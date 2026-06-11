@@ -1,0 +1,58 @@
+{
+  "data": {
+    "core_types": [
+      {
+        "name": "task",
+        "description": "General work item (default)"
+      },
+      {
+        "name": "bug",
+        "description": "Bug report or defect"
+      },
+      {
+        "name": "feature",
+        "description": "New feature or enhancement"
+      },
+      {
+        "name": "chore",
+        "description": "Maintenance or housekeeping"
+      },
+      {
+        "name": "epic",
+        "description": "Large body of work spanning multiple issues"
+      },
+      {
+        "name": "decision",
+        "description": "Architecture decision record (ADR)"
+      },
+      {
+        "name": "spike",
+        "description": "Timeboxed investigation to reduce uncertainty before committing to a story"
+      },
+      {
+        "name": "story",
+        "description": "User story describing a feature from the user's perspective"
+      },
+      {
+        "name": "milestone",
+        "description": "Marks completion of a set of related issues (contains no work itself)"
+      }
+    ],
+    "custom_types": [
+      "agent",
+      "convergence",
+      "convoy",
+      "event",
+      "gate",
+      "merge-request",
+      "message",
+      "molecule",
+      "rig",
+      "role",
+      "session",
+      "spec",
+      "step"
+    ]
+  },
+  "schema_version": 1
+}

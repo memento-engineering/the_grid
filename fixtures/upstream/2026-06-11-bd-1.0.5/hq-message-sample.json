@@ -1,0 +1,74 @@
+{
+  "data": [
+    {
+      "id": "ga-wisp-y9uqd9",
+      "title": "Dolt health advisory [MEDIUM]",
+      "description": "Latency: 1s [WARN: latency 1s \u003e= threshold 1s]\nConnections: 5/50\nDisk: 430M\nOrphan DBs: 0",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "message",
+      "assignee": "mayor",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-06-11T02:43:00Z",
+      "created_by": "order:mol-dog-doctor",
+      "updated_at": "2026-06-11T02:43:00Z",
+      "metadata": {
+        "from": "controller"
+      },
+      "labels": [
+        "thread:thread-067ce293d2d4"
+      ],
+      "ephemeral": true,
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    },
+    {
+      "id": "ga-wisp-xx886o",
+      "title": "Dolt health advisory [MEDIUM]",
+      "description": "Latency: 1s [WARN: latency 1s \u003e= threshold 1s]\nConnections: 4/50\nDisk: 542M\nOrphan DBs: 0",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "message",
+      "assignee": "mayor",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-06-11T02:06:57Z",
+      "created_by": "order:mol-dog-doctor",
+      "updated_at": "2026-06-11T02:06:57Z",
+      "metadata": {
+        "from": "controller"
+      },
+      "labels": [
+        "thread:thread-ebfb94643fbb"
+      ],
+      "ephemeral": true,
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    },
+    {
+      "id": "ga-wisp-f9hoad",
+      "title": "Dolt health advisory [MEDIUM]",
+      "description": "Latency: 1s [WARN: latency 1s \u003e= threshold 1s]\nConnections: 4/50\nDisk: 625M\nOrphan DBs: 0",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "message",
+      "assignee": "mayor",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-06-11T00:24:05Z",
+      "created_by": "order:mol-dog-doctor",
+      "updated_at": "2026-06-11T00:24:05Z",
+      "metadata": {
+        "from": "controller"
+      },
+      "labels": [
+        "thread:thread-0b865c065485"
+      ],
+      "ephemeral": true,
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "schema_version": 1
+}

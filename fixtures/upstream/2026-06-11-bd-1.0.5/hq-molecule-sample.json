@@ -1,0 +1,27 @@
+{
+  "data": [
+    {
+      "id": "ga-dda",
+      "title": "mol-dog-stale-db",
+      "description": "Detect and clean stale Dolt databases and orphan Dolt processes.\n\nThis formula shells out to `gc dolt-cleanup --json`, parses the\n`gc.dolt.cleanup.v1` envelope, and emits one summary line per stage\nto `gc events` so operators skimming a long scrollback can spot\ntrends. The full JSON report is appended to the work bead so a\nfollow-up reader can `bd show \u003cid\u003e` to see details.\n\n## Dog Contract\n\nThis is infrastructure work. You:\n1. Run a dry-run `gc dolt-cleanup --json --probe` scan.\n2. Decide: no work -\u003e report, at/below stale-DB threshold -\u003e apply, above threshold -\u003e escalate.\n3. Apply with `gc dolt-cleanup --json --probe --force` only when safe.\n4. Report findings, nudge deacon if past warn threshold, exit.\n5. Return to kennel.\n\n## Variables\n\n| Variable | Source | Description |\n|----------|--------|-------------|\n| max_orphans_for_sql | formula default | Max stale dropped databases before escalating instead of forcing (default 20) |\n| warn_threshold | formula default | Orphan count that triggers a warning to deacon (default 5) |\n\n## Safety\n\n`gc dolt-cleanup` resolves the Dolt port via the AD-04 chain\n(--port flag \u003e city dolt.port \u003e \u003crigRoot\u003e/.beads/dolt-server.port \u003e\nlegacy 3307). Invalid explicit ports and unreadable or invalid rig\nport files fail closed; only absent rig port files can reach the\nlegacy default. It cross-references registered rigs (HQ-first) and\nwill not drop any database whose name matches a registered rig DB,\nnor any Dolt internals (`information_schema`, `mysql`,\n`dolt_cluster`, `__gc_probe`). Orphan-process kills are restricted\nto processes whose `--config` path lives under the test-config\nallowlist (`/tmp/Test*`, `os.TempDir()/Test*`, `~/.gotmp/Test*`).\nDatabase identifiers used for destructive DROP and purge calls must\ncontain only ASCII letters, digits, underscores, and non-leading\nhyphens; rigs with other `dolt_database` names should be renamed or\nhandled manually so the cleanup can stay SQL-injection safe.\n\nThe apply branch treats a non-zero `gc dolt-cleanup --probe --force`\nexit as an operator escalation. Do not retry from this formula with\nthe separate `gc dolt cleanup --server-down-ok` fallback; that is a\nTTY-only human action after independently verifying the dolt server\nprocess is stopped and the port is closed.\n\nThe runtime work is intentionally one formula step. Formula steps are\nseparate agent interactions, so scan, decision, apply, and report state\nmust stay inside one shell execution instead of relying on variables to\ncross step boundaries.",
+      "status": "closed",
+      "priority": 2,
+      "issue_type": "molecule",
+      "created_at": "2026-06-06T05:00:29Z",
+      "updated_at": "2026-06-11T06:51:12Z",
+      "closed_at": "2026-06-11T06:51:12Z",
+      "close_reason": "all steps complete",
+      "metadata": {
+        "gc.routed_to": "dolt.dog",
+        "gc.run_target": "dog"
+      },
+      "labels": [
+        "order-run:mol-dog-stale-db"
+      ],
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "schema_version": 1
+}
