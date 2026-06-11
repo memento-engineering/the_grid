@@ -9,7 +9,7 @@
 
 ## Decision 1 — Language, workspace, conventions
 
-Dart (SDK `^3.11.0`), pub workspace + melos, cloning Lenny's root `pubspec.yaml` shape and `analysis_options.yaml` (lints/recommended + `strict-casts`, `strict-inference`, `strict-raw-types`, `prefer_single_quotes`, `sort_pub_dependencies`, `unawaited_futures`, `avoid_print`). Hand-written models and codecs — no codegen (`freezed`/`json_serializable`) in M1; revisit if value-type boilerplate becomes a tax.
+Dart (SDK `^3.11.0`), pub workspace + melos, cloning Lenny's root `pubspec.yaml` shape and `analysis_options.yaml` (lints/recommended + `strict-casts`, `strict-inference`, `strict-raw-types`, `prefer_single_quotes`, `sort_pub_dependencies`, `unawaited_futures`, `avoid_print`). Value types and unions are **freezed** (sealed unions) with `json_serializable`-backed codecs; consumers lean heavily on Dart pattern matching — exhaustive `switch` expressions over the sealed hierarchies (`GraphEvent`, gate outcomes, reconciler transitions) are the house style, compiler-checked. `build_runner` is wired into the melos scripts. *(Amended 2026-06-11: reverses the original hand-written-models call.)*
 
 **Consequence:** any Dart developer (or agent) moving between lenny and the_grid sees one set of rules.
 
@@ -37,6 +37,7 @@ Divergence note: lenny is on flutter_riverpod 2.6. The workspaces are independen
 ## Decision 4 — beads substrate: bd CLI writes, pooled Dolt SQL reads
 
 - **Mutations and ready-work: always `bd` CLI** (`BD_JSON_ENVELOPE=1`, `--actor grid-controller`, 15s timeout with kill, max 4 concurrent). bd owns validation, audit events, gc hooks, and Dolt commit semantics — SQL writes would bypass all four. Ready-work is never reimplemented in M1 (`bd ready --json` is authoritative; M2 ports it differential-tested).
+- **Batch and bulk bd forms, never per-issue loops** *(added 2026-06-11)*: mutations that move together go through **`bd batch`** — one line-oriented script, one dolt transaction, one `DOLT_COMMIT` (atomic rollback-on-error, no write amplification, and one dirty signal instead of N). Bulk/filtered reads prefer one-spawn forms: **`bd export --include-infra`** (full-graph JSONL in a single spawn — also the CLI-fallback snapshot read; `--include-infra` pulls the agent/rig/role/message infrastructure beads the domain projections need), **`bd query "<expr>"`** for filtered reads, and multi-id **`bd show id1 id2 …`** / **`bd dep list <ids…>`**. Spawning bd per issue inside a loop is forbidden.
 - **Snapshot reads: pooled MySQL-protocol connection** (1–2 connections) to the Dolt server (`127.0.0.1:34947`, db `tg`, discovered via `.beads/metadata.json` + `.beads/.env` → `$GT_ROOT/.gc/runtime/packs/dolt/dolt-config.yaml`). `SELECT`-only by construction. Client: `mysql_client`, with `mysql1` as fallback; auth handshake is the day-one spike.
 - **Schema-drift guard:** on connect, read the migrations version; unknown/newer ⇒ disable SQL reads, fall back to `BdCliService` reads, log loudly. An SQL-vs-CLI snapshot equivalence test is the drift canary in CI.
 - **Connection hygiene:** reconnect-on-error (server reaps idle at 30s); the ~1s probe doubles as keepalive. Never more than the pool's 1–2 connections (documented pileup incident).
@@ -49,7 +50,7 @@ Change detection is layered; signals only need to be *sufficient*, the structura
 2. `SELECT @@tg_working` probe every ~1s over the pool — catches all writes including cross-workspace, ~1ms each.
 3. bd-CLI polling backstop (5s) — active only when SQL is unavailable (embedded mode, server down).
 
-All signals funnel to `GraphSyncInteractor`: dirty-bit + single-flight (signals during a refresh schedule exactly one follow-up), 150ms quiet period. Refresh composes the snapshot (issues + dependencies + labels via SQL or CLI fallback; ready set via `bd ready`). `GraphEvent` is a sealed hierarchy: `SnapshotInitialized`, `BeadCreated/Updated(changedFields)/Closed/Reopened`, `DependencyAdded/Removed`, `ReadySetChanged(entered, exited)`.
+All signals funnel to `GraphSyncInteractor`: dirty-bit + single-flight (signals during a refresh schedule exactly one follow-up), 150ms quiet period. Refresh composes the snapshot — issues + dependencies + labels + **metadata** (domain projections need it, ADR-0002) including infrastructure beads — via SQL, or via a single `bd export --include-infra` spawn on the CLI fallback path; ready set via `bd ready`. `GraphEvent` is a sealed (freezed) hierarchy: `SnapshotInitialized`, `BeadCreated/Updated(changedFields)/Closed/Reopened`, `DependencyAdded/Removed`, `ReadySetChanged(entered, exited)`.
 
 ## Decision 6 — Observability: the Lenny exploration protocol, exclusively
 
