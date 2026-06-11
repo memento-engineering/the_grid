@@ -1,0 +1,12 @@
+# grid_exploration test configuration.
+#
+# The offline unit suite runs anywhere. The `integration` tag marks the
+# VM-service attach test (acceptance criterion 3), which needs a live VM
+# service: run it with `dart test --enable-vm-service -t integration`. It
+# self-skips when the VM service is absent, and is excluded from the default
+# offline run (`dart test -x integration`).
+tags:
+  integration:
+    description: >-
+      Attaches to the running process over the VM service and exercises the
+      ext.exploration.* extensions. Self-skips without --enable-vm-service.

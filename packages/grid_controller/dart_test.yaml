@@ -1,0 +1,15 @@
+# grid_controller test configuration.
+#
+# The offline unit suite (everything NOT tagged `integration`) runs with no bd
+# binary, no Dolt server, and no credentials — `dart test` runs it by default.
+#
+# The `integration` tag marks tests that spawn the real `bd` 1.0.5 binary against
+# a hermetic `bd init` temp workspace (embedded mode — no server, no creds). Run
+# them explicitly with `dart test -t integration`; exclude them with
+# `dart test -x integration` to keep the offline suite runnable anywhere
+# (ADR-0001 Decision 7).
+tags:
+  integration:
+    description: >-
+      Spawns real bd against a hermetic temp workspace. Requires bd on PATH;
+      never touches the live tg server.

@@ -14,9 +14,45 @@ Dart VM service exploration protocol.
 
 ## Status
 
-Documentation phase. Implementation is gated until ADR-0001–0004 are Accepted
-(PDR §9). This repo is also a Gas City rig (`tg` issue prefix) — the factory that will
-eventually build it.
+**M1 in progress** — the gate is open (ADR-0001–0004 Accepted, 2026-06-11). The reactive
+kernel is built and demonstrated end-to-end: a `bd` mutation in one terminal surfaces as a
+typed event in `grid watch` in another.
+
+```
+$ grid watch                       # in the_grid (or any beads workspace)
+grid watch — workspace: /…/grid_demo
+read path: cli  (direct mode, db demo)
+VM service: ws://127.0.0.1:…/ws    ·  attach exploration_cli/devtools here
+————————————————————————————————————————————————————————————————
+06:48:25.375  SnapshotInitialized — 0 beads, 0 ready
+06:48:28.793  BeadCreated     demo-3iu "tron lives" [molecule] (reacted 659ms)
+06:48:31.597  BeadClosed      demo-3iu (reacted 590ms)
+
+# meanwhile, in another terminal:
+$ bd create "tron lives" -t molecule -p 1
+$ bd close demo-3iu --reason "end of line"
+```
+
+**Measured reaction latency** (dirty signal → typed event, hermetic `bd init` workspace,
+macOS): ~590–660ms on the **bd-CLI fallback path** (two `bd` spawns per refresh + the 150ms
+quiet period + FSEvents watcher latency). The **pooled-SQL path** (~1–5ms reads) is the one
+that targets the PDR §6.1 ≤500ms budget; it self-skips without `GC_DOLT_PASSWORD` and falls
+back to CLI. Latency is printed per event so the reactivity claim stays quantitative.
+
+### Packages
+
+| Package | Role |
+|---|---|
+| `grid_controller` | the SDK: bd-CLI + Dolt-SQL services → snapshot repository → structural diff → typed `GraphEvent` stream → Riverpod providers → domain projections |
+| `grid_exploration` | exploration-protocol host (`ext.exploration.*`): handshake / stable observation / `grid` tools, over `dart:developer` |
+| `grid_cli` | `grid watch` — stream typed events with measured latency; `--json` for NDJSON |
+| `grid_devtools` | DevTools extension over the exploration protocol (no SDK dependency) |
+
+`melos bootstrap` then `melos test` / `melos analyze`. Integration tests are tagged
+`integration` (require `bd` on `PATH`); the unit suite runs fully offline.
+
+This repo is also a Gas City rig (`tg` issue prefix) — the factory that will eventually
+build it.
 
 ## Reading order
 

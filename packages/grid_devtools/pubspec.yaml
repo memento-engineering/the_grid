@@ -1,0 +1,29 @@
+name: grid_devtools
+description: >-
+  DevTools extension for the_grid. Attaches over the exploration protocol
+  only (ADR-0002 Decision 3) — no direct grid_controller dependency.
+publish_to: none
+resolution: workspace
+
+environment:
+  flutter: ">=3.41.0"
+  sdk: ^3.11.0
+
+dependencies:
+  devtools_extensions: ^0.4.0
+  dtd: ^4.0.0
+  flutter:
+    sdk: flutter
+  vm_service: ^14.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  lints: ^5.1.0
+  test: any
+
+# Match devtools_extensions' uses-material-design so icon glyphs render in
+# the web build instead of tofu boxes (same caveat as lenny's
+# exploration_devtools).
+flutter:
+  uses-material-design: true

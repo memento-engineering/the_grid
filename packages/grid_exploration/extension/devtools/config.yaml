@@ -1,0 +1,5 @@
+name: grid
+issueTracker: https://github.com/memento-engineering/the_grid/issues
+version: 0.0.1
+materialIconCodePoint: 0xe1bd
+requiresConnection: true

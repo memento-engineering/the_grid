@@ -1,0 +1,67 @@
+name: the_grid_workspace
+publish_to: none
+environment:
+  sdk: ^3.11.0
+workspace:
+  - packages/grid_controller
+  - packages/grid_cli
+  - packages/grid_exploration
+  - packages/grid_devtools
+
+dev_dependencies:
+  melos: ^7.7.0
+
+melos:
+  scripts:
+    # ---------- primary scripts ----------
+    test:
+      description: >-
+        Run the offline unit suite (excludes `integration`-tagged tests, which
+        need bd/Dolt). Runs dart test on pure-Dart packages and flutter test on
+        Flutter packages.
+      steps:
+        - test:dart
+        - test:flutter
+
+    test:integration:
+      description: >-
+        Run the integration-tagged suite (requires `bd` on PATH; SQL/VM-service
+        cases self-skip without GC_DOLT_PASSWORD / --enable-vm-service).
+      exec: dart test -t integration
+      packageFilters:
+        flutter: false
+        dirExists: test
+
+    analyze:
+      description: >-
+        Run dart analyze on the entire workspace.
+      run: dart analyze
+
+    format:
+      description: >-
+        Check formatting for all Dart files. Fails if any file needs changes.
+      run: dart format --output=none --set-exit-if-changed .
+
+    build_runner:
+      description: >-
+        Run build_runner codegen in every package that declares it.
+      exec: dart run build_runner build --delete-conflicting-outputs
+      packageFilters:
+        dependsOn: build_runner
+
+    # ---------- private sub-scripts (not listed by melos run) ----------
+    test:dart:
+      private: true
+      description: dart test on pure-Dart packages (offline; excludes integration)
+      exec: dart test -x integration
+      packageFilters:
+        flutter: false
+        dirExists: test
+
+    test:flutter:
+      private: true
+      description: flutter test on Flutter packages (offline; excludes integration)
+      exec: flutter test -x integration
+      packageFilters:
+        flutter: true
+        dirExists: test

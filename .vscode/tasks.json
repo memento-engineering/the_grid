@@ -1,0 +1,39 @@
+{
+  // VS Code tasks for the_grid workspace.
+  //
+  // The DevTools extension bundle is rebuild-on-demand: source lives in
+  // packages/grid_devtools/, but the artifact DevTools serves is the compiled
+  // web build copied into packages/grid_exploration/extension/devtools/build/
+  // (the host package `grid watch` depends on). Without a fresh rebuild after
+  // touching grid_devtools source, an attached DevTools loads a stale panel.
+  //
+  // "Build DevTools Extension" wraps tool/build_devtools_extension.sh and is
+  // referenced as preLaunchTask on the "grid watch (fresh DevTools)" config.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build DevTools Extension",
+      "type": "shell",
+      "command": "${workspaceFolder}/tool/build_devtools_extension.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "melos test (offline)",
+      "type": "shell",
+      "command": "dart run melos test",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "melos test:integration",
+      "type": "shell",
+      "command": "dart run melos test:integration",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

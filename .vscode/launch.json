@@ -1,0 +1,94 @@
+{
+  // Launch configurations for the_grid workspace.
+  //
+  // Conventions (mirroring lenny's .vscode/launch.json):
+  //   - `grid watch` runs the pure-Dart CLI under the Dart-Code debug session,
+  //     which enables the VM service automatically. Once it's running, attach
+  //     DevTools with the command palette → "Dart: Open DevTools" (or the
+  //     "Open DevTools" action on the debug session): the `grid` panel appears
+  //     as a DevTools tab, surfaced from grid_exploration's
+  //     extension/devtools/ bundle (grid_cli depends on grid_exploration).
+  //     Run the "Build DevTools Extension" task once first (or use the
+  //     "(fresh DevTools)" variant, which rebuilds the bundle on launch).
+  //   - `cwd` is the beads workspace `grid watch` discovers. Defaults to the
+  //     repo root; override via the `watchDir` prompt to watch another rig.
+  //   - "grid_devtools (standalone web)" runs the panel as a plain Flutter web
+  //     app against devtools_extensions's simulated environment — fast widget
+  //     iteration with hot reload, no real VM. Use the grid-watch + Open
+  //     DevTools path for the real DTD/VM handshake.
+  "version": "0.2.0",
+  "inputs": [
+    {
+      "id": "watchDir",
+      "type": "promptString",
+      "description": "Beads workspace directory for `grid watch` (Enter for the repo root)",
+      "default": "${workspaceFolder}"
+    }
+  ],
+  "configurations": [
+    {
+      "name": "grid watch",
+      "type": "dart",
+      "request": "launch",
+      "program": "packages/grid_cli/bin/grid.dart",
+      "cwd": "${input:watchDir}",
+      "args": ["watch"],
+      "presentation": { "group": "1_grid_watch", "order": 1 }
+    },
+    {
+      "name": "grid watch (fresh DevTools)",
+      "type": "dart",
+      "request": "launch",
+      "program": "packages/grid_cli/bin/grid.dart",
+      "cwd": "${input:watchDir}",
+      "args": ["watch"],
+      // Rebuild the DevTools extension bundle before launching so the panel
+      // served when you Open DevTools always reflects current grid_devtools
+      // source (rebuild-on-demand; build/ is gitignored).
+      "preLaunchTask": "Build DevTools Extension",
+      "presentation": { "group": "1_grid_watch", "order": 2 }
+    },
+    {
+      "name": "grid watch (--no-sql)",
+      "type": "dart",
+      "request": "launch",
+      "program": "packages/grid_cli/bin/grid.dart",
+      "cwd": "${input:watchDir}",
+      "args": ["watch", "--no-sql"],
+      "presentation": { "group": "1_grid_watch", "order": 3 }
+    },
+    {
+      "name": "grid watch (--json NDJSON)",
+      "type": "dart",
+      "request": "launch",
+      "program": "packages/grid_cli/bin/grid.dart",
+      "cwd": "${input:watchDir}",
+      "args": ["watch", "--json"],
+      "presentation": { "group": "1_grid_watch", "order": 4 }
+    },
+    {
+      "name": "grid_devtools (standalone web)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "cwd": "${workspaceFolder}/packages/grid_devtools",
+      "deviceId": "chrome",
+      // Runs the panel as a Flutter web app against devtools_extensions's
+      // simulated environment (fake DTD + fake VM service). No preLaunchTask:
+      // Dart-Code attaches its own VM service, so breakpoints in lib/** and
+      // hot reload on save work. Use grid watch + Open DevTools for the real
+      // protocol handshake.
+      "args": ["--dart-define=use_simulated_environment=true"],
+      "presentation": { "group": "2_devtools", "order": 1 }
+    },
+    {
+      "name": "the_grid: unit tests (offline)",
+      "type": "dart",
+      "request": "launch",
+      "program": "./",
+      "cwd": "${workspaceFolder}",
+      "args": ["-x", "integration"],
+      "presentation": { "group": "3_tests", "order": 1 }
+    }
+  ]
+}

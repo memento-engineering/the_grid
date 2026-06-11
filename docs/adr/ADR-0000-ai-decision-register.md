@@ -55,3 +55,52 @@ Entry format: `A<n> (date) — title` · Decision · Why · Affects (docs/code t
 **Why:** gc's convergence handler assumes a single writer per bead (ADR-0003 invariant 7); two reconcilers on one convergence bead corrupts state for both.
 **Affects (if promoted):** ADR-0003 (operating-mode section), M2/M3 acceptance criteria, M4-SCOPING.
 **Status:** promoted → ADR-0003 Decision 6 (2026-06-11).
+
+## A8 (2026-06-11) — Dolt auth spike outcome: `mysql_client` is wire-compatible; credential is operator-provided env
+
+**Decision:** Keep `mysql_client` as the SQL read-path client (ADR-0001 Decision 4, no change). The `DoltQueryService` resolves its credential from the documented env contract — `GC_DOLT_USER` (default `root`) and `GC_DOLT_PASSWORD` — and connects with `secure: false` (the gc-managed server offers no SSL). Live-SQL integration tests **self-skip** when `GC_DOLT_PASSWORD` is absent (the lenny e2e pattern); the bd-CLI read path is the guaranteed fallback, so M1 acceptance never depends on the SQL credential being present in CI.
+**Why:** Track 0.2 spike (2026-06-11, `mysql_client 0.0.27` → `127.0.0.1:34947` db `tg`): the client completed Dolt's MySQL handshake through to credential evaluation, and the server returned an application-level **`1045 Access Denied`** ERR packet — proving wire/auth-plugin compatibility. (Contrast: requesting `secure: true` threw a distinct *client* exception, "Server does not support SSL." Two different exception classes confirm the server processed our handshake and answered at the application layer rather than failing the protocol.) The only gap is the credential itself, which is gc-provisioned and surfaced through the same `GC_DOLT_PASSWORD` channel `bd` uses — an operational wiring step, not a Dart-client limitation. Process-env credential extraction was deliberately not attempted (and was blocked by the sandbox classifier as credential exploration); the spike's protocol question is answered without it. PDR Risk #1 ("Dart MySQL client can't complete Dolt's auth handshake") is **retired** at the protocol level.
+**Affects (if promoted):** ADR-0001 Decision 4 (credential-resolution sentence + SSL/`secure:false` note); `DoltQueryService` connection config; the live-SQL integration test's skip guard; PDR §8 risk table (Risk #1 → resolved). Spike artifact: `packages/grid_controller/tool/dolt_spike.dart`.
+**Status:** pending.
+
+## A9 (2026-06-11) — `BeadStatus` is an extension type over String, not a 7-value enum
+
+**Decision:** Model `BeadStatus` (and uniformly `IssueType`, `DependencyType`) as a zero-cost extension type over the wire string with named constants for the built-ins, rather than a strict closed Dart enum. `category`/`isClosed`/`isBuiltIn` cover the seven built-ins; unknown values decode without throwing (`category → StatusCategory.unspecified`).
+**Why:** the PDR plan and ADR-0001 Decision 1 framed status as an "enum, closed set of 7", but upstream beads supports **custom statuses** (`Status.IsValidWithCustom`, `internal/types/types.go`), so a strict enum would throw on a custom value during snapshot decode — a latent crash. Extension-type-over-String matches beads reality, keeps value equality/`hashCode` correct for free (a `BeadStatus` *is* its String at runtime), and is uniform with the already-open `IssueType`/`DependencyType`. The canonical seven remain enumerated as constants.
+**Affects (if promoted):** ADR-0001 Decision 1 wording (status "enum" → extension type). Code: `packages/grid_controller/lib/src/models/bead_status.dart`.
+**Status:** pending.
+
+## A10 (2026-06-11) — `GraphEvent` gains `BeadDeleted`; dependency edges diff by the (issue,dependsOn,type) triple
+
+**Decision:** Add a `BeadDeleted(Bead)` variant to the ratified `GraphEvent` union, and key dependency add/remove detection by the triple `(issueId, dependsOnId, type)` (`BeadDependency.edgeKey`).
+**Why:** (a) ADR-0001 Decision 5 enumerated the event set without a delete variant, but a hard `bd delete` removes a bead from the snapshot — silently dropping it would violate the "diff is authoritative, no missed change class" invariant (PDR Risk row). `BeadDeleted` keeps the diff complete and the union exhaustively switchable. (b) The upstream `dependencies` PK is the *pair* `(issue_id, depends_on_id)`, but keying the diff by the full triple makes a dependency **type change** surface as remove+add (complete) rather than being missed; the known small gap is that a metadata-only edit on an unchanged triple is not surfaced (no `DependencyUpdated` event in M1 — low value, documented).
+**Affects (if promoted):** ADR-0001 Decision 5 event list (+`BeadDeleted`). Code: `packages/grid_controller/lib/src/diff/graph_event.dart`, `diff_snapshots.dart`, `models/bead_dependency.dart`.
+**Status:** pending.
+
+## A11 (2026-06-11) — Bead labels are canonicalized to sorted order at the model boundary
+
+**Decision:** Sort `Bead.labels` on construction in **both** read paths — the bd-CLI decoder (`Bead.fromJson`, via a `SortedLabelsConverter`) and the SQL `beadFromRow` mapper.
+**Why:** labels are a **set** upstream (the `labels` table PK is `(issue_id, label)`), so order carries no meaning, yet `Bead ==` (freezed, order-sensitive on lists) and the SQL-vs-CLI snapshot equivalence canary (ADR-0001 Decision 7) require the two read paths to agree byte-for-byte. Without a canonical order the canary fails on label ordering alone. The structural diff already compares labels order-insensitively (set equality), so this only makes `Bead ==` and the equivalence test reliable; no behavior is lost.
+**Affects (if promoted):** ADR-0001 Decision 7 (note the canonicalization). Code: `models/converters.dart` (`SortedLabelsConverter`), `models/bead.dart`, `services/dolt_row_mapper.dart`.
+**Status:** pending.
+
+## A12 (2026-06-11) — `BdRunner.run` gains a `stdin` channel for `bd batch`
+
+**Decision:** Extend the `BdRunner` seam with an optional `{String? stdin}` parameter; `ProcessBdRunner` writes it to the child's stdin and closes the stream (EOF). `BdCliService.batch(lines)` pipes its newline-joined script this way.
+**Why:** upstream `bd batch` reads its line-oriented script from **stdin** (`cmd/bd/batch.go`), but the first-cut runner interface was argv-only, so `batch()` was a no-op that would commit an empty transaction (caught by the Wave-1 adversarial verifier). A stdin channel keeps batching a single atomic spawn / one `DOLT_COMMIT` (ADR-0001 Decision 4) with no temp-file lifecycle. Minor internal-interface refinement, recorded for completeness.
+**Affects (if promoted):** none in the ratified docs (implementation detail of ADR-0001 D4's batch requirement). Code: `services/bd_runner.dart`, `services/bd_cli_service.dart`.
+**Status:** pending.
+
+## A13 (2026-06-11) — Domain-projection design (Track E): result boundary, session state, step/needs composition
+
+**Decision:** the M1 projections (ADR-0002 D2 trio) adopt these shapes: (a) every `project()` factory returns a sealed `ProjectionResult<T>` (`ProjectionOk` | `ProjectionFailed(ProjectionError)`) — decode is total, never throws past the projector, never silently drops (a type mismatch is a typed failure); unknown metadata keys are preserved in a `raw` map. (b) `AgentSession.state` is a binary `{open, closed}` derived from bead **status** (durable identity per ADR-0002 D2); gc's finer lifecycle string (`drained`/`detached`/…) is preserved verbatim on `SessionMetadata.lifecycleState` but not promoted to a typed enum the_grid doesn't yet own. (c) `Molecule` resolves child steps from `parent-child` edges and `Step.needs` from blocking edges between sibling steps; `isWisp = bead.ephemeral || metadata.wisp_type present`; `threadProvider` groups by the `thread:<id>` label (not `replies-to` edges).
+**Why:** ADR-0002 D2 names the projections and composition rules but leaves the boundary/error shape and several mappings to implementation. **Validated against fixtures:** session (hq-session-sample ga-dvt2), message (hq-message-sample), molecule metadata + `isWisp` (hq-molecule-sample ga-dda). **NOT yet validated:** step/`needs` composition and the `wisp_type` metadata key — the pinned set contains **zero** step beads and zero molecule dependencies, so the edge direction/semantics are tested only synthetically. A follow-up capture of a real molecule+step+needs subgraph should pin these before the M2 reconciler consumes `runnableSteps`.
+**Affects (if promoted):** ADR-0002 D2 (projection boundary + composition specifics); a new pinned fixture (molecule+step+needs). Code: `packages/grid_controller/lib/src/projections/`.
+**Status:** pending.
+
+## A14 (2026-06-11) — `bd ready` excludes molecule-type beads; PDR §6.1 demo and the ≤500ms target
+
+**Decision:** the two-terminal acceptance demo (PDR §6.1) asserts `ReadySetChanged` against a **task/step** create, not a `molecule` create; and the ≤500ms latency budget is understood as the **pooled-SQL** path's target, with the bd-CLI fallback measured separately (~0.6–0.8s, embedded mode).
+**Why:** observed live (bd 1.0.5, hermetic `bd init`): `bd ready` excludes `molecule`-type beads — molecules are containers; only their claimable steps enter the ready set. So `bd create -t molecule` fires `BeadCreated` only, with **no** `ReadySetChanged` (the M1 live demo and the integration test both confirm this). PDR §6.1's literal "molecule → BeadCreated + ReadySetChanged" is therefore inaccurate. Separately, the embedded-mode CLI read path is bd-spawn-dominated (~70–140ms × 2 per refresh + 150ms quiet + watcher latency), consistently ~0.6–0.8s — within the integration suite's generous 2s budget but above §6.1's 500ms, which the SQL path (≈1–5ms reads) targets. Latency is printed per event so the claim stays quantitative either way.
+**Affects (if promoted):** PDR §6.1 (reword the demo to a task/step; note the SQL-vs-CLI latency split + retire the molecule→ready assumption). Code: `packages/grid_controller/test/integration/reactive_lifecycle_test.dart` already uses a task for the ready-set assertion.
+**Status:** pending.
