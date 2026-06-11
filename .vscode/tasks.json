@@ -12,6 +12,17 @@
   "version": "2.0.0",
   "tasks": [
     {
+      // Zero-setup reactivity proof: a throwaway `bd init` workspace + scripted
+      // mutations so the full typed-event stream scrolls past in the terminal,
+      // no credentials needed. Run via Cmd-Shift-P → "Tasks: Run Task".
+      "label": "grid: hermetic demo (reactivity proof)",
+      "type": "shell",
+      "command": "${workspaceFolder}/tool/grid_demo.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
       "label": "Build DevTools Extension",
       "type": "shell",
       "command": "${workspaceFolder}/tool/build_devtools_extension.sh",
