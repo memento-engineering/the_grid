@@ -10,7 +10,8 @@ builds everything.**
 2. `docs/adr/ADR-0000-ai-decision-register.md` — **process-critical, see below**
 3. `docs/adr/ADR-0001…0004` — ratified technical decisions (foundations, packages/projections, reconciler, runtime/tmux)
 4. `docs/M1-BUILD-ORDER.md` — dependency-ordered work breakdown
-5. The `predictable-flutter` skill (installed at `.claude/skills/predictable-flutter/`) — the architecture all code follows
+5. `docs/M4-SCOPING.md` — usage-driven M4 decomposition + fs adoption ladder (proposal, ADR-0000 A6)
+6. The `predictable-flutter` skill (installed at `.claude/skills/predictable-flutter/`) — the architecture all code follows
 
 ## Process rules (non-negotiable)
 
@@ -35,6 +36,7 @@ builds everything.**
 - Grouped mutations: `bd batch` (one transaction, one DOLT_COMMIT). Bulk reads: `bd export --include-infra` / `bd query` / multi-id `bd show`. **Never spawn bd per issue in a loop.**
 - **Never call `bd show` from a re-query/controller path** — it writes `.beads/last-touched` and self-triggers the watcher.
 - `bd list` does not surface infra-typed beads (agent/rig/role) — use export for those (ADR-0000 A5).
+- **Coexistence safety (treat as binding even while ADR-0000 A7 is pending):** gc's convergence handler assumes a single writer per bead. Never reconcile or mutate beads gc's reconciler owns; any shadow/conformance experiment against live convergence traffic is strictly read-only.
 
 ## Environment facts
 
