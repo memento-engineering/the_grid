@@ -1,6 +1,6 @@
 # ADR-0004 — M3 runtime providers: tmux first, tiered
 
-**Status:** Proposed
+**Status:** Accepted 2026-06-11 (Nico)
 **Date:** 2026-06-11
 **Deciders:** Nico Spencer
 **Context:** M3 gives the_grid hands — spawning and supervising coding-agent sessions for ready work. Source assessed 2026-06-11: gc's tmux provider (`gascity/internal/runtime/tmux/`, ~5.9k LOC production + ~8.1k tests; PDR §7a) and the `runtime.Provider` contract (`gascity/internal/runtime/runtime.go`). gc's provider is pure subprocess invocation of the `tmux` binary — no library, no control mode — so the port is `Process.run` plus the reliability heuristics.

@@ -1,6 +1,6 @@
 # ADR-0001 — Technical foundations for the_grid
 
-**Status:** Proposed
+**Status:** Accepted 2026-06-11 (Nico)
 **Date:** 2026-06-11
 **Deciders:** Nico Spencer
 **Context:** PDR §1–5 ([docs/PDR.md](../PDR.md)). This ADR fixes the technical requirements for M1 and the conventions that bind all later milestones.
@@ -37,6 +37,8 @@ Divergence note: lenny is on flutter_riverpod 2.6. The workspaces are independen
 ## Decision 4 — beads substrate: bd CLI writes, pooled Dolt SQL reads
 
 - **Mutations and ready-work: always `bd` CLI** (`BD_JSON_ENVELOPE=1`, `--actor grid-controller`, 15s timeout with kill, max 4 concurrent). bd owns validation, audit events, gc hooks, and Dolt commit semantics — SQL writes would bypass all four. Ready-work is never reimplemented in M1 (`bd ready --json` is authoritative; M2 ports it differential-tested).
+- **Error channel** *(promoted from ADR-0000 A3, 2026-06-11)*: under envelope mode, bd emits errors **enveloped on stdout** (`{"data": {"error": …}, "schema_version": 1}`) with empty stderr and exit ≠ 0 — `BdException` parsing reads stdout first, falls back to stderr, then raw text. Fixture: `fixtures/upstream/2026-06-11-bd-1.0.5/tg-error-stdout.json`.
+- **`bd list` never surfaces infra-typed beads** *(promoted from ADR-0000 A5, 2026-06-11)*: regardless of `--all`, agent/rig/role records do not appear in `list`; snapshot composition and domain sampling on the CLI path use `bd export --include-infra` exclusively.
 - **Batch and bulk bd forms, never per-issue loops** *(added 2026-06-11)*: mutations that move together go through **`bd batch`** — one line-oriented script, one dolt transaction, one `DOLT_COMMIT` (atomic rollback-on-error, no write amplification, and one dirty signal instead of N). Bulk/filtered reads prefer one-spawn forms: **`bd export --include-infra`** (full-graph JSONL in a single spawn — also the CLI-fallback snapshot read; `--include-infra` pulls the agent/rig/role/message infrastructure beads the domain projections need), **`bd query "<expr>"`** for filtered reads, and multi-id **`bd show id1 id2 …`** / **`bd dep list <ids…>`**. Spawning bd per issue inside a loop is forbidden.
 - **Snapshot reads: pooled MySQL-protocol connection** (1–2 connections) to the Dolt server (`127.0.0.1:34947`, db `tg`, discovered via `.beads/metadata.json` + `.beads/.env` → `$GT_ROOT/.gc/runtime/packs/dolt/dolt-config.yaml`). `SELECT`-only by construction. Client: `mysql_client`, with `mysql1` as fallback; auth handshake is the day-one spike.
 - **Schema-drift guard:** on connect, read the migrations version; unknown/newer ⇒ disable SQL reads, fall back to `BdCliService` reads, log loudly. An SQL-vs-CLI snapshot equivalence test is the drift canary in CI.
@@ -67,10 +69,14 @@ Prerequisite (M0, in lenny's repo): extract the pure-Dart **`exploration_contrac
 ## Decision 7 — Testing requirements
 
 - Unit tests run fully offline: `FakeBdRunner`, fake services, `fake_async` for quiet-period/coalescing; exhaustive `diffSnapshots` cases including `diff(s, s) == []`; pool reconnect-after-idle.
-- Codec fixtures captured from real `bd --json` output, checked in with the bd version recorded.
+- Codec fixtures captured from real `bd --json` output, checked in with the bd version recorded. *(Promoted from ADR-0000 A1, 2026-06-11:)* fixtures live at `fixtures/upstream/<date>-bd-<version>/`, captured under `BD_JSON_ENVELOPE=1` — empty-workspace cases + `statuses`/`types` from the_grid, per-domain samples extracted from the HQ `bd export --include-infra` JSONL (never from `bd list`), a raw export sample, and an error-shape fixture. Re-capture only via the porting skill's procedure; never hand-edit.
 - Tagged integration suite: hermetic `bd init` temp workspace, real mutations, ordered typed events, ≤2s budget each, latencies printed.
 - SQL-vs-CLI equivalence test (tagged) as the schema-drift canary.
 - A test asserts no SQL writes and no `.beads/hooks/` modifications (PDR §6.6).
+
+## Decision 8 — Onboarding artifacts *(promoted from ADR-0000 A4, 2026-06-11)*
+
+Context survives compaction and reaches subagents through repo artifacts, not conversation history: `CLAUDE.md` (session contract — read-first chain, the gate, process rules including the ADR-0000 register, conventions, bd rules, environment facts, upstream pins) and `docs/M1-BUILD-ORDER.md` (dependency-ordered work breakdown for orchestration). `README.md` carries the public reading order. These are maintained as decisions evolve.
 
 ---
 

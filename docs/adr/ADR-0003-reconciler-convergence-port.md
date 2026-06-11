@@ -1,6 +1,6 @@
 # ADR-0003 — M2 reconciler: porting gc's convergence state machine
 
-**Status:** Proposed
+**Status:** Accepted 2026-06-11 (Nico)
 **Date:** 2026-06-11
 **Deciders:** Nico Spencer
 **Context:** M2 ports gc's work-convergence engine (`gascity/internal/convergence/`, ~11.5k LOC, of which ~3.8k is portable pure domain logic) into `grid_reconciler`, consuming `grid_controller`'s `GraphEvent` stream + `GraphSnapshot` and actuating through bd. Source spec assessed 2026-06-11 against gascity HEAD; key files: `handler.go` (9-step algorithm, lines 161–390), `reconcile.go` (recovery paths), `metadata.go` (schema), `gate.go`/`condition.go`/`hybrid.go` (gates), `manual.go`, `trigger.go`.
@@ -62,7 +62,11 @@ Reconciler actions execute via `grid_controller`'s mutation services. Multi-writ
 
 M2 ports `bd ready`'s predicate (`beads/internal/storage/issueops/ready_work.go`: status ∈ {open}, `is_blocked`=0 over {blocks, conditional-blocks, waits-for} edges with conditional-blocks' failure-keyword semantics, defer_until, ephemeral, sort policies) to run over the pooled Dolt connection — **gated by a differential test harness** that replays every integration scenario against both implementations and diffs results. `bd ready` remains the fallback and the oracle.
 
-## Decision 6 — Conformance via gc's test suite
+## Decision 6 — Operating mode: coexistence partition *(promoted from ADR-0000 A7, 2026-06-11)*
+
+While gc and the_grid both run, the_grid owns a bead/rig set **disjoint** from gc's reconciler — partitioned by rig and/or an ownership marker — because gc's convergence handler assumes a single writer per bead (invariant 7); two reconcilers on one convergence bead corrupts state for both. M2 shadow mode (computing transitions against live traffic and diffing them against gc's) is strictly read-only. The fs adoption ladder (`docs/M4-SCOPING.md`) sequences write authority accordingly: observe (M1) → shadow (M2) → drive one owned rig (M3) → cutover per rig (M4f).
+
+## Decision 7 — Conformance via gc's test suite
 
 gc's convergence tests are the executable spec. M2's definition of done includes a conformance suite transliterated from: `handler_test.go` (9-step coverage), `reconcile_test.go` (recovery paths), `manual_test.go`, `trigger_test.go`, `gate_test.go`, `hybrid_test.go`.
 

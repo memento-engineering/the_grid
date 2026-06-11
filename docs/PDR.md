@@ -1,6 +1,6 @@
 # PDR — the_grid: a reactive work-graph orchestrator in Dart
 
-**Status:** Draft for review
+**Status:** Accepted 2026-06-11 — **gate open** (ADR-0001–0004 Accepted; ADR-0000 A1–A7 promoted)
 **Date:** 2026-06-11
 **Author:** Nico Spencer (with Claude)
 
@@ -55,10 +55,10 @@ code we write. Everything above it is Dart.
 | Milestone | Deliverable | Proves |
 |---|---|---|
 | **M0** | `exploration_contract` extraction in lenny (pure-Dart plugin contract), preceded by the repo-wide `ext.exploration.*` prefix rename (see §9 Q1) | Prerequisite for G3 |
-| **M1** | Reactive beads controller across packages `grid_controller` (sdk) / `grid_cli` (mgmt) / `grid_exploration` (lenny plugin) + `grid_devtools` scaffold (ADR-0002): services (bd CLI + Dolt SQL) → snapshot repository → diff interactor → typed `GraphEvent` stream → Riverpod providers → domain-projection mechanism (agents, sessions, rigs as proving domains) → `grid watch` CLI → `GridControllerPlugin` speaking the exploration protocol. Plus the **porting skill**: a skill documenting how to track upstream gascity/beads releases, pull pack-protocol changes, and stay aligned while the port matures | The bet: Dart + Riverpod beats the polling loop; the process is live-debuggable; upstream drift is managed, not accidental |
+| **M1** | Reactive beads controller across packages `grid_controller` (sdk) / `grid_cli` (mgmt) / `grid_exploration` (lenny plugin) + `grid_devtools` scaffold (ADR-0002): services (bd CLI + Dolt SQL) → snapshot repository → diff interactor → typed `GraphEvent` stream → Riverpod providers → domain-projection mechanism (sessions, messages, molecules as proving domains — ADR-0002) → `grid watch` CLI → `GridControllerPlugin` speaking the exploration protocol. Plus the **porting skill**: a skill documenting how to track upstream gascity/beads releases, pull pack-protocol changes, and stay aligned while the port matures | The bet: Dart + Riverpod beats the polling loop; the process is live-debuggable; upstream drift is managed, not accidental |
 | **M2** | Reconciler skeleton: `DesiredState` + state machine consuming events/snapshots, emitting typed actions through bd mutations. Differential-tested ready-work SQL (removes `bd ready` from the hot path) | gc's convergence core works as a Dart state machine |
 | **M3** | Runtime providers: **tmux provider** (gc's default and ours — see §7a scope) + plain subprocess provider; spawn/supervise coding-agent sessions per ready bead, lifecycle tracked as beads | the_grid dispatches real work into attachable tmux sessions |
-| **M4** | Declarative topology (city-config equivalent) + orders/triggers | gc replacement proper. Scoping proposal: `docs/M4-SCOPING.md` (usage-driven M4a–f decomposition + fs adoption ladder — ADR-0000 A6, pending) |
+| **M4** | Declarative topology (city-config equivalent) + orders/triggers, decomposed M4a–f with just-in-time ADRs 0005–0010 per `docs/M4-SCOPING.md` (ratified via ADR-0000 A6); adoption via the fs ladder: observe (M1) → shadow (M2) → drive one rig (M3) → cutover per rig (M4f) | gc replacement proper — acceptance is the cutover test, not feature parity |
 
 Deferred deliverable (post-M1, no milestone assigned yet): an **upstream RFC document** for
 pushing the_grid's ideas (reactive controller, exploration-protocol observability) back to
@@ -73,7 +73,7 @@ Gas City.
 5. Unit suite green offline (no bd, no Dolt); tagged integration suite green against a hermetic `bd init` workspace.
 6. No writes ever issued over SQL; no files under `.beads/hooks/` touched (verified by test).
 7. The porting skill exists in-repo and covers: pinned upstream versions (gascity, beads), how to diff pack-protocol / `bd --json` schema changes against our fixtures, and the procedure for re-aligning when upstream moves.
-8. Domain projections prove out: `agentsProvider` / `sessionsProvider` / `rigsProvider` expose freezed domain values projected from real city beads (metadata mappings validated against fixtures captured from the live city).
+8. Domain projections prove out: `sessionsProvider` / `inboxProvider` / `moleculesProvider` expose freezed domain values projected from real city beads (metadata mappings validated against the pinned fixtures; ADR-0002 proving trio).
 
 ## 7. Constraints & environment facts
 
@@ -119,6 +119,8 @@ gc's tmux provider is its default runtime and the_grid will need one. Assessment
 ## 9. Open questions
 
 *(Gate: this section must be empty AND ADR-0001 through ADR-0004 must be **Accepted** before implementation starts — per Nico, the chain runs all the way through the M3/tmux ADR.)*
+
+**Gate opened 2026-06-11** — all questions resolved, ADR-0001–0004 Accepted, ADR-0000 A1–A7 promoted.
 
 1. ~~**Protocol naming:**~~ **Resolved 2026-06-11:** rename upstream in lenny to `ext.exploration.*` as a precursor to M0 (lenny bead lenny-wisp-41rdl, blocks lenny-wisp-9h557). `ext.flutter.*` is the framework's reserved namespace; registration is via `dart:developer.registerExtension`, so the `flutter` segment was hand-written, and a pure-Dart host advertising it would mislead Flutter-detection tooling. All consumers (agent/CLI/DevTools) live in lenny's monorepo and land in lockstep. See ADR-0001 Decision 6 (amended).
 2. ~~**M0 scoping:**~~ **Resolved 2026-06-11:** no lenny-side ADR for now (Nico will author one later); the work is tracked by the defined lenny beads (lenny-wisp-41rdl → lenny-wisp-9h557). the_grid consumes `exploration_contract` as a path dependency during development.

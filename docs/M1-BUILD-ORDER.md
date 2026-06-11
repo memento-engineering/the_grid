@@ -15,7 +15,7 @@ AI decisions made en route: ADR-0000 amendments, never silent.
 - **Track B — `BdCliService`**: runner (`Process.start`, timeout+kill, semaphore 4, `BD_JSON_ENVELOPE=1`), reads (`ready`, `export --include-infra` as snapshot read, `query`, multi-id `show`/`dep list`, `statuses`, `types`), mutations (`create/update/close/depAdd`, `batch`), error hierarchy.
 - **Track C — `DoltQueryService`** ⊣ Track 0.2: pool (1–2 conns, reconnect-on-error vs 30s reap), snapshot SELECTs (issues+deps+labels+metadata), `@@tg_working` probe, migrations-version guard with CLI fallback.
 - **Track D — reactivity core** ⊣ A, B (C optional): dirty-signal sources (`.beads` watcher, probe ticker, CLI poll fallback) → `GraphSyncInteractor` (dirty-bit + single-flight, 150ms quiet) → `BeadsRepository` (`AsyncValue<GraphSnapshot>`) → `GraphEventsTransformer` → providers. `fake_async` coalescing tests.
-- **Track E — domain projections** ⊣ A, D: projection mechanism + proving domains per ADR-0000 A2 disposition (pending: sessions/messages/molecules; if rejected: agents/sessions/rigs) + metadata codecs + `ProjectionError`.
+- **Track E — domain projections** ⊣ A, D: projection mechanism + proving domains **sessions, messages, molecules/steps** (ADR-0002, promoted A2) + metadata codecs + `ProjectionError`.
 - **Track F — `grid_exploration`** ⊣ D; blocked on lenny M0 for the contract dep (until then: build the pure-Dart host against the wire shapes — handshake / get_stable_observation / tools — verified against lenny source).
 - **Track G — `grid_cli` watch** ⊣ D: NDJSON `--json`, per-event reaction latency, VM-service URI banner.
 - **Track H — `grid_devtools` scaffold** ⊣ F: `devtools_extensions` shell + events-timeline panel over the exploration protocol.

@@ -1,6 +1,6 @@
 # ADR-0002 — Package topology and reactive domain projections
 
-**Status:** Proposed
+**Status:** Accepted 2026-06-11 (Nico)
 **Date:** 2026-06-11
 **Deciders:** Nico Spencer
 **Context:** ADR-0001 fixed the layering and substrate. This ADR fixes the package map (names set by Nico, 2026-06-11) and the requirement that **every grid domain gets reactive, typed views** — not just raw beads.
@@ -64,7 +64,7 @@ Gas City's docs define **five primitives** (Session, Beads Store, Event Bus, Con
 Consequences:
 - The snapshot composition MUST include the metadata column and infrastructure beads (SQL reads do naturally; the CLI fallback uses `bd export --include-infra` — ADR-0001 Decision 4 amendment).
 - Mapping fidelity comes from **fixtures captured from the live city per domain** (real agent/session/rig/message/molecule beads), checked in with the gc version recorded — the same pinning discipline as the bd codec fixtures. Health Patrol's composition (probe → threshold → restart) is a *consumer* of these projections and lands with M3.
-- M1 ships the mechanism plus the infrastructure trio **agents, sessions, rigs**; **message, molecule/step, convoy** land in M2 alongside the reconciler and the domain-event Transformers; the rest with their first consumer.
+- M1 ships the mechanism plus the proving trio **sessions, messages, molecules/steps** *(promoted from ADR-0000 A2, 2026-06-11 — the live city holds zero agent/rig/role/convoy beads; in current gc those are config/registry-derived, so there is nothing to pin their mappings against yet)*. `agent`/`role`/`rig`/`convoy` projections remain targets in the table above but wait on an upstream-representation investigation; remaining domains land with their first consumer.
 
 ## Decision 3 — grid_devtools rides the exploration protocol only
 

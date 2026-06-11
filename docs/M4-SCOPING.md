@@ -1,6 +1,6 @@
 # M4 scoping — usage-driven, sub-milestoned, adopted through fs
 
-**Status:** Proposal (ADR-0000 A6/A7 pending promotion)
+**Status:** Ratified 2026-06-11 (ADR-0000 A6/A7 promoted: A6 → PDR §5 + this doc; A7 → ADR-0003 Decision 6)
 **Date:** 2026-06-11
 
 ## The strategy

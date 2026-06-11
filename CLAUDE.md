@@ -15,7 +15,7 @@ builds everything.**
 
 ## Process rules (non-negotiable)
 
-- **The gate:** no implementation until ADR-0001–0004 are **Accepted** and PDR §9 is empty. Plan approval is NOT a start signal; Nico opens the gate explicitly.
+- **The gate: OPEN as of 2026-06-11** (ADR-0001–0004 Accepted, ADR-0000 A1–A7 promoted, PDR §9 empty). The rule persists for new scope: doc before code; Nico ratifies explicitly.
 - **ADR-0000 rule:** any decision made by AI goes into ADR-0000 as an amendment and stays there until Nico promotes it or shoots it down. Never write AI decisions directly into ADR-0001+ or silently change ratified docs to match your conclusions.
 - Brainstorm → PDR → ADR → zero open questions → code. New scope gets a doc before it gets code.
 - Fixtures are version-pinned (`fixtures/upstream/<date>-bd-<version>/`); re-capture via the porting skill's procedure, never edit by hand.
@@ -31,12 +31,12 @@ builds everything.**
 
 ## bd / beads rules
 
-- Always `BD_JSON_ENVELOPE=1`; assert `schema_version == 1`. Errors arrive **enveloped on stdout** with exit ≠ 0 (ADR-0000 A3).
+- Always `BD_JSON_ENVELOPE=1`; assert `schema_version == 1`. Errors arrive **enveloped on stdout** with exit ≠ 0 (ADR-0001 Decision 4).
 - Mutations: bd CLI only, `--actor grid-controller`. **Never SQL writes. Never touch `.beads/hooks/` (gc owns them).**
 - Grouped mutations: `bd batch` (one transaction, one DOLT_COMMIT). Bulk reads: `bd export --include-infra` / `bd query` / multi-id `bd show`. **Never spawn bd per issue in a loop.**
 - **Never call `bd show` from a re-query/controller path** — it writes `.beads/last-touched` and self-triggers the watcher.
-- `bd list` does not surface infra-typed beads (agent/rig/role) — use export for those (ADR-0000 A5).
-- **Coexistence safety (treat as binding even while ADR-0000 A7 is pending):** gc's convergence handler assumes a single writer per bead. Never reconcile or mutate beads gc's reconciler owns; any shadow/conformance experiment against live convergence traffic is strictly read-only.
+- `bd list` does not surface infra-typed beads (agent/rig/role) — use export for those (ADR-0001 Decision 4).
+- **Coexistence safety (ADR-0003 Decision 6):** gc's convergence handler assumes a single writer per bead. Never reconcile or mutate beads gc's reconciler owns; any shadow/conformance experiment against live convergence traffic is strictly read-only.
 
 ## Environment facts
 
