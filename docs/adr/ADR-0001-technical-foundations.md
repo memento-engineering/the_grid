@@ -55,11 +55,11 @@ All signals funnel to `GraphSyncInteractor`: dirty-bit + single-flight (signals 
 
 the_grid's process exposes exactly the exploration protocol — no bespoke `ext.grid.*` namespace:
 
-- `ext.flutter.exploration.core.handshake` → `{protocolVersion, plugins: [{namespace: "grid", tools: [...]}]}`
-- `ext.flutter.exploration.core.get_stable_observation` → observation envelope with empty `semantics`/`routes`, grid state under `plugins.grid`, `stability` reflecting in-flight refreshes
-- `ext.flutter.exploration.grid.<tool>` → tools: `requery`, `snapshot`, `ready`, `events` (ring buffer, 256), `stats` (read-path in use, signal counts per source, refresh latency)
+- `ext.exploration.core.handshake` → `{protocolVersion, plugins: [{namespace: "grid", tools: [...]}]}`
+- `ext.exploration.core.get_stable_observation` → observation envelope with empty `semantics`/`routes`, grid state under `plugins.grid`, `stability` reflecting in-flight refreshes
+- `ext.exploration.grid.<tool>` → tools: `requery`, `snapshot`, `ready`, `events` (ring buffer, 256), `stats` (read-path in use, signal counts per source, refresh latency)
 
-Prerequisite (M0, in lenny's repo): extract the pure-Dart **`exploration_contract`** package (plugin.dart, types.dart, registry.dart, de-Fluttered plugin_context.dart with `registerFrameCallback` optional), repoint exploration_flutter and plugins at it. the_grid consumes it (path dep during development) and ships `GridControllerPlugin` + a minimal pure-Dart host that registers the three extensions via `dart:developer`. Extension method names keep the `ext.flutter.exploration.` prefix verbatim — the agent/CLI/DevTools require those names today; renaming is cosmetic debt tracked in lenny.
+Prerequisite (M0, in lenny's repo): extract the pure-Dart **`exploration_contract`** package (plugin.dart, types.dart, registry.dart, de-Fluttered plugin_context.dart with `registerFrameCallback` optional), repoint exploration_flutter and plugins at it. the_grid consumes it (path dep during development) and ships `GridControllerPlugin` + a minimal pure-Dart host that registers the three extensions via `dart:developer`. Extension method names use the `ext.exploration.` prefix: the historical `ext.flutter.exploration.` prefix squatted the Flutter framework's reserved namespace (registration is via `dart:developer.registerExtension`, so the `flutter` segment was never framework-imposed) and would mislead Flutter-detection tooling once a pure-Dart host advertises it. Lenny renames repo-wide (agent/CLI/DevTools land in lockstep, bead lenny-wisp-41rdl) as a precursor to the extraction (bead lenny-wisp-9h557). *(Amended 2026-06-11: this reverses the original "keep verbatim" call, resolving PDR §9 Q1.)*
 
 **Consequence:** exploration_cli, exploration_devtools, and the exploration agent attach to the running orchestrator on day one; humans and agents share one debugging surface (PDR G3).
 

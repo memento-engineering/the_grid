@@ -53,7 +53,7 @@ code we write. Everything above it is Dart.
 
 | Milestone | Deliverable | Proves |
 |---|---|---|
-| **M0** | `exploration_contract` extraction in lenny (pure-Dart plugin contract) | Prerequisite for G3 |
+| **M0** | `exploration_contract` extraction in lenny (pure-Dart plugin contract), preceded by the repo-wide `ext.exploration.*` prefix rename (see §9 Q1) | Prerequisite for G3 |
 | **M1** | Reactive beads controller: services (bd CLI + Dolt SQL) → snapshot repository → diff interactor → typed `GraphEvent` stream → Riverpod providers → `grid watch` CLI → `GridControllerPlugin` speaking the exploration protocol. Plus the **porting skill**: a skill documenting how to track upstream gascity/beads releases, pull pack-protocol changes, and stay aligned while the port matures | The bet: Dart + Riverpod beats the polling loop; the process is live-debuggable; upstream drift is managed, not accidental |
 | **M2** | Reconciler skeleton: `DesiredState` + state machine consuming events/snapshots, emitting typed actions through bd mutations. Differential-tested ready-work SQL (removes `bd ready` from the hot path) | gc's convergence core works as a Dart state machine |
 | **M3** | Runtime providers: **tmux provider** (gc's default and ours — see §7a scope) + plain subprocess provider; spawn/supervise coding-agent sessions per ready bead, lifecycle tracked as beads | the_grid dispatches real work into attachable tmux sessions |
@@ -118,6 +118,6 @@ gc's tmux provider is its default runtime and the_grid will need one. Assessment
 
 *(Gate: this section must be empty before implementation starts.)*
 
-1. **Protocol naming:** the exploration extensions are literally `ext.flutter.exploration.core.*`. Keep the names verbatim in a non-Flutter process (agent/CLI/DevTools require them today), or rename upstream in lenny as part of M0? Proposed: keep verbatim, note as cosmetic debt in lenny.
+1. ~~**Protocol naming:**~~ **Resolved 2026-06-11:** rename upstream in lenny to `ext.exploration.*` as a precursor to M0 (lenny bead lenny-wisp-41rdl, blocks lenny-wisp-9h557). `ext.flutter.*` is the framework's reserved namespace; registration is via `dart:developer.registerExtension`, so the `flutter` segment was hand-written, and a pure-Dart host advertising it would mislead Flutter-detection tooling. All consumers (agent/CLI/DevTools) live in lenny's monorepo and land in lockstep. See ADR-0001 Decision 6 (amended).
 2. **M0 scoping:** does the `exploration_contract` extraction get its own ADR in lenny's repo (it changes lenny's package graph), and does the_grid consume it as a path dependency or git dependency? Proposed: ADR in lenny; path dep during development, git dep at first tag.
 3. **Package names:** `beads_client` / `beads_controller` / `grid_cli` — or domain names matching predictable-flutter value/reference conventions (e.g. `beads_services`, `grid_controller`)? Proposed: decide in ADR-0001 review.
