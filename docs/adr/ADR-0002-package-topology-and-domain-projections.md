@@ -16,44 +16,55 @@
 | **`grid_exploration`** | The lenny plugin: `GridControllerPlugin` + the minimal pure-Dart host registering the three `ext.exploration.*` extensions. | M1 | Depends on lenny's `exploration_contract` (M0 extraction) + `grid_controller`. |
 | **`grid_devtools`** | DevTools extension for the grid: events timeline, ready queue, graph/domain inspectors. | Scaffold in M1 (timeline panel); richer panels M2+ | Flutter web (`devtools_extensions`) — the only Flutter-dependent package in the workspace. Talks to the process exclusively over the exploration protocol. |
 | **`grid_reconciler`** | M2: the convergence state machine (`DesiredState`, transitions, actions) — see ADR-0003. | M2 | Pure Dart; consumes `grid_controller` events/snapshots, actuates via its mutation services. |
-| **`grid_runtime`** | M3: runtime providers (tmux, subprocess) — see ADR-0004. | M3 | Pure Dart. |
+| **`grid_runtime`** | M3: runtime providers (tmux, subprocess) — see ADR-0004. | M3 | Pure Dart; `TmuxProvider` is built on the `tmux` package. |
+| **`tmux`** | Standalone, general-purpose tmux client for Dart: command layer (Futures) + reactive layer (Streams) — see ADR-0004 Decision 2. | M3 | **Zero grid dependencies**; pub.dev candidate. |
 
 Dependency direction (longevity outward-in, per predictable-flutter):
 
 ```
 grid_cli ──┐
-grid_exploration ──┤──► grid_controller ◄── grid_reconciler ◄── grid_runtime (actions spawn sessions)
-grid_devtools ─────┘         (sdk)
+grid_exploration ──┤──► grid_controller ◄── grid_reconciler ◄── grid_runtime ──► tmux
+grid_devtools ─────┘         (sdk)                                (actions spawn sessions)
 ```
 
 Internal layout of `grid_controller` follows the skill: `lib/src/{models,services,repositories,interactors,selectors,providers}`, public API through the barrel only.
 
 Not packages: the porting skill (`skills/`), docs, fixtures.
 
-## Decision 2 — Reactive domain projections for every domain
+## Decision 2 — Reactive domain projections, grounded in Gas City's primitive model
 
-The bead graph is the *storage* model; it is not the *domain* model. the_grid's beads carry typed domains via `issue_type` + metadata — the workspace already declares them (`types.custom`): **agent, role, rig, session, molecule, convoy, message, event, gate, merge-request, spec, convergence, step**.
+*(Rewritten 2026-06-11 to ground projections in the documented concept model — [docs.gascityhall.com/concepts/primitives](https://docs.gascityhall.com/concepts/primitives) — rather than generic bead filtering.)*
 
-Requirement (Nico, 2026-06-11): every domain gets reactive typed views/transformations — agents, agent sessions, rigs, etc. — not ad-hoc bead filtering at call sites.
+Gas City's docs define **five primitives** (Session, Beads Store, Event Bus, Config, Prompt Templates) and **four derived mechanisms** (Messaging, Formulas & Molecules, Dispatch/Sling, Health Patrol) — and every derived mechanism is documented as a *composition over beads*: "everything is a bead", differentiated by type, labels, relationships, and metadata. That composition rule is exactly what a projection encodes. the_grid's domain model is therefore not invented here — it is the primitive model, made typed and reactive.
 
-Mechanism — one generic projection pattern, instantiated per domain:
+**Primitives → the_grid counterparts:**
 
-```dart
-/// A typed, reactive view over beads of one domain.
-abstract interface class DomainProjection<T> {
-  IssueType get type;                       // which beads belong to this domain
-  T fromBead(Bead bead, BeadMetadata meta); // decode (freezed value type)
-}
-```
+| Gas City primitive | the_grid counterpart |
+|---|---|
+| Beads Store ("the universal persistence substrate") | `GraphSnapshot` + `BeadsRepository` — the substrate everything projects from |
+| Event Bus ("reactive watching instead of polling") | the `GraphEvent` stream + domain-event Transformers — we make the beads layer itself reactive, which gc's bus (gc-emitted events only) does not |
+| Session ("a live process… work persists in the Beads Store, not the process") | `AgentSession` projection (M1); actuation in `grid_runtime` (M3) |
+| Config ("TOML with progressive activation") | M4 |
+| Prompt Templates ("the entire behavioral specification for a session") | M3/M4 — rendered at spawn by the runtime |
 
-- Each domain is a **freezed value type** (`Agent`, `AgentSession`, `Rig`, `Role`, `Convoy`, `Molecule`, `Gate`, `MergeRequest`, `Spec`, `Convergence`, `Step`, …) decoded from the bead + its metadata namespace.
-- Each domain gets **Selectors** exposed as providers, derived from the single `GraphSnapshot` via `select` (rebuild only on relevant change): `agentsProvider`, `agentProvider(id)`, `sessionsProvider`, `sessionsForAgentProvider(agentId)`, `rigsProvider`, `convergencesProvider`, … — list and per-id family per domain, plus domain-specific derived views (e.g. sessions by state, convergences by `convergence.state`).
-- **Domain events**: M1 ships the generic `GraphEvent` stream; domain-scoped event streams (e.g. `SessionStateChanged`, `ConvergenceIterated`) are *Transformers* over `GraphEvent` filtered by projection, added in M2 alongside the reconciler, which is their first consumer.
-- Field mappings for gc-authored domains (agent/session/rig metadata conventions) are captured as **fixtures from the live city** and ported per-domain; unknown metadata keys are preserved in a raw map so projections never lose data.
+**Derived mechanisms → projections.** Each projection is a freezed value type decoded from `(bead, metadata, labels, dependencies)` plus *named derived views* encoding that mechanism's documented composition rule:
+
+| Domain (bead type) | Value type | Composition rule (from the docs) | Derived reactive views |
+|---|---|---|---|
+| `agent`, `role`, `rig` | `Agent`, `Role`, `Rig` | Infrastructure beads; labels drive pool dispatch and rig scoping; issue prefix partitions rigs in one store | `agentsProvider`, `agentProvider(id)`, `rigsProvider`, `agentsInPoolProvider(label)`, `agentsForRigProvider(rig)` |
+| `session` | `AgentSession` | "Stable name even as the underlying process restarts"; disposable container, durable identity | `sessionsProvider`, `sessionsForAgentProvider(agent)`, `sessionsByStateProvider` |
+| `message` | `Message` | Mail = "bead with `type: message`"; "closing = archiving"; open + addressed = unread | `inboxProvider(agent)`, `threadProvider(id)` (via `replies-to` edges) |
+| `molecule` + `step` | `Molecule`, `Step` | "A formula instantiated at runtime: one root bead plus child step beads"; `needs` declares step deps; wisp = ephemeral molecule, TTL'd | `moleculesProvider`, `moleculeProgressProvider(id)` (closed/total steps), `runnableStepsProvider(id)` (needs satisfied), `isWisp` on the value type |
+| `convoy` | `Convoy` | "Container bead that groups related work as one tracked batch" | `convoysProvider`, `convoyProgressProvider(id)` (member rollup) |
+| `convergence` | `Convergence` | ADR-0003's metadata schema (`convergence.state`, iteration, gate config…) | `convergencesProvider`, `convergencesByStateProvider(state)`, `activeWispProvider(id)` |
+| `gate`, `merge-request`, `spec`, `event` | `Gate`, `MergeRequest`, `Spec`, `GridEventRecord` | the_grid `types.custom`; composition rules pinned from fixtures | list + per-id families; derived views added with their first consumer |
+
+**Metadata transformations are first-class.** Raw bead metadata is a JSON blob; each projection owns a **typed metadata codec for its namespace** (e.g. `convergence.*` per ADR-0003), and *Transformers* (predictable-flutter's stream-reshaping role) lift generic `GraphEvent`s into domain events — `SessionStateChanged`, `MessageReceived`, `MoleculeStepCompleted`, `ConvergenceIterated` — by running the projection over the before/after beads. Unknown metadata keys are preserved in a raw map (projections never lose data); decode failures surface as typed `ProjectionError` values, never silent drops.
 
 Consequences:
 - The snapshot composition MUST include the metadata column and infrastructure beads (SQL reads do naturally; the CLI fallback uses `bd export --include-infra` — ADR-0001 Decision 4 amendment).
-- M1 ships the mechanism plus three proving domains: **agents, sessions, rigs**. Remaining domains land with their first consumer (most arrive in M2 with the reconciler).
+- Mapping fidelity comes from **fixtures captured from the live city per domain** (real agent/session/rig/message/molecule beads), checked in with the gc version recorded — the same pinning discipline as the bd codec fixtures. Health Patrol's composition (probe → threshold → restart) is a *consumer* of these projections and lands with M3.
+- M1 ships the mechanism plus the infrastructure trio **agents, sessions, rigs**; **message, molecule/step, convoy** land in M2 alongside the reconciler and the domain-event Transformers; the rest with their first consumer.
 
 ## Decision 3 — grid_devtools rides the exploration protocol only
 
