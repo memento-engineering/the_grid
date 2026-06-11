@@ -41,3 +41,17 @@ Entry format: `A<n> (date) — title` · Decision · Why · Affects (docs/code t
 **Why:** `bd list --json --all --type agent/rig/role` returned empty envelopes in HQ while `--type message/session/molecule` returned data; export is the documented carrier of infra records.
 **Affects (if promoted):** ADR-0001 Decision 4 amendment wording; `BdCliService.list` documentation.
 **Status:** pending.
+
+## A6 (2026-06-11) — M4 is scoped usage-driven, decomposed M4a–M4f with just-in-time ADRs, adopted via the fs ladder
+
+**Decision:** M4 is scoped by the measured surface of the live city (audited 2026-06-11: 12 gc command families, 13 agent templates, 35 orders, 33 formulas, 2 active rigs — full inventory in `docs/M4-SCOPING.md`), decomposed into M4a config / M4b topology reconciler / M4c orders / M4d sling+hooks / M4e patrol / M4f cutover, each getting its ADR (0005–0010) just-in-time as predecessors land. M4 acceptance = cutover of one real rig, not feature parity. fs adoption is per-milestone: M1 observe, M2 shadow, M3 drive-one-rig (dogfood: the_grid rig), M4f replace.
+**Why:** One up-front M4 ADR would speculate against a target M1–M3 (and the upstream RFC) will move; the usage inventory makes the checklist finite and testable.
+**Affects (if promoted):** PDR §5 (M4 row → sub-milestones + ladder reference), `docs/M4-SCOPING.md` status.
+**Status:** pending.
+
+## A7 (2026-06-11) — Coexistence partition rule
+
+**Decision:** While gc and the_grid both run, the_grid owns a bead/rig set **disjoint** from gc's reconciler — partitioned by rig and/or ownership marker; M2 shadow mode is strictly read-only.
+**Why:** gc's convergence handler assumes a single writer per bead (ADR-0003 invariant 7); two reconcilers on one convergence bead corrupts state for both.
+**Affects (if promoted):** ADR-0003 (operating-mode section), M2/M3 acceptance criteria, M4-SCOPING.
+**Status:** pending.
