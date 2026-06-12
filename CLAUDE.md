@@ -9,9 +9,12 @@ builds everything.**
 1. `docs/PDR.md` — vision, goals, milestones, acceptance criteria, constraints, **the gate (§9)**
 2. `docs/adr/ADR-0000-ai-decision-register.md` — **process-critical, see below**
 3. `docs/adr/ADR-0001…0004` — ratified technical decisions (foundations, packages/projections, reconciler, runtime/tmux)
-4. `docs/M1-BUILD-ORDER.md` — dependency-ordered work breakdown
-5. `docs/M4-SCOPING.md` — usage-driven M4 decomposition + fs adoption ladder (proposal, ADR-0000 A6)
-6. The `predictable-flutter` skill (installed at `.claude/skills/predictable-flutter/`) — the architecture all code follows
+4. `docs/M1-BUILD-ORDER.md` — M1 dependency-ordered work breakdown (**M1 done — see below**)
+5. `docs/M2-BUILD-ORDER.md` — M2 (reconciler) orchestration spine, maps ADR-0003 → tracks
+6. `docs/M4-SCOPING.md` — usage-driven M4 decomposition + fs adoption ladder (proposal, ADR-0000 A6)
+7. The `predictable-flutter` skill (installed at `.claude/skills/predictable-flutter/`) — the architecture all code follows
+
+**M1 shipped (2026-06-11):** the reactive kernel is built, tested (183 offline + 5 integration green), and committed on branch `m1-reactive-kernel` (packages `grid_controller`/`grid_exploration`/`grid_cli`/`grid_devtools`). `grid demo` proves it. ADR-0000 A8–A14 record the en-route AI decisions (pending Nico). **Next: M2 per `docs/M2-BUILD-ORDER.md` + ADR-0003.**
 
 ## Process rules (non-negotiable)
 
