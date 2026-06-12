@@ -14,11 +14,18 @@ files = the conformance oracle, ADR-0003 D7).
 
 1. **`grid_reconciler` scaffold**: pubspec (depends on `grid_controller`, freezed/riverpod/
    test), add to the root pub workspace + melos. Green: `melos bootstrap` + `dart analyze`.
-2. **Wisp-pour verb spike** (ADR-0003 D4, "exact verb pinned during M2"): determine how bd
-   1.0.5 instantiates a formula/pours the next wisp (`bd mol pour` vs `bd` graph apply) and
-   the idempotency-key surface (`converge:{beadID}:iter:{N}`). Hermetic `bd init` probe; the
-   gc source is `convergence/create.go` + `formula.go`. Outcome → ADR-0000. If the verb
-   isn't reproducible offline, note it and stub the pour actuator behind the `Actuator` seam.
+2. **Wisp-pour verb spike** (ADR-0003 D4) — ✅ **RESOLVED** (2026-06-12, ADR-0000 **A15/A16**;
+   artifact `packages/grid_reconciler/tool/wisp_pour_spike.sh`). The pour IS offline-reproducible
+   and atomic via **`bd cook <formula> --mode=runtime` (resolve) → `bd create --graph <plan>
+   --ephemeral` (pour)**, the plan's root node carrying `parent_id`→convergence bead +
+   `metadata.idempotency_key = converge:{beadID}:iter:{N}` (the faithful CLI analog of gc's
+   in-process `molecule.Cook`; `bd mol wisp` is rejected — no parent/key/file surface).
+   **Idempotency is the_grid's own job** (`FindByIdempotencyKey` = scan the root's children for
+   the key metadata over the snapshot — no bd primitive). **A16 caveat:** `bd batch` cannot carry
+   `metadata` or `mol wisp` (allowed update keys: status/priority/title/assignee), so transition
+   metadata uses `bd update --metadata`; crash-safety rests on the write-ordering + idempotency
+   invariants, not batch atomicity. **Touches ratified ADR-0003 D4** → pending in ADR-0000, not
+   silently edited into D4.
 
 ## Parallel tracks (after Track 0.1)
 
@@ -97,4 +104,7 @@ files = the conformance oracle, ADR-0003 D7).
 - **No pinned convergence fixture** (Track I) — build B/C/D/H against gc's Go tests now; pin a real
   subgraph when a convergence runs.
 - **Shadow acceptance** needs live convergence traffic (none today) + dolt creds.
-- **bd pour verb** (Track 0.2) may not be offline-reproducible — keep it behind the `Actuator` seam.
+- ~~**bd pour verb** (Track 0.2) may not be offline-reproducible~~ — **resolved** (A15): it is, via
+  `cook`+`create --graph`. The `Actuator` seam stays for testability (fake in unit tests), not for an
+  offline gap. Track E must extend `grid_controller`'s `BdCliService` with a `--metadata` update path,
+  a `--graph --ephemeral` pour path, and a `cook --mode=runtime` resolve (A16 "Affects: code").
