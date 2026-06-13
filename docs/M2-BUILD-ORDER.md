@@ -56,10 +56,14 @@ files = the conformance oracle, ADR-0003 D7).
   transitions (A22). **Preserves all 7 invariants verbatim** (Track A's ordered-write getters encode
   invariant 2 incl. `last_processed_wisp` after `CloseBead` on terminal paths). Pure (no I/O/clock),
   exhaustively unit-tested against the transliterated conformance inventories.
-- **Track C — recovery / full-reconcile pass** ⊣ A, B: ports `reconcile.go` recovery paths
-  (state `""`→adopt/pour wisp 1 · `creating`→terminate · `terminated`-but-open→close+re-emit ·
-  `waitingManual`→re-emit hold + repair markers · `waitingTrigger`→no-op unless terminal ·
-  `active`→recover/replay/pour). Runs at startup + as a low-frequency backstop over the snapshot.
+- **Track C — recovery / full-reconcile pass** ✅ **DONE** (2026-06-13, 49 tests; design ADR-0000
+  **A25**) ⊣ A, B: `ConvergenceRecovery.reconcile(snapshot) → RecoveryReport`, a **pure** port of
+  `reconcile.go` recovery paths (state `""`→adopt/pour wisp 1 · `creating`→terminate ·
+  `terminated`-but-open→close+re-emit · `waitingManual`→re-emit hold + repair markers ·
+  `waitingTrigger`→no-op unless terminal · `active`→recover/replay/pour). Recovery effects are a
+  separate `RecoveryAction` union; the two replay paths **reuse `ConvergenceReducer`** (A22).
+  Idempotent = fixpoint-of-writes (the genuine manual hold re-emits every pass by design). Runs at
+  startup + as a low-frequency backstop. (Live-store-failure error paths deferred to Track G — A25.)
 - **Track D — gate execution** ✅ **DONE** (2026-06-13, ~105 tests; design ADR-0000 **A23**)
   ⊣ A: `GateRunnerService` over an injectable `ProcessRunner` seam (fake in unit tests, real
   subprocess in integration-tagged) returning a closed `ProcessRunOutcome`; gc's env contract
@@ -69,16 +73,18 @@ files = the conformance oracle, ADR-0003 D7).
   `iterate`/`retry`(≤3)/`manual`/`terminate`; bounded stdout/stderr capture; **symlink/traversal
   containment** ported + escape-tested (A23 — the trusted-roots guard is built but wired by Track E/G
   at the exec call site). Agent-verdict channel is read, not reinterpreted.
-- **Track E — actuator** ⊣ A, B, grid_controller: executes `ReconcilerAction`s' ordered writes
-  (A17 getters). **Not via `bd batch`** (A16: batch carries no `metadata`, no `delete`, no `mol`/
-  `--graph`) — transitions are sequenced calls ordered by the write-ordering invariant: metadata
-  via `bd update --metadata <json>` (merges; works on closed beads — A15 correction), **burn** via
-  `bd delete` post-order subtree (NOT close — A16), **pour** via `bd cook --mode=runtime` +
-  `bd create --graph` **PERSISTENT — no `--ephemeral`** (A15 correction: gc's iterations are
-  committed `issues` beads), idempotency pre-checked by a **live** probe immediately before pour
-  (snapshot scan is the fast/shadow path only — duplicate-pour freshness, A17). Requires extending
-  grid_controller's `BdCliService` with `update(--metadata)`, `create(--graph)`, `delete`, and a
-  `cook` resolve. The `Actuator` interface is the seam (fake in tests; ADR-0003 D4).
+- **Track E — actuator** ✅ **DONE** (2026-06-13, ~235 tests, passed both adversarial lenses with
+  no fix round; design ADR-0000 **A26**) ⊣ A, B, grid_controller: the_grid's **only writer** —
+  `Actuator` seam (+ `BdActuator`/`FakeActuator`) executing a `ReduceResult`'s ordered writes (A17
+  getters). **Not via `bd batch`** (A16) — sequenced calls ordered by the write-ordering invariant:
+  metadata via `bd update --metadata` (merges; works on closed beads), **burn** via `bd delete`
+  subtree in natural post-order (NOT close — only *speculative* wisps burn; a stopped active wisp is
+  *closed*, A26), **pour** via `bd cook --mode=runtime` + `bd create --graph` **PERSISTENT — no
+  `--ephemeral`** (A15), idempotency pre-checked by a **live** `DoltQueryService` SELECT probe
+  (`JSON_EXTRACT(metadata,'$.idempotency_key')`, not `bd show`) immediately before pour (A17).
+  Extended grid_controller's `BdCliService` (`update(--metadata)`, `applyGraph`, `delete`, `cook`)
+  + `GraphApplyPlan`. Step-8 bus events deferred to Track G's exec site. Seam fakes in tests; no
+  live writes (ADR-0003 D4/D6).
 - **Track F — ready-work SQL port + differential harness** ✅ **DONE** (2026-06-13, +26 offline +
   hermetic differential green; design + correction ADR-0000 **A24**) ⊣ grid_controller
   (DoltQueryService): ported `issueops/ready_work.go`'s predicate (status∈{open}, `is_blocked`=0 over

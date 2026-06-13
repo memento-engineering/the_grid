@@ -42,4 +42,15 @@ export 'src/reducer/reducer.dart';
 // Service + its process seam, env contract, and path-containment defenses.
 export 'src/gates/gates.dart';
 
-// Track C / E–G surfaces land here as they're built per docs/M2-BUILD-ORDER.md.
+// Track C — recovery / full-reconcile pass (ADR-0003 Decision 2 recovery
+// paths): gc's Reconciler ported as a pure, idempotent pass over a snapshot.
+export 'src/recovery/recovery.dart';
+
+// Track E — the actuator (ADR-0003 Decision 4): the_grid's ONLY writer — the
+// seam, its bd-backed impl, the live idempotency probe, and the test fake.
+export 'src/actuator/actuator.dart';
+export 'src/actuator/bd_actuator.dart';
+export 'src/actuator/fake_actuator.dart';
+export 'src/actuator/idempotency_probe.dart';
+
+// Track G (runtime + shadow) lands here per docs/M2-BUILD-ORDER.md.
