@@ -29,17 +29,23 @@ files = the conformance oracle, ADR-0003 D7).
 
 ## Parallel tracks (after Track 0.1)
 
-- **Track A — convergence domain + metadata codec** *(pure; the contract everything binds to)*:
-  freezed `ConvergenceState {creating, active, waitingManual, waitingTrigger, terminated}`;
-  the typed `convergence.*` metadata codec (16 keys — `state, iteration, max_iterations,
-  formula, target, gate_mode, gate_condition, gate_timeout, gate_timeout_action, active_wisp,
-  last_processed_wisp, agent_verdict, agent_verdict_wisp, gate_outcome, gate_exit_code,
-  gate_outcome_wisp`; source `metadata.go`), preserving unknown keys in a raw map (A13
-  pattern); `GateMode {manual, condition, hybrid}`; `GateOutcome {pass, fail, timeout, error}`;
-  sealed `ReconcilerAction {iterate, approved, noConvergence, waitingManual, waitingTrigger,
-  stopped, skipped}` — every action is data. `Convergence`/`Wisp` projections over `(bead,
-  metadata, deps)` (ADR-0002 D2: `convergencesProvider`, `convergencesByStateProvider`,
-  `activeWispProvider`).
+- **Track A — convergence domain + metadata codec** ✅ **DONE** (2026-06-13, 240 tests; design
+  pinned in ADR-0000 **A17–A19**) *(pure; the contract everything binds to)*:
+  `ConvergenceState {creating, active, waiting_manual, waiting_trigger, terminated}` (⚠ snake_case
+  wire) with a total-decode `ConvergenceStateReading {notAdopted | known | unrecognized}`;
+  the typed `convergence.*` metadata codec — **31 keys, not 16** (A18 corrects the count; the
+  build order's original list omitted `pending_next_wisp` + 14 others, several invariant-load-
+  bearing; source `metadata.go:12-44`), each field a `FieldReading {value|absent|malformed}`,
+  unknown keys preserved verbatim so `encode(decode(m))==m` (A13 pattern); `GateMode`/`GateOutcome`/
+  `GateTimeoutAction`/`TriggerMode` closed enums, `TerminalReason`/`WaitingReason`/`Verdict` open
+  extension types (gc passes them through unvalidated); Go-scalar parity (`GoDuration`, `goAtoi`…)
+  pinned to go1.26 output. Sealed `ReconcilerAction` (the 7 ADR-0003 wire actions + carrier
+  variants `pourSpeculative`/`persistGateOutcome`/`repairIteration`/`failed`/`requeue`) — every
+  action is data, exposing its gc ordered-write sequence as derived getters; `ReducerEvent` is the
+  `reduce()` input. `Convergence`/`Wisp` projections over the snapshot (reusing grid_controller's
+  `ProjectionResult`; `Wisp.subtreeIds` post-order = burn order, `speculativeNodes`,
+  `findByIdempotencyKey`) + providers (ADR-0002 D2: `convergencesProvider`,
+  `convergencesByStateProvider` keyed by the *reading*, `activeWispProvider`).
 - **Track B — the pure state machine** ⊣ A: `reduce(state, event, snapshot) → (state′,
   List<ReconcilerAction>)`, switch-matched + exhaustive (ports `handler.go` lines 161–390,
   the 9-step algorithm + ADR-0003's transition table). **Preserves all 7 invariants verbatim**:
@@ -57,10 +63,16 @@ files = the conformance oracle, ADR-0003 D7).
   deadline=timeout / pre-exec=error); timeout actions `iterate`/`retry`(≤3)/`manual`/`terminate`;
   stdout/stderr capture + truncate into metadata; path traversal/symlink containment defenses.
   Agent-verdict channel is read, not reinterpreted.
-- **Track E — actuator** ⊣ A, B, grid_controller: executes `ReconcilerAction`s via
-  `BdCliService.batch` — multi-write transitions (metadata sets + close, burn + repoint) as ONE
-  `bd batch` (one commit, atomic, one dirty signal back into our own controller). Wisp pour via
-  the Track-0.2 verb. The `Actuator` interface is the seam (fake in tests; ADR-0003 D4).
+- **Track E — actuator** ⊣ A, B, grid_controller: executes `ReconcilerAction`s' ordered writes
+  (A17 getters). **Not via `bd batch`** (A16: batch carries no `metadata`, no `delete`, no `mol`/
+  `--graph`) — transitions are sequenced calls ordered by the write-ordering invariant: metadata
+  via `bd update --metadata <json>` (merges; works on closed beads — A15 correction), **burn** via
+  `bd delete` post-order subtree (NOT close — A16), **pour** via `bd cook --mode=runtime` +
+  `bd create --graph` **PERSISTENT — no `--ephemeral`** (A15 correction: gc's iterations are
+  committed `issues` beads), idempotency pre-checked by a **live** probe immediately before pour
+  (snapshot scan is the fast/shadow path only — duplicate-pour freshness, A17). Requires extending
+  grid_controller's `BdCliService` with `update(--metadata)`, `create(--graph)`, `delete`, and a
+  `cook` resolve. The `Actuator` interface is the seam (fake in tests; ADR-0003 D4).
 - **Track F — ready-work SQL port + differential harness** ⊣ grid_controller (DoltQueryService):
   port `issueops/ready_work.go`'s predicate (status∈{open}, `is_blocked`=0 over
   {blocks, conditional-blocks, waits-for} with conditional-blocks failure-keyword semantics,
@@ -69,10 +81,17 @@ files = the conformance oracle, ADR-0003 D7).
   stays the oracle + fallback. Live half self-skips without `GC_DOLT_PASSWORD`.
 - **Track G — reconciler runtime + shadow mode** ⊣ B, C, D, E: wires the `GraphEvent` stream →
   per-bead **serialized** processing (invariant 7) → state machine (B) → actuator (E) + the
-  periodic full reconcile (C); Riverpod providers for convergence projections. **Shadow mode
-  (ADR-0003 D6, strictly read-only):** compute every transition gc would make, diff against what
-  gc actually did, report divergence — no writes. Coexistence partition enforced (disjoint
-  bead/rig set; ownership marker).
+  periodic full reconcile (C); Riverpod providers for convergence projections. **Freshness (A17):**
+  events are evaluated against a **write-through post-actuation overlay**, never the raw snapshot
+  (else a stale snapshot re-fires `triggerPassed` → duplicate pour); the operator-stop **drain**
+  is re-enqueued as `OperatorStopEvent(postDrain: true)` behind the synthesized `wispClosed`
+  pipeline (A19). **Dirty signal (A21):** `SELECT @@<db>_working` already flips on dolt-ignored
+  wisp writes, so the SQL probe alone catches gc's cross-workspace wisp closes (the file-watcher
+  cannot) — no wisp-specific augmentation needed; treat it as sufficient-not-necessary (structural
+  diff is authority). **Shadow mode (ADR-0003 D6, strictly read-only):** compute every transition
+  gc would make, diff against what gc actually did, report divergence — no writes. gc's convergence
+  wisps are persistent `issues` beads (A15 correction), so shadow reads them directly. Coexistence
+  partition enforced (disjoint bead/rig set; ownership marker).
 - **Track H — conformance suite** ⊣ B, C, D: transliterate gc's convergence tests into Dart —
   `handler_test.go` (9-step), `reconcile_test.go` (recovery), `manual_test.go`, `trigger_test.go`,
   `gate_test.go`, `hybrid_test.go`. The executable spec (ADR-0003 D7).
