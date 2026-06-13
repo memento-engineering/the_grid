@@ -1,0 +1,73 @@
+{
+  "captured_by": "gascity cmd/gc real writer (MemStore); gc binary 1.1.1 / source 4e1e6f66d",
+  "convergence_root": "gc-1",
+  "root_metadata": {
+    "convergence.active_wisp": "gc-2",
+    "convergence.city_path": "/tmp/gct8807-281792454/TestZZTrackICapture864639694/001",
+    "convergence.evaluate_prompt": "",
+    "convergence.formula": "test-formula",
+    "convergence.gate_condition": "",
+    "convergence.gate_mode": "manual",
+    "convergence.gate_timeout": "",
+    "convergence.gate_timeout_action": "",
+    "convergence.iteration": "1",
+    "convergence.max_iterations": "3",
+    "convergence.rig": "",
+    "convergence.state": "active",
+    "convergence.target": "test-agent",
+    "convergence.trigger": "",
+    "convergence.trigger_condition": ""
+  },
+  "scenario": "01-active-manual",
+  "subgraph": {
+    "id": "gc-1",
+    "title": "Convergence: test-formula",
+    "issue_type": "convergence",
+    "status": "open",
+    "metadata": {
+      "convergence.active_wisp": "gc-2",
+      "convergence.city_path": "/tmp/gct8807-281792454/TestZZTrackICapture864639694/001",
+      "convergence.evaluate_prompt": "",
+      "convergence.formula": "test-formula",
+      "convergence.gate_condition": "",
+      "convergence.gate_mode": "manual",
+      "convergence.gate_timeout": "",
+      "convergence.gate_timeout_action": "",
+      "convergence.iteration": "1",
+      "convergence.max_iterations": "3",
+      "convergence.rig": "",
+      "convergence.state": "active",
+      "convergence.target": "test-agent",
+      "convergence.trigger": "",
+      "convergence.trigger_condition": ""
+    },
+    "children": [
+      {
+        "id": "gc-2",
+        "title": "test-formula",
+        "issue_type": "molecule",
+        "status": "open",
+        "parent": "gc-1",
+        "ref": "test-formula",
+        "metadata": {
+          "gc.formula_hash": "04bf4b9830057290dff321c5ae12cbc790ada229786488c27a34455b7ffad2da",
+          "gc.formula_source": "/tmp/gct8807-281792454/gascity-gc-test-fixtures-pid8807-1402046620/formulas/test-formula.toml",
+          "idempotency_key": "converge:gc-1:iter:1"
+        },
+        "children": [
+          {
+            "id": "gc-3",
+            "title": "Work",
+            "issue_type": "step",
+            "status": "open",
+            "parent": "gc-2",
+            "ref": "test-formula.work",
+            "metadata": {
+              "gc.step_ref": "test-formula.work"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

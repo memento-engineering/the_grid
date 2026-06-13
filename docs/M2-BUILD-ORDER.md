@@ -122,13 +122,19 @@ files = the conformance oracle, ADR-0003 D7).
   lifecycle conformance tests through the real `ReconcilerRuntime` (the layer units can't provide).
   The coverage report is the DoD-criterion-1 artifact. n-a classes documented (create/retry → M3;
   live-store-I/O → Track-G seam; gate-internals → Track D suite). The executable spec (ADR-0003 D7).
-- **Track I — convergence fixture capture** *(just-in-time; DATA GAP)*: capture a real
-  `convergence + gate + wisp + molecule + step + needs` subgraph and pin it (folds in A13's
-  molecule/step gap). Validates the Track-A metadata codec against reality. **Blocked on live
-  convergence activity** — the live city currently holds ZERO convergence/gate/wisp beads
-  (export histogram = session/task/bug), so until a convergence runs, A's codec is validated
-  synthetically + against the Go tests only. Source for synthetic fixtures: gc's own test
-  fixtures under `convergence/*_test.go`.
+- **Track I — convergence fixture capture** ◐ **codec half DONE** (2026-06-13; ADR-0000 **A29**)
+  *(decoupled — the "blocked on a live convergence" framing conflated two halves)*:
+  **(a) codec fidelity ✅** — captured **real gc-produced** convergence metadata across 6 states by
+  driving gc's *actual* writer through `cmd/gc`'s test seam (`MemStore` + fake provider, **no
+  supervisor/agents/live city** — `gc start` is machine-wide, avoided; gascity compiles with
+  `icu4c@78` CGO flags), bd-export round-tripped, pinned at
+  `fixtures/upstream/2026-06-11-bd-1.0.5/convergence/`. The codec decodes all 6 **total + clean,
+  byte-for-byte round-trip, no lib change** — the fixtures *confirm* Track A. A shadow **replay
+  harness** + AGREE/DIVERGE goldens validate the divergence mechanism offline (and surfaced a real
+  manual-loop divergence — the D6 signal). **(b) live shadow ◐** — diffing against *live* gc traffic
+  still needs a convergence running on a the_grid-owned disjoint rig (gc writes, the_grid reads):
+  **M3 dogfood**, needs Nico + creds + ADR-0006. Folds in A13's molecule/step gap (the captured
+  subgraph carries the real molecule→step→needs shape).
 
 ## Dependency spine
 
@@ -141,15 +147,17 @@ files = the conformance oracle, ADR-0003 D7).
 2. ✅ Ready-work SQL **differential-equal** to `bd ready` across all scenarios (D5, F) — three-half
    harness (hermetic oracle + hermetic `dolt sql-server` SQL-port + live, A24); live half self-skips.
 3. ✅ Gate subprocess contract verified — env, exit-code→outcome, timeout actions, containment (D, A23).
-4. ◐ **Shadow mode** is built and **structurally read-only** (A27) + offline-testable now; the **live**
-   half (diff against real gc convergence traffic) is **gated on convergence activity + `GC_DOLT_PASSWORD`**
-   — degrades exactly like M1 criteria 2/4 (no live convergence beads exist yet; Track I).
+4. ◐ **Shadow mode** is built, **structurally read-only** (A27), and its divergence **mechanism is now
+   validated offline against REAL gc bytes** — the Track-I capture + replay harness/goldens, which even
+   surfaced a genuine manual-loop divergence (A29). The codec is confirmed total+clean vs reality. The
+   remaining **live** half (diff against *live* gc convergence traffic) is **M3 dogfood** — needs gc
+   running a convergence on a the_grid-owned disjoint rig + `GC_DOLT_PASSWORD` (degrades like M1 2/4).
 5. ✅ Coexistence partition respected: ownership gates the whole cycle, shadow constructs no writer (D6, A27).
-6. ✅ Every en-route AI decision sits in ADR-0000 as pending (A15–A28).
+6. ✅ Every en-route AI decision sits in ADR-0000 as pending (A15–A29).
 
 **Carried to M3 (do not block M2 acceptance):** a **recovery actuator** (the runtime actuates only
-reducer-shaped replay plans; recovery-specific effects are surfaced as data — A27); the **Track I**
-real-convergence fixture (validates the codec against reality + lights up the live shadow half).
+reducer-shaped replay plans; recovery-specific effects are surfaced as data — A27); the **Track I live
+shadow** run (codec fidelity ✅ A29; the live-traffic diff lights up when gc drives one owned-rig convergence).
 
 ## Known gaps carried in (do not let these block the pure core)
 
