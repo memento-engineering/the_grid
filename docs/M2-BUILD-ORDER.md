@@ -115,9 +115,13 @@ files = the conformance oracle, ADR-0003 D7).
   gc would make, diff against what gc actually did, report divergence — no writes. gc's convergence
   wisps are persistent `issues` beads (A15 correction), so shadow reads them directly. Coexistence
   partition enforced (disjoint bead/rig set; ownership marker).
-- **Track H — conformance suite** ⊣ B, C, D: transliterate gc's convergence tests into Dart —
-  `handler_test.go` (9-step), `reconcile_test.go` (recovery), `manual_test.go`, `trigger_test.go`,
-  `gate_test.go`, `hybrid_test.go`. The executable spec (ADR-0003 D7).
+- **Track H — conformance suite** ✅ **DONE** (2026-06-13; design ADR-0000 **A28**; report
+  `doc/port/conformance-report.md`) ⊣ B, C, D: audited all **21 gc `*_test.go` (165 funcs)** against
+  source — every must-priority case already covered faithfully by the per-component suites
+  (reducer/recovery/gates/literals), **zero must-gaps, zero real bugs**; added 5 **end-to-end**
+  lifecycle conformance tests through the real `ReconcilerRuntime` (the layer units can't provide).
+  The coverage report is the DoD-criterion-1 artifact. n-a classes documented (create/retry → M3;
+  live-store-I/O → Track-G seam; gate-internals → Track D suite). The executable spec (ADR-0003 D7).
 - **Track I — convergence fixture capture** *(just-in-time; DATA GAP)*: capture a real
   `convergence + gate + wisp + molecule + step + needs` subgraph and pin it (folds in A13's
   molecule/step gap). Validates the Track-A metadata codec against reality. **Blocked on live
@@ -130,16 +134,22 @@ files = the conformance oracle, ADR-0003 D7).
 
 `0 → A → {B, D, F} → {C, E} → G → H` · I just-in-time.
 
-## Definition of done (ADR-0003 + PDR §5 M2 row)
+## Definition of done (ADR-0003 + PDR §5 M2 row) — STATUS 2026-06-13
 
-1. State machine + recovery **conformance-green** against the transliterated gc suite (D7, H).
-2. Ready-work SQL **differential-equal** to `bd ready` across all scenarios (D5, F).
-3. Gate subprocess contract verified — env, exit-code→outcome, timeout actions, containment (D).
-4. **Shadow mode** runs read-only against live convergence traffic and reports divergence vs gc
-   (D2/D6) — the live half gated on convergence activity + `GC_DOLT_PASSWORD` (degrades like M1
-   criteria 2/4; mechanism + replay-against-fixtures testable offline now).
-5. Coexistence partition respected: disjoint bead set, shadow never writes (D6).
-6. Every en-route AI decision sits in ADR-0000 as pending.
+1. ✅ State machine + recovery **conformance-green** against the transliterated gc suite (D7, H) —
+   all 21 gc `*_test.go` must-cases covered faithfully + e2e; report `doc/port/conformance-report.md` (A28).
+2. ✅ Ready-work SQL **differential-equal** to `bd ready` across all scenarios (D5, F) — three-half
+   harness (hermetic oracle + hermetic `dolt sql-server` SQL-port + live, A24); live half self-skips.
+3. ✅ Gate subprocess contract verified — env, exit-code→outcome, timeout actions, containment (D, A23).
+4. ◐ **Shadow mode** is built and **structurally read-only** (A27) + offline-testable now; the **live**
+   half (diff against real gc convergence traffic) is **gated on convergence activity + `GC_DOLT_PASSWORD`**
+   — degrades exactly like M1 criteria 2/4 (no live convergence beads exist yet; Track I).
+5. ✅ Coexistence partition respected: ownership gates the whole cycle, shadow constructs no writer (D6, A27).
+6. ✅ Every en-route AI decision sits in ADR-0000 as pending (A15–A28).
+
+**Carried to M3 (do not block M2 acceptance):** a **recovery actuator** (the runtime actuates only
+reducer-shaped replay plans; recovery-specific effects are surfaced as data — A27); the **Track I**
+real-convergence fixture (validates the codec against reality + lights up the live shadow half).
 
 ## Known gaps carried in (do not let these block the pure core)
 
