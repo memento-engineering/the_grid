@@ -14,7 +14,9 @@ builds everything.**
 6. `docs/M4-SCOPING.md` — usage-driven M4 decomposition + fs adoption ladder (proposal, ADR-0000 A6)
 7. The `predictable-flutter` skill (installed at `.claude/skills/predictable-flutter/`) — the architecture all code follows
 
-**M1 shipped (2026-06-11):** the reactive kernel is built, tested (183 offline + 5 integration green), and committed on branch `m1-reactive-kernel` (packages `grid_controller`/`grid_exploration`/`grid_cli`/`grid_devtools`). `grid demo` proves it. ADR-0000 A8–A14 record the en-route AI decisions (pending Nico). **Next: M2 per `docs/M2-BUILD-ORDER.md` + ADR-0003.**
+**M1 shipped (2026-06-11):** the reactive kernel is built, tested (183 offline + 5 integration green), and committed on branch `m1-reactive-kernel` (packages `grid_controller`/`grid_exploration`/`grid_cli`/`grid_devtools`). `grid demo` proves it. ADR-0000 A8–A14 record the en-route AI decisions (pending Nico).
+
+**M2 built (2026-06-13) — pending ratification:** the convergence reconciler is built, tested (771 offline + 49 integration green), and committed on branch `m2-reconciler` (new pkg `grid_reconciler`). All spine tracks done — `0→A→{B,D,F}→{C,E}→G→H` (domain+codec, reducer, gates, ready-work SQL, recovery, actuator, runtime+shadow, conformance). DoD `docs/M2-BUILD-ORDER.md` §"Definition of done": 1✅2✅3✅4◐(live shadow half gated on real convergence traffic + creds)5✅6✅. **ADR-0000 A15–A28 record the en-route AI decisions (pending Nico)** — three touch *ratified* ADR-0003 and need disposition: **A16** (D4: `bd batch` carries no metadata→`bd update --metadata`), **A19** (D2: transition table incomplete vs gc source), **A24** (D5: `bd ready` has no conditional-blocks failure-keyword semantics). Branch **not pushed, not merged to main** (awaiting Nico). Carried to M3: a **recovery actuator** (A27) + **Track I** real-convergence fixture (lights up the live shadow half). **Next: Nico ratifies A15–A28 + decides push/merge; then M3 per ADR-0004.**
 
 ## Process rules (non-negotiable)
 
