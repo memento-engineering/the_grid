@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import '../codecs/envelope.dart';
 import '../errors/bd_exception.dart';
@@ -6,6 +7,7 @@ import '../models/bead.dart';
 import '../models/bead_dependency.dart';
 import '../models/bead_status.dart';
 import '../models/dependency_type.dart';
+import '../models/graph_apply_plan.dart';
 import '../models/issue_type.dart';
 import 'bd_runner.dart';
 
@@ -150,14 +152,34 @@ class BdCliService {
     return _idFromEnvelope(env);
   }
 
-  /// `bd update <id> [--title …] [--status …] [--priority …] [--description …]`.
+  /// `bd update` with any of `--title`, `--status`, `--priority`,
+  /// `--description`, `--type`, `--assignee`, `--metadata '{…}'`.
   /// Only the provided fields are sent.
+  ///
+  /// **[metadata] is the convergence-transition write channel (ADR-0000
+  /// A16).** It is emitted as `--metadata '<json>'` (a single JSON object),
+  /// which bd **MERGES** into the bead's existing metadata — keys carried
+  /// here overwrite, keys absent are preserved (beads `cmd/bd/update.go`
+  /// `mergeMetadata`, spike-pinned `tool/wisp_pour_spike.sh`) — so a write
+  /// sequence carries ONLY its named keys and never clobbers the agent-owned
+  /// `convergence.agent_verdict*` channel. The update **succeeds on a CLOSED
+  /// bead**, which the terminal `last_processed_wisp` write (written AFTER
+  /// the close) requires (ADR-0000 A19). An empty [metadata] map is omitted.
+  ///
+  /// [type] and [assignee] are the speculative-wisp **activation** channel
+  /// (`ActivateWisp`, convergence_store.go:204-246): a deferred node is
+  /// promoted by restoring its real `gc.deferred_type`/`gc.deferred_assignee`
+  /// via `-t`/`--assignee` (with the `gc.routed_to`/`gc.execution_routed_to`
+  /// values riding [metadata]).
   Future<void> update(
     String id, {
     String? title,
     BeadStatus? status,
     int? priority,
     String? description,
+    IssueType? type,
+    String? assignee,
+    Map<String, String>? metadata,
   }) async {
     // Decode asserts the schema version (drift guard) on the mutation path too;
     // a non-zero exit was already raised inside _runEnvelope.
@@ -168,6 +190,9 @@ class BdCliService {
         status: status,
         priority: priority,
         description: description,
+        type: type,
+        assignee: assignee,
+        metadata: metadata,
       ),
     );
   }
@@ -198,6 +223,77 @@ class BdCliService {
     if (lines.isEmpty) return;
     final script = lines.join('\n');
     await _runEnvelope(batchArgs(), stdin: script);
+  }
+
+  /// `bd cook <formula> --mode=runtime [--var k=v …] --json` — **resolves**
+  /// a formula's step DAG with variables substituted (ADR-0000 A15 step 1).
+  ///
+  /// This is a **READ, not a mutation** — it does not persist a proto (no
+  /// `--persist`), so it carries no `--actor` (nothing is written to audit).
+  /// Returns the resolved envelope's `data` map verbatim (the
+  /// `proto_id`/`formula`/`steps` shape, cook.go:309); the caller (the M2
+  /// actuator) reads `data['steps']` to build a [GraphApplyPlan].
+  ///
+  /// [formula] is a formula file path or a registered formula name (cook
+  /// resolves both). [mode] defaults to `runtime` (substitute vars). [vars]
+  /// become repeated `--var k=v` flags.
+  Future<Map<String, dynamic>> cook(
+    String formula, {
+    String mode = 'runtime',
+    Map<String, String> vars = const {},
+  }) async {
+    final env = await _runEnvelope(cookArgs(formula, mode: mode, vars: vars));
+    return env.dataMap;
+  }
+
+  /// `bd delete <id> --force` — the **burn** primitive (ADR-0000 A16): a
+  /// subtree delete that removes the bead (and its descendants) entirely.
+  ///
+  /// Convergence **burns a speculative wisp by deleting it, NEVER closing**:
+  /// a closed speculative wisp keeps its `converge:…:iter:N` key prefix +
+  /// closed status and permanently inflates `deriveIterationCount`
+  /// (ADR-0003 invariant 4; handler-9step trap 2). The actuator calls this
+  /// in **post-order** over `Wisp.subtreeIds` (children before parents).
+  /// `--force` skips the interactive confirmation (non-interactive spawn).
+  Future<void> delete(String id) async {
+    await _runEnvelope(deleteArgs(id));
+  }
+
+  /// `bd create --graph <plan-file> [--ephemeral] --json` — the atomic
+  /// graph-apply pour (ADR-0000 A15 step 2): one transaction / one
+  /// `DOLT_COMMIT`. Returns the `key → bead-id` map (the envelope's
+  /// `data.ids`, graph_apply.go:48-51).
+  ///
+  /// **DEFAULT [ephemeral] = false (PERSISTENT).** A convergence pour MUST
+  /// drop `--ephemeral`: gc's convergence iterations are committed `issues`
+  /// rows (`molecule.Cook → store.Create` sets no `Ephemeral`), and the
+  /// crash-safety/replay invariants depend on every iteration being a
+  /// git-synced row (ADR-0000 A15 correction). The flag exists only for the
+  /// rare genuinely-vapor pour; the M2 actuator never sets it.
+  ///
+  /// bd reads the plan from a **file path** (graph_apply.go:262
+  /// `os.ReadFile`), so the plan is written to a temp file under the system
+  /// temp dir, passed by path, and deleted afterwards (best-effort).
+  Future<Map<String, String>> applyGraph(
+    GraphApplyPlan plan, {
+    bool ephemeral = false,
+  }) async {
+    final dir = await Directory.systemTemp.createTemp('grid-graph-apply');
+    final planFile = File('${dir.path}/plan.json');
+    try {
+      await planFile.writeAsString(plan.toJsonString());
+      final env = await _runEnvelope(
+        applyGraphArgs(planFile.path, ephemeral: ephemeral),
+      );
+      return _idMapFromEnvelope(env);
+    } finally {
+      // Best-effort cleanup; never mask the call's result/error.
+      try {
+        await dir.delete(recursive: true);
+      } on Object {
+        // ignore
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -252,6 +348,9 @@ class BdCliService {
     BeadStatus? status,
     int? priority,
     String? description,
+    IssueType? type,
+    String? assignee,
+    Map<String, String>? metadata,
   }) => [
     'update',
     id,
@@ -261,6 +360,14 @@ class BdCliService {
     if (status != null) ...['--status', status.wire],
     if (priority != null) ...['--priority', '$priority'],
     if (description != null) ...['--description', description],
+    if (type != null) ...['--type', type.wire],
+    if (assignee != null) ...['--assignee', assignee],
+    // `--metadata '<json>'` MERGES (named keys overwrite, absent preserved)
+    // and works on a closed bead (ADR-0000 A16/A19). Empty map ⇒ omitted.
+    if (metadata != null && metadata.isNotEmpty) ...[
+      '--metadata',
+      jsonEncode(metadata),
+    ],
   ];
 
   List<String> closeArgs(String id, {String? reason}) => [
@@ -287,6 +394,43 @@ class BdCliService {
   ];
 
   List<String> batchArgs() => ['batch', '--json', ..._actorArgs];
+
+  /// `bd cook <formula> --mode=<mode> [--var k=v …] --json`. A resolve, not a
+  /// mutation — no `--actor` (nothing is persisted without `--persist`).
+  List<String> cookArgs(
+    String formula, {
+    required String mode,
+    required Map<String, String> vars,
+  }) => [
+    'cook',
+    formula,
+    '--mode=$mode',
+    for (final entry in vars.entries) ...[
+      '--var',
+      '${entry.key}=${entry.value}',
+    ],
+    '--json',
+  ];
+
+  /// `bd delete <id> --force --json` — the burn primitive (subtree delete).
+  List<String> deleteArgs(String id) => [
+    'delete',
+    id,
+    '--force',
+    '--json',
+    ..._actorArgs,
+  ];
+
+  /// `bd create --graph <plan-file> [--ephemeral] --json`. The pour drops
+  /// `--ephemeral` (persistent) by default (ADR-0000 A15).
+  List<String> applyGraphArgs(String planFile, {required bool ephemeral}) => [
+    'create',
+    '--graph',
+    planFile,
+    if (ephemeral) '--ephemeral',
+    '--json',
+    ..._actorArgs,
+  ];
 
   // ---------------------------------------------------------------------------
   // internals
@@ -339,6 +483,22 @@ class BdCliService {
       }
     }
     throw BdParseException('bd create envelope carried no id', '$data');
+  }
+
+  /// Pulls the `key → id` map out of a `bd create --graph` envelope: the
+  /// `data.ids` object (graph_apply.go:48-51 `GraphApplyResult.IDs`).
+  Map<String, String> _idMapFromEnvelope(BdEnvelope env) {
+    final data = env.data;
+    if (data is Map<String, dynamic>) {
+      final ids = data['ids'];
+      if (ids is Map<String, dynamic>) {
+        return {for (final entry in ids.entries) entry.key: '${entry.value}'};
+      }
+    }
+    throw BdParseException(
+      'bd create --graph envelope carried no ids map',
+      '$data',
+    );
   }
 
   ({List<Bead> beads, List<BeadDependency> dependencies}) _parseExportJsonl(

@@ -11,6 +11,7 @@ export 'src/models/bead_comment.dart';
 export 'src/models/bead_dependency.dart';
 export 'src/models/bead_status.dart';
 export 'src/models/dependency_type.dart';
+export 'src/models/graph_apply_plan.dart';
 export 'src/models/graph_snapshot.dart';
 export 'src/models/issue_type.dart';
 

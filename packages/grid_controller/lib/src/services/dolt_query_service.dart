@@ -266,6 +266,81 @@ class DoltQueryService {
     }
   }
 
+  /// The **live** idempotency probe (ADR-0000 A15/A17): the existing child
+  /// wisp id under [parentId] whose `metadata.idempotency_key == key`, or
+  /// null when none exists. gc's `FindByIdempotencyKey` analog
+  /// (cmd/gc/convergence_store.go:248-270) — list the parent's children
+  /// (parent-child edge) and match the key.
+  ///
+  /// **SELECT-only, and deliberately a LIVE query — never the snapshot
+  /// scan** ([Convergence.findByIdempotencyKey] is the stale fast-path; a
+  /// MISS there proves nothing because a fast actuation routinely beats the
+  /// Dolt watcher poll). The actuator's find-before-pour calls THIS
+  /// immediately before `bd create --graph`: a hit is adopted, a miss pours.
+  ///
+  /// The query reads the parent-child edge tables (`dependencies` ∪
+  /// `wisp_dependencies` — a poured wisp's parent edge lives in
+  /// `wisp_dependencies`), joining the child id to `issues` ∪ `wisps` to read
+  /// the JSON `metadata` column. The whole probe runs in one
+  /// `START TRANSACTION READ ONLY` so it sees a single consistent MVCC
+  /// snapshot. Returns the matching child id (created-ascending, so the
+  /// **oldest** match wins exactly like gc's `SortCreatedAsc` list scan,
+  /// convergence_store.go:254).
+  Future<String?> findWispByIdempotencyKey(String parentId, String key) async {
+    await _ensureDriftChecked();
+    final sql = idempotencyProbeSql(parentId, key);
+    final rows = await runReadTransaction((select) => select(sql));
+    if (rows.isEmpty) return null;
+    final id = rows.first['id'] ?? rows.first.values.firstOrNull;
+    return id?.toString();
+  }
+
+  /// The live idempotency-probe SELECT for [parentId] + [key]. Exposed for
+  /// tests asserting the exact statement (SELECT-only; literals escaped).
+  ///
+  /// Parent-child edges: child = `issue_id`, parent = the target
+  /// (`COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)`)
+  /// on a `type = 'parent-child'` edge (beads issueops/blocked.go:60-63). The
+  /// child's `metadata.idempotency_key` is read from the JSON column on
+  /// `issues` ∪ `wisps`. Ordered created-ascending then id so the oldest
+  /// match is deterministic (gc's `SortCreatedAsc`).
+  @visibleForTesting
+  static String idempotencyProbeSql(String parentId, String key) {
+    const target =
+        'COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)';
+    final parentLit = sqlString(parentId);
+    final keyLit = sqlString(key);
+    // child ids parented under parentId via a parent-child edge (both tables).
+    const childEdges =
+        'SELECT issue_id FROM dependencies '
+        "WHERE type = 'parent-child' AND $target = %PARENT% "
+        'UNION '
+        'SELECT issue_id FROM wisp_dependencies '
+        "WHERE type = 'parent-child' AND $target = %PARENT%";
+    final childEdgesResolved = childEdges.replaceAll('%PARENT%', parentLit);
+    // children rows from issues ∪ wisps whose metadata.idempotency_key matches.
+    const keyExpr =
+        "JSON_UNQUOTE(JSON_EXTRACT(metadata, '\$.idempotency_key'))";
+    return 'SELECT id, created_at FROM ('
+        'SELECT id, created_at, metadata FROM issues WHERE id IN ($childEdgesResolved) '
+        'UNION ALL '
+        'SELECT id, created_at, metadata FROM wisps WHERE id IN ($childEdgesResolved)'
+        ') AS children '
+        'WHERE $keyExpr = $keyLit '
+        'ORDER BY created_at ASC, id ASC '
+        'LIMIT 1';
+  }
+
+  /// SQL string literal: single-quote-wrapped, backslash + single-quote
+  /// doubling — mirrors `mysql_client`'s `_escapeString` so an inlined
+  /// literal matches the bound-parameter encoding byte-for-byte (same
+  /// escaper Track F's ready-work port uses). Exposed for tests.
+  @visibleForTesting
+  static String sqlString(String value) {
+    final escaped = value.replaceAll(r'\', r'\\').replaceAll("'", "''");
+    return "'$escaped'";
+  }
+
   // -------------------------------------------------------------------------
   // SELECT statements. Column lists are explicit so a drifted column rename is
   // a loud query error (caught → reconnect/fallback) rather than silent data.
