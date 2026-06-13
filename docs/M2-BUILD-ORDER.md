@@ -46,23 +46,29 @@ files = the conformance oracle, ADR-0003 D7).
   `ProjectionResult`; `Wisp.subtreeIds` post-order = burn order, `speculativeNodes`,
   `findByIdempotencyKey`) + providers (ADR-0002 D2: `convergencesProvider`,
   `convergencesByStateProvider` keyed by the *reading*, `activeWispProvider`).
-- **Track B — the pure state machine** ⊣ A: `reduce(state, event, snapshot) → (state′,
-  List<ReconcilerAction>)`, switch-matched + exhaustive (ports `handler.go` lines 161–390,
-  the 9-step algorithm + ADR-0003's transition table). **Preserves all 7 invariants verbatim**:
-  monotonic dedup (skip iter ≤ `last_processed_wisp`), write-ordering (`last_processed_wisp`
-  written LAST = commit point; `gate_outcome_wisp` last in gate persistence), idempotency keys,
-  iteration-from-closed-wisp-count (self-healing), speculative pour before gate eval
-  (`pending_next_wisp`), terminal irreversibility, single-writer. Pure → exhaustively unit-tested.
+- **Track B — the pure state machine** ✅ **DONE** (2026-06-13, ~110 tests; design ADR-0000 **A22**)
+  ⊣ A: `ConvergenceReducer.reduce(Convergence, ReducerEvent, GraphSnapshot) → ReduceResult` (ordered
+  action list + `primary` getter), switch-matched + exhaustive, **ported from the Go** (handler.go
+  9-step + operator/trigger handlers) per A19 not the incomplete table. Gate eval is a **two-reduce
+  phase split** (fresh: `[pourSpeculative, evaluateGate]` → Track D runs it → re-enter via
+  `gateEvaluated` → `persistGateOutcome` + transition; replay skips phase 1; manual short-circuits
+  in one reduce). `RetryHandler` + trigger-gated CREATE are the create/actuator surface, NOT reduce
+  transitions (A22). **Preserves all 7 invariants verbatim** (Track A's ordered-write getters encode
+  invariant 2 incl. `last_processed_wisp` after `CloseBead` on terminal paths). Pure (no I/O/clock),
+  exhaustively unit-tested against the transliterated conformance inventories.
 - **Track C — recovery / full-reconcile pass** ⊣ A, B: ports `reconcile.go` recovery paths
   (state `""`→adopt/pour wisp 1 · `creating`→terminate · `terminated`-but-open→close+re-emit ·
   `waitingManual`→re-emit hold + repair markers · `waitingTrigger`→no-op unless terminal ·
   `active`→recover/replay/pour). Runs at startup + as a low-frequency backstop over the snapshot.
-- **Track D — gate execution** ⊣ A: subprocess gate runner (`gate.go`/`condition.go`/`hybrid.go`)
-  with gc's env contract verbatim (`GC_BEAD_ID, GC_ITERATION, GC_WISP_ID, GC_AGENT_VERDICT,
-  GC_ARTIFACT_DIR`, durations, paths); outcome by exit code (0=pass / non-zero=fail /
-  deadline=timeout / pre-exec=error); timeout actions `iterate`/`retry`(≤3)/`manual`/`terminate`;
-  stdout/stderr capture + truncate into metadata; path traversal/symlink containment defenses.
-  Agent-verdict channel is read, not reinterpreted.
+- **Track D — gate execution** ✅ **DONE** (2026-06-13, ~105 tests; design ADR-0000 **A23**)
+  ⊣ A: `GateRunnerService` over an injectable `ProcessRunner` seam (fake in unit tests, real
+  subprocess in integration-tagged) returning a closed `ProcessRunOutcome`; gc's env contract
+  verbatim (`GC_BEAD_ID, GC_ITERATION, GC_WISP_ID, GC_AGENT_VERDICT, GC_ARTIFACT_DIR, GC_CITY_RUNTIME_DIR,
+  GC_CONTROL_DISPATCHER_TRACE_DEFAULT`, durations, paths); outcome by exit code (0=pass / non-zero=fail /
+  deadline=timeout / pre-exec=error), parent-cancel via `CancellationToken`; timeout actions
+  `iterate`/`retry`(≤3)/`manual`/`terminate`; bounded stdout/stderr capture; **symlink/traversal
+  containment** ported + escape-tested (A23 — the trusted-roots guard is built but wired by Track E/G
+  at the exec call site). Agent-verdict channel is read, not reinterpreted.
 - **Track E — actuator** ⊣ A, B, grid_controller: executes `ReconcilerAction`s' ordered writes
   (A17 getters). **Not via `bd batch`** (A16: batch carries no `metadata`, no `delete`, no `mol`/
   `--graph`) — transitions are sequenced calls ordered by the write-ordering invariant: metadata
@@ -73,12 +79,17 @@ files = the conformance oracle, ADR-0003 D7).
   (snapshot scan is the fast/shadow path only — duplicate-pour freshness, A17). Requires extending
   grid_controller's `BdCliService` with `update(--metadata)`, `create(--graph)`, `delete`, and a
   `cook` resolve. The `Actuator` interface is the seam (fake in tests; ADR-0003 D4).
-- **Track F — ready-work SQL port + differential harness** ⊣ grid_controller (DoltQueryService):
-  port `issueops/ready_work.go`'s predicate (status∈{open}, `is_blocked`=0 over
-  {blocks, conditional-blocks, waits-for} with conditional-blocks failure-keyword semantics,
-  `defer_until`, ephemeral, sort policy) to SQL over the pool; a **differential harness** replays
-  every scenario against both the SQL port and `bd ready` and diffs (ADR-0003 D5). `bd ready`
-  stays the oracle + fallback. Live half self-skips without `GC_DOLT_PASSWORD`.
+- **Track F — ready-work SQL port + differential harness** ✅ **DONE** (2026-06-13, +26 offline +
+  hermetic differential green; design + correction ADR-0000 **A24**) ⊣ grid_controller
+  (DoltQueryService): ported `issueops/ready_work.go`'s predicate (status∈{open}, `is_blocked`=0 over
+  {blocks, conditional-blocks, waits-for}, `defer_until`, ephemeral, molecule-exclusion A14, sort
+  policy) to SQL over the pool via a `runReadTransaction` (START TRANSACTION READ ONLY) seam.
+  ⚠ **A24 correction:** `bd ready` applies **NO conditional-blocks failure-keyword semantics** —
+  `blocked.go:29` treats conditional-blocks identically to blocks (`IsFailureClose` has zero
+  non-test call sites); the keyword set is ported as inert data. **Three-half differential** (D5):
+  hermetic `bd init` oracle witnesses (everywhere) · hermetic `dolt sql-server` SQL-port==`bd ready`
+  on seeded fixtures · live read-only over `tg`, self-skipping without `GC_DOLT_PASSWORD` and never
+  seeding the gc-managed server (partition rule). `bd ready` stays the oracle + fallback.
 - **Track G — reconciler runtime + shadow mode** ⊣ B, C, D, E: wires the `GraphEvent` stream →
   per-bead **serialized** processing (invariant 7) → state machine (B) → actuator (E) + the
   periodic full reconcile (C); Riverpod providers for convergence projections. **Freshness (A17):**

@@ -34,5 +34,12 @@ export 'src/projections/convergence.dart';
 export 'src/projections/wisp.dart';
 export 'src/providers/convergence_providers.dart';
 
-// Track B (the pure reducer) and Track C–G surfaces land here as they're
-// built per docs/M2-BUILD-ORDER.md.
+// Track B — the pure convergence reducer (ADR-0003 Decision 2): gc's
+// HandleWispClosed 9-step + operator/trigger handlers as a pure function.
+export 'src/reducer/reducer.dart';
+
+// Track D — gate execution (ADR-0003 Decision 3): the subprocess gate runner
+// Service + its process seam, env contract, and path-containment defenses.
+export 'src/gates/gates.dart';
+
+// Track C / E–G surfaces land here as they're built per docs/M2-BUILD-ORDER.md.
