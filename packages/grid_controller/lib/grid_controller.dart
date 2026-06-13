@@ -17,6 +17,14 @@ export 'src/models/issue_type.dart';
 // Codecs.
 export 'src/codecs/envelope.dart';
 
+// Ready-work SQL port + differential harness (Track F; ADR-0003 Decision 5).
+// The ready-work predicate ported from beads ready_work.go over the pooled,
+// SELECT-only Dolt connection, plus the differential gate that diffs it against
+// the `bd ready --json` oracle.
+export 'src/ready/ready_work_differential.dart';
+export 'src/ready/ready_work_filter.dart';
+export 'src/ready/ready_work_query.dart';
+
 // Services (stateless I/O): workspace discovery, bd CLI, Dolt SQL reads.
 export 'src/services/bd_cli_service.dart';
 export 'src/services/bd_runner.dart';

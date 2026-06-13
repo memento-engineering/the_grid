@@ -41,6 +41,12 @@ abstract interface class DoltConnection {
 typedef DoltConnectionFactory =
     Future<DoltConnection> Function(DoltEndpoint endpoint);
 
+/// A SELECT-only runner handed to a [DoltQueryService.runReadTransaction]
+/// callback. Every call is guarded by [DoltQueryService.assertSelectOnly], so a
+/// transaction body can only ever read — writes are impossible by construction
+/// even inside the transaction.
+typedef SelectRunner = Future<List<Map<String, Object?>>> Function(String sql);
+
 /// Pooled, **SELECT-only** MySQL-protocol read service over a gc-managed Dolt
 /// sql-server (predictable-flutter Service tier: stateless beyond the pooled
 /// sockets, all IO, no domain state).
@@ -197,6 +203,67 @@ class DoltQueryService {
     ];
 
     return (beads: beads, dependencies: dependencies);
+  }
+
+  /// Runs [body] inside a single **read-only** Dolt transaction on one pinned
+  /// pooled connection, so every SELECT the body issues sees one consistent
+  /// MVCC snapshot (ready-work spec §1: a ready computation's deferred-parent
+  /// scan, descendant CTE and wisp pass must all read the same snapshot or
+  /// differential runs flake under concurrent cross-workspace writes).
+  ///
+  /// The service itself issues `START TRANSACTION READ ONLY` / `COMMIT`
+  /// (`ROLLBACK` on error) — those control statements are not user SQL and
+  /// never pass through [assertSelectOnly]; [body] receives a [SelectRunner]
+  /// that *is* guarded, so the transaction stays SELECT-only by construction
+  /// (CLAUDE.md: the SQL path never writes). `READ ONLY` makes the server reject
+  /// any stray write outright.
+  ///
+  /// Reconnect handling: if the connection is reaped (30s idle) when the
+  /// transaction is opened, the whole transaction is retried once on a fresh
+  /// connection (mid-transaction reaping surfaces as a query error and
+  /// propagates — a partially-read snapshot must not be silently stitched).
+  Future<T> runReadTransaction<T>(
+    Future<T> Function(SelectRunner select) body,
+  ) async {
+    await _ensureDriftChecked();
+    if (_closed) {
+      throw const BdParseException(
+        'DoltQueryService is closed; call connect() first',
+      );
+    }
+    try {
+      return await _runTransactionOn(await _acquire(), body);
+    } on Object catch (error) {
+      if (_isConnectionClosed(error)) {
+        _evictDead();
+        return _runTransactionOn(await _acquire(forceFresh: true), body);
+      }
+      rethrow;
+    }
+  }
+
+  Future<T> _runTransactionOn<T>(
+    DoltConnection conn,
+    Future<T> Function(SelectRunner select) body,
+  ) async {
+    Future<List<Map<String, Object?>>> select(String sql) {
+      assertSelectOnly(sql);
+      return conn.query(sql);
+    }
+
+    await conn.query('START TRANSACTION READ ONLY');
+    try {
+      final result = await body(select);
+      await conn.query('COMMIT');
+      return result;
+    } on Object {
+      try {
+        await conn.query('ROLLBACK');
+      } on Object {
+        // Best-effort: the server may have already aborted the txn.
+      }
+      rethrow;
+    }
   }
 
   // -------------------------------------------------------------------------
