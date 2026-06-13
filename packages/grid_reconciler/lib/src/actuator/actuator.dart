@@ -37,7 +37,11 @@ abstract interface class Actuator {
 
 /// The runtime outcome of executing one [ReduceResult].
 class ActuationResult {
-  const ActuationResult({this.pouredWispId, this.requeue});
+  const ActuationResult({
+    this.pouredWispId,
+    this.requeue,
+    this.pourFailed = false,
+  });
 
   /// The wisp id produced (poured or adopted) by a [PourSpeculativeAction] /
   /// [IterateAction] in the list — the value the reducer could not name. Null
@@ -48,6 +52,18 @@ class ActuationResult {
   /// operator-stop drain — [RequeueAction]). Null when the list had no
   /// requeue.
   final RequeueAction? requeue;
+
+  /// gc's deferred `speculativePourErr` (handler.go:259-266), surfaced ACROSS
+  /// the phase-split boundary: a [PourSpeculativeAction] in a phase-1 list
+  /// (`[pourSpeculative, evaluateGate]`) whose real pour failed AND whose
+  /// idempotency probe missed produced no wisp — but `pouredWispId == null`
+  /// alone cannot distinguish that from "no pour happened" (a manual/trigger
+  /// path, or an adopted pending). Track G threads this flag into the phase-2
+  /// `ReducerEvent.gateEvaluated.pourFailed`, where the reducer surfaces it as
+  /// the `sling_failure` waiting_manual transition exactly when the gate
+  /// outcome is non-terminal (handler.go:370-373). Always false when the list
+  /// contained no speculative pour, or the pour succeeded/was adopted.
+  final bool pourFailed;
 }
 
 /// The find-before-pour probe seam (ADR-0000 A15/A17): a **LIVE** query for

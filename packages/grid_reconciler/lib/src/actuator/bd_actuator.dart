@@ -112,7 +112,11 @@ class BdActuator implements Actuator {
       }
     }
 
-    return ActuationResult(pouredWispId: priorPourWispId, requeue: requeue);
+    return ActuationResult(
+      pouredWispId: priorPourWispId,
+      requeue: requeue,
+      pourFailed: priorPourFailed,
+    );
   }
 
   // ---------------------------------------------------------------------------

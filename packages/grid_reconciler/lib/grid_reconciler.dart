@@ -53,4 +53,10 @@ export 'src/actuator/bd_actuator.dart';
 export 'src/actuator/fake_actuator.dart';
 export 'src/actuator/idempotency_probe.dart';
 
-// Track G (runtime + shadow) lands here per docs/M2-BUILD-ORDER.md.
+// Track G — the reconciler runtime + shadow mode (ADR-0003 Decision 2 & 6):
+// the composition that runs the convergence machine. Per-bead serialized
+// event ingestion, the reduce→gate→actuate cycle (the A22 phase split + the
+// A19 drain), the A17 write-through freshness overlay, the Track C periodic
+// reconcile, the A25 deferred live-error contract, the Decision 6 coexistence
+// partition, and STRICTLY read-only shadow mode.
+export 'src/runtime/runtime.dart';

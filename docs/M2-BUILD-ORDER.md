@@ -96,9 +96,15 @@ files = the conformance oracle, ADR-0003 D7).
   hermetic `bd init` oracle witnesses (everywhere) · hermetic `dolt sql-server` SQL-port==`bd ready`
   on seeded fixtures · live read-only over `tg`, self-skipping without `GC_DOLT_PASSWORD` and never
   seeding the gc-managed server (partition rule). `bd ready` stays the oracle + fallback.
-- **Track G — reconciler runtime + shadow mode** ⊣ B, C, D, E: wires the `GraphEvent` stream →
+- **Track G — reconciler runtime + shadow mode** ✅ **DONE** (2026-06-13, +~36 offline + 3 lifecycle
+  integration tests; design ADR-0000 **A27**; one critical drain-ordering bug found by adversarial
+  verify + fixed/regression-tested) ⊣ B, C, D, E: wires the `GraphEvent` stream →
   per-bead **serialized** processing (invariant 7) → state machine (B) → actuator (E) + the
-  periodic full reconcile (C); Riverpod providers for convergence projections. **Freshness (A17):**
+  periodic full reconcile (C); Riverpod providers for convergence projections. ⚠ **Known gap (A27):**
+  the runtime actuates only the reducer-shaped *replay* plans; recovery-specific effects
+  (adopt/pour-wisp-1, partial-creation terminate, marker repair) are surfaced as data — a **recovery
+  actuator** is the M3 follow-up (harmless for M2: shadow is read-only, recovery pass is Track-C
+  conformance-tested). **Freshness (A17):**
   events are evaluated against a **write-through post-actuation overlay**, never the raw snapshot
   (else a stale snapshot re-fires `triggerPassed` → duplicate pour); the operator-stop **drain**
   is re-enqueued as `OperatorStopEvent(postDrain: true)` behind the synthesized `wispClosed`
