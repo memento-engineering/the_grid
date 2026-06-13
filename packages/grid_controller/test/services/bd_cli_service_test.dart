@@ -41,8 +41,10 @@ void main() {
       // This HQ sample carries no edges; the parse-path for edges is covered
       // by the synthetic-dependencies test below.
       expect(snapshot.dependencies, isEmpty);
-      // export is the single-spawn snapshot read: `export --include-infra`.
-      expect(runner.calls.single, ['export', '--include-infra']);
+      // export is the single-spawn snapshot read: `export --all` (the
+      // complete graph — `--all` subsumes `--include-infra` and lifts the
+      // default template + ephemeral-wisp exclusions, export.go:96-126).
+      expect(runner.calls.single, ['export', '--all']);
     });
 
     test(
@@ -74,6 +76,70 @@ void main() {
         expect(snapshot.dependencies.single.issueId, 'tg-a');
         expect(snapshot.dependencies.single.dependsOnId, 'tg-b');
         expect(snapshot.dependencies.single.type, DependencyType.blocks);
+      },
+    );
+
+    test(
+      'exportAll() surfaces ephemeral wisp records (A15 pour shape: '
+      'ephemeral root with idempotency_key, gate-typed step, parent edge)',
+      () async {
+        // `bd export --all` includes ephemeral wisps (the wisps tables) —
+        // the M2 contract beads: a poured convergence wisp root and its
+        // gate-typed (speculative) step, with the parent-child edge inline.
+        final lines = [
+          jsonEncode({
+            '_type': 'issue',
+            'id': 'tg-wisp-r1',
+            'title': 'Convergence wisp iter 1',
+            'issue_type': 'epic',
+            'status': 'open',
+            'ephemeral': true,
+            'metadata': {'idempotency_key': 'converge:tg-root:iter:1'},
+            'dependencies': [
+              {
+                'issue_id': 'tg-wisp-r1',
+                'depends_on_id': 'tg-root',
+                'type': 'parent-child',
+              },
+            ],
+          }),
+          jsonEncode({
+            '_type': 'issue',
+            'id': 'tg-wisp-s1',
+            'title': 'iterate on tron',
+            'issue_type': 'gate',
+            'status': 'closed',
+            'ephemeral': true,
+            'metadata': {'gc.deferred_type': 'task'},
+            'dependencies': [
+              {
+                'issue_id': 'tg-wisp-s1',
+                'depends_on_id': 'tg-wisp-r1',
+                'type': 'parent-child',
+              },
+            ],
+          }),
+          jsonEncode({'_type': 'issue', 'id': 'tg-root', 'title': 'root'}),
+        ].join('\n');
+
+        final runner = FakeBdRunner()
+          ..stubCommand('export', BdReply(stdout: lines));
+        final service = BdCliService(runner);
+
+        final snapshot = await service.exportAll();
+
+        final root = snapshot.beads.singleWhere((b) => b.id == 'tg-wisp-r1');
+        expect(root.ephemeral, isTrue);
+        expect(root.metadata['idempotency_key'], 'converge:tg-root:iter:1');
+        final step = snapshot.beads.singleWhere((b) => b.id == 'tg-wisp-s1');
+        expect(step.ephemeral, isTrue);
+        expect(step.issueType, IssueType.gate);
+        // A closed wisp remains visible (snapshot = all statuses).
+        expect(step.status.wire, 'closed');
+        expect(
+          snapshot.dependencies.map((d) => '${d.issueId}->${d.dependsOnId}'),
+          containsAll(['tg-wisp-r1->tg-root', 'tg-wisp-s1->tg-wisp-r1']),
+        );
       },
     );
 

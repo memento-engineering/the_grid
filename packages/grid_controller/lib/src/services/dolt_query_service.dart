@@ -14,12 +14,16 @@ import 'dolt_row_mapper.dart';
 /// (`internal/storage/schema/migrations/0050_dependencies_deterministic_id`).
 ///
 /// The targeted SELECTs assume the post-0041 dependencies layout (typed target
-/// columns surfaced via a `COALESCE(...) AS depends_on_id` alias) and the
-/// `started_at`/`spec_id` issue columns added by 0027/0034. A database **newer**
-/// than this (forward drift) may have dropped or renamed a column this code
-/// reads, so the connect-time guard rejects it and the caller falls back to the
-/// bd CLI (ADR-0001 Decision 4 schema-drift guard). Bump this constant whenever
-/// the targeted SELECTs are re-validated against a newer migration.
+/// columns surfaced via a `COALESCE(...) AS depends_on_id` alias), the
+/// `started_at`/`spec_id` issue columns added by 0027/0034, and the wisp tables
+/// (`wisps`/`wisp_labels`/`wisp_dependencies`, migrations 0020/0021 plus the
+/// ignored-track split of wisp_dependencies' target columns) that bd routes
+/// ephemeral/no-history/infra beads into (ephemeral_routing.go, migration
+/// 0035). A database **newer** than this (forward drift) may have dropped or
+/// renamed a column this code reads, so the connect-time guard rejects it and
+/// the caller falls back to the bd CLI (ADR-0001 Decision 4 schema-drift
+/// guard). Bump this constant whenever the targeted SELECTs are re-validated
+/// against a newer migration.
 const int kTargetSchemaVersion = 50;
 
 /// Internal seam for unit-testing the pooled service without a real socket: a
@@ -46,9 +50,10 @@ typedef DoltConnectionFactory =
 ///   reaps an idle socket (30s) or a query hits a closed connection;
 /// - [probe] — the `SELECT @@<db>_working` working-set hash, the ~1ms
 ///   authoritative change signal that doubles as keepalive;
-/// - [snapshotParts] — issues + labels + dependencies composed into [Bead]s and
-///   [BeadDependency]s (the ready set is **not** computed here; `bd ready` is
-///   authoritative in M1);
+/// - [snapshotParts] — the COMPLETE graph (`issues` ∪ `wisps`, plus both
+///   label and dependency tables) composed into [Bead]s and [BeadDependency]s
+///   (the ready set is **not** computed here; `bd ready` is authoritative in
+///   M1);
 /// - a connect-time schema-drift guard that throws [BdSchemaDriftException] on a
 ///   database newer than [kTargetSchemaVersion] so the caller falls back to the
 ///   bd CLI.
@@ -119,19 +124,36 @@ class DoltQueryService {
     return value.toString();
   }
 
-  /// Reads the issues + labels + dependencies that compose a graph snapshot and
-  /// returns the value-typed parts. The ready set is intentionally excluded —
-  /// it comes from `bd ready` in M1 (ADR-0001 Decision 4); the caller assembles
-  /// a `GraphSnapshot` from these parts plus that ready set.
+  /// Reads the parts that compose a graph snapshot and returns the value-typed
+  /// results. The ready set is intentionally excluded — it comes from
+  /// `bd ready` in M1 (ADR-0001 Decision 4); the caller assembles a
+  /// `GraphSnapshot` from these parts plus that ready set.
   ///
-  /// Three SELECTs (issues, labels, dependencies); labels are grouped per issue
-  /// and dependency/dependent counts are derived from the dependency edges so a
-  /// single round of queries yields fully-populated [Bead]s.
+  /// **The snapshot is the COMPLETE graph: `issues` ∪ `wisps`, all statuses,
+  /// including infra/template/gate-typed beads.** bd routes ephemeral,
+  /// no-history, and infra beads to the separate `wisps`/`wisp_labels`/
+  /// `wisp_dependencies` tables (beads internal/storage/dolt/
+  /// ephemeral_routing.go; migrations 0020/0021/0035), so a read over `issues`
+  /// alone would never see a poured wisp — or, post-0035, any agent/rig/role/
+  /// message bead. Filtering is the consumer's job (projections/selectors);
+  /// the CLI capture path (`bd export --all`, cmd/bd/export.go) shares these
+  /// inclusion semantics so the two paths produce identical snapshots.
+  ///
+  /// Four SELECTs (issues, wisps, labels∪wisp_labels, dependencies∪
+  /// wisp_dependencies); labels are grouped per issue and dependency/dependent
+  /// counts are derived from the dependency edges so a single round of queries
+  /// yields fully-populated [Bead]s. Issue and wisp rows are merged by column
+  /// *name* in Dart rather than positionally UNION'd in SQL: the two tables
+  /// share every column this mapper reads, but their ordinal layouts can
+  /// diverge across upgrade histories (`is_blocked` arrived via the numbered
+  /// track on `issues` (0046) and via the ignored track on `wisps`), which
+  /// would silently scramble a positional `SELECT *` UNION.
   Future<({List<Bead> beads, List<BeadDependency> dependencies})>
   snapshotParts() async {
     await _ensureDriftChecked();
 
     final issueRows = await _runSelect(issuesSelect);
+    final wispRows = await _runSelect(wispsSelect);
     final labelRows = await _runSelect(labelsSelect);
     final depRows = await _runSelect(dependenciesSelect);
 
@@ -156,8 +178,11 @@ class DoltQueryService {
           (dependentCount[dep.dependsOnId] ?? 0) + 1;
     }
 
+    // issues ∪ wisps — bd hard-errors when an id exists in both tables
+    // (issueops/search.go), so plain concatenation cannot double-count.
+    final beadRows = [...issueRows, ...wispRows];
     final beads = <Bead>[
-      for (final row in issueRows)
+      for (final row in beadRows)
         () {
           final id = row['id']?.toString();
           return beadFromRow(
@@ -183,22 +208,46 @@ class DoltQueryService {
   @visibleForTesting
   static const String issuesSelect = 'SELECT * FROM issues';
 
-  /// The labels SELECT. Exposed for tests that fake the connection layer.
+  /// The wisps SELECT — the ephemeral/no-history/infra half of the bead set
+  /// (beads routes those to the `wisps` table; ephemeral_routing.go, migration
+  /// 0035). Read separately from [issuesSelect] and merged by column name in
+  /// Dart (see [snapshotParts] for why a positional SQL UNION is unsafe).
+  /// `ephemeral` is a real column on `wisps` and is mapped as-is — no-history
+  /// beads live there with `ephemeral = 0` (GH#3649), so it is NOT assumed
+  /// true. Exposed for tests that fake the connection layer.
   @visibleForTesting
-  static const String labelsSelect = 'SELECT issue_id, label FROM labels';
+  static const String wispsSelect = 'SELECT * FROM wisps';
 
-  /// The dependencies SELECT. Mirrors beads' own dependency read
-  /// (internal/storage/domain/db/dependency.go): the natural target is
+  /// The labels SELECT: `labels` ∪ `wisp_labels` — wisp labels live in their
+  /// own table (migration 0021), identical two-column shape, so a UNION ALL is
+  /// positionally safe. Exposed for tests that fake the connection layer.
+  @visibleForTesting
+  static const String labelsSelect =
+      'SELECT issue_id, label FROM labels '
+      'UNION ALL '
+      'SELECT issue_id, label FROM wisp_labels';
+
+  /// The dependencies SELECT: `dependencies` ∪ `wisp_dependencies` (a wisp's
+  /// outgoing edges live in `wisp_dependencies`; beads counts.go). Mirrors
+  /// beads' own dependency read (internal/storage/domain/db/dependency.go):
+  /// the natural target is
   /// `COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)`
   /// surfaced as a `depends_on_id` alias, robust to whether the legacy generated
-  /// `depends_on_id` column is present. Exposed for tests that fake the
-  /// connection layer.
+  /// `depends_on_id` column is present. Both tables carry the identical
+  /// explicit column list (migration 0021 + ignored-track split), so the UNION
+  /// ALL is positionally safe. Exposed for tests that fake the connection
+  /// layer.
   @visibleForTesting
   static const String dependenciesSelect =
       'SELECT issue_id, '
       'COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external) '
       'AS depends_on_id, type, created_at, created_by, metadata, thread_id '
-      'FROM dependencies';
+      'FROM dependencies '
+      'UNION ALL '
+      'SELECT issue_id, '
+      'COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external) '
+      'AS depends_on_id, type, created_at, created_by, metadata, thread_id '
+      'FROM wisp_dependencies';
 
   // -------------------------------------------------------------------------
   // Drift guard.

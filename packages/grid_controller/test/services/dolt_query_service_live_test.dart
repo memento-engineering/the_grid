@@ -69,19 +69,56 @@ void main() {
         'SELECT @@tg_working': [
           {'@@tg_working': 'hash-abc'},
         ],
-        'SELECT * FROM issues': [
+        DoltQueryService.issuesSelect: [
           {'id': 'tg-1', 'title': 'one', 'status': 'open', 'ephemeral': 0},
           {'id': 'tg-2', 'title': 'two', 'status': 'open', 'ephemeral': 0},
         ],
-        'SELECT issue_id, label FROM labels': [
+        // The wisps half of the issues ∪ wisps snapshot: a poured convergence
+        // wisp root (A15 shape — ephemeral, idempotency_key metadata) and its
+        // gate-typed speculative step, already closed.
+        DoltQueryService.wispsSelect: [
+          {
+            'id': 'tg-wisp-r1',
+            'title': 'Convergence wisp iter 1',
+            'status': 'open',
+            'issue_type': 'epic',
+            'metadata': '{"idempotency_key":"converge:tg-1:iter:1"}',
+            'ephemeral': 1,
+          },
+          {
+            'id': 'tg-wisp-s1',
+            'title': 'iterate on tron',
+            'status': 'closed',
+            'issue_type': 'gate',
+            'metadata': '{"gc.deferred_type":"task"}',
+            'ephemeral': 1,
+          },
+        ],
+        // labels ∪ wisp_labels arrive as one UNION ALL result set.
+        DoltQueryService.labelsSelect: [
           {'issue_id': 'tg-1', 'label': 'zeta'},
           {'issue_id': 'tg-1', 'label': 'alpha'},
+          {'issue_id': 'tg-wisp-r1', 'label': 'converge'},
         ],
+        // dependencies ∪ wisp_dependencies arrive as one UNION ALL result set:
+        // the permanent edge plus the wisp root's parent-child edge.
         DoltQueryService.dependenciesSelect: [
           {
             'issue_id': 'tg-1',
             'depends_on_id': 'tg-2',
             'type': 'blocks',
+            'metadata': '{}',
+          },
+          {
+            'issue_id': 'tg-wisp-r1',
+            'depends_on_id': 'tg-1',
+            'type': 'parent-child',
+            'metadata': '{}',
+          },
+          {
+            'issue_id': 'tg-wisp-s1',
+            'depends_on_id': 'tg-wisp-r1',
+            'type': 'parent-child',
             'metadata': '{}',
           },
         ],
@@ -114,16 +151,64 @@ void main() {
         addTearDown(svc.close);
         final parts = await svc.snapshotParts();
 
-        expect(parts.beads, hasLength(2));
+        expect(parts.beads, hasLength(4));
         final one = parts.beads.firstWhere((b) => b.id == 'tg-1');
         final two = parts.beads.firstWhere((b) => b.id == 'tg-2');
         // labels arrive unsorted from SQL, sorted in the result.
         expect(one.labels, ['alpha', 'zeta']);
-        // tg-1 owns one outgoing edge; tg-2 is the target of one.
+        // tg-1 owns one outgoing edge; tg-2 is the target of one. tg-1 is
+        // also the target of the wisp root's parent-child edge.
         expect(one.dependencyCount, 1);
+        expect(one.dependentCount, 1);
         expect(two.dependentCount, 1);
-        expect(parts.dependencies, hasLength(1));
-        expect(parts.dependencies.single.edgeKey, 'tg-1 tg-2 blocks');
+        expect(parts.dependencies, hasLength(3));
+        expect(
+          parts.dependencies.map((d) => d.edgeKey),
+          contains('tg-1 tg-2 blocks'),
+        );
+      },
+    );
+
+    test(
+      'snapshotParts includes the wisps tables: an A15-poured ephemeral wisp '
+      'subtree (root + gate-typed step + parent-child edges) and a closed '
+      'wisp are all visible',
+      () async {
+        // The M2 contract surface: closedWispCount / findByIdempotencyKey /
+        // wispClosed detection are all snapshot reads — a snapshot that
+        // missed the wisps tables would break every one of them.
+        final fake = _FakeConnection(answers());
+        final svc = DoltQueryService(
+          endpoint,
+          connectionFactory: (_) async => fake,
+        );
+        addTearDown(svc.close);
+        final parts = await svc.snapshotParts();
+
+        final root = parts.beads.singleWhere((b) => b.id == 'tg-wisp-r1');
+        expect(root.ephemeral, isTrue);
+        expect(root.metadata['idempotency_key'], 'converge:tg-1:iter:1');
+        // wisp_labels rows attach through the same UNION'd label read.
+        expect(root.labels, ['converge']);
+        // The wisp root's parent-child edge to the convergence root counts
+        // toward its out-degree like any other edge.
+        expect(root.dependencyCount, 1);
+        expect(root.dependentCount, 1);
+
+        // The gate-typed speculative step remains visible when closed
+        // (snapshot = all statuses; deriveIterationCount depends on it).
+        final step = parts.beads.singleWhere((b) => b.id == 'tg-wisp-s1');
+        expect(step.ephemeral, isTrue);
+        expect(step.isClosed, isTrue);
+        expect(step.metadata['gc.deferred_type'], 'task');
+
+        expect(
+          parts.dependencies.map((d) => d.edgeKey),
+          containsAll([
+            'tg-wisp-r1 tg-1 parent-child',
+            'tg-wisp-s1 tg-wisp-r1 parent-child',
+          ]),
+        );
       },
     );
 
@@ -250,9 +335,20 @@ void main() {
       final second = await svc.probe();
       expect(second, first, reason: 'working-set hash flapped while idle');
 
+      // snapshotParts now UNION-reads the wisp tables (issues ∪ wisps,
+      // labels ∪ wisp_labels, dependencies ∪ wisp_dependencies) — this live
+      // pass proves the UNION'd statements execute against the real schema.
       final parts = await svc.snapshotParts();
       // tg always has infrastructure beads; an empty result would be suspect.
       expect(parts.beads, isNotEmpty);
+      // The two tables are disjoint by bd's invariant (issueops/search.go
+      // errors on an id in both) — concatenation must not double-count.
+      final ids = parts.beads.map((b) => b.id).toList();
+      expect(
+        ids.toSet().length,
+        ids.length,
+        reason: 'issues ∪ wisps produced a duplicate bead id',
+      );
       // Every dependency edge references a real issue id is not asserted here
       // (cross-workspace edges exist); we only assert structural sanity.
       for (final dep in parts.dependencies.take(20)) {

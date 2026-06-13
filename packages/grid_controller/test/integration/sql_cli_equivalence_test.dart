@@ -20,6 +20,16 @@ import 'package:test/test.dart';
 /// `dolt_row_mapper_test.dart`; this is the end-to-end drift canary the
 /// schema-version guard backs (ADR-0001 Decisions 4 & 7).
 ///
+/// Both paths now share one inclusion contract: the COMPLETE graph — issues ∪
+/// wisps, all statuses, including infra/template/gate-typed beads (SQL reads
+/// the `wisps` tables; CLI uses `bd export --all`, cmd/bd/export.go:96-126).
+/// The id-set equality below is therefore also the wisp/template-inclusion
+/// canary: a workspace carrying a template proto (`bd cook --persist`), an
+/// ephemeral wisp subtree (A15 pour), or a closed wisp fails loudly here if
+/// either path drops it — the per-path-only ids are named in the failure. The
+/// hermetic half of that witness (a workspace constructed WITH those shapes)
+/// lives in `wisp_snapshot_test.dart`.
+///
 /// SELF-SKIPs (via `markTestSkipped`) when no live endpoint/credential is
 /// present — exactly like `services/dolt_query_service_live_test.dart` — so the
 /// offline suite is unaffected.
@@ -68,11 +78,17 @@ void main() {
     final sqlById = {for (final b in sqlParts.beads) b.id: b};
     final cliById = {for (final b in cliExport.beads) b.id: b};
 
-    // 1) Identical id sets.
+    // 1) Identical id sets. Name the per-path-only ids so an inclusion
+    //    divergence (e.g. a wisp or template visible to one path only) is
+    //    immediately diagnosable.
+    final sqlOnly = sqlById.keys.toSet().difference(cliById.keys.toSet());
+    final cliOnly = cliById.keys.toSet().difference(sqlById.keys.toSet());
     expect(
       sqlById.keys.toSet(),
       equals(cliById.keys.toSet()),
-      reason: 'the SQL and CLI read paths must see the same beads',
+      reason:
+          'the SQL and CLI read paths must see the same beads '
+          '(SQL-only: $sqlOnly; CLI-only: $cliOnly)',
     );
 
     // 2) Per-bead identity on the diff-relevant fields. The two paths compose

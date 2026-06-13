@@ -46,7 +46,8 @@ extension type const IssueType(String wire) {
 
   /// Infrastructure types that `bd list` does **not** surface regardless of
   /// `--all` (ADR-0001 Decision 4, promoted from ADR-0000 A5): sampling these
-  /// requires `bd export --include-infra`.
+  /// requires an infra-inclusive export — the snapshot read uses
+  /// `bd export --all`, which subsumes `--include-infra` (cmd/bd/export.go).
   static const infraTypes = <IssueType>[agent, rig, role];
 
   bool get isCore => coreTypes.contains(this);

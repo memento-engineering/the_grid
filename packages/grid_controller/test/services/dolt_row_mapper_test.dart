@@ -123,6 +123,45 @@ void main() {
       expect(bead.labels, isEmpty);
     });
 
+    test('maps a wisps-table row (A15 pour shape: ephemeral root with '
+        'idempotency_key metadata; gate-typed speculative step)', () {
+      // The `wisps` table shares every column this mapper reads with `issues`
+      // (migrations 0020/0023/0027 + ignored-track is_blocked), so the same
+      // mapper serves both halves of the issues ∪ wisps snapshot. A poured
+      // convergence wisp root arrives ephemeral='1' with the idempotency key
+      // under metadata (the find-before-pour probe surface).
+      final root = beadFromRow(<String, Object?>{
+        'id': 'tg-wisp-r1',
+        'title': 'Convergence wisp iter 1',
+        'status': 'open',
+        'priority': '1',
+        'issue_type': 'epic',
+        'created_at': '2026-06-12 06:00:00',
+        'metadata': '{"idempotency_key":"converge:tg-root:iter:1"}',
+        'ephemeral': '1',
+      });
+      expect(root.ephemeral, isTrue);
+      expect(root.issueType, IssueType.epic);
+      expect(root.metadata['idempotency_key'], 'converge:tg-root:iter:1');
+
+      // A speculative step pours as ready-excluded type `gate` with the real
+      // type stashed under gc.deferred_* (A15) — and a CLOSED wisp row keeps
+      // mapping (snapshot = all statuses; closedWispCount depends on it).
+      final step = beadFromRow(<String, Object?>{
+        'id': 'tg-wisp-s1',
+        'title': 'iterate on tron',
+        'status': 'closed',
+        'issue_type': 'gate',
+        'closed_at': '2026-06-12 07:00:00',
+        'metadata': '{"gc.deferred_type":"task"}',
+        'ephemeral': '1',
+      });
+      expect(step.ephemeral, isTrue);
+      expect(step.issueType, IssueType.gate);
+      expect(step.isClosed, isTrue);
+      expect(step.metadata['gc.deferred_type'], 'task');
+    });
+
     test('ephemeral 1 (int) → true', () {
       final bead = beadFromRow(<String, Object?>{'id': 'x', 'ephemeral': 1});
       expect(bead.ephemeral, isTrue);

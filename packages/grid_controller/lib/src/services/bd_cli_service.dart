@@ -45,15 +45,28 @@ class BdCliService {
     return _beadsFromList(env.dataList);
   }
 
-  /// `bd export --include-infra` — the full-graph JSONL snapshot in a single
-  /// spawn, and the CLI-fallback snapshot read (ADR-0001 D4). Output is **raw
-  /// JSONL** (one JSON object per line, `_type == "issue"`), NOT an envelope —
-  /// parsed line-by-line. `--include-infra` pulls the agent/rig/role/message
-  /// infrastructure beads the domain projections need; `bd list` would hide
-  /// them (ADR-0001 D4, promoted A5).
+  /// `bd export --all` — the full-graph JSONL snapshot in a single spawn, and
+  /// the CLI-fallback snapshot read (ADR-0001 D4). Output is **raw JSONL**
+  /// (one JSON object per line, `_type == "issue"`), NOT an envelope — parsed
+  /// line-by-line.
+  ///
+  /// **The snapshot is the COMPLETE graph: issues ∪ wisps, all statuses,
+  /// including infra/template/gate-typed beads** — identical inclusion
+  /// semantics to the SQL capture path (`DoltQueryService.snapshotParts`,
+  /// which reads `issues` ∪ `wisps`). Filtering is the consumer's job
+  /// (projections/selectors). `--all` subsumes `--include-infra` and lifts the
+  /// default template + ephemeral exclusions (beads cmd/bd/export.go:96-126;
+  /// ephemeral beads live in the separate `wisps` tables per
+  /// internal/storage/dolt/ephemeral_routing.go and would otherwise never
+  /// appear in a snapshot). `--all` also emits persistent memories, but those
+  /// arrive as `_type == "memory"` config-KV records — not graph nodes — and
+  /// are skipped by the JSONL parse on this path, exactly as the SQL path
+  /// never reads the config table.
   ///
   /// Each issue record may carry an inline `dependencies` array (the upstream
-  /// `Issue.Dependencies` field); those edges are gathered alongside the beads.
+  /// `Issue.Dependencies` field); those edges are gathered alongside the beads
+  /// (bd's bulk loaders route wisp ids to `wisp_dependencies`/`wisp_labels`,
+  /// so wisp edges and labels arrive inline too).
   Future<({List<Bead> beads, List<BeadDependency> dependencies})>
   exportAll() async {
     final result = await _run(exportArgs());
@@ -195,7 +208,7 @@ class BdCliService {
 
   List<String> readyArgs() => const ['ready', '--json'];
 
-  List<String> exportArgs() => const ['export', '--include-infra'];
+  List<String> exportArgs() => const ['export', '--all'];
 
   List<String> queryArgs(String expr) => ['query', expr, '--json'];
 

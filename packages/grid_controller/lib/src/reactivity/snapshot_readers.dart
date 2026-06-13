@@ -4,8 +4,9 @@ import '../services/bd_cli_service.dart';
 import '../services/dolt_query_service.dart';
 import 'snapshot_reader.dart';
 
-/// Composes a snapshot entirely from the bd CLI: `bd export --include-infra`
-/// for the bead/dependency graph and `bd ready` for the ready set. The
+/// Composes a snapshot entirely from the bd CLI: `bd export --all` for the
+/// complete bead/dependency graph (issues ∪ wisps — see [SnapshotReader] for
+/// the unified inclusion semantics) and `bd ready` for the ready set. The
 /// guaranteed-correct path (and the SQL path's fallback). Two bd spawns per
 /// refresh.
 class CliSnapshotReader implements SnapshotReader {
@@ -28,10 +29,12 @@ class CliSnapshotReader implements SnapshotReader {
   }
 }
 
-/// Composes a snapshot from pooled Dolt SQL (issues + dependencies + labels)
-/// plus `bd ready` for the ready set (authoritative in M1; M2 ports ready-work
-/// to SQL, differential-tested). One bd spawn per refresh instead of two, and
-/// the heavy read is ~1–5ms SQL instead of a ~70–140ms `bd export` spawn.
+/// Composes a snapshot from pooled Dolt SQL (issues ∪ wisps, plus both label
+/// and dependency tables — see [SnapshotReader] for the unified inclusion
+/// semantics) plus `bd ready` for the ready set (authoritative in M1; M2 ports
+/// ready-work to SQL, differential-tested). One bd spawn per refresh instead
+/// of two, and the heavy read is ~1–5ms SQL instead of a ~70–140ms `bd export`
+/// spawn.
 ///
 /// Any failure — schema drift ([BdSchemaDriftException]), a reaped connection,
 /// or any other SQL error — falls back to [fallback] (the CLI reader) so a
