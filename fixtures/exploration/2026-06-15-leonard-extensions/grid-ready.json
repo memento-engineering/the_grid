@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "value": {
+    "count": 2,
+    "beads": [
+      {
+        "id": "tg-2",
+        "title": "ready one",
+        "status": "open",
+        "issueType": "task",
+        "priority": 0
+      },
+      {
+        "id": "tg-3",
+        "title": "ready two",
+        "status": "open",
+        "issueType": "task",
+        "priority": 0
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+# grid_cli test configuration.
+#
+# The offline unit suite (everything NOT tagged `integration`) runs with no
+# `bd` binary, no Dolt server, no `claude`, no `git`, and no credentials —
+# `dart test` runs it by default. The `grid run` Track-7 wiring tests use Fakes
+# (fake ready-work source, fake convergence source, fake RuntimeProvider, fake
+# git runner, recording bd runner) and never touch the live `tg` workspace.
+# Exclude the integration tier anywhere with `dart test -x integration`.
+tags:
+  integration:
+    description: >-
+      Tier requiring an out-of-process dependency (bd on PATH, a Dolt server, a
+      live VM service); excluded from the offline default with `-x integration`.

@@ -15,7 +15,7 @@ import 'grid_exploration_protocol.dart';
 ///
 /// * `ext.exploration.core.handshake`
 /// * `ext.exploration.core.get_stable_observation` (empty semantics/routes,
-///   grid state under `plugins.grid`, stability from the sync loop)
+///   grid state under `extensions.grid`, stability from the sync loop)
 /// * `ext.exploration.grid.{requery,snapshot,ready,events,stats}`
 ///
 /// and streams each [GraphEvent] via `developer.postEvent('grid.controller.
@@ -42,8 +42,7 @@ class GridExplorationHost {
     'protocolVersion': kProtocolVersion,
     'bindingType': 'GridControllerHost',
     'hostType': 'dart',
-    'pluginCount': 1,
-    'plugins': [
+    kExtensionsKey: [
       {'namespace': plugin.namespace, 'tools': plugin.toolNames},
     ],
   };
@@ -61,7 +60,7 @@ class GridExplorationHost {
           'refreshCount': stats.refreshCount,
           'lastRefreshMs': stats.lastRefresh?.inMilliseconds,
         },
-        'plugins': {plugin.namespace: plugin.observe()},
+        kExtensionsKey: {plugin.namespace: plugin.observe()},
       },
     };
   }

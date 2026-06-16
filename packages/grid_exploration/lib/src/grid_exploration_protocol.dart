@@ -18,6 +18,18 @@ const String kProtocolVersion = '1';
 /// `ext.exploration.grid.<tool>`.
 const String kGridNamespace = 'grid';
 
+/// Serialized map key carrying the per-namespace extension entries/fragments
+/// in both the handshake (`extensions: [{namespace, tools}]`) and the stable
+/// observation (`extensions: {<ns>: <fragment>}`).
+///
+/// Renamed from `plugins` to converge on leonard ≥0.1.0's published read
+/// contract, which reads **only** `extensions` with no fallback
+/// (`leonard_agent/.../vm_service_client.dart`, `observation/models.dart`).
+/// ADR-0000 A33 (ratified) records the rename; the `ext.exploration.*` prefix,
+/// the method names, and protocol version `'1'` are unchanged. Centralized
+/// (mirroring [kExplorationPrefix]) so the host emits one key.
+const String kExtensionsKey = 'extensions';
+
 /// Fully-qualified extension method name for a core method.
 String coreExtension(String suffix) => '$kExplorationPrefix.core.$suffix';
 

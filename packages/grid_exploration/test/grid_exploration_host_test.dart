@@ -71,10 +71,11 @@ void main() {
 
       final handshake = host.handshakeJson();
       expect(handshake['protocolVersion'], '1');
-      expect(handshake['pluginCount'], 1);
-      final plugins = handshake['plugins']! as List;
-      expect((plugins.single as Map)['namespace'], 'grid');
-      expect((plugins.single as Map)['tools'], [
+      // ADR-0000 A33: the wire key is `extensions`, no legacy `plugins`.
+      expect(handshake.containsKey('plugins'), isFalse);
+      final extensions = handshake[kExtensionsKey]! as List;
+      expect((extensions.single as Map)['namespace'], 'grid');
+      expect((extensions.single as Map)['tools'], [
         'requery',
         'snapshot',
         'ready',
@@ -84,7 +85,7 @@ void main() {
     });
 
     test(
-      'observation has empty semantics/routes and grid under plugins',
+      'observation has empty semantics/routes and grid under extensions',
       () async {
         final runtime = await _startedRuntime(
           () => _snap([_bead('a'), _bead('b')], ready: {'a'}),
@@ -98,8 +99,10 @@ void main() {
         expect(value['semantics'], isEmpty);
         expect(value['routes'], isEmpty);
         expect((value['stability']! as Map)['refreshCount'], greaterThan(0));
+        // ADR-0000 A33: grid state lives under `extensions.grid`, not `plugins`.
+        expect(value.containsKey('plugins'), isFalse);
         final grid =
-            (value['plugins']! as Map)['grid']! as Map<String, Object?>;
+            (value[kExtensionsKey]! as Map)['grid']! as Map<String, Object?>;
         expect(grid['beadCount'], 2);
         expect(grid['readyCount'], 1);
       },

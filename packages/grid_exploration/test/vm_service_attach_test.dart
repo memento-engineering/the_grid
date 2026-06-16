@@ -65,23 +65,25 @@ void main() {
       addTearDown(vm.dispose);
       final isolateId = developer.Service.getIsolateId(iso.Isolate.current)!;
 
-      // Handshake advertises the grid plugin + its tools.
+      // Handshake advertises the grid extension + its tools (ADR-0000 A33:
+      // the wire key is `extensions`, matching leonard's reader).
       final handshake = await vm.callServiceExtension(
         'ext.exploration.core.handshake',
         isolateId: isolateId,
       );
       expect(handshake.json!['protocolVersion'], '1');
-      final plugins = handshake.json!['plugins']! as List;
-      expect((plugins.single as Map)['namespace'], 'grid');
+      final extensions = handshake.json!['extensions']! as List;
+      expect((extensions.single as Map)['namespace'], 'grid');
 
-      // Stable observation returns graph state under plugins.grid.
+      // Stable observation returns graph state under extensions.grid.
       final observation = await vm.callServiceExtension(
         'ext.exploration.core.get_stable_observation',
         isolateId: isolateId,
       );
       expect(observation.json!['type'], 'Observation');
       final value = observation.json!['value']! as Map<String, Object?>;
-      final grid = (value['plugins']! as Map)['grid']! as Map<String, Object?>;
+      final grid =
+          (value['extensions']! as Map)['grid']! as Map<String, Object?>;
       expect(grid['beadCount'], 2);
       expect(grid['readyCount'], 1);
 

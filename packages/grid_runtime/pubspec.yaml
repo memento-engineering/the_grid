@@ -1,0 +1,29 @@
+name: grid_runtime
+description: >-
+  M3 runtime providers — gives the_grid hands. Spawns and supervises a coding
+  agent per ready bead (subprocess-first; tmux as the gc-compatible
+  alternative), isolates each bead's work in a git worktree, and tracks each
+  session's lifecycle as a bead through the single bd write chokepoint
+  (bd-only, `--actor grid-controller`, never SQL). Ports gc's runtime.Provider
+  contract (ADR-0004) and consumes grid_controller's ready-set seam +
+  grid_reconciler's actuator. Scaffold only; Track 2 fills it.
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  freezed_annotation: ^3.0.0
+  grid_controller: any
+  grid_reconciler: any
+  json_annotation: ^4.9.0
+  meta: ^1.16.0
+  path: ^1.9.0
+
+dev_dependencies:
+  build_runner: ^2.4.0
+  freezed: ^3.0.0
+  json_serializable: ^6.9.0
+  lints: ^5.1.0
+  test: ^1.25.0

@@ -24,16 +24,18 @@ const String kHandshakeExtension = 'ext.exploration.core.handshake';
 /// Fully-qualified `ext.exploration.grid.events` extension method.
 const String kEventsExtension = 'ext.exploration.grid.events';
 
-/// One plugin entry from the handshake `plugins` array:
-/// `{namespace, tools}`.
+/// One extension entry from the handshake `extensions` array:
+/// `{namespace, tools}`. (The Dart type stays `GridPlugin` — it is the
+/// panel's internal model; only the wire key is `extensions`, per ADR-0000
+/// A33's `plugins`→`extensions` rename.)
 class GridPlugin {
   const GridPlugin({required this.namespace, required this.tools});
 
   final String namespace;
   final List<String> tools;
 
-  /// Decodes a single plugin entry, tolerating missing/extra keys. Returns
-  /// `null` when [raw] is not a well-formed plugin map (no namespace).
+  /// Decodes a single extension entry, tolerating missing/extra keys. Returns
+  /// `null` when [raw] is not a well-formed entry map (no namespace).
   static GridPlugin? fromWire(Object? raw) {
     if (raw is! Map) return null;
     final namespace = raw['namespace'];
@@ -48,10 +50,13 @@ class GridPlugin {
   }
 }
 
-/// The handshake response: `{protocolVersion, plugins:[{namespace,tools}]}`.
+/// The handshake response:
+/// `{protocolVersion, extensions:[{namespace,tools}]}`.
 ///
-/// Extra advertised keys (`bindingType`, `hostType`, `pluginCount`) are
-/// ignored — only the substance the panels render is decoded.
+/// Extra advertised keys (`bindingType`, `hostType`) are ignored — only the
+/// substance the panels render is decoded. The wire key is `extensions`
+/// (ADR-0000 A33), matching leonard's reader; the Dart accessor stays
+/// `plugins` (the panel's model name).
 class GridHandshake {
   const GridHandshake({required this.protocolVersion, required this.plugins});
 
@@ -67,10 +72,10 @@ class GridHandshake {
         'handshake response missing/malformed protocolVersion: $version',
       );
     }
-    final rawPlugins = json['plugins'];
+    final rawExtensions = json['extensions'];
     final plugins = <GridPlugin>[
-      if (rawPlugins is List)
-        for (final entry in rawPlugins)
+      if (rawExtensions is List)
+        for (final entry in rawExtensions)
           if (GridPlugin.fromWire(entry) case final GridPlugin p) p,
     ];
     return GridHandshake(protocolVersion: version, plugins: plugins);

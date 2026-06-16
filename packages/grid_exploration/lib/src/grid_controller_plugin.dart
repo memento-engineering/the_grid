@@ -64,7 +64,7 @@ class GridControllerPlugin {
 
   List<String> get toolNames => [for (final t in tools) t.name];
 
-  /// The plugin's observation fragment (lives under `plugins.grid` in the
+  /// The plugin's observation fragment (lives under `extensions.grid` in the
   /// stable observation). Bounded by [eventLimit]/[readyLimit].
   Map<String, Object?> observe({int eventLimit = 32, int readyLimit = 64}) {
     final snapshot = runtime.current;

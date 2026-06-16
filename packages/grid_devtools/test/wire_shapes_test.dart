@@ -3,13 +3,14 @@ import 'package:grid_devtools/grid_devtools.dart';
 
 void main() {
   group('GridHandshake.fromWire', () {
-    test('decodes protocol version + plugins, ignoring extra keys', () {
+    test('decodes protocol version + extensions, ignoring extra keys', () {
+      // ADR-0000 A33: the host emits the manifest under the `extensions` wire
+      // key (matching leonard's reader), not the legacy `plugins`.
       final handshake = GridHandshake.fromWire(const {
         'protocolVersion': '1',
         'bindingType': 'GridControllerHost',
         'hostType': 'dart',
-        'pluginCount': 1,
-        'plugins': [
+        'extensions': [
           {
             'namespace': 'grid',
             'tools': ['requery', 'events', 'stats'],
@@ -22,17 +23,32 @@ void main() {
       expect(handshake.plugins.single.tools, ['requery', 'events', 'stats']);
     });
 
+    test('ignores the legacy `plugins` key (no fallback, like leonard)', () {
+      final handshake = GridHandshake.fromWire(const {
+        'protocolVersion': '1',
+        'plugins': [
+          {
+            'namespace': 'grid',
+            'tools': ['events'],
+          },
+        ],
+      });
+      // Reading only `extensions` means a legacy-`plugins` host advertises
+      // nothing — exactly leonard's no-fallback behavior.
+      expect(handshake.plugins, isEmpty);
+    });
+
     test('throws FormatException when protocolVersion is missing', () {
       expect(
-        () => GridHandshake.fromWire(const {'plugins': []}),
+        () => GridHandshake.fromWire(const {'extensions': []}),
         throwsFormatException,
       );
     });
 
-    test('drops malformed plugin entries without losing valid ones', () {
+    test('drops malformed extension entries without losing valid ones', () {
       final handshake = GridHandshake.fromWire(const {
         'protocolVersion': '1',
-        'plugins': [
+        'extensions': [
           'not-a-map',
           {'tools': <String>[]},
           {

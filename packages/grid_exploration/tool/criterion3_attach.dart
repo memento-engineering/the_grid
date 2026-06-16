@@ -64,13 +64,14 @@ Future<void> main() async {
 
   final checks = <String, bool>{
     'handshake.protocolVersion == 1': handshake.json!['protocolVersion'] == '1',
-    'handshake advertises grid plugin':
-        ((handshake.json!['plugins']! as List).first as Map)['namespace'] ==
+    // ADR-0000 A33: the wire key is `extensions`, matching leonard's reader.
+    'handshake advertises grid extension':
+        ((handshake.json!['extensions']! as List).first as Map)['namespace'] ==
         'grid',
     'observation.type == Observation':
         observation.json!['type'] == 'Observation',
     'observation has grid beadCount 2':
-        (((observation.json!['value']! as Map)['plugins']! as Map)['grid']!
+        (((observation.json!['value']! as Map)['extensions']! as Map)['grid']!
             as Map)['beadCount'] ==
         2,
     'grid.ready tool ok + count 1':

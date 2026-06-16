@@ -1,0 +1,53 @@
+{
+  "type": "Observation",
+  "value": {
+    "semantics": [],
+    "routes": [],
+    "stability": {
+      "refreshing": false,
+      "pendingFollowUp": false,
+      "refreshCount": 1,
+      "lastRefreshMs": 5
+    },
+    "extensions": {
+      "grid": {
+        "readPath": "unknown",
+        "beadCount": 3,
+        "readyCount": 2,
+        "readyBeads": [
+          {
+            "id": "tg-2",
+            "title": "ready one",
+            "status": "open",
+            "issueType": "task",
+            "priority": 0
+          },
+          {
+            "id": "tg-3",
+            "title": "ready two",
+            "status": "open",
+            "issueType": "task",
+            "priority": 0
+          }
+        ],
+        "recentEvents": [
+          {
+            "type": "snapshotInitialized",
+            "beadCount": 3,
+            "readyCount": 2
+          }
+        ],
+        "stats": {
+          "signalCounts": {},
+          "totalSignals": 0,
+          "refreshCount": 1,
+          "lastRefreshMs": 5,
+          "lastReactionMs": null,
+          "refreshing": false,
+          "pendingFollowUp": false
+        },
+        "capturedAt": "2026-06-15T12:00:00.000Z"
+      }
+    }
+  }
+}

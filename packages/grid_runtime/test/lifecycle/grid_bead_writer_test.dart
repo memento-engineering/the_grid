@@ -1,0 +1,205 @@
+import 'dart:convert';
+
+import 'package:grid_controller/grid_controller.dart';
+import 'package:grid_runtime/grid_runtime.dart';
+import 'package:test/test.dart';
+
+import 'support/recording_bd_runner.dart';
+
+/// Tests for the single bd write chokepoint (Track 4; ADR-0006 Decision 2).
+///
+/// The heart is the fail-closed safety: a write whose target rig is WRONG or
+/// ABSENT is refused before any `bd` call, and every allowed write carries
+/// `--actor grid-controller`, merges metadata, and never calls `bd show` or any
+/// SQL.
+void main() {
+  late RecordingBdRunner runner;
+  late BdCliService bd;
+  late List<String> refusals;
+
+  // The shared rig allow-set seed (A35): exactly {tgdog}.
+  BeadOwnershipPredicate predicate() => BeadOwnershipPredicate({'tgdog'});
+
+  GridBeadWriter writer() =>
+      GridBeadWriter(bd: bd, ownership: predicate(), onRefusal: refusals.add);
+
+  setUp(() {
+    runner = RecordingBdRunner(createdId: 'tgdog-sess1');
+    bd = BdCliService(runner);
+    refusals = <String>[];
+  });
+
+  group('the fail-closed refusal (the key safety test)', () {
+    test('update on a bead whose id prefix is NOT owned is refused', () async {
+      // gascity-owned bead — the_grid must never mutate it.
+      await expectLater(
+        writer().update('gascity-conv7', metadata: {'state': 'active'}),
+        throwsA(isA<OwnershipRefused>()),
+      );
+      // NOT ONE bd call was issued (refused before the wire).
+      expect(runner.calls, isEmpty);
+      // It logged loudly.
+      expect(refusals, hasLength(1));
+      expect(refusals.single, contains('not in the owned allow-set'));
+    });
+
+    test(
+      'update on a bead with NO rig prefix at all is refused (absent rig)',
+      () async {
+        await expectLater(
+          writer().update('noprefixbead', metadata: {'state': 'active'}),
+          throwsA(isA<OwnershipRefused>().having((e) => e.rig, 'rig', isNull)),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
+
+    test(
+      'createSession with a non-owned rig is refused before any bd create',
+      () async {
+        await expectLater(
+          writer().createSession(
+            rig: 'gascity',
+            title: 'x',
+            workBeadId: 'gascity-99',
+          ),
+          throwsA(
+            isA<OwnershipRefused>().having(
+              (e) => e.operation,
+              'operation',
+              'create',
+            ),
+          ),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
+
+    test('close and delete on a non-owned bead are refused', () async {
+      await expectLater(
+        writer().close('gascity-conv7'),
+        throwsA(isA<OwnershipRefused>()),
+      );
+      await expectLater(
+        writer().delete('gascity-conv7'),
+        throwsA(isA<OwnershipRefused>()),
+      );
+      expect(runner.calls, isEmpty);
+    });
+
+    test(
+      'a wrong allow-set seed (not tgdog) refuses the_grid\'s own rig too',
+      () async {
+        // belt-and-suspenders: the predicate is the only authority; if seeded
+        // with the wrong rig, even a tgdog-prefixed bead is refused.
+        final w = GridBeadWriter(
+          bd: bd,
+          ownership: BeadOwnershipPredicate({'someotherrig'}),
+          onRefusal: refusals.add,
+        );
+        await expectLater(
+          w.update('tgdog-sess1', metadata: {'state': 'active'}),
+          throwsA(isA<OwnershipRefused>()),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
+  });
+
+  group('allowed writes — bd-only, --actor grid-controller, merge, no show', () {
+    test('createSession mints + stamps the owned rig FROM BIRTH', () async {
+      final id = await writer().createSession(
+        rig: 'tgdog',
+        title: 'session for tgdog-work1',
+        workBeadId: 'tgdog-work1',
+        metadata: {'state': 'start_pending'},
+      );
+      expect(id, 'tgdog-sess1');
+
+      // 1) a `bd create --json --actor grid-controller --type session …`.
+      final creates = runner.callsFor('create');
+      expect(creates, hasLength(1));
+      expect(creates.single, containsAllInOrder(['create', '--json']));
+      expect(creates.single, containsAllInOrder(['--type', 'session']));
+
+      // 2) immediately followed by the rig-stamping `update --metadata`.
+      final updates = runner.callsFor('update');
+      expect(updates, hasLength(1));
+      final stamped =
+          jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+      // The rig marker is present from birth — the chokepoint can assert it on
+      // every later write.
+      expect(stamped['rig'], 'tgdog');
+      expect(stamped['work_bead'], 'tgdog-work1');
+      expect(stamped['state'], 'start_pending');
+
+      // Safety invariants.
+      expect(runner.everyMutationHasActor, isTrue);
+      expect(runner.neverCalledShow, isTrue);
+    });
+
+    test(
+      'update issues exactly one `bd update --metadata <json>` (merge)',
+      () async {
+        await writer().update('tgdog-sess1', metadata: {'state': 'active'});
+        final updates = runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single, containsAllInOrder(['update', 'tgdog-sess1']));
+        // metadata is a single merged JSON object (bd merges named keys).
+        final meta =
+            jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+        expect(meta, {'state': 'active'});
+        expect(runner.everyMutationHasActor, isTrue);
+      },
+    );
+
+    test('close issues `bd close <id> --reason`', () async {
+      await writer().close('tgdog-sess1', reason: 'session ended');
+      final closes = runner.callsFor('close');
+      expect(closes, hasLength(1));
+      expect(closes.single, containsAllInOrder(['close', 'tgdog-sess1']));
+      expect(closes.single, containsAllInOrder(['--reason', 'session ended']));
+      expect(closes.single, containsAllInOrder(['--actor', 'grid-controller']));
+    });
+
+    test(
+      'an owned-rig-MARKER bead (no owned prefix) is still writable',
+      () async {
+        // The metadata.rig axis: a bead whose id prefix is unknown but whose
+        // metadata declares the owned rig in the SAME write is owned.
+        await writer().update(
+          'xyz-1',
+          metadata: {'rig': 'tgdog', 'state': 'active'},
+        );
+        expect(runner.callsFor('update'), hasLength(1));
+        expect(refusals, isEmpty);
+      },
+    );
+
+    test(
+      'batch refuses the whole transaction if ANY line is non-owned',
+      () async {
+        await expectLater(
+          writer().batch([
+            (id: 'tgdog-sess1', line: 'close tgdog-sess1'),
+            (id: 'gascity-9', line: 'close gascity-9'),
+          ]),
+          throwsA(isA<OwnershipRefused>()),
+        );
+        // No batch was sent (the unowned target poisons the one transaction).
+        expect(runner.callsFor('batch'), isEmpty);
+      },
+    );
+  });
+
+  test('requireRigMarker demands BOTH prefix and metadata.rig', () {
+    final strict = BeadOwnershipPredicate({'tgdog'}, requireRigMarker: true);
+    // prefix owned but no marker → not owned.
+    expect(strict.ownsTarget(id: 'tgdog-1'), isFalse);
+    // both present → owned.
+    expect(
+      strict.ownsTarget(id: 'tgdog-1', metadata: {'rig': 'tgdog'}),
+      isTrue,
+    );
+  });
+}

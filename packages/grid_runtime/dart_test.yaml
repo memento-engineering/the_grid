@@ -1,0 +1,21 @@
+# grid_runtime test configuration.
+#
+# The offline unit suite (everything NOT tagged `integration`) runs with no
+# `claude` binary, no Dolt server, and no credentials — `dart test` runs it by
+# default. Exclude the integration tier anywhere with `dart test -x integration`.
+#
+# The `git` tag marks Track-3 worktree tests that drive the REAL `git` binary
+# against TEMP repos only (a `git init` working repo + a LOCAL bare `file://`
+# origin). They are hermetic — never touch real lenny / real GitHub /
+# `lenny-tgdog`, never run `gh`, never spawn `claude` (the PR-open step goes
+# through a FAKE injectable `PrOpener`). `git` is always present, so these run by
+# default; select just them with `dart test -t git`.
+tags:
+  integration:
+    description: >-
+      Tier requiring an out-of-process dependency beyond the always-present git
+      binary; excluded from the offline default with `-x integration`.
+  git:
+    description: >-
+      Drives the real git binary against hermetic temp repos + a local bare
+      file:// origin. No network, no real remote, no gh, no claude.

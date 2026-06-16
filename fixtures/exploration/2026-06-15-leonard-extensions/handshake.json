@@ -1,0 +1,17 @@
+{
+  "protocolVersion": "1",
+  "bindingType": "GridControllerHost",
+  "hostType": "dart",
+  "extensions": [
+    {
+      "namespace": "grid",
+      "tools": [
+        "requery",
+        "snapshot",
+        "ready",
+        "events",
+        "stats"
+      ]
+    }
+  ]
+}
