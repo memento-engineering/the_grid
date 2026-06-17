@@ -7,6 +7,7 @@ import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 import 'package:grid_reconciler/grid_reconciler.dart';
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:meta/meta.dart';
 
 /// `grid run` — the M3 dogfood composition (M3-BUILD-ORDER Track 7).
 ///
@@ -71,6 +72,43 @@ class RunCommand extends Command<int> {
             '(e.g. /Users/nico/development/engineering.memento/lenny-tgdog). '
             'Required to ARM a non-dry run; never created by grid run.',
       )
+      ..addOption(
+        'workspace',
+        abbr: 'w',
+        help:
+            'The beads workspace to read ready work from (a directory at or '
+            'above a `.beads/`). Defaults to discovery from the cwd. The '
+            'dogfood side-cars another repo by pointing this at it (e.g. '
+            '/Users/nico/development/engineering.memento/genesis with '
+            '--rig genesis). Read-only under --dry-run.',
+      )
+      ..addOption(
+        'state-workspace',
+        help:
+            'A SEPARATE the_grid-owned beads workspace where the_grid writes its '
+            'own session/lifecycle beads (A36 choice B), so the --workspace '
+            'work source stays read-only and never adopts the_grid\'s `session` '
+            'type. Omit to write session beads into --workspace itself.',
+      )
+      ..addOption(
+        'state-rig',
+        defaultsTo: 'tgdog',
+        help:
+            'the_grid\'s OWNED session partition (the prefix of the '
+            '--state-workspace store). Unioned into the allow-set so the write '
+            'chokepoint owns the session beads it mints. Only used with '
+            '--state-workspace.',
+      )
+      ..addMultiOption(
+        'bead',
+        abbr: 'b',
+        help:
+            'A specific work-bead id to drive (repeatable) — the operational '
+            'drive-list layered ON TOP of the ownership allow-set. When given, '
+            'ONLY these (owned) beads dispatch; everything else is observed '
+            'read-only. This is the "bless the specific work beads" gate (A35). '
+            'Omit to drive every owned bead (the prefix scopes on its own).',
+      )
       ..addFlag(
         'dry-run',
         defaultsTo: true,
@@ -116,6 +154,14 @@ class RunCommand extends Command<int> {
       rigs: rigs,
       provider: RuntimeProviderKind.parse(args.option('provider')),
       rootPath: args.option('root'),
+      workspacePath: args.option('workspace'),
+      stateWorkspacePath: args.option('state-workspace'),
+      // --state-rig only applies when a state workspace is given.
+      stateRig: args.option('state-workspace') == null
+          ? null
+          : args.option('state-rig'),
+      targetBeads: <String>{...args.multiOption('bead')}
+        ..removeWhere((b) => b.trim().isEmpty),
       dryRun: args.flag('dry-run'),
       noSql: args.flag('no-sql'),
       runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
@@ -220,6 +266,9 @@ RunWiring composeRun({
   GateEvaluator? gateEvaluator,
   IdempotencyProbe? idempotencyProbe,
   int maxInFlight = 8,
+  Set<String> driveList = const {},
+  BdCliService? stateBd,
+  String? stateRig,
   void Function(String message)? onObserve,
   void Function(Object error, StackTrace stack)? onError,
 }) {
@@ -230,8 +279,17 @@ RunWiring composeRun({
     'sources are injected',
   );
 
-  // THE single source of truth: one Set<String> instance feeds BOTH gates.
-  final allowSet = Set<String>.unmodifiable(rigs);
+  // THE single source of truth: one Set<String> instance feeds BOTH gates
+  // (A32). The split-DB arm (A36 choice B) adds the_grid's own session
+  // partition (`stateRig`, e.g. `tgdog`) so the write chokepoint owns the
+  // session beads it mints into the SEPARATE state store, while dispatch still
+  // owns the work rigs it reads. No work/convergence bead in the read workspace
+  // carries the stateRig prefix, so widening the set never broadens
+  // dispatch/actuation — it only authorizes the_grid's own lifecycle writes.
+  final allowSet = Set<String>.unmodifiable(<String>{
+    ...rigs,
+    if (stateRig != null && stateRig.isNotEmpty) stateRig,
+  });
   final ownsRigs = OwnsRigs(allowSet);
   final beadOwnership = BeadOwnershipPredicate(allowSet);
 
@@ -265,9 +323,11 @@ RunWiring composeRun({
   final runtimeProvider = provider ?? _buildProvider(providerKind);
   final git = gitService ?? _buildGitService();
   // The session-bead actuator writes ONLY through the chokepoint, which
-  // re-checks ownership fail-closed against the SAME allow-set.
+  // re-checks ownership fail-closed against the SAME allow-set. In the split-DB
+  // arm the writes target [stateBd] (the_grid's own state store), NOT the read
+  // workspace's bd — genesis stays a pristine work source (A36 choice B).
   final writer = GridBeadWriter(
-    bd: bd,
+    bd: stateBd ?? bd,
     ownership: beadOwnership,
     onRefusal: onObserve,
   );
@@ -295,6 +355,8 @@ RunWiring composeRun({
     configBuilder: _buildAgentConfig,
     maxInFlight: maxInFlight,
     dryRun: dryRun,
+    driveList: driveList,
+    sessionRig: stateRig,
     onObserve: onObserve,
     onError: onError,
   );
@@ -318,19 +380,60 @@ RunWiring composeRun({
 
 /// The `claude` invocation contract for one dispatched bead (M3 Track 2/7). The
 /// agent token rides the env allowlist (never argv); `-p` is non-interactive
-/// print mode; the prompt is the bead's title/description. Pre-granted
-/// permissions so no approval prompt appears (dogfood agents run headless).
-RuntimeConfig _buildAgentConfig(DispatchRequest request) {
-  final prompt = request.bead.title.isNotEmpty
-      ? request.bead.title
-      : 'work bead ${request.bead.id}';
+/// print mode; pre-granted permissions so no approval prompt appears (dogfood
+/// agents run headless). The prompt carries the **full** bead (title +
+/// description + design + acceptance criteria + notes) — a title-only prompt
+/// starves the agent of the load-bearing instructions (A36 pre-flight) — plus a
+/// **local-first working agreement**: commit on the throwaway branch, do NOT
+/// push, do NOT open a PR. Landing (`GridGitService.land`) is a deliberate
+/// human follow-up for the first live arms, so the loop produces inspectable
+/// local commits with zero GitHub side effects.
+RuntimeConfig _buildAgentConfig(DispatchRequest request) =>
+    buildAgentConfig(request);
+
+/// The prompt/command assembly, exposed for unit tests (the prompt is the live
+/// dogfood contract). See [_buildAgentConfig] for the rationale.
+@visibleForTesting
+RuntimeConfig buildAgentConfig(DispatchRequest request) {
+  final bead = request.bead;
+  final title = bead.title.isNotEmpty ? bead.title : 'work bead ${bead.id}';
+  final p = StringBuffer()
+    ..writeln('# $title')
+    ..writeln()
+    ..writeln('Bead `${bead.id}` (rig `${request.rig}`).');
+  void section(String heading, String body) {
+    if (body.trim().isEmpty) return;
+    p
+      ..writeln()
+      ..writeln('## $heading')
+      ..writeln(body.trim());
+  }
+
+  section('Task', bead.description);
+  section('Design', bead.design);
+  section('Acceptance criteria', bead.acceptanceCriteria);
+  section('Notes', bead.notes);
+  p
+    ..writeln()
+    ..writeln('## Working agreement')
+    ..writeln(
+      '- Work ONLY inside this worktree (${request.worktree.path}); it is on '
+      'branch `${request.worktree.branch}`, a throwaway branch the_grid '
+      'provisioned for this bead.',
+    )
+    ..writeln('- Implement the task and COMMIT your work on that branch.')
+    ..writeln(
+      '- Do NOT push and do NOT open a pull request — leave the commit for '
+      'human review.',
+    )
+    ..writeln('- When the work is committed you are done; exit.');
   return RuntimeConfig(
     workDir: request.worktree.path,
     command: 'claude',
-    args: ['--dangerously-skip-permissions', '-p', prompt],
+    args: ['--dangerously-skip-permissions', '-p', p.toString()],
     lifecycle: Lifecycle.oneTurn,
     env: {
-      'GRID_BEAD_ID': request.bead.id,
+      'GRID_BEAD_ID': bead.id,
       'GRID_SESSION_ID': request.sessionBeadId,
     },
   );
@@ -379,6 +482,10 @@ Future<int> runGrid({
   required Set<String> rigs,
   RuntimeProviderKind provider = RuntimeProviderKind.subprocess,
   String? rootPath,
+  String? workspacePath,
+  String? stateWorkspacePath,
+  String? stateRig,
+  Set<String> targetBeads = const {},
   bool dryRun = true,
   bool noSql = false,
   void Function(String)? out,
@@ -419,10 +526,29 @@ Future<int> runGrid({
     return 64;
   }
 
-  final workspace = workspaceOverride ?? BeadsWorkspace.discover();
+  // The_grid's own session/lifecycle beads must go to an EXPLICIT state store,
+  // never silently default into the read --workspace — which, in the side-car
+  // arm, is a pristine FOREIGN work source (A36/A37). A live run therefore
+  // REQUIRES --state-workspace. (A review caught a live side-car that omitted
+  // it writing `type=session` into genesis, blocked only by genesis's own
+  // schema; this fail-closes that in the_grid instead of leaning on the
+  // consumer store.) The single-DB self-owned arm passes its own store here.
+  if (!dryRun && stateWorkspacePath == null) {
+    writeErr(
+      'grid run: a non-dry (live) run requires --state-workspace — the_grid '
+      'writes its session/lifecycle beads there and must NEVER default them '
+      'into the read --workspace. Pass --state-workspace (+ --state-rig), or '
+      'use --dry-run.',
+    );
+    return 64;
+  }
+
+  final workspace =
+      workspaceOverride ?? BeadsWorkspace.discover(start: workspacePath);
   if (workspace == null) {
     writeErr(
-      'grid run: no .beads/ workspace found from ${Directory.current.path}',
+      'grid run: no .beads/ workspace found from '
+      '${workspacePath ?? Directory.current.path}',
     );
     return 1;
   }
@@ -459,6 +585,37 @@ Future<int> runGrid({
   final bd =
       bdOverride ?? BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
 
+  // --- the split state store (A36 choice B) ----------------------------------
+  // When --state-workspace is set, the_grid's OWN lifecycle/session beads are
+  // written into a SEPARATE the_grid-owned store (e.g. the `tgdog` embedded DB)
+  // instead of the read workspace — so a side-car'd work source (genesis) stays
+  // a pristine, read-only backlog and never has to adopt the_grid's `session`
+  // type. The session partition is `stateRig`, which must be in the allow-set
+  // (composeRun unions it in) so the chokepoint owns the session beads it mints.
+  BdCliService? stateBd;
+  if (stateWorkspacePath != null) {
+    if (stateRig == null || stateRig.trim().isEmpty) {
+      writeErr(
+        'grid run: --state-workspace requires --state-rig (the_grid\'s owned '
+        'session partition, e.g. `tgdog`).',
+      );
+      await shutdownController();
+      await host.dispose();
+      return 64;
+    }
+    final stateWs = BeadsWorkspace.discover(start: stateWorkspacePath);
+    if (stateWs == null) {
+      writeErr(
+        'grid run: no .beads/ state workspace found from $stateWorkspacePath '
+        '(--state-workspace)',
+      );
+      await shutdownController();
+      await host.dispose();
+      return 1;
+    }
+    stateBd = BdCliService(ProcessBdRunner(workspaceRoot: stateWs.root));
+  }
+
   // The registered root checkout (Layer 1). In dry-run we register lazily only
   // if a root was supplied; a missing root is fine (nothing is provisioned).
   RootCheckout? root = rootCheckoutOverride;
@@ -488,6 +645,9 @@ Future<int> runGrid({
     convergenceSource: convergenceSourceOverride,
     provider: providerOverride,
     gitService: gitServiceOverride,
+    driveList: targetBeads,
+    stateBd: stateBd,
+    stateRig: stateRig,
     onObserve: write,
     onError: (e, st) => writeErr('grid run: $e'),
   );
@@ -500,6 +660,15 @@ Future<int> runGrid({
   );
   if (root != null) {
     write('root checkout: ${root.path} (default ${root.defaultBranch})');
+  }
+  if (stateBd != null) {
+    write(
+      'state store: $stateWorkspacePath  ·  session rig: $stateRig  '
+      '(genesis read-only; sessions written here)',
+    );
+  }
+  if (targetBeads.isNotEmpty) {
+    write('drive-list (blessed beads): {${targetBeads.join(', ')}}');
   }
   final info = await developer.Service.getInfo();
   final uri = info.serverUri;

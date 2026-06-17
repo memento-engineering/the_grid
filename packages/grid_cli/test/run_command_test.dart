@@ -87,6 +87,22 @@ void main() {
       expect(code, 64);
       expect(errs.join('\n'), contains('--rig/--owner is required'));
     });
+
+    test('a live run with --root but NO --state-workspace is refused (exit 64) '
+        '— sessions must never default into the read --workspace', () async {
+      final errs = <String>[];
+      final code = await runGrid(
+        rigs: {'genesis'},
+        dryRun: false,
+        rootPath: '/tmp/some-root', // root supplied → past the root guard…
+        // …but no --state-workspace → must be refused before composition.
+        out: (_) {},
+        err: errs.add,
+        runForever: false,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('requires --state-workspace'));
+    });
   });
 
   group('composeRun — one source of truth for ownership', () {
@@ -185,6 +201,55 @@ void main() {
       // The reconciler ran its startup recovery pass but actuated nothing
       // (OwnsNothing gate in dry-run); the bd runner saw no write.
       expect(h.bdRunner.calls, isEmpty);
+    });
+  });
+
+  group('buildAgentConfig — the live dogfood prompt contract (A36)', () {
+    DispatchRequest req(Bead bead) => DispatchRequest(
+          bead: bead,
+          rig: 'genesis',
+          sessionBeadId: 'genesis-sess1',
+          worktree: const BeadWorktree(
+            beadId: 'genesis-q8h',
+            path: '/clone/.grid/worktrees/genesis/genesis-q8h',
+            branch: 'grid/genesis-q8h',
+          ),
+        );
+
+    test('carries the full bead (not title-only) + the local-first trailer', () {
+      final cfg = buildAgentConfig(
+        req(Bead(
+          id: 'genesis-q8h',
+          title: 'a first-class Key type',
+          description: 'Add ValueKey<T> and ObjectKey; deliberately no GlobalKey.',
+          design: 'An abstract Key on the spine with equality/hashCode.',
+          acceptanceCriteria: 'Seed.key accepts a typed Key; reconcile matches.',
+          notes: 'Pairs with multi-child reconcile.',
+        )),
+      );
+      expect(cfg.command, 'claude');
+      // The token never rides argv; `-p` is the only non-flag arg.
+      expect(cfg.args.first, '--dangerously-skip-permissions');
+      final prompt = cfg.args.last;
+      // The load-bearing instructions reach the agent…
+      expect(prompt, contains('Add ValueKey<T> and ObjectKey'));
+      expect(prompt, contains('## Design'));
+      expect(prompt, contains('## Acceptance criteria'));
+      expect(prompt, contains('Pairs with multi-child reconcile'));
+      // …and the arm-#1 safety trailer is non-negotiable.
+      expect(prompt, contains('grid/genesis-q8h'));
+      expect(prompt, contains('COMMIT'));
+      expect(prompt, contains('Do NOT push and do NOT open a pull request'));
+      expect(cfg.workDir, '/clone/.grid/worktrees/genesis/genesis-q8h');
+      expect(cfg.env['GRID_BEAD_ID'], 'genesis-q8h');
+    });
+
+    test('a bead with only a title still gets a usable prompt + the trailer', () {
+      final cfg = buildAgentConfig(req(Bead(id: 'genesis-7r9', title: 'multi-child')));
+      final prompt = cfg.args.last;
+      expect(prompt, contains('multi-child'));
+      expect(prompt, isNot(contains('## Task'))); // no description section
+      expect(prompt, contains('Do NOT push and do NOT open a pull request'));
     });
   });
 }

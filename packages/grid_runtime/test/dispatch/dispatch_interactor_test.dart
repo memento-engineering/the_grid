@@ -44,11 +44,20 @@ void main() {
     args: ['-p', request.bead.title],
   );
 
-  void wire({bool dryRun = false, int maxInFlight = 8}) {
+  void wire({
+    bool dryRun = false,
+    int maxInFlight = 8,
+    Set<String> driveList = const {},
+    Set<String> owned = const {'tgdog'},
+    String? sessionRig,
+    void Function(Object error, StackTrace stack)? onError,
+  }) {
     bdRunner = RecordingBdRunner(createdId: 'tgdog-sess1');
+    // One predicate instance feeds BOTH gates (the A32 shared-allow-set rule).
+    final ownership = BeadOwnershipPredicate(owned);
     final writer = GridBeadWriter(
       bd: BdCliService(bdRunner),
-      ownership: BeadOwnershipPredicate({'tgdog'}),
+      ownership: ownership,
     );
     actuator = RuntimeActuator(writer: writer);
     // The actuator ingests the provider's RuntimeEvent stream (Track 4 bind).
@@ -56,7 +65,7 @@ void main() {
     git = GridGitService(runner: gitRunner, prOpener: FakePrOpener());
     dispatcher = DispatchInteractor(
       source: source,
-      ownership: BeadOwnershipPredicate({'tgdog'}),
+      ownership: ownership,
       git: git,
       root: root,
       provider: provider,
@@ -64,6 +73,9 @@ void main() {
       configBuilder: buildConfig,
       maxInFlight: maxInFlight,
       dryRun: dryRun,
+      driveList: driveList,
+      sessionRig: sessionRig,
+      onError: onError,
     );
   }
 
@@ -383,5 +395,146 @@ void main() {
     source.fire(GraphEvent.beadCreated(Bead(id: 'tgdog-other')));
     await pumpEventQueue();
     expect(provider.starts.length, before);
+  });
+
+  group('the operational drive-list (A36) — owned AND blessed gate', () {
+    test('empty drive-list imposes NO filter (the owned bead dispatches, none parked)',
+        () async {
+      // The default posture — the prefix allow-set scopes on its own. This is
+      // the existing tgdog behaviour; the genesis arm narrows it. (The wider
+      // suite already covers owned dispatch with no drive-list; here we assert
+      // the empty list parks NOTHING as out-of-scope.)
+      wire(); // driveList defaults to {}
+      source.addReady(Bead(id: 'tgdog-a', title: 'a'));
+      await dispatcher.start();
+      expect(dispatcher.dispatched.keys, contains('tgdog-a'));
+      expect(dispatcher.observedOutOfScope, isEmpty);
+    });
+
+    test('an owned bead NOT in the drive-list is observed read-only, never spawned',
+        () async {
+      wire(driveList: {'tgdog-blessed'});
+      source
+        ..addReady(Bead(id: 'tgdog-blessed', title: 'blessed'))
+        ..addReady(Bead(id: 'tgdog-other', title: 'owned but unlisted'));
+      await dispatcher.start();
+
+      // Only the blessed bead dispatched; the owned-but-unlisted one is parked.
+      expect(dispatcher.dispatched.keys, contains('tgdog-blessed'));
+      expect(dispatcher.dispatched.keys, isNot(contains('tgdog-other')));
+      expect(dispatcher.observedOutOfScope, contains('tgdog-other'));
+      // It is owned (not in observedNonOwned) — the gate is operational scope,
+      // not ownership.
+      expect(dispatcher.observedNonOwned, isNot(contains('tgdog-other')));
+      // No agent/worktree/bead for the unlisted bead.
+      expect(provider.starts, hasLength(1));
+      expect(provider.starts.single.config.workDir, contains('tgdog-blessed'));
+    });
+
+    test('a non-owned bead is still blocked by ownership even if drive-listed',
+        () async {
+      // Ownership is the hard gate; listing a non-owned id cannot promote it.
+      wire(driveList: {'gascity-xyz'});
+      source.addReady(Bead(id: 'gascity-xyz', title: 'gc work'));
+      await dispatcher.start();
+      expect(dispatcher.inFlight, 0);
+      expect(dispatcher.observedNonOwned, contains('gascity-xyz'));
+      expect(dispatcher.observedOutOfScope, isEmpty);
+      expect(provider.starts, isEmpty);
+    });
+  });
+
+  group('split-DB sessions (A36 choice B): session rig decoupled from work rig',
+      () {
+    test('a genesis work bead mints its session into the tgdog partition',
+        () async {
+      // Dispatch owns `genesis` (the read rig); the chokepoint ALSO owns
+      // `tgdog` (the_grid's own session partition). sessionRig routes the mint
+      // so genesis never has to adopt the_grid's `session` type.
+      wire(owned: {'genesis', 'tgdog'}, sessionRig: 'tgdog');
+      source.addReady(Bead(id: 'genesis-q8h', title: 'a first-class Key type'));
+      await dispatcher.start();
+
+      // The genesis bead dispatched (one session, one agent).
+      expect(dispatcher.dispatched.keys, contains('genesis-q8h'));
+      expect(provider.starts, hasLength(1));
+      // The session bead was minted into the tgdog partition (default id
+      // tgdog-sess1), stamped rig=tgdog AND linked to the genesis work bead —
+      // proving the_grid's lifecycle state lives in ITS store, not genesis's.
+      final flat = bdRunner.calls.expand((c) => c).join(' ');
+      expect(flat, contains('"rig":"tgdog"'));
+      expect(flat, contains('"work_bead":"genesis-q8h"'));
+      expect(flat, isNot(contains('"rig":"genesis"')));
+    });
+  });
+
+  group('a dispatch failure is reported, NOT crashed, and leaves NO orphan '
+      '(A37 + review)', () {
+    int gitOps(String sub) => gitRunner.calls
+        .where((c) => c.length >= 2 && c[0] == 'worktree' && c[1] == sub)
+        .length;
+
+    test('a bd create reject is reported, the worktree is reaped, and a retry '
+        'succeeds', () async {
+      // Reproduces the genesis live-arm failure (`invalid issue type: session`)
+      // AND the arm2 orphan-worktree bug: a post-provision failure must leave
+      // NO orphan, or the bead can never re-dispatch.
+      final errors = <Object>[];
+      wire(onError: (e, _) => errors.add(e));
+      bdRunner.failCreateError = 'invalid issue type: session';
+      source.addReady(Bead(id: 'tgdog-work1', title: 'do the thing'));
+
+      await dispatcher.start(); // start() must not throw (A37).
+
+      expect(errors, hasLength(1), reason: 'the failure is reported once');
+      expect(errors.single.toString(), contains('invalid issue type: session'));
+      expect(dispatcher.inFlight, 0);
+      expect(dispatcher.dispatched, isEmpty);
+      expect(provider.starts, isEmpty);
+      // The just-minted worktree was reaped — no orphan to block a retry.
+      expect(gitOps('add'), 1);
+      expect(gitOps('remove'), 1, reason: 'the orphan worktree must be cleaned');
+
+      // RETRY: the create now succeeds → the bead re-provisions and dispatches
+      // (the orphan did not wedge it).
+      bdRunner.failCreateError = null;
+      source.fireReady({'tgdog-work1'});
+      await pumpEventQueue();
+
+      expect(dispatcher.dispatched.keys, contains('tgdog-work1'));
+      expect(provider.starts, hasLength(1));
+      expect(gitOps('add'), 2, reason: 'the retry re-provisions a fresh worktree');
+    });
+
+    test('a provider.start failure drops the records, closes the orphan '
+        'session, reaps, and a retry succeeds', () async {
+      // Bug 3: spawnSession succeeds (session minted + records written) then
+      // provider.start throws — the unwind must drop _dispatched/_bySession,
+      // close the orphan session bead, and reap, or all retries wedge forever
+      // on the idempotency guard.
+      final errors = <Object>[];
+      wire(onError: (e, _) => errors.add(e));
+      provider.failNextStartWith = StateError('spawn boom');
+      source.addReady(Bead(id: 'tgdog-work1', title: 'do the thing'));
+
+      await dispatcher.start();
+
+      expect(errors, hasLength(1));
+      expect(dispatcher.inFlight, 0);
+      expect(dispatcher.dispatched, isEmpty);
+      // The minted session bead was closed (orphan cleanup); the worktree
+      // reaped — bd saw create THEN close; git saw add THEN remove.
+      expect(bdRunner.callsFor('create'), hasLength(1));
+      expect(bdRunner.callsFor('close'), hasLength(1));
+      expect(gitOps('remove'), 1);
+
+      // RETRY is possible (the idempotency guard is not wedged).
+      provider.failNextStartWith = null;
+      bdRunner.nextCreatedId = 'tgdog-sess2';
+      source.fireReady({'tgdog-work1'});
+      await pumpEventQueue();
+      expect(dispatcher.dispatched.keys, contains('tgdog-work1'));
+      expect(provider.starts, hasLength(1));
+    });
   });
 }

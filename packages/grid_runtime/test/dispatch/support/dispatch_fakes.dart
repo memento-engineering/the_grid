@@ -60,11 +60,20 @@ class FakeRuntimeProvider implements RuntimeProvider {
   /// name already started (the real provider rejects a duplicate live name).
   bool rejectDuplicateStart = true;
 
+  /// When non-null, the NEXT `start` throws this (then clears) — to drive the
+  /// dispatcher's conservative unwind on a provider spawn failure.
+  Object? failNextStartWith;
+
   /// How many times a session [name] was started (proves no double-spawn).
   int startCountFor(String name) => starts.where((s) => s.name == name).length;
 
   @override
   Future<void> start(String name, RuntimeConfig config) async {
+    final fail = failNextStartWith;
+    if (fail != null) {
+      failNextStartWith = null;
+      throw fail;
+    }
     if (rejectDuplicateStart && _running.contains(name)) {
       throw SessionAlreadyExists(name);
     }

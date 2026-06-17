@@ -83,6 +83,8 @@ class DispatchInteractor {
     required RuntimeConfig Function(DispatchRequest request) configBuilder,
     int maxInFlight = 8,
     bool dryRun = false,
+    Set<String> driveList = const {},
+    String? sessionRig,
     void Function(String message)? onObserve,
     void Function(Object error, StackTrace stack)? onError,
   }) : assert(maxInFlight >= 1, 'maxInFlight must be >= 1'),
@@ -95,6 +97,8 @@ class DispatchInteractor {
        _configBuilder = configBuilder,
        _maxInFlight = maxInFlight,
        _dryRun = dryRun,
+       _driveList = driveList,
+       _sessionRig = sessionRig,
        _onObserve = onObserve,
        _onError = onError;
 
@@ -107,6 +111,23 @@ class DispatchInteractor {
   final RuntimeConfig Function(DispatchRequest) _configBuilder;
   final int _maxInFlight;
   final bool _dryRun;
+
+  /// The operational drive-list — an OPTIONAL second, narrower selector layered
+  /// **on top of** [_ownership] (ADR-0000 A36). Ownership answers "may I touch
+  /// this?" (the security/coexistence invariant); the drive-list answers "which
+  /// owned beads do I drive in this run?". When **empty** it imposes no filter
+  /// (the prefix allow-set scopes on its own — the original `tgdog` posture).
+  /// When **non-empty**, a bead must be **both owned AND listed** to dispatch —
+  /// the mechanical embodiment of ADR-0006/A35's "bless the 2 specific work
+  /// beads" gate, needed for the genesis arm where `{genesis}` owns the whole
+  /// repo prefix. Fail-safe: an owned-but-unlisted bead is observed read-only.
+  final Set<String> _driveList;
+
+  /// The owned partition the SESSION beads are minted into, when the_grid's
+  /// lifecycle state lives in a different store than the work it reads (A36
+  /// choice B — split read/write). Null = sessions share the work bead's rig
+  /// (the single-DB arm). See [_dispatch].
+  final String? _sessionRig;
   final void Function(String message)? _onObserve;
   final void Function(Object, StackTrace)? _onError;
 
@@ -139,6 +160,10 @@ class DispatchInteractor {
   /// (read-only observation; for tests/diagnostics). A non-owned bead is NEVER
   /// dispatched and NEVER mutated.
   final Set<String> observedNonOwned = {};
+
+  /// Owned work beads observed-but-not-dispatched because a non-empty
+  /// [_driveList] does not list them (read-only; for tests/diagnostics).
+  final Set<String> observedOutOfScope = {};
 
   /// The live dispatch records (read-only view, for tests/diagnostics).
   Map<String, DispatchRecord> get dispatched =>
@@ -215,6 +240,15 @@ class DispatchInteractor {
         return;
       }
 
+      // The operational drive-list — a SECOND, narrower scope on top of
+      // ownership (A36). Empty = no filter; non-empty = only listed beads
+      // dispatch. An owned-but-unlisted bead is observed read-only.
+      if (_driveList.isNotEmpty && !_driveList.contains(id)) {
+        observedOutOfScope.add(id);
+        _onObserve?.call('observe (owned, not in drive-list): $id');
+        return;
+      }
+
       // The max-in-flight cap (M3's simple backpressure; the full pool is M4).
       // Counted over reservations (synchronous) so concurrent different-bead
       // considers cannot both slip past it before either records.
@@ -229,11 +263,15 @@ class DispatchInteractor {
       _reserved.add(id);
       try {
         await _dispatch(bead);
-      } on Object {
-        // A failed dispatch releases the reservation so a retry can proceed; the
-        // error is reported by the caller's onError where one is wired.
+      } on Object catch (error, stack) {
+        // A failed dispatch releases the reservation so a later ready event can
+        // retry, and is REPORTED — never rethrown. One bead's failure (e.g. a
+        // bd validation reject or a git error) must not tear down the whole
+        // controller: `reconcileReadySet`'s `Future.wait` and `_onEvent`'s
+        // `unawaited` both sit upstream, so a rethrow here would crash the live
+        // run. Report-and-continue keeps the other ready beads dispatching.
         _reserved.remove(id);
-        rethrow;
+        _reportError(error, stack);
       }
     });
   }
@@ -243,49 +281,90 @@ class DispatchInteractor {
   /// single-flight). On any failure the partial state is unwound conservatively
   /// (no session record is retained), so the next ready event can retry.
   Future<void> _dispatch(Bead bead) async {
-    final rig = _ownership.rigOf(bead);
-    if (rig == null) return; // owns() was true, so rigOf is non-null; defensive.
+    final workRig = _ownership.rigOf(bead);
+    if (workRig == null) return; // owns() was true; defensive.
+    // The SESSION bead's owned partition. When [_sessionRig] is set (the
+    // split-DB arm: session beads live in a separate the_grid-owned store, e.g.
+    // `tgdog`, while work is read from another rig like `genesis`), the session
+    // bead is minted into that partition — its id prefix and `metadata.rig` are
+    // `_sessionRig`, so the chokepoint owns it by prefix across its whole
+    // lifecycle (A36 choice B). Default (single-DB tgdog arm): the session
+    // shares the work bead's rig.
+    final sessionRig = _sessionRig ?? workRig;
 
     // --dry-run: observe-only, no worktree, no spawn, no writes.
     if (_dryRun) {
-      _onObserve?.call('dry-run (would dispatch): ${bead.id} rig=$rig');
+      _onObserve?.call('dry-run (would dispatch): ${bead.id} rig=$workRig');
       return;
     }
 
     // 1. Provision the per-bead worktree (Track 3).
     final worktree = await _git.provisionWorktree(root: _root, beadId: bead.id);
 
-    // 2. Mint the session bead through the chokepoint (Track 4) BEFORE the
-    //    spawn, so the runtime session is named by the session bead id and the
-    //    actuator's RuntimeEvent ingestion can find its record.
-    final sessionBeadId = await _actuator.spawnSession(
-      rig: rig,
-      workBeadId: bead.id,
-      title: bead.title.isNotEmpty ? bead.title : 'session for ${bead.id}',
-      worktreePath: worktree.path,
-      branch: worktree.branch,
-    );
+    // Everything after provisioning is wrapped so a post-provision failure (a
+    // bd-create reject, a provider spawn failure) leaves NO orphan. Without
+    // this, the just-minted worktree/branch survives — the bead can then NEVER
+    // re-dispatch (`worktree add` fails "branch exists") — and a half-written
+    // `_dispatched`/`_bySession` record wedges the idempotency guard, with the
+    // session bead left open. The agent has not started yet (provider.start IS
+    // the start), so the worktree is always clean → reap removes it.
+    String? sessionBeadId;
+    try {
+      // 2. Mint the session bead through the chokepoint (Track 4) BEFORE the
+      //    spawn, so the runtime session is named by the session bead id and
+      //    the actuator's RuntimeEvent ingestion can find its record.
+      sessionBeadId = await _actuator.spawnSession(
+        rig: sessionRig,
+        workBeadId: bead.id,
+        title: bead.title.isNotEmpty ? bead.title : 'session for ${bead.id}',
+        worktreePath: worktree.path,
+        branch: worktree.branch,
+      );
 
-    final record = DispatchRecord(
-      workBeadId: bead.id,
-      sessionBeadId: sessionBeadId,
-      worktree: worktree,
-    );
-    // Record BEFORE the spawn act so a re-fire that races the await is a no-op.
-    _dispatched[bead.id] = record;
-    _bySession[sessionBeadId] = record;
-
-    // 3. Start the agent subprocess in the worktree (Track 2). The provider
-    //    emits SessionStarted, which the actuator (already bound) ingests.
-    final config = _configBuilder(
-      DispatchRequest(
-        bead: bead,
-        rig: rig,
+      final record = DispatchRecord(
+        workBeadId: bead.id,
         sessionBeadId: sessionBeadId,
         worktree: worktree,
-      ),
-    );
-    await _provider.start(sessionBeadId, config);
+      );
+      // Record BEFORE the spawn act so a re-fire that races the await is a
+      // no-op.
+      _dispatched[bead.id] = record;
+      _bySession[sessionBeadId] = record;
+
+      // 3. Start the agent subprocess in the worktree (Track 2). The provider
+      //    emits SessionStarted, which the actuator (already bound) ingests.
+      final config = _configBuilder(
+        DispatchRequest(
+          // The prompt describes the WORK bead's rig (e.g. genesis) to the
+          // agent, not the_grid's internal session partition.
+          bead: bead,
+          rig: workRig,
+          sessionBeadId: sessionBeadId,
+          worktree: worktree,
+        ),
+      );
+      await _provider.start(sessionBeadId, config);
+    } on Object {
+      // Conservative unwind: drop the records, close any minted (orphan)
+      // session bead, and reap the clean worktree so a later ready event can
+      // re-provision. Then rethrow — `_consider` releases the reservation and
+      // reports (it never re-crashes the controller, A37).
+      _dispatched.remove(bead.id);
+      if (sessionBeadId != null) {
+        _bySession.remove(sessionBeadId);
+        try {
+          await _actuator.closeSession(sessionBeadId, reason: 'spawn failed');
+        } on Object {
+          // best-effort: the session bead may already be unreachable.
+        }
+      }
+      try {
+        await _git.reap(root: _root, worktree: worktree);
+      } on Object {
+        // best-effort: a reap failure must not mask the original error.
+      }
+      rethrow;
+    }
   }
 
   /// Reacts to a [CrashDecision] from the actuator's supervision stream. A

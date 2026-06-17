@@ -188,7 +188,11 @@ class SubprocessProvider implements RuntimeProvider {
       throw SessionAlreadyExists(name);
     }
     // Reserve the name synchronously so a concurrent same-name start rejects.
-    final session = _Session(name: name, peekBufferLines: _peekBufferLines);
+    final session = _Session(
+      name: name,
+      peekBufferLines: _peekBufferLines,
+      lifecycle: config.lifecycle,
+    );
     _sessions[name] = session;
 
     final SpawnedProcess spawned;
@@ -332,7 +336,16 @@ class SubprocessProvider implements RuntimeProvider {
     final code = session.observedExitCode;
     if (code != null) {
       _emit(RuntimeEvent.exited(name: session.name, exitCode: code));
+    } else if (session.lifecycle == Lifecycle.oneTurn) {
+      // A run-once agent that disappears has COMPLETED its single turn. The
+      // detached spawn gives no readable exit code, so we cannot prove `0` —
+      // but a one-shot exit is success-by-intent (whether the WORK succeeded is
+      // judged by its commit, separately). Emit a clean exit so the actuator
+      // parks it asleep instead of treating success as a crash and
+      // crash-looping/quarantining it (the bug the first genesis arm exposed).
+      _emit(RuntimeEvent.exited(name: session.name, exitCode: 0));
     } else {
+      // A longLived agent that vanishes really did die unexpectedly → crash.
       _emit(RuntimeEvent.died(name: session.name, reason: 'process vanished'));
     }
     session.close();
@@ -354,10 +367,21 @@ class SubprocessProvider implements RuntimeProvider {
 /// In-process state for one supervised session — the registry entry that stands
 /// in for gc's per-session Unix control socket (CUT for Tier-1).
 class _Session {
-  _Session({required this.name, required this.peekBufferLines});
+  _Session({
+    required this.name,
+    required this.peekBufferLines,
+    this.lifecycle = Lifecycle.longLived,
+  });
 
   final String name;
   final int peekBufferLines;
+
+  /// The expected lifetime of this session's command (from its [RuntimeConfig]).
+  /// A `oneTurn` (run-once) agent that disappears has COMPLETED its single turn,
+  /// not crashed — detached mode gives no exit code, so the provider would
+  /// otherwise report every exit as a `died` (`process vanished`) and the
+  /// actuator would crash-loop/quarantine a SUCCESSFUL agent. See [_emitExit].
+  final Lifecycle lifecycle;
 
   int? pid;
   int? pgid;

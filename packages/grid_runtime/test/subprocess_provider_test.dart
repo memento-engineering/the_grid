@@ -23,6 +23,12 @@ class FakeSpawner implements SubprocessSpawner {
 
   int nextPid = 4242;
 
+  /// When false, the spawned process reports a NULL exit code — mirroring the
+  /// real detached path (`Process.exitCode` unavailable), so death is observed
+  /// only via the liveness poll. Lets a test exercise the
+  /// `oneTurn` → Exited(0) vs `longLived` → Died branch in `_emitExit`.
+  bool provideExitCode = true;
+
   @override
   Future<SpawnedProcess> spawn({
     required String executable,
@@ -38,7 +44,7 @@ class FakeSpawner implements SubprocessSpawner {
       pid: nextPid,
       stdout: stdoutCtl.stream,
       stderr: stderrCtl.stream,
-      exitCode: exit.future,
+      exitCode: provideExitCode ? exit.future : null,
     );
   }
 
@@ -56,7 +62,7 @@ class _FakeSpawned implements SpawnedProcess {
     required this.pid,
     required this.stdout,
     required this.stderr,
-    required Future<int> exitCode,
+    required Future<int>? exitCode,
   }) : _exit = exitCode;
 
   @override
@@ -65,7 +71,7 @@ class _FakeSpawned implements SpawnedProcess {
   final Stream<List<int>> stdout;
   @override
   final Stream<List<int>> stderr;
-  final Future<int> _exit;
+  final Future<int>? _exit;
 
   @override
   Future<int>? get exitCode => _exit;
@@ -363,6 +369,63 @@ exit 0
       await evSub.cancel();
       await provider.dispose();
     }, timeout: const Timeout(Duration(seconds: 20)));
+  });
+
+  group('lifecycle-aware exit: a oneTurn completion is NOT a crash (A37)', () {
+    // The detached path gives no readable exit code (provideExitCode=false), so
+    // death is seen only via the liveness poll — exactly the genesis-arm case
+    // where a SUCCESSFUL `claude -p` agent was crash-looped/quarantined.
+    Future<List<RuntimeEvent>> runUntilExit(Lifecycle lifecycle) async {
+      final spawner = FakeSpawner()..provideExitCode = false;
+      final group = AliveGroupController();
+      final provider = SubprocessProvider(
+        spawner: spawner,
+        groupController: group,
+        livenessPollPeriod: const Duration(milliseconds: 5),
+        parentEnvironment: const {},
+      );
+      final events = <RuntimeEvent>[];
+      final sub = provider.events.listen(events.add);
+      await provider.start(
+        'sess',
+        RuntimeConfig(
+          workDir: '/tmp',
+          command: 'claude',
+          args: const ['-p', 'x'],
+          lifecycle: lifecycle,
+        ),
+      );
+      group.alive = false; // the process disappears; no readable exit code
+      for (var i = 0;
+          i < 200 &&
+              events.whereType<Exited>().isEmpty &&
+              events.whereType<Died>().isEmpty;
+          i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await sub.cancel();
+      await provider.dispose();
+      return events;
+    }
+
+    test('a oneTurn agent that vanishes emits Exited(0), NOT Died', () async {
+      final events = await runUntilExit(Lifecycle.oneTurn);
+      expect(
+        events.whereType<Died>(),
+        isEmpty,
+        reason: 'a one-shot completion must not read as a crash',
+      );
+      final exited = events.whereType<Exited>().toList();
+      expect(exited, hasLength(1));
+      expect(exited.single.exitCode, 0);
+    });
+
+    test('a longLived agent that vanishes still emits Died (a real crash)',
+        () async {
+      final events = await runUntilExit(Lifecycle.longLived);
+      expect(events.whereType<Exited>(), isEmpty);
+      expect(events.whereType<Died>(), hasLength(1));
+    });
   });
 }
 

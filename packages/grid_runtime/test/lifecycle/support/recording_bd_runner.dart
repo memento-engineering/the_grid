@@ -26,11 +26,27 @@ class RecordingBdRunner implements BdRunner {
   /// with distinct ids).
   set nextCreatedId(String id) => _createdId = id;
 
+  /// When non-null, every `bd create` returns a FAILED envelope carrying this
+  /// error (exit 1, error-on-stdout) — reproducing a real bd validation reject
+  /// (e.g. `invalid issue type: session`) so a test can prove the dispatcher
+  /// survives a create failure instead of crashing the controller.
+  String? failCreateError;
+
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'create' && failCreateError != null) {
+      return Future<BdResult>.value(
+        BdResult(
+          exitCode: 1,
+          stdout:
+              '{"schema_version":1,"data":{"error":"$failCreateError"}}',
+          stderr: '',
+        ),
+      );
+    }
     final data = switch (sub) {
       'create' => '{"id":"$_createdId"}',
       // update/close/delete/batch — bd returns the affected bead; an object
