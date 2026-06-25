@@ -21,7 +21,21 @@ import 'package:grid_runtime/grid_runtime.dart';
 /// emits SessionStarted/Exited/Died on demand. Only the members the effect
 /// touches are meaningful; the rest are honest no-ops over an empty surface.
 class FakeRuntimeProvider implements RuntimeProvider {
-  final _events = StreamController<RuntimeEvent>.broadcast();
+  FakeRuntimeProvider() {
+    _events = StreamController<RuntimeEvent>.broadcast(
+      onListen: () => _eventListeners++,
+      onCancel: () => _eventListeners--,
+    );
+  }
+
+  late final StreamController<RuntimeEvent> _events;
+
+  int _eventListeners = 0;
+
+  /// The number of live subscriptions to [events] (added and not yet
+  /// cancelled). Lets a test prove the effect's per-incarnation subscription is
+  /// actually torn down on dispose (PDR §7 (f) — the subscription-cancel half).
+  int get eventListenerCount => _eventListeners;
 
   /// (name, config) of every `start`, in call order.
   final List<({String name, RuntimeConfig config})> started = [];
