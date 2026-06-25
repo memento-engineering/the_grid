@@ -43,6 +43,11 @@ export 'src/kernel/idle.dart';
 export 'src/notifiers/joined_snapshot_notifier.dart';
 export 'src/notifiers/rig_config_notifier.dart';
 
+// Restart respawn-or-skip (Track D): reconcile the survivors (worktrees + owned
+// session cursors) BEFORE the tree re-mounts — skip done, kill orphans, respawn
+// the rest.
+export 'src/restart/restart_reconciler.dart';
+
 // The Seeds (the tree topology).
 export 'src/seeds/grid_seed.dart';
 export 'src/seeds/rig.dart';
