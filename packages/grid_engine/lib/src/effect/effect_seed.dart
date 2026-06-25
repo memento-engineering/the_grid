@@ -58,10 +58,12 @@ abstract class EffectSeed extends StatefulSeed {
   final SessionProjection? session;
 
   /// The process to spawn for this phase — what executable, in which worktree,
-  /// with what argv/lifecycle. The engine layers the per-incarnation
-  /// `GRID_BEAD_ID` + `GRID_INSTANCE_TOKEN` over this config's `env`.
+  /// with what argv/lifecycle. Given the resolved [ctx] so a capability can
+  /// derive the per-bead worktree path ([EffectContext.worktreeFor]). The
+  /// engine layers the per-incarnation `GRID_BEAD_ID` + `GRID_INSTANCE_TOKEN`
+  /// over this config's `env`.
   @protected
-  RuntimeConfig buildConfig();
+  RuntimeConfig buildConfig(EffectContext ctx);
 
   /// The cursor to write on a CLEAN completion, or null to CLOSE the session
   /// bead (a positive terminal — e.g. after `land`, there is no next phase).
@@ -129,7 +131,7 @@ class EffectSeedState extends State<EffectSeed> {
     _sub = _ctx!.provider.events
         .where((e) => e.name == _sessionName)
         .listen(_onEvent);
-    final base = seed.buildConfig();
+    final base = seed.buildConfig(_ctx!);
     final config = base.copyWith(
       env: {
         ...base.env,

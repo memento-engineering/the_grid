@@ -8,14 +8,17 @@
 // controllable FakeRuntimeProvider event stream. The two races — a completion
 // event AFTER dispose, and a dispose DURING the async createSession — are the
 // load-bearing cases Track D/E-F build on.
-import 'dart:async';
-import 'dart:convert';
-
+//
+// The fakes (FakeRuntimeProvider + RecordingBdRunner + the context builder) now
+// live in test/support/engine_fakes.dart, shared with the kernel reactive-loop
+// test and the land test (Track E/F).
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
+
+import 'support/engine_fakes.dart';
 
 // ---------------------------------------------------------------------------
 // A concrete effect under test: the IMPLEMENT/VERIFY/LAND shape, configurable
@@ -35,7 +38,7 @@ class _SpawnEffect extends EffectSeed {
   final WorkPhase? target;
 
   @override
-  RuntimeConfig buildConfig() => const RuntimeConfig(
+  RuntimeConfig buildConfig(EffectContext ctx) => const RuntimeConfig(
     workDir: '/tmp/x',
     command: 'true',
     lifecycle: Lifecycle.oneTurn,
@@ -47,154 +50,8 @@ class _SpawnEffect extends EffectSeed {
 }
 
 // ---------------------------------------------------------------------------
-// Fakes (Fakes, not mocks): a controllable RuntimeProvider + a recording bd
-// runner wrapped in BdCliService → GridBeadWriter (mirroring grid_runtime's
-// grid_bead_writer_test fake shape).
+// Harness: mount the effect under InheritedSeed<EffectContext> via a TreeOwner.
 // ---------------------------------------------------------------------------
-
-/// Records start/stop calls and exposes a controllable events stream so a test
-/// emits SessionStarted/Exited/Died on demand. Only the members the effect
-/// touches are meaningful; the rest are honest no-ops over an empty surface.
-class FakeRuntimeProvider implements RuntimeProvider {
-  final _events = StreamController<RuntimeEvent>.broadcast();
-
-  /// (name, config) of every `start`, in call order.
-  final List<({String name, RuntimeConfig config})> started = [];
-
-  /// Every `stop`ped session name, in call order.
-  final List<String> stopped = [];
-
-  /// A gate the test can hold to delay a `start` (proves the spawn ordering /
-  /// races); when null, `start` completes immediately.
-  Completer<void>? startGate;
-
-  /// When set, the next `start` throws this (e.g. SessionAlreadyExists).
-  Object? throwOnStart;
-
-  /// Emits [event] to subscribers (after a microtask, like a real stream).
-  void emit(RuntimeEvent event) => _events.add(event);
-
-  @override
-  Future<void> start(String name, RuntimeConfig config) async {
-    started.add((name: name, config: config));
-    if (startGate != null) await startGate!.future;
-    final t = throwOnStart;
-    if (t != null) {
-      throwOnStart = null;
-      throw t;
-    }
-  }
-
-  @override
-  Future<void> stop(String name) async => stopped.add(name);
-
-  @override
-  Future<void> interrupt(String name) async {}
-
-  @override
-  Stream<RuntimeEvent> get events => _events.stream;
-
-  @override
-  Stream<String> output(String name) => const Stream.empty();
-
-  @override
-  bool isRunning(String name) => false;
-
-  @override
-  bool processAlive(String name) => false;
-
-  @override
-  String peek(String name, int lines) => '';
-
-  @override
-  List<String> listRunning(String prefix) => const [];
-
-  @override
-  DateTime? lastActivity(String name) => null;
-
-  @override
-  RuntimeCapabilities get capabilities => RuntimeCapabilities.subprocess;
-
-  Future<void> close() => _events.close();
-}
-
-/// A recording [BdRunner] (the grid_runtime fake shape): records full argv +
-/// stdin so a test asserts the EXACT bd commands, and `create` returns a
-/// caller-controlled synthetic id so the mint+stamp is exercised with no real
-/// `bd`.
-class RecordingBdRunner implements BdRunner {
-  RecordingBdRunner({String createdId = 'tgdog-sess1'}) : _createdId = createdId;
-
-  final String _createdId;
-  final List<List<String>> calls = <List<String>>[];
-  final List<String?> stdins = <String?>[];
-
-  @override
-  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
-    calls.add(List<String>.unmodifiable(args));
-    stdins.add(stdin);
-    final sub = args.isNotEmpty ? args.first : '';
-    final data = switch (sub) {
-      'create' => '{"id":"$_createdId"}',
-      _ => '{"id":"${args.length >= 2 ? args[1] : ''}"}',
-    };
-    return Future<BdResult>.value(
-      BdResult(
-        exitCode: 0,
-        stdout: '{"schema_version":1,"data":$data}',
-        stderr: '',
-      ),
-    );
-  }
-
-  /// All calls whose leading subcommand is [sub].
-  List<List<String>> callsFor(String sub) =>
-      calls.where((c) => c.isNotEmpty && c.first == sub).toList();
-
-  /// The decoded `--metadata` JSON object of the `update` call at [index].
-  Map<String, dynamic> metadataOfUpdate(int index) {
-    final updates = callsFor('update');
-    final c = updates[index];
-    final i = c.indexOf('--metadata');
-    return jsonDecode(c[i + 1]) as Map<String, dynamic>;
-  }
-
-  /// True if no call was `bd show` (forbidden on a controller path) and no call
-  /// looks like raw SQL (defense — the chokepoint cannot issue SQL by
-  /// construction).
-  bool get neverShowOrSql => calls.every(
-    (c) => c.isEmpty || (c.first != 'show' && c.first != 'sql'),
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Harness: build the EffectContext over the fakes and mount the effect under
-// InheritedSeed<EffectContext> via a TreeOwner.
-// ---------------------------------------------------------------------------
-
-const _stateRig = 'tgdog';
-
-({EffectContext ctx, RecordingBdRunner runner, FakeRuntimeProvider provider})
-fakes({String createdId = 'tgdog-sess1'}) {
-  final runner = RecordingBdRunner(createdId: createdId);
-  final provider = FakeRuntimeProvider();
-  final writer = GridBeadWriter(
-    bd: BdCliService(runner),
-    ownership: BeadOwnershipPredicate(const {_stateRig}),
-  );
-  return (
-    ctx: EffectContext(
-      provider: provider,
-      writer: writer,
-      stateRig: _stateRig,
-    ),
-    runner: runner,
-    provider: provider,
-  );
-}
-
-Bead _bead(String id) =>
-    Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
 /// Mounts [effect] under `InheritedSeed<EffectContext>(value: ctx)` and returns
 /// the owner so the test can unmount (dispose the effect) on demand.
@@ -210,11 +67,11 @@ void main() {
       'session==null ⇒ createSession ONCE then start with the minted token + '
       'bead id in config.env',
       () async {
-        final f = fakes(createdId: 'tgdog-sess1');
+        final f = buildFakes(createdId: 'tgdog-sess1');
         final owner = _mount(
           f.ctx,
           _SpawnEffect(
-            bead: _bead('tg-1'),
+            bead: bead('tg-1'),
             phase: WorkPhase.implement,
             target: WorkPhase.verify,
             key: const ValueKey('tg-1.agent'),
@@ -235,7 +92,7 @@ void main() {
         expect(creates.single, containsAllInOrder(['--type', 'session']));
         // The mint stamps rig + work_bead from birth (the chokepoint's stamp).
         final mintStamp = f.runner.metadataOfUpdate(0);
-        expect(mintStamp['rig'], _stateRig);
+        expect(mintStamp['rig'], stateRig);
         expect(mintStamp['work_bead'], 'tg-1');
 
         // start(sessionName, config): name == the minted session id; config.env
@@ -251,11 +108,11 @@ void main() {
 
     test('session!=null (verify/land) ⇒ NO createSession; start on the existing '
         'session id', () async {
-      final f = fakes();
+      final f = buildFakes();
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.verify,
           target: WorkPhase.land,
           session: const SessionProjection(
@@ -280,11 +137,11 @@ void main() {
   group('EffectSeed — SessionStarted persists the process identity', () {
     test('emit SessionStarted(pgid:111,pid:112) ⇒ update with '
         'startedIdentityMetadata', () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -317,11 +174,11 @@ void main() {
   group('EffectSeed — completion advances the cursor or closes', () {
     test('Exited (advanceTo=verify) ⇒ update phaseCursorMetadata(verify)',
         () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -347,11 +204,11 @@ void main() {
 
     test('Exited (advanceTo=null) ⇒ close the session bead (positive terminal)',
         () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.land,
           target: null, // land has no next phase
           session: const SessionProjection(
@@ -384,11 +241,11 @@ void main() {
 
     test('Died ⇒ same completion path as Exited (advance the cursor)',
         () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -411,11 +268,11 @@ void main() {
     });
 
     test('Respawned / ActivityChanged are ignored (no writer call)', () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -439,11 +296,11 @@ void main() {
   group('EffectSeed — demux: an event for ANOTHER session is dropped', () {
     test('a completion event whose name != our session id is ignored',
         () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -464,11 +321,11 @@ void main() {
 
   group('EffectSeed — unmount = kill, and the post-dispose guards', () {
     test('dispose ⇒ provider.stop(sessionName) called', () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -486,11 +343,11 @@ void main() {
       'a completion event emitted AFTER dispose ⇒ NO writer call, NO StateError '
       '(the _cancelled + mounted guard)',
       () async {
-        final f = fakes(createdId: 'tgdog-sess1');
+        final f = buildFakes(createdId: 'tgdog-sess1');
         final owner = _mount(
           f.ctx,
           _SpawnEffect(
-            bead: _bead('tg-1'),
+            bead: bead('tg-1'),
             phase: WorkPhase.implement,
             target: WorkPhase.verify,
             key: const ValueKey('tg-1.agent'),
@@ -522,23 +379,23 @@ void main() {
       '(the step-3 guard), and stop is not called (never spawned)',
       () async {
         // Gate the create so dispose lands while _run() is awaiting it.
-        final runner = _GatedCreateBdRunner();
+        final runner = GatedCreateBdRunner();
         final provider = FakeRuntimeProvider();
         final writer = GridBeadWriter(
           bd: BdCliService(runner),
-          ownership: BeadOwnershipPredicate(const {_stateRig}),
+          ownership: BeadOwnershipPredicate(const {stateRig}),
         );
         final ctx = EffectContext(
           provider: provider,
           writer: writer,
-          stateRig: _stateRig,
+          stateRig: stateRig,
         );
         addTearDown(provider.close);
 
         final owner = _mount(
           ctx,
           _SpawnEffect(
-            bead: _bead('tg-1'),
+            bead: bead('tg-1'),
             phase: WorkPhase.implement,
             target: WorkPhase.verify,
             key: const ValueKey('tg-1.agent'),
@@ -563,12 +420,12 @@ void main() {
 
     test('a re-fired ready event mid-spawn: SessionAlreadyExists from start is '
         'swallowed (no throw escapes)', () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       f.provider.throwOnStart = const SessionAlreadyExists('tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -586,11 +443,11 @@ void main() {
   group('EffectSeed — never bypasses the chokepoint', () {
     test('the effect issues bd ONLY via the injected writer (no show/SQL); '
         'every mutation carries --actor grid-controller', () async {
-      final f = fakes(createdId: 'tgdog-sess1');
+      final f = buildFakes(createdId: 'tgdog-sess1');
       final owner = _mount(
         f.ctx,
         _SpawnEffect(
-          bead: _bead('tg-1'),
+          bead: bead('tg-1'),
           phase: WorkPhase.implement,
           target: WorkPhase.verify,
           key: const ValueKey('tg-1.agent'),
@@ -619,35 +476,4 @@ void main() {
       }
     });
   });
-}
-
-/// A [BdRunner] whose `create` parks until [releaseCreate] is called, so a test
-/// can drive a dispose into the middle of the async mint.
-class _GatedCreateBdRunner implements BdRunner {
-  Completer<String>? _createGate;
-
-  bool get createPending => _createGate != null && !_createGate!.isCompleted;
-
-  /// Resolves the in-flight `create` with [id].
-  void releaseCreate(String id) => _createGate!.complete(id);
-
-  @override
-  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) async {
-    final sub = args.isNotEmpty ? args.first : '';
-    if (sub == 'create') {
-      _createGate = Completer<String>();
-      final id = await _createGate!.future;
-      return BdResult(
-        exitCode: 0,
-        stdout: '{"schema_version":1,"data":{"id":"$id"}}',
-        stderr: '',
-      );
-    }
-    final id = args.length >= 2 ? args[1] : '';
-    return BdResult(
-      exitCode: 0,
-      stdout: '{"schema_version":1,"data":{"id":"$id"}}',
-      stderr: '',
-    );
-  }
 }

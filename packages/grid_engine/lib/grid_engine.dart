@@ -29,8 +29,14 @@ export 'src/domain/work_phase.dart';
 export 'src/effect/effect_context.dart';
 export 'src/effect/effect_seed.dart';
 
-// Kernel seams.
+// Extension (the compiled DefaultExtension capabilities) — the OPINIONS live
+// here, never in the kernel/effect core (ADR-0007 §1): the agent/verify/land
+// capability Seeds + the resolver that maps a phase to one.
+export 'src/extension/default_extension.dart';
+
+// Kernel: the seams + the composition/flush driver.
 export 'src/kernel/effect_resolver.dart';
+export 'src/kernel/grid_kernel.dart';
 export 'src/kernel/idle.dart';
 
 // Reactive sources (the only subscriptions into the pipelines live here).
