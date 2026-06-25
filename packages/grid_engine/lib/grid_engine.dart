@@ -15,6 +15,7 @@ library;
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
+export 'src/domain/session_bead.dart';
 export 'src/domain/rig_config.dart';
 export 'src/domain/session_projection.dart';
 export 'src/domain/work_phase.dart';
