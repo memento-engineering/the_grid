@@ -123,9 +123,9 @@ class _WorkListState extends State<WorkList> {
   /// upstream built-in work types; every the_grid custom type (convergence /
   /// session / convoy / event / step / spec / gate / molecule / message /
   /// merge-request / agent / rig / role) is non-core and excluded. Fail-closed:
-  /// an unrecognised custom type does NOT mount. (A41; whether epic / milestone
-  /// / decision — aggregates / planning rather than coding targets — should be
-  /// narrowed further is a sub-question flagged for Nico.)
+  /// an unrecognised custom type does NOT mount. (A41, ratified Nico
+  /// 2026-06-25 — `isCore` stands; the epic / milestone / decision narrowing
+  /// was considered and left in scope.)
   static bool _isDispatchableWork(IssueType type) => type.isCore;
 }
 
