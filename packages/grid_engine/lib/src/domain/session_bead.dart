@@ -75,12 +75,17 @@ Map<String, String> phaseCursorMetadata(WorkPhase phase) => {
 /// The metadata payload stamped at `SessionStarted` (Track D): the process
 /// identity for respawn-or-skip + the freshness fence. All string-valued
 /// (`bd update --metadata` is `Map<String, String>`).
+///
+/// [pgid] is nullable — `SessionStarted.pgid` is null when pgid resolution
+/// failed at spawn; the key is then omitted (an honest "no group kill target",
+/// so restart falls back to a single-process kill) rather than written as a
+/// bogus value.
 Map<String, String> startedIdentityMetadata({
-  required int pgid,
+  required int? pgid,
   required int pid,
   required String token,
 }) => {
-  SessionBeadKeys.pgid: pgid.toString(),
+  if (pgid != null) SessionBeadKeys.pgid: pgid.toString(),
   SessionBeadKeys.pid: pid.toString(),
   SessionBeadKeys.token: token,
 };

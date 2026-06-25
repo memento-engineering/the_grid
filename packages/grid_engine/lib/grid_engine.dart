@@ -24,6 +24,11 @@ export 'src/domain/rig_config.dart';
 export 'src/domain/session_projection.dart';
 export 'src/domain/work_phase.dart';
 
+// The effect carrier — the runtime heart (Track C): a tree node whose Branch
+// lifecycle IS the work-process lifecycle (mount = spawn, unmount = kill).
+export 'src/effect/effect_context.dart';
+export 'src/effect/effect_seed.dart';
+
 // Kernel seams.
 export 'src/kernel/effect_resolver.dart';
 export 'src/kernel/idle.dart';
