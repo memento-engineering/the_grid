@@ -13,6 +13,10 @@
 /// by exactly one node, `WorkList` (derailment-invariant 1).
 library;
 
+// The join bridge (the only subscription into the snapshot pipelines, A39).
+export 'src/bridge/grid_join_bridge.dart';
+export 'src/bridge/snapshot_source.dart';
+
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
 export 'src/domain/session_bead.dart';
