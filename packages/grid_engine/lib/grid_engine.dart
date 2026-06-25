@@ -3,20 +3,33 @@
 ///
 /// `build(observed)` reconciles the running system: keyed reconcile + Branch
 /// lifecycle = the work lifecycle (mount = spawn, unmount = kill, phase = a
-/// reconcile transition). The kernel is opinion-light — capabilities are
-/// effect Seeds contributed by an extension; the engine holds no landing /
-/// VCS / provider opinion.
+/// reconcile transition). The kernel is opinion-light — capabilities are effect
+/// Seeds contributed by an extension via an [EffectResolver]; the engine holds
+/// no landing / VCS / provider opinion.
 ///
-/// The public surface is filled by the Wave 1+ tracks. This barrel currently
-/// proves only that the cross-workspace `genesis_tree` link resolves.
+/// The tree (Wave 1 / Track A):
+/// `Grid` → `RigScope` → `Rig` → `WorkList` → `WorkBead` → effect Seed.
+/// Config flows down the *ancestors* (RigScope/Rig); the work axis is observed
+/// by exactly one node, `WorkList` (derailment-invariant 1).
 library;
 
-// Wave 0 resolution smoke: prove the cross-workspace genesis_tree import
-// resolves and analyzes before any Seed is authored. Replaced by the real
-// Seed graph in Wave 1 (Track A).
-import 'package:genesis_tree/genesis_tree.dart' show TreeOwner;
+// Domain (value types).
+export 'src/domain/joined_snapshot.dart';
+export 'src/domain/rig_config.dart';
+export 'src/domain/session_projection.dart';
+export 'src/domain/work_phase.dart';
 
-/// The engine's scheduler is genesis_tree's [TreeOwner] — never a hand-rolled
-/// loop (ADR-0007 Decision 1). Placeholder alias; superseded by the real
-/// `Grid` root Seed in Wave 1.
-typedef EngineScheduler = TreeOwner;
+// Kernel seams.
+export 'src/kernel/effect_resolver.dart';
+export 'src/kernel/idle.dart';
+
+// Reactive sources (the only subscriptions into the pipelines live here).
+export 'src/notifiers/joined_snapshot_notifier.dart';
+export 'src/notifiers/rig_config_notifier.dart';
+
+// The Seeds (the tree topology).
+export 'src/seeds/grid_seed.dart';
+export 'src/seeds/rig.dart';
+export 'src/seeds/rig_scope.dart';
+export 'src/seeds/work_bead.dart';
+export 'src/seeds/work_list.dart';
