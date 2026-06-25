@@ -31,6 +31,14 @@ Internal layout of `grid_controller` follows the skill: `lib/src/{models,service
 
 Not packages: the porting skill (`skills/`), docs, fixtures.
 
+**Amended 2026-06-25 (A40, ratified Nico 2026-06-24 — the M4 tree-engine package):** add an **eighth** package row:
+
+| Package | Role | Milestone | Notes |
+|---|---|---|---|
+| **`grid_engine`** | M4: the `genesis_tree` tree engine — `build(observed)` reconciles the running system (`Grid` → `RigScope` → `Rig` → `WorkList` → `WorkBead` → effect Seed); the kernel + the compiled `DefaultExtension` capabilities. See ADR-0007. | M4 (P0) | Pure Dart. **Acyclic: `grid_engine → {grid_controller, grid_runtime}`** (NOT `grid_reconciler` — the M2 gate machinery is P3-fenced). Consumes `genesis_tree` as a dev-time path dep (genesis ADR-0001 D8). Its minimal import surface *is* the enforcement of derailment-invariant 1 (it cannot import the detection pipeline). |
+
+Dependency direction gains: `grid_engine ──► grid_controller` (snapshot/ownership seams) and `grid_engine ──► grid_runtime` (subprocess/git/chokepoint transport); `grid_cli ──► grid_engine` (the kernel composition / `composeRun`). The M2 `grid_reconciler` convergence state machine is retained intact (A41 excludes `type=convergence` at the engine's mount boundary, so the two never collide).
+
 ## Decision 2 — Reactive domain projections, grounded in Gas City's primitive model
 
 *(Rewritten 2026-06-11 to ground projections in the documented concept model — [docs.gascityhall.com/concepts/primitives](https://docs.gascityhall.com/concepts/primitives) — rather than generic bead filtering.)*
