@@ -9,6 +9,16 @@ workspace:
   - packages/grid_devtools
   - packages/grid_reconciler
   - packages/grid_runtime
+  - packages/grid_engine
+
+# genesis_tree is the M4 engine (ADR-0007). It lives in the sibling genesis
+# workspace; consume it as a dev-time path dep (A34 / genesis_tmux precedent,
+# genesis ADR-0001 D8). Pub-workspace rule: dependency_overrides are honored
+# only at the workspace root. The `^0.1.3` constraint in grid_engine records
+# the pin; this override supplies the bits during local dev.
+dependency_overrides:
+  genesis_tree:
+    path: ../genesis/packages/tree
 
 dev_dependencies:
   melos: ^7.7.0
