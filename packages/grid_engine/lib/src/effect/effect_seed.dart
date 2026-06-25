@@ -161,6 +161,14 @@ class EffectSeedState extends State<EffectSeed> {
     }
   }
 
+  /// Delivers [event] to the lifecycle handler directly — a test affordance to
+  /// exercise the post-dispose `_onComplete` guard in ISOLATION from the
+  /// per-incarnation subscription (which `dispose` cancels), so the two
+  /// defense-in-depth guards can each be pinned non-vacuously (Wave 4 §7 (f)).
+  /// Production events always arrive via the provider stream, never this.
+  @visibleForTesting
+  void deliverEventForTest(RuntimeEvent event) => _onEvent(event);
+
   Future<void> _persistIdentity(SessionStarted s) async {
     if (_cancelled || !context.mounted || _sessionId == null) return;
     await _ctx!.writer.update(
