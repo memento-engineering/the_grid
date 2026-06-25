@@ -32,6 +32,8 @@ Naming: reference types carry classifiers (`BdCliService`, `BeadsRepository`, `G
 
 Pure-Dart `riverpod ^3.0.0`. State containers are `Notifier`/`AsyncNotifier` subclasses exposed via `NotifierProvider`/`AsyncNotifierProvider`; event streams via `StreamProvider`; derived state via providers with `select`. **Not** `StateNotifier` — predictable-flutter's *architecture* is adopted; its Riverpod-2-era primitive is translated to Riverpod 3's. (predictable-flutter's references should be updated to take a Riverpod 3 position; tracked there, not here.)
 
+**Amended 2026-06-24 — fully reversed by ADR-0007 §6.6 (the M4 tree-engine pivot, ratified).** the_grid adopts plain **`StateNotifier` + freezed** (provided via `InheritedSeed`, observed by `StatefulSeed`s; `build()` pure, observe out-of-band) — which *un-diverges* it from predictable-flutter and lenny's **actual** StateNotifier+freezed stack. The "Not `StateNotifier`" position above and the Alternatives "StateNotifier literal — rejected" line are now **historical**. (Riverpod is dropped on the tree path; ADR-0002 D2's projection providers move with it — see its amendment.)
+
 Divergence note: lenny is on flutter_riverpod 2.6. The workspaces are independent; flag if packages are ever shared.
 
 ## Decision 4 — beads substrate: bd CLI writes, pooled Dolt SQL reads
@@ -89,7 +91,7 @@ Context survives compaction and reaches subagents through repo artifacts, not co
 
 - **Full gascity port** — rejected: 343k LOC, mostly projection layers (CLI/HTTP/providers); the domain core is ~4k LOC and the loop it serves is the thing being replaced.
 - **Direct SQL writes** — rejected: bypasses bd validation, audit trail, gc hooks, Dolt commit semantics.
-- **`StateNotifier` literal** — rejected in favor of Riverpod 3 `Notifier` (Decision 3).
+- **`StateNotifier` literal** — rejected in favor of Riverpod 3 `Notifier` (Decision 3). *(Amended 2026-06-24: this rejection is **reversed** by ADR-0007 §6.6 — the_grid adopts `StateNotifier` with the M4 tree pivot.)*
 - **Bespoke `ext.grid.*` observability namespace** — rejected: the exploration protocol gives three working consumers for free (Decision 6).
 - **bd-CLI-only reads** — kept as the fallback path, not primary: ~70–140ms/spawn vs ~1–5ms pooled SQL, and the per-call-client pileup incident argues against spawn-per-read at scale.
 - **Installing `.beads/hooks/` for push signals** — rejected: gc owns and restamps those files.

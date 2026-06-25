@@ -24,6 +24,8 @@ This is the parity checklist. Not gc's 343k LOC / 70+ commands — the running c
 
 ## Sub-milestones and just-in-time ADRs
 
+> **⚠ Superseded by the M4 tree-engine pivot — ADR-0007 (Accepted 2026-06-24).** The M4a–M4f reducer/actuator decomposition below assumed the hand-rolled engine ADR-0007 replaces. The ADR-number reservations are re-pointed to the tree sequence — **0007** = tree engine, **0008** = gc-TOML import, **0009** = topology tree, **0010** = convergence-as-subtree — and **ADR-0005 is retired** (genesis adoption is done in the engine by ADR-0007; the config-model *import* sense becomes ADR-0008). This table is kept as historical record; see ADR-0007's "Note on ADR numbering." (A6's *scoping method* — the usage inventory and cutover-is-acceptance — still stands.)
+
 | Sub | Scope | ADR | Written when |
 |---|---|---|---|
 | M4a | Config model: city.toml progressive activation, packs/imports/overrides, rig registry | ADR-0005 | as M2 lands |

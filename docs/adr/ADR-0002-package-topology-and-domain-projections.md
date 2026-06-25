@@ -59,6 +59,8 @@ Gas City's docs define **five primitives** (Session, Beads Store, Event Bus, Con
 | `convergence` | `Convergence` | ADR-0003's metadata schema (`convergence.state`, iteration, gate config…) | `convergencesProvider`, `convergencesByStateProvider(state)`, `activeWispProvider(id)` |
 | `gate`, `merge-request`, `spec`, `event` | `Gate`, `MergeRequest`, `Spec`, `GridEventRecord` | the_grid `types.custom`; composition rules pinned from fixtures | list + per-id families; derived views added with their first consumer |
 
+**Amended 2026-06-24 (ADR-0007 §6.6, ratified — the M4 tree-engine pivot):** the projection table's *reactive views* above are provided as **`StateNotifier` services** (via `InheritedSeed`, observed by `StatefulSeed`s), **not** Riverpod providers — the table's *shape and composition rules are unchanged*, only the reactive primitive flips. (Decision 1's `grid_reconciler` convergence state machine is **retained intact**, not reversed.)
+
 **Metadata transformations are first-class.** Raw bead metadata is a JSON blob; each projection owns a **typed metadata codec for its namespace** (e.g. `convergence.*` per ADR-0003), and *Transformers* (predictable-flutter's stream-reshaping role) lift generic `GraphEvent`s into domain events — `SessionStateChanged`, `MessageReceived`, `MoleculeStepCompleted`, `ConvergenceIterated` — by running the projection over the before/after beads. Unknown metadata keys are preserved in a raw map (projections never lose data); decode failures surface as typed `ProjectionError` values, never silent drops.
 
 Consequences:
