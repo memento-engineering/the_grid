@@ -74,12 +74,18 @@ class _WorkListState extends State<WorkList> {
     final ownership = BeadOwnershipPredicate(seed.rigConfig.ownedRigs);
     final children = <WorkBead>[];
     for (final bead in _snapshot.graph.beadsById.values) {
-      // Type exclusion BEFORE ownership (M4-P0 §3 Track A): an owned
-      // type=convergence (or other M2/M3-owned infra) root mounts ZERO
-      // WorkBeads — that axis is the M2 ReconcilerRuntime's exclusively, and
-      // mounting an agent effect on it is a true two-writer collision.
-      // Defends ADR-0007 §6.1 invariant 3 / §6.3.
-      if (_isExcludedType(bead.issueType)) continue;
+      // Dispatchable-type gate BEFORE ownership, as an ALLOW-list (fail-closed):
+      // only plain coding-work types mount a WorkBead + spawn an agent. A
+      // deny-list would have to enumerate every non-work type, and `bd ready`
+      // leaks the_grid's orchestration/coordination customs — its ready_work
+      // query narrows only {merge-request,gate,molecule,message,agent,role,rig},
+      // never convergence/convoy/event/step/spec. An allow-list of core work
+      // types excludes convergence (the M2 two-writer axis), `session`
+      // (the_grid's own lifecycle), every gc orchestration noun, and infra
+      // (agent/rig/role) by construction; an unknown custom type does NOT mount.
+      // (A41 — refines A40's mount-boundary type gate; the live-arm blessed-bead
+      // drive-list remains a SEPARATE gate, ADR-0006.)
+      if (!_isDispatchableWork(bead.issueType)) continue;
       if (!ownership.owns(bead)) continue;
 
       final session = _snapshot.sessionsByWorkBead[bead.id];
@@ -101,6 +107,7 @@ class _WorkListState extends State<WorkList> {
         WorkBead(
           bead: bead,
           phase: phaseOf(bead, session),
+          session: session,
           key: ValueKey(bead.id),
         ),
       );
@@ -111,14 +118,15 @@ class _WorkListState extends State<WorkList> {
     return _WorkBeads(children);
   }
 
-  /// Types excluded at the mount boundary. `convergence` is the M2 reconciler's
-  /// axis; `session` is the_grid's OWN lifecycle type (it lives in the state
-  /// store, never the read source); `agent`/`rig`/`role` ([IssueType.isInfra])
-  /// are infrastructure, not dispatchable work.
-  static bool _isExcludedType(IssueType type) =>
-      type == IssueType.convergence ||
-      type == IssueType.session ||
-      type.isInfra;
+  /// The ALLOW-list: only plain, coding-dispatchable work mounts. `isCore` =
+  /// {task, bug, feature, chore, epic, decision, spike, story, milestone} — the
+  /// upstream built-in work types; every the_grid custom type (convergence /
+  /// session / convoy / event / step / spec / gate / molecule / message /
+  /// merge-request / agent / rig / role) is non-core and excluded. Fail-closed:
+  /// an unrecognised custom type does NOT mount. (A41; whether epic / milestone
+  /// / decision — aggregates / planning rather than coding targets — should be
+  /// narrowed further is a sub-question flagged for Nico.)
+  static bool _isDispatchableWork(IssueType type) => type.isCore;
 }
 
 /// The keyed-reconcile container `WorkList` builds — an impl detail of the work

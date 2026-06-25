@@ -26,7 +26,11 @@ class _FakeEffectResolver implements EffectResolver {
   final _Recorder recorder;
 
   @override
-  Seed effectFor({required Bead bead, required WorkPhase phase}) => _FakeEffect(
+  Seed effectFor({
+    required Bead bead,
+    required WorkPhase phase,
+    SessionProjection? session,
+  }) => _FakeEffect(
     recorder: recorder,
     capId: phase.capId,
     beadId: bead.id,
@@ -395,18 +399,36 @@ void main() {
       expect(_workBead(root, 'tg-1'), isNull);
     });
 
-    test('type exclusion before ownership: an owned convergence/infra bead '
-        'mounts ZERO work beads; a plain owned bead still mounts', () {
+    test('allow-list type gate (A41): only core work mounts — every the_grid '
+        'custom type (convergence, infra, AND the orchestration nouns bd ready '
+        'leaks) mounts ZERO work beads', () {
       final recorder = _Recorder();
+      // Every the_grid custom IssueType, all owned + ready. NONE may mount —
+      // especially the orchestration nouns (convoy/event/step/spec/gate/
+      // molecule/message/merge-request) that bd ready does NOT narrow out and a
+      // deny-list missed.
+      final customs = <String, IssueType>{
+        'tg-conv': IssueType.convergence,
+        'tg-cvy': IssueType.convoy,
+        'tg-evt': IssueType.event,
+        'tg-gate': IssueType.gate,
+        'tg-mr': IssueType.mergeRequest,
+        'tg-msg': IssueType.message,
+        'tg-mol': IssueType.molecule,
+        'tg-role': IssueType.role,
+        'tg-rig': IssueType.rig,
+        'tg-agent': IssueType.agent,
+        'tg-sess': IssueType.session,
+        'tg-spec': IssueType.spec,
+        'tg-step': IssueType.step,
+      };
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [
-            _bead('tg-conv', type: IssueType.convergence),
-            _bead('tg-role', type: IssueType.role),
-            _bead('tg-sess', type: IssueType.session),
-            _bead('tg-1'),
+            for (final e in customs.entries) _bead(e.key, type: e.value),
+            _bead('tg-1'), // a plain task
           ],
-          ready: {'tg-conv', 'tg-role', 'tg-sess', 'tg-1'},
+          ready: {...customs.keys, 'tg-1'},
         ),
       );
       final owner = TreeOwner();
@@ -419,11 +441,42 @@ void main() {
         ),
       );
 
+      // Only the plain task spawned an agent.
       expect(recorder.events, ['START agent(tg-1)']);
-      expect(_workBead(root, 'tg-conv'), isNull);
-      expect(_workBead(root, 'tg-role'), isNull);
-      expect(_workBead(root, 'tg-sess'), isNull);
+      for (final id in customs.keys) {
+        expect(_workBead(root, id), isNull, reason: '$id must not mount');
+      }
       expect(_workBead(root, 'tg-1'), isNotNull);
+    });
+
+    test('core work types each mount (the allow-list is not over-narrow)', () {
+      final recorder = _Recorder();
+      final core = <String, IssueType>{
+        'tg-task': IssueType.task,
+        'tg-bug': IssueType.bug,
+        'tg-feat': IssueType.feature,
+        'tg-chore': IssueType.chore,
+      };
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [for (final e in core.entries) _bead(e.key, type: e.value)],
+          ready: core.keys.toSet(),
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      final root = owner.mountRoot(
+        _root(
+          joined: joined,
+          resolver: _FakeEffectResolver(recorder),
+          rigConfig: RigConfigNotifier(_tgConfig()),
+        ),
+      );
+
+      for (final id in core.keys) {
+        expect(_workBead(root, id), isNotNull, reason: '$id should mount');
+      }
+      expect(recorder.events.length, core.length);
     });
 
     test('an unowned bead (foreign prefix) never mounts (fail-closed)', () {

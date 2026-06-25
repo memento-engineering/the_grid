@@ -21,6 +21,12 @@ abstract class SessionProjection with _$SessionProjection {
     /// The work bead this session drives (`metadata.work_bead`).
     required String workBeadId,
 
+    /// The session/lifecycle bead's OWN id in the state store — the target the
+    /// verify/land effects advance the cursor on (injected pull-free so an
+    /// effect never re-queries the store; A39). Null only in synthetic/test
+    /// projections — the join bridge always populates it.
+    String? sessionId,
+
     /// The cursor phase (`metadata.grid.phase`): implement | verify | land.
     required WorkPhase phase,
 

@@ -15,7 +15,11 @@ T _$identity<T>(T value) => value;
 mixin _$SessionProjection {
 
 /// The work bead this session drives (`metadata.work_bead`).
- String get workBeadId;/// The cursor phase (`metadata.grid.phase`): implement | verify | land.
+ String get workBeadId;/// The session/lifecycle bead's OWN id in the state store — the target the
+/// verify/land effects advance the cursor on (injected pull-free so an
+/// effect never re-queries the store; A39). Null only in synthetic/test
+/// projections — the join bridge always populates it.
+ String? get sessionId;/// The cursor phase (`metadata.grid.phase`): implement | verify | land.
  WorkPhase get phase;/// True once the session reached a positive terminal (the session bead
 /// `closed`, or the cursor advanced past `land`). A terminal session means
 /// the work node unmounts — never respawns.
@@ -36,16 +40,16 @@ $SessionProjectionCopyWith<SessionProjection> get copyWith => _$SessionProjectio
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,phase,isTerminal,pgid,token,pid);
+int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,phase,isTerminal,pgid,token,pid);
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid)';
 }
 
 
@@ -56,7 +60,7 @@ abstract mixin class $SessionProjectionCopyWith<$Res>  {
   factory $SessionProjectionCopyWith(SessionProjection value, $Res Function(SessionProjection) _then) = _$SessionProjectionCopyWithImpl;
 @useResult
 $Res call({
- String workBeadId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid
+ String workBeadId, String? sessionId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid
 });
 
 
@@ -73,10 +77,11 @@ class _$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,}) {
   return _then(_self.copyWith(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
-as String,phase: null == phase ? _self.phase : phase // ignore: cast_nullable_to_non_nullable
+as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
+as String?,phase: null == phase ? _self.phase : phase // ignore: cast_nullable_to_non_nullable
 as WorkPhase,isTerminal: null == isTerminal ? _self.isTerminal : isTerminal // ignore: cast_nullable_to_non_nullable
 as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
@@ -166,10 +171,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
   return orElse();
 
 }
@@ -187,10 +192,10 @@ return $default(_that.workBeadId,_that.phase,_that.isTerminal,_that.pgid,_that.t
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection():
-return $default(_that.workBeadId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -207,10 +212,10 @@ return $default(_that.workBeadId,_that.phase,_that.isTerminal,_that.pgid,_that.t
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)?  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
   return null;
 
 }
@@ -222,11 +227,16 @@ return $default(_that.workBeadId,_that.phase,_that.isTerminal,_that.pgid,_that.t
 
 
 class _SessionProjection implements SessionProjection {
-  const _SessionProjection({required this.workBeadId, required this.phase, this.isTerminal = false, this.pgid, this.token, this.pid});
+  const _SessionProjection({required this.workBeadId, this.sessionId, required this.phase, this.isTerminal = false, this.pgid, this.token, this.pid});
   
 
 /// The work bead this session drives (`metadata.work_bead`).
 @override final  String workBeadId;
+/// The session/lifecycle bead's OWN id in the state store — the target the
+/// verify/land effects advance the cursor on (injected pull-free so an
+/// effect never re-queries the store; A39). Null only in synthetic/test
+/// projections — the join bridge always populates it.
+@override final  String? sessionId;
 /// The cursor phase (`metadata.grid.phase`): implement | verify | land.
 @override final  WorkPhase phase;
 /// True once the session reached a positive terminal (the session bead
@@ -253,16 +263,16 @@ _$SessionProjectionCopyWith<_SessionProjection> get copyWith => __$SessionProjec
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,phase,isTerminal,pgid,token,pid);
+int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,phase,isTerminal,pgid,token,pid);
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid)';
 }
 
 
@@ -273,7 +283,7 @@ abstract mixin class _$SessionProjectionCopyWith<$Res> implements $SessionProjec
   factory _$SessionProjectionCopyWith(_SessionProjection value, $Res Function(_SessionProjection) _then) = __$SessionProjectionCopyWithImpl;
 @override @useResult
 $Res call({
- String workBeadId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid
+ String workBeadId, String? sessionId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid
 });
 
 
@@ -290,10 +300,11 @@ class __$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,}) {
   return _then(_SessionProjection(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
-as String,phase: null == phase ? _self.phase : phase // ignore: cast_nullable_to_non_nullable
+as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
+as String?,phase: null == phase ? _self.phase : phase // ignore: cast_nullable_to_non_nullable
 as WorkPhase,isTerminal: null == isTerminal ? _self.isTerminal : isTerminal // ignore: cast_nullable_to_non_nullable
 as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
