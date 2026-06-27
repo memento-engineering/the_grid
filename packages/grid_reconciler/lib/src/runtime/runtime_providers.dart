@@ -21,7 +21,7 @@ final convergenceSourceProvider = Provider<ConvergenceSource>(
 /// The ownership partition predicate (ADR-0003 Decision 6). Defaults to
 /// [OwnsNothing] — the safe coexistence default (the_grid actuates nothing
 /// until an owned rig is configured). The application overrides this with an
-/// [OwnsRigs]/[OwnsMarked] for M3's drive-one-owned-rig.
+/// [OwnsSubstations]/[OwnsMarked] for M3's drive-one-owned-rig.
 final ownershipProvider = Provider<OwnershipPredicate>(
   (ref) => const OwnsNothing(),
 );

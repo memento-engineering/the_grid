@@ -55,7 +55,7 @@ Bead session(
 );
 
 void main() {
-  group('GridJoinBridge', () {
+  group('StationJoinBridge', () {
     late FakeSnapshotSource workSrc;
     late FakeSnapshotSource stateSrc;
 
@@ -72,7 +72,7 @@ void main() {
     test('a LATE subscriber sees the baseline join, not nothing', () {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
       stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'verify')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       // Subscribe AFTER construction/start — must still see the seeded baseline.
@@ -86,7 +86,7 @@ void main() {
     });
 
     test('with no work baseline, the seed is JoinedSnapshot.empty', () {
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc);
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc);
       addTearDown(bridge.dispose);
       expect(bridge.notifier.current.graph.isEmpty, isTrue);
       expect(bridge.notifier.current.sessionsByWorkBead, isEmpty);
@@ -94,7 +94,7 @@ void main() {
 
     test('one work change → exactly ONE push, new graph + unchanged sessions', () async {
       stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'verify')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       final pushes = <JoinedSnapshot>[];
@@ -114,7 +114,7 @@ void main() {
     test('one cursor change → exactly ONE push, pairs work bead to its session', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
       stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'implement')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       final pushes = <JoinedSnapshot>[];
@@ -135,7 +135,7 @@ void main() {
 
     test('a no-op (neither source emits) → no push beyond the baseline', () {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       final pushes = <JoinedSnapshot>[];
@@ -153,7 +153,7 @@ void main() {
         metadata: const {'rig': 'tgdog'},
       );
       stateSrc = FakeSnapshotSource(graphOf([orphan, session('s1', workBeadId: 'w1')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       final joined = bridge.notifier.current;
@@ -172,7 +172,7 @@ void main() {
         metadata: const {'work_bead': 'w1'},
       );
       stateSrc = FakeSnapshotSource(graphOf([decoy, session('s1', workBeadId: 'w1', phase: 'land')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       // Only the real session contributes the cursor.
@@ -183,7 +183,7 @@ void main() {
     test('terminal retention: a CLOSED session still appears (so WorkList unmounts)', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
       stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'land')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       final pushes = <JoinedSnapshot>[];
@@ -200,7 +200,7 @@ void main() {
 
     test('start() re-seeds: a baseline landing in the construct→start gap is recovered', () async {
       // No `.current` at construction — the seed is JoinedSnapshot.empty.
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc);
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc);
       addTearDown(bridge.dispose);
       expect(bridge.notifier.current.graph.isEmpty, isTrue);
 
@@ -221,7 +221,7 @@ void main() {
 
     test('start() is idempotent — no double subscription, one push per change', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
         ..start()
         ..start();
       addTearDown(bridge.dispose);
@@ -238,7 +238,7 @@ void main() {
     test('an injected notifier is driven but not disposed by the bridge', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
       final external = JoinedSnapshotNotifier(JoinedSnapshot.empty());
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc, notifier: external)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc, notifier: external)..start();
 
       final pushes = <JoinedSnapshot>[];
       external.addListener(pushes.add);
@@ -254,7 +254,7 @@ void main() {
 
     test('dispose() stops pushes and is idempotent', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      final bridge = GridJoinBridge(work: workSrc, state: stateSrc)..start();
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
 
       final pushes = <JoinedSnapshot>[];
       bridge.notifier.addListener(pushes.add);

@@ -4,7 +4,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/joined_snapshot.dart';
-import '../domain/rig_config.dart';
+import '../domain/substation_config.dart';
 import '../domain/work_phase.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import 'work_bead.dart';
@@ -22,14 +22,14 @@ import 'work_bead.dart';
 /// `root.markNeedsRebuild()` is banned; a single over-broad observation would
 /// re-create the "config built 100×" bug ADR-0007 §6.1 exists to prevent.
 class WorkList extends StatefulSeed {
-  /// Creates the work list under [rigConfig] (passed down as data by `Rig`;
+  /// Creates the work list under [substationConfig] (passed down as data by `Substation`;
   /// the WorkList depends on the work axis only, never on the config inherited
   /// value).
-  const WorkList({required this.rigConfig, super.key});
+  const WorkList({required this.substationConfig, super.key});
 
-  /// The rig config, as data — its [RigConfig.ownedRigs] builds the ownership
+  /// The rig config, as data — its [SubstationConfig.ownedSubstations] builds the ownership
   /// predicate.
-  final RigConfig rigConfig;
+  final SubstationConfig substationConfig;
 
   @override
   State<WorkList> createState() => _WorkListState();
@@ -49,7 +49,7 @@ class _WorkListState extends State<WorkList> {
         .dependOnInheritedSeedOfExactType<JoinedSnapshotNotifier>();
     assert(
       notifier != null,
-      'WorkList requires an ambient JoinedSnapshotNotifier provided above Grid',
+      'WorkList requires an ambient JoinedSnapshotNotifier provided above Station',
     );
     if (identical(notifier, _notifier)) return;
     _remove?.call();
@@ -71,7 +71,7 @@ class _WorkListState extends State<WorkList> {
 
   @override
   Seed build(TreeContext context) {
-    final ownership = BeadOwnershipPredicate(seed.rigConfig.ownedRigs);
+    final ownership = BeadOwnershipPredicate(seed.substationConfig.ownedSubstations);
     final children = <WorkBead>[];
     for (final bead in _snapshot.graph.beadsById.values) {
       // Dispatchable-type gate BEFORE ownership, as an ALLOW-list (fail-closed):

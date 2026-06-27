@@ -31,13 +31,13 @@ import 'snapshot_source.dart';
 /// with the current join up front (or [JoinedSnapshot.empty] when no work
 /// baseline exists yet); a late notifier subscriber sees that baseline, and the
 /// first real emission fills it.
-class GridJoinBridge {
+class StationJoinBridge {
   /// Creates a bridge over the [work] and [state] snapshot sources.
   ///
   /// If [notifier] is supplied, the bridge drives it but does **not** own its
   /// lifecycle (it is left undisposed on [dispose]); otherwise the bridge
   /// creates one, seeded with the current join, and disposes it itself.
-  GridJoinBridge({
+  StationJoinBridge({
     required SnapshotSource work,
     required SnapshotSource state,
     JoinedSnapshotNotifier? notifier,

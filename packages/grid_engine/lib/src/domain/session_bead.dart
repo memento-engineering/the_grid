@@ -3,7 +3,7 @@
 /// The_grid's OWN session/lifecycle beads (`type=session`, in the state store —
 /// e.g. `tgdog`) carry the work-bead linkage + the phase cursor + the spawned
 /// process identity as `metadata`. Every value is string-typed — the
-/// `GridBeadWriter` chokepoint's `update` takes `Map<String, String>`.
+/// `StationBeadWriter` chokepoint's `update` takes `Map<String, String>`.
 ///
 /// This module is the SINGLE definition of those keys + the read projection +
 /// the write payloads, so the join bridge (Track B — reads) and the effects /
@@ -18,7 +18,7 @@ import 'session_projection.dart';
 import 'work_phase.dart';
 
 /// Metadata keys on a the_grid session bead. `work_bead` + `rig` are stamped at
-/// mint by `GridBeadWriter.createSession`; the rest are written later through
+/// mint by `StationBeadWriter.createSession`; the rest are written later through
 /// the chokepoint.
 abstract final class SessionBeadKeys {
   /// The work bead this session drives (stamped at mint; the JOIN key).

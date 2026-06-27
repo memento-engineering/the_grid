@@ -1,11 +1,11 @@
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_runtime/grid_runtime.dart';
-import 'package:grid_reconciler/grid_reconciler.dart' show OwnsRigs;
+import 'package:grid_reconciler/grid_reconciler.dart' show OwnsSubstations;
 import 'package:test/test.dart';
 
 /// Unit proofs for the dispatch-side ownership gate (M3 Track 5; ADR-0006
 /// Decision 1; ADR-0000 A32) — the bead-shaped analog of the M2 convergence
-/// `OwnsRigs` unit tests. The DoD: a ready bead whose prefix/label is NOT the
+/// `OwnsSubstations` unit tests. The DoD: a ready bead whose prefix/label is NOT the
 /// owned rig is not-owned (so the dispatcher observes it read-only and never
 /// dispatches it); the shared allow-set is one `Set<String>`, never two copies.
 void main() {
@@ -52,8 +52,8 @@ void main() {
       );
     });
 
-    test('requireRigMarker demands BOTH the prefix AND the marker', () {
-      final strict = BeadOwnershipPredicate({'tgdog'}, requireRigMarker: true);
+    test('requireSubstationMarker demands BOTH the prefix AND the marker', () {
+      final strict = BeadOwnershipPredicate({'tgdog'}, requireSubstationMarker: true);
       // Prefix owned but no marker → not owned under the strict posture.
       expect(strict.owns(workBead('tgdog-1')), isFalse);
       // Both owned → owned.
@@ -66,38 +66,38 @@ void main() {
 
   group('the shared allow-set is ONE Set<String>, not two predicate copies', () {
     test(
-      'the IDENTICAL Set<String> instance feeds both OwnsRigs (M2 actuation) '
+      'the IDENTICAL Set<String> instance feeds both OwnsSubstations (M2 actuation) '
       'and BeadOwnershipPredicate (M3 dispatch) — they cannot drift (A32)',
       () {
         // ONE source of truth — the seed the dogfood uses.
         final allowSet = {'tgdog'};
         final dispatchGate = BeadOwnershipPredicate(allowSet);
         // The SAME instance feeds the M2 convergence actuator (constructed here
-        // only to prove the one set wires both; OwnsRigs operates on a
+        // only to prove the one set wires both; OwnsSubstations operates on a
         // Convergence, BeadOwnershipPredicate on a Bead — A32).
-        OwnsRigs(allowSet);
+        OwnsSubstations(allowSet);
 
         // The dispatch gate accepts the_grid's owned rig and rejects gc's.
         expect(dispatchGate.owns(workBead('tgdog-1')), isTrue);
         expect(dispatchGate.owns(workBead('gascity-1')), isFalse);
         // The dispatch gate exposes the allow-set so the write chokepoint can be
         // built from the IDENTICAL instance (the shared artifact is the set).
-        expect(dispatchGate.rigs, contains('tgdog'));
-        expect(dispatchGate.rigs, hasLength(1));
+        expect(dispatchGate.substations, contains('tgdog'));
+        expect(dispatchGate.substations, hasLength(1));
       },
     );
   });
 
-  group('rigOf / prefixOf helpers', () {
+  group('substationOf / prefixOf helpers', () {
     test('prefixOf returns the leading dash-delimited segment', () {
       expect(BeadOwnershipPredicate.prefixOf('tgdog-abc'), 'tgdog');
       expect(BeadOwnershipPredicate.prefixOf('nodash'), isNull);
     });
 
-    test('rigOf prefers the prefix, falls back to the marker', () {
+    test('substationOf prefers the prefix, falls back to the marker', () {
       final p = BeadOwnershipPredicate({'tgdog'});
-      expect(p.rigOf(workBead('tgdog-1')), 'tgdog');
-      expect(p.rigOf(workBead('nodash', metadata: {'rig': 'tgdog'})), 'tgdog');
+      expect(p.substationOf(workBead('tgdog-1')), 'tgdog');
+      expect(p.substationOf(workBead('nodash', metadata: {'rig': 'tgdog'})), 'tgdog');
     });
   });
 }

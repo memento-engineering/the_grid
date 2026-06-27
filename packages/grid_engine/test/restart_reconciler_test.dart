@@ -139,7 +139,7 @@ BeadWorktree _wt(String beadId) => BeadWorktree(
 const _workRoot = RootCheckout(
   path: '/Users/nico/development/engineering.memento/lenny-tgdog',
   defaultBranch: 'main',
-  rig: 'tgdog',
+  substation: 'tgdog',
 );
 
 void main() {

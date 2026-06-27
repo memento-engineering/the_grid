@@ -20,8 +20,8 @@ void main() {
   // The shared rig allow-set seed (A35): exactly {tgdog}.
   BeadOwnershipPredicate predicate() => BeadOwnershipPredicate({'tgdog'});
 
-  GridBeadWriter writer() =>
-      GridBeadWriter(bd: bd, ownership: predicate(), onRefusal: refusals.add);
+  StationBeadWriter writer() =>
+      StationBeadWriter(bd: bd, ownership: predicate(), onRefusal: refusals.add);
 
   setUp(() {
     runner = RecordingBdRunner(createdId: 'tgdog-sess1');
@@ -48,7 +48,7 @@ void main() {
       () async {
         await expectLater(
           writer().update('noprefixbead', metadata: {'state': 'active'}),
-          throwsA(isA<OwnershipRefused>().having((e) => e.rig, 'rig', isNull)),
+          throwsA(isA<OwnershipRefused>().having((e) => e.substation, 'rig', isNull)),
         );
         expect(runner.calls, isEmpty);
       },
@@ -59,7 +59,7 @@ void main() {
       () async {
         await expectLater(
           writer().createSession(
-            rig: 'gascity',
+            substation: 'gascity',
             title: 'x',
             workBeadId: 'gascity-99',
           ),
@@ -92,7 +92,7 @@ void main() {
       () async {
         // belt-and-suspenders: the predicate is the only authority; if seeded
         // with the wrong rig, even a tgdog-prefixed bead is refused.
-        final w = GridBeadWriter(
+        final w = StationBeadWriter(
           bd: bd,
           ownership: BeadOwnershipPredicate({'someotherrig'}),
           onRefusal: refusals.add,
@@ -109,7 +109,7 @@ void main() {
   group('allowed writes — bd-only, --actor grid-controller, merge, no show', () {
     test('createSession mints + stamps the owned rig FROM BIRTH', () async {
       final id = await writer().createSession(
-        rig: 'tgdog',
+        substation: 'tgdog',
         title: 'session for tgdog-work1',
         workBeadId: 'tgdog-work1',
         metadata: {'state': 'start_pending'},
@@ -192,8 +192,8 @@ void main() {
     );
   });
 
-  test('requireRigMarker demands BOTH prefix and metadata.rig', () {
-    final strict = BeadOwnershipPredicate({'tgdog'}, requireRigMarker: true);
+  test('requireSubstationMarker demands BOTH prefix and metadata.rig', () {
+    final strict = BeadOwnershipPredicate({'tgdog'}, requireSubstationMarker: true);
     // prefix owned but no marker → not owned.
     expect(strict.ownsTarget(id: 'tgdog-1'), isFalse);
     // both present → owned.

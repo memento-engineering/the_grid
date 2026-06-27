@@ -8,19 +8,19 @@
 /// no landing / VCS / provider opinion.
 ///
 /// The tree (Wave 1 / Track A):
-/// `Grid` → `RigScope` → `Rig` → `WorkList` → `WorkBead` → effect Seed.
-/// Config flows down the *ancestors* (RigScope/Rig); the work axis is observed
+/// `Station` → `SubstationScope` → `Substation` → `WorkList` → `WorkBead` → effect Seed.
+/// Config flows down the *ancestors* (SubstationScope/Substation); the work axis is observed
 /// by exactly one node, `WorkList` (derailment-invariant 1).
 library;
 
 // The join bridge (the only subscription into the snapshot pipelines, A39).
-export 'src/bridge/grid_join_bridge.dart';
+export 'src/bridge/station_join_bridge.dart';
 export 'src/bridge/snapshot_source.dart';
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
 export 'src/domain/session_bead.dart';
-export 'src/domain/rig_config.dart';
+export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
 export 'src/domain/work_phase.dart';
 
@@ -36,12 +36,12 @@ export 'src/extension/default_extension.dart';
 
 // Kernel: the seams + the composition/flush driver.
 export 'src/kernel/effect_resolver.dart';
-export 'src/kernel/grid_kernel.dart';
+export 'src/kernel/station_kernel.dart';
 export 'src/kernel/idle.dart';
 
 // Reactive sources (the only subscriptions into the pipelines live here).
 export 'src/notifiers/joined_snapshot_notifier.dart';
-export 'src/notifiers/rig_config_notifier.dart';
+export 'src/notifiers/substation_config_notifier.dart';
 
 // Restart respawn-or-skip (Track D): reconcile the survivors (worktrees + owned
 // session cursors) BEFORE the tree re-mounts — skip done, kill orphans, respawn
@@ -49,8 +49,8 @@ export 'src/notifiers/rig_config_notifier.dart';
 export 'src/restart/restart_reconciler.dart';
 
 // The Seeds (the tree topology).
-export 'src/seeds/grid_seed.dart';
-export 'src/seeds/rig.dart';
-export 'src/seeds/rig_scope.dart';
+export 'src/seeds/station_seed.dart';
+export 'src/seeds/substation.dart';
+export 'src/seeds/substation_scope.dart';
 export 'src/seeds/work_bead.dart';
 export 'src/seeds/work_list.dart';

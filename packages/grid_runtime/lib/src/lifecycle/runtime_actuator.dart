@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import '../runtime/runtime_event.dart';
-import 'grid_bead_writer.dart';
+import 'station_bead_writer.dart';
 import 'session_state.dart';
 
 /// What [RuntimeActuator] decided to do with a crashed session — surfaced so the
@@ -41,7 +41,7 @@ class SessionParked extends CrashDecision {
 
 /// The bd write chokepoint consumer (M3 Track 4): turns Track-2 [RuntimeEvent]s
 /// into `state` transitions on the_grid-owned **session beads**, written
-/// **exclusively** through the [GridBeadWriter] chokepoint (bd-only,
+/// **exclusively** through the [StationBeadWriter] chokepoint (bd-only,
 /// `--actor grid-controller`, fail-closed ownership re-check before every
 /// write).
 ///
@@ -60,7 +60,7 @@ class SessionParked extends CrashDecision {
 /// the counter.
 class RuntimeActuator {
   RuntimeActuator({
-    required GridBeadWriter writer,
+    required StationBeadWriter writer,
     int crashThreshold = 3,
     Duration quarantineBackoff = const Duration(minutes: 5),
     DateTime Function()? clock,
@@ -70,7 +70,7 @@ class RuntimeActuator {
        _quarantineBackoff = quarantineBackoff,
        _clock = clock ?? DateTime.now;
 
-  final GridBeadWriter _writer;
+  final StationBeadWriter _writer;
   final int _crashThreshold;
   final Duration _quarantineBackoff;
   final DateTime Function() _clock;
@@ -98,21 +98,21 @@ class RuntimeActuator {
   // Spawn — mint the session bead and drive it to active.
   // ---------------------------------------------------------------------------
 
-  /// Mints a the_grid-owned session bead for [workBeadId] in [rig] through the
-  /// chokepoint (owned rig stamped from birth), records its lifecycle locally
+  /// Mints a the_grid-owned session bead for [workBeadId] in [substation] through the
+  /// chokepoint (owned substation stamped from birth), records its lifecycle locally
   /// at `start_pending`, and returns its id. **Futures for acts.**
   ///
-  /// The chokepoint refuses ([OwnershipRefused]) when [rig] is not owned — so a
+  /// The chokepoint refuses ([OwnershipRefused]) when [substation] is not owned — so a
   /// non-owned spawn never even mints a bead.
   Future<String> spawnSession({
-    required String rig,
+    required String substation,
     required String workBeadId,
     String? title,
     String? worktreePath,
     String? branch,
   }) async {
     final id = await _writer.createSession(
-      rig: rig,
+      substation: substation,
       title: title ?? 'session for $workBeadId',
       workBeadId: workBeadId,
       metadata: {

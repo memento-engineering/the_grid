@@ -306,7 +306,7 @@ class FakeSnapshotSource implements SnapshotSource {
 // ---------------------------------------------------------------------------
 
 /// The_grid's owned state rig in the offline fakes.
-const stateRig = 'tgdog';
+const stateSubstation = 'tgdog';
 
 /// A bundle of an [EffectContext] over the fakes plus the recording collaborators
 /// the test asserts against.
@@ -324,26 +324,26 @@ typedef Fakes = ({
 Fakes buildFakes({
   String createdId = 'tgdog-sess1',
   String? worktreeRoot,
-  String workRig = '',
+  String workSubstation = '',
   String baseBranch = 'main',
 }) {
   final runner = RecordingBdRunner(createdId: createdId);
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
   final pr = FakePrOpener();
-  final writer = GridBeadWriter(
+  final writer = StationBeadWriter(
     bd: BdCliService(runner),
-    ownership: BeadOwnershipPredicate(const {stateRig}),
+    ownership: BeadOwnershipPredicate(const {stateSubstation}),
   );
   return (
     ctx: EffectContext(
       provider: provider,
       writer: writer,
-      stateRig: stateRig,
+      stateSubstation: stateSubstation,
       gitOps: GitOps(git),
       prOpener: pr,
       worktreeRoot: worktreeRoot,
-      workRig: workRig,
+      workSubstation: workSubstation,
       baseBranch: baseBranch,
     ),
     runner: runner,

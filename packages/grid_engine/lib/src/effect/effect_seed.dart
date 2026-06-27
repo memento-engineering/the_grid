@@ -120,7 +120,7 @@ class EffectSeedState extends State<EffectSeed> {
     _sessionId = seed.session?.sessionId;
     // The IMPLEMENT phase mints the session bead; verify/land reuse it.
     _sessionId ??= await _ctx!.writer.createSession(
-      rig: _ctx!.stateRig,
+      substation: _ctx!.stateSubstation,
       title: 'grid session ${seed.bead.id}',
       workBeadId: seed.bead.id,
     );

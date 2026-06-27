@@ -89,17 +89,17 @@ JoinedSnapshot _joined({
 );
 
 /// The root: provide the work-axis notifier + the capability resolver above the
-/// Grid; give the single rig its config notifier.
+/// Station; give the single rig its config notifier.
 Seed _root({
   required JoinedSnapshotNotifier joined,
   required EffectResolver resolver,
-  required RigConfigNotifier rigConfig,
+  required SubstationConfigNotifier substationConfig,
 }) => InheritedSeed<JoinedSnapshotNotifier>(
   value: joined,
   child: InheritedSeed<EffectResolver>(
     value: resolver,
-    child: Grid([
-      RigScope(configNotifier: rigConfig, key: const ValueKey('scope.tg')),
+    child: Station([
+      SubstationScope(configNotifier: substationConfig, key: const ValueKey('scope.tg')),
     ]),
   ),
 );
@@ -127,7 +127,7 @@ Branch? _workBead(Branch root, String beadId) {
 }
 
 /// Default rig config: rig `tg`, owning prefix `tg`.
-RigConfig _tgConfig() => const RigConfig(rigId: 'tg', ownedRigs: {'tg'});
+SubstationConfig _tgConfig() => const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 
 void main() {
   group('Track A — reconcile is the work lifecycle', () {
@@ -143,7 +143,7 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: RigConfigNotifier(_tgConfig()),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
 
@@ -168,7 +168,7 @@ void main() {
           _root(
             joined: joined,
             resolver: _FakeEffectResolver(recorder),
-            rigConfig: RigConfigNotifier(_tgConfig()),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
           ),
         );
 
@@ -211,12 +211,12 @@ void main() {
         // (they were never dirtied — ancestors of the sole dirtied node cannot
         // be force-rebuilt by a descendant's change, so their build did not
         // run; the sibling's effect recorded nothing above).
-        expect(flushed, isNot(contains(_branchWhere(root, (s) => s is Grid))));
+        expect(flushed, isNot(contains(_branchWhere(root, (s) => s is Station))));
         expect(
           flushed,
-          isNot(contains(_branchWhere(root, (s) => s is RigScope))),
+          isNot(contains(_branchWhere(root, (s) => s is SubstationScope))),
         );
-        expect(flushed, isNot(contains(_branchWhere(root, (s) => s is Rig))));
+        expect(flushed, isNot(contains(_branchWhere(root, (s) => s is Substation))));
         expect(flushed, isNot(contains(_workBead(root, 'tg-2'))));
       },
     );
@@ -232,7 +232,7 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: RigConfigNotifier(_tgConfig()),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
       expect(recorder.events, ['START agent(tg-1)']);
@@ -265,27 +265,27 @@ void main() {
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1')], ready: {'tg-1'}),
       );
-      final rigConfig = RigConfigNotifier(_tgConfig());
+      final substationConfig = SubstationConfigNotifier(_tgConfig());
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: rigConfig,
+          substationConfig: substationConfig,
         ),
       );
       expect(recorder.events, ['START agent(tg-1)']);
       recorder.events.clear();
 
       // Tick the CONFIG axis (a different owned set value).
-      rigConfig.push(const RigConfig(rigId: 'tg', ownedRigs: {'tg', 'other'}));
+      substationConfig.push(const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg', 'other'}));
       final flushed = owner.flush();
 
-      // The config observer (RigScope) rebuilt; Rig is force-rebuilt by the
+      // The config observer (SubstationScope) rebuilt; Substation is force-rebuilt by the
       // cascade and excluded. A config tick is real (proving the work-tick
       // guardrail's absence is meaningful, not because config is inert)...
-      expect(flushed, equals([_branchWhere(root, (s) => s is RigScope)]));
+      expect(flushed, equals([_branchWhere(root, (s) => s is SubstationScope)]));
       // ...yet it touches NO work effect.
       expect(recorder.events, isEmpty);
     });
@@ -304,7 +304,7 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: RigConfigNotifier(_tgConfig()),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
       expect(recorder.events, ['START agent(tg-1)']);
@@ -373,7 +373,7 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: RigConfigNotifier(_tgConfig()),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
       expect(recorder.events, ['START land(tg-1)']);
@@ -437,7 +437,7 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: RigConfigNotifier(_tgConfig()),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
 
@@ -469,7 +469,7 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: RigConfigNotifier(_tgConfig()),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
 
@@ -490,7 +490,7 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeEffectResolver(recorder),
-          rigConfig: RigConfigNotifier(_tgConfig()),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
 

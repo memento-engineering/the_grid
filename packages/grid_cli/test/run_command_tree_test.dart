@@ -12,7 +12,7 @@ import 'package:test/test.dart';
 /// NO `bd` writes to a live workspace. The DoD this file locks:
 ///
 ///  1. **pure composition** — [composeRunTree] assembles a [TreeRunWiring]
-///     (a [GridKernel] + a [RestartReconciler]) without spawning, opening a
+///     (a [StationKernel] + a [RestartReconciler]) without spawning, opening a
 ///     socket, or writing a bead;
 ///  2. **the kernel mounts + a ready owned bead spawns (dry)** — `start()` over a
 ///     fake work source carrying one ready owned task mounts the tree and the
@@ -159,27 +159,27 @@ class _TreeHarness {
     // claude), the bd write chokepoint over the recording runner (fail-closed on
     // the owned rig), the owned state rig, and NO git/PR land ops (an offline
     // build no-ops land rather than touch real GitHub).
-    final writer = GridBeadWriter(
+    final writer = StationBeadWriter(
       bd: BdCliService(bdRunner),
       ownership: BeadOwnershipPredicate(const {'tgdog'}),
     );
     final effectContext = EffectContext(
       provider: provider,
       writer: writer,
-      stateRig: 'tgdog',
+      stateSubstation: 'tgdog',
     );
     return composeRunTree(
       work: work,
       state: state,
       effectContext: effectContext,
-      rigs: const [
-        RigConfig(rigId: 'tgdog', ownedRigs: {'tgdog'}),
+      substations: const [
+        SubstationConfig(substationId: 'tgdog', ownedSubstations: {'tgdog'}),
       ],
       git: git.service,
       workRoot: const RootCheckout(
         path: '/tmp/grid-tree-test-root',
         defaultBranch: 'main',
-        rig: 'tgdog',
+        substation: 'tgdog',
       ),
       groups: groups,
       freshnessBarrier: _barrier,
@@ -287,21 +287,21 @@ class _RecordingDryProvider implements RuntimeProvider {
   Future<void> close() => _events.close();
 }
 
-/// A fake [GridGitService] whose worktree-list seam returns EMPTY (no survivors
+/// A fake [StationGitService] whose worktree-list seam returns EMPTY (no survivors
 /// to reconcile on restart) and whose reap is never reached. Built over a fake
 /// [GitRunner] so no real `git` runs; [listCalls] counts the worktree probes so
 /// the composition-only test can assert ZERO at construct time.
 class _FakeGitService {
   int listCalls = 0;
 
-  late final GridGitService service = _RecordingGitService(
+  late final StationGitService service = _RecordingGitService(
     onList: () => listCalls++,
   );
 }
 
-/// A [GridGitService] over fake runners that records each `listBeadWorktrees`
+/// A [StationGitService] over fake runners that records each `listBeadWorktrees`
 /// call and always reports no worktrees (the live `git` is never touched).
-class _RecordingGitService extends GridGitService {
+class _RecordingGitService extends StationGitService {
   _RecordingGitService({required this.onList})
       : super(runner: _FakeGitRunner(), prOpener: _FakePrOpener());
 

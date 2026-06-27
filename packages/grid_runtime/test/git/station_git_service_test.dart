@@ -7,7 +7,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-/// Hermetic real-`git` tests for [GridGitService] (Track 3). They drive the
+/// Hermetic real-`git` tests for [StationGitService] (Track 3). They drive the
 /// REAL `git` binary against TEMP repos only — `git init` a working repo + a
 /// LOCAL bare `file://` origin, clone, worktree-add off the probed default,
 /// push to the LOCAL bare origin, and open a PR through a FAKE [PrOpener]. They
@@ -77,8 +77,8 @@ void main() {
     return (bare: bare, root: root);
   }
 
-  GridGitService serviceWith(PrOpener opener) =>
-      GridGitService(runner: runner, prOpener: opener);
+  StationGitService serviceWith(PrOpener opener) =>
+      StationGitService(runner: runner, prOpener: opener);
 
   test('Layer 1: register probes the default branch from origin/HEAD', () async {
     final seeded = await seedOriginAndClone();
@@ -86,10 +86,10 @@ void main() {
 
     final root = await svc.registerRootCheckout(
       path: seeded.root,
-      rig: 'tgdog',
+      substation: 'tgdog',
     );
     expect(root.defaultBranch, 'main');
-    expect(root.rig, 'tgdog');
+    expect(root.substation, 'tgdog');
     expect(p.normalize(root.path), p.normalize(seeded.root));
   });
 
@@ -97,7 +97,7 @@ void main() {
     final notARepo = Directory(p.join(tmp.path, 'plain'))..createSync();
     final svc = serviceWith(_FakePrOpener());
     expect(
-      () => svc.registerRootCheckout(path: notARepo.path, rig: 'tgdog'),
+      () => svc.registerRootCheckout(path: notARepo.path, substation: 'tgdog'),
       throwsA(isA<StateError>()),
     );
   });
@@ -106,7 +106,7 @@ void main() {
       () async {
     final seeded = await seedOriginAndClone();
     final svc = serviceWith(_FakePrOpener());
-    final root = await svc.registerRootCheckout(path: seeded.root, rig: 'tgdog');
+    final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
 
     final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-1');
     expect(
@@ -137,7 +137,7 @@ void main() {
     final seeded = await seedOriginAndClone();
     final fakePr = _FakePrOpener();
     final svc = serviceWith(fakePr);
-    final root = await svc.registerRootCheckout(path: seeded.root, rig: 'tgdog');
+    final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
     final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-2');
 
     // The agent "did work".
@@ -175,7 +175,7 @@ void main() {
     test('(a) uncommitted work blocks removal', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, rig: 'tgdog');
+      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
       final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-u');
 
       // Uncommitted (untracked) work present.
@@ -192,7 +192,7 @@ void main() {
     test('(b) unpushed commits block removal', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, rig: 'tgdog');
+      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
       final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-p');
 
       // A committed-but-unpushed change (clean tree, but commits not on remote).
@@ -211,7 +211,7 @@ void main() {
     test('(c) a stash blocks removal', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, rig: 'tgdog');
+      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
       final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-s');
 
       // Create a tracked file, commit, then stash a modification so the tree is
@@ -237,7 +237,7 @@ void main() {
     test('scope gate: a path outside the worktrees root is refused', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, rig: 'tgdog');
+      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
 
       final outside = BeadWorktree(
         beadId: 'evil',
@@ -269,7 +269,7 @@ void main() {
     final root = RootCheckout(
       path: standalone.path,
       defaultBranch: 'main',
-      rig: 'tgdog',
+      substation: 'tgdog',
     );
     File(p.join(standalone.path, 'more')).writeAsStringSync('y');
 

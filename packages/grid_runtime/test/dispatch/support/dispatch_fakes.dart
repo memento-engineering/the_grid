@@ -122,7 +122,7 @@ class FakeRuntimeProvider implements RuntimeProvider {
 }
 
 /// A fake [GitRunner] (Fakes, not mocks): returns canned [GitRunResult]s keyed
-/// by the leading git subcommand so the REAL [GridGitService] runs end-to-end
+/// by the leading git subcommand so the REAL [StationGitService] runs end-to-end
 /// with no real `git`. `worktree add`/`remove` succeed; the three reap gates
 /// (`status`/`rev-list`/`stash list`) report CLEAN by default, and a test can
 /// flip [unpushed] to prove the fail-closed reaper refuses an unpushed

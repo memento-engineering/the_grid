@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_reconciler/grid_reconciler.dart' show PerBeadQueue;
 
-import '../git/grid_git_service.dart';
+import '../git/station_git_service.dart';
 import '../lifecycle/bead_ownership.dart';
 import '../lifecycle/runtime_actuator.dart';
 import '../runtime/runtime_config.dart';
@@ -42,18 +42,18 @@ class DispatchRecord {
 ///
 /// **The ownership gate is the Track-4 [BeadOwnershipPredicate]**, seeded with
 /// the shared `{tgdog}` allow-set (ADR-0000 A32/A35). A non-owned bead is
-/// **observed read-only, NEVER dispatched** — `OwnsRigs.owns(Convergence)`
+/// **observed read-only, NEVER dispatched** — `OwnsSubstations.owns(Convergence)`
 /// is structurally uncallable on a plain `Bead`, so this bead-shaped predicate
 /// is the gate, sharing the identical `Set<String>` with M2's actuator so they
 /// cannot drift.
 ///
 /// **On accept** (the pipeline; **Futures for acts**):
-///  1. [GridGitService.provisionWorktree] (Track 3) — the per-bead worktree on
+///  1. [StationGitService.provisionWorktree] (Track 3) — the per-bead worktree on
 ///     a fresh `grid/<beadId>` branch off the probed default;
 ///  2. [RuntimeProvider.start] (Track 2) — a `claude` subprocess in that
 ///     worktree, env via the explicit allowlist (token never argv);
 ///  3. [RuntimeActuator.spawnSession] (Track 4) — the session bead minted +
-///     stamped through the [GridBeadWriter] chokepoint.
+///     stamped through the [StationBeadWriter] chokepoint.
 ///
 /// **Idempotent + single-flight per bead.** A re-fired ready event for an
 /// already-dispatched (or in-flight) bead never double-spawns: a [PerBeadQueue]
@@ -65,7 +65,7 @@ class DispatchRecord {
 /// **On exit / crash** (the supervision half): the interactor listens to the
 /// actuator's [CrashDecision] stream. A clean park / quarantine drives the
 /// removal TRIGGER — the lifecycle bead is closed AND, once the branch is
-/// pushed (`HasUnpushedCommits==false`), [GridGitService.reap] removes the
+/// pushed (`HasUnpushedCommits==false`), [StationGitService.reap] removes the
 /// worktree behind the three fail-closed gates. A [RestartSession] re-spawns
 /// the same bead (the actuator already left the session bead open). A
 /// [QuarantineSession] leaves it parked — no reap, no respawn.
@@ -76,7 +76,7 @@ class DispatchInteractor {
   DispatchInteractor({
     required ReadyWorkSource source,
     required BeadOwnershipPredicate ownership,
-    required GridGitService git,
+    required StationGitService git,
     required RootCheckout root,
     required RuntimeProvider provider,
     required RuntimeActuator actuator,
@@ -84,7 +84,7 @@ class DispatchInteractor {
     int maxInFlight = 8,
     bool dryRun = false,
     Set<String> driveList = const {},
-    String? sessionRig,
+    String? sessionSubstation,
     void Function(String message)? onObserve,
     void Function(Object error, StackTrace stack)? onError,
   }) : assert(maxInFlight >= 1, 'maxInFlight must be >= 1'),
@@ -98,13 +98,13 @@ class DispatchInteractor {
        _maxInFlight = maxInFlight,
        _dryRun = dryRun,
        _driveList = driveList,
-       _sessionRig = sessionRig,
+       _sessionRig = sessionSubstation,
        _onObserve = onObserve,
        _onError = onError;
 
   final ReadyWorkSource _source;
   final BeadOwnershipPredicate _ownership;
-  final GridGitService _git;
+  final StationGitService _git;
   final RootCheckout _root;
   final RuntimeProvider _provider;
   final RuntimeActuator _actuator;
@@ -235,7 +235,7 @@ class DispatchInteractor {
         observedNonOwned.add(id);
         _onObserve?.call(
           'observe (not owned, read-only): $id '
-          'rig=${_ownership.rigOf(bead) ?? '<none>'}',
+          'rig=${_ownership.substationOf(bead) ?? '<none>'}',
         );
         return;
       }
@@ -281,8 +281,8 @@ class DispatchInteractor {
   /// single-flight). On any failure the partial state is unwound conservatively
   /// (no session record is retained), so the next ready event can retry.
   Future<void> _dispatch(Bead bead) async {
-    final workRig = _ownership.rigOf(bead);
-    if (workRig == null) return; // owns() was true; defensive.
+    final workSubstation = _ownership.substationOf(bead);
+    if (workSubstation == null) return; // owns() was true; defensive.
     // The SESSION bead's owned partition. When [_sessionRig] is set (the
     // split-DB arm: session beads live in a separate the_grid-owned store, e.g.
     // `tgdog`, while work is read from another rig like `genesis`), the session
@@ -290,11 +290,11 @@ class DispatchInteractor {
     // `_sessionRig`, so the chokepoint owns it by prefix across its whole
     // lifecycle (A36 choice B). Default (single-DB tgdog arm): the session
     // shares the work bead's rig.
-    final sessionRig = _sessionRig ?? workRig;
+    final sessionSubstation = _sessionRig ?? workSubstation;
 
     // --dry-run: observe-only, no worktree, no spawn, no writes.
     if (_dryRun) {
-      _onObserve?.call('dry-run (would dispatch): ${bead.id} rig=$workRig');
+      _onObserve?.call('dry-run (would dispatch): ${bead.id} rig=$workSubstation');
       return;
     }
 
@@ -314,7 +314,7 @@ class DispatchInteractor {
       //    spawn, so the runtime session is named by the session bead id and
       //    the actuator's RuntimeEvent ingestion can find its record.
       sessionBeadId = await _actuator.spawnSession(
-        rig: sessionRig,
+        substation: sessionSubstation,
         workBeadId: bead.id,
         title: bead.title.isNotEmpty ? bead.title : 'session for ${bead.id}',
         worktreePath: worktree.path,
@@ -338,7 +338,7 @@ class DispatchInteractor {
           // The prompt describes the WORK bead's rig (e.g. genesis) to the
           // agent, not the_grid's internal session partition.
           bead: bead,
-          rig: workRig,
+          substation: workSubstation,
           sessionBeadId: sessionBeadId,
           worktree: worktree,
         ),
@@ -396,7 +396,7 @@ class DispatchInteractor {
             bead:
                 _source.bead(record.workBeadId) ??
                 Bead(id: record.workBeadId),
-            rig: _root.rig,
+            substation: _root.substation,
             sessionBeadId: record.sessionBeadId,
             worktree: record.worktree,
           ),
@@ -470,7 +470,7 @@ class DispatchInteractor {
 class DispatchRequest {
   const DispatchRequest({
     required this.bead,
-    required this.rig,
+    required this.substation,
     required this.sessionBeadId,
     required this.worktree,
   });
@@ -480,7 +480,7 @@ class DispatchRequest {
   final Bead bead;
 
   /// The owned rig (e.g. `tgdog`).
-  final String rig;
+  final String substation;
 
   /// The minted session bead id (the runtime session name; also the
   /// `GRID_SESSION_ID`/`GRID_BEAD_ID` env source).

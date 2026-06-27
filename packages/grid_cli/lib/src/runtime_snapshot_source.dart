@@ -10,7 +10,7 @@ import 'package:grid_engine/grid_engine.dart';
 /// The [GridControllerRuntime] already exposes the exact surface the bridge
 /// needs — a change-gated, broadcast, non-replaying [snapshots] stream and a
 /// `null`-before-baseline [current] — so this adapter is a pure pass-through; it
-/// owns nothing and subscribes to nothing (the [GridJoinBridge] is the lone
+/// owns nothing and subscribes to nothing (the [StationJoinBridge] is the lone
 /// subscriber, A39).
 class RuntimeSnapshotSource implements SnapshotSource {
   /// Wraps [runtime] (the M1 controller) as a [SnapshotSource].

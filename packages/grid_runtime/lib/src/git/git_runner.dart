@@ -27,7 +27,7 @@ class GitRunResult {
   bool get ok => launched && exitCode == 0;
 }
 
-/// The git-command SEAM — the single point where [GridGitService] shells out to
+/// The git-command SEAM — the single point where [StationGitService] shells out to
 /// `git`. A reference type (carries the `Runner` role name; predictable-flutter).
 ///
 /// Mirrors grid_reconciler's [ProcessRunner] / grid_runtime's

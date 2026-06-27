@@ -9,7 +9,7 @@
 //
 // Track A's track_a_reconcile_test asserts the predicate at the WorkBead
 // child-set level; THIS formalizes it at the kernel/effect-SPAWN level — driven
-// through the real GridKernel + the real DefaultEffectResolver, the allow-list
+// through the real StationKernel + the real DefaultEffectResolver, the allow-list
 // is proven by what does (and does not) reach the provider.
 //
 // Offline only — FAKES, no live tg/gc/claude/git/network.
@@ -33,16 +33,16 @@ GraphSnapshot _graph({
 Bead _typed(String id, IssueType type) =>
     Bead(id: id, issueType: type, status: BeadStatus.open);
 
-GridKernel _kernel(GridJoinBridge bridge, Fakes f) => GridKernel(
+StationKernel _kernel(StationJoinBridge bridge, Fakes f) => StationKernel(
   bridge: bridge,
   effectContext: f.ctx,
   resolver: const DefaultEffectResolver(),
-  rigs: [
-    RigScope(
-      configNotifier: RigConfigNotifier(
+  substations: [
+    SubstationScope(
+      configNotifier: SubstationConfigNotifier(
         // Own the `tg` prefix so the ONLY thing keeping the customs out is the
         // TYPE allow-list, not ownership (every bead below is `tg-*`).
-        const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+        const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
       ),
       key: const ValueKey('scope.tg'),
     ),
@@ -64,7 +64,7 @@ void main() {
         final state = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
+        final bridge = StationJoinBridge(work: work, state: state);
         final kernel = _kernel(bridge, f);
         addTearDown(kernel.dispose);
         addTearDown(f.provider.close);
@@ -135,7 +135,7 @@ void main() {
         final state = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
+        final bridge = StationJoinBridge(work: work, state: state);
         final kernel = _kernel(bridge, f);
         addTearDown(kernel.dispose);
         addTearDown(f.provider.close);

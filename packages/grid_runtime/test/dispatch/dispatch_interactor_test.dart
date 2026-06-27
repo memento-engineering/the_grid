@@ -22,7 +22,7 @@ void main() {
   late FakeRuntimeProvider provider;
   late FakeGitRunner gitRunner;
   late RecordingBdRunner bdRunner;
-  late GridGitService git;
+  late StationGitService git;
   late RuntimeActuator actuator;
   late RootCheckout root;
   late DispatchInteractor dispatcher;
@@ -33,7 +33,7 @@ void main() {
   RootCheckout rootAt(String path) => RootCheckout(
     path: path,
     defaultBranch: 'main',
-    rig: 'tgdog',
+    substation: 'tgdog',
   );
 
   /// The config builder Track 7 supplies; here a minimal `claude -p` invocation
@@ -49,20 +49,20 @@ void main() {
     int maxInFlight = 8,
     Set<String> driveList = const {},
     Set<String> owned = const {'tgdog'},
-    String? sessionRig,
+    String? sessionSubstation,
     void Function(Object error, StackTrace stack)? onError,
   }) {
     bdRunner = RecordingBdRunner(createdId: 'tgdog-sess1');
     // One predicate instance feeds BOTH gates (the A32 shared-allow-set rule).
     final ownership = BeadOwnershipPredicate(owned);
-    final writer = GridBeadWriter(
+    final writer = StationBeadWriter(
       bd: BdCliService(bdRunner),
       ownership: ownership,
     );
     actuator = RuntimeActuator(writer: writer);
     // The actuator ingests the provider's RuntimeEvent stream (Track 4 bind).
     actuator.bind(provider.events);
-    git = GridGitService(runner: gitRunner, prOpener: FakePrOpener());
+    git = StationGitService(runner: gitRunner, prOpener: FakePrOpener());
     dispatcher = DispatchInteractor(
       source: source,
       ownership: ownership,
@@ -74,7 +74,7 @@ void main() {
       maxInFlight: maxInFlight,
       dryRun: dryRun,
       driveList: driveList,
-      sessionRig: sessionRig,
+      sessionSubstation: sessionSubstation,
       onError: onError,
     );
   }
@@ -168,7 +168,7 @@ void main() {
   group('DoD 2 — a non-owned ready bead is observed read-only, never dispatched',
       () {
     test(
-      'a gascity-prefixed ready bead is NEVER spawned (mirrors OwnsRigs)',
+      'a gascity-prefixed ready bead is NEVER spawned (mirrors OwnsSubstations)',
       () async {
         wire();
         source.addReady(Bead(id: 'gascity-xyz', title: 'gc work'));
@@ -449,9 +449,9 @@ void main() {
     test('a genesis work bead mints its session into the tgdog partition',
         () async {
       // Dispatch owns `genesis` (the read rig); the chokepoint ALSO owns
-      // `tgdog` (the_grid's own session partition). sessionRig routes the mint
+      // `tgdog` (the_grid's own session partition). sessionSubstation routes the mint
       // so genesis never has to adopt the_grid's `session` type.
-      wire(owned: {'genesis', 'tgdog'}, sessionRig: 'tgdog');
+      wire(owned: {'genesis', 'tgdog'}, sessionSubstation: 'tgdog');
       source.addReady(Bead(id: 'genesis-q8h', title: 'a first-class Key type'));
       await dispatcher.start();
 

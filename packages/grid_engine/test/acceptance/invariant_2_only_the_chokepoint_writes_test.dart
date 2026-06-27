@@ -1,13 +1,13 @@
 // Wave 4 / Track G — CONFORMANCE: derailment-invariant 2.
 //
 // "Only the chokepoint writes." (ADR-0006 Decision 2 / A32.) Every bd mutation
-// the_grid issues flows through the single GridBeadWriter chokepoint — bd-only,
+// the_grid issues flows through the single StationBeadWriter chokepoint — bd-only,
 // `--actor grid-controller`, fail-closed on ownership, never a `bd show` and
 // never raw `sql`. And no write EVER happens inside a `build()`: effects act in
 // initState / onComplete / dispose; `build()` is a pure Idle leaf.
 //
-// This drives a FULL implement→verify→land cycle through the REAL GridKernel
-// with a RecordingBdRunner-backed GridBeadWriter (the chokepoint) + the fake
+// This drives a FULL implement→verify→land cycle through the REAL StationKernel
+// with a RecordingBdRunner-backed StationBeadWriter (the chokepoint) + the fake
 // provider/git/PR, emitting SessionStarted + a clean completion per phase and
 // advancing the session cursor via the fake STATE source. It then asserts the
 // chokepoint discipline over the WHOLE recorded call log.
@@ -43,7 +43,7 @@ Bead _sessionBead({
   issueType: IssueType.session,
   status: BeadStatus.open,
   metadata: {
-    'rig': stateRig,
+    'rig': stateSubstation,
     SessionBeadKeys.workBead: workBeadId,
     SessionBeadKeys.phase: phase.name,
   },
@@ -64,15 +64,15 @@ void main() {
         final state = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
-        final kernel = GridKernel(
+        final bridge = StationJoinBridge(work: work, state: state);
+        final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
           resolver: const DefaultEffectResolver(),
-          rigs: [
-            RigScope(
-              configNotifier: RigConfigNotifier(
-                const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(
+                const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
               ),
               key: const ValueKey('scope.tg'),
             ),
@@ -147,7 +147,7 @@ void main() {
         expect(f.runner.callsFor('close'), hasLength(1));
 
         // (a) NO bd write bypasses the chokepoint: the ONLY BdRunner in the
-        //     system is the one inside the GridBeadWriter, so EVERY recorded bd
+        //     system is the one inside the StationBeadWriter, so EVERY recorded bd
         //     call IS a chokepoint call. A `show` or `sql` would mean a bypass.
         expect(
           f.runner.neverShowOrSql,
@@ -193,15 +193,15 @@ void main() {
         final state = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
-        final kernel = GridKernel(
+        final bridge = StationJoinBridge(work: work, state: state);
+        final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
           resolver: const DefaultEffectResolver(),
-          rigs: [
-            RigScope(
-              configNotifier: RigConfigNotifier(
-                const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(
+                const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
               ),
               key: const ValueKey('scope.tg'),
             ),

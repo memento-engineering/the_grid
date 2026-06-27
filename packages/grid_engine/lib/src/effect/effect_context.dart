@@ -6,7 +6,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 /// The kernel (Track E/F) provides exactly one of these via an
 /// `InheritedSeed<EffectContext>` above the work tree, so every mounted effect
 /// reaches its process transport ([provider]), its single bd write chokepoint
-/// ([writer]), and the owned state rig ([stateRig]) through a single
+/// ([writer]), and the owned state rig ([stateSubstation]) through a single
 /// `dependOnInheritedSeedOfExactType` — never three separate lookups, and never
 /// a re-query of the store (A39).
 ///
@@ -24,16 +24,16 @@ import 'package:grid_runtime/grid_runtime.dart';
 /// real GitHub.
 class EffectContext {
   /// Bundles the process transport [provider], the bd write [writer], and the
-  /// owned [stateRig], plus the optional land-orchestration ops + worktree
+  /// owned [stateSubstation], plus the optional land-orchestration ops + worktree
   /// layout the capability Seeds resolve.
   const EffectContext({
     required this.provider,
     required this.writer,
-    required this.stateRig,
+    required this.stateSubstation,
     this.gitOps,
     this.prOpener,
     this.worktreeRoot,
-    this.workRig = '',
+    this.workSubstation = '',
     this.baseBranch = 'main',
   });
 
@@ -44,11 +44,11 @@ class EffectContext {
   /// The single bd write chokepoint — the ONLY path session/lifecycle beads are
   /// written through (`createSession` / `update` / `close`), bd-only,
   /// `--actor grid-controller`, fail-closed on ownership (ADR-0006 Decision 2).
-  final GridBeadWriter writer;
+  final StationBeadWriter writer;
 
   /// The_grid's OWNED state rig (`tgdog`) — the partition session beads are
   /// minted into, kept separate from the read-only work source (A37).
-  final String stateRig;
+  final String stateSubstation;
 
   /// The injectable git ops the land orchestration drives (commit → push).
   /// Null when land is not wired (an offline build that never touches real
@@ -65,8 +65,8 @@ class EffectContext {
   final String? worktreeRoot;
 
   /// The work rig the worktrees partition under (`$root/.grid/worktrees/
-  /// $workRig/$beadId`); empty by default.
-  final String workRig;
+  /// $workSubstation/$beadId`); empty by default.
+  final String workSubstation;
 
   /// The base branch the land step opens PRs against (`main` by default).
   final String baseBranch;
@@ -76,10 +76,10 @@ class EffectContext {
   ///
   /// Falls back to the bare `/grid/worktrees/$beadId` layout when no
   /// [worktreeRoot] is registered (the synthetic offline default); otherwise
-  /// mirrors grid_runtime's `$root/.grid/worktrees/$workRig/$beadId` layout.
+  /// mirrors grid_runtime's `$root/.grid/worktrees/$workSubstation/$beadId` layout.
   String worktreeFor(String beadId) => worktreeRoot == null
       ? '/grid/worktrees/$beadId'
-      : '$worktreeRoot/.grid/worktrees/$workRig/$beadId';
+      : '$worktreeRoot/.grid/worktrees/$workSubstation/$beadId';
 
   /// The land branch for [beadId] (`grid/<beadId>`) — the branch the agent's
   /// worktree was cut on and the land step pushes + opens a PR for.

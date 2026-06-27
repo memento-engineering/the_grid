@@ -3,7 +3,7 @@ import 'package:grid_controller/grid_controller.dart';
 /// The observable snapshot seam the join bridge subscribes to — the narrow
 /// surface of a `GridControllerRuntime` the bridge actually needs.
 ///
-/// Decouples [GridJoinBridge] from the concrete runtime so the bridge is
+/// Decouples [StationJoinBridge] from the concrete runtime so the bridge is
 /// fake-testable in pure-Dart (a broadcast controller + a settable [current]).
 /// `grid_cli` adapts the two real `GridControllerRuntime`s (work + state) to
 /// this interface at composition time — the bridge never constructs one.

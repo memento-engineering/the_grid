@@ -2,19 +2,19 @@ import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
 
-import '../bridge/grid_join_bridge.dart';
+import '../bridge/station_join_bridge.dart';
 import '../effect/effect_context.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
-import '../seeds/grid_seed.dart';
-import '../seeds/rig_scope.dart';
+import '../seeds/station_seed.dart';
+import '../seeds/substation_scope.dart';
 import 'effect_resolver.dart';
 
 /// The kernel: composes the running tree and drives it (ADR-0007 /
 /// M4-P0-BUILD-ORDER Track E/F).
 ///
-/// It assembles the ambient providers above the [Grid] — the work-axis
+/// It assembles the ambient providers above the [Station] — the work-axis
 /// [JoinedSnapshotNotifier] (from the [bridge]), the [EffectContext] (the
-/// provider/writer/stateRig the effects resolve), and the [EffectResolver]
+/// provider/writer/stateSubstation the effects resolve), and the [EffectResolver]
 /// (phase → effect Seed) — mounts the tree under a [TreeOwner], and runs the
 /// reactive loop:
 ///
@@ -27,23 +27,23 @@ import 'effect_resolver.dart';
 /// dirties (derailment-invariant 1); the kernel just drains what the dirty set
 /// holds. Flushes are coalesced: many dirties between microtask turns collapse
 /// into one flush.
-class GridKernel {
+class StationKernel {
   /// Assembles the kernel. The tree is not mounted until [start].
-  GridKernel({
+  StationKernel({
     required this.bridge,
     required EffectContext effectContext,
     required EffectResolver resolver,
-    required List<RigScope> rigs,
+    required List<SubstationScope> substations,
   }) : _effectContext = effectContext,
        _resolver = resolver,
-       _rigs = rigs;
+       _substations = substations;
 
   /// The join bridge feeding the work axis — the kernel owns its lifecycle
   /// (started in [start], disposed in [dispose]).
-  final GridJoinBridge bridge;
+  final StationJoinBridge bridge;
   final EffectContext _effectContext;
   final EffectResolver _resolver;
-  final List<RigScope> _rigs;
+  final List<SubstationScope> _substations;
 
   final TreeOwner _owner = TreeOwner();
   bool _started = false;
@@ -65,7 +65,7 @@ class GridKernel {
           value: _effectContext,
           child: InheritedSeed<EffectResolver>(
             value: _resolver,
-            child: Grid(_rigs),
+            child: Station(_substations),
           ),
         ),
       ),

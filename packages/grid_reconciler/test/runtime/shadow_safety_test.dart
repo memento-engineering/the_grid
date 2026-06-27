@@ -142,7 +142,7 @@ void main() {
 
   group('OwnershipPredicate — the coexistence partition gates actuation', () {
     test('the writing runtime does NOT actuate a non-owned bead', () async {
-      // A loop the_grid does NOT own (OwnsRigs with a different rig). A live
+      // A loop the_grid does NOT own (OwnsSubstations with a different rig). A live
       // closure must be reduced but NEVER actuated — the partition boundary.
       final loop = activeLoop(
         rootId: 'NotOurs',
@@ -163,7 +163,7 @@ void main() {
         actuator: actuator,
         gateEvaluator: FakeGate(),
         // We own only "the-grid-rig"; this loop's rig is "gc-rig".
-        ownership: OwnsRigs(const ['the-grid-rig']),
+        ownership: OwnsSubstations(const ['the-grid-rig']),
         runRecoveryAtStartup: false,
       );
       await runtime.start();
@@ -209,7 +209,7 @@ void main() {
         gateEvaluator: FakeGate(
           defaultResult: GateResult.of(GateOutcome.fail, exitCode: 1),
         ),
-        ownership: OwnsRigs(const ['the-grid-rig']),
+        ownership: OwnsSubstations(const ['the-grid-rig']),
         runRecoveryAtStartup: false,
       );
       await runtime.start();

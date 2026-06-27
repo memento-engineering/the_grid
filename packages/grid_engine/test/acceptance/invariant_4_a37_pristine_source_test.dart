@@ -12,7 +12,7 @@
 // foreign-rig arm and asserts:
 //  - every recorded bd write targets a state-rig (tgdog-*) bead — ZERO target a
 //    work-rig (genesis-*) bead;
-//  - the fail-closed proof: the GridBeadWriter chokepoint REFUSES
+//  - the fail-closed proof: the StationBeadWriter chokepoint REFUSES
 //    (OwnershipRefused) a write whose target is a foreign (genesis-*) bead.
 //
 // Offline only — FAKES, no live tg/gc/claude/git/network.
@@ -51,7 +51,7 @@ Bead _ownedSession({
   issueType: IssueType.session,
   status: BeadStatus.open,
   metadata: {
-    'rig': stateRig,
+    'rig': stateSubstation,
     SessionBeadKeys.workBead: workBeadId,
     SessionBeadKeys.phase: phase.name,
   },
@@ -73,19 +73,19 @@ void main() {
         final state = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
-        final kernel = GridKernel(
+        final bridge = StationJoinBridge(work: work, state: state);
+        final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
           resolver: const DefaultEffectResolver(),
-          rigs: [
-            RigScope(
-              configNotifier: RigConfigNotifier(
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(
                 // The WORK axis owns the FOREIGN rig (the live foreign-rig arm:
                 // the_grid builds the genesis backlog), so the genesis-* bead
                 // MOUNTS. The chokepoint's allow-set is still {tgdog} — that
                 // split is exactly what A37 protects.
-                const RigConfig(rigId: 'genesis', ownedRigs: {'genesis'}),
+                const SubstationConfig(substationId: 'genesis', ownedSubstations: {'genesis'}),
               ),
               key: const ValueKey('scope.genesis'),
             ),
@@ -153,7 +153,7 @@ void main() {
           workRoot: const RootCheckout(
             path: '/tmp/genesis-grid',
             defaultBranch: 'main',
-            rig: 'genesis',
+            substation: 'genesis',
           ),
           groups: _NoopGroups(),
           freshnessBarrier: () async {},
@@ -165,7 +165,7 @@ void main() {
                 issueType: IssueType.session,
                 status: BeadStatus.closed,
                 metadata: const {
-                  'rig': stateRig,
+                  'rig': stateSubstation,
                   'work_bead': 'genesis-7r9',
                   'grid.phase': 'land',
                 },
@@ -213,15 +213,15 @@ void main() {
     );
 
     test(
-      'the fail-closed structural guarantee behind A37: the GridBeadWriter '
+      'the fail-closed structural guarantee behind A37: the StationBeadWriter '
       'REFUSES (OwnershipRefused) a write whose target is a foreign genesis-* '
       'bead — for update, close, AND delete',
       () async {
         // A chokepoint owning ONLY the tgdog state rig (exactly the live arm).
         final runner = RecordingBdRunner();
-        final writer = GridBeadWriter(
+        final writer = StationBeadWriter(
           bd: BdCliService(runner),
-          ownership: BeadOwnershipPredicate(const {stateRig}),
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
         );
 
         // A write to an OWNED tgdog bead succeeds (proves the refusal is the
@@ -246,7 +246,7 @@ void main() {
         // createSession into a foreign rig is refused BEFORE any bd create.
         await expectLater(
           writer.createSession(
-            rig: 'genesis',
+            substation: 'genesis',
             title: 'illegal',
             workBeadId: 'genesis-7r9',
           ),

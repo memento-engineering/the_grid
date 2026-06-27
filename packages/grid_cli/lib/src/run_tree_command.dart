@@ -4,7 +4,7 @@
 /// assembly with fakes (no live `tg`, no real `claude`, no real `git`).
 ///
 /// **Pure composition.** [composeRunTree] constructs no process, opens no
-/// socket, and writes no bead — it builds the [GridKernel] + the
+/// socket, and writes no bead — it builds the [StationKernel] + the
 /// [RestartReconciler] and hands back a [TreeRunWiring]. *Starting* is
 /// [TreeRunWiring.start]'s job; with a dry [EffectContext.provider] (a recording
 /// no-op transport) and the land ops left null, `start()` is inert beyond the
@@ -31,7 +31,7 @@ class TreeRunWiring {
   }) : _freshnessBarrier = freshnessBarrier;
 
   /// The composed M4 kernel — the running tree. Not mounted until [start].
-  final GridKernel kernel;
+  final StationKernel kernel;
 
   /// The Track-D restart respawn-or-skip reconciler, run once BEFORE the kernel
   /// mounts (so survivors are reconciled before the tree blindly respawns).
@@ -59,22 +59,22 @@ class TreeRunWiring {
 /// whole composition with fakes: the [work]/[state] [SnapshotSource]s (fakes in
 /// a test; [RuntimeSnapshotSource] over the real controllers in the live arm),
 /// the [effectContext] (a dry provider + the bd write chokepoint; land ops left
-/// null for an offline build), the per-rig [rigs] config, the [git] service +
+/// null for an offline build), the per-rig [substations] config, the [git] service +
 /// [workRoot] (the Track-D worktree seam), the [groups] process-group
 /// controller (the orphan-kill seam — kept REAL so its `pgid <= 1` guard is
 /// exercised), and the [freshnessBarrier] (a completed re-query of the read +
 /// state runtimes).
 ///
 /// Construction only: it builds
-///  - a [GridJoinBridge] over [work] + [state] (the lone subscription, A39),
+///  - a [StationJoinBridge] over [work] + [state] (the lone subscription, A39),
 ///  - a [DefaultEffectResolver] (the compiled built-in capability set),
-///  - the [RigScope]s (one per [RigConfig], keyed by rig id so a rig add/remove
+///  - the [SubstationScope]s (one per [SubstationConfig], keyed by rig id so a rig add/remove
 ///    mounts/unmounts exactly that scope),
 ///  - a [RestartReconciler] binding the engine's narrow worktree seams to the
 ///    injected [git] service's `listBeadWorktrees`/`reap` (the engine never
 ///    names the concrete VCS service — ADR-0007 §1), reading the post-barrier
 ///    OWNED session cursors from [state]'s `current` snapshot, and
-///  - the [GridKernel] over the bridge + context + resolver + scopes.
+///  - the [StationKernel] over the bridge + context + resolver + scopes.
 ///
 /// Nothing is started; [TreeRunWiring.start] drives the barrier → restart →
 /// mount ordering.
@@ -82,22 +82,22 @@ TreeRunWiring composeRunTree({
   required SnapshotSource work,
   required SnapshotSource state,
   required EffectContext effectContext,
-  required List<RigConfig> rigs,
-  required GridGitService git,
+  required List<SubstationConfig> substations,
+  required StationGitService git,
   required RootCheckout workRoot,
   required ProcessGroupController groups,
   required Future<void> Function() freshnessBarrier,
 }) {
-  final bridge = GridJoinBridge(work: work, state: state);
+  final bridge = StationJoinBridge(work: work, state: state);
   const resolver = DefaultEffectResolver();
 
   // One config scope per rig, keyed by rig id so a rig add/remove mounts /
   // unmounts exactly that scope (the Grid reconciles its scope children by key).
-  final rigScopes = rigs
+  final substationScopes = substations
       .map(
-        (config) => RigScope(
-          configNotifier: RigConfigNotifier(config),
-          key: ValueKey('scope.${config.rigId}'),
+        (config) => SubstationScope(
+          configNotifier: SubstationConfigNotifier(config),
+          key: ValueKey('scope.${config.substationId}'),
         ),
       )
       .toList(growable: false);
@@ -116,11 +116,11 @@ TreeRunWiring composeRunTree({
     stateSnapshot: () => state.current ?? _emptySnapshot(),
   );
 
-  final kernel = GridKernel(
+  final kernel = StationKernel(
     bridge: bridge,
     effectContext: effectContext,
     resolver: resolver,
-    rigs: rigScopes,
+    substations: substationScopes,
   );
 
   return TreeRunWiring(

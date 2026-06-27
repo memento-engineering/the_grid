@@ -1,0 +1,288 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+// coverage:ignore-file
+// ignore_for_file: type=lint
+// ignore_for_file: unused_element, deprecated_member_use, deprecated_member_use_from_same_package, use_function_type_syntax_for_parameters, unnecessary_const, avoid_init_to_null, invalid_override_different_default_values_named, prefer_expression_function_bodies, annotate_overrides, invalid_annotation_target, unnecessary_question_mark
+
+part of 'substation_config.dart';
+
+// **************************************************************************
+// FreezedGenerator
+// **************************************************************************
+
+// dart format off
+T _$identity<T>(T value) => value;
+/// @nodoc
+mixin _$SubstationConfig {
+
+/// The rig's id (its issue-id prefix and `metadata.rig` marker).
+ String get substationId;/// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
+/// against (fail-closed — an empty set owns nothing).
+ Set<String> get ownedSubstations;
+/// Create a copy of SubstationConfig
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$SubstationConfigCopyWith<SubstationConfig> get copyWith => _$SubstationConfigCopyWithImpl<SubstationConfig>(this as SubstationConfig, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other.ownedSubstations, ownedSubstations));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(ownedSubstations));
+
+@override
+String toString() {
+  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $SubstationConfigCopyWith<$Res>  {
+  factory $SubstationConfigCopyWith(SubstationConfig value, $Res Function(SubstationConfig) _then) = _$SubstationConfigCopyWithImpl;
+@useResult
+$Res call({
+ String substationId, Set<String> ownedSubstations
+});
+
+
+
+
+}
+/// @nodoc
+class _$SubstationConfigCopyWithImpl<$Res>
+    implements $SubstationConfigCopyWith<$Res> {
+  _$SubstationConfigCopyWithImpl(this._self, this._then);
+
+  final SubstationConfig _self;
+  final $Res Function(SubstationConfig) _then;
+
+/// Create a copy of SubstationConfig
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? substationId = null,Object? ownedSubstations = null,}) {
+  return _then(_self.copyWith(
+substationId: null == substationId ? _self.substationId : substationId // ignore: cast_nullable_to_non_nullable
+as String,ownedSubstations: null == ownedSubstations ? _self.ownedSubstations : ownedSubstations // ignore: cast_nullable_to_non_nullable
+as Set<String>,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [SubstationConfig].
+extension SubstationConfigPatterns on SubstationConfig {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _SubstationConfig value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _SubstationConfig() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _SubstationConfig value)  $default,){
+final _that = this;
+switch (_that) {
+case _SubstationConfig():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _SubstationConfig value)?  $default,){
+final _that = this;
+switch (_that) {
+case _SubstationConfig() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _SubstationConfig() when $default != null:
+return $default(_that.substationId,_that.ownedSubstations);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations)  $default,) {final _that = this;
+switch (_that) {
+case _SubstationConfig():
+return $default(_that.substationId,_that.ownedSubstations);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String substationId,  Set<String> ownedSubstations)?  $default,) {final _that = this;
+switch (_that) {
+case _SubstationConfig() when $default != null:
+return $default(_that.substationId,_that.ownedSubstations);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class _SubstationConfig implements SubstationConfig {
+  const _SubstationConfig({required this.substationId, final  Set<String> ownedSubstations = const <String>{}}): _ownedSubstations = ownedSubstations;
+  
+
+/// The rig's id (its issue-id prefix and `metadata.rig` marker).
+@override final  String substationId;
+/// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
+/// against (fail-closed — an empty set owns nothing).
+ final  Set<String> _ownedSubstations;
+/// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
+/// against (fail-closed — an empty set owns nothing).
+@override@JsonKey() Set<String> get ownedSubstations {
+  if (_ownedSubstations is EqualUnmodifiableSetView) return _ownedSubstations;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableSetView(_ownedSubstations);
+}
+
+
+/// Create a copy of SubstationConfig
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$SubstationConfigCopyWith<_SubstationConfig> get copyWith => __$SubstationConfigCopyWithImpl<_SubstationConfig>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other._ownedSubstations, _ownedSubstations));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(_ownedSubstations));
+
+@override
+String toString() {
+  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$SubstationConfigCopyWith<$Res> implements $SubstationConfigCopyWith<$Res> {
+  factory _$SubstationConfigCopyWith(_SubstationConfig value, $Res Function(_SubstationConfig) _then) = __$SubstationConfigCopyWithImpl;
+@override @useResult
+$Res call({
+ String substationId, Set<String> ownedSubstations
+});
+
+
+
+
+}
+/// @nodoc
+class __$SubstationConfigCopyWithImpl<$Res>
+    implements _$SubstationConfigCopyWith<$Res> {
+  __$SubstationConfigCopyWithImpl(this._self, this._then);
+
+  final _SubstationConfig _self;
+  final $Res Function(_SubstationConfig) _then;
+
+/// Create a copy of SubstationConfig
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? substationId = null,Object? ownedSubstations = null,}) {
+  return _then(_SubstationConfig(
+substationId: null == substationId ? _self.substationId : substationId // ignore: cast_nullable_to_non_nullable
+as String,ownedSubstations: null == ownedSubstations ? _self._ownedSubstations : ownedSubstations // ignore: cast_nullable_to_non_nullable
+as Set<String>,
+  ));
+}
+
+
+}
+
+// dart format on

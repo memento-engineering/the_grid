@@ -7,13 +7,13 @@
 // snapshot pipelines). A single over-broad observation would re-create the
 // "config built 100×" bug the invariant exists to prevent.
 //
-// This drives the FULL GridKernel over fake SnapshotSources and asserts the
+// This drives the FULL StationKernel over fake SnapshotSources and asserts the
 // invariant three ways: (a) exactly one persistent notifier listener after
 // mount; (b) the bridge is the only subscriber to the SnapshotSources (no tree
 // node subscribes to a GraphSnapshot stream); (c) a work tick reconciles
 // WITHOUT re-running a config ancestor's build — proven through the integrated
 // kernel via the effect lifecycle (a work tick spawns/swaps an effect but does
-// not re-build the config-observing RigScope).
+// not re-build the config-observing SubstationScope).
 //
 // Offline only — FAKES, no live tg/gc/claude/git/network.
 import 'package:genesis_tree/genesis_tree.dart';
@@ -50,19 +50,19 @@ void main() {
         // The bridge drives our counting notifier — but does NOT own it (we
         // pass it in), so the count reflects tree listeners + the WorkList only.
         final notifier = CountingJoinedSnapshotNotifier(JoinedSnapshot.empty());
-        final bridge = GridJoinBridge(
+        final bridge = StationJoinBridge(
           work: work,
           state: state,
           notifier: notifier,
         );
-        final kernel = GridKernel(
+        final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
           resolver: const DefaultEffectResolver(),
-          rigs: [
-            RigScope(
-              configNotifier: RigConfigNotifier(
-                const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(
+                const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
               ),
               key: const ValueKey('scope.tg'),
             ),
@@ -81,7 +81,7 @@ void main() {
         await pumpEventQueue();
 
         // After mounting the WHOLE tree: exactly ONE persistent listener — the
-        // WorkList. Every other node (Grid/RigScope/Rig/WorkBead/effects)
+        // WorkList. Every other node (Station/SubstationScope/Substation/WorkBead/effects)
         // observes the work axis through NONE of its own subscriptions.
         expect(
           notifier.liveListenerCount,
@@ -125,15 +125,15 @@ void main() {
         final state = CountingSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
-        final kernel = GridKernel(
+        final bridge = StationJoinBridge(work: work, state: state);
+        final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
           resolver: const DefaultEffectResolver(),
-          rigs: [
-            RigScope(
-              configNotifier: RigConfigNotifier(
-                const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(
+                const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
               ),
               key: const ValueKey('scope.tg'),
             ),
@@ -177,7 +177,7 @@ void main() {
       '(c) the runtime guardrail through the integrated tree: a work tick '
       'reconciles WITHOUT re-running a config ancestor build — proven BOTH by '
       'effect-churn (a NEW work bead spawns, the existing one is untouched) AND '
-      'STRUCTURALLY (the config subtree below RigScope keeps its branch '
+      'STRUCTURALLY (the config subtree below SubstationScope keeps its branch '
       'identity — a config-ancestor rebuild would re-create the WorkList branch)',
       () async {
         final f = buildFakes();
@@ -193,10 +193,10 @@ void main() {
             value: f.ctx,
             child: InheritedSeed<EffectResolver>(
               value: const DefaultEffectResolver(),
-              child: Grid([
-                RigScope(
-                  configNotifier: RigConfigNotifier(
-                    const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(
+                    const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
                   ),
                   key: const ValueKey('scope.tg'),
                 ),
@@ -219,13 +219,13 @@ void main() {
         expect(f.provider.started, hasLength(1));
         expect(f.provider.stopped, isEmpty);
         // Capture the config subtree's identity: the WorkList branch sits BELOW
-        // the config ancestors (RigScope→Rig→WorkList). A config-ancestor
+        // the config ancestors (SubstationScope→Substation→WorkList). A config-ancestor
         // rebuild re-creates this child branch (a new branchId).
         final workListId =
             _branchWhere(mounted, (s) => s is WorkList).branchId;
 
         // SECOND work tick: ADD tg-2 (tg-1 unchanged). If a config ancestor
-        // (RigScope/Rig) re-built on the work tick, the whole work subtree would
+        // (SubstationScope/Substation) re-built on the work tick, the whole work subtree would
         // be re-created — tg-1's effect torn down+respawned (a stop + duplicate
         // start) AND the WorkList branch RE-CREATED. The guardrail asserts BOTH
         // the effect-churn signal AND the structural branch-identity signal.

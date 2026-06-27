@@ -92,7 +92,7 @@ void main() {
         expect(creates.single, containsAllInOrder(['--type', 'session']));
         // The mint stamps rig + work_bead from birth (the chokepoint's stamp).
         final mintStamp = f.runner.metadataOfUpdate(0);
-        expect(mintStamp['rig'], stateRig);
+        expect(mintStamp['rig'], stateSubstation);
         expect(mintStamp['work_bead'], 'tg-1');
 
         // start(sessionName, config): name == the minted session id; config.env
@@ -381,14 +381,14 @@ void main() {
         // Gate the create so dispose lands while _run() is awaiting it.
         final runner = GatedCreateBdRunner();
         final provider = FakeRuntimeProvider();
-        final writer = GridBeadWriter(
+        final writer = StationBeadWriter(
           bd: BdCliService(runner),
-          ownership: BeadOwnershipPredicate(const {stateRig}),
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
         );
         final ctx = EffectContext(
           provider: provider,
           writer: writer,
-          stateRig: stateRig,
+          stateSubstation: stateSubstation,
         );
         addTearDown(provider.close);
 

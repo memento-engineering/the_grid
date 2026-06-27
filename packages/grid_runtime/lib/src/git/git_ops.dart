@@ -40,7 +40,7 @@ bool gateBlocks(GateOutcome outcome) => outcome != GateOutcome.clear;
 /// Low-level git operations scoped to a working directory — the Dart port of
 /// gc's `Git` (`gascity/internal/git/git.go`), over the injectable [GitRunner]
 /// seam. This is a stateless Service in predictable-flutter terms (owns one
-/// source: the `git` binary); [GridGitService] composes it.
+/// source: the `git` binary); [StationGitService] composes it.
 ///
 /// Every method runs `git` with the [gitEnvBlacklist] stripped (via the
 /// runner) so a parent `GIT_DIR` from a melos/hook context can never redirect

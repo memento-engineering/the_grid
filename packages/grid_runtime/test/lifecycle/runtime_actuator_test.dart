@@ -20,7 +20,7 @@ void main() {
   /// and a fixed clock (so `quarantined_until` is deterministic).
   RuntimeActuator build({int crashThreshold = 3}) {
     runner = RecordingBdRunner(createdId: 'tgdog-sess1');
-    final writer = GridBeadWriter(
+    final writer = StationBeadWriter(
       bd: BdCliService(runner),
       ownership: BeadOwnershipPredicate({'tgdog'}),
     );
@@ -49,7 +49,7 @@ void main() {
       'spawn mints a session bead at start_pending through the chokepoint',
       () async {
         final id = await actuator.spawnSession(
-          rig: 'tgdog',
+          substation: 'tgdog',
           workBeadId: 'tgdog-work1',
           worktreePath: '/root/.grid/worktrees/tgdog/tgdog-work1',
           branch: 'grid/tgdog-work1',
@@ -70,7 +70,7 @@ void main() {
 
     test('SessionStarted drives the bead to active via bd update', () async {
       final id = await actuator.spawnSession(
-        rig: 'tgdog',
+        substation: 'tgdog',
         workBeadId: 'tgdog-work1',
       );
       await actuator.handle(
@@ -86,7 +86,7 @@ void main() {
       'a clean Exited(0) parks the bead asleep and resets crash_count',
       () async {
         final id = await actuator.spawnSession(
-          rig: 'tgdog',
+          substation: 'tgdog',
           workBeadId: 'tgdog-work1',
         );
         await actuator.handle(
@@ -108,7 +108,7 @@ void main() {
       'EVERY write went through bd with --actor and NEVER `bd show`/SQL',
       () async {
         final id = await actuator.spawnSession(
-          rig: 'tgdog',
+          substation: 'tgdog',
           workBeadId: 'tgdog-work1',
         );
         await actuator.handle(
@@ -137,7 +137,7 @@ void main() {
 
     test('closeSession writes state=closed then `bd close`', () async {
       final id = await actuator.spawnSession(
-        rig: 'tgdog',
+        substation: 'tgdog',
         workBeadId: 'tgdog-work1',
       );
       await actuator.handle(
@@ -156,7 +156,7 @@ void main() {
       'a crash under the threshold sets restart_requested (bead NOT closed)',
       () async {
         final id = await actuator.spawnSession(
-          rig: 'tgdog',
+          substation: 'tgdog',
           workBeadId: 'tgdog-work1',
         );
         await actuator.handle(
@@ -181,7 +181,7 @@ void main() {
 
     test('a non-zero Exited counts as a crash (not a clean park)', () async {
       final id = await actuator.spawnSession(
-        rig: 'tgdog',
+        substation: 'tgdog',
         workBeadId: 'tgdog-work1',
       );
       await actuator.handle(
@@ -199,7 +199,7 @@ void main() {
       () async {
         actuator = build(crashThreshold: 3);
         final id = await actuator.spawnSession(
-          rig: 'tgdog',
+          substation: 'tgdog',
           workBeadId: 'tgdog-work1',
         );
         await actuator.handle(
@@ -237,7 +237,7 @@ void main() {
       'a fresh Respawned clears restart_requested and resets crash_count',
       () async {
         final id = await actuator.spawnSession(
-          rig: 'tgdog',
+          substation: 'tgdog',
           workBeadId: 'tgdog-work1',
         );
         await actuator.handle(
@@ -260,7 +260,7 @@ void main() {
       'spawnSession with a non-owned rig is refused (no bead minted)',
       () async {
         await expectLater(
-          actuator.spawnSession(rig: 'gascity', workBeadId: 'gascity-1'),
+          actuator.spawnSession(substation: 'gascity', workBeadId: 'gascity-1'),
           throwsA(isA<OwnershipRefused>()),
         );
         expect(runner.calls, isEmpty);
@@ -270,7 +270,7 @@ void main() {
 
   test('bind() drives the lifecycle off a live RuntimeEvent stream', () async {
     final id = await actuator.spawnSession(
-      rig: 'tgdog',
+      substation: 'tgdog',
       workBeadId: 'tgdog-work1',
     );
     final controller = StreamController<RuntimeEvent>();

@@ -1,4 +1,4 @@
-// Track E/F — the REACTIVE LOOP through the ALREADY-AUTHORED GridKernel.
+// Track E/F — the REACTIVE LOOP through the ALREADY-AUTHORED StationKernel.
 //
 // This is the integration proof that the M4 tree engine drives
 // implement → verify → land as RECONCILE TRANSITIONS: a bridge push marks the
@@ -49,7 +49,7 @@ Bead _sessionBead({
 );
 
 void main() {
-  group('GridKernel — the reactive loop drives implement→verify→land', () {
+  group('StationKernel — the reactive loop drives implement→verify→land', () {
     test(
       'a ready owned task spawns an agent; advancing the session cursor swaps '
       'the effect (stop old + start new) as a reconcile transition',
@@ -61,16 +61,16 @@ void main() {
         final state = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
+        final bridge = StationJoinBridge(work: work, state: state);
 
-        final kernel = GridKernel(
+        final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
           resolver: const DefaultEffectResolver(),
-          rigs: [
-            RigScope(
-              configNotifier: RigConfigNotifier(
-                const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(
+                const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
               ),
               key: const ValueKey('scope.tg'),
             ),

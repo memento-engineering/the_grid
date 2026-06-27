@@ -41,16 +41,20 @@ class OwnsEverything implements OwnershipPredicate {
 /// Owns loops whose `convergence.rig` is in an explicit allow-set — the M3
 /// drive-one-owned-rig partition (the_grid's own rig). A loop with no rig is
 /// NOT owned (it predates the partition / belongs to the city scope gc runs).
-class OwnsRigs implements OwnershipPredicate {
-  OwnsRigs(Iterable<String> rigs) : _rigs = rigs.toSet();
+class OwnsSubstations implements OwnershipPredicate {
+  OwnsSubstations(Iterable<String> substations)
+    : _substations = substations.toSet();
 
-  final Set<String> _rigs;
+  final Set<String> _substations;
 
   @override
   bool owns(Convergence convergence) {
-    final rig = convergence.metadata.rig;
-    if (rig == null || rig.isEmpty) return false;
-    return _rigs.contains(rig);
+    // The accessor stays `convergence.metadata.rig` — gc's persisted
+    // convergence-schema key (byte-port fidelity). the_grid's vocabulary for the
+    // owned partition is "substation"; the codec boundary maps the two.
+    final substation = convergence.metadata.rig;
+    if (substation == null || substation.isEmpty) return false;
+    return _substations.contains(substation);
   }
 }
 

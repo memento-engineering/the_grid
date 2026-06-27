@@ -17,7 +17,7 @@
 /// impl (new-process-group spawn, explicit env allowlist, whole-tree kill) are
 /// implemented here.
 ///
-/// **Track 3 built.** `GridGitService` gives git-worktree-per-bead isolation:
+/// **Track 3 built.** `StationGitService` gives git-worktree-per-bead isolation:
 /// Layer-1 root-checkout registration (probed default branch from
 /// `origin/HEAD`), Layer-2 `git worktree add -b grid/<beadId>` under
 /// `<root>/.grid/worktrees/<rig>/<beadId>`, the land step (commit → push → open
@@ -28,7 +28,7 @@
 /// **Track 4 built.** Lifecycle-as-beads + the single bd write chokepoint: a
 /// Dart port of gc's session `state` transition table (`session_state.dart`),
 /// the `BeadOwnershipPredicate` (the bead-shaped ownership gate sharing the rig
-/// allow-set with M2's `OwnsRigs`), the `GridBeadWriter` chokepoint (fail-closed
+/// allow-set with M2's `OwnsSubstations`), the `StationBeadWriter` chokepoint (fail-closed
 /// ownership re-check before EVERY `create`/`update`/`close`/`delete`, bd-only,
 /// `--actor grid-controller`), and the `RuntimeActuator` that consumes Track-2
 /// `RuntimeEvent`s and writes session beads THROUGH the chokepoint — including
@@ -90,10 +90,10 @@ export 'src/git/git_runner.dart'
         gitEnvBlacklist;
 export 'src/git/git_ops.dart'
     show GateOutcome, GitOps, GitWorktree, gateBlocks, parseWorktreeList;
-export 'src/git/grid_git_service.dart'
+export 'src/git/station_git_service.dart'
     show
         BeadWorktree,
-        GridGitService,
+        StationGitService,
         LandResult,
         ReapOutcome,
         RootCheckout,
@@ -111,8 +111,8 @@ export 'src/git/stale_ancestor_guard.dart'
 
 // Track 4 — lifecycle-as-beads + the single bd write chokepoint.
 export 'src/lifecycle/bead_ownership.dart' show BeadOwnershipPredicate;
-export 'src/lifecycle/grid_bead_writer.dart'
-    show GridBeadWriter, OwnershipRefused;
+export 'src/lifecycle/station_bead_writer.dart'
+    show StationBeadWriter, OwnershipRefused;
 export 'src/lifecycle/runtime_actuator.dart'
     show
         CrashDecision,

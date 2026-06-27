@@ -39,7 +39,7 @@ const _probeError = GitRunResult(
 /// the `git` binary: the GIT_* env blacklist, the worktree-list parser, the
 /// `<root>/.grid/worktrees/<rig>/<beadId>` layout + bead-id round-trip, and the
 /// scope gate. (The real-git behaviour is exercised in
-/// `grid_git_service_test.dart` against temp repos.)
+/// `station_git_service_test.dart` against temp repos.)
 void main() {
   group('cleanGitEnvironment — the GIT_* blacklist', () {
     test('strips every blacklisted GIT_* var, keeps everything else', () {
@@ -205,7 +205,7 @@ branch refs/heads/grid/lenny-1
     });
   });
 
-  group('GridGitService.reap fails closed on probe error (scripted runner)', () {
+  group('StationGitService.reap fails closed on probe error (scripted runner)', () {
     late Directory tmp;
 
     setUp(() {
@@ -230,12 +230,12 @@ branch refs/heads/grid/lenny-1
           'log': _probeError,
           'stash': _probeError,
         });
-        final svc = GridGitService(runner: runner, prOpener: _NeverPrOpener());
+        final svc = StationGitService(runner: runner, prOpener: _NeverPrOpener());
 
         final root = RootCheckout(
           path: rootPath,
           defaultBranch: 'main',
-          rig: 'tgdog',
+          substation: 'tgdog',
         );
         final wt = BeadWorktree(
           beadId: 'lenny-pe',

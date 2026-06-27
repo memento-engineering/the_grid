@@ -19,16 +19,16 @@ import 'package:meta/meta.dart';
 ///     [GridExplorationHost.register] → `runtime.start`), so leonard can attach
 ///     over `ext.exploration.*` and observe live grid state;
 ///  2. **the M2 convergence reconciler** ([ReconcilerRuntime] over
-///     [GridConvergenceSource] + [BdActuator] + [GateEvaluator] + [OwnsRigs]) —
+///     [GridConvergenceSource] + [BdActuator] + [GateEvaluator] + [OwnsSubstations]) —
 ///     the reduce→gate→actuate spine for OWNED convergence loops;
 ///  3. **the M3 dispatcher** ([DispatchInteractor] over a [ReadyWorkSource] +
 ///     the chosen [RuntimeProvider]) — ready work bead → a `claude` subprocess
 ///     in a git worktree, tracked as a session bead through the single
-///     [GridBeadWriter] bd-write chokepoint.
+///     [StationBeadWriter] bd-write chokepoint.
 ///
 /// **One source of truth for ownership (ADR-0006 Decision 1; ADR-0000 A32).**
-/// The `--rig`/`--owner` allow-set is parsed into ONE `Set<String>` instance
-/// ([RunWiring.allowSet]) that seeds BOTH the M2 [OwnsRigs] convergence actuator
+/// The `--substation`/`--owner` allow-set is parsed into ONE `Set<String>` instance
+/// ([RunWiring.allowSet]) that seeds BOTH the M2 [OwnsSubstations] convergence actuator
 /// gate AND the Track-4 [BeadOwnershipPredicate] used for dispatch + the write
 /// chokepoint — never two copies, so the two gates cannot drift.
 ///
@@ -43,18 +43,18 @@ class RunCommand extends Command<int> {
   RunCommand() {
     argParser
       ..addMultiOption(
-        'rig',
+        'substation',
         abbr: 'r',
         help:
             'An OWNED rig / ownership token (repeatable). This is the SINGLE '
-            'allow-set that feeds both the M2 OwnsRigs convergence gate and the '
+            'allow-set that feeds both the M2 OwnsSubstations convergence gate and the '
             'dispatch BeadOwnershipPredicate — one source of truth. The dogfood '
             'rig is `tgdog`.',
       )
       ..addMultiOption(
         'owner',
         help:
-            'Alias for --rig (the ownership allow-set); merged with --rig into '
+            'Alias for --substation (the ownership allow-set); merged with --substation into '
             'one shared Set<String>.',
       )
       ..addOption(
@@ -80,7 +80,7 @@ class RunCommand extends Command<int> {
             'above a `.beads/`). Defaults to discovery from the cwd. The '
             'dogfood side-cars another repo by pointing this at it (e.g. '
             '/Users/nico/development/engineering.memento/genesis with '
-            '--rig genesis). Read-only under --dry-run.',
+            '--substation genesis). Read-only under --dry-run.',
       )
       ..addOption(
         'state-workspace',
@@ -91,7 +91,7 @@ class RunCommand extends Command<int> {
             'type. Omit to write session beads into --workspace itself.',
       )
       ..addOption(
-        'state-rig',
+        'state-substation',
         defaultsTo: 'tgdog',
         help:
             'the_grid\'s OWNED session partition (the prefix of the '
@@ -145,21 +145,21 @@ class RunCommand extends Command<int> {
   Future<int> run() async {
     final args = argResults!;
     final seconds = args.option('for-seconds');
-    final rigs = <String>{
-      ...args.multiOption('rig'),
+    final substations = <String>{
+      ...args.multiOption('substation'),
       ...args.multiOption('owner'),
     }..removeWhere((r) => r.trim().isEmpty);
 
     return runGrid(
-      rigs: rigs,
+      substations: substations,
       provider: RuntimeProviderKind.parse(args.option('provider')),
       rootPath: args.option('root'),
       workspacePath: args.option('workspace'),
       stateWorkspacePath: args.option('state-workspace'),
-      // --state-rig only applies when a state workspace is given.
-      stateRig: args.option('state-workspace') == null
+      // --state-substation only applies when a state workspace is given.
+      stateSubstation: args.option('state-workspace') == null
           ? null
-          : args.option('state-rig'),
+          : args.option('state-substation'),
       targetBeads: <String>{...args.multiOption('bead')}
         ..removeWhere((b) => b.trim().isEmpty),
       dryRun: args.flag('dry-run'),
@@ -190,13 +190,13 @@ enum RuntimeProviderKind {
 ///
 /// Exposed as a value-ish holder (not started) so unit tests can assert the
 /// composition WITHOUT running a live loop: that the allow-set is shared between
-/// the two ownership gates ([ownsRigs]/[beadOwnership] seeded from the identical
+/// the two ownership gates ([ownsSubstations]/[beadOwnership] seeded from the identical
 /// [allowSet]), that dry-run wires the reconciler with [OwnsNothing], and that a
 /// dry-run dispatch performs zero spawns and zero bd writes.
 class RunWiring {
   RunWiring({
     required this.allowSet,
-    required this.ownsRigs,
+    required this.ownsSubstations,
     required this.beadOwnership,
     required this.reconciler,
     required this.dispatcher,
@@ -211,7 +211,7 @@ class RunWiring {
   final Set<String> allowSet;
 
   /// The M2 convergence-actuation gate, seeded from [allowSet].
-  final OwnsRigs ownsRigs;
+  final OwnsSubstations ownsSubstations;
 
   /// The dispatch + write-chokepoint gate, seeded from the SAME [allowSet].
   final BeadOwnershipPredicate beadOwnership;
@@ -254,7 +254,7 @@ class RunWiring {
 /// runner, fake git runner) — no live `tg`, no real `claude`, no real `git`.
 RunWiring composeRun({
   required BdCliService bd,
-  required Set<String> rigs,
+  required Set<String> substations,
   required bool dryRun,
   GridControllerRuntime? controller,
   RuntimeProviderKind providerKind = RuntimeProviderKind.subprocess,
@@ -262,13 +262,13 @@ RunWiring composeRun({
   ReadyWorkSource? readyWorkSource,
   ConvergenceSource? convergenceSource,
   RuntimeProvider? provider,
-  GridGitService? gitService,
+  StationGitService? gitService,
   GateEvaluator? gateEvaluator,
   IdempotencyProbe? idempotencyProbe,
   int maxInFlight = 8,
   Set<String> driveList = const {},
   BdCliService? stateBd,
-  String? stateRig,
+  String? stateSubstation,
   void Function(String message)? onObserve,
   void Function(Object error, StackTrace stack)? onError,
 }) {
@@ -281,26 +281,26 @@ RunWiring composeRun({
 
   // THE single source of truth: one Set<String> instance feeds BOTH gates
   // (A32). The split-DB arm (A36 choice B) adds the_grid's own session
-  // partition (`stateRig`, e.g. `tgdog`) so the write chokepoint owns the
+  // partition (`stateSubstation`, e.g. `tgdog`) so the write chokepoint owns the
   // session beads it mints into the SEPARATE state store, while dispatch still
-  // owns the work rigs it reads. No work/convergence bead in the read workspace
-  // carries the stateRig prefix, so widening the set never broadens
+  // owns the work substations it reads. No work/convergence bead in the read workspace
+  // carries the stateSubstation prefix, so widening the set never broadens
   // dispatch/actuation — it only authorizes the_grid's own lifecycle writes.
   final allowSet = Set<String>.unmodifiable(<String>{
-    ...rigs,
-    if (stateRig != null && stateRig.isNotEmpty) stateRig,
+    ...substations,
+    if (stateSubstation != null && stateSubstation.isNotEmpty) stateSubstation,
   });
-  final ownsRigs = OwnsRigs(allowSet);
+  final ownsSubstations = OwnsSubstations(allowSet);
   final beadOwnership = BeadOwnershipPredicate(allowSet);
 
   // --- M2 reconciler ---------------------------------------------------------
   final convergence =
       convergenceSource ?? GridConvergenceSource(controller!);
   // dry-run actuates nothing: OwnsNothing keeps every loop observe-only. A live
-  // run uses OwnsRigs over the shared allow-set (the M2 actuation gate).
+  // run uses OwnsSubstations over the shared allow-set (the M2 actuation gate).
   final OwnershipPredicate reconcilerOwnership = dryRun
       ? const OwnsNothing()
-      : ownsRigs;
+      : ownsSubstations;
   // A real gate runner needs a city/store path that only the live arm has; an
   // observe-only run never reaches actuation (OwnsNothing), so a no-op gate is
   // sufficient. The live arm supplies a real GateRunnerProcessGate.
@@ -326,7 +326,7 @@ RunWiring composeRun({
   // re-checks ownership fail-closed against the SAME allow-set. In the split-DB
   // arm the writes target [stateBd] (the_grid's own state store), NOT the read
   // workspace's bd — genesis stays a pristine work source (A36 choice B).
-  final writer = GridBeadWriter(
+  final writer = StationBeadWriter(
     bd: stateBd ?? bd,
     ownership: beadOwnership,
     onRefusal: onObserve,
@@ -341,29 +341,29 @@ RunWiring composeRun({
   // runGrid before this point.
   final root =
       rootCheckout ??
-      (rigs.isEmpty
+      (substations.isEmpty
           ? null
-          : RootCheckout(path: '', defaultBranch: 'main', rig: rigs.first));
+          : RootCheckout(path: '', defaultBranch: 'main', substation: substations.first));
 
   final dispatcher = DispatchInteractor(
     source: ready,
     ownership: beadOwnership,
     git: git,
-    root: root ?? const RootCheckout(path: '', defaultBranch: 'main', rig: ''),
+    root: root ?? const RootCheckout(path: '', defaultBranch: 'main', substation: ''),
     provider: runtimeProvider,
     actuator: runtimeActuator,
     configBuilder: _buildAgentConfig,
     maxInFlight: maxInFlight,
     dryRun: dryRun,
     driveList: driveList,
-    sessionRig: stateRig,
+    sessionSubstation: stateSubstation,
     onObserve: onObserve,
     onError: onError,
   );
 
   return RunWiring(
     allowSet: allowSet,
-    ownsRigs: ownsRigs,
+    ownsSubstations: ownsSubstations,
     beadOwnership: beadOwnership,
     reconciler: reconciler,
     dispatcher: dispatcher,
@@ -385,7 +385,7 @@ RunWiring composeRun({
 /// description + design + acceptance criteria + notes) — a title-only prompt
 /// starves the agent of the load-bearing instructions (A36 pre-flight) — plus a
 /// **local-first working agreement**: commit on the throwaway branch, do NOT
-/// push, do NOT open a PR. Landing (`GridGitService.land`) is a deliberate
+/// push, do NOT open a PR. Landing (`StationGitService.land`) is a deliberate
 /// human follow-up for the first live arms, so the loop produces inspectable
 /// local commits with zero GitHub side effects.
 RuntimeConfig _buildAgentConfig(DispatchRequest request) =>
@@ -400,7 +400,7 @@ RuntimeConfig buildAgentConfig(DispatchRequest request) {
   final p = StringBuffer()
     ..writeln('# $title')
     ..writeln()
-    ..writeln('Bead `${bead.id}` (rig `${request.rig}`).');
+    ..writeln('Bead `${bead.id}` (substation `${request.substation}`).');
   void section(String heading, String body) {
     if (body.trim().isEmpty) return;
     p
@@ -454,10 +454,10 @@ RuntimeProvider _buildProvider(RuntimeProviderKind kind) => switch (kind) {
   RuntimeProviderKind.tmux => SubprocessProvider(),
 };
 
-/// The live [GridGitService] over the real `git` binary (GIT_*-blacklisted by
+/// The live [StationGitService] over the real `git` binary (GIT_*-blacklisted by
 /// [SystemGitRunner]) and a real `gh pr create` runner for the land step. Built
 /// lazily only on the live arm; the offline test suite always injects a fake.
-GridGitService _buildGitService() => GridGitService(
+StationGitService _buildGitService() => StationGitService(
   runner: SystemGitRunner(),
   prOpener: GhPrOpener(_ghRunner),
 );
@@ -486,12 +486,12 @@ Future<GitRunResult> _ghRunner(String workDir, List<String> args) async {
 /// Returns a process exit code. The seams are injectable for tests; the default
 /// path builds the live wiring but is gated to dry-run unless explicitly armed.
 Future<int> runGrid({
-  required Set<String> rigs,
+  required Set<String> substations,
   RuntimeProviderKind provider = RuntimeProviderKind.subprocess,
   String? rootPath,
   String? workspacePath,
   String? stateWorkspacePath,
-  String? stateRig,
+  String? stateSubstation,
   Set<String> targetBeads = const {},
   bool dryRun = true,
   bool noSql = false,
@@ -504,7 +504,7 @@ Future<int> runGrid({
   ReadyWorkSource? readyWorkSourceOverride,
   ConvergenceSource? convergenceSourceOverride,
   RuntimeProvider? providerOverride,
-  GridGitService? gitServiceOverride,
+  StationGitService? gitServiceOverride,
   RootCheckout? rootCheckoutOverride,
   Future<({GridControllerRuntime runtime, Future<void> Function() shutdown})>
   Function(BeadsWorkspace workspace)?
@@ -513,9 +513,9 @@ Future<int> runGrid({
   final void Function(String) write = out ?? (m) => stdout.writeln(m);
   final void Function(String) writeErr = err ?? (m) => stderr.writeln(m);
 
-  if (rigs.isEmpty) {
+  if (substations.isEmpty) {
     writeErr(
-      'grid run: at least one --rig/--owner is required (the ownership '
+      'grid run: at least one --substation/--owner is required (the ownership '
       'allow-set; the dogfood rig is `tgdog`).',
     );
     return 64;
@@ -544,7 +544,7 @@ Future<int> runGrid({
     writeErr(
       'grid run: a non-dry (live) run requires --state-workspace — the_grid '
       'writes its session/lifecycle beads there and must NEVER default them '
-      'into the read --workspace. Pass --state-workspace (+ --state-rig), or '
+      'into the read --workspace. Pass --state-workspace (+ --state-substation), or '
       'use --dry-run.',
     );
     return 64;
@@ -597,13 +597,13 @@ Future<int> runGrid({
   // written into a SEPARATE the_grid-owned store (e.g. the `tgdog` embedded DB)
   // instead of the read workspace — so a side-car'd work source (genesis) stays
   // a pristine, read-only backlog and never has to adopt the_grid's `session`
-  // type. The session partition is `stateRig`, which must be in the allow-set
+  // type. The session partition is `stateSubstation`, which must be in the allow-set
   // (composeRun unions it in) so the chokepoint owns the session beads it mints.
   BdCliService? stateBd;
   if (stateWorkspacePath != null) {
-    if (stateRig == null || stateRig.trim().isEmpty) {
+    if (stateSubstation == null || stateSubstation.trim().isEmpty) {
       writeErr(
-        'grid run: --state-workspace requires --state-rig (the_grid\'s owned '
+        'grid run: --state-workspace requires --state-substation (the_grid\'s owned '
         'session partition, e.g. `tgdog`).',
       );
       await shutdownController();
@@ -630,7 +630,7 @@ Future<int> runGrid({
     try {
       root = await _buildGitService().registerRootCheckout(
         path: rootPath,
-        rig: rigs.first,
+        substation: substations.first,
       );
     } on Object catch (e) {
       writeErr('grid run: could not register root checkout "$rootPath": $e');
@@ -644,7 +644,7 @@ Future<int> runGrid({
   final wiring = composeRun(
     controller: controller,
     bd: bd,
-    rigs: rigs,
+    substations: substations,
     dryRun: dryRun,
     providerKind: provider,
     rootCheckout: root,
@@ -654,7 +654,7 @@ Future<int> runGrid({
     gitService: gitServiceOverride,
     driveList: targetBeads,
     stateBd: stateBd,
-    stateRig: stateRig,
+    stateSubstation: stateSubstation,
     onObserve: write,
     onError: (e, st) => writeErr('grid run: $e'),
   );
@@ -662,7 +662,7 @@ Future<int> runGrid({
   write('grid run — workspace: ${workspace.root}');
   write(
     'mode: ${dryRun ? 'DRY-RUN (observe-only: no writes, no spawns)' : 'LIVE'}  '
-    '·  provider: ${provider.name}  ·  rigs: {${rigs.join(', ')}}  '
+    '·  provider: ${provider.name}  ·  substations: {${substations.join(', ')}}  '
     '·  read path: $readPathName',
   );
   if (root != null) {
@@ -670,7 +670,7 @@ Future<int> runGrid({
   }
   if (stateBd != null) {
     write(
-      'state store: $stateWorkspacePath  ·  session rig: $stateRig  '
+      'state store: $stateWorkspacePath  ·  session substation: $stateSubstation  '
       '(genesis read-only; sessions written here)',
     );
   }

@@ -16,7 +16,7 @@
 //      dropped — pinned guard-by-guard (the per-incarnation subscription-cancel
 //      AND the _cancelled/mounted handler guard, each isolated + combined).
 //
-// (a)/(b)/(c) drive the real Grid→RigScope→Rig→WorkList→WorkBead→EffectSeed tree
+// (a)/(b)/(c) drive the real Station→SubstationScope→Substation→WorkList→WorkBead→EffectSeed tree
 // (with the REAL DefaultEffectResolver + an EffectContext over the offline
 // fakes) under a TreeOwner so branch identity is walkable; (d)/(e)/(f) re-drive
 // the Track C/D mechanisms through the same integrated effect path.
@@ -59,19 +59,19 @@ JoinedSnapshot _joined({
 );
 
 /// The integrated root: the work-axis notifier + the EffectContext + the REAL
-/// DefaultEffectResolver above the Grid; one rig owning `tg`.
+/// DefaultEffectResolver above the Station; one rig owning `tg`.
 Seed _root({
   required JoinedSnapshotNotifier joined,
   required EffectContext ctx,
-  required RigConfigNotifier rigConfig,
+  required SubstationConfigNotifier substationConfig,
 }) => InheritedSeed<JoinedSnapshotNotifier>(
   value: joined,
   child: InheritedSeed<EffectContext>(
     value: ctx,
     child: InheritedSeed<EffectResolver>(
       value: const DefaultEffectResolver(),
-      child: Grid([
-        RigScope(configNotifier: rigConfig, key: const ValueKey('scope.tg')),
+      child: Station([
+        SubstationScope(configNotifier: substationConfig, key: const ValueKey('scope.tg')),
       ]),
     ),
   ),
@@ -114,12 +114,12 @@ EffectSeedState effectState(Branch root) {
 
 /// A counting StatefulSeed wrapper is not available for the config nodes, so we
 /// detect a config-node rebuild structurally: a rebuild RE-CREATES the WorkList
-/// branch beneath it (a new branchId), since RigScope/Rig build a fresh child.
+/// branch beneath it (a new branchId), since SubstationScope/Substation build a fresh child.
 /// We capture the WorkList branchId and assert it is STABLE across a work tick.
 String _workListId(Branch root) =>
     _branchWhere(root, (s) => s is WorkList).branchId;
 
-const _tgConfig = RigConfig(rigId: 'tg', ownedRigs: {'tg'});
+const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 
 void main() {
   group('PDR §7 (a)+(b)+(c) — transitions, sibling isolation, config quiet', () {
@@ -136,7 +136,7 @@ void main() {
         addTearDown(owner.dispose);
         addTearDown(f.provider.close);
         final root = owner.mountRoot(
-          _root(joined: joined, ctx: f.ctx, rigConfig: RigConfigNotifier(_tgConfig)),
+          _root(joined: joined, ctx: f.ctx, substationConfig: SubstationConfigNotifier(_tgConfig)),
         );
         await pumpEventQueue();
 
@@ -206,7 +206,7 @@ void main() {
             ['claude', 'claude', 'sh']);
 
         // --- (c) the config subtree did NOT rebuild on the work tick ---
-        // RigScope/Rig rebuilding would re-create the WorkList child branch (a
+        // SubstationScope/Substation rebuilding would re-create the WorkList child branch (a
         // new branchId). It is STABLE ⇒ the config ancestors did not rebuild.
         expect(_workListId(root), workListId,
             reason: 'a work tick does not rebuild the config ancestors');
@@ -266,7 +266,7 @@ void main() {
           workRoot: const RootCheckout(
             path: '/tmp/grid',
             defaultBranch: 'main',
-            rig: 'tg',
+            substation: 'tg',
           ),
           groups: _RecordingGroups(signals, alivePids: {4243}),
           freshnessBarrier: () async {},
@@ -320,15 +320,15 @@ void main() {
         final state = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
         );
-        final bridge = GridJoinBridge(work: work, state: state);
-        final kernel = GridKernel(
+        final bridge = StationJoinBridge(work: work, state: state);
+        final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
           resolver: const DefaultEffectResolver(),
-          rigs: [
-            RigScope(
-              configNotifier: RigConfigNotifier(
-                const RigConfig(rigId: 'tg', ownedRigs: {'tg'}),
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(
+                const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
               ),
               key: const ValueKey('scope.tg'),
             ),
@@ -367,11 +367,11 @@ void main() {
         final provider = FakeRuntimeProvider();
         final ctx = EffectContext(
           provider: provider,
-          writer: GridBeadWriter(
+          writer: StationBeadWriter(
             bd: BdCliService(runner),
-            ownership: BeadOwnershipPredicate(const {stateRig}),
+            ownership: BeadOwnershipPredicate(const {stateSubstation}),
           ),
-          stateRig: stateRig,
+          stateSubstation: stateSubstation,
         );
         addTearDown(provider.close);
 

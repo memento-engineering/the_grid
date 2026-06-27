@@ -8,7 +8,7 @@
 /// (ADR-0000 A14), and *that* string is what this table governs:
 /// `start_pending → spawning → active → {idle/asleep, draining, quarantined,
 /// closed}`. The [RuntimeActuator] writes the resulting state through the
-/// `GridBeadWriter` chokepoint as a `bd update --metadata {state: …}`.
+/// `StationBeadWriter` chokepoint as a `bd update --metadata {state: …}`.
 ///
 /// This is a pure, total reducer — no I/O — so it is tested before any bd write
 /// is wired (predictable-flutter: pure logic before IO).

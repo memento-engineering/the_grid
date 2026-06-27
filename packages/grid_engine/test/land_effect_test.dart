@@ -107,11 +107,11 @@ void main() {
       final provider = FakeRuntimeProvider();
       final ctx = EffectContext(
         provider: provider,
-        writer: GridBeadWriter(
+        writer: StationBeadWriter(
           bd: BdCliService(runner),
-          ownership: BeadOwnershipPredicate(const {stateRig}),
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
         ),
-        stateRig: stateRig,
+        stateSubstation: stateSubstation,
       );
       addTearDown(provider.close);
       final owner = _mountLand(ctx, bead('tg-1'), _session);
@@ -164,11 +164,11 @@ void main() {
       final pr = FakePrOpener();
       final ctx = EffectContext(
         provider: provider,
-        writer: GridBeadWriter(
+        writer: StationBeadWriter(
           bd: BdCliService(runner),
-          ownership: BeadOwnershipPredicate(const {stateRig}),
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
         ),
-        stateRig: stateRig,
+        stateSubstation: stateSubstation,
         gitOps: GitOps(git),
         prOpener: pr,
       );
@@ -204,11 +204,11 @@ void main() {
         final pr = FakePrOpener();
         final ctx = EffectContext(
           provider: provider,
-          writer: GridBeadWriter(
+          writer: StationBeadWriter(
             bd: BdCliService(runner),
-            ownership: BeadOwnershipPredicate(const {stateRig}),
+            ownership: BeadOwnershipPredicate(const {stateSubstation}),
           ),
-          stateRig: stateRig,
+          stateSubstation: stateSubstation,
           gitOps: GitOps(git),
           prOpener: pr,
         );

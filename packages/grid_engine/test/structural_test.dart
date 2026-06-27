@@ -24,7 +24,7 @@ const _opinionLiterals = <String>[
   // The real process transport impl.
   'SubprocessProvider',
   // The real git worktree/land service.
-  'GridGitService',
+  'StationGitService',
   // The land orchestration call site.
   '.land(',
 ];
@@ -43,7 +43,7 @@ Directory _libSrc() {
     for (final rel in candidates) {
       final probe = Directory(p.join(dir.path, rel));
       if (probe.existsSync() &&
-          File(p.join(probe.path, 'kernel', 'grid_kernel.dart')).existsSync()) {
+          File(p.join(probe.path, 'kernel', 'station_kernel.dart')).existsSync()) {
         return probe;
       }
     }

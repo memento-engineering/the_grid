@@ -9,7 +9,7 @@ import 'stale_ancestor_guard.dart';
 
 /// The Layer-1 root checkout registration — a the_grid-OWNED real clone of the
 /// target repo (lenny), registered ONCE, with `origin` set and the default
-/// branch probed from `origin/HEAD` (ADR-0006 Decision 3; gc's rig model). This
+/// branch probed from `origin/HEAD` (ADR-0006 Decision 3; gc's substation model). This
 /// is NOT a worktree; it is the_grid's "rig" in gc's sense.
 ///
 /// This service NEVER creates the clone — registration RECORDS an
@@ -20,7 +20,7 @@ class RootCheckout {
   const RootCheckout({
     required this.path,
     required this.defaultBranch,
-    required this.rig,
+    required this.substation,
     this.remote = 'origin',
   });
 
@@ -33,9 +33,9 @@ class RootCheckout {
   /// a hardcoded `main`.
   final String defaultBranch;
 
-  /// The owned dogfood rig (e.g. `tgdog`) — the dir segment under
-  /// `<root>/.grid/worktrees/<rig>/` (ADR-0006 Decision 1).
-  final String rig;
+  /// The owned dogfood substation (e.g. `tgdog`) — the dir segment under
+  /// `<root>/.grid/worktrees/<substation>/` (ADR-0006 Decision 1).
+  final String substation;
 
   /// The push remote (default `origin`).
   final String remote;
@@ -54,7 +54,7 @@ class BeadWorktree {
 
   final String beadId;
 
-  /// `<root>/.grid/worktrees/<rig>/<beadId>`.
+  /// `<root>/.grid/worktrees/<substation>/<beadId>`.
   final String path;
 
   /// `grid/<beadId>`.
@@ -145,8 +145,8 @@ class LandResult {
   bool get isLanded => pr != null;
 }
 
-/// Pure helpers for the `<root>/.grid/worktrees/<rig>/<beadId>` layout +
-/// `grid/<beadId>` branch naming — mirrors gc's `.gc/worktrees/<rig>/<name>`
+/// Pure helpers for the `<root>/.grid/worktrees/<substation>/<beadId>` layout +
+/// `grid/<beadId>` branch naming — mirrors gc's `.gc/worktrees/<substation>/<name>`
 /// (`internal/workdir/workdir.go:76-86`). Separated out so the path/branch
 /// derivation and the bead-id round-trip are unit-tested with no IO.
 class WorktreeLayout {
@@ -157,13 +157,13 @@ class WorktreeLayout {
   static String worktreesRoot(String rootPath) =>
       p.join(rootPath, '.grid', 'worktrees');
 
-  /// The rig dir: `<root>/.grid/worktrees/<rig>`.
-  static String rigDir(String rootPath, String rig) =>
-      p.join(worktreesRoot(rootPath), rig);
+  /// The substation dir: `<root>/.grid/worktrees/<substation>`.
+  static String substationDir(String rootPath, String substation) =>
+      p.join(worktreesRoot(rootPath), substation);
 
-  /// The per-bead worktree path: `<root>/.grid/worktrees/<rig>/<beadId>`.
-  static String worktreePath(String rootPath, String rig, String beadId) =>
-      p.join(rigDir(rootPath, rig), beadId);
+  /// The per-bead worktree path: `<root>/.grid/worktrees/<substation>/<beadId>`.
+  static String worktreePath(String rootPath, String substation, String beadId) =>
+      p.join(substationDir(rootPath, substation), beadId);
 
   /// The per-bead branch: `grid/<beadId>`.
   static String branchFor(String beadId) => 'grid/$beadId';
@@ -231,8 +231,8 @@ String _canonical(String path) {
 /// **The land step DIVERGES from gc** (no gc prior art): commit → push -u →
 /// open PR via the injectable [PrOpener] → return the [PullRequestRef] for the
 /// caller to record on the lifecycle bead. NEVER auto-merges.
-class GridGitService {
-  GridGitService({
+class StationGitService {
+  StationGitService({
     required GitRunner runner,
     required PrOpener prOpener,
   }) : _ops = GitOps(runner),
@@ -250,7 +250,7 @@ class GridGitService {
   /// non-repo).
   Future<RootCheckout> registerRootCheckout({
     required String path,
-    required String rig,
+    required String substation,
     String remote = 'origin',
   }) async {
     final normalized = p.normalize(path);
@@ -270,14 +270,14 @@ class GridGitService {
     return RootCheckout(
       path: normalized,
       defaultBranch: defaultBranch,
-      rig: rig,
+      substation: substation,
       remote: remote,
     );
   }
 
   /// **Layer 2 — provision a per-bead worktree.** Runs the stale-ancestor guard
   /// (fail closed), then runs, from the root repo,
-  /// `git worktree add -b grid/<beadId> <root>/.grid/worktrees/<rig>/<beadId> <base>`.
+  /// `git worktree add -b grid/<beadId> <root>/.grid/worktrees/<substation>/<beadId> <base>`.
   /// Idempotency / single-worktree-per-bead is the caller's job (Track 5's
   /// per-bead queue); this throws if the worktree path already exists.
   Future<BeadWorktree> provisionWorktree({
@@ -285,7 +285,7 @@ class GridGitService {
     required String beadId,
   }) async {
     final branch = WorktreeLayout.branchFor(beadId);
-    final path = WorktreeLayout.worktreePath(root.path, root.rig, beadId);
+    final path = WorktreeLayout.worktreePath(root.path, root.substation, beadId);
 
     // Stale-ancestor guard BEFORE any `git worktree add` (gascity#1556).
     final rejection = validateAncestorWorktreesNotStale(path);
@@ -293,11 +293,11 @@ class GridGitService {
       throw StateError(rejection);
     }
 
-    // Ensure the rig dir exists so `git worktree add` lands the target under
+    // Ensure the substation dir exists so `git worktree add` lands the target under
     // it. (git creates the leaf; the parent dirs must exist.)
-    final rigDir = Directory(WorktreeLayout.rigDir(root.path, root.rig));
-    if (!rigDir.existsSync()) {
-      rigDir.createSync(recursive: true);
+    final substationDir = Directory(WorktreeLayout.substationDir(root.path, root.substation));
+    if (!substationDir.existsSync()) {
+      substationDir.createSync(recursive: true);
     }
 
     final result = await _ops.worktreeAdd(

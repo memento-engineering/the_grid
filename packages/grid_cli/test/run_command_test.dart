@@ -10,8 +10,8 @@ import 'package:test/test.dart';
 /// no live state, no real `claude`, no real `git`, NO `bd` writes to the live
 /// `tg` workspace. The DoD this file locks:
 ///
-///  1. **one source of truth** — the `--rig`/`--owner` allow-set flows to BOTH
-///     the M2 `OwnsRigs` convergence gate AND the dispatch
+///  1. **one source of truth** — the `--substation`/`--owner` allow-set flows to BOTH
+///     the M2 `OwnsSubstations` convergence gate AND the dispatch
 ///     `BeadOwnershipPredicate` from one shared `Set<String>` (they cannot
 ///     drift);
 ///  2. **--dry-run smoke** — a dry run with an OWNED ready bead performs ZERO
@@ -23,13 +23,13 @@ void main() {
   group('RunCommand flag parsing', () {
     test('--dry-run is the SAFE DEFAULT (true when unspecified)', () {
       final cmd = RunCommand();
-      final parsed = cmd.argParser.parse(['--rig', 'tgdog']);
+      final parsed = cmd.argParser.parse(['--substation', 'tgdog']);
       expect(parsed.flag('dry-run'), isTrue);
     });
 
     test('--provider defaults to subprocess', () {
       final cmd = RunCommand();
-      final parsed = cmd.argParser.parse(['--rig', 'tgdog']);
+      final parsed = cmd.argParser.parse(['--substation', 'tgdog']);
       expect(parsed.option('provider'), 'subprocess');
       expect(
         RuntimeProviderKind.parse(parsed.option('provider')),
@@ -37,24 +37,24 @@ void main() {
       );
     });
 
-    test('--rig and --owner both feed the one allow-set', () {
+    test('--substation and --owner both feed the one allow-set', () {
       final cmd = RunCommand();
       final parsed = cmd.argParser.parse([
-        '--rig',
+        '--substation',
         'tgdog',
         '--owner',
         'other',
       ]);
-      final rigs = <String>{
-        ...parsed.multiOption('rig'),
+      final substations = <String>{
+        ...parsed.multiOption('substation'),
         ...parsed.multiOption('owner'),
       };
-      expect(rigs, {'tgdog', 'other'});
+      expect(substations, {'tgdog', 'other'});
     });
 
     test('--no-dry-run is the explicit live-arm opt-in', () {
       final cmd = RunCommand();
-      final parsed = cmd.argParser.parse(['--rig', 'tgdog', '--no-dry-run']);
+      final parsed = cmd.argParser.parse(['--substation', 'tgdog', '--no-dry-run']);
       expect(parsed.flag('dry-run'), isFalse);
     });
   });
@@ -64,7 +64,7 @@ void main() {
         () async {
       final errs = <String>[];
       final code = await runGrid(
-        rigs: {'tgdog'},
+        substations: {'tgdog'},
         dryRun: false, // ask for the LIVE arm…
         // …but supply no root → must be refused before any composition.
         out: (_) {},
@@ -78,21 +78,21 @@ void main() {
     test('an empty allow-set is refused (exit 64)', () async {
       final errs = <String>[];
       final code = await runGrid(
-        rigs: const {},
+        substations: const {},
         dryRun: true,
         out: (_) {},
         err: errs.add,
         runForever: false,
       );
       expect(code, 64);
-      expect(errs.join('\n'), contains('--rig/--owner is required'));
+      expect(errs.join('\n'), contains('--substation/--owner is required'));
     });
 
     test('a live run with --root but NO --state-workspace is refused (exit 64) '
         '— sessions must never default into the read --workspace', () async {
       final errs = <String>[];
       final code = await runGrid(
-        rigs: {'genesis'},
+        substations: {'genesis'},
         dryRun: false,
         rootPath: '/tmp/some-root', // root supplied → past the root guard…
         // …but no --state-workspace → must be refused before composition.
@@ -106,9 +106,9 @@ void main() {
   });
 
   group('composeRun — one source of truth for ownership', () {
-    test('the SAME allow-set feeds both OwnsRigs and BeadOwnershipPredicate',
+    test('the SAME allow-set feeds both OwnsSubstations and BeadOwnershipPredicate',
         () async {
-      final h = _Harness(rigs: {'tgdog'}, dryRun: true);
+      final h = _Harness(substations: {'tgdog'}, dryRun: true);
       final wiring = h.compose();
       addTearDown(() async {
         await wiring.dispose();
@@ -117,10 +117,10 @@ void main() {
 
       // Both gates accept the owned rig and reject a foreign one — the parity
       // that proves they were seeded from the identical allow-set.
-      final owned = _convergence('tgdog-c1', rig: 'tgdog');
-      final foreign = _convergence('gascity-c1', rig: 'gascity');
-      expect(wiring.ownsRigs.owns(owned), isTrue);
-      expect(wiring.ownsRigs.owns(foreign), isFalse);
+      final owned = _convergence('tgdog-c1', substation: 'tgdog');
+      final foreign = _convergence('gascity-c1', substation: 'gascity');
+      expect(wiring.ownsSubstations.owns(owned), isTrue);
+      expect(wiring.ownsSubstations.owns(foreign), isFalse);
 
       expect(wiring.beadOwnership.owns(Bead(id: 'tgdog-w1', title: 't')), isTrue);
       expect(
@@ -128,16 +128,16 @@ void main() {
         isFalse,
       );
 
-      // The shared set carries exactly the configured rigs.
+      // The shared set carries exactly the configured substations.
       expect(wiring.allowSet, {'tgdog'});
-      expect(wiring.beadOwnership.rigs, {'tgdog'});
+      expect(wiring.beadOwnership.substations, {'tgdog'});
     });
   });
 
   group('composeRun — --dry-run smoke (ZERO spawns, ZERO bd writes)', () {
     test('an OWNED ready bead is observed read-only: no spawn, no bd write',
         () async {
-      final h = _Harness(rigs: {'tgdog'}, dryRun: true);
+      final h = _Harness(substations: {'tgdog'}, dryRun: true);
       final wiring = h.compose();
       addTearDown(() async {
         await wiring.dispose();
@@ -169,7 +169,7 @@ void main() {
 
     test('a non-owned ready bead is also never dispatched (read-only)',
         () async {
-      final h = _Harness(rigs: {'tgdog'}, dryRun: true);
+      final h = _Harness(substations: {'tgdog'}, dryRun: true);
       final wiring = h.compose();
       addTearDown(() async {
         await wiring.dispose();
@@ -188,7 +188,7 @@ void main() {
 
     test('dry-run wires the reconciler observe-only (no convergence writes)',
         () async {
-      final h = _Harness(rigs: {'tgdog'}, dryRun: true);
+      final h = _Harness(substations: {'tgdog'}, dryRun: true);
       final wiring = h.compose();
       addTearDown(() async {
         await wiring.dispose();
@@ -207,7 +207,7 @@ void main() {
   group('buildAgentConfig — the live dogfood prompt contract (A36)', () {
     DispatchRequest req(Bead bead) => DispatchRequest(
           bead: bead,
-          rig: 'genesis',
+          substation: 'genesis',
           sessionBeadId: 'genesis-sess1',
           worktree: const BeadWorktree(
             beadId: 'genesis-q8h',
@@ -263,11 +263,11 @@ Future<void> _settle() async {
 }
 
 /// A minimal owned/foreign [Convergence] carrying just the rig the gate reads.
-Convergence _convergence(String id, {required String rig}) => Convergence(
+Convergence _convergence(String id, {required String substation}) => Convergence(
       id: id,
       title: id,
       status: BeadStatus.open,
-      metadata: ConvergenceMetadata.decode({'convergence.rig': rig}),
+      metadata: ConvergenceMetadata.decode({'convergence.rig': substation}),
     );
 
 /// The offline harness: a fake ready-work source, a fake convergence source, a
@@ -275,9 +275,9 @@ Convergence _convergence(String id, {required String rig}) => Convergence(
 /// `composeRun` runs end-to-end with NO live `tg`, NO real `claude`, NO real
 /// `git`, NO real `bd`.
 class _Harness {
-  _Harness({required this.rigs, required this.dryRun});
+  _Harness({required this.substations, required this.dryRun});
 
-  final Set<String> rigs;
+  final Set<String> substations;
   final bool dryRun;
 
   final FakeReadyWorkSource source = FakeReadyWorkSource();
@@ -288,17 +288,17 @@ class _Harness {
 
   RunWiring compose() => composeRun(
         bd: BdCliService(bdRunner),
-        rigs: rigs,
+        substations: substations,
         dryRun: dryRun,
         rootCheckout: RootCheckout(
           path: '/tmp/grid-test-root',
           defaultBranch: 'main',
-          rig: rigs.isEmpty ? '' : rigs.first,
+          substation: substations.isEmpty ? '' : substations.first,
         ),
         readyWorkSource: source,
         convergenceSource: convergence,
         provider: provider,
-        gitService: GridGitService(
+        gitService: StationGitService(
           runner: gitRunner,
           prOpener: _FakePrOpener(),
         ),

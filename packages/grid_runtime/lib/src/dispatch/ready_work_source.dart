@@ -29,7 +29,7 @@ abstract interface class ReadyWorkSource {
 
   /// The current ready-work set — `bd ready`'s authoritative output projected
   /// by grid_controller (`readyBeads`). Plain work [Bead]s, no
-  /// `convergence.rig` key (so `OwnsRigs` is uncallable on them; A32).
+  /// `convergence.rig` key (so `OwnsSubstations` is uncallable on them; A32).
   List<Bead> get readyBeads;
 
   /// The full [Bead] for [id] in the current snapshot, or null if absent — the
