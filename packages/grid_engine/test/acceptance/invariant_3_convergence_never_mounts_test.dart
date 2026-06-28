@@ -9,8 +9,8 @@
 //
 // Track A's track_a_reconcile_test asserts the predicate at the WorkBead
 // child-set level; THIS formalizes it at the kernel/effect-SPAWN level — driven
-// through the real StationKernel + the real DefaultEffectResolver, the allow-list
-// is proven by what does (and does not) reach the provider.
+// through the real StationKernel + the real `code` formula, the allow-list is
+// proven by what does (and does not) reach the provider.
 //
 // Offline only — FAKES, no live tg/gc/claude/git/network.
 import 'package:genesis_tree/genesis_tree.dart';
@@ -36,7 +36,8 @@ Bead _typed(String id, IssueType type) =>
 StationKernel _kernel(StationJoinBridge bridge, Fakes f) => StationKernel(
   bridge: bridge,
   effectContext: f.ctx,
-  resolver: const DefaultEffectResolver(),
+  resolver: kCodeResolver,
+  registry: buildCodeRegistry(),
   substations: [
     SubstationScope(
       configNotifier: SubstationConfigNotifier(

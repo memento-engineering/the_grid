@@ -41,18 +41,15 @@ export 'src/domain/joined_snapshot.dart';
 export 'src/domain/session_bead.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
-export 'src/domain/work_phase.dart';
 
-// The effect carrier — the runtime heart (Track C): a tree node whose Branch
-// lifecycle IS the work-process lifecycle (mount = spawn, unmount = kill).
+// The effect-context bundle the work subtree resolves (provider/writer/state
+// rig + the worktree layout) in one inherited lookup.
 export 'src/effect/effect_context.dart';
-export 'src/effect/effect_seed.dart';
 
 // Extension (the OPINIONS live here, never in the kernel/effect core —
-// ADR-0007 §1). The P0 WorkPhase path (default_extension) + the M4-P1 `code`
-// extension (agent/verify/land as Capability impls + the `code` formula).
+// ADR-0007 §1): the `code` extension — agent/verify/land as Capability impls +
+// the `code` formula + the git `SourceControl`.
 export 'src/extension/code_capabilities.dart';
-export 'src/extension/default_extension.dart';
 
 // Kernel: the seams + the composition/flush driver.
 export 'src/kernel/effect_resolver.dart';

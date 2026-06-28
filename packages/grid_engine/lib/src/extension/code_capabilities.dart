@@ -1,17 +1,15 @@
 /// The `code` extension — agent/verify/land as Capability impls + the linear
 /// `code` formula (ADR-0008 D2 / M4-P1 §6, Track H).
 ///
-/// The agent/verify/land OPINIONS migrate here from `default_extension.dart`'s
-/// `AgentEffectSeed`/`VerifyEffectSeed`/`LandEffectSeed` — now opaque
-/// [Capability] leaves (never a `Seed`), composed into a linear [Formula] whose
-/// always-1-wide frontier reproduces P0 byte-for-byte (§6). The kernel/effect
-/// core references none of this — only this extension does (the opinion-free
-/// kernel invariant, ADR-0007 §1; a structural fence keeps it here).
+/// The agent/verify/land OPINIONS live here as opaque [Capability] leaves (never
+/// a `Seed`), composed into a linear [Formula] whose always-1-wide frontier
+/// reproduces the original agent→verify→land sequence. The kernel/effect core
+/// references none of this — only this extension does (the opinion-free kernel
+/// invariant, ADR-0007 §1; a structural fence keeps it here).
 ///
-/// This is the ADDITIVE migration: the new path runs the `code` formula via the
-/// [buildCodeRegistry] registry + [FormulaResolver]. Swapping the live
-/// `composeRunTree` wiring onto it + retiring the `WorkPhase`/`EffectSeed` path
-/// is the live-arm/cleanup follow-on (the byte-for-byte behavior is proven here).
+/// This is the LIVE work path: `composeRunTree` wires it via the
+/// [buildCodeRegistry] registry + a [FormulaResolver] that roots the `code`
+/// formula per coding bead.
 library;
 
 import 'package:grid_runtime/grid_runtime.dart';

@@ -73,7 +73,6 @@ JoinedSnapshot _joined({
 SessionProjection _session(Map<String, NodeCursor> cursor) => SessionProjection(
   workBeadId: 'tg-1',
   sessionId: 'tgdog-s',
-  phase: WorkPhase.implement,
   cursor: cursor,
 );
 

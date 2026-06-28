@@ -103,8 +103,8 @@ void main() {
           .toList();
       final allExtensionSource =
           extensionFiles.map((f) => f.readAsStringSync()).join('\n');
-      // The compiled DefaultExtension spawns `claude` and calls the land
-      // orchestration — proving the literals exist SOMEWHERE, so the
+      // The compiled `code` extension's capabilities spawn `claude` and drive
+      // the land orchestration — proving the literals exist SOMEWHERE, so the
       // engine-is-clean assertion above is not vacuously true.
       expect(allExtensionSource, contains('claude'));
     });

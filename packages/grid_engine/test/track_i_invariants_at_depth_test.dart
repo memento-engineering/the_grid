@@ -92,7 +92,6 @@ SessionProjection _session(
 }) => SessionProjection(
   workBeadId: workBead,
   sessionId: sessionId,
-  phase: WorkPhase.implement,
   cursor: cursor,
 );
 

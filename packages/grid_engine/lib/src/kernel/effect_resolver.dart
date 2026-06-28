@@ -2,30 +2,26 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_controller/grid_controller.dart';
 
 import '../domain/session_projection.dart';
-import '../domain/work_phase.dart';
 
-/// The opinion-light seam between the kernel and capabilities (ADR-0007
-/// Decision 5): given a work [bead] and its live [WorkPhase], return the Seed
-/// that *effects* that phase.
+/// The opinion-light seam between the kernel and the running work subtree
+/// (ADR-0007 Decision 5 / ADR-0008 D4): given a work [bead] (and its linked
+/// session), return the Seed that *runs* it.
 ///
-/// The kernel knows nothing of agents, processes, git, or PRs — an extension
-/// (Track E/F `DefaultExtension`) contributes the concrete effect Seeds; tests
-/// inject a fake. This indirection is what keeps the engine landing/VCS/
-/// provider-opinion-free.
+/// The kernel knows nothing of agents, processes, git, or PRs — the compiled
+/// extension contributes the concrete subtree root (the reentrant
+/// [FormulaResolver] returns a `SessionScope` that inflates the bead's root
+/// formula); tests inject a fake. This indirection is what keeps the engine
+/// landing/VCS/provider-opinion-free.
 ///
-/// The returned Seed MUST be keyed `'<bead.id>.<phase.capId>'` so a phase
-/// advance swaps the effect child — unmount the old capability (its `dispose`
-/// kills), mount the new (its `initState` spawns) — while the owning `WorkBead`
-/// branch keeps its identity.
+/// The returned Seed MUST be keyed off `bead.id` (the [FormulaResolver] keys it
+/// `'<bead.id>:session'`) so that across snapshot ticks keyed reconcile keeps
+/// the bead's running subtree while config (the linked session cursor) flows
+/// down in place.
 abstract class EffectResolver {
-  /// Builds the effect Seed for [bead] in [phase]. [session] is the bead's
-  /// linked session projection (null when no session exists yet — the
-  /// `implement` effect then creates one); the `verify` / `land` effects use
-  /// [SessionProjection.sessionId] to advance the cursor pull-free (A39),
-  /// never re-querying the store. See the class doc for the required key shape.
-  Seed effectFor({
-    required Bead bead,
-    required WorkPhase phase,
-    SessionProjection? session,
-  });
+  /// Builds the work Seed for [bead]. [session] is the bead's linked session
+  /// projection (null when no session exists yet — the resolver's subtree then
+  /// mints one); its [SessionProjection.cursor] threads the per-node reentrant
+  /// cursor down pull-free (A39), never re-querying the store. See the class doc
+  /// for the required key shape.
+  Seed effectFor({required Bead bead, SessionProjection? session});
 }

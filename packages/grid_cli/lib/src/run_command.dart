@@ -427,7 +427,7 @@ RuntimeConfig buildAgentConfig(DispatchRequest request) {
       'human review.',
     )
     ..writeln(
-      '- When committed, run `grid phase --advance` to mark this phase done, '
+      '- When committed, run `grid step --advance` to mark this step done, '
       'then exit. (This advances your OWN session cursor through the_grid\'s '
       'chokepoint-mediated shim — the durable-completion belt-and-suspenders of '
       'ADR-0007 §0.2 / A40. It is NOT a free-form `bd` call: do not write beads '

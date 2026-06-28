@@ -5,7 +5,6 @@ import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/joined_snapshot.dart';
 import '../domain/substation_config.dart';
-import '../domain/work_phase.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import 'work_bead.dart';
 
@@ -104,12 +103,7 @@ class _WorkListState extends State<WorkList> {
       if (!inReady && !liveSession) continue;
 
       children.add(
-        WorkBead(
-          bead: bead,
-          phase: phaseOf(bead, session),
-          session: session,
-          key: ValueKey(bead.id),
-        ),
+        WorkBead(bead: bead, session: session, key: ValueKey(bead.id)),
       );
     }
     // Deterministic order by bead id — all children are keyed, so reconcile is

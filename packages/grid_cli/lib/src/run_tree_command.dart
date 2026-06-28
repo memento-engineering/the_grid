@@ -67,7 +67,9 @@ class TreeRunWiring {
 ///
 /// Construction only: it builds
 ///  - a [StationJoinBridge] over [work] + [state] (the lone subscription, A39),
-///  - a [DefaultEffectResolver] (the compiled built-in capability set),
+///  - a [FormulaResolver] rooting the `code` formula per coding bead + the
+///    [buildCodeRegistry] capability set + a git [ServiceBundle] (lifted from
+///    the injected land ops; null ⇒ land no-ops, an offline build),
 ///  - the [SubstationScope]s (one per [SubstationConfig], keyed by rig id so a rig add/remove
 ///    mounts/unmounts exactly that scope),
 ///  - a [RestartReconciler] binding the engine's narrow worktree seams to the
@@ -89,7 +91,21 @@ TreeRunWiring composeRunTree({
   required Future<void> Function() freshnessBarrier,
 }) {
   final bridge = StationJoinBridge(work: work, state: state);
-  const resolver = DefaultEffectResolver();
+  // The live work path (ADR-0008 D4): the reentrant FormulaResolver roots the
+  // `code` formula (agent → verify → land as Capabilities) per coding bead at
+  // the EffectResolver seam. The registry supplies the capability set + the
+  // formula; the ServiceBundle lifts the injected git/PR ops into the land
+  // capability's SourceControl (null ⇒ land no-ops — an offline build never
+  // touches real git/GitHub).
+  const resolver = FormulaResolver(_codeFormulaFor);
+  final registry = buildCodeRegistry();
+  final gitOps = effectContext.gitOps;
+  final prOpener = effectContext.prOpener;
+  final services = (gitOps != null && prOpener != null)
+      ? ServiceBundle(
+          sourceControl: GitSourceControl(gitOps: gitOps, prOpener: prOpener),
+        )
+      : const ServiceBundle();
 
   // One config scope per rig, keyed by rig id so a rig add/remove mounts /
   // unmounts exactly that scope (the Grid reconciles its scope children by key).
@@ -121,6 +137,8 @@ TreeRunWiring composeRunTree({
     effectContext: effectContext,
     resolver: resolver,
     substations: substationScopes,
+    registry: registry,
+    services: services,
   );
 
   return TreeRunWiring(
@@ -129,6 +147,11 @@ TreeRunWiring composeRunTree({
     freshnessBarrier: freshnessBarrier,
   );
 }
+
+/// The bead→root-formula policy for the live path: all coding work roots the
+/// `code` formula (P1 — one formula; the Burn bead's formula arrives with
+/// `butane_grid_assets`). A top-level tear-off so [FormulaResolver] stays const.
+Formula _codeFormulaFor(Bead bead) => kCodeFormula;
 
 /// An empty [GraphSnapshot] — the fail-safe the restart reconciler projects
 /// cursors from when the state store has no baseline yet (no sessions ⇒ every

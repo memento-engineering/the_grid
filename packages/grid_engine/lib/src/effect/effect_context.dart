@@ -1,31 +1,29 @@
 import 'package:grid_runtime/grid_runtime.dart';
 
-/// The injected bundle an [EffectSeed] resolves from the tree in ONE inherited
-/// lookup (ADR-0007 / M4-P0-BUILD-ORDER Track C).
+/// The injected bundle a `CapabilityHost` resolves from the tree in ONE
+/// inherited lookup (ADR-0007 / ADR-0008 D4).
 ///
-/// The kernel (Track E/F) provides exactly one of these via an
-/// `InheritedSeed<EffectContext>` above the work tree, so every mounted effect
-/// reaches its process transport ([provider]), its single bd write chokepoint
-/// ([writer]), and the owned state rig ([stateSubstation]) through a single
-/// `dependOnInheritedSeedOfExactType` — never three separate lookups, and never
-/// a re-query of the store (A39).
+/// The kernel provides exactly one of these via an `InheritedSeed<EffectContext>`
+/// above the work tree, so every mounted host reaches its process transport
+/// ([provider]), its single bd write chokepoint ([writer]), and the owned state
+/// rig ([stateSubstation]) through a single `dependOnInheritedSeedOfExactType` —
+/// never three separate lookups, and never a re-query of the store (A39).
 ///
 /// Immutable and value-light: the bundle is a handle to long-lived
-/// collaborators, not state. An effect captures it once in
-/// `didChangeDependencies` and uses the captured reference across async gaps so
-/// it never touches the `TreeContext` (which throws post-unmount) for I/O.
+/// collaborators, not state. A host captures it once in `didChangeDependencies`
+/// and uses the captured reference across async gaps so it never touches the
+/// `TreeContext` (which throws post-unmount) for I/O.
 ///
-/// The first three collaborators are required (every effect needs the
-/// transport, the chokepoint, and the owned rig). The land-orchestration ops
-/// ([gitOps] / [prOpener]) and the worktree layout fields are OPTIONAL — a
-/// process effect (`AgentEffectSeed` / `VerifyEffectSeed`) needs only the
-/// worktree path, and an offline build that does not wire git/PR leaves
-/// [gitOps] / [prOpener] null so the land effect no-ops rather than touches
-/// real GitHub.
+/// The first three collaborators are required (every host needs the transport,
+/// the chokepoint, and the owned rig). The land-orchestration ops ([gitOps] /
+/// [prOpener]) and the worktree layout fields are OPTIONAL — `composeRunTree`
+/// lifts [gitOps] / [prOpener] into the git `SourceControl` it provides to the
+/// `code` extension's land capability; an offline build leaves them null so land
+/// no-ops rather than touching real GitHub.
 class EffectContext {
   /// Bundles the process transport [provider], the bd write [writer], and the
   /// owned [stateSubstation], plus the optional land-orchestration ops + worktree
-  /// layout the capability Seeds resolve.
+  /// layout the capability hosts resolve.
   const EffectContext({
     required this.provider,
     required this.writer,

@@ -1,6 +1,13 @@
 // Track A — the heart: the pure Seeds reconcile the running system, and the
 // derailment-invariant-1 guardrail holds (only the observing node dirties; a
-// work tick never rebuilds config; a phase advance is a reconcile transition).
+// work tick never rebuilds config; a cursor advance is a reconcile transition
+// that threads config DOWN without re-creating the work subtree root).
+//
+// In the reentrant model the WorkBead's child is the bead's whole work SUBTREE
+// (a stable, bead-keyed root); progress is the per-node cursor advancing INSIDE
+// that subtree (FormulaScope — Track C/D/H), NOT a swap at the WorkBead level.
+// So this file pins the WorkBead/WorkList reconcile + the child-set predicate;
+// the in-subtree step swap is proven by track_c/track_h.
 //
 // ADR-0007 §6.1 / M4-P0-BUILD-ORDER §3 Track A. Zero I/O — fakes only.
 import 'package:genesis_tree/genesis_tree.dart';
@@ -9,44 +16,38 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
 // ---------------------------------------------------------------------------
-// Fakes: an EffectResolver that mounts effects which record their lifecycle.
+// Fakes: an EffectResolver that mounts a recording subtree-root per work bead.
 // ---------------------------------------------------------------------------
 
-/// Records effect lifecycle in mount/unmount order — the observable proxy for
-/// "spawn" (`START`) and "kill" (`STOP`).
+/// Records the work subtree-root lifecycle in mount/unmount order — the
+/// observable proxy for "the bead's work mounts" (`START`) / "unmounts" (`STOP`).
 class _Recorder {
   final List<String> events = [];
   void record(String event) => events.add(event);
 }
 
-/// Returns a `_FakeEffect` keyed `'<beadId>.<capId>'` — the key shape the real
-/// resolver must honour so a phase advance swaps the effect child.
+/// Returns a `_FakeEffect` keyed `'<beadId>:work'` — the bead-keyed subtree root
+/// the real resolver returns (a `SessionScope`). It is STABLE across cursor
+/// ticks: a cursor advance threads new config down, never swaps this child.
 class _FakeEffectResolver implements EffectResolver {
   _FakeEffectResolver(this.recorder);
   final _Recorder recorder;
 
   @override
-  Seed effectFor({
-    required Bead bead,
-    required WorkPhase phase,
-    SessionProjection? session,
-  }) => _FakeEffect(
+  Seed effectFor({required Bead bead, SessionProjection? session}) => _FakeEffect(
     recorder: recorder,
-    capId: phase.capId,
     beadId: bead.id,
-    key: ValueKey('${bead.id}.${phase.capId}'),
+    key: ValueKey('${bead.id}:work'),
   );
 }
 
 class _FakeEffect extends StatefulSeed {
   const _FakeEffect({
     required this.recorder,
-    required this.capId,
     required this.beadId,
     super.key,
   });
   final _Recorder recorder;
-  final String capId;
   final String beadId;
 
   @override
@@ -55,10 +56,10 @@ class _FakeEffect extends StatefulSeed {
 
 class _FakeEffectState extends State<_FakeEffect> {
   @override
-  void initState() => seed.recorder.record('START ${seed.capId}(${seed.beadId})');
+  void initState() => seed.recorder.record('START work(${seed.beadId})');
 
   @override
-  void dispose() => seed.recorder.record('STOP ${seed.capId}(${seed.beadId})');
+  void dispose() => seed.recorder.record('STOP work(${seed.beadId})');
 
   @override
   Seed build(TreeContext context) => const Idle();
@@ -126,12 +127,19 @@ Branch? _workBead(Branch root, String beadId) {
   return null;
 }
 
+/// The single child branch of [wb] (the resolver's subtree root).
+Branch _effectChild(Branch wb) {
+  Branch? found;
+  wb.visitChildren((c) => found = c);
+  return found!;
+}
+
 /// Default rig config: rig `tg`, owning prefix `tg`.
 SubstationConfig _tgConfig() => const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 
 void main() {
   group('Track A — reconcile is the work lifecycle', () {
-    test('two ready owned beads mount one implement effect each', () {
+    test('two ready owned beads mount one work subtree each', () {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1'), _bead('tg-2')], ready: {'tg-1', 'tg-2'}),
@@ -147,13 +155,14 @@ void main() {
         ),
       );
 
-      // mount = spawn; no session cursor ⇒ implement (capId `agent`).
-      expect(recorder.events, ['START agent(tg-1)', 'START agent(tg-2)']);
+      // mount = spawn the bead's work subtree, one per ready owned bead.
+      expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
     });
 
     test(
-      'a phase advance is a reconcile transition: effect swaps, WorkBead branch '
-      'persists, flush() returns exactly [WorkList], config + sibling absent',
+      'a cursor advance is a reconcile transition: WorkList alone drains, the '
+      'WorkBead AND its subtree-root child persist (config threads down in '
+      'place — no WorkBead-level swap), config + sibling absent from the drain',
       () {
         final recorder = _Recorder();
         final joined = JoinedSnapshotNotifier(
@@ -172,12 +181,14 @@ void main() {
           ),
         );
 
-        expect(recorder.events, ['START agent(tg-1)', 'START agent(tg-2)']);
+        expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
         final wb1IdBefore = _workBead(root, 'tg-1')!.branchId;
+        final child1IdBefore = _effectChild(_workBead(root, 'tg-1')!).branchId;
         recorder.events.clear();
 
-        // Advance tg-1's SESSION cursor implement → verify (A40: the cursor
-        // lives on the_grid's own session bead, not the work bead).
+        // Advance tg-1's SESSION cursor (A40: the cursor lives on the_grid's own
+        // session bead). In the reentrant model this re-keys steps INSIDE the
+        // subtree; at the WorkBead level the child is bead-keyed and PERSISTS.
         joined.push(
           _joined(
             beads: [_bead('tg-1'), _bead('tg-2')],
@@ -185,7 +196,8 @@ void main() {
             sessions: {
               'tg-1': const SessionProjection(
                 workBeadId: 'tg-1',
-                phase: WorkPhase.verify,
+                sessionId: 'tgdog-s',
+                cursor: {'tg-1/agent': NodeCursor(state: StepState.complete)},
               ),
             },
           ),
@@ -194,23 +206,21 @@ void main() {
 
         // Only the observing node is drained. The changed WorkBead is
         // force-rebuilt by WorkList's reconcile cascade (its dirty flag cleared
-        // before the drain) and is correctly EXCLUDED — asserting it were IN
-        // the flush list would require it to observe the notifier itself, a
+        // before the drain) and is correctly EXCLUDED — asserting it were IN the
+        // flush list would require it to observe the notifier itself, a
         // derailment-invariant-1 violation.
         final workList = _branchWhere(root, (s) => s is WorkList);
         expect(flushed, equals([workList]));
 
-        // The phase swap, proven separately: old capability killed, new spawned
-        // — for tg-1 only.
-        expect(recorder.events, ['STOP agent(tg-1)', 'START verify(tg-1)']);
-
-        // The WorkBead branch keeps its identity across the swap.
+        // The WorkBead branch AND its subtree-root child keep their identity —
+        // the cursor advance threaded down as config, never a WorkBead-level
+        // swap (the fake root records NOTHING; the in-subtree step swap is
+        // track_c/track_h's concern).
+        expect(recorder.events, isEmpty);
         expect(_workBead(root, 'tg-1')!.branchId, wb1IdBefore);
+        expect(_effectChild(_workBead(root, 'tg-1')!).branchId, child1IdBefore);
 
-        // Guardrail: config ancestors + the sibling are ABSENT from the drain
-        // (they were never dirtied — ancestors of the sole dirtied node cannot
-        // be force-rebuilt by a descendant's change, so their build did not
-        // run; the sibling's effect recorded nothing above).
+        // Guardrail: config ancestors + the sibling are ABSENT from the drain.
         expect(flushed, isNot(contains(_branchWhere(root, (s) => s is Station))));
         expect(
           flushed,
@@ -220,47 +230,11 @@ void main() {
         expect(flushed, isNot(contains(_workBead(root, 'tg-2'))));
       },
     );
-
-    test('a bead can run implement → verify → land as successive transitions', () {
-      final recorder = _Recorder();
-      final joined = JoinedSnapshotNotifier(
-        _joined(beads: [_bead('tg-1')], ready: {'tg-1'}),
-      );
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeEffectResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
-        ),
-      );
-      expect(recorder.events, ['START agent(tg-1)']);
-
-      void advance(WorkPhase phase) {
-        recorder.events.clear();
-        joined.push(
-          _joined(
-            beads: [_bead('tg-1')],
-            ready: {'tg-1'},
-            sessions: {
-              'tg-1': SessionProjection(workBeadId: 'tg-1', phase: phase),
-            },
-          ),
-        );
-        owner.flush();
-      }
-
-      advance(WorkPhase.verify);
-      expect(recorder.events, ['STOP agent(tg-1)', 'START verify(tg-1)']);
-      advance(WorkPhase.land);
-      expect(recorder.events, ['STOP verify(tg-1)', 'START land(tg-1)']);
-    });
   });
 
   group('Track A — the config axis is separate and live', () {
     test('a config tick rebuilds the config scope and starts/stops no work '
-        'effect (the inverse of the work-tick guardrail)', () {
+        'subtree (the inverse of the work-tick guardrail)', () {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1')], ready: {'tg-1'}),
@@ -275,7 +249,7 @@ void main() {
           substationConfig: substationConfig,
         ),
       );
-      expect(recorder.events, ['START agent(tg-1)']);
+      expect(recorder.events, ['START work(tg-1)']);
       recorder.events.clear();
 
       // Tick the CONFIG axis (a different owned set value).
@@ -286,14 +260,14 @@ void main() {
       // cascade and excluded. A config tick is real (proving the work-tick
       // guardrail's absence is meaningful, not because config is inert)...
       expect(flushed, equals([_branchWhere(root, (s) => s is SubstationScope)]));
-      // ...yet it touches NO work effect.
+      // ...yet it touches NO work subtree.
       expect(recorder.events, isEmpty);
     });
   });
 
   group('Track A — the corrected child-set predicate', () {
     test('positive-terminal-only unmount: a ready→blocked bead with a live '
-        'agent stays mounted; a closed bead unmounts and kills', () {
+        'session stays mounted; a closed bead unmounts and kills', () {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1')], ready: {'tg-1'}),
@@ -307,10 +281,10 @@ void main() {
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
-      expect(recorder.events, ['START agent(tg-1)']);
+      expect(recorder.events, ['START work(tg-1)']);
 
       // tg-1 leaves the ready-set (blocked) but keeps a live (non-terminal)
-      // session — its agent must NOT be unmounted/killed.
+      // session — its work subtree must NOT be unmounted/killed.
       recorder.events.clear();
       joined.push(
         _joined(
@@ -319,7 +293,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              phase: WorkPhase.implement,
+              sessionId: 'tgdog-s',
             ),
           },
         ),
@@ -328,7 +302,7 @@ void main() {
       expect(
         recorder.events,
         isEmpty,
-        reason: 'a ready-set exit with a live agent is not a positive terminal',
+        reason: 'a ready-set exit with a live session is not a positive terminal',
       );
       expect(_workBead(root, 'tg-1'), isNotNull);
 
@@ -341,13 +315,13 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              phase: WorkPhase.implement,
+              sessionId: 'tgdog-s',
             ),
           },
         ),
       );
       owner.flush();
-      expect(recorder.events, ['STOP agent(tg-1)']);
+      expect(recorder.events, ['STOP work(tg-1)']);
       expect(_workBead(root, 'tg-1'), isNull);
     });
 
@@ -362,7 +336,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              phase: WorkPhase.land,
+              sessionId: 'tgdog-s',
             ),
           },
         ),
@@ -376,7 +350,7 @@ void main() {
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
-      expect(recorder.events, ['START land(tg-1)']);
+      expect(recorder.events, ['START work(tg-1)']);
 
       recorder.events.clear();
       // The work bead is STILL open + ready, but the owned session cursor went
@@ -388,14 +362,14 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              phase: WorkPhase.land,
+              sessionId: 'tgdog-s',
               isTerminal: true,
             ),
           },
         ),
       );
       owner.flush();
-      expect(recorder.events, ['STOP land(tg-1)']);
+      expect(recorder.events, ['STOP work(tg-1)']);
       expect(_workBead(root, 'tg-1'), isNull);
     });
 
@@ -441,8 +415,8 @@ void main() {
         ),
       );
 
-      // Only the plain task spawned an agent.
-      expect(recorder.events, ['START agent(tg-1)']);
+      // Only the plain task mounted a work subtree.
+      expect(recorder.events, ['START work(tg-1)']);
       for (final id in customs.keys) {
         expect(_workBead(root, id), isNull, reason: '$id must not mount');
       }
@@ -494,7 +468,7 @@ void main() {
         ),
       );
 
-      expect(recorder.events, ['START agent(tg-1)']);
+      expect(recorder.events, ['START work(tg-1)']);
       expect(_workBead(root, 'gc-9'), isNull);
     });
   });

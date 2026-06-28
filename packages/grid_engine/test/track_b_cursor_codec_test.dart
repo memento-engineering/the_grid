@@ -2,8 +2,8 @@
 //
 // FLAT, merge-safe `grid.cursor.{nodePath}.{field}` keys on the_grid's OWN
 // session bead round-trip a FormulaCursor; disjoint nodes never collide; the
-// codec boundary (rig/work_bead/grid.phase) is untouched. Additive in Wave 1 —
-// it coexists with the legacy WorkPhase cursor until Track H.
+// codec boundary (rig/work_bead) is untouched, and a stray legacy `grid.phase`
+// key is simply ignored.
 //
 // ADR-0008 D4 / M4-P1 Track B. Zero I/O — pure codec.
 import 'package:grid_controller/grid_controller.dart';
@@ -138,17 +138,17 @@ void main() {
       expect(cursor['tg-1/agent']!.state, StepState.complete);
     });
 
-    test('projectSession carries BOTH the legacy phase AND the new cursor', () {
+    test('projectSession reads the per-node cursor; a legacy grid.phase is '
+        'ignored', () {
       final session = projectSession(
         _sessionBead(const {
           'work_bead': 'tg-1',
           'rig': 'tgdog',
-          'grid.phase': 'verify', // legacy WorkPhase cursor still read
-          'grid.cursor.tg-1/agent.state': 'complete', // new per-node cursor
+          'grid.phase': 'verify', // a legacy key — now IGNORED by the projection
+          'grid.cursor.tg-1/agent.state': 'complete', // the per-node cursor
         }),
       );
       expect(session.workBeadId, 'tg-1');
-      expect(session.phase.name, 'verify');
       expect(session.cursor['tg-1/agent']!.state, StepState.complete);
       expect(session.isTerminal, isFalse);
     });

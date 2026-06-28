@@ -1,7 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/cursor.dart';
-import 'work_phase.dart';
 
 part 'session_projection.freezed.dart';
 
@@ -12,9 +11,10 @@ part 'session_projection.freezed.dart';
 /// (A37): the cursor lives on the_grid's own bead, so respawn-or-skip works
 /// even for a foreign, unwritable work bead.
 ///
-/// Track A populates [phase] + [isTerminal]. The process-identity fields
-/// ([pgid] / [token] / [pid]) are stamped at `SessionStarted` by Track C/D for
-/// respawn-or-skip and the freshness fence; they are null until then.
+/// [isTerminal] gates unmount; the per-node reentrant [cursor] (D-3) carries
+/// progress. The process-identity fields ([pgid] / [token] / [pid]) are the
+/// legacy scalar restart fence stamped at `SessionStarted`; they are null until
+/// then (the reentrant path stamps per-node identity inside [cursor] instead).
 @freezed
 abstract class SessionProjection with _$SessionProjection {
   /// Creates a projection of one session bead's cursor for [workBeadId].
@@ -23,13 +23,10 @@ abstract class SessionProjection with _$SessionProjection {
     required String workBeadId,
 
     /// The session/lifecycle bead's OWN id in the state store — the target the
-    /// verify/land effects advance the cursor on (injected pull-free so an
-    /// effect never re-queries the store; A39). Null only in synthetic/test
+    /// capability hosts advance the cursor on (injected pull-free so a host
+    /// never re-queries the store; A39). Null only in synthetic/test
     /// projections — the join bridge always populates it.
     String? sessionId,
-
-    /// The cursor phase (`metadata.grid.phase`): implement | verify | land.
-    required WorkPhase phase,
 
     /// True once the session reached a positive terminal (the session bead
     /// `closed`, or the cursor advanced past `land`). A terminal session means
@@ -51,8 +48,8 @@ abstract class SessionProjection with _$SessionProjection {
     /// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
     /// node's [NodeCursor] keyed by its `nodePath`, projected from the session
     /// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
-    /// pull-free (A39). Empty for a legacy/freshly-minted session (the linear
-    /// agent/verify/land path still rides the [phase] cursor until Track H).
+    /// pull-free (A39). Empty for a freshly-minted session (no node has written
+    /// its cursor yet — the root formula's frontier mounts from `pending`).
     @Default(<String, NodeCursor>{}) FormulaCursor cursor,
   }) = _SessionProjection;
 }

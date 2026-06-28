@@ -1,21 +1,16 @@
 /// The reentrant resolver (ADR-0008 D4 / M4-P1 §4, Track D).
 ///
-/// Drops in at the EXISTING `EffectResolver` seam (`effectFor` is already typed
-/// `Seed`, so it roots a subtree with no change to `WorkBead`): instead of a
-/// single effect leaf, it returns an engine-private `SessionScope` that
-/// adopt-or-mints the session and inflates the work bead's root formula. Track H
-/// swaps this in for `DefaultEffectResolver` and migrates agent/verify/land onto
-/// the `code` formula; until then the new path is exercised standalone.
-///
-/// The `phase` argument is ignored — the reentrant cursor is per-node, not a
-/// 3-value `WorkPhase` (D-3). `WorkPhase` retires with that swap (Track H).
+/// Drops in at the `EffectResolver` seam (`effectFor` is typed `Seed`, so it
+/// roots a subtree with no change to `WorkBead`): instead of a single effect
+/// leaf, it returns an engine-private `SessionScope` that adopt-or-mints the
+/// session and inflates the work bead's root formula. This is the live work
+/// path — the per-node reentrant cursor (D-3) replaced the 3-value `WorkPhase`.
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_controller/grid_controller.dart';
 
 import '../domain/session_projection.dart';
-import '../domain/work_phase.dart';
 import '../kernel/effect_resolver.dart';
 import '../sdk/formula.dart';
 import 'session_scope.dart';
@@ -35,11 +30,7 @@ class FormulaResolver implements EffectResolver {
   final RootFormulaFor rootFormulaFor;
 
   @override
-  Seed effectFor({
-    required Bead bead,
-    required WorkPhase phase,
-    SessionProjection? session,
-  }) =>
+  Seed effectFor({required Bead bead, SessionProjection? session}) =>
       SessionScope(
         bead: bead,
         formula: rootFormulaFor(bead),

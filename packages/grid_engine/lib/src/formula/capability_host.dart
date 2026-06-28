@@ -1,7 +1,7 @@
 /// The engine-private capability carrier (ADR-0008 D4 / M4-P1 §5, Track E).
 ///
-/// `CapabilityHost` is `EffectSeed` GENERALIZED off the 3-value `WorkPhase` onto
-/// an arbitrary `nodePath`/`stepId` — a tree node whose Branch lifecycle IS the
+/// `CapabilityHost` is the engine's per-step process carrier, keyed on an
+/// arbitrary `nodePath`/`stepId` — a tree node whose Branch lifecycle IS the
 /// step-process lifecycle: mount (`initState`) = spawn, a `SessionStarted` =
 /// persist the per-node identity (pgid/pid/token — D-4), a terminal event =
 /// write the node cursor through the chokepoint, unmount (`dispose`) = kill +
@@ -14,8 +14,8 @@
 /// each. The capability sees only the sandboxed [CapabilityContext] — no
 /// TreeContext/writer/notifier (invariants 1/2 hold at depth by construction).
 ///
-/// The three load-bearing guards live entirely here (ported verbatim from
-/// `EffectSeed`): `_cancelled` (set FIRST in `dispose`) + `TreeContext.mounted`
+/// The three load-bearing guards live entirely here (the engine's async-gap
+/// discipline): `_cancelled` (set FIRST in `dispose`) + `TreeContext.mounted`
 /// (the never-throwing async-gap probe) drop an out-of-band event reaching an
 /// unmounted Branch; the captured `_ctx` is used across gaps (never `context`,
 /// which throws post-unmount); `_completed` is the once-only terminal latch.

@@ -3,13 +3,15 @@
 // "Only the chokepoint writes." (ADR-0006 Decision 2 / A32.) Every bd mutation
 // the_grid issues flows through the single StationBeadWriter chokepoint — bd-only,
 // `--actor grid-controller`, fail-closed on ownership, never a `bd show` and
-// never raw `sql`. And no write EVER happens inside a `build()`: effects act in
-// initState / onComplete / dispose; `build()` is a pure Idle leaf.
+// never raw `sql`. And no write EVER happens inside a `build()`: the capability
+// hosts act in initState / on a runtime event / dispose; `build()` is a pure
+// Idle leaf.
 //
-// This drives a FULL implement→verify→land cycle through the REAL StationKernel
-// with a RecordingBdRunner-backed StationBeadWriter (the chokepoint) + the fake
-// provider/git/PR, emitting SessionStarted + a clean completion per phase and
-// advancing the session cursor via the fake STATE source. It then asserts the
+// This drives a FULL agent→verify→land cycle through the REAL StationKernel + the
+// REAL `code` formula (FormulaResolver + buildCodeRegistry) with a
+// RecordingBdRunner-backed StationBeadWriter (the chokepoint) + the fake
+// provider/git/PR, emitting SessionStarted + a clean completion per step and
+// advancing the per-node cursor via the fake STATE source. It then asserts the
 // chokepoint discipline over the WHOLE recorded call log.
 //
 // Offline only — FAKES, no live tg/gc/claude/git/network.
@@ -31,29 +33,24 @@ GraphSnapshot _graph({
   capturedAt: DateTime(2026),
 );
 
-/// A `type=session` state bead linking [workBeadId] with cursor [phase] — the
-/// row the join bridge projects + keys by `work_bead`. Carries the owned `rig`
-/// marker so the chokepoint's ownership re-check passes.
-Bead _sessionBead({
-  required String id,
-  required String workBeadId,
-  required WorkPhase phase,
-}) => Bead(
-  id: id,
-  issueType: IssueType.session,
-  status: BeadStatus.open,
-  metadata: {
-    'rig': stateSubstation,
-    SessionBeadKeys.workBead: workBeadId,
-    SessionBeadKeys.phase: phase.name,
-  },
+/// A one-bead STATE snapshot carrying the session for `tg-1` at the given
+/// [completed] step set (the shared `sessionBead` builds the per-node cursor).
+GraphSnapshot _stateAt(Set<String> completed) => _graph(
+  beads: [sessionBead(id: 'tgdog-sess1', workBeadId: 'tg-1', completed: completed)],
+  ready: const {},
+);
+
+/// The live `code` registry + a git ServiceBundle so the land capability runs
+/// its commit→push→PR through the fakes.
+ServiceBundle _gitServices(Fakes f) => ServiceBundle(
+  sourceControl: GitSourceControl(gitOps: GitOps(f.git), prOpener: f.pr),
 );
 
 void main() {
   group('invariant 2 — only the chokepoint writes', () {
     test(
-      'a full implement→verify→land cycle through the kernel: EVERY bd write '
-      'is a chokepoint mutation (create/update/close), carries --actor '
+      'a full agent→verify→land cycle through the kernel: EVERY bd write is a '
+      'chokepoint mutation (create/update/close), carries --actor '
       'grid-controller, and NO bd show / sql ever appears',
       () async {
         final f = buildFakes(createdId: 'tgdog-sess1');
@@ -68,7 +65,9 @@ void main() {
         final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
-          resolver: const DefaultEffectResolver(),
+          resolver: kCodeResolver,
+          registry: buildCodeRegistry(),
+          services: _gitServices(f),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -86,65 +85,52 @@ void main() {
         kernel.start();
         await pumpEventQueue();
 
-        // 1) IMPLEMENT — a ready owned task mounts the agent; the chokepoint
-        //    mints the session bead (create + the birth stamp = one update).
+        // 1) AGENT — a ready owned task mounts the agent; the chokepoint mints the
+        //    session bead (create + the birth stamp = one update). The step's
+        //    provider name is '<sessionId>/<nodePath>'.
         work.push(_graph(beads: [bead('tg-1')], ready: {'tg-1'}));
         await pumpEventQueue();
         expect(f.provider.started, hasLength(1));
+        expect(f.provider.started.single.name, 'tgdog-sess1/tg-1/agent');
 
-        // SessionStarted → identity stamped through the chokepoint.
+        // SessionStarted → per-node identity stamped through the chokepoint.
         f.provider.emit(
-          const SessionStarted(name: 'tgdog-sess1', pid: 112, pgid: 111),
+          const SessionStarted(name: 'tgdog-sess1/tg-1/agent', pid: 112, pgid: 111),
         );
         await pumpEventQueue();
 
-        // implement completes → cursor advances to verify (a chokepoint update).
-        f.provider.emit(const Exited(name: 'tgdog-sess1', exitCode: 0));
+        // agent completes → its host writes agent=complete (a chokepoint update);
+        // the STATE source then surfaces the advanced cursor and verify spawns.
+        f.provider.emit(const Exited(name: 'tgdog-sess1/tg-1/agent', exitCode: 0));
+        await pumpEventQueue();
+        state.push(_stateAt({'agent'}));
+        await pumpEventQueue();
+        expect(f.provider.started, hasLength(2));
+        expect(f.provider.started.last.name, 'tgdog-sess1/tg-1/verify');
+
+        // 2) VERIFY completes → cursor advances to land; the STATE source surfaces
+        //    it and the land capability (a ServiceCapability — no spawn) runs.
+        f.provider.emit(const Exited(name: 'tgdog-sess1/tg-1/verify', exitCode: 0));
+        await pumpEventQueue();
+        state.push(_stateAt({'agent', 'verify'}));
         await pumpEventQueue();
 
-        // 2) VERIFY — the STATE source surfaces the advanced cursor; the effect
-        //    swaps; verify runs; its completion advances the cursor to land.
-        state.push(
-          _graph(
-            beads: [
-              _sessionBead(
-                id: 'tgdog-sess1',
-                workBeadId: 'tg-1',
-                phase: WorkPhase.verify,
-              ),
-            ],
-            ready: const {},
-          ),
-        );
-        await pumpEventQueue();
-        f.provider.emit(const Exited(name: 'tgdog-sess1', exitCode: 0));
-        await pumpEventQueue();
-
-        // 3) LAND — the STATE source surfaces the land cursor; the land effect
-        //    commits→pushes→opens the PR, records pr_url + closes the session,
-        //    all through the chokepoint.
-        state.push(
-          _graph(
-            beads: [
-              _sessionBead(
-                id: 'tgdog-sess1',
-                workBeadId: 'tg-1',
-                phase: WorkPhase.land,
-              ),
-            ],
-            ready: const {},
-          ),
-        );
+        // 3) LAND completed (its host wrote land=complete); the STATE source
+        //    surfaces the terminal and SessionScope closes the session.
+        state.push(_stateAt({'agent', 'verify', 'land'}));
         await pumpEventQueue();
 
         // --- The chokepoint discipline over the WHOLE recorded log ---
 
         // The cycle actually produced writes (else the assertions are vacuous):
-        // create (mint), updates (birth stamp + identity + 2 cursor advances +
-        // pr_url), and a close (the land terminal).
+        // create (mint), updates (birth stamp + identity + cursor advances), and a
+        // close (the positive terminal).
         expect(f.runner.callsFor('create'), hasLength(1));
         expect(f.runner.callsFor('update'), isNotEmpty);
         expect(f.runner.callsFor('close'), hasLength(1));
+        // The land Service really ran its orchestration through the fakes.
+        expect(f.git.subcommands, containsAll(<String>['add', 'commit', 'push']));
+        expect(f.pr.opened, isNotEmpty);
 
         // (a) NO bd write bypasses the chokepoint: the ONLY BdRunner in the
         //     system is the one inside the StationBeadWriter, so EVERY recorded bd
@@ -182,9 +168,9 @@ void main() {
     );
 
     test(
-      'NO write happens inside build(): every effect build() is a pure Idle '
-      'leaf — driving the full tree, the work subtree leaves are all Idle and '
-      'the recorded writes are all event-driven, never a build product',
+      'NO write happens inside build(): every host build() is a pure Idle leaf — '
+      'driving the full tree, the work subtree leaves are all Idle and the '
+      'recorded writes are all event-driven, never a build product',
       () async {
         final f = buildFakes(createdId: 'tgdog-sess1');
         final work = FakeSnapshotSource(
@@ -197,7 +183,8 @@ void main() {
         final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
-          resolver: const DefaultEffectResolver(),
+          resolver: kCodeResolver,
+          registry: buildCodeRegistry(),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -215,20 +202,20 @@ void main() {
         kernel.start();
         await pumpEventQueue();
 
-        // Mount a work bead. The agent spawns from initState — a write (the
-        // session mint) lands. But that write came from the lifecycle, not a
+        // Mount a work bead. The agent spawns from the host lifecycle — a write
+        // (the session mint) lands. But that write came from the lifecycle, not a
         // build: re-pushing the SAME snapshot (a redundant work tick) re-runs
-        // WorkList.build() and the WorkBead.build() — and produces ZERO new bd
-        // writes, because build() never writes.
+        // WorkList/WorkBead/SessionScope/FormulaScope build() — and produces ZERO
+        // new bd writes, because build() never writes.
         work.push(_graph(beads: [bead('tg-1')], ready: {'tg-1'}));
         await pumpEventQueue();
         final writesAfterMount = f.runner.calls.length;
         expect(writesAfterMount, greaterThan(0), reason: 'the mint landed');
         expect(f.provider.started, hasLength(1));
 
-        // A redundant identical work tick → WorkList rebuilds, WorkBead rebuilds
-        // (same key, same config) → NO new writes (build() is side-effect-free)
-        // and NO effect churn (the keyed reconcile preserves the branch).
+        // A redundant identical work tick → the subtree rebuilds (same keys, same
+        // config) → NO new writes (build() is side-effect-free) and NO effect
+        // churn (the keyed reconcile preserves the branches).
         work.push(_graph(beads: [bead('tg-1')], ready: {'tg-1'}));
         await pumpEventQueue();
         work.push(_graph(beads: [bead('tg-1')], ready: {'tg-1'}));
@@ -242,7 +229,7 @@ void main() {
         expect(
           f.provider.started,
           hasLength(1),
-          reason: 'no respawn — the effect branch persisted across rebuilds',
+          reason: 'no respawn — the host branch persisted across rebuilds',
         );
         expect(f.provider.stopped, isEmpty);
       },

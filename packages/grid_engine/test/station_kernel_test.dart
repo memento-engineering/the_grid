@@ -1,11 +1,12 @@
 // Track E/F — the REACTIVE LOOP through the ALREADY-AUTHORED StationKernel.
 //
-// This is the integration proof that the M4 tree engine drives
-// implement → verify → land as RECONCILE TRANSITIONS: a bridge push marks the
-// sole observer (WorkList) dirty, the kernel's microtask flush reconciles the
-// work set, mount = spawn (an agent), a phase advance swaps the effect (stop
-// old + start new). The DefaultEffectResolver (real) supplies the capabilities;
-// the EffectContext is over the offline fakes (no live tg/gc/claude/git).
+// This is the integration proof that the M4 tree engine drives agent → verify →
+// land as RECONCILE TRANSITIONS: a bridge push marks the sole observer (WorkList)
+// dirty, the kernel's microtask flush reconciles the work set, mount = spawn (an
+// agent), a per-node cursor advance swaps the running step (stop old + start
+// new). The live `code` formula (FormulaResolver + buildCodeRegistry) supplies
+// the capabilities; the EffectContext is over the offline fakes (no live
+// tg/gc/claude/git).
 //
 // Unlike Track A's track_a_reconcile_test (which calls owner.flush() directly),
 // THIS test goes through the kernel's real `scheduleMicrotask` flush loop, so
@@ -31,28 +32,19 @@ GraphSnapshot _graph({
   capturedAt: DateTime(2026),
 );
 
-/// A `type=session` state bead linking [workBeadId] with cursor [phase] — the
-/// row the join bridge projects + keys by `work_bead`, exactly as the real
-/// state store holds it.
-Bead _sessionBead({
-  required String id,
-  required String workBeadId,
-  required WorkPhase phase,
-}) => Bead(
-  id: id,
-  issueType: IssueType.session,
-  status: BeadStatus.open,
-  metadata: {
-    SessionBeadKeys.workBead: workBeadId,
-    SessionBeadKeys.phase: phase.name,
-  },
+/// A one-bead STATE snapshot carrying the session for `tg-1` with the given
+/// [completed] step set (the shared `sessionBead` builds the per-node cursor —
+/// `{'agent'}` makes verify eligible, `{'agent','verify'}` makes land eligible).
+GraphSnapshot _stateAt(Set<String> completed) => _graph(
+  beads: [sessionBead(id: 'tgdog-sess1', workBeadId: 'tg-1', completed: completed)],
+  ready: const {},
 );
 
 void main() {
-  group('StationKernel — the reactive loop drives implement→verify→land', () {
+  group('StationKernel — the reactive loop drives agent→verify→land', () {
     test(
-      'a ready owned task spawns an agent; advancing the session cursor swaps '
-      'the effect (stop old + start new) as a reconcile transition',
+      'a ready owned task spawns an agent; advancing the per-node cursor swaps '
+      'the running step (stop old + start new) as a reconcile transition',
       () async {
         final f = buildFakes(createdId: 'tgdog-sess1');
         // Empty baselines so the bridge seeds JoinedSnapshot.empty and the first
@@ -66,7 +58,8 @@ void main() {
         final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
-          resolver: const DefaultEffectResolver(),
+          resolver: kCodeResolver,
+          registry: buildCodeRegistry(),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -87,16 +80,18 @@ void main() {
         expect(f.provider.started, isEmpty);
 
         // 1) A ready owned task arrives on the WORK source → WorkList dirties →
-        //    the kernel's microtask flush reconciles → mount = spawn the agent.
+        //    the kernel mints the session + spawns the agent (the 1-wide frontier
+        //    of the `code` formula). The step's provider name is
+        //    '<sessionId>/<nodePath>'.
         work.push(_graph(beads: [bead('tg-1')], ready: {'tg-1'}));
         await pumpEventQueue();
 
         expect(f.provider.started, hasLength(1), reason: 'the agent spawned');
         final agentStart = f.provider.started.single;
-        // The implement capability is the coding agent (DefaultExtension opinion,
-        // resolved through the REAL DefaultEffectResolver).
+        // The agent step is the coding agent (the `code` extension opinion,
+        // resolved through the REAL FormulaResolver + registry).
         expect(agentStart.config.command, 'claude');
-        expect(agentStart.name, 'tgdog-sess1');
+        expect(agentStart.name, 'tgdog-sess1/tg-1/agent');
         // The engine-minted per-incarnation token rides config.env on the spawn.
         expect(
           agentStart.config.env['GRID_INSTANCE_TOKEN'],
@@ -105,39 +100,28 @@ void main() {
         );
         expect(agentStart.config.env['GRID_BEAD_ID'], 'tg-1');
 
-        // 2) Advance the bead's SESSION cursor implement → verify via the STATE
+        // 2) Advance the bead's per-node cursor (agent complete) via the STATE
         //    source (A40: the cursor lives on the_grid's own session bead). The
-        //    bridge re-joins, WorkList dirties, the flush swaps the effect.
-        state.push(
-          _graph(
-            beads: [
-              _sessionBead(
-                id: 'tgdog-sess1',
-                workBeadId: 'tg-1',
-                phase: WorkPhase.verify,
-              ),
-            ],
-            ready: const {},
-          ),
-        );
+        //    bridge re-joins, WorkList dirties, the flush swaps the running step.
+        state.push(_stateAt({'agent'}));
         await pumpEventQueue();
 
-        // The swap: the old capability (agent) was killed; a new one started.
+        // The swap: the old step (agent) was killed; verify started.
         expect(
           f.provider.stopped,
-          contains('tgdog-sess1'),
-          reason: 'the agent (implement) capability was unmounted → killed',
+          contains('tgdog-sess1/tg-1/agent'),
+          reason: 'the agent step was unmounted → killed',
         );
         expect(
           f.provider.started,
           hasLength(2),
-          reason: 'the verify capability spawned (the effect SWAPPED)',
+          reason: 'the verify step spawned (the running step SWAPPED)',
         );
         final verifyStart = f.provider.started.last;
-        // The verify capability runs the check via the SAME transport — and
-        // reuses the EXISTING session (no second createSession).
+        // The verify step runs the check via the SAME transport — and reuses the
+        // EXISTING session (no second createSession).
         expect(verifyStart.config.command, 'sh');
-        expect(verifyStart.name, 'tgdog-sess1');
+        expect(verifyStart.name, 'tgdog-sess1/tg-1/verify');
         expect(
           f.runner.callsFor('create'),
           hasLength(1),
@@ -145,26 +129,15 @@ void main() {
         );
 
         // 3) Advance verify → land via the STATE source → swap again.
-        state.push(
-          _graph(
-            beads: [
-              _sessionBead(
-                id: 'tgdog-sess1',
-                workBeadId: 'tg-1',
-                phase: WorkPhase.land,
-              ),
-            ],
-            ready: const {},
-          ),
-        );
+        state.push(_stateAt({'agent', 'verify'}));
         await pumpEventQueue();
 
-        // land is git orchestration, NOT a supervised process — it does NOT
-        // spawn through the provider. So the verify capability is killed
-        // (stopped twice total) but no THIRD start lands.
+        // land is a ServiceCapability (git orchestration), NOT a supervised
+        // process — it does NOT spawn through the provider. So the verify step is
+        // killed (agent + verify both stopped) but no THIRD start lands.
         expect(
-          f.provider.stopped.where((n) => n == 'tgdog-sess1').length,
-          2,
+          f.provider.stopped,
+          containsAll(<String>['tgdog-sess1/tg-1/agent', 'tgdog-sess1/tg-1/verify']),
           reason: 'verify was also unmounted → killed on the land swap',
         );
         expect(

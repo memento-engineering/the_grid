@@ -39,24 +39,6 @@ GraphSnapshot _graph({
 Bead _foreignWork(String id) =>
     Bead(id: id, issueType: IssueType.feature, status: BeadStatus.open);
 
-/// An OWNED (tgdog) `type=session` state bead linking the FOREIGN [workBeadId]
-/// with cursor [phase]; this is the_grid's own bead, written through the
-/// chokepoint, carrying the foreign work-bead linkage.
-Bead _ownedSession({
-  required String id,
-  required String workBeadId,
-  required WorkPhase phase,
-}) => Bead(
-  id: id,
-  issueType: IssueType.session,
-  status: BeadStatus.open,
-  metadata: {
-    'rig': stateSubstation,
-    SessionBeadKeys.workBead: workBeadId,
-    SessionBeadKeys.phase: phase.name,
-  },
-);
-
 /// The bead id every recorded mutation targets (the arg after the subcommand).
 String? _targetOf(List<String> call) => call.length >= 2 ? call[1] : null;
 
@@ -77,7 +59,8 @@ void main() {
         final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
-          resolver: const DefaultEffectResolver(),
+          resolver: kCodeResolver,
+          registry: buildCodeRegistry(),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -110,22 +93,30 @@ void main() {
           reason: 'the foreign work bead mounted + spawned',
         );
 
-        // Drive identity + a completion (cursor advance to verify).
+        // Drive identity + a completion (cursor advance to verify) on the agent
+        // step (provider name '<sessionId>/<nodePath>').
         f.provider.emit(
-          const SessionStarted(name: 'tgdog-sess1', pid: 9, pgid: 8),
+          const SessionStarted(
+            name: 'tgdog-sess1/genesis-7r9/agent',
+            pid: 9,
+            pgid: 8,
+          ),
         );
         await pumpEventQueue();
-        f.provider.emit(const Exited(name: 'tgdog-sess1', exitCode: 0));
+        f.provider.emit(
+          const Exited(name: 'tgdog-sess1/genesis-7r9/agent', exitCode: 0),
+        );
         await pumpEventQueue();
 
-        // 2) verify surfaces via the STATE source (the_grid's own bead).
+        // 2) verify surfaces via the STATE source (the_grid's own bead — the
+        //    per-node cursor with the agent step complete).
         state.push(
           _graph(
             beads: [
-              _ownedSession(
+              sessionBead(
                 id: 'tgdog-sess1',
                 workBeadId: 'genesis-7r9',
-                phase: WorkPhase.verify,
+                completed: {'agent'},
               ),
             ],
             ready: const {},
@@ -167,7 +158,6 @@ void main() {
                 metadata: const {
                   'rig': stateSubstation,
                   'work_bead': 'genesis-7r9',
-                  'grid.phase': 'land',
                 },
               ),
             ],
@@ -226,13 +216,19 @@ void main() {
 
         // A write to an OWNED tgdog bead succeeds (proves the refusal is the
         // FOREIGN-ness, not a dead writer).
-        await writer.update('tgdog-sess1', metadata: {'grid.phase': 'verify'});
+        await writer.update(
+          'tgdog-sess1',
+          metadata: nodeStateMetadata('tgdog-sess1/agent', StepState.complete),
+        );
         expect(runner.callsFor('update'), hasLength(1));
 
         // A write to a FOREIGN genesis-* bead is refused, loudly, on EVERY
         // mutation surface — the engine can never write the pristine source.
         await expectLater(
-          writer.update('genesis-7r9', metadata: {'grid.phase': 'verify'}),
+          writer.update(
+            'genesis-7r9',
+            metadata: nodeStateMetadata('genesis-7r9/agent', StepState.complete),
+          ),
           throwsA(isA<OwnershipRefused>()),
         );
         await expectLater(

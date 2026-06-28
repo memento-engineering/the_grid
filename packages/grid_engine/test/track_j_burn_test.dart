@@ -128,7 +128,6 @@ class _Burn {
           beadId: SessionProjection(
             workBeadId: beadId,
             sessionId: 'tgdog-s',
-            phase: WorkPhase.implement,
             isTerminal: terminal,
             cursor: cursor,
           ),

@@ -58,7 +58,8 @@ void main() {
         final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
-          resolver: const DefaultEffectResolver(),
+          resolver: kCodeResolver,
+          registry: buildCodeRegistry(),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -129,7 +130,8 @@ void main() {
         final kernel = StationKernel(
           bridge: bridge,
           effectContext: f.ctx,
-          resolver: const DefaultEffectResolver(),
+          resolver: kCodeResolver,
+          registry: buildCodeRegistry(),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -191,16 +193,19 @@ void main() {
           value: joined,
           child: InheritedSeed<EffectContext>(
             value: f.ctx,
-            child: InheritedSeed<EffectResolver>(
-              value: const DefaultEffectResolver(),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(
-                    const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
+            child: StableInheritedSeed<CapabilityRegistry>(
+              value: buildCodeRegistry(),
+              child: InheritedSeed<EffectResolver>(
+                value: kCodeResolver,
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(
+                      const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
+                    ),
+                    key: const ValueKey('scope.tg'),
                   ),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+                ]),
+              ),
             ),
           ),
         );
@@ -209,10 +214,14 @@ void main() {
         addTearDown(joined.dispose);
         addTearDown(f.provider.close);
 
-        // First work tick: tg-1 arrives → ONE agent spawn.
+        // First work tick: tg-1 arrives with an ADOPTED session (so the
+        // SessionScope resolves synchronously and the agent spawns under one
+        // flush — the manual owner has no kernel self-flush). → ONE agent spawn.
         joined.push(JoinedSnapshot(
           graph: _graph(beads: [bead('tg-1')], ready: {'tg-1'}),
-          sessionsByWorkBead: const {},
+          sessionsByWorkBead: const {
+            'tg-1': SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-1'),
+          },
         ));
         owner.flush();
         await pumpEventQueue();
@@ -231,12 +240,16 @@ void main() {
         // the effect-churn signal AND the structural branch-identity signal.
         joined.push(JoinedSnapshot(
           graph: _graph(beads: [bead('tg-1'), bead('tg-2')], ready: {'tg-1', 'tg-2'}),
-          sessionsByWorkBead: const {},
+          sessionsByWorkBead: const {
+            'tg-1': SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-1'),
+            'tg-2': SessionProjection(workBeadId: 'tg-2', sessionId: 'tgdog-2'),
+          },
         ));
         owner.flush();
         await pumpEventQueue();
 
-        // (1) effect-churn signal (the original assertion).
+        // (1) effect-churn signal: exactly one NEW spawn (tg-2); tg-1's agent was
+        // neither torn down nor re-created (config did not re-build).
         expect(
           f.provider.started,
           hasLength(2),
@@ -247,7 +260,6 @@ void main() {
           isEmpty,
           reason: 'tg-1 effect was never torn down — config did not re-build',
         );
-        expect(f.runner.callsFor('create'), hasLength(2));
 
         // (2) STRUCTURAL signal — the config subtree kept its identity; a
         // config-ancestor rebuild would have re-created the WorkList branch.

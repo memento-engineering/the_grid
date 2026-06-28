@@ -171,9 +171,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              sessionId: 'tgdog-existing',
-              phase: WorkPhase.implement,
-            ),
+              sessionId: 'tgdog-existing',            ),
           },
         ),
       );
@@ -204,9 +202,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',
-              phase: WorkPhase.land,
-            ),
+              sessionId: 'tgdog-s',            ),
           },
         ),
       );
@@ -226,9 +222,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',
-              phase: WorkPhase.land,
-              cursor: {
+              sessionId: 'tgdog-s',              cursor: {
                 'tg-1/agent': NodeCursor(state: StepState.complete),
                 'tg-1/verify': NodeCursor(state: StepState.complete),
                 'tg-1/land': NodeCursor(state: StepState.complete),
@@ -260,9 +254,7 @@ void main() {
       final reg = RecordingCapabilityRegistry(formulas: const {});
       const terminal = SessionProjection(
         workBeadId: 'tg-1',
-        sessionId: 'tgdog-s',
-        phase: WorkPhase.land,
-        cursor: {
+        sessionId: 'tgdog-s',        cursor: {
           'tg-1/agent': NodeCursor(state: StepState.complete),
           'tg-1/verify': NodeCursor(state: StepState.complete),
           'tg-1/land': NodeCursor(state: StepState.complete),
@@ -308,9 +300,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',
-              phase: WorkPhase.implement,
-            ),
+              sessionId: 'tgdog-s',            ),
           },
         ),
       );
@@ -332,9 +322,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',
-              phase: WorkPhase.implement,
-              cursor: {'tg-1/agent': NodeCursor(state: StepState.complete)},
+              sessionId: 'tgdog-s',              cursor: {'tg-1/agent': NodeCursor(state: StepState.complete)},
             ),
           },
         ),

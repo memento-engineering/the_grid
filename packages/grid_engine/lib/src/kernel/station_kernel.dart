@@ -5,7 +5,10 @@ import 'package:genesis_tree/genesis_tree.dart';
 import '../bridge/station_join_bridge.dart';
 import '../domain/joined_snapshot.dart';
 import '../effect/effect_context.dart';
+import '../formula/capability_registry.dart';
+import '../formula/stable_inherited.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
+import '../sdk/capability.dart';
 import '../seeds/station_seed.dart';
 import '../seeds/substation_scope.dart';
 import 'effect_resolver.dart';
@@ -39,11 +42,15 @@ class StationKernel {
     required EffectContext effectContext,
     required EffectResolver resolver,
     required List<SubstationScope> substations,
+    CapabilityRegistry? registry,
+    ServiceBundle services = const ServiceBundle(),
     DateTime Function()? clock,
     Timer Function(Duration, void Function())? scheduleTimer,
   }) : _effectContext = effectContext,
        _resolver = resolver,
        _substations = substations,
+       _registry = registry,
+       _services = services,
        _clock = clock ?? DateTime.now,
        _scheduleTimer = scheduleTimer ?? Timer.new;
 
@@ -53,6 +60,18 @@ class StationKernel {
   final EffectContext _effectContext;
   final EffectResolver _resolver;
   final List<SubstationScope> _substations;
+
+  /// The reentrant capability/formula resolution seam (ADR-0008 D4) — provided
+  /// as a stable ambient value the `FormulaScope` inflater resolves. Null when
+  /// the resolver roots a non-reentrant subtree (a test fake that returns a
+  /// plain leaf needs no registry).
+  final CapabilityRegistry? _registry;
+
+  /// The pluggable Service collaborators (source control / trust / transport —
+  /// ADR-0008 D5), provided stably above `Station`; a `CapabilityHost` resolves
+  /// them for its capability. Empty by default (an offline build wires none).
+  final ServiceBundle _services;
+
   final DateTime Function() _clock;
   final Timer Function(Duration, void Function()) _scheduleTimer;
 
@@ -70,18 +89,28 @@ class StationKernel {
     // in mountRoot (no markNeedsRebuild), so onNeedsFlush won't fire during it.
     _owner.onNeedsFlush = _scheduleFlush;
     bridge.start();
-    _owner.mountRoot(
-      InheritedSeed<JoinedSnapshotNotifier>(
-        value: bridge.notifier,
-        child: InheritedSeed<EffectContext>(
-          value: _effectContext,
-          child: InheritedSeed<EffectResolver>(
-            value: _resolver,
-            child: Station(_substations),
-          ),
-        ),
-      ),
+    // Build the ambient-provider stack inside-out. The reentrant engine's
+    // CapabilityRegistry + ServiceBundle are STABLE handles (D-6:
+    // updateShouldNotify => false), so the resolving→ready transitions inside a
+    // formula subtree never fan-rebuild from them; the work-axis notifier +
+    // context + resolver keep their existing (plain) provision. The registry is
+    // wrapped only when present (a non-reentrant fake resolver needs none).
+    Seed root = Station(_substations);
+    root = StableInheritedSeed<ServiceBundle>(value: _services, child: root);
+    final registry = _registry;
+    if (registry != null) {
+      root = StableInheritedSeed<CapabilityRegistry>(
+        value: registry,
+        child: root,
+      );
+    }
+    root = InheritedSeed<EffectResolver>(value: _resolver, child: root);
+    root = InheritedSeed<EffectContext>(value: _effectContext, child: root);
+    root = InheritedSeed<JoinedSnapshotNotifier>(
+      value: bridge.notifier,
+      child: root,
     );
+    _owner.mountRoot(root);
     // Arm the backoff Timer for any baseline cooldown (a restart that adopts a
     // cooled-down session — D-5/F1). Steady-state scans happen in the flush
     // cycle below, so the kernel adds NO persistent notifier listener (WorkList

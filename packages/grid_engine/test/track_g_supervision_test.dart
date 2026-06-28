@@ -60,11 +60,8 @@ Bead _task(String id) =>
 class _IdleResolver implements EffectResolver {
   const _IdleResolver();
   @override
-  Seed effectFor({
-    required Bead bead,
-    required WorkPhase phase,
-    SessionProjection? session,
-  }) => const Idle();
+  Seed effectFor({required Bead bead, SessionProjection? session}) =>
+      const Idle();
 }
 
 /// A controllable Timer the kernel's scheduleTimer seam returns (no real wall
@@ -93,7 +90,6 @@ void main() {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
               sessionId: 'tgdog-s',
-              phase: WorkPhase.implement,
               cursor: {
                 'tg-1/agent': NodeCursor(
                   state: StepState.failed,

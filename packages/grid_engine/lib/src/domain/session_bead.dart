@@ -1,15 +1,15 @@
 /// The shared session-bead metadata contract (ADR-0007 / A40).
 ///
 /// The_grid's OWN session/lifecycle beads (`type=session`, in the state store —
-/// e.g. `tgdog`) carry the work-bead linkage + the phase cursor + the spawned
-/// process identity as `metadata`. Every value is string-typed — the
-/// `StationBeadWriter` chokepoint's `update` takes `Map<String, String>`.
+/// e.g. `tgdog`) carry the work-bead linkage + the per-node reentrant cursor +
+/// the spawned process identity as `metadata`. Every value is string-typed —
+/// the `StationBeadWriter` chokepoint's `update` takes `Map<String, String>`.
 ///
 /// This module is the SINGLE definition of those keys + the read projection +
-/// the write payloads, so the join bridge (Track B — reads) and the effects /
-/// restart-reconcile (Track C/D — writes) cannot drift on the schema. Writes go
-/// through the chokepoint on the session bead, never a raw `bd` call and never
-/// the read-only work source (A37 / invariant 2).
+/// the write payloads, so the join bridge (reads) and the capability hosts /
+/// restart-reconcile (writes) cannot drift on the schema. Writes go through the
+/// chokepoint on the session bead, never a raw `bd` call and never the read-only
+/// work source (A37 / invariant 2).
 library;
 
 import 'package:grid_controller/grid_controller.dart';
@@ -17,7 +17,6 @@ import 'package:grid_controller/grid_controller.dart';
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
 import 'session_projection.dart';
-import 'work_phase.dart';
 
 /// Metadata keys on a the_grid session bead. `work_bead` + `rig` are stamped at
 /// mint by `StationBeadWriter.createSession`; the rest are written later through
@@ -26,12 +25,9 @@ abstract final class SessionBeadKeys {
   /// The work bead this session drives (stamped at mint; the JOIN key).
   static const workBead = 'work_bead';
 
-  /// The phase cursor — `implement` | `verify` | `land` (the [WorkPhase] name),
-  /// advanced by the effects as their last act + the controller's done-marker.
-  static const phase = 'grid.phase';
-
   /// The spawned agent's process-group id (stamped at `SessionStarted`; the
-  /// restart orphan-kill target, Track D).
+  /// legacy scalar restart orphan-kill fence, kept alongside the per-node
+  /// [CursorKeys.pgid]).
   static const pgid = 'pgid';
 
   /// The spawned agent's pid (diagnostics).
@@ -45,7 +41,7 @@ abstract final class SessionBeadKeys {
 /// The per-node reentrant cursor keys (ADR-0008 D4 / M4-P1 §3, D-3).
 ///
 /// The reentrant engine's progress is a step-graph position, not a 3-value
-/// [WorkPhase] enum, so each inflated node carries its own FLAT, merge-safe
+/// phase enum, so each inflated node carries its own FLAT, merge-safe
 /// `grid.cursor.{nodePath}.{field}` metadata on the_grid's OWN session bead.
 /// Flatness closes the disjoint-key write race (two concurrent leaf hosts on
 /// different nodes never collide); the chokepoint serialization (D-1) closes the
@@ -54,9 +50,7 @@ abstract final class SessionBeadKeys {
 /// This is the **the_grid-internal** schema on `tgdog` session beads — the codec
 /// boundary ([StationBeadWriter.rigKey] `'rig'`, `work_bead`, `IssueType.rig`,
 /// `type=convergence`, `kGridNamespace='grid'`, the M2 convergence byte-port)
-/// is untouched (A37: gc never reads `tgdog`). It coexists with the legacy
-/// [SessionBeadKeys.phase] cursor through Wave 1–3; the [WorkPhase] path retires
-/// in Track H when agent/verify/land move onto the `code` formula.
+/// is untouched (A37: gc never reads `tgdog`).
 abstract final class CursorKeys {
   /// The flat-key namespace for the per-node cursor.
   static const prefix = 'grid.cursor.';
@@ -196,16 +190,6 @@ StepState _parseStepState(Object? wire) {
 DateTime? _parseDate(Object? wire) =>
     wire == null ? null : DateTime.tryParse(wire.toString());
 
-/// Parses a `grid.phase` wire value (the [WorkPhase] name); defaults to
-/// [WorkPhase.implement] for a missing/unknown value (a freshly minted session
-/// with no cursor written yet).
-WorkPhase parseWorkPhase(Object? wire) => switch (wire) {
-  'implement' => WorkPhase.implement,
-  'verify' => WorkPhase.verify,
-  'land' => WorkPhase.land,
-  _ => WorkPhase.implement,
-};
-
 /// Projects a the_grid session [Bead] into the [SessionProjection] the tree
 /// joins against. The session bead's OWN status is the terminal signal
 /// (`closed` ⇒ terminal); the cursor + process identity come from metadata.
@@ -214,7 +198,6 @@ SessionProjection projectSession(Bead sessionBead) {
   return SessionProjection(
     workBeadId: (metadata[SessionBeadKeys.workBead] as String?) ?? '',
     sessionId: sessionBead.id,
-    phase: parseWorkPhase(metadata[SessionBeadKeys.phase]),
     isTerminal: sessionBead.isClosed,
     pgid: _asInt(metadata[SessionBeadKeys.pgid]),
     pid: _asInt(metadata[SessionBeadKeys.pid]),
@@ -225,12 +208,6 @@ SessionProjection projectSession(Bead sessionBead) {
     cursor: projectFormulaCursor(sessionBead),
   );
 }
-
-/// The metadata payload that advances the cursor to [phase] — Track C/D write
-/// this through the chokepoint, on the session bead.
-Map<String, String> phaseCursorMetadata(WorkPhase phase) => {
-  SessionBeadKeys.phase: phase.name,
-};
 
 /// The metadata payload stamped at `SessionStarted` (Track D): the process
 /// identity for respawn-or-skip + the freshness fence. All string-valued

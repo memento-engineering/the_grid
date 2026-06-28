@@ -41,18 +41,29 @@ GraphSnapshot graphOf(List<Bead> beads, {int tick = 0}) => GraphSnapshot.fromPar
 /// A work bead.
 Bead work(String id) => Bead(id: id, issueType: IssueType.feature, status: BeadStatus.open);
 
-/// A the_grid session bead linked to [workBeadId] at [phase].
+/// A the_grid session bead linked to [workBeadId], carrying the per-node cursor:
+/// each step id in [completed] is marked `complete` at `'$workBeadId/$step'` (the
+/// distinguishing payload the JOIN must pair + reflect on a change).
 Bead session(
   String id, {
   required String workBeadId,
-  String phase = 'implement',
+  Set<String> completed = const {},
   bool closed = false,
 }) => Bead(
   id: id,
   issueType: IssueType.session,
   status: closed ? BeadStatus.closed : BeadStatus.open,
-  metadata: {'rig': 'tgdog', 'work_bead': workBeadId, 'grid.phase': phase},
+  metadata: {
+    'rig': 'tgdog',
+    'work_bead': workBeadId,
+    for (final step in completed)
+      ...nodeStateMetadata('$workBeadId/$step', StepState.complete),
+  },
 );
+
+/// The cursor state of [node] in [s]'s session for [workBead], or null.
+StepState? _stateOf(JoinedSnapshot s, String workBead, String node) =>
+    s.sessionsByWorkBead[workBead]?.cursor[node]?.state;
 
 void main() {
   group('StationJoinBridge', () {
@@ -71,7 +82,9 @@ void main() {
 
     test('a LATE subscriber sees the baseline join, not nothing', () {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'verify')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([session('s1', workBeadId: 'w1', completed: {'agent'})]),
+      );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
@@ -82,7 +95,7 @@ void main() {
 
       expect(seen, isNotNull);
       expect(seen!.graph.beadsById.keys, contains('w1'));
-      expect(seen!.sessionsByWorkBead['w1']?.phase, WorkPhase.verify);
+      expect(_stateOf(seen!, 'w1', 'w1/agent'), StepState.complete);
     });
 
     test('with no work baseline, the seed is JoinedSnapshot.empty', () {
@@ -93,7 +106,9 @@ void main() {
     });
 
     test('one work change → exactly ONE push, new graph + unchanged sessions', () async {
-      stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'verify')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([session('s1', workBeadId: 'w1', completed: {'agent'})]),
+      );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
@@ -108,27 +123,31 @@ void main() {
       final joined = pushes.last;
       expect(joined.graph.beadsById.keys, containsAll(<String>['w1', 'w2']));
       // Sessions came from the OTHER source's `.current` — unchanged.
-      expect(joined.sessionsByWorkBead['w1']?.phase, WorkPhase.verify);
+      expect(_stateOf(joined, 'w1', 'w1/agent'), StepState.complete);
     });
 
     test('one cursor change → exactly ONE push, pairs work bead to its session', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'implement')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([session('s1', workBeadId: 'w1')]), // empty cursor
+      );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       final pushes = <JoinedSnapshot>[];
       bridge.notifier.addListener(pushes.add);
       expect(pushes, hasLength(1));
-      expect(pushes.last.sessionsByWorkBead['w1']?.phase, WorkPhase.implement);
+      expect(pushes.last.sessionsByWorkBead['w1']?.cursor, isEmpty);
 
-      // The cursor advances on the work_bead-linked session bead.
-      stateSrc.emit(graphOf([session('s1', workBeadId: 'w1', phase: 'verify')], tick: 1));
+      // The cursor advances on the work_bead-linked session bead (agent done).
+      stateSrc.emit(
+        graphOf([session('s1', workBeadId: 'w1', completed: {'agent'})], tick: 1),
+      );
       await pumpEventQueue();
 
       expect(pushes, hasLength(2), reason: 'exactly one push for one cursor change');
       // The JOIN pairs the work bead with its advanced session cursor.
-      expect(pushes.last.sessionsByWorkBead['w1']?.phase, WorkPhase.verify);
+      expect(_stateOf(pushes.last, 'w1', 'w1/agent'), StepState.complete);
       // Graph stayed the work source's `.current`.
       expect(pushes.last.graph.beadsById.keys, contains('w1'));
     });
@@ -171,18 +190,20 @@ void main() {
         status: BeadStatus.open,
         metadata: const {'work_bead': 'w1'},
       );
-      stateSrc = FakeSnapshotSource(graphOf([decoy, session('s1', workBeadId: 'w1', phase: 'land')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([decoy, session('s1', workBeadId: 'w1', completed: {'agent'})]),
+      );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
       // Only the real session contributes the cursor.
-      expect(bridge.notifier.current.sessionsByWorkBead['w1']?.phase, WorkPhase.land);
+      expect(_stateOf(bridge.notifier.current, 'w1', 'w1/agent'), StepState.complete);
       expect(bridge.notifier.current.sessionsByWorkBead, hasLength(1));
     });
 
     test('terminal retention: a CLOSED session still appears (so WorkList unmounts)', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1', phase: 'land')]));
+      stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1')]));
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
@@ -190,7 +211,9 @@ void main() {
       bridge.notifier.addListener(pushes.add);
 
       // The session closes — the positive terminal signal.
-      stateSrc.emit(graphOf([session('s1', workBeadId: 'w1', phase: 'land', closed: true)], tick: 1));
+      stateSrc.emit(
+        graphOf([session('s1', workBeadId: 'w1', closed: true)], tick: 1),
+      );
       await pumpEventQueue();
 
       final terminal = pushes.last.sessionsByWorkBead['w1'];

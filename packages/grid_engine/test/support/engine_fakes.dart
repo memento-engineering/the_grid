@@ -358,6 +358,37 @@ Fakes buildFakes({
 Bead bead(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
+/// A `type=session` state bead linking [workBeadId] — the row the join bridge
+/// projects + keys by `work_bead`, carrying the OWNED rig marker (so the
+/// chokepoint's ownership re-check passes) + the per-node reentrant cursor: each
+/// step id in [completed] is marked `complete` at nodePath `'$workBeadId/$step'`
+/// (the read half of the cursor the FormulaScope frontier advances on). The
+/// `code` formula's steps are `agent` → `verify` → `land`, so
+/// `completed: {'agent'}` makes `verify` eligible, `{'agent','verify'}` makes
+/// `land` eligible, and `{'agent','verify','land'}` is the positive terminal.
+Bead sessionBead({
+  required String id,
+  required String workBeadId,
+  Set<String> completed = const {},
+  bool closed = false,
+}) => Bead(
+  id: id,
+  issueType: IssueType.session,
+  status: closed ? BeadStatus.closed : BeadStatus.open,
+  metadata: {
+    'rig': stateSubstation,
+    SessionBeadKeys.workBead: workBeadId,
+    for (final step in completed)
+      ...nodeStateMetadata('$workBeadId/$step', StepState.complete),
+  },
+);
+
+/// The live `code` resolver (all work → the `code` formula) for the integrated
+/// acceptance tests — pair it with [buildCodeRegistry] as the ambient
+/// `CapabilityRegistry`. Mirrors `composeRunTree`'s production wiring.
+const FormulaResolver kCodeResolver = FormulaResolver(_codeFormula);
+Formula _codeFormula(Bead bead) => kCodeFormula;
+
 // ---------------------------------------------------------------------------
 // The reentrant inflater fakes (Track C/D): a CapabilityRegistry whose `host`
 // returns a recording leaf (the spawn proxy, like the Track A _FakeEffect) and

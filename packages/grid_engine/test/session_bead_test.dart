@@ -4,7 +4,8 @@ import 'package:test/test.dart';
 
 void main() {
   group('projectSession (the read half of the contract)', () {
-    test('projects work-bead linkage, cursor, identity, and terminal', () {
+    test('projects work-bead linkage, the per-node cursor, identity, terminal',
+        () {
       final session = Bead(
         id: 'tgdog-9a',
         issueType: IssueType.session,
@@ -12,7 +13,8 @@ void main() {
         metadata: const {
           'rig': 'tgdog',
           'work_bead': 'genesis-7r9',
-          'grid.phase': 'verify',
+          'grid.cursor.genesis-7r9/agent.state': 'complete',
+          // The legacy scalar identity fence (kept for the restart reconciler).
           'pgid': '4242',
           'pid': '4243',
           'token': 'deadbeef',
@@ -22,21 +24,22 @@ void main() {
       final p = projectSession(session);
       expect(p.workBeadId, 'genesis-7r9');
       expect(p.sessionId, 'tgdog-9a');
-      expect(p.phase, WorkPhase.verify);
+      expect(p.cursor['genesis-7r9/agent']!.state, StepState.complete);
       expect(p.isTerminal, isFalse);
       expect(p.pgid, 4242);
       expect(p.pid, 4243);
       expect(p.token, 'deadbeef');
     });
 
-    test('a freshly minted session (no cursor) projects implement', () {
+    test('a freshly minted session (no cursor keys) projects an empty cursor',
+        () {
       final session = Bead(
         id: 'tgdog-1',
         issueType: IssueType.session,
         metadata: const {'work_bead': 'genesis-q8h'},
       );
       final p = projectSession(session);
-      expect(p.phase, WorkPhase.implement);
+      expect(p.cursor, isEmpty);
       expect(p.pgid, isNull);
       expect(p.token, isNull);
     });
@@ -46,34 +49,34 @@ void main() {
         id: 'tgdog-2',
         issueType: IssueType.session,
         status: BeadStatus.closed,
-        metadata: const {'work_bead': 'genesis-q8h', 'grid.phase': 'land'},
+        metadata: const {
+          'work_bead': 'genesis-q8h',
+          'grid.cursor.genesis-q8h/land.state': 'complete',
+        },
       );
       final p = projectSession(session);
       expect(p.isTerminal, isTrue);
-      expect(p.phase, WorkPhase.land);
+      expect(p.cursor['genesis-q8h/land']!.state, StepState.complete);
     });
   });
 
   group('write payloads (the write half of the contract)', () {
-    test('phaseCursorMetadata uses the WorkPhase name', () {
-      expect(phaseCursorMetadata(WorkPhase.implement), {'grid.phase': 'implement'});
-      expect(phaseCursorMetadata(WorkPhase.verify), {'grid.phase': 'verify'});
-      expect(phaseCursorMetadata(WorkPhase.land), {'grid.phase': 'land'});
-    });
-
-    test('startedIdentityMetadata stringifies pgid/pid/token', () {
+    test('startedIdentityMetadata stringifies the scalar pgid/pid/token fence',
+        () {
       expect(
         startedIdentityMetadata(pgid: 7, pid: 8, token: 'cafe'),
         {'pgid': '7', 'pid': '8', 'token': 'cafe'},
       );
     });
 
-    test('round-trip: a cursor write then projection reads it back', () {
-      // Simulate the chokepoint merge of a cursor write onto a minted session.
+    test('round-trip: a per-node cursor write then projection reads it back', () {
+      // Simulate the chokepoint merge of a node cursor write onto a minted
+      // session (the disjoint-key, merge-safe write of D-1/D-3).
       final merged = <String, dynamic>{
         'rig': 'tgdog',
         'work_bead': 'genesis-7r9',
-        ...phaseCursorMetadata(WorkPhase.land),
+        ...nodeStateMetadata('genesis-7r9/agent', StepState.complete),
+        ...nodeFailedMetadata('genesis-7r9/verify', restartCount: 2),
         ...startedIdentityMetadata(pgid: 99, pid: 100, token: 'fade'),
       };
       final session = Bead(
@@ -82,7 +85,9 @@ void main() {
         metadata: merged,
       );
       final p = projectSession(session);
-      expect(p.phase, WorkPhase.land);
+      expect(p.cursor['genesis-7r9/agent']!.state, StepState.complete);
+      expect(p.cursor['genesis-7r9/verify']!.state, StepState.failed);
+      expect(p.cursor['genesis-7r9/verify']!.restartCount, 2);
       expect(p.pgid, 99);
       expect(p.token, 'fade');
       expect(p.workBeadId, 'genesis-7r9');
