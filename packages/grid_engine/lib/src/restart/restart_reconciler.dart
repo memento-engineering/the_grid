@@ -55,6 +55,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
+import '../sdk/formula.dart';
 
 /// The worktree-list seam: lists the per-bead worktrees under [root], each
 /// re-bound to its bead id (the dir name encodes the id). Returns `null` on a
@@ -306,20 +307,29 @@ class RestartReconciler {
     );
   }
 
-  /// A live, non-terminal [session]: terminate its orphan process group (if a
-  /// usable `pgid` + leader pid are on record), then mark respawn-pending.
+  /// A live, non-terminal [session]: terminate EVERY live orphan process group
+  /// it carries (D-4 — per-node, not a single scalar pgid), then mark
+  /// respawn-pending.
+  ///
+  /// A reentrant Burn has MANY concurrent live groups (peripheral + central
+  /// daemons, advertisers, the coordinator). The per-node cursor records each
+  /// one's `pgid`/`pid`; this iterates every node whose state ∈ {running, ready}
+  /// with a usable kill target and runs the REAL guarded [terminateGroup] on
+  /// each (per-node `token` is the recycled-pgid freshness fence, recorded on the
+  /// node). The legacy single-process path (a scalar `pgid` on the session, the
+  /// pre-Track-H agent/verify/land carrier) is the fallback when no per-node
+  /// target is recorded. Worktree reap stays per-bead.
   Future<RestartEntry> _killOrphanThenRespawn(
     BeadWorktree wt,
     SessionProjection session,
   ) async {
-    final pgid = session.pgid;
-    final leaderPid = session.pid;
+    final targets = _killTargets(session);
 
-    // No usable kill target (no pgid, or no leader pid to fence the liveness
-    // probe on): we cannot run the guarded terminate. Leave it respawn-pending
-    // — the agent's commit is durable, so a bounded re-run is not a correctness
+    // No usable kill target anywhere (no pgid+leader-pid on any live node, nor a
+    // scalar): we cannot run the guarded terminate. Leave it respawn-pending —
+    // the agent's commit is durable, so a bounded re-run is not a correctness
     // violation (the both-markers-partial residual).
-    if (pgid == null || leaderPid == null) {
+    if (targets.isEmpty) {
       return RestartEntry(
         worktree: wt,
         disposition: RestartDisposition.respawnPending,
@@ -327,24 +337,62 @@ class RestartReconciler {
       );
     }
 
-    // The REAL guarded terminate — never bypassing the `pgid <= 1`/own-group
-    // safety guard. A refusal still leaves the bead respawn-pending.
-    final result = await terminateGroup(
-      controller: _groups,
-      pgid: pgid,
-      leaderPid: leaderPid,
-    );
-    final disposition = switch (result) {
-      GroupTerminateResult.refusedUnsafe => RestartDisposition.refusedUnsafe,
-      GroupTerminateResult.exitedOnTerm ||
-      GroupTerminateResult.killed ||
-      GroupTerminateResult.alreadyGone => RestartDisposition.killed,
-    };
+    // The REAL guarded terminate on EACH live group — never bypassing the
+    // `pgid <= 1`/own-group safety guard. A group refused is still left
+    // respawn-pending.
+    final results = <GroupTerminateResult>[];
+    for (final t in targets) {
+      results.add(
+        await terminateGroup(
+          controller: _groups,
+          pgid: t.pgid,
+          leaderPid: t.pid,
+        ),
+      );
+    }
+
+    // Aggregate per worktree: if ANY group was signalled (not refused) the
+    // worktree is `killed`; if EVERY target was refused it is `refusedUnsafe`.
+    // Both buckets are respawn-pending. The representative result is the first
+    // non-refusal (or the refusal when all refused) — single-target entries keep
+    // their exact result.
+    final firstSignalled = results
+        .where((r) => r != GroupTerminateResult.refusedUnsafe)
+        .firstOrNull;
+    final disposition = firstSignalled != null
+        ? RestartDisposition.killed
+        : RestartDisposition.refusedUnsafe;
     return RestartEntry(
       worktree: wt,
       disposition: disposition,
       sessionId: session.sessionId,
-      terminateResult: result,
+      terminateResult: firstSignalled ?? GroupTerminateResult.refusedUnsafe,
     );
+  }
+
+  /// The live process groups to terminate for [session] — the per-node cursor's
+  /// live groups (D-4), or the legacy scalar pgid when no per-node target is
+  /// recorded. A target needs BOTH a `pgid` and a leader `pid` (the liveness
+  /// fence); a pgid without a pid is skipped (no usable target). Deduped by pgid.
+  List<({int pgid, int pid})> _killTargets(SessionProjection session) {
+    final out = <({int pgid, int pid})>[];
+    final seen = <int>{};
+    for (final node in session.cursor.values) {
+      final live =
+          node.state == StepState.running || node.state == StepState.ready;
+      final pgid = node.pgid;
+      final pid = node.pid;
+      if (live && pgid != null && pid != null && seen.add(pgid)) {
+        out.add((pgid: pgid, pid: pid));
+      }
+    }
+    // Legacy single-process fallback (the pre-Track-H carrier) — only when the
+    // per-node cursor recorded no live target.
+    if (out.isEmpty) {
+      final pgid = session.pgid;
+      final pid = session.pid;
+      if (pgid != null && pid != null) out.add((pgid: pgid, pid: pid));
+    }
+    return out;
   }
 }

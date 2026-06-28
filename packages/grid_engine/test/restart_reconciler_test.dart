@@ -122,6 +122,62 @@ Bead _session({
   );
 }
 
+/// Builds a STATE-store session bead carrying a per-node cursor (D-4) — the
+/// reentrant identity, written as flat `grid.cursor.*` metadata.
+Bead _sessionWithCursor({
+  required String id,
+  required String workBead,
+  required Map<String, NodeCursor> cursor,
+  bool closed = false,
+}) {
+  final meta = <String, dynamic>{'rig': 'tgdog', 'work_bead': workBead};
+  cursor.forEach((path, node) => meta.addAll(nodeCursorMetadata(path, node)));
+  return Bead(
+    id: id,
+    issueType: IssueType.session,
+    status: closed ? BeadStatus.closed : BeadStatus.open,
+    metadata: meta,
+  );
+}
+
+/// A process-group fake that clears ONLY the signalled group's leader pid (so a
+/// session with N concurrent live groups terminates each independently — the
+/// single-orphan [FakeProcessGroupController] clears all pids at once).
+class _PerGroupController implements ProcessGroupController {
+  _PerGroupController({
+    required this.ownGroupId,
+    required this.log,
+    required Map<int, int> pgidToLeader,
+    Set<int> alivePids = const {},
+  }) : _pgidToLeader = pgidToLeader,
+       _alive = {...alivePids};
+
+  final int ownGroupId;
+  final List<String> log;
+  final Map<int, int> _pgidToLeader;
+  final Set<int> _alive;
+  final List<(int, ProcessSignal)> signals = [];
+
+  @override
+  Future<int?> resolvePgid(int pid) async => null;
+
+  @override
+  bool processAlive(int pid) => _alive.contains(pid);
+
+  @override
+  bool signalGroup(int pgid, ProcessSignal signal) {
+    log.add('signal:$pgid');
+    signals.add((pgid, signal));
+    if (signal == ProcessSignal.sigterm || signal == ProcessSignal.sigkill) {
+      _alive.remove(_pgidToLeader[pgid]); // only THIS group's leader dies
+    }
+    return true;
+  }
+
+  @override
+  int currentGroupId() => ownGroupId;
+}
+
 GraphSnapshot _stateSnapshotOf(List<Bead> beads) => GraphSnapshot.fromParts(
   beads: beads,
   dependencies: const [],
@@ -523,6 +579,155 @@ void main() {
 
         // respawnCount = everything except the skipped done bead.
         expect(report.respawnCount, 3);
+      },
+    );
+  });
+
+  group('RestartReconciler — D-4 per-node respawn (the reentrant Burn arm)', () {
+    test(
+      'a session with N live per-node groups terminates EVERY one (not just '
+      'a scalar pgid); a completed node is not killed',
+      () async {
+        final log = <String>[];
+        final git = FakeGit(worktrees: [_wt('tgdog-burn')], log: log);
+        // Two live daemon groups + one completed job (no kill target).
+        final groups = _PerGroupController(
+          ownGroupId: 999,
+          log: log,
+          pgidToLeader: {5000: 5001, 6000: 6001},
+          alivePids: {5001, 6001},
+        );
+        final state = _stateSnapshotOf([
+          _sessionWithCursor(
+            id: 'tgdog-burn-s',
+            workBead: 'tgdog-burn',
+            cursor: {
+              'tgdog-burn/harnessPeripheral/launch': const NodeCursor(
+                state: StepState.ready,
+                pgid: 5000,
+                pid: 5001,
+                token: 'tA',
+              ),
+              'tgdog-burn/harnessCentral/launch': const NodeCursor(
+                state: StepState.running,
+                pgid: 6000,
+                pid: 6001,
+                token: 'tB',
+              ),
+              'tgdog-burn/coordinator': const NodeCursor(
+                state: StepState.complete, // not live → never signalled
+              ),
+            },
+          ),
+        ]);
+
+        final report = await RestartReconciler(
+          listWorktrees: git.listWorktrees,
+          reapWorktree: git.reapWorktree,
+          workRoot: _workRoot,
+          groups: groups,
+          freshnessBarrier: () async {},
+          stateSnapshot: () => state,
+        ).reconcile();
+
+        // One worktree entry, killed; BOTH live groups terminated (the D-4 fix —
+        // the P0 scalar reconciler had no scalar pgid here and would have killed
+        // NONE, then respawned over still-live daemons).
+        expect(report.killed, hasLength(1));
+        expect(groups.signals.map((s) => s.$1).toSet(), {5000, 6000});
+        expect(report.respawnCount, 1);
+      },
+    );
+
+    test(
+      'mixed per-node: one live group killed + one pgid<=1 refused ⇒ the '
+      'worktree is killed (any group signalled) and respawn-pending',
+      () async {
+        final log = <String>[];
+        final git = FakeGit(worktrees: [_wt('tgdog-mix')], log: log);
+        final groups = _PerGroupController(
+          ownGroupId: 999,
+          log: log,
+          pgidToLeader: {7000: 7001},
+          alivePids: {7001, 9},
+        );
+        final state = _stateSnapshotOf([
+          _sessionWithCursor(
+            id: 'tgdog-mix-s',
+            workBead: 'tgdog-mix',
+            cursor: {
+              'tgdog-mix/a': const NodeCursor(
+                state: StepState.running,
+                pgid: 7000,
+                pid: 7001,
+              ),
+              'tgdog-mix/b': const NodeCursor(
+                state: StepState.running,
+                pgid: 1, // unsafe — refused, no signal
+                pid: 9,
+              ),
+            },
+          ),
+        ]);
+
+        final report = await RestartReconciler(
+          listWorktrees: git.listWorktrees,
+          reapWorktree: git.reapWorktree,
+          workRoot: _workRoot,
+          groups: groups,
+          freshnessBarrier: () async {},
+          stateSnapshot: () => state,
+        ).reconcile();
+
+        expect(report.killed, hasLength(1));
+        // Only the safe group was signalled; the pgid=1 group was refused.
+        expect(groups.signals.map((s) => s.$1), [7000]);
+        expect(report.respawnCount, 1);
+      },
+    );
+
+    test(
+      'all per-node groups refused (every pgid<=1) ⇒ refusedUnsafe, no signal',
+      () async {
+        final log = <String>[];
+        final git = FakeGit(worktrees: [_wt('tgdog-allbad')], log: log);
+        final groups = _PerGroupController(
+          ownGroupId: 999,
+          log: log,
+          pgidToLeader: const {},
+          alivePids: {10, 11},
+        );
+        final state = _stateSnapshotOf([
+          _sessionWithCursor(
+            id: 'tgdog-allbad-s',
+            workBead: 'tgdog-allbad',
+            cursor: {
+              'tgdog-allbad/a': const NodeCursor(
+                state: StepState.running,
+                pgid: 1,
+                pid: 10,
+              ),
+              'tgdog-allbad/b': const NodeCursor(
+                state: StepState.ready,
+                pgid: 0,
+                pid: 11,
+              ),
+            },
+          ),
+        ]);
+
+        final report = await RestartReconciler(
+          listWorktrees: git.listWorktrees,
+          reapWorktree: git.reapWorktree,
+          workRoot: _workRoot,
+          groups: groups,
+          freshnessBarrier: () async {},
+          stateSnapshot: () => state,
+        ).reconcile();
+
+        expect(report.refusedUnsafe, hasLength(1));
+        expect(groups.signals, isEmpty);
+        expect(report.respawnCount, 1);
       },
     );
   });
