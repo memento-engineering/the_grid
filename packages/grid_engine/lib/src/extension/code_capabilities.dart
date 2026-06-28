@@ -114,6 +114,9 @@ class LandCapability extends ServiceCapability {
       baseBranch: ctx.baseBranch,
       title: 'grid: ${ctx.beadId}',
     );
+    // Check cancellation after EVERY async gap (P0 LandEffectSeed parity) — a
+    // dispose mid-land must not record a stale terminal.
+    if (ctx.cancel.isCancelled) return const Failed('cancelled');
     if (pr == null) return const Failed('pr open did not complete');
     return Ok({'pr_url': pr.url});
   }

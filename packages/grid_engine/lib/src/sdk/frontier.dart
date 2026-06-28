@@ -117,7 +117,7 @@ bool _runnableState(
     StepState.running => true,
     StepState.ready => step is CapabilityStep && step.kind == StepKind.daemon,
     StepState.complete => false,
-    StepState.failed => node.restartCount <= formula.maxRestarts && // MUT F3
+    StepState.failed => node.restartCount < formula.maxRestarts &&
         (node.cooldownUntil == null || !now.isBefore(node.cooldownUntil!)),
   };
 }

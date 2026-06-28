@@ -5,12 +5,48 @@
 // the D-1 race in grid_runtime; invariant 3: track_a A41 allow-list; invariant
 // 4: track_c/restart). THIS file re-proves all four INSIDE a nested formula
 // subtree (the Burn shape), each as a mutation-resistant gate. Zero I/O.
+import 'dart:async';
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
+
+/// A real (writing) fake ProcessCapability — so a CapabilityHost actually mounts,
+/// spawns, and WRITES its cursor through the chokepoint (the invariant-2/4 gates
+/// must exercise a running host, not just SessionScope's close).
+class _WritingCap extends ProcessCapability {
+  const _WritingCap();
+  @override
+  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
+    workDir: ctx.workspaceDir,
+    command: 'sh',
+    args: const ['-c', 'echo'],
+    lifecycle: Lifecycle.oneTurn,
+  );
+  @override
+  StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
+    Exited(:final exitCode) when exitCode == 0 => StepSignal.complete,
+    Exited() || Died() => StepSignal.failed,
+    _ => StepSignal.none,
+  };
+}
+
+Future<void> _pump() async {
+  for (var i = 0; i < 5; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+const _burnCaps = <String, Capability>{
+  'build': _WritingCap(),
+  'install': _WritingCap(),
+  'waitWS': _WritingCap(),
+  'report': _WritingCap(),
+};
 
 const _deploy = Formula(
   id: 'deploy',
@@ -108,6 +144,46 @@ List<Branch> _all(Branch root) {
 Branch _whereSeed(Branch root, bool Function(Seed) test) =>
     _all(root).firstWhere((b) => test(b.seed));
 
+/// Mounts the burn formula with REAL CapabilityHosts (DefaultCapabilityRegistry
+/// over [_burnCaps]) so a host genuinely spawns + writes its cursor — for the
+/// invariant-2/4 write-target gates.
+({TreeOwner owner, Branch root, Fakes fakes}) _mountReal({
+  required JoinedSnapshotNotifier joined,
+  required SubstationConfig config,
+}) {
+  final fakes = buildFakes();
+  final registry = DefaultCapabilityRegistry(
+    capabilities: _burnCaps,
+    formulas: const {'deploy': _deploy},
+    clock: () => DateTime(2026),
+  );
+  final owner = TreeOwner();
+  final root = owner.mountRoot(
+    InheritedSeed<JoinedSnapshotNotifier>(
+      value: joined,
+      child: InheritedSeed<EffectContext>(
+        value: fakes.ctx,
+        child: StableInheritedSeed<CapabilityRegistry>(
+          value: registry,
+          child: InheritedSeed<ServiceBundle>(
+            value: const ServiceBundle(),
+            child: InheritedSeed<EffectResolver>(
+              value: FormulaResolver((_) => _burn),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(config),
+                  key: const ValueKey('scope'),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return (owner: owner, root: root, fakes: fakes);
+}
+
 const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 
 void main() {
@@ -153,41 +229,47 @@ void main() {
     });
   });
 
-  group('Invariant 2 AT DEPTH — only the chokepoint writes', () {
-    test('the only bd writes in a driven formula are the chokepoint`s (the '
-        'recording runner sees every one; no bypass)', () async {
+  group('Invariant 2 AT DEPTH — only the chokepoint writes (a RUNNING host)', () {
+    test('a deep CapabilityHost`s cursor write goes via the chokepoint onto the '
+        'OWN session — never a direct/foreign write', () async {
+      // Empty cursor → the peripheral build host (two levels deep) actually
+      // MOUNTS, spawns, and writes (not a vacuous all-complete cursor).
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [_bead('tg-b')],
           ready: {'tg-b'},
-          sessions: {
-            'tg-b': _session('tg-b', 'tgdog-s', cursor: const {
-              'tg-b/harness/build': NodeCursor(state: StepState.complete),
-              'tg-b/harness/install': NodeCursor(state: StepState.complete),
-              'tg-b/harness/waitWS': NodeCursor(state: StepState.complete),
-              'tg-b/report': NodeCursor(state: StepState.complete),
-            }),
-          },
+          sessions: {'tg-b': _session('tg-b', 'tgdog-s')},
         ),
       );
-      final m = _mount(joined: joined, config: _tg);
-      addTearDown(m.owner.dispose);
-      await Future<void>.delayed(Duration.zero);
+      final m = _mountReal(joined: joined, config: _tg);
+      addTearDown(() {
+        m.owner.dispose();
+        unawaited(m.fakes.provider.close());
+      });
+      await _pump();
 
-      // The formula is complete → SessionScope closes via the chokepoint. EVERY
-      // recorded bd call is a session-bead write (never the foreign work bead),
-      // and the runner is the SOLE write surface (CapabilityContext has no
-      // writer — track_e; the D-1 same-key race — grid_runtime).
-      for (final call in m.fakes.runner.calls) {
-        if (call.length > 1 && {'update', 'close', 'create'}.contains(call.first)) {
-          // a mutation targeting the work bead would put 'tg-b' here.
-          expect(call[1], isNot('tg-b'));
-        }
-      }
+      // The deep build host spawned under the OWN session name.
+      expect(m.fakes.provider.started.map((s) => s.name),
+          contains('tgdog-s/tg-b/harness/build'));
+
+      // It completes → the host writes the node cursor THROUGH the chokepoint.
+      m.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-b/harness/build', exitCode: 0));
+      await _pump();
+
+      // The write landed on the OWN session (tgdog-s), at the deep node path —
+      // and NO bd call targets the work bead (invariant 2 + A37, at depth).
+      final writes = m.fakes.runner
+          .callsFor('update')
+          .where((c) => c[1] == 'tgdog-s')
+          .toList();
+      expect(writes, isNotEmpty);
       expect(
-        m.fakes.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
-        hasLength(1),
+        writes.any((c) => c.join(' ').contains('grid.cursor.tg-b/harness/build.state')),
+        isTrue,
       );
+      for (final call in m.fakes.runner.calls) {
+        if (call.length > 1) expect(call[1], isNot('tg-b'));
+      }
     });
   });
 
@@ -212,9 +294,10 @@ void main() {
     });
   });
 
-  group('Invariant 4 / A37 AT DEPTH — read-only foreign source', () {
-    test('a FOREIGN work bead`s formula writes its cursor/close to the OWN '
-        'session bead, NEVER the foreign work bead', () async {
+  group('Invariant 4 / A37 AT DEPTH — read-only foreign source (a RUNNING host)',
+      () {
+    test('a FOREIGN work bead`s deep host writes its cursor to the OWN session, '
+        'NEVER the foreign work bead', () async {
       // The_grid dispatches a foreign work source (config owns `genesis`); the
       // session lives in the OWNED state store (`tgdog`, the writer`s allow-set).
       const foreignConfig =
@@ -223,29 +306,33 @@ void main() {
         _joined(
           beads: [_bead('genesis-x')],
           ready: {'genesis-x'},
-          sessions: {
-            'genesis-x': _session('genesis-x', 'tgdog-s', cursor: const {
-              'genesis-x/harness/build': NodeCursor(state: StepState.complete),
-              'genesis-x/harness/install': NodeCursor(state: StepState.complete),
-              'genesis-x/harness/waitWS': NodeCursor(state: StepState.complete),
-              'genesis-x/report': NodeCursor(state: StepState.complete),
-            }),
-          },
+          // Empty cursor → the deep build host actually RUNS + writes.
+          sessions: {'genesis-x': _session('genesis-x', 'tgdog-s')},
         ),
       );
-      final m = _mount(joined: joined, config: foreignConfig);
-      addTearDown(m.owner.dispose);
-      await Future<void>.delayed(Duration.zero);
+      final m = _mountReal(joined: joined, config: foreignConfig);
+      addTearDown(() {
+        m.owner.dispose();
+        unawaited(m.fakes.provider.close());
+      });
+      await _pump();
 
-      // The foreign work bead mounted (config owns `genesis`), the formula
-      // completed, and the close targeted the OWN session — never `genesis-x`.
+      // The foreign work bead mounted (config owns `genesis`); its deep build
+      // host spawned + completes.
       expect(
-        _all(m.root).whereType<Branch>().where((b) => b.seed is WorkBead),
+        _all(m.root).where((b) => b.seed is WorkBead),
         hasLength(1),
       );
+      m.fakes.provider.emit(
+        const Exited(name: 'tgdog-s/genesis-x/harness/build', exitCode: 0),
+      );
+      await _pump();
+
+      // The cursor write targeted the OWN session — and NOT ONE bd call touches
+      // the foreign work bead `genesis-x` (A37, at depth, with a running host).
       expect(
-        m.fakes.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
-        hasLength(1),
+        m.fakes.runner.callsFor('update').where((c) => c[1] == 'tgdog-s'),
+        isNotEmpty,
       );
       for (final call in m.fakes.runner.calls) {
         if (call.length > 1) expect(call[1], isNot('genesis-x'));

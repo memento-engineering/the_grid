@@ -251,7 +251,25 @@ void main() {
         isTrue,
       );
 
-      // Central's build FAILS and exhausts (restartCount 3 == maxRestarts) →
+      // Central's build FAILS but is WITHIN budget (restartCount 1 < 3) → it
+      // RE-KEYS: the old incarnation unmounts, a new one mounts (backoff
+      // re-mount). Validates the supervised-restart path before exhaustion.
+      burn.advance({
+        '${_b('harnessPeripheral')}/launch': _ready(),
+        '${_b('harnessPeripheral')}/waitWS': _done(),
+        '${_b('harnessCentral')}/build':
+            const NodeCursor(state: StepState.failed, restartCount: 1),
+      });
+      expect(
+        burn.events,
+        containsAll([
+          'STOP build(tgdog-s/tg-burn/harnessCentral/build)',
+          'START build(tgdog-s/tg-burn/harnessCentral/build)',
+        ]),
+        reason: 'a failed-within-budget step re-keys (incarnation bump)',
+      );
+
+      // Now central's build EXHAUSTS (restartCount 3 == maxRestarts) →
       // circuit-broken → broken-deep → SessionScope escalates + closes.
       burn.advance({
         '${_b('harnessPeripheral')}/launch': _ready(),
@@ -274,8 +292,8 @@ void main() {
       );
     });
 
-    test('a half-up rig NEVER mounts the coordinator (positive-terminal-only)',
-        () {
+    test('a half-up rig NEVER mounts the coordinator; completing it DOES '
+        '(positive-terminal-only, with a positive control)', () {
       final burn = _Burn('tg-burn')..mount();
       addTearDown(burn.dispose);
       // Peripheral up, central FAILED (not terminal) — the coordinator's
@@ -290,6 +308,23 @@ void main() {
         burn.events.any((e) => e.contains('coordinator')),
         isFalse,
         reason: 'a failed harness never satisfies the barrier',
+      );
+
+      // The POSITIVE CONTROL: drive central to its terminal → the coordinator
+      // NOW mounts. This proves the withholding above was the barrier itself
+      // (not some unrelated reason — the test is not vacuous).
+      burn.advance({
+        '${_b('harnessPeripheral')}/waitWS': _done(),
+        '${_b('harnessPeripheral')}/launch': _ready(),
+        '${_b('harnessCentral')}/build': _done(),
+        '${_b('harnessCentral')}/install': _done(),
+        '${_b('harnessCentral')}/launch': _ready(),
+        '${_b('harnessCentral')}/waitWS': _done(),
+      });
+      expect(
+        burn.events.any((e) => e.contains('START coordinator(tgdog-s/tg-burn/coordinator)')),
+        isTrue,
+        reason: 'both harnesses terminal → the barrier opens',
       );
     });
   });
