@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -356,3 +357,69 @@ Fakes buildFakes({
 /// An open task bead with [id].
 Bead bead(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
+
+// ---------------------------------------------------------------------------
+// The reentrant inflater fakes (Track C/D): a CapabilityRegistry whose `host`
+// returns a recording leaf (the spawn proxy, like the Track A _FakeEffect) and
+// whose `formula` resolves from an injected map; a fixed clock keeps the
+// frontier predicate deterministic.
+// ---------------------------------------------------------------------------
+
+/// A recording [CapabilityRegistry]: `host` mounts a fake leaf that records
+/// `START`/`STOP <capabilityId>(<sessionId>/<nodePath>)` so a test asserts the
+/// inflation frontier AND the disjoint per-session routing; `formula` resolves
+/// from [formulas]; `now` is a fixed [clock].
+class RecordingCapabilityRegistry implements CapabilityRegistry {
+  RecordingCapabilityRegistry({
+    Map<String, Formula> formulas = const {},
+    DateTime? clock,
+  }) : _formulas = formulas,
+       _clock = clock ?? DateTime(2026);
+
+  final Map<String, Formula> _formulas;
+  final DateTime _clock;
+
+  /// Leaf lifecycle in mount/unmount order — the observable proxy for
+  /// spawn (`START`) / kill (`STOP`).
+  final List<String> events = [];
+
+  @override
+  Formula? formula(String formulaId) => _formulas[formulaId];
+
+  @override
+  DateTime now() => _clock;
+
+  @override
+  Seed host(StepMount mount) => FakeCapabilityHost(registry: this, mount: mount, key: mount.key);
+}
+
+/// A recording fake leaf (NOT the real `CapabilityHost`): records its mount /
+/// unmount with its capabilityId, session, and path, and is a pure `Idle` leaf.
+class FakeCapabilityHost extends StatefulSeed {
+  const FakeCapabilityHost({
+    required this.registry,
+    required this.mount,
+    super.key,
+  });
+
+  final RecordingCapabilityRegistry registry;
+  final StepMount mount;
+
+  @override
+  State<FakeCapabilityHost> createState() => _FakeCapabilityHostState();
+}
+
+class _FakeCapabilityHostState extends State<FakeCapabilityHost> {
+  String get _label =>
+      '${seed.mount.step.capabilityId}'
+      '(${seed.mount.session.sessionId}/${seed.mount.nodePath})';
+
+  @override
+  void initState() => seed.registry.events.add('START $_label');
+
+  @override
+  void dispose() => seed.registry.events.add('STOP $_label');
+
+  @override
+  Seed build(TreeContext context) => const Idle();
+}

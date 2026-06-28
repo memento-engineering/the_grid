@@ -21,6 +21,17 @@ export 'src/bridge/snapshot_source.dart';
 // value-types + the pure frontier predicate the author composes — never a Seed.
 export 'src/sdk/sdk.dart';
 
+// The reentrant engine (ENGINE-PRIVATE — never subclassed by an asset; the
+// public/private package split is deferred, D1): the SessionScope adopt-or-mint
+// lifecycle owner (D-2), the FormulaScope inflater + its registry/clock seam
+// (Track D), and the resolver that roots the subtree at the EffectResolver seam.
+export 'src/formula/capability_registry.dart';
+export 'src/formula/formula_resolver.dart';
+export 'src/formula/formula_scope.dart';
+export 'src/formula/session_handle.dart';
+export 'src/formula/session_scope.dart';
+export 'src/formula/stable_inherited.dart';
+
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
 export 'src/domain/session_bead.dart';
