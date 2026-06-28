@@ -9,6 +9,8 @@ import 'package:grid_reconciler/grid_reconciler.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:meta/meta.dart';
 
+import 'run_tree_command.dart' show runGridTree;
+
 /// `grid run` — the M3 dogfood composition (M3-BUILD-ORDER Track 7).
 ///
 /// One process that wires together the three the_grid loops over a SINGLE
@@ -136,10 +138,12 @@ class RunCommand extends Command<int> {
 
   @override
   final String description =
-      'Run the M3 dogfood loop: the reactive controller + the convergence '
-      'reconciler + the ready-bead dispatcher, over one shared ownership '
-      'allow-set. Defaults to --dry-run (observe-only). Run under '
-      '`dart run --enable-vm-service` so leonard can attach.';
+      'Run the M4 TREE ENGINE (tree-as-default): the reactive controller + the '
+      'reentrant tree engine that spawns a coding agent per ready bead, over one '
+      'shared ownership allow-set. Defaults to --dry-run (observe-only). Run '
+      'under `dart run --enable-vm-service` so leonard can attach. (The legacy '
+      'M2/M3 reducer+dispatcher path — `runGrid` — is retained dormant pending '
+      'its retirement scope.)';
 
   @override
   Future<int> run() async {
@@ -150,7 +154,10 @@ class RunCommand extends Command<int> {
       ...args.multiOption('owner'),
     }..removeWhere((r) => r.trim().isEmpty);
 
-    return runGrid(
+    // tree-as-default (M5 D1 / ADR-0007): `grid run` IS the tree engine. The
+    // legacy `runGrid` (M2/M3 dispatch) stays in this file, dormant, until its
+    // retirement is scoped (the convergence-reconciler question).
+    return runGridTree(
       substations: substations,
       provider: RuntimeProviderKind.parse(args.option('provider')),
       rootPath: args.option('root'),

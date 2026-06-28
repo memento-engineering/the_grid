@@ -113,6 +113,132 @@ void main() {
       expect(h.provider.stops.length, stopsAfterFirst);
     });
   });
+
+  group('runGridTree — gating + dry-run wiring (tree-as-default)', () {
+    test('an empty allow-set is refused (exit 64, no composition)', () async {
+      final errs = <String>[];
+      final code = await runGridTree(
+        substations: const {},
+        dryRun: true,
+        out: (_) {},
+        err: errs.add,
+        runForever: false,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('--substation/--owner is required'));
+    });
+
+    test('a non-dry run with no --root is refused (exit 64)', () async {
+      final errs = <String>[];
+      final code = await runGridTree(
+        substations: {'tgdog'},
+        dryRun: false, // ask for LIVE…
+        // …no root → refused before any composition.
+        out: (_) {},
+        err: errs.add,
+        runForever: false,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('requires --root'));
+    });
+
+    test('a non-dry run with --root but NO --state-workspace is refused (64) — '
+        'sessions must never default into the read --workspace (A36/A37)',
+        () async {
+      final errs = <String>[];
+      final code = await runGridTree(
+        substations: {'genesis'},
+        dryRun: false,
+        rootPath: '/tmp/some-root', // past the root guard…
+        // …no --state-workspace → refused.
+        out: (_) {},
+        err: errs.add,
+        runForever: false,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('requires --state-workspace'));
+    });
+
+    test('dry-run wires the M3 seams into the tree engine: an owned ready bead '
+        'mounts + records a would-spawn through the chokepoint, NOTHING live; '
+        'the start→teardown lifecycle returns 0', () async {
+      final work = _FakeSnapshotSource();
+      work.push(
+        GraphSnapshot.fromParts(
+          beads: [Bead(id: 'tgdog-w1', title: 'do the thing')],
+          dependencies: const [],
+          readyIds: {'tgdog-w1'},
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        ),
+      );
+      final state = _FakeSnapshotSource();
+      final provider = _RecordingDryProvider();
+      final bdRunner = RecordingBdRunner();
+      final groups = _FakeProcessGroupController();
+      addTearDown(() async {
+        await work.close();
+        await state.close();
+        await provider.close();
+      });
+
+      final code = await runGridTree(
+        substations: {'tgdog'},
+        stateSubstation: 'tgdog',
+        dryRun: true,
+        // Inject the two sources + the dry seams — but NOT the git service, so
+        // the lib's own dry (no-op) git service is exercised end-to-end (the
+        // RestartReconciler probes it on start; it must touch no real git).
+        workSourceOverride: work,
+        stateSourceOverride: state,
+        providerOverride: provider,
+        stateBdOverride: BdCliService(bdRunner),
+        groupsOverride: groups,
+        rootCheckoutOverride: const RootCheckout(
+          path: '/tmp/grid-tree-root',
+          defaultBranch: 'main',
+          substation: 'tgdog',
+        ),
+        freshnessBarrierOverride: () async {},
+        // A short fixed run lets the mount→mint→spawn microtask chain settle
+        // before teardown, then returns 0.
+        runFor: const Duration(milliseconds: 100),
+        out: (_) {},
+        err: (_) {},
+      );
+
+      expect(code, 0);
+      // The engine mounted through the wiring and drove the chokepoint (the
+      // session mint) + recorded a would-spawn — all through fakes.
+      expect(
+        bdRunner.calls.where((c) => c.isNotEmpty && c.first == 'create'),
+        isNotEmpty,
+        reason: 'the session mint went through the chokepoint (fake bd)',
+      );
+      expect(
+        provider.starts,
+        isNotEmpty,
+        reason: 'the ready owned bead would spawn (recorded, never real)',
+      );
+    });
+
+    test('the dry-run git service is INERT — a no-op runner yields a NON-NULL '
+        'empty worktree list (a real `git` over a non-repo path errors → null), '
+        'so the RestartReconciler finds no survivors without touching real git',
+        () async {
+      final result = await buildDryTreeGitService().listBeadWorktrees(
+        const RootCheckout(
+          path: '/tmp/grid-tree-root-does-not-exist',
+          defaultBranch: 'main',
+          substation: 'tgdog',
+        ),
+      );
+      // Exit-0 + empty output (the no-op runner) parses to [] — a real `git`
+      // over a non-existent repo would exit non-zero → worktreeList returns null.
+      expect(result, isNotNull,
+          reason: 'the no-op runner short-circuits real git (empty success)');
+      expect(result, isEmpty);
+    });
+  });
 }
 
 /// Pumps the microtask/event queue a few turns so the kernel's batched flush,
