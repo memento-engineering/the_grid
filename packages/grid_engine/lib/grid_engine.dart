@@ -17,15 +17,19 @@ library;
 export 'src/bridge/station_join_bridge.dart';
 export 'src/bridge/snapshot_source.dart';
 
-// The reentrant authoring SDK surface (ADR-0008 D2/D4 / M4-P1 Track A): the
-// value-types + the pure frontier predicate the author composes — never a Seed.
+// The reentrant authoring SDK surface (ADR-0008 D2/D4 / M4-P1 Track A/E): the
+// value-types + the pure frontier predicate + the opaque Capability/Service
+// interfaces the author composes — never a Seed.
+export 'src/sdk/capability.dart';
 export 'src/sdk/sdk.dart';
 
 // The reentrant engine (ENGINE-PRIVATE — never subclassed by an asset; the
 // public/private package split is deferred, D1): the SessionScope adopt-or-mint
 // lifecycle owner (D-2), the FormulaScope inflater + its registry/clock seam
 // (Track D), and the resolver that roots the subtree at the EffectResolver seam.
+export 'src/formula/capability_host.dart';
 export 'src/formula/capability_registry.dart';
+export 'src/formula/default_capability_registry.dart';
 export 'src/formula/formula_resolver.dart';
 export 'src/formula/formula_scope.dart';
 export 'src/formula/session_handle.dart';

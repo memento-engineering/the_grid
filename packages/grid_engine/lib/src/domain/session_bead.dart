@@ -111,6 +111,30 @@ Map<String, String> nodeCursorMetadata(String nodePath, NodeCursor node) => {
     CursorKeys.keyFor(nodePath, CursorKeys.logOffset): node.logOffset.toString(),
 };
 
+/// The targeted metadata payload advancing ONE node's [state] (the merge-safe
+/// state-only write a `CapabilityHost` issues on a step terminal — Track E).
+/// Disjoint from every other node's keys, so concurrent writes never collide
+/// (the flat half of invariant 2; D-1 closes the same-key half).
+Map<String, String> nodeStateMetadata(String nodePath, StepState state) => {
+  CursorKeys.keyFor(nodePath, CursorKeys.state): state.name,
+};
+
+/// The targeted metadata payload stamping ONE node's spawned identity at
+/// `SessionStarted` (Track E / D-4): `state=running` + the per-node pgid/pid/
+/// token (the respawn fence). [pgid] is omitted when null (an honest "no group
+/// kill target" rather than a bogus value).
+Map<String, String> nodeStartedMetadata(
+  String nodePath, {
+  required int? pgid,
+  required int pid,
+  required String token,
+}) => {
+  CursorKeys.keyFor(nodePath, CursorKeys.state): StepState.running.name,
+  if (pgid != null) CursorKeys.keyFor(nodePath, CursorKeys.pgid): pgid.toString(),
+  CursorKeys.keyFor(nodePath, CursorKeys.pid): pid.toString(),
+  CursorKeys.keyFor(nodePath, CursorKeys.token): token,
+};
+
 /// Projects every `grid.cursor.*` key on [sessionBead] into a [FormulaCursor],
 /// keyed by `nodePath` (the read half of [nodeCursorMetadata]). A node's
 /// `nodePath` is everything between the prefix and the final `.field` segment.
