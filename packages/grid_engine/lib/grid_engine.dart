@@ -17,6 +17,10 @@ library;
 export 'src/bridge/station_join_bridge.dart';
 export 'src/bridge/snapshot_source.dart';
 
+// The reentrant authoring SDK surface (ADR-0008 D2/D4 / M4-P1 Track A): the
+// value-types + the pure frontier predicate the author composes — never a Seed.
+export 'src/sdk/sdk.dart';
+
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
 export 'src/domain/session_bead.dart';
