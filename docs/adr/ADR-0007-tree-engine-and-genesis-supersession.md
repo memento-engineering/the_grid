@@ -178,6 +178,16 @@ On Nico's ratification (2026-06-24) the following were applied — append-only t
 - **A6** Status line gains: *"the M4a–M4f ADR-number reservations (0005–0010) are re-pointed by the M4 pivot — see ADR-0007's numbering note; update `docs/M4-SCOPING.md`'s table on ratification."*
 - **ADR-0001 Decision 3** — fully superseded by **ADR-0007 §6.6**; one-line amendment to the StateNotifier stack on ratification (not-silently-edited rule, A33 precedent). **ADR-0002 D2's** providers → restated as `StateNotifier` services under the same stamp (shape unchanged; D1 retained). **`CLAUDE.md`** convention line → the StateNotifier convention (§6.5).
 
+## Amended 2026-06-27 (M4-P1 build-order — ratified Nico; promoted on his explicit direction)
+
+The M4-P1 reentrant-engine build-order (`docs/M4-P1-REENTRANT-ENGINE-BUILD-ORDER.md`) **generalizes three P0 engine mechanisms this ADR established**, from the always-1-wide P0 frontier to the formula fan-out. Decisions 1/2/4's reconcile *semantics* are unchanged:
+
+- **(D-1) the write chokepoint SERIALIZES per target-id.** Derailment-invariant 2 is re-scoped from single-writer-**auth** to single-writer-**auth + write-ordering**: `StationBeadWriter` gains an in-process per-target-id queue. `bd update --metadata` is a lockless client-side read-modify-write; under fan-out, two concurrent **disjoint-key** cursor writes on one session bead last-writer-win and lose a key → the barrier never opens (silent stall). The sole-process-writer property (inv 2) makes an in-process lock sufficient — no SQL/cross-process locking.
+- **(D-3) the phase cursor generalizes** from `WorkPhase` (3-enum, one key) to **per-step `grid.cursor.{nodePath}.*`** on the_grid's own `tgdog` session bead (`WorkPhase` retires; `phaseOf` → `cursorOf` JOIN). **No compat shim** — `grid.phase` is the_grid-internal metadata on the disposable `tgdog` store, *not* a gc contract (A37), so `tgdog` is rebuilt. The codec boundary (`rigKey='rig'`, `IssueType.rig`, `type=convergence`, `kGridNamespace='grid'`, the M2 convergence byte-port) is untouched.
+- **(D-4) respawn-or-skip (Decision 4) goes per-node.** `pgid`/`pid`/`token` promote from the flat session projection into a per-`NodeCursor` map; the `RestartReconciler` iterates **every** node-cursor in `{running,ready}` (a Burn runs many concurrent groups; the scalar single-pgid reconciler would leave N−1 alive then respawn them — the double-work respawn-or-skip exists to prevent).
+
+(D-2/D-5/D-6/D-7 + the worktree/Trust open questions are homed in **ADR-0008** D4/D7/D8/open-questions.)
+
 ## Consequences
 
 - **Positive.** One engine, not two (the general reconciler replaces the hand-rolled reducer/actuator); lifecycle symmetry (mount=spawn / unmount=kill) is structural, not procedural; sibling isolation is free (keyed reconcile); the stack re-aligns with predictable-flutter + lenny; `build()` purity + the A32 single-writer + A39 pull-free discipline all survive intact.

@@ -83,6 +83,10 @@ Burn → [HarnessA, HarnessB] → Barrier → Coordinator → finally(teardown) 
 
 **Commitment:** the ADR-0007 §7 derailment-invariants must hold **at depth** — guaranteed because the author only ever touches the declarative builder + opaque leaves, never raw Seeds. OTP framing: a formula step is a `gen_server`-like behaviour (`init`/`handle_*`/`terminate`); `terminate` *is* the guaranteed teardown; cross-station children are **monitors, not links**.
 
+**Amended 2026-06-27 (M4-P1 build-order, ratified Nico) — the session model + inflation discipline:**
+- **(D-2) session establishment is an engine-private `SessionScope`** (Nico's design), mounted by `WorkBead` ABOVE the formula subtree: it **adopt-or-mints** the session bead through the chokepoint, holds `{resolving | ready(SessionHandle) | failed}`, and provides `InheritedSeed<SessionHandle>` so the formula subtree attaches **only once the session is resolved** (the async establishment is a tree *state*, not a synchronous inject — the Page:Route abstraction, intuition not a rename). It owns the session lifecycle **end-to-end** (open AND close — on the formula's positive terminal or breaker-exhaustion). Per-step provider name `'$sessionId/$nodePath/$stepId'`. **Supersedes P0's first-leaf-mint + `EffectSeed` name=id** (which double-mint the restoration root + collapse fan-out to one process). Restoration's adopt-or-mint falls out of the same `resolving → ready` path. Engine-private (no author-facing "session capability" until a need arises).
+- **(D-6) inflation discipline:** ambient providers (`ServiceBundle` / `CapabilityRegistry` / `DartEnvironment` / `InheritedSeed<SessionHandle>`) are **stable** (`updateShouldNotify => false`); formula child Seeds are built **fresh each build** (no identical-skip caching — genesis skip is identity-only, so a value-equality cache would skip a subtree across a real cursor change and stall the barrier).
+
 ---
 
 ## Decision 5 — Pluggable abstract domains: the engine knows concept, not detail
@@ -118,6 +122,8 @@ Crash-recovery is modeled on Flutter's state-restoration framework. the_grid is 
   - **scope = per-(station × work)** — a crash here trips *my* attempts; a peer with different env/capacity may still try ("decline, don't poison").
   - **exhaustion escalates to a human/operator** — a signal written to the_grid's **own** store. In a foreign-work-source world the_grid cannot mark the work dead, and silent-stop-trying is the worst failure mode. OTP "escalate to the parent," where the parent is the operator.
 
+**Amended 2026-06-27 (M4-P1 build-order, ratified Nico) — D-5:** supervision + the restorable circuit-breaker **sequence BEFORE the Burn acceptance** (backoff-free immediate respawn is not shippable: a circuit-broken step yields an empty frontier *indistinguishable* from "formula complete" → silent forever-mount + leaked daemons + no escalation). The **failing leaf host's own `_onComplete`** is the named `restartCount`/`cooldownUntil` writer (no supervisor node → derailment-invariant 1 preserved); **`SessionScope` (D-2) closes/escalates** on exhaustion, distinguishing empty-because-broken from empty-because-complete at the source.
+
 ---
 
 ## Decision 8 — Resource governance (declare-and-check, bounded now)
@@ -131,6 +137,8 @@ Crash-recovery is modeled on Flutter's state-restoration framework. the_grid is 
 - **A formula declares its peak aggregate requirement, checked at claim time** — never claim what the station can't fully satisfy → barrier-starvation impossible by construction. Requires the resource shape be statically inspectable (forbids unbounded dynamic permit-fan-out without a declared bound).
 - **Crash-safe:** permits are in-memory, re-acquired on restart from observed running state (derived, never persisted).
 - **FUTURE — dynamic planning:** a formula plans its requirement at runtime (e.g. one harness per discovered device) via **plan → reserve → execute** (the reservation, not a static declaration, becomes the deadlock guard). Start static; grow to planned.
+
+**Amended 2026-06-27 (M4-P1 build-order, ratified Nico) — D-7:** for the P1 build, ship **`ResourceRequest` as a declared, statically-inspectable value-type field only** (on `Formula`/`CapabilityStep`); the `DartEnvironment` governor + leaf-permit acquisition are a **separate, optional track NOT in the P1 spine** (the Burn does not block on it). The declare-and-check / dynamic-planning model above is otherwise unchanged.
 
 ---
 
@@ -154,8 +162,8 @@ Crash-recovery is modeled on Flutter's state-restoration framework. the_grid is 
 
 ## Open questions (deferred — do not block the first build)
 
-- Is "worktree layout" universal enough to stay in core `EffectContext`, or does it belong to a process-capability base? (Lean: stays core.)
-- The `Trust` *interface* home — the_grid vs a genesis-shared abstraction like `consent`. (Lean: the_grid.)
+- ~~Is "worktree layout" universal enough to stay in core `EffectContext`?~~ **RESOLVED (Nico, 2026-06-27, M4-P1):** stays core, and **renamed `worktree` → `workspace`** at the engine/context level — a git worktree is the git `SourceControl` impl *provisioning* a workspace; a remote Burn harness has a workspace, no git worktree. `workspace` = the stable home + restoration anchor; cwd defaults to it, overridable per-spawn; **no separate `pwd` cursor**.
+- ~~The `Trust` *interface* home — the_grid vs a genesis-shared abstraction.~~ **RESOLVED (Nico, 2026-06-27):** lives in **the_grid (`grid_engine`)** for now — no extraction planned, but designed to be lifted (a clean, dependency-free interface so a later genesis-shared home is a move, not a rewrite).
 - The genesis home for the restoration mechanism (`genesis_tree` vs sibling) — decided after the the_grid-local prototype.
 
 ---

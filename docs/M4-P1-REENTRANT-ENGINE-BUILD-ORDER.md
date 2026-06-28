@@ -12,7 +12,7 @@
 
 ## DECISIONS (resolved by Nico, 2026-06-27) — build-order requirements
 
-> **Status:** D-1…D-7 are **decided** and recorded here as **build-order requirements** — this is where decisions made *with* Nico live. (NOT ADR-0000: that is the autonomous/unwatched-subagent register, never written in a live session. Promote any of these into an official ADR — an ADR-0007/0008 amendment — only if Nico later deems it federal; his separate call.) OPEN QUESTIONS 1–7 resolved below; 8–9 stay deferred.
+> **Status:** D-1…D-7 are **decided** and recorded here as **build-order requirements** — this is where decisions made *with* Nico live. (NOT ADR-0000: that is the autonomous/unwatched-subagent register, never written in a live session.) **Promoted to official ADR amendments on Nico's direction (2026-06-27):** D-1/D-3/D-4 → **ADR-0007** (Amended §); D-2/D-5/D-6/D-7 + OQ-6/OQ-7 → **ADR-0008** (D4/D7/D8 + open questions). This build-order remains the detailed source. OPEN QUESTIONS 1–7 resolved below; 8–9 stay deferred.
 
 > Each changes a ratified shape, a shipped file's contract, or the build sequence — none is a chore. Listed worst-first.
 
