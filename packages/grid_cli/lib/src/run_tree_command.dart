@@ -76,10 +76,11 @@ class TreeRunWiring {
 /// Construction only: it builds
 ///  - a [StationJoinBridge] over [work] + [state] (the lone subscription, A39),
 ///  - a [FormulaResolver] rooting the `code` formula per coding bead + the
-///    [buildCodeRegistry] capability set + a git [ServiceBundle] (lifted from
-///    the injected land ops; null ⇒ land no-ops, an offline build),
+///    [buildCodeRegistry] capability set,
 ///  - the [SubstationScope]s (one per [SubstationConfig], keyed by rig id so a rig add/remove
-///    mounts/unmounts exactly that scope),
+///    mounts/unmounts exactly that scope), each provided the git [ServiceBundle]
+///    (lifted from the injected provisioner + land ops; land null ⇒ land no-ops,
+///    an offline build) AT THE SCOPE (ADR-0008 D5: source control is per-substation),
 ///  - a [RestartReconciler] binding the engine's narrow worktree seams to the
 ///    injected [git] service's `listBeadWorktrees`/`reap` (the engine never
 ///    names the concrete VCS service — ADR-0007 §1), reading the post-barrier
@@ -124,10 +125,16 @@ TreeRunWiring composeRunTree({
 
   // One config scope per rig, keyed by rig id so a rig add/remove mounts /
   // unmounts exactly that scope (the Grid reconciles its scope children by key).
+  // The git [services] are provided AT THE SCOPE (ADR-0008 D5: source control is
+  // a per-substation responsibility), so a CapabilityHost resolves its own
+  // substation's SourceControl. P1 composes a single root checkout (one work
+  // substation), so the one bundle is attached to the scope; a multi-substation
+  // build with distinct roots would build one bundle per config here.
   final substationScopes = substations
       .map(
         (config) => SubstationScope(
           configNotifier: SubstationConfigNotifier(config),
+          services: services,
           key: ValueKey('scope.${config.substationId}'),
         ),
       )
@@ -153,7 +160,6 @@ TreeRunWiring composeRunTree({
     resolver: resolver,
     substations: substationScopes,
     registry: registry,
-    services: services,
   );
 
   return TreeRunWiring(

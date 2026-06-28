@@ -79,8 +79,9 @@ SessionProjection _session(
 );
 
 /// The integrated root: the work-axis notifier + the EffectContext + the live
-/// `code` registry + a git ServiceBundle + the FormulaResolver above the Station;
-/// one rig owning `tg`.
+/// `code` registry + the FormulaResolver above the Station; one rig owning `tg`.
+/// The git ServiceBundle is provided AT THE SubstationScope (ADR-0008 D5: source
+/// control is a per-substation responsibility).
 Seed _root({
   required JoinedSnapshotNotifier joined,
   required EffectContext ctx,
@@ -92,17 +93,15 @@ Seed _root({
     value: ctx,
     child: StableInheritedSeed<CapabilityRegistry>(
       value: registry,
-      child: InheritedSeed<ServiceBundle>(
-        value: services,
-        child: InheritedSeed<EffectResolver>(
-          value: kCodeResolver,
-          child: Station([
-            SubstationScope(
-              configNotifier: SubstationConfigNotifier(_tgConfig),
-              key: const ValueKey('scope.tg'),
-            ),
-          ]),
-        ),
+      child: InheritedSeed<EffectResolver>(
+        value: kCodeResolver,
+        child: Station([
+          SubstationScope(
+            configNotifier: SubstationConfigNotifier(_tgConfig),
+            services: services,
+            key: const ValueKey('scope.tg'),
+          ),
+        ]),
       ),
     ),
   ),

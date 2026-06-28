@@ -67,12 +67,14 @@ void main() {
           effectContext: f.ctx,
           resolver: kCodeResolver,
           registry: buildCodeRegistry(),
-          services: _gitServices(f),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
                 const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
               ),
+              // The git services are provided AT THE SCOPE (ADR-0008 D5), so the
+              // land capability resolves this substation's SourceControl.
+              services: _gitServices(f),
               key: const ValueKey('scope.tg'),
             ),
           ],

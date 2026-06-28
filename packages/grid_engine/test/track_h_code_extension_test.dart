@@ -240,17 +240,16 @@ void main() {
             value: f.ctx,
             child: StableInheritedSeed<CapabilityRegistry>(
               value: registry,
-              child: InheritedSeed<ServiceBundle>(
-                value: ServiceBundle(sourceControl: sc),
-                child: InheritedSeed<EffectResolver>(
-                  value: FormulaResolver((_) => kCodeFormula),
-                  child: Station([
-                    SubstationScope(
-                      configNotifier: SubstationConfigNotifier(_tgConfig),
-                      key: const ValueKey('scope.tg'),
-                    ),
-                  ]),
-                ),
+              child: InheritedSeed<EffectResolver>(
+                value: FormulaResolver((_) => kCodeFormula),
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(_tgConfig),
+                    // The SourceControl is provided AT THE SCOPE (ADR-0008 D5).
+                    services: ServiceBundle(sourceControl: sc),
+                    key: const ValueKey('scope.tg'),
+                  ),
+                ]),
               ),
             ),
           ),

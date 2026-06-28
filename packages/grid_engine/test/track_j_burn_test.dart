@@ -90,17 +90,16 @@ class _Burn {
           value: fakes.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: reg,
-            child: InheritedSeed<ServiceBundle>(
-              value: const ServiceBundle(),
-              child: InheritedSeed<EffectResolver>(
-                value: FormulaResolver((_) => _burn),
-                child: Station([
-                  SubstationScope(
-                    configNotifier: SubstationConfigNotifier(_tgConfig),
-                    key: const ValueKey('scope.tg'),
-                  ),
-                ]),
-              ),
+            // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
+            // D5). With none set the scope provides the empty default.
+            child: InheritedSeed<EffectResolver>(
+              value: FormulaResolver((_) => _burn),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(_tgConfig),
+                  key: const ValueKey('scope.tg'),
+                ),
+              ]),
             ),
           ),
         ),
