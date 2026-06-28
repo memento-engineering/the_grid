@@ -10,6 +10,7 @@
 /// the capability just describes what to run and how to read its events.
 library;
 
+import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 /// A leaf the engine mounts — either a [ProcessCapability] or a
@@ -102,13 +103,14 @@ class CancelToken {
 /// `TreeContext`, NO writer, NO notifier, NO `markNeedsRebuild` — a read-only
 /// slice. This is what holds invariants 1/2 at depth by construction.
 class CapabilityContext {
-  /// Bundles the step [params], the work [beadId], the [workspaceDir] the
+  /// Bundles the step [params], the full work [bead] (so a capability — e.g. the
+  /// agent — can author the rich, full-bead prompt), the [workspaceDir] the
   /// capability runs in (OQ-6: the stable home — was "worktree"), the [branch] /
   /// [baseBranch], the pluggable [services], the [cancel] token, and the
   /// restoration [logFile] seam (deferred).
   const CapabilityContext({
     required this.params,
-    required this.beadId,
+    required this.bead,
     required this.workspaceDir,
     required this.branch,
     required this.baseBranch,
@@ -120,8 +122,14 @@ class CapabilityContext {
   /// The step's opaque params (from the `CapabilityStep`/`SubFormulaStep`).
   final Map<String, String> params;
 
-  /// The work bead this capability serves.
-  final String beadId;
+  /// The full work bead this capability serves (title/description/design/
+  /// acceptance/notes/metadata) — a read-only value, the load-bearing input to
+  /// the agent's prompt. Threaded down from `WorkBead` via the inflater (never a
+  /// re-query — A39).
+  final Bead bead;
+
+  /// The work bead id (`bead.id`) — the cursor key + provider-name root segment.
+  String get beadId => bead.id;
 
   /// The stable home directory the capability runs in (the cwd default;
   /// per-spawn overridable via `RuntimeConfig.workingDirectory`). OQ-6: the

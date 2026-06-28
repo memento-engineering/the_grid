@@ -105,11 +105,13 @@ class RunCommand extends Command<int> {
         'bead',
         abbr: 'b',
         help:
-            'A specific work-bead id to drive (repeatable) — the operational '
-            'drive-list layered ON TOP of the ownership allow-set. When given, '
-            'ONLY these (owned) beads dispatch; everything else is observed '
-            'read-only. This is the "bless the specific work beads" gate (A35). '
-            'Omit to drive every owned bead (the prefix scopes on its own).',
+            'A specific work-bead id to drive (repeatable) — the blessed '
+            'drive-list layered ON TOP of the ownership allow-set (ADR-0006/A35). '
+            'When given, ONLY these (owned) beads mount + dispatch; everything '
+            'else is observed read-only (ENFORCED at the tree mount boundary). '
+            'REQUIRED for a live (--no-dry-run) arm — the_grid mounts an agent '
+            'only for explicitly blessed beads. In --dry-run, omit to observe '
+            'every owned bead.',
       )
       ..addFlag(
         'dry-run',

@@ -221,6 +221,80 @@ void main() {
       );
     });
 
+    test('a non-dry run with NO --bead is refused (64) — a live arm must bless '
+        'specific beads (the drive-list, ADR-0006)', () async {
+      final errs = <String>[];
+      final code = await runGridTree(
+        substations: {'tgdog'},
+        dryRun: false,
+        rootPath: '/tmp/some-root', // past the root guard…
+        stateWorkspacePath: '/tmp/some-state', // …past the state guard…
+        // …no --bead → refused before any discovery/composition.
+        out: (_) {},
+        err: errs.add,
+        runForever: false,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('requires at least one --bead'));
+    });
+
+    test('the blessed drive-list is ENFORCED at the tree mount boundary: of two '
+        'ready owned beads, ONLY the --bead one mounts + would-spawn', () async {
+      final work = _FakeSnapshotSource();
+      work.push(
+        GraphSnapshot.fromParts(
+          beads: [
+            Bead(id: 'tgdog-w1', title: 'blessed'),
+            Bead(id: 'tgdog-w2', title: 'not blessed'),
+          ],
+          dependencies: const [],
+          readyIds: {'tgdog-w1', 'tgdog-w2'},
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        ),
+      );
+      final state = _FakeSnapshotSource();
+      final provider = _RecordingDryProvider();
+      final bdRunner = RecordingBdRunner();
+      final groups = _FakeProcessGroupController();
+      addTearDown(() async {
+        await work.close();
+        await state.close();
+        await provider.close();
+      });
+
+      final code = await runGridTree(
+        substations: {'tgdog'},
+        stateSubstation: 'tgdog',
+        dryRun: true,
+        targetBeads: const {'tgdog-w1'}, // bless ONLY w1
+        workSourceOverride: work,
+        stateSourceOverride: state,
+        providerOverride: provider,
+        stateBdOverride: BdCliService(bdRunner),
+        groupsOverride: groups,
+        rootCheckoutOverride: const RootCheckout(
+          path: '/tmp/grid-tree-root',
+          defaultBranch: 'main',
+          substation: 'tgdog',
+        ),
+        freshnessBarrierOverride: () async {},
+        runFor: const Duration(milliseconds: 100),
+        out: (_) {},
+        err: (_) {},
+      );
+
+      expect(code, 0);
+      // Exactly one spawn — for the blessed bead; the unblessed owned/ready bead
+      // never mounted, so it never minted a session nor recorded a would-spawn.
+      expect(provider.starts, hasLength(1));
+      expect(provider.starts.single.name, contains('tgdog-w1'));
+      expect(
+        provider.starts.where((s) => s.name.contains('tgdog-w2')),
+        isEmpty,
+        reason: 'the unblessed bead must not mount',
+      );
+    });
+
     test('the dry-run git service is INERT — a no-op runner yields a NON-NULL '
         'empty worktree list (a real `git` over a non-repo path errors → null), '
         'so the RestartReconciler finds no survivors without touching real git',

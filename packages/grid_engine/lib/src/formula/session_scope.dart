@@ -207,6 +207,7 @@ class SessionScopeState extends State<SessionScope> {
       value: SessionHandle(id),
       child: FormulaScope(
         formula: seed.formula,
+        bead: seed.bead,
         cursor: cursor,
         nodePath: seed.bead.id,
       ),

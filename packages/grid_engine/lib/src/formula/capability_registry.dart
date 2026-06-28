@@ -15,6 +15,7 @@
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_controller/grid_controller.dart';
 
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
@@ -23,13 +24,15 @@ import 'session_handle.dart';
 /// Everything the registry's [CapabilityRegistry.host] needs to mount one
 /// eligible [CapabilityStep] as an engine leaf.
 class StepMount {
-  /// Bundles the [step], its full [nodePath], the resolved [session], the
-  /// step's current [node] cursor (identity/incarnation for respawn — D-4), the
-  /// incarnation-keyed reconcile [key], and the owning formula's supervision
-  /// params ([backoff]/[maxRestarts]) the host uses to author the
-  /// supervised-restart cursor on failure (D-5).
+  /// Bundles the [step], the full work [bead] (threaded down so the host can
+  /// hand the capability the rich bead), its full [nodePath], the resolved
+  /// [session], the step's current [node] cursor (identity/incarnation for
+  /// respawn — D-4), the incarnation-keyed reconcile [key], and the owning
+  /// formula's supervision params ([backoff]/[maxRestarts]) the host uses to
+  /// author the supervised-restart cursor on failure (D-5).
   const StepMount({
     required this.step,
+    required this.bead,
     required this.nodePath,
     required this.session,
     required this.node,
@@ -40,6 +43,10 @@ class StepMount {
 
   /// The eligible step to mount.
   final CapabilityStep step;
+
+  /// The full work bead this formula instance serves (config, threaded from
+  /// `WorkBead` down through the inflater) — the capability's prompt input.
+  final Bead bead;
 
   /// The step's FULL path within the formula tree (`'$parentNodePath/$stepId'`)
   /// — the cursor key + the per-step provider-name segment.

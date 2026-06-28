@@ -19,5 +19,14 @@ abstract class SubstationConfig with _$SubstationConfig {
     /// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
     /// against (fail-closed — an empty set owns nothing).
     @Default(<String>{}) Set<String> ownedSubstations,
+
+    /// The blessed-bead **drive-list** (ADR-0006): when non-empty, ONLY these
+    /// bead ids mount a work node + spawn an agent (`WorkList` enforces it at the
+    /// mount boundary). Empty = no per-bead restriction (dev / dry-run observes
+    /// all owned dispatchable work); a LIVE run refuses an empty drive-list
+    /// upstream (`runGridTree` gating), so this gate is active whenever armed.
+    /// Orthogonal to [ownedSubstations]: ownership says *whose* beads, the
+    /// drive-list says *which specific* beads Nico has blessed for this arm.
+    @Default(<String>{}) Set<String> driveList,
   }) = _SubstationConfig;
 }

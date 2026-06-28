@@ -87,6 +87,15 @@ class _WorkListState extends State<WorkList> {
       if (!_isDispatchableWork(bead.issueType)) continue;
       if (!ownership.owns(bead)) continue;
 
+      // Blessed-bead drive-list gate (ADR-0006): when a drive-list is configured
+      // (a live arm blesses specific beads via `--bead`), ONLY those beads mount.
+      // Empty = no per-bead restriction (dev/dry-run observes all owned work); a
+      // live run refuses an empty drive-list upstream, so when armed this gate is
+      // always active. Independent of the type/ownership allow-lists above — it
+      // narrows further, never widens.
+      final driveList = seed.substationConfig.driveList;
+      if (driveList.isNotEmpty && !driveList.contains(bead.id)) continue;
+
       final session = _snapshot.sessionsByWorkBead[bead.id];
 
       // Positive-terminal-only unmount: the work bead `closed`, OR the owned

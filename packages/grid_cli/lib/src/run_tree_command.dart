@@ -178,11 +178,12 @@ Formula _codeFormulaFor(Bead bead) => kCodeFormula;
 /// [SubprocessProvider] + the chokepoint over the state store + the worktree git
 /// service. The first live arm is the human gate.
 ///
-/// Carried (live-arm prerequisites, NOT wired here): the `--bead` blessed
-/// drive-list is not yet enforced at the tree's mount boundary (Track 3); the
-/// agent's rich full-bead prompt lives in [buildAgentConfig] and must move into
-/// the `code` extension's `AgentCapability` (a live-arm concern); land→PR stays a
-/// deliberate human follow-up (gitOps/prOpener left null).
+/// Live-arm prerequisites NOW wired: the `--bead` blessed drive-list flows into
+/// `SubstationConfig.driveList` and is ENFORCED at the `WorkList` mount boundary
+/// (a live run refuses an empty drive-list); the agent's rich full-bead prompt
+/// now lives in the `code` extension's `AgentCapability` (`buildAgentPrompt`).
+/// Still a human follow-up: land→PR (gitOps/prOpener left null, so the `land`
+/// capability no-ops). The first live arm remains the human gate.
 ///
 /// The seams are injectable so an offline test drives the whole composition with
 /// fakes (inject [workSourceOverride]/[stateSourceOverride] + the dry seams) — no
@@ -237,6 +238,15 @@ Future<int> runGridTree({
       'writes its session/lifecycle beads there and must NEVER default them into '
       'the read --workspace (A36/A37). Pass --state-workspace (+ '
       '--state-substation), or use --dry-run.',
+    );
+    return 64;
+  }
+  if (!dryRun && targetBeads.isEmpty) {
+    writeErr(
+      'grid run: a non-dry (live) run requires at least one --bead — the '
+      'blessed drive-list (ADR-0006). The_grid mounts an agent ONLY for beads '
+      'explicitly blessed for a live arm; re-run with --bead <id> (repeatable), '
+      'or use --dry-run to observe all owned work.',
     );
     return 64;
   }
@@ -371,9 +381,16 @@ Future<int> runGridTree({
   );
 
   // One scope owning the work substations (the WorkList ownership predicate);
-  // the state substation is the chokepoint's, not a work axis.
+  // the state substation is the chokepoint's, not a work axis. The blessed-bead
+  // drive-list (ADR-0006) flows in as config — WorkList mounts ONLY these beads
+  // when non-empty (a live run guarantees it; dry-run may leave it empty to
+  // observe all owned work).
   final substationConfigs = <SubstationConfig>[
-    SubstationConfig(substationId: substations.first, ownedSubstations: substations),
+    SubstationConfig(
+      substationId: substations.first,
+      ownedSubstations: substations,
+      driveList: targetBeads,
+    ),
   ];
 
   final groups = groupsOverride ?? SystemProcessGroupController();
@@ -419,7 +436,11 @@ Future<int> runGridTree({
   if (targetBeads.isNotEmpty) {
     write(
       'drive-list (blessed beads): {${targetBeads.join(', ')}} '
-      '(NOTE: tree-mount drive-list enforcement is a live-arm prerequisite)',
+      '(ENFORCED at the WorkList mount boundary — only these beads mount)',
+    );
+  } else {
+    write(
+      'drive-list: none (observing ALL owned dispatchable work — dry-run only)',
     );
   }
   final info = await developer.Service.getInfo();

@@ -14,15 +14,16 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
-CapabilityContext _capCtx({SourceControl? sourceControl}) => CapabilityContext(
-  params: const {},
-  beadId: 'tg-1',
-  workspaceDir: '/w/tg-1',
-  branch: 'grid/tg-1',
-  baseBranch: 'main',
-  services: ServiceBundle(sourceControl: sourceControl),
-  cancel: CancelToken(),
-);
+CapabilityContext _capCtx({SourceControl? sourceControl, Bead? beadOverride}) =>
+    CapabilityContext(
+      params: const {},
+      bead: beadOverride ?? bead('tg-1'),
+      workspaceDir: '/w/tg-1',
+      branch: 'grid/tg-1',
+      baseBranch: 'main',
+      services: ServiceBundle(sourceControl: sourceControl),
+      cancel: CancelToken(),
+    );
 
 /// A recording [SourceControl] (the land Service, faked).
 class _FakeSourceControl implements SourceControl {
@@ -80,12 +81,55 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
 
 void main() {
   group('Track H — the capabilities reproduce P0 configs/orchestration', () {
-    test('AgentCapability spawns `claude -p` (P0 AgentEffectSeed parity)', () {
+    test('AgentCapability spawns headless `claude -p <prompt>` in the worktree',
+        () {
       final cfg = const AgentCapability().spawn(_capCtx());
       expect(cfg.command, 'claude');
-      expect(cfg.args, const ['-p']);
+      // Headless print mode + skip-permissions, then the rich prompt as argv[2].
+      expect(cfg.args.length, 3);
+      expect(cfg.args[0], '--dangerously-skip-permissions');
+      expect(cfg.args[1], '-p');
+      expect(cfg.args[2], contains('Bead `tg-1`'));
       expect(cfg.workDir, '/w/tg-1');
       expect(cfg.lifecycle, Lifecycle.oneTurn);
+    });
+
+    test('AgentCapability carries the FULL bead + local-first working agreement',
+        () {
+      final rich = bead('tg-1').copyWith(
+        title: 'Wire the federation bus',
+        description: 'Connect The Studio to The Dashboard.',
+        design: 'Use a lossy inter-station gossip bus.',
+        acceptanceCriteria: 'A peer heartbeat surfaces within 1s.',
+        notes: 'Coexistence-safe; do not touch gc.',
+        metadata: const {'rig': 'tgdog'},
+      );
+      final prompt = buildAgentPrompt(_capCtx(beadOverride: rich));
+      // The full bead — a title-only prompt would starve the agent (A36).
+      expect(prompt, contains('# Wire the federation bus'));
+      expect(prompt, contains('substation `tgdog`'));
+      expect(prompt, contains('## Task\nConnect The Studio to The Dashboard.'));
+      expect(prompt, contains('## Design\nUse a lossy inter-station gossip bus.'));
+      expect(prompt, contains('## Acceptance criteria'));
+      expect(prompt, contains('## Notes\nCoexistence-safe; do not touch gc.'));
+      // The local-first working agreement (commit, no push, no PR, advance shim).
+      expect(prompt, contains('/w/tg-1'));
+      expect(prompt, contains('branch `grid/tg-1`'));
+      expect(prompt, contains('COMMIT'));
+      expect(prompt, contains('Do NOT push and do NOT open a pull request'));
+      expect(prompt, contains('grid step --advance'));
+    });
+
+    test('AgentCapability prompt omits empty bead sections + the substation '
+        'parenthetical', () {
+      // An empty bead: only the header + the working agreement, no Task/Design.
+      final prompt = buildAgentPrompt(_capCtx());
+      expect(prompt, contains('# work bead tg-1'));
+      expect(prompt, contains('Bead `tg-1`.'));
+      expect(prompt, isNot(contains('## Task')));
+      expect(prompt, isNot(contains('## Design')));
+      expect(prompt, isNot(contains('substation `'))); // no rig metadata
+      expect(prompt, contains('## Working agreement'));
     });
 
     test('VerifyCapability spawns `sh -c melos test` (P0 VerifyEffectSeed parity)',

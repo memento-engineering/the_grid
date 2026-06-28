@@ -78,7 +78,12 @@ class _CursorHostState extends State<_CursorHost> {
   void advance(FormulaCursor cursor) => setState(() => _cursor = cursor);
   @override
   Seed build(TreeContext context) =>
-      FormulaScope(formula: seed.formula, cursor: _cursor, nodePath: 'root');
+      FormulaScope(
+        formula: seed.formula,
+        bead: bead('root'),
+        cursor: _cursor,
+        nodePath: 'root',
+      );
 }
 
 List<Branch> _all(Branch root) {

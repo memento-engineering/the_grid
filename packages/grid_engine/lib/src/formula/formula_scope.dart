@@ -20,6 +20,7 @@
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_controller/grid_controller.dart';
 
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
@@ -30,9 +31,10 @@ import 'session_handle.dart';
 /// The pure inflater for one formula instance rooted at [nodePath], under
 /// [cursor] (M4-P1 §4). Engine-private — an asset never subclasses it.
 class FormulaScope extends StatelessSeed {
-  /// Inflates [formula] at [nodePath] under [cursor].
+  /// Inflates [formula] for work [bead] at [nodePath] under [cursor].
   const FormulaScope({
     required this.formula,
+    required this.bead,
     required this.cursor,
     required this.nodePath,
     super.key,
@@ -40,6 +42,11 @@ class FormulaScope extends StatelessSeed {
 
   /// The formula to inflate.
   final Formula formula;
+
+  /// The full work bead this formula serves — pure config, threaded into each
+  /// `StepMount` (and down any nested sub-formula) so a `CapabilityHost` can hand
+  /// its capability the rich bead. Reentrant: a sub-formula serves the SAME bead.
+  final Bead bead;
 
   /// The injected cursor (config, threaded from `WorkList`'s cascade — NOT a
   /// subscription). A missing node reads as a fresh `pending` cursor.
@@ -81,6 +88,7 @@ class FormulaScope extends StatelessSeed {
             reg.host(
               StepMount(
                 step: step,
+                bead: bead,
                 nodePath: path,
                 session: session!,
                 node: node,
@@ -100,6 +108,7 @@ class FormulaScope extends StatelessSeed {
           children.add(
             FormulaScope(
               formula: sub,
+              bead: bead,
               cursor: cursor,
               nodePath: path,
               key: ValueKey('$path/scope'),

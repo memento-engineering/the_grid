@@ -91,6 +91,7 @@ Future<void> _pump() async {
 
 StepMount _mount(Capability cap, {String nodePath = 'tg-1/agent'}) => StepMount(
   step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
+  bead: bead(nodePath.split('/').first),
   nodePath: nodePath,
   session: const SessionHandle('tgdog-s'),
   node: const NodeCursor(),
@@ -232,6 +233,7 @@ void main() {
                 capability: _RecordingProcessCap(log),
                 mount: StepMount(
                   step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
+                  bead: bead('tg-1'),
                   nodePath: 'tg-1/agent',
                   session: const SessionHandle('tgdog-s'),
                   node: const NodeCursor(restartCount: 2),
@@ -415,17 +417,18 @@ void main() {
 
     test('CapabilityContext exposes no notifier/stream/writer surface', () {
       // Compile-time: a CapabilityContext has only the sandboxed fields. This
-      // asserts the SHAPE (params/beadId/workspaceDir/branch/baseBranch/services/
+      // asserts the SHAPE (params/bead/workspaceDir/branch/baseBranch/services/
       // cancel/logFile) — no Stream, no writer, no TreeContext.
       final ctx = CapabilityContext(
         params: const {},
-        beadId: 'tg-1',
+        bead: bead('tg-1'),
         workspaceDir: '/w',
         branch: 'grid/tg-1',
         baseBranch: 'main',
         services: const ServiceBundle(),
         cancel: CancelToken(),
       );
+      expect(ctx.beadId, 'tg-1');
       expect(ctx.services, isA<ServiceBundle>());
       expect(ctx.cancel, isA<CancelToken>());
       expect(ctx.logFile, isNull);

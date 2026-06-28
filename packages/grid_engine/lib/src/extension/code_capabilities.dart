@@ -33,7 +33,15 @@ const Formula kCodeFormula = Formula(
 
 /// The IMPLEMENT capability — spawn the coding agent in the bead's workspace
 /// (migrated from `AgentEffectSeed`). `claude -p` (non-interactive print mode);
-/// the exact argv (model/effort/prompt) is a live-arm concern.
+/// `--dangerously-skip-permissions` so a headless dogfood agent runs without an
+/// approval prompt. The prompt carries the **full** bead (title + description +
+/// design + acceptance + notes — a title-only prompt starves the agent of the
+/// load-bearing instructions, A36 pre-flight) plus a **local-first working
+/// agreement**: work in the worktree, COMMIT, do NOT push, do NOT open a PR.
+/// Landing is a deliberate human follow-up for the early arms (the `land`
+/// capability no-ops offline), so the loop produces inspectable local commits
+/// with zero GitHub side effects. (The agent-token/auth seam is the macOS
+/// keychain — A38; nothing rides argv.)
 class AgentCapability extends ProcessCapability {
   /// Creates the agent capability.
   const AgentCapability();
@@ -42,12 +50,63 @@ class AgentCapability extends ProcessCapability {
   RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
     workDir: ctx.workspaceDir,
     command: 'claude',
-    args: const ['-p'],
+    args: ['--dangerously-skip-permissions', '-p', buildAgentPrompt(ctx)],
     lifecycle: Lifecycle.oneTurn,
   );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => _jobSignal(event);
+}
+
+/// Assembles the agent's full-bead prompt + local-first working agreement (the
+/// live dogfood contract — exposed for unit tests). The host layers
+/// `GRID_BEAD_ID`/`GRID_SESSION_ID`/`GRID_STEP_PATH` over the env (so the
+/// `grid step --advance` shim can advance the OWN session cursor through the
+/// chokepoint); this is the human-readable instruction half.
+String buildAgentPrompt(CapabilityContext ctx) {
+  final bead = ctx.bead;
+  final title = bead.title.isNotEmpty ? bead.title : 'work bead ${bead.id}';
+  final substation = bead.metadata['rig'];
+  final p = StringBuffer()
+    ..writeln('# $title')
+    ..writeln()
+    ..writeln(
+      substation is String && substation.isNotEmpty
+          ? 'Bead `${bead.id}` (substation `$substation`).'
+          : 'Bead `${bead.id}`.',
+    );
+  void section(String heading, String body) {
+    if (body.trim().isEmpty) return;
+    p
+      ..writeln()
+      ..writeln('## $heading')
+      ..writeln(body.trim());
+  }
+
+  section('Task', bead.description);
+  section('Design', bead.design);
+  section('Acceptance criteria', bead.acceptanceCriteria);
+  section('Notes', bead.notes);
+  p
+    ..writeln()
+    ..writeln('## Working agreement')
+    ..writeln(
+      '- Work ONLY inside this worktree (${ctx.workspaceDir}); it is on branch '
+      '`${ctx.branch}`, a throwaway branch the_grid provisioned for this bead.',
+    )
+    ..writeln('- Implement the task and COMMIT your work on that branch.')
+    ..writeln(
+      '- Do NOT push and do NOT open a pull request — leave the commit for '
+      'human review.',
+    )
+    ..writeln(
+      '- When committed, run `grid step --advance` to mark this step done, then '
+      "exit. (This advances your OWN session cursor through the_grid's "
+      'chokepoint-mediated shim. It is NOT a free-form `bd` call: do not write '
+      'beads directly from the worktree.)',
+    )
+    ..writeln('- When the work is committed you are done; exit.');
+  return p.toString();
 }
 
 /// The VERIFY capability — run the check in the bead's workspace (migrated from

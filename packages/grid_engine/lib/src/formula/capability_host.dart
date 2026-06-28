@@ -104,7 +104,7 @@ class CapabilityHostState extends State<CapabilityHost> {
     final ctx = _ctx!;
     return CapabilityContext(
       params: seed.mount.step.params,
-      beadId: _beadId,
+      bead: seed.mount.bead,
       workspaceDir: ctx.worktreeFor(_beadId),
       branch: ctx.branchFor(_beadId),
       baseBranch: ctx.baseBranch,
@@ -133,6 +133,9 @@ class CapabilityHostState extends State<CapabilityHost> {
           env: {
             ...base.env,
             'GRID_BEAD_ID': _beadId,
+            // The agent's `grid step --advance` shim writes its OWN session
+            // cursor at this step path through the chokepoint — it needs both.
+            'GRID_SESSION_ID': _sessionId,
             'GRID_INSTANCE_TOKEN': _token,
             'GRID_STEP_PATH': _nodePath,
           },
