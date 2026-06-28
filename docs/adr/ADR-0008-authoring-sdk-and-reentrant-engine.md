@@ -100,6 +100,19 @@ The engine depends on a small set of **abstract domains** via seams, never their
 
 **Why:** this is what lets a tinkerer run local-trust-on-a-LAN while an enterprise plugs in a ledger, from the same engine. "Less blockchain" stops being a core-vs-not tension and becomes *which impl you mount*. The engine stays domain-free; extensibility lives entirely at the edge.
 
+**Amended 2026-06-28 (ratified Nico) — `SourceControl` is a SUBSTATION responsibility; the station provides shared execution machinery the substation *leases*.** A project dictates its own source control: repo/root, remote, the assigned **head/base branch**, branch-naming, land-vs-commit-only, and *which VCS* (git, jj, …). So the seam is owned **per-substation**, not per-station. Two layers, previously conflated in `StationGitService`:
+
+- **Execution machinery** — the project-agnostic thing that *runs* `git`/`gh` (the runner). The **station** owns it (shared); substations **lease** it.
+- **Policy + config + impl** — root checkout, remote, assigned head, land policy, the concrete `SourceControl`. The **substation** owns it (its asset supplies the impl).
+
+**In the tree:** `SourceControl` (the `ServiceBundle`) is provided **per-`SubstationScope`** — a `WorkBead`'s `CapabilityHost` resolves the *nearest* one (its substation's) via genesis's nearest-ancestor inherited lookup — **not** once at the station root (the P0 shape, now a wrong default for a multi-substation station). The engine still sees only the abstract `SourceControl` (concept, not detail — this Decision); the git-specific config (root/head/remote/land) lives in the **composition/asset layer**, never the engine.
+
+**Corollaries:**
+- **"Assign heads"** — each substation declares the base branch (head) its worktrees fork from; no `origin/HEAD` guess (which would silently cut from `main`). "Stacks of work" (a sequence of dependent heads) layers on later; per-substation head-assignment is the floor.
+- **Published-deps build policy** — a substation's checkout resolves dependencies from the registry *unless* it is actively developing that dep, so a the_grid worktree builds against published `genesis_tree` rather than the local dev path override.
+
+*Implementation note:* the P0/M4-P1 code provides the `ServiceBundle` at the station root (`StationKernel.mountRoot`); the per-`SubstationScope` re-homing is the pending refactor executing this amendment.
+
 ---
 
 ## Decision 6 — State restoration is the crash-recovery model (Flutter-modeled)
@@ -110,6 +123,16 @@ Crash-recovery is modeled on Flutter's state-restoration framework. the_grid is 
 - **Two requirements restoration imposes:** (1) detached processes write output to a **worktree log file**, not just a pipe (the pipe dies with the controller; the restored byte-offset re-attaches to a survivor's output); (2) an **identity/liveness guard** (token + freshness barrier) Flutter doesn't need, because a restored pgid could be a recycled pid / prior-incarnation orphan.
 - **Discipline:** restore ONLY non-derivable external handles; everything derivable re-observes from bd. the_grid holds **no important state in memory** — it is all re-observed (bd) or restored (bucket).
 - **Home (deferred):** the mechanism is domain-free tree machinery and belongs in the **genesis project** (`genesis_tree` or a sibling) like Flutter puts restoration in the framework. Path: **prototype the_grid-local against the `Burn`** (hardest case), prove the shape, then upstream via genesis's own ADR-0000 gate.
+
+**Amended 2026-06-28 (ratified Nico) — the bucket-tree is scoped THREE ways in ONE per-station store, and is CURSOR-ONLY-DURABLE.** Generalising A40's single-node bucket to the multi-substation station (the_grid-as-substation), pressure-tested by a 3-design → judge → 2-adversarial-refuter design pass:
+
+- **One per-station store** (tgdog, A37) — NOT a DB per substation. The bucket-*tree* gives the scoping: `station.*` ⊃ `substation.{id}.*` ⊃ `session.{workBead}.*`, mirroring `Station → Substation → WorkBead`.
+- **Cursor-only-durable (Flutter's rule, taken strictly):** persist ONLY the non-derivable state — the per-node cursor + the pgid/pid/token restart fence. **Completion, escalation, and "is-this-formula-done" are DERIVED from the cursor on restart, never separately persisted.** A separate completion/escalation/restoration bucket is redundant durable state to keep consistent (two adversarial reviewers independently flagged it as a corruption surface). Everything else — live process handle, heartbeat/presence, permits — is the **ephemeral "wisp" layer**: in-memory, re-observed/re-derived, never persisted.
+- **Forward-safe key prefix:** put the station id in the durable key namespace so two stations sharing the tgdog dolt server never collide on `grid.cursor.{nodePath}` (a federation pre-req, ADR-0011).
+- **Enforce the split, don't just name it:** the durable/ephemeral boundary wants a type/structure barrier (a `Durable<T>` or a structural test), not a naming convention — else an ephemeral handle gets accidentally persisted.
+- **Discipline (carried):** step-ids must be **dot-free** (the flat-key `lastIndexOf('.')` parse), and `StationBeadWriter.createSession`'s create-then-rig-stamp must become atomic/recoverable — a crash between the `bd create` and the rig-stamp currently orphans an unstamped session (a **banked follow-up bug**).
+
+**Sequencing:** this is a CRASH-RECOVERY + MULTI-SUBSTATION robustness track. The FIRST live arm (one station, one substation, happy path, no crash, no federation) does **not** need it — it runs on the existing single-session model. This amendment is the design of record for when that track is built.
 
 ---
 
