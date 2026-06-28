@@ -219,10 +219,19 @@ class CapabilityHostState extends State<CapabilityHost> {
     if (_cancelled || !context.mounted || _completed) return;
     _completed = true;
     switch (outcome) {
-      case Ok():
+      case Ok(:final payload):
+        // The terminal state PLUS the optional result payload (e.g. the land
+        // step's pr_url) — recorded on the_grid's OWN session bead through the
+        // chokepoint (ADR-0006 D3: "record the PR on the lifecycle bead"). The
+        // result keys are namespaced disjoint from the cursor, so they merge
+        // alongside `state=complete` without colliding (invariant 2 holds: one
+        // chokepoint, own session bead, off-build).
         await _ctx!.writer.update(
           _sessionId,
-          metadata: nodeStateMetadata(_nodePath, StepState.complete),
+          metadata: {
+            ...nodeStateMetadata(_nodePath, StepState.complete),
+            ...nodeResultMetadata(_nodePath, payload),
+          },
         );
       case Failed():
         await _writeFailure();

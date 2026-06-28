@@ -129,6 +129,19 @@ class RunCommand extends Command<int> {
             'run). Pass --no-dry-run to ARM the live writing arm (requires '
             '--root and ADR-0006 ratification).',
       )
+      ..addFlag(
+        'land',
+        defaultsTo: false,
+        negatable: false,
+        help:
+            'ARM the land step (ADR-0006 D3): on a step-complete, the `land` '
+            'capability commits → pushes `grid/<bead>` → opens a PR (`gh pr '
+            'create`) and records the PR url on the session bead. NEVER '
+            'auto-merges — finished work lands as a PR for human review. '
+            'OPT-IN and OFF by default (the early-arm posture is commit-only, '
+            'land left to a human). Requires --no-dry-run (land is a live '
+            'GitHub write); --land with --dry-run is refused.',
+      )
       ..addOption(
         'for-seconds',
         help:
@@ -181,6 +194,7 @@ class RunCommand extends Command<int> {
       targetBeads: <String>{...args.multiOption('bead')}
         ..removeWhere((b) => b.trim().isEmpty),
       dryRun: args.flag('dry-run'),
+      land: args.flag('land'),
       noSql: args.flag('no-sql'),
       runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
     );

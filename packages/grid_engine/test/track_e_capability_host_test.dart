@@ -398,6 +398,25 @@ void main() {
       expect(h.fakes.provider.stopped, isEmpty);
     });
 
+    test('run → Ok(payload) records the result alongside complete — the land '
+        "step's pr_url lands on the session bead (ADR-0006 D3), namespaced "
+        'disjoint from the cursor so it never misreads as state', () async {
+      final log = <String>[];
+      const pr = 'https://github.com/acme/widget/pull/7';
+      final h = _host(_ServiceCap(const Ok({'pr_url': pr}), log));
+      addTearDown(() {
+        h.owner.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+      expect(log, contains('run(tg-1)'));
+      // ONE merged write: the terminal cursor state PLUS the namespaced result.
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'complete',
+        'grid.result.tg-1/agent.pr_url': pr,
+      });
+    });
+
     test('run → Failed writes the supervised failure (failed + restartCount + '
         'cooldown)', () async {
       final log = <String>[];

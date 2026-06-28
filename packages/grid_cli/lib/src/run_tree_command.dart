@@ -197,8 +197,11 @@ Formula _codeFormulaFor(Bead bead) => kCodeFormula;
 /// `SubstationConfig.driveList` and is ENFORCED at the `WorkList` mount boundary
 /// (a live run refuses an empty drive-list); the agent's rich full-bead prompt
 /// now lives in the `code` extension's `AgentCapability` (`buildAgentPrompt`).
-/// Still a human follow-up: land→PR (gitOps/prOpener left null, so the `land`
-/// capability no-ops). The first live arm remains the human gate.
+/// **Land→PR is an explicit OPT-IN** ([land], ADR-0006 D3): off by default
+/// (gitOps/prOpener stay null ⇒ the `land` capability no-ops and finished work
+/// is commit-only, left for a human to land), and only `--land` on a `--no-dry-run`
+/// run wires the real `git`/`gh` land ops so the `land` step commits → pushes →
+/// opens a PR (it NEVER auto-merges). The first live arm remains the human gate.
 ///
 /// The seams are injectable so an offline test drives the whole composition with
 /// fakes (inject [workSourceOverride]/[stateSourceOverride] + the dry seams) — no
@@ -213,6 +216,7 @@ Future<int> runGridTree({
   String? stateSubstation,
   Set<String> targetBeads = const {},
   bool dryRun = true,
+  bool land = false,
   bool noSql = false,
   void Function(String)? out,
   void Function(String)? err,
@@ -237,6 +241,14 @@ Future<int> runGridTree({
     writeErr(
       'grid run: at least one --substation/--owner is required (the ownership '
       'allow-set; the dogfood rig is `tgdog`).',
+    );
+    return 64;
+  }
+  if (land && dryRun) {
+    writeErr(
+      'grid run: --land cannot be combined with --dry-run. Land is a LIVE '
+      'GitHub write (commit → push → PR); a dry run touches nothing. Re-run '
+      'with --no-dry-run to arm land, or drop --land to observe only.',
     );
     return 64;
   }
@@ -385,9 +397,13 @@ Future<int> runGridTree({
   }
 
   // --- the live EffectContext ----------------------------------------------
-  // Land ops (gitOps/prOpener) stay NULL — land is a deliberate human follow-up
-  // for the early arms (the working agreement is commit-only, no push/PR), so
-  // the land capability no-ops rather than touching real GitHub.
+  // Land ops (gitOps/prOpener) are wired ONLY when --land arms a live run
+  // (ADR-0006 D3): the `land` capability then commits → pushes → opens a PR via
+  // real `git`/`gh` (never auto-merges) and records the PR url on the session
+  // bead. Default (and ALWAYS in dry-run, guaranteed by the --land/--dry-run
+  // gate above) they stay null ⇒ `canLand` is false ⇒ land no-ops, so the
+  // early-arm commit-only posture is the safe default and a human lands the PR.
+  final bool armLand = land && !dryRun;
   final effectContext = EffectContext(
     provider: runtimeProvider,
     writer: writer,
@@ -397,6 +413,8 @@ Future<int> runGridTree({
     worktreeRoot: root.path.isEmpty ? null : root.path,
     workSubstation: substations.first,
     baseBranch: root.defaultBranch,
+    gitOps: armLand ? GitOps(SystemGitRunner()) : null,
+    prOpener: armLand ? GhPrOpener(_ghRunner) : null,
   );
 
   // One scope owning the work substations (the WorkList ownership predicate);
@@ -446,6 +464,15 @@ Future<int> runGridTree({
   );
   if (root.path.isNotEmpty) {
     write('root checkout: ${root.path} (default ${root.defaultBranch})');
+  }
+  if (!dryRun) {
+    write(
+      armLand
+          ? 'land: ARMED (on step-complete: commit → push → PR via gh; '
+                'NEVER auto-merges)'
+          : 'land: OFF (commit-only; landing is a human follow-up — pass '
+                '--land to arm)',
+    );
   }
   if (stateWs != null) {
     write(

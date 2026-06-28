@@ -132,6 +132,21 @@ void main() {
       expect(errs.join('\n'), contains('--substation/--owner is required'));
     });
 
+    test('--land combined with --dry-run is refused (exit 64) — land is a LIVE '
+        'GitHub write, never armed under an observe-only run', () async {
+      final errs = <String>[];
+      final code = await runGridTree(
+        substations: {'tgdog'},
+        dryRun: true, // observe-only…
+        land: true, //   …but asking to land → contradiction, refused.
+        out: (_) {},
+        err: errs.add,
+        runForever: false,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('--land cannot be combined with --dry-run'));
+    });
+
     test('a non-dry run with no --root is refused (exit 64)', () async {
       final errs = <String>[];
       final code = await runGridTree(

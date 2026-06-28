@@ -69,6 +69,34 @@ void main() {
       );
     });
 
+    test('nodeResultMetadata namespaces the payload under grid.result.; a '
+        'null/empty payload writes nothing', () {
+      expect(
+        nodeResultMetadata('genesis-7r9/land', {'pr_url': 'https://x/pull/3'}),
+        {'grid.result.genesis-7r9/land.pr_url': 'https://x/pull/3'},
+      );
+      expect(nodeResultMetadata('genesis-7r9/land', null), isEmpty);
+      expect(nodeResultMetadata('genesis-7r9/land', const {}), isEmpty);
+    });
+
+    test('a grid.result.* key is DISJOINT from the cursor namespace — the '
+        'projection ignores it (no misread as cursor state)', () {
+      final merged = <String, dynamic>{
+        'work_bead': 'genesis-7r9',
+        ...nodeStateMetadata('genesis-7r9/land', StepState.complete),
+        ...nodeResultMetadata('genesis-7r9/land', {'pr_url': 'https://x/pull/9'}),
+      };
+      final session = Bead(
+        id: 'tgdog-9',
+        issueType: IssueType.session,
+        metadata: merged,
+      );
+      final p = projectSession(session);
+      // The cursor reads the state; the result key is NOT projected as a node.
+      expect(p.cursor['genesis-7r9/land']!.state, StepState.complete);
+      expect(p.cursor.keys, ['genesis-7r9/land']);
+    });
+
     test('round-trip: a per-node cursor write then projection reads it back', () {
       // Simulate the chokepoint merge of a node cursor write onto a minted
       // session (the disjoint-key, merge-safe write of D-1/D-3).

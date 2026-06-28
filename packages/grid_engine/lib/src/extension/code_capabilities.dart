@@ -40,8 +40,10 @@ const Formula kCodeFormula = Formula(
 /// design + acceptance + notes — a title-only prompt starves the agent of the
 /// load-bearing instructions, A36 pre-flight) plus a **local-first working
 /// agreement**: work in the worktree, COMMIT, do NOT push, do NOT open a PR.
-/// Landing is a deliberate human follow-up for the early arms (the `land`
-/// capability no-ops offline), so the loop produces inspectable local commits
+/// Landing is an explicit OPT-IN (`grid run --land`; ADR-0006 D3) and OFF by
+/// default — the AGENT always stops at a local commit; only the separate `land`
+/// step (after `verify`) pushes + opens the PR, and only when armed. Unarmed,
+/// the `land` capability no-ops, so the loop produces inspectable local commits
 /// with zero GitHub side effects. (The agent-token/auth seam is the macOS
 /// keychain — A38; nothing rides argv.)
 class AgentCapability extends ProcessCapability {

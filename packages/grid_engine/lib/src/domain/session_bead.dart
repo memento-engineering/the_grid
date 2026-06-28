@@ -84,6 +84,24 @@ abstract final class CursorKeys {
       '$prefix$nodePath.$field';
 }
 
+/// The per-node RESULT keys — the optional [Ok.payload] a `ServiceCapability`
+/// returns (e.g. the land step's `pr_url`), recorded on the_grid's OWN session
+/// bead so a finished step's artifact is durable (ADR-0006 D3: "record the PR on
+/// the lifecycle bead"). DISJOINT from the [CursorKeys] namespace
+/// (`grid.result.` vs `grid.cursor.`), so [projectFormulaCursor] never misreads
+/// a result key as cursor state; flat + merge-safe like the cursor (D-1/D-3).
+/// Write-only for now — no engine reader consumes them; they are the
+/// human-/audit-facing record of what a step produced.
+abstract final class ResultKeys {
+  /// The flat-key namespace for the per-node step result.
+  static const prefix = 'grid.result.';
+
+  /// The flat key for [field] of the node at [nodePath]
+  /// (`grid.result.{nodePath}.{field}`).
+  static String keyFor(String nodePath, String field) =>
+      '$prefix$nodePath.$field';
+}
+
 /// The flat metadata payload for ONE node's cursor entry — the merge-safe,
 /// disjoint-key write through the chokepoint (D-1/D-3). Only set fields are
 /// written ([state] and [restartCount] always; the rest omitted when null, an
@@ -143,6 +161,20 @@ Map<String, String> nodeStartedMetadata(
   if (pgid != null) CursorKeys.keyFor(nodePath, CursorKeys.pgid): pgid.toString(),
   CursorKeys.keyFor(nodePath, CursorKeys.pid): pid.toString(),
   CursorKeys.keyFor(nodePath, CursorKeys.token): token,
+};
+
+/// The targeted metadata payload recording ONE node's step RESULT — the
+/// optional [Ok.payload] (e.g. the land step's `{pr_url: …}`) namespaced under
+/// [ResultKeys] so it merges alongside the node's terminal `state=complete`
+/// write without colliding with any cursor key. An empty/absent payload yields
+/// an empty map (nothing extra is written). Merge-safe (disjoint keys).
+Map<String, String> nodeResultMetadata(
+  String nodePath,
+  Map<String, String>? payload,
+) => {
+  if (payload != null)
+    for (final entry in payload.entries)
+      ResultKeys.keyFor(nodePath, entry.key): entry.value,
 };
 
 /// Projects every `grid.cursor.*` key on [sessionBead] into a [FormulaCursor],
