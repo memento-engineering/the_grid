@@ -1,5 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../sdk/cursor.dart';
 import 'work_phase.dart';
 
 part 'session_projection.freezed.dart';
@@ -46,5 +47,12 @@ abstract class SessionProjection with _$SessionProjection {
 
     /// The spawned agent's pid (diagnostics).
     int? pid,
+
+    /// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
+    /// node's [NodeCursor] keyed by its `nodePath`, projected from the session
+    /// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+    /// pull-free (A39). Empty for a legacy/freshly-minted session (the linear
+    /// agent/verify/land path still rides the [phase] cursor until Track H).
+    @Default(<String, NodeCursor>{}) FormulaCursor cursor,
   }) = _SessionProjection;
 }

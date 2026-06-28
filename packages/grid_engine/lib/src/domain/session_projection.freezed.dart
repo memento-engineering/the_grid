@@ -29,7 +29,12 @@ mixin _$SessionProjection {
 /// the freshness fence against a stale prior-incarnation completion
 /// (Track C/D).
  String? get token;/// The spawned agent's pid (diagnostics).
- int? get pid;
+ int? get pid;/// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
+/// node's [NodeCursor] keyed by its `nodePath`, projected from the session
+/// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+/// pull-free (A39). Empty for a legacy/freshly-minted session (the linear
+/// agent/verify/land path still rides the [phase] cursor until Track H).
+ FormulaCursor get cursor;
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -40,16 +45,16 @@ $SessionProjectionCopyWith<SessionProjection> get copyWith => _$SessionProjectio
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other.cursor, cursor));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,phase,isTerminal,pgid,token,pid);
+int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,phase,isTerminal,pgid,token,pid,const DeepCollectionEquality().hash(cursor));
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor)';
 }
 
 
@@ -60,7 +65,7 @@ abstract mixin class $SessionProjectionCopyWith<$Res>  {
   factory $SessionProjectionCopyWith(SessionProjection value, $Res Function(SessionProjection) _then) = _$SessionProjectionCopyWithImpl;
 @useResult
 $Res call({
- String workBeadId, String? sessionId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid
+ String workBeadId, String? sessionId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor
 });
 
 
@@ -77,7 +82,7 @@ class _$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,}) {
   return _then(_self.copyWith(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
 as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
@@ -86,7 +91,8 @@ as WorkPhase,isTerminal: null == isTerminal ? _self.isTerminal : isTerminal // i
 as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
-as int?,
+as int?,cursor: null == cursor ? _self.cursor : cursor // ignore: cast_nullable_to_non_nullable
+as FormulaCursor,
   ));
 }
 
@@ -171,10 +177,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor);case _:
   return orElse();
 
 }
@@ -192,10 +198,10 @@ return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_t
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor)  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection():
-return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -212,10 +218,10 @@ return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_t
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  WorkPhase phase,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor)?  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor);case _:
   return null;
 
 }
@@ -227,7 +233,7 @@ return $default(_that.workBeadId,_that.sessionId,_that.phase,_that.isTerminal,_t
 
 
 class _SessionProjection implements SessionProjection {
-  const _SessionProjection({required this.workBeadId, this.sessionId, required this.phase, this.isTerminal = false, this.pgid, this.token, this.pid});
+  const _SessionProjection({required this.workBeadId, this.sessionId, required this.phase, this.isTerminal = false, this.pgid, this.token, this.pid, final  FormulaCursor cursor = const <String, NodeCursor>{}}): _cursor = cursor;
   
 
 /// The work bead this session drives (`metadata.work_bead`).
@@ -252,6 +258,23 @@ class _SessionProjection implements SessionProjection {
 @override final  String? token;
 /// The spawned agent's pid (diagnostics).
 @override final  int? pid;
+/// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
+/// node's [NodeCursor] keyed by its `nodePath`, projected from the session
+/// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+/// pull-free (A39). Empty for a legacy/freshly-minted session (the linear
+/// agent/verify/land path still rides the [phase] cursor until Track H).
+ final  FormulaCursor _cursor;
+/// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
+/// node's [NodeCursor] keyed by its `nodePath`, projected from the session
+/// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+/// pull-free (A39). Empty for a legacy/freshly-minted session (the linear
+/// agent/verify/land path still rides the [phase] cursor until Track H).
+@override@JsonKey() FormulaCursor get cursor {
+  if (_cursor is EqualUnmodifiableMapView) return _cursor;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableMapView(_cursor);
+}
+
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
@@ -263,16 +286,16 @@ _$SessionProjectionCopyWith<_SessionProjection> get copyWith => __$SessionProjec
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other._cursor, _cursor));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,phase,isTerminal,pgid,token,pid);
+int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,phase,isTerminal,pgid,token,pid,const DeepCollectionEquality().hash(_cursor));
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, phase: $phase, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor)';
 }
 
 
@@ -283,7 +306,7 @@ abstract mixin class _$SessionProjectionCopyWith<$Res> implements $SessionProjec
   factory _$SessionProjectionCopyWith(_SessionProjection value, $Res Function(_SessionProjection) _then) = __$SessionProjectionCopyWithImpl;
 @override @useResult
 $Res call({
- String workBeadId, String? sessionId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid
+ String workBeadId, String? sessionId, WorkPhase phase, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor
 });
 
 
@@ -300,7 +323,7 @@ class __$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? phase = null,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,}) {
   return _then(_SessionProjection(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
 as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
@@ -309,7 +332,8 @@ as WorkPhase,isTerminal: null == isTerminal ? _self.isTerminal : isTerminal // i
 as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
-as int?,
+as int?,cursor: null == cursor ? _self._cursor : cursor // ignore: cast_nullable_to_non_nullable
+as FormulaCursor,
   ));
 }
 
