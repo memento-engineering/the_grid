@@ -48,9 +48,10 @@ export 'src/domain/work_phase.dart';
 export 'src/effect/effect_context.dart';
 export 'src/effect/effect_seed.dart';
 
-// Extension (the compiled DefaultExtension capabilities) — the OPINIONS live
-// here, never in the kernel/effect core (ADR-0007 §1): the agent/verify/land
-// capability Seeds + the resolver that maps a phase to one.
+// Extension (the OPINIONS live here, never in the kernel/effect core —
+// ADR-0007 §1). The P0 WorkPhase path (default_extension) + the M4-P1 `code`
+// extension (agent/verify/land as Capability impls + the `code` formula).
+export 'src/extension/code_capabilities.dart';
 export 'src/extension/default_extension.dart';
 
 // Kernel: the seams + the composition/flush driver.
