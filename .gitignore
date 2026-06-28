@@ -18,3 +18,8 @@ packages/*/extension/devtools/build/
 # Gas City
 .beads/*
 !.beads/identity.toml
+
+# the_grid live-arm worktrees (the tree engine cuts per-bead worktrees here when
+# THIS checkout is the substation root: .grid/worktrees/<substation>/<bead>).
+# Never tracked — they are throwaway working copies of this repo.
+.grid/

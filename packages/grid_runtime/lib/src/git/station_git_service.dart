@@ -242,16 +242,27 @@ class StationGitService {
   final PrOpener _prOpener;
 
   /// **Layer 1 — register the root checkout.** Records [path] (an
-  /// already-present clone) + the probed default branch from `origin/HEAD`
-  /// (gc's `ProbeDefaultBranch`). Does NOT create the clone (the `lenny-tgdog`
-  /// clone is Nico's one-time out-of-band step; ADR-0006). Verifies [path] is a
-  /// git repo and probes the mainline; throws [StateError] if [path] is not a
-  /// repo (fail closed at registration rather than minting worktrees off a
-  /// non-repo).
+  /// already-present clone) + the default branch per-bead worktrees branch off.
+  ///
+  /// By default the mainline is PROBED from `origin/HEAD` (gc's
+  /// `ProbeDefaultBranch`). Pass [head] to ASSIGN it explicitly instead — the
+  /// "assign-head" affordance for the_grid-as-substation: when THIS checkout is
+  /// the root and its work lives on a feature branch (e.g.
+  /// `m4-p1-reentrant-engine`), worktrees must cut off THAT branch, not `main`.
+  /// An assigned [head] skips the probe; it is NOT verified to exist here (no
+  /// cheap ref-probe seam), so a bad branch fails loudly at the first
+  /// [provisionWorktree] `git worktree add` rather than silently cutting off the
+  /// wrong base.
+  ///
+  /// Does NOT create the clone (the root checkout is registered, never
+  /// auto-provisioned; ADR-0006). Verifies [path] is a git repo; throws
+  /// [StateError] if [path] is not a repo (fail closed at registration rather
+  /// than minting worktrees off a non-repo).
   Future<RootCheckout> registerRootCheckout({
     required String path,
     required String substation,
     String remote = 'origin',
+    String? head,
   }) async {
     final normalized = p.normalize(path);
     if (!await _ops.isRepo(normalized)) {
@@ -260,12 +271,19 @@ class StationGitService {
         '(register an existing clone; the_grid never auto-provisions it)',
       );
     }
-    final defaultBranch = await _ops.probeDefaultBranch(normalized);
-    if (defaultBranch.isEmpty) {
-      throw StateError(
-        'registerRootCheckout: could not probe a default branch for '
-        '"$normalized" (origin/HEAD unset and no usable current branch)',
-      );
+    final String defaultBranch;
+    if (head != null && head.trim().isNotEmpty) {
+      // Assigned head: trust the operator; verified at `git worktree add` time.
+      defaultBranch = head.trim();
+    } else {
+      defaultBranch = await _ops.probeDefaultBranch(normalized);
+      if (defaultBranch.isEmpty) {
+        throw StateError(
+          'registerRootCheckout: could not probe a default branch for '
+          '"$normalized" (origin/HEAD unset and no usable current branch). '
+          'Pass an explicit head to assign one.',
+        );
+      }
     }
     return RootCheckout(
       path: normalized,

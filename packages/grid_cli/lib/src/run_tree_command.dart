@@ -189,7 +189,9 @@ Formula _codeFormulaFor(Bead bead) => kCodeFormula;
 /// ops. The read controllers still read the real workspace (read-only). A LIVE
 /// run (`--no-dry-run` + `--root` + `--state-workspace`) wires the real
 /// [SubprocessProvider] + the chokepoint over the state store + the worktree git
-/// service. The first live arm is the human gate.
+/// service. [head] assigns the base branch worktrees cut from (the_grid-as-
+/// substation cuts off its own feature branch, not the probed `origin/HEAD`).
+/// The first live arm is the human gate.
 ///
 /// Live-arm prerequisites NOW wired: the `--bead` blessed drive-list flows into
 /// `SubstationConfig.driveList` and is ENFORCED at the `WorkList` mount boundary
@@ -205,6 +207,7 @@ Future<int> runGridTree({
   required Set<String> substations,
   RuntimeProviderKind provider = RuntimeProviderKind.subprocess,
   String? rootPath,
+  String? head,
   String? workspacePath,
   String? stateWorkspacePath,
   String? stateSubstation,
@@ -366,6 +369,9 @@ Future<int> runGridTree({
       root = await git.registerRootCheckout(
         path: rootPath,
         substation: substations.first,
+        // Assign-head: cut per-bead worktrees off this branch (e.g. the_grid's
+        // own feature branch) instead of the probed origin/HEAD. Null ⇒ probe.
+        head: head,
       );
     } on Object catch (e) {
       writeErr('grid run: could not register root checkout "$rootPath": $e');

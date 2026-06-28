@@ -299,6 +299,59 @@ void main() {
       );
     });
 
+    test('--head is plumbed to registerRootCheckout: a live run ASSIGNS the base '
+        'branch worktrees cut from (the_grid-as-substation cuts off its own '
+        'branch, not the probed origin/HEAD)', () async {
+      final work = _FakeSnapshotSource();
+      work.push(
+        GraphSnapshot.fromParts(
+          beads: [Bead(id: 'tgdog-w1', title: 'blessed')],
+          dependencies: const [],
+          readyIds: {'tgdog-w1'},
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        ),
+      );
+      final state = _FakeSnapshotSource();
+      final provider = _RecordingDryProvider();
+      final bdRunner = RecordingBdRunner();
+      final groups = _FakeProcessGroupController();
+      final git = _FakeGitService();
+      addTearDown(() async {
+        await work.close();
+        await state.close();
+        await provider.close();
+      });
+
+      // A LIVE run (dryRun:false) with a --root but NO rootCheckoutOverride, so
+      // registerRootCheckout is actually exercised — all other seams faked.
+      final code = await runGridTree(
+        substations: {'tgdog'},
+        stateSubstation: 'tgdog',
+        dryRun: false,
+        rootPath: '/tmp/grid-tree-root',
+        head: 'm4-p1-reentrant-engine',
+        targetBeads: const {'tgdog-w1'},
+        workSourceOverride: work,
+        stateSourceOverride: state,
+        providerOverride: provider,
+        stateBdOverride: BdCliService(bdRunner),
+        groupsOverride: groups,
+        gitServiceOverride: git.service,
+        freshnessBarrierOverride: () async {},
+        runFor: const Duration(milliseconds: 100),
+        out: (_) {},
+        err: (_) {},
+      );
+
+      expect(code, 0);
+      expect(git.service.registerCalled, isTrue);
+      expect(
+        git.service.registeredHead,
+        'm4-p1-reentrant-engine',
+        reason: '--head reaches registerRootCheckout as the assigned base branch',
+      );
+    });
+
     test('the dry-run git service is INERT — a no-op runner yields a NON-NULL '
         'empty worktree list (a real `git` over a non-repo path errors → null), '
         'so the RestartReconciler finds no survivors without touching real git',
@@ -515,6 +568,29 @@ class _RecordingGitService extends StationGitService {
   final void Function() onList;
 
   final List<String> provisioned = [];
+
+  /// Whether [registerRootCheckout] was called, and the `head` it received — so a
+  /// test can assert `--head` is plumbed through as the assigned base branch.
+  bool registerCalled = false;
+  String? registeredHead;
+
+  @override
+  Future<RootCheckout> registerRootCheckout({
+    required String path,
+    required String substation,
+    String remote = 'origin',
+    String? head,
+  }) async {
+    registerCalled = true;
+    registeredHead = head;
+    // The assigned head becomes the default branch (no real git probe).
+    return RootCheckout(
+      path: path,
+      defaultBranch: head ?? 'main',
+      substation: substation,
+      remote: remote,
+    );
+  }
 
   @override
   Future<List<BeadWorktree>?> listBeadWorktrees(RootCheckout root) async {

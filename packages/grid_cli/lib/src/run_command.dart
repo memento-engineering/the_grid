@@ -75,6 +75,14 @@ class RunCommand extends Command<int> {
             'Required to ARM a non-dry run; never created by grid run.',
       )
       ..addOption(
+        'head',
+        help:
+            'ASSIGN the base branch per-bead worktrees cut from, overriding the '
+            'probed origin/HEAD. For the_grid-as-substation (THIS checkout as '
+            '--root), set this to the working branch (e.g. m4-p1-reentrant-engine) '
+            'so worktrees build off it, not main. Omit to probe origin/HEAD.',
+      )
+      ..addOption(
         'workspace',
         abbr: 'w',
         help:
@@ -163,6 +171,7 @@ class RunCommand extends Command<int> {
       substations: substations,
       provider: RuntimeProviderKind.parse(args.option('provider')),
       rootPath: args.option('root'),
+      head: args.option('head'),
       workspacePath: args.option('workspace'),
       stateWorkspacePath: args.option('state-workspace'),
       // --state-substation only applies when a state workspace is given.

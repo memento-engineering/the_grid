@@ -93,6 +93,48 @@ void main() {
     expect(p.normalize(root.path), p.normalize(seeded.root));
   });
 
+  test('an assigned head OVERRIDES the origin/HEAD probe; worktrees cut off the '
+      'assigned branch, not main (the_grid-as-substation)', () async {
+    final seeded = await seedOriginAndClone();
+    // A feature branch carrying a commit `main` does NOT have.
+    await git(seeded.root, <String>['checkout', '-b', 'feature']);
+    File(p.join(seeded.root, 'feature.txt')).writeAsStringSync('on feature\n');
+    await git(seeded.root, <String>['add', '-A']);
+    await git(seeded.root, <String>['commit', '-m', 'feature-only change']);
+    // Back to main so the clone's CURRENT branch is NOT the assigned head — this
+    // proves the worktree base is the ASSIGNED branch, not whatever is checked out.
+    await git(seeded.root, <String>['checkout', 'main']);
+
+    final svc = serviceWith(_FakePrOpener());
+    final root = await svc.registerRootCheckout(
+      path: seeded.root,
+      substation: 'tgdog',
+      head: 'feature',
+    );
+    // The assigned head won — no origin/HEAD probe (which would yield `main`).
+    expect(root.defaultBranch, 'feature');
+
+    // The worktree is branched off the assigned head: it carries the
+    // feature-only file (which `main` lacks).
+    final wt = await svc.provisionWorktree(root: root, beadId: 'tg-1');
+    expect(
+      File(p.join(wt.path, 'feature.txt')).existsSync(),
+      isTrue,
+      reason: 'the worktree was branched off the ASSIGNED head (feature), not main',
+    );
+  });
+
+  test('an empty/whitespace head falls back to the origin/HEAD probe', () async {
+    final seeded = await seedOriginAndClone();
+    final svc = serviceWith(_FakePrOpener());
+    final root = await svc.registerRootCheckout(
+      path: seeded.root,
+      substation: 'tgdog',
+      head: '   ',
+    );
+    expect(root.defaultBranch, 'main', reason: 'blank head → probe, not ""');
+  });
+
   test('register refuses a non-repo path (fail closed)', () async {
     final notARepo = Directory(p.join(tmp.path, 'plain'))..createSync();
     final svc = serviceWith(_FakePrOpener());
