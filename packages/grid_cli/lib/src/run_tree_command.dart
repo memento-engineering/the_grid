@@ -107,13 +107,20 @@ TreeRunWiring composeRunTree({
   // touches real git/GitHub).
   const resolver = FormulaResolver(_codeFormulaFor);
   final registry = buildCodeRegistry();
-  final gitOps = effectContext.gitOps;
-  final prOpener = effectContext.prOpener;
-  final services = (gitOps != null && prOpener != null)
-      ? ServiceBundle(
-          sourceControl: GitSourceControl(gitOps: gitOps, prOpener: prOpener),
-        )
-      : const ServiceBundle();
+  // ALWAYS provide a git SourceControl: it owns WORKSPACE PROVISIONING (the host
+  // cuts the per-bead worktree off `git`/`workRoot` before the agent spawns) —
+  // needed even when LAND is deferred. Land stays optional: gitOps/prOpener null
+  // ⇒ `canLand` is false ⇒ the land capability no-ops (the early-arm commit-only
+  // posture). In a dry-run `git` is the INERT dry service, so provisioning is a
+  // no-op too.
+  final services = ServiceBundle(
+    sourceControl: GitSourceControl(
+      gitOps: effectContext.gitOps,
+      prOpener: effectContext.prOpener,
+      provisioner: git,
+      root: workRoot,
+    ),
+  );
 
   // One config scope per rig, keyed by rig id so a rig add/remove mounts /
   // unmounts exactly that scope (the Grid reconciles its scope children by key).
@@ -506,10 +513,29 @@ StationGitService _buildTreeGitService() => StationGitService(
 /// The INERT git service for `--dry-run` — a no-op [GitRunner] (every `git`
 /// invocation returns an empty success) so `listBeadWorktrees` parses an empty
 /// worktree set WITHOUT executing a real `git`, the reconcile finds no survivors
-/// (no kill, no reap), and the dry run touches nothing live. Exposed for the
-/// inertness regression test.
-StationGitService buildDryTreeGitService() =>
-    StationGitService(runner: _DryGitRunner(), prOpener: _DryPrOpener());
+/// (no kill, no reap), and `provisionWorktree` is overridden to touch NO
+/// filesystem (it would otherwise `mkdir` the worktree dir). The dry run touches
+/// nothing live. Exposed for the inertness regression test.
+StationGitService buildDryTreeGitService() => _DryStationGitService();
+
+/// The dry-run [StationGitService]: inherits the no-op-runner worktree probe and
+/// overrides [provisionWorktree] so a dry run materializes NO worktree (no
+/// `mkdir`, no `git worktree add`) — it returns a synthetic descriptor the host
+/// ignores. Live provisioning uses the real `StationGitService`.
+class _DryStationGitService extends StationGitService {
+  _DryStationGitService()
+    : super(runner: _DryGitRunner(), prOpener: _DryPrOpener());
+
+  @override
+  Future<BeadWorktree> provisionWorktree({
+    required RootCheckout root,
+    required String beadId,
+  }) async => BeadWorktree(
+    beadId: beadId,
+    path: '${root.path}/.grid/worktrees/${root.substation}/$beadId',
+    branch: 'grid/$beadId',
+  );
+}
 
 /// Execs `gh` for the land PR opener (inherits the parent env so `gh` finds its
 /// own auth). Not reached on the early arms (land stays a human follow-up).

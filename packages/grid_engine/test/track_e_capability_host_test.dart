@@ -101,7 +101,10 @@ StepMount _mount(Capability cap, {String nodePath = 'tg-1/agent'}) => StepMount(
 /// The fixed clock the host's backoff cooldown is computed against.
 final _clock = DateTime(2026);
 
-({TreeOwner owner, Branch root, Fakes fakes}) _host(Capability cap) {
+({TreeOwner owner, Branch root, Fakes fakes}) _host(
+  Capability cap, {
+  ServiceBundle services = const ServiceBundle(),
+}) {
   final fakes = buildFakes();
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -110,13 +113,36 @@ final _clock = DateTime(2026);
       child: StableInheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: _clock),
         child: InheritedSeed<ServiceBundle>(
-          value: const ServiceBundle(),
+          value: services,
           child: CapabilityHost(capability: cap, mount: _mount(cap)),
         ),
       ),
     ),
   );
   return (owner: owner, root: root, fakes: fakes);
+}
+
+/// A [SourceControl] that records `provision(beadId)` into a shared [log] so a
+/// test can assert provisioning fires BEFORE the spawn. Land is irrelevant here.
+class _RecordingProvisionSourceControl implements SourceControl {
+  _RecordingProvisionSourceControl(this.log);
+  final List<String> log;
+
+  @override
+  bool get canLand => false;
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async => log.add('provision($beadId)');
+
+  @override
+  Future<void> commitAll({required String workspaceDir, required String message}) async {}
+  @override
+  Future<void> push({required String workspaceDir, required String remote, required String branch}) async {}
+  @override
+  Future<PrRef?> openPr({required String workspaceDir, required String branch, required String baseBranch, required String title}) async => null;
 }
 
 Branch _hostBranch(Branch root) {
@@ -145,9 +171,34 @@ void main() {
       final started = h.fakes.provider.started.single;
       expect(started.name, 'tgdog-s/tg-1/agent'); // $sessionId/$nodePath
       expect(started.config.env['GRID_BEAD_ID'], 'tg-1');
+      expect(started.config.env['GRID_SESSION_ID'], 'tgdog-s');
       expect(started.config.env['GRID_STEP_PATH'], 'tg-1/agent');
       expect(started.config.env['GRID_INSTANCE_TOKEN'], isNotEmpty);
       expect(log.first, startsWith('spawn(tg-1@'));
+    });
+
+    test('the host provisions the workspace BEFORE spawning into it', () async {
+      final log = <String>[];
+      final h = _host(
+        _RecordingProcessCap(log),
+        services: ServiceBundle(
+          sourceControl: _RecordingProvisionSourceControl(log),
+        ),
+      );
+      addTearDown(() {
+        h.owner.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      // Provision is recorded, and it precedes the spawn — the agent never lands
+      // in a non-existent worktree (the M3-dispatcher parity the tree path lost).
+      expect(log, contains('provision(tg-1)'));
+      expect(
+        log.indexOf('provision(tg-1)') < log.indexWhere((l) => l.startsWith('spawn(')),
+        isTrue,
+        reason: 'provision must precede spawn',
+      );
     });
 
     test('SessionStarted persists the per-node identity (pgid/pid/token/running)',

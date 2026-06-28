@@ -58,6 +58,10 @@ void main() {
       // The kernel mounted and the implement-phase effect drove the DRY
       // transport: exactly one (recorded, never-real) spawn for the ready bead.
       expect(h.provider.starts, hasLength(1), reason: 'the ready bead spawned');
+      // The host provisioned the worktree (via SourceControl) before spawning —
+      // the agent never lands in a non-existent dir (the blocker fix).
+      expect(h.git.provisioned, contains('tgdog-w1'),
+          reason: 'the workspace was provisioned before the spawn');
       // The session bead was minted through the chokepoint over the recording
       // bd runner — a `create` was recorded, but NO live `bd` ran (the runner is
       // a fake returning a canned envelope).
@@ -494,9 +498,12 @@ class _RecordingDryProvider implements RuntimeProvider {
 class _FakeGitService {
   int listCalls = 0;
 
-  late final StationGitService service = _RecordingGitService(
+  late final _RecordingGitService service = _RecordingGitService(
     onList: () => listCalls++,
   );
+
+  /// Bead ids whose worktree the host asked to provision (via SourceControl).
+  List<String> get provisioned => service.provisioned;
 }
 
 /// A [StationGitService] over fake runners that records each `listBeadWorktrees`
@@ -507,10 +514,27 @@ class _RecordingGitService extends StationGitService {
 
   final void Function() onList;
 
+  final List<String> provisioned = [];
+
   @override
   Future<List<BeadWorktree>?> listBeadWorktrees(RootCheckout root) async {
     onList();
     return const <BeadWorktree>[];
+  }
+
+  // Inert provisioning — records the call, touches NO filesystem (the real
+  // StationGitService.provisionWorktree would mkdir + `git worktree add`).
+  @override
+  Future<BeadWorktree> provisionWorktree({
+    required RootCheckout root,
+    required String beadId,
+  }) async {
+    provisioned.add(beadId);
+    return BeadWorktree(
+      beadId: beadId,
+      path: '${root.path}/.grid/worktrees/${root.substation}/$beadId',
+      branch: 'grid/$beadId',
+    );
   }
 }
 

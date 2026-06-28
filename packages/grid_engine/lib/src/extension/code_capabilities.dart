@@ -12,6 +12,8 @@
 /// formula per coding bead.
 library;
 
+import 'dart:io';
+
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../formula/default_capability_registry.dart';
@@ -149,8 +151,10 @@ class LandCapability extends ServiceCapability {
   @override
   Future<StepOutcome> run(CapabilityContext ctx) async {
     final sc = ctx.services.sourceControl;
-    // Land not wired (an offline build) — no-op rather than touch real git.
-    if (sc == null) return const Ok();
+    // Land not wired (no SourceControl, or provisioning-only for an early arm
+    // whose working agreement is commit-only) — no-op rather than touch real
+    // git. `canLand` distinguishes "deferred" (Ok) from "tried + failed" (Failed).
+    if (sc == null || !sc.canLand) return const Ok();
 
     await sc.commitAll(
       workspaceDir: ctx.workspaceDir,
@@ -179,31 +183,62 @@ class LandCapability extends ServiceCapability {
   }
 }
 
-/// The git [SourceControl] impl over grid_runtime's [GitOps] + [PrOpener] (the
-/// detail the engine knows only in CONCEPT — ADR-0008 D5; ships in the
-/// extension). Null ops ⇒ this is simply not provided (the bundle's
-/// `sourceControl` stays null and [LandCapability] no-ops).
+/// The git [SourceControl] impl over grid_runtime (the detail the engine knows
+/// only in CONCEPT — ADR-0008 D5; ships in the extension). Two independent
+/// halves:
+///  - **provisioning** — [provisioner] ([StationGitService]) + [root]
+///    ([RootCheckout]) cut the per-bead worktree. Provided whenever a root is
+///    registered (live), so the host can materialize the workspace before the
+///    agent spawns. Absent ⇒ `provisionWorkspace` no-ops (offline).
+///  - **land** — [gitOps] (commit/push) + [prOpener] (PR). Absent ⇒ [canLand] is
+///    false and [LandCapability] no-ops (the early-arm commit-only posture).
 class GitSourceControl implements SourceControl {
-  /// Wraps [gitOps] (commit/push) + [prOpener] (PR).
-  const GitSourceControl({required GitOps gitOps, required PrOpener prOpener})
-    : _gitOps = gitOps,
-      _prOpener = prOpener;
+  /// Wraps the optional land ops ([gitOps]/[prOpener]) and the optional
+  /// provisioning seam ([provisioner]/[root]).
+  const GitSourceControl({
+    GitOps? gitOps,
+    PrOpener? prOpener,
+    StationGitService? provisioner,
+    RootCheckout? root,
+  }) : _gitOps = gitOps,
+       _prOpener = prOpener,
+       _provisioner = provisioner,
+       _root = root;
 
-  final GitOps _gitOps;
-  final PrOpener _prOpener;
+  final GitOps? _gitOps;
+  final PrOpener? _prOpener;
+  final StationGitService? _provisioner;
+  final RootCheckout? _root;
+
+  @override
+  bool get canLand => _gitOps != null && _prOpener != null;
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {
+    final provisioner = _provisioner;
+    final root = _root;
+    // Provisioning not wired (offline) — nothing to do.
+    if (provisioner == null || root == null) return;
+    // Idempotent: a later step (verify/land) reuses the agent's worktree.
+    if (Directory(workspaceDir).existsSync()) return;
+    await provisioner.provisionWorktree(root: root, beadId: beadId);
+  }
 
   @override
   Future<void> commitAll({
     required String workspaceDir,
     required String message,
-  }) => _gitOps.commitAll(workDir: workspaceDir, message: message);
+  }) => _gitOps!.commitAll(workDir: workspaceDir, message: message);
 
   @override
   Future<void> push({
     required String workspaceDir,
     required String remote,
     required String branch,
-  }) => _gitOps.pushSetUpstream(
+  }) => _gitOps!.pushSetUpstream(
     workDir: workspaceDir,
     remote: remote,
     branch: branch,
@@ -216,7 +251,7 @@ class GitSourceControl implements SourceControl {
     required String baseBranch,
     required String title,
   }) async {
-    final result = await _prOpener.open(
+    final result = await _prOpener!.open(
       workDir: workspaceDir,
       branch: branch,
       baseBranch: baseBranch,

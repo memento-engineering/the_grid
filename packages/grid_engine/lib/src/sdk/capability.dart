@@ -174,11 +174,27 @@ class ServiceBundle {
   final ExplorationTransport? transport;
 }
 
-/// The first [Service] — commit/push/open-PR, abstracted so the engine knows it
-/// in CONCEPT, not detail (the git impl ships in `station_grid_assets`, Track H).
-/// Clean + dependency-free so a future genesis-shared home is a move, not a
-/// rewrite (designed-to-be-lifted).
+/// The first [Service] — provision-workspace + commit/push/open-PR, abstracted
+/// so the engine knows it in CONCEPT, not detail (the git impl ships in
+/// `station_grid_assets`, Track H). Clean + dependency-free so a future
+/// genesis-shared home is a move, not a rewrite (designed-to-be-lifted).
 abstract interface class SourceControl {
+  /// Materializes the workspace for [beadId] at [workspaceDir] (the git impl
+  /// cuts a worktree off the root — ADR-0008 D5: "the git worktree is the
+  /// `SourceControl` impl's way of provisioning"). The host calls this BEFORE the
+  /// first process spawns into the workspace. MUST be idempotent: a no-op when
+  /// [workspaceDir] already exists (verify/land reuse the agent's workspace) or
+  /// when provisioning isn't wired (an offline build).
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  });
+
+  /// Whether land (commit/push/PR) is wired. When false, the land capability
+  /// no-ops to `Ok` — the early-arm posture (commit-only working agreement; land
+  /// is a deliberate human follow-up). Provisioning is independent of this.
+  bool get canLand;
+
   /// Commits all changes in [workspaceDir] with [message].
   Future<void> commitAll({required String workspaceDir, required String message});
 

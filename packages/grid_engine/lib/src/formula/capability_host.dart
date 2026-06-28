@@ -125,6 +125,14 @@ class CapabilityHostState extends State<CapabilityHost> {
     final cap = seed.capability;
     switch (cap) {
       case ProcessCapability():
+        // Materialize the workspace BEFORE spawning into it (the host owns
+        // provisioning, ADR-0008 D5). Idempotent — a later step in the same
+        // worktree no-ops; offline it no-ops. A dispose racing this drops out.
+        await _services.sourceControl?.provisionWorkspace(
+          beadId: _beadId,
+          workspaceDir: _capCtx!.workspaceDir,
+        );
+        if (_cancelled || !context.mounted) return;
         _sub = _ctx!.provider.events
             .where((e) => e.name == _stepName)
             .listen(_onEvent);

@@ -25,10 +25,31 @@ CapabilityContext _capCtx({SourceControl? sourceControl, Bead? beadOverride}) =>
       cancel: CancelToken(),
     );
 
-/// A recording [SourceControl] (the land Service, faked).
+/// A recording [SourceControl] (the land + provision Service, faked).
 class _FakeSourceControl implements SourceControl {
   final List<String> calls = [];
   bool prOpens = true;
+  bool canProvision = true;
+
+  /// Workspaces this fake "already has" (so provision is idempotent in tests).
+  final Set<String> existingWorkspaces = {};
+
+  @override
+  bool get canLand => true;
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {
+    if (existingWorkspaces.contains(workspaceDir)) {
+      calls.add('provision-skip:$beadId');
+      return;
+    }
+    if (!canProvision) return;
+    existingWorkspaces.add(workspaceDir);
+    calls.add('provision:$beadId:$workspaceDir');
+  }
 
   @override
   Future<void> commitAll({required String workspaceDir, required String message}) async =>
@@ -176,6 +197,24 @@ void main() {
       final sc = _FakeSourceControl()..prOpens = false;
       final outcome = await const LandCapability().run(_capCtx(sourceControl: sc));
       expect(outcome, isA<Failed>());
+    });
+
+    test('LandCapability no-ops to Ok when a SourceControl is present but land '
+        'is NOT wired (canLand=false) — provision-only, commit-only arm', () async {
+      // A provision-only GitSourceControl (no gitOps/prOpener) ⇒ canLand false.
+      const sc = GitSourceControl();
+      expect(sc.canLand, isFalse);
+      final outcome = await const LandCapability().run(_capCtx(sourceControl: sc));
+      expect(outcome, isA<Ok>(), reason: 'deferred land is Ok, not Failed');
+    });
+
+    test('GitSourceControl.provisionWorkspace no-ops when provisioning is not '
+        'wired (no provisioner) — never throws', () async {
+      await const GitSourceControl().provisionWorkspace(
+        beadId: 'tg-1',
+        workspaceDir: '/does/not/exist/anywhere',
+      );
+      // Reaching here without throwing is the assertion (offline no-op).
     });
   });
 
