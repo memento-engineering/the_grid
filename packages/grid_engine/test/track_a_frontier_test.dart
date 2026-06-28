@@ -285,6 +285,27 @@ void main() {
     });
   });
 
+  group('Track A — isFormulaBrokenDeep descends into sub-formulas (D-5)', () {
+    test('a nested deploy step exhausting its breaker is broken-deep, but the '
+        'shallow check at the burn level misses it', () {
+      final cursor = {
+        // The peripheral deploy's build failed AND exhausted (>= maxRestarts 3).
+        'b/harnessPeripheral/build': _c(StepState.failed, restartCount: 3),
+      };
+      expect(isFormulaBrokenDeep(burn, cursor, 'b', formulaById: _byId), isTrue);
+      // The shallow check (burn's OWN steps) sees no broken step — they are
+      // sub-formulas + withheld leaves.
+      expect(isFormulaBroken(burn, cursor, 'b'), isFalse);
+    });
+
+    test('a healthy burn is not broken-deep', () {
+      expect(
+        isFormulaBrokenDeep(burn, const {}, 'b', formulaById: _byId),
+        isFalse,
+      );
+    });
+  });
+
   group('Track A — isFormulaComplete descends into a sub-formula terminal', () {
     // The regression guard for the asymmetry the adversarial review found: a
     // SubFormulaStep has no host, so its OWN cursor node is never written.

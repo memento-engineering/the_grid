@@ -57,6 +57,7 @@ class CapabilityHost extends StatefulSeed {
 class CapabilityHostState extends State<CapabilityHost> {
   EffectContext? _ctx;
   ServiceBundle _services = const ServiceBundle();
+  CapabilityRegistry? _registry;
   CapabilityContext? _capCtx;
   StreamSubscription<RuntimeEvent>? _sub;
   String _token = '';
@@ -82,6 +83,11 @@ class CapabilityHostState extends State<CapabilityHost> {
     );
     final services = context.dependOnInheritedSeedOfExactType<ServiceBundle>();
     if (services != null) _services = services;
+    _registry ??= context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    // Build the sandboxed context HERE (synchronously, before _run's async gap)
+    // so teardown is guaranteed on EVERY exit path — even a dispose that races
+    // _run before it would have built it (Track E review finding #1).
+    _capCtx ??= _buildCapCtx();
   }
 
   @override
@@ -89,6 +95,10 @@ class CapabilityHostState extends State<CapabilityHost> {
     _token = newInstanceToken();
     unawaited(_run());
   }
+
+  /// The wall clock for the backoff cooldown — the registry's (the kernel owns
+  /// it, D-5/F1), falling back to the system clock if no registry is ambient.
+  DateTime _now() => _registry?.now() ?? DateTime.now();
 
   CapabilityContext _buildCapCtx() {
     final ctx = _ctx!;
@@ -105,10 +115,9 @@ class CapabilityHostState extends State<CapabilityHost> {
   }
 
   Future<void> _run() async {
-    // Yield so didChangeDependencies has captured _ctx/_services.
+    // Yield so didChangeDependencies has captured _ctx/_services + built _capCtx.
     await null;
     if (_cancelled || !context.mounted) return;
-    _capCtx = _buildCapCtx();
     // The per-step provider name — '$sessionId/$nodePath' (the full path already
     // disambiguates every concurrent step → disjoint event routing, D-2).
     _stepName = '$_sessionId/$_nodePath';
@@ -173,34 +182,58 @@ class CapabilityHostState extends State<CapabilityHost> {
 
   Future<void> _writeSignal(StepSignal signal) async {
     if (_cancelled || !context.mounted || _completed) return;
-    final state = switch (signal) {
-      StepSignal.ready => StepState.ready,
-      StepSignal.complete => StepState.complete,
-      StepSignal.failed => StepState.failed,
-      StepSignal.none => null,
-    };
-    if (state == null) return;
-    // A job's complete/failed is a terminal latch; a daemon's `ready` is NOT
-    // (it stays mounted and may later write a non-positive cursor on death).
-    if (state == StepState.complete || state == StepState.failed) {
-      _completed = true;
+    switch (signal) {
+      case StepSignal.none:
+        return;
+      case StepSignal.ready:
+        // A daemon's `ready` is a POSITIVE TERMINAL but does NOT latch — the
+        // daemon stays mounted and may later write `failed` on death (OQ-5).
+        await _ctx!.writer.update(
+          _sessionId,
+          metadata: nodeStateMetadata(_nodePath, StepState.ready),
+        );
+      case StepSignal.complete:
+        _completed = true;
+        await _ctx!.writer.update(
+          _sessionId,
+          metadata: nodeStateMetadata(_nodePath, StepState.complete),
+        );
+      case StepSignal.failed:
+        _completed = true;
+        await _writeFailure();
     }
-    await _ctx!.writer.update(
-      _sessionId,
-      metadata: nodeStateMetadata(_nodePath, state),
-    );
   }
 
   Future<void> _writeOutcome(StepOutcome outcome) async {
     if (_cancelled || !context.mounted || _completed) return;
     _completed = true;
-    final state = switch (outcome) {
-      Ok() => StepState.complete,
-      Failed() => StepState.failed,
-    };
+    switch (outcome) {
+      case Ok():
+        await _ctx!.writer.update(
+          _sessionId,
+          metadata: nodeStateMetadata(_nodePath, StepState.complete),
+        );
+      case Failed():
+        await _writeFailure();
+    }
+  }
+
+  /// Authors the SUPERVISED-RESTART cursor on failure (D-5): bump restartCount
+  /// and, when still within budget, set a backoff cooldown so the predicate
+  /// re-keys after it; at exhaustion write no cooldown so the node is
+  /// circuit-broken and SessionScope escalates. The failing leaf host is the
+  /// named restart writer (no supervisor node — invariant 1 preserved).
+  Future<void> _writeFailure() async {
+    final next = seed.mount.node.restartCount + 1;
+    final exhausted = next >= seed.mount.maxRestarts;
+    final cooldown = exhausted ? null : _now().add(seed.mount.backoff.delayFor(next));
     await _ctx!.writer.update(
       _sessionId,
-      metadata: nodeStateMetadata(_nodePath, state),
+      metadata: nodeFailedMetadata(
+        _nodePath,
+        restartCount: next,
+        cooldownUntil: cooldown,
+      ),
     );
   }
 

@@ -74,12 +74,16 @@ class SessionScope extends StatefulSeed {
 /// (`_cancelled` set first in `dispose`, `context.mounted` after every await,
 /// the captured `_ctx`) mirror `EffectSeedState`.
 class SessionScopeState extends State<SessionScope> {
+  /// The the_grid-internal escalation marker key (NOT a codec-boundary key) — a
+  /// human picks it up when a formula's breaker exhausts (D-5).
+  static const _escalationKey = 'grid.escalation';
+
   EffectContext? _ctx;
   String? _sessionId;
   bool _resolving = true;
   bool _failed = false;
   bool _cancelled = false;
-  bool _closeScheduled = false;
+  bool _terminalScheduled = false;
 
   @override
   void didChangeDependencies() {
@@ -134,9 +138,30 @@ class SessionScopeState extends State<SessionScope> {
   /// Schedules the session close on the positive terminal — latched once, run
   /// off `build` (never a write IN `build`).
   void _scheduleClose(String id) {
-    if (_closeScheduled) return;
-    _closeScheduled = true;
+    if (_terminalScheduled) return;
+    _terminalScheduled = true;
     scheduleMicrotask(() => unawaited(_ctx?.writer.close(id)));
+  }
+
+  /// Schedules the breaker-exhaustion escalation (D-5): write the human marker
+  /// onto the OWN session bead, then close — which tears the subtree down,
+  /// killing any leaked daemons (the §9 failure path). Latched once, off `build`.
+  void _scheduleEscalation(String id) {
+    if (_terminalScheduled) return;
+    _terminalScheduled = true;
+    scheduleMicrotask(() => unawaited(_escalateAndClose(id)));
+  }
+
+  Future<void> _escalateAndClose(String id) async {
+    // Runs to completion even if SessionScope is mid-dispose — the escalation
+    // marker + close must be durable (uses the captured ctx, never `context`).
+    final ctx = _ctx;
+    if (ctx == null) return;
+    await ctx.writer.update(
+      id,
+      metadata: const {_escalationKey: 'breaker-exhausted'},
+    );
+    await ctx.writer.close(id, reason: 'breaker-exhausted');
   }
 
   @override
@@ -150,18 +175,29 @@ class SessionScopeState extends State<SessionScope> {
     final id = _sessionId!;
     final cursor = seed.existingSession?.cursor ?? const <String, NodeCursor>{};
 
-    // D-2: own the close on the formula's positive terminal. Read-only here
-    // (isFormulaComplete is pure); the actual write is scheduled off build.
+    // D-2/D-5: own the terminal. Read-only here (the predicates are pure); the
+    // actual write is scheduled off build (never a write IN build, invariant 2).
+    // Breaker-exhaustion (broken ANYWHERE in the subtree) escalates + tears
+    // down; otherwise a positive terminal closes. Distinguishing
+    // empty-because-broken from empty-because-complete is the whole point of D-5.
     final registry =
         context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
-    if (registry != null &&
-        isFormulaComplete(
-          seed.formula,
-          cursor,
-          seed.bead.id,
-          formulaById: registry.formula,
-        )) {
-      _scheduleClose(id);
+    if (registry != null && !_terminalScheduled) {
+      if (isFormulaBrokenDeep(
+        seed.formula,
+        cursor,
+        seed.bead.id,
+        formulaById: registry.formula,
+      )) {
+        _scheduleEscalation(id);
+      } else if (isFormulaComplete(
+        seed.formula,
+        cursor,
+        seed.bead.id,
+        formulaById: registry.formula,
+      )) {
+        _scheduleClose(id);
+      }
     }
 
     // STABLE (D-6): the resolving→ready transition is a structural child

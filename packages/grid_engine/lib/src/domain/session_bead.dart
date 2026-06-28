@@ -119,6 +119,22 @@ Map<String, String> nodeStateMetadata(String nodePath, StepState state) => {
   CursorKeys.keyFor(nodePath, CursorKeys.state): state.name,
 };
 
+/// The targeted metadata payload for a SUPERVISED FAILURE of ONE node (D-5):
+/// `state=failed` + the bumped [restartCount] + the backoff [cooldownUntil]
+/// (omitted when the breaker is exhausted — then `restartCount >= maxRestarts`
+/// makes the node circuit-broken and SessionScope escalates). Merge-safe.
+Map<String, String> nodeFailedMetadata(
+  String nodePath, {
+  required int restartCount,
+  DateTime? cooldownUntil,
+}) => {
+  CursorKeys.keyFor(nodePath, CursorKeys.state): StepState.failed.name,
+  CursorKeys.keyFor(nodePath, CursorKeys.restartCount): restartCount.toString(),
+  if (cooldownUntil != null)
+    CursorKeys.keyFor(nodePath, CursorKeys.cooldownUntil):
+        cooldownUntil.toIso8601String(),
+};
+
 /// The targeted metadata payload stamping ONE node's spawned identity at
 /// `SessionStarted` (Track E / D-4): `state=running` + the per-node pgid/pid/
 /// token (the respawn fence). [pgid] is omitted when null (an honest "no group

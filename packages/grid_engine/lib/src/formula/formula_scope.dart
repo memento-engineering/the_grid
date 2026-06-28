@@ -87,6 +87,8 @@ class FormulaScope extends StatelessSeed {
                 // The incarnation key: a supervised restart bumps restartCount
                 // → a new key → keyed reconcile swaps the leaf (D-5).
                 key: ValueKey('$path#${node.restartCount}'),
+                backoff: formula.backoff,
+                maxRestarts: formula.maxRestarts,
               ),
             ),
           );

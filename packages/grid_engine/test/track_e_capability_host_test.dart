@@ -58,6 +58,31 @@ class _ServiceCap extends ServiceCapability {
   Future<void> teardown(CapabilityContext ctx) async => log.add('svc-teardown');
 }
 
+/// A daemon-style capability: signals `ready` when up (ActivityChanged), `failed`
+/// on death (the non-positive cursor, OQ-5).
+class _DaemonCap extends ProcessCapability {
+  _DaemonCap(this.log);
+  final List<String> log;
+
+  @override
+  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
+    workDir: ctx.workspaceDir,
+    command: 'sh',
+    args: const ['-c', 'sleep 999'],
+    lifecycle: Lifecycle.oneTurn,
+  );
+
+  @override
+  StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
+    ActivityChanged(:final active) when active => StepSignal.ready,
+    Died() || Exited() => StepSignal.failed,
+    _ => StepSignal.none,
+  };
+
+  @override
+  Future<void> teardown(CapabilityContext ctx) async => log.add('daemon-teardown');
+}
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -72,15 +97,21 @@ StepMount _mount(Capability cap, {String nodePath = 'tg-1/agent'}) => StepMount(
   key: ValueKey('$nodePath#0'),
 );
 
+/// The fixed clock the host's backoff cooldown is computed against.
+final _clock = DateTime(2026);
+
 ({TreeOwner owner, Branch root, Fakes fakes}) _host(Capability cap) {
   final fakes = buildFakes();
   final owner = TreeOwner();
   final root = owner.mountRoot(
     InheritedSeed<EffectContext>(
       value: fakes.ctx,
-      child: InheritedSeed<ServiceBundle>(
-        value: const ServiceBundle(),
-        child: CapabilityHost(capability: cap, mount: _mount(cap)),
+      child: StableInheritedSeed<CapabilityRegistry>(
+        value: RecordingCapabilityRegistry(clock: _clock),
+        child: InheritedSeed<ServiceBundle>(
+          value: const ServiceBundle(),
+          child: CapabilityHost(capability: cap, mount: _mount(cap)),
+        ),
       ),
     ),
   );
@@ -158,7 +189,8 @@ void main() {
           {'grid.cursor.tg-1/agent.state': 'complete'});
     });
 
-    test('a non-zero Exited writes failed', () async {
+    test('a non-zero Exited writes the SUPERVISED failure (failed + restartCount '
+        '+ backoff cooldown — D-5)', () async {
       final log = <String>[];
       final h = _host(_RecordingProcessCap(log));
       addTearDown(() {
@@ -168,8 +200,56 @@ void main() {
       await _pump();
       h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1));
       await _pump();
-      expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'failed'});
+      // restartCount bumped to 1; cooldown = clock + Backoff.standard.delayFor(1)
+      // (= 1s). Within budget (maxRestarts default 3), so a cooldown is written.
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'failed',
+        'grid.cursor.tg-1/agent.restartCount': '1',
+        'grid.cursor.tg-1/agent.cooldownUntil':
+            _clock.add(const Duration(seconds: 1)).toIso8601String(),
+      });
+    });
+
+    test('the LAST restart (exhausted) writes failed + restartCount, NO cooldown '
+        '(circuit-broken → SessionScope escalates)', () async {
+      final log = <String>[];
+      final fakes = buildFakes();
+      final owner = TreeOwner();
+      addTearDown(() {
+        owner.dispose();
+        unawaited(fakes.provider.close());
+      });
+      // The node is already at restartCount 2; one more failure → 3 == maxRestarts
+      // → exhausted.
+      owner.mountRoot(
+        InheritedSeed<EffectContext>(
+          value: fakes.ctx,
+          child: StableInheritedSeed<CapabilityRegistry>(
+            value: RecordingCapabilityRegistry(clock: _clock),
+            child: InheritedSeed<ServiceBundle>(
+              value: const ServiceBundle(),
+              child: CapabilityHost(
+                capability: _RecordingProcessCap(log),
+                mount: StepMount(
+                  step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
+                  nodePath: 'tg-1/agent',
+                  session: const SessionHandle('tgdog-s'),
+                  node: const NodeCursor(restartCount: 2),
+                  key: const ValueKey('tg-1/agent#2'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pump();
+      fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1));
+      await _pump();
+      expect(fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'failed',
+        'grid.cursor.tg-1/agent.restartCount': '3', // == maxRestarts → exhausted
+        // no cooldownUntil key — the breaker is tripped.
+      });
     });
 
     test('dispose kills the managed group AND runs the belt-and-braces teardown',
@@ -212,6 +292,24 @@ void main() {
       );
     });
 
+    test('teardown fires even when disposed BEFORE _run reaches spawn '
+        '(finding #1: guaranteed on every exit path)', () async {
+      final log = <String>[];
+      final h = _host(_RecordingProcessCap(log));
+      // Dispose IMMEDIATELY — _run is scheduled but has not passed `await null`,
+      // so the spawn never happens (_started stays false). _capCtx was built in
+      // didChangeDependencies, so teardown STILL fires.
+      h.owner.dispose();
+      await _pump();
+      unawaited(h.fakes.provider.close());
+      expect(log, contains('teardown'));
+      expect(
+        h.fakes.provider.started,
+        isEmpty,
+        reason: 'the spawn was never reached',
+      );
+    });
+
     test('two terminals in one incarnation write the cursor only ONCE (latch)',
         () async {
       final log = <String>[];
@@ -247,7 +345,8 @@ void main() {
       expect(h.fakes.provider.stopped, isEmpty);
     });
 
-    test('run → Failed writes failed', () async {
+    test('run → Failed writes the supervised failure (failed + restartCount + '
+        'cooldown)', () async {
       final log = <String>[];
       final h = _host(_ServiceCap(const Failed('nope'), log));
       addTearDown(() {
@@ -255,8 +354,42 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _pump();
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'failed',
+        'grid.cursor.tg-1/agent.restartCount': '1',
+        'grid.cursor.tg-1/agent.cooldownUntil':
+            _clock.add(const Duration(seconds: 1)).toIso8601String(),
+      });
+    });
+  });
+
+  group('Track E — the daemon ready→death path (no latch on ready, OQ-5)', () {
+    test('a daemon writes ready (no latch), then a later death writes failed — '
+        'TWO writes (the latch must NOT fire on ready)', () async {
+      final log = <String>[];
+      // A daemon-style capability: SessionStarted → ready (up), Died → failed.
+      final h = _host(_DaemonCap(log));
+      addTearDown(() {
+        h.owner.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      // The daemon signals up → ready (positive terminal; stays mounted).
+      h.fakes.provider.emit(
+        const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true),
+      );
+      await _pump();
       expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'failed'});
+          {'grid.cursor.tg-1/agent.state': 'ready'});
+
+      // Later the daemon dies → failed. A SECOND write (latch did not fire on
+      // ready). A mutation latching on ready would drop this.
+      h.fakes.provider.emit(const Died(name: 'tgdog-s/tg-1/agent'));
+      await _pump();
+      expect(h.fakes.runner.callsFor('update'), hasLength(2));
+      expect(h.fakes.runner.metadataOfUpdate(1)['grid.cursor.tg-1/agent.state'],
+          'failed');
     });
   });
 

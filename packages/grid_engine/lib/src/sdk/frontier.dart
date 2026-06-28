@@ -168,10 +168,42 @@ bool isFormulaComplete(
 }
 
 /// Whether any step in [formula] is circuit-broken (D-5) — an empty frontier
-/// that is "broken" (escalate + tear down), never "done".
+/// that is "broken" (escalate + tear down), never "done". Shallow (this level
+/// only); [isFormulaBrokenDeep] descends into sub-formulas.
 bool isFormulaBroken(
   Formula formula,
   FormulaCursor cursor,
   String nodePath,
 ) =>
     formula.steps.any((s) => isCircuitBroken(formula, s, cursor, nodePath));
+
+/// Whether [formula] is broken ANYWHERE in its subtree (D-5) — a step at this
+/// level is circuit-broken, OR a nested sub-formula is broken-deep. This is what
+/// `SessionScope` (the one lifecycle owner, D-2) checks to escalate + tear down,
+/// because a nested harness can exhaust its breaker BELOW the top formula (the
+/// top-level [isFormulaBroken] would miss it). Fail-open on an unresolvable
+/// sub-formula (it cannot be inspected, so it is not reported broken here — its
+/// own un-satisfied dep withholds whatever depends on it).
+bool isFormulaBrokenDeep(
+  Formula formula,
+  FormulaCursor cursor,
+  String nodePath, {
+  required Formula? Function(String formulaId) formulaById,
+}) {
+  for (final step in formula.steps) {
+    if (isCircuitBroken(formula, step, cursor, nodePath)) return true;
+    if (step is SubFormulaStep) {
+      final sub = formulaById(step.formulaId);
+      if (sub != null &&
+          isFormulaBrokenDeep(
+            sub,
+            cursor,
+            stepPath(nodePath, step.stepId),
+            formulaById: formulaById,
+          )) {
+        return true;
+      }
+    }
+  }
+  return false;
+}

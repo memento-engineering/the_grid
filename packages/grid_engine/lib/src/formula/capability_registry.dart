@@ -24,14 +24,18 @@ import 'session_handle.dart';
 /// eligible [CapabilityStep] as an engine leaf.
 class StepMount {
   /// Bundles the [step], its full [nodePath], the resolved [session], the
-  /// step's current [node] cursor (identity/incarnation for respawn — D-4), and
-  /// the incarnation-keyed reconcile [key].
+  /// step's current [node] cursor (identity/incarnation for respawn — D-4), the
+  /// incarnation-keyed reconcile [key], and the owning formula's supervision
+  /// params ([backoff]/[maxRestarts]) the host uses to author the
+  /// supervised-restart cursor on failure (D-5).
   const StepMount({
     required this.step,
     required this.nodePath,
     required this.session,
     required this.node,
     required this.key,
+    this.backoff = Backoff.standard,
+    this.maxRestarts = 3,
   });
 
   /// The eligible step to mount.
@@ -51,6 +55,15 @@ class StepMount {
   /// — a supervised restart bumps `restartCount`, changing the key, so keyed
   /// reconcile unmounts the old incarnation and mounts the new.
   final Key key;
+
+  /// The owning formula's backoff schedule (D-5) — the host computes the
+  /// cooldown for the next restart attempt from it on failure.
+  final Backoff backoff;
+
+  /// The owning formula's restart budget (D-5) — at `restartCount >= maxRestarts`
+  /// the host writes the exhausted failure (no cooldown) and SessionScope
+  /// escalates.
+  final int maxRestarts;
 }
 
 /// The engine's capability/formula/clock resolution seam (Track D). The default
