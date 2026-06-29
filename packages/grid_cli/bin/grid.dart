@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/src/demo_command.dart';
+import 'package:grid_cli/src/gate_command.dart';
 import 'package:grid_cli/src/run_command.dart';
 import 'package:grid_cli/src/watch_command.dart';
 
@@ -10,6 +11,7 @@ Future<void> main(List<String> arguments) async {
       CommandRunner<int>('grid', 'the_grid — a reactive beads controller.')
         ..addCommand(WatchCommand())
         ..addCommand(RunCommand())
+        ..addCommand(GateCommand())
         ..addCommand(DemoCommand());
 
   try {
