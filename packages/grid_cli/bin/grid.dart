@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/src/demo_command.dart';
 import 'package:grid_cli/src/gate_command.dart';
+import 'package:grid_cli/src/lease_command.dart';
 import 'package:grid_cli/src/run_command.dart';
+import 'package:grid_cli/src/serve_command.dart';
 import 'package:grid_cli/src/watch_command.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -12,7 +14,9 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(WatchCommand())
         ..addCommand(RunCommand())
         ..addCommand(GateCommand())
-        ..addCommand(DemoCommand());
+        ..addCommand(DemoCommand())
+        ..addCommand(ServeCommand())
+        ..addCommand(LeaseCommand());
 
   try {
     final code = await runner.run(arguments);
