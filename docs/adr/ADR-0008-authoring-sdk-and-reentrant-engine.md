@@ -52,6 +52,15 @@ The "full power grid" rename. Canonical:
 
 **Why:** `butane_flutter` is already a gascity rig (its committed `.gascity-pack/`); `butane_grid_assets` is the the_grid-native successor. A different-repo consumer structurally **cannot** subclass the engine's element tree without coupling to internals and inheriting every derailment footgun.
 
+**Amended 2026-06-28 (ratified Nico) — the asset taxonomy refines; `grid_assets` is the baseline; `power_station` is the assets repo; assets follow the Dart "Packaged AI Assets" format.**
+
+- **`grid_assets`** is the **default, bare-bones baseline pack** — industry-standard operations (git `SourceControl` + a bare goal-oriented SDLC loop). It **supersedes the `station_grid_assets` name** above: grid assets live at **any turtle/level** of the system (not just a station), and it follows the `grid_*` pattern. (`butane_grid_assets` / `zero_conf_grid_assets` / `leonard_grid_assets` are unchanged.)
+- **`power_station`** is a **new memento.engineering repo** for grid assets — it houses **"The Circuit"** (Decision 9, the SDLC coding-workflow system; the factoryskills-reborn pack) plus the language/framework packs (`dart_grid_assets` / `flutter_grid_assets` / `zero_conf_grid_assets`) and grid utilities without their own project (genesis / butane / lenny have theirs). Open-source baseline + closed-source assets ("keep the lights on"). **`grid_assets` first lives IN the_grid repo** (decided 2026-06-28) — all grid-asset code stays in the_grid for now; split-and-extract to `power_station` later, at stabilization.
+- **Substation-linking is a `dart_grid_assets` capability** (forward note, Nico 2026-06-28): co-developing two substations (e.g. the_grid + `genesis_tree`) needs pubspec `dependency_overrides` path-linking between them — a **dart grid capability** should own that linking, generalizing the manual path-override↔published-dep dance (the ADR-0008 D5 "published-deps build policy" corollary). Not in The Circuit's verify-first scope; recorded for `dart_grid_assets`.
+- **Asset authoring format = the Dart/Flutter "Packaged AI Assets" proposal** (`flutter.dev/go/packaged-ai-assets`, Jake MacDonald; status: implementation starting). Assets expose prompts/resources via **`extension/mcp/config.yaml`** (the `package:extension_discovery` format): files on disk, **mustache-templated** prompt args, **`visibility: public|private`** (our open/closed split), and **AI-only packages with no Dart code** explicitly blessed; consumed via the Dart MCP server. We adopt it as a **forward-looking spec** — our systems use it now and can pivot if the community standardizes on it. It dovetails with the_grid's `extension/` convention and the "extension, never plugin" rule. **Dart-first** for the dynamic half (formulas + capabilities at the existing seam); the TOML `PackInflater` is deferred (Decision 3's "TOML *or* Dart" — TOML is the lower-priority serialization).
+
+*(The SDK package name — public `the_grid` / fallback `grid_sdk` — is unchanged by this amendment.)*
+
 ---
 
 ## Decision 3 — The authoring vocabulary: Formula · Capability · Service · Asset
@@ -162,6 +171,23 @@ Crash-recovery is modeled on Flutter's state-restoration framework. the_grid is 
 - **FUTURE — dynamic planning:** a formula plans its requirement at runtime (e.g. one harness per discovered device) via **plan → reserve → execute** (the reservation, not a static declaration, becomes the deadlock guard). Start static; grow to planned.
 
 **Amended 2026-06-27 (M4-P1 build-order, ratified Nico) — D-7:** for the P1 build, ship **`ResourceRequest` as a declared, statically-inspectable value-type field only** (on `Formula`/`CapabilityStep`); the `DartEnvironment` governor + leaf-permit acquisition are a **separate, optional track NOT in the P1 spine** (the Burn does not block on it). The declare-and-check / dynamic-planning model above is otherwise unchanged.
+
+---
+
+## Decision 9 — "The Circuit": the SDLC workflow + gates AND flares (verify-first)
+
+**Decided 2026-06-28 (ratified Nico; the engine-design specifics are PROPOSED in the M5 "The Circuit" build-order, pending ratification — the M4-P1 build-order→ADR-stamp precedent).**
+
+**The Circuit** is the_grid's SDLC coding-workflow system — factoryskills reborn, grid-themed (work flows a *circuit* of stages: **discovery → spec → review → build → review → land**). It ships as an **asset** (Decision 2/3), not engine code. Its crown jewel is the **adversarial committee**: one critic per rubric, graded **in isolation** (anti-anchoring — a critic reads only its own rubric), fanned out in parallel, then a **route** step aggregates verdicts via a deterministic matrix. This maps onto the reentrant engine (Decision 4) almost 1:1 — a committee is a **fan-out sub-formula + a join `route` step** — reusing the proven fan-out/barrier machinery, with two deltas the_grid owns: factoryskills' cadence **orders** are replaced by **reactive reconcile** (the kernel flush *is* the loop), and the work source stays **read-only** (A37) so grades/lifecycle are per-node `grid.cursor.*` / `grid.result.*` writes on the_grid's OWN session bead, never the foreign work bead.
+
+Ratified shape:
+- **Verify-first.** The **code-committee** (the post-build review: `code-validation` [gating, runs the bead's OWN Validation Plan], spec-adherence, regression-risk, test-coverage) ships first — the self-contained, highest-value upgrade that replaces the placeholder `melos test` verify. The **spec front-half** (discover/architect) and the **spec-committee** (the first review point) are **phase 2**.
+- **Gates AND flares are TWO distinct primitives** (not synonyms):
+  - a **gate** = a **blocking** human checkpoint — parks the formula subtree and waits for an external resolve (generalizes Decision 7's supervision escalation). For `route`'s `block` / human-ultimatum outcomes. A gate **functionally blocks via a `type=gate` bead in the_grid's OWN store (tgdog) against its own session bead — it NEVER mutates the foreign, read-only work bead's state (A37)**; the mount predicate honors `¬gated` and the operator resolves the gate to route back.
+  - a **flare** = a **non-blocking** signal emitted at a transition (fire-and-continue) to the observability/exploration sink (the ADR-0012 hook). A flare-as-gate would wrongly halt the loop.
+- **The engine stays opinion-free** (Decision 5 / the ADR-0007 §1 invariant): the committee, critics, rubrics, route-matrix, and the agent/verify/land opinions move OUT of `grid_engine` into `grid_assets`. The **one** engine change is a narrow, read-only **sibling-read** seam (a `ServiceCapability` route step reads its siblings' already-observed results — no new pipeline subscription, no write; the four derailment invariants hold). All else composes at the existing `CapabilityRegistry` / `FormulaResolver` / `ServiceBundle` seam (dart-first).
+
+**Detail + the lettered design decisions (D-1…D-10) + tracks + DoD:** the **M5 "The Circuit" build-order** (`docs/M5-THE-CIRCUIT-BUILD-ORDER.md`). On ratification its lettered decisions stamp back here (the D-2/D-4/D-5/D-7 amendment pattern). The first live arm (the_grid building itself through The Circuit) remains the human gate.
 
 ---
 
