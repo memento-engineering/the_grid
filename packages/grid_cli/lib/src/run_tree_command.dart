@@ -102,9 +102,10 @@ TreeRunWiring composeRunTree({
 }) {
   final bridge = StationJoinBridge(work: work, state: state);
   // The live work path (ADR-0008 D4): the reentrant FormulaResolver roots the
-  // `code` formula (agent → verify → land as Capabilities) per coding bead at
-  // the EffectResolver seam. The registry supplies the capability set + the
-  // formula; the ServiceBundle lifts the injected git/PR ops into the land
+  // `code` formula (agent → review → land, where `review` inflates the
+  // adversarial committee sub-formula — M5 Track E) per coding bead at the
+  // EffectResolver seam. The registry supplies the capability set + the
+  // formulas; the ServiceBundle lifts the injected git/PR ops into the land
   // capability's SourceControl (null ⇒ land no-ops — an offline build never
   // touches real git/GitHub).
   const resolver = FormulaResolver(_codeFormulaFor);
