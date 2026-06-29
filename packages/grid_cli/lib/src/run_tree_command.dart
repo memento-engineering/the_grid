@@ -20,6 +20,7 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_exploration/grid_exploration.dart';

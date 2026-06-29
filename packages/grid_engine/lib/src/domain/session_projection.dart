@@ -51,5 +51,17 @@ abstract class SessionProjection with _$SessionProjection {
     /// pull-free (A39). Empty for a freshly-minted session (no node has written
     /// its cursor yet — the root formula's frontier mounts from `pending`).
     @Default(<String, NodeCursor>{}) FormulaCursor cursor,
+
+    /// The per-node `grid.result.*` payloads, threaded down pull-free so a
+    /// `route` step reads its siblings' grades — D-5. Keyed by `nodePath`; empty
+    /// until a step records a result.
+    @Default(<String, Map<String, String>>{})
+    Map<String, Map<String, String>> results,
+
+    /// The nodePaths with an OPEN `type=gate` bead blocking this session (D-7) —
+    /// scanned from the state snapshot by the join bridge, not from this session
+    /// bead. A node leaves this set when its gate bead closes, which re-arms the
+    /// parked node (`SessionScope` flips it back to `pending`).
+    @Default(<String>{}) Set<String> openGateNodes,
   }) = _SessionProjection;
 }

@@ -82,6 +82,7 @@ class _CursorHostState extends State<_CursorHost> {
         formula: seed.formula,
         bead: bead('root'),
         cursor: _cursor,
+        results: const {},
         nodePath: 'root',
       );
 }

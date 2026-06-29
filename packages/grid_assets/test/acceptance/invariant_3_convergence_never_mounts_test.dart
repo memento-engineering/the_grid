@@ -14,11 +14,12 @@
 //
 // Offline only — FAKES, no live tg/gc/claude/git/network.
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
-import '../support/engine_fakes.dart';
+import '../support/asset_fakes.dart';
 
 GraphSnapshot _graph({
   required List<Bead> beads,

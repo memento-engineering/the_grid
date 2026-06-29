@@ -46,10 +46,9 @@ export 'src/domain/session_projection.dart';
 // rig + the worktree layout) in one inherited lookup.
 export 'src/effect/effect_context.dart';
 
-// Extension (the OPINIONS live here, never in the kernel/effect core —
-// ADR-0007 §1): the `code` extension — agent/verify/land as Capability impls +
-// the `code` formula + the git `SourceControl`.
-export 'src/extension/code_capabilities.dart';
+// The OPINIONS (agent/verify/land + the `code` formula + the git
+// `SourceControl`) live in the `grid_assets` package, NEVER in the engine
+// (ADR-0007 §1: the opinion-free kernel — a structural fence keeps them out).
 
 // Kernel: the seams + the composition/flush driver.
 export 'src/kernel/effect_resolver.dart';

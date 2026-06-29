@@ -209,6 +209,25 @@ FormulaCursor projectFormulaCursor(Bead sessionBead) {
   return cursor;
 }
 
+/// Projects every `grid.result.*` key on [sessionBead] into a per-node result
+/// map (the read half of [nodeResultMetadata]). Mirrors [projectFormulaCursor]'s
+/// key parsing: `grid.result.{nodePath}.{field}` → results[nodePath][field].
+/// Values are stringified; a malformed key (no field segment) is skipped.
+Map<String, Map<String, String>> projectFormulaResults(Bead sessionBead) {
+  final results = <String, Map<String, String>>{};
+  for (final entry in sessionBead.metadata.entries) {
+    final key = entry.key;
+    if (!key.startsWith(ResultKeys.prefix)) continue;
+    final rest = key.substring(ResultKeys.prefix.length); // {nodePath}.{field}
+    final dot = rest.lastIndexOf('.');
+    if (dot <= 0 || dot == rest.length - 1) continue; // need a path AND a field
+    final nodePath = rest.substring(0, dot);
+    final field = rest.substring(dot + 1);
+    (results[nodePath] ??= <String, String>{})[field] = entry.value.toString();
+  }
+  return results;
+}
+
 /// Parses a [StepState] name; defaults to [StepState.pending] for a
 /// missing/unknown wire value (a node with no state written yet).
 StepState _parseStepState(Object? wire) {
@@ -238,6 +257,9 @@ SessionProjection projectSession(Bead sessionBead) {
     // pull-free (A39). Empty for a legacy/freshly-minted session with no
     // `grid.cursor.*` keys yet.
     cursor: projectFormulaCursor(sessionBead),
+    // The per-node result payloads (D-5) — threaded down pull-free so a `route`
+    // step reads its siblings' grades. Empty until a step records a result.
+    results: projectFormulaResults(sessionBead),
   );
 }
 

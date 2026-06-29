@@ -117,7 +117,49 @@ class StationJoinBridge {
         if (projection.workBeadId.isEmpty) continue; // no JOIN key — skip.
         sessions[projection.workBeadId] = projection;
       }
+      _attachOpenGates(state, sessions);
     }
     return JoinedSnapshot(graph: work, sessionsByWorkBead: sessions);
+  }
+
+  /// Scans [state] for OPEN `type=gate` beads (D-7) and folds each one's blocked
+  /// node into the matching session projection's `openGateNodes` — the re-arm
+  /// signal `SessionScope` reads (a node leaves the set when its gate closes).
+  ///
+  /// A gate bead carries `metadata.blocks` (a sessionId) + `metadata.node` (a
+  /// nodePath). Mutates [sessions] in place, rebuilding the touched projection
+  /// with `copyWith`. A gate whose `blocks` matches no known session — or that
+  /// is CLOSED (resolved) — is ignored, so `openGateNodes` reflects only live
+  /// gates. Like the session scan, this is the JOIN's job (`projectSession`
+  /// stays pure — a session bead never names its own gate).
+  static void _attachOpenGates(
+    GraphSnapshot state,
+    Map<String, SessionProjection> sessions,
+  ) {
+    // sessionId → workBeadId, so a gate's `blocks` (a sessionId) finds its
+    // projection (keyed by workBeadId).
+    final workBeadBySessionId = <String, String>{};
+    sessions.forEach((workBeadId, projection) {
+      final sessionId = projection.sessionId;
+      if (sessionId != null) workBeadBySessionId[sessionId] = workBeadId;
+    });
+    final gateNodesByWorkBead = <String, Set<String>>{};
+    for (final bead in state.beadsById.values) {
+      if (bead.issueType != IssueType.gate) continue;
+      if (bead.isClosed) continue; // a resolved gate re-arms — drop it.
+      final blocks = bead.metadata['blocks'] as String?;
+      if (blocks == null) continue;
+      final workBeadId = workBeadBySessionId[blocks];
+      if (workBeadId == null) continue; // blocks an unknown session — ignore.
+      final node = bead.metadata['node'] as String?;
+      if (node == null) continue;
+      (gateNodesByWorkBead[workBeadId] ??= <String>{}).add(node);
+    }
+    gateNodesByWorkBead.forEach((workBeadId, nodes) {
+      final projection = sessions[workBeadId];
+      if (projection != null) {
+        sessions[workBeadId] = projection.copyWith(openGateNodes: nodes);
+      }
+    });
   }
 }

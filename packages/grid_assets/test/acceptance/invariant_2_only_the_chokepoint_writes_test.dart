@@ -7,21 +7,25 @@
 // hosts act in initState / on a runtime event / dispose; `build()` is a pure
 // Idle leaf.
 //
-// This drives a FULL agent→verify→land cycle through the REAL StationKernel + the
-// REAL `code` formula (FormulaResolver + buildCodeRegistry) with a
-// RecordingBdRunner-backed StationBeadWriter (the chokepoint) + the fake
-// provider/git/PR, emitting SessionStarted + a clean completion per step and
-// advancing the per-node cursor via the fake STATE source. It then asserts the
-// chokepoint discipline over the WHOLE recorded call log.
+// This drives a FULL agent→committee→land cycle through the REAL StationKernel +
+// the REAL `code` formula (FormulaResolver + buildCodeRegistry — agent → the four
+// adversarial critics → route → land) with a RecordingBdRunner-backed
+// StationBeadWriter (the chokepoint) + the fake provider/git/PR, emitting
+// SessionStarted + a clean completion per step and advancing the per-node cursor
+// (+ all-pass grades) via the fake STATE source. It then asserts the chokepoint
+// discipline over the WHOLE recorded call log.
 //
 // Offline only — FAKES, no live tg/gc/claude/git/network.
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import '../support/engine_fakes.dart';
+import '../support/asset_fakes.dart';
+
+const _sid = 'tgdog-sess1';
 
 GraphSnapshot _graph({
   required List<Bead> beads,
@@ -33,12 +37,25 @@ GraphSnapshot _graph({
   capturedAt: DateTime(2026),
 );
 
-/// A one-bead STATE snapshot carrying the session for `tg-1` at the given
-/// [completed] step set (the shared `sessionBead` builds the per-node cursor).
-GraphSnapshot _stateAt(Set<String> completed) => _graph(
-  beads: [sessionBead(id: 'tgdog-sess1', workBeadId: 'tg-1', completed: completed)],
+/// A one-bead STATE snapshot carrying the committee session for `tg-1` at the
+/// given [completed] node set + [grades] (the shared `committeeSession` builds
+/// the per-node cursor + the `grid.result.*` grades the route reads).
+GraphSnapshot _stateAt({
+  Set<String> completed = const {},
+  Map<String, String> grades = const {},
+}) => _graph(
+  beads: [committeeSession(id: _sid, completed: completed, grades: grades)],
   ready: const {},
 );
+
+/// The committee critic step (provider) name for relative node [rel].
+String _step(String rel) => '$_sid/tg-1/$rel';
+
+/// The four critic provider names, in committee order.
+final List<String> _criticSteps = [for (final n in kCriticNodes) _step(n)];
+
+/// All-pass grades (the happy committee — the route advances, never gates).
+final Map<String, String> _allA = {for (final n in kCriticNodes) n: 'A'};
 
 /// The live `code` registry + a git ServiceBundle so the land capability runs
 /// its commit→push→PR through the fakes.
@@ -46,14 +63,20 @@ ServiceBundle _gitServices(Fakes f) => ServiceBundle(
   sourceControl: GitSourceControl(gitOps: GitOps(f.git), prOpener: f.pr),
 );
 
+Future<void> _settle() async {
+  for (var i = 0; i < 6; i++) {
+    await pumpEventQueue();
+  }
+}
+
 void main() {
   group('invariant 2 — only the chokepoint writes', () {
     test(
-      'a full agent→verify→land cycle through the kernel: EVERY bd write is a '
+      'a full agent→committee→land cycle through the kernel: EVERY bd write is a '
       'chokepoint mutation (create/update/close), carries --actor '
       'grid-controller, and NO bd show / sql ever appears',
       () async {
-        final f = buildFakes(createdId: 'tgdog-sess1');
+        final f = buildFakes(createdId: _sid);
         f.pr.url = 'https://github.com/memento/genesis/pull/7';
         final work = FakeSnapshotSource(
           _graph(beads: const [], ready: const {}),
@@ -66,7 +89,9 @@ void main() {
           bridge: bridge,
           effectContext: f.ctx,
           resolver: kCodeResolver,
-          registry: buildCodeRegistry(),
+          // Inline rubrics so the committee critics build their prompts without a
+          // disk read (the on-disk loader is exercised by track_d_assets_test).
+          registry: buildCodeRegistry(rubrics: (id) => '($id rubric bands)'),
           substations: [
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -85,42 +110,60 @@ void main() {
         addTearDown(state.close);
 
         kernel.start();
-        await pumpEventQueue();
+        await _settle();
 
         // 1) AGENT — a ready owned task mounts the agent; the chokepoint mints the
         //    session bead (create + the birth stamp = one update). The step's
         //    provider name is '<sessionId>/<nodePath>'.
         work.push(_graph(beads: [bead('tg-1')], ready: {'tg-1'}));
-        await pumpEventQueue();
+        await _settle();
         expect(f.provider.started, hasLength(1));
-        expect(f.provider.started.single.name, 'tgdog-sess1/tg-1/agent');
+        expect(f.provider.started.single.name, _step('agent'));
 
         // SessionStarted → per-node identity stamped through the chokepoint.
         f.provider.emit(
-          const SessionStarted(name: 'tgdog-sess1/tg-1/agent', pid: 112, pgid: 111),
+          SessionStarted(name: _step('agent'), pid: 112, pgid: 111),
         );
-        await pumpEventQueue();
+        await _settle();
 
         // agent completes → its host writes agent=complete (a chokepoint update);
-        // the STATE source then surfaces the advanced cursor and verify spawns.
-        f.provider.emit(const Exited(name: 'tgdog-sess1/tg-1/agent', exitCode: 0));
-        await pumpEventQueue();
-        state.push(_stateAt({'agent'}));
-        await pumpEventQueue();
-        expect(f.provider.started, hasLength(2));
-        expect(f.provider.started.last.name, 'tgdog-sess1/tg-1/verify');
+        // the STATE source surfaces the advance → the `review` sub-formula inflates
+        // its four critic lanes IN PARALLEL.
+        f.provider.emit(Exited(name: _step('agent'), exitCode: 0));
+        await _settle();
+        state.push(_stateAt(completed: {kAgentNode}));
+        await _settle();
+        expect(f.provider.started, hasLength(5),
+            reason: 'the four committee critics fanned out after the agent');
 
-        // 2) VERIFY completes → cursor advances to land; the STATE source surfaces
-        //    it and the land capability (a ServiceCapability — no spawn) runs.
-        f.provider.emit(const Exited(name: 'tgdog-sess1/tg-1/verify', exitCode: 0));
-        await pumpEventQueue();
-        state.push(_stateAt({'agent', 'verify'}));
-        await pumpEventQueue();
+        // 2) COMMITTEE — every critic completes; the STATE source surfaces the
+        //    advanced cursor + all-pass grades, and the route joins (await-all),
+        //    reads the grades, and advances (a chokepoint update; no gate minted).
+        for (final critic in _criticSteps) {
+          f.provider.emit(Exited(name: critic, exitCode: 0));
+        }
+        await _settle();
+        state.push(
+          _stateAt(completed: {kAgentNode, ...kCriticNodes}, grades: _allA),
+        );
+        await _settle();
 
-        // 3) LAND completed (its host wrote land=complete); the STATE source
-        //    surfaces the terminal and SessionScope closes the session.
-        state.push(_stateAt({'agent', 'verify', 'land'}));
-        await pumpEventQueue();
+        // 3) LAND — route complete → the land capability (a ServiceCapability — no
+        //    spawn) runs its commit→push→PR through the fakes; its host writes
+        //    land=complete.
+        state.push(_stateAt(
+          completed: {kAgentNode, ...kCriticNodes, kRouteNode},
+          grades: _allA,
+        ));
+        await _settle();
+
+        // 4) The terminal (land) is complete; the STATE source surfaces it and
+        //    SessionScope closes the session.
+        state.push(_stateAt(
+          completed: {kAgentNode, ...kCriticNodes, kRouteNode, kLandNode},
+          grades: _allA,
+        ));
+        await _settle();
 
         // --- The chokepoint discipline over the WHOLE recorded log ---
 

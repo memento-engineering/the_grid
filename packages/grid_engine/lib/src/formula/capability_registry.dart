@@ -29,7 +29,10 @@ class StepMount {
   /// [session], the step's current [node] cursor (identity/incarnation for
   /// respawn — D-4), the incarnation-keyed reconcile [key], and the owning
   /// formula's supervision params ([backoff]/[maxRestarts]) the host uses to
-  /// author the supervised-restart cursor on failure (D-5).
+  /// author the supervised-restart cursor on failure (D-5). The WHOLE session
+  /// [cursor] + [results] are threaded down so the host can hand a
+  /// `ServiceCapability` a read-only sibling view (D-5) — config, never a
+  /// re-query.
   const StepMount({
     required this.step,
     required this.bead,
@@ -39,6 +42,8 @@ class StepMount {
     required this.key,
     this.backoff = Backoff.standard,
     this.maxRestarts = 3,
+    this.cursor = const {},
+    this.results = const {},
   });
 
   /// The eligible step to mount.
@@ -71,6 +76,15 @@ class StepMount {
   /// the host writes the exhausted failure (no cooldown) and SessionScope
   /// escalates.
   final int maxRestarts;
+
+  /// The WHOLE session cursor (every node's [NodeCursor], not just [node]) —
+  /// threaded down so the host's `ServiceCapability` reads its siblings' states
+  /// pull-free (D-5). Config, never a re-query (A39/invariant 1).
+  final FormulaCursor cursor;
+
+  /// Every node's recorded result payload, keyed by `nodePath` — threaded down
+  /// so a `route` step reads its siblings' grades pull-free (D-5).
+  final Map<String, Map<String, String>> results;
 }
 
 /// The engine's capability/formula/clock resolution seam (Track D). The default

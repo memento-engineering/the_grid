@@ -110,6 +110,13 @@ class CapabilityHostState extends State<CapabilityHost> {
       baseBranch: ctx.baseBranch,
       services: _services,
       cancel: CancelToken(),
+      nodePath: _nodePath,
+      // The read-only sibling view (D-5): the WHOLE session cursor + results,
+      // threaded down (config, never a subscription/re-query — A39/invariant 1).
+      siblings: SiblingView(
+        cursor: seed.mount.cursor,
+        results: seed.mount.results,
+      ),
       logFile: null,
     );
   }
@@ -203,12 +210,25 @@ class CapabilityHostState extends State<CapabilityHost> {
           _sessionId,
           metadata: nodeStateMetadata(_nodePath, StepState.ready),
         );
+        _emitFlare('step.ready', const {});
       case StepSignal.complete:
         _completed = true;
+        // The optional result payload a ProcessCapability contributes on a clean
+        // completion (e.g. a critic's grade) — read AFTER latching, merged with
+        // the terminal `state=complete` write into ONE chokepoint update so the
+        // grade lands atomically alongside the cursor advance (A1/D-5).
+        final cap = seed.capability;
+        final payload =
+            cap is ProcessCapability ? await cap.result(_capCtx!) : null;
+        if (_cancelled || !context.mounted) return;
         await _ctx!.writer.update(
           _sessionId,
-          metadata: nodeStateMetadata(_nodePath, StepState.complete),
+          metadata: {
+            ...nodeStateMetadata(_nodePath, StepState.complete),
+            ...nodeResultMetadata(_nodePath, payload),
+          },
         );
+        _emitFlare('step.complete', const {});
       case StepSignal.failed:
         _completed = true;
         await _writeFailure();
@@ -233,8 +253,26 @@ class CapabilityHostState extends State<CapabilityHost> {
             ...nodeResultMetadata(_nodePath, payload),
           },
         );
+        _emitFlare('step.complete', const {});
       case Failed():
         await _writeFailure();
+      case Gate(:final reason):
+        // PARK at a human gate (D-7): write `state=gated` (parks the node +
+        // withholds its dependents) AND mint a real `type=gate` bead in the OWN
+        // state store through the chokepoint — never a write to the foreign work
+        // bead (A37). Resolving that gate bead re-arms the node.
+        await _ctx!.writer.update(
+          _sessionId,
+          metadata: nodeStateMetadata(_nodePath, StepState.gated),
+        );
+        if (_cancelled || !context.mounted) return;
+        await _ctx!.writer.createGate(
+          substation: _ctx!.stateSubstation,
+          sessionId: _sessionId,
+          nodePath: _nodePath,
+          reason: reason,
+        );
+        _emitFlare('step.gated', {'reason': reason});
     }
   }
 
@@ -255,6 +293,23 @@ class CapabilityHostState extends State<CapabilityHost> {
         cooldownUntil: cooldown,
       ),
     );
+    _emitFlare('step.failed', const {});
+  }
+
+  /// Emits a fire-and-forget observability flare after a terminal cursor write
+  /// (D-8) through the reserved emit-only [ExplorationTransport] — never an
+  /// inbound pipeline handle (invariant 1). A throwing transport must NOT break
+  /// the flush, so errors are swallowed (the cursor already advanced).
+  void _emitFlare(String name, Map<String, String> data) {
+    try {
+      _services.transport?.flare(name, {
+        'sessionId': _sessionId,
+        'nodePath': _nodePath,
+        ...data,
+      });
+    } catch (_) {
+      // A throwing transport never breaks the flush (D-8) — swallow.
+    }
   }
 
   @override

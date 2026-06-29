@@ -119,6 +119,9 @@ bool _runnableState(
     StepState.complete => false,
     StepState.failed => node.restartCount < formula.maxRestarts &&
         (node.cooldownUntil == null || !now.isBefore(node.cooldownUntil!)),
+    // Parked at a human gate — never runnable until the gate resolves (the
+    // re-arm flips it back to pending; D-7).
+    StepState.gated => false,
   };
 }
 

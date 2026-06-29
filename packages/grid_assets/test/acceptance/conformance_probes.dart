@@ -8,15 +8,15 @@
 // `@protected` internals (`StateNotifier.hasListeners`) or scraping logs.
 //
 // Pure-Dart: no live tg/gc/claude/git/network. Reused across the invariant_1
-// acceptance test; kept here (not in test/support/engine_fakes.dart) because
-// they are conformance instrumentation, not the shared offline fakes.
+// acceptance test; kept here (not in the shared asset_fakes) because they are
+// conformance instrumentation, not the shared offline fakes.
 import 'dart:async';
 
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:state_notifier/state_notifier.dart';
 
-import '../support/engine_fakes.dart';
+import '../support/asset_fakes.dart';
 
 /// A [JoinedSnapshotNotifier] that counts its LIVE persistent listeners.
 ///

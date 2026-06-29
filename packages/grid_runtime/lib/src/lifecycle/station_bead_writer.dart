@@ -130,6 +130,47 @@ class StationBeadWriter {
     return id;
   }
 
+  /// Mints a the_grid-owned `type=gate` bead in [substation] (the OWN state store)
+  /// that functionally blocks the session [sessionId] at [nodePath] (D-7).
+  /// Fail-closed on ownership exactly like [createSession]; stamps `rig`
+  /// (= [substation]) + `blocks` (= [sessionId]) + `node` (= [nodePath]) +
+  /// `reason`. Returns the gate id. NEVER touches the foreign work bead (A37) —
+  /// a gate is a functional block in the_grid's OWN store, not a mutation of the
+  /// parked work. `bd create -t gate` + a stamping `update` (the mint = birth,
+  /// mirroring [createSession] — `bd create` carries no `--metadata`).
+  Future<String> createGate({
+    required String substation,
+    required String sessionId,
+    required String nodePath,
+    required String reason,
+  }) async {
+    // Re-check ownership of the REQUESTED substation before the create — the
+    // gate bead does not exist yet, so the declared substation is the authority,
+    // and it must be owned.
+    if (!_ownership.ownsTarget(
+      id: '$substation-pending',
+      metadata: {rigKey: substation},
+    )) {
+      _refuse('create', substation, substation);
+    }
+    final id = await _bd.create(
+      title: 'grid gate $sessionId@$nodePath',
+      type: IssueType.gate,
+    );
+    // Stamp the owned substation marker + the block linkage FROM BIRTH (merge
+    // update; the `blocks`/`node` keys are how the join re-arms the parked node).
+    await _bd.update(
+      id,
+      metadata: {
+        rigKey: substation,
+        'blocks': sessionId,
+        'node': nodePath,
+        'reason': reason,
+      },
+    );
+    return id;
+  }
+
   /// A lifecycle `bd update --metadata <json>` (merge semantics; works on
   /// closed beads) on a the_grid-owned session bead.
   ///

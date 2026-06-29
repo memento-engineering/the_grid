@@ -28,6 +28,7 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_controller/grid_controller.dart';
 
+import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../effect/effect_context.dart';
 import '../kernel/idle.dart';
@@ -84,6 +85,10 @@ class SessionScopeState extends State<SessionScope> {
   bool _failed = false;
   bool _cancelled = false;
   bool _terminalScheduled = false;
+
+  /// The nodePaths whose gate re-arm has already been scheduled — latched so a
+  /// resolved gate flips its parked node back to `pending` exactly once (D-7).
+  final Set<String> _rearmed = {};
 
   @override
   void didChangeDependencies() {
@@ -152,6 +157,22 @@ class SessionScopeState extends State<SessionScope> {
     scheduleMicrotask(() => unawaited(_escalateAndClose(id)));
   }
 
+  /// Re-arms ONE parked node whose gate bead has closed (D-7): flips its cursor
+  /// `gated` → `pending` through the chokepoint so the route re-runs. Latched per
+  /// node (`_rearmed`), scheduled off `build` (never a write IN `build`).
+  void _scheduleRearm(String id, String nodePath) {
+    if (_rearmed.contains(nodePath)) return;
+    _rearmed.add(nodePath);
+    scheduleMicrotask(
+      () => unawaited(
+        _ctx?.writer.update(
+          id,
+          metadata: nodeStateMetadata(nodePath, StepState.pending),
+        ),
+      ),
+    );
+  }
+
   Future<void> _escalateAndClose(String id) async {
     // Runs to completion even if SessionScope is mid-dispose — the escalation
     // marker + close must be durable (uses the captured ctx, never `context`).
@@ -174,6 +195,19 @@ class SessionScopeState extends State<SessionScope> {
     if (_resolving || _failed || _sessionId == null) return const Idle();
     final id = _sessionId!;
     final cursor = seed.existingSession?.cursor ?? const <String, NodeCursor>{};
+    final results =
+        seed.existingSession?.results ?? const <String, Map<String, String>>{};
+
+    // D-7: re-arm any node parked at a gate whose gate bead has CLOSED (its
+    // nodePath left `openGateNodes`). Read-only here; the flip to `pending` is
+    // scheduled off build (invariant 2), latched once per node. A still-open
+    // gate is left parked.
+    final openGates = seed.existingSession?.openGateNodes ?? const <String>{};
+    cursor.forEach((nodePath, node) {
+      if (node.state == StepState.gated && !openGates.contains(nodePath)) {
+        _scheduleRearm(id, nodePath);
+      }
+    });
 
     // D-2/D-5: own the terminal. Read-only here (the predicates are pure); the
     // actual write is scheduled off build (never a write IN build, invariant 2).
@@ -209,6 +243,7 @@ class SessionScopeState extends State<SessionScope> {
         formula: seed.formula,
         bead: seed.bead,
         cursor: cursor,
+        results: results,
         nodePath: seed.bead.id,
       ),
     );

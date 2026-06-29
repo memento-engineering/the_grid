@@ -2,10 +2,11 @@
 // through the REAL kernel/tree + the REAL `code` extension capabilities.
 //
 // The six criteria (M4-PDR §7 / M4-P0-BUILD-ORDER), in the reentrant model:
-//  (a) a bead runs agent→verify→land as RECONCILE TRANSITIONS — the running
-//      step SWAPS (stop old / start new) while the WorkBead branch + its
-//      bead-keyed subtree root persist (progress is the per-node cursor INSIDE
-//      the subtree, not a WorkBead-level swap);
+//  (a) a bead runs agent→committee→land as RECONCILE TRANSITIONS — the running
+//      frontier SWAPS (stop old / start new — the agent retiring fans the four
+//      critics out, then route + land swap through) while the WorkBead branch +
+//      its bead-keyed subtree root persist (progress is the per-node cursor
+//      INSIDE the subtree, not a WorkBead-level swap);
 //  (b) sibling work is untouched across a transition (no spurious spawn/kill);
 //  (c) config build() does NOT run on a work tick (the WorkList branch identity
 //      is stable);
@@ -30,12 +31,13 @@
 import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import '../support/engine_fakes.dart';
+import '../support/asset_fakes.dart';
 
 // ---------------------------------------------------------------------------
 // Builders + branch-walk helpers (the integrated tree, REAL capabilities).
@@ -64,17 +66,24 @@ JoinedSnapshot _joined({
 );
 
 /// An adopted session for [workBead] (sessionId [id]) at the given [completed]
-/// step set — the JOIN row the bridge would surface (per-node cursor).
+/// node set + [grades] (relative nodePath → letter) — the JOIN row the bridge
+/// would surface (the per-node cursor + the `grid.result.*` grades a `route`
+/// reads through its SiblingView, D-5).
 SessionProjection _session(
   String workBead,
   String id, {
   Set<String> completed = const {},
+  Map<String, String> grades = const {},
 }) => SessionProjection(
   workBeadId: workBead,
   sessionId: id,
   cursor: {
     for (final step in completed)
       '$workBead/$step': const NodeCursor(state: StepState.complete),
+  },
+  results: {
+    for (final entry in grades.entries)
+      '$workBead/${entry.key}': {'grade': entry.value},
   },
 );
 
@@ -157,12 +166,15 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
 void main() {
   group('PDR §7 (a)+(b)+(c) — transitions, sibling isolation, config quiet', () {
     test(
-      'a bead runs agent→verify→land as reconcile transitions (the running step '
-      'swaps, the WorkBead branch + its subtree root persist), a sibling is '
-      'untouched, and the config subtree does NOT rebuild on a work tick',
+      'a bead runs agent→committee→land as reconcile transitions (the running '
+      'frontier swaps, the WorkBead branch + its subtree root persist), a sibling '
+      'is untouched, and the config subtree does NOT rebuild on a work tick',
       () async {
         final f = buildFakes(createdId: 'tgdog-sess1');
         f.pr.url = 'https://github.com/memento/genesis/pull/7';
+        // The four tg-1 committee critic step names, in declaration order.
+        final tg1Critics = [for (final n in kCriticNodes) 'tgdog-1/tg-1/$n'];
+        final allA = {for (final n in kCriticNodes) n: 'A'};
         // ADOPTED sessions so the SessionScope resolves synchronously (the manual
         // owner has no kernel self-flush): the agents spawn under one flush.
         final joined = JoinedSnapshotNotifier(
@@ -182,7 +194,9 @@ void main() {
           _root(
             joined: joined,
             ctx: f.ctx,
-            registry: buildCodeRegistry(),
+            // Inline rubrics so the committee critics build their prompts without
+            // a disk read (the on-disk loader is exercised by track_d_assets_test).
+            registry: buildCodeRegistry(rubrics: (id) => '($id rubric bands)'),
             services: _gitServices(f),
           ),
         );
@@ -208,14 +222,15 @@ void main() {
         expect(effectChild(_workBead(root, 'tg-1')!).key,
             const ValueKey('tg-1:session'));
 
-        // --- (a) agent → verify (a reconcile transition) ---
+        // --- (a) agent → committee (a reconcile transition: the agent retires
+        // and the four critic lanes fan out IN PARALLEL) ---
         // Advance tg-1's per-node cursor (A40), keep tg-2 untouched.
         joined.push(
           _joined(
             beads: [_bead('tg-1'), _bead('tg-2')],
             ready: {'tg-1', 'tg-2'},
             sessions: {
-              'tg-1': _session('tg-1', 'tgdog-1', completed: {'agent'}),
+              'tg-1': _session('tg-1', 'tgdog-1', completed: {kAgentNode}),
               'tg-2': _session('tg-2', 'tgdog-2'),
             },
           ),
@@ -223,19 +238,28 @@ void main() {
         owner.flush();
         await pumpEventQueue();
 
-        // The running step SWAPPED: the agent step was killed, verify spawned;
-        // the WorkBead branch + its bead-keyed subtree root PERSISTED.
+        // The running frontier SWAPPED: the agent step was killed and the four
+        // critics spawned; the WorkBead branch + its bead-keyed subtree root
+        // PERSISTED.
+        expect(f.provider.started, hasLength(6),
+            reason: 'the four committee critics fanned out (the swap)');
+        for (final critic in tg1Critics) {
+          expect(f.provider.started.map((s) => s.name), contains(critic),
+              reason: 'critic $critic fanned out IN PARALLEL');
+        }
+        // The gating lane spawns `sh` (the Validation Plan); an LLM lane `claude`.
         expect(
-          f.provider.started,
-          hasLength(3),
-          reason: 'verify spawned (the swap)',
-        );
-        expect(
-          f.provider.started.last.config.command,
+          f.provider.started.firstWhere((s) => s.name == tg1Critics.first)
+              .config.command,
           'sh',
-          reason: 'the REAL verify capability',
+          reason: 'the gating critic runs the bead\'s Validation Plan',
         );
-        expect(f.provider.started.last.name, 'tgdog-1/tg-1/verify');
+        expect(
+          f.provider.started.firstWhere((s) => s.name == tg1Critics[1])
+              .config.command,
+          'claude',
+          reason: 'an LLM critic spawns claude',
+        );
         expect(
           f.provider.stopped,
           contains('tgdog-1/tg-1/agent'),
@@ -245,29 +269,57 @@ void main() {
             reason: 'WorkBead branch persists across the transition');
         expect(effectChild(_workBead(root, 'tg-1')!).branchId, sessionRootId,
             reason: 'the bead-keyed subtree root persists (config threaded down)');
-        // No new mint (the sessions are adopted).
+        // No new mint (the sessions are adopted; the happy path mints no gate).
         expect(f.runner.callsFor('create'), isEmpty);
 
         // --- (b) the sibling tg-2 was untouched across tg-1's transition ---
         expect(_workBead(root, 'tg-2')!.branchId, wb2Id,
             reason: 'sibling WorkBead branch unchanged');
-        // No spurious sibling spawn/kill: the only starts were
-        // [tg-1.agent, tg-2.agent, tg-1.verify]; tg-2 never appears in stopped.
-        expect(f.provider.started.map((s) => s.config.command),
-            ['claude', 'claude', 'sh']);
+        // No spurious sibling fan-out: tg-2 started exactly once (its agent) and
+        // never appears in stopped. The new starts are all tg-1's critics.
+        expect(
+          f.provider.started.where((s) => s.name.startsWith('tgdog-2')),
+          hasLength(1),
+          reason: 'tg-2 did not fan out a committee of its own',
+        );
         expect(f.provider.stopped, isNot(contains('tgdog-2/tg-2/agent')));
 
         // --- (c) the config subtree did NOT rebuild on the work tick ---
         expect(_workListId(root), workListId,
             reason: 'a work tick does not rebuild the config ancestors');
 
-        // --- (a) continued: verify → land (the second transition) ---
+        // --- (a) continued: committee → route (the critics retire, the route
+        // joins on all four, reads the all-pass grades, and advances) ---
         joined.push(
           _joined(
             beads: [_bead('tg-1'), _bead('tg-2')],
             ready: {'tg-1', 'tg-2'},
             sessions: {
-              'tg-1': _session('tg-1', 'tgdog-1', completed: {'agent', 'verify'}),
+              'tg-1': _session('tg-1', 'tgdog-1',
+                  completed: {kAgentNode, ...kCriticNodes}, grades: allA),
+              'tg-2': _session('tg-2', 'tgdog-2'),
+            },
+          ),
+        );
+        owner.flush();
+        await pumpEventQueue();
+
+        // The four critic steps were killed on the swap; the route is a
+        // ServiceCapability (no provider spawn), so no new start lands.
+        expect(f.provider.stopped, containsAll(tg1Critics),
+            reason: 'every critic step was unmounted → killed once the route ran');
+        expect(f.provider.started, hasLength(6),
+            reason: 'the route does not spawn a process');
+
+        // --- (a) continued: route → land (the final transition) ---
+        joined.push(
+          _joined(
+            beads: [_bead('tg-1'), _bead('tg-2')],
+            ready: {'tg-1', 'tg-2'},
+            sessions: {
+              'tg-1': _session('tg-1', 'tgdog-1',
+                  completed: {kAgentNode, ...kCriticNodes, kRouteNode},
+                  grades: allA),
               'tg-2': _session('tg-2', 'tgdog-2'),
             },
           ),
@@ -276,14 +328,10 @@ void main() {
         await pumpEventQueue();
 
         // land is a ServiceCapability (git/PR orchestration) — NOT a provider
-        // spawn (no 4th start); verify was killed on the swap; the land Service
-        // ran its real orchestration through the fakes.
-        expect(f.provider.started, hasLength(3),
+        // spawn (still 6 starts); the land Service ran its real orchestration
+        // through the fakes; the WorkBead branch still persists.
+        expect(f.provider.started, hasLength(6),
             reason: 'land does not spawn a process');
-        expect(
-          f.provider.stopped,
-          containsAll(<String>['tgdog-1/tg-1/agent', 'tgdog-1/tg-1/verify']),
-        );
         expect(_workBead(root, 'tg-1')!.branchId, wb1Id,
             reason: 'the WorkBead branch still persists at land');
         expect(f.git.subcommands, containsAll(<String>['add', 'commit', 'push']));

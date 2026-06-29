@@ -1,21 +1,26 @@
-// Track E/F — the OPINION-FREE KERNEL invariant (ADR-0007 §1).
+// Track E/F + Track B — the OPINION-FREE KERNEL invariant (ADR-0007 §1).
 //
 // The engine holds NO landing / VCS / provider opinion: agents, `claude`, the
-// PR opener, the subprocess provider, the git service, and the `.land(` call
-// live ONLY in the compiled extension (lib/src/extension/). The kernel, the
-// effect core, and the core seeds resolve capabilities through the opaque
-// EffectResolver / EffectContext seams and never name a concrete opinion.
+// PR opener, the subprocess provider, the git service, the `.land(` call, and
+// even `melos` (D-1) live ONLY in the `grid_assets` package — NEVER in the
+// engine. The kernel, the effect core, and the core seeds resolve capabilities
+// through the opaque EffectResolver / EffectContext seams and never name a
+// concrete opinion. The opinions used to live in `lib/src/extension/`; with the
+// Track B extraction there is no such dir, so the engine must name NONE of the
+// opinion literals ANYWHERE in `lib/src`.
 //
 // This is a structural (grep-the-source) guardrail: it reads every lib/src file
-// and fails — naming the offending path — if an opinion literal appears outside
-// lib/src/extension/. A pure-Dart, offline test (reads files; no live anything).
+// and fails — naming the offending path — if an opinion literal appears. A
+// pure-Dart, offline test (reads files; no live anything). The complementary
+// "the opinions DO live somewhere" meaningfulness check is in
+// grid_assets/test/structural_test.dart.
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 /// The literals that encode a landing / VCS / provider OPINION — none may appear
-/// in the engine (everything under lib/src EXCEPT lib/src/extension/).
+/// anywhere in the engine's `lib/src`.
 const _opinionLiterals = <String>[
   // The coding agent the implement capability spawns.
   'claude',
@@ -27,6 +32,9 @@ const _opinionLiterals = <String>[
   'StationGitService',
   // The land orchestration call site.
   '.land(',
+  // The test-runner the toy verify shells out to (D-1: the engine names no
+  // build-tool opinion either).
+  'melos',
 ];
 
 /// Resolves this package's `lib/src` directory, walking up from the test's
@@ -57,15 +65,11 @@ Directory _libSrc() {
 void main() {
   group('the engine is opinion-free (ADR-0007 §1)', () {
     final libSrc = _libSrc();
-    final extensionDir =
-        p.normalize(p.join(libSrc.path, 'extension')) + p.separator;
 
     final engineFiles = libSrc
         .listSync(recursive: true)
         .whereType<File>()
         .where((f) => f.path.endsWith('.dart'))
-        // ONLY lib/src/extension/ may carry the opinion literals.
-        .where((f) => !p.normalize(f.path).startsWith(extensionDir))
         .toList();
 
     test('the kernel, effect core, and core seeds reference NO opinion literal',
@@ -90,23 +94,9 @@ void main() {
         offences,
         isEmpty,
         reason:
-            'opinion literals must live ONLY in lib/src/extension/ — the engine '
-            'holds no landing/VCS/provider opinion:\n  ${offences.join('\n  ')}',
+            'opinion literals must live ONLY in grid_assets — the engine holds '
+            'no landing/VCS/provider opinion:\n  ${offences.join('\n  ')}',
       );
-    });
-
-    test('the extension DOES carry the opinions (the test is meaningful)', () {
-      final extensionFiles = Directory(p.join(libSrc.path, 'extension'))
-          .listSync(recursive: true)
-          .whereType<File>()
-          .where((f) => f.path.endsWith('.dart'))
-          .toList();
-      final allExtensionSource =
-          extensionFiles.map((f) => f.readAsStringSync()).join('\n');
-      // The compiled `code` extension's capabilities spawn `claude` and drive
-      // the land orchestration — proving the literals exist SOMEWHERE, so the
-      // engine-is-clean assertion above is not vacuously true.
-      expect(allExtensionSource, contains('claude'));
     });
   });
 }

@@ -497,10 +497,12 @@ void main() {
         baseBranch: 'main',
         services: const ServiceBundle(),
         cancel: CancelToken(),
+        nodePath: 'tg-1/agent',
       );
       expect(ctx.beadId, 'tg-1');
       expect(ctx.services, isA<ServiceBundle>());
       expect(ctx.cancel, isA<CancelToken>());
+      expect(ctx.siblings, isA<SiblingView>());
       expect(ctx.logFile, isNull);
     });
   });

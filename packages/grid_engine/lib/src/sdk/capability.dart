@@ -13,6 +13,8 @@ library;
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import 'cursor.dart';
+
 /// A leaf the engine mounts — either a [ProcessCapability] or a
 /// [ServiceCapability]. Sealed so the carrier's dispatch is exhaustive; the two
 /// flavors are open for an asset to implement.
@@ -35,6 +37,14 @@ abstract class ProcessCapability extends Capability {
   /// a daemon's up-signal → `ready`; a crash → `failed`; anything else →
   /// `none`). The host writes the resulting cursor state through the chokepoint.
   StepSignal interpretEvent(RuntimeEvent event);
+
+  /// An optional result payload this process step contributes on a clean
+  /// completion (e.g. a critic's grade). Called by the host on a `complete`
+  /// signal; the returned map is recorded under `grid.result.<nodePath>.*`
+  /// alongside the terminal `state=complete` write (one atomic chokepoint
+  /// update). Defaults to null (no result). MUST be idempotent + side-effect-free
+  /// beyond reading [ctx] (e.g. reading a file the spawned process wrote).
+  Future<Map<String, String>?> result(CapabilityContext ctx) async => null;
 
   /// Idempotent belt-and-braces cleanup on unmount (TEARDOWN-11/12) — e.g.
   /// `pkill` a detached side-process by token. Defaults to a no-op (the host's
@@ -86,6 +96,19 @@ class Failed extends StepOutcome {
   final String reason;
 }
 
+/// The capability decided the work must PARK at a human gate (a hard block, a
+/// grade spread, a human-ultimatum). The host writes `state=gated` (parks the
+/// node + withholds its dependents) and mints a real `type=gate` bead in the
+/// OWN state store via the chokepoint — never a write to the foreign work bead
+/// (A37). Resolving that gate bead re-arms the node. D-7.
+class Gate extends StepOutcome {
+  /// Creates a gate park with an optional human-readable [reason].
+  const Gate([this.reason = '']);
+
+  /// Why the work parked at the gate (recorded on the minted gate bead).
+  final String reason;
+}
+
 /// A cooperative cancellation flag a [Capability] polls across async gaps — set
 /// when the host unmounts. The engine never force-kills a `ServiceCapability`
 /// body; the capability checks [isCancelled] and unwinds.
@@ -99,6 +122,32 @@ class CancelToken {
   void cancel() => _cancelled = true;
 }
 
+/// A read-only view of THIS session's per-node cursor + results, threaded down
+/// (config, never a subscription/re-query — A39/invariant 1). A `ServiceCapability`
+/// (e.g. `route`) reads its sibling steps' terminal states + result payloads
+/// through this — the ONLY sibling-read affordance (no TreeContext/writer/notifier;
+/// invariants 1/2 hold by construction). D-5.
+class SiblingView {
+  /// Wraps the threaded-down [cursor] (per-node states) + [results] (per-node
+  /// result payloads) of this session.
+  const SiblingView({this.cursor = const {}, this.results = const {}});
+
+  /// Every inflated node's [NodeCursor] in this session, keyed by `nodePath`.
+  final FormulaCursor cursor;
+
+  /// Every node's recorded result payload, keyed by `nodePath`.
+  final Map<String, Map<String, String>> results;
+
+  /// The [NodeCursor] at [nodePath] (a default `pending` cursor for an
+  /// unknown/never-run node).
+  NodeCursor cursorOf(String nodePath) => cursor[nodePath] ?? const NodeCursor();
+
+  /// The result payload at [nodePath] (an empty map for a node that recorded
+  /// none).
+  Map<String, String> resultOf(String nodePath) =>
+      results[nodePath] ?? const {};
+}
+
 /// The narrow, sandboxed projection a [Capability] leaf gets (M4-P1 §3): NO
 /// `TreeContext`, NO writer, NO notifier, NO `markNeedsRebuild` — a read-only
 /// slice. This is what holds invariants 1/2 at depth by construction.
@@ -106,8 +155,9 @@ class CapabilityContext {
   /// Bundles the step [params], the full work [bead] (so a capability — e.g. the
   /// agent — can author the rich, full-bead prompt), the [workspaceDir] the
   /// capability runs in (OQ-6: the stable home — was "worktree"), the [branch] /
-  /// [baseBranch], the pluggable [services], the [cancel] token, and the
-  /// restoration [logFile] seam (deferred).
+  /// [baseBranch], the pluggable [services], the [cancel] token, this step's full
+  /// [nodePath] (so a `route` can compute its sibling paths), the read-only
+  /// [siblings] view (D-5), and the restoration [logFile] seam (deferred).
   const CapabilityContext({
     required this.params,
     required this.bead,
@@ -116,6 +166,8 @@ class CapabilityContext {
     required this.baseBranch,
     required this.services,
     required this.cancel,
+    required this.nodePath,
+    this.siblings = const SiblingView(),
     this.logFile,
   });
 
@@ -148,6 +200,15 @@ class CapabilityContext {
 
   /// The cooperative cancellation token (set when the host unmounts).
   final CancelToken cancel;
+
+  /// This step's FULL path within the formula tree (`'$parentNodePath/$stepId'`)
+  /// — a `route` step computes its sibling critic paths off this.
+  final String nodePath;
+
+  /// The read-only view of THIS session's sibling cursors + results, threaded
+  /// down pull-free (D-5) — the only way a `ServiceCapability` reads its
+  /// siblings' grades without a subscription/re-query (invariants 1/2).
+  final SiblingView siblings;
 
   /// The durable log file for the deferred adopt-a-live-process seam (§11);
   /// null until restoration ships.
@@ -229,5 +290,12 @@ class PrRef {
 abstract interface class Trust {}
 
 /// Reserved outbound exploration transport — an emit-only sink, never an inbound
-/// pipeline handle (invariant 1). No members in P1.
-abstract interface class ExplorationTransport {}
+/// pipeline handle (invariant 1). The live arm adapts it over the exploration
+/// host event stream leonard reads (A39/A40).
+abstract interface class ExplorationTransport {
+  /// Emits a fire-and-forget observability flare [name] with [data] to the
+  /// out-of-band sink (the exploration host event stream the live arm adapts).
+  /// Emit-only — NEVER an inbound pipeline handle (invariant 1). Must not throw to
+  /// the caller in a way that breaks the flush (the host swallows errors). D-8.
+  void flare(String name, Map<String, String> data);
+}

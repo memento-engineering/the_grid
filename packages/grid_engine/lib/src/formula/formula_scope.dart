@@ -31,11 +31,13 @@ import 'session_handle.dart';
 /// The pure inflater for one formula instance rooted at [nodePath], under
 /// [cursor] (M4-P1 §4). Engine-private — an asset never subclasses it.
 class FormulaScope extends StatelessSeed {
-  /// Inflates [formula] for work [bead] at [nodePath] under [cursor].
+  /// Inflates [formula] for work [bead] at [nodePath] under [cursor] (with the
+  /// session [results] threaded down for sibling reads — D-5).
   const FormulaScope({
     required this.formula,
     required this.bead,
     required this.cursor,
+    required this.results,
     required this.nodePath,
     super.key,
   });
@@ -51,6 +53,11 @@ class FormulaScope extends StatelessSeed {
   /// The injected cursor (config, threaded from `WorkList`'s cascade — NOT a
   /// subscription). A missing node reads as a fresh `pending` cursor.
   final FormulaCursor cursor;
+
+  /// The injected per-node result payloads (config, threaded from `SessionScope`
+  /// — NOT a subscription). Handed to each `StepMount` so a `ServiceCapability`
+  /// reads its siblings' grades pull-free (D-5).
+  final Map<String, Map<String, String>> results;
 
   /// This formula instance's path (`bead.id` at the root; `'$parent/$stepId'`
   /// for a nested sub-formula).
@@ -97,6 +104,10 @@ class FormulaScope extends StatelessSeed {
                 key: ValueKey('$path#${node.restartCount}'),
                 backoff: formula.backoff,
                 maxRestarts: formula.maxRestarts,
+                // The WHOLE cursor + results, threaded down so a host's
+                // ServiceCapability reads its siblings pull-free (D-5).
+                cursor: cursor,
+                results: results,
               ),
             ),
           );
@@ -110,6 +121,7 @@ class FormulaScope extends StatelessSeed {
               formula: sub,
               bead: bead,
               cursor: cursor,
+              results: results,
               nodePath: path,
               key: ValueKey('$path/scope'),
             ),

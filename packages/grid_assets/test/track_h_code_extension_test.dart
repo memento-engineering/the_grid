@@ -1,18 +1,21 @@
-// Track H — agent/verify/land as Capability impls + the `code` formula (§6).
-// The real capabilities produce P0's spawn configs / land orchestration, and the
-// `code` formula runs end-to-end over the new path (the no-behavior-change
-// proof: a 1-wide frontier, agent → verify → land → session close).
+// Track H — the agent + land Capability impls + the git SourceControl (§6).
 //
-// ADR-0008 D2 / M4-P1 §6, Track H. Zero I/O — fakes + the recording chokepoint.
-import 'dart:async';
-
-import 'package:genesis_tree/genesis_tree.dart';
+// The agent/land OPINIONS are real [Capability] impls: the agent produces the
+// coding-agent spawn config (the full-bead prompt + the local-first working
+// agreement), and `land` drives commit → push → PR through the pluggable
+// [SourceControl] Service. The toy `verify` capability is GONE (M5 "The Circuit"
+// — `verify` is now the adversarial committee; that wiring is proven end-to-end
+// by circuit_acceptance_test.dart), so this file is the Agent/Land/GitSourceControl
+// capability-UNIT file.
+//
+// ADR-0008 D2 / M4-P1 §6, Track H. Zero I/O — fakes only.
+import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'support/asset_fakes.dart';
 
 CapabilityContext _capCtx({SourceControl? sourceControl, Bead? beadOverride}) =>
     CapabilityContext(
@@ -23,6 +26,7 @@ CapabilityContext _capCtx({SourceControl? sourceControl, Bead? beadOverride}) =>
       baseBranch: 'main',
       services: ServiceBundle(sourceControl: sourceControl),
       cancel: CancelToken(),
+      nodePath: 'tg-1/agent',
     );
 
 /// A recording [SourceControl] (the land + provision Service, faked).
@@ -74,32 +78,6 @@ class _FakeSourceControl implements SourceControl {
   }
 }
 
-Future<void> _pump() async {
-  for (var i = 0; i < 5; i++) {
-    await Future<void>.delayed(Duration.zero);
-  }
-}
-
-JoinedSnapshot _joined({
-  required Map<String, SessionProjection> sessions,
-}) => JoinedSnapshot(
-  graph: GraphSnapshot.fromParts(
-    beads: [Bead(id: 'tg-1', issueType: IssueType.task, status: BeadStatus.open)],
-    dependencies: const [],
-    readyIds: const {'tg-1'},
-    capturedAt: DateTime(2026),
-  ),
-  sessionsByWorkBead: sessions,
-);
-
-SessionProjection _session(Map<String, NodeCursor> cursor) => SessionProjection(
-  workBeadId: 'tg-1',
-  sessionId: 'tgdog-s',
-  cursor: cursor,
-);
-
-const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
-
 void main() {
   group('Track H — the capabilities reproduce P0 configs/orchestration', () {
     test('AgentCapability spawns headless `claude -p <prompt>` in the worktree',
@@ -133,12 +111,14 @@ void main() {
       expect(prompt, contains('## Design\nUse a lossy inter-station gossip bus.'));
       expect(prompt, contains('## Acceptance criteria'));
       expect(prompt, contains('## Notes\nCoexistence-safe; do not touch gc.'));
-      // The local-first working agreement (commit, no push, no PR, advance shim).
+      // The local-first working agreement (commit, no push, no PR).
       expect(prompt, contains('/w/tg-1'));
       expect(prompt, contains('branch `grid/tg-1`'));
       expect(prompt, contains('COMMIT'));
       expect(prompt, contains('Do NOT push and do NOT open a pull request'));
-      expect(prompt, contains('grid step --advance'));
+      // tg-p9q: completion is OBSERVED via process-exit, never DECLARED — the
+      // dangling `grid step --advance` instruction is gone.
+      expect(prompt, isNot(contains('grid step --advance')));
     });
 
     test('AgentCapability prompt omits empty bead sections + the substation '
@@ -153,26 +133,18 @@ void main() {
       expect(prompt, contains('## Working agreement'));
     });
 
-    test('VerifyCapability spawns `sh -c melos test` (P0 VerifyEffectSeed parity)',
-        () {
-      final cfg = const VerifyCapability().spawn(_capCtx());
-      expect(cfg.command, 'sh');
-      expect(cfg.args, const ['-c', 'melos test']);
-    });
-
-    test('a clean exit completes a job; a non-zero exit / death fails', () {
+    test('AgentCapability interpretEvent: clean exit completes, non-zero / death '
+        'fails', () {
+      const cap = AgentCapability();
       expect(
-        const AgentCapability().interpretEvent(const Exited(name: 'x', exitCode: 0)),
+        cap.interpretEvent(const Exited(name: 'x', exitCode: 0)),
         StepSignal.complete,
       );
       expect(
-        const AgentCapability().interpretEvent(const Exited(name: 'x', exitCode: 1)),
+        cap.interpretEvent(const Exited(name: 'x', exitCode: 1)),
         StepSignal.failed,
       );
-      expect(
-        const VerifyCapability().interpretEvent(const Died(name: 'x')),
-        StepSignal.failed,
-      );
+      expect(cap.interpretEvent(const Died(name: 'x')), StepSignal.failed);
     });
 
     test('LandCapability drives commit → push → PR and returns Ok(pr_url)', () async {
@@ -215,96 +187,6 @@ void main() {
         workspaceDir: '/does/not/exist/anywhere',
       );
       // Reaching here without throwing is the assertion (offline no-op).
-    });
-  });
-
-  group('Track H — the `code` formula runs end-to-end over the new path (§6)', () {
-    test('agent → verify → land → session close, 1-wide frontier throughout',
-        () async {
-      final f = buildFakes();
-      final sc = _FakeSourceControl();
-      final registry = buildCodeRegistry(clock: () => DateTime(2026));
-      // Pre-seed the session (adopt synchronously); start at an empty cursor.
-      final joined = JoinedSnapshotNotifier(
-        _joined(sessions: {'tg-1': _session(const {})}),
-      );
-      final owner = TreeOwner();
-      addTearDown(() {
-        owner.dispose();
-        unawaited(f.provider.close());
-      });
-      owner.mountRoot(
-        InheritedSeed<JoinedSnapshotNotifier>(
-          value: joined,
-          child: InheritedSeed<EffectContext>(
-            value: f.ctx,
-            child: StableInheritedSeed<CapabilityRegistry>(
-              value: registry,
-              child: InheritedSeed<EffectResolver>(
-                value: FormulaResolver((_) => kCodeFormula),
-                child: Station([
-                  SubstationScope(
-                    configNotifier: SubstationConfigNotifier(_tgConfig),
-                    // The SourceControl is provided AT THE SCOPE (ADR-0008 D5).
-                    services: ServiceBundle(sourceControl: sc),
-                    key: const ValueKey('scope.tg'),
-                  ),
-                ]),
-              ),
-            ),
-          ),
-        ),
-      );
-      await _pump();
-
-      // 1-wide: only the agent spawned.
-      expect(f.provider.started.map((s) => s.name), ['tgdog-s/tg-1/agent']);
-
-      // Agent exits clean → host writes agent=complete; advance the cursor.
-      f.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
-      await _pump();
-      joined.push(_joined(sessions: {
-        'tg-1': _session(const {'tg-1/agent': NodeCursor(state: StepState.complete)}),
-      }));
-      owner.flush();
-      await _pump();
-
-      // Verify spawned next (still 1-wide — agent retired).
-      expect(f.provider.started.map((s) => s.name),
-          ['tgdog-s/tg-1/agent', 'tgdog-s/tg-1/verify']);
-
-      // Verify exits clean → advance to land.
-      f.provider.emit(const Exited(name: 'tgdog-s/tg-1/verify', exitCode: 0));
-      await _pump();
-      joined.push(_joined(sessions: {
-        'tg-1': _session(const {
-          'tg-1/agent': NodeCursor(state: StepState.complete),
-          'tg-1/verify': NodeCursor(state: StepState.complete),
-        }),
-      }));
-      owner.flush();
-      await _pump();
-
-      // Land (a ServiceCapability — no spawn) ran the git orchestration.
-      expect(sc.calls, isNotEmpty);
-      expect(f.provider.started.map((s) => s.name),
-          ['tgdog-s/tg-1/agent', 'tgdog-s/tg-1/verify']); // land never spawns
-
-      // Land wrote land=complete; advance — SessionScope closes the session.
-      joined.push(_joined(sessions: {
-        'tg-1': _session(const {
-          'tg-1/agent': NodeCursor(state: StepState.complete),
-          'tg-1/verify': NodeCursor(state: StepState.complete),
-          'tg-1/land': NodeCursor(state: StepState.complete),
-        }),
-      }));
-      owner.flush();
-      await _pump();
-      expect(
-        f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
-        hasLength(1),
-        reason: 'the terminal step (land) drives the SessionScope close (§6 parity)',
-      );
     });
   });
 }

@@ -1,0 +1,49 @@
+# The Circuit — code-review assets, authored in the Dart/Flutter
+# "Packaged AI Assets" format (per flutter.dev/go/packaged-ai-assets, the
+# package:extension_discovery `extension/mcp/config.yaml` shape). We follow it as
+# a SPEC so the_grid's systems use it now AND can pivot if the community adopts
+# it. Dart-first: the active prompt/grade path is composed in Dart at the engine's
+# CapabilityRegistry seam (grid_assets); this manifest is the portable, declarative
+# mirror of those same assets. The TOML PackInflater is deferred (D-9).
+name: grid_assets
+version: 1
+
+# Rubric prose — one resource per committee lane. `visibility: public` is the
+# open-source split (a closed rubric would be `private`). Each is a plain
+# markdown file the critic capability embeds, in isolation, into its prompt.
+resources:
+  - id: code-validation
+    description: The GATING lane — runs the bead's own Validation Plan; F on any non-zero command.
+    path: rubrics/code-validation.md
+    visibility: public
+  - id: spec-adherence
+    description: Does the diff implement the bead's Implementation Plan + acceptance criteria?
+    path: rubrics/spec-adherence.md
+    visibility: public
+  - id: regression-risk
+    description: The blast radius — how likely is the change to break existing behavior?
+    path: rubrics/regression-risk.md
+    visibility: public
+  - id: test-coverage
+    description: Are the changes covered by MEANINGFUL (non-vacuous) tests?
+    path: rubrics/test-coverage.md
+    visibility: public
+
+# Prompts — the critic prompt template, mustache-templated. `{{rubric}}` /
+# `{{rubricText}}` / `{{bead}}` are substituted per lane (the asset loader's
+# renderPrompt; D-9). One critic per rubric, in isolation (anti-anchoring).
+prompts:
+  - id: critic
+    description: One adversarial critic, grading the work against a single rubric in isolation.
+    path: prompts/critic.md
+    visibility: public
+    args:
+      - name: rubric
+        description: The rubric id this critic grades against (the lane).
+        required: true
+      - name: rubricText
+        description: The rubric's prose bands, loaded from resources/<rubric>.
+        required: true
+      - name: bead
+        description: The full work bead under review (title/task/design/acceptance/notes).
+        required: true

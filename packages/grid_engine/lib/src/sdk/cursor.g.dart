@@ -37,4 +37,5 @@ const _$StepStateEnumMap = {
   StepState.ready: 'ready',
   StepState.complete: 'complete',
   StepState.failed: 'failed',
+  StepState.gated: 'gated',
 };

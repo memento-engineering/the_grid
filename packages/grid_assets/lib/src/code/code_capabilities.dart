@@ -4,8 +4,8 @@
 /// The agent/verify/land OPINIONS live here as opaque [Capability] leaves (never
 /// a `Seed`), composed into a linear [Formula] whose always-1-wide frontier
 /// reproduces the original agent→verify→land sequence. The kernel/effect core
-/// references none of this — only this extension does (the opinion-free kernel
-/// invariant, ADR-0007 §1; a structural fence keeps it here).
+/// references none of this — only this asset package does (the opinion-free
+/// kernel invariant, ADR-0007 §1; a structural fence keeps it out of the engine).
 ///
 /// This is the LIVE work path: `composeRunTree` wires it via the
 /// [buildCodeRegistry] registry + a [FormulaResolver] that roots the `code`
@@ -14,22 +14,31 @@ library;
 
 import 'dart:io';
 
+import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
-import '../formula/default_capability_registry.dart';
-import '../sdk/capability.dart';
-import '../sdk/formula.dart';
+import '../assets/asset_loader.dart';
+import 'committee.dart';
 
-/// agent → verify → land — the degenerate linear formula (§6). Its 1-wide
-/// frontier (agent dep-free; verify after agent; land after verify) mounts ONE
-/// `CapabilityHost` at a time, reproducing P0's `EffectSeed` swap behavior.
+/// agent → review → land — the live `code` formula (M5 "The Circuit" Track E).
+///
+/// The toy `verify` step (`sh -c 'melos test'`) is GONE: `verify` is now the
+/// adversarial code-committee, a [SubFormulaStep] the engine inflates one level
+/// down ([kCodeReviewFormula] — four critics in parallel → a `route` join). A
+/// `dependsOn` on `review` resolves to its terminal-step descendant
+/// (`<bead>/review/route`'s positive terminal), so `land` waits for the route to
+/// advance; a route `Gate` parks the work (no `land`) instead.
 const Formula kCodeFormula = Formula(
   id: 'code',
   terminalStepId: 'land',
   steps: [
     CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-    CapabilityStep(stepId: 'verify', capabilityId: 'verify', dependsOn: {'agent'}),
-    CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'verify'}),
+    SubFormulaStep(
+      stepId: 'review',
+      formulaId: 'code_review',
+      dependsOn: {'agent'},
+    ),
+    CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'review'}),
   ],
 );
 
@@ -63,10 +72,9 @@ class AgentCapability extends ProcessCapability {
 }
 
 /// Assembles the agent's full-bead prompt + local-first working agreement (the
-/// live dogfood contract — exposed for unit tests). The host layers
-/// `GRID_BEAD_ID`/`GRID_SESSION_ID`/`GRID_STEP_PATH` over the env (so the
-/// `grid step --advance` shim can advance the OWN session cursor through the
-/// chokepoint); this is the human-readable instruction half.
+/// live dogfood contract — exposed for unit tests). Completion is OBSERVED via
+/// process-exit (the host writes the node cursor through the chokepoint when the
+/// agent's process exits clean) — the agent never DECLARES it (tg-p9q).
 String buildAgentPrompt(CapabilityContext ctx) {
   final bead = ctx.bead;
   final title = bead.title.isNotEmpty ? bead.title : 'work bead ${bead.id}';
@@ -103,34 +111,15 @@ String buildAgentPrompt(CapabilityContext ctx) {
       '- Do NOT push and do NOT open a pull request — leave the commit for '
       'human review.',
     )
-    ..writeln(
-      '- When committed, run `grid step --advance` to mark this step done, then '
-      "exit. (This advances your OWN session cursor through the_grid's "
-      'chokepoint-mediated shim. It is NOT a free-form `bd` call: do not write '
-      'beads directly from the worktree.)',
-    )
     ..writeln('- When the work is committed you are done; exit.');
   return p.toString();
 }
 
-/// The VERIFY capability — run the check in the bead's workspace (migrated from
-/// `VerifyEffectSeed`; deliberately NOT the M2 convergence gate). `sh -c 'melos
-/// test'`: a green exit completes, a non-zero exit fails.
-class VerifyCapability extends ProcessCapability {
-  /// Creates the verify capability.
-  const VerifyCapability();
-
-  @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
-    command: 'sh',
-    args: const ['-c', 'melos test'],
-    lifecycle: Lifecycle.oneTurn,
-  );
-
-  @override
-  StepSignal interpretEvent(RuntimeEvent event) => _jobSignal(event);
-}
+// The toy VERIFY capability (a fixed test command) was DELETED in M5 Track E:
+// `verify` is now the adversarial code-committee ([kCodeReviewFormula]), whose
+// gating `code-validation` lane runs the bead's OWN Validation Plan — real
+// verification, not one hard-coded command. (The opinion-free engine names no
+// build tool at all; the structural fence guards it.)
 
 /// A job's terminal mapping: a clean `Exited(0)` completes; any other terminal
 /// (non-zero exit or a `Died`) fails (routes to supervision).
@@ -186,7 +175,7 @@ class LandCapability extends ServiceCapability {
 }
 
 /// The git [SourceControl] impl over grid_runtime (the detail the engine knows
-/// only in CONCEPT — ADR-0008 D5; ships in the extension). Two independent
+/// only in CONCEPT — ADR-0008 D5; ships in the asset package). Two independent
 /// halves:
 ///  - **provisioning** — [provisioner] ([StationGitService]) + [root]
 ///    ([RootCheckout]) cut the per-bead worktree. Provided whenever a root is
@@ -263,17 +252,29 @@ class GitSourceControl implements SourceControl {
   }
 }
 
-/// Builds the `code` registry: the agent/verify/land capabilities + the `code`
-/// formula, with an optional injected [clock] (the backoff seam). The composer
-/// provides it as a stable `InheritedSeed<CapabilityRegistry>` above `Station`,
-/// alongside a `FormulaResolver((_) => kCodeFormula)`.
-DefaultCapabilityRegistry buildCodeRegistry({DateTime Function()? clock}) =>
-    DefaultCapabilityRegistry(
-      capabilities: const {
-        'agent': AgentCapability(),
-        'verify': VerifyCapability(),
-        'land': LandCapability(),
-      },
-      formulas: const {'code': kCodeFormula},
-      clock: clock,
-    );
+/// Builds the `code` registry: the agent/land capabilities + the adversarial
+/// committee (`critic`/`route` + the `code_review` formula), with an optional
+/// injected [clock] (the backoff seam). The composer provides it as a stable
+/// `InheritedSeed<CapabilityRegistry>` above `Station`, alongside a
+/// `FormulaResolver((_) => kCodeFormula)`.
+///
+/// The `code` formula's `verify` step is the committee (M5 Track E): the toy
+/// `verify` capability is gone, and the `critic` capability is wired to the
+/// Packaged-AI-Asset rubric loader (D-9) — [rubrics] overrides it for a test
+/// that wants inline rubric text (absent ⇒ the on-disk `extension/rubrics/`).
+DefaultCapabilityRegistry buildCodeRegistry({
+  DateTime Function()? clock,
+  RubricSource? rubrics,
+}) {
+  final rubricSource = rubrics ?? PackagedAssetLoader().rubricSource;
+  return DefaultCapabilityRegistry(
+    capabilities: {
+      'agent': const AgentCapability(),
+      'land': const LandCapability(),
+      'critic': CriticCapability(rubrics: rubricSource),
+      'route': const RouteCapability(),
+    },
+    formulas: const {'code': kCodeFormula, 'code_review': kCodeReviewFormula},
+    clock: clock,
+  );
+}

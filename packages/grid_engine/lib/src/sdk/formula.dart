@@ -58,6 +58,11 @@ enum StepState {
 
   /// The step failed — routes to supervision (D-5).
   failed,
+
+  /// Parked at a human gate — a NON-positive, non-failed terminal-ish state: it
+  /// does not satisfy a `dependsOn`, is not retired, is not circuit-broken, and
+  /// does not re-mount until the gate resolves — D-7.
+  gated,
 }
 
 /// How a [Formula] supervises a failed child (M4-P1 §3 / D-5).
