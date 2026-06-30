@@ -208,27 +208,33 @@ class LeaseManager {
     return _held.containsKey(leaseId);
   }
 
-  /// Extends [leaseId]'s idle TTL on activity (a dispatch), capped at the lease's
-  /// max lifetime. Throws [LeaseInvalidException] if the lease is unknown/expired
-  /// or [token] is stale (fencing).
+  /// Extends [leaseId]'s idle TTL on activity (a dispatch). Renewal cannot keep a
+  /// lease alive past its max lifetime: the idle expiry is pushed forward freely,
+  /// but the immovable [_Held.hardDeadline] is enforced ORTHOGONALLY by the
+  /// owner-clock reaper ([_reap]) — renewal never clamps the stored deadline, so
+  /// the hard-deadline reap (not this push) is the sole max-lifetime bound. Throws
+  /// [LeaseInvalidException] if the lease is unknown/expired or [token] is stale
+  /// (fencing).
   void touch(String leaseId, int token) {
     _validate(leaseId, token);
     final h = _held[leaseId]!;
-    h.expiry = _cap(_clock().add(ttl), h.hardDeadline);
+    h.expiry = _clock().add(ttl);
     _pump();
   }
 
   /// Records a liveness HEARTBEAT for [leaseId], renewing its heartbeat deadline
-  /// to `now + heartbeatTimeout` (capped at the max lifetime). A no-op on the
-  /// deadline when [heartbeat] is off, but it still validates the handle +
-  /// fencing [token] (so a stale beat is refused). Throws [LeaseInvalidException]
-  /// if the lease is unknown/expired or [token] is stale.
+  /// to `now + heartbeatTimeout`. A no-op on the deadline when [heartbeat] is off,
+  /// but it still validates the handle + fencing [token] (so a stale beat is
+  /// refused). A beat cannot keep a lease alive past its max lifetime: the
+  /// [_Held.hardDeadline] reaper ([_reap]) bounds the lease ORTHOGONALLY,
+  /// regardless of how far the renewed heartbeat deadline is pushed. Throws
+  /// [LeaseInvalidException] if the lease is unknown/expired or [token] is stale.
   void beat(String leaseId, int token) {
     _validate(leaseId, token);
     final h = _held[leaseId]!;
     final timeout = heartbeatTimeout;
     if (timeout != null) {
-      h.heartbeatDeadline = _cap(_clock().add(timeout), h.hardDeadline);
+      h.heartbeatDeadline = _clock().add(timeout);
     }
     _pump();
   }
@@ -306,11 +312,13 @@ class LeaseManager {
     final timeout = heartbeatTimeout;
     _held[id] = _Held(
       kind: kind,
-      expiry: _cap(now.add(ttl), hardDeadline),
+      // The idle/heartbeat deadlines are NOT clamped to the hard deadline; the
+      // hard deadline is enforced independently by [_reap], so it stays the lone,
+      // testable max-lifetime bound (no masking by a clamped idle expiry).
+      expiry: now.add(ttl),
       hardDeadline: hardDeadline,
       // A grace window before the first heartbeat is due.
-      heartbeatDeadline:
-          timeout == null ? null : _cap(now.add(timeout), hardDeadline),
+      heartbeatDeadline: timeout == null ? null : now.add(timeout),
       fencingToken: token,
       idempotencyKey: req.idempotencyKey,
     );
@@ -326,19 +334,22 @@ class LeaseManager {
     return grant;
   }
 
-  /// Clamps a renewed deadline so renewal can never push past the max lifetime.
-  DateTime _cap(DateTime renewed, DateTime hardDeadline) =>
-      renewed.isBefore(hardDeadline) ? renewed : hardDeadline;
-
   void _remove(String leaseId, _Held h) {
     _held.remove(leaseId);
     if (h.idempotencyKey.isNotEmpty) _grantsByKey.remove(h.idempotencyKey);
   }
 
-  /// Reap by the OWNER clock: a lease dies when its idle TTL, its max lifetime,
-  /// OR (when heartbeat is on) its heartbeat deadline passes — whichever first.
-  /// The heartbeat deadline is the disconnect reaper: a missed-heartbeat
-  /// threshold elapsing frees the slot exactly like an idle/expired lease.
+  /// Reap by the OWNER clock: a lease dies when ANY of three ORTHOGONAL bounds
+  /// passes — its idle TTL ([_Held.expiry], renewed by [touch]), its immovable max
+  /// lifetime ([_Held.hardDeadline], NEVER renewed), or (when heartbeat is on) its
+  /// heartbeat deadline ([_Held.heartbeatDeadline], renewed by [beat]) — whichever
+  /// is first. These are independent: a greedy lease that renews its idle TTL (and
+  /// heartbeat) forever is STILL reaped at its hard deadline. Because renewal never
+  /// clamps the stored deadlines, the hard-deadline clause is the SOLE
+  /// max-lifetime enforcer — load-bearing and independently testable (no idle-TTL
+  /// reap masking it). The heartbeat deadline is the disconnect reaper: a
+  /// missed-heartbeat threshold elapsing frees the slot exactly like an
+  /// idle/expired lease.
   void _reap() {
     final now = _clock();
     final dead = <String>[];

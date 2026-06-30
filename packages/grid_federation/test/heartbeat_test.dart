@@ -3,8 +3,8 @@
 //   * a beat renews the lease's liveness deadline (heartbeat KEEPS it alive);
 //   * missing heartbeats past the threshold → the OWNER reaps it by its own
 //     clock (the disconnect handler), freeing the slot + advancing the FIFO queue;
-//   * the heartbeat deadline is fenced (a stale token cannot beat) and capped by
-//     the max lifetime.
+//   * the heartbeat deadline is fenced (a stale token cannot beat); a beat cannot
+//     keep a lease alive past the max lifetime (the hard-deadline reap bounds it).
 import 'package:grid_federation/grid_federation.dart';
 import 'package:test/test.dart';
 
@@ -118,8 +118,11 @@ void main() {
       );
       final g = m.grant(const LeaseRequest(lessee: 'greedy'));
       clock.advance(const Duration(seconds: 25)); // still inside the 30s window
-      m.beat(g.leaseId, g.fencingToken); // would be 25+30=55s, capped at 40s
+      m.beat(g.leaseId, g.fencingToken); // pushes the hb deadline to 55s …
       clock.advance(const Duration(seconds: 16)); // 41s > the 40s lifetime
+      // … but the hard-deadline reap bounds the lease regardless of the beat:
+      // only the max-lifetime clause is due at 41s (hb deadline is 55s), so this
+      // also genuinely exercises that reap clause.
       expect(m.isValid(g.leaseId), isFalse); // reaped despite the fresh beat
     });
   });

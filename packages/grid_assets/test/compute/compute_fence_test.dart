@@ -49,10 +49,11 @@ void main() {
 
     test('grid_federation/lib names NO compute symbol (case-insensitive)', () {
       final lower = fedSource.toLowerCase();
+      // `commandresult` is checked precisely in the next test (it must exclude
+      // the legitimate git-sync `GitCommandResult`, Track E / ADR-0011 D7).
       const forbidden = [
         'compute',
         'dispatchcommand',
-        'commandresult',
         'commandexecutor',
       ];
       for (final symbol in forbidden) {
@@ -64,6 +65,24 @@ void main() {
               'grid_assets/src/compute/',
         );
       }
+    });
+
+    test('the git-SYNC channel type is NOT a compute leak (Track E vs the D '
+        'fence)', () {
+      // `GitCommandResult` is the git-over-LAN sync channel's result type (Track
+      // E, ADR-0011 D7 — git sync IS a federation-native concern that belongs in
+      // the core); its name happens to END in `CommandResult` but it is NOT the
+      // compute domain's `CommandResult`. The fence below excludes that one
+      // legitimate collision so the kind-agnostic `commandresult` check stays
+      // precise (it still catches the bare compute type).
+      final lower = fedSource.toLowerCase();
+      final computeResultLeak = RegExp(r'(?<!git)commandresult').hasMatch(lower);
+      expect(
+        computeResultLeak,
+        isFalse,
+        reason: 'the federation core must not name the compute "CommandResult" — '
+            'only the git-sync `GitCommandResult` may appear',
+      );
     });
 
     test('the compute domain DOES live in grid_assets (the fence is meaningful)',
