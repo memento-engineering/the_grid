@@ -22,9 +22,16 @@
 /// ([ToolchainProbe]/[FakeProbe]), and [CapabilityRevalidator] (re-check a held
 /// lease at TTL renewal — depth #2). The `InheritedSeed` cascade NODE is a later
 /// engine-side consumer; this package stays engine-free.
+///
+/// SYNC is a SEPARATE channel from the lease bus (ADR-0011 D7): [GitSyncService]
+/// distributes code/assets to a peer's bare repo over a git remote
+/// ([GitSyncService.ensureRemote]/[GitSyncService.push]/[GitSyncService.distribute]),
+/// SSH for real and a local file-path remote offline. The bus carries
+/// coordination; git carries the code.
 library;
 
 export 'src/capability.dart';
+export 'src/git_sync.dart';
 export 'src/lease_manager.dart';
 export 'src/membership.dart';
 export 'src/protocol.dart';
