@@ -1,9 +1,19 @@
 /// The lessor side of the bus — a station that OFFERS capacity over HTTP, grants
-/// leases (declare-and-check via [LeaseManager]), runs dispatched GENERIC
-/// commands on a leased slot, and frees the slot on release/TTL.
+/// leases (the owner-authoritative serialization point, via [LeaseManager]), runs
+/// a dispatched OPAQUE payload on a leased slot, and frees the slot on
+/// release/TTL.
 ///
-/// `dart:io` only; the executor is injectable so tests never spawn real
-/// processes. Lib stays print-free — the CLI wires [onLog] to stdout.
+/// The server enforces the hazard bake-ins on the wire: a dispatch/release must
+/// carry the lease's fencing token (`X-Grid-Fence`), and an `X-Grid-Idem` key
+/// dedups a dispatch so a retried/dup message never re-runs (ADR-0011 Hazards).
+///
+/// The dispatch handler is kind-agnostic ([DispatchHandler]: opaque map → opaque
+/// map). [computeDispatchHandler] adapts the COMPUTE domain's
+/// [DispatchCommand]/[CommandResult] onto it; that compute glue moves to
+/// `grid_assets` at the M6 Track D split — the federation core stays kind-free.
+///
+/// `dart:io` only; the handler is injectable so tests never spawn real processes.
+/// Lib stays print-free — the CLI wires [onLog] to stdout.
 library;
 
 import 'dart:async';
@@ -13,19 +23,63 @@ import 'dart:io';
 import 'lease_manager.dart';
 import 'protocol.dart';
 
-/// Runs a dispatched command and returns its result. Injectable (default =
-/// [_runProcess], a real `Process.run`).
+/// Runs a dispatched OPAQUE payload and returns an opaque result — the
+/// kind-agnostic execution seam. The compute domain supplies one via
+/// [computeDispatchHandler]; other domains (burn, …) supply their own.
+typedef DispatchHandler =
+    Future<Map<String, dynamic>> Function(Map<String, dynamic> payload);
+
+/// Runs a compute [DispatchCommand] and returns its [CommandResult]. Injectable
+/// (default = [_runProcess], a real `Process.run`).
 typedef CommandExecutor = Future<CommandResult> Function(DispatchCommand cmd);
 
-/// A station server: an HTTP lessor over a [LeaseManager] + a [CommandExecutor].
+/// Adapts the COMPUTE domain's typed [CommandExecutor] onto the kind-agnostic
+/// [DispatchHandler]: decode [DispatchCommand], run it, encode [CommandResult].
+/// Defaults to a real `Process.run`.
+DispatchHandler computeDispatchHandler([CommandExecutor? executor]) {
+  final exec = executor ?? _runProcess;
+  return (payload) async =>
+      (await exec(DispatchCommand.fromJson(payload))).toJson();
+}
+
+/// The default compute executor: a real `Process.run`, timed.
+Future<CommandResult> _runProcess(DispatchCommand cmd) async {
+  final sw = Stopwatch()..start();
+  final r = await Process.run(
+    cmd.command,
+    cmd.args,
+    workingDirectory: cmd.workdir,
+  );
+  sw.stop();
+  return CommandResult(
+    exitCode: r.exitCode,
+    stdout: r.stdout.toString(),
+    stderr: r.stderr.toString(),
+    durationMs: sw.elapsedMilliseconds,
+  );
+}
+
+/// A station server: an HTTP lessor over a [LeaseManager] + a [DispatchHandler].
 class StationServer {
-  StationServer._(this._server, this._leases, this._executor, this._token, this._onLog);
+  StationServer._(
+    this._server,
+    this._leases,
+    this._handler,
+    this._token,
+    this._leaseWait,
+    this._onLog,
+  );
 
   final HttpServer _server;
   final LeaseManager _leases;
-  final CommandExecutor _executor;
+  final DispatchHandler _handler;
   final String? _token;
+  final Duration _leaseWait;
   final void Function(String) _onLog;
+
+  /// In-flight/completed dispatch results keyed by idempotency key. Storing the
+  /// FUTURE (not just the result) collapses concurrent retries onto one run.
+  final Map<String, Future<Map<String, dynamic>>> _dispatchByKey = {};
 
   /// The bound port (useful when started on port 0 — an ephemeral port).
   int get port => _server.port;
@@ -34,8 +88,9 @@ class StationServer {
   LeaseManager get leases => _leases;
 
   /// Binds an HTTP lessor on [host]:[port] offering [offered] slots of [kind]
-  /// for [station]. Pass [token] to require `X-Grid-Token`; [executor] to fake
-  /// command execution; [onLog] to observe events.
+  /// for [station]. Pass [token] to require `X-Grid-Token`; [handler] to fake
+  /// execution; [onLog] to observe events. [leaseWait] (default zero) opts a
+  /// full-capacity request into the FIFO wait-queue instead of an immediate deny.
   static Future<StationServer> start({
     required String station,
     required int offered,
@@ -44,7 +99,10 @@ class StationServer {
     String kind = 'compute',
     String? token,
     Duration ttl = const Duration(seconds: 300),
-    CommandExecutor? executor,
+    Duration maxLifetime = const Duration(seconds: 3600),
+    Duration leaseWait = Duration.zero,
+    int maxQueueDepth = 64,
+    DispatchHandler? handler,
     DateTime Function()? clock,
     String Function(int seq)? idGen,
     void Function(String)? onLog,
@@ -55,14 +113,17 @@ class StationServer {
       offered: offered,
       kind: kind,
       ttl: ttl,
+      maxLifetime: maxLifetime,
+      maxQueueDepth: maxQueueDepth,
       clock: clock,
       idGen: idGen,
     );
     final s = StationServer._(
       server,
       manager,
-      executor ?? _runProcess,
+      handler ?? computeDispatchHandler(),
       token,
+      leaseWait,
       onLog ?? (_) {},
     );
     unawaited(s._serve());
@@ -93,38 +154,79 @@ class StationServer {
       final body = await _readJson(req);
       final LeaseGrant grant;
       try {
-        grant = _leases.grant(LeaseRequest.fromJson(body));
+        grant = await _leases.acquire(
+          LeaseRequest.fromJson(body),
+          maxWait: _leaseWait,
+        );
       } on LeaseDeniedException catch (e) {
         _onLog('lease DENIED for ${body['lessee']}: ${e.message}');
         return _fail(req, 409, e.message);
       }
-      _onLog('lease ${grant.leaseId} GRANTED to ${body['lessee']} '
-          '(${_leases.available}/${_leases.offered} free)');
+      _onLog(
+        'lease ${grant.leaseId} GRANTED to ${body['lessee']} '
+        '(fence ${grant.fencingToken}; ${_leases.available}/${_leases.offered} '
+        'free)',
+      );
       return _ok(req, grant.toJson());
     }
     // POST /lease/<id>/dispatch  and  POST /lease/<id>/release
     if (method == 'POST' && seg.length == 3 && seg[0] == 'lease') {
       final id = seg[1];
       final verb = seg[2];
+      final fence = int.tryParse(req.headers.value('X-Grid-Fence') ?? '');
+      if (fence == null) {
+        return _fail(
+          req,
+          400,
+          'missing or invalid X-Grid-Fence (fencing token)',
+        );
+      }
+
       if (verb == 'release') {
-        _leases.release(id);
-        _onLog('lease $id RELEASED (${_leases.available}/${_leases.offered} free)');
+        try {
+          _leases.release(id, token: fence);
+        } on LeaseInvalidException catch (e) {
+          return _fail(req, 410, e.message); // stale token
+        }
+        _onLog(
+          'lease $id RELEASED (${_leases.available}/${_leases.offered} free)',
+        );
         return _ok(req, {'released': true});
       }
+
       if (verb == 'dispatch') {
         try {
-          _leases.touch(id);
+          _leases.touch(id, fence); // validates liveness + fencing token
         } on LeaseInvalidException catch (e) {
           return _fail(req, 410, e.message);
         }
-        final cmd = DispatchCommand.fromJson(await _readJson(req));
-        _onLog('lease $id DISPATCH: ${cmd.command} ${cmd.args.join(' ')}');
-        final result = await _executor(cmd);
-        _onLog('lease $id RESULT: exit=${result.exitCode} (${result.durationMs}ms)');
-        return _ok(req, result.toJson());
+        final idem = req.headers.value('X-Grid-Idem') ?? '';
+        final payload = await _readJson(req);
+        final result = await _runDispatch(id, idem, payload);
+        return _ok(req, result);
       }
     }
     return _fail(req, 404, 'no route for $method ${req.uri.path}');
+  }
+
+  /// Runs (or replays) a dispatch. With a non-empty [idem] key the run is
+  /// memoized so a retried/dup message returns the SAME result, never re-running.
+  Future<Map<String, dynamic>> _runDispatch(
+    String leaseId,
+    String idem,
+    Map<String, dynamic> payload,
+  ) {
+    if (idem.isEmpty) {
+      _onLog('lease $leaseId DISPATCH (no idem key)');
+      return _handler(payload);
+    }
+    final existing = _dispatchByKey[idem];
+    if (existing != null) {
+      _onLog('lease $leaseId DISPATCH idem "$idem" → replayed (deduped)');
+      return existing;
+    }
+    _onLog('lease $leaseId DISPATCH idem "$idem"');
+    return _dispatchByKey[idem] = _handler(payload);
   }
 
   Future<Map<String, dynamic>> _readJson(HttpRequest req) async {
@@ -151,21 +253,4 @@ class StationServer {
 
   /// Stops the server.
   Future<void> close() => _server.close(force: true);
-
-  /// The default executor: a real `Process.run`, timed.
-  static Future<CommandResult> _runProcess(DispatchCommand cmd) async {
-    final sw = Stopwatch()..start();
-    final r = await Process.run(
-      cmd.command,
-      cmd.args,
-      workingDirectory: cmd.workdir,
-    );
-    sw.stop();
-    return CommandResult(
-      exitCode: r.exitCode,
-      stdout: r.stdout.toString(),
-      stderr: r.stderr.toString(),
-      durationMs: sw.elapsedMilliseconds,
-    );
-  }
 }

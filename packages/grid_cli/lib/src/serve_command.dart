@@ -27,13 +27,34 @@ class ServeCommand extends Command<int> {
       ..addOption('slots', defaultsTo: '1', help: 'How many slots to offer.')
       ..addOption(
         'token',
-        help: 'Optional shared secret; when set, peers must send it as '
+        help:
+            'Optional shared secret; when set, peers must send it as '
             'X-Grid-Token (LAN trust, this pass).',
       )
       ..addOption(
         'ttl',
         defaultsTo: '300',
         help: 'Lease TTL in seconds (reaped if idle this long).',
+      )
+      ..addOption(
+        'max-lifetime',
+        defaultsTo: '3600',
+        help:
+            'Max lease lifetime in seconds (caps total TTL renewal — the '
+            'starvation bound; a held lease is reaped past this regardless of '
+            'activity).',
+      )
+      ..addOption(
+        'lease-wait',
+        defaultsTo: '0',
+        help:
+            'Seconds a full-capacity request waits in the FIFO queue before '
+            'it is denied (0 = deny immediately).',
+      )
+      ..addOption(
+        'max-queue',
+        defaultsTo: '64',
+        help: 'Max requests that may wait in the FIFO queue.',
       );
   }
 
@@ -58,6 +79,9 @@ class ServeCommand extends Command<int> {
       offered: int.parse(a.option('slots')!),
       token: token,
       ttl: Duration(seconds: int.parse(a.option('ttl')!)),
+      maxLifetime: Duration(seconds: int.parse(a.option('max-lifetime')!)),
+      leaseWait: Duration(seconds: int.parse(a.option('lease-wait')!)),
+      maxQueueDepth: int.parse(a.option('max-queue')!),
       onLog: (m) => stdout.writeln('  $m'),
     );
     stdout

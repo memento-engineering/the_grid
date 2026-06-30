@@ -15,14 +15,19 @@ class LeaseCommand extends Command<int> {
       ..addOption(
         'peer',
         mandatory: true,
-        help: 'host:port of the lessor station (e.g. linux-dashboard.local:8080).',
+        help:
+            'host:port of the lessor station (e.g. linux-dashboard.local:8080).',
       )
       ..addOption(
         'lessee',
         defaultsTo: Platform.localHostname,
         help: 'This station id (defaults to the hostname).',
       )
-      ..addOption('kind', defaultsTo: 'compute', help: 'Resource-asset kind to lease.')
+      ..addOption(
+        'kind',
+        defaultsTo: 'compute',
+        help: 'Resource-asset kind to lease.',
+      )
       ..addOption('token', help: 'Shared secret, if the peer requires one.');
   }
 
@@ -58,29 +63,48 @@ class LeaseCommand extends Command<int> {
       return 64;
     }
 
-    final client = HttpStationClient(host: host, port: port, token: a.option('token'));
+    final client = HttpStationClient(
+      host: host,
+      port: port,
+      token: a.option('token'),
+    );
+    // A per-invocation idempotency key so a retried lease/dispatch dedups at the
+    // owner (never a second grant or a second run).
+    final lessee = a.option('lessee')!;
+    final idem = '$lessee-${DateTime.now().microsecondsSinceEpoch}';
     try {
       final p = await client.presence();
       stdout.writeln(
         'peer "${p.station}": ${p.available}/${p.offered} ${p.kinds.join(',')} free',
       );
       final grant = await client.requestLease(
-        LeaseRequest(lessee: a.option('lessee')!, kind: a.option('kind')!),
+        LeaseRequest(
+          lessee: lessee,
+          kind: a.option('kind')!,
+          idempotencyKey: idem,
+        ),
       );
-      stdout.writeln('leased ${grant.leaseId} (ttl ${grant.ttlSeconds}s)');
+      stdout.writeln(
+        'leased ${grant.leaseId} (ttl ${grant.ttlSeconds}s, '
+        'fence ${grant.fencingToken})',
+      );
 
       final cmd = DispatchCommand(
         command: cmdline.first,
         args: cmdline.skip(1).toList(),
       );
-      stdout.writeln('dispatching to "${p.station}": ${cmd.command} ${cmd.args.join(' ')}');
-      final r = await client.dispatch(grant.leaseId, cmd);
+      stdout.writeln(
+        'dispatching to "${p.station}": ${cmd.command} ${cmd.args.join(' ')}',
+      );
+      final r = CommandResult.fromJson(
+        await client.dispatch(grant, cmd.toJson(), idempotencyKey: idem),
+      );
       if (r.stdout.isNotEmpty) stdout.write(r.stdout);
       if (r.stderr.isNotEmpty) stderr.write(r.stderr);
       stdout.writeln(
         '--- exit ${r.exitCode} in ${r.durationMs}ms (ran on "${p.station}") ---',
       );
-      await client.release(grant.leaseId);
+      await client.release(grant);
       stdout.writeln('released ${grant.leaseId}');
       return r.exitCode;
     } on FederationException catch (e) {

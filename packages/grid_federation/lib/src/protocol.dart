@@ -2,6 +2,11 @@
 /// (ADR-0011). Plain immutable classes with hand-written JSON (no codegen): the
 /// federation wire is small and must stay dependency-light so the lessor runs
 /// anywhere `dart` runs.
+///
+/// The bus seam is **kind-agnostic** (ADR-0011 D3/D7): [Presence], [LeaseRequest]
+/// and [LeaseGrant] are bus-level coordination types. [DispatchCommand] /
+/// [CommandResult] are the COMPUTE domain's payloads — they ride the seam as an
+/// opaque envelope and move to `grid_assets` at the M6 Track D split.
 library;
 
 import 'package:meta/meta.dart';
@@ -18,14 +23,18 @@ class FederationException implements Exception {
   String toString() => 'FederationException: $message';
 }
 
-/// Thrown when a lessor REFUSES a lease (no capacity / not offered) — the
-/// declare-and-check denial (HTTP 409).
+/// Thrown when a lessor REFUSES a lease (no capacity / not offered / the
+/// wait-queue is full or the wait expired) — the declare-and-check denial
+/// (HTTP 409).
 class LeaseDeniedException extends FederationException {
   /// Creates a denial carrying [reason].
   const LeaseDeniedException(super.reason);
 }
 
-/// Thrown when a lease id is unknown or has EXPIRED (TTL reaped) — HTTP 404/410.
+/// Thrown when a lease handle is no longer usable: the id is unknown, the TTL or
+/// max-lifetime reaped it, or the dispatch/release carries a **stale fencing
+/// token** (HTTP 404/410). Fencing rejections surface here so a zombie holder of
+/// a reaped-then-reissued slot cannot act on it (ADR-0011 Hazards).
 class LeaseInvalidException extends FederationException {
   /// Creates an invalid-lease error carrying [message].
   const LeaseInvalidException(super.message);
@@ -73,10 +82,18 @@ class Presence {
 }
 
 /// A lessee's request for one slot of [kind] (the `POST /lease` body).
+///
+/// [idempotencyKey] is a client-generated dedup key: a retried request carrying
+/// the same key returns the SAME live grant, never a second grant (ADR-0011
+/// lossy-bus idempotency). Empty = no dedup (each request is distinct).
 @immutable
 class LeaseRequest {
   /// Creates a lease request.
-  const LeaseRequest({required this.lessee, this.kind = 'compute'});
+  const LeaseRequest({
+    required this.lessee,
+    this.kind = 'compute',
+    this.idempotencyKey = '',
+  });
 
   /// The requesting station id.
   final String lessee;
@@ -84,13 +101,21 @@ class LeaseRequest {
   /// The resource-asset kind requested.
   final String kind;
 
+  /// The client-generated idempotency key (empty = none).
+  final String idempotencyKey;
+
   /// JSON form.
-  Map<String, dynamic> toJson() => {'lessee': lessee, 'kind': kind};
+  Map<String, dynamic> toJson() => {
+    'lessee': lessee,
+    'kind': kind,
+    if (idempotencyKey.isNotEmpty) 'idempotencyKey': idempotencyKey,
+  };
 
   /// Parses [j].
   static LeaseRequest fromJson(Map<String, dynamic> j) => LeaseRequest(
     lessee: j['lessee'] as String,
     kind: (j['kind'] as String?) ?? 'compute',
+    idempotencyKey: (j['idempotencyKey'] as String?) ?? '',
   );
 }
 
@@ -103,6 +128,7 @@ class LeaseGrant {
     required this.leaseId,
     required this.station,
     required this.ttlSeconds,
+    required this.fencingToken,
     this.kind = 'compute',
   });
 
@@ -115,6 +141,15 @@ class LeaseGrant {
   /// Seconds the lease lives without activity before the lessor reaps it.
   final int ttlSeconds;
 
+  /// The owner-issued **fencing token**: a monotonically increasing integer (the
+  /// owner's own version counter, NEVER wall-clock — clock skew is fatal to
+  /// cross-machine math, ADR-0011). Every grant on the owner gets a strictly
+  /// greater token than any prior grant, so a reaped-then-reissued slot's new
+  /// holder always carries a higher token. The owner REJECTS any dispatch/release
+  /// whose token does not match the live lease's token (Chubby/Kleppmann
+  /// fencing), so a zombie prior holder cannot double-use the slot.
+  final int fencingToken;
+
   /// The leased resource-asset kind.
   final String kind;
 
@@ -123,6 +158,7 @@ class LeaseGrant {
     'leaseId': leaseId,
     'station': station,
     'ttlSeconds': ttlSeconds,
+    'fencingToken': fencingToken,
     'kind': kind,
   };
 
@@ -131,13 +167,18 @@ class LeaseGrant {
     leaseId: j['leaseId'] as String,
     station: j['station'] as String,
     ttlSeconds: j['ttlSeconds'] as int,
+    fencingToken: (j['fencingToken'] as int?) ?? 0,
     kind: (j['kind'] as String?) ?? 'compute',
   );
 }
 
-/// A generic command to run on a leased slot (the `POST .../dispatch` body).
+/// A generic command to run on a leased slot — the COMPUTE domain's dispatch
+/// payload, serialized into the kind-agnostic bus envelope.
+///
 /// **No inference this pass** — this is an ordinary process, the seed of the
-/// generic (claude-agnostic) coding/burn capability.
+/// generic (claude-agnostic) coding/burn capability. Moves to `grid_assets` at
+/// the M6 Track D compute-domain split; the federation core only sees the opaque
+/// envelope it (de)serializes to.
 @immutable
 class DispatchCommand {
   /// Creates a dispatch.
