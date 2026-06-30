@@ -14,8 +14,17 @@
 /// [Presence] carries the gossip split — the durable capability profile + the
 /// ephemeral capacity — and a lessee [StationClient.heartbeat]s so the owner
 /// reaps a disconnected lease by its own clock (a missed-heartbeat threshold).
+///
+/// The CAPABILITY MODEL ([CapabilityFacts], ADR-0011 D6) types that profile:
+/// per-fact composition ([CapabilityFacts.compose] — scalar override / set
+/// union; derived target defaults), CONTAINMENT matching
+/// ([CapabilityFacts.matches]), the dynamic toolchain [CapabilityProbe]
+/// ([ToolchainProbe]/[FakeProbe]), and [CapabilityRevalidator] (re-check a held
+/// lease at TTL renewal — depth #2). The `InheritedSeed` cascade NODE is a later
+/// engine-side consumer; this package stays engine-free.
 library;
 
+export 'src/capability.dart';
 export 'src/lease_manager.dart';
 export 'src/membership.dart';
 export 'src/protocol.dart';
