@@ -58,6 +58,105 @@ A37 (read-only foreign work source; own state in own store), the codec boundary,
 gc-coexistence, the chokepoint-only writer — all hold. A remote lease must not let a
 station write another's store except through the agreed federation protocol.
 
+## Federation design — decisions so far (Nico, 2026-06-29)
+
+- **Contracts are DOMAIN-DEFINED.** The asset + lease agreement is a contract owned
+  by the domain it belongs to: abstract at the engine (ADR-0008
+  pluggable-abstract-domain seam), concrete in the asset. The engine never hardcodes
+  a generic lease/lessor; a station composes only the asset domains it serves. (This
+  retires the mis-framed "standalone lessor" finding — see Spike findings #2.)
+- **Membership = STATIC this round** — each station's config lists its peers
+  (addresses/keys/token). Deterministic, no-center, works today; grow by editing
+  config. Design the membership seam so discovery drops in behind it.
+- **Dynamic discovery is a LATER ASSET: `zero_conf_grid_assets`** (zeroconf/mDNS) —
+  NOT engine code. This is itself the proof of the domain-contract rule: discovery
+  is an asset in its own domain, not baked into the engine.
+
+### Capability composition (the burn drove this out — Nico, 2026-06-29)
+
+- **Capabilities are composable, cascading config — and the cascade IS the tree.**
+  Config nodes are ancestors of work nodes (M4 `InheritedSeed`, nearest-wins).
+  Composing extensions/asset-domains in order stacks config ancestors; an **order**
+  reads its *effective* capability profile by lookup. No new cascade machinery.
+- **Derived defaults kill the redundancy:** `flutter-target ⟸ dart-target ⟸
+  system-os` — inherit the nearest value unless overridden; only divergence (a
+  cross-compile / multi-target host) is restated.
+- **Per-fact composition semantics, declared by the fact's DOMAIN:** scalar facts
+  override (nearest `system-os` wins); **set** facts accumulate (`radio` unions;
+  **targets are SET-valued** — `flutter-target={linux,android}`).
+- **Matching = generalized declare-and-check, by CONTAINMENT** (`station.facts ⊨
+  order.requires`): scalar ⇒ equality, set ⇒ membership/⊆. The resource went from a
+  scalar count to a **capability-profiled slot** — that is what "federated
+  resources" means (heterogeneous, matched by capability).
+- **PROBED + DYNAMIC for `system-os` / `dart-target` / `flutter-target`** (probe the
+  `dart`/`flutter` toolchain; targets are sets); other facts static now,
+  probe-capable later. **GOAL: prove out dynamic/shifting configurations** — a
+  probed capability is a `StateNotifier`, the cascade is `InheritedSeed`, so a shift
+  → re-match → the engine reconciles. Dynamic config is where the reactive engine
+  earns its keep.
+- **Shift-revocation depth = re-validate at TTL renewal (#2).** A shift re-places
+  *pending* orders immediately (the reactive cascade); an *active* lease re-checks
+  its match at each TTL renewal, so a station that LOST a required capability fails
+  renewal → the lease lapses → the order re-places on another match. Bounded by the
+  TTL, reuses the existing lease mechanism — no continuous-watch / live-migration.
+  (Continuous park/migrate is a later depth once migration is real.)
+- **Vocabulary lives in the domain assets** — os/dart/flutter/radio each own their
+  facts + probes; a station's profile is the union of the asset domains it composes.
+
+### Truth + coordination (Nico, 2026-06-29)
+
+- **Ownership-partitioned, owner-authoritative.** The resource-owning station is the
+  single authoritative writer for its slots + capability profile (its dolt = truth);
+  peers only cache/observe. Conflicts: **owner wins** for real state;
+  **heartbeat-timestamp, last-known-from-owner wins** for gossiped liveness. The
+  owner's own declare-and-check at grant time is the serialization point → **no
+  double-grant, no consensus protocol.** Same principle the_grid already lives by:
+  single-writer-per-bead (bd/gc coexistence) + A37 (write only your own store).
+- **Future topologies — allowed, NOT designed now:** two stations co-owning a
+  pooled asset (one machine's resources mirrored on both); peer-to-peer / 1:1; a
+  peer bridging another peer's assets into a federation as its own. Owner-authority
+  is the floor; richer topologies layer on later. (Flagged so the model doesn't
+  preclude them — the flexibility is the point.)
+
+### The burn — host↔follower coordination (Nico, 2026-06-29)
+
+The burn = a formula (in `butane_grid_assets`) that pours two capability-scoped
+orders and wires a drive channel between them:
+
+- **`burn-follower`** — requires `{system-os=linux, flutter-target=linux,
+  radio=ble}` → leased to a matching peer. Its execution: provision the
+  app-under-test from the **butane substation**, build for the target, **launch it
+  exposing `ext.exploration.*`** (the app embeds `leonard_flutter`), **publish its
+  VM-service/exploration endpoint**, and tear it down on release.
+- **`burn-host`** — requires `{system-os=macos, agent, radio=ble}` → local. Awaits
+  the endpoint, attaches **`leonard_drive`** (credential-free, zero-model; proven in
+  A40/tg-e28), runs the scenario, asserts, collects a (domain-defined) TestReport.
+
+**Two orthogonal channels (the key structural call):**
+- **Federation bus = rendezvous + lifecycle** (lossy): lease → grant → the follower
+  *publishes its endpoint* → release/teardown. Low-frequency.
+- **Drive = direct perception**: `leonard_drive` ↔ the follower app's
+  `ext.exploration.*` over its VM service, point-to-point on the LAN. High-frequency,
+  ordered, live — **NOT tunneled through the bus.** Matches ADR-0012 perception ⊥
+  observability: the bus coordinates *resources*; lenny/perception is the channel for
+  the *actual test*.
+
+**Engine/domain separation (Nico):** the engine provides primitives (lease, bus,
+rendezvous); **butane owns persist/maintain/execute** for its domain (build, launch,
+expose, teardown), pulling whatever primitives + dependent domains it needs.
+
+- **Drive = SCRIPTED** via `leonard_drive` (zero model — no inference on either box;
+  a real regression). **FUTURE formula (not now):** an **agent-to-agent burn** that
+  simulates two users communicating over BLE — higher-level, more assets to lease +
+  coordinate (the Dashboard's `llama-server` can power that driver once it's
+  provider-pluggable).
+- **App lifecycle = the follower's execution** (build/launch/expose/teardown).
+- **Trust = LAN-trust now;** authentication/authorization are extensions for another
+  day (pluggable `Trust`, not this pass).
+- **Heads-up:** the burn's app-under-test is the live `butane_flutter` (it just
+  updated) — its current state matters at the follower's BUILD time, not to this
+  design.
+
 ## OPEN QUESTIONS (for Nico — drive the design)
 
 1. **MVP / minimal first cut ("mvo").** Smallest useful slice? (e.g. local asset
@@ -118,6 +217,42 @@ impl #1, MQTT droppable in later with no rework.
 space) → A releases → B's slot frees. Plus: deny-when-no-capacity; TTL reaps an
 abandoned lease. Coexistence-safe (A never writes B's store except via the lease
 protocol; chokepoint discipline per side; gc untouched).
+
+## Spike results — POINT-TO-POINT, not federation (DONE 2026-06-29, parked)
+
+A `grid_federation` package + `grid serve`/`grid lease` were built and the
+**cross-machine lease was proven live**: from the Studio (macOS) a slot was leased
+on `linux-dashboard.local` (Linux) and `uname -a`/`hostname` were dispatched + their
+output returned (`Linux linux-dashboard … x86_64`, `linux-dashboard`), full
+lifecycle (presence→lease→dispatch→result→release) twice. Branch `m6-federation`
+(pushed to origin + a bare repo on the Dashboard). **This is ONE leasable edge — a
+de-risking SPIKE, explicitly NOT federation** (no topology, presence/gossip,
+claim-resolution, reaping, bus, or Trust). Nico's course-correction: **design
+federation before building it.** The spike is INPUT, not the architecture.
+
+**Findings that must shape the design:**
+1. **Deployment / the bus is federation-native git.** The Dashboard has no GitHub
+   access and no own SSH keys; only Studio→Dashboard SSH works. So the working
+   channel is a **LAN git remote** (Studio pushes to a bare repo on the peer) —
+   which IS the "stations as git peers" idea. The auto-mode classifier blocks
+   `rsync` to a non-remote host (exfiltration); git-to-a-configured-remote is the
+   sanctioned path. → the federation transport/sync story should lean on git over
+   the LAN, not ad-hoc copies.
+2. **Build hygiene, NOT a federation rule (Nico, 2026-06-29).** The
+   `grid_devtools`→Flutter break was a *symptom* of running the lessor through the
+   whole workspace, not grounds to mandate a "standalone lessor." The real
+   principle: **the asset + lease agreement is a CONTRACT defined in the domain it
+   belongs to** — abstract at the engine (the ADR-0008 pluggable-abstract-domain
+   seam), concrete in the asset. A station composes ONLY the asset domains it
+   actually serves, so a compute-only station never pulls Flutter/devtools; the
+   "standalone-ness" falls out of domain-scoping — it is not a separate rule.
+3. **The Dashboard already runs local inference** (`llama-server` on :8080). Its
+   "own local coding agent" is closer than assumed → reinforces making the coding
+   capability **generic / provider-pluggable**, not claude-specific.
+4. **Validated primitives** (reusable by the design): the transport SEAM
+   (`StationClient`), the lease lifecycle, declare-and-check capacity + TTL, and a
+   shared-secret token (LAN trust). HTTP is impl #1; the real bus (MQTT/pub-sub) is
+   the design's call.
 
 ## Homes (proposed)
 
