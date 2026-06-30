@@ -42,6 +42,10 @@ class LeaseInvalidException extends FederationException {
 
 /// A station's advertised presence + current capacity (the `GET /presence`
 /// body) — discovery plus a liveness/health probe.
+///
+/// Presence carries the **gossip** split (ADR-0011 D5/D7): the [profile] is the
+/// **durable** half (a station's capability facts are truth, gossiped sparingly)
+/// and [available] is the **ephemeral** half (free/used slots churn constantly).
 @immutable
 class Presence {
   /// Creates a presence snapshot.
@@ -50,6 +54,7 @@ class Presence {
     required this.kinds,
     required this.offered,
     required this.available,
+    this.profile = const {},
   });
 
   /// The station id (e.g. `the-dashboard`).
@@ -61,8 +66,28 @@ class Presence {
   /// Total slots offered.
   final int offered;
 
-  /// Slots currently free (offered minus held leases).
+  /// Slots currently free (offered minus held leases) — the EPHEMERAL half of
+  /// the gossip (it churns; never reconciled cross-machine by wall-time).
   final int available;
+
+  /// The station's **capability profile** — its advertised facts (the DURABLE
+  /// half of the gossip). Scalar facts are strings; set-valued facts are lists
+  /// (e.g. `{'system-os': 'linux', 'flutter-target': ['linux', 'android']}`).
+  ///
+  /// Carried here as opaque JSON so the wire is forward-compatible: the TYPED
+  /// fact model, per-fact composition, the `InheritedSeed` cascade, containment
+  /// matching, and the dart/flutter probes all land in M6 Track C — this is only
+  /// the transport of the profile alongside capacity.
+  final Map<String, Object?> profile;
+
+  /// Returns a copy overriding [profile] (capacity is read from the owner).
+  Presence copyWith({Map<String, Object?>? profile}) => Presence(
+    station: station,
+    kinds: kinds,
+    offered: offered,
+    available: available,
+    profile: profile ?? this.profile,
+  );
 
   /// JSON form.
   Map<String, dynamic> toJson() => {
@@ -70,6 +95,7 @@ class Presence {
     'kinds': kinds,
     'offered': offered,
     'available': available,
+    if (profile.isNotEmpty) 'profile': profile,
   };
 
   /// Parses [j].
@@ -78,6 +104,7 @@ class Presence {
     kinds: (j['kinds'] as List).cast<String>(),
     offered: j['offered'] as int,
     available: j['available'] as int,
+    profile: (j['profile'] as Map?)?.cast<String, Object?>() ?? const {},
   );
 }
 
@@ -129,6 +156,7 @@ class LeaseGrant {
     required this.station,
     required this.ttlSeconds,
     required this.fencingToken,
+    this.heartbeatSeconds = 0,
     this.kind = 'compute',
   });
 
@@ -140,6 +168,12 @@ class LeaseGrant {
 
   /// Seconds the lease lives without activity before the lessor reaps it.
   final int ttlSeconds;
+
+  /// The cadence (seconds) at which the lessee must HEARTBEAT to keep the lease
+  /// alive; `0` = no heartbeat required (idle-TTL liveness only). The owner reaps
+  /// a held lease once the heartbeat is missed past its threshold — **by its OWN
+  /// clock** (no cross-machine timestamp math, ADR-0011 D5).
+  final int heartbeatSeconds;
 
   /// The owner-issued **fencing token**: a monotonically increasing integer (the
   /// owner's own version counter, NEVER wall-clock — clock skew is fatal to
@@ -159,6 +193,7 @@ class LeaseGrant {
     'station': station,
     'ttlSeconds': ttlSeconds,
     'fencingToken': fencingToken,
+    'heartbeatSeconds': heartbeatSeconds,
     'kind': kind,
   };
 
@@ -168,6 +203,7 @@ class LeaseGrant {
     station: j['station'] as String,
     ttlSeconds: j['ttlSeconds'] as int,
     fencingToken: (j['fencingToken'] as int?) ?? 0,
+    heartbeatSeconds: (j['heartbeatSeconds'] as int?) ?? 0,
     kind: (j['kind'] as String?) ?? 'compute',
   );
 }

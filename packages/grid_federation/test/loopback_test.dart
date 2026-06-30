@@ -16,6 +16,14 @@ Future<CommandResult> _fakeExec(DispatchCommand cmd) async => CommandResult(
   durationMs: 7,
 );
 
+/// A controllable OWNER clock — injected into the lessor so heartbeat reaping is
+/// driven by the test, not wall-time.
+class _Clock {
+  DateTime now = DateTime.utc(2026);
+  DateTime call() => now;
+  void advance(Duration d) => now = now.add(d);
+}
+
 void main() {
   group('federation loopback', () {
     test(
@@ -307,6 +315,99 @@ void main() {
 
       await client.release(granted);
       expect((await client.presence()).available, 1);
+    });
+  });
+
+  group('federation membership/presence/heartbeat (Track B)', () {
+    test('presence carries the capability profile + ephemeral capacity', () async {
+      final server = await StationServer.start(
+        station: 'the-dashboard',
+        offered: 2,
+        host: '127.0.0.1',
+        profile: const {
+          'system-os': 'linux',
+          'flutter-target': ['linux', 'android'],
+        },
+        handler: computeDispatchHandler(_fakeExec),
+      );
+      addTearDown(server.close);
+      final client = HttpStationClient(host: '127.0.0.1', port: server.port);
+      addTearDown(client.close);
+
+      final p = await client.presence();
+      expect(p.station, 'the-dashboard');
+      expect(p.offered, 2);
+      expect(p.available, 2); // the EPHEMERAL half
+      expect(p.profile['system-os'], 'linux'); // the DURABLE half
+      expect(p.profile['flutter-target'], ['linux', 'android']);
+
+      // After a lease only capacity churns; the durable profile is unchanged.
+      await client.requestLease(const LeaseRequest(lessee: 'studio'));
+      final p2 = await client.presence();
+      expect(p2.available, 1);
+      expect(p2.profile['system-os'], 'linux');
+    });
+
+    test('heartbeat over the wire keeps a lease alive; loss reaps it', () async {
+      final clock = _Clock();
+      final server = await StationServer.start(
+        station: 'b',
+        offered: 1,
+        host: '127.0.0.1',
+        heartbeat: const Duration(seconds: 10), // timeout = 10 × 3 = 30s
+        handler: computeDispatchHandler(_fakeExec),
+        clock: clock.call,
+      );
+      addTearDown(server.close);
+      final client = HttpStationClient(host: '127.0.0.1', port: server.port);
+      addTearDown(client.close);
+
+      final grant = await client.requestLease(const LeaseRequest(lessee: 'a'));
+      expect(grant.heartbeatSeconds, 10); // the cadence is advertised
+      expect((await client.presence()).available, 0); // held
+
+      // A heartbeat before the 30s deadline pushes it out to 25 + 30 = 55s.
+      clock.advance(const Duration(seconds: 25));
+      await client.heartbeat(grant);
+      clock.advance(const Duration(seconds: 25)); // total 50s < 55s
+      expect((await client.presence()).available, 0); // still held — kept alive
+
+      // Stop heartbeating: past the deadline the owner reaps on the next read.
+      clock.advance(const Duration(seconds: 10)); // 60s > the 55s deadline
+      expect((await client.presence()).available, 1); // reaped → slot returns
+    });
+
+    test('a missed heartbeat reaps the slot and a new lessee is granted over '
+        'the bus (FIFO queue advances)', () async {
+      final clock = _Clock();
+      final server = await StationServer.start(
+        station: 'b',
+        offered: 1,
+        host: '127.0.0.1',
+        heartbeat: const Duration(seconds: 10), // timeout 30s
+        leaseWait: const Duration(seconds: 600),
+        handler: computeDispatchHandler(_fakeExec),
+        clock: clock.call,
+      );
+      addTearDown(server.close);
+      final client = HttpStationClient(host: '127.0.0.1', port: server.port);
+      addTearDown(client.close);
+
+      final first = await client.requestLease(
+        const LeaseRequest(lessee: 'first'),
+      );
+      // Capacity is full → this WAITS server-side in the FIFO queue.
+      final waiting = client.requestLease(const LeaseRequest(lessee: 'next'));
+
+      // 'first' never heartbeats; past the threshold the owner reaps it, and a
+      // request that pumps the manager hands the freed slot to the waiter.
+      clock.advance(const Duration(seconds: 31));
+      await client.presence();
+
+      final granted = await waiting;
+      expect(granted.leaseId, isNot(first.leaseId));
+      expect(granted.fencingToken, greaterThan(first.fencingToken));
+      await client.release(granted);
     });
   });
 }

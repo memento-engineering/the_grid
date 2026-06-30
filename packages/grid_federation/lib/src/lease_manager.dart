@@ -14,6 +14,15 @@
 /// 4. **Idempotency** — a [LeaseRequest.idempotencyKey] dedups: a retried request
 ///    returns the SAME live grant, never a second grant.
 ///
+/// On top of those, M6 Track B adds **heartbeat liveness** (ADR-0011 D5/D7): when
+/// [heartbeat] is set, each grant carries a heartbeat deadline; a lessee [beat]s
+/// to renew it, and the owner reaps a held lease once the heartbeat is missed past
+/// [missedHeartbeatThreshold] intervals — **by its OWN clock** (disconnect = a
+/// missed-heartbeat threshold, never cross-machine time math). Heartbeat is
+/// orthogonal to the idle TTL: TTL reaps an *idle* lease, heartbeat reaps a
+/// *disconnected* one. With [heartbeat] unset, behaviour is unchanged (idle TTL +
+/// max-lifetime only).
+///
 /// Pure, synchronous, injectable clock + id generator so it is fully testable
 /// without a wall-clock, randomness, or real IO.
 library;
@@ -23,13 +32,15 @@ import 'dart:async';
 import 'protocol.dart';
 
 /// One held lease: its kind, the idle-TTL expiry (renewed by [LeaseManager.touch]),
-/// the immovable max-lifetime deadline, the fencing token, and the (optional)
-/// idempotency key it was granted under.
+/// the immovable max-lifetime deadline, the optional heartbeat deadline (renewed
+/// by [LeaseManager.beat]; `null` when heartbeat is not required), the fencing
+/// token, and the (optional) idempotency key it was granted under.
 class _Held {
   _Held({
     required this.kind,
     required this.expiry,
     required this.hardDeadline,
+    required this.heartbeatDeadline,
     required this.fencingToken,
     required this.idempotencyKey,
   });
@@ -37,6 +48,7 @@ class _Held {
   final String kind;
   DateTime expiry;
   final DateTime hardDeadline;
+  DateTime? heartbeatDeadline;
   final int fencingToken;
   final String idempotencyKey;
 }
@@ -57,8 +69,10 @@ class LeaseManager {
   ///
   /// [ttl] is the idle-renewal window (each [touch] extends it). [maxLifetime] is
   /// the immovable cap on a lease's total life (renewal cannot push past it).
-  /// [maxQueueDepth] bounds the FIFO wait-queue. [clock] and [idGen] are
-  /// injectable for deterministic tests.
+  /// [maxQueueDepth] bounds the FIFO wait-queue. [heartbeat] (when set) is the
+  /// expected liveness cadence; a lease with no [beat] within
+  /// [heartbeat] × [missedHeartbeatThreshold] is reaped as disconnected. [clock]
+  /// and [idGen] are injectable for deterministic tests.
   LeaseManager({
     required this.station,
     required this.offered,
@@ -66,9 +80,12 @@ class LeaseManager {
     this.ttl = const Duration(seconds: 300),
     this.maxLifetime = const Duration(seconds: 3600),
     this.maxQueueDepth = 64,
+    this.heartbeat,
+    this.missedHeartbeatThreshold = 3,
     DateTime Function()? clock,
     String Function(int seq)? idGen,
-  }) : _clock = clock ?? DateTime.now,
+  }) : assert(missedHeartbeatThreshold > 0, 'threshold must be positive'),
+       _clock = clock ?? DateTime.now,
        _idGen = idGen ?? ((seq) => '$station-lease-$seq');
 
   /// The station id this manager speaks for.
@@ -88,6 +105,20 @@ class LeaseManager {
 
   /// The maximum number of requests that may wait in the FIFO queue.
   final int maxQueueDepth;
+
+  /// The expected heartbeat cadence, or `null` when heartbeat liveness is off
+  /// (idle TTL + max-lifetime only). Surfaced to the lessee via
+  /// [LeaseGrant.heartbeatSeconds].
+  final Duration? heartbeat;
+
+  /// How many heartbeat intervals may be missed before the owner reaps the lease
+  /// (the disconnect threshold). Only meaningful when [heartbeat] is set.
+  final int missedHeartbeatThreshold;
+
+  /// The grace window a held lease survives without a heartbeat
+  /// ([heartbeat] × [missedHeartbeatThreshold]), or `null` when heartbeat is off.
+  Duration? get heartbeatTimeout =>
+      heartbeat == null ? null : heartbeat! * missedHeartbeatThreshold;
 
   final DateTime Function() _clock;
   final String Function(int seq) _idGen;
@@ -183,8 +214,22 @@ class LeaseManager {
   void touch(String leaseId, int token) {
     _validate(leaseId, token);
     final h = _held[leaseId]!;
-    final renewed = _clock().add(ttl);
-    h.expiry = renewed.isBefore(h.hardDeadline) ? renewed : h.hardDeadline;
+    h.expiry = _cap(_clock().add(ttl), h.hardDeadline);
+    _pump();
+  }
+
+  /// Records a liveness HEARTBEAT for [leaseId], renewing its heartbeat deadline
+  /// to `now + heartbeatTimeout` (capped at the max lifetime). A no-op on the
+  /// deadline when [heartbeat] is off, but it still validates the handle +
+  /// fencing [token] (so a stale beat is refused). Throws [LeaseInvalidException]
+  /// if the lease is unknown/expired or [token] is stale.
+  void beat(String leaseId, int token) {
+    _validate(leaseId, token);
+    final h = _held[leaseId]!;
+    final timeout = heartbeatTimeout;
+    if (timeout != null) {
+      h.heartbeatDeadline = _cap(_clock().add(timeout), h.hardDeadline);
+    }
     _pump();
   }
 
@@ -257,10 +302,15 @@ class LeaseManager {
     final id = _idGen(_seq++);
     final token = ++_fence; // monotonic owner version (1, 2, 3, …)
     final now = _clock();
+    final hardDeadline = now.add(maxLifetime);
+    final timeout = heartbeatTimeout;
     _held[id] = _Held(
       kind: kind,
-      expiry: now.add(ttl),
-      hardDeadline: now.add(maxLifetime),
+      expiry: _cap(now.add(ttl), hardDeadline),
+      hardDeadline: hardDeadline,
+      // A grace window before the first heartbeat is due.
+      heartbeatDeadline:
+          timeout == null ? null : _cap(now.add(timeout), hardDeadline),
       fencingToken: token,
       idempotencyKey: req.idempotencyKey,
     );
@@ -269,24 +319,36 @@ class LeaseManager {
       station: station,
       ttlSeconds: ttl.inSeconds,
       fencingToken: token,
+      heartbeatSeconds: heartbeat?.inSeconds ?? 0,
       kind: kind,
     );
     if (req.idempotencyKey.isNotEmpty) _grantsByKey[req.idempotencyKey] = grant;
     return grant;
   }
 
+  /// Clamps a renewed deadline so renewal can never push past the max lifetime.
+  DateTime _cap(DateTime renewed, DateTime hardDeadline) =>
+      renewed.isBefore(hardDeadline) ? renewed : hardDeadline;
+
   void _remove(String leaseId, _Held h) {
     _held.remove(leaseId);
     if (h.idempotencyKey.isNotEmpty) _grantsByKey.remove(h.idempotencyKey);
   }
 
-  /// Reap by the OWNER clock: a lease dies when its idle TTL OR its max lifetime
-  /// passes (whichever first).
+  /// Reap by the OWNER clock: a lease dies when its idle TTL, its max lifetime,
+  /// OR (when heartbeat is on) its heartbeat deadline passes — whichever first.
+  /// The heartbeat deadline is the disconnect reaper: a missed-heartbeat
+  /// threshold elapsing frees the slot exactly like an idle/expired lease.
   void _reap() {
     final now = _clock();
     final dead = <String>[];
     _held.forEach((id, h) {
-      if (!h.expiry.isAfter(now) || !h.hardDeadline.isAfter(now)) dead.add(id);
+      final hb = h.heartbeatDeadline;
+      if (!h.expiry.isAfter(now) ||
+          !h.hardDeadline.isAfter(now) ||
+          (hb != null && !hb.isAfter(now))) {
+        dead.add(id);
+      }
     });
     for (final id in dead) {
       _remove(id, _held[id]!);

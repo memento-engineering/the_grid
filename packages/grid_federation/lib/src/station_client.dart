@@ -35,6 +35,11 @@ abstract interface class StationClient {
     String idempotencyKey,
   });
 
+  /// Sends a liveness HEARTBEAT for [lease], propagating its fencing token, so the
+  /// owner does not reap the held slot as disconnected. Throws
+  /// [LeaseInvalidException] if the lease is gone or the token is stale. (An act.)
+  Future<void> heartbeat(LeaseGrant lease);
+
   /// Releases the slot held by [lease] (idempotent), propagating its fencing
   /// token so a stale holder cannot free a reissued slot.
   Future<void> release(LeaseGrant lease);
@@ -80,6 +85,15 @@ class HttpStationClient implements StationClient {
     fencingToken: lease.fencingToken,
     idempotencyKey: idempotencyKey,
   );
+
+  @override
+  Future<void> heartbeat(LeaseGrant lease) async {
+    await _call(
+      'POST',
+      '/lease/${lease.leaseId}/heartbeat',
+      fencingToken: lease.fencingToken,
+    );
+  }
 
   @override
   Future<void> release(LeaseGrant lease) async {

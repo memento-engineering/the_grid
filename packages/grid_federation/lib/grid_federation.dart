@@ -8,9 +8,16 @@
 /// lifetime + a FIFO wait-queue, owner-clock reaping, and request idempotency.
 /// HTTP is impl #1 of the kind-agnostic bus seam; MQTT/WS drop in behind
 /// [StationClient] later.
+///
+/// Membership is **static** ([Membership]/[Peer]/[MembershipLoader], ADR-0011
+/// D4): a station declares its peers in config; discovery is a later asset.
+/// [Presence] carries the gossip split — the durable capability profile + the
+/// ephemeral capacity — and a lessee [StationClient.heartbeat]s so the owner
+/// reaps a disconnected lease by its own clock (a missed-heartbeat threshold).
 library;
 
 export 'src/lease_manager.dart';
+export 'src/membership.dart';
 export 'src/protocol.dart';
 export 'src/station_client.dart';
 export 'src/station_server.dart';

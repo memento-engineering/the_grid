@@ -67,6 +67,7 @@ class StationServer {
     this._handler,
     this._token,
     this._leaseWait,
+    this._profile,
     this._onLog,
   );
 
@@ -75,7 +76,12 @@ class StationServer {
   final DispatchHandler _handler;
   final String? _token;
   final Duration _leaseWait;
+  final Map<String, Object?> _profile;
   final void Function(String) _onLog;
+
+  /// The owner-clock reap ticker (when [start] is given a `reapInterval`); drives
+  /// heartbeat-loss + TTL reaping without waiting for traffic.
+  Timer? _reapTimer;
 
   /// In-flight/completed dispatch results keyed by idempotency key. Storing the
   /// FUTURE (not just the result) collapses concurrent retries onto one run.
@@ -91,6 +97,14 @@ class StationServer {
   /// for [station]. Pass [token] to require `X-Grid-Token`; [handler] to fake
   /// execution; [onLog] to observe events. [leaseWait] (default zero) opts a
   /// full-capacity request into the FIFO wait-queue instead of an immediate deny.
+  ///
+  /// [profile] is the station's advertised **capability profile** (durable facts)
+  /// echoed in `GET /presence` beside the ephemeral capacity. [heartbeat] (when
+  /// set) enables liveness heartbeat: the owner reaps a held lease missing a
+  /// heartbeat past [missedHeartbeatThreshold] intervals. [reapInterval] (when
+  /// set) drives an owner-clock reap ticker so a disconnected lease frees its slot
+  /// — and any FIFO waiter advances — without waiting for the next request; leave
+  /// it `null` (the default) for tests that drive the injected [clock] manually.
   static Future<StationServer> start({
     required String station,
     required int offered,
@@ -102,6 +116,10 @@ class StationServer {
     Duration maxLifetime = const Duration(seconds: 3600),
     Duration leaseWait = Duration.zero,
     int maxQueueDepth = 64,
+    Map<String, Object?> profile = const {},
+    Duration? heartbeat,
+    int missedHeartbeatThreshold = 3,
+    Duration? reapInterval,
     DispatchHandler? handler,
     DateTime Function()? clock,
     String Function(int seq)? idGen,
@@ -115,6 +133,8 @@ class StationServer {
       ttl: ttl,
       maxLifetime: maxLifetime,
       maxQueueDepth: maxQueueDepth,
+      heartbeat: heartbeat,
+      missedHeartbeatThreshold: missedHeartbeatThreshold,
       clock: clock,
       idGen: idGen,
     );
@@ -124,8 +144,12 @@ class StationServer {
       handler ?? computeDispatchHandler(),
       token,
       leaseWait,
+      profile,
       onLog ?? (_) {},
     );
+    if (reapInterval != null) {
+      s._reapTimer = Timer.periodic(reapInterval, (_) => manager.tick());
+    }
     unawaited(s._serve());
     return s;
   }
@@ -145,9 +169,10 @@ class StationServer {
     final seg = req.uri.pathSegments;
     final method = req.method;
 
-    // GET /presence
+    // GET /presence — capacity (ephemeral) from the manager + the station's
+    // capability profile (durable) overlaid here.
     if (method == 'GET' && seg.length == 1 && seg[0] == 'presence') {
-      return _ok(req, _leases.presence.toJson());
+      return _ok(req, _leases.presence.copyWith(profile: _profile).toJson());
     }
     // POST /lease
     if (method == 'POST' && seg.length == 1 && seg[0] == 'lease') {
@@ -192,6 +217,16 @@ class StationServer {
           'lease $id RELEASED (${_leases.available}/${_leases.offered} free)',
         );
         return _ok(req, {'released': true});
+      }
+
+      if (verb == 'heartbeat') {
+        try {
+          _leases.beat(id, fence); // validates liveness + fencing, renews
+        } on LeaseInvalidException catch (e) {
+          return _fail(req, 410, e.message); // unknown/expired/stale token
+        }
+        _onLog('lease $id HEARTBEAT');
+        return _ok(req, {'alive': true});
       }
 
       if (verb == 'dispatch') {
@@ -251,6 +286,9 @@ class StationServer {
     await req.response.close();
   }
 
-  /// Stops the server.
-  Future<void> close() => _server.close(force: true);
+  /// Stops the server (and the reap ticker, if one was started).
+  Future<void> close() {
+    _reapTimer?.cancel();
+    return _server.close(force: true);
+  }
 }
