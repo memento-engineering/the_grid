@@ -8,9 +8,10 @@
 /// dedups a dispatch so a retried/dup message never re-runs (ADR-0011 Hazards).
 ///
 /// The dispatch handler is kind-agnostic ([DispatchHandler]: opaque map → opaque
-/// map). [computeDispatchHandler] adapts the COMPUTE domain's
-/// [DispatchCommand]/[CommandResult] onto it; that compute glue moves to
-/// `grid_assets` at the M6 Track D split — the federation core stays kind-free.
+/// map). What a payload MEANS + what "use" executes lives in the asset domain
+/// that owns the kind (ADR-0011 D3) — an asset in `grid_assets` supplies a
+/// handler that decodes + runs its own payload; the federation core stays
+/// kind-free and only sees the opaque envelope.
 ///
 /// `dart:io` only; the handler is injectable so tests never spawn real processes.
 /// Lib stays print-free — the CLI wires [onLog] to stdout.
@@ -24,40 +25,10 @@ import 'lease_manager.dart';
 import 'protocol.dart';
 
 /// Runs a dispatched OPAQUE payload and returns an opaque result — the
-/// kind-agnostic execution seam. The compute domain supplies one via
-/// [computeDispatchHandler]; other domains (burn, …) supply their own.
+/// kind-agnostic execution seam. Each asset domain supplies its own (decoding
+/// the payload its kind defines and running that kind's bounded "use").
 typedef DispatchHandler =
     Future<Map<String, dynamic>> Function(Map<String, dynamic> payload);
-
-/// Runs a compute [DispatchCommand] and returns its [CommandResult]. Injectable
-/// (default = [_runProcess], a real `Process.run`).
-typedef CommandExecutor = Future<CommandResult> Function(DispatchCommand cmd);
-
-/// Adapts the COMPUTE domain's typed [CommandExecutor] onto the kind-agnostic
-/// [DispatchHandler]: decode [DispatchCommand], run it, encode [CommandResult].
-/// Defaults to a real `Process.run`.
-DispatchHandler computeDispatchHandler([CommandExecutor? executor]) {
-  final exec = executor ?? _runProcess;
-  return (payload) async =>
-      (await exec(DispatchCommand.fromJson(payload))).toJson();
-}
-
-/// The default compute executor: a real `Process.run`, timed.
-Future<CommandResult> _runProcess(DispatchCommand cmd) async {
-  final sw = Stopwatch()..start();
-  final r = await Process.run(
-    cmd.command,
-    cmd.args,
-    workingDirectory: cmd.workdir,
-  );
-  sw.stop();
-  return CommandResult(
-    exitCode: r.exitCode,
-    stdout: r.stdout.toString(),
-    stderr: r.stderr.toString(),
-    durationMs: sw.elapsedMilliseconds,
-  );
-}
 
 /// A station server: an HTTP lessor over a [LeaseManager] + a [DispatchHandler].
 class StationServer {
@@ -94,9 +65,11 @@ class StationServer {
   LeaseManager get leases => _leases;
 
   /// Binds an HTTP lessor on [host]:[port] offering [offered] slots of [kind]
-  /// for [station]. Pass [token] to require `X-Grid-Token`; [handler] to fake
-  /// execution; [onLog] to observe events. [leaseWait] (default zero) opts a
-  /// full-capacity request into the FIFO wait-queue instead of an immediate deny.
+  /// for [station]. [handler] runs a dispatched OPAQUE payload (the asset domain
+  /// that owns the kind supplies it — the core has no built-in execution). Pass
+  /// [token] to require `X-Grid-Token`; [onLog] to observe events. [leaseWait]
+  /// (default zero) opts a full-capacity request into the FIFO wait-queue instead
+  /// of an immediate deny.
   ///
   /// [profile] is the station's advertised **capability profile** (durable facts)
   /// echoed in `GET /presence` beside the ephemeral capacity. [heartbeat] (when
@@ -108,9 +81,10 @@ class StationServer {
   static Future<StationServer> start({
     required String station,
     required int offered,
+    required DispatchHandler handler,
     String host = '0.0.0.0',
     int port = 0,
-    String kind = 'compute',
+    String kind = kDefaultKind,
     String? token,
     Duration ttl = const Duration(seconds: 300),
     Duration maxLifetime = const Duration(seconds: 3600),
@@ -120,7 +94,6 @@ class StationServer {
     Duration? heartbeat,
     int missedHeartbeatThreshold = 3,
     Duration? reapInterval,
-    DispatchHandler? handler,
     DateTime Function()? clock,
     String Function(int seq)? idGen,
     void Function(String)? onLog,
@@ -141,7 +114,7 @@ class StationServer {
     final s = StationServer._(
       server,
       manager,
-      handler ?? computeDispatchHandler(),
+      handler,
       token,
       leaseWait,
       profile,

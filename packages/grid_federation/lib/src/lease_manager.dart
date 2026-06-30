@@ -76,7 +76,7 @@ class LeaseManager {
   LeaseManager({
     required this.station,
     required this.offered,
-    this.kind = 'compute',
+    this.kind = kDefaultKind,
     this.ttl = const Duration(seconds: 300),
     this.maxLifetime = const Duration(seconds: 3600),
     this.maxQueueDepth = 64,

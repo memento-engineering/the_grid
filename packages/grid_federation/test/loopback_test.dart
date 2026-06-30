@@ -4,17 +4,18 @@
 // the ADR-0011 hazard bake-ins ON THE WIRE: a stale fencing token is refused, a
 // dispatch idempotency key dedups a re-run, and the FIFO wait-queue drains over
 // the bus. The same flow runs cross-machine; only host/port change.
+//
+// The bus is KIND-AGNOSTIC (ADR-0011 D3): these tests dispatch an OPAQUE map and
+// the handler echoes it — no compute/command types. The COMPUTE domain's
+// payloads + bounded "use" moved to `grid_assets` at the M6 Track D split (see
+// grid_assets/test/compute/*).
 import 'package:grid_federation/grid_federation.dart';
 import 'package:test/test.dart';
 
-/// A deterministic compute executor — echoes the command back as a result, no
-/// spawn.
-Future<CommandResult> _fakeExec(DispatchCommand cmd) async => CommandResult(
-  exitCode: 0,
-  stdout: 'ran ${cmd.command} ${cmd.args.join(' ')}',
-  stderr: '',
-  durationMs: 7,
-);
+/// A generic, kind-agnostic dispatch handler — echoes the opaque payload back.
+/// The bus only ever sees Maps; what a payload MEANS lives in the asset domain.
+Future<Map<String, dynamic>> _echoHandler(Map<String, dynamic> payload) async =>
+    {'echo': payload};
 
 /// A controllable OWNER clock — injected into the lessor so heartbeat reaping is
 /// driven by the test, not wall-time.
@@ -33,7 +34,7 @@ void main() {
           station: 'the-dashboard',
           offered: 1,
           host: '127.0.0.1',
-          handler: computeDispatchHandler(_fakeExec),
+          handler: _echoHandler,
         );
         addTearDown(server.close);
         final client = HttpStationClient(host: '127.0.0.1', port: server.port);
@@ -53,46 +54,17 @@ void main() {
         // The slot is now held.
         expect((await client.presence()).available, 0);
 
-        final result = CommandResult.fromJson(
-          await client.dispatch(
-            grant,
-            const DispatchCommand(command: 'echo', args: ['hi']).toJson(),
-          ),
-        );
-        expect(result.ok, isTrue);
-        expect(result.stdout, contains('echo hi'));
+        final result = await client.dispatch(grant, {
+          'cmd': 'echo',
+          'args': ['hi'],
+        });
+        expect(result['echo'], {
+          'cmd': 'echo',
+          'args': ['hi'],
+        });
 
         await client.release(grant);
         expect((await client.presence()).available, 1);
-      },
-    );
-
-    test(
-      'a real Process.run executes on the leased slot (default handler)',
-      () async {
-        final server = await StationServer.start(
-          station: 'the-dashboard',
-          offered: 1,
-          host: '127.0.0.1',
-        );
-        addTearDown(server.close);
-        final client = HttpStationClient(host: '127.0.0.1', port: server.port);
-        addTearDown(client.close);
-
-        final grant = await client.requestLease(
-          const LeaseRequest(lessee: 'x'),
-        );
-        final result = CommandResult.fromJson(
-          await client.dispatch(
-            grant,
-            const DispatchCommand(
-              command: 'echo',
-              args: ['federation-works'],
-            ).toJson(),
-          ),
-        );
-        expect(result.exitCode, 0);
-        expect(result.stdout.trim(), 'federation-works');
       },
     );
 
@@ -103,7 +75,7 @@ void main() {
           station: 'b',
           offered: 1,
           host: '127.0.0.1',
-          handler: computeDispatchHandler(_fakeExec),
+          handler: _echoHandler,
         );
         addTearDown(server.close);
         final client = HttpStationClient(host: '127.0.0.1', port: server.port);
@@ -126,7 +98,7 @@ void main() {
           station: 'b',
           offered: 1,
           host: '127.0.0.1',
-          handler: computeDispatchHandler(_fakeExec),
+          handler: _echoHandler,
         );
         addTearDown(server.close);
         final client = HttpStationClient(host: '127.0.0.1', port: server.port);
@@ -137,10 +109,7 @@ void main() {
         );
         await client.release(grant);
         await expectLater(
-          client.dispatch(
-            grant,
-            const DispatchCommand(command: 'echo').toJson(),
-          ),
+          client.dispatch(grant, const {}),
           throwsA(isA<LeaseInvalidException>()),
         );
       },
@@ -152,7 +121,7 @@ void main() {
         offered: 1,
         host: '127.0.0.1',
         token: 'sekret',
-        handler: computeDispatchHandler(_fakeExec),
+        handler: _echoHandler,
       );
       addTearDown(server.close);
 
@@ -180,7 +149,7 @@ void main() {
           station: 'b',
           offered: 1,
           host: '127.0.0.1',
-          handler: computeDispatchHandler(_fakeExec),
+          handler: _echoHandler,
         );
         addTearDown(server.close);
         final client = HttpStationClient(host: '127.0.0.1', port: server.port);
@@ -197,10 +166,7 @@ void main() {
               grant.fencingToken + 99, // a token the owner never issued
         );
         await expectLater(
-          client.dispatch(
-            forged,
-            const DispatchCommand(command: 'echo').toJson(),
-          ),
+          client.dispatch(forged, const {}),
           throwsA(isA<LeaseInvalidException>()),
         );
         await expectLater(
@@ -208,13 +174,8 @@ void main() {
           throwsA(isA<LeaseInvalidException>()),
         );
         // The real holder is untouched.
-        final ok = CommandResult.fromJson(
-          await client.dispatch(
-            grant,
-            const DispatchCommand(command: 'echo').toJson(),
-          ),
-        );
-        expect(ok.ok, isTrue);
+        final ok = await client.dispatch(grant, const {'ping': 1});
+        expect(ok['echo'], const {'ping': 1});
       },
     );
 
@@ -226,12 +187,7 @@ void main() {
           Map<String, dynamic> payload,
         ) async {
           runs++;
-          return {
-            'exitCode': 0,
-            'stdout': 'run #$runs',
-            'stderr': '',
-            'durationMs': 1,
-          };
+          return {'run': '#$runs'};
         }
 
         final server = await StationServer.start(
@@ -247,16 +203,11 @@ void main() {
         final grant = await client.requestLease(
           const LeaseRequest(lessee: 'a'),
         );
-        final payload = const DispatchCommand(command: 'echo').toJson();
-        final r1 = CommandResult.fromJson(
-          await client.dispatch(grant, payload, idempotencyKey: 'job-1'),
-        );
-        final r2 = CommandResult.fromJson(
-          await client.dispatch(grant, payload, idempotencyKey: 'job-1'),
-        );
+        final r1 = await client.dispatch(grant, const {}, idempotencyKey: 'job-1');
+        final r2 = await client.dispatch(grant, const {}, idempotencyKey: 'job-1');
         expect(runs, 1); // the owner deduped — a single run
-        expect(r2.stdout, r1.stdout);
-        expect(r1.stdout, 'run #1');
+        expect(r2['run'], r1['run']);
+        expect(r1['run'], '#1');
       },
     );
 
@@ -267,7 +218,7 @@ void main() {
           station: 'b',
           offered: 2,
           host: '127.0.0.1',
-          handler: computeDispatchHandler(_fakeExec),
+          handler: _echoHandler,
         );
         addTearDown(server.close);
         final client = HttpStationClient(host: '127.0.0.1', port: server.port);
@@ -295,7 +246,7 @@ void main() {
         offered: 1,
         host: '127.0.0.1',
         leaseWait: const Duration(seconds: 60),
-        handler: computeDispatchHandler(_fakeExec),
+        handler: _echoHandler,
       );
       addTearDown(server.close);
       final client = HttpStationClient(host: '127.0.0.1', port: server.port);
@@ -328,7 +279,7 @@ void main() {
           'system-os': 'linux',
           'flutter-target': ['linux', 'android'],
         },
-        handler: computeDispatchHandler(_fakeExec),
+        handler: _echoHandler,
       );
       addTearDown(server.close);
       final client = HttpStationClient(host: '127.0.0.1', port: server.port);
@@ -355,7 +306,7 @@ void main() {
         offered: 1,
         host: '127.0.0.1',
         heartbeat: const Duration(seconds: 10), // timeout = 10 × 3 = 30s
-        handler: computeDispatchHandler(_fakeExec),
+        handler: _echoHandler,
         clock: clock.call,
       );
       addTearDown(server.close);
@@ -386,7 +337,7 @@ void main() {
         host: '127.0.0.1',
         heartbeat: const Duration(seconds: 10), // timeout 30s
         leaseWait: const Duration(seconds: 600),
-        handler: computeDispatchHandler(_fakeExec),
+        handler: _echoHandler,
         clock: clock.call,
       );
       addTearDown(server.close);

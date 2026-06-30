@@ -4,12 +4,20 @@
 /// anywhere `dart` runs.
 ///
 /// The bus seam is **kind-agnostic** (ADR-0011 D3/D7): [Presence], [LeaseRequest]
-/// and [LeaseGrant] are bus-level coordination types. [DispatchCommand] /
-/// [CommandResult] are the COMPUTE domain's payloads — they ride the seam as an
-/// opaque envelope and move to `grid_assets` at the M6 Track D split.
+/// and [LeaseGrant] are bus-level coordination types. A `kind` is an opaque,
+/// equality-checked label — the core bakes in NO concrete asset kind; each ASSET
+/// DOMAIN names + interprets its own (the dispatch payload is an opaque envelope
+/// the domain (de)serializes; M6 Track D moved the domain payloads out to the
+/// asset packages in `grid_assets`).
 library;
 
 import 'package:meta/meta.dart';
+
+/// The default resource-asset kind a request/offer carries when it leaves `kind`
+/// unspecified — a GENERIC placeholder, deliberately NOT a concrete kind (which
+/// each asset domain names for itself, ADR-0011 D3). The federation core treats
+/// `kind` as an opaque, equality-checked label and assumes no domain.
+const String kDefaultKind = 'resource';
 
 /// Base for every federation-protocol failure.
 class FederationException implements Exception {
@@ -60,7 +68,8 @@ class Presence {
   /// The station id (e.g. `the-dashboard`).
   final String station;
 
-  /// The resource-asset kinds this station offers (e.g. `['compute']`).
+  /// The resource-asset kinds this station offers (each named by its own asset
+  /// domain — the core treats them as opaque labels).
   final List<String> kinds;
 
   /// Total slots offered.
@@ -118,7 +127,7 @@ class LeaseRequest {
   /// Creates a lease request.
   const LeaseRequest({
     required this.lessee,
-    this.kind = 'compute',
+    this.kind = kDefaultKind,
     this.idempotencyKey = '',
   });
 
@@ -141,7 +150,7 @@ class LeaseRequest {
   /// Parses [j].
   static LeaseRequest fromJson(Map<String, dynamic> j) => LeaseRequest(
     lessee: j['lessee'] as String,
-    kind: (j['kind'] as String?) ?? 'compute',
+    kind: (j['kind'] as String?) ?? kDefaultKind,
     idempotencyKey: (j['idempotencyKey'] as String?) ?? '',
   );
 }
@@ -157,7 +166,7 @@ class LeaseGrant {
     required this.ttlSeconds,
     required this.fencingToken,
     this.heartbeatSeconds = 0,
-    this.kind = 'compute',
+    this.kind = kDefaultKind,
   });
 
   /// The opaque lease handle.
@@ -204,89 +213,6 @@ class LeaseGrant {
     ttlSeconds: j['ttlSeconds'] as int,
     fencingToken: (j['fencingToken'] as int?) ?? 0,
     heartbeatSeconds: (j['heartbeatSeconds'] as int?) ?? 0,
-    kind: (j['kind'] as String?) ?? 'compute',
-  );
-}
-
-/// A generic command to run on a leased slot — the COMPUTE domain's dispatch
-/// payload, serialized into the kind-agnostic bus envelope.
-///
-/// **No inference this pass** — this is an ordinary process, the seed of the
-/// generic (claude-agnostic) coding/burn capability. Moves to `grid_assets` at
-/// the M6 Track D compute-domain split; the federation core only sees the opaque
-/// envelope it (de)serializes to.
-@immutable
-class DispatchCommand {
-  /// Creates a dispatch.
-  const DispatchCommand({
-    required this.command,
-    this.args = const [],
-    this.workdir,
-  });
-
-  /// The executable.
-  final String command;
-
-  /// Its arguments.
-  final List<String> args;
-
-  /// Optional working directory on the lessor (defaults to the lessor's cwd).
-  final String? workdir;
-
-  /// JSON form.
-  Map<String, dynamic> toJson() => {
-    'command': command,
-    'args': args,
-    if (workdir != null) 'workdir': workdir,
-  };
-
-  /// Parses [j].
-  static DispatchCommand fromJson(Map<String, dynamic> j) => DispatchCommand(
-    command: j['command'] as String,
-    args: ((j['args'] as List?) ?? const []).cast<String>(),
-    workdir: j['workdir'] as String?,
-  );
-}
-
-/// The result of running a [DispatchCommand] on a leased slot.
-@immutable
-class CommandResult {
-  /// Creates a result.
-  const CommandResult({
-    required this.exitCode,
-    required this.stdout,
-    required this.stderr,
-    required this.durationMs,
-  });
-
-  /// The process exit code.
-  final int exitCode;
-
-  /// Captured stdout.
-  final String stdout;
-
-  /// Captured stderr.
-  final String stderr;
-
-  /// Wall-clock duration in milliseconds.
-  final int durationMs;
-
-  /// Whether the command succeeded (exit 0).
-  bool get ok => exitCode == 0;
-
-  /// JSON form.
-  Map<String, dynamic> toJson() => {
-    'exitCode': exitCode,
-    'stdout': stdout,
-    'stderr': stderr,
-    'durationMs': durationMs,
-  };
-
-  /// Parses [j].
-  static CommandResult fromJson(Map<String, dynamic> j) => CommandResult(
-    exitCode: j['exitCode'] as int,
-    stdout: (j['stdout'] as String?) ?? '',
-    stderr: (j['stderr'] as String?) ?? '',
-    durationMs: (j['durationMs'] as int?) ?? 0,
+    kind: (j['kind'] as String?) ?? kDefaultKind,
   );
 }

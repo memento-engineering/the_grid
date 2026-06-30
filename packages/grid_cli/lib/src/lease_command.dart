@@ -1,6 +1,9 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
+// The COMPUTE domain's payloads moved here at the M6 Track D split — the
+// federation core is kind-agnostic and no longer names them.
+import 'package:grid_assets/grid_assets.dart' show CommandResult, DispatchCommand;
 import 'package:grid_federation/grid_federation.dart';
 
 /// `grid lease` — run as a LESSEE: lease a compute slot from a peer station and

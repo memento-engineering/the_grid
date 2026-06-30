@@ -5,7 +5,7 @@
 /// (Nico, 2026-06-29).
 ///
 /// The seam carries only bus-level coordination types ([Presence], [LeaseRequest],
-/// [LeaseGrant]) plus an OPAQUE dispatch envelope ([Map]) — no compute/command
+/// [LeaseGrant]) plus an OPAQUE dispatch envelope ([Map]) — no domain/kind
 /// specifics leak in (ADR-0011 D3). The lessee holds the [LeaseGrant], so the
 /// fencing token rides every dispatch/release automatically.
 library;
