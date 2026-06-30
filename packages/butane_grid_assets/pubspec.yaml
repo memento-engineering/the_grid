@@ -1,0 +1,27 @@
+name: butane_grid_assets
+description: >-
+  The butane burn asset domain (ADR-0011 D9, M6 Track F) — the cross-station
+  BURN formula: two capability-scoped orders (`burn-host` local + `burn-follower`
+  leased to a capability match) over two orthogonal channels — the federation BUS
+  (lease + endpoint rendezvous) and the DIRECT `leonard_drive` ↔ `ext.exploration.*`
+  perception channel. The follower provisions/builds/launches the app-under-test
+  exposing exploration + publishes its endpoint and is torn down via the M4
+  `terminateGroup`/pgid reaper; the host attaches `leonard_drive`, runs a SCRIPTED
+  (zero-model) scenario, and collects a domain `TestReport`. In-repo home for M6
+  (sibling-to-`butane_flutter` placement is the later split).
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  grid_assets: any
+  grid_engine: any
+  grid_federation: any
+  grid_runtime: any
+  meta: ^1.16.0
+
+dev_dependencies:
+  lints: ^5.1.0
+  test: ^1.25.0
