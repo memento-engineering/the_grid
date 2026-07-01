@@ -41,8 +41,15 @@ import 'pub_links.dart';
 /// `grid.dart` payload rather than a `grid.pub` sibling.
 const String kDartDomainKey = 'grid.dart';
 
-/// This pack's envelope-shape version (the codec discriminator). Bump on a
-/// breaking payload change; [isCompatibleAssetsVersion] gates decoding.
+/// This pack's envelope-shape version (the codec discriminator).
+///
+/// The versioning RULE (the precedent for every domain envelope): a **patch**
+/// bump is ADDITIVE-only — an older reader tolerates it (unknown fields are
+/// ignored on read) and, being a tolerant reader, must NEVER write back an
+/// envelope it did not fully understand (the_grid never writes work beads at
+/// all — A37; authoring tools re-author from typed config). A **breaking**
+/// shape change bumps minor pre-1.0 / major from 1.0, which
+/// [isCompatibleAssetsVersion] refuses whole (fail-closed).
 const String kDartAssetsVersion = '0.0.1';
 
 /// Whether an envelope written at [version] is decodable by THIS pack.
@@ -67,6 +74,8 @@ bool isCompatibleAssetsVersion(String version) {
   final minor = int.tryParse(parts[1]);
   final patch = int.tryParse(parts[2]);
   if (major == null || minor == null || patch == null) return null;
+  // Semver components are non-negative; "1.-1.0" must not slip a gate.
+  if (major < 0 || minor < 0 || patch < 0) return null;
   return (major: major, minor: minor, patch: patch);
 }
 

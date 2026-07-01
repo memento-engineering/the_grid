@@ -88,12 +88,20 @@ class PubLink {
     if (gitRef != null) 'git_ref': gitRef,
   };
 
-  /// Parses [json]; throws [FormatException] on a missing/non-string package
+  /// The valid pub package-name shape (identifier chars only). Enforced at
+  /// decode so a YAML-dangerous "name" (colons, spaces, hashes) can never reach
+  /// the overrides emitter — the envelope is malformed instead (fail-closed).
+  static final RegExp _validPackage = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
+
+  /// Parses [json]; throws [FormatException] on a missing/invalid package name
   /// (the envelope decoder maps that to a malformed result — fail-closed).
   static PubLink fromJson(Map<String, Object?> json) {
     final package = json['package'];
-    if (package is! String || package.isEmpty) {
-      throw const FormatException('PubLink requires a non-empty "package"');
+    if (package is! String || !_validPackage.hasMatch(package)) {
+      throw const FormatException(
+        'PubLink requires a valid pub package name '
+        '(identifier characters only)',
+      );
     }
     return PubLink(
       package: package,
@@ -135,7 +143,9 @@ class PubLinkConfig {
     'links': [for (final l in links) l.toJson()],
   };
 
-  /// Parses [json] (a missing/empty `links` is a valid empty config).
+  /// Parses [json] (a missing/empty `links` is a valid empty config). A
+  /// non-list `links` or a non-object entry throws [FormatException] —
+  /// explicit, so the fail-closed path never rides an implicit cast error.
   static PubLinkConfig fromJson(Map<String, Object?> json) {
     final raw = json['links'];
     if (raw == null) return const PubLinkConfig();
@@ -145,7 +155,10 @@ class PubLinkConfig {
     return PubLinkConfig(
       links: [
         for (final entry in raw)
-          PubLink.fromJson((entry as Map).cast<String, Object?>()),
+          if (entry is Map)
+            PubLink.fromJson(entry.cast<String, Object?>())
+          else
+            throw const FormatException('"links" entries must be objects'),
       ],
     );
   }
@@ -175,8 +188,15 @@ class PubLinkConfig {
 ///   path resolves naturally from the root checkout).
 /// - [PubLinkContext.worktree] → path overrides ABSOLUTIZED: an absolute
 ///   declaration passes through; a relative one is resolved against [devRoot]
-///   (normalized). A relative declaration with NO [devRoot] throws
-///   [StateError] — fail-closed, never a silently broken override.
+///   (normalized). A relative declaration with NO [devRoot] — or a [devRoot]
+///   that is itself relative (which would silently yield a still-relative,
+///   broken override) — throws [StateError]: fail-closed, never a silently
+///   broken override.
+///
+/// Paths are emitted as single-quoted YAML scalars (embedded quotes doubled),
+/// so a path carrying YAML-hostile characters (`: `, ` #`, leading/trailing
+/// spaces) can never corrupt the file. Package names are identifier-validated
+/// at decode, so they need no quoting.
 ///
 /// Links with no [PubLink.devPath] contribute nothing. No dev links at all →
 /// null (nothing to override).
@@ -208,13 +228,24 @@ String? pubspecOverridesFor(
           'worse than none).',
         );
       }
+      if (!p.isAbsolute(devRoot)) {
+        throw StateError(
+          'devRoot "$devRoot" is relative — absolutizing '
+          '"${link.package}: $declared" against it would yield a still-'
+          'relative (broken) override (fail-closed).',
+        );
+      }
       path = p.normalize(p.join(devRoot, declared));
     } else {
       path = declared;
     }
     buffer
       ..writeln('  ${link.package}:')
-      ..writeln('    path: $path');
+      ..writeln('    path: ${_yamlQuote(path)}');
   }
   return buffer.toString();
 }
+
+/// A single-quoted YAML scalar: content survives any YAML-hostile character
+/// (embedded single quotes are doubled per the YAML spec).
+String _yamlQuote(String value) => "'${value.replaceAll("'", "''")}'";
