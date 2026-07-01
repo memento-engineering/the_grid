@@ -60,6 +60,18 @@ abstract class ProcessCapability extends Capability {
   /// `provider.stop` kills the managed group).
   Future<void> teardown(CapabilityContext ctx) async {}
 
+  /// Proves a prior incarnation at [fence] is STILL the live effect this
+  /// capability manages — the daemon adopt-freshness half (ADR-0009 D4:
+  /// "pgid alive ∧ token echoed over its endpoint"). The engine supplies the
+  /// pgid-alive half (the injected liveness seam); this supplies the
+  /// domain-specific half (a daemon probes its endpoint and checks the token
+  /// echoes). **No-adopt-on-faith**: the default is `false`, so a job — or a
+  /// daemon that cannot prove it — is respawned fresh, never adopted blind. A
+  /// daemon capability (the M6 burn-follower) overrides this. MUST be
+  /// side-effect-free beyond the read.
+  Future<bool> proveFreshness(AdoptFence fence, CapabilityContext ctx) async =>
+      false;
+
   /// The default [Allocation] for a spawned process (ADR-0009 D6) — a
   /// [ProcessAllocation] driving [spawn]/[interpretEvent] over the transport.
   /// A one-shot (`StepKind.job`) is respawn-or-skip; a `StepKind.daemon` is

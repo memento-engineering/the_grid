@@ -158,13 +158,16 @@ class CapabilityHostState extends State<CapabilityHost> {
       },
       sink: _onReport,
       // The prior incarnation's identity for an adopt-freshness proof (D4);
-      // empty for a fresh node. The base families never adopt (Track C/D wire
-      // the daemon/lease adopt path).
+      // empty for a fresh node. A job never adopts; a daemon adopts only when the
+      // liveness seam proves the group live — offline (P1) that seam is the
+      // default `false`, so the Host always spawns fresh (today's behavior). The
+      // live pgid-liveness wiring is deferred to the live arm (the human gate).
       fence: AdoptFence(
         pgid: seed.mount.node.pgid,
         pid: seed.mount.node.pid,
         token: seed.mount.node.token,
       ),
+      kind: seed.mount.step.kind,
     );
   }
 

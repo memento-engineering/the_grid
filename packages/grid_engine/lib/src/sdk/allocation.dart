@@ -30,6 +30,7 @@ import 'dart:async';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import 'capability.dart';
+import 'formula.dart';
 
 /// The lifecycle state of an [Allocation] (ADR-0009 D5:
 /// `starting → live → [ready] → dying → gone`, plus `adopting`).
@@ -188,6 +189,18 @@ class AllocationGated extends AllocationReport {
 /// report reaching an unmounted/cancelled node.
 typedef AllocationSink = void Function(AllocationReport report);
 
+/// The engine's pgid-liveness half of the daemon adopt-freshness proof (ADR-0009
+/// D4: "pgid alive"). Returns whether the process group at [fence] is STILL a
+/// live OS group — bound to a [ProcessGroupController] by the composer (live);
+/// the offline default is `false` (no controller ⇒ can't prove liveness ⇒
+/// respawn fresh, no-adopt-on-faith). The domain-specific "token echoed over its
+/// endpoint" half is [ProcessCapability.proveFreshness].
+typedef AllocationLiveness = bool Function(AdoptFence fence);
+
+/// The offline liveness default — no OS controller wired, so nothing proves
+/// live, so an adoptable effect respawns fresh (no-adopt-on-faith).
+bool _noLiveness(AdoptFence fence) => false;
+
 /// Everything an [Allocation] needs to manage its effect — assembled by the Host
 /// and handed to [Capability.createAllocation] (ADR-0009 D5).
 ///
@@ -199,7 +212,8 @@ typedef AllocationSink = void Function(AllocationReport report);
 /// [fence] (the prior identity for a no-adopt-on-faith proof — D4).
 class AllocationContext {
   /// Bundles the effect's [capContext], process [transport], [address], engine
-  /// [env] overlay, report [sink], and adopt [fence].
+  /// [env] overlay, report [sink], adopt [fence], step [kind], and pgid
+  /// [liveness] seam.
   const AllocationContext({
     required this.capContext,
     required this.transport,
@@ -207,6 +221,8 @@ class AllocationContext {
     required this.env,
     required this.sink,
     this.fence = const AdoptFence(),
+    this.kind = StepKind.job,
+    this.liveness = _noLiveness,
   });
 
   /// The sandboxed capability context (the effect's read-only config slice).
@@ -231,6 +247,15 @@ class AllocationContext {
   /// The prior incarnation's identity for the adopt-freshness proof (D4); empty
   /// for a fresh mint.
   final AdoptFence fence;
+
+  /// Whether this effect runs-to-completion ([StepKind.job]) or stays mounted
+  /// ([StepKind.daemon]) — the discriminator for adoptability/detachability (D4:
+  /// a job is respawn-or-skip; a daemon is adopt-or-respawn + detach-capable).
+  final StepKind kind;
+
+  /// The engine pgid-liveness half of the adopt-freshness proof (D4); offline
+  /// default `false` (no controller ⇒ no adopt).
+  final AllocationLiveness liveness;
 }
 
 /// A node of the_grid's third tree — a persistent managed object holding one live
@@ -370,15 +395,55 @@ class ProcessAllocation extends Allocation {
 
   StreamSubscription<RuntimeEvent>? _sub;
   bool _started = false;
+  bool _adopted = false;
   bool _terminal = false;
 
   /// Whether the spawn was reached (the Host stops the group on unmount only
   /// when true).
   bool get started => _started;
 
+  /// Whether a survivor was reattached instead of spawned (D4).
+  bool get adopted => _adopted;
+
+  /// A daemon ([StepKind.daemon]) is adopt-capable + detach-capable; a one-shot
+  /// ([StepKind.job]) is respawn-or-skip (never adopts/detaches — D4).
+  @override
+  bool get isAdoptable => context.kind == StepKind.daemon;
+
+  @override
+  bool get isDetachable => context.kind == StepKind.daemon;
+
   @override
   Future<void> startOrAdopt() async {
     final ctx = context.capContext;
+
+    // ADOPT a proven-fresh survivor (a daemon deliberately detached, or a crash
+    // orphan still live) — reattach WITHOUT respawning (D4). **No-adopt-on-faith**
+    // (D5): BOTH the engine pgid-liveness AND the capability's endpoint/token
+    // proof must hold; either failing → spawn fresh, never adopt blind. (The live
+    // cross-process output re-wire is the deferred adopt-a-live-process piece,
+    // ADR-0008 D6; the load-bearing part built now is the adopt DECISION + not
+    // double-spawning a survivor.)
+    if (isAdoptable &&
+        context.fence.hasIdentity &&
+        context.liveness(context.fence) &&
+        await capability.proveFreshness(context.fence, ctx)) {
+      if (ctx.cancel.isCancelled) {
+        state = AllocationState.gone;
+        return;
+      }
+      state = AllocationState.adopting;
+      _sub = context.transport.events
+          .where((e) => e.name == address.providerName)
+          .listen(_onEvent);
+      _adopted = true;
+      // The survivor was PROVEN live+ready — surface it as ready with no spawn.
+      state = AllocationState.ready;
+      context.sink(const AllocationReady());
+      return;
+    }
+
+    // SPAWN fresh (a job, or a daemon that could not prove freshness).
     // Materialize the workspace BEFORE spawning into it (the effect owns
     // provisioning; ADR-0008 D5). Idempotent — a later step in the same worktree
     // no-ops, and an offline build with no source control no-ops.
@@ -447,6 +512,20 @@ class ProcessAllocation extends Allocation {
   /// Production events always arrive via the [transport] stream.
   void deliverEventForTest(RuntimeEvent event) => _onEvent(event);
 
+  /// LEAVE the group RUNNING + keep its persisted handle (the per-node
+  /// pgid/pid/token cursor already IS the handle) so a later [startOrAdopt]
+  /// reattaches it (D4) — a DISTINCT verb from [dispose] (never stops the group,
+  /// never tears down side-processes). Only the per-incarnation subscription is
+  /// cancelled (this node stops observing); the OS group lives on. The
+  /// reconciler's orphan-sweep reaps a detached effect nobody re-adopts (Track D).
+  @override
+  Future<void> detach() async {
+    state = AllocationState.dying;
+    unawaited(_sub?.cancel());
+    _sub = null;
+    state = AllocationState.gone;
+  }
+
   @override
   Future<void> dispose() async {
     state = AllocationState.dying;
@@ -455,9 +534,9 @@ class ProcessAllocation extends Allocation {
     context.capContext.cancel.cancel();
     unawaited(_sub?.cancel());
     _sub = null;
-    // Kill the managed group (only if we reached the spawn) + the capability's
-    // belt-and-braces teardown.
-    if (_started) {
+    // Kill the managed group — whether we spawned it (_started) or reattached a
+    // survivor (_adopted); dispose is KILL, the floor (D4).
+    if (_started || _adopted) {
       unawaited(context.transport.stop(address.providerName));
     }
     await capability.teardown(context.capContext);
