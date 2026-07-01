@@ -1,7 +1,14 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-import 'package:grid_assets/grid_assets.dart' show DartCommand;
+import 'package:grid_assets/grid_assets.dart'
+    show
+        CommandResult,
+        ComputeBounds,
+        DartCommand,
+        DispatchCommand,
+        computeDispatchHandler,
+        kComputeKind;
 import 'package:grid_cli/src/code_run_command.dart';
 import 'package:grid_cli/src/demo_command.dart';
 import 'package:grid_cli/src/gate_command.dart';
@@ -25,8 +32,67 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(DartCommand())
         ..addCommand(GateCommand())
         ..addCommand(DemoCommand())
-        ..addCommand(ServeCommand())
-        ..addCommand(LeaseCommand());
+        // serve/lease are GENERIC core commands ("leasing is core"); the
+        // COMPUTE asset's use (bounded dispatch + its payload/result codec) is
+        // assembled in here — the asset owns the "use" (ADR-0011 D3).
+        ..addCommand(
+          ServeCommand(
+            defaultKind: kComputeKind,
+            configureFlags: (parser) => parser
+              ..addMultiOption(
+                'allow',
+                defaultsTo: const [
+                  'dart',
+                  'echo',
+                  'flutter',
+                  'git',
+                  'hostname',
+                  'melos',
+                  'uname',
+                ],
+                help:
+                    'The executables the lessor will run (the bounded-use '
+                    'allow-list). A dispatched command not on this list is '
+                    'REFUSED (no shell-as-a-service; ADR-0011 RCE-bounds).',
+              )
+              ..addOption(
+                'exec-timeout',
+                defaultsTo: '300',
+                help:
+                    'Per-command timeout in seconds (the bounded-use upper '
+                    'bound).',
+              ),
+            handlerFor: (args, log) {
+              final bounds = ComputeBounds(
+                allowedCommands: args.multiOption('allow').toSet(),
+                timeout:
+                    Duration(seconds: int.parse(args.option('exec-timeout')!)),
+              );
+              return (
+                handler: computeDispatchHandler(bounds: bounds, onLog: log),
+                banner:
+                    'bounded use: allow-list '
+                    '${bounds.allowedCommands.toList()..sort()}  ·  '
+                    'timeout ${bounds.timeout.inSeconds}s',
+              );
+            },
+          ),
+        )
+        ..addCommand(
+          LeaseCommand(
+            defaultKind: kComputeKind,
+            payloadFor: (rest) => DispatchCommand(
+              command: rest.first,
+              args: rest.skip(1).toList(),
+            ).toJson(),
+            render: (raw, out, err) {
+              final r = CommandResult.fromJson(raw);
+              if (r.stdout.isNotEmpty) out(r.stdout);
+              if (r.stderr.isNotEmpty) err(r.stderr);
+              return r.exitCode;
+            },
+          ),
+        );
 
   try {
     final code = await runner.run(arguments);

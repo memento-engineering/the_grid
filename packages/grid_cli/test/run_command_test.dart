@@ -58,6 +58,33 @@ void main() {
       final parsed = cmd.argParser.parse(['--substation', 'tgdog', '--no-dry-run']);
       expect(parsed.flag('dry-run'), isFalse);
     });
+
+    test('the CODE ASSET carries the opinion, not the framework: the trio + a '
+        'git-SourceControl servicesFor live on CodeRunCommand', () {
+      final cmd = CodeRunCommand();
+      // The trio is the command's (the composer requires it, defaults nothing).
+      expect(cmd.resolver, isNotNull);
+      expect(cmd.registry.formula('code'), isNotNull,
+          reason: 'the code registry (agent/review/land) rides the command');
+      // servicesFor builds the git SourceControl from the live wiring.
+      final services = cmd.servicesFor!((
+        git: StationGitService(
+          runner: FakeGitRunner(),
+          prOpener: _FakePrOpener(),
+        ),
+        workRoot: const RootCheckout(
+          path: '/tmp/r',
+          defaultBranch: 'main',
+          substation: 'tgdog',
+        ),
+        gitOps: null,
+        prOpener: null,
+      ));
+      expect(services.sourceControl, isNotNull,
+          reason: 'the code asset supplies provisioning source control');
+      expect(services.sourceControl!.canLand, isFalse,
+          reason: 'land ops null (not armed) → commit-only posture');
+    });
   });
 
   group('runGrid live-arm gating (no live state)', () {

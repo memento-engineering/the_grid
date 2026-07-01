@@ -160,20 +160,22 @@ void main() {
       await wiring.teardown();
     });
 
-    test('with NO injected asset, the `code` default still drives (unchanged): the '
-        'git ServiceBundle provisions the worktree before the spawn', () async {
+    test('the framework composer carries NO asset default — an asset-supplied '
+        'SourceControl provisions; the empty bundle does not (the contrast)',
+        () async {
       final h = _TreeHarness();
-      final wiring = h.compose(); // no asset → code default
+      // The harness default trio + a SourceControl bundle (what an asset's
+      // servicesFor supplies) → provisioning happens before the spawn.
+      final wiring = h.compose();
       addTearDown(h.dispose);
 
-      h.pushWork(Bead(id: 'tgdog-w1', title: 'code default'));
+      h.pushWork(Bead(id: 'tgdog-w1', title: 'asset services'));
       await wiring.start();
       await _settle();
 
       expect(h.provider.starts, hasLength(1));
-      // The code default provisions via the git SourceControl (the contrast with
-      // the injected-asset case above).
-      expect(h.git.provisioned, contains('tgdog-w1'));
+      expect(h.git.provisioned, contains('tgdog-w1'),
+          reason: 'the asset-supplied SourceControl owns provisioning');
 
       await wiring.teardown();
     });
@@ -183,6 +185,8 @@ void main() {
     test('an empty allow-set is refused (exit 64, no composition)', () async {
       final errs = <String>[];
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: const {},
         dryRun: true,
         out: (_) {},
@@ -197,6 +201,8 @@ void main() {
         'GitHub write, never armed under an observe-only run', () async {
       final errs = <String>[];
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: {'tgdog'},
         dryRun: true, // observe-only…
         land: true, //   …but asking to land → contradiction, refused.
@@ -211,6 +217,8 @@ void main() {
     test('a non-dry run with no --root is refused (exit 64)', () async {
       final errs = <String>[];
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: {'tgdog'},
         dryRun: false, // ask for LIVE…
         // …no root → refused before any composition.
@@ -227,6 +235,8 @@ void main() {
         () async {
       final errs = <String>[];
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: {'genesis'},
         dryRun: false,
         rootPath: '/tmp/some-root', // past the root guard…
@@ -262,6 +272,8 @@ void main() {
       });
 
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: {'tgdog'},
         stateSubstation: 'tgdog',
         dryRun: true,
@@ -305,6 +317,8 @@ void main() {
         'specific beads (the drive-list, ADR-0006)', () async {
       final errs = <String>[];
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: {'tgdog'},
         dryRun: false,
         rootPath: '/tmp/some-root', // past the root guard…
@@ -343,6 +357,8 @@ void main() {
       });
 
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: {'tgdog'},
         stateSubstation: 'tgdog',
         dryRun: true,
@@ -401,6 +417,8 @@ void main() {
       // A LIVE run (dryRun:false) with a --root but NO rootCheckoutOverride, so
       // registerRootCheckout is actually exercised — all other seams faked.
       final code = await runGridTree(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
         substations: {'tgdog'},
         stateSubstation: 'tgdog',
         dryRun: false,
@@ -479,6 +497,70 @@ const Formula _markerFormula = Formula(
 /// The bead→formula policy for the injected asset (all work → the marker formula).
 Formula _markerFormulaFor(Bead bead) => _markerFormula;
 
+/// The marker asset's registry (the harness default trio's second half).
+DefaultCapabilityRegistry _markerRegistry() => DefaultCapabilityRegistry(
+  capabilities: const {_markerStep: _MarkerCap()},
+  formulas: const {'marker': _markerFormula},
+);
+
+/// An in-test [SourceControl] over the recording [StationGitService] — replaces
+/// the retired composer-side git default so the provisioning assertions still
+/// observe `git.provisioned` (the asset owns provisioning now; the framework
+/// composes an EMPTY bundle unless the asset supplies one).
+class _HarnessSourceControl implements SourceControl {
+  _HarnessSourceControl(this._git);
+
+  final StationGitService _git;
+
+  static const _root = RootCheckout(
+    path: '/tmp/grid-tree-test-root',
+    defaultBranch: 'main',
+    substation: 'tgdog',
+  );
+
+  @override
+  String workspaceFor(String beadId) =>
+      '${_root.path}/.grid/worktrees/${_root.substation}/$beadId';
+
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+
+  @override
+  String get baseBranch => _root.defaultBranch;
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {
+    await _git.provisionWorktree(root: _root, beadId: beadId);
+  }
+
+  @override
+  bool get canLand => false;
+
+  @override
+  Future<void> commitAll({
+    required String workspaceDir,
+    required String message,
+  }) async {}
+
+  @override
+  Future<void> push({
+    required String workspaceDir,
+    required String remote,
+    required String branch,
+  }) async {}
+
+  @override
+  Future<PrRef?> openPr({
+    required String workspaceDir,
+    required String branch,
+    required String baseBranch,
+    required String title,
+  }) async => null;
+}
+
 /// A trivial process capability for the marker step — the DRY provider records
 /// its (never-real) spawn; the node path carries [_markerStep].
 class _MarkerCap extends ProcessCapability {
@@ -526,9 +608,10 @@ class _TreeHarness {
     firstBarrierTick ??= nextTick();
   }
 
-  /// Composes the wiring. With no [resolver]/[registry]/[services] it uses the
-  /// `code` asset defaults (the live path); pass them to prove the ADR-0008 D1
-  /// asset seam (a non-code asset composes without editing the composer).
+  /// Composes the wiring. The trio is REQUIRED by the framework (no asset
+  /// default — the Dart-runner model); the harness defaults to the in-test
+  /// MARKER asset + a fake SourceControl over the recording git service (so the
+  /// provisioning assertions still observe `git.provisioned`).
   TreeRunWiring compose({
     FormulaResolver? resolver,
     CapabilityRegistry? registry,
@@ -562,9 +645,10 @@ class _TreeHarness {
       ),
       groups: groups,
       freshnessBarrier: _barrier,
-      resolver: resolver,
-      registry: registry,
-      services: services,
+      resolver: resolver ?? const FormulaResolver(_markerFormulaFor),
+      registry: registry ?? _markerRegistry(),
+      services: services ??
+          ServiceBundle(sourceControl: _HarnessSourceControl(git.service)),
     );
   }
 

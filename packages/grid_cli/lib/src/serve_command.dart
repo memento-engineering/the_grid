@@ -1,18 +1,32 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
-import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_federation/grid_federation.dart';
 
-/// `grid serve` — run as a LESSOR station: offer compute slots over the
-/// federation bus (ADR-0011). A peer leases a slot and dispatches a generic
-/// command to run HERE. No inference required — this station just executes the
-/// dispatched process, BOUNDED by the compute domain's allow-list (ADR-0011 D3:
-/// the asset domain — not the kind-agnostic core — owns the "use").
+/// Builds the ASSET's dispatch [handler] (+ an optional [banner] line) from the
+/// parsed args — the seam that keeps `serve` GENERIC ("leasing is core"): the
+/// core command owns the lessor lifecycle; the asset domain owns the "use"
+/// (ADR-0011 D3). The reference app supplies the compute one.
+typedef ServeHandlerFactory =
+    ({DispatchHandler handler, String? banner}) Function(
+      ArgResults args,
+      void Function(String) log,
+    );
+
+/// `grid serve` — run as a LESSOR station: offer slots over the federation bus
+/// (ADR-0011). A peer leases a slot and dispatches a use to run HERE. GENERIC:
+/// the dispatched "use" is the asset domain's, injected via [handlerFor] +
+/// [configureFlags] (the runner assembles e.g. the compute bounded-use).
 class ServeCommand extends Command<int> {
-  /// Wires the serve flags.
-  ServeCommand() {
+  /// Wires the generic serve flags, then the asset's [configureFlags]; the
+  /// offered [defaultKind] and the dispatch [handlerFor] are the asset's.
+  ServeCommand({
+    required String defaultKind,
+    required void Function(ArgParser) configureFlags,
+    required this.handlerFor,
+  }) {
     argParser
       ..addOption(
         'station',
@@ -23,31 +37,10 @@ class ServeCommand extends Command<int> {
       ..addOption('port', defaultsTo: '8080', help: 'Bind port.')
       ..addOption(
         'kind',
-        defaultsTo: kComputeKind,
+        defaultsTo: defaultKind,
         help: 'The resource-asset kind offered.',
       )
       ..addOption('slots', defaultsTo: '1', help: 'How many slots to offer.')
-      ..addMultiOption(
-        'allow',
-        defaultsTo: const [
-          'dart',
-          'echo',
-          'flutter',
-          'git',
-          'hostname',
-          'melos',
-          'uname',
-        ],
-        help:
-            'The executables the lessor will run (the bounded-use allow-list). A '
-            'dispatched command not on this list is REFUSED (no shell-as-a-'
-            'service; ADR-0011 RCE-bounds).',
-      )
-      ..addOption(
-        'exec-timeout',
-        defaultsTo: '300',
-        help: 'Per-command timeout in seconds (the bounded-use upper bound).',
-      )
       ..addOption(
         'token',
         help:
@@ -79,7 +72,12 @@ class ServeCommand extends Command<int> {
         defaultsTo: '64',
         help: 'Max requests that may wait in the FIFO queue.',
       );
+    configureFlags(argParser);
   }
+
+  /// The asset's dispatch-handler factory (the compute bounded-use in the
+  /// reference app).
+  final ServeHandlerFactory handlerFor;
 
   @override
   final String name = 'serve';
@@ -94,10 +92,7 @@ class ServeCommand extends Command<int> {
     final a = argResults!;
     final station = a.option('station')!;
     final token = a.option('token');
-    final bounds = ComputeBounds(
-      allowedCommands: a.multiOption('allow').toSet(),
-      timeout: Duration(seconds: int.parse(a.option('exec-timeout')!)),
-    );
+    final asset = handlerFor(a, (m) => stdout.writeln('  $m'));
     final server = await StationServer.start(
       station: station,
       host: a.option('host')!,
@@ -109,10 +104,7 @@ class ServeCommand extends Command<int> {
       maxLifetime: Duration(seconds: int.parse(a.option('max-lifetime')!)),
       leaseWait: Duration(seconds: int.parse(a.option('lease-wait')!)),
       maxQueueDepth: int.parse(a.option('max-queue')!),
-      handler: computeDispatchHandler(
-        bounds: bounds,
-        onLog: (m) => stdout.writeln('  $m'),
-      ),
+      handler: asset.handler,
       onLog: (m) => stdout.writeln('  $m'),
     );
     stdout
@@ -121,12 +113,9 @@ class ServeCommand extends Command<int> {
         'listening on ${a.option('host')}:${server.port}  ·  offering '
         '${a.option('slots')} ${a.option('kind')} slot(s)'
         '${token != null ? '  ·  token REQUIRED' : ''}',
-      )
-      ..writeln(
-        'bounded use: allow-list ${(bounds.allowedCommands.toList()..sort())}  ·  '
-        'timeout ${bounds.timeout.inSeconds}s',
-      )
-      ..writeln('Ctrl-C to stop.');
+      );
+    if (asset.banner != null) stdout.writeln(asset.banner);
+    stdout.writeln('Ctrl-C to stop.');
 
     final done = Completer<void>();
     final sub = ProcessSignal.sigint.watch().listen((_) {

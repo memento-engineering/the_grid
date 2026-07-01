@@ -15,7 +15,7 @@ import 'package:args/command_runner.dart';
 import 'package:grid_engine/grid_engine.dart';
 
 import 'run_command.dart' show RuntimeProviderKind;
-import 'run_tree_command.dart' show runGridTree;
+import 'run_tree_command.dart' show AssetServicesBuilder, runGridTree;
 
 /// The reusable, asset-agnostic `run` base. A concrete run command extends this,
 /// passing its [resolver] + [registry] (the ADR-0008 D1 asset seam) and its own
@@ -23,10 +23,16 @@ import 'run_tree_command.dart' show runGridTree;
 /// [runGridTree] for now (a non-code asset passes no `--root` ⇒ inert git); its
 /// full extraction into an asset `servicesFor` is the repo-split follow-up.
 abstract class StationRunCommand extends Command<int> {
-  /// Creates the base with the ASSET TRIO — the bead→formula [resolver] and the
-  /// capability [registry] the tree mounts. The subclass supplies these + a
-  /// `name`/`description`.
-  StationRunCommand({required this.resolver, required this.registry}) {
+  /// Creates the base with the ASSET TRIO — the bead→formula [resolver], the
+  /// capability [registry] the tree mounts, and optionally [servicesFor] (the
+  /// asset's per-substation ServiceBundle built from the live wiring; null →
+  /// the empty bundle: no provisioning, land no-ops). The subclass supplies
+  /// these + a `name`/`description`.
+  StationRunCommand({
+    required this.resolver,
+    required this.registry,
+    this.servicesFor,
+  }) {
     argParser
       ..addMultiOption(
         'substation',
@@ -121,6 +127,10 @@ abstract class StationRunCommand extends Command<int> {
   /// The capability set + formulas the tree mounts.
   final CapabilityRegistry registry;
 
+  /// Builds the asset's per-substation [ServiceBundle] from the live wiring
+  /// (git service / work root / armed land ops). Null → an empty bundle.
+  final AssetServicesBuilder? servicesFor;
+
   @override
   Future<int> run() async {
     final args = argResults!;
@@ -134,6 +144,7 @@ abstract class StationRunCommand extends Command<int> {
       substations: substations,
       resolver: resolver,
       registry: registry,
+      servicesFor: servicesFor,
       provider: RuntimeProviderKind.parse(args.option('provider')),
       rootPath: args.option('root'),
       head: args.option('head'),

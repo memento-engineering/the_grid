@@ -1,19 +1,35 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-// The COMPUTE domain's payloads moved here at the M6 Track D split — the
-// federation core is kind-agnostic and no longer names them.
-import 'package:grid_assets/grid_assets.dart' show CommandResult, DispatchCommand;
 import 'package:grid_federation/grid_federation.dart';
 
-/// `grid lease` — run as a LESSEE: lease a compute slot from a peer station and
-/// dispatch a command to run THERE, streaming the result back. Proves
-/// cross-machine resource leasing (ADR-0011).
+/// Builds the ASSET's dispatch payload from the rest args — the seam that keeps
+/// `lease` GENERIC ("leasing is core"; the payload shape is the asset domain's,
+/// ADR-0011 D3 — the reference app supplies the compute one).
+typedef LeasePayloadBuilder = Map<String, dynamic> Function(List<String> rest);
+
+/// Renders the ASSET's opaque dispatch result, returning the exit code (the
+/// compute renderer prints stdout/stderr + the exit line).
+typedef LeaseResultRenderer =
+    int Function(
+      Map<String, dynamic> result,
+      void Function(String) out,
+      void Function(String) err,
+    );
+
+/// `grid lease` — run as a LESSEE: lease a slot from a peer station and
+/// dispatch a use to run THERE, rendering the result. GENERIC: the payload +
+/// result shapes are the asset domain's, injected via [payloadFor]/[render].
 ///
 /// Usage: `grid lease --peer host:port -- <command> [args...]`
 class LeaseCommand extends Command<int> {
-  /// Wires the lease flags.
-  LeaseCommand() {
+  /// Wires the lease flags; the payload/result codecs + [defaultKind] are the
+  /// asset's.
+  LeaseCommand({
+    required String defaultKind,
+    required this.payloadFor,
+    required this.render,
+  }) {
     argParser
       ..addOption(
         'peer',
@@ -28,11 +44,17 @@ class LeaseCommand extends Command<int> {
       )
       ..addOption(
         'kind',
-        defaultsTo: 'compute',
+        defaultsTo: defaultKind,
         help: 'Resource-asset kind to lease.',
       )
       ..addOption('token', help: 'Shared secret, if the peer requires one.');
   }
+
+  /// The asset's payload builder (compute: `DispatchCommand.toJson`).
+  final LeasePayloadBuilder payloadFor;
+
+  /// The asset's result renderer (compute: `CommandResult` → stdout/stderr).
+  final LeaseResultRenderer render;
 
   @override
   final String name = 'lease';
@@ -92,24 +114,20 @@ class LeaseCommand extends Command<int> {
         'fence ${grant.fencingToken})',
       );
 
-      final cmd = DispatchCommand(
-        command: cmdline.first,
-        args: cmdline.skip(1).toList(),
-      );
       stdout.writeln(
-        'dispatching to "${p.station}": ${cmd.command} ${cmd.args.join(' ')}',
+        'dispatching to "${p.station}": ${cmdline.join(' ')}',
       );
-      final r = CommandResult.fromJson(
-        await client.dispatch(grant, cmd.toJson(), idempotencyKey: idem),
+      final raw = await client.dispatch(
+        grant,
+        payloadFor(cmdline),
+        idempotencyKey: idem,
       );
-      if (r.stdout.isNotEmpty) stdout.write(r.stdout);
-      if (r.stderr.isNotEmpty) stderr.write(r.stderr);
-      stdout.writeln(
-        '--- exit ${r.exitCode} in ${r.durationMs}ms (ran on "${p.station}") ---',
-      );
+      // The asset's renderer interprets the opaque result envelope.
+      final code = render(raw, stdout.write, stderr.write);
+      stdout.writeln('--- exit $code (ran on "${p.station}") ---');
       await client.release(grant);
       stdout.writeln('released ${grant.leaseId}');
-      return r.exitCode;
+      return code;
     } on FederationException catch (e) {
       stderr.writeln('grid lease: ${e.message}');
       return 1;

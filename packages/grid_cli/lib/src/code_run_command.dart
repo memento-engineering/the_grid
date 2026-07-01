@@ -13,6 +13,7 @@ import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_controller/grid_controller.dart' show Bead;
 import 'package:grid_engine/grid_engine.dart';
 
+import 'run_tree_command.dart' show AssetWiring;
 import 'station_run_command.dart';
 
 /// The bead→formula policy for the `code` asset — all coding work roots the
@@ -21,14 +22,31 @@ import 'station_run_command.dart';
 Formula _codeFormula(Bead bead) => kCodeFormula;
 
 /// `grid run` for the `code` asset: the reentrant tree engine spawning a coding
-/// agent per ready bead, wired with the `code` formula + [buildCodeRegistry].
+/// agent per ready bead, wired with the `code` formula + [buildCodeRegistry] +
+/// the git `SourceControl` (built from the live wiring via `servicesFor` — the
+/// framework composer holds no git opinion; provisioning + land are THIS
+/// asset's).
 class CodeRunCommand extends StationRunCommand {
   /// Creates the code run command (the `code` trio into the de-opinionated base).
   CodeRunCommand()
     : super(
         resolver: const FormulaResolver(_codeFormula),
         registry: buildCodeRegistry(),
+        servicesFor: _codeServices,
       );
+
+  /// The code asset's per-substation services: a git [SourceControl] over the
+  /// live worktree service + root (provisioning works even when LAND is off —
+  /// gitOps/prOpener are non-null only when `--land` armed a live run; null ⇒
+  /// `canLand` false ⇒ the land capability no-ops, the commit-only posture).
+  static ServiceBundle _codeServices(AssetWiring wiring) => ServiceBundle(
+    sourceControl: GitSourceControl(
+      gitOps: wiring.gitOps,
+      prOpener: wiring.prOpener,
+      provisioner: wiring.git,
+      root: wiring.workRoot,
+    ),
+  );
 
   @override
   final String name = 'run';
