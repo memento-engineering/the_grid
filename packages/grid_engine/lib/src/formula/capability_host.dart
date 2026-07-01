@@ -168,6 +168,9 @@ class CapabilityHostState extends State<CapabilityHost> {
         token: seed.mount.node.token,
       ),
       kind: seed.mount.step.kind,
+      // The engine pgid-liveness half (D4), co-wired with the reconciler's
+      // AdoptProof at the live arm; null → neverLive → no mount-time adopt (P1).
+      liveness: _ctx!.liveness ?? neverLive,
     );
   }
 
@@ -207,6 +210,12 @@ class CapabilityHostState extends State<CapabilityHost> {
     final alloc = _allocation;
     if (alloc is ProcessAllocation) alloc.deliverEventForTest(event);
   }
+
+  /// Test affordance: deliver [report] straight into the Host's report sink,
+  /// BYPASSING the allocation's own terminal latch — so the Host's `_completed`
+  /// latch (a duplicate terminal → exactly one chokepoint write) can be exercised
+  /// in isolation (the two latches otherwise mutually mask each other).
+  void deliverReportForTest(AllocationReport report) => _onReport(report);
 
   Future<void> _persistStarted({required int pid, int? pgid}) async {
     if (_cancelled || !context.mounted) return;

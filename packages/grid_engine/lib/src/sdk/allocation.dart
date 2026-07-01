@@ -198,8 +198,11 @@ typedef AllocationSink = void Function(AllocationReport report);
 typedef AllocationLiveness = bool Function(AdoptFence fence);
 
 /// The offline liveness default — no OS controller wired, so nothing proves
-/// live, so an adoptable effect respawns fresh (no-adopt-on-faith).
-bool _noLiveness(AdoptFence fence) => false;
+/// live, so an adoptable effect respawns fresh (no-adopt-on-faith). Public so
+/// the composer / EffectContext can use it as the explicit "adopt disabled"
+/// value (the two adopt halves — this liveness seam and the reconciler's
+/// [AdoptProof] — must be co-wired; see [AllocationContext.liveness]).
+bool neverLive(AdoptFence fence) => false;
 
 /// Everything an [Allocation] needs to manage its effect — assembled by the Host
 /// and handed to [Capability.createAllocation] (ADR-0009 D5).
@@ -222,7 +225,7 @@ class AllocationContext {
     required this.sink,
     this.fence = const AdoptFence(),
     this.kind = StepKind.job,
-    this.liveness = _noLiveness,
+    this.liveness = neverLive,
   });
 
   /// The sandboxed capability context (the effect's read-only config slice).
@@ -254,7 +257,16 @@ class AllocationContext {
   final StepKind kind;
 
   /// The engine pgid-liveness half of the adopt-freshness proof (D4); offline
-  /// default `false` (no controller ⇒ no adopt).
+  /// default [neverLive] (no controller ⇒ no adopt).
+  ///
+  /// **All-or-nothing with the reconciler's [AdoptProof].** Adopt is TWO
+  /// cooperating halves: the reconciler LEAVES a proven survivor running
+  /// (pre-mount), and the Host REATTACHES it at mount (this seam). Enabling one
+  /// without the other double-runs — the reconciler leaves a survivor AND the
+  /// Host, unable to prove liveness, spawns fresh. The composer MUST wire this
+  /// (via `EffectContext.liveness`) together with the reconciler's `adoptProof`,
+  /// or leave BOTH at their offline defaults. This is the human-gate live-arm
+  /// wiring; P1 leaves both off.
   final AllocationLiveness liveness;
 }
 

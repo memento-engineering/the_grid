@@ -1,5 +1,7 @@
 import 'package:grid_runtime/grid_runtime.dart';
 
+import '../sdk/allocation.dart';
+
 /// The injected bundle a `CapabilityHost` resolves from the tree in ONE
 /// inherited lookup (ADR-0007 / ADR-0008 D4).
 ///
@@ -33,6 +35,7 @@ class EffectContext {
     this.worktreeRoot,
     this.workSubstation = '',
     this.baseBranch = 'main',
+    this.liveness,
   });
 
   /// The process transport — spawn (`start`), kill (`stop`), and the broadcast
@@ -68,6 +71,15 @@ class EffectContext {
 
   /// The base branch the land step opens PRs against (`main` by default).
   final String baseBranch;
+
+  /// The engine pgid-liveness half of the daemon adopt-freshness proof
+  /// (ADR-0009 D4) — the Host threads it into each `AllocationContext.liveness`.
+  /// Null (the default) ⇒ [neverLive] ⇒ the Host never adopts at mount (P1
+  /// offline). **All-or-nothing** with the `RestartReconciler`'s `adoptProof`:
+  /// the composer wires BOTH (from a real `ProcessGroupController`) at the live
+  /// arm, or leaves both off — wiring one alone double-runs. This makes the two
+  /// adopt halves symmetrically wireable (closing the adversarial-review footgun).
+  final AllocationLiveness? liveness;
 
   /// The per-bead worktree path for [beadId] — the working directory a process
   /// effect spawns into and the land effect commits/pushes from.
