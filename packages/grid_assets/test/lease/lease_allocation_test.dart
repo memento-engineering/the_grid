@@ -33,6 +33,10 @@ class FakeStationClient implements StationClient {
   /// When true, [release] throws [LeaseInvalidException] (already reaped).
   bool releaseThrows = false;
 
+  /// Fires right after a heartbeat is recorded — used to simulate a dispose
+  /// racing the adopt freshness proof (the await window inside `_proveFresh`).
+  void Function()? onHeartbeat;
+
   int _seq = 0;
 
   /// Mints a grant as [requestLease] would (for seeding a prior/adopt grant).
@@ -68,6 +72,7 @@ class FakeStationClient implements StationClient {
   @override
   Future<void> heartbeat(LeaseGrant lease) async {
     calls.add('heartbeat:${lease.leaseId}');
+    onHeartbeat?.call();
     if (heartbeatInvalid) throw const LeaseInvalidException('stale / reaped');
   }
 
@@ -351,6 +356,30 @@ void main() {
       expect(alloc.grant?.leaseId, 'lease-1'); // the fresh one, not the stale prior
     });
 
+    test('a dispose racing the adopt PROOF releases the (TTL-renewed) prior grant '
+        '— never orphans it (invariant 4 at the adopt path)', () async {
+      final client = FakeStationClient();
+      final prior = LeaseBound(client, client.mintGrant()); // lease-0
+      final cancel = CancelToken();
+      // The heartbeat (the freshness proof) cancels the token mid-proof —
+      // simulating a dispose landing inside `_proveFresh`'s await, BEFORE the
+      // allocation binds `_grant` (so the racing dispose would release nothing).
+      client.onHeartbeat = cancel.cancel;
+      final cap = _LeaseCap(client: client, prior: prior);
+      final alloc = _alloc(cap, sink: (_) {}, cancel: cancel);
+
+      await alloc.startOrAdopt();
+
+      expect(alloc.adopted, isFalse, reason: 'the cancel aborted the adopt');
+      expect(client.calls, contains('heartbeat:lease-0'),
+          reason: 'the proof ran (and renewed the prior grant TTL)');
+      expect(client.any('release:'), isTrue,
+          reason: 'the proven prior grant is RELEASED, not orphaned for its TTL');
+      // A following dispose must not double-release (start released inline).
+      await alloc.dispose();
+      expect(client.countWith('release:'), 1);
+    });
+
     test('a JOB never adopts even with a fresh prior grant available (respawn-'
         'or-skip is the job contract)', () async {
       final client = FakeStationClient();
@@ -392,7 +421,7 @@ void main() {
         kind: StepKind.job,
       );
       await alloc.startOrAdopt();
-      expect(() => alloc.detach(), throwsA(isA<UnsupportedError>()));
+      await expectLater(alloc.detach(), throwsA(isA<UnsupportedError>()));
     });
   });
 

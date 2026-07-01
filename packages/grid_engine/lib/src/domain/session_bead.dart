@@ -84,14 +84,17 @@ abstract final class CursorKeys {
       '$prefix$nodePath.$field';
 }
 
-/// The per-node RESULT keys — the optional [Ok.payload] a `ServiceCapability`
-/// returns (e.g. the land step's `pr_url`), recorded on the_grid's OWN session
-/// bead so a finished step's artifact is durable (ADR-0006 D3: "record the PR on
-/// the lifecycle bead"). DISJOINT from the [CursorKeys] namespace
-/// (`grid.result.` vs `grid.cursor.`), so [projectFormulaCursor] never misreads
-/// a result key as cursor state; flat + merge-safe like the cursor (D-1/D-3).
-/// Write-only for now — no engine reader consumes them; they are the
-/// human-/audit-facing record of what a step produced.
+/// The per-node RESULT keys — the payload a positive terminal publishes: a job's
+/// [Ok.payload] on `complete` (e.g. the land step's `pr_url`) OR a daemon's
+/// rendezvous payload on `ready` (e.g. the burn-follower's `{endpoint, …}`),
+/// recorded on the_grid's OWN session bead so a finished/ready step's artifact is
+/// durable (ADR-0006 D3: "record the PR on the lifecycle bead"). DISJOINT from
+/// the [CursorKeys] namespace (`grid.result.` vs `grid.cursor.`), so
+/// [projectFormulaCursor] never misreads a result key as cursor state; flat +
+/// merge-safe like the cursor (D-1/D-3). Read back pull-free by a dependent step
+/// via [projectFormulaResults] → `SessionProjection.results` → the `SiblingView`
+/// (a `route`/`burn-host` reads a sibling's grade/endpoint — never a re-query,
+/// A39). Also the human-/audit-facing record of what a step produced.
 abstract final class ResultKeys {
   /// The flat-key namespace for the per-node step result.
   static const prefix = 'grid.result.';

@@ -184,6 +184,12 @@ class LeaseAllocation extends Allocation {
       }
       if (prior != null && await _proveFresh(prior.client, prior.grant)) {
         if (ctx.cancel.isCancelled) {
+          // A dispose raced the adopt PROOF: `_proveFresh` just heartbeat-renewed
+          // the prior grant's TTL, but `_grant` is not bound yet, so the racing
+          // `dispose` released nothing. Release the proven grant here so it isn't
+          // orphaned for its full (just-renewed) TTL — the same immediate-release
+          // contract the fresh-acquire cancel path honors (invariant 4).
+          await _safeRelease(prior.client, prior.grant);
           state = AllocationState.gone;
           return;
         }
