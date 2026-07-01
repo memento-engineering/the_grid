@@ -5,9 +5,11 @@
 // NOT raw shell-as-a-service. Fakes (an injected executor), no real process; a
 // loopback case proves the lessor-side glue + the bound end-to-end over the bus.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_federation/grid_federation.dart';
+import 'package:grid_runtime/grid_runtime.dart' show ProcessGroupController;
 import 'package:test/test.dart';
 
 void main() {
@@ -91,6 +93,54 @@ void main() {
       expect(r.ok, isFalse);
       expect(r.exitCode, 124);
       expect(r.stderr, contains('timed out'));
+    });
+
+    test('a hung command is REAPED on timeout (the M4 group reaper fires, not '
+        'just an abandoned wait)', () async {
+      final groups = _FakeGroups(); // resolvePgid = identity; dies on SIGTERM
+      final hung = _HungComputeProcess(pid: 4242);
+      final bounded = BoundedCommandExecutor(
+        bounds: const ComputeBounds(
+          allowedCommands: {'sleep'},
+          timeout: Duration(milliseconds: 20),
+        ),
+        spawn: (cmd) async => hung,
+        groups: groups,
+      );
+      final r = await bounded.run(const DispatchCommand(command: 'sleep'));
+      expect(r.exitCode, 124);
+      expect(r.stderr, contains('reaped'));
+      // The reaper SIGNALLED the spawned group — the leak fix, not the old
+      // abandon-the-wait behaviour (this assertion fails if _reap is removed).
+      expect(
+        groups.signals.map((s) => s.$2),
+        contains(ProcessSignal.sigterm),
+        reason: 'the timeout must reap the spawned group',
+      );
+      expect(groups.signals.first.$1, 4242, reason: 'reaped the spawned pgid');
+      expect(
+        hung.killed,
+        isFalse,
+        reason: 'the group reaper handled it — no direct-kill fallback needed',
+      );
+    });
+
+    test('an unresolvable pgid falls back to a direct kill (never leaks)',
+        () async {
+      final groups = _FakeGroups(resolvesToNull: true);
+      final hung = _HungComputeProcess(pid: 4242);
+      final bounded = BoundedCommandExecutor(
+        bounds: const ComputeBounds(
+          allowedCommands: {'sleep'},
+          timeout: Duration(milliseconds: 20),
+        ),
+        spawn: (cmd) async => hung,
+        groups: groups,
+      );
+      final r = await bounded.run(const DispatchCommand(command: 'sleep'));
+      expect(r.exitCode, 124);
+      expect(groups.signals, isEmpty, reason: 'no pgid → no group signal');
+      expect(hung.killed, isTrue, reason: 'fell back to a direct kill');
     });
   });
 
@@ -183,4 +233,56 @@ void main() {
       await client.release(grant);
     });
   });
+}
+
+/// A fake [ProcessGroupController] for the reap path: [resolvePgid] is identity
+/// (or null when [resolvesToNull]); the group "dies" after the first SIGTERM so
+/// [terminateGroup] returns within one poll. Records every signal sent.
+class _FakeGroups implements ProcessGroupController {
+  _FakeGroups({this.resolvesToNull = false});
+
+  final bool resolvesToNull;
+  final List<(int pgid, ProcessSignal signal)> signals = [];
+  int _termCount = 0;
+  bool _killed = false;
+
+  @override
+  Future<int?> resolvePgid(int pid) async => resolvesToNull ? null : pid;
+
+  @override
+  bool processAlive(int pid) => !_killed && _termCount == 0;
+
+  @override
+  bool signalGroup(int pgid, ProcessSignal signal) {
+    signals.add((pgid, signal));
+    if (signal == ProcessSignal.sigterm) _termCount++;
+    if (signal == ProcessSignal.sigkill) _killed = true;
+    return true;
+  }
+
+  @override
+  int currentGroupId() => 99999; // never equals a test pgid → guard passes
+}
+
+/// A [ComputeProcess] whose [exitCode] never completes — a hung command, so the
+/// bound's timeout (and the reap) is the only way out.
+class _HungComputeProcess implements ComputeProcess {
+  _HungComputeProcess({required this.pid});
+
+  @override
+  final int pid;
+
+  bool killed = false;
+
+  @override
+  Future<int> get exitCode => Completer<int>().future; // never completes
+
+  @override
+  Future<String> stdoutText() async => '';
+
+  @override
+  Future<String> stderrText() async => '';
+
+  @override
+  void kill() => killed = true;
 }
