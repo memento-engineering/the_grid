@@ -42,6 +42,29 @@ CapabilityContext _ctx({String nodePath = 'tg-1/lease'}) => CapabilityContext(
   nodePath: nodePath,
 );
 
+/// Drives [cap] as the engine would — a job [LeaseAllocation] (mount → acquire →
+/// dispatch over the bus), returning the reports + the allocation (so the test
+/// disposes it, releasing over the bus). The lease consumer is exercised through
+/// its REAL engine carrier, not the retired `run`/`teardown` interface.
+Future<({List<AllocationReport> reports, LeaseAllocation alloc})> _run(
+  LeaseCapability cap,
+  CapabilityContext ctx,
+) async {
+  final reports = <AllocationReport>[];
+  final alloc = cap.createAllocation(
+    AllocationContext(
+      capContext: ctx,
+      transport: FakeRuntimeProvider(),
+      address: AllocationAddress('tgdog-s', ctx.nodePath),
+      env: const {},
+      sink: reports.add,
+      kind: StepKind.job,
+    ),
+  ) as LeaseAllocation;
+  await alloc.startOrAdopt();
+  return (reports: reports, alloc: alloc);
+}
+
 void main() {
   group('Invariant 5 — A37 / coexistence: a lease never writes a peer store '
       'except via the protocol (at depth)', () {
@@ -96,9 +119,10 @@ void main() {
         );
         final ctx = _ctx();
 
-        final outcome = await cap.run(ctx); // acquire + dispatch (over the bus)
-        expect(outcome, isA<Ok>());
-        await cap.teardown(ctx); // release (over the bus)
+        // Acquire + dispatch (over the bus), then release on dispose.
+        final r = await _run(cap, ctx);
+        expect(r.reports.whereType<AllocationCompleted>(), hasLength(1));
+        await r.alloc.dispose(); // release (over the bus)
 
         // SANITY CONTROL: the dispatch DID mutate the peer store — the test is not
         // vacuously asserting "nothing was written".
@@ -166,14 +190,16 @@ void main() {
 
         // Cycle 1.
         final c1 = _ctx(nodePath: 'tg-1/lease');
-        expect(await cap.run(c1), isA<Ok>());
-        await cap.teardown(c1); // releases the slot
+        final r1 = await _run(cap, c1);
+        expect(r1.reports.whereType<AllocationCompleted>(), hasLength(1));
+        await r1.alloc.dispose(); // releases the slot
         expect(lessor.writes.length, 1);
 
         // Cycle 2 — the slot was freed on release, so this re-leases cleanly.
         final c2 = _ctx(nodePath: 'tg-2/lease');
-        expect(await cap.run(c2), isA<Ok>());
-        await cap.teardown(c2);
+        final r2 = await _run(cap, c2);
+        expect(r2.reports.whereType<AllocationCompleted>(), hasLength(1));
+        await r2.alloc.dispose();
 
         // Every peer-store mutation is protocol-tagged and 1:1 with dispatches.
         expect(lessor.writes.length, 2);

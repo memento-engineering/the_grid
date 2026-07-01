@@ -26,6 +26,7 @@
 /// — the four derailment-invariants hold at depth by construction.
 library;
 
+import 'package:grid_assets/grid_assets.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_federation/grid_federation.dart';
 
@@ -125,25 +126,20 @@ Future<FollowerPeer?> matchFollower({
   return null;
 }
 
-/// The mutable, per-mount hold for [BurnFollowerCapability] (keyed off the
-/// [CapabilityContext]) — the matched client + grant, so a teardown releases the
-/// SAME lease the mount acquired.
-class _FollowerHold {
-  StationClient? client;
-  LeaseGrant? grant;
-  FollowerEndpoint? endpoint;
-}
-
 /// The `burn-follower` order (ADR-0011 D9): lease a matching peer over the bus,
 /// dispatch the launch, and receive the follower's published endpoint.
 ///
-/// Lifecycle (guarded like the compute `LeaseCapability`): MOUNT (`run`) matches
-/// + leases + dispatches; UNMOUNT (`teardown`) RELEASES the lease (→ the peer
-/// reaps the launched app via its own `terminateGroup` reaper) — even on the
-/// failure path. Cancellation is polled across every async gap; the per-mount
-/// hold lives in an [Expando] keyed by the [CapabilityContext] so this capability
-/// stays a stateless, shareable description (two concurrent mounts never clobber).
-class BurnFollowerCapability extends ServiceCapability {
+/// A HELD daemon lease (ADR-0009 D6): the engine drives it as a [LeaseAllocation]
+/// (via [LeasePlan]) — [acquire] matches a peer by containment + leases its slot;
+/// [dispatchOn] launches the follower + returns its published endpoint as the
+/// rendezvous [Ok] payload. Because the burn formula's step is [StepKind.daemon],
+/// the allocation reports `ready` (a positive terminal that STAYS LIVE, publishing
+/// the endpoint) — NOT `complete`. That is the daemon-reap bug this rebuild fixes:
+/// the old `Expando<_FollowerHold>` + `Ok`-as-complete shape retired a live daemon
+/// (the exact ADR-0009 D1 smell). The grant now lives as a [LeaseAllocation]
+/// instance field; `dispose` RELEASES it (→ the peer reaps the launched app via its
+/// own `terminateGroup` reaper), even on the failure path.
+class BurnFollowerCapability extends ServiceCapability with LeasePlan {
   /// Creates the order over the candidate [peers], the [launchSpec] to dispatch,
   /// and the [requires] the peer must satisfy by containment. [lessee] defaults to
   /// the work bead id at mount.
@@ -170,14 +166,14 @@ class BurnFollowerCapability extends ServiceCapability {
 
   final void Function(String) _onLog;
 
-  static final Expando<_FollowerHold> _holds =
-      Expando<_FollowerHold>('grid-burn-follower-hold');
+  /// A stable per-node idempotency key so a retried lease/dispatch dedups at the
+  /// owner (never a second grant or a second launch — the lossy-bus hazard).
+  String _idem(CapabilityContext ctx) =>
+      '${lessee.isEmpty ? ctx.beadId : lessee}/${ctx.nodePath}';
 
   @override
-  Future<StepOutcome> run(CapabilityContext ctx) async {
-    final hold = _holds[ctx] = _FollowerHold();
+  Future<LeaseResolution> acquire(CapabilityContext ctx) async {
     final who = lessee.isEmpty ? ctx.beadId : lessee;
-    final idem = '$who/${ctx.nodePath}';
 
     // MATCH a peer by containment (Track C). Fail-closed: no match → no order.
     final peer = await matchFollower(
@@ -186,36 +182,37 @@ class BurnFollowerCapability extends ServiceCapability {
       onLog: _onLog,
     );
     if (peer == null) {
-      return Failed('no follower peer satisfies $requires');
+      return LeaseUnavailable('no follower peer satisfies $requires');
     }
-    if (ctx.cancel.isCancelled) return const Failed('cancelled');
+    if (ctx.cancel.isCancelled) return const LeaseUnavailable('cancelled');
 
     // LEASE the matched peer's slot over the bus.
     final LeaseGrant grant;
     try {
       grant = await peer.client.requestLease(
-        LeaseRequest(lessee: who, kind: kBurnKind, idempotencyKey: idem),
+        LeaseRequest(lessee: who, kind: kBurnKind, idempotencyKey: _idem(ctx)),
       );
     } on LeaseDeniedException catch (e) {
-      return Failed('follower lease denied: ${e.message}');
+      return LeaseUnavailable('follower lease denied: ${e.message}');
     }
-    // A dispose raced the acquire: release now (teardown saw no grant) + skip.
-    if (ctx.cancel.isCancelled) {
-      await _safeRelease(peer.client, grant);
-      return const Failed('cancelled');
-    }
-    hold.client = peer.client;
-    hold.grant = grant; // teardown releases this on unmount/dispose
     _onLog('follower leased ${grant.leaseId} on ${peer.id}');
+    return LeaseBound(peer.client, grant);
+  }
 
+  @override
+  Future<StepOutcome> dispatchOn(
+    StationClient client,
+    LeaseGrant grant,
+    CapabilityContext ctx,
+  ) async {
     // DISPATCH the launch over the bus → the follower publishes its endpoint
     // (the rendezvous handoff rides the dispatch result).
     final Map<String, dynamic> raw;
     try {
-      raw = await peer.client.dispatch(
+      raw = await client.dispatch(
         grant,
         launchSpec.toJson(),
-        idempotencyKey: idem,
+        idempotencyKey: _idem(ctx),
       );
     } on LeaseInvalidException catch (e) {
       return Failed('follower launch dispatch failed: ${e.message}');
@@ -226,42 +223,16 @@ class BurnFollowerCapability extends ServiceCapability {
     if (!endpoint.isPublished) {
       return const Failed('follower published no endpoint');
     }
-    hold.endpoint = endpoint;
     _onLog('follower published ${endpoint.vmServiceUri}');
 
-    // The endpoint rides the Ok payload → recorded on the session bead, read by
-    // `burn-host` pull-free through the threaded `SiblingView` (D-5).
+    // The endpoint rides the daemon's `ready` payload → recorded on the session
+    // bead, read by `burn-host` pull-free through the threaded `SiblingView`
+    // (D-5). A daemon `ready` stays live; `dispose` releases the held lease.
     return Ok({
       'endpoint': endpoint.vmServiceUri,
       'station': endpoint.station,
       'lease': grant.leaseId,
     });
-  }
-
-  /// The endpoint this mount published (for tests / introspection), or `null`.
-  FollowerEndpoint? endpointFor(CapabilityContext ctx) => _holds[ctx]?.endpoint;
-
-  @override
-  Future<void> teardown(CapabilityContext ctx) async {
-    final hold = _holds[ctx];
-    final client = hold?.client;
-    final grant = hold?.grant;
-    if (client == null || grant == null) return; // never acquired / already freed
-    hold!.grant = null; // once-only guard against a double release
-    await _safeRelease(client, grant);
-  }
-
-  /// Releases [grant] over [client], swallowing a federation error so release
-  /// stays idempotent for the holder (an already-reaped lease is not an error).
-  /// Releasing the lease is what triggers the peer to reap the launched follower
-  /// app (the guaranteed teardown crosses the bus).
-  Future<void> _safeRelease(StationClient client, LeaseGrant grant) async {
-    try {
-      await client.release(grant);
-      _onLog('follower released ${grant.leaseId}');
-    } on FederationException {
-      // Already reaped/invalid — release is idempotent for the holder.
-    }
   }
 }
 

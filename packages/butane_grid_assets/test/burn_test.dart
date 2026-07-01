@@ -16,8 +16,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:butane_grid_assets/butane_grid_assets.dart';
+import 'package:grid_assets/grid_assets.dart' show LeaseAllocation;
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/testing.dart' show bead;
+import 'package:grid_engine/testing.dart' show FakeRuntimeProvider, bead;
 import 'package:grid_federation/grid_federation.dart';
 import 'package:grid_runtime/grid_runtime.dart'
     show GroupTerminateResult, ProcessGroupController;
@@ -255,6 +256,38 @@ CapabilityContext _ctx({
 const String _followerPath = 'tg-burn/$kBurnFollowerStep';
 const String _hostPath = 'tg-burn/$kBurnHostStep';
 
+/// Drives the `burn-follower` order as the engine would — a daemon
+/// [LeaseAllocation] (mount → adopt-or-acquire → dispatch), returning the pushed
+/// reports + the allocation (so a test can dispose it, releasing the lease → the
+/// peer reaps the launched app). The burn formula's follower step is
+/// `StepKind.daemon`, so a successful launch reports `ready` (stays live), never
+/// `complete`.
+Future<({List<AllocationReport> reports, LeaseAllocation alloc})> _driveFollower(
+  BurnFollowerCapability follower,
+  CapabilityContext ctx,
+) async {
+  final reports = <AllocationReport>[];
+  final alloc = follower.createAllocation(
+    AllocationContext(
+      capContext: ctx,
+      transport: FakeRuntimeProvider(),
+      address: AllocationAddress('tgdog-s', ctx.nodePath),
+      env: const {},
+      sink: reports.add,
+      kind: StepKind.daemon,
+    ),
+  ) as LeaseAllocation;
+  await alloc.startOrAdopt();
+  return (reports: reports, alloc: alloc);
+}
+
+/// The rendezvous payload the follower published (its `ready` report), or null if
+/// it never reached ready (a failed order).
+Map<String, String>? _publishedEndpoint(List<AllocationReport> reports) {
+  final ready = reports.whereType<AllocationReady>();
+  return ready.isEmpty ? null : ready.first.payload;
+}
+
 const LaunchSpec _spec = LaunchSpec(app: 'butane_flutter', target: 'linux');
 
 /// A passing scripted scenario (every step's expectation holds).
@@ -349,21 +382,24 @@ void main() {
       final drive = _passingDrive();
       final host = BurnHostCapability(drive: drive, scenario: _passingScenario());
 
-      // ORDER 1 — burn-follower: match → lease → dispatch launch → endpoint.
+      // ORDER 1 — burn-follower: match → lease → dispatch launch → endpoint. As a
+      // daemon lease it reports `ready` (stays live), NEVER `complete` (the
+      // daemon-reap fix): the endpoint rides the ready payload.
       final fCtx = _ctx(nodePath: _followerPath);
-      final fOut = await follower.run(fCtx);
-      expect(fOut, isA<Ok>());
+      final f = await _driveFollower(follower, fCtx);
+      expect(f.reports.whereType<AllocationReady>(), hasLength(1));
+      expect(f.reports.whereType<AllocationCompleted>(), isEmpty,
+          reason: 'a held daemon lease must not complete/retire');
       expect(
         lessor.station.calls,
         ['presence', 'lease:the-studio:burn', 'dispatch'],
         reason: 'the rendezvous rode the bus: probe → lease → dispatch',
       );
       expect(lessor.runner.isRunning, isTrue, reason: 'the follower launched');
-      expect(follower.endpointFor(fCtx)?.vmServiceUri, _published.vmServiceUri);
 
-      // The endpoint handoff: the follower Ok payload threads to the host as a
-      // sibling result (D-5 — pull-free, never through the bus).
-      final published = (fOut as Ok).payload!;
+      // The endpoint handoff: the follower's ready payload threads to the host as
+      // a sibling result (D-5 — pull-free, never through the bus).
+      final published = _publishedEndpoint(f.reports)!;
       expect(published['endpoint'], _published.vmServiceUri);
 
       // ORDER 2 — burn-host: read endpoint → attach drive → scripted scenario.
@@ -386,10 +422,11 @@ void main() {
       expect(report.total, 2);
       expect(report.failures, 0);
 
-      // TEARDOWN both orders: host closes the drive; follower releases the lease
-      // → the lessor reaps the launched app via the M4 terminateGroup reaper.
+      // TEARDOWN both orders: host closes the drive; the follower allocation's
+      // dispose releases the lease → the lessor reaps the launched app via the M4
+      // terminateGroup reaper.
       await host.teardown(hCtx);
-      await follower.teardown(fCtx);
+      await f.alloc.dispose();
       expect(drive.closed, isTrue, reason: 'the drive channel is closed');
       expect(lessor.station.calls, contains('release'));
       expect(
@@ -427,13 +464,13 @@ void main() {
       final host = BurnHostCapability(drive: drive, scenario: scenario);
 
       final fCtx = _ctx(nodePath: _followerPath);
-      final fOut = await follower.run(fCtx);
-      expect(fOut, isA<Ok>());
+      final f = await _driveFollower(follower, fCtx);
+      final published = _publishedEndpoint(f.reports)!;
       expect(lessor.runner.isRunning, isTrue, reason: 'a daemon to leak');
 
       final hCtx = _ctx(
         nodePath: _hostPath,
-        siblings: SiblingView(results: {_followerPath: (fOut as Ok).payload!}),
+        siblings: SiblingView(results: {_followerPath: published}),
       );
       final hOut = await host.run(hCtx);
       expect(hOut, isA<Failed>(), reason: 'a failed scenario escalates');
@@ -445,7 +482,7 @@ void main() {
       // The GUARANTEED teardown: even though the host escalated, tearing the
       // orders down reaps the follower daemon — no leaked process.
       await host.teardown(hCtx);
-      await follower.teardown(fCtx);
+      await f.alloc.dispose();
       expect(
         lessor.runner.isRunning,
         isFalse,
@@ -462,11 +499,11 @@ void main() {
         launchSpec: _spec,
       );
       final ctx = _ctx(nodePath: _followerPath);
-      final out = await follower.run(ctx);
-      expect(out, isA<Failed>());
+      final f = await _driveFollower(follower, ctx);
+      expect(f.reports.single, isA<AllocationFailed>());
       expect(lessor.station.calls, ['presence'], reason: 'probed, then no lease');
       expect(lessor.runner.isRunning, isFalse);
-      await follower.teardown(ctx); // no grant held → no release
+      await f.alloc.dispose(); // no grant held → no release
       expect(lessor.station.countWith('release'), 0);
     });
 
@@ -480,16 +517,17 @@ void main() {
       expect(drive.attachedTo, isNull, reason: 'never attached without an endpoint');
     });
 
-    test('a denied lease → the follower order fails; teardown no-ops', () async {
+    test('a denied lease → the follower order fails; dispose no-ops', () async {
       final lessor = _lessor()..station.denyLease = true;
       final follower = BurnFollowerCapability(
         peers: [FollowerPeer(id: 'the-dashboard', client: lessor.station)],
         launchSpec: _spec,
       );
       final ctx = _ctx(nodePath: _followerPath);
-      expect(await follower.run(ctx), isA<Failed>());
+      final f = await _driveFollower(follower, ctx);
+      expect(f.reports.single, isA<AllocationFailed>());
       expect(lessor.station.countWith('dispatch'), 0);
-      await follower.teardown(ctx);
+      await f.alloc.dispose();
       expect(lessor.station.countWith('release'), 0);
     });
 
@@ -502,16 +540,16 @@ void main() {
         launchSpec: _spec,
       );
       final ctx = _ctx(nodePath: _followerPath, cancel: cancel);
-      final out = await follower.run(ctx);
-      expect(out, isA<Failed>());
+      final f = await _driveFollower(follower, ctx);
+      expect(f.reports, isEmpty, reason: 'a cancelled start reports nothing');
       expect(lessor.station.countWith('dispatch'), 0, reason: 'no launch after cancel');
       expect(lessor.station.countWith('release'), 1, reason: 'released despite cancel');
-      // teardown must NOT double-release (run released inline; no held grant).
-      await follower.teardown(ctx);
+      // dispose must NOT double-release (start released inline; no held grant).
+      await f.alloc.dispose();
       expect(lessor.station.countWith('release'), 1);
     });
 
-    test('the follower order releases ONCE (idempotent on a double teardown)',
+    test('the follower order releases ONCE (idempotent on a double dispose)',
         () async {
       final lessor = _lessor();
       final follower = BurnFollowerCapability(
@@ -519,9 +557,9 @@ void main() {
         launchSpec: _spec,
       );
       final ctx = _ctx(nodePath: _followerPath);
-      await follower.run(ctx);
-      await follower.teardown(ctx);
-      await follower.teardown(ctx);
+      final f = await _driveFollower(follower, ctx);
+      await f.alloc.dispose();
+      await f.alloc.dispose();
       expect(lessor.station.countWith('release'), 1);
     });
   });
