@@ -7,11 +7,11 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-/// Offline proof for `composeRunTree` (the M4 tree-engine "runnable path",
+/// Offline proof for `composeStation` (the M4 tree-engine "runnable path",
 /// ADR-0007) — Fakes, not mocks; NO live `tg`, NO real `claude`, NO real `git`,
 /// NO `bd` writes to a live workspace. The DoD this file locks:
 ///
-///  1. **pure composition** — [composeRunTree] assembles a [TreeRunWiring]
+///  1. **pure composition** — [composeStation] assembles a [TreeRunWiring]
 ///     (a [StationKernel] + a [RestartReconciler]) without spawning, opening a
 ///     socket, or writing a bead;
 ///  2. **the kernel mounts + a ready owned bead spawns (dry)** — `start()` over a
@@ -23,7 +23,7 @@ import 'package:test/test.dart';
 ///  4. **clean teardown** — `teardown()` unmounts the tree (the dry effect's
 ///     `dispose` records a stop) and is idempotent.
 void main() {
-  group('composeRunTree — pure composition (no I/O at construct time)', () {
+  group('composeStation — pure composition (no I/O at construct time)', () {
     test('assembles a kernel + restart reconciler; constructs nothing live',
         () {
       final h = _TreeHarness();
@@ -41,7 +41,7 @@ void main() {
     });
   });
 
-  group('composeRunTree — dry start smoke (kernel mounts, ready bead spawns)',
+  group('composeStation — dry start smoke (kernel mounts, ready bead spawns)',
       () {
     test('a ready OWNED task mounts the tree and the DRY provider records a '
         'start (the bead would spawn live)', () async {
@@ -118,7 +118,7 @@ void main() {
     });
   });
 
-  group('composeRunTree — the ASSET seam (ADR-0008 D1: default code, or inject)',
+  group('composeStation — the ASSET seam (ADR-0008 D1: default code, or inject)',
       () {
     test('an INJECTED asset (resolver + registry + services) drives the mount — a '
         'non-code formula mounts its OWN step, so the burn composes WITHOUT '
@@ -457,7 +457,7 @@ Future<void> _settle() async {
   }
 }
 
-// --- a minimal NON-CODE asset (proves the composeRunTree asset seam) ----------
+// --- a minimal NON-CODE asset (proves the composeStation asset seam) ----------
 
 const String _markerStep = 'marker';
 
@@ -499,7 +499,7 @@ class _MarkerCap extends ProcessCapability {
 /// The offline harness: fake work/state snapshot sources, a recording dry
 /// provider, a recording bd runner behind the chokepoint, a fake git service
 /// (no worktrees), a fake process-group controller, and a completing,
-/// tick-recording freshness barrier — so [composeRunTree] runs end-to-end with
+/// tick-recording freshness barrier — so [composeStation] runs end-to-end with
 /// NOTHING live.
 class _TreeHarness {
   _TreeHarness();
@@ -547,7 +547,7 @@ class _TreeHarness {
       writer: writer,
       stateSubstation: 'tgdog',
     );
-    return composeRunTree(
+    return composeStation(
       work: work,
       state: state,
       stationServices: effectContext,

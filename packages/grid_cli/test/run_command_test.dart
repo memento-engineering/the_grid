@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:grid_cli/src/code_run_command.dart';
 import 'package:grid_cli/src/run_command.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_reconciler/grid_reconciler.dart';
@@ -20,15 +21,15 @@ import 'package:test/test.dart';
 ///     non-dry run with no root is refused;
 ///  4. **provider default** — `--provider` defaults to subprocess.
 void main() {
-  group('RunCommand flag parsing', () {
+  group('CodeRunCommand flag parsing (via the StationRunCommand base)', () {
     test('--dry-run is the SAFE DEFAULT (true when unspecified)', () {
-      final cmd = RunCommand();
+      final cmd = CodeRunCommand();
       final parsed = cmd.argParser.parse(['--substation', 'tgdog']);
       expect(parsed.flag('dry-run'), isTrue);
     });
 
     test('--provider defaults to subprocess', () {
-      final cmd = RunCommand();
+      final cmd = CodeRunCommand();
       final parsed = cmd.argParser.parse(['--substation', 'tgdog']);
       expect(parsed.option('provider'), 'subprocess');
       expect(
@@ -38,7 +39,7 @@ void main() {
     });
 
     test('--substation and --owner both feed the one allow-set', () {
-      final cmd = RunCommand();
+      final cmd = CodeRunCommand();
       final parsed = cmd.argParser.parse([
         '--substation',
         'tgdog',
@@ -53,7 +54,7 @@ void main() {
     });
 
     test('--no-dry-run is the explicit live-arm opt-in', () {
-      final cmd = RunCommand();
+      final cmd = CodeRunCommand();
       final parsed = cmd.argParser.parse(['--substation', 'tgdog', '--no-dry-run']);
       expect(parsed.flag('dry-run'), isFalse);
     });

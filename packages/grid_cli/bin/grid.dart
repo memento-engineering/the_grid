@@ -1,18 +1,23 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
+import 'package:grid_cli/src/code_run_command.dart';
 import 'package:grid_cli/src/demo_command.dart';
 import 'package:grid_cli/src/gate_command.dart';
 import 'package:grid_cli/src/lease_command.dart';
-import 'package:grid_cli/src/run_command.dart';
 import 'package:grid_cli/src/serve_command.dart';
 import 'package:grid_cli/src/watch_command.dart';
 
+// The reference app (the `space_station` template): it ASSEMBLES the Commands it
+// wants — the generic CLI-SDK ones (watch/gate/serve/lease) + the code asset's
+// CodeRunCommand — over the framework. There is no baked-in `grid run`; a real
+// station is a runner like this, AOT-compiled (see docs/SCRATCH-dart-runner-and-
+// cli-sdk.md).
 Future<void> main(List<String> arguments) async {
   final runner =
       CommandRunner<int>('grid', 'the_grid — a reactive beads controller.')
         ..addCommand(WatchCommand())
-        ..addCommand(RunCommand())
+        ..addCommand(CodeRunCommand())
         ..addCommand(GateCommand())
         ..addCommand(DemoCommand())
         ..addCommand(ServeCommand())

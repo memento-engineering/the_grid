@@ -2,204 +2,11 @@ import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 
-import 'package:args/command_runner.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 import 'package:grid_reconciler/grid_reconciler.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:meta/meta.dart';
-
-import 'run_tree_command.dart' show runGridTree;
-
-/// `grid run` — the M3 dogfood composition (M3-BUILD-ORDER Track 7).
-///
-/// One process that wires together the three the_grid loops over a SINGLE
-/// shared ownership allow-set:
-///
-///  1. **the M1 reactive controller** — exactly what `runWatch` builds
-///     (workspace discover → [GridRuntimeFactory.build] →
-///     [GridExplorationHost.register] → `runtime.start`), so leonard can attach
-///     over `ext.exploration.*` and observe live grid state;
-///  2. **the M2 convergence reconciler** ([ReconcilerRuntime] over
-///     [GridConvergenceSource] + [BdActuator] + [GateEvaluator] + [OwnsSubstations]) —
-///     the reduce→gate→actuate spine for OWNED convergence loops;
-///  3. **the M3 dispatcher** ([DispatchInteractor] over a [ReadyWorkSource] +
-///     the chosen [RuntimeProvider]) — ready work bead → a `claude` subprocess
-///     in a git worktree, tracked as a session bead through the single
-///     [StationBeadWriter] bd-write chokepoint.
-///
-/// **One source of truth for ownership (ADR-0006 Decision 1; ADR-0000 A32).**
-/// The `--substation`/`--owner` allow-set is parsed into ONE `Set<String>` instance
-/// ([RunWiring.allowSet]) that seeds BOTH the M2 [OwnsSubstations] convergence actuator
-/// gate AND the Track-4 [BeadOwnershipPredicate] used for dispatch + the write
-/// chokepoint — never two copies, so the two gates cannot drift.
-///
-/// **`--dry-run` is the SAFE DEFAULT (observe-only).** A dry run constructs the
-/// full wiring but performs NO writes and NO spawns: the dispatcher's
-/// [DispatchInteractor.dryRun] short-circuits before any worktree/spawn/bd
-/// write, and the reconciler is wired with [OwnsNothing] so it actuates nothing
-/// (it still reduces every owned loop for diagnostics). A non-dry (LIVE) run is
-/// the writing arm and is gated behind explicit `--no-dry-run` PLUS a registered
-/// [RootCheckout]; it is never armed automatically.
-class RunCommand extends Command<int> {
-  RunCommand() {
-    argParser
-      ..addMultiOption(
-        'substation',
-        abbr: 'r',
-        help:
-            'An OWNED rig / ownership token (repeatable). This is the SINGLE '
-            'allow-set that feeds both the M2 OwnsSubstations convergence gate and the '
-            'dispatch BeadOwnershipPredicate — one source of truth. The dogfood '
-            'rig is `tgdog`.',
-      )
-      ..addMultiOption(
-        'owner',
-        help:
-            'Alias for --substation (the ownership allow-set); merged with --substation into '
-            'one shared Set<String>.',
-      )
-      ..addOption(
-        'provider',
-        allowed: ['subprocess', 'tmux'],
-        defaultsTo: 'subprocess',
-        help:
-            'The runtime provider for agent spawns. `subprocess` is the Friday '
-            'dogfood default; `tmux` is the gc-compatible alternative.',
-      )
-      ..addOption(
-        'root',
-        help:
-            'The registered worktree root checkout under engineering.memento '
-            '(e.g. /Users/nico/development/engineering.memento/lenny-tgdog). '
-            'Required to ARM a non-dry run; never created by grid run.',
-      )
-      ..addOption(
-        'head',
-        help:
-            'ASSIGN the base branch per-bead worktrees cut from, overriding the '
-            'probed origin/HEAD. For the_grid-as-substation (THIS checkout as '
-            '--root), set this to the working branch (e.g. m4-p1-reentrant-engine) '
-            'so worktrees build off it, not main. Omit to probe origin/HEAD.',
-      )
-      ..addOption(
-        'workspace',
-        abbr: 'w',
-        help:
-            'The beads workspace to read ready work from (a directory at or '
-            'above a `.beads/`). Defaults to discovery from the cwd. The '
-            'dogfood side-cars another repo by pointing this at it (e.g. '
-            '/Users/nico/development/engineering.memento/genesis with '
-            '--substation genesis). Read-only under --dry-run.',
-      )
-      ..addOption(
-        'state-workspace',
-        help:
-            'A SEPARATE the_grid-owned beads workspace where the_grid writes its '
-            'own session/lifecycle beads (A36 choice B), so the --workspace '
-            'work source stays read-only and never adopts the_grid\'s `session` '
-            'type. Omit to write session beads into --workspace itself.',
-      )
-      ..addOption(
-        'state-substation',
-        defaultsTo: 'tgdog',
-        help:
-            'the_grid\'s OWNED session partition (the prefix of the '
-            '--state-workspace store). Unioned into the allow-set so the write '
-            'chokepoint owns the session beads it mints. Only used with '
-            '--state-workspace.',
-      )
-      ..addMultiOption(
-        'bead',
-        abbr: 'b',
-        help:
-            'A specific work-bead id to drive (repeatable) — the blessed '
-            'drive-list layered ON TOP of the ownership allow-set (ADR-0006/A35). '
-            'When given, ONLY these (owned) beads mount + dispatch; everything '
-            'else is observed read-only (ENFORCED at the tree mount boundary). '
-            'REQUIRED for a live (--no-dry-run) arm — the_grid mounts an agent '
-            'only for explicitly blessed beads. In --dry-run, omit to observe '
-            'every owned bead.',
-      )
-      ..addFlag(
-        'dry-run',
-        defaultsTo: true,
-        help:
-            'Observe-only: NO writes, NO spawns (the SAFE DEFAULT for the first '
-            'run). Pass --no-dry-run to ARM the live writing arm (requires '
-            '--root and ADR-0006 ratification).',
-      )
-      ..addFlag(
-        'land',
-        defaultsTo: false,
-        negatable: false,
-        help:
-            'ARM the land step (ADR-0006 D3): on a step-complete, the `land` '
-            'capability commits → pushes `grid/<bead>` → opens a PR (`gh pr '
-            'create`) and records the PR url on the session bead. NEVER '
-            'auto-merges — finished work lands as a PR for human review. '
-            'OPT-IN and OFF by default (the early-arm posture is commit-only, '
-            'land left to a human). Requires --no-dry-run (land is a live '
-            'GitHub write); --land with --dry-run is refused.',
-      )
-      ..addOption(
-        'for-seconds',
-        help:
-            'Run for a fixed number of seconds then exit (scripted demos / CI) '
-            'instead of until Ctrl-C.',
-      )
-      ..addFlag(
-        'no-sql',
-        negatable: false,
-        help:
-            'Force the bd-CLI read path even when pooled Dolt SQL is available.',
-      );
-  }
-
-  @override
-  final String name = 'run';
-
-  @override
-  final String description =
-      'Run the M4 TREE ENGINE (tree-as-default): the reactive controller + the '
-      'reentrant tree engine that spawns a coding agent per ready bead, over one '
-      'shared ownership allow-set. Defaults to --dry-run (observe-only). Run '
-      'under `dart run --enable-vm-service` so leonard can attach. (The legacy '
-      'M2/M3 reducer+dispatcher path — `runGrid` — is retained dormant pending '
-      'its retirement scope.)';
-
-  @override
-  Future<int> run() async {
-    final args = argResults!;
-    final seconds = args.option('for-seconds');
-    final substations = <String>{
-      ...args.multiOption('substation'),
-      ...args.multiOption('owner'),
-    }..removeWhere((r) => r.trim().isEmpty);
-
-    // tree-as-default (M5 D1 / ADR-0007): `grid run` IS the tree engine. The
-    // legacy `runGrid` (M2/M3 dispatch) stays in this file, dormant, until its
-    // retirement is scoped (the convergence-reconciler question).
-    return runGridTree(
-      substations: substations,
-      provider: RuntimeProviderKind.parse(args.option('provider')),
-      rootPath: args.option('root'),
-      head: args.option('head'),
-      workspacePath: args.option('workspace'),
-      stateWorkspacePath: args.option('state-workspace'),
-      // --state-substation only applies when a state workspace is given.
-      stateSubstation: args.option('state-workspace') == null
-          ? null
-          : args.option('state-substation'),
-      targetBeads: <String>{...args.multiOption('bead')}
-        ..removeWhere((b) => b.trim().isEmpty),
-      dryRun: args.flag('dry-run'),
-      land: args.flag('land'),
-      noSql: args.flag('no-sql'),
-      runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
-    );
-  }
-}
 
 /// Which [RuntimeProvider] `grid run` spawns agents through.
 enum RuntimeProviderKind {
@@ -326,8 +133,7 @@ RunWiring composeRun({
   final beadOwnership = BeadOwnershipPredicate(allowSet);
 
   // --- M2 reconciler ---------------------------------------------------------
-  final convergence =
-      convergenceSource ?? GridConvergenceSource(controller!);
+  final convergence = convergenceSource ?? GridConvergenceSource(controller!);
   // dry-run actuates nothing: OwnsNothing keeps every loop observe-only. A live
   // run uses OwnsSubstations over the shared allow-set (the M2 actuation gate).
   final OwnershipPredicate reconcilerOwnership = dryRun
@@ -375,13 +181,19 @@ RunWiring composeRun({
       rootCheckout ??
       (substations.isEmpty
           ? null
-          : RootCheckout(path: '', defaultBranch: 'main', substation: substations.first));
+          : RootCheckout(
+              path: '',
+              defaultBranch: 'main',
+              substation: substations.first,
+            ));
 
   final dispatcher = DispatchInteractor(
     source: ready,
     ownership: beadOwnership,
     git: git,
-    root: root ?? const RootCheckout(path: '', defaultBranch: 'main', substation: ''),
+    root:
+        root ??
+        const RootCheckout(path: '', defaultBranch: 'main', substation: ''),
     provider: runtimeProvider,
     actuator: runtimeActuator,
     configBuilder: _buildAgentConfig,
@@ -471,10 +283,7 @@ RuntimeConfig buildAgentConfig(DispatchRequest request) {
     command: 'claude',
     args: ['--dangerously-skip-permissions', '-p', p.toString()],
     lifecycle: Lifecycle.oneTurn,
-    env: {
-      'GRID_BEAD_ID': bead.id,
-      'GRID_SESSION_ID': request.sessionBeadId,
-    },
+    env: {'GRID_BEAD_ID': bead.id, 'GRID_SESSION_ID': request.sessionBeadId},
   );
 }
 
@@ -499,11 +308,7 @@ StationGitService _buildGitService() => StationGitService(
 /// agent's `CLAUDE_CODE_OAUTH_TOKEN` is forwarded to the child agent only via
 /// the [AgentEnvAllowlist], never here).
 Future<GitRunResult> _ghRunner(String workDir, List<String> args) async {
-  final result = await Process.run(
-    'gh',
-    args,
-    workingDirectory: workDir,
-  );
+  final result = await Process.run('gh', args, workingDirectory: workDir);
   return GitRunResult(
     exitCode: result.exitCode,
     output: '${result.stdout}${result.stderr}',
@@ -622,7 +427,8 @@ Future<int> runGrid({
   // (bd-only, `--actor grid-controller`). Tests inject a fake BdRunner so ZERO
   // writes reach the live `tg` workspace.
   final bd =
-      bdOverride ?? BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
+      bdOverride ??
+      BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
 
   // --- the split state store (A36 choice B) ----------------------------------
   // When --state-workspace is set, the_grid's OWN lifecycle/session beads are

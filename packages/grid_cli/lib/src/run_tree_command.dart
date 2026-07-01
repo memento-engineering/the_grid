@@ -3,7 +3,7 @@
 /// [composeRun] wires the M2/M3 spine, so the dry-run smoke drives the whole
 /// assembly with fakes (no live `tg`, no real `claude`, no real `git`).
 ///
-/// **Pure composition.** [composeRunTree] constructs no process, opens no
+/// **Pure composition.** [composeStation] constructs no process, opens no
 /// socket, and writes no bead — it builds the [StationKernel] + the
 /// [RestartReconciler] and hands back a [TreeRunWiring]. *Starting* is
 /// [TreeRunWiring.start]'s job; with a dry [StationServices.provider] (a recording
@@ -29,7 +29,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'run_command.dart' show RuntimeProviderKind;
 import 'runtime_snapshot_source.dart';
 
-/// The resolved tree-engine wiring — built by [composeRunTree] from the
+/// The resolved tree-engine wiring — built by [composeStation] from the
 /// injectable seams, started/torn down by the caller. A value-ish holder so a
 /// test can assert the composition WITHOUT running a live loop.
 class TreeRunWiring {
@@ -96,7 +96,7 @@ class TreeRunWiring {
 ///
 /// Nothing is started; [TreeRunWiring.start] drives the barrier → restart →
 /// mount ordering.
-TreeRunWiring composeRunTree({
+TreeRunWiring composeStation({
   required SnapshotSource work,
   required SnapshotSource state,
   required StationServices stationServices,
@@ -199,7 +199,7 @@ Formula _codeFormulaFor(Bead bead) => kCodeFormula;
 
 /// Runs the M4 TREE ENGINE as `grid run` (tree-as-default — ADR-0007 + M5
 /// DECISIONS D1): the live orchestrator that wires the M3 live seams into
-/// [composeRunTree], mirroring [runGrid]. It discovers the work workspace, builds
+/// [composeStation], mirroring [runGrid]. It discovers the work workspace, builds
 /// the M1 controller (work axis) + a state controller (the split A36/A37 store),
 /// adapts both to [SnapshotSource] via [RuntimeSnapshotSource], registers the
 /// exploration host (leonard attach), builds the live [StationServices], composes
@@ -241,6 +241,12 @@ Future<int> runGridTree({
   bool dryRun = true,
   bool land = false,
   bool noSql = false,
+  // The ASSET seam (ADR-0008 D1): the bead→formula policy + the capability set.
+  // Default null → the `code` asset (composeStation's defaults) — so `grid run`
+  // via a CodeRunCommand is unchanged. A different asset's run command
+  // (a burn's) passes its own trio; the CLI stops being welded to `code`.
+  FormulaResolver? resolver,
+  CapabilityRegistry? registry,
   void Function(String)? out,
   void Function(String)? err,
   bool runForever = true,
@@ -471,7 +477,7 @@ Future<int> runGridTree({
         ]);
       };
 
-  final wiring = composeRunTree(
+  final wiring = composeStation(
     work: workSource,
     state: stateSource,
     stationServices: stationServices,
@@ -482,6 +488,12 @@ Future<int> runGridTree({
     workRoot: root,
     groups: groups,
     freshnessBarrier: barrier,
+    // The asset trio (null → the `code` default); a non-code run command supplies
+    // its own. The git ServiceBundle stays composeStation's `code` default here —
+    // full extraction of the git/root/land wiring into an asset `servicesFor` is
+    // the split-time follow-up (the burn passes no root ⇒ inert git).
+    resolver: resolver,
+    registry: registry,
   );
 
   // --- banner ---------------------------------------------------------------
