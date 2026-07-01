@@ -208,8 +208,12 @@ class GitSourceControl implements SourceControl {
   String workspaceFor(String beadId) {
     final root = _root;
     // The git layout is THIS impl's opinion (ADR-0008 D5): a per-bead worktree
-    // under the root checkout. No root wired (offline) ⇒ a synthetic placeholder.
-    return root == null
+    // under the root checkout. No root — or an EMPTY-path root (the dry-run
+    // synthetic) — ⇒ the absolute synthetic placeholder, byte-identical to the
+    // old EffectContext.worktreeFor null-branch. Guarding only `root == null`
+    // would let an empty path produce a CWD-RELATIVE `.grid/worktrees/...`
+    // (p.join drops the empty leading segment) — a latent spawn-against-CWD risk.
+    return (root == null || root.path.isEmpty)
         ? '/grid/worktrees/$beadId'
         : WorktreeLayout.worktreePath(root.path, root.substation, beadId);
   }

@@ -195,5 +195,32 @@ void main() {
       );
       // Reaching here without throwing is the assertion (offline no-op).
     });
+
+    test('workspaceFor/branchFor/baseBranch derive the layout — and an EMPTY '
+        'root path yields the ABSOLUTE synthetic, never a CWD-relative path '
+        '(the E3 review fix)', () {
+      // A real root → the canonical per-bead worktree layout (byte-identical to
+      // the deleted EffectContext.worktreeFor).
+      const real = GitSourceControl(
+        root: RootCheckout(path: '/root', defaultBranch: 'trunk', substation: 'tgdog'),
+      );
+      expect(real.workspaceFor('tg-1'), '/root/.grid/worktrees/tgdog/tg-1');
+      expect(real.branchFor('tg-1'), 'grid/tg-1');
+      expect(real.baseBranch, 'trunk');
+
+      // No root → the absolute synthetic.
+      expect(const GitSourceControl().workspaceFor('tg-1'), '/grid/worktrees/tg-1');
+      expect(const GitSourceControl().baseBranch, 'main');
+
+      // EMPTY-path root (the dry-run synthetic) → STILL the absolute synthetic,
+      // NOT a CWD-relative `.grid/worktrees/...` (p.join would drop the empty
+      // leading segment). This is the E3 latent-footgun fix + byte-parity restore.
+      const emptyRoot = GitSourceControl(
+        root: RootCheckout(path: '', defaultBranch: 'main', substation: 'tgdog'),
+      );
+      expect(emptyRoot.workspaceFor('tg-1'), '/grid/worktrees/tg-1');
+      expect(emptyRoot.workspaceFor('tg-1').startsWith('/'), isTrue,
+          reason: 'must be absolute — never spawn against the CWD');
+    });
   });
 }

@@ -47,8 +47,12 @@ expressible.
   `EffectContext.worktreeFor`/`branchFor`, so no behavior change). Update every `SourceControl` test
   fake. Green.
 - **E2 — shrink EffectContext → StationServices + move derivation.** The Host derives
-  `workspaceDir` / `branch` / `baseBranch` from `_services.sourceControl` (a synthetic
-  `/grid/worktrees/<bead>` + `grid/<bead>` fallback when no source control is wired — offline tests);
+  `workspaceDir` / `branch` / `baseBranch` from `_services.sourceControl`. When no source control
+  is wired (offline tests only — the live `composeRunTree` always wires a `GitSourceControl`) the
+  Host uses a NEUTRAL placeholder (`/grid/workspaces/<bead>` + an empty branch + `main`),
+  deliberately NOT the git `.grid/worktrees` / `grid/<bead>` shapes, so no git-layout opinion
+  re-enters the engine. (The git impl's own no/empty-root synthetic stays the absolute
+  `/grid/worktrees/<bead>`, byte-identical to the deleted `EffectContext.worktreeFor`.)
   rename `EffectContext` → `StationServices` and DROP the moved fields (`worktreeRoot`/`workSubstation`/
   `baseBranch`/`gitOps`/`prOpener`/`worktreeFor`/`branchFor`); `run_tree_command` builds
   `GitSourceControl(gitOps:…, prOpener:…, provisioner:git, root:workRoot)` DIRECTLY; update
