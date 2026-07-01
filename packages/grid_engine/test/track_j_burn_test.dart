@@ -92,7 +92,7 @@ class _Burn {
             value: reg,
             // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
             // D5). With none set the scope provides the empty default.
-            child: InheritedSeed<EffectResolver>(
+            child: InheritedSeed<SessionResolver>(
               value: FormulaResolver((_) => _burn),
               child: Station([
                 SubstationScope(

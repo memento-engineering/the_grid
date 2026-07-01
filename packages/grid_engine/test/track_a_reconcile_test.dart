@@ -16,7 +16,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
 // ---------------------------------------------------------------------------
-// Fakes: an EffectResolver that mounts a recording subtree-root per work bead.
+// Fakes: an SessionResolver that mounts a recording subtree-root per work bead.
 // ---------------------------------------------------------------------------
 
 /// Records the work subtree-root lifecycle in mount/unmount order — the
@@ -29,12 +29,12 @@ class _Recorder {
 /// Returns a `_FakeEffect` keyed `'<beadId>:work'` — the bead-keyed subtree root
 /// the real resolver returns (a `SessionScope`). It is STABLE across cursor
 /// ticks: a cursor advance threads new config down, never swaps this child.
-class _FakeEffectResolver implements EffectResolver {
-  _FakeEffectResolver(this.recorder);
+class _FakeSessionResolver implements SessionResolver {
+  _FakeSessionResolver(this.recorder);
   final _Recorder recorder;
 
   @override
-  Seed effectFor({required Bead bead, SessionProjection? session}) => _FakeEffect(
+  Seed sessionFor({required Bead bead, SessionProjection? session}) => _FakeEffect(
     recorder: recorder,
     beadId: bead.id,
     key: ValueKey('${bead.id}:work'),
@@ -93,11 +93,11 @@ JoinedSnapshot _joined({
 /// Station; give the single rig its config notifier.
 Seed _root({
   required JoinedSnapshotNotifier joined,
-  required EffectResolver resolver,
+  required SessionResolver resolver,
   required SubstationConfigNotifier substationConfig,
 }) => InheritedSeed<JoinedSnapshotNotifier>(
   value: joined,
-  child: InheritedSeed<EffectResolver>(
+  child: InheritedSeed<SessionResolver>(
     value: resolver,
     child: Station([
       SubstationScope(configNotifier: substationConfig, key: const ValueKey('scope.tg')),
@@ -150,7 +150,7 @@ void main() {
       owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
@@ -176,7 +176,7 @@ void main() {
         final root = owner.mountRoot(
           _root(
             joined: joined,
-            resolver: _FakeEffectResolver(recorder),
+            resolver: _FakeSessionResolver(recorder),
             substationConfig: SubstationConfigNotifier(_tgConfig()),
           ),
         );
@@ -245,7 +245,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: substationConfig,
         ),
       );
@@ -277,7 +277,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
@@ -346,7 +346,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
@@ -410,7 +410,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
@@ -442,7 +442,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
@@ -463,7 +463,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(_tgConfig()),
         ),
       );
@@ -486,7 +486,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(
             _tgConfig().copyWith(driveList: const {'tg-2'}),
           ),
@@ -518,7 +518,7 @@ void main() {
       final root = owner.mountRoot(
         _root(
           joined: joined,
-          resolver: _FakeEffectResolver(recorder),
+          resolver: _FakeSessionResolver(recorder),
           substationConfig: SubstationConfigNotifier(
             // ALL three blessed — the drive-list cannot resurrect a bead the
             // ownership / type gates reject.

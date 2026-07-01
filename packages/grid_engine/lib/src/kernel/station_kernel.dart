@@ -4,20 +4,20 @@ import 'package:genesis_tree/genesis_tree.dart';
 
 import '../bridge/station_join_bridge.dart';
 import '../domain/joined_snapshot.dart';
-import '../effect/station_services.dart';
+import '../kernel/station_services.dart';
 import '../formula/capability_registry.dart';
 import '../formula/stable_inherited.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../seeds/station_seed.dart';
 import '../seeds/substation_scope.dart';
-import 'effect_resolver.dart';
+import 'session_resolver.dart';
 
 /// The kernel: composes the running tree and drives it (ADR-0007 /
 /// M4-P0-BUILD-ORDER Track E/F).
 ///
 /// It assembles the ambient providers above the [Station] — the work-axis
 /// [JoinedSnapshotNotifier] (from the [bridge]), the [StationServices] (the
-/// provider/writer/stateSubstation the effects resolve), and the [EffectResolver]
+/// provider/writer/stateSubstation the effects resolve), and the [SessionResolver]
 /// (phase → effect Seed) — mounts the tree under a [TreeOwner], and runs the
 /// reactive loop:
 ///
@@ -39,7 +39,7 @@ class StationKernel {
   StationKernel({
     required this.bridge,
     required StationServices stationServices,
-    required EffectResolver resolver,
+    required SessionResolver resolver,
     required List<SubstationScope> substations,
     CapabilityRegistry? registry,
     DateTime Function()? clock,
@@ -55,7 +55,7 @@ class StationKernel {
   /// (started in [start], disposed in [dispose]).
   final StationJoinBridge bridge;
   final StationServices _stationServices;
-  final EffectResolver _resolver;
+  final SessionResolver _resolver;
   final List<SubstationScope> _substations;
 
   /// The reentrant capability/formula resolution seam (ADR-0008 D4) — provided
@@ -98,7 +98,7 @@ class StationKernel {
         child: root,
       );
     }
-    root = InheritedSeed<EffectResolver>(value: _resolver, child: root);
+    root = InheritedSeed<SessionResolver>(value: _resolver, child: root);
     root = InheritedSeed<StationServices>(value: _stationServices, child: root);
     root = InheritedSeed<JoinedSnapshotNotifier>(
       value: bridge.notifier,

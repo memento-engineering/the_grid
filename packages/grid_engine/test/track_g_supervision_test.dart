@@ -55,12 +55,12 @@ JoinedSnapshot _joined({
 Bead _task(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
-/// An EffectResolver that returns a const Idle (the G3 kernel test does not need
+/// An SessionResolver that returns a const Idle (the G3 kernel test does not need
 /// real effects — it exercises the cooldown scanner, not the tree).
-class _IdleResolver implements EffectResolver {
+class _IdleResolver implements SessionResolver {
   const _IdleResolver();
   @override
-  Seed effectFor({required Bead bead, SessionProjection? session}) =>
+  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
       const Idle();
 }
 
@@ -109,7 +109,7 @@ void main() {
             value: f.ctx,
             child: StableInheritedSeed<CapabilityRegistry>(
               value: reg,
-              child: InheritedSeed<EffectResolver>(
+              child: InheritedSeed<SessionResolver>(
                 value: FormulaResolver((_) => _code),
                 child: Station([
                   SubstationScope(

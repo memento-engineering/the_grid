@@ -73,7 +73,7 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
         value: ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: registry,
-          child: InheritedSeed<EffectResolver>(
+          child: InheritedSeed<SessionResolver>(
             value: FormulaResolver(rootFormula),
             child: Station([
               SubstationScope(

@@ -106,7 +106,7 @@ TreeRunWiring composeRunTree({
   // The live work path (ADR-0008 D4): the reentrant FormulaResolver roots the
   // `code` formula (agent → review → land, where `review` inflates the
   // adversarial committee sub-formula — M5 Track E) per coding bead at the
-  // EffectResolver seam. The registry supplies the capability set + the
+  // SessionResolver seam. The registry supplies the capability set + the
   // formulas; the ServiceBundle lifts the injected git/PR ops into the land
   // capability's SourceControl (null ⇒ land no-ops — an offline build never
   // touches real git/GitHub).

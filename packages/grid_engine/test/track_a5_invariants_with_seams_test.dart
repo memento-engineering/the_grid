@@ -167,7 +167,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
         value: fakes.ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: reg,
-          child: InheritedSeed<EffectResolver>(
+          child: InheritedSeed<SessionResolver>(
             value: FormulaResolver((_) => _code),
             child: Station([
               SubstationScope(
@@ -206,7 +206,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
         value: fakes.ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: registry,
-          child: InheritedSeed<EffectResolver>(
+          child: InheritedSeed<SessionResolver>(
             value: FormulaResolver((_) => _code),
             child: Station([
               SubstationScope(

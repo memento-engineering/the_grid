@@ -102,7 +102,7 @@ Seed _root({
     value: ctx,
     child: StableInheritedSeed<CapabilityRegistry>(
       value: registry,
-      child: InheritedSeed<EffectResolver>(
+      child: InheritedSeed<SessionResolver>(
         value: kCodeResolver,
         child: Station([
           SubstationScope(
@@ -480,7 +480,7 @@ void main() {
             value: ctx,
             child: StableInheritedSeed<CapabilityRegistry>(
               value: buildCodeRegistry(),
-              child: kCodeResolver.effectFor(bead: bead('tg-1')),
+              child: kCodeResolver.sessionFor(bead: bead('tg-1')),
             ),
           ),
         );
@@ -525,7 +525,7 @@ void main() {
           value: f.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: buildCodeRegistry(),
-            child: kCodeResolver.effectFor(
+            child: kCodeResolver.sessionFor(
               bead: bead('tg-1'),
               session: _session('tg-1', 'tgdog-sess1'),
             ),

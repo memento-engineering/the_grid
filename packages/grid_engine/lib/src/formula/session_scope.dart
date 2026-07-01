@@ -30,7 +30,7 @@ import 'package:grid_controller/grid_controller.dart';
 
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
-import '../effect/station_services.dart';
+import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
@@ -73,7 +73,7 @@ class SessionScope extends StatefulSeed {
 
 /// The `{resolving | ready | failed}` lifecycle (D-2). The async-gap guards
 /// (`_cancelled` set first in `dispose`, `context.mounted` after every await,
-/// the captured `_ctx`) mirror `EffectSeedState`.
+/// the captured `_ctx`) are the same discipline as `CapabilityHostState`.
 class SessionScopeState extends State<SessionScope> {
   /// The the_grid-internal escalation marker key (NOT a codec-boundary key) — a
   /// human picks it up when a formula's breaker exhausts (D-5).

@@ -33,7 +33,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
-import '../effect/station_services.dart';
+import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';

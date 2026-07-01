@@ -8,7 +8,7 @@
 /// clock the frontier predicate reads (injectable so the predicate stays pure).
 ///
 /// The author never sees this — it is the engine's opinion bundle (the
-/// depth-analogue of the P0 `EffectResolver`). Provided via
+/// depth-analogue of the P0 `SessionResolver`). Provided via
 /// `InheritedSeed<CapabilityRegistry>` typed to the INTERFACE (genesis's
 /// exact-type lookup means a concrete subtype could not be found as
 /// `CapabilityRegistry`).

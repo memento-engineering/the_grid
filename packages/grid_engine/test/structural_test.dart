@@ -4,7 +4,7 @@
 // PR opener, the subprocess provider, the git service, the `.land(` call, and
 // even `melos` (D-1) live ONLY in the `grid_assets` package — NEVER in the
 // engine. The kernel, the effect core, and the core seeds resolve capabilities
-// through the opaque EffectResolver / StationServices seams and never name a
+// through the opaque SessionResolver / StationServices seams and never name a
 // concrete opinion. The opinions used to live in `lib/src/extension/`; with the
 // Track B extraction there is no such dir, so the engine must name NONE of the
 // opinion literals ANYWHERE in `lib/src`.

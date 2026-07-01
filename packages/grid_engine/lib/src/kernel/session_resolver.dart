@@ -17,11 +17,11 @@ import '../domain/session_projection.dart';
 /// `'<bead.id>:session'`) so that across snapshot ticks keyed reconcile keeps
 /// the bead's running subtree while config (the linked session cursor) flows
 /// down in place.
-abstract class EffectResolver {
+abstract class SessionResolver {
   /// Builds the work Seed for [bead]. [session] is the bead's linked session
   /// projection (null when no session exists yet — the resolver's subtree then
   /// mints one); its [SessionProjection.cursor] threads the per-node reentrant
   /// cursor down pull-free (A39), never re-querying the store. See the class doc
   /// for the required key shape.
-  Seed effectFor({required Bead bead, SessionProjection? session});
+  Seed sessionFor({required Bead bead, SessionProjection? session});
 }

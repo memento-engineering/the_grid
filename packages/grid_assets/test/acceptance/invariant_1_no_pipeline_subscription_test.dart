@@ -196,7 +196,7 @@ void main() {
             value: f.ctx,
             child: StableInheritedSeed<CapabilityRegistry>(
               value: buildCodeRegistry(),
-              child: InheritedSeed<EffectResolver>(
+              child: InheritedSeed<SessionResolver>(
                 value: kCodeResolver,
                 child: Station([
                   SubstationScope(

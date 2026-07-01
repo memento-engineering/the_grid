@@ -1,7 +1,7 @@
 /// The reentrant inflater (ADR-0008 D4 / M4-P1 §4, Track D).
 ///
 /// `FormulaScope` is a PURE `StatelessSeed` — the depth-analogue of `WorkList` +
-/// `EffectResolver`, with ZERO pipeline subscription (invariant 1). Its `build`
+/// `SessionResolver`, with ZERO pipeline subscription (invariant 1). Its `build`
 /// reads only the INJECTED cursor (threaded down from `WorkList`'s reconcile
 /// cascade, A39 — never a re-query), computes the eligible frontier with the
 /// pure predicate, and maps each eligible step to a keyed child Seed:
