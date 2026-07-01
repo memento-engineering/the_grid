@@ -121,11 +121,14 @@ lenny's `leonard_drive` binary). The live burn stays the **human gate**.
   sketch), replaced whole on write:
   ```json
   {
-    "grid.dart": { "assets_version": "0.0.1", "packs_version": null, "payload": { } }
+    "grid.dart": { "assets_version": "0.0.1", "payload": { } }
   }
   ```
-  (`assets_version` = the pack's codec version discriminator; `packs_version` = the gc pack-protocol
-  scheme when applicable, nullable/missing okay.) Mechanical note: the chokepoint types metadata
+  (`assets_version` = the pack's codec version discriminator. **`packs_version` corrected (Nico,
+  round 3): it belongs ONLY to TOML packs implementing the gc packs protocol — a plain Dart-asset
+  domain like `grid.dart` does not carry it**; a future TOML codec adds it. The envelope machinery is
+  SHARED (`grid_assets/src/domain/domain_envelope.dart`, power_station-common at the split) and the
+  version gate rides `pub_semver` — no hand-rolled semver.) Mechanical note: the chokepoint types metadata
   `Map<String, String>` today (BdCliService already takes `Map<String, dynamic>` + jsonEncodes) — a
   small widening if a CONTROLLER write ever carries an envelope; for THIS config it's read-only to
   the_grid, so no chokepoint change is needed.

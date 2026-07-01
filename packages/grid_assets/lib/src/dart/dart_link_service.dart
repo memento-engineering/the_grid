@@ -15,6 +15,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../domain/domain_envelope.dart';
 import 'dart_domain.dart';
 import 'pub_links.dart';
 
@@ -89,16 +90,16 @@ class DartLinkService {
     String? devRoot,
   }) async {
     switch (decodeDartEnvelope(metadata)) {
-      case DartEnvelopeAbsent():
+      case DomainEnvelopeAbsent():
         return const LinkNoConfig();
-      case DartEnvelopeIncompatible(:final version):
+      case DomainEnvelopeIncompatible(:final version):
         return LinkRefused(
           'grid.dart envelope written by an incompatible pack '
           '(assets_version $version; this pack reads $kDartAssetsVersion)',
         );
-      case DartEnvelopeMalformed(:final reason):
+      case DomainEnvelopeMalformed(:final reason):
         return LinkRefused('grid.dart envelope malformed: $reason');
-      case DartEnvelopeDecoded(:final config):
+      case DomainEnvelopeDecoded(:final config):
         final String? content;
         try {
           content = pubspecOverridesFor(

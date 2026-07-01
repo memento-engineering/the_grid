@@ -15,12 +15,10 @@ import 'package:test/test.dart';
 Map<String, dynamic> _metadataWith(
   List<PubLink> links, {
   String version = kDartAssetsVersion,
-  String? packsVersion,
 }) => {
   'validation_plan': 'dart test', // neighbors survive untouched (merge model)
   kDartDomainKey: {
     'assets_version': version,
-    if (packsVersion != null) 'packs_version': packsVersion,
     'payload': {
       'pub': PubLinkConfig(links: links).toJson(),
     },
@@ -34,29 +32,33 @@ const _genesisLink = PubLink(
 );
 
 void main() {
-  group('the grid.dart envelope codec (versioned, fail-closed)', () {
-    test('round-trips through the envelope shape', () {
+  group('the grid.dart envelope codec (versioned, fail-closed — over the '
+      'shared domain-envelope machinery)', () {
+    test('round-trips through the envelope shape (no packs_version — that is '
+        'the TOML gc-packs-protocol field, not a Dart-asset one)', () {
       const config = DartDomainConfig(
         pub: PubLinkConfig(links: [_genesisLink]),
-        packsVersion: 'gc-1',
       );
       final metadata = <String, dynamic>{
         kDartDomainKey: config.toEnvelope(),
       };
       final result = decodeDartEnvelope(metadata);
-      expect(result, isA<DartEnvelopeDecoded>());
-      expect((result as DartEnvelopeDecoded).config, config);
-      // The envelope is stamped with THIS pack's version.
+      expect(result, isA<DomainEnvelopeDecoded<DartDomainConfig>>());
       expect(
-        (metadata[kDartDomainKey] as Map<String, Object?>)['assets_version'],
-        kDartAssetsVersion,
+        (result as DomainEnvelopeDecoded<DartDomainConfig>).config,
+        config,
       );
+      final envelope = metadata[kDartDomainKey] as Map<String, Object?>;
+      // The envelope is stamped with THIS pack's version…
+      expect(envelope['assets_version'], kDartAssetsVersion);
+      // …and carries NO packs_version (gc packs protocol = TOML packs only).
+      expect(envelope.containsKey('packs_version'), isFalse);
     });
 
     test('no grid.dart key → Absent (the common case, not an error)', () {
       expect(
         decodeDartEnvelope({'gc.some_key': 'x'}),
-        isA<DartEnvelopeAbsent>(),
+        isA<DomainEnvelopeAbsent<DartDomainConfig>>(),
       );
     });
 
@@ -65,42 +67,60 @@ void main() {
       final result = decodeDartEnvelope(
         _metadataWith([_genesisLink], version: '0.1.0'),
       );
-      expect(result, isA<DartEnvelopeIncompatible>());
-      expect((result as DartEnvelopeIncompatible).version, '0.1.0');
+      expect(result, isA<DomainEnvelopeIncompatible<DartDomainConfig>>());
+      expect(
+        (result as DomainEnvelopeIncompatible<DartDomainConfig>).version,
+        '0.1.0',
+      );
     });
 
-    test('pre-1.0 minor is BREAKING; 1.x major gates compatibility', () {
-      expect(isCompatibleAssetsVersion(kDartAssetsVersion), isTrue);
-      expect(isCompatibleAssetsVersion('0.0.9'), isTrue,
+    test('pre-1.0 minor is BREAKING; 1.x major gates compatibility (the '
+        'SHARED gate, pub_semver-parsed)', () {
+      bool compat(String theirs) => envelopeVersionCompatible(
+            ours: kDartAssetsVersion,
+            theirs: theirs,
+          );
+      expect(compat(kDartAssetsVersion), isTrue);
+      expect(compat('0.0.9'), isTrue,
           reason: 'same 0.0 minor — patch is compatible (additive-only rule)');
-      expect(isCompatibleAssetsVersion('0.1.0'), isFalse,
+      expect(compat('0.1.0'), isFalse,
           reason: 'pre-1.0 minor bump is breaking (pub semantics)');
-      expect(isCompatibleAssetsVersion('1.0.0'), isFalse);
-      expect(isCompatibleAssetsVersion('garbage'), isFalse,
+      expect(compat('1.0.0'), isFalse);
+      expect(compat('garbage'), isFalse,
           reason: 'unparseable → incompatible (fail-closed)');
-      expect(isCompatibleAssetsVersion('0.-1.0'), isFalse,
+      expect(compat('0.-1.0'), isFalse,
           reason: 'negative components are not semver — fail-closed');
-      expect(isCompatibleAssetsVersion('1.-1.0'), isFalse,
+      expect(compat('1.-1.0'), isFalse,
           reason: 'a negative component must never slip a major gate');
+      // The from-1.0 half of the rule (major-gated).
+      expect(
+        envelopeVersionCompatible(ours: '1.2.0', theirs: '1.9.3'),
+        isTrue,
+        reason: 'post-1.0: same major is compatible',
+      );
+      expect(
+        envelopeVersionCompatible(ours: '1.2.0', theirs: '2.0.0'),
+        isFalse,
+      );
     });
 
     test('malformed envelopes are refused with a reason (never applied)', () {
       expect(
         decodeDartEnvelope({kDartDomainKey: 'not-an-object'}),
-        isA<DartEnvelopeMalformed>(),
+        isA<DomainEnvelopeMalformed<DartDomainConfig>>(),
       );
       expect(
         decodeDartEnvelope({
           kDartDomainKey: {'payload': <String, Object?>{}},
         }),
-        isA<DartEnvelopeMalformed>(),
+        isA<DomainEnvelopeMalformed<DartDomainConfig>>(),
         reason: 'missing assets_version',
       );
       expect(
         decodeDartEnvelope({
           kDartDomainKey: {'assets_version': kDartAssetsVersion},
         }),
-        isA<DartEnvelopeMalformed>(),
+        isA<DomainEnvelopeMalformed<DartDomainConfig>>(),
         reason: 'missing payload',
       );
       expect(
@@ -116,7 +136,7 @@ void main() {
             },
           },
         }),
-        isA<DartEnvelopeMalformed>(),
+        isA<DomainEnvelopeMalformed<DartDomainConfig>>(),
         reason: 'a link without a package is malformed, not skipped',
       );
       expect(
@@ -130,7 +150,7 @@ void main() {
             },
           },
         }),
-        isA<DartEnvelopeMalformed>(),
+        isA<DomainEnvelopeMalformed<DartDomainConfig>>(),
         reason: 'a non-object link entry is malformed (explicitly, not via an '
             'implicit cast error)',
       );
@@ -147,7 +167,7 @@ void main() {
             },
           },
         }),
-        isA<DartEnvelopeMalformed>(),
+        isA<DomainEnvelopeMalformed<DartDomainConfig>>(),
         reason: 'a YAML-hostile "package name" is refused at DECODE, so it can '
             'never reach the overrides emitter',
       );

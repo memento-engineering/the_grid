@@ -23,6 +23,9 @@ dependencies:
   grid_runtime: any
   meta: ^1.16.0
   path: ^1.9.0
+  # The shared domain-envelope version gate (pub-style semantics over the
+  # canonical parser — no hand-rolled semver).
+  pub_semver: ^2.1.4
 
 dev_dependencies:
   lints: ^5.1.0
