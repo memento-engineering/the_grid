@@ -16,10 +16,16 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'allocation.dart';
 import 'cursor.dart';
 
-/// A leaf the engine mounts — either a [ProcessCapability] or a
-/// [ServiceCapability]. Sealed so the carrier's dispatch is exhaustive; the two
-/// flavors are open for an asset to implement.
-sealed class Capability {
+/// A leaf the engine mounts. The engine ships three families — [ProcessCapability]
+/// (a spawned process), [ServiceCapability] (an async body), and
+/// [LeaseCapability] (a held lease) — and an asset may add its own (tmux, app, …).
+///
+/// NOT sealed: the carrier's dispatch is polymorphic through [createAllocation]
+/// (the `createRenderObject` analogue, ADR-0009 D4), never an exhaustive `switch`
+/// on the subtype — so a new family is an addition, not a core edit. (The former
+/// `sealed` + "exhaustive dispatch" rationale was retired by that refactor; a
+/// lease is "a custom Capability" per ADR-0009 D6, which a seal forbade.)
+abstract class Capability {
   const Capability();
 
   /// Mints the [Allocation] that holds this capability's live effect — the

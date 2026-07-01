@@ -16,7 +16,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:butane_grid_assets/butane_grid_assets.dart';
-import 'package:grid_assets/grid_assets.dart' show LeaseAllocation;
+import 'package:grid_assets/grid_assets.dart' show BusLease;
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart' show FakeRuntimeProvider, bead;
 import 'package:grid_federation/grid_federation.dart';
@@ -262,7 +262,8 @@ const String _hostPath = 'tg-burn/$kBurnHostStep';
 /// peer reaps the launched app). The burn formula's follower step is
 /// `StepKind.daemon`, so a successful launch reports `ready` (stays live), never
 /// `complete`.
-Future<({List<AllocationReport> reports, LeaseAllocation alloc})> _driveFollower(
+Future<({List<AllocationReport> reports, LeaseAllocation<BusLease> alloc})>
+_driveFollower(
   BurnFollowerCapability follower,
   CapabilityContext ctx,
 ) async {
@@ -276,7 +277,7 @@ Future<({List<AllocationReport> reports, LeaseAllocation alloc})> _driveFollower
       sink: reports.add,
       kind: StepKind.daemon,
     ),
-  ) as LeaseAllocation;
+  ) as LeaseAllocation<BusLease>;
   await alloc.startOrAdopt();
   return (reports: reports, alloc: alloc);
 }

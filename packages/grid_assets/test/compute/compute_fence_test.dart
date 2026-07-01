@@ -90,7 +90,9 @@ void main() {
       final assetSource = _allSource(_libDir('grid_assets'));
       expect(assetSource, contains('class DispatchCommand'));
       expect(assetSource, contains('class CommandResult'));
-      expect(assetSource, contains('class LeaseCapability'));
+      // The compute lease consumer (the generic LeaseCapability<H> family is core,
+      // in grid_engine; the compute-specific impl over the bus lives here).
+      expect(assetSource, contains('class ComputeLeaseCapability'));
       expect(assetSource, contains("kComputeKind = 'compute'"));
     });
   });

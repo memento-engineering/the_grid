@@ -46,8 +46,8 @@ CapabilityContext _ctx({String nodePath = 'tg-1/lease'}) => CapabilityContext(
 /// dispatch over the bus), returning the reports + the allocation (so the test
 /// disposes it, releasing over the bus). The lease consumer is exercised through
 /// its REAL engine carrier, not the retired `run`/`teardown` interface.
-Future<({List<AllocationReport> reports, LeaseAllocation alloc})> _run(
-  LeaseCapability cap,
+Future<({List<AllocationReport> reports, LeaseAllocation<BusLease> alloc})> _run(
+  ComputeLeaseCapability cap,
   CapabilityContext ctx,
 ) async {
   final reports = <AllocationReport>[];
@@ -60,7 +60,7 @@ Future<({List<AllocationReport> reports, LeaseAllocation alloc})> _run(
       sink: reports.add,
       kind: StepKind.job,
     ),
-  ) as LeaseAllocation;
+  ) as LeaseAllocation<BusLease>;
   await alloc.startOrAdopt();
   return (reports: reports, alloc: alloc);
 }
@@ -112,7 +112,7 @@ void main() {
         // constructed with ONLY a StationClient (the bus) + the command: there is
         // no peer-store seam to write through.
         lessee.write('claim:tg-1', via: 'own');
-        final cap = LeaseCapability(
+        final cap = ComputeLeaseCapability(
           client: busClient,
           command: const DispatchCommand(command: 'echo', args: ['hi']),
           lessee: 'the-studio',
@@ -182,7 +182,7 @@ void main() {
         final busClient = HttpStationClient(host: '127.0.0.1', port: server.port);
         addTearDown(busClient.close);
 
-        final cap = LeaseCapability(
+        final cap = ComputeLeaseCapability(
           client: busClient,
           command: const DispatchCommand(command: 'echo'),
           lessee: 'the-studio',

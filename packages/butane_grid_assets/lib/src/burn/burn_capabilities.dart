@@ -129,17 +129,19 @@ Future<FollowerPeer?> matchFollower({
 /// The `burn-follower` order (ADR-0011 D9): lease a matching peer over the bus,
 /// dispatch the launch, and receive the follower's published endpoint.
 ///
-/// A HELD daemon lease (ADR-0009 D6): the engine drives it as a [LeaseAllocation]
-/// (via [LeasePlan]) — [acquire] matches a peer by containment + leases its slot;
+/// A HELD daemon lease (ADR-0009 D6 / "leasing is core"): a first-class core
+/// [LeaseCapability] over a [BusLease] handle. The engine drives it as a
+/// [LeaseAllocation] — [acquire] matches a peer by containment + leases its slot;
 /// [dispatchOn] launches the follower + returns its published endpoint as the
-/// rendezvous [Ok] payload. Because the burn formula's step is [StepKind.daemon],
-/// the allocation reports `ready` (a positive terminal that STAYS LIVE, publishing
-/// the endpoint) — NOT `complete`. That is the daemon-reap bug this rebuild fixes:
-/// the old `Expando<_FollowerHold>` + `Ok`-as-complete shape retired a live daemon
-/// (the exact ADR-0009 D1 smell). The grant now lives as a [LeaseAllocation]
-/// instance field; `dispose` RELEASES it (→ the peer reaps the launched app via its
-/// own `terminateGroup` reaper), even on the failure path.
-class BurnFollowerCapability extends ServiceCapability with LeasePlan {
+/// rendezvous [Ok] payload; [proveFresh]/[release] heartbeat/release over the bus.
+/// Because the burn formula's step is [StepKind.daemon], the allocation reports
+/// `ready` (a positive terminal that STAYS LIVE, publishing the endpoint) — NOT
+/// `complete`. That is the daemon-reap bug the rebuild fixed: the old
+/// `Expando<_FollowerHold>` + `Ok`-as-complete shape retired a live daemon (the
+/// exact ADR-0009 D1 smell). The grant now lives on the [LeaseAllocation]; `dispose`
+/// RELEASES it (→ the peer reaps the launched app via its own `terminateGroup`
+/// reaper), even on the failure path.
+class BurnFollowerCapability extends LeaseCapability<BusLease> {
   /// Creates the order over the candidate [peers], the [launchSpec] to dispatch,
   /// and the [requires] the peer must satisfy by containment. [lessee] defaults to
   /// the work bead id at mount.
@@ -172,7 +174,7 @@ class BurnFollowerCapability extends ServiceCapability with LeasePlan {
       '${lessee.isEmpty ? ctx.beadId : lessee}/${ctx.nodePath}';
 
   @override
-  Future<LeaseResolution> acquire(CapabilityContext ctx) async {
+  Future<LeaseResolution<BusLease>> acquire(CapabilityContext ctx) async {
     final who = lessee.isEmpty ? ctx.beadId : lessee;
 
     // MATCH a peer by containment (Track C). Fail-closed: no match → no order.
@@ -196,21 +198,17 @@ class BurnFollowerCapability extends ServiceCapability with LeasePlan {
       return LeaseUnavailable('follower lease denied: ${e.message}');
     }
     _onLog('follower leased ${grant.leaseId} on ${peer.id}');
-    return LeaseBound(peer.client, grant);
+    return LeaseBound((client: peer.client, grant: grant));
   }
 
   @override
-  Future<StepOutcome> dispatchOn(
-    StationClient client,
-    LeaseGrant grant,
-    CapabilityContext ctx,
-  ) async {
+  Future<StepOutcome> dispatchOn(BusLease handle, CapabilityContext ctx) async {
     // DISPATCH the launch over the bus → the follower publishes its endpoint
     // (the rendezvous handoff rides the dispatch result).
     final Map<String, dynamic> raw;
     try {
-      raw = await client.dispatch(
-        grant,
+      raw = await handle.client.dispatch(
+        handle.grant,
         launchSpec.toJson(),
         idempotencyKey: _idem(ctx),
       );
@@ -231,8 +229,33 @@ class BurnFollowerCapability extends ServiceCapability with LeasePlan {
     return Ok({
       'endpoint': endpoint.vmServiceUri,
       'station': endpoint.station,
-      'lease': grant.leaseId,
+      'lease': handle.grant.leaseId,
     });
+  }
+
+  @override
+  Future<bool> proveFresh(BusLease handle, CapabilityContext ctx) async {
+    // The daemon adopt freshness proof (live-arm): a fenced heartbeat succeeds
+    // only for a grant still live AND ours. Offline this is unreached (adoptable
+    // defaults null ⇒ no adopt); wired for the cross-machine arm.
+    try {
+      await handle.client.heartbeat(handle.grant);
+      return true;
+    } on FederationException {
+      return false;
+    }
+  }
+
+  @override
+  Future<void> release(BusLease handle) async {
+    // Releasing the lease is what triggers the peer to reap the launched follower
+    // app (the guaranteed teardown crosses the bus). Idempotent for the holder.
+    try {
+      await handle.client.release(handle.grant);
+      _onLog('follower released ${handle.grant.leaseId}');
+    } on FederationException {
+      // Already reaped/invalid — release is idempotent.
+    }
   }
 }
 
