@@ -23,3 +23,4 @@ packages/*/extension/devtools/build/
 # THIS checkout is the substation root: .grid/worktrees/<substation>/<bead>).
 # Never tracked — they are throwaway working copies of this repo.
 .grid/
+*.iml
