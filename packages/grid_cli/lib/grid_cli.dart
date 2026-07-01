@@ -7,18 +7,21 @@
 /// assets' Commands. There is no baked-in `grid run`; the de-opinionated
 /// [StationRunCommand] base takes the asset trio (resolver + registry) as
 /// configuration, and each asset offers a configured run command
-/// ([CodeRunCommand] is the `code` asset's — it moves to `power_station` at the
-/// repo split, when the CLI SDK becomes a framework lib the asset can depend on).
+/// (`CodeRunCommand` is the `code` asset's — it lives in `power_station`'s
+/// `grid_assets` since the repo split; memento's assembled runner is
+/// `space_station`).
 library;
 
 // The de-opinionated run base + the pure composition seam (the asset trio in).
 export 'src/station_run_command.dart';
-export 'src/run_tree_command.dart' show composeStation, runGridTree, TreeRunWiring;
+export 'src/run_tree_command.dart'
+    show
+        AssetServicesBuilder,
+        AssetWiring,
+        TreeRunWiring,
+        composeStation,
+        runGridTree;
 export 'src/run_command.dart' show RuntimeProviderKind;
-
-// The code asset's run command (here for now — the cycle keeps it out of the
-// code asset until the split).
-export 'src/code_run_command.dart';
 
 // The generic, asset-agnostic driving commands.
 export 'src/watch_command.dart';

@@ -2,10 +2,59 @@ import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 
+import 'package:args/command_runner.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 
 import 'event_renderer.dart';
+
+/// `grid watch` — stream typed graph events from the live work graph. A
+/// generic, asset-agnostic CLI-SDK command (moved out of the reference bin at
+/// the repo split so any station runner can assemble it).
+class WatchCommand extends Command<int> {
+  /// Creates the watch command with its flags.
+  WatchCommand() {
+    argParser
+      ..addFlag(
+        'json',
+        negatable: false,
+        help: 'Emit NDJSON (one JSON event per line) instead of human output.',
+      )
+      ..addFlag(
+        'no-sql',
+        negatable: false,
+        help:
+            'Force the bd-CLI read path even when pooled Dolt SQL is '
+            'available.',
+      )
+      ..addOption(
+        'for-seconds',
+        help:
+            'Run for a fixed number of seconds then exit (for scripted '
+            'demos / CI) instead of until Ctrl-C.',
+      );
+  }
+
+  @override
+  final String name = 'watch';
+
+  @override
+  final String description =
+      'Watch the work graph and print typed events with reaction latency. '
+      'Run under `dart run --enable-vm-service` to allow exploration tools to '
+      'attach.';
+
+  @override
+  Future<int> run() async {
+    final args = argResults!;
+    final seconds = args.option('for-seconds');
+    return runWatch(
+      json: args.flag('json'),
+      noSql: args.flag('no-sql'),
+      runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
+    );
+  }
+}
 
 /// Runs `grid watch`: discovers the workspace, builds a reactive runtime,
 /// registers the exploration host (so exploration_cli/devtools can attach),

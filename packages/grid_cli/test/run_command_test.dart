@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:grid_cli/src/code_run_command.dart';
 import 'package:grid_cli/src/run_command.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_reconciler/grid_reconciler.dart';
@@ -21,72 +20,9 @@ import 'package:test/test.dart';
 ///     non-dry run with no root is refused;
 ///  4. **provider default** — `--provider` defaults to subprocess.
 void main() {
-  group('CodeRunCommand flag parsing (via the StationRunCommand base)', () {
-    test('--dry-run is the SAFE DEFAULT (true when unspecified)', () {
-      final cmd = CodeRunCommand();
-      final parsed = cmd.argParser.parse(['--substation', 'tgdog']);
-      expect(parsed.flag('dry-run'), isTrue);
-    });
-
-    test('--provider defaults to subprocess', () {
-      final cmd = CodeRunCommand();
-      final parsed = cmd.argParser.parse(['--substation', 'tgdog']);
-      expect(parsed.option('provider'), 'subprocess');
-      expect(
-        RuntimeProviderKind.parse(parsed.option('provider')),
-        RuntimeProviderKind.subprocess,
-      );
-    });
-
-    test('--substation and --owner both feed the one allow-set', () {
-      final cmd = CodeRunCommand();
-      final parsed = cmd.argParser.parse([
-        '--substation',
-        'tgdog',
-        '--owner',
-        'other',
-      ]);
-      final substations = <String>{
-        ...parsed.multiOption('substation'),
-        ...parsed.multiOption('owner'),
-      };
-      expect(substations, {'tgdog', 'other'});
-    });
-
-    test('--no-dry-run is the explicit live-arm opt-in', () {
-      final cmd = CodeRunCommand();
-      final parsed = cmd.argParser.parse(['--substation', 'tgdog', '--no-dry-run']);
-      expect(parsed.flag('dry-run'), isFalse);
-    });
-
-    test('the CODE ASSET carries the opinion, not the framework: the trio + a '
-        'git-SourceControl servicesFor live on CodeRunCommand', () {
-      final cmd = CodeRunCommand();
-      // The trio is the command's (the composer requires it, defaults nothing).
-      expect(cmd.resolver, isNotNull);
-      expect(cmd.registry.formula('code'), isNotNull,
-          reason: 'the code registry (agent/review/land) rides the command');
-      // servicesFor builds the git SourceControl from the live wiring.
-      final services = cmd.servicesFor!((
-        git: StationGitService(
-          runner: FakeGitRunner(),
-          prOpener: _FakePrOpener(),
-        ),
-        workRoot: const RootCheckout(
-          path: '/tmp/r',
-          defaultBranch: 'main',
-          substation: 'tgdog',
-        ),
-        gitOps: null,
-        prOpener: null,
-      ));
-      expect(services.sourceControl, isNotNull,
-          reason: 'the code asset supplies provisioning source control');
-      expect(services.sourceControl!.canLand, isFalse,
-          reason: 'land ops null (not armed) → commit-only posture');
-    });
-  });
-
+  // The CodeRunCommand groups (flag parsing + "the CODE ASSET carries the
+  // opinion") moved to power_station/packages/grid_assets at the repo split —
+  // CodeRunCommand is the code asset's exported Command now.
   group('runGrid live-arm gating (no live state)', () {
     test('a non-dry run with no --root is refused (exit 64, no composition)',
         () async {
