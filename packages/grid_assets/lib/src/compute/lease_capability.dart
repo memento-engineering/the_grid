@@ -1,7 +1,7 @@
 /// Lease-as-Capability — the COMPUTE domain's engine wrapper (ADR-0011 D3 + the
 /// SCRATCH "Lease ≈ a Capability" call; M6 DoD-1's engine wrapper).
 ///
-/// A [LeaseCapability] mounts at the engine's `EffectResolver`/Capability seam
+/// A [LeaseCapability] mounts at the engine's `SessionResolver`/Capability seam
 /// (resolved by the registry like every other [Capability], mirroring
 /// `code_capabilities.dart`). Its Branch lifecycle IS the lease lifecycle: on
 /// MOUNT (`run`) it ACQUIRES a lease on a peer's slot and DISPATCHES the bounded

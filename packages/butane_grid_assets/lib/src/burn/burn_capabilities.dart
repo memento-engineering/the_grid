@@ -1,5 +1,5 @@
 /// The BURN — two capability-scoped orders + two orthogonal channels (ADR-0011
-/// D9, M6 Track F), composed at the engine `EffectResolver`/Capability seam
+/// D9, M6 Track F), composed at the engine `SessionResolver`/Capability seam
 /// (mirroring `grid_assets/src/code`).
 ///
 /// [kBurnFormula] pours two orders:
