@@ -81,7 +81,7 @@ Plus a **freshness barrier**: gate the first post-restart reconcile on one obser
 To keep the supersession honest and bounded, ADR-0007 decides the **P0 engine + the stack reversal + the supersession argument** and nothing downstream:
 
 - **gc-TOML import / `PackInflater`** (capture-users-without-rewrite) → **P1 / ADR-0008.**
-- **The unified topology tree** (config nodes `Rig`/pool/`Order` as ancestors; elastic rigs; ownership stamped by `RigScope`) → **P2 / ADR-0009.**
+- **The unified topology tree** (config nodes `Rig`/pool/`Order` as ancestors; elastic rigs; ownership stamped by `RigScope`) → **P2 / ADR-0009.** **→ FILLED: ADR-0009 (the Allocation Tree), Accepted 2026-07-01** — it generalizes this slot as the_grid's *third tree* on `genesis_tree`; the topology/config nodes are **Allocations** (config scopes + effect leaves), addressable + inspectable + restorable.
 - **Convergence-as-subtree + retiring the M2 byte-port coexistence shim per-rig** → **P3 / ADR-0010.** Until then the `ConvergenceReducer` byte-port is **retained intact** as a coexistence shim (the shadow/diff harness consumes the *reducer*, not a serialized plan), and it retires **per-rig** as each gc-owned rig converts — never globally until the last rig (gc assumes one writer per bead; ADR-0003 D6).
 
 ### Note on ADR numbering (a Nico decision — flagged, not resolved)

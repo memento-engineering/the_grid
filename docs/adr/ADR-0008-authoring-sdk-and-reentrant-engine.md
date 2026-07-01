@@ -219,6 +219,12 @@ Ratified shape:
 
 ## Out of scope (later ADRs — numbers are Nico's to assign vs ADR-0007 §5's P2/P3 reservations)
 
+**Amended 2026-07-01 (ratified Nico) — ADR-0007 §5's reserved P2/0009 is now FILLED:**
+**ADR-0009 (the Allocation Tree)** occupies it — the_grid's *third tree* on `genesis_tree`. It
+**extends this ADR's Decision 6** (state restoration): adopt-a-surviving-detached-process becomes
+the Allocation lifecycle's **`startOrAdopt` (reattach) + `detach`** branch. Observability (§8)
+still graduates separately (**ADR-0012**); federation stays as below.
+
 - **Federation** — `Station`/`Substation`/virtual, the per-station no-center `Grid`, the pull predicate, dolt + the inter-station bus, claim mechanics, presence/reaping, and the `Trust` *impls* (`docs/SCRATCH-vnext-prd.md` §§5–7, §9).
 - **Observability** — observable-source as a first-class engine concept, OTel ⊥ perception (both sinks on the reconcile-event stream), the AOT exploration transport (`docs/SCRATCH-vnext-prd.md` §8).
 - **The genesis-side restoration extraction** — genesis's own ADR-0000 gate, post-prototype.
