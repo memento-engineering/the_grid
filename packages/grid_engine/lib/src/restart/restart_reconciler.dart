@@ -55,7 +55,33 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
+import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
+
+/// The adopt-decision seam (ADR-0009 D4, Track D): given a surviving LIVE node,
+/// returns whether the reconciler should ADOPT it — leave the group running for
+/// the re-mounted tree to reattach — rather than kill-and-respawn. This is the
+/// composer-supplied domain half of the freshness proof (a daemon probes its
+/// endpoint + checks the token echoes); the engine already supplied the
+/// pgid-alive half. **No-adopt-on-faith**: the offline default is `false`, so a
+/// node the composer cannot prove is killed-and-respawned, never left to leak.
+/// The engine stays opinion-free — it never names the daemon or its endpoint.
+typedef AdoptProof =
+    Future<bool> Function(
+      BeadWorktree worktree,
+      SessionProjection session,
+      String nodePath,
+      NodeCursor node,
+    );
+
+/// The offline adopt default — no composer proof wired, so nothing is adopted
+/// (respawn-or-skip, today's behavior). No-adopt-on-faith.
+Future<bool> _neverAdopt(
+  BeadWorktree worktree,
+  SessionProjection session,
+  String nodePath,
+  NodeCursor node,
+) async => false;
 
 /// The worktree-list seam: lists the per-bead worktrees under [root], each
 /// re-bound to its bead id (the dir name encodes the id). Returns `null` on a
@@ -79,7 +105,15 @@ typedef ReapWorktree =
 enum RestartDisposition {
   /// The OWNED session reached a positive terminal — the work is done. The
   /// worktree was handed to the [ReapWorktree] seam; the bead does NOT respawn.
+  /// A done session's still-live groups (detached daemons) are swept (killed)
+  /// first — nobody re-adopts a completed session (D4 orphan sweep).
   skipped,
+
+  /// A live (non-terminal) session whose live group(s) the [AdoptProof] accepted
+  /// — the group is LEFT RUNNING for the re-mounted tree to reattach (D4). NOT
+  /// killed, NOT reaped, and NOT respawned (the tree's `startOrAdopt` reattaches
+  /// it). This bucket is respawn-free.
+  adopted,
 
   /// A live (non-terminal) session carried a usable `pgid` + leader pid and the
   /// orphan group was reconciled so the respawn cannot double-run — the bead is
@@ -145,6 +179,9 @@ class RestartReport {
       skipped = List.unmodifiable(
         entries.where((e) => e.disposition == RestartDisposition.skipped),
       ),
+      adopted = List.unmodifiable(
+        entries.where((e) => e.disposition == RestartDisposition.adopted),
+      ),
       killed = List.unmodifiable(
         entries.where((e) => e.disposition == RestartDisposition.killed),
       ),
@@ -165,6 +202,10 @@ class RestartReport {
   /// Done beads whose worktree was reaped (no respawn).
   final List<RestartEntry> skipped;
 
+  /// Live survivors LEFT RUNNING for the re-mounted tree to reattach (D4) — not
+  /// killed, not reaped, not respawned.
+  final List<RestartEntry> adopted;
+
   /// Orphans whose live process group was terminated (then respawn-pending).
   final List<RestartEntry> killed;
 
@@ -177,13 +218,14 @@ class RestartReport {
   final List<RestartEntry> respawnPending;
 
   /// The total number of beads the tree must respawn on re-mount: everything
-  /// except the skipped (done) beads. [refusedUnsafe] is included.
-  int get respawnCount => entries.length - skipped.length;
+  /// except the skipped (done) beads AND the adopted (reattached) survivors.
+  /// [refusedUnsafe] is included.
+  int get respawnCount => entries.length - skipped.length - adopted.length;
 
   @override
   String toString() =>
-      'RestartReport(skipped: ${skipped.length}, killed: ${killed.length}, '
-      'refusedUnsafe: ${refusedUnsafe.length}, '
+      'RestartReport(skipped: ${skipped.length}, adopted: ${adopted.length}, '
+      'killed: ${killed.length}, refusedUnsafe: ${refusedUnsafe.length}, '
       'respawnPending: ${respawnPending.length}, '
       'respawnCount: $respawnCount)';
 }
@@ -209,17 +251,23 @@ class RestartReconciler {
     required ProcessGroupController groups,
     required Future<void> Function() freshnessBarrier,
     required GraphSnapshot Function() stateSnapshot,
+    AdoptProof? adoptProof,
   }) : _listWorktrees = listWorktrees,
        _reapWorktree = reapWorktree,
        _workRoot = workRoot,
        _groups = groups,
        _freshnessBarrier = freshnessBarrier,
-       _stateSnapshot = stateSnapshot;
+       _stateSnapshot = stateSnapshot,
+       _adoptProof = adoptProof ?? _neverAdopt;
 
   final ListBeadWorktrees _listWorktrees;
   final ReapWorktree _reapWorktree;
   final RootCheckout _workRoot;
   final ProcessGroupController _groups;
+
+  /// The composer-supplied adopt-decision (D4). Offline default: never adopt
+  /// (respawn-or-skip). No-adopt-on-faith.
+  final AdoptProof _adoptProof;
 
   /// A COMPLETED re-query of the read + state runtimes — awaited FIRST so no
   /// decision is made on stale state. Injected so it is fake-driveable.
@@ -278,10 +326,13 @@ class RestartReconciler {
     BeadWorktree wt,
     SessionProjection? session,
   ) async {
-    // SKIP (done): the OWNED session reached a positive terminal. Reap the
-    // worktree; do not respawn. Fires even for a FOREIGN wt.beadId because the
-    // cursor is on the_grid's own session bead (A40/A37).
+    // SKIP (done): the OWNED session reached a positive terminal. First SWEEP
+    // any still-live groups it left running (a detached daemon on a completed
+    // session — nobody re-adopts it, D4 orphan sweep), THEN reap the worktree;
+    // do not respawn. Fires even for a FOREIGN wt.beadId because the cursor is on
+    // the_grid's own session bead (A40/A37).
     if (session != null && session.isTerminal) {
+      await _sweepLiveGroups(session);
       final outcome = await _reapWorktree(root: _workRoot, worktree: wt);
       return RestartEntry(
         worktree: wt,
@@ -307,23 +358,28 @@ class RestartReconciler {
     );
   }
 
-  /// A live, non-terminal [session]: terminate EVERY live orphan process group
-  /// it carries (D-4 — per-node, not a single scalar pgid), then mark
-  /// respawn-pending.
+  /// A live, non-terminal [session]: for EVERY live group it carries (D-4 —
+  /// per-node, not a single scalar pgid), either ADOPT it (leave it running for
+  /// the re-mounted tree to reattach — [AdoptProof] accepted it) or terminate it
+  /// (the crash-orphan case, so the respawn does not double-run).
   ///
   /// A reentrant Burn has MANY concurrent live groups (peripheral + central
   /// daemons, advertisers, the coordinator). The per-node cursor records each
-  /// one's `pgid`/`pid`; this iterates every node whose state ∈ {running, ready}
-  /// with a usable kill target and runs the REAL guarded [terminateGroup] on
-  /// each (per-node `token` is the recycled-pgid freshness fence, recorded on the
-  /// node). The legacy single-process path (a scalar `pgid` on the session, the
-  /// pre-Track-H agent/verify/land carrier) is the fallback when no per-node
-  /// target is recorded. Worktree reap stays per-bead.
+  /// one's `pgid`/`pid`/`token`; this consults the composer's [AdoptProof] per
+  /// live node (the domain freshness half — offline default: never, so every
+  /// live group is killed, today's respawn-or-skip), then runs the REAL guarded
+  /// [terminateGroup] on each NON-adopted group. The legacy single-process path
+  /// (a scalar `pgid` on the session) is the fallback when no per-node target is
+  /// recorded. Worktree reap stays per-bead.
+  ///
+  /// Aggregation: ANY group killed ⇒ `killed` (or `refusedUnsafe` if all kills
+  /// were guard-refused) → respawn-pending; else every live group was adopted ⇒
+  /// `adopted` (respawn-free — the tree reattaches).
   Future<RestartEntry> _killOrphanThenRespawn(
     BeadWorktree wt,
     SessionProjection session,
   ) async {
-    final targets = _killTargets(session);
+    final targets = _liveGroups(session);
 
     // No usable kill target anywhere (no pgid+leader-pid on any live node, nor a
     // scalar): we cannot run the guarded terminate. Leave it respawn-pending —
@@ -337,12 +393,16 @@ class RestartReconciler {
       );
     }
 
-    // The REAL guarded terminate on EACH live group — never bypassing the
-    // `pgid <= 1`/own-group safety guard. A group refused is still left
-    // respawn-pending.
-    final results = <GroupTerminateResult>[];
+    // Per live group: ADOPT (leave) if the composer proves it fresh; else run
+    // the REAL guarded terminate — never bypassing the `pgid <= 1`/own-group
+    // safety guard. No-adopt-on-faith: an unproven group is always killed, never
+    // left to leak.
+    final killResults = <GroupTerminateResult>[];
     for (final t in targets) {
-      results.add(
+      if (await _adoptProof(wt, session, t.nodePath, t.node)) {
+        continue; // ADOPT: leave this group running for the tree to reattach.
+      }
+      killResults.add(
         await terminateGroup(
           controller: _groups,
           pgid: t.pgid,
@@ -351,47 +411,76 @@ class RestartReconciler {
       );
     }
 
-    // Aggregate per worktree: if ANY group was signalled (not refused) the
-    // worktree is `killed`; if EVERY target was refused it is `refusedUnsafe`.
-    // Both buckets are respawn-pending. The representative result is the first
-    // non-refusal (or the refusal when all refused) — single-target entries keep
-    // their exact result.
-    final firstSignalled = results
-        .where((r) => r != GroupTerminateResult.refusedUnsafe)
-        .firstOrNull;
-    final disposition = firstSignalled != null
-        ? RestartDisposition.killed
-        : RestartDisposition.refusedUnsafe;
+    // Any kill ⇒ the worktree respawns (killed, or refusedUnsafe if every kill
+    // was guard-refused). The representative result is the first non-refusal (or
+    // the refusal when all refused) — single-target entries keep their exact
+    // result.
+    if (killResults.isNotEmpty) {
+      final firstSignalled = killResults
+          .where((r) => r != GroupTerminateResult.refusedUnsafe)
+          .firstOrNull;
+      final disposition = firstSignalled != null
+          ? RestartDisposition.killed
+          : RestartDisposition.refusedUnsafe;
+      return RestartEntry(
+        worktree: wt,
+        disposition: disposition,
+        sessionId: session.sessionId,
+        terminateResult: firstSignalled ?? GroupTerminateResult.refusedUnsafe,
+      );
+    }
+
+    // No kills — every live group was ADOPTED (left running for the tree to
+    // reattach). Respawn-free.
     return RestartEntry(
       worktree: wt,
-      disposition: disposition,
+      disposition: RestartDisposition.adopted,
       sessionId: session.sessionId,
-      terminateResult: firstSignalled ?? GroupTerminateResult.refusedUnsafe,
     );
   }
 
-  /// The live process groups to terminate for [session] — the per-node cursor's
-  /// live groups (D-4), or the legacy scalar pgid when no per-node target is
-  /// recorded. A target needs BOTH a `pgid` and a leader `pid` (the liveness
-  /// fence); a pgid without a pid is skipped (no usable target). Deduped by pgid.
-  List<({int pgid, int pid})> _killTargets(SessionProjection session) {
-    final out = <({int pgid, int pid})>[];
+  /// Terminates EVERY live group a TERMINAL [session] left running — the orphan
+  /// sweep (D4). A done session is never adopted, so every live group is a leak;
+  /// each is reaped with the REAL guarded [terminateGroup] (a `pgid <= 1`/
+  /// own-group group is left, the guard never bypassed — a bounded residual).
+  Future<void> _sweepLiveGroups(SessionProjection session) async {
+    for (final t in _liveGroups(session)) {
+      await terminateGroup(controller: _groups, pgid: t.pgid, leaderPid: t.pid);
+    }
+  }
+
+  /// The live process groups of [session] — the per-node cursor's live groups
+  /// (D-4), or the legacy scalar pgid when no per-node target is recorded. A
+  /// group needs BOTH a `pgid` and a leader `pid` (the liveness fence); a pgid
+  /// without a pid is skipped (no usable target). Deduped by pgid. Each carries
+  /// its `nodePath` + `NodeCursor` so the [AdoptProof] can probe it.
+  List<({String nodePath, NodeCursor node, int pgid, int pid})> _liveGroups(
+    SessionProjection session,
+  ) {
+    final out = <({String nodePath, NodeCursor node, int pgid, int pid})>[];
     final seen = <int>{};
-    for (final node in session.cursor.values) {
+    session.cursor.forEach((path, node) {
       final live =
           node.state == StepState.running || node.state == StepState.ready;
       final pgid = node.pgid;
       final pid = node.pid;
       if (live && pgid != null && pid != null && seen.add(pgid)) {
-        out.add((pgid: pgid, pid: pid));
+        out.add((nodePath: path, node: node, pgid: pgid, pid: pid));
       }
-    }
+    });
     // Legacy single-process fallback (the pre-Track-H carrier) — only when the
     // per-node cursor recorded no live target.
     if (out.isEmpty) {
       final pgid = session.pgid;
       final pid = session.pid;
-      if (pgid != null && pid != null) out.add((pgid: pgid, pid: pid));
+      if (pgid != null && pid != null) {
+        out.add((
+          nodePath: '',
+          node: NodeCursor(pgid: pgid, pid: pid, token: session.token),
+          pgid: pgid,
+          pid: pid,
+        ));
+      }
     }
     return out;
   }
