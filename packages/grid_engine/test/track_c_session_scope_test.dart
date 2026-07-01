@@ -58,10 +58,10 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
 
 /// The full new-path root: WorkList observes [joined]; WorkBead resolves through
 /// the FormulaResolver → SessionScope → FormulaScope; SessionScope mints via the
-/// EffectContext writer; FormulaScope inflates via the registry.
+/// StationServices writer; FormulaScope inflates via the registry.
 ({TreeOwner owner, Branch root}) _mountFull({
   required JoinedSnapshotNotifier joined,
-  required EffectContext ctx,
+  required StationServices ctx,
   required CapabilityRegistry registry,
   required RootFormulaFor rootFormula,
 }) {
@@ -69,7 +69,7 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
   final root = owner.mountRoot(
     InheritedSeed<JoinedSnapshotNotifier>(
       value: joined,
-      child: InheritedSeed<EffectContext>(
+      child: InheritedSeed<StationServices>(
         value: ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: registry,

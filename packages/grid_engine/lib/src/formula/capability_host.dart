@@ -33,7 +33,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
-import '../effect/effect_context.dart';
+import '../effect/station_services.dart';
 import '../kernel/idle.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
@@ -62,7 +62,7 @@ class CapabilityHost extends StatefulSeed {
 
 /// The pinned [CapabilityHost] lifecycle — the thin driver (ADR-0009 D5).
 class CapabilityHostState extends State<CapabilityHost> {
-  EffectContext? _ctx;
+  StationServices? _ctx;
   ServiceBundle _services = const ServiceBundle();
   CapabilityRegistry? _registry;
   Allocation? _allocation;
@@ -85,10 +85,10 @@ class CapabilityHostState extends State<CapabilityHost> {
 
   @override
   void didChangeDependencies() {
-    _ctx ??= context.dependOnInheritedSeedOfExactType<EffectContext>();
+    _ctx ??= context.dependOnInheritedSeedOfExactType<StationServices>();
     assert(
       _ctx != null,
-      'CapabilityHost requires an ambient InheritedSeed<EffectContext>',
+      'CapabilityHost requires an ambient InheritedSeed<StationServices>',
     );
     final services = context.dependOnInheritedSeedOfExactType<ServiceBundle>();
     if (services != null) _services = services;
@@ -126,12 +126,20 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// fence (the prior identity for a no-adopt-on-faith proof — D4).
   AllocationContext _buildAllocationContext() {
     final ctx = _ctx!;
+    // The workspace/branch/baseBranch are the per-substation SourceControl's
+    // (ADR-0008 D5) — the engine holds no worktree-layout opinion. A synthetic
+    // placeholder covers the no-source-control offline case (nothing depends on
+    // it there — the workspace is never provisioned nor landed).
+    final sc = _services.sourceControl;
+    final workspaceDir = sc?.workspaceFor(_beadId) ?? '/grid/workspaces/$_beadId';
+    final branch = sc?.branchFor(_beadId) ?? '';
+    final baseBranch = sc?.baseBranch ?? 'main';
     final capContext = CapabilityContext(
       params: seed.mount.step.params,
       bead: seed.mount.bead,
-      workspaceDir: ctx.worktreeFor(_beadId),
-      branch: ctx.branchFor(_beadId),
-      baseBranch: ctx.baseBranch,
+      workspaceDir: workspaceDir,
+      branch: branch,
+      baseBranch: baseBranch,
       services: _services,
       cancel: CancelToken(),
       nodePath: _nodePath,

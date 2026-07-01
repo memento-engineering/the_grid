@@ -36,7 +36,7 @@ Bead _typed(String id, IssueType type) =>
 
 StationKernel _kernel(StationJoinBridge bridge, Fakes f) => StationKernel(
   bridge: bridge,
-  effectContext: f.ctx,
+  stationServices: f.ctx,
   resolver: kCodeResolver,
   registry: buildCodeRegistry(),
   substations: [

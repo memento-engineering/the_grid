@@ -68,7 +68,7 @@ void main() {
         unawaited(fakes.provider.close());
       });
       owner.mountRoot(
-        InheritedSeed<EffectContext>(
+        InheritedSeed<StationServices>(
           value: fakes.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
@@ -195,7 +195,7 @@ void main() {
         unawaited(closed.provider.close());
       });
       closedOwner.mountRoot(
-        InheritedSeed<EffectContext>(
+        InheritedSeed<StationServices>(
           value: closed.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
@@ -225,7 +225,7 @@ void main() {
         unawaited(open.provider.close());
       });
       openOwner.mountRoot(
-        InheritedSeed<EffectContext>(
+        InheritedSeed<StationServices>(
           value: open.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),

@@ -22,7 +22,7 @@
 //      guard, each isolated + combined).
 //
 // (a)/(b)/(c) drive the real Station→…→WorkBead→SessionScope→FormulaScope→
-// CapabilityHost tree (FormulaResolver + buildCodeRegistry, an EffectContext +
+// CapabilityHost tree (FormulaResolver + buildCodeRegistry, an StationServices +
 // git ServiceBundle over the offline fakes) under a TreeOwner so branch identity
 // is walkable; (d)/(e)/(f) re-drive the Track C/D/E mechanisms through the same
 // integrated path.
@@ -87,18 +87,18 @@ SessionProjection _session(
   },
 );
 
-/// The integrated root: the work-axis notifier + the EffectContext + the live
+/// The integrated root: the work-axis notifier + the StationServices + the live
 /// `code` registry + the FormulaResolver above the Station; one rig owning `tg`.
 /// The git ServiceBundle is provided AT THE SubstationScope (ADR-0008 D5: source
 /// control is a per-substation responsibility).
 Seed _root({
   required JoinedSnapshotNotifier joined,
-  required EffectContext ctx,
+  required StationServices ctx,
   required CapabilityRegistry registry,
   required ServiceBundle services,
 }) => InheritedSeed<JoinedSnapshotNotifier>(
   value: joined,
-  child: InheritedSeed<EffectContext>(
+  child: InheritedSeed<StationServices>(
     value: ctx,
     child: StableInheritedSeed<CapabilityRegistry>(
       value: registry,
@@ -420,7 +420,7 @@ void main() {
         final bridge = StationJoinBridge(work: work, state: state);
         final kernel = StationKernel(
           bridge: bridge,
-          effectContext: f.ctx,
+          stationServices: f.ctx,
           resolver: kCodeResolver,
           registry: buildCodeRegistry(),
           substations: [
@@ -462,7 +462,7 @@ void main() {
         // Gate the create so dispose lands mid-mint.
         final runner = GatedCreateBdRunner();
         final provider = FakeRuntimeProvider();
-        final ctx = EffectContext(
+        final ctx = StationServices(
           provider: provider,
           writer: StationBeadWriter(
             bd: BdCliService(runner),
@@ -476,7 +476,7 @@ void main() {
         // `code` formula) with NO existing session ⇒ it MINTS.
         final owner = TreeOwner();
         owner.mountRoot(
-          InheritedSeed<EffectContext>(
+          InheritedSeed<StationServices>(
             value: ctx,
             child: StableInheritedSeed<CapabilityRegistry>(
               value: buildCodeRegistry(),
@@ -521,7 +521,7 @@ void main() {
     ({TreeOwner owner, Branch root}) mountAgent(Fakes f) {
       final owner = TreeOwner();
       final root = owner.mountRoot(
-        InheritedSeed<EffectContext>(
+        InheritedSeed<StationServices>(
           value: f.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: buildCodeRegistry(),

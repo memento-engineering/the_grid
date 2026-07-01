@@ -44,7 +44,7 @@ class _Committee {
     owner.mountRoot(
       InheritedSeed<JoinedSnapshotNotifier>(
         value: joined,
-        child: InheritedSeed<EffectContext>(
+        child: InheritedSeed<StationServices>(
           value: fakes.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: reg,

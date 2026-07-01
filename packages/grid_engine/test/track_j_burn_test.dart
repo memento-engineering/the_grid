@@ -86,7 +86,7 @@ class _Burn {
     root = owner.mountRoot(
       InheritedSeed<JoinedSnapshotNotifier>(
         value: joined,
-        child: InheritedSeed<EffectContext>(
+        child: InheritedSeed<StationServices>(
           value: fakes.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: reg,

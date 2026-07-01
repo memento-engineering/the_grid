@@ -139,7 +139,7 @@ void main() {
           reason: 'the effect layer is not a tree node — it holds no TreeContext');
       expect(imports.any((l) => l.contains('station_bead_writer')), isFalse);
       expect(imports.any((l) => l.contains('joined_snapshot_notifier')), isFalse);
-      expect(imports.any((l) => l.contains('effect_context')), isFalse);
+      expect(imports.any((l) => l.contains('station_services')), isFalse);
       // Sanity control: it DOES import its legitimate transport (grid_runtime) —
       // proving the fence above is meaningful, not vacuously true on an empty set.
       expect(imports.any((l) => l.contains('grid_runtime')), isTrue);
@@ -238,7 +238,7 @@ void main() {
       final fakes = buildFakes();
       final owner = TreeOwner();
       final root = owner.mountRoot(
-        InheritedSeed<EffectContext>(
+        InheritedSeed<StationServices>(
           value: fakes.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),

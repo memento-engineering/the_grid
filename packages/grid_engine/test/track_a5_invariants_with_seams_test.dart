@@ -163,7 +163,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
   final root = owner.mountRoot(
     InheritedSeed<JoinedSnapshotNotifier>(
       value: joined,
-      child: InheritedSeed<EffectContext>(
+      child: InheritedSeed<StationServices>(
         value: fakes.ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: reg,
@@ -202,7 +202,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
   final root = owner.mountRoot(
     InheritedSeed<JoinedSnapshotNotifier>(
       value: joined,
-      child: InheritedSeed<EffectContext>(
+      child: InheritedSeed<StationServices>(
         value: fakes.ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: registry,

@@ -87,7 +87,7 @@ void main() {
         final bridge = StationJoinBridge(work: work, state: state);
         final kernel = StationKernel(
           bridge: bridge,
-          effectContext: f.ctx,
+          stationServices: f.ctx,
           resolver: kCodeResolver,
           // Inline rubrics so the committee critics build their prompts without a
           // disk read (the on-disk loader is exercised by track_d_assets_test).
@@ -227,7 +227,7 @@ void main() {
         final bridge = StationJoinBridge(work: work, state: state);
         final kernel = StationKernel(
           bridge: bridge,
-          effectContext: f.ctx,
+          stationServices: f.ctx,
           resolver: kCodeResolver,
           registry: buildCodeRegistry(),
           substations: [

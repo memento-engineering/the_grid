@@ -4,7 +4,7 @@
 // PR opener, the subprocess provider, the git service, the `.land(` call, and
 // even `melos` (D-1) live ONLY in the `grid_assets` package — NEVER in the
 // engine. The kernel, the effect core, and the core seeds resolve capabilities
-// through the opaque EffectResolver / EffectContext seams and never name a
+// through the opaque EffectResolver / StationServices seams and never name a
 // concrete opinion. The opinions used to live in `lib/src/extension/`; with the
 // Track B extraction there is no such dir, so the engine must name NONE of the
 // opinion literals ANYWHERE in `lib/src`.
@@ -35,6 +35,12 @@ const _opinionLiterals = <String>[
   // The test-runner the toy verify shells out to (D-1: the engine names no
   // build-tool opinion either).
   'melos',
+  // The git worktree LAYOUT (ADR-0009 EffectContext→StationServices cleanup /
+  // ADR-0008 D5): "one git worktree per bead, built from source" is the
+  // SourceControl impl's opinion, NOT the engine's — the workspace/branch come
+  // from `SourceControl.workspaceFor`/`branchFor`, so the engine names this layout
+  // marker nowhere (it used to leak via `EffectContext.worktreeFor`).
+  '.grid/worktrees',
 ];
 
 /// Resolves this package's `lib/src` directory, walking up from the test's

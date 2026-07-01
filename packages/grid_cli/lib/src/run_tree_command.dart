@@ -6,7 +6,7 @@
 /// **Pure composition.** [composeRunTree] constructs no process, opens no
 /// socket, and writes no bead — it builds the [StationKernel] + the
 /// [RestartReconciler] and hands back a [TreeRunWiring]. *Starting* is
-/// [TreeRunWiring.start]'s job; with a dry [EffectContext.provider] (a recording
+/// [TreeRunWiring.start]'s job; with a dry [StationServices.provider] (a recording
 /// no-op transport) and the land ops left null, `start()` is inert beyond the
 /// in-memory tree mount + the (recorded) spawn.
 ///
@@ -93,12 +93,14 @@ class TreeRunWiring {
 TreeRunWiring composeRunTree({
   required SnapshotSource work,
   required SnapshotSource state,
-  required EffectContext effectContext,
+  required StationServices stationServices,
   required List<SubstationConfig> substations,
   required StationGitService git,
   required RootCheckout workRoot,
   required ProcessGroupController groups,
   required Future<void> Function() freshnessBarrier,
+  GitOps? gitOps,
+  PrOpener? prOpener,
 }) {
   final bridge = StationJoinBridge(work: work, state: state);
   // The live work path (ADR-0008 D4): the reentrant FormulaResolver roots the
@@ -118,8 +120,8 @@ TreeRunWiring composeRunTree({
   // no-op too.
   final services = ServiceBundle(
     sourceControl: GitSourceControl(
-      gitOps: effectContext.gitOps,
-      prOpener: effectContext.prOpener,
+      gitOps: gitOps,
+      prOpener: prOpener,
       provisioner: git,
       root: workRoot,
     ),
@@ -158,7 +160,7 @@ TreeRunWiring composeRunTree({
 
   final kernel = StationKernel(
     bridge: bridge,
-    effectContext: effectContext,
+    stationServices: stationServices,
     resolver: resolver,
     substations: substationScopes,
     registry: registry,
@@ -181,7 +183,7 @@ Formula _codeFormulaFor(Bead bead) => kCodeFormula;
 /// [composeRunTree], mirroring [runGrid]. It discovers the work workspace, builds
 /// the M1 controller (work axis) + a state controller (the split A36/A37 store),
 /// adapts both to [SnapshotSource] via [RuntimeSnapshotSource], registers the
-/// exploration host (leonard attach), builds the live [EffectContext], composes
+/// exploration host (leonard attach), builds the live [StationServices], composes
 /// the tree, and drives the barrier → restart → mount ordering.
 ///
 /// **`--dry-run` is the SAFE DEFAULT (observe-only — touch NOTHING live).**
@@ -398,7 +400,7 @@ Future<int> runGridTree({
     root = RootCheckout(path: '', defaultBranch: 'main', substation: substations.first);
   }
 
-  // --- the live EffectContext ----------------------------------------------
+  // --- the live StationServices ----------------------------------------------
   // Land ops (gitOps/prOpener) are wired ONLY when --land arms a live run
   // (ADR-0006 D3): the `land` capability then commits → pushes → opens a PR via
   // real `git`/`gh` (never auto-merges) and records the PR url on the session
@@ -406,18 +408,22 @@ Future<int> runGridTree({
   // gate above) they stay null ⇒ `canLand` is false ⇒ land no-ops, so the
   // early-arm commit-only posture is the safe default and a human lands the PR.
   final bool armLand = land && !dryRun;
-  final effectContext = EffectContext(
+  // Station-level ambient only (ADR-0009 D2): the process transport, the bd
+  // chokepoint, the owned state rig. The workspace/branch layout is the
+  // per-substation SourceControl's (built below from workRoot — ADR-0008 D5),
+  // NOT the station's.
+  final stationServices = StationServices(
     provider: runtimeProvider,
     writer: writer,
     stateSubstation: (stateSubstation != null && stateSubstation.isNotEmpty)
         ? stateSubstation
         : substations.first,
-    worktreeRoot: root.path.isEmpty ? null : root.path,
-    workSubstation: substations.first,
-    baseBranch: root.defaultBranch,
-    gitOps: armLand ? GitOps(SystemGitRunner()) : null,
-    prOpener: armLand ? GhPrOpener(_ghRunner) : null,
   );
+  // Land ops (gitOps/prOpener) are wired ONLY when --land arms a live run
+  // (ADR-0006 D3); they flow straight into the substation's git SourceControl,
+  // never through the station services. Null ⇒ `canLand` false ⇒ land no-ops.
+  final gitOps = armLand ? GitOps(SystemGitRunner()) : null;
+  final prOpener = armLand ? GhPrOpener(_ghRunner) : null;
 
   // One scope owning the work substations (the WorkList ownership predicate);
   // the state substation is the chokepoint's, not a work axis. The blessed-bead
@@ -449,7 +455,9 @@ Future<int> runGridTree({
   final wiring = composeRunTree(
     work: workSource,
     state: stateSource,
-    effectContext: effectContext,
+    stationServices: stationServices,
+    gitOps: gitOps,
+    prOpener: prOpener,
     substations: substationConfigs,
     git: git,
     workRoot: root,

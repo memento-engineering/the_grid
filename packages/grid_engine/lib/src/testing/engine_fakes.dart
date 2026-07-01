@@ -315,31 +315,26 @@ class FakeSnapshotSource implements SnapshotSource {
 }
 
 // ---------------------------------------------------------------------------
-// Builders: the EffectContext + a Bead, over the fakes.
+// Builders: the StationServices + a Bead, over the fakes.
 // ---------------------------------------------------------------------------
 
 /// The_grid's owned state rig in the offline fakes.
 const stateSubstation = 'tgdog';
 
-/// A bundle of an [EffectContext] over the fakes plus the recording collaborators
+/// A bundle of an [StationServices] over the fakes plus the recording collaborators
 /// the test asserts against.
 typedef Fakes = ({
-  EffectContext ctx,
+  StationServices ctx,
   RecordingBdRunner runner,
   FakeRuntimeProvider provider,
   RecordingGitRunner git,
   FakePrOpener pr,
 });
 
-/// Builds an [EffectContext] over the fakes (the chokepoint writes through a
+/// Builds an [StationServices] over the fakes (the chokepoint writes through a
 /// recording bd runner; the transport is a controllable provider; land is wired
 /// to the recording git/PR ops) and returns it with the recorders.
-Fakes buildFakes({
-  String createdId = 'tgdog-sess1',
-  String? worktreeRoot,
-  String workSubstation = '',
-  String baseBranch = 'main',
-}) {
+Fakes buildFakes({String createdId = 'tgdog-sess1'}) {
   final runner = RecordingBdRunner(createdId: createdId);
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
@@ -349,15 +344,14 @@ Fakes buildFakes({
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   );
   return (
-    ctx: EffectContext(
+    // Station-level ambient only (ADR-0009 D2): transport + chokepoint + state
+    // rig. The git/PR recorders are returned separately so a test wires its own
+    // per-substation `GitSourceControl`/`ServiceBundle` (the workspace/branch
+    // layout is the SourceControl's, not the station's — ADR-0008 D5).
+    ctx: StationServices(
       provider: provider,
       writer: writer,
       stateSubstation: stateSubstation,
-      gitOps: GitOps(git),
-      prOpener: pr,
-      worktreeRoot: worktreeRoot,
-      workSubstation: workSubstation,
-      baseBranch: baseBranch,
     ),
     runner: runner,
     provider: provider,

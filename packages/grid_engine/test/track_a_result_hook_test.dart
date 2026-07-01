@@ -48,7 +48,7 @@ Future<void> _pump() async {
   final fakes = buildFakes();
   final owner = TreeOwner();
   owner.mountRoot(
-    InheritedSeed<EffectContext>(
+    InheritedSeed<StationServices>(
       value: fakes.ctx,
       child: StableInheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: DateTime(2026)),

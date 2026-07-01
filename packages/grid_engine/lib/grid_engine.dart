@@ -44,7 +44,7 @@ export 'src/domain/session_projection.dart';
 
 // The effect-context bundle the work subtree resolves (provider/writer/state
 // rig + the worktree layout) in one inherited lookup.
-export 'src/effect/effect_context.dart';
+export 'src/effect/station_services.dart';
 
 // The OPINIONS (agent/verify/land + the `code` formula + the git
 // `SourceControl`) live in the `grid_assets` package, NEVER in the engine

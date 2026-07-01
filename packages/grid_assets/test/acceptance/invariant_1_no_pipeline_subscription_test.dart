@@ -58,7 +58,7 @@ void main() {
         );
         final kernel = StationKernel(
           bridge: bridge,
-          effectContext: f.ctx,
+          stationServices: f.ctx,
           resolver: kCodeResolver,
           registry: buildCodeRegistry(),
           substations: [
@@ -130,7 +130,7 @@ void main() {
         final bridge = StationJoinBridge(work: work, state: state);
         final kernel = StationKernel(
           bridge: bridge,
-          effectContext: f.ctx,
+          stationServices: f.ctx,
           resolver: kCodeResolver,
           registry: buildCodeRegistry(),
           substations: [
@@ -192,7 +192,7 @@ void main() {
         final owner = TreeOwner();
         final root = InheritedSeed<JoinedSnapshotNotifier>(
           value: joined,
-          child: InheritedSeed<EffectContext>(
+          child: InheritedSeed<StationServices>(
             value: f.ctx,
             child: StableInheritedSeed<CapabilityRegistry>(
               value: buildCodeRegistry(),

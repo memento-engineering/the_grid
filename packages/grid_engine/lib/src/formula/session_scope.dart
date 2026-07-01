@@ -30,7 +30,7 @@ import 'package:grid_controller/grid_controller.dart';
 
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
-import '../effect/effect_context.dart';
+import '../effect/station_services.dart';
 import '../kernel/idle.dart';
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
@@ -79,7 +79,7 @@ class SessionScopeState extends State<SessionScope> {
   /// human picks it up when a formula's breaker exhausts (D-5).
   static const _escalationKey = 'grid.escalation';
 
-  EffectContext? _ctx;
+  StationServices? _ctx;
   String? _sessionId;
   bool _resolving = true;
   bool _failed = false;
@@ -94,10 +94,10 @@ class SessionScopeState extends State<SessionScope> {
   void didChangeDependencies() {
     // Capture the context once (the writer is used across async gaps; `context`
     // throws post-unmount).
-    _ctx ??= context.dependOnInheritedSeedOfExactType<EffectContext>();
+    _ctx ??= context.dependOnInheritedSeedOfExactType<StationServices>();
     assert(
       _ctx != null,
-      'SessionScope requires an ambient InheritedSeed<EffectContext>',
+      'SessionScope requires an ambient InheritedSeed<StationServices>',
     );
   }
 

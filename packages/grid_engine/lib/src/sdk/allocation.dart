@@ -199,7 +199,7 @@ typedef AllocationLiveness = bool Function(AdoptFence fence);
 
 /// The offline liveness default — no OS controller wired, so nothing proves
 /// live, so an adoptable effect respawns fresh (no-adopt-on-faith). Public so
-/// the composer / EffectContext can use it as the explicit "adopt disabled"
+/// the composer / StationServices can use it as the explicit "adopt disabled"
 /// value (the two adopt halves — this liveness seam and the reconciler's
 /// [AdoptProof] — must be co-wired; see [AllocationContext.liveness]).
 bool neverLive(AdoptFence fence) => false;
@@ -264,7 +264,7 @@ class AllocationContext {
   /// (pre-mount), and the Host REATTACHES it at mount (this seam). Enabling one
   /// without the other double-runs — the reconciler leaves a survivor AND the
   /// Host, unable to prove liveness, spawns fresh. The composer MUST wire this
-  /// (via `EffectContext.liveness`) together with the reconciler's `adoptProof`,
+  /// (via `StationServices.liveness`) together with the reconciler's `adoptProof`,
   /// or leave BOTH at their offline defaults. This is the human-gate live-arm
   /// wiring; P1 leaves both off.
   final AllocationLiveness liveness;

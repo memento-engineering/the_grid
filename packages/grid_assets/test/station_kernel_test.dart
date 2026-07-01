@@ -7,7 +7,7 @@
 // (stop old + start new) — the agent retiring fans the four critics out IN
 // PARALLEL, then route + land swap through. The live `code` formula
 // (FormulaResolver + buildCodeRegistry) supplies the capabilities; the
-// EffectContext is over the offline fakes (no live tg/gc/claude/git).
+// StationServices is over the offline fakes (no live tg/gc/claude/git).
 //
 // Unlike Track A's reconcile test (which calls owner.flush() directly), THIS test
 // goes through the kernel's real `scheduleMicrotask` flush loop, so every step
@@ -79,7 +79,7 @@ void main() {
 
         final kernel = StationKernel(
           bridge: bridge,
-          effectContext: f.ctx,
+          stationServices: f.ctx,
           resolver: kCodeResolver,
           // Inline rubrics so the committee critics build their prompts without a
           // disk read (the on-disk loader is exercised by track_d_assets_test).

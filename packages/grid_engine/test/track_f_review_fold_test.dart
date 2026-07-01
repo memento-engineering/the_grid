@@ -7,7 +7,7 @@
 //     isolation. These two tests exercise each latch ALONE.
 //  2. LEAK-SAFETY: the adopt halves were asymmetrically wireable (reconciler
 //     adoptProof injectable, Host liveness not) → half-enabling adopt double-runs.
-//     EffectContext now carries the liveness seam; this proves it flows to the
+//     StationServices now carries the liveness seam; this proves it flows to the
 //     mount-time adopt (co-wireable), with a sanity control (unwired → spawn).
 import 'dart:async';
 
@@ -102,10 +102,10 @@ Future<void> _pump() async {
   }
 }
 
-/// An EffectContext over the fakes with an explicit [liveness] seam (the live-arm
+/// An StationServices over the fakes with an explicit [liveness] seam (the live-arm
 /// adopt half). Null ⇒ the Host uses `neverLive` (no mount-time adopt).
-EffectContext _ctxWithLiveness(Fakes fakes, {AllocationLiveness? liveness}) =>
-    EffectContext(
+StationServices _ctxWithLiveness(Fakes fakes, {AllocationLiveness? liveness}) =>
+    StationServices(
       provider: fakes.ctx.provider,
       writer: fakes.ctx.writer,
       stateSubstation: fakes.ctx.stateSubstation,
@@ -143,7 +143,7 @@ CapabilityHostState _mountDaemonHost(
   AllocationLiveness? liveness,
 }) {
   final root = owner.mountRoot(
-    InheritedSeed<EffectContext>(
+    InheritedSeed<StationServices>(
       value: _ctxWithLiveness(fakes, liveness: liveness),
       child: StableInheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: DateTime(2026)),
@@ -210,7 +210,7 @@ void main() {
   });
 
   group('review fold — leak-safety: the adopt halves are SYMMETRICALLY '
-      'wireable (EffectContext.liveness)', () {
+      'wireable (StationServices.liveness)', () {
     test('liveness WIRED (live arm) → the Host ADOPTS at mount (no respawn)',
         () async {
       final fakes = buildFakes();
@@ -222,7 +222,7 @@ void main() {
       });
       await _pump();
 
-      // Both halves proven (EffectContext.liveness=true + the daemon's endpoint
+      // Both halves proven (StationServices.liveness=true + the daemon's endpoint
       // proof) → the survivor is reattached, NOT respawned. This is the mount
       // half that was previously unwireable (the review footgun): now it fires.
       expect(fakes.provider.started, isEmpty, reason: 'adopt must not respawn');

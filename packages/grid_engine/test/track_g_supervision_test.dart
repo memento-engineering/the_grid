@@ -105,7 +105,7 @@ void main() {
       owner.mountRoot(
         InheritedSeed<JoinedSnapshotNotifier>(
           value: joined,
-          child: InheritedSeed<EffectContext>(
+          child: InheritedSeed<StationServices>(
             value: f.ctx,
             child: StableInheritedSeed<CapabilityRegistry>(
               value: reg,
@@ -151,7 +151,7 @@ void main() {
 
       final kernel = StationKernel(
         bridge: bridge,
-        effectContext: f.ctx,
+        stationServices: f.ctx,
         resolver: const _IdleResolver(),
         substations: [
           SubstationScope(
@@ -216,7 +216,7 @@ void main() {
       final f = buildFakes();
       final kernel = StationKernel(
         bridge: bridge,
-        effectContext: f.ctx,
+        stationServices: f.ctx,
         resolver: const _IdleResolver(),
         substations: [
           SubstationScope(

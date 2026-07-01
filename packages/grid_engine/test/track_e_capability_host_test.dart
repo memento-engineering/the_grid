@@ -108,7 +108,7 @@ final _clock = DateTime(2026);
   final fakes = buildFakes();
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<EffectContext>(
+    InheritedSeed<StationServices>(
       value: fakes.ctx,
       child: StableInheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: _clock),
@@ -281,7 +281,7 @@ void main() {
       // The node is already at restartCount 2; one more failure → 3 == maxRestarts
       // → exhausted.
       owner.mountRoot(
-        InheritedSeed<EffectContext>(
+        InheritedSeed<StationServices>(
           value: fakes.ctx,
           child: StableInheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: _clock),
@@ -489,7 +489,7 @@ void main() {
       expect(imports.any((l) => l.contains('genesis_tree')), isFalse);
       expect(imports.any((l) => l.contains('station_bead_writer')), isFalse);
       expect(imports.any((l) => l.contains('joined_snapshot_notifier')), isFalse);
-      expect(imports.any((l) => l.contains('effect_context')), isFalse);
+      expect(imports.any((l) => l.contains('station_services')), isFalse);
     });
 
     test('CapabilityContext exposes no notifier/stream/writer surface', () {

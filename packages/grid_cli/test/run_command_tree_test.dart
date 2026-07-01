@@ -435,7 +435,7 @@ class _TreeHarness {
       bd: BdCliService(bdRunner),
       ownership: BeadOwnershipPredicate(const {'tgdog'}),
     );
-    final effectContext = EffectContext(
+    final effectContext = StationServices(
       provider: provider,
       writer: writer,
       stateSubstation: 'tgdog',
@@ -443,7 +443,7 @@ class _TreeHarness {
     return composeRunTree(
       work: work,
       state: state,
-      effectContext: effectContext,
+      stationServices: effectContext,
       substations: const [
         SubstationConfig(substationId: 'tgdog', ownedSubstations: {'tgdog'}),
       ],

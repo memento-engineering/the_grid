@@ -106,7 +106,7 @@ SessionProjection _session(
   final root = owner.mountRoot(
     InheritedSeed<JoinedSnapshotNotifier>(
       value: joined,
-      child: InheritedSeed<EffectContext>(
+      child: InheritedSeed<StationServices>(
         value: fakes.ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: reg,
@@ -160,7 +160,7 @@ Branch _whereSeed(Branch root, bool Function(Seed) test) =>
   final root = owner.mountRoot(
     InheritedSeed<JoinedSnapshotNotifier>(
       value: joined,
-      child: InheritedSeed<EffectContext>(
+      child: InheritedSeed<StationServices>(
         value: fakes.ctx,
         child: StableInheritedSeed<CapabilityRegistry>(
           value: registry,

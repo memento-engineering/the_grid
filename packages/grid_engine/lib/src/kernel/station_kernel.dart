@@ -4,7 +4,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 
 import '../bridge/station_join_bridge.dart';
 import '../domain/joined_snapshot.dart';
-import '../effect/effect_context.dart';
+import '../effect/station_services.dart';
 import '../formula/capability_registry.dart';
 import '../formula/stable_inherited.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
@@ -16,7 +16,7 @@ import 'effect_resolver.dart';
 /// M4-P0-BUILD-ORDER Track E/F).
 ///
 /// It assembles the ambient providers above the [Station] — the work-axis
-/// [JoinedSnapshotNotifier] (from the [bridge]), the [EffectContext] (the
+/// [JoinedSnapshotNotifier] (from the [bridge]), the [StationServices] (the
 /// provider/writer/stateSubstation the effects resolve), and the [EffectResolver]
 /// (phase → effect Seed) — mounts the tree under a [TreeOwner], and runs the
 /// reactive loop:
@@ -38,13 +38,13 @@ class StationKernel {
   /// timer), injectable so the re-poke is driven deterministically offline.
   StationKernel({
     required this.bridge,
-    required EffectContext effectContext,
+    required StationServices stationServices,
     required EffectResolver resolver,
     required List<SubstationScope> substations,
     CapabilityRegistry? registry,
     DateTime Function()? clock,
     Timer Function(Duration, void Function())? scheduleTimer,
-  }) : _effectContext = effectContext,
+  }) : _stationServices = stationServices,
        _resolver = resolver,
        _substations = substations,
        _registry = registry,
@@ -54,7 +54,7 @@ class StationKernel {
   /// The join bridge feeding the work axis — the kernel owns its lifecycle
   /// (started in [start], disposed in [dispose]).
   final StationJoinBridge bridge;
-  final EffectContext _effectContext;
+  final StationServices _stationServices;
   final EffectResolver _resolver;
   final List<SubstationScope> _substations;
 
@@ -99,7 +99,7 @@ class StationKernel {
       );
     }
     root = InheritedSeed<EffectResolver>(value: _resolver, child: root);
-    root = InheritedSeed<EffectContext>(value: _effectContext, child: root);
+    root = InheritedSeed<StationServices>(value: _stationServices, child: root);
     root = InheritedSeed<JoinedSnapshotNotifier>(
       value: bridge.notifier,
       child: root,

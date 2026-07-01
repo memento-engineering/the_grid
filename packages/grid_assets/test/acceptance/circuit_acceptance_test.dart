@@ -59,7 +59,7 @@ StationKernel _buildKernel(
   final bridge = StationJoinBridge(work: work, state: state);
   return StationKernel(
     bridge: bridge,
-    effectContext: f.ctx,
+    stationServices: f.ctx,
     resolver: kCodeResolver,
     // Inject an inline rubric source so the committee is hermetic (no disk read);
     // the on-disk Packaged-AI-Asset loader is exercised by track_d_assets_test.

@@ -102,7 +102,7 @@ void main() {
 
       final kernel = StationKernel(
         bridge: bridge,
-        effectContext: f.ctx,
+        stationServices: f.ctx,
         resolver: kCodeResolver,
         registry: buildCodeRegistry(),
         substations: [
@@ -171,7 +171,7 @@ void main() {
 
       final kernel = StationKernel(
         bridge: bridge,
-        effectContext: f.ctx,
+        stationServices: f.ctx,
         resolver: kCodeResolver,
         registry: buildCodeRegistry(),
         substations: [
