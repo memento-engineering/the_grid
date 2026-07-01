@@ -42,6 +42,13 @@ class _FakeSourceControl implements SourceControl {
   bool get canLand => true;
 
   @override
+  String workspaceFor(String beadId) => '/w/$beadId';
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+  @override
+  String get baseBranch => 'main';
+
+  @override
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,

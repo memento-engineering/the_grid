@@ -277,6 +277,21 @@ class ServiceBundle {
 /// `station_grid_assets`, Track H). Clean + dependency-free so a future
 /// genesis-shared home is a move, not a rewrite (designed-to-be-lifted).
 abstract interface class SourceControl {
+  /// The workspace directory the effect runs in for [beadId] — where the host
+  /// spawns its process and the land step commits/pushes from. The LAYOUT is the
+  /// SourceControl's detail, NOT the engine's (ADR-0008 D5 / ADR-0007 §1: the
+  /// engine's concept is "a workspace"; "one git worktree per bead, built from
+  /// source" is this impl's opinion). Deterministic + pure (no I/O);
+  /// [provisionWorkspace] is what actually creates it.
+  String workspaceFor(String beadId);
+
+  /// The branch [beadId]'s work is on (the git impl: `grid/<beadId>`).
+  String branchFor(String beadId);
+
+  /// The base branch a land opens its PR against (the substation's default
+  /// branch — the git impl reads its root checkout's default branch).
+  String get baseBranch;
+
   /// Materializes the workspace for [beadId] at [workspaceDir] (the git impl
   /// cuts a worktree off the root — ADR-0008 D5: "the git worktree is the
   /// `SourceControl` impl's way of provisioning"). The host calls this BEFORE the

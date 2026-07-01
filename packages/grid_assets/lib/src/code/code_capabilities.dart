@@ -205,6 +205,22 @@ class GitSourceControl implements SourceControl {
   bool get canLand => _gitOps != null && _prOpener != null;
 
   @override
+  String workspaceFor(String beadId) {
+    final root = _root;
+    // The git layout is THIS impl's opinion (ADR-0008 D5): a per-bead worktree
+    // under the root checkout. No root wired (offline) ⇒ a synthetic placeholder.
+    return root == null
+        ? '/grid/worktrees/$beadId'
+        : WorktreeLayout.worktreePath(root.path, root.substation, beadId);
+  }
+
+  @override
+  String branchFor(String beadId) => WorktreeLayout.branchFor(beadId);
+
+  @override
+  String get baseBranch => _root?.defaultBranch ?? 'main';
+
+  @override
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,

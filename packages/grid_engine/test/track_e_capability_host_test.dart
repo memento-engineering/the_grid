@@ -132,6 +132,13 @@ class _RecordingProvisionSourceControl implements SourceControl {
   bool get canLand => false;
 
   @override
+  String workspaceFor(String beadId) => '/w/$beadId';
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+  @override
+  String get baseBranch => 'main';
+
+  @override
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,
