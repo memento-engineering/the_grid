@@ -370,6 +370,7 @@ class ProcessAllocation extends Allocation {
 
   StreamSubscription<RuntimeEvent>? _sub;
   bool _started = false;
+  bool _terminal = false;
 
   /// Whether the spawn was reached (the Host stops the group on unmount only
   /// when true).
@@ -405,6 +406,11 @@ class ProcessAllocation extends Allocation {
   }
 
   void _onEvent(RuntimeEvent e) {
+    // A terminal (complete/failed) latches the effect: a re-fired terminal
+    // event never reads [ProcessCapability.result] twice nor double-reports (the
+    // Host also latches, belt-and-braces). A daemon's `ready` is NOT terminal —
+    // it may still die later and report `failed`.
+    if (_terminal) return;
     if (e is SessionStarted) {
       context.sink(AllocationStarted(pid: e.pid, pgid: e.pgid));
       return;
@@ -417,11 +423,13 @@ class ProcessAllocation extends Allocation {
         state = AllocationState.ready;
         context.sink(const AllocationReady());
       case StepSignal.complete:
+        _terminal = true;
         // The optional result payload the capability contributes on a clean
         // completion (read once, off the spawned process's output). Reported
         // WITH the completion so the Host records it in one merged write.
         unawaited(_reportComplete());
       case StepSignal.failed:
+        _terminal = true;
         state = AllocationState.gone;
         context.sink(const AllocationFailed());
     }
@@ -442,6 +450,9 @@ class ProcessAllocation extends Allocation {
   @override
   Future<void> dispose() async {
     state = AllocationState.dying;
+    // Cancel the cooperative token FIRST — a racing `startOrAdopt` that has not
+    // yet spawned bails at its guard (no orphan spawn after unmount).
+    context.capContext.cancel.cancel();
     unawaited(_sub?.cancel());
     _sub = null;
     // Kill the managed group (only if we reached the spawn) + the capability's
