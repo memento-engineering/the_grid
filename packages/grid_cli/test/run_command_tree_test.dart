@@ -118,6 +118,67 @@ void main() {
     });
   });
 
+  group('composeRunTree — the ASSET seam (ADR-0008 D1: default code, or inject)',
+      () {
+    test('an INJECTED asset (resolver + registry + services) drives the mount — a '
+        'non-code formula mounts its OWN step, so the burn composes WITHOUT '
+        'editing the composer', () async {
+      final h = _TreeHarness();
+      final wiring = h.compose(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: DefaultCapabilityRegistry(
+          capabilities: const {_markerStep: _MarkerCap()},
+          formulas: const {'marker': _markerFormula},
+        ),
+        // An empty ServiceBundle (no SourceControl) — an asset that leases/drives
+        // instead of cutting a git worktree (the burn). Proves `services` is
+        // honored: no git provisioning happens.
+        services: const ServiceBundle(),
+      );
+      addTearDown(h.dispose);
+
+      h.pushWork(Bead(id: 'tgdog-w1', title: 'do the thing'));
+      await wiring.start();
+      await _settle();
+
+      // The injected formula/registry drove the mount: the sole recorded spawn is
+      // the MARKER node path, not the `code` asset's `agent` step.
+      expect(h.provider.starts, hasLength(1));
+      expect(
+        h.provider.starts.single.name,
+        contains('/$_markerStep'),
+        reason: 'the injected asset mounted, not the code default',
+      );
+      // The injected empty ServiceBundle replaced the git default — no worktree
+      // was provisioned (a `code` default would have provisioned via git).
+      expect(
+        h.git.provisioned,
+        isEmpty,
+        reason: 'the injected ServiceBundle (no SourceControl) was honored',
+      );
+
+      await wiring.teardown();
+    });
+
+    test('with NO injected asset, the `code` default still drives (unchanged): the '
+        'git ServiceBundle provisions the worktree before the spawn', () async {
+      final h = _TreeHarness();
+      final wiring = h.compose(); // no asset → code default
+      addTearDown(h.dispose);
+
+      h.pushWork(Bead(id: 'tgdog-w1', title: 'code default'));
+      await wiring.start();
+      await _settle();
+
+      expect(h.provider.starts, hasLength(1));
+      // The code default provisions via the git SourceControl (the contrast with
+      // the injected-asset case above).
+      expect(h.git.provisioned, contains('tgdog-w1'));
+
+      await wiring.teardown();
+    });
+  });
+
   group('runGridTree — gating + dry-run wiring (tree-as-default)', () {
     test('an empty allow-set is refused (exit 64, no composition)', () async {
       final errs = <String>[];
@@ -396,6 +457,45 @@ Future<void> _settle() async {
   }
 }
 
+// --- a minimal NON-CODE asset (proves the composeRunTree asset seam) ----------
+
+const String _markerStep = 'marker';
+
+/// A one-step formula distinct from the `code` asset — its step id [_markerStep]
+/// is recognizable in the recorded spawn name, proving an injected asset (not the
+/// code default) drove the mount.
+const Formula _markerFormula = Formula(
+  id: 'marker',
+  terminalStepId: _markerStep,
+  steps: [
+    CapabilityStep(
+      stepId: _markerStep,
+      capabilityId: _markerStep,
+      kind: StepKind.job,
+    ),
+  ],
+);
+
+/// The bead→formula policy for the injected asset (all work → the marker formula).
+Formula _markerFormulaFor(Bead bead) => _markerFormula;
+
+/// A trivial process capability for the marker step — the DRY provider records
+/// its (never-real) spawn; the node path carries [_markerStep].
+class _MarkerCap extends ProcessCapability {
+  const _MarkerCap();
+
+  @override
+  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
+    workDir: ctx.workspaceDir,
+    command: 'sh',
+    args: const ['-c', 'true'],
+    lifecycle: Lifecycle.oneTurn,
+  );
+
+  @override
+  StepSignal interpretEvent(RuntimeEvent event) => StepSignal.none;
+}
+
 /// The offline harness: fake work/state snapshot sources, a recording dry
 /// provider, a recording bd runner behind the chokepoint, a fake git service
 /// (no worktrees), a fake process-group controller, and a completing,
@@ -426,7 +526,14 @@ class _TreeHarness {
     firstBarrierTick ??= nextTick();
   }
 
-  TreeRunWiring compose() {
+  /// Composes the wiring. With no [resolver]/[registry]/[services] it uses the
+  /// `code` asset defaults (the live path); pass them to prove the ADR-0008 D1
+  /// asset seam (a non-code asset composes without editing the composer).
+  TreeRunWiring compose({
+    FormulaResolver? resolver,
+    CapabilityRegistry? registry,
+    ServiceBundle? services,
+  }) {
     // The dry effect context: the recording provider (never spawns real
     // claude), the bd write chokepoint over the recording runner (fail-closed on
     // the owned rig), the owned state rig, and NO git/PR land ops (an offline
@@ -455,6 +562,9 @@ class _TreeHarness {
       ),
       groups: groups,
       freshnessBarrier: _barrier,
+      resolver: resolver,
+      registry: registry,
+      services: services,
     );
   }
 

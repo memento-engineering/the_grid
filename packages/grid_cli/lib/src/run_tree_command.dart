@@ -67,17 +67,23 @@ class TreeRunWiring {
 /// Mirrors [composeRun]'s injectable-seam style so the dry-run smoke drives the
 /// whole composition with fakes: the [work]/[state] [SnapshotSource]s (fakes in
 /// a test; [RuntimeSnapshotSource] over the real controllers in the live arm),
-/// the [effectContext] (a dry provider + the bd write chokepoint; land ops left
+/// the [stationServices] (a dry provider + the bd write chokepoint; land ops left
 /// null for an offline build), the per-rig [substations] config, the [git] service +
 /// [workRoot] (the Track-D worktree seam), the [groups] process-group
 /// controller (the orphan-kill seam — kept REAL so its `pgid <= 1` guard is
 /// exercised), and the [freshnessBarrier] (a completed re-query of the read +
 /// state runtimes).
 ///
+/// The ASSET seam (ADR-0008 D1) is injectable too: [resolver] (the bead→formula
+/// policy), [registry] (the capability set + formulas), and [services] (the
+/// per-substation collaborators) DEFAULT to the `code` asset, but a different asset
+/// (the M6 burn — its 2nd consumer) passes its own trio and composes WITHOUT
+/// editing this composer.
+///
 /// Construction only: it builds
 ///  - a [StationJoinBridge] over [work] + [state] (the lone subscription, A39),
-///  - a [FormulaResolver] rooting the `code` formula per coding bead + the
-///    [buildCodeRegistry] capability set,
+///  - the resolved [FormulaResolver] + [CapabilityRegistry] (default: the `code`
+///    formula per coding bead + [buildCodeRegistry]),
 ///  - the [SubstationScope]s (one per [SubstationConfig], keyed by rig id so a rig add/remove
 ///    mounts/unmounts exactly that scope), each provided the git [ServiceBundle]
 ///    (lifted from the injected provisioner + land ops; land null ⇒ land no-ops,
@@ -101,31 +107,44 @@ TreeRunWiring composeRunTree({
   required Future<void> Function() freshnessBarrier,
   GitOps? gitOps,
   PrOpener? prOpener,
+  FormulaResolver? resolver,
+  CapabilityRegistry? registry,
+  ServiceBundle? services,
 }) {
   final bridge = StationJoinBridge(work: work, state: state);
-  // The live work path (ADR-0008 D4): the reentrant FormulaResolver roots the
+  // The ASSET seam (ADR-0008 D1 — now with its 2nd consumer, the M6 burn): the
+  // bead→formula policy ([resolver]), the capability set + formulas ([registry]),
+  // and the per-substation collaborators ([services]) are INPUTS — a different
+  // asset (the burn) passes its own trio and composes WITHOUT editing this
+  // composer. They DEFAULT to the `code` asset, so the live path + every existing
+  // caller is unchanged.
+  //
+  // The `code` default (ADR-0008 D4): the reentrant FormulaResolver roots the
   // `code` formula (agent → review → land, where `review` inflates the
   // adversarial committee sub-formula — M5 Track E) per coding bead at the
-  // SessionResolver seam. The registry supplies the capability set + the
-  // formulas; the ServiceBundle lifts the injected git/PR ops into the land
-  // capability's SourceControl (null ⇒ land no-ops — an offline build never
-  // touches real git/GitHub).
-  const resolver = FormulaResolver(_codeFormulaFor);
-  final registry = buildCodeRegistry();
-  // ALWAYS provide a git SourceControl: it owns WORKSPACE PROVISIONING (the host
-  // cuts the per-bead worktree off `git`/`workRoot` before the agent spawns) —
-  // needed even when LAND is deferred. Land stays optional: gitOps/prOpener null
-  // ⇒ `canLand` is false ⇒ the land capability no-ops (the early-arm commit-only
-  // posture). In a dry-run `git` is the INERT dry service, so provisioning is a
-  // no-op too.
-  final services = ServiceBundle(
-    sourceControl: GitSourceControl(
-      gitOps: gitOps,
-      prOpener: prOpener,
-      provisioner: git,
-      root: workRoot,
-    ),
-  );
+  // SessionResolver seam; [buildCodeRegistry] supplies its capability set + the
+  // formulas; the git [ServiceBundle] lifts the injected git/PR ops into the land
+  // capability's SourceControl (null land ops ⇒ land no-ops — an offline build
+  // never touches real git/GitHub).
+  final resolvedResolver = resolver ?? const FormulaResolver(_codeFormulaFor);
+  final resolvedRegistry = registry ?? buildCodeRegistry();
+  // The `code` asset ALWAYS provides a git SourceControl: it owns WORKSPACE
+  // PROVISIONING (the host cuts the per-bead worktree off `git`/`workRoot` before
+  // the agent spawns) — needed even when LAND is deferred. Land stays optional:
+  // gitOps/prOpener null ⇒ `canLand` is false ⇒ the land capability no-ops (the
+  // early-arm commit-only posture). In a dry-run `git` is the INERT dry service,
+  // so provisioning is a no-op too. An asset with no source control (the burn
+  // leases + drives — it never cuts a worktree) passes its own [services].
+  final resolvedServices =
+      services ??
+      ServiceBundle(
+        sourceControl: GitSourceControl(
+          gitOps: gitOps,
+          prOpener: prOpener,
+          provisioner: git,
+          root: workRoot,
+        ),
+      );
 
   // One config scope per rig, keyed by rig id so a rig add/remove mounts /
   // unmounts exactly that scope (the Grid reconciles its scope children by key).
@@ -138,7 +157,7 @@ TreeRunWiring composeRunTree({
       .map(
         (config) => SubstationScope(
           configNotifier: SubstationConfigNotifier(config),
-          services: services,
+          services: resolvedServices,
           key: ValueKey('scope.${config.substationId}'),
         ),
       )
@@ -161,9 +180,9 @@ TreeRunWiring composeRunTree({
   final kernel = StationKernel(
     bridge: bridge,
     stationServices: stationServices,
-    resolver: resolver,
+    resolver: resolvedResolver,
     substations: substationScopes,
-    registry: registry,
+    registry: resolvedRegistry,
   );
 
   return TreeRunWiring(
