@@ -152,6 +152,36 @@ class _RecordingProvisionSourceControl implements SourceControl {
   Future<PrRef?> openPr({required String workspaceDir, required String branch, required String baseBranch, required String title}) async => null;
 }
 
+/// A [SourceControl] with a KNOWN workspace/branch layout that records the
+/// workspaceDir it is asked to provision — so a test can prove the HOST DERIVES
+/// its workspace from the INHERITED SourceControl (ADR-0008 D5), not from a
+/// baked-in engine path (the EffectContext→StationServices cleanup).
+class _DerivingSourceControl implements SourceControl {
+  final List<String> provisionedDirs = [];
+
+  @override
+  bool get canLand => false;
+  @override
+  String workspaceFor(String beadId) => '/custom/ws/$beadId';
+  @override
+  String branchFor(String beadId) => 'custom/$beadId';
+  @override
+  String get baseBranch => 'trunk';
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async => provisionedDirs.add(workspaceDir);
+
+  @override
+  Future<void> commitAll({required String workspaceDir, required String message}) async {}
+  @override
+  Future<void> push({required String workspaceDir, required String remote, required String branch}) async {}
+  @override
+  Future<PrRef?> openPr({required String workspaceDir, required String branch, required String baseBranch, required String title}) async => null;
+}
+
 Branch _hostBranch(Branch root) {
   Branch? found;
   void walk(Branch b) {
@@ -206,6 +236,30 @@ void main() {
         isTrue,
         reason: 'provision must precede spawn',
       );
+    });
+
+    test('the host DERIVES workspaceDir from the INHERITED SourceControl '
+        '(ADR-0008 D5) — the engine holds no worktree layout', () async {
+      final log = <String>[];
+      final sc = _DerivingSourceControl();
+      final h = _host(
+        _RecordingProcessCap(log),
+        services: ServiceBundle(sourceControl: sc),
+      );
+      addTearDown(() {
+        h.owner.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
+
+      // The workspace came from the inherited SourceControl's workspaceFor — it
+      // reached the capability's spawn config AND the provision call, NOT a
+      // baked engine path. (A mutation that hardcodes the workspace in the Host,
+      // or resolves the wrong ambient, fails all three.)
+      expect(h.fakes.provider.started.single.config.workDir, '/custom/ws/tg-1');
+      expect(log.first, 'spawn(tg-1@/custom/ws/tg-1)');
+      expect(sc.provisionedDirs, ['/custom/ws/tg-1'],
+          reason: 'the SAME derived path is provisioned');
     });
 
     test('SessionStarted persists the per-node identity (pgid/pid/token/running)',
