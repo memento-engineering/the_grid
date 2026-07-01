@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
+import 'package:grid_assets/grid_assets.dart' show DartCommand;
 import 'package:grid_cli/src/code_run_command.dart';
 import 'package:grid_cli/src/demo_command.dart';
 import 'package:grid_cli/src/gate_command.dart';
@@ -18,6 +19,10 @@ Future<void> main(List<String> arguments) async {
       CommandRunner<int>('grid', 'the_grid — a reactive beads controller.')
         ..addCommand(WatchCommand())
         ..addCommand(CodeRunCommand())
+        // The FIRST asset-exported Command consumed by a runner (the CLI-SDK
+        // model): the DART domain ships it from grid_assets; this app just
+        // assembles it.
+        ..addCommand(DartCommand())
         ..addCommand(GateCommand())
         ..addCommand(DemoCommand())
         ..addCommand(ServeCommand())

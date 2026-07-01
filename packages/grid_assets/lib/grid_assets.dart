@@ -20,4 +20,8 @@ export 'src/code/committee.dart';
 export 'src/compute/bounded_use.dart';
 export 'src/compute/compute_command.dart';
 export 'src/compute/lease_capability.dart';
+export 'src/dart/dart_command.dart';
+export 'src/dart/dart_domain.dart';
+export 'src/dart/dart_link_service.dart';
+export 'src/dart/pub_links.dart';
 export 'src/lease/bus_lease.dart';
