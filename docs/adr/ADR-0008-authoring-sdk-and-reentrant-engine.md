@@ -52,6 +52,8 @@ The "full power grid" rename. Canonical:
 
 **Why:** `butane_flutter` is already a gascity rig (its committed `.gascity-pack/`); `butane_grid_assets` is the the_grid-native successor. A different-repo consumer structurally **cannot** subclass the engine's element tree without coupling to internals and inheriting every derailment footgun.
 
+**Amended 2026-06-29 (ratified Nico, ADR-0011) — `Asset` becomes an UMBRELLA with two families:** the *content/capability* assets defined here (the `*_grid_assets` packs) **plus** a new *resource/capacity* family (leasable compute / agent slots / humans-via-HITL). "Asset Management" is the discipline over both; federation leases the resource family. This **extends — does not rename** — the `Asset` defined below. See **ADR-0011** (Federation + Asset Management).
+
 **Amended 2026-06-28 (ratified Nico) — the asset taxonomy refines; `grid_assets` is the baseline; `power_station` is the assets repo; assets follow the Dart "Packaged AI Assets" format.**
 
 - **`grid_assets`** is the **default, bare-bones baseline pack** — industry-standard operations (git `SourceControl` + a bare goal-oriented SDLC loop). It **supersedes the `station_grid_assets` name** above: grid assets live at **any turtle/level** of the system (not just a station), and it follows the `grid_*` pattern. (`butane_grid_assets` / `zero_conf_grid_assets` / `leonard_grid_assets` are unchanged.)

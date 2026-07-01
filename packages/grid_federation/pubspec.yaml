@@ -1,0 +1,21 @@
+name: grid_federation
+description: >-
+  Cross-station federation (ADR-0011): per-station RESOURCE LEASING over a
+  pluggable bus. A station OFFERS capacity (compute / agent slots); a peer
+  LEASES a slot and dispatches a GENERIC command to run there, collecting the
+  result. Per-station dolt stays the truth; this package carries the lossy bus.
+  Transport is an abstract seam — HTTP impl #1 (this pass), MQTT/WS droppable in
+  later (Nico, 2026-06-29). Standalone: `dart:io` only, no grid_* deps, so the
+  lessor runs anywhere dart runs.
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  meta: ^1.16.0
+
+dev_dependencies:
+  lints: ^5.1.0
+  test: ^1.25.0
