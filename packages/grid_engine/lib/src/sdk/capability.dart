@@ -13,6 +13,7 @@ library;
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import 'allocation.dart';
 import 'cursor.dart';
 
 /// A leaf the engine mounts — either a [ProcessCapability] or a
@@ -20,6 +21,14 @@ import 'cursor.dart';
 /// flavors are open for an asset to implement.
 sealed class Capability {
   const Capability();
+
+  /// Mints the [Allocation] that holds this capability's live effect — the
+  /// `createRenderObject` analogue (ADR-0009 D4). Synchronous + cheap; the Host
+  /// then drives it asynchronously (`startOrAdopt`/`update`/`dispose`/`detach`).
+  /// [ProcessCapability]/[ServiceCapability] supply defaults, so an existing
+  /// capability needs no change; an asset overrides only to customize adopt/
+  /// detach/update for a bespoke effect.
+  Allocation createAllocation(AllocationContext ctx);
 }
 
 /// A capability backed by a spawned, supervised process (generalizes P0's
@@ -50,6 +59,15 @@ abstract class ProcessCapability extends Capability {
   /// `pkill` a detached side-process by token. Defaults to a no-op (the host's
   /// `provider.stop` kills the managed group).
   Future<void> teardown(CapabilityContext ctx) async {}
+
+  /// The default [Allocation] for a spawned process (ADR-0009 D6) — a
+  /// [ProcessAllocation] driving [spawn]/[interpretEvent] over the transport.
+  /// A one-shot (`StepKind.job`) is respawn-or-skip; a `StepKind.daemon` is
+  /// adopt-or-respawn + detach-capable (Track C). Override only for a bespoke
+  /// process effect.
+  @override
+  Allocation createAllocation(AllocationContext ctx) =>
+      ProcessAllocation(this, ctx);
 }
 
 /// A capability backed by an async body driving [ServiceBundle] collaborators
@@ -65,6 +83,13 @@ abstract class ServiceCapability extends Capability {
 
   /// Idempotent cleanup on unmount. Defaults to a no-op.
   Future<void> teardown(CapabilityContext ctx) async {}
+
+  /// The default [Allocation] for an async service body (ADR-0009 D6) — the
+  /// [ServiceAllocation]/`JobAllocation` convenience: start-runs, no adopt/
+  /// detach/update, respawn-or-skip.
+  @override
+  Allocation createAllocation(AllocationContext ctx) =>
+      ServiceAllocation(this, ctx);
 }
 
 /// What a runtime event means to a [ProcessCapability]. `ready` and `complete`

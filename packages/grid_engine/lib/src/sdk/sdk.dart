@@ -9,6 +9,7 @@
 /// DEPTH by construction.
 library;
 
+export 'allocation.dart';
 export 'cursor.dart';
 export 'formula.dart';
 export 'frontier.dart';
