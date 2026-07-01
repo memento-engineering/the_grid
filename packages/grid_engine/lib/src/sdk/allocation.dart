@@ -143,9 +143,20 @@ class AllocationStarted extends AllocationReport {
 /// A daemon signalled it is up — a POSITIVE TERMINAL that satisfies a `dependsOn`
 /// while the daemon stays mounted (OQ-5). The Host persists `state=ready` and
 /// does NOT latch (a later death still reports [AllocationFailed]).
+///
+/// A ready daemon may PUBLISH a rendezvous [payload] (e.g. the burn-follower's
+/// `{endpoint, station, lease}`) — the Host records it under the disjoint result
+/// namespace merged with the `state=ready` write, so a dependent step reads it
+/// pull-free (D-5), exactly as a job's completion payload. Empty/null for a
+/// daemon that publishes nothing (a plain up-signal).
 class AllocationReady extends AllocationReport {
-  /// Reports a daemon reaching ready.
-  const AllocationReady();
+  /// Reports a daemon reaching ready, optionally publishing a rendezvous
+  /// [payload].
+  const AllocationReady([this.payload]);
+
+  /// The optional rendezvous payload the daemon publishes on ready (recorded on
+  /// the session bead, never used as a pipeline signal).
+  final Map<String, String>? payload;
 }
 
 /// A job ran to completion — a POSITIVE TERMINAL that latches. The Host persists

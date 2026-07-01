@@ -192,9 +192,9 @@ class CapabilityHostState extends State<CapabilityHost> {
     switch (report) {
       case AllocationStarted(:final pid, :final pgid):
         unawaited(_persistStarted(pid: pid, pgid: pgid));
-      case AllocationReady():
+      case AllocationReady(:final payload):
         if (_completed) return;
-        unawaited(_persistReady());
+        unawaited(_persistReady(payload));
       case AllocationCompleted(:final payload):
         if (_completed) return;
         _completed = true;
@@ -239,12 +239,20 @@ class CapabilityHostState extends State<CapabilityHost> {
   }
 
   /// A daemon's `ready` — a POSITIVE TERMINAL that does NOT latch (the daemon
-  /// stays mounted and may later write `failed` on death, OQ-5).
-  Future<void> _persistReady() async {
+  /// stays mounted and may later write `failed` on death, OQ-5). It may PUBLISH a
+  /// rendezvous [payload] (e.g. the burn-follower's endpoint), recorded under the
+  /// disjoint result namespace merged with the `state=ready` write — one atomic
+  /// chokepoint update — so a dependent reads it pull-free (D-5), exactly like a
+  /// job's completion payload. A null payload writes only the state (no result
+  /// keys — a plain up-signal, today's behavior).
+  Future<void> _persistReady([Map<String, String>? payload]) async {
     if (_cancelled || !context.mounted) return;
     await _ctx!.writer.update(
       _sessionId,
-      metadata: nodeStateMetadata(_nodePath, StepState.ready),
+      metadata: {
+        ...nodeStateMetadata(_nodePath, StepState.ready),
+        ...nodeResultMetadata(_nodePath, payload),
+      },
     );
     _emitFlare('step.ready', const {});
   }

@@ -20,3 +20,4 @@ export 'src/code/committee.dart';
 export 'src/compute/bounded_use.dart';
 export 'src/compute/compute_command.dart';
 export 'src/compute/lease_capability.dart';
+export 'src/lease/lease_allocation.dart';
