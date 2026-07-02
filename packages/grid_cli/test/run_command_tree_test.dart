@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:grid_cli/src/run_tree_command.dart';
+import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_cli/src/station_runner.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -181,14 +182,15 @@ void main() {
     });
   });
 
-  group('runGridTree — gating + dry-run wiring (tree-as-default)', () {
+  group(
+      'the station-runner pieces (a file-local asset runner) — gating + '
+      'dry-run wiring', () {
     test('an empty allow-set is refused (exit 64, no composition)', () async {
       final errs = <String>[];
-      final code = await runGridTree(
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: const {},
-        dryRun: true,
+        args: const StationArgs(substations: {}, dryRun: true),
         out: (_) {},
         err: errs.add,
         runForever: false,
@@ -200,12 +202,14 @@ void main() {
     test('--land combined with --dry-run is refused (exit 64) — land is a LIVE '
         'GitHub write, never armed under an observe-only run', () async {
       final errs = <String>[];
-      final code = await runGridTree(
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: {'tgdog'},
-        dryRun: true, // observe-only…
-        land: true, //   …but asking to land → contradiction, refused.
+        args: const StationArgs(
+          substations: {'tgdog'},
+          dryRun: true, // observe-only…
+          land: true, //   …but asking to land → contradiction, refused.
+        ),
         out: (_) {},
         err: errs.add,
         runForever: false,
@@ -216,12 +220,14 @@ void main() {
 
     test('a non-dry run with no --root is refused (exit 64)', () async {
       final errs = <String>[];
-      final code = await runGridTree(
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: {'tgdog'},
-        dryRun: false, // ask for LIVE…
-        // …no root → refused before any composition.
+        args: const StationArgs(
+          substations: {'tgdog'},
+          dryRun: false, // ask for LIVE…
+          // …no root → refused before any composition.
+        ),
         out: (_) {},
         err: errs.add,
         runForever: false,
@@ -234,13 +240,15 @@ void main() {
         'sessions must never default into the read --workspace (A36/A37)',
         () async {
       final errs = <String>[];
-      final code = await runGridTree(
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: {'genesis'},
-        dryRun: false,
-        rootPath: '/tmp/some-root', // past the root guard…
-        // …no --state-workspace → refused.
+        args: const StationArgs(
+          substations: {'genesis'},
+          dryRun: false,
+          rootPath: '/tmp/some-root', // past the root guard…
+          // …no --state-workspace → refused.
+        ),
         out: (_) {},
         err: errs.add,
         runForever: false,
@@ -271,29 +279,31 @@ void main() {
         await provider.close();
       });
 
-      final code = await runGridTree(
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: {'tgdog'},
-        stateSubstation: 'tgdog',
-        dryRun: true,
+        args: const StationArgs(
+          substations: {'tgdog'},
+          stateSubstation: 'tgdog',
+          dryRun: true,
+          // A short fixed run lets the mount→mint→spawn microtask chain settle
+          // before teardown, then returns 0.
+          runFor: Duration(milliseconds: 100),
+        ),
         // Inject the two sources + the dry seams — but NOT the git service, so
         // the lib's own dry (no-op) git service is exercised end-to-end (the
         // RestartReconciler probes it on start; it must touch no real git).
-        workSourceOverride: work,
-        stateSourceOverride: state,
-        providerOverride: provider,
-        stateBdOverride: BdCliService(bdRunner),
-        groupsOverride: groups,
-        rootCheckoutOverride: const RootCheckout(
+        work: work,
+        state: state,
+        provider: provider,
+        stateBd: BdCliService(bdRunner),
+        groups: groups,
+        rootCheckout: const RootCheckout(
           path: '/tmp/grid-tree-root',
           defaultBranch: 'main',
           substation: 'tgdog',
         ),
-        freshnessBarrierOverride: () async {},
-        // A short fixed run lets the mount→mint→spawn microtask chain settle
-        // before teardown, then returns 0.
-        runFor: const Duration(milliseconds: 100),
+        freshnessBarrier: () async {},
         out: (_) {},
         err: (_) {},
       );
@@ -316,14 +326,16 @@ void main() {
     test('a non-dry run with NO --bead is refused (64) — a live arm must bless '
         'specific beads (the drive-list, ADR-0006)', () async {
       final errs = <String>[];
-      final code = await runGridTree(
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: {'tgdog'},
-        dryRun: false,
-        rootPath: '/tmp/some-root', // past the root guard…
-        stateWorkspacePath: '/tmp/some-state', // …past the state guard…
-        // …no --bead → refused before any discovery/composition.
+        args: const StationArgs(
+          substations: {'tgdog'},
+          dryRun: false,
+          rootPath: '/tmp/some-root', // past the root guard…
+          stateWorkspacePath: '/tmp/some-state', // …past the state guard…
+          // …no --bead → refused before any discovery/composition.
+        ),
         out: (_) {},
         err: errs.add,
         runForever: false,
@@ -356,25 +368,27 @@ void main() {
         await provider.close();
       });
 
-      final code = await runGridTree(
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: {'tgdog'},
-        stateSubstation: 'tgdog',
-        dryRun: true,
-        targetBeads: const {'tgdog-w1'}, // bless ONLY w1
-        workSourceOverride: work,
-        stateSourceOverride: state,
-        providerOverride: provider,
-        stateBdOverride: BdCliService(bdRunner),
-        groupsOverride: groups,
-        rootCheckoutOverride: const RootCheckout(
+        args: const StationArgs(
+          substations: {'tgdog'},
+          stateSubstation: 'tgdog',
+          dryRun: true,
+          targetBeads: {'tgdog-w1'}, // bless ONLY w1
+          runFor: Duration(milliseconds: 100),
+        ),
+        work: work,
+        state: state,
+        provider: provider,
+        stateBd: BdCliService(bdRunner),
+        groups: groups,
+        rootCheckout: const RootCheckout(
           path: '/tmp/grid-tree-root',
           defaultBranch: 'main',
           substation: 'tgdog',
         ),
-        freshnessBarrierOverride: () async {},
-        runFor: const Duration(milliseconds: 100),
+        freshnessBarrier: () async {},
         out: (_) {},
         err: (_) {},
       );
@@ -414,25 +428,27 @@ void main() {
         await provider.close();
       });
 
-      // A LIVE run (dryRun:false) with a --root but NO rootCheckoutOverride, so
-      // registerRootCheckout is actually exercised — all other seams faked.
-      final code = await runGridTree(
+      // A LIVE run (dryRun:false) with a --root but NO injected root checkout,
+      // so registerRootCheckout is actually exercised — all other seams faked.
+      final code = await runStation(
         resolver: const FormulaResolver(_markerFormulaFor),
         registry: _markerRegistry(),
-        substations: {'tgdog'},
-        stateSubstation: 'tgdog',
-        dryRun: false,
-        rootPath: '/tmp/grid-tree-root',
-        head: 'm4-p1-reentrant-engine',
-        targetBeads: const {'tgdog-w1'},
-        workSourceOverride: work,
-        stateSourceOverride: state,
-        providerOverride: provider,
-        stateBdOverride: BdCliService(bdRunner),
-        groupsOverride: groups,
-        gitServiceOverride: git.service,
-        freshnessBarrierOverride: () async {},
-        runFor: const Duration(milliseconds: 100),
+        args: const StationArgs(
+          substations: {'tgdog'},
+          stateSubstation: 'tgdog',
+          dryRun: false,
+          rootPath: '/tmp/grid-tree-root',
+          head: 'm4-p1-reentrant-engine',
+          targetBeads: {'tgdog-w1'},
+          runFor: Duration(milliseconds: 100),
+        ),
+        work: work,
+        state: state,
+        provider: provider,
+        stateBd: BdCliService(bdRunner),
+        groups: groups,
+        gitService: git.service,
+        freshnessBarrier: () async {},
         out: (_) {},
         err: (_) {},
       );
@@ -472,6 +488,84 @@ void main() {
 Future<void> _settle() async {
   for (var i = 0; i < 12; i++) {
     await Future<void>.delayed(Duration.zero);
+  }
+}
+
+/// A file-local asset runner mirroring what an asset's `main()` composes from
+/// the station-runner LIBRARY pieces (the composition inversion, 2026-07-02 —
+/// the framework owns no run command): `validateArming` → [StationSources] →
+/// `buildLiveWiring` → `composeStation` → `driveStation`, with the
+/// [StationRefusal] catch mapping to (err, exit code) exactly like a runner's
+/// top level would. The optional seams thread straight through to
+/// `buildLiveWiring` so the gating + dry-run wiring assertions run over fakes.
+Future<int> runStation({
+  required StationArgs args,
+  required FormulaResolver resolver,
+  required CapabilityRegistry registry,
+  SnapshotSource work = const EmptySnapshotSource(),
+  SnapshotSource? state,
+  ServiceBundle services = const ServiceBundle(),
+  void Function(String)? out,
+  void Function(String)? err,
+  BdCliService? stateBd,
+  RuntimeProvider? provider,
+  StationGitService? gitService,
+  ProcessGroupController? groups,
+  RootCheckout? rootCheckout,
+  Future<void> Function()? freshnessBarrier,
+  bool runForever = true,
+}) async {
+  final writeErr = err ?? (String _) {};
+  try {
+    validateArming(
+      args,
+      rootInjected: rootCheckout != null,
+      stateInjected: state != null || stateBd != null,
+    );
+    final sources = StationSources(
+      work: work,
+      state: state ?? const EmptySnapshotSource(),
+    );
+    final live = await buildLiveWiring(
+      args: args,
+      sources: sources,
+      onRefusal: out,
+      stateBdOverride: stateBd,
+      providerOverride: provider,
+      gitServiceOverride: gitService,
+      groupsOverride: groups,
+      rootCheckoutOverride: rootCheckout,
+      freshnessBarrierOverride: freshnessBarrier,
+    );
+    final wiring = composeStation(
+      work: sources.work,
+      state: sources.state,
+      stationServices: live.stationServices,
+      substations: [
+        SubstationConfig(
+          substationId: args.substations.first,
+          ownedSubstations: args.substations,
+          driveList: args.targetBeads,
+        ),
+      ],
+      git: live.git,
+      workRoot: live.workRoot,
+      groups: live.groups,
+      freshnessBarrier: live.freshnessBarrier,
+      resolver: resolver,
+      registry: registry,
+      services: services,
+    );
+    return await driveStation(
+      wiring: wiring,
+      sources: sources,
+      args: args,
+      out: out,
+      runForever: runForever,
+    );
+  } on StationRefusal catch (refusal) {
+    writeErr(refusal.message);
+    return refusal.code;
   }
 }
 
@@ -567,8 +661,10 @@ class _MarkerCap extends ProcessCapability {
   const _MarkerCap();
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    // The effect verb: the per-session Workspace is AMBIENT (mounted by
+    // SessionScope — a synthetic placeholder when no SourceControl is wired).
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'true'],
     lifecycle: Lifecycle.oneTurn,

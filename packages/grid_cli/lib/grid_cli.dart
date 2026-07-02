@@ -4,23 +4,18 @@
 /// `the_grid` is a framework, not a turnkey tool: a station is a user-composed,
 /// AOT-compiled runner (`main.dart` + `dart compile exe`) that builds a
 /// `CommandRunner` from the Commands it wants — the generic ones here plus its
-/// assets' Commands. There is no baked-in `grid run`; the de-opinionated
-/// [StationRunCommand] base takes the asset trio (resolver + registry) as
-/// configuration, and each asset offers a configured run command
-/// (`CodeRunCommand` is the `code` asset's — it lives in `power_station`'s
-/// `grid_assets` since the repo split; memento's assembled runner is
-/// `space_station`).
+/// assets' Commands. There is no baked-in `grid run` and no run BASE CLASS
+/// (ADR-0008 Decision 2, amended 2026-07-02 — consumers compose, never
+/// subclass): an asset's runner calls the station-runner LIBRARY PIECES in
+/// order — `addStationFlags`/`StationArgs` → `validateArming` →
+/// `discoverWorkspaces` → `buildControllers` → `buildLiveWiring` → its OWN
+/// `ServiceBundle` → `composeStation` (+ `wrapRoot` for its ambient config
+/// providers) → `driveStation`. (`CodeRunCommand` lives in `power_station`'s
+/// `grid_assets`; memento's assembled runner is `space_station`.)
 library;
 
-// The de-opinionated run base + the pure composition seam (the asset trio in).
-export 'src/station_run_command.dart';
-export 'src/run_tree_command.dart'
-    show
-        AssetServicesBuilder,
-        AssetWiring,
-        TreeRunWiring,
-        composeStation,
-        runGridTree;
+// The station-runner library pieces (the composition inversion, 2026-07-02).
+export 'src/station_runner.dart';
 export 'src/run_command.dart' show RuntimeProviderKind;
 
 // The generic, asset-agnostic driving commands.
