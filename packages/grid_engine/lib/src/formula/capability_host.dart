@@ -74,6 +74,12 @@ class CapabilityHostState extends State<CapabilityHost> {
   bool _cancelled = false;
   bool _completed = false;
 
+  /// Capture-only flow telemetry (FT-1, tg-pez) — the instant this incarnation
+  /// began driving its effect (captured at the FIRST kick, off any build-path
+  /// read; the injected clock). The terminal write derives `durationMs` from it.
+  /// Null only before the kick (never on a terminal path).
+  DateTime? _startedAt;
+
   String get _sessionId => seed.mount.session.sessionId;
   String get _nodePath => seed.mount.nodePath;
 
@@ -112,6 +118,10 @@ class CapabilityHostState extends State<CapabilityHost> {
 
     final existing = _allocation;
     if (existing == null) {
+      // Capture-only flow telemetry (FT-1): stamp the step's begin instant at
+      // the kick (off-build, injected clock) — the terminal write derives
+      // `durationMs` from it. Set once, before the async kick.
+      _startedAt = _now();
       // FIRST call: mint the Allocation HERE (synchronously, before the async
       // kick) so `dispose → allocation.dispose` (teardown) is guaranteed on
       // EVERY exit path — even a dispose that races the kick before it spawns
@@ -192,10 +202,10 @@ class CapabilityHostState extends State<CapabilityHost> {
         if (_completed) return;
         _completed = true;
         unawaited(_persistComplete(payload));
-      case AllocationFailed():
+      case AllocationFailed(:final reason):
         if (_completed) return;
         _completed = true;
-        unawaited(_persistFailure());
+        unawaited(_persistFailure(reason));
       case AllocationGated(:final reason):
         if (_completed) return;
         _completed = true;
@@ -218,16 +228,40 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// in isolation (the two latches otherwise mutually mask each other).
   void deliverReportForTest(AllocationReport report) => _onReport(report);
 
+  /// The capture-only flow-telemetry keys (FT-1, tg-pez) for a terminal
+  /// transition — the step's start + finish + derived duration (+ an optional
+  /// [failureReason]), MERGED into the SAME chokepoint write as the cursor state
+  /// (no extra write traffic). Fail-safe: a start that was never measured
+  /// (`_startedAt` null AND no persisted `startedAt`) omits both `startedAt` and
+  /// `durationMs` rather than blocking the transition.
+  Map<String, String> _terminalTelemetry({String? failureReason}) {
+    final finishedAt = _now();
+    // Prefer the in-memory kick instant (race-free, per-incarnation); fall back
+    // to the persisted projection the host already holds (the adopt/restore
+    // seam). Null → omit the derived duration.
+    final startedAt = _startedAt ?? seed.mount.node.startedAt;
+    final durationMs = startedAt == null
+        ? null
+        : finishedAt.difference(startedAt).inMilliseconds;
+    return nodeTelemetryMetadata(
+      _nodePath,
+      startedAt: startedAt,
+      finishedAt: finishedAt,
+      durationMs: durationMs,
+      failureReason: failureReason,
+    );
+  }
+
   Future<void> _persistStarted({required int pid, int? pgid}) async {
     if (_cancelled || !context.mounted) return;
     await _ctx!.writer.update(
       _sessionId,
-      metadata: nodeStartedMetadata(
-        _nodePath,
-        pgid: pgid,
-        pid: pid,
-        token: _token,
-      ),
+      metadata: {
+        ...nodeStartedMetadata(_nodePath, pgid: pgid, pid: pid, token: _token),
+        // Capture-only (FT-1): stamp the step-begin instant on the `running`
+        // write so a live step's start is durable before its terminal.
+        ...nodeTelemetryMetadata(_nodePath, startedAt: _startedAt),
+      },
     );
   }
 
@@ -245,6 +279,7 @@ class CapabilityHostState extends State<CapabilityHost> {
       metadata: {
         ...nodeStateMetadata(_nodePath, StepState.ready),
         ...nodeResultMetadata(_nodePath, payload),
+        ..._terminalTelemetry(),
       },
     );
     _emitFlare('step.ready', const {});
@@ -260,6 +295,7 @@ class CapabilityHostState extends State<CapabilityHost> {
       metadata: {
         ...nodeStateMetadata(_nodePath, StepState.complete),
         ...nodeResultMetadata(_nodePath, payload),
+        ..._terminalTelemetry(),
       },
     );
     _emitFlare('step.complete', const {});
@@ -270,7 +306,11 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// re-keys after it; at exhaustion write no cooldown so the node is
   /// circuit-broken and SessionScope escalates. The failing leaf host is the
   /// named restart writer (no supervisor node — invariant 1 preserved).
-  Future<void> _persistFailure() async {
+  ///
+  /// [reason] is the `AllocationFailed.reason` — persisted capture-only (FT-1)
+  /// as the truncated `failureReason`, merged into the SAME write; an empty
+  /// reason (e.g. a bare process death carrying no diagnostic) omits the key.
+  Future<void> _persistFailure([String reason = '']) async {
     if (_cancelled || !context.mounted) return;
     final next = seed.mount.node.restartCount + 1;
     final exhausted = next >= seed.mount.maxRestarts;
@@ -278,11 +318,14 @@ class CapabilityHostState extends State<CapabilityHost> {
         exhausted ? null : _now().add(seed.mount.backoff.delayFor(next));
     await _ctx!.writer.update(
       _sessionId,
-      metadata: nodeFailedMetadata(
-        _nodePath,
-        restartCount: next,
-        cooldownUntil: cooldown,
-      ),
+      metadata: {
+        ...nodeFailedMetadata(
+          _nodePath,
+          restartCount: next,
+          cooldownUntil: cooldown,
+        ),
+        ..._terminalTelemetry(failureReason: reason.isEmpty ? null : reason),
+      },
     );
     _emitFlare('step.failed', const {});
   }
@@ -295,7 +338,10 @@ class CapabilityHostState extends State<CapabilityHost> {
     if (_cancelled || !context.mounted) return;
     await _ctx!.writer.update(
       _sessionId,
-      metadata: nodeStateMetadata(_nodePath, StepState.gated),
+      metadata: {
+        ...nodeStateMetadata(_nodePath, StepState.gated),
+        ..._terminalTelemetry(),
+      },
     );
     if (_cancelled || !context.mounted) return;
     await _ctx!.writer.createGate(

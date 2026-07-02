@@ -192,6 +192,68 @@ void main() {
     );
   });
 
+  group('capture-only session lifecycle stamps (FT-1, tg-pez)', () {
+    final clock = DateTime.utc(2026, 7, 2, 9, 30);
+    StationBeadWriter clockedWriter() => StationBeadWriter(
+      bd: bd,
+      ownership: predicate(),
+      onRefusal: refusals.add,
+      clock: () => clock,
+    );
+
+    test('createSession stamps started_at (ISO-8601 UTC) in the birth merge — '
+        'no extra write', () async {
+      await clockedWriter().createSession(
+        substation: 'tgdog',
+        title: 'x',
+        workBeadId: 'tgdog-work1',
+      );
+      // The stamp rides the SAME single birth update (rig + work_bead + started_at).
+      expect(runner.callsFor('update'), hasLength(1));
+      final birth = jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+      expect(birth['started_at'], '2026-07-02T09:30:00.000Z');
+      expect(birth['rig'], 'tgdog');
+    });
+
+    test('a caller-supplied started_at overrides the default (spawn metadata '
+        'wins)', () async {
+      await clockedWriter().createSession(
+        substation: 'tgdog',
+        title: 'x',
+        workBeadId: 'tgdog-work1',
+        metadata: {'started_at': 'CALLER'},
+      );
+      final birth = jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+      expect(birth['started_at'], 'CALLER');
+    });
+
+    test('close stamps closed_at (ISO-8601 UTC) BEFORE the bd close (one '
+        'serialized chain link)', () async {
+      await clockedWriter().close('tgdog-sess1', reason: 'done');
+      // The closed_at merge update.
+      final meta = jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+      expect(meta['closed_at'], '2026-07-02T09:30:00.000Z');
+      // …then exactly one `bd close`.
+      expect(runner.callsFor('close'), hasLength(1));
+      // Ordering: the stamp update precedes the close on the wire.
+      final updateIdx = runner.calls.indexWhere((c) => c.first == 'update');
+      final closeIdx = runner.calls.indexWhere((c) => c.first == 'close');
+      expect(updateIdx >= 0 && updateIdx < closeIdx, isTrue);
+      // Still bd-only, --actor, never show.
+      expect(runner.everyMutationHasActor, isTrue);
+      expect(runner.neverCalledShow, isTrue);
+    });
+
+    test('close on a NON-owned bead is still refused before any stamp', () async {
+      await expectLater(
+        clockedWriter().close('gascity-conv7'),
+        throwsA(isA<OwnershipRefused>()),
+      );
+      // Fail-closed: neither the closed_at stamp nor the close reached the wire.
+      expect(runner.calls, isEmpty);
+    });
+  });
+
   test('requireSubstationMarker demands BOTH prefix and metadata.rig', () {
     final strict = BeadOwnershipPredicate({'tgdog'}, requireSubstationMarker: true);
     // prefix owned but no marker → not owned.

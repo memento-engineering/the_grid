@@ -192,21 +192,39 @@ bool isFormulaBrokenDeep(
   FormulaCursor cursor,
   String nodePath, {
   required Formula? Function(String formulaId) formulaById,
+}) =>
+    firstBrokenNode(formula, cursor, nodePath, formulaById: formulaById) != null;
+
+/// The FIRST circuit-broken node in [formula]'s subtree — its full `nodePath`
+/// plus its [NodeCursor] — mirroring [isFormulaBrokenDeep]'s traversal
+/// (declaration order, depth-first). Null when nothing is broken.
+///
+/// Capture-only (FT-1, tg-pez): the ESCALATE decision is [isFormulaBrokenDeep];
+/// this only names WHICH node + reason to record beside the escalation marker
+/// (`SessionScope`). Never gates orchestration.
+({String nodePath, NodeCursor node})? firstBrokenNode(
+  Formula formula,
+  FormulaCursor cursor,
+  String nodePath, {
+  required Formula? Function(String formulaId) formulaById,
 }) {
   for (final step in formula.steps) {
-    if (isCircuitBroken(formula, step, cursor, nodePath)) return true;
+    if (isCircuitBroken(formula, step, cursor, nodePath)) {
+      final path = stepPath(nodePath, step.stepId);
+      return (nodePath: path, node: cursorNodeAt(cursor, path));
+    }
     if (step is SubFormulaStep) {
       final sub = formulaById(step.formulaId);
-      if (sub != null &&
-          isFormulaBrokenDeep(
-            sub,
-            cursor,
-            stepPath(nodePath, step.stepId),
-            formulaById: formulaById,
-          )) {
-        return true;
+      if (sub != null) {
+        final found = firstBrokenNode(
+          sub,
+          cursor,
+          stepPath(nodePath, step.stepId),
+          formulaById: formulaById,
+        );
+        if (found != null) return found;
       }
     }
   }
-  return false;
+  return null;
 }

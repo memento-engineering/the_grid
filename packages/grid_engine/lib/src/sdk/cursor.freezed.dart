@@ -28,7 +28,18 @@ mixin _$NodeCursor {
 /// cooling down.
  DateTime? get cooldownUntil;/// The durable log byte-offset for the deferred adopt-a-live-process seam
 /// (§11); null until restoration ships.
- int? get logOffset;
+ int? get logOffset;/// Capture-only FLOW TELEMETRY (FT-1, tg-pez) — the wall-clock instant this
+/// incarnation began driving its effect (the host's kick), ISO-8601 UTC on
+/// the wire; null until the node has started. Never gates orchestration.
+ DateTime? get startedAt;/// Capture-only flow telemetry — the wall-clock instant of this incarnation's
+/// terminal transition (complete/failed/ready/gated); null until terminal.
+ DateTime? get finishedAt;/// Capture-only flow telemetry — `finishedAt - startedAt` in milliseconds,
+/// derived at the terminal write; null when the start was never measured
+/// (fail-safe omission).
+ int? get durationMs;/// Capture-only flow telemetry — the truncated diagnostic reason persisted
+/// alongside a `failed` terminal (the `AllocationFailed.reason`); null when
+/// the failure carried no diagnostic.
+ String? get failureReason;
 /// Create a copy of NodeCursor
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -41,16 +52,16 @@ $NodeCursorCopyWith<NodeCursor> get copyWith => _$NodeCursorCopyWithImpl<NodeCur
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.finishedAt, finishedAt) || other.finishedAt == finishedAt)&&(identical(other.durationMs, durationMs) || other.durationMs == durationMs)&&(identical(other.failureReason, failureReason) || other.failureReason == failureReason));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,cooldownUntil,logOffset);
+int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,cooldownUntil,logOffset,startedAt,finishedAt,durationMs,failureReason);
 
 @override
 String toString() {
-  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset)';
+  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset, startedAt: $startedAt, finishedAt: $finishedAt, durationMs: $durationMs, failureReason: $failureReason)';
 }
 
 
@@ -61,7 +72,7 @@ abstract mixin class $NodeCursorCopyWith<$Res>  {
   factory $NodeCursorCopyWith(NodeCursor value, $Res Function(NodeCursor) _then) = _$NodeCursorCopyWithImpl;
 @useResult
 $Res call({
- StepState state, int? pgid, int? pid, String? token, int restartCount, DateTime? cooldownUntil, int? logOffset
+ StepState state, int? pgid, int? pid, String? token, int restartCount, DateTime? cooldownUntil, int? logOffset, DateTime? startedAt, DateTime? finishedAt, int? durationMs, String? failureReason
 });
 
 
@@ -78,7 +89,7 @@ class _$NodeCursorCopyWithImpl<$Res>
 
 /// Create a copy of NodeCursor
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,Object? startedAt = freezed,Object? finishedAt = freezed,Object? durationMs = freezed,Object? failureReason = freezed,}) {
   return _then(_self.copyWith(
 state: null == state ? _self.state : state // ignore: cast_nullable_to_non_nullable
 as StepState,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
@@ -87,7 +98,11 @@ as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_t
 as String?,restartCount: null == restartCount ? _self.restartCount : restartCount // ignore: cast_nullable_to_non_nullable
 as int,cooldownUntil: freezed == cooldownUntil ? _self.cooldownUntil : cooldownUntil // ignore: cast_nullable_to_non_nullable
 as DateTime?,logOffset: freezed == logOffset ? _self.logOffset : logOffset // ignore: cast_nullable_to_non_nullable
-as int?,
+as int?,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,finishedAt: freezed == finishedAt ? _self.finishedAt : finishedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,durationMs: freezed == durationMs ? _self.durationMs : durationMs // ignore: cast_nullable_to_non_nullable
+as int?,failureReason: freezed == failureReason ? _self.failureReason : failureReason // ignore: cast_nullable_to_non_nullable
+as String?,
   ));
 }
 
@@ -172,10 +187,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  DateTime? cooldownUntil,  int? logOffset)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _NodeCursor() when $default != null:
-return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.cooldownUntil,_that.logOffset);case _:
+return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
   return orElse();
 
 }
@@ -193,10 +208,10 @@ return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  DateTime? cooldownUntil,  int? logOffset)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)  $default,) {final _that = this;
 switch (_that) {
 case _NodeCursor():
-return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.cooldownUntil,_that.logOffset);case _:
+return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -213,10 +228,10 @@ return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  DateTime? cooldownUntil,  int? logOffset)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)?  $default,) {final _that = this;
 switch (_that) {
 case _NodeCursor() when $default != null:
-return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.cooldownUntil,_that.logOffset);case _:
+return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
   return null;
 
 }
@@ -228,7 +243,7 @@ return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,
 @JsonSerializable()
 
 class _NodeCursor extends NodeCursor {
-  const _NodeCursor({this.state = StepState.pending, this.pgid, this.pid, this.token, this.restartCount = 0, this.cooldownUntil, this.logOffset}): super._();
+  const _NodeCursor({this.state = StepState.pending, this.pgid, this.pid, this.token, this.restartCount = 0, this.cooldownUntil, this.logOffset, this.startedAt, this.finishedAt, this.durationMs, this.failureReason}): super._();
   factory _NodeCursor.fromJson(Map<String, dynamic> json) => _$NodeCursorFromJson(json);
 
 /// The node's lifecycle state.
@@ -251,6 +266,21 @@ class _NodeCursor extends NodeCursor {
 /// The durable log byte-offset for the deferred adopt-a-live-process seam
 /// (§11); null until restoration ships.
 @override final  int? logOffset;
+/// Capture-only FLOW TELEMETRY (FT-1, tg-pez) — the wall-clock instant this
+/// incarnation began driving its effect (the host's kick), ISO-8601 UTC on
+/// the wire; null until the node has started. Never gates orchestration.
+@override final  DateTime? startedAt;
+/// Capture-only flow telemetry — the wall-clock instant of this incarnation's
+/// terminal transition (complete/failed/ready/gated); null until terminal.
+@override final  DateTime? finishedAt;
+/// Capture-only flow telemetry — `finishedAt - startedAt` in milliseconds,
+/// derived at the terminal write; null when the start was never measured
+/// (fail-safe omission).
+@override final  int? durationMs;
+/// Capture-only flow telemetry — the truncated diagnostic reason persisted
+/// alongside a `failed` terminal (the `AllocationFailed.reason`); null when
+/// the failure carried no diagnostic.
+@override final  String? failureReason;
 
 /// Create a copy of NodeCursor
 /// with the given fields replaced by the non-null parameter values.
@@ -265,16 +295,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.finishedAt, finishedAt) || other.finishedAt == finishedAt)&&(identical(other.durationMs, durationMs) || other.durationMs == durationMs)&&(identical(other.failureReason, failureReason) || other.failureReason == failureReason));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,cooldownUntil,logOffset);
+int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,cooldownUntil,logOffset,startedAt,finishedAt,durationMs,failureReason);
 
 @override
 String toString() {
-  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset)';
+  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset, startedAt: $startedAt, finishedAt: $finishedAt, durationMs: $durationMs, failureReason: $failureReason)';
 }
 
 
@@ -285,7 +315,7 @@ abstract mixin class _$NodeCursorCopyWith<$Res> implements $NodeCursorCopyWith<$
   factory _$NodeCursorCopyWith(_NodeCursor value, $Res Function(_NodeCursor) _then) = __$NodeCursorCopyWithImpl;
 @override @useResult
 $Res call({
- StepState state, int? pgid, int? pid, String? token, int restartCount, DateTime? cooldownUntil, int? logOffset
+ StepState state, int? pgid, int? pid, String? token, int restartCount, DateTime? cooldownUntil, int? logOffset, DateTime? startedAt, DateTime? finishedAt, int? durationMs, String? failureReason
 });
 
 
@@ -302,7 +332,7 @@ class __$NodeCursorCopyWithImpl<$Res>
 
 /// Create a copy of NodeCursor
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,Object? startedAt = freezed,Object? finishedAt = freezed,Object? durationMs = freezed,Object? failureReason = freezed,}) {
   return _then(_NodeCursor(
 state: null == state ? _self.state : state // ignore: cast_nullable_to_non_nullable
 as StepState,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
@@ -311,7 +341,11 @@ as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_t
 as String?,restartCount: null == restartCount ? _self.restartCount : restartCount // ignore: cast_nullable_to_non_nullable
 as int,cooldownUntil: freezed == cooldownUntil ? _self.cooldownUntil : cooldownUntil // ignore: cast_nullable_to_non_nullable
 as DateTime?,logOffset: freezed == logOffset ? _self.logOffset : logOffset // ignore: cast_nullable_to_non_nullable
-as int?,
+as int?,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,finishedAt: freezed == finishedAt ? _self.finishedAt : finishedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,durationMs: freezed == durationMs ? _self.durationMs : durationMs // ignore: cast_nullable_to_non_nullable
+as int?,failureReason: freezed == failureReason ? _self.failureReason : failureReason // ignore: cast_nullable_to_non_nullable
+as String?,
   ));
 }
 

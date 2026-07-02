@@ -83,13 +83,25 @@ class StationBeadWriter {
     required BdCliService bd,
     required BeadOwnershipPredicate ownership,
     void Function(String message)? onRefusal,
+    DateTime Function()? clock,
   }) : _bd = bd,
        _ownership = ownership,
-       _onRefusal = onRefusal;
+       _onRefusal = onRefusal,
+       _clock = clock ?? DateTime.now;
 
   final BdCliService _bd;
   final BeadOwnershipPredicate _ownership;
   final void Function(String message)? _onRefusal;
+
+  /// The wall clock for capture-only session lifecycle stamps (FT-1, tg-pez) —
+  /// injected so tests are deterministic; never read on a build path.
+  final DateTime Function() _clock;
+
+  /// The session-lifecycle telemetry metadata keys (FT-1) — string literals here
+  /// (grid_runtime cannot import grid_engine's `SessionBeadKeys`), kept
+  /// wire-identical to it. Session-level, disjoint from the `grid.cursor.*` codec.
+  static const String startedAtKey = 'started_at';
+  static const String closedAtKey = 'closed_at';
 
   /// The per-target-id serialization chain (D-1). `_tail[id]` completes when the
   /// last-queued write on `id` settles (success OR failure — it never rejects,
@@ -122,10 +134,17 @@ class StationBeadWriter {
     }
     final id = await _bd.create(title: title, type: IssueType.session);
     // Stamp the owned substation marker + linkage FROM BIRTH (merge update; the substation
-    // key is what every later write asserts against).
+    // key is what every later write asserts against). The capture-only
+    // `started_at` stamp (FT-1) rides the SAME birth write — no extra traffic;
+    // a caller-supplied [metadata] value wins (it can override the default).
     await _bd.update(
       id,
-      metadata: {rigKey: substation, 'work_bead': workBeadId, ...metadata},
+      metadata: {
+        rigKey: substation,
+        'work_bead': workBeadId,
+        startedAtKey: _clock().toUtc().toIso8601String(),
+        ...metadata,
+      },
     );
     return id;
   }
@@ -196,9 +215,20 @@ class StationBeadWriter {
   /// `bd close` on a the_grid-owned session bead (terminal lifecycle).
   /// Fail-closed: refuses when [id]'s substation is not owned. Serialized per-id
   /// (D-1) so a close cannot race an in-flight cursor update on the same bead.
+  ///
+  /// Stamps the capture-only `closed_at` telemetry (FT-1) in the SAME serialized
+  /// chain link, immediately before the `bd close`, so EVERY session close (the
+  /// M3 actuator + the M4 `SessionScope`) records a terminal instant with no
+  /// caller change. The stamp is a merge `update` (bd merges named keys; the
+  /// bead is still open here), then `bd close`.
   Future<void> close(String id, {String? reason}) async {
     _assertOwned('close', id, const {});
-    return _serialized(id, () => _bd.close(id, reason: reason));
+    return _serialized(id, () async {
+      await _bd.update(id, metadata: {
+        closedAtKey: _clock().toUtc().toIso8601String(),
+      });
+      await _bd.close(id, reason: reason);
+    });
   }
 
   /// `bd delete <id> --force` — the burn primitive, used only for speculative

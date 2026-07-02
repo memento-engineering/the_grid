@@ -306,6 +306,9 @@ void main() {
       expect(meta['grid.cursor.tg-1/agent.pgid'], '200');
       expect(meta['grid.cursor.tg-1/agent.pid'], '100');
       expect(meta['grid.cursor.tg-1/agent.token'], isNotEmpty);
+      // The step-begin instant is stamped on the `running` write (FT-1), so a
+      // live step's start is durable BEFORE its terminal.
+      expect(meta['grid.cursor.tg-1/agent.startedAt'], isNotEmpty);
     });
 
     test('a clean Exited(0) writes the node cursor complete (interpretEvent)',
@@ -322,8 +325,11 @@ void main() {
       await _pump();
 
       // The terminal cursor write (the only update — no SessionStarted here).
-      expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'complete'});
+      // Carries capture-only timing (FT-1) MERGED into the same single write.
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'complete',
+        ...expectedTiming('tg-1/agent'),
+      });
     });
 
     test('a non-zero Exited writes the SUPERVISED failure (failed + restartCount '
@@ -339,11 +345,13 @@ void main() {
       await _pump();
       // restartCount bumped to 1; cooldown = clock + Backoff.standard.delayFor(1)
       // (= 1s). Within budget (maxRestarts default 3), so a cooldown is written.
+      // A bare process death carries no diagnostic → no failureReason key (FT-1).
       expect(h.fakes.runner.metadataOfUpdate(0), {
         'grid.cursor.tg-1/agent.state': 'failed',
         'grid.cursor.tg-1/agent.restartCount': '1',
         'grid.cursor.tg-1/agent.cooldownUntil':
             _clock.add(const Duration(seconds: 1)).toIso8601String(),
+        ...expectedTiming('tg-1/agent'),
       });
     });
 
@@ -392,6 +400,7 @@ void main() {
         'grid.cursor.tg-1/agent.state': 'failed',
         'grid.cursor.tg-1/agent.restartCount': '3', // == maxRestarts → exhausted
         // no cooldownUntil key — the breaker is tripped.
+        ...expectedTiming('tg-1/agent'),
       });
     });
 
@@ -485,8 +494,10 @@ void main() {
       final h = _host(_ServiceCap(const Ok(), log));
       await _pump();
       expect(log, contains('run(tg-1)'));
-      expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'complete'});
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'complete',
+        ...expectedTiming('tg-1/agent'),
+      });
 
       h.owner.dispose();
       await _pump();
@@ -508,10 +519,12 @@ void main() {
       });
       await _pump();
       expect(log, contains('run(tg-1)'));
-      // ONE merged write: the terminal cursor state PLUS the namespaced result.
+      // ONE merged write: the terminal cursor state PLUS the namespaced result
+      // PLUS the capture-only timing (FT-1) — all in a single chokepoint write.
       expect(h.fakes.runner.metadataOfUpdate(0), {
         'grid.cursor.tg-1/agent.state': 'complete',
         'grid.result.tg-1/agent.pr_url': pr,
+        ...expectedTiming('tg-1/agent'),
       });
     });
 
@@ -524,11 +537,15 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _pump();
+      // A ServiceCapability Failed('nope') carries a diagnostic → it is persisted
+      // capture-only as the truncated failureReason, MERGED into the same write.
       expect(h.fakes.runner.metadataOfUpdate(0), {
         'grid.cursor.tg-1/agent.state': 'failed',
         'grid.cursor.tg-1/agent.restartCount': '1',
         'grid.cursor.tg-1/agent.cooldownUntil':
             _clock.add(const Duration(seconds: 1)).toIso8601String(),
+        'grid.cursor.tg-1/agent.failureReason': 'nope',
+        ...expectedTiming('tg-1/agent'),
       });
     });
   });
@@ -550,8 +567,11 @@ void main() {
         const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true),
       );
       await _pump();
-      expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'ready'});
+      // A daemon `ready` is a positive terminal too → it carries timing (FT-1).
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'ready',
+        ...expectedTiming('tg-1/agent'),
+      });
 
       // Later the daemon dies → failed. A SECOND write (latch did not fire on
       // ready). A mutation latching on ready would drop this.

@@ -36,6 +36,16 @@ abstract final class SessionBeadKeys {
   /// The engine-minted `GRID_INSTANCE_TOKEN` freshness fence (stamped at
   /// `SessionStarted`; drops a stale prior-incarnation completion).
   static const token = 'token';
+
+  /// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the ISO-8601 UTC
+  /// instant the session bead was minted, stamped once at birth by
+  /// `StationBeadWriter.createSession`. Session-level (NOT under the
+  /// `grid.cursor.` namespace), so the cursor projection never misreads it.
+  static const startedAt = 'started_at';
+
+  /// Capture-only session lifecycle telemetry — the ISO-8601 UTC instant the
+  /// session bead was closed, stamped inside `StationBeadWriter.close`.
+  static const closedAt = 'closed_at';
 }
 
 /// The per-node reentrant cursor keys (ADR-0008 D4 / M4-P1 §3, D-3).
@@ -76,6 +86,24 @@ abstract final class CursorKeys {
   /// The restoration log byte-offset suffix (deferred adopt seam — §11).
   static const logOffset = 'logOffset';
 
+  /// Capture-only per-node FLOW-TELEMETRY suffixes (FT-1, tg-pez) — the step's
+  /// begin/finish instants (ISO-8601 UTC), the derived duration, and the failure
+  /// diagnostic. Written MERGED into the transition's single chokepoint write;
+  /// never read on a build/orchestration path (capture-only).
+
+  /// The step-begin instant suffix (the host's kick; ISO-8601 UTC).
+  static const startedAt = 'startedAt';
+
+  /// The terminal-transition instant suffix (ISO-8601 UTC).
+  static const finishedAt = 'finishedAt';
+
+  /// The derived `finishedAt - startedAt` milliseconds suffix.
+  static const durationMs = 'durationMs';
+
+  /// The truncated failure-diagnostic suffix (stamped alongside a `failed`
+  /// terminal — the `AllocationFailed.reason`).
+  static const failureReason = 'failureReason';
+
   /// The flat key for [field] of the node at [nodePath]
   /// (`grid.cursor.{nodePath}.{field}`). A `nodePath` is `/`-joined step ids
   /// (e.g. `tg-burn/harnessPeripheral/build`); step ids must not contain `.`
@@ -105,10 +133,50 @@ abstract final class ResultKeys {
       '$prefix$nodePath.$field';
 }
 
+/// The max persisted length of a capture-only failure/escalation diagnostic
+/// (FT-1, tg-pez) — a pathological multi-KB stderr is truncated so telemetry
+/// never bloats the session bead's metadata (fail-safe).
+const int kMaxReasonChars = 500;
+
+/// Truncates [reason] to [kMaxReasonChars] (capture-only telemetry is never
+/// allowed to grow unbounded, and never blocks a transition).
+String truncateReason(String reason) =>
+    reason.length <= kMaxReasonChars ? reason : reason.substring(0, kMaxReasonChars);
+
+/// The flat, CAPTURE-ONLY flow-telemetry payload for ONE node (FT-1, tg-pez) —
+/// step timing ([startedAt]/[finishedAt]/[durationMs]) + the failure diagnostic
+/// ([failureReason]), MERGED into a transition's single chokepoint write (no
+/// extra write traffic; disjoint from every other node's keys, so the D-1/D-3
+/// merge-safety is unchanged). Every field is OMITTED when null (an honest
+/// "unmeasured" rather than a bogus value), so missing telemetry never blocks a
+/// transition — the fail-safe posture. Timestamps are ISO-8601 UTC;
+/// [failureReason] is truncated to [kMaxReasonChars]. This never gates
+/// orchestration — nothing on a build/reconcile path reads these keys.
+Map<String, String> nodeTelemetryMetadata(
+  String nodePath, {
+  DateTime? startedAt,
+  DateTime? finishedAt,
+  int? durationMs,
+  String? failureReason,
+}) => {
+  if (startedAt != null)
+    CursorKeys.keyFor(nodePath, CursorKeys.startedAt):
+        startedAt.toUtc().toIso8601String(),
+  if (finishedAt != null)
+    CursorKeys.keyFor(nodePath, CursorKeys.finishedAt):
+        finishedAt.toUtc().toIso8601String(),
+  if (durationMs != null)
+    CursorKeys.keyFor(nodePath, CursorKeys.durationMs): durationMs.toString(),
+  if (failureReason != null)
+    CursorKeys.keyFor(nodePath, CursorKeys.failureReason):
+        truncateReason(failureReason),
+};
+
 /// The flat metadata payload for ONE node's cursor entry — the merge-safe,
 /// disjoint-key write through the chokepoint (D-1/D-3). Only set fields are
 /// written ([state] and [restartCount] always; the rest omitted when null, an
-/// honest "unset" rather than a bogus value).
+/// honest "unset" rather than a bogus value). The capture-only telemetry fields
+/// (FT-1) round-trip through [nodeTelemetryMetadata].
 Map<String, String> nodeCursorMetadata(String nodePath, NodeCursor node) => {
   CursorKeys.keyFor(nodePath, CursorKeys.state): node.state.name,
   CursorKeys.keyFor(nodePath, CursorKeys.restartCount):
@@ -124,6 +192,13 @@ Map<String, String> nodeCursorMetadata(String nodePath, NodeCursor node) => {
         node.cooldownUntil!.toIso8601String(),
   if (node.logOffset != null)
     CursorKeys.keyFor(nodePath, CursorKeys.logOffset): node.logOffset.toString(),
+  ...nodeTelemetryMetadata(
+    nodePath,
+    startedAt: node.startedAt,
+    finishedAt: node.finishedAt,
+    durationMs: node.durationMs,
+    failureReason: node.failureReason,
+  ),
 };
 
 /// The targeted metadata payload advancing ONE node's [state] (the merge-safe
@@ -207,6 +282,12 @@ FormulaCursor projectFormulaCursor(Bead sessionBead) {
       restartCount: _asInt(fields[CursorKeys.restartCount]) ?? 0,
       cooldownUntil: _parseDate(fields[CursorKeys.cooldownUntil]),
       logOffset: _asInt(fields[CursorKeys.logOffset]),
+      // Capture-only flow telemetry (FT-1) — surfaced typed for observers; never
+      // read on a build/reconcile path.
+      startedAt: _parseDate(fields[CursorKeys.startedAt]),
+      finishedAt: _parseDate(fields[CursorKeys.finishedAt]),
+      durationMs: _asInt(fields[CursorKeys.durationMs]),
+      failureReason: fields[CursorKeys.failureReason]?.toString(),
     );
   });
   return cursor;
@@ -263,6 +344,10 @@ SessionProjection projectSession(Bead sessionBead) {
     // The per-node result payloads (D-5) — threaded down pull-free so a `route`
     // step reads its siblings' grades. Empty until a step records a result.
     results: projectFormulaResults(sessionBead),
+    // Capture-only session lifecycle telemetry (FT-1) — surfaced typed; null
+    // for a legacy bead / an open session.
+    startedAt: _parseDate(metadata[SessionBeadKeys.startedAt]),
+    closedAt: _parseDate(metadata[SessionBeadKeys.closedAt]),
   );
 }
 

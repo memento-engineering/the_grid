@@ -82,6 +82,11 @@ class SessionScopeState extends State<SessionScope> {
   /// human picks it up when a formula's breaker exhausts (D-5).
   static const _escalationKey = 'grid.escalation';
 
+  /// The capture-only escalation-diagnostic key (FT-1, tg-pez) — the final
+  /// failing node + its truncated reason, recorded beside [_escalationKey] in
+  /// the SAME write so a human sees WHAT exhausted, not just THAT it did.
+  static const _escalationReasonKey = 'grid.escalation_reason';
+
   StationServices? _ctx;
   String? _sessionId;
   bool _resolving = true;
@@ -153,12 +158,13 @@ class SessionScopeState extends State<SessionScope> {
   }
 
   /// Schedules the breaker-exhaustion escalation (D-5): write the human marker
-  /// onto the OWN session bead, then close — which tears the subtree down,
-  /// killing any leaked daemons (the §9 failure path). Latched once, off `build`.
-  void _scheduleEscalation(String id) {
+  /// (+ the capture-only [reason] diagnostic, FT-1) onto the OWN session bead,
+  /// then close — which tears the subtree down, killing any leaked daemons (the
+  /// §9 failure path). Latched once, off `build`.
+  void _scheduleEscalation(String id, String reason) {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
-    scheduleMicrotask(() => unawaited(_escalateAndClose(id)));
+    scheduleMicrotask(() => unawaited(_escalateAndClose(id, reason)));
   }
 
   /// Re-arms ONE parked node whose gate bead has closed (D-7): flips its cursor
@@ -177,14 +183,18 @@ class SessionScopeState extends State<SessionScope> {
     );
   }
 
-  Future<void> _escalateAndClose(String id) async {
+  Future<void> _escalateAndClose(String id, String reason) async {
     // Runs to completion even if SessionScope is mid-dispose — the escalation
     // marker + close must be durable (uses the captured ctx, never `context`).
     final ctx = _ctx;
     if (ctx == null) return;
     await ctx.writer.update(
       id,
-      metadata: const {_escalationKey: 'breaker-exhausted'},
+      metadata: {
+        _escalationKey: 'breaker-exhausted',
+        // Capture-only (FT-1): the failing node + reason, beside the marker.
+        if (reason.isNotEmpty) _escalationReasonKey: reason,
+      },
     );
     await ctx.writer.close(id, reason: 'breaker-exhausted');
   }
@@ -221,13 +231,20 @@ class SessionScopeState extends State<SessionScope> {
     final registry =
         context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
     if (registry != null && !_terminalScheduled) {
-      if (isFormulaBrokenDeep(
+      final broken = firstBrokenNode(
         seed.formula,
         cursor,
         seed.bead.id,
         formulaById: registry.formula,
-      )) {
-        _scheduleEscalation(id);
+      );
+      if (broken != null) {
+        // Capture-only (FT-1): record WHICH node exhausted + its reason (read
+        // from the cursor's persisted telemetry) beside the escalation marker.
+        // Read-only here; the write is scheduled off build (invariant 2).
+        final reason = truncateReason(
+          '${broken.nodePath}: ${broken.node.failureReason ?? ''}',
+        );
+        _scheduleEscalation(id, reason);
       } else if (isFormulaComplete(
         seed.formula,
         cursor,

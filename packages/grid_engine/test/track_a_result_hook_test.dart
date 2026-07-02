@@ -99,6 +99,7 @@ void main() {
       expect(h.fakes.runner.metadataOfUpdate(0), {
         'grid.cursor.tg-1/critic.state': 'complete',
         'grid.result.tg-1/critic.grade': 'B',
+        ...expectedTiming('tg-1/critic'),
       });
     });
 
@@ -114,8 +115,10 @@ void main() {
       h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/critic', exitCode: 0));
       await _pump();
 
-      expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/critic.state': 'complete'});
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/critic.state': 'complete',
+        ...expectedTiming('tg-1/critic'),
+      });
     });
   });
 }

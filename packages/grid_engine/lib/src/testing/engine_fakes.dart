@@ -376,6 +376,45 @@ StepArgs stepArgs(
   CancelToken? cancel,
 }) => StepArgs(params: params, nodePath: nodePath, cancel: cancel ?? CancelToken());
 
+/// The capture-only flow-telemetry keys (FT-1, tg-pez) a TERMINAL cursor write
+/// carries under a FIXED test clock (default [DateTime]`(2026)`): the host
+/// captures `startedAt` at its kick and `finishedAt` at the terminal, so under a
+/// non-advancing clock they are the SAME instant and `durationMs` is 0. Spread
+/// into an exact-map assertion for a terminal transition. Reuses the production
+/// codec ([nodeTelemetryMetadata]) so the expectation tracks the wire format —
+/// the timing VALUES/ordering are proven independently in the codec + host tests.
+Map<String, String> expectedTiming(
+  String nodePath, {
+  DateTime? clock,
+  int durationMs = 0,
+}) {
+  final t = clock ?? DateTime(2026);
+  return nodeTelemetryMetadata(
+    nodePath,
+    startedAt: t,
+    finishedAt: t,
+    durationMs: durationMs,
+  );
+}
+
+/// A monotonically ADVANCING clock (FT-1, tg-pez) — each call returns the next
+/// instant [step] apart, starting at [from] (default [DateTime]`(2026)`). Feed to
+/// [RecordingCapabilityRegistry.new]'s `nowFn` so the host's kick and terminal
+/// read DISTINCT instants, proving `startedAt < finishedAt` and a deterministic
+/// `durationMs` (the first two `now()` calls of a clean transition are `step`
+/// apart).
+DateTime Function() advancingClock({
+  DateTime? from,
+  Duration step = const Duration(seconds: 1),
+}) {
+  var next = from ?? DateTime(2026);
+  return () {
+    final current = next;
+    next = next.add(step);
+    return current;
+  };
+}
+
 /// A [Workspace] for a bare-driven test (the synthetic offline shape
 /// `SessionScope` mounts when no source control is wired).
 Workspace testWorkspace(
@@ -476,15 +515,19 @@ Bead sessionBead({
 /// inflation frontier AND the disjoint per-session routing; `formula` resolves
 /// from [formulas]; `now` is a fixed [clock].
 class RecordingCapabilityRegistry implements CapabilityRegistry {
-  /// Creates the recorder over the injected [formulas] + fixed [clock].
+  /// Creates the recorder over the injected [formulas] + fixed [clock], or an
+  /// ADVANCING [nowFn] (FT-1, tg-pez) that returns a fresh instant per `now()`
+  /// call so a test can prove `startedAt < finishedAt` / a non-zero `durationMs`
+  /// (use [advancingClock]). [nowFn] wins when both are supplied.
   RecordingCapabilityRegistry({
     Map<String, Formula> formulas = const {},
     DateTime? clock,
+    DateTime Function()? nowFn,
   }) : _formulas = formulas,
-       _clock = clock ?? DateTime(2026);
+       _now = nowFn ?? (() => clock ?? DateTime(2026));
 
   final Map<String, Formula> _formulas;
-  final DateTime _clock;
+  final DateTime Function() _now;
 
   /// Leaf lifecycle in mount/unmount order — the observable proxy for
   /// spawn (`START`) / kill (`STOP`).
@@ -494,7 +537,7 @@ class RecordingCapabilityRegistry implements CapabilityRegistry {
   Formula? formula(String formulaId) => _formulas[formulaId];
 
   @override
-  DateTime now() => _clock;
+  DateTime now() => _now();
 
   @override
   Seed host(StepMount mount) => FakeCapabilityHost(registry: this, mount: mount, key: mount.key);
