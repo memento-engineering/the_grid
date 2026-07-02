@@ -30,6 +30,8 @@
 /// sink; the Host persists off-build. It may freely hold its transport (D3).
 library;
 
+import 'package:genesis_tree/genesis_tree.dart';
+
 import 'allocation.dart';
 import 'capability.dart';
 import 'formula.dart';
@@ -71,24 +73,25 @@ abstract class LeaseCapability<H> extends Capability {
   /// Const-constructible (capabilities are stateless description).
   const LeaseCapability();
 
-  /// Resolve + acquire a FRESH lease for [ctx], returning its opaque handle (or a
+  /// Resolve + acquire a FRESH lease, returning its opaque handle (or a
   /// [LeaseUnavailable] when none can be bound — fail-closed). MUST poll
-  /// [CapabilityContext.cancel] across its own async gaps; a dispose racing the
+  /// [StepArgs.cancel] across its own async gaps; a dispose racing the
   /// acquire is unwound by the carrier (it calls [release] on the bound handle).
-  Future<LeaseResolution<H>> acquire(CapabilityContext ctx);
+  Future<LeaseResolution<H>> acquire(TreeContext context, StepArgs args);
 
   /// Dispatch the work on the leased slot [handle] and interpret the result into
   /// a [StepOutcome] — [Ok] (with the payload a daemon publishes on `ready` / a
   /// job records on `complete`), [Failed], or [Gate]. Called once after a
   /// successful [acquire]; NOT called on adopt.
-  Future<StepOutcome> dispatchOn(H handle, CapabilityContext ctx);
+  Future<StepOutcome> dispatchOn(H handle, TreeContext context, StepArgs args);
 
   /// **No-adopt-on-faith** freshness proof (D4/D5): confirm [handle] is still a
   /// live lease we hold (the owner-side check — e.g. a fenced heartbeat). Only
   /// consulted for a daemon with an [adoptable] prior handle. Defaults to `false`
   /// (never adopt blind); a real daemon lease overrides it. MUST be idempotent /
   /// side-effect-free beyond the liveness check.
-  Future<bool> proveFresh(H handle, CapabilityContext ctx) async => false;
+  Future<bool> proveFresh(H handle, TreeContext context, StepArgs args) async =>
+      false;
 
   /// Release [handle], freeing the leased slot. **MUST be idempotent** and must
   /// not throw for an already-reaped/invalid lease (the carrier calls it on
@@ -100,7 +103,8 @@ abstract class LeaseCapability<H> extends Capability {
   /// acquire fresh (the offline P1 posture; the live arm wires it to the
   /// persisted handle). Only consulted for a daemon, and only reattached when
   /// [proveFresh] holds.
-  Future<LeaseBound<H>?> adoptable(CapabilityContext ctx) async => null;
+  Future<LeaseBound<H>?> adoptable(TreeContext context, StepArgs args) async =>
+      null;
 
   @override
   Allocation createAllocation(AllocationContext ctx) => LeaseAllocation<H>(this, ctx);
@@ -140,7 +144,8 @@ class LeaseAllocation<H> extends Allocation {
 
   @override
   Future<void> startOrAdopt() async {
-    final ctx = context.capContext;
+    final tree = context.treeContext;
+    final args = context.args;
 
     // ADOPT a still-valid prior handle (a detached daemon lease or a crash
     // survivor) — reattach WITHOUT re-acquiring or re-dispatching (D4).
@@ -148,13 +153,14 @@ class LeaseAllocation<H> extends Allocation {
     // prove → acquire fresh. The daemon's rendezvous payload persists on the
     // node's cursor from the prior incarnation, so a bare `ready` re-surfaces it.
     if (isAdoptable) {
-      final prior = await capability.adoptable(ctx);
-      if (ctx.cancel.isCancelled) {
+      final prior = await capability.adoptable(tree, args);
+      if (args.cancel.isCancelled) {
         state = AllocationState.gone;
         return;
       }
-      if (prior != null && await capability.proveFresh(prior.handle, ctx)) {
-        if (ctx.cancel.isCancelled) {
+      if (prior != null &&
+          await capability.proveFresh(prior.handle, tree, args)) {
+        if (args.cancel.isCancelled) {
           // A dispose raced the adopt proof: release the proven handle so it
           // isn't orphaned (the immediate-release contract the fresh path honors).
           await _release(prior.handle);
@@ -170,9 +176,20 @@ class LeaseAllocation<H> extends Allocation {
       }
     }
 
-    // ACQUIRE a fresh lease.
-    final resolution = await capability.acquire(ctx);
-    if (ctx.cancel.isCancelled) {
+    // ACQUIRE a fresh lease. A THROWING hook routes to supervision as a
+    // failure — never an unhandled zone error (the per-work fail-closed
+    // posture, ADR-0008 Decision 10).
+    final LeaseResolution<H> resolution;
+    try {
+      resolution = await capability.acquire(tree, args);
+    } on Object catch (e) {
+      state = AllocationState.gone;
+      if (!args.cancel.isCancelled) {
+        _reportTerminal(AllocationFailed('acquire threw: $e'));
+      }
+      return;
+    }
+    if (args.cancel.isCancelled) {
       // A dispose raced the acquire: release the just-bound slot + skip dispatch.
       if (resolution is LeaseBound<H>) await _release(resolution.handle);
       state = AllocationState.gone;
@@ -187,9 +204,20 @@ class LeaseAllocation<H> extends Allocation {
         state = AllocationState.live;
     }
 
-    // DISPATCH the work on the leased slot + interpret the outcome.
-    final outcome = await capability.dispatchOn(_handle as H, ctx);
-    if (ctx.cancel.isCancelled) {
+    // DISPATCH the work on the leased slot + interpret the outcome. A throwing
+    // dispatch fails the work (supervision); the held lease is still released
+    // by dispose on unmount.
+    final StepOutcome outcome;
+    try {
+      outcome = await capability.dispatchOn(_handle as H, tree, args);
+    } on Object catch (e) {
+      state = AllocationState.gone;
+      if (!args.cancel.isCancelled) {
+        _reportTerminal(AllocationFailed('dispatch threw: $e'));
+      }
+      return;
+    }
+    if (args.cancel.isCancelled) {
       state = AllocationState.gone;
       return;
     }
@@ -248,7 +276,7 @@ class LeaseAllocation<H> extends Allocation {
     state = AllocationState.dying;
     // Cancel FIRST — a racing startOrAdopt that hasn't bound a handle bails at
     // its guard (no orphan lease after unmount).
-    context.capContext.cancel.cancel();
+    context.args.cancel.cancel();
     // dispose == RELEASE (the floor, D4): free the slot whether we acquired it or
     // reattached a survivor. Once-only + idempotent.
     if (_hasHandle && !_released) {

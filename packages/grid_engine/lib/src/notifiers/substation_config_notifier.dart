@@ -14,13 +14,9 @@ class SubstationConfigNotifier extends StateNotifier<SubstationConfig> {
   SubstationConfigNotifier(super.initial);
 
   /// Pushes a new config value (the config source's only write path).
+  ///
+  /// There is deliberately NO public synchronous read (D-H rule 2): the scope
+  /// subscribes with `addListener(fireImmediately: true)` — the baseline
+  /// arrives through the same listener every later change does.
   void push(SubstationConfig config) => state = config;
-
-  /// The current value, read through the public listener API (the `state`
-  /// getter is `@visibleForTesting`): subscribe, capture synchronously, remove.
-  SubstationConfig get current {
-    late SubstationConfig value;
-    addListener((config) => value = config, fireImmediately: true)();
-    return value;
-  }
 }

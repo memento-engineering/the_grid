@@ -1,10 +1,11 @@
 // Track A2 — the sibling-read projection (D-5).
 //
-// A read-only view of THIS session's cursor + results is threaded down to each
-// capability (config, not a subscription/re-query — A39/invariant 1). A `route`
-// step reads its sibling critics' terminal states + grades through it. Tests the
-// value-types (SiblingView), the StepMount→CapabilityContext threading, and the
-// `grid.result.*` read projection. Zero I/O.
+// A read-only view of THIS session's cursor + results is an AMBIENT value
+// mounted by SessionScope (config, not a subscription/re-query — A39/invariant
+// 1; plumbing moved ambient 2026-07-02). A `route` step reads its sibling
+// critics' terminal states + grades by looking the SiblingView up with the
+// effect verb. Tests the value-types (SiblingView), the ambient effect-verb
+// read, and the `grid.result.*` read projection. Zero I/O.
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -12,8 +13,27 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
+/// A ServiceCapability that reads its siblings' states + results from the
+/// AMBIENT SiblingView with the effect verb — pull-free, read-only (D-5) — and
+/// surfaces what it saw as its Ok payload so the test asserts the read.
+class _RouteCap extends ServiceCapability {
+  const _RouteCap();
+
+  @override
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+    final siblings =
+        context.getInheritedSeedOfExactType<SiblingView>() ??
+        const SiblingView();
+    return Ok({
+      'nodePath': args.nodePath,
+      'critic1.state': siblings.cursorOf('tg-1/review/critic1').state.name,
+      'critic1.grade': siblings.resultOf('tg-1/review/critic1')['grade'] ?? '',
+    });
+  }
+}
+
 void main() {
-  group('Track A2 — SiblingView reads the threaded cursor + results', () {
+  group('Track A2 — SiblingView reads the ambient cursor + results', () {
     test('cursorOf/resultOf surface a complete sibling with its grade; an '
         'unknown path defaults to pending + empty', () {
       const view = SiblingView(
@@ -32,37 +52,27 @@ void main() {
       expect(view.resultOf('b/missing'), isEmpty);
     });
 
-    test('a CapabilityContext built from a StepMount exposes its siblings + '
-        'nodePath', () {
-      const mount = StepMount(
-        step: CapabilityStep(stepId: 'route', capabilityId: 'route'),
-        bead: _noBead,
-        nodePath: 'tg-1/review/route',
-        session: SessionHandle('tgdog-s'),
-        node: NodeCursor(),
-        key: ValueKey('tg-1/review/route#0'),
-        cursor: {
-          'tg-1/review/critic1': NodeCursor(state: StepState.complete),
-        },
-        results: {
-          'tg-1/review/critic1': {'grade': 'A'},
+    test('a ServiceCapability reads the AMBIENT SiblingView (mounted by '
+        'SessionScope) with the effect verb — its siblings + its nodePath', () async {
+      // The ambient value SessionScope mounts: this session's cursor + results.
+      final context = FakeTreeContext(
+        values: {
+          SiblingView: const SiblingView(
+            cursor: {
+              'tg-1/review/critic1': NodeCursor(state: StepState.complete),
+            },
+            results: {
+              'tg-1/review/critic1': {'grade': 'A'},
+            },
+          ),
         },
       );
-      final ctx = CapabilityContext(
-        params: mount.step.params,
-        bead: mount.bead,
-        workspaceDir: '/w',
-        branch: 'grid/tg-1',
-        baseBranch: 'main',
-        services: const ServiceBundle(),
-        cancel: CancelToken(),
-        nodePath: mount.nodePath,
-        siblings: SiblingView(cursor: mount.cursor, results: mount.results),
-      );
-      expect(ctx.nodePath, 'tg-1/review/route');
-      expect(ctx.siblings.cursorOf('tg-1/review/critic1').state,
-          StepState.complete);
-      expect(ctx.siblings.resultOf('tg-1/review/critic1'), {'grade': 'A'});
+      final outcome =
+          await const _RouteCap().run(context, stepArgs('tg-1/review/route'));
+      final payload = (outcome as Ok).payload!;
+      expect(payload['nodePath'], 'tg-1/review/route');
+      expect(payload['critic1.state'], 'complete');
+      expect(payload['critic1.grade'], 'A');
     });
 
     test('projectFormulaResults parses grid.result.* into per-node maps; a '
@@ -107,5 +117,3 @@ void main() {
     });
   });
 }
-
-const _noBead = Bead(id: 'tg-1', issueType: IssueType.task, status: BeadStatus.open);

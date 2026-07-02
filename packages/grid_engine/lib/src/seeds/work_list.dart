@@ -53,13 +53,19 @@ class _WorkListState extends State<WorkList> {
     if (identical(notifier, _notifier)) return;
     _remove?.call();
     _notifier = notifier;
-    _snapshot = notifier!.current;
-    // fireImmediately:false — the baseline is read synchronously above; firing
-    // during initState would setState before the first build.
-    _remove = notifier.addListener(
-      (snapshot) => setState(() => _snapshot = snapshot),
-      fireImmediately: false,
-    );
+    // The initial read IS the subscription (D-H rule 2: never a sync accessor
+    // that dodges `@protected state`): fireImmediately delivers the baseline
+    // synchronously into the listener — assigned directly (setState during the
+    // build phase is illegal); every later fire goes through setState.
+    var first = true;
+    _remove = notifier!.addListener((snapshot) {
+      if (first) {
+        first = false;
+        _snapshot = snapshot;
+        return;
+      }
+      setState(() => _snapshot = snapshot);
+    }, fireImmediately: true);
   }
 
   @override

@@ -315,6 +315,81 @@ class FakeSnapshotSource implements SnapshotSource {
 }
 
 // ---------------------------------------------------------------------------
+// The bare-drive harness (the context rip-out, 2026-07-02): a fake TreeContext
+// so an Allocation/Capability is drivable WITHOUT a mounted tree, plus the
+// StepArgs builder. Fakes, not mocks.
+// ---------------------------------------------------------------------------
+
+/// A fake [TreeContext] for driving an [Allocation]/[Capability] bare — no
+/// mounted tree. Ambient values resolve from [values] by EXACT type (mirroring
+/// genesis's exact-type inherited lookup). Flip [mounted] to false to exercise
+/// the loud async-gap protection ([getInheritedSeedOfExactType] then throws,
+/// like the real handle).
+class FakeTreeContext implements TreeContext {
+  /// Creates the fake with the ambient [values] (keyed by exact type).
+  FakeTreeContext({Map<Type, Object> values = const {}})
+    : _values = Map.of(values);
+
+  final Map<Type, Object> _values;
+
+  /// Whether the (fake) branch is still mounted — settable so a test drives
+  /// the unmounted-throw path.
+  @override
+  bool mounted = true;
+
+  @override
+  Key? get key => null;
+
+  @override
+  String get branchId => 'fake-branch';
+
+  void _checkMounted(String member) {
+    if (!mounted) {
+      throw StateError('FakeTreeContext.$member used after unmount');
+    }
+  }
+
+  @override
+  T? dependOnInheritedSeedOfExactType<T extends Object>() {
+    _checkMounted('dependOnInheritedSeedOfExactType');
+    return _values[T] as T?;
+  }
+
+  @override
+  T? getInheritedSeedOfExactType<T extends Object>() {
+    _checkMounted('getInheritedSeedOfExactType');
+    return _values[T] as T?;
+  }
+
+  @override
+  void markNeedsRebuild() {}
+
+  /// Adds/replaces the ambient value for exact type [T].
+  void provide<T extends Object>(T value) => _values[T] = value;
+}
+
+/// [StepArgs] for a bare-driven capability/allocation (a fresh [CancelToken]
+/// unless one is injected).
+StepArgs stepArgs(
+  String nodePath, {
+  Map<String, String> params = const {},
+  CancelToken? cancel,
+}) => StepArgs(params: params, nodePath: nodePath, cancel: cancel ?? CancelToken());
+
+/// A [Workspace] for a bare-driven test (the synthetic offline shape
+/// `SessionScope` mounts when no source control is wired).
+Workspace testWorkspace(
+  String beadId, {
+  String? workspaceDir,
+  String branch = '',
+  String baseBranch = 'main',
+}) => Workspace(
+  workspaceDir: workspaceDir ?? '/grid/workspaces/$beadId',
+  branch: branch,
+  baseBranch: baseBranch,
+);
+
+// ---------------------------------------------------------------------------
 // Builders: the StationServices + a Bead, over the fakes.
 // ---------------------------------------------------------------------------
 

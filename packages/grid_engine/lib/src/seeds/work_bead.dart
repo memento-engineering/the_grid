@@ -36,6 +36,13 @@ class WorkBead extends StatelessSeed {
       'WorkBead requires an ambient SessionResolver (the kernel/extension '
       'provides one; tests inject a fake)',
     );
-    return resolver!.sessionFor(bead: bead, session: session);
+    // Mount the work bead as an AMBIENT value (2026-07-02): an effect below
+    // reads it with the non-binding lookup instead of having it threaded
+    // through every mount. Bead is a freezed value type, so a re-provide with
+    // an unchanged bead never notifies dependents.
+    return InheritedSeed<Bead>(
+      value: bead,
+      child: resolver!.sessionFor(bead: bead, session: session),
+    );
   }
 }

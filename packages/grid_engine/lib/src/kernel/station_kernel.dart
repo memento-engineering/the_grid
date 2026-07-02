@@ -3,10 +3,8 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 
 import '../bridge/station_join_bridge.dart';
-import '../domain/joined_snapshot.dart';
 import '../kernel/station_services.dart';
 import '../formula/capability_registry.dart';
-import '../formula/stable_inherited.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../seeds/station_seed.dart';
 import '../seeds/substation_scope.dart';
@@ -42,12 +40,14 @@ class StationKernel {
     required SessionResolver resolver,
     required List<SubstationScope> substations,
     CapabilityRegistry? registry,
+    Seed Function(Seed root)? wrapRoot,
     DateTime Function()? clock,
     Timer Function(Duration, void Function())? scheduleTimer,
   }) : _stationServices = stationServices,
        _resolver = resolver,
        _substations = substations,
        _registry = registry,
+       _wrapRoot = wrapRoot,
        _clock = clock ?? DateTime.now,
        _scheduleTimer = scheduleTimer ?? Timer.new;
 
@@ -63,6 +63,13 @@ class StationKernel {
   /// the resolver roots a non-reentrant subtree (a test fake that returns a
   /// plain leaf needs no registry).
   final CapabilityRegistry? _registry;
+
+  /// The composer's provider hook (ADR-0008 D-A, 2026-07-02): applied OUTERMOST
+  /// around the kernel's own ambient stack, so an asset's `main()` mounts its
+  /// station-default config values (`InheritedSeed<AgentConfig>`-style) as
+  /// ancestors of everything — the kernel never knows what rides it (the
+  /// opinion-free extension point; `Nest` chains multiple providers cleanly).
+  final Seed Function(Seed root)? _wrapRoot;
 
   final DateTime Function() _clock;
   final Timer Function(Duration, void Function()) _scheduleTimer;
@@ -81,22 +88,18 @@ class StationKernel {
     // in mountRoot (no markNeedsRebuild), so onNeedsFlush won't fire during it.
     _owner.onNeedsFlush = _scheduleFlush;
     bridge.start();
-    // Build the ambient-provider stack inside-out. The reentrant engine's
-    // CapabilityRegistry is a STABLE handle (D-6: updateShouldNotify => false),
-    // so the resolving→ready transitions inside a formula subtree never
-    // fan-rebuild from it; the work-axis notifier + context + resolver keep
-    // their existing (plain) provision. The registry is wrapped only when
-    // present (a non-reentrant fake resolver needs none). The `ServiceBundle` is
-    // NOT provided here — it is a per-substation responsibility provided by each
-    // `SubstationScope` so two substations get isolated source control (ADR-0008
-    // D5).
+    // Build the ambient-provider stack inside-out. Every provider is a plain
+    // InheritedSeed: the root never rebuilds, and genesis's default identity
+    // check declines to notify for a re-provided handle anyway (ADR-0008 D-6,
+    // superseded 2026-07-02 — the StableInheritedSeed guard type is deleted).
+    // The registry is wrapped only when present (a non-reentrant fake resolver
+    // needs none). The `ServiceBundle` is NOT provided here — it is a
+    // per-substation responsibility provided by each `SubstationScope` so two
+    // substations get isolated source control (ADR-0008 D5).
     Seed root = Station(_substations);
     final registry = _registry;
     if (registry != null) {
-      root = StableInheritedSeed<CapabilityRegistry>(
-        value: registry,
-        child: root,
-      );
+      root = InheritedSeed<CapabilityRegistry>(value: registry, child: root);
     }
     root = InheritedSeed<SessionResolver>(value: _resolver, child: root);
     root = InheritedSeed<StationServices>(value: _stationServices, child: root);
@@ -104,6 +107,8 @@ class StationKernel {
       value: bridge.notifier,
       child: root,
     );
+    final wrap = _wrapRoot;
+    if (wrap != null) root = wrap(root);
     _owner.mountRoot(root);
     // Arm the backoff Timer for any baseline cooldown (a restart that adopts a
     // cooled-down session — D-5/F1). Steady-state scans happen in the flush
@@ -127,13 +132,14 @@ class StationKernel {
   }
 
   /// Scans every owned session's cursor for the EARLIEST future cooldown and
-  /// (re)arms the backoff Timer for it (D-5/F1). Reads the latest join through
-  /// the notifier's synchronous accessor — NOT a persistent listener.
+  /// (re)arms the backoff Timer for it (D-5/F1). Reads the PRODUCER-side latest
+  /// off the bridge (what it last pushed) — never a sync read of the notifier's
+  /// reactive state (D-H rule 2) and never a persistent listener.
   void _scanCooldowns() {
     if (_disposed) return;
     final now = _clock();
     DateTime? earliest;
-    for (final session in bridge.notifier.current.sessionsByWorkBead.values) {
+    for (final session in bridge.latest.sessionsByWorkBead.values) {
       for (final node in session.cursor.values) {
         final cooldown = node.cooldownUntil;
         if (cooldown != null &&
@@ -150,22 +156,15 @@ class StationKernel {
     }
   }
 
-  /// A cooldown expired — re-emit a FRESH-instance copy of the current snapshot
-  /// so `WorkList` re-runs the frontier predicate (now past the cooldown) and
-  /// re-keys the eligible failed step (the backoff re-mount). A fresh instance is
-  /// required because `JoinedSnapshot` is reference-y (no value equality), so an
-  /// identical push would be a no-op. The re-emit goes through the notifier
-  /// (WorkList stays the sole dirtier); `root.markNeedsRebuild` is NEVER called.
+  /// A cooldown expired — re-emit a FRESH-instance copy of the latest snapshot
+  /// (the bridge's `repush`) so `WorkList` re-runs the frontier predicate (now
+  /// past the cooldown) and re-keys the eligible failed step (the backoff
+  /// re-mount). The re-emit goes through the notifier (WorkList stays the sole
+  /// dirtier); `root.markNeedsRebuild` is NEVER called.
   void _repokeCooldown() {
     _cooldownTimer = null;
     if (_disposed) return;
-    final current = bridge.notifier.current;
-    bridge.notifier.push(
-      JoinedSnapshot(
-        graph: current.graph,
-        sessionsByWorkBead: current.sessionsByWorkBead,
-      ),
-    );
+    bridge.repush();
   }
 
   /// Tears down the tree (unmounting every effect → kill) and the bridge.

@@ -15,7 +15,6 @@
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_controller/grid_controller.dart';
 
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
@@ -23,35 +22,29 @@ import 'session_handle.dart';
 
 /// Everything the registry's [CapabilityRegistry.host] needs to mount one
 /// eligible [CapabilityStep] as an engine leaf.
+///
+/// Slimmed 2026-07-02 (the context rip-out): the work `Bead` and the session
+/// `SiblingView` are AMBIENT (mounted by `WorkBead`/`SessionScope`) — an effect
+/// reads them with the non-binding lookup, so the mount threads only the
+/// step's own identity + supervision params.
 class StepMount {
-  /// Bundles the [step], the full work [bead] (threaded down so the host can
-  /// hand the capability the rich bead), its full [nodePath], the resolved
-  /// [session], the step's current [node] cursor (identity/incarnation for
-  /// respawn — D-4), the incarnation-keyed reconcile [key], and the owning
-  /// formula's supervision params ([backoff]/[maxRestarts]) the host uses to
-  /// author the supervised-restart cursor on failure (D-5). The WHOLE session
-  /// [cursor] + [results] are threaded down so the host can hand a
-  /// `ServiceCapability` a read-only sibling view (D-5) — config, never a
-  /// re-query.
+  /// Bundles the [step], its full [nodePath], the resolved [session], the
+  /// step's current [node] cursor (identity/incarnation for respawn — D-4), the
+  /// incarnation-keyed reconcile [key], and the owning formula's supervision
+  /// params ([backoff]/[maxRestarts]) the host uses to author the
+  /// supervised-restart cursor on failure (D-5).
   const StepMount({
     required this.step,
-    required this.bead,
     required this.nodePath,
     required this.session,
     required this.node,
     required this.key,
     this.backoff = Backoff.standard,
     this.maxRestarts = 3,
-    this.cursor = const {},
-    this.results = const {},
   });
 
   /// The eligible step to mount.
   final CapabilityStep step;
-
-  /// The full work bead this formula instance serves (config, threaded from
-  /// `WorkBead` down through the inflater) — the capability's prompt input.
-  final Bead bead;
 
   /// The step's FULL path within the formula tree (`'$parentNodePath/$stepId'`)
   /// — the cursor key + the per-step provider-name segment.
@@ -76,15 +69,6 @@ class StepMount {
   /// the host writes the exhausted failure (no cooldown) and SessionScope
   /// escalates.
   final int maxRestarts;
-
-  /// The WHOLE session cursor (every node's [NodeCursor], not just [node]) —
-  /// threaded down so the host's `ServiceCapability` reads its siblings' states
-  /// pull-free (D-5). Config, never a re-query (A39/invariant 1).
-  final FormulaCursor cursor;
-
-  /// Every node's recorded result payload, keyed by `nodePath` — threaded down
-  /// so a `route` step reads its siblings' grades pull-free (D-5).
-  final Map<String, Map<String, String>> results;
 }
 
 /// The engine's capability/formula/clock resolution seam (Track D). The default

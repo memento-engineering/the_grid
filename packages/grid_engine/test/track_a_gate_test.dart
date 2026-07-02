@@ -20,7 +20,7 @@ class _RouteCap extends ServiceCapability {
   final StepOutcome outcome;
 
   @override
-  Future<StepOutcome> run(CapabilityContext ctx) async => outcome;
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async => outcome;
 }
 
 const _gateFormula = Formula(
@@ -70,7 +70,7 @@ void main() {
       owner.mountRoot(
         InheritedSeed<StationServices>(
           value: fakes.ctx,
-          child: StableInheritedSeed<CapabilityRegistry>(
+          child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
             child: InheritedSeed<ServiceBundle>(
               value: const ServiceBundle(),
@@ -78,7 +78,6 @@ void main() {
                 capability: const _RouteCap(Gate('x')),
                 mount: const StepMount(
                   step: CapabilityStep(stepId: 'route', capabilityId: 'route'),
-                  bead: _bead,
                   nodePath: 'tg-1/route',
                   session: SessionHandle('tgdog-s'),
                   node: NodeCursor(),
@@ -154,7 +153,7 @@ void main() {
       final openBridge = StationJoinBridge(work: work, state: openState);
       addTearDown(openBridge.dispose);
       expect(
-        openBridge.notifier.current.sessionsByWorkBead['tg-1']!.openGateNodes,
+        openBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
         {'tg-1/route'},
       );
 
@@ -166,7 +165,7 @@ void main() {
       final closedBridge = StationJoinBridge(work: work, state: closedState);
       addTearDown(closedBridge.dispose);
       expect(
-        closedBridge.notifier.current.sessionsByWorkBead['tg-1']!.openGateNodes,
+        closedBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
         isEmpty,
       );
 
@@ -178,7 +177,7 @@ void main() {
       final strayBridge = StationJoinBridge(work: work, state: strayState);
       addTearDown(strayBridge.dispose);
       expect(
-        strayBridge.notifier.current.sessionsByWorkBead['tg-1']!.openGateNodes,
+        strayBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
         isEmpty,
       );
     });
@@ -197,7 +196,7 @@ void main() {
       closedOwner.mountRoot(
         InheritedSeed<StationServices>(
           value: closed.ctx,
-          child: StableInheritedSeed<CapabilityRegistry>(
+          child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
             child: const SessionScope(
               bead: _bead,
@@ -227,7 +226,7 @@ void main() {
       openOwner.mountRoot(
         InheritedSeed<StationServices>(
           value: open.ctx,
-          child: StableInheritedSeed<CapabilityRegistry>(
+          child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
             child: const SessionScope(
               bead: _bead,

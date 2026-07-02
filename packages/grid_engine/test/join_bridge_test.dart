@@ -65,6 +65,16 @@ Bead session(
 StepState? _stateOf(JoinedSnapshot s, String workBead, String node) =>
     s.sessionsByWorkBead[workBead]?.cursor[node]?.state;
 
+/// Reads [notifier]'s value the consumer way (D-H rule 2: no public sync
+/// accessor over reactive state): subscribe (`fireImmediately` delivers the
+/// baseline), capture, unsubscribe.
+JoinedSnapshot _read(JoinedSnapshotNotifier notifier) {
+  late JoinedSnapshot value;
+  final remove = notifier.addListener((s) => value = s);
+  remove();
+  return value;
+}
+
 void main() {
   group('StationJoinBridge', () {
     late FakeSnapshotSource workSrc;
@@ -101,8 +111,8 @@ void main() {
     test('with no work baseline, the seed is JoinedSnapshot.empty', () {
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc);
       addTearDown(bridge.dispose);
-      expect(bridge.notifier.current.graph.isEmpty, isTrue);
-      expect(bridge.notifier.current.sessionsByWorkBead, isEmpty);
+      expect(_read(bridge.notifier).graph.isEmpty, isTrue);
+      expect(_read(bridge.notifier).sessionsByWorkBead, isEmpty);
     });
 
     test('one work change → exactly ONE push, new graph + unchanged sessions', () async {
@@ -175,7 +185,7 @@ void main() {
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
-      final joined = bridge.notifier.current;
+      final joined = _read(bridge.notifier);
       // Orphan dropped; no '' key, no NoSuchMethod, no null-key crash.
       expect(joined.sessionsByWorkBead.keys, <String>['w1']);
       expect(joined.sessionsByWorkBead.containsKey(''), isFalse);
@@ -197,8 +207,8 @@ void main() {
       addTearDown(bridge.dispose);
 
       // Only the real session contributes the cursor.
-      expect(_stateOf(bridge.notifier.current, 'w1', 'w1/agent'), StepState.complete);
-      expect(bridge.notifier.current.sessionsByWorkBead, hasLength(1));
+      expect(_stateOf(_read(bridge.notifier), 'w1', 'w1/agent'), StepState.complete);
+      expect(_read(bridge.notifier).sessionsByWorkBead, hasLength(1));
     });
 
     test('terminal retention: a CLOSED session still appears (so WorkList unmounts)', () async {
@@ -225,20 +235,20 @@ void main() {
       // No `.current` at construction — the seed is JoinedSnapshot.empty.
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc);
       addTearDown(bridge.dispose);
-      expect(bridge.notifier.current.graph.isEmpty, isTrue);
+      expect(_read(bridge.notifier).graph.isEmpty, isTrue);
 
       // A first baseline lands in the gap BEFORE start() subscribes. The
       // broadcast stream does not replay, so the event itself is lost — but
-      // `.current` carries it, and start()'s re-seed recovers it.
+      // the source's `.current` carries it, and start()'s re-seed recovers it.
       workSrc.emit(graphOf([work('w1')]));
       await pumpEventQueue();
-      expect(bridge.notifier.current.graph.isEmpty, isTrue, reason: 'gap event not yet recovered');
+      expect(_read(bridge.notifier).graph.isEmpty, isTrue, reason: 'gap event not yet recovered');
 
       bridge.start();
       expect(
-        bridge.notifier.current.graph.beadsById.keys,
+        _read(bridge.notifier).graph.beadsById.keys,
         contains('w1'),
-        reason: 'start() re-seeds from `.current`, recovering the missed baseline',
+        reason: 'start() re-seeds from the sources\' `.current`, recovering the missed baseline',
       );
     });
 

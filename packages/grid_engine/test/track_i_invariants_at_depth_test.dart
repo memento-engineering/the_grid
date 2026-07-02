@@ -21,8 +21,8 @@ import 'support/engine_fakes.dart';
 class _WritingCap extends ProcessCapability {
   const _WritingCap();
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'echo'],
     lifecycle: Lifecycle.oneTurn,
@@ -108,7 +108,7 @@ SessionProjection _session(
       value: joined,
       child: InheritedSeed<StationServices>(
         value: fakes.ctx,
-        child: StableInheritedSeed<CapabilityRegistry>(
+        child: InheritedSeed<CapabilityRegistry>(
           value: reg,
           // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
           // D5). With none set the scope provides the empty default (an offline
@@ -162,7 +162,7 @@ Branch _whereSeed(Branch root, bool Function(Seed) test) =>
       value: joined,
       child: InheritedSeed<StationServices>(
         value: fakes.ctx,
-        child: StableInheritedSeed<CapabilityRegistry>(
+        child: InheritedSeed<CapabilityRegistry>(
           value: registry,
           // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
           // D5). With none set the scope provides the empty default (an offline

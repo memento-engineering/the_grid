@@ -17,14 +17,11 @@ class JoinedSnapshotNotifier extends StateNotifier<JoinedSnapshot> {
   /// Pushes a new joined value — the bridge's only write path. Public because
   /// the notifier is driven externally (by the join bridge), not by internal
   /// transitions; `StateNotifier.state`'s setter is protected.
+  ///
+  /// There is deliberately NO public synchronous read (D-H rule 2: a sync
+  /// accessor that dodges `@protected state` invites unsubscribed reads):
+  /// consumers subscribe (`addListener(fireImmediately: true)` delivers the
+  /// baseline); the producer-side latest lives on the bridge, which remembers
+  /// what it last pushed.
   void push(JoinedSnapshot snapshot) => state = snapshot;
-
-  /// The current value, read through the public listener API (the `state`
-  /// getter is `@visibleForTesting`, off-limits to lib consumers): subscribe
-  /// with `fireImmediately`, capture synchronously, then remove.
-  JoinedSnapshot get current {
-    late JoinedSnapshot value;
-    addListener((snapshot) => value = snapshot, fireImmediately: true)();
-    return value;
-  }
 }

@@ -107,7 +107,7 @@ void main() {
           value: joined,
           child: InheritedSeed<StationServices>(
             value: f.ctx,
-            child: StableInheritedSeed<CapabilityRegistry>(
+            child: InheritedSeed<CapabilityRegistry>(
               value: reg,
               child: InheritedSeed<SessionResolver>(
                 value: FormulaResolver((_) => _code),

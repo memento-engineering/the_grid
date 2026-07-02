@@ -19,8 +19,8 @@ import 'support/engine_fakes.dart';
 class _AgentCap extends ProcessCapability {
   const _AgentCap();
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'echo'],
     lifecycle: Lifecycle.oneTurn,
@@ -36,8 +36,8 @@ class _AgentCap extends ProcessCapability {
 class _CriticCap extends ProcessCapability {
   const _CriticCap();
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'echo'],
     lifecycle: Lifecycle.oneTurn,
@@ -51,19 +51,23 @@ class _CriticCap extends ProcessCapability {
 }
 
 /// The sibling-reading aggregator (A2): reads each critic's grade through the
-/// threaded [SiblingView] and parks at a gate (A3) on any fail-closed `F`.
+/// AMBIENT [SiblingView] (mounted by `SessionScope`, read with the effect verb)
+/// and parks at a gate (A3) on any fail-closed `F`.
 class _RouteCap extends ServiceCapability {
   const _RouteCap();
   @override
-  Future<StepOutcome> run(CapabilityContext ctx) async {
-    final path = ctx.nodePath;
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+    final path = args.nodePath;
     final parent = path.substring(0, path.lastIndexOf('/'));
-    final critics = (ctx.params['critics'] ?? '')
+    final siblings =
+        context.getInheritedSeedOfExactType<SiblingView>() ??
+        const SiblingView();
+    final critics = (args.params['critics'] ?? '')
         .split(',')
         .where((s) => s.isNotEmpty);
     for (final critic in critics) {
       // Fail-closed: a missing grade reads as `F` (it can never advance).
-      final grade = ctx.siblings.resultOf('$parent/$critic')['grade'] ?? 'F';
+      final grade = siblings.resultOf('$parent/$critic')['grade'] ?? 'F';
       if (grade == 'F') return Gate('critic $critic failed');
     }
     return const Ok({'verdict': 'advance'});
@@ -73,7 +77,8 @@ class _RouteCap extends ServiceCapability {
 class _LandCap extends ServiceCapability {
   const _LandCap();
   @override
-  Future<StepOutcome> run(CapabilityContext ctx) async => const Ok();
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async =>
+      const Ok();
 }
 
 const _caps = <String, Capability>{
@@ -165,7 +170,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
       value: joined,
       child: InheritedSeed<StationServices>(
         value: fakes.ctx,
-        child: StableInheritedSeed<CapabilityRegistry>(
+        child: InheritedSeed<CapabilityRegistry>(
           value: reg,
           child: InheritedSeed<SessionResolver>(
             value: FormulaResolver((_) => _code),
@@ -204,7 +209,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
       value: joined,
       child: InheritedSeed<StationServices>(
         value: fakes.ctx,
-        child: StableInheritedSeed<CapabilityRegistry>(
+        child: InheritedSeed<CapabilityRegistry>(
           value: registry,
           child: InheritedSeed<SessionResolver>(
             value: FormulaResolver((_) => _code),
@@ -259,9 +264,9 @@ SessionProjection _routeReady(Map<String, String> grades) => _session(
 );
 
 void main() {
-  group('A5 invariant 1 AT DEPTH (with the threaded sibling seam present)', () {
+  group('A5 invariant 1 AT DEPTH (with the ambient sibling seam present)', () {
     test('a deep committee cursor tick → flush() == [WorkList]; no FormulaScope '
-        'is in the drain (the results/cursor threading added no subscription)',
+        'is in the drain (the ambient results/cursor seam added no subscription)',
         () {
       final joined = JoinedSnapshotNotifier(
         _joined(

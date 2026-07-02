@@ -17,14 +17,17 @@
 /// pushes — off `build`, latched, through the single [StationBeadWriter].
 ///
 /// **The effect layer holds NO writer** (invariant 2): the [Allocation] reports;
-/// the Host persists. This is layering, not a sandbox (ADR-0009 D3) — the
-/// allocation may freely depend on the tree; only the Host writes.
+/// the Host persists. This is layering — the effect freely reads the tree with
+/// the effect verb (ADR-0009 D3 / ADR-0008 Decision 3, 2026-07-02); only the
+/// Host writes. The Host's own inherited reads are `dependOn*` (the tree verb)
+/// and are RE-READ on every `didChangeDependencies` — never `??=`-cached
+/// (assume every reference can change; D-H rule 1). The captured fields exist
+/// for async-gap use (a `TreeContext` throws post-unmount), not as a cache.
 ///
 /// The load-bearing async-gap guards live entirely here (the tree's discipline):
 /// `_cancelled` (set FIRST in `dispose`) + `TreeContext.mounted` drop a report
-/// reaching an unmounted Branch; the captured `_ctx` is used across gaps (never
-/// `context`, which throws post-unmount); `_completed` is the once-only terminal
-/// latch (a daemon `ready` does NOT latch — OQ-5).
+/// reaching an unmounted Branch; `_completed` is the once-only terminal latch
+/// (a daemon `ready` does NOT latch — OQ-5).
 library;
 
 import 'dart:async';
@@ -66,6 +69,7 @@ class CapabilityHostState extends State<CapabilityHost> {
   ServiceBundle _services = const ServiceBundle();
   CapabilityRegistry? _registry;
   Allocation? _allocation;
+  StepArgs? _args;
   String _token = '';
   bool _cancelled = false;
   bool _completed = false;
@@ -81,18 +85,30 @@ class CapabilityHostState extends State<CapabilityHost> {
   @override
   void initState() {
     _token = newInstanceToken();
+    // One StepArgs per incarnation: its CancelToken is the effect's cooperative
+    // unmount signal (the allocation cancels it in dispose).
+    _args = StepArgs(
+      params: seed.mount.step.params,
+      nodePath: seed.mount.nodePath,
+      cancel: CancelToken(),
+    );
   }
 
   @override
   void didChangeDependencies() {
-    _ctx ??= context.dependOnInheritedSeedOfExactType<StationServices>();
+    // ALWAYS re-read every dependency (D-H rule 1: assume a reference can
+    // change; dependencyChanged re-runs this). The fields are captured for
+    // async-gap use — never a read-once cache.
+    final ctx = context.dependOnInheritedSeedOfExactType<StationServices>();
     assert(
-      _ctx != null,
+      ctx != null,
       'CapabilityHost requires an ambient InheritedSeed<StationServices>',
     );
-    final services = context.dependOnInheritedSeedOfExactType<ServiceBundle>();
-    if (services != null) _services = services;
-    _registry ??= context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    _ctx = ctx;
+    _services =
+        context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
+        const ServiceBundle();
+    _registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
 
     final existing = _allocation;
     if (existing == null) {
@@ -120,39 +136,16 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// it, D-5/F1), falling back to the system clock if no registry is ambient.
   DateTime _now() => _registry?.now() ?? DateTime.now();
 
-  /// Assembles the [AllocationContext] the effect runs against — the sandboxed
-  /// [CapabilityContext] (read-only config slice), the process transport, the
-  /// stable address, the engine env overlay, the report sink, and the adopt
-  /// fence (the prior identity for a no-adopt-on-faith proof — D4).
+  /// Assembles the [AllocationContext] the effect runs against — the host's
+  /// stable tree context + the per-step args (the effect reads its ambient
+  /// values itself, with the effect verb), the process transport, the stable
+  /// address, the engine env overlay, the report sink, and the adopt fence
+  /// (the prior identity for a no-adopt-on-faith proof — D4).
   AllocationContext _buildAllocationContext() {
     final ctx = _ctx!;
-    // The workspace/branch/baseBranch are the per-substation SourceControl's
-    // (ADR-0008 D5) — the engine holds no worktree-layout opinion. A synthetic
-    // placeholder covers the no-source-control offline case (nothing depends on
-    // it there — the workspace is never provisioned nor landed).
-    final sc = _services.sourceControl;
-    final workspaceDir = sc?.workspaceFor(_beadId) ?? '/grid/workspaces/$_beadId';
-    final branch = sc?.branchFor(_beadId) ?? '';
-    final baseBranch = sc?.baseBranch ?? 'main';
-    final capContext = CapabilityContext(
-      params: seed.mount.step.params,
-      bead: seed.mount.bead,
-      workspaceDir: workspaceDir,
-      branch: branch,
-      baseBranch: baseBranch,
-      services: _services,
-      cancel: CancelToken(),
-      nodePath: _nodePath,
-      // The read-only sibling view (D-5): the WHOLE session cursor + results,
-      // threaded down (config, never a subscription/re-query — A39/invariant 1).
-      siblings: SiblingView(
-        cursor: seed.mount.cursor,
-        results: seed.mount.results,
-      ),
-      logFile: null,
-    );
     return AllocationContext(
-      capContext: capContext,
+      treeContext: context,
+      args: _args!,
       transport: ctx.provider,
       address: AllocationAddress(_sessionId, _nodePath),
       // The per-incarnation env the effect spawns under. The full path already

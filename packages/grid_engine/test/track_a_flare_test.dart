@@ -7,7 +7,6 @@
 import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -17,8 +16,8 @@ import 'support/engine_fakes.dart';
 class _CompletingCap extends ProcessCapability {
   const _CompletingCap();
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'echo'],
     lifecycle: Lifecycle.oneTurn,
@@ -58,19 +57,23 @@ Future<void> _pump() async {
   owner.mountRoot(
     InheritedSeed<StationServices>(
       value: fakes.ctx,
-      child: StableInheritedSeed<CapabilityRegistry>(
+      child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: DateTime(2026)),
         child: InheritedSeed<ServiceBundle>(
           value: services,
-          child: CapabilityHost(
-            capability: const _CompletingCap(),
-            mount: const StepMount(
-              step: CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-              bead: _bead,
-              nodePath: 'tg-1/agent',
-              session: SessionHandle('tgdog-s'),
-              node: NodeCursor(),
-              key: ValueKey('tg-1/agent#0'),
+          // A bare host (no real SessionScope) — mount the ambient Workspace
+          // the capability's spawn reads with the effect verb.
+          child: InheritedSeed<Workspace>(
+            value: testWorkspace('tg-1'),
+            child: CapabilityHost(
+              capability: const _CompletingCap(),
+              mount: const StepMount(
+                step: CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
+                nodePath: 'tg-1/agent',
+                session: SessionHandle('tgdog-s'),
+                node: NodeCursor(),
+                key: ValueKey('tg-1/agent#0'),
+              ),
             ),
           ),
         ),
@@ -132,5 +135,3 @@ void main() {
     });
   });
 }
-
-const _bead = Bead(id: 'tg-1', issueType: IssueType.task, status: BeadStatus.open);

@@ -19,8 +19,8 @@ class _GradingCritic extends ProcessCapability {
   final String? grade;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'echo grade'],
     lifecycle: Lifecycle.oneTurn,
@@ -34,7 +34,7 @@ class _GradingCritic extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(CapabilityContext ctx) async =>
+  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async =>
       grade == null ? null : {'grade': grade!};
 }
 
@@ -50,19 +50,26 @@ Future<void> _pump() async {
   owner.mountRoot(
     InheritedSeed<StationServices>(
       value: fakes.ctx,
-      child: StableInheritedSeed<CapabilityRegistry>(
+      child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: DateTime(2026)),
         child: InheritedSeed<ServiceBundle>(
           value: const ServiceBundle(),
-          child: CapabilityHost(
-            capability: cap,
-            mount: StepMount(
-              step: const CapabilityStep(stepId: 'critic', capabilityId: 'critic'),
-              bead: bead('tg-1'),
-              nodePath: 'tg-1/critic',
-              session: const SessionHandle('tgdog-s'),
-              node: const NodeCursor(),
-              key: const ValueKey('tg-1/critic#0'),
+          // The workspace is an AMBIENT value now (mounted by SessionScope in
+          // the real tree) — the critic's spawn reads it with the effect verb.
+          child: InheritedSeed<Workspace>(
+            value: testWorkspace('tg-1'),
+            child: CapabilityHost(
+              capability: cap,
+              mount: StepMount(
+                step: const CapabilityStep(
+                  stepId: 'critic',
+                  capabilityId: 'critic',
+                ),
+                nodePath: 'tg-1/critic',
+                session: const SessionHandle('tgdog-s'),
+                node: const NodeCursor(),
+                key: const ValueKey('tg-1/critic#0'),
+              ),
             ),
           ),
         ),

@@ -71,7 +71,7 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
       value: joined,
       child: InheritedSeed<StationServices>(
         value: ctx,
-        child: StableInheritedSeed<CapabilityRegistry>(
+        child: InheritedSeed<CapabilityRegistry>(
           value: registry,
           child: InheritedSeed<SessionResolver>(
             value: FormulaResolver(rootFormula),

@@ -36,7 +36,6 @@ export 'src/formula/formula_resolver.dart';
 export 'src/formula/formula_scope.dart';
 export 'src/formula/session_handle.dart';
 export 'src/formula/session_scope.dart';
-export 'src/formula/stable_inherited.dart';
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';

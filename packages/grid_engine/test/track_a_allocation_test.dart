@@ -3,8 +3,7 @@
 // Capability.createAllocation factory defaults. The effect layer REPORTS through
 // the sink and holds NO writer — these tests drive it with a capturing sink + the
 // controllable FakeRuntimeProvider (Fakes, not mocks; zero I/O).
-import 'dart:async';
-
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -19,10 +18,11 @@ class _RecProcessCap extends ProcessCapability {
   final Map<String, String>? payload;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) {
-    log.add('spawn(${ctx.beadId}@${ctx.workspaceDir})');
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
+    final workspace = context.getInheritedSeedOfExactType<Workspace>()!;
+    log.add('spawn(${args.beadId}@${workspace.workspaceDir})');
     return RuntimeConfig(
-      workDir: ctx.workspaceDir,
+      workDir: workspace.workspaceDir,
       command: 'sh',
       args: const ['-c', 'echo hi'],
       lifecycle: Lifecycle.oneTurn,
@@ -39,10 +39,11 @@ class _RecProcessCap extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(CapabilityContext ctx) async => payload;
+  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async =>
+      payload;
 
   @override
-  Future<void> teardown(CapabilityContext ctx) async => log.add('teardown');
+  Future<void> teardown(StepArgs args) async => log.add('teardown');
 }
 
 class _RecServiceCap extends ServiceCapability {
@@ -51,13 +52,13 @@ class _RecServiceCap extends ServiceCapability {
   final List<String> log;
 
   @override
-  Future<StepOutcome> run(CapabilityContext ctx) async {
-    log.add('run(${ctx.beadId})');
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+    log.add('run(${args.beadId})');
     return outcome;
   }
 
   @override
-  Future<void> teardown(CapabilityContext ctx) async => log.add('svc-teardown');
+  Future<void> teardown(StepArgs args) async => log.add('svc-teardown');
 }
 
 /// A [SourceControl] that records `provision(beadId)` so a test can assert
@@ -104,16 +105,18 @@ class _RecordingProvisionSourceControl implements SourceControl {
 
 // --- builders ----------------------------------------------------------------
 
-CapabilityContext _capCtx(CancelToken cancel, {ServiceBundle services = const ServiceBundle()}) =>
-    CapabilityContext(
-      params: const {},
-      bead: bead('tg-1'),
-      workspaceDir: '/w/tg-1',
-      branch: 'grid/tg-1',
-      baseBranch: 'main',
-      services: services,
-      cancel: cancel,
-      nodePath: 'tg-1/agent',
+/// The ambient values the old CapabilityContext threaded, now read from the
+/// tree (the context rip-out): the workspace + the per-substation services.
+FakeTreeContext _treeCtx({ServiceBundle services = const ServiceBundle()}) =>
+    FakeTreeContext(
+      values: {
+        Workspace: testWorkspace(
+          'tg-1',
+          workspaceDir: '/w/tg-1',
+          branch: 'grid/tg-1',
+        ),
+        ServiceBundle: services,
+      },
     );
 
 AllocationContext _allocCtx({
@@ -124,7 +127,8 @@ AllocationContext _allocCtx({
   AdoptFence fence = const AdoptFence(),
   Map<String, String> env = const {},
 }) => AllocationContext(
-  capContext: _capCtx(cancel, services: services),
+  treeContext: _treeCtx(services: services),
+  args: stepArgs('tg-1/agent', cancel: cancel),
   transport: transport,
   address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
   env: env,

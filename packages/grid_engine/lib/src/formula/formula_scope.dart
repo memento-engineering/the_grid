@@ -20,7 +20,6 @@
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_controller/grid_controller.dart';
 
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
@@ -31,13 +30,13 @@ import 'session_handle.dart';
 /// The pure inflater for one formula instance rooted at [nodePath], under
 /// [cursor] (M4-P1 §4). Engine-private — an asset never subclasses it.
 class FormulaScope extends StatelessSeed {
-  /// Inflates [formula] for work [bead] at [nodePath] under [cursor] (with the
-  /// session [results] threaded down for sibling reads — D-5).
+  /// Inflates [formula] at [nodePath] under [cursor]. The work `Bead` and the
+  /// session `SiblingView` are AMBIENT (mounted by `WorkBead`/`SessionScope`,
+  /// 2026-07-02) — an effect reads them with the non-binding lookup; the
+  /// inflater threads nothing but the frontier's own inputs.
   const FormulaScope({
     required this.formula,
-    required this.bead,
     required this.cursor,
-    required this.results,
     required this.nodePath,
     super.key,
   });
@@ -45,19 +44,9 @@ class FormulaScope extends StatelessSeed {
   /// The formula to inflate.
   final Formula formula;
 
-  /// The full work bead this formula serves — pure config, threaded into each
-  /// `StepMount` (and down any nested sub-formula) so a `CapabilityHost` can hand
-  /// its capability the rich bead. Reentrant: a sub-formula serves the SAME bead.
-  final Bead bead;
-
   /// The injected cursor (config, threaded from `WorkList`'s cascade — NOT a
   /// subscription). A missing node reads as a fresh `pending` cursor.
   final FormulaCursor cursor;
-
-  /// The injected per-node result payloads (config, threaded from `SessionScope`
-  /// — NOT a subscription). Handed to each `StepMount` so a `ServiceCapability`
-  /// reads its siblings' grades pull-free (D-5).
-  final Map<String, Map<String, String>> results;
 
   /// This formula instance's path (`bead.id` at the root; `'$parent/$stepId'`
   /// for a nested sub-formula).
@@ -95,7 +84,6 @@ class FormulaScope extends StatelessSeed {
             reg.host(
               StepMount(
                 step: step,
-                bead: bead,
                 nodePath: path,
                 session: session!,
                 node: node,
@@ -104,10 +92,6 @@ class FormulaScope extends StatelessSeed {
                 key: ValueKey('$path#${node.restartCount}'),
                 backoff: formula.backoff,
                 maxRestarts: formula.maxRestarts,
-                // The WHOLE cursor + results, threaded down so a host's
-                // ServiceCapability reads its siblings pull-free (D-5).
-                cursor: cursor,
-                results: results,
               ),
             ),
           );
@@ -119,9 +103,7 @@ class FormulaScope extends StatelessSeed {
           children.add(
             FormulaScope(
               formula: sub,
-              bead: bead,
               cursor: cursor,
-              results: results,
               nodePath: path,
               key: ValueKey('$path/scope'),
             ),

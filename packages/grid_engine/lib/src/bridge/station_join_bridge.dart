@@ -37,18 +37,41 @@ class StationJoinBridge {
   /// If [notifier] is supplied, the bridge drives it but does **not** own its
   /// lifecycle (it is left undisposed on [dispose]); otherwise the bridge
   /// creates one, seeded with the current join, and disposes it itself.
-  StationJoinBridge({
+  factory StationJoinBridge({
     required SnapshotSource work,
     required SnapshotSource state,
     JoinedSnapshotNotifier? notifier,
+  }) {
+    final seed = _join(work.current, state.current);
+    return StationJoinBridge._(
+      work: work,
+      state: state,
+      ownsNotifier: notifier == null,
+      notifier: notifier ?? JoinedSnapshotNotifier(seed),
+      latest: seed,
+    );
+  }
+
+  StationJoinBridge._({
+    required SnapshotSource work,
+    required SnapshotSource state,
+    required bool ownsNotifier,
+    required this.notifier,
+    required JoinedSnapshot latest,
   }) : _work = work,
        _state = state,
-       _ownsNotifier = notifier == null,
-       notifier = notifier ?? JoinedSnapshotNotifier(_join(work.current, state.current));
+       _ownsNotifier = ownsNotifier,
+       _latest = latest;
 
   final SnapshotSource _work;
   final SnapshotSource _state;
   final bool _ownsNotifier;
+  JoinedSnapshot _latest;
+
+  /// The last joined value this bridge pushed — the PRODUCER's own record of
+  /// its output (not a reactive read; D-H rule 2 forbids a public sync accessor
+  /// on the notifier). The kernel's cooldown scan reads this.
+  JoinedSnapshot get latest => _latest;
 
   /// The joined-snapshot value the tree's `WorkList` observes. Seeded with the
   /// current join (or [JoinedSnapshot.empty]) so a late subscriber sees the
@@ -70,15 +93,35 @@ class StationJoinBridge {
     // (non-replaying, broadcast) event was missed — recover it from `.current`
     // so the notifier never carries a stale construction-time seed. A no-op in
     // the intended atomic construct-then-start composition.
-    notifier.push(_join(_work.current, _state.current));
+    _push(_join(_work.current, _state.current));
     // Use the freshly-emitted snapshot for the source that fired and `.current`
     // for the other — one push per real emission, never two for one change.
     _workSub = _work.snapshots.listen((workSnapshot) {
-      notifier.push(_join(workSnapshot, _state.current));
+      _push(_join(workSnapshot, _state.current));
     });
     _stateSub = _state.snapshots.listen((stateSnapshot) {
-      notifier.push(_join(_work.current, stateSnapshot));
+      _push(_join(_work.current, stateSnapshot));
     });
+  }
+
+  /// Re-emits a FRESH-instance copy of [latest] — the kernel's backoff re-poke
+  /// (a cooldown expired; `WorkList` must re-run the frontier predicate). A
+  /// fresh instance is required because [JoinedSnapshot] is reference-y (no
+  /// value equality), so re-pushing the same instance would be a no-op.
+  void repush() {
+    _push(
+      JoinedSnapshot(
+        graph: _latest.graph,
+        sessionsByWorkBead: _latest.sessionsByWorkBead,
+      ),
+    );
+  }
+
+  /// The single push funnel: records the producer-side [latest], then drives
+  /// the notifier.
+  void _push(JoinedSnapshot joined) {
+    _latest = joined;
+    notifier.push(joined);
   }
 
   /// Cancels both subscriptions and, if the bridge created the notifier,

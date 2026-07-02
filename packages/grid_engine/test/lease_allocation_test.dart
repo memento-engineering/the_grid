@@ -4,8 +4,10 @@
 // acquire/dispatch, daemon `ready` (the reap fix) vs job `complete`, adopt-or-
 // reacquire (no-adopt-on-faith), dispose=release, detach=keep, and the two
 // cancel-race release paths. Zero I/O.
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/testing.dart' show FakeRuntimeProvider, bead;
+import 'package:grid_engine/testing.dart'
+    show FakeRuntimeProvider, FakeTreeContext, stepArgs;
 import 'package:test/test.dart';
 
 /// A programmable core lease capability over an opaque String handle (a lease
@@ -36,20 +38,31 @@ class _FakeLeaseCap extends LeaseCapability<String> {
   String mint() => 'lease-${_seq++}';
 
   @override
-  Future<LeaseResolution<String>> acquire(CapabilityContext ctx) async {
+  Future<LeaseResolution<String>> acquire(
+    TreeContext context,
+    StepArgs args,
+  ) async {
     log.add('acquire');
     if (unavailable != null) return LeaseUnavailable(unavailable!);
     return LeaseBound(mint());
   }
 
   @override
-  Future<StepOutcome> dispatchOn(String handle, CapabilityContext ctx) async {
+  Future<StepOutcome> dispatchOn(
+    String handle,
+    TreeContext context,
+    StepArgs args,
+  ) async {
     log.add('dispatch:$handle');
     return outcome;
   }
 
   @override
-  Future<bool> proveFresh(String handle, CapabilityContext ctx) async {
+  Future<bool> proveFresh(
+    String handle,
+    TreeContext context,
+    StepArgs args,
+  ) async {
     log.add('proveFresh:$handle');
     onProveFresh?.call();
     return fresh;
@@ -63,25 +76,16 @@ class _FakeLeaseCap extends LeaseCapability<String> {
   }
 
   @override
-  Future<LeaseBound<String>?> adoptable(CapabilityContext ctx) async {
+  Future<LeaseBound<String>?> adoptable(
+    TreeContext context,
+    StepArgs args,
+  ) async {
     log.add('adoptable');
     return prior;
   }
 
   bool releasedAny() => released.isNotEmpty;
 }
-
-CapabilityContext _capCtx(CancelToken cancel, {String nodePath = 'tg-1/lease'}) =>
-    CapabilityContext(
-      params: const {},
-      bead: bead('tg-1'),
-      workspaceDir: '/w/tg-1',
-      branch: 'grid/tg-1',
-      baseBranch: 'main',
-      services: const ServiceBundle(),
-      cancel: cancel,
-      nodePath: nodePath,
-    );
 
 LeaseAllocation<String> _alloc(
   _FakeLeaseCap cap, {
@@ -90,7 +94,8 @@ LeaseAllocation<String> _alloc(
   StepKind kind = StepKind.daemon,
 }) => cap.createAllocation(
   AllocationContext(
-    capContext: _capCtx(cancel ?? CancelToken()),
+    treeContext: FakeTreeContext(),
+    args: stepArgs('tg-1/lease', cancel: cancel),
     transport: FakeRuntimeProvider(),
     address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
     env: const {},

@@ -4,8 +4,7 @@
 // controllable FakeRuntimeProvider + an injectable liveness seam. Zero I/O; the
 // live cross-process output re-wire is the deferred adopt-a-live-process piece
 // (ADR-0008 D6) — what's proven here is the adopt DECISION + not double-spawning.
-import 'dart:async';
-
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -20,10 +19,10 @@ class _DaemonCap extends ProcessCapability {
   final List<String> log;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) {
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
     log.add('spawn');
     return RuntimeConfig(
-      workDir: ctx.workspaceDir,
+      workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
       command: 'sh',
       args: const ['-c', 'sleep 999'],
       lifecycle: Lifecycle.oneTurn,
@@ -38,13 +37,17 @@ class _DaemonCap extends ProcessCapability {
   };
 
   @override
-  Future<bool> proveFreshness(AdoptFence fence, CapabilityContext ctx) async {
+  Future<bool> proveFreshness(
+    AdoptFence fence,
+    TreeContext context,
+    StepArgs args,
+  ) async {
     log.add('proveFreshness');
     return fresh;
   }
 
   @override
-  Future<void> teardown(CapabilityContext ctx) async => log.add('teardown');
+  Future<void> teardown(StepArgs args) async => log.add('teardown');
 }
 
 /// A one-shot (job) process capability — must NEVER adopt or detach.
@@ -53,10 +56,10 @@ class _JobCap extends ProcessCapability {
   final List<String> log;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) {
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
     log.add('spawn');
     return RuntimeConfig(
-      workDir: ctx.workspaceDir,
+      workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
       command: 'sh',
       args: const ['-c', 'echo hi'],
       lifecycle: Lifecycle.oneTurn,
@@ -71,7 +74,11 @@ class _JobCap extends ProcessCapability {
   };
 
   @override
-  Future<bool> proveFreshness(AdoptFence fence, CapabilityContext ctx) async {
+  Future<bool> proveFreshness(
+    AdoptFence fence,
+    TreeContext context,
+    StepArgs args,
+  ) async {
     // Even if a job somehow "proves fresh", it must not adopt (isAdoptable is
     // false for a job) — this makes the guard non-vacuous.
     log.add('proveFreshness');
@@ -79,15 +86,16 @@ class _JobCap extends ProcessCapability {
   }
 }
 
-CapabilityContext _capCtx(CancelToken cancel) => CapabilityContext(
-  params: const {},
-  bead: bead('tg-1'),
-  workspaceDir: '/w/tg-1',
-  branch: 'grid/tg-1',
-  baseBranch: 'main',
-  services: const ServiceBundle(),
-  cancel: cancel,
-  nodePath: 'tg-1/harness',
+/// The ambient values the old CapabilityContext threaded, now read from the
+/// tree (the context rip-out): the workspace the spawn runs in.
+FakeTreeContext _treeCtx() => FakeTreeContext(
+  values: {
+    Workspace: testWorkspace(
+      'tg-1',
+      workspaceDir: '/w/tg-1',
+      branch: 'grid/tg-1',
+    ),
+  },
 );
 
 AllocationContext _ctx({
@@ -98,7 +106,8 @@ AllocationContext _ctx({
   bool live = true,
   AdoptFence fence = const AdoptFence(pgid: 200, pid: 201, token: 't'),
 }) => AllocationContext(
-  capContext: _capCtx(cancel),
+  treeContext: _treeCtx(),
+  args: stepArgs('tg-1/harness', cancel: cancel),
   transport: transport,
   address: const AllocationAddress('tgdog-s', 'tg-1/harness'),
   env: const {},

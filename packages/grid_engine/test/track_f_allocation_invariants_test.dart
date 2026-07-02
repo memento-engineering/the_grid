@@ -45,10 +45,10 @@ class _RecProcessCap extends ProcessCapability {
   final List<String> log;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) {
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
     log.add('spawn');
     return RuntimeConfig(
-      workDir: ctx.workspaceDir,
+      workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
       command: 'sh',
       args: const ['-c', 'echo hi'],
       lifecycle: Lifecycle.oneTurn,
@@ -68,8 +68,8 @@ class _DaemonCap extends ProcessCapability {
   final bool fresh;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'sleep 999'],
     lifecycle: Lifecycle.oneTurn,
@@ -82,19 +82,20 @@ class _DaemonCap extends ProcessCapability {
   };
 
   @override
-  Future<bool> proveFreshness(AdoptFence fence, CapabilityContext ctx) async =>
+  Future<bool> proveFreshness(
+    AdoptFence fence,
+    TreeContext context,
+    StepArgs args,
+  ) async =>
       fresh;
 }
 
-CapabilityContext _capCtx() => CapabilityContext(
-  params: const {},
-  bead: bead('tg-1'),
-  workspaceDir: '/w',
-  branch: 'grid/tg-1',
-  baseBranch: 'main',
-  services: const ServiceBundle(),
-  cancel: CancelToken(),
-  nodePath: 'tg-1/n',
+/// The ambient values the old CapabilityContext threaded, now read from the
+/// tree (the context rip-out): the workspace the spawn runs in.
+FakeTreeContext _treeCtx() => FakeTreeContext(
+  values: {
+    Workspace: testWorkspace('tg-1', workspaceDir: '/w', branch: 'grid/tg-1'),
+  },
 );
 
 AllocationContext _allocCtx(
@@ -103,7 +104,8 @@ AllocationContext _allocCtx(
   bool live = true,
   AdoptFence fence = const AdoptFence(pgid: 1, pid: 2, token: 't'),
 }) => AllocationContext(
-  capContext: _capCtx(),
+  treeContext: _treeCtx(),
+  args: stepArgs('tg-1/n'),
   transport: transport,
   address: const AllocationAddress('s', 'tg-1/n'),
   env: const {},
@@ -115,7 +117,6 @@ AllocationContext _allocCtx(
 
 StepMount _mount() => StepMount(
   step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-  bead: bead('tg-1'),
   nodePath: 'tg-1/agent',
   session: const SessionHandle('tgdog-s'),
   node: const NodeCursor(),
@@ -130,30 +131,34 @@ Future<void> _pump() async {
 
 void main() {
   group('Track F/G — D3: the effect layer holds NO writer (structural fence)', () {
-    test('allocation.dart imports no writer / notifier / tree / effect-context',
+    test('allocation.dart imports no writer / notifier / station-services',
         () async {
       final imports = _importLines(await _readEngineSource('src/sdk/allocation.dart'));
       // The invariant is about IMPORTS — the effect layer cannot even NAME a
-      // writer/notifier/tree, so invariant 2 holds by construction (not a wall).
-      expect(imports.any((l) => l.contains('genesis_tree')), isFalse,
-          reason: 'the effect layer is not a tree node — it holds no TreeContext');
+      // writer/notifier, so invariant 2 holds by construction (not a wall).
+      // (The context rip-out, ADR-0009 D3: depending on the TREE is the norm —
+      // the effect reads its ambient values through the host's TreeContext, so
+      // genesis_tree is now a LEGITIMATE import; the write locus stays out.)
       expect(imports.any((l) => l.contains('station_bead_writer')), isFalse);
       expect(imports.any((l) => l.contains('joined_snapshot_notifier')), isFalse);
       expect(imports.any((l) => l.contains('station_services')), isFalse);
-      // Sanity control: it DOES import its legitimate transport (grid_runtime) —
-      // proving the fence above is meaningful, not vacuously true on an empty set.
+      // Sanity control: it DOES import its legitimate transport (grid_runtime)
+      // and the tree it reads ambient values from (genesis_tree) — proving the
+      // fence above is meaningful, not vacuously true on an empty set.
       expect(imports.any((l) => l.contains('grid_runtime')), isTrue);
+      expect(imports.any((l) => l.contains('genesis_tree')), isTrue);
     });
 
-    test('AllocationContext exposes only the sandboxed shape (no writer field)',
+    test('AllocationContext exposes only the effect-layer shape (no writer field)',
         () {
       final ctx = _allocCtx(FakeRuntimeProvider());
       // Compile-time shape: the effect gets transport (process), a report sink,
-      // the sandboxed capContext, address, env, fence, kind, liveness — and NO
-      // writer/notifier. Reading these proves the shape.
+      // the host's tree context + the per-step args, address, env, fence, kind,
+      // liveness — and NO writer/notifier. Reading these proves the shape.
       expect(ctx.transport, isA<RuntimeProvider>());
       expect(ctx.sink, isA<AllocationSink>());
-      expect(ctx.capContext, isA<CapabilityContext>());
+      expect(ctx.treeContext, isA<TreeContext>());
+      expect(ctx.args, isA<StepArgs>());
       expect(ctx.address.providerName, 's/tg-1/n');
     });
   });
@@ -240,13 +245,18 @@ void main() {
       final root = owner.mountRoot(
         InheritedSeed<StationServices>(
           value: fakes.ctx,
-          child: StableInheritedSeed<CapabilityRegistry>(
+          child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
             child: InheritedSeed<ServiceBundle>(
               value: const ServiceBundle(),
-              child: CapabilityHost(
-                capability: _RecProcessCap([]),
-                mount: _mount(),
+              // The workspace is an AMBIENT value now (mounted by SessionScope
+              // in the real tree) — the capability's spawn reads it.
+              child: InheritedSeed<Workspace>(
+                value: testWorkspace('tg-1', workspaceDir: '/w'),
+                child: CapabilityHost(
+                  capability: _RecProcessCap([]),
+                  mount: _mount(),
+                ),
               ),
             ),
           ),
@@ -276,5 +286,6 @@ void main() {
 /// A no-op service capability for the detach-throws shape test.
 class _NoopService extends ServiceCapability {
   @override
-  Future<StepOutcome> run(CapabilityContext ctx) async => const Ok();
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async =>
+      const Ok();
 }

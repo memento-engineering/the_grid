@@ -1,7 +1,8 @@
 // Track E — the CapabilityHost carrier: mount=spawn / dispose=kill at depth, the
 // per-node identity persist (D-4) + cursor writes through the chokepoint, the
-// async-gap guards, teardown, and the sandbox fence (a Capability sees no
-// Seed/writer/notifier).
+// async-gap guards, teardown, and the write fence (a Capability sees no
+// writer/notifier — the sandbox DISSOLVED into layering with the context
+// rip-out, ADR-0009: it reads the tree with the effect verb, it never writes).
 //
 // ADR-0008 D4 / M4-P1 §5, Track E. Zero I/O — fakes + the recording chokepoint.
 import 'dart:async';
@@ -9,6 +10,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -22,10 +24,14 @@ class _RecordingProcessCap extends ProcessCapability {
   final List<String> log;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) {
-    log.add('spawn(${ctx.beadId}@${ctx.workspaceDir})');
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
+    // The effect verb: the per-session Workspace is AMBIENT (mounted by
+    // SessionScope in the full tree; by the harness here).
+    final workspaceDir =
+        context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir;
+    log.add('spawn(${args.beadId}@$workspaceDir)');
     return RuntimeConfig(
-      workDir: ctx.workspaceDir,
+      workDir: workspaceDir,
       command: 'sh',
       args: const ['-c', 'echo hi'],
       lifecycle: Lifecycle.oneTurn,
@@ -40,7 +46,7 @@ class _RecordingProcessCap extends ProcessCapability {
   };
 
   @override
-  Future<void> teardown(CapabilityContext ctx) async => log.add('teardown');
+  Future<void> teardown(StepArgs args) async => log.add('teardown');
 }
 
 class _ServiceCap extends ServiceCapability {
@@ -49,13 +55,13 @@ class _ServiceCap extends ServiceCapability {
   final List<String> log;
 
   @override
-  Future<StepOutcome> run(CapabilityContext ctx) async {
-    log.add('run(${ctx.beadId})');
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+    log.add('run(${args.beadId})');
     return outcome;
   }
 
   @override
-  Future<void> teardown(CapabilityContext ctx) async => log.add('svc-teardown');
+  Future<void> teardown(StepArgs args) async => log.add('svc-teardown');
 }
 
 /// A daemon-style capability: signals `ready` when up (ActivityChanged), `failed`
@@ -65,8 +71,8 @@ class _DaemonCap extends ProcessCapability {
   final List<String> log;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'sleep 999'],
     lifecycle: Lifecycle.oneTurn,
@@ -80,7 +86,7 @@ class _DaemonCap extends ProcessCapability {
   };
 
   @override
-  Future<void> teardown(CapabilityContext ctx) async => log.add('daemon-teardown');
+  Future<void> teardown(StepArgs args) async => log.add('daemon-teardown');
 }
 
 Future<void> _pump() async {
@@ -91,7 +97,6 @@ Future<void> _pump() async {
 
 StepMount _mount(Capability cap, {String nodePath = 'tg-1/agent'}) => StepMount(
   step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-  bead: bead(nodePath.split('/').first),
   nodePath: nodePath,
   session: const SessionHandle('tgdog-s'),
   node: const NodeCursor(),
@@ -104,17 +109,25 @@ final _clock = DateTime(2026);
 ({TreeOwner owner, Branch root, Fakes fakes}) _host(
   Capability cap, {
   ServiceBundle services = const ServiceBundle(),
+  Workspace? workspace,
 }) {
   final fakes = buildFakes();
   final owner = TreeOwner();
+  // The Workspace is the ambient value SessionScope would mount in the full
+  // tree (the context rip-out) — the harness mounts it above the bare host. A
+  // test wiring a SourceControl passes the workspace derived from it (matching
+  // SessionScope's computation), per the ProcessAllocation spawn-path assert.
   final root = owner.mountRoot(
     InheritedSeed<StationServices>(
       value: fakes.ctx,
-      child: StableInheritedSeed<CapabilityRegistry>(
+      child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: _clock),
         child: InheritedSeed<ServiceBundle>(
           value: services,
-          child: CapabilityHost(capability: cap, mount: _mount(cap)),
+          child: InheritedSeed<Workspace>(
+            value: workspace ?? testWorkspace('tg-1'),
+            child: CapabilityHost(capability: cap, mount: _mount(cap)),
+          ),
         ),
       ),
     ),
@@ -153,9 +166,10 @@ class _RecordingProvisionSourceControl implements SourceControl {
 }
 
 /// A [SourceControl] with a KNOWN workspace/branch layout that records the
-/// workspaceDir it is asked to provision — so a test can prove the HOST DERIVES
-/// its workspace from the INHERITED SourceControl (ADR-0008 D5), not from a
-/// baked-in engine path (the EffectContext→StationServices cleanup).
+/// workspaceDir it is asked to provision — so a test can prove the effect
+/// spawns into + provisions the AMBIENT [Workspace] derived from the inherited
+/// SourceControl (ADR-0008 D5; SessionScope owns the derivation since the
+/// context rip-out), not a baked-in engine path.
 class _DerivingSourceControl implements SourceControl {
   final List<String> provisionedDirs = [];
 
@@ -216,11 +230,11 @@ void main() {
 
     test('the host provisions the workspace BEFORE spawning into it', () async {
       final log = <String>[];
+      final sc = _RecordingProvisionSourceControl(log);
       final h = _host(
         _RecordingProcessCap(log),
-        services: ServiceBundle(
-          sourceControl: _RecordingProvisionSourceControl(log),
-        ),
+        services: ServiceBundle(sourceControl: sc),
+        workspace: testWorkspace('tg-1', workspaceDir: sc.workspaceFor('tg-1')),
       );
       addTearDown(() {
         h.owner.dispose();
@@ -238,13 +252,23 @@ void main() {
       );
     });
 
-    test('the host DERIVES workspaceDir from the INHERITED SourceControl '
-        '(ADR-0008 D5) — the engine holds no worktree layout', () async {
+    test('the effect spawns into + provisions the AMBIENT Workspace derived '
+        'from the SourceControl (ADR-0008 D5) — the engine holds no worktree '
+        'layout', () async {
       final log = <String>[];
       final sc = _DerivingSourceControl();
       final h = _host(
         _RecordingProcessCap(log),
         services: ServiceBundle(sourceControl: sc),
+        // The Workspace SessionScope computes from this SourceControl in the
+        // full tree (the derivation moved off the Host with the rip-out);
+        // mounted here so the ambient value is what the assertions trace.
+        workspace: testWorkspace(
+          'tg-1',
+          workspaceDir: sc.workspaceFor('tg-1'),
+          branch: sc.branchFor('tg-1'),
+          baseBranch: sc.baseBranch,
+        ),
       );
       addTearDown(() {
         h.owner.dispose();
@@ -252,10 +276,10 @@ void main() {
       });
       await _pump();
 
-      // The workspace came from the inherited SourceControl's workspaceFor — it
-      // reached the capability's spawn config AND the provision call, NOT a
-      // baked engine path. (A mutation that hardcodes the workspace in the Host,
-      // or resolves the wrong ambient, fails all three.)
+      // The SourceControl-derived AMBIENT workspace reached the capability's
+      // spawn config AND the provision call, NOT a baked engine path. (A
+      // mutation that hardcodes the workspace in the Host/Allocation, or
+      // resolves the wrong ambient, fails all three.)
       expect(h.fakes.provider.started.single.config.workDir, '/custom/ws/tg-1');
       expect(log.first, 'spawn(tg-1@/custom/ws/tg-1)');
       expect(sc.provisionedDirs, ['/custom/ws/tg-1'],
@@ -337,19 +361,24 @@ void main() {
       owner.mountRoot(
         InheritedSeed<StationServices>(
           value: fakes.ctx,
-          child: StableInheritedSeed<CapabilityRegistry>(
+          child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: _clock),
             child: InheritedSeed<ServiceBundle>(
               value: const ServiceBundle(),
-              child: CapabilityHost(
-                capability: _RecordingProcessCap(log),
-                mount: StepMount(
-                  step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-                  bead: bead('tg-1'),
-                  nodePath: 'tg-1/agent',
-                  session: const SessionHandle('tgdog-s'),
-                  node: const NodeCursor(restartCount: 2),
-                  key: const ValueKey('tg-1/agent#2'),
+              child: InheritedSeed<Workspace>(
+                value: testWorkspace('tg-1'),
+                child: CapabilityHost(
+                  capability: _RecordingProcessCap(log),
+                  mount: StepMount(
+                    step: const CapabilityStep(
+                      stepId: 'agent',
+                      capabilityId: 'agent',
+                    ),
+                    nodePath: 'tg-1/agent',
+                    session: const SessionHandle('tgdog-s'),
+                    node: const NodeCursor(restartCount: 2),
+                    key: const ValueKey('tg-1/agent#2'),
+                  ),
                 ),
               ),
             ),
@@ -406,13 +435,21 @@ void main() {
       );
     });
 
-    test('teardown fires even when disposed BEFORE _run reaches spawn '
+    test('teardown fires even when disposed BEFORE the kick reaches spawn '
         '(finding #1: guaranteed on every exit path)', () async {
       final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      // Dispose IMMEDIATELY — _run is scheduled but has not passed `await null`,
-      // so the spawn never happens (_started stays false). _capCtx was built in
-      // didChangeDependencies, so teardown STILL fires.
+      // The pre-spawn async gap is the provisioning await (without source
+      // control the new kick spawns synchronously at mount — nothing to race).
+      final sc = _RecordingProvisionSourceControl(log);
+      final h = _host(
+        _RecordingProcessCap(log),
+        services: ServiceBundle(sourceControl: sc),
+        workspace: testWorkspace('tg-1', workspaceDir: sc.workspaceFor('tg-1')),
+      );
+      // Dispose IMMEDIATELY — startOrAdopt is parked on the provision await; its
+      // cancel-token check after the gap bails, so the spawn is never reached
+      // (_started stays false). The Allocation was minted in
+      // didChangeDependencies, so dispose → teardown STILL fires.
       h.owner.dispose();
       await _pump();
       unawaited(h.fakes.provider.close());
@@ -526,8 +563,9 @@ void main() {
     });
   });
 
-  group('Track E — the sandbox fence (the SDK leaks no engine surface)', () {
-    test('capability.dart IMPORTS no genesis_tree / writer / notifier', () async {
+  group('Track E — the write fence (the SDK leaks no engine WRITE surface)', () {
+    test('capability.dart IMPORTS no writer / notifier / station services '
+        '(genesis_tree IS imported — the effect verb is the norm)', () async {
       // Resolve the source CWD-independently (the repo-root `dart test` and the
       // per-package `melos test` have different working directories).
       final uri = await Isolate.resolvePackageUri(
@@ -540,31 +578,57 @@ void main() {
           .split('\n')
           .where((l) => l.trimLeft().startsWith('import '))
           .toList();
-      expect(imports.any((l) => l.contains('genesis_tree')), isFalse);
+      // The context rip-out (ADR-0009: the sandbox DISSOLVES — layering + a
+      // single write-locus, not a wall): a capability now receives the
+      // TreeContext and reads ambient values with the effect verb, so the
+      // genesis_tree import is EXPECTED — the positive control that this is
+      // the post-rip-out SDK file. What remains fenced is the WRITE surface.
+      expect(imports.any((l) => l.contains('genesis_tree')), isTrue);
       expect(imports.any((l) => l.contains('station_bead_writer')), isFalse);
       expect(imports.any((l) => l.contains('joined_snapshot_notifier')), isFalse);
       expect(imports.any((l) => l.contains('station_services')), isFalse);
     });
 
-    test('CapabilityContext exposes no notifier/stream/writer surface', () {
-      // Compile-time: a CapabilityContext has only the sandboxed fields. This
-      // asserts the SHAPE (params/bead/workspaceDir/branch/baseBranch/services/
-      // cancel/logFile) — no Stream, no writer, no TreeContext.
-      final ctx = CapabilityContext(
-        params: const {},
-        bead: bead('tg-1'),
-        workspaceDir: '/w',
-        branch: 'grid/tg-1',
-        baseBranch: 'main',
-        services: const ServiceBundle(),
-        cancel: CancelToken(),
+    test('StepArgs carries only the per-step values; the ambient values resolve '
+        'from the tree (no writer/notifier/stream anywhere)', () {
+      // The deleted CapabilityContext threaded bead/workspace/services/siblings
+      // BY VALUE. The new shape splits them (ADR-0008 Decision 3): StepArgs
+      // carries only what is OF the step incarnation — params, nodePath, the
+      // derived beadId, the cooperative cancel token, and the restoration
+      // logFile seam. No Stream, no writer, no TreeContext rides in it.
+      final args = StepArgs(
+        params: const <String, String>{},
         nodePath: 'tg-1/agent',
+        cancel: CancelToken(),
       );
-      expect(ctx.beadId, 'tg-1');
-      expect(ctx.services, isA<ServiceBundle>());
-      expect(ctx.cancel, isA<CancelToken>());
-      expect(ctx.siblings, isA<SiblingView>());
-      expect(ctx.logFile, isNull);
+      expect(args.beadId, 'tg-1');
+      expect(args.params, isEmpty);
+      expect(args.cancel, isA<CancelToken>());
+      expect(args.logFile, isNull);
+
+      // …and everything the old context threaded is now AMBIENT, read with the
+      // effect verb off the (fake) tree — still values only, never a writer.
+      final tree = FakeTreeContext(
+        values: {
+          Bead: bead('tg-1'),
+          Workspace: testWorkspace('tg-1', branch: 'grid/tg-1'),
+          ServiceBundle: const ServiceBundle(),
+          SiblingView: const SiblingView(),
+        },
+      );
+      expect(tree.getInheritedSeedOfExactType<Bead>()!.id, 'tg-1');
+      final workspace = tree.getInheritedSeedOfExactType<Workspace>()!;
+      expect(workspace.workspaceDir, '/grid/workspaces/tg-1');
+      expect(workspace.branch, 'grid/tg-1');
+      expect(workspace.baseBranch, 'main');
+      expect(
+        tree.getInheritedSeedOfExactType<ServiceBundle>(),
+        isA<ServiceBundle>(),
+      );
+      expect(
+        tree.getInheritedSeedOfExactType<SiblingView>(),
+        isA<SiblingView>(),
+      );
     });
   });
 }

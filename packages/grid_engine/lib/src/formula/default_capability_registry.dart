@@ -16,7 +16,8 @@ import '../sdk/formula.dart';
 import 'capability_host.dart';
 import 'capability_registry.dart';
 
-/// The standard registry. Stable (provided via `StableInheritedSeed`, D-6).
+/// The standard registry — a fixed-at-mount handle provided via a plain
+/// `InheritedSeed<CapabilityRegistry>` at the root.
 class DefaultCapabilityRegistry implements CapabilityRegistry {
   /// Creates the registry over the [capabilities] (capabilityId → impl) and
   /// [formulas] (formulaId → graph), with an optional injected [clock].

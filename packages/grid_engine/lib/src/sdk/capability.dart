@@ -1,16 +1,32 @@
-/// The opaque capability leaves + the pluggable Service seam (ADR-0008 D2/D5 /
-/// M4-P1 §3, Track E).
+/// The opaque capability leaves + the pluggable Service seam (ADR-0008 D2/D5,
+/// amended 2026-07-02 — the context rip-out).
 ///
 /// The author implements a [Capability] (a [ProcessCapability] over a spawned
 /// process, or a [ServiceCapability] over async collaborators) and NEVER a
-/// `Seed`. A capability sees only the sandboxed [CapabilityContext] — no
-/// `TreeContext`, no writer, no notifier, no `markNeedsRebuild` — so the four
-/// derailment-invariants hold AT DEPTH by construction. The engine-private
-/// `CapabilityHost` carrier owns the tree lifecycle (mount=spawn, dispose=kill);
-/// the capability just describes what to run and how to read its events.
+/// `Seed`. A capability receives its host's stable `TreeContext` plus the
+/// per-step [StepArgs] — **one lookup system, two verbs** (ADR-0008 Decision 3,
+/// 2026-07-02):
+///
+/// - `dependOn*` is the TREE verb — branches always watch; only the engine's
+///   carriers call it, during build.
+/// - `getInheritedSeedOfExactType` is the EFFECT verb — a snapshot-at-read,
+///   callable across the effect's async life, LOUD (`StateError`) on an
+///   unmounted branch. A capability reads its ambient values with it: the work
+///   [Bead] (mounted by `WorkBead`), the [Workspace] (mounted by
+///   `SessionScope`), the [ServiceBundle] (per-substation), the [SiblingView]
+///   (per-session), and any asset-owned value the asset mounted itself.
+///
+/// Discipline (the async-gap contract): read at ENTRY (synchronously, while
+/// mounted — the kick guarantees it), then use the captured values; after every
+/// await, check [StepArgs.cancel] (set on unmount) before touching the context
+/// again. The invariants hold as mutation-verified gates, not a wall: a
+/// capability never calls `dependOn*`, never `addListener`s anything it reads
+/// from context, never subscribes to a pipeline, and never writes — the
+/// engine-private `CapabilityHost` persists every report through the one
+/// chokepoint.
 library;
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import 'allocation.dart';
@@ -22,9 +38,7 @@ import 'cursor.dart';
 ///
 /// NOT sealed: the carrier's dispatch is polymorphic through [createAllocation]
 /// (the `createRenderObject` analogue, ADR-0009 D4), never an exhaustive `switch`
-/// on the subtype — so a new family is an addition, not a core edit. (The former
-/// `sealed` + "exhaustive dispatch" rationale was retired by that refactor; a
-/// lease is "a custom Capability" per ADR-0009 D6, which a seal forbade.)
+/// on the subtype — so a new family is an addition, not a core edit.
 abstract class Capability {
   const Capability();
 
@@ -37,16 +51,92 @@ abstract class Capability {
   Allocation createAllocation(AllocationContext ctx);
 }
 
-/// A capability backed by a spawned, supervised process (generalizes P0's
-/// `AgentEffectSeed`/`VerifyEffectSeed`). The carrier owns `provider.start/stop`;
-/// the capability is PURE description.
+/// The irreducibly per-step values a capability receives alongside the tree
+/// context — NOT a context and NOT a grab-bag: everything ambient (bead,
+/// workspace, services, siblings) is read from the tree with the effect verb;
+/// only what is genuinely OF this step incarnation rides here.
+class StepArgs {
+  /// Bundles the step [params], this step's full [nodePath], the cooperative
+  /// [cancel] token (set when the host unmounts), and the restoration [logFile]
+  /// seam (deferred; null until restoration ships).
+  const StepArgs({
+    this.params = const {},
+    required this.nodePath,
+    required this.cancel,
+    this.logFile,
+  });
+
+  /// The step's opaque params (from the `CapabilityStep`/`SubFormulaStep`).
+  final Map<String, String> params;
+
+  /// This step's FULL path within the formula tree (`'$parentNodePath/$stepId'`)
+  /// — the cursor key; its root segment is the work bead id.
+  final String nodePath;
+
+  /// The work bead id — the root segment of [nodePath] (the root formula's
+  /// nodePath IS the bead id).
+  String get beadId =>
+      nodePath.contains('/') ? nodePath.split('/').first : nodePath;
+
+  /// The cooperative cancellation token — set when the host unmounts. Check it
+  /// after EVERY async gap before touching the tree context again (an unmounted
+  /// branch's context throws, loudly, by design).
+  final CancelToken cancel;
+
+  /// The durable log file for the deferred adopt-a-live-process seam
+  /// (ADR-0008 D6 §restoration); null until restoration ships.
+  final String? logFile;
+}
+
+/// The per-session workspace the work runs in — an ambient VALUE mounted by
+/// `SessionScope` (computed once per session from the per-substation
+/// [SourceControl]; ADR-0008 D5: the layout is the SourceControl impl's
+/// opinion, the engine's concept is "a workspace"). A capability reads it with
+/// the effect verb: `context.getInheritedSeedOfExactType<Workspace>()`.
+class Workspace {
+  /// Bundles the stable [workspaceDir] home, the work [branch], and the
+  /// [baseBranch] a land opens its PR against.
+  const Workspace({
+    required this.workspaceDir,
+    required this.branch,
+    required this.baseBranch,
+  });
+
+  /// The stable home directory the work runs in (the cwd default; per-spawn
+  /// overridable via `RuntimeConfig.workingDirectory`).
+  final String workspaceDir;
+
+  /// The branch the work is on (the git impl: `grid/<beadId>`).
+  final String branch;
+
+  /// The base branch a land opens its PR against.
+  final String baseBranch;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Workspace &&
+      other.workspaceDir == workspaceDir &&
+      other.branch == branch &&
+      other.baseBranch == baseBranch;
+
+  @override
+  int get hashCode => Object.hash(workspaceDir, branch, baseBranch);
+
+  @override
+  String toString() => 'Workspace($workspaceDir @ $branch → $baseBranch)';
+}
+
+/// A capability backed by a spawned, supervised process. The carrier owns
+/// `provider.start/stop`; the capability is PURE description.
 abstract class ProcessCapability extends Capability {
   /// Const-constructible (capabilities are stateless description).
   const ProcessCapability();
 
-  /// Describes the process to spawn for [ctx] — PURE; the host owns the actual
+  /// Describes the process to spawn — PURE; the host owns the actual
   /// `provider.start` (and layers the per-incarnation env over the config).
-  RuntimeConfig spawn(CapabilityContext ctx);
+  /// Called synchronously at kick (the branch is mounted): read ambient values
+  /// from [context] here with the effect verb.
+  RuntimeConfig spawn(TreeContext context, StepArgs args);
 
   /// Maps a runtime [event] to a [StepSignal] (a job's clean exit → `complete`;
   /// a daemon's up-signal → `ready`; a crash → `failed`; anything else →
@@ -58,13 +148,17 @@ abstract class ProcessCapability extends Capability {
   /// signal; the returned map is recorded under `grid.result.<nodePath>.*`
   /// alongside the terminal `state=complete` write (one atomic chokepoint
   /// update). Defaults to null (no result). MUST be idempotent + side-effect-free
-  /// beyond reading [ctx] (e.g. reading a file the spawned process wrote).
-  Future<Map<String, String>?> result(CapabilityContext ctx) async => null;
+  /// beyond reading its inputs (e.g. a file the spawned process wrote); read
+  /// [context] at entry and check [StepArgs.cancel] after any await.
+  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async =>
+      null;
 
   /// Idempotent belt-and-braces cleanup on unmount (TEARDOWN-11/12) — e.g.
   /// `pkill` a detached side-process by token. Defaults to a no-op (the host's
-  /// `provider.stop` kills the managed group).
-  Future<void> teardown(CapabilityContext ctx) async {}
+  /// `provider.stop` kills the managed group). Runs on the dispose path, where
+  /// the branch may already be unmounted — so it receives NO tree context (a
+  /// lookup there would throw); it works from [args] + its own state.
+  Future<void> teardown(StepArgs args) async {}
 
   /// Proves a prior incarnation at [fence] is STILL the live effect this
   /// capability manages — the daemon adopt-freshness half (ADR-0009 D4:
@@ -72,35 +166,41 @@ abstract class ProcessCapability extends Capability {
   /// pgid-alive half (the injected liveness seam); this supplies the
   /// domain-specific half (a daemon probes its endpoint and checks the token
   /// echoes). **No-adopt-on-faith**: the default is `false`, so a job — or a
-  /// daemon that cannot prove it — is respawned fresh, never adopted blind. A
-  /// daemon capability (the M6 burn-follower) overrides this. MUST be
-  /// side-effect-free beyond the read.
-  Future<bool> proveFreshness(AdoptFence fence, CapabilityContext ctx) async =>
+  /// daemon that cannot prove it — is respawned fresh, never adopted blind.
+  /// MUST be side-effect-free beyond the read.
+  Future<bool> proveFreshness(
+    AdoptFence fence,
+    TreeContext context,
+    StepArgs args,
+  ) async =>
       false;
 
   /// The default [Allocation] for a spawned process (ADR-0009 D6) — a
   /// [ProcessAllocation] driving [spawn]/[interpretEvent] over the transport.
   /// A one-shot (`StepKind.job`) is respawn-or-skip; a `StepKind.daemon` is
-  /// adopt-or-respawn + detach-capable (Track C). Override only for a bespoke
-  /// process effect.
+  /// adopt-or-respawn + detach-capable. Override only for a bespoke process
+  /// effect.
   @override
   Allocation createAllocation(AllocationContext ctx) =>
       ProcessAllocation(this, ctx);
 }
 
 /// A capability backed by an async body driving [ServiceBundle] collaborators
-/// (generalizes P0's `LandEffectSeed`: git/PR orchestration, the Burn
-/// coordinator). No process lifecycle; its [run] resolves to a [StepOutcome].
+/// (git/PR orchestration, the Burn coordinator). No process lifecycle; its
+/// [run] resolves to a [StepOutcome].
 abstract class ServiceCapability extends Capability {
   /// Const-constructible.
   const ServiceCapability();
 
-  /// Runs the capability body for [ctx], resolving to its outcome. The host maps
-  /// the outcome to a cursor write through the chokepoint.
-  Future<StepOutcome> run(CapabilityContext ctx);
+  /// Runs the capability body, resolving to its outcome. The host maps the
+  /// outcome to a cursor write through the chokepoint. Read ambient values from
+  /// [context] at entry; after every await, check [StepArgs.cancel] before
+  /// touching the context again.
+  Future<StepOutcome> run(TreeContext context, StepArgs args);
 
-  /// Idempotent cleanup on unmount. Defaults to a no-op.
-  Future<void> teardown(CapabilityContext ctx) async {}
+  /// Idempotent cleanup on unmount. Defaults to a no-op. Dispose-path: NO tree
+  /// context (see [ProcessCapability.teardown]).
+  Future<void> teardown(StepArgs args) async {}
 
   /// The default [Allocation] for an async service body (ADR-0009 D6) — the
   /// [ServiceAllocation]/`JobAllocation` convenience: start-runs, no adopt/
@@ -154,7 +254,9 @@ class Gate extends StepOutcome {
 
 /// A cooperative cancellation flag a [Capability] polls across async gaps — set
 /// when the host unmounts. The engine never force-kills a `ServiceCapability`
-/// body; the capability checks [isCancelled] and unwinds.
+/// body; the capability checks [isCancelled] and unwinds. It is ALSO the
+/// mounted-probe by proxy: cancelled ⟺ the host disposed, so an uncancelled
+/// token means the tree context is still safe to read.
 class CancelToken {
   bool _cancelled = false;
 
@@ -165,14 +267,15 @@ class CancelToken {
   void cancel() => _cancelled = true;
 }
 
-/// A read-only view of THIS session's per-node cursor + results, threaded down
-/// (config, never a subscription/re-query — A39/invariant 1). A `ServiceCapability`
-/// (e.g. `route`) reads its sibling steps' terminal states + result payloads
-/// through this — the ONLY sibling-read affordance (no TreeContext/writer/notifier;
-/// invariants 1/2 hold by construction). D-5.
+/// A read-only view of THIS session's per-node cursor + results — an ambient
+/// VALUE mounted by `SessionScope` (never a subscription/re-query — A39/
+/// invariant 1). A `ServiceCapability` (e.g. `route`) reads its sibling steps'
+/// terminal states + result payloads by looking this up with the effect verb —
+/// the ONLY sibling-read affordance (no writer, no notifier; the derailment
+/// gates hold). D-5, plumbing moved ambient 2026-07-02.
 class SiblingView {
-  /// Wraps the threaded-down [cursor] (per-node states) + [results] (per-node
-  /// result payloads) of this session.
+  /// Wraps this session's [cursor] (per-node states) + [results] (per-node
+  /// result payloads).
   const SiblingView({this.cursor = const {}, this.results = const {}});
 
   /// Every inflated node's [NodeCursor] in this session, keyed by `nodePath`.
@@ -191,82 +294,15 @@ class SiblingView {
       results[nodePath] ?? const {};
 }
 
-/// The narrow, sandboxed projection a [Capability] leaf gets (M4-P1 §3): NO
-/// `TreeContext`, NO writer, NO notifier, NO `markNeedsRebuild` — a read-only
-/// slice. This is what holds invariants 1/2 at depth by construction.
-class CapabilityContext {
-  /// Bundles the step [params], the full work [bead] (so a capability — e.g. the
-  /// agent — can author the rich, full-bead prompt), the [workspaceDir] the
-  /// capability runs in (OQ-6: the stable home — was "worktree"), the [branch] /
-  /// [baseBranch], the pluggable [services], the [cancel] token, this step's full
-  /// [nodePath] (so a `route` can compute its sibling paths), the read-only
-  /// [siblings] view (D-5), and the restoration [logFile] seam (deferred).
-  const CapabilityContext({
-    required this.params,
-    required this.bead,
-    required this.workspaceDir,
-    required this.branch,
-    required this.baseBranch,
-    required this.services,
-    required this.cancel,
-    required this.nodePath,
-    this.siblings = const SiblingView(),
-    this.logFile,
-  });
-
-  /// The step's opaque params (from the `CapabilityStep`/`SubFormulaStep`).
-  final Map<String, String> params;
-
-  /// The full work bead this capability serves (title/description/design/
-  /// acceptance/notes/metadata) — a read-only value, the load-bearing input to
-  /// the agent's prompt. Threaded down from `WorkBead` via the inflater (never a
-  /// re-query — A39).
-  final Bead bead;
-
-  /// The work bead id (`bead.id`) — the cursor key + provider-name root segment.
-  String get beadId => bead.id;
-
-  /// The stable home directory the capability runs in (the cwd default;
-  /// per-spawn overridable via `RuntimeConfig.workingDirectory`). OQ-6: the
-  /// engine concept is `workspace`; "git worktree" is the git `SourceControl`
-  /// impl's way of provisioning it.
-  final String workspaceDir;
-
-  /// The branch the work is on (`grid/<beadId>`).
-  final String branch;
-
-  /// The base branch a land opens its PR against.
-  final String baseBranch;
-
-  /// The pluggable collaborators (source control, trust, transport).
-  final ServiceBundle services;
-
-  /// The cooperative cancellation token (set when the host unmounts).
-  final CancelToken cancel;
-
-  /// This step's FULL path within the formula tree (`'$parentNodePath/$stepId'`)
-  /// — a `route` step computes its sibling critic paths off this.
-  final String nodePath;
-
-  /// The read-only view of THIS session's sibling cursors + results, threaded
-  /// down pull-free (D-5) — the only way a `ServiceCapability` reads its
-  /// siblings' grades without a subscription/re-query (invariants 1/2).
-  final SiblingView siblings;
-
-  /// The durable log file for the deferred adopt-a-live-process seam (§11);
-  /// null until restoration ships.
-  final String? logFile;
-}
-
 /// The pluggable collaborators a [Capability] drives (ADR-0008 D5) — ONE
 /// concrete bundle (genesis's exact-type inherited lookup can't resolve an
-/// abstract `<SourceControl>`), provided stably above `Station`. Impls ship in
-/// assets (Track H wires the git `SourceControl`).
+/// abstract `<SourceControl>`), provided per-`SubstationScope`. Impls ship in
+/// assets.
 class ServiceBundle {
   /// Creates a bundle of optional collaborators.
   const ServiceBundle({this.sourceControl, this.trust, this.transport});
 
-  /// Source control (commit/push/PR) — today's git ops migrate IN (Track H).
+  /// Source control (commit/push/PR) — the git impl ships in the asset.
   final SourceControl? sourceControl;
 
   /// Reserved (OQ-7) — local/reputation/ledger trust, distinct from
@@ -279,9 +315,9 @@ class ServiceBundle {
 }
 
 /// The first [Service] — provision-workspace + commit/push/open-PR, abstracted
-/// so the engine knows it in CONCEPT, not detail (the git impl ships in
-/// `station_grid_assets`, Track H). Clean + dependency-free so a future
-/// genesis-shared home is a move, not a rewrite (designed-to-be-lifted).
+/// so the engine knows it in CONCEPT, not detail (the git impl ships in the
+/// asset pack). Clean + dependency-free so a future genesis-shared home is a
+/// move, not a rewrite (designed-to-be-lifted).
 abstract interface class SourceControl {
   /// The workspace directory the effect runs in for [beadId] — where the host
   /// spawns its process and the land step commits/pushes from. The LAYOUT is the

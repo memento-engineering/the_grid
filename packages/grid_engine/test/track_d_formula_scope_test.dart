@@ -80,9 +80,7 @@ class _CursorHostState extends State<_CursorHost> {
   Seed build(TreeContext context) =>
       FormulaScope(
         formula: seed.formula,
-        bead: bead('root'),
         cursor: _cursor,
-        results: const {},
         nodePath: 'root',
       );
 }
@@ -108,8 +106,8 @@ _CursorHostState _cursorState(Branch root) {
   return branch.state as _CursorHostState;
 }
 
-/// Mounts [host] under a stable registry + a fixed SessionHandle; returns the
-/// owner, the root branch, and the recording registry.
+/// Mounts [host] under a fixed-at-mount registry + a fixed SessionHandle;
+/// returns the owner, the root branch, and the recording registry.
 ({TreeOwner owner, Branch root, RecordingCapabilityRegistry reg}) _mount(
   _CursorHost host, {
   Map<String, Formula> formulas = const {},
@@ -117,7 +115,7 @@ _CursorHostState _cursorState(Branch root) {
   final reg = RecordingCapabilityRegistry(formulas: formulas);
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    StableInheritedSeed<CapabilityRegistry>(
+    InheritedSeed<CapabilityRegistry>(
       value: reg,
       child: InheritedSeed<SessionHandle>(
         value: const SessionHandle('sess'),
@@ -232,30 +230,32 @@ void main() {
     });
   });
 
-  group('Track D — D-6 stable ambient providers', () {
-    test('StableInheritedSeed.updateShouldNotify is ALWAYS false (the gate)', () {
-      const a = StableInheritedSeed<SessionHandle>(
+  group('Track D — ambient providers (D-6, superseded 2026-07-02)', () {
+    test('a re-provide of an EQUAL value never notifies; a genuine change does '
+        "(genesis's default replaces the deleted StableInheritedSeed)", () {
+      // StableInheritedSeed (never-notify, even across DIFFERENT values) is
+      // DELETED with the context rip-out: the ambient providers are plain
+      // InheritedSeeds riding genesis's default `value != oldSeed.value`. The
+      // stability D-6 wanted survives via VALUE EQUALITY — a value-equal
+      // SessionHandle (or the same registry instance) re-provided unchanged
+      // never fan-rebuilds the subtree…
+      const old = InheritedSeed<SessionHandle>(
         value: SessionHandle('a'),
         child: Idle(),
       );
-      const b = StableInheritedSeed<SessionHandle>(
-        value: SessionHandle('b'),
-        child: Idle(),
-      );
-      // Even across DIFFERENT values, a stable provider never notifies
-      // dependents (D-6) — so a re-provide can never fan-rebuild the subtree.
-      expect(a.updateShouldNotify(b), isFalse);
-      // Contrast: a plain InheritedSeed WOULD notify on a value change — proving
-      // the gate is meaningful, not vacuous.
-      const plainA = InheritedSeed<SessionHandle>(
+      const same = InheritedSeed<SessionHandle>(
         value: SessionHandle('a'),
         child: Idle(),
       );
-      const plainB = InheritedSeed<SessionHandle>(
+      expect(same.updateShouldNotify(old), isFalse);
+      // …while a GENUINE value change now notifies dependents (the "always
+      // false" gate is gone with the type) — proving the no-notify above is
+      // value equality at work, not a vacuous never-notify.
+      const changed = InheritedSeed<SessionHandle>(
         value: SessionHandle('b'),
         child: Idle(),
       );
-      expect(plainA.updateShouldNotify(plainB), isTrue);
+      expect(changed.updateShouldNotify(old), isTrue);
     });
   });
 

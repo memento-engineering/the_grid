@@ -26,8 +26,8 @@ class _ResultCountingCap extends ProcessCapability {
   int resultCalls = 0;
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) => RuntimeConfig(
-    workDir: ctx.workspaceDir,
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'echo hi'],
     lifecycle: Lifecycle.oneTurn,
@@ -41,7 +41,7 @@ class _ResultCountingCap extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(CapabilityContext ctx) async {
+  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async {
     resultCalls++;
     return {'n': '$resultCalls'};
   }
@@ -53,10 +53,10 @@ class _AlwaysFreshDaemon extends ProcessCapability {
   final log = <String>[];
 
   @override
-  RuntimeConfig spawn(CapabilityContext ctx) {
+  RuntimeConfig spawn(TreeContext context, StepArgs args) {
     log.add('spawn');
     return RuntimeConfig(
-      workDir: ctx.workspaceDir,
+      workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
       command: 'sh',
       args: const ['-c', 'sleep 999'],
       lifecycle: Lifecycle.oneTurn,
@@ -70,26 +70,28 @@ class _AlwaysFreshDaemon extends ProcessCapability {
   };
 
   @override
-  Future<bool> proveFreshness(AdoptFence fence, CapabilityContext ctx) async =>
+  Future<bool> proveFreshness(
+    AdoptFence fence,
+    TreeContext context,
+    StepArgs args,
+  ) async =>
       true;
 }
 
 // --- helpers -----------------------------------------------------------------
 
-CapabilityContext _capCtx() => CapabilityContext(
-  params: const {},
-  bead: bead('tg-1'),
-  workspaceDir: '/w',
-  branch: 'grid/tg-1',
-  baseBranch: 'main',
-  services: const ServiceBundle(),
-  cancel: CancelToken(),
-  nodePath: 'tg-1/agent',
+/// The ambient values the old CapabilityContext threaded, now read from the
+/// tree (the context rip-out): the workspace the spawn runs in.
+FakeTreeContext _treeCtx() => FakeTreeContext(
+  values: {
+    Workspace: testWorkspace('tg-1', workspaceDir: '/w', branch: 'grid/tg-1'),
+  },
 );
 
 AllocationContext _allocCtx(RuntimeProvider transport, AllocationSink sink) =>
     AllocationContext(
-      capContext: _capCtx(),
+      treeContext: _treeCtx(),
+      args: stepArgs('tg-1/agent'),
       transport: transport,
       address: const AllocationAddress('s', 'tg-1/agent'),
       env: const {},
@@ -118,7 +120,6 @@ StepMount _daemonMount() => StepMount(
     capabilityId: 'harness',
     kind: StepKind.daemon,
   ),
-  bead: bead('tg-1'),
   nodePath: 'tg-1/harness',
   session: const SessionHandle('tgdog-s'),
   // A prior incarnation's identity (the fence) — so adopt has something to prove.
@@ -145,13 +146,18 @@ CapabilityHostState _mountDaemonHost(
   final root = owner.mountRoot(
     InheritedSeed<StationServices>(
       value: _ctxWithLiveness(fakes, liveness: liveness),
-      child: StableInheritedSeed<CapabilityRegistry>(
+      child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: DateTime(2026)),
         child: InheritedSeed<ServiceBundle>(
           value: const ServiceBundle(),
-          child: CapabilityHost(
-            capability: _AlwaysFreshDaemon(),
-            mount: _daemonMount(),
+          // The workspace is an AMBIENT value now (mounted by SessionScope in
+          // the real tree) — the daemon's spawn reads it with the effect verb.
+          child: InheritedSeed<Workspace>(
+            value: testWorkspace('tg-1', workspaceDir: '/w'),
+            child: CapabilityHost(
+              capability: _AlwaysFreshDaemon(),
+              mount: _daemonMount(),
+            ),
           ),
         ),
       ),

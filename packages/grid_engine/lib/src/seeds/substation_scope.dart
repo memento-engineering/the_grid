@@ -2,7 +2,6 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/substation_config.dart';
-import '../formula/stable_inherited.dart';
 import '../notifiers/substation_config_notifier.dart';
 import '../sdk/capability.dart';
 import 'substation.dart';
@@ -17,11 +16,13 @@ import 'substation.dart';
 /// It is ALSO where the substation's [ServiceBundle] is provided (ADR-0008 D5:
 /// source control is a SUBSTATION responsibility — a project dictates its own
 /// SCM; the station only supplies shared git-execution machinery the substation
-/// leases). The bundle is re-provided via a [StableInheritedSeed] (D-6:
-/// `updateShouldNotify => false` — it is a long-lived handle, never an in-place
-/// swap), scoped to THIS substation's subtree: a `CapabilityHost` deep below
-/// resolves the NEAREST bundle, so each substation's work runs against its own
-/// source control, never a station-wide one. Provided here rather than above
+/// leases). The bundle is a fixed-at-mount handle: it is provided as a plain
+/// `InheritedSeed<ServiceBundle>` (genesis's identity check declines to notify
+/// when the same instance is re-provided; to change a substation's services,
+/// remount the scope by key — ADR-0008 D-6, superseded 2026-07-02), scoped to
+/// THIS substation's subtree: a `CapabilityHost` deep below resolves the
+/// NEAREST bundle, so each substation's work runs against its own source
+/// control, never a station-wide one. Provided here rather than above
 /// `Station` so two substations get isolated bundles.
 ///
 /// Because the config and work axes are observed by *different* nodes, a work
@@ -61,11 +62,18 @@ class _SubstationScopeState extends State<SubstationScope> {
 
   @override
   void initState() {
-    _config = seed.configNotifier.current;
-    _remove = seed.configNotifier.addListener(
-      (config) => setState(() => _config = config),
-      fireImmediately: false,
-    );
+    // The initial read IS the subscription (D-H rule 2): fireImmediately
+    // delivers the baseline synchronously into the listener — assigned directly
+    // (no setState during mount); every later fire goes through setState.
+    var first = true;
+    _remove = seed.configNotifier.addListener((config) {
+      if (first) {
+        first = false;
+        _config = config;
+        return;
+      }
+      setState(() => _config = config);
+    }, fireImmediately: true);
   }
 
   @override
@@ -76,10 +84,11 @@ class _SubstationScopeState extends State<SubstationScope> {
 
   @override
   Seed build(TreeContext context) {
-    // The ServiceBundle is a STABLE handle (D-6): re-providing it on a config
-    // tick must NOT notify dependents (a CapabilityHost resolving it must not
-    // fan-rebuild), so it rides StableInheritedSeed, not a plain InheritedSeed.
-    return StableInheritedSeed<ServiceBundle>(
+    // The ServiceBundle is a fixed-at-mount handle: the same instance is
+    // re-provided on every config tick, and genesis's default identity check
+    // (`value != oldSeed.value`) declines to notify — no guard type needed
+    // (ADR-0008 D-6, superseded 2026-07-02).
+    return InheritedSeed<ServiceBundle>(
       value: seed.services,
       child: InheritedSeed<SubstationConfig>(
         value: _config,

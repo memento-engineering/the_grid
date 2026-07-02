@@ -88,7 +88,7 @@ class _Burn {
         value: joined,
         child: InheritedSeed<StationServices>(
           value: fakes.ctx,
-          child: StableInheritedSeed<CapabilityRegistry>(
+          child: InheritedSeed<CapabilityRegistry>(
             value: reg,
             // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
             // D5). With none set the scope provides the empty default.

@@ -7,7 +7,10 @@
 /// `CapabilityHost` attach to the SAME session — establishing the session is a
 /// tree *state* (a loading state, `const Idle()` until resolved), not a
 /// synchronous id injection. This is the "Route resolves before its Page
-/// attaches" shape (an abstraction, not a literal router).
+/// attaches" shape (an abstraction, not a literal router). It is ALSO where the
+/// per-session ambient values mount (2026-07-02): the `Workspace` (computed from
+/// the per-substation `SourceControl`) and the `SiblingView` (this session's
+/// cursor + results) — the values an effect reads with the non-binding lookup.
 ///
 /// It owns the session lifecycle END-TO-END: it also CLOSES the session on the
 /// formula's positive terminal (D-2 — one owner for open+close, not the terminal
@@ -32,13 +35,13 @@ import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
+import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
 import '../sdk/formula.dart';
 import '../sdk/frontier.dart';
 import 'capability_registry.dart';
 import 'formula_scope.dart';
 import 'session_handle.dart';
-import 'stable_inherited.dart';
 
 /// The adopt-or-mint session lifecycle owner for one work [bead]'s [formula]
 /// (D-2). Key it `ValueKey('${bead.id}:session')` so it persists across cursor
@@ -92,13 +95,14 @@ class SessionScopeState extends State<SessionScope> {
 
   @override
   void didChangeDependencies() {
-    // Capture the context once (the writer is used across async gaps; `context`
-    // throws post-unmount).
-    _ctx ??= context.dependOnInheritedSeedOfExactType<StationServices>();
+    // ALWAYS re-read (D-H rule 1) — the captured field exists for async-gap use
+    // (`context` throws post-unmount), never as a read-once cache.
+    final ctx = context.dependOnInheritedSeedOfExactType<StationServices>();
     assert(
-      _ctx != null,
+      ctx != null,
       'SessionScope requires an ambient InheritedSeed<StationServices>',
     );
+    _ctx = ctx;
   }
 
   @override
@@ -234,17 +238,36 @@ class SessionScopeState extends State<SessionScope> {
       }
     }
 
-    // STABLE (D-6): the resolving→ready transition is a structural child
-    // appearance (this InheritedSeed mounts fresh), never an in-place value
-    // swap — so it must never fan-rebuild the formula subtree.
-    return StableInheritedSeed<SessionHandle>(
+    // The per-session ambient values (ADR-0008 Decision 3, 2026-07-02 — the
+    // context rip-out): the SessionHandle (value-equal, so a same-id re-provide
+    // never notifies), the Workspace (computed HERE from the per-substation
+    // SourceControl — the synthetic placeholder covers the no-source-control
+    // offline case, where nothing provisions nor lands), and the SiblingView
+    // (this session's whole cursor + results — capabilities read it with the
+    // effect verb; nothing registers on it, so a fresh instance per build
+    // notifies nobody).
+    final services =
+        context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
+        const ServiceBundle();
+    final sc = services.sourceControl;
+    final beadId = seed.bead.id;
+    final workspace = Workspace(
+      workspaceDir: sc?.workspaceFor(beadId) ?? '/grid/workspaces/$beadId',
+      branch: sc?.branchFor(beadId) ?? '',
+      baseBranch: sc?.baseBranch ?? 'main',
+    );
+    return InheritedSeed<SessionHandle>(
       value: SessionHandle(id),
-      child: FormulaScope(
-        formula: seed.formula,
-        bead: seed.bead,
-        cursor: cursor,
-        results: results,
-        nodePath: seed.bead.id,
+      child: InheritedSeed<Workspace>(
+        value: workspace,
+        child: InheritedSeed<SiblingView>(
+          value: SiblingView(cursor: cursor, results: results),
+          child: FormulaScope(
+            formula: seed.formula,
+            cursor: cursor,
+            nodePath: seed.bead.id,
+          ),
+        ),
       ),
     );
   }
