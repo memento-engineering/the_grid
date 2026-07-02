@@ -117,8 +117,10 @@ void main() {
 
       // The flare threw, but the terminal cursor write STILL landed (the flush
       // completed). Positive control vs the recording case above.
-      expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'complete'});
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'complete',
+        ...expectedTiming('tg-1/agent'),
+      });
     });
 
     test('no transport (null) — no flare, no error', () async {
@@ -130,8 +132,10 @@ void main() {
       await _pump();
       h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
       await _pump();
-      expect(h.fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'complete'});
+      expect(h.fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'complete',
+        ...expectedTiming('tg-1/agent'),
+      });
     });
   });
 }

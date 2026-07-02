@@ -91,9 +91,12 @@ void main() {
       await _pump();
 
       // 1) the parked cursor write (onto the OWN session, never the work bead).
+      // A gate is a terminal transition too → it carries capture-only timing.
       final updates = fakes.runner.callsFor('update');
-      expect(fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/route.state': 'gated'});
+      expect(fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/route.state': 'gated',
+        ...expectedTiming('tg-1/route'),
+      });
 
       // 2) a real type=gate bead was minted (create -t gate) + stamped.
       final creates = fakes.runner.callsFor('create');

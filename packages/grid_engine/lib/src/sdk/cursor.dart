@@ -54,6 +54,25 @@ abstract class NodeCursor with _$NodeCursor {
     /// The durable log byte-offset for the deferred adopt-a-live-process seam
     /// (§11); null until restoration ships.
     int? logOffset,
+
+    /// Capture-only FLOW TELEMETRY (FT-1, tg-pez) — the wall-clock instant this
+    /// incarnation began driving its effect (the host's kick), ISO-8601 UTC on
+    /// the wire; null until the node has started. Never gates orchestration.
+    DateTime? startedAt,
+
+    /// Capture-only flow telemetry — the wall-clock instant of this incarnation's
+    /// terminal transition (complete/failed/ready/gated); null until terminal.
+    DateTime? finishedAt,
+
+    /// Capture-only flow telemetry — `finishedAt - startedAt` in milliseconds,
+    /// derived at the terminal write; null when the start was never measured
+    /// (fail-safe omission).
+    int? durationMs,
+
+    /// Capture-only flow telemetry — the truncated diagnostic reason persisted
+    /// alongside a `failed` terminal (the `AllocationFailed.reason`); null when
+    /// the failure carried no diagnostic.
+    String? failureReason,
   }) = _NodeCursor;
 
   const NodeCursor._();

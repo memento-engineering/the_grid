@@ -40,7 +40,14 @@ mixin _$SessionProjection {
 /// scanned from the state snapshot by the join bridge, not from this session
 /// bead. A node leaves this set when its gate bead closes, which re-arms the
 /// parked node (`SessionScope` flips it back to `pending`).
- Set<String> get openGateNodes;
+ Set<String> get openGateNodes;/// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the wall-clock
+/// instant the session bead was minted (its `started_at` metadata, stamped
+/// once at first spawn through the chokepoint); null for a legacy bead minted
+/// before the stamp shipped. Never gates orchestration.
+ DateTime? get startedAt;/// Capture-only session lifecycle telemetry — the wall-clock instant the
+/// session bead was closed (its `closed_at` metadata, stamped inside the
+/// chokepoint's `close`); null while the session is still open.
+ DateTime? get closedAt;
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -51,16 +58,16 @@ $SessionProjectionCopyWith<SessionProjection> get copyWith => _$SessionProjectio
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other.cursor, cursor)&&const DeepCollectionEquality().equals(other.results, results)&&const DeepCollectionEquality().equals(other.openGateNodes, openGateNodes));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other.cursor, cursor)&&const DeepCollectionEquality().equals(other.results, results)&&const DeepCollectionEquality().equals(other.openGateNodes, openGateNodes)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.closedAt, closedAt) || other.closedAt == closedAt));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,isTerminal,pgid,token,pid,const DeepCollectionEquality().hash(cursor),const DeepCollectionEquality().hash(results),const DeepCollectionEquality().hash(openGateNodes));
+int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,isTerminal,pgid,token,pid,const DeepCollectionEquality().hash(cursor),const DeepCollectionEquality().hash(results),const DeepCollectionEquality().hash(openGateNodes),startedAt,closedAt);
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, results: $results, openGateNodes: $openGateNodes)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, results: $results, openGateNodes: $openGateNodes, startedAt: $startedAt, closedAt: $closedAt)';
 }
 
 
@@ -71,7 +78,7 @@ abstract mixin class $SessionProjectionCopyWith<$Res>  {
   factory $SessionProjectionCopyWith(SessionProjection value, $Res Function(SessionProjection) _then) = _$SessionProjectionCopyWithImpl;
 @useResult
 $Res call({
- String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes
+ String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, DateTime? startedAt, DateTime? closedAt
 });
 
 
@@ -88,7 +95,7 @@ class _$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? results = null,Object? openGateNodes = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? results = null,Object? openGateNodes = null,Object? startedAt = freezed,Object? closedAt = freezed,}) {
   return _then(_self.copyWith(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
 as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
@@ -99,7 +106,9 @@ as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non
 as int?,cursor: null == cursor ? _self.cursor : cursor // ignore: cast_nullable_to_non_nullable
 as FormulaCursor,results: null == results ? _self.results : results // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<String, String>>,openGateNodes: null == openGateNodes ? _self.openGateNodes : openGateNodes // ignore: cast_nullable_to_non_nullable
-as Set<String>,
+as Set<String>,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,closedAt: freezed == closedAt ? _self.closedAt : closedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,
   ));
 }
 
@@ -184,10 +193,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.startedAt,_that.closedAt);case _:
   return orElse();
 
 }
@@ -205,10 +214,10 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection():
-return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.startedAt,_that.closedAt);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -225,10 +234,10 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)?  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.startedAt,_that.closedAt);case _:
   return null;
 
 }
@@ -240,7 +249,7 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_th
 
 
 class _SessionProjection implements SessionProjection {
-  const _SessionProjection({required this.workBeadId, this.sessionId, this.isTerminal = false, this.pgid, this.token, this.pid, final  FormulaCursor cursor = const <String, NodeCursor>{}, final  Map<String, Map<String, String>> results = const <String, Map<String, String>>{}, final  Set<String> openGateNodes = const <String>{}}): _cursor = cursor,_results = results,_openGateNodes = openGateNodes;
+  const _SessionProjection({required this.workBeadId, this.sessionId, this.isTerminal = false, this.pgid, this.token, this.pid, final  FormulaCursor cursor = const <String, NodeCursor>{}, final  Map<String, Map<String, String>> results = const <String, Map<String, String>>{}, final  Set<String> openGateNodes = const <String>{}, this.startedAt, this.closedAt}): _cursor = cursor,_results = results,_openGateNodes = openGateNodes;
   
 
 /// The work bead this session drives (`metadata.work_bead`).
@@ -308,6 +317,15 @@ class _SessionProjection implements SessionProjection {
   return EqualUnmodifiableSetView(_openGateNodes);
 }
 
+/// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the wall-clock
+/// instant the session bead was minted (its `started_at` metadata, stamped
+/// once at first spawn through the chokepoint); null for a legacy bead minted
+/// before the stamp shipped. Never gates orchestration.
+@override final  DateTime? startedAt;
+/// Capture-only session lifecycle telemetry — the wall-clock instant the
+/// session bead was closed (its `closed_at` metadata, stamped inside the
+/// chokepoint's `close`); null while the session is still open.
+@override final  DateTime? closedAt;
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
@@ -319,16 +337,16 @@ _$SessionProjectionCopyWith<_SessionProjection> get copyWith => __$SessionProjec
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other._cursor, _cursor)&&const DeepCollectionEquality().equals(other._results, _results)&&const DeepCollectionEquality().equals(other._openGateNodes, _openGateNodes));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other._cursor, _cursor)&&const DeepCollectionEquality().equals(other._results, _results)&&const DeepCollectionEquality().equals(other._openGateNodes, _openGateNodes)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.closedAt, closedAt) || other.closedAt == closedAt));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,isTerminal,pgid,token,pid,const DeepCollectionEquality().hash(_cursor),const DeepCollectionEquality().hash(_results),const DeepCollectionEquality().hash(_openGateNodes));
+int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,isTerminal,pgid,token,pid,const DeepCollectionEquality().hash(_cursor),const DeepCollectionEquality().hash(_results),const DeepCollectionEquality().hash(_openGateNodes),startedAt,closedAt);
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, results: $results, openGateNodes: $openGateNodes)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, results: $results, openGateNodes: $openGateNodes, startedAt: $startedAt, closedAt: $closedAt)';
 }
 
 
@@ -339,7 +357,7 @@ abstract mixin class _$SessionProjectionCopyWith<$Res> implements $SessionProjec
   factory _$SessionProjectionCopyWith(_SessionProjection value, $Res Function(_SessionProjection) _then) = __$SessionProjectionCopyWithImpl;
 @override @useResult
 $Res call({
- String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes
+ String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, DateTime? startedAt, DateTime? closedAt
 });
 
 
@@ -356,7 +374,7 @@ class __$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? results = null,Object? openGateNodes = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? results = null,Object? openGateNodes = null,Object? startedAt = freezed,Object? closedAt = freezed,}) {
   return _then(_SessionProjection(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
 as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
@@ -367,7 +385,9 @@ as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non
 as int?,cursor: null == cursor ? _self._cursor : cursor // ignore: cast_nullable_to_non_nullable
 as FormulaCursor,results: null == results ? _self._results : results // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<String, String>>,openGateNodes: null == openGateNodes ? _self._openGateNodes : openGateNodes // ignore: cast_nullable_to_non_nullable
-as Set<String>,
+as Set<String>,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,closedAt: freezed == closedAt ? _self.closedAt : closedAt // ignore: cast_nullable_to_non_nullable
+as DateTime?,
   ));
 }
 

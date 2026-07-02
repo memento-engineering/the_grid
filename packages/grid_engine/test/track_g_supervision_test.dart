@@ -134,6 +134,70 @@ void main() {
         hasLength(1),
       );
     });
+
+    test('the escalation records grid.escalation_reason (the failing node + its '
+        'persisted reason) beside the marker — capture-only (FT-1)', () async {
+      final f = buildFakes();
+      final reg = RecordingCapabilityRegistry(formulas: const {});
+      // The broken node carries a persisted failureReason (as the failing leaf
+      // host would have written it before exhausting the breaker).
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1': const SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-s',
+              cursor: {
+                'tg-1/agent': NodeCursor(
+                  state: StepState.failed,
+                  restartCount: 3,
+                  failureReason: 'the harness refused: exit 42',
+                ),
+              },
+            ),
+          },
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        InheritedSeed<JoinedSnapshotNotifier>(
+          value: joined,
+          child: InheritedSeed<StationServices>(
+            value: f.ctx,
+            child: InheritedSeed<CapabilityRegistry>(
+              value: reg,
+              child: InheritedSeed<SessionResolver>(
+                value: FormulaResolver((_) => _code),
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(_tgConfig),
+                    key: const ValueKey('scope.tg'),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pump();
+
+      // The escalation write carries BOTH the marker AND the node+reason (in ONE
+      // update — a mutation dropping the reason, or naming the wrong node, fails
+      // here).
+      final updates = f.runner.callsFor('update');
+      final escIndex =
+          updates.indexWhere((c) => c.join(' ').contains('grid.escalation'));
+      expect(escIndex, isNonNegative);
+      final meta = f.runner.metadataOfUpdate(escIndex);
+      expect(meta['grid.escalation'], 'breaker-exhausted');
+      expect(
+        meta['grid.escalation_reason'],
+        'tg-1/agent: the harness refused: exit 42',
+      );
+    });
   });
 
   group('Track G (G3/F1) — the kernel owns the backoff Timer + re-poke', () {

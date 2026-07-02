@@ -18,6 +18,14 @@ _NodeCursor _$NodeCursorFromJson(Map<String, dynamic> json) => _NodeCursor(
       ? null
       : DateTime.parse(json['cooldownUntil'] as String),
   logOffset: (json['logOffset'] as num?)?.toInt(),
+  startedAt: json['startedAt'] == null
+      ? null
+      : DateTime.parse(json['startedAt'] as String),
+  finishedAt: json['finishedAt'] == null
+      ? null
+      : DateTime.parse(json['finishedAt'] as String),
+  durationMs: (json['durationMs'] as num?)?.toInt(),
+  failureReason: json['failureReason'] as String?,
 );
 
 Map<String, dynamic> _$NodeCursorToJson(_NodeCursor instance) =>
@@ -29,6 +37,10 @@ Map<String, dynamic> _$NodeCursorToJson(_NodeCursor instance) =>
       'restartCount': instance.restartCount,
       'cooldownUntil': instance.cooldownUntil?.toIso8601String(),
       'logOffset': instance.logOffset,
+      'startedAt': instance.startedAt?.toIso8601String(),
+      'finishedAt': instance.finishedAt?.toIso8601String(),
+      'durationMs': instance.durationMs,
+      'failureReason': instance.failureReason,
     };
 
 const _$StepStateEnumMap = {

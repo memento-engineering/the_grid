@@ -63,5 +63,16 @@ abstract class SessionProjection with _$SessionProjection {
     /// bead. A node leaves this set when its gate bead closes, which re-arms the
     /// parked node (`SessionScope` flips it back to `pending`).
     @Default(<String>{}) Set<String> openGateNodes,
+
+    /// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the wall-clock
+    /// instant the session bead was minted (its `started_at` metadata, stamped
+    /// once at first spawn through the chokepoint); null for a legacy bead minted
+    /// before the stamp shipped. Never gates orchestration.
+    DateTime? startedAt,
+
+    /// Capture-only session lifecycle telemetry — the wall-clock instant the
+    /// session bead was closed (its `closed_at` metadata, stamped inside the
+    /// chokepoint's `close`); null while the session is still open.
+    DateTime? closedAt,
   }) = _SessionProjection;
 }

@@ -276,8 +276,10 @@ void main() {
       fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
       await _pump();
       expect(fakes.runner.callsFor('update'), hasLength(1));
-      expect(fakes.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/agent.state': 'complete'});
+      expect(fakes.runner.metadataOfUpdate(0), {
+        'grid.cursor.tg-1/agent.state': 'complete',
+        ...expectedTiming('tg-1/agent'),
+      });
       expect(root, isNotNull);
     });
   });
