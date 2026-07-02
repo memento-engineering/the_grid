@@ -24,7 +24,15 @@ mixin _$SubstationConfig {
 /// upstream (`runGridTree` gating), so this gate is active whenever armed.
 /// Orthogonal to [ownedSubstations]: ownership says *whose* beads, the
 /// drive-list says *which specific* beads Nico has blessed for this arm.
- Set<String> get driveList;
+ Set<String> get driveList;/// Resident all-ready arming (RS-3/D-R4): when true, `WorkList` narrows
+/// the mount boundary to the DRIVEABLE-WORK types (`task`/`bug`/
+/// `feature`/`chore`) ON TOP of the existing A41 `isCore` allow-list — a
+/// resident station's ready frontier must never auto-mount an
+/// organizational bead (epic/milestone/decision) just because it surfaced
+/// ready. Orthogonal to [driveList]: under resident arming the drive-list
+/// is always empty (`validateArming` refuses a `--bead`) — this narrows
+/// WHICH TYPES of the all-ready frontier are driveable, not which ids.
+ bool get resident;
 /// Create a copy of SubstationConfig
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -35,16 +43,16 @@ $SubstationConfigCopyWith<SubstationConfig> get copyWith => _$SubstationConfigCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other.ownedSubstations, ownedSubstations)&&const DeepCollectionEquality().equals(other.driveList, driveList));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other.ownedSubstations, ownedSubstations)&&const DeepCollectionEquality().equals(other.driveList, driveList)&&(identical(other.resident, resident) || other.resident == resident));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(ownedSubstations),const DeepCollectionEquality().hash(driveList));
+int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(ownedSubstations),const DeepCollectionEquality().hash(driveList),resident);
 
 @override
 String toString() {
-  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList)';
+  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList, resident: $resident)';
 }
 
 
@@ -55,7 +63,7 @@ abstract mixin class $SubstationConfigCopyWith<$Res>  {
   factory $SubstationConfigCopyWith(SubstationConfig value, $Res Function(SubstationConfig) _then) = _$SubstationConfigCopyWithImpl;
 @useResult
 $Res call({
- String substationId, Set<String> ownedSubstations, Set<String> driveList
+ String substationId, Set<String> ownedSubstations, Set<String> driveList, bool resident
 });
 
 
@@ -72,12 +80,13 @@ class _$SubstationConfigCopyWithImpl<$Res>
 
 /// Create a copy of SubstationConfig
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,Object? resident = null,}) {
   return _then(_self.copyWith(
 substationId: null == substationId ? _self.substationId : substationId // ignore: cast_nullable_to_non_nullable
 as String,ownedSubstations: null == ownedSubstations ? _self.ownedSubstations : ownedSubstations // ignore: cast_nullable_to_non_nullable
 as Set<String>,driveList: null == driveList ? _self.driveList : driveList // ignore: cast_nullable_to_non_nullable
-as Set<String>,
+as Set<String>,resident: null == resident ? _self.resident : resident // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 
@@ -162,10 +171,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SubstationConfig() when $default != null:
-return $default(_that.substationId,_that.ownedSubstations,_that.driveList);case _:
+return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident);case _:
   return orElse();
 
 }
@@ -183,10 +192,10 @@ return $default(_that.substationId,_that.ownedSubstations,_that.driveList);case 
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident)  $default,) {final _that = this;
 switch (_that) {
 case _SubstationConfig():
-return $default(_that.substationId,_that.ownedSubstations,_that.driveList);case _:
+return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -203,10 +212,10 @@ return $default(_that.substationId,_that.ownedSubstations,_that.driveList);case 
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident)?  $default,) {final _that = this;
 switch (_that) {
 case _SubstationConfig() when $default != null:
-return $default(_that.substationId,_that.ownedSubstations,_that.driveList);case _:
+return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident);case _:
   return null;
 
 }
@@ -218,7 +227,7 @@ return $default(_that.substationId,_that.ownedSubstations,_that.driveList);case 
 
 
 class _SubstationConfig implements SubstationConfig {
-  const _SubstationConfig({required this.substationId, final  Set<String> ownedSubstations = const <String>{}, final  Set<String> driveList = const <String>{}}): _ownedSubstations = ownedSubstations,_driveList = driveList;
+  const _SubstationConfig({required this.substationId, final  Set<String> ownedSubstations = const <String>{}, final  Set<String> driveList = const <String>{}, this.resident = false}): _ownedSubstations = ownedSubstations,_driveList = driveList;
   
 
 /// The rig's id (its issue-id prefix and `metadata.rig` marker).
@@ -255,6 +264,15 @@ class _SubstationConfig implements SubstationConfig {
   return EqualUnmodifiableSetView(_driveList);
 }
 
+/// Resident all-ready arming (RS-3/D-R4): when true, `WorkList` narrows
+/// the mount boundary to the DRIVEABLE-WORK types (`task`/`bug`/
+/// `feature`/`chore`) ON TOP of the existing A41 `isCore` allow-list — a
+/// resident station's ready frontier must never auto-mount an
+/// organizational bead (epic/milestone/decision) just because it surfaced
+/// ready. Orthogonal to [driveList]: under resident arming the drive-list
+/// is always empty (`validateArming` refuses a `--bead`) — this narrows
+/// WHICH TYPES of the all-ready frontier are driveable, not which ids.
+@override@JsonKey() final  bool resident;
 
 /// Create a copy of SubstationConfig
 /// with the given fields replaced by the non-null parameter values.
@@ -266,16 +284,16 @@ _$SubstationConfigCopyWith<_SubstationConfig> get copyWith => __$SubstationConfi
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other._ownedSubstations, _ownedSubstations)&&const DeepCollectionEquality().equals(other._driveList, _driveList));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other._ownedSubstations, _ownedSubstations)&&const DeepCollectionEquality().equals(other._driveList, _driveList)&&(identical(other.resident, resident) || other.resident == resident));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(_ownedSubstations),const DeepCollectionEquality().hash(_driveList));
+int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(_ownedSubstations),const DeepCollectionEquality().hash(_driveList),resident);
 
 @override
 String toString() {
-  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList)';
+  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList, resident: $resident)';
 }
 
 
@@ -286,7 +304,7 @@ abstract mixin class _$SubstationConfigCopyWith<$Res> implements $SubstationConf
   factory _$SubstationConfigCopyWith(_SubstationConfig value, $Res Function(_SubstationConfig) _then) = __$SubstationConfigCopyWithImpl;
 @override @useResult
 $Res call({
- String substationId, Set<String> ownedSubstations, Set<String> driveList
+ String substationId, Set<String> ownedSubstations, Set<String> driveList, bool resident
 });
 
 
@@ -303,12 +321,13 @@ class __$SubstationConfigCopyWithImpl<$Res>
 
 /// Create a copy of SubstationConfig
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,Object? resident = null,}) {
   return _then(_SubstationConfig(
 substationId: null == substationId ? _self.substationId : substationId // ignore: cast_nullable_to_non_nullable
 as String,ownedSubstations: null == ownedSubstations ? _self._ownedSubstations : ownedSubstations // ignore: cast_nullable_to_non_nullable
 as Set<String>,driveList: null == driveList ? _self._driveList : driveList // ignore: cast_nullable_to_non_nullable
-as Set<String>,
+as Set<String>,resident: null == resident ? _self.resident : resident // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 

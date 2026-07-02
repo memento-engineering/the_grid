@@ -480,6 +480,322 @@ void main() {
       expect(result, isEmpty);
     });
   });
+
+  group('resident arming (RS-3, D-R4): the ready frontier is the drive set',
+      () {
+    test('validateArming: resident live arming passes with ZERO beads — root '
+        '+ state-workspace present, no --bead required', () {
+      expect(
+        () => validateArming(
+          const StationArgs(
+            substations: {'tgdog'},
+            stateSubstation: 'tgdog',
+            dryRun: false,
+            resident: true,
+          ),
+          rootInjected: true,
+          stateInjected: true,
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('validateArming: resident + --bead is refused LOUD in DRY-RUN — a '
+        'drive-list is a trigger surface under resident arming, not just a '
+        'live-arm restriction', () {
+      expect(
+        () => validateArming(
+          const StationArgs(
+            substations: {'tgdog'},
+            dryRun: true,
+            resident: true,
+            targetBeads: {'tgdog-w1'},
+          ),
+        ),
+        throwsA(
+          isA<StationRefusal>().having(
+            (r) => r.message,
+            'message',
+            allOf(
+              contains('resident station takes no drive-list'),
+              contains('bless a bead by making it ready'),
+            ),
+          ),
+        ),
+      );
+    });
+
+    test(
+        'validateArming: resident + --bead is refused LOUD in a LIVE arm too',
+        () {
+      expect(
+        () => validateArming(
+          const StationArgs(
+            substations: {'tgdog'},
+            stateSubstation: 'tgdog',
+            dryRun: false,
+            resident: true,
+            targetBeads: {'tgdog-w1'},
+          ),
+          rootInjected: true,
+          stateInjected: true,
+        ),
+        throwsA(
+          isA<StationRefusal>().having(
+            (r) => r.message,
+            'message',
+            contains('resident station takes no drive-list'),
+          ),
+        ),
+      );
+    });
+
+    test('validateArming: the LEGACY (non-resident) live-arm bead '
+        'requirement is untouched — byte-identical refusal with zero beads',
+        () {
+      expect(
+        () => validateArming(
+          const StationArgs(substations: {'tgdog'}, dryRun: false),
+          rootInjected: true,
+          stateInjected: true,
+        ),
+        throwsA(
+          isA<StationRefusal>().having(
+            (r) => r.message,
+            'message',
+            contains('requires at least one --bead'),
+          ),
+        ),
+      );
+    });
+
+    test('a resident LIVE arm with root + state-workspace + zero beads mounts '
+        'the ready frontier end-to-end (validateArming → buildLiveWiring → '
+        'composeStation → driveStation), all seams faked', () async {
+      final work = _FakeSnapshotSource();
+      work.push(
+        GraphSnapshot.fromParts(
+          beads: [Bead(id: 'tgdog-w1', title: 'ready under resident')],
+          dependencies: const [],
+          readyIds: {'tgdog-w1'},
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        ),
+      );
+      final state = _FakeSnapshotSource();
+      final provider = _RecordingDryProvider();
+      final bdRunner = RecordingBdRunner();
+      final groups = _FakeProcessGroupController();
+      final git = _FakeGitService();
+      addTearDown(() async {
+        await work.close();
+        await state.close();
+        await provider.close();
+      });
+
+      final code = await runStation(
+        resolver: const FormulaResolver(_markerFormulaFor),
+        registry: _markerRegistry(),
+        args: const StationArgs(
+          substations: {'tgdog'},
+          stateSubstation: 'tgdog',
+          dryRun: false,
+          resident: true,
+          rootPath: '/tmp/grid-resident-root',
+          stateWorkspacePath: '/tmp/grid-resident-state',
+          // no --bead — the ready frontier IS the drive set.
+          // A short fixed run lets the mount→mint→spawn microtask chain
+          // settle before teardown (mirrors the dry-run M3-seams smoke above).
+          runFor: Duration(milliseconds: 100),
+        ),
+        work: work,
+        state: state,
+        provider: provider,
+        stateBd: BdCliService(bdRunner),
+        groups: groups,
+        gitService: git.service,
+        rootCheckout: const RootCheckout(
+          path: '/tmp/grid-resident-root',
+          defaultBranch: 'main',
+          substation: 'tgdog',
+        ),
+        freshnessBarrier: () async {},
+        out: (_) {},
+        err: (_) {},
+      );
+
+      expect(code, 0);
+      expect(provider.starts, hasLength(1));
+      expect(provider.starts.single.name, contains('tgdog-w1'));
+    });
+
+    test('a bead flipping ready POST-BOOT mounts reactively under resident '
+        'arming — the SAME kernel instance, no restart, no --bead', () async {
+      final h = _TreeHarness();
+      final wiring = h.compose(
+        config: const SubstationConfig(
+          substationId: 'tgdog',
+          ownedSubstations: {'tgdog'},
+          resident: true,
+        ),
+      );
+      addTearDown(h.dispose);
+
+      h.pushWork(Bead(id: 'tgdog-w1', title: 'already ready'));
+      await wiring.start();
+      await _settle();
+      expect(h.provider.starts, hasLength(1));
+      expect(h.provider.starts.single.name, contains('tgdog-w1'));
+
+      // A second bead flips ready post-boot — same wiring, no recompose/
+      // restart, no --bead: the store IS the sole bless surface (D-R4).
+      h.work.push(
+        GraphSnapshot.fromParts(
+          beads: [
+            Bead(id: 'tgdog-w1', title: 'already ready'),
+            Bead(id: 'tgdog-w2', title: 'newly ready'),
+          ],
+          dependencies: const [],
+          readyIds: const {'tgdog-w1', 'tgdog-w2'},
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(1),
+        ),
+      );
+      await _settle();
+
+      expect(h.provider.starts, hasLength(2));
+      expect(
+        h.provider.starts.map((s) => s.name),
+        anyElement(contains('tgdog-w2')),
+      );
+
+      await wiring.teardown();
+    });
+
+    test('resident all-ready still honors the EXISTING mount-boundary gates: '
+        'a non-core (convergence) bead and an unowned bead never mount',
+        () async {
+      final h = _TreeHarness();
+      final wiring = h.compose(
+        config: const SubstationConfig(
+          substationId: 'tgdog',
+          ownedSubstations: {'tgdog'},
+          resident: true,
+        ),
+      );
+      addTearDown(h.dispose);
+
+      h.work.push(
+        GraphSnapshot.fromParts(
+          beads: [
+            Bead(id: 'tgdog-w1', title: 'ok'),
+            Bead(
+              id: 'tgdog-conv',
+              title: 'convergence',
+              issueType: IssueType.convergence,
+            ),
+            Bead(id: 'gc-9', title: 'unowned'),
+          ],
+          dependencies: const [],
+          readyIds: const {'tgdog-w1', 'tgdog-conv', 'gc-9'},
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        ),
+      );
+
+      await wiring.start();
+      await _settle();
+
+      expect(h.provider.starts, hasLength(1));
+      expect(h.provider.starts.single.name, contains('tgdog-w1'));
+
+      await wiring.teardown();
+    });
+
+    test('resident all-ready excludes organizational core types (epic / '
+        'milestone / decision) — the DRIVEABLE-WORK boundary (the RS-3 '
+        'filing CATCH) — while task/bug/feature/chore still mount; a '
+        'NON-RESIDENT sanity control proves the exclusion is '
+        'resident-specific, not a pre-existing gate (epic/milestone/decision '
+        'ARE core — A41 alone would let them through)', () async {
+      final beads = [
+        Bead(id: 'tgdog-task', issueType: IssueType.task),
+        Bead(id: 'tgdog-bug', issueType: IssueType.bug),
+        Bead(id: 'tgdog-feat', issueType: IssueType.feature),
+        Bead(id: 'tgdog-chore', issueType: IssueType.chore),
+        Bead(id: 'tgdog-epic', issueType: IssueType.epic),
+        Bead(id: 'tgdog-milestone', issueType: IssueType.milestone),
+        Bead(id: 'tgdog-decision', issueType: IssueType.decision),
+      ];
+      final ready = beads.map((b) => b.id).toSet();
+
+      final resident = _TreeHarness();
+      final residentWiring = resident.compose(
+        config: const SubstationConfig(
+          substationId: 'tgdog',
+          ownedSubstations: {'tgdog'},
+          resident: true,
+        ),
+      );
+      addTearDown(resident.dispose);
+      resident.work.push(
+        GraphSnapshot.fromParts(
+          beads: beads,
+          dependencies: const [],
+          readyIds: ready,
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        ),
+      );
+      await residentWiring.start();
+      await _settle();
+
+      final startedNames =
+          resident.provider.starts.map((s) => s.name).toList();
+      for (final driveable in [
+        'tgdog-task',
+        'tgdog-bug',
+        'tgdog-feat',
+        'tgdog-chore',
+      ]) {
+        expect(
+          startedNames.where((n) => n.contains(driveable)),
+          isNotEmpty,
+          reason: '$driveable is driveable — should mount under resident',
+        );
+      }
+      for (final organizational in [
+        'tgdog-epic',
+        'tgdog-milestone',
+        'tgdog-decision',
+      ]) {
+        expect(
+          startedNames.where((n) => n.contains(organizational)),
+          isEmpty,
+          reason:
+              '$organizational is organizational — must NOT mount under '
+              'resident',
+        );
+      }
+      expect(startedNames, hasLength(4));
+      await residentWiring.teardown();
+
+      // Sanity control: the SAME 7 beads under the LEGACY (non-resident)
+      // config all mount — proving the exclusion above comes from the
+      // resident flag, not some other (already-passing) gate.
+      final legacy = _TreeHarness();
+      final legacyWiring = legacy.compose();
+      addTearDown(legacy.dispose);
+      legacy.work.push(
+        GraphSnapshot.fromParts(
+          beads: beads,
+          dependencies: const [],
+          readyIds: ready,
+          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        ),
+      );
+      await legacyWiring.start();
+      await _settle();
+      expect(legacy.provider.starts, hasLength(7));
+      await legacyWiring.teardown();
+    });
+  });
 }
 
 /// Pumps the microtask/event queue a few turns so the kernel's batched flush,
@@ -546,6 +862,7 @@ Future<int> runStation({
           substationId: args.substations.first,
           ownedSubstations: args.substations,
           driveList: args.targetBeads,
+          resident: args.resident,
         ),
       ],
       git: live.git,
@@ -712,6 +1029,7 @@ class _TreeHarness {
     FormulaResolver? resolver,
     CapabilityRegistry? registry,
     ServiceBundle? services,
+    SubstationConfig? config,
   }) {
     // The dry effect context: the recording provider (never spawns real
     // claude), the bd write chokepoint over the recording runner (fail-closed on
@@ -730,8 +1048,12 @@ class _TreeHarness {
       work: work,
       state: state,
       stationServices: effectContext,
-      substations: const [
-        SubstationConfig(substationId: 'tgdog', ownedSubstations: {'tgdog'}),
+      substations: [
+        config ??
+            const SubstationConfig(
+              substationId: 'tgdog',
+              ownedSubstations: {'tgdog'},
+            ),
       ],
       git: git.service,
       workRoot: const RootCheckout(
