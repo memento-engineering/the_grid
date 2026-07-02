@@ -92,6 +92,14 @@ Read primitives: **`dependOnInheritedSeedOfExactType`** (registering) is the **p
 lookup** (genesis FR, optional) is only for read-once-and-ignore. This **retires** any
 `ResourceBag` / parallel engine container — *the tree is the bag.*
 
+**Amended 2026-07-02 (ratified Nico; ADR-0008 Decisions 3/4 amendments + `docs/SCRATCH-agent-scope.md`
+D-F/D-G):** the FR **landed** — genesis_tree 0.1.4 ships `getInheritedSeedOfExactType` (non-binding,
+callable outside build, `StateError` on an unmounted branch) — and is **upgraded from optional
+optimization to the EFFECT verb**: `dependOn*` = the tree/build verb (branches always watch), `get*`
+= the effect verb (+ `initState` initial reads, teardown). **`StableInheritedSeed` is DELETED** (its
+provider-side-hack role is obsolete with the consumer-side read landed; genesis's default identity
+check already covers the stable-handle case — ADR-0008 D-6's 2026-07-02 supersession).
+
 ## Decision 4 — Lifecycle: **`startOrAdopt` / `update` / `dispose` / `detach`** — all TYPE properties
 
 `Capability.createAllocation(ctx)` mints the Allocation (sync, cheap). The Allocation then owns,
@@ -204,6 +212,8 @@ split: a one-shot `ServiceCapability` → `JobAllocation`; a daemon/lease → fu
    `getInheritedSeedOfExactType` (mirrors Flutter's `getInheritedWidgetOfExactType`), a minor
    read-once-and-ignore optimization. The **primary** read is the existing registering `dependOn`;
    `StableInheritedSeed` covers constant config. Genesis is **not blocked on this**.
+   **✅ DONE (Nico, published 2026-07-02 — genesis_tree 0.1.4)** and upgraded to the EFFECT verb
+   (see the Decision 3 amendment above); `StableInheritedSeed` deleted with it.
 2. **Doc: the third-tree pattern in `genesis_tree`** — the four pieces (nodes / owner / protocol
    / affordance-scopes) + typesetting/perception as worked examples.
 

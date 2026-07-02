@@ -3,6 +3,7 @@
 **Status:** **Accepted 2026-06-27** (ratified by Nico; drafted by AI per Nico's decisions in the 2026-06-27 design session, per the ADR-0000 register rule). This ADR **supersedes ADR-0007 Decision 1's type *names*** (Decision 1 below) and **extends ADR-0002 Decision 1's package topology** (Decision 2). The forward-pointer stamps were **applied on ratification (2026-06-27)** to **ADR-0007 D1** + **ADR-0002 Decision 1** (one-line amendments) and **`the_grid/CLAUDE.md`** — never a silent rewrite (the A33 / ADR-0007 precedent). Per the gate: doc before code — code may now proceed on this ADR's single-station cluster (the Station/Substation rename is the first migration). **D1 rename APPLIED in code 2026-06-27** (whole-repo type + machinery + lowercase-vocab + CLI-flag rename; `melos analyze` + offline suite green; the persisted gc `metadata.rig` key + convergence byte-port schema preserved across the codec boundary; package-name renames `the_grid`/private `grid_engine`/`*_grid_assets` deferred to a later task).
 **Date:** 2026-06-27
 **Deciders:** Nico Spencer (decided each call in the design session; ratifier). Drafted by AI per the ADR-0000 register rule.
+**Amended 2026-07-02 (ratified Nico — the agent-scope design pass, `docs/SCRATCH-agent-scope.md`):** Decisions 2/3/4(D-6)/9 carry quote-and-supersede amendments and **Decision 10 (the agent scope) is added**; stamps applied same-day, never silent.
 **Gates:** the M4 follow-on (the SDK / "build everything" authoring layer). Fulfils the scope ADR-0007 §5 reserved as **P1/ADR-0008 ("gc-TOML import")** — generalised from "import gc TOML" to the full **asset (pack-protocol) authoring model**, of which TOML configs are one half.
 **Source of record:** `docs/SCRATCH-vnext-prd.md` §§0.5–4, §9 (the design surface; this ADR promotes its converged decisions and states the load-bearing ones).
 **Supersedes (explicit, per the register rule — never silent):** **ADR-0007 Decision 1's type *names*** — the root `Grid`/`RigScope`/`Rig` tree is renamed (Decision 1 below); "Grid" is repurposed for the federation object. ADR-0007's reconcile *semantics* are unchanged and extended, not reversed.
@@ -63,6 +64,8 @@ The "full power grid" rename. Canonical:
 
 *(The SDK package name — public `the_grid` / fallback `grid_sdk` — is unchanged by this amendment.)*
 
+**Amended 2026-07-02 (ratified Nico; `docs/SCRATCH-agent-scope.md` D-A) — the composition inversion finishes "consumers compose, never subclass" at the RUNNER level.** The asset's runner IS `main()`. The CLI-SDK's `StationRunCommand` subclass base and the `servicesFor`/`AssetWiring`/`AssetServicesBuilder` callback seam (both from the 2026-07-01 dart-runner design note; split prep, never ratified) are **DELETED**: `runGridTree` decomposes into library pieces — `discoverWorkspaces` / `buildControllers` / `driveStation` — that an asset's `main()` calls in order, the arming/gating checks (`--dry-run` default, `--land` requires `--no-dry-run`, the A36/A37 state-store guards) moving into the pieces so every runner inherits them by calling through. An asset constructs its live wiring, builds its `ServiceBundle` itself, and mounts its own providers (`Nest`). `composeStation` stays pure composition.
+
 ---
 
 ## Decision 3 — The authoring vocabulary: Formula · Capability · Service · Asset
@@ -78,6 +81,8 @@ The "full power grid" rename. Canonical:
 - **Dynamic behaviour is Dart** (a `Burn`), against the narrow `Capability` interface. Like Flutter: data for static config, Dart for dynamic widgets.
 
 **Why:** this is the original `EffectContext`-git resolution, generalised: git was never "a collaborator bolted to land" — it is a **`Service`** the landing formula depends on, shipped in an asset. The engine carries the seam, the asset carries the impl.
+
+**Amended 2026-07-02 (ratified Nico; `docs/SCRATCH-agent-scope.md` D-D/D-G) — the Capability row's sandbox clause is SUPERSEDED** (quoted: *"Sandboxed to a narrow interface — no `TreeContext`, no detection pipeline, no `markNeedsRebuild`"*). Per ADR-0009's "depending on context is the norm" + genesis_tree 0.1.4's non-binding `getInheritedSeedOfExactType` (snapshot-at-read, callable outside build, `StateError` on an unmounted branch): a capability now receives the host's stable **`(TreeContext, StepArgs)`** and reads ambient values with the non-binding verb; the `CapabilityContext` grab-bag is **deleted**. **Two verbs, one lookup system:** `dependOn*` = the tree/build verb (branches always watch); `get*` = the effect verb (+ `initState` initial reads and teardown). The invariants move from wall to **mutation-verified gates extended to capability-land**: a capability never calls `dependOn*`, never `addListener`s anything reached from context, never subscribes to the pipeline, and writes only through the chokepoint.
 
 ---
 
@@ -97,6 +102,8 @@ Burn → [HarnessA, HarnessB] → Barrier → Coordinator → finally(teardown) 
 **Amended 2026-06-27 (M4-P1 build-order, ratified Nico) — the session model + inflation discipline:**
 - **(D-2) session establishment is an engine-private `SessionScope`** (Nico's design), mounted by `WorkBead` ABOVE the formula subtree: it **adopt-or-mints** the session bead through the chokepoint, holds `{resolving | ready(SessionHandle) | failed}`, and provides `InheritedSeed<SessionHandle>` so the formula subtree attaches **only once the session is resolved** (the async establishment is a tree *state*, not a synchronous inject — the Page:Route abstraction, intuition not a rename). It owns the session lifecycle **end-to-end** (open AND close — on the formula's positive terminal or breaker-exhaustion). Per-step provider name `'$sessionId/$nodePath/$stepId'`. **Supersedes P0's first-leaf-mint + `EffectSeed` name=id** (which double-mint the restoration root + collapse fan-out to one process). Restoration's adopt-or-mint falls out of the same `resolving → ready` path. Engine-private (no author-facing "session capability" until a need arises).
 - **(D-6) inflation discipline:** ambient providers (`ServiceBundle` / `CapabilityRegistry` / `DartEnvironment` / `InheritedSeed<SessionHandle>`) are **stable** (`updateShouldNotify => false`); formula child Seeds are built **fresh each build** (no identical-skip caching — genesis skip is identity-only, so a value-equality cache would skip a subtree across a real cursor change and stall the barrier).
+
+  **Amended 2026-07-02 (ratified Nico; `docs/SCRATCH-agent-scope.md` D-F) — D-6's "stable (`updateShouldNotify => false`)" clause is SUPERSEDED and `StableInheritedSeed` is DELETED.** genesis's default (`updateShouldNotify => value != oldSeed.value` — an identity check for handle types without `==`) already declines to notify when the same instance is re-provided, so the fan-rebuild the stable type guarded against is unreachable on any existing path — while the type's only added behavior made an in-place instance swap **silently inert** (a worse failure mode than the benign rebuild it prevented). Ambient providers are plain `InheritedSeed`s; the fixed-at-mount contract is a doc line ("to change a substation's services, remount the scope by key"). The fresh-each-build discipline for formula child Seeds is unchanged. **The guard principle (ratified):** a guard exists only if it protects a named invariant with a concrete failure story and is LOUD when violated — else it's ceremony and gets deleted.
 
 ---
 
@@ -190,6 +197,22 @@ Ratified shape:
 - **The engine stays opinion-free** (Decision 5 / the ADR-0007 §1 invariant): the committee, critics, rubrics, route-matrix, and the agent/verify/land opinions move OUT of `grid_engine` into `grid_assets`. The **one** engine change is a narrow, read-only **sibling-read** seam (a `ServiceCapability` route step reads its siblings' already-observed results — no new pipeline subscription, no write; the four derailment invariants hold). All else composes at the existing `CapabilityRegistry` / `FormulaResolver` / `ServiceBundle` seam (dart-first).
 
 **Detail + the lettered design decisions (D-1…D-10) + tracks + DoD:** the **M5 "The Circuit" build-order** (`docs/M5-THE-CIRCUIT-BUILD-ORDER.md`). On ratification its lettered decisions stamp back here (the D-2/D-4/D-5/D-7 amendment pattern). The first live arm (the_grid building itself through The Circuit) remains the human gate.
+
+**Amended 2026-07-02 (ratified Nico; `docs/SCRATCH-agent-scope.md` D-D) — the sibling-read seam goes AMBIENT:** `SiblingView` is mounted by the session/fan-out container and read via the non-binding lookup (Decision 3's 2026-07-02 amendment) instead of being threaded through the now-deleted `CapabilityContext`. Still read-only, still no pipeline subscription — the seam's spirit is unchanged; only the plumbing moved.
+
+---
+
+## Decision 10 — the agent scope: harnesses over the agentic step
+
+**Decided 2026-07-02 (ratified Nico; design surface `docs/SCRATCH-agent-scope.md` — its D-A…D-H are the detail of record).**
+
+- **"Harness"** enters the vocabulary: a **turn/tool harness** — renders a brief + config into one tool's invocation and interprets its runtime events. The agentic seam is "**Agent**," not "Coding" (the committee's critics ride the same harness).
+- **Config is a VALUE in the tree; impls are DI.** `AgentConfig` {harness id, `ModelTarget`, params} rides a plain `InheritedSeed<AgentConfig>` (always watched by branches), resolved by the ladder: station `main()` default → substation override → the `grid.agent` **domain envelope** on the work bead (fail-closed decode) → step params. Harness impls resolve from a registry wired at `main()`, at the **effect boundary** — behavior is never derived from a service looked up in the tree.
+- **`AgentBrief`** = the harness-agnostic work content (prompt + working agreement + extra context). Model/parameters are config, NOT brief — one brief replays across harnesses. **Transport is harness-owned** (argv / stdin / workspace file).
+- **`ModelTarget`** (sealed): `ProviderManaged` (the tool owns auth/routing — claude keychain A38, copilot gh) / `OpenAiCompatible` (llama.cpp) / `SwiftInfer`. **Two-moment validation:** boot-eager at the composition root (misconfigured machine fails before any work mounts); per-work fail-closed at resolution (`Failed` → supervision/gate — one bad bead never crashes the station).
+- **Harness roster (this pass): claude, copilot, pi, opencode.** The grid's OWN harness (`GridHarness`, name reserved) + the own-agent program are **PARKED as their own epic**. Recorded bounds for that epic: agentic work is always a spawned process; no inference dep in the engine/SDK; **leonard/lenny is a DEV TOOL — never in the production-code path** (a shared model-provider layer, if wanted, is centralized; the epic's question).
+- **Home:** the seam + spawner impls target the Decision 2 SDK package; interim `grid_assets/src/code/` (power_station).
+- **The genesis_tree consumption doctrine** (`docs/SCRATCH-agent-scope.md` D-H) is ratified house style: always watch dependencies (never `??=`-cache — genesis's `dependencyChanged` must re-run the read); never sync-read reactive state without subscribing (no public state mirrors); no service-layer access in seeds/branches except DI/composition — branches touch value types and reactive domain objects; delegate-classes (pure description) are acceptable in build; I/O services flow untouched to the effect boundary. Propagation to predictable-flutter/the genesis docs is Nico's.
 
 ---
 
