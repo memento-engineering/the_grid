@@ -9,22 +9,29 @@
 /// ```dart
 /// // an asset's main()/command body:
 /// final args = StationArgs.from(argResults);       // addStationFlags(parser)
-/// validateArming(args);                            // throws StationRefusal
-/// final ws = discoverWorkspaces(
-///   workspacePath: args.workspacePath,
-///   stateWorkspacePath: args.stateWorkspacePath);
-/// final sources = await buildControllers(
-///   work: ws.work, state: ws.state, noSql: args.noSql);
-/// final live = await buildLiveWiring(args: args, sources: sources);
-/// final services = ServiceBundle(sourceControl: /* the asset's own */);
-/// final wiring = composeStation(
-///   work: sources.work, state: sources.state,
-///   stationServices: live.stationServices, substations: [...],
-///   git: live.git, workRoot: live.workRoot, groups: live.groups,
-///   freshnessBarrier: live.freshnessBarrier,
-///   resolver: myResolver, registry: myRegistry, services: services,
-///   wrapRoot: (root) => /* mount the asset's ambient config values */ root);
-/// return driveStation(wiring: wiring, sources: sources, ...);
+/// StationSources? sources;                         // held for refusal cleanup
+/// try {
+///   validateArming(args);                          // throws StationRefusal
+///   final ws = discoverWorkspaces(
+///     workspacePath: args.workspacePath,
+///     stateWorkspacePath: args.stateWorkspacePath);
+///   sources = await buildControllers(
+///     work: ws.work, state: ws.state, noSql: args.noSql);
+///   final live = await buildLiveWiring(args: args, sources: sources);
+///   final services = ServiceBundle(sourceControl: /* the asset's own */);
+///   final wiring = composeStation(
+///     work: sources.work, state: sources.state,
+///     stationServices: live.stationServices, substations: [...],
+///     git: live.git, workRoot: live.workRoot, groups: live.groups,
+///     freshnessBarrier: live.freshnessBarrier,
+///     resolver: myResolver, registry: myRegistry, services: services,
+///     wrapRoot: (root) => /* mount the asset's ambient config values */ root);
+///   return driveStation(wiring: wiring, sources: sources, ...);
+/// } on StationRefusal catch (refusal) {
+///   await sources?.shutdown();   // a live Dolt pool would outlive the refusal
+///   stderr.writeln(refusal.message);
+///   return refusal.code;
+/// }
 /// ```
 ///
 /// [composeStation] stays **pure composition** (no process, no socket, no bead

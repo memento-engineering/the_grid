@@ -290,8 +290,11 @@ resolves 0.1.4 with no pubspec change.
   boot-eager (OQ-c moment 1), and calls `driveStation`.
 - `grid.agent` envelope layer; effective-config merge + per-work fail-closed
   resolution (OQ-c moment 2) at the effect boundary.
-- Migrate ALL capability impls across the packs (code/compute/butane) to
-  `(context, args)`.
+- Migrate ALL capability impls across the packs (code/compute) to
+  `(context, args)`. **Carved out (2026-07-02):** `butane_grid_assets` moved
+  home to `butane_flutter/packages` (a gc-owned rig — power_station
+  `eea6a2b`); its burn-capability migration is a WITH-NICO follow-up, not this
+  pass's edit.
 
 **Docs (woven through, doc-before-code).** On ratification: ADR-0008 updates
 with quote-and-supersede stamps — D1 (finished by D-A), D-5 (SiblingView →

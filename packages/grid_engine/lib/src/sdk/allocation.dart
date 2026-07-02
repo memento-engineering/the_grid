@@ -413,7 +413,12 @@ class ServiceAllocation extends Allocation {
   Future<void> dispose() async {
     state = AllocationState.dying;
     context.args.cancel.cancel();
-    await capability.teardown(context.args);
+    try {
+      await capability.teardown(context.args);
+    } on Object {
+      // A throwing teardown must not break unmount (no one left to report
+      // to). Mirrors LeaseAllocation._release.
+    }
     state = AllocationState.gone;
   }
 }
@@ -578,7 +583,19 @@ class ProcessAllocation extends Allocation {
     // Guard BEFORE the read too: a dispose racing the terminal event must not
     // let `result` touch an unmounted tree context (which throws).
     if (context.args.cancel.isCancelled) return;
-    final payload = await capability.result(context.treeContext, context.args);
+    // A THROWING result hook routes to supervision as a failure, exactly like
+    // a throwing spawn/run (the completion is real, but an unreadable result
+    // must not leave the node silently STUCK — review finding 2026-07-02).
+    final Map<String, String>? payload;
+    try {
+      payload = await capability.result(context.treeContext, context.args);
+    } on Object catch (e) {
+      state = AllocationState.gone;
+      if (!context.args.cancel.isCancelled) {
+        context.sink(AllocationFailed('result threw: $e'));
+      }
+      return;
+    }
     if (context.args.cancel.isCancelled) return;
     state = AllocationState.gone;
     context.sink(AllocationCompleted(payload));
@@ -616,7 +633,13 @@ class ProcessAllocation extends Allocation {
     if (_started || _adopted) {
       unawaited(context.transport.stop(address.providerName));
     }
-    await capability.teardown(context.args);
+    try {
+      await capability.teardown(context.args);
+    } on Object {
+      // A throwing teardown must not break unmount (the group is already
+      // stopped; there is no one left to report to — the sink drops
+      // post-cancel reports by design). Mirrors LeaseAllocation._release.
+    }
     state = AllocationState.gone;
   }
 }

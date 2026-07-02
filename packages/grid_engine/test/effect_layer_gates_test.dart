@@ -19,14 +19,22 @@
 // effect verb in use (allocation.dart reads ambient values with it).
 
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:test/test.dart';
 
-/// The effect layer: every file under lib/src/sdk/.
-Iterable<File> _sdkSources() => Directory('lib/src/sdk')
-    .listSync(recursive: true)
-    .whereType<File>()
-    .where((f) => f.path.endsWith('.dart'));
+/// The effect layer: every file under lib/src/sdk/ — resolved via the package
+/// URI (CWD-independent, like the track_e structural fence).
+Iterable<File> _sdkSources() {
+  final libUri = Isolate.resolvePackageUriSync(
+    Uri.parse('package:grid_engine/grid_engine.dart'),
+  );
+  final sdkDir = Directory.fromUri(libUri!.resolve('src/sdk/'));
+  return sdkDir
+      .listSync(recursive: true)
+      .whereType<File>()
+      .where((f) => f.path.endsWith('.dart'));
+}
 
 void main() {
   group('effect-layer gates (capability-land, ADR-0008 D3 2026-07-02)', () {
