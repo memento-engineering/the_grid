@@ -28,5 +28,15 @@ abstract class SubstationConfig with _$SubstationConfig {
     /// Orthogonal to [ownedSubstations]: ownership says *whose* beads, the
     /// drive-list says *which specific* beads Nico has blessed for this arm.
     @Default(<String>{}) Set<String> driveList,
+
+    /// Resident all-ready arming (RS-3/D-R4): when true, `WorkList` narrows
+    /// the mount boundary to the DRIVEABLE-WORK types (`task`/`bug`/
+    /// `feature`/`chore`) ON TOP of the existing A41 `isCore` allow-list — a
+    /// resident station's ready frontier must never auto-mount an
+    /// organizational bead (epic/milestone/decision) just because it surfaced
+    /// ready. Orthogonal to [driveList]: under resident arming the drive-list
+    /// is always empty (`validateArming` refuses a `--bead`) — this narrows
+    /// WHICH TYPES of the all-ready frontier are driveable, not which ids.
+    @Default(false) bool resident,
   }) = _SubstationConfig;
 }

@@ -90,7 +90,12 @@ class _WorkListState extends State<WorkList> {
       // (agent/rig/role) by construction; an unknown custom type does NOT mount.
       // (A41 — refines A40's mount-boundary type gate; the live-arm blessed-bead
       // drive-list remains a SEPARATE gate, ADR-0006.)
-      if (!_isDispatchableWork(bead.issueType)) continue;
+      if (!_isDispatchableWork(
+        bead.issueType,
+        resident: seed.substationConfig.resident,
+      )) {
+        continue;
+      }
       if (!ownership.owns(bead)) continue;
 
       // Blessed-bead drive-list gate (ADR-0006): when a drive-list is configured
@@ -135,7 +140,16 @@ class _WorkListState extends State<WorkList> {
   /// an unrecognised custom type does NOT mount. (A41, ratified Nico
   /// 2026-06-25 — `isCore` stands; the epic / milestone / decision narrowing
   /// was considered and left in scope.)
-  static bool _isDispatchableWork(IssueType type) => type.isCore;
+  ///
+  /// Under [resident] arming (RS-3/D-R4) the allow-list narrows FURTHER to
+  /// the DRIVEABLE-WORK boundary ([IssueType.isDriveable]) — a resident
+  /// station's ready frontier IS the drive set, so an organizational core
+  /// type (epic/milestone/decision/spike/story) must never auto-mount just
+  /// because it surfaced ready (the filing-time CATCH on RS-3; a scoped
+  /// refinement of A41, flagged for the graduation ADR, never a weakening of
+  /// the gates themselves).
+  static bool _isDispatchableWork(IssueType type, {required bool resident}) =>
+      type.isCore && (!resident || type.isDriveable);
 }
 
 /// The keyed-reconcile container `WorkList` builds — an impl detail of the work

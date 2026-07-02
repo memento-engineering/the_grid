@@ -187,6 +187,7 @@ class StationArgs {
     this.land = false,
     this.noSql = false,
     this.runFor,
+    this.resident = false,
   });
 
   /// Parses the standard flags added by [addStationFlags].
@@ -249,13 +250,31 @@ class StationArgs {
 
   /// Run for a fixed duration then exit (null ⇒ run forever).
   final Duration? runFor;
+
+  /// Resident all-ready arming (RS-3, `docs/SCRATCH-resident-station.md` D-R4):
+  /// the ready frontier of the owned substation IS the drive set — no
+  /// `--bead`, ever (a drive-list is a trigger surface under resident arming;
+  /// Nico's ruling). NOT parsed by [StationArgs.from]/[addStationFlags] — the
+  /// `run` verb's flag surface is untouched; the composed resident verb
+  /// (space_station's `up`, RS-5b) constructs [StationArgs] with this set
+  /// directly.
+  final bool resident;
 }
 
-/// The arming/gating checks (ADR-0006 / A36/A37) — every runner inherits them
-/// by calling through. Throws a [StationRefusal] (exit 64) on a bad arming.
+/// The arming/gating checks (ADR-0006 / A36/A37 / RS-3 D-R4) — every runner
+/// inherits them by calling through. Throws a [StationRefusal] (exit 64) on a
+/// bad arming.
 ///
 /// [rootInjected]/[stateInjected] let an offline test that injects its own
 /// root/state seams pass the live gates without real paths.
+///
+/// The drive-list requirement is MODE-AWARE (the one deliberate branch — every
+/// other check applies identically to both modes): the non-resident (`run`,
+/// transitional scaffolding until RS-8) arm still requires ≥1 `--bead`, byte-
+/// identical to before RS-3; a [StationArgs.resident] arm takes the OPPOSITE
+/// stance — the ready frontier of the owned substation IS the drive set, so a
+/// `--bead` is refused LOUD (a drive-list is a trigger surface under resident
+/// arming — Nico's ruling), in EITHER dry-run or live.
 void validateArming(
   StationArgs args, {
   bool rootInjected = false,
@@ -289,7 +308,16 @@ void validateArming(
       '--state-substation), or use --dry-run.',
     );
   }
-  if (!args.dryRun && args.targetBeads.isEmpty) {
+  if (args.resident) {
+    if (args.targetBeads.isNotEmpty) {
+      throw const StationRefusal(
+        'grid run: a resident station takes no drive-list — the ready '
+        'frontier of the owned substation IS the drive set (RS-3, D-R4). A '
+        '--bead is a trigger surface under resident arming; bless a bead by '
+        'making it ready in the store, not with --bead.',
+      );
+    }
+  } else if (!args.dryRun && args.targetBeads.isEmpty) {
     throw const StationRefusal(
       'grid run: a non-dry (live) run requires at least one --bead — the '
       'blessed drive-list (ADR-0006). The_grid mounts an agent ONLY for beads '
@@ -781,6 +809,11 @@ Future<int> driveStation({
     write(
       'drive-list (blessed beads): {${args.targetBeads.join(', ')}} '
       '(ENFORCED at the WorkList mount boundary — only these beads mount)',
+    );
+  } else if (args.resident) {
+    write(
+      'drive-list: the ready frontier (RESIDENT — RS-3/D-R4; every ready '
+      'owned driveable bead mounts, no --bead)',
     );
   } else {
     write(

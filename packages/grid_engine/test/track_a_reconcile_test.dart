@@ -453,6 +453,102 @@ void main() {
       expect(recorder.events.length, core.length);
     });
 
+    test('resident config (RS-3/D-R4): narrows the allow-list further to the '
+        'DRIVEABLE-WORK boundary — organizational core types (epic/decision/'
+        'spike/story/milestone) never mount even when ready + owned + core',
+        () {
+      final recorder = _Recorder();
+      final organizational = <String, IssueType>{
+        'tg-epic': IssueType.epic,
+        'tg-decision': IssueType.decision,
+        'tg-spike': IssueType.spike,
+        'tg-story': IssueType.story,
+        'tg-milestone': IssueType.milestone,
+      };
+      final driveable = <String, IssueType>{
+        'tg-task': IssueType.task,
+        'tg-bug': IssueType.bug,
+        'tg-feat': IssueType.feature,
+        'tg-chore': IssueType.chore,
+      };
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [
+            for (final e in organizational.entries)
+              _bead(e.key, type: e.value),
+            for (final e in driveable.entries) _bead(e.key, type: e.value),
+          ],
+          ready: {...organizational.keys, ...driveable.keys},
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      final root = owner.mountRoot(
+        _root(
+          joined: joined,
+          resolver: _FakeSessionResolver(recorder),
+          substationConfig: SubstationConfigNotifier(
+            _tgConfig().copyWith(resident: true),
+          ),
+        ),
+      );
+
+      for (final id in driveable.keys) {
+        expect(
+          _workBead(root, id),
+          isNotNull,
+          reason: '$id should mount under resident',
+        );
+      }
+      for (final id in organizational.keys) {
+        expect(
+          _workBead(root, id),
+          isNull,
+          reason: '$id must NOT mount under resident',
+        );
+      }
+      expect(recorder.events.length, driveable.length);
+    });
+
+    test('resident sanity control: the SAME organizational beads mount under '
+        'the LEGACY (non-resident) config — proving the exclusion above is '
+        'resident-specific, not a pre-existing A41 gate', () {
+      final recorder = _Recorder();
+      final organizational = <String, IssueType>{
+        'tg-epic': IssueType.epic,
+        'tg-decision': IssueType.decision,
+        'tg-spike': IssueType.spike,
+        'tg-story': IssueType.story,
+        'tg-milestone': IssueType.milestone,
+      };
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [
+            for (final e in organizational.entries)
+              _bead(e.key, type: e.value),
+          ],
+          ready: organizational.keys.toSet(),
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      final root = owner.mountRoot(
+        _root(
+          joined: joined,
+          resolver: _FakeSessionResolver(recorder),
+          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ),
+      );
+
+      for (final id in organizational.keys) {
+        expect(
+          _workBead(root, id),
+          isNotNull,
+          reason: '$id should mount without resident',
+        );
+      }
+    });
+
     test('an unowned bead (foreign prefix) never mounts (fail-closed)', () {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(

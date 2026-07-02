@@ -291,6 +291,43 @@ void main() {
       expect(workBeads, hasLength(1));
       expect((workBeads.single.seed as WorkBead).bead.id, 'tg-ok');
     });
+
+    test('resident mode (RS-3/D-R4, the filing CATCH): convergence AND an '
+        'organizational core type (epic) both mount ZERO formula nodes under '
+        'an all-ready resident config, at depth — a plain owned task is the '
+        'live sanity control proving the mount pipeline itself still works',
+        () {
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [
+            _bead('tg-conv', type: IssueType.convergence),
+            _bead('tg-epic', type: IssueType.epic),
+            _bead('tg-ok'),
+          ],
+          ready: {'tg-conv', 'tg-epic', 'tg-ok'},
+        ),
+      );
+      final m = _mount(joined: joined, config: _tg.copyWith(resident: true));
+      addTearDown(m.owner.dispose);
+
+      final workBeads = _all(m.root).where((b) => b.seed is WorkBead).toList();
+      expect(workBeads, hasLength(1));
+      expect((workBeads.single.seed as WorkBead).bead.id, 'tg-ok');
+    });
+
+    test('resident mode sanity control: the SAME epic bead mounts under the '
+        'LEGACY (non-resident) config — the exclusion above is '
+        'resident-specific, not a pre-existing A41 gate (epic IS core)', () {
+      final joined = JoinedSnapshotNotifier(
+        _joined(beads: [_bead('tg-epic', type: IssueType.epic)], ready: {'tg-epic'}),
+      );
+      final m = _mount(joined: joined, config: _tg);
+      addTearDown(m.owner.dispose);
+
+      final workBeads = _all(m.root).where((b) => b.seed is WorkBead).toList();
+      expect(workBeads, hasLength(1));
+      expect((workBeads.single.seed as WorkBead).bead.id, 'tg-epic');
+    });
   });
 
   group('Invariant 4 / A37 AT DEPTH — read-only foreign source (a RUNNING host)',
