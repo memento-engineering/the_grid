@@ -5,12 +5,19 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:grid_federation/grid_federation.dart';
 
-/// Builds the ASSET's dispatch [handler] (+ an optional [banner] line) from the
-/// parsed args — the seam that keeps `serve` GENERIC ("leasing is core"): the
-/// core command owns the lessor lifecycle; the asset domain owns the "use"
-/// (ADR-0011 D3). The reference app supplies the compute one.
+/// Builds the ASSET's dispatch [handler] (+ an optional [banner] line + an
+/// optional lessor-teardown [onLeaseEnded] hook) from the parsed args — the
+/// seam that keeps `serve` GENERIC ("leasing is core"): the core command owns
+/// the lessor lifecycle; the asset domain owns the "use" AND the reap of any
+/// work it launched under a lease (ADR-0011 D3 + Hazards). The reference app
+/// supplies the compute one; the burn's reaps its follower app.
 typedef ServeHandlerFactory =
-    ({DispatchHandler handler, String? banner}) Function(
+    ({
+      DispatchHandler handler,
+      String? banner,
+      void Function(String leaseId)? onLeaseEnded,
+    })
+    Function(
       ArgResults args,
       void Function(String) log,
     );
@@ -105,6 +112,8 @@ class ServeCommand extends Command<int> {
       leaseWait: Duration(seconds: int.parse(a.option('lease-wait')!)),
       maxQueueDepth: int.parse(a.option('max-queue')!),
       handler: asset.handler,
+      // The asset's lessor teardown (lease release/reap → reap launched work).
+      onLeaseEnded: asset.onLeaseEnded,
       onLog: (m) => stdout.writeln('  $m'),
     );
     stdout

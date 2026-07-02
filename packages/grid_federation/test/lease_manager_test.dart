@@ -176,6 +176,38 @@ void main() {
     });
   });
 
+  group('onLeaseEnded (the lessor teardown hook)', () {
+    test('fires on explicit release AND on every reap path; a throwing '
+        'callback never corrupts accounting', () {
+      final clock = _Clock();
+      final ended = <String>[];
+      final m = LeaseManager(
+        station: 'b',
+        offered: 2,
+        ttl: const Duration(seconds: 30),
+        clock: clock.call,
+        onLeaseEnded: (id) {
+          ended.add(id);
+          throw StateError('hook explodes'); // exception-isolated
+        },
+      );
+
+      // Explicit release fires the hook.
+      final g1 = m.grant(const LeaseRequest(lessee: 'x'));
+      m.release(g1.leaseId, token: g1.fencingToken);
+      expect(ended, [g1.leaseId]);
+      expect(m.available, 2, reason: 'a throwing hook never blocks the slot');
+
+      // An idle-TTL reap fires the hook too (the follower app must die when
+      // its lease does, however the lease ends).
+      final g2 = m.grant(const LeaseRequest(lessee: 'x'));
+      clock.advance(const Duration(seconds: 31));
+      m.tick();
+      expect(ended, [g1.leaseId, g2.leaseId]);
+      expect(m.available, 2);
+    });
+  });
+
   group('idempotency (hazard #4)', () {
     test(
       'a retried request (same key) returns the SAME grant, never a second',

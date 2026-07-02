@@ -97,6 +97,7 @@ class StationServer {
     DateTime Function()? clock,
     String Function(int seq)? idGen,
     void Function(String)? onLog,
+    void Function(String leaseId)? onLeaseEnded,
   }) async {
     final server = await HttpServer.bind(host, port);
     final manager = LeaseManager(
@@ -108,6 +109,10 @@ class StationServer {
       maxQueueDepth: maxQueueDepth,
       heartbeat: heartbeat,
       missedHeartbeatThreshold: missedHeartbeatThreshold,
+      // The lessor teardown hook (ADR-0011 Hazards): fires on explicit
+      // release AND every reap path, so work launched under the lease
+      // (e.g. the burn's follower app) never outlives it.
+      onLeaseEnded: onLeaseEnded,
       clock: clock,
       idGen: idGen,
     );

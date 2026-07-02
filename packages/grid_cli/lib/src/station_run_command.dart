@@ -11,6 +11,7 @@
 /// over-opinionated monolithic `grid run` (Nico's long-standing critique).
 library;
 
+import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:grid_engine/grid_engine.dart';
 
@@ -131,6 +132,12 @@ abstract class StationRunCommand extends Command<int> {
   /// (git service / work root / armed land ops). Null → an empty bundle.
   final AssetServicesBuilder? servicesFor;
 
+  /// The registry for THIS invocation. Defaults to the construction-time
+  /// [registry]; an asset whose composition depends on its own flags (the
+  /// burn: peers, scenario, launcher paths) overrides this and builds from
+  /// [args].
+  CapabilityRegistry registryFor(ArgResults args) => registry;
+
   @override
   Future<int> run() async {
     final args = argResults!;
@@ -143,7 +150,7 @@ abstract class StationRunCommand extends Command<int> {
     return runGridTree(
       substations: substations,
       resolver: resolver,
-      registry: registry,
+      registry: registryFor(args),
       servicesFor: servicesFor,
       provider: RuntimeProviderKind.parse(args.option('provider')),
       rootPath: args.option('root'),

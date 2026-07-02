@@ -82,6 +82,7 @@ class LeaseManager {
     this.maxQueueDepth = 64,
     this.heartbeat,
     this.missedHeartbeatThreshold = 3,
+    this.onLeaseEnded,
     DateTime Function()? clock,
     String Function(int seq)? idGen,
   }) : assert(missedHeartbeatThreshold > 0, 'threshold must be positive'),
@@ -334,9 +335,22 @@ class LeaseManager {
     return grant;
   }
 
+  /// Fired whenever a held lease ends — explicit [release] OR any reap
+  /// (idle TTL / hard deadline / missed heartbeat). The lessor's teardown
+  /// hook: a domain that launched work under the lease reaps it here
+  /// (ADR-0011 Hazards, "orphaned work on the lessor" — the burn's
+  /// follower app must die when its lease does). Exception-isolated: a
+  /// throwing callback never corrupts lease accounting.
+  final void Function(String leaseId)? onLeaseEnded;
+
   void _remove(String leaseId, _Held h) {
     _held.remove(leaseId);
     if (h.idempotencyKey.isNotEmpty) _grantsByKey.remove(h.idempotencyKey);
+    try {
+      onLeaseEnded?.call(leaseId);
+    } on Object {
+      // The hook is best-effort; lease accounting already advanced.
+    }
   }
 
   /// Reap by the OWNER clock: a lease dies when ANY of three ORTHOGONAL bounds
