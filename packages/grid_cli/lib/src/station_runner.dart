@@ -164,7 +164,8 @@ void addStationFlags(ArgParser parser) {
     ..addFlag(
       'no-sql',
       negatable: false,
-      help: 'Force the bd-CLI read path even when pooled Dolt SQL is available.',
+      help:
+          'Force the bd-CLI read path even when pooled Dolt SQL is available.',
     );
 }
 
@@ -697,17 +698,52 @@ TreeRunWiring composeStation({
 // driveStation — banner + pinned start ordering + run loop + teardown
 // ---------------------------------------------------------------------------
 
+/// The default resident-station termination binding (D-R2,
+/// `docs/SCRATCH-resident-station.md`, ratified 2026-07-02): SIGINT, SIGTERM,
+/// and SIGHUP merged into ONE stream. A supervised resident station
+/// (`launchctl stop`, plain `kill`) sends SIGTERM — it joins SIGINT on the
+/// SAME graceful path; SIGHUP is treated as terminate (no reload semantics
+/// yet — not earned).
+///
+/// Single-subscription: the underlying [ProcessSignal.watch] subscriptions
+/// attach on listen and detach on cancel, so a drained station's VM can exit.
+Stream<ProcessSignal> terminationSignals() {
+  final watched = <StreamSubscription<ProcessSignal>>[];
+  late final StreamController<ProcessSignal> controller;
+  controller = StreamController<ProcessSignal>(
+    onListen: () {
+      for (final signal in const [
+        ProcessSignal.sigint,
+        ProcessSignal.sigterm,
+        ProcessSignal.sighup,
+      ]) {
+        watched.add(signal.watch().listen(controller.add));
+      }
+    },
+    onCancel: () async {
+      for (final subscription in watched) {
+        await subscription.cancel();
+      }
+      watched.clear();
+    },
+  );
+  return controller.stream;
+}
+
 /// Drives a composed station: prints the banner, starts the controllers + the
 /// exploration host, brings the tree up ([TreeRunWiring.start]: barrier →
 /// restart → mount), then runs until [StationArgs.runFor] elapses, [runForever]
-/// is false (scripted/test: start-then-teardown), or SIGINT. Returns the
-/// process exit code.
+/// is false (scripted/test: start-then-teardown), or the FIRST termination
+/// signal (SIGINT / SIGTERM / SIGHUP — D-R2; [signals] injects a fake stream
+/// for tests, defaulting to [terminationSignals]). Returns the process exit
+/// code.
 Future<int> driveStation({
   required TreeRunWiring wiring,
   required StationSources sources,
   required StationArgs args,
   void Function(String)? out,
   bool runForever = true,
+  Stream<ProcessSignal>? signals,
 }) async {
   final void Function(String) write = out ?? (m) => stdout.writeln(m);
 
@@ -772,15 +808,23 @@ Future<int> driveStation({
     return 0;
   }
 
+  // Park until the FIRST termination signal; the first completes the interrupt
+  // exactly once, later ones are ignored with one loud line (shutdown is never
+  // re-entered). The subscription stays live THROUGH shutdown — a repeat signal
+  // during teardown is absorbed here instead of default-killing the half-drained
+  // process — and is cancelled after, so the VM can exit.
   final interrupt = Completer<void>();
-  late final StreamSubscription<ProcessSignal> sigint;
-  sigint = ProcessSignal.sigint.watch().listen((_) {
-    if (!interrupt.isCompleted) interrupt.complete();
+  final termination = (signals ?? terminationSignals()).listen((signal) {
+    if (interrupt.isCompleted) {
+      write('grid run: already shutting down — $signal ignored');
+      return;
+    }
+    interrupt.complete();
   });
   await interrupt.future;
-  await sigint.cancel();
   write('\ngrid run: shutting down…');
   await shutdown();
+  await termination.cancel();
   return 0;
 }
 
