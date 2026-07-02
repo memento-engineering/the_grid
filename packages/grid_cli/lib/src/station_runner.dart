@@ -54,6 +54,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import 'run_command.dart' show RuntimeProviderKind;
 import 'runtime_snapshot_source.dart';
+import 'station_lock.dart';
 
 // ---------------------------------------------------------------------------
 // Refusals + the standard station flags
@@ -737,6 +738,12 @@ Stream<ProcessSignal> terminationSignals() {
 /// signal (SIGINT / SIGTERM / SIGHUP — D-R2; [signals] injects a fake stream
 /// for tests, defaulting to [terminationSignals]). Returns the process exit
 /// code.
+///
+/// When [sources] carry a state workspace, the STATION LOCK (RS-2, D-A1) is
+/// acquired on it before `sources.start()` — ONE supervisor per station state
+/// store; a live holder is a [StationRefusal] — and released on the graceful
+/// shutdown path and on the start-throw unwind. [lock] injects the service
+/// (fake pid probe) for offline tests.
 Future<int> driveStation({
   required TreeRunWiring wiring,
   required StationSources sources,
@@ -744,6 +751,7 @@ Future<int> driveStation({
   void Function(String)? out,
   bool runForever = true,
   Stream<ProcessSignal>? signals,
+  StationLockService? lock,
 }) async {
   final void Function(String) write = out ?? (m) => stdout.writeln(m);
 
@@ -788,13 +796,39 @@ Future<int> driveStation({
   );
   write('—' * 64);
 
+  // --- the station lock (RS-2, D-A1): ONE supervisor per state store -------
+  // Acquired after validateArming (the caller ran it), before
+  // sources.start(). No state workspace (offline/dry with no split store) ⇒
+  // no session store to guard ⇒ no lock.
+  StationLockHandle? stationLock;
+  final stateStore = sources.stateWorkspace;
+  if (stateStore != null) {
+    stationLock = await (lock ?? StationLockService(log: write)).acquire(
+      stateWorkspaceDir: stateStore.root,
+      pid: pid,
+      pgid: SystemProcessGroupController().currentGroupId(),
+      now: DateTime.now(),
+    );
+  }
+
   // --- start: controllers → host → barrier → restart → mount ---------------
-  await sources.start();
-  await wiring.start();
+  try {
+    await sources.start();
+    await wiring.start();
+  } on Object {
+    // The start-throw unwind (parity with the refusal-catch
+    // `sources?.shutdown()` example above): a lock left naming a dead boot
+    // would wedge the next `up` behind a stale-steal.
+    await stationLock?.release();
+    rethrow;
+  }
 
   Future<void> shutdown() async {
     await wiring.teardown();
     await sources.shutdown();
+    // Release LAST: the store stays guarded until the tree is torn down and
+    // the controllers are drained.
+    await stationLock?.release();
   }
 
   final runFor = args.runFor;
