@@ -15,6 +15,7 @@
 library;
 
 // The station-runner library pieces (the composition inversion, 2026-07-02).
+export 'src/station_attach.dart';
 export 'src/station_control.dart';
 export 'src/station_lock.dart';
 export 'src/station_runner.dart';
