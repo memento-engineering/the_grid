@@ -110,10 +110,12 @@ one state store (`tgdog`), one lock.
   `composeStation` refuses overlapping owned-sets LOUD (the double-mount guard — protects a named
   invariant: one bead, one agent). The WRITER's allow-set stays the union (+ state substation),
   unchanged.
-- **D-M4 — Rooting is an ARMING obligation.** A live arm refuses at `validateArming` when any
-  owned work substation lacks a registered root — you own it, you root it. Deterministic, boot-time,
-  and per the §5 failure-discrimination principle (SCRATCH-orchestration-determinism): a
-  configuration defect is an arming refusal, never a mount-time surprise or a gate.
+- **D-M4 — Rooting is a DRIVEN-SET obligation** *(amended §4b)*. A live arm refuses at
+  `validateArming` when any OWNED work substation lacks a registered root — you own it, you root
+  it. Deterministic, and per the §5 failure-discrimination principle
+  (SCRATCH-orchestration-determinism): a configuration defect is an arming refusal, never a
+  mount-time surprise or a gate. Under dynamic membership the same gate applies at JOIN time to
+  the driven set only — an observed-not-owned member needs no root (D-Z5).
 - **D-M5 — `devRoot` resolves per scope.** Pub-link absolutization reads the root off the ambient
   per-scope `ServiceBundle.sourceControl` (expose the root path on the `SourceControl` surface)
   instead of a station-wide constructor bake. `buildCodeRegistry(devRoot:)` loses the parameter
@@ -127,9 +129,12 @@ one state store (`tgdog`), one lock.
 
 ## 4. Proposed decisions — federated work sources (tg-nsj)
 
-- **D-F1 — `FederatedSnapshotSource`, fan-in before the bridge.** A union source owns the N
-  sub-subscriptions internally and exposes ONE change-gated `SnapshotSource`. The bridge keeps its
-  two axes and its lone-subscription invariant untouched (A39/inv-1).
+- **D-F1 — `FederatedSnapshotSource`, fan-in before the bridge — with MUTABLE membership**
+  *(amended §4b)*. A union source owns the member subscriptions internally and exposes ONE
+  change-gated `SnapshotSource`. The bridge keeps its two axes and its lone-subscription invariant
+  untouched (A39/inv-1). NOT fixed-N at construction: the union observes a membership set and
+  attaches/detaches member sources at runtime (§4b) — static flags are merely the first membership
+  source.
 - **D-F2 — Ready semantics: union + the external-dep guard.** `readyIds` = union of per-store
   `bd ready` sets, THEN: for any bead carrying an external dep whose target IS in the federation,
   apply the block in Dart (resolve it — we have both stores); whose target is OUTSIDE the
@@ -137,15 +142,20 @@ one state store (`tgdog`), one lock.
   see beats a false positive that spawns unprerequisited work). Zero cross-store deps exist today
   (measured), so this guard costs nothing until someone creates one — and then it is already
   correct.
-- **D-F3 — Union identity + coalescing.** Per-source `latest` retained; any source emission
-  rebuilds the union; the union emits only when `diffSnapshots(previous, next)` is non-empty (the
-  honest change gate); union `capturedAt` = max of the parts. The freshness barrier re-queries ALL
-  runtimes (requery fans out).
-- **D-F4 — Store membership is explicit flags, never `routes.jsonl`.** Repeatable
-  `--workspace <substation>=<path>` (bare `--workspace <path>` = single-store shorthand). Routes
-  are bd's lazy id-resolver, not an observation opt-in; explicit flags are the operator's bless
-  surface. The `<substation>` key is the join key across `--workspace` / `--root` /
-  `--substation` — one triple per covered store.
+- **D-F3 — Union identity + coalescing: a per-member freshness vector** *(amended §4b)*.
+  Per-member `latest` retained; any member emission rebuilds the union; the union emits only when
+  `diffSnapshots(previous, next)` is non-empty (the honest change gate). The union carries a
+  freshness VECTOR ({member → capturedAt, presence}) rather than one `capturedAt` — the scalar
+  `capturedAt` = max of the parts for the existing field, but staleness is judged per member
+  (§4b). The freshness barrier re-queries ALL live members (requery fans out).
+- **D-F4 — Store membership is an OBSERVED SET; explicit flags are its first source — never
+  `routes.jsonl`** *(amended §4b)*. Repeatable `--workspace <substation>=<path>` (bare
+  `--workspace <path>` = single-store shorthand) populates a static `MembershipSource` — the same
+  posture as `grid_federation`'s deliberately-static `Membership` (ADR-0011 D4), and the same
+  promise: zero-conf discovery drops in BEHIND the seam later as `zero_conf_grid_assets`, it does
+  not reshape it. Routes are bd's lazy id-resolver, not an observation opt-in; entry into the
+  observed set is ALWAYS a policy decision (§4b trust gate). The `<substation>` key is the join
+  key across `--workspace` / `--root` / `--substation` — one triple per covered store.
 - **D-F5 — Probe cardinality: N-per-store as built, optimization deferred.** N watchers + N probes
   (1s SQL probe or 5s CLI ticker per store) + ≤2 pooled connections per SQL store. The
   single-connection multi-`@@<db>_working` probe (one round-trip for N same-server dbs) is a
@@ -160,6 +170,63 @@ one state store (`tgdog`), one lock.
   server-mode tg store; JSONL pull staleness; foreign beads materialized in the gc-watched db.
   Revisit only if bd grows server-mode, live hydration.
 
+## 4b. Dynamic membership — the zero-conf forward-compat frame (added 2026-07-03, Nico's check)
+
+Nico's challenge while reading v1: *make sure we operate under future assumptions w.r.t.
+zero-conf/mDNS federations — v1 smelled of static remote-station configuration.* Audit result:
+three static assumptions were embedded (fixed-N union, boot-time-only scope list, boot-time-only
+rooting gate). The codebase already points the way — `grid_federation`'s membership is
+**deliberately static by ratified decision** (ADR-0011 D4) with the dynamic seam named:
+*"shaped so dynamic discovery drops in BEHIND it later as `zero_conf_grid_assets`"* — and
+`Presence` already carries the **capability-durable / capacity-ephemeral** split. This section
+applies the same discipline to work-source observation, so tg-7gm/tg-nsj build against seams
+zero-conf can drop behind without reshaping anything.
+
+- **D-Z1 — Membership is observed state, not constructor config.** A `MembershipSource` notifier
+  holds the observed member set {substation → (workspace | remote endpoint, root?)}. The static
+  flag triples (D-F4) are the FIRST source impl; a zero-conf browser is the SECOND, behind the
+  same seam. Consumers never know which produced the set.
+- **D-Z2 — Scopes reconcile from membership.** `Station` is already a `MultiChildSeed` of keyed
+  `SubstationScope`s; the scope list derives from the observed membership set, so a member
+  joining/leaving mounts/unmounts exactly that scope by keyed reconcile — the M4 doctrine
+  ("config nodes are observed ancestors of work nodes") applied to membership. The substation
+  prefix is the reconcile KEY, so identity is stable across disappear/reappear. With the static
+  source this degenerates to today's boot-time list; no behavioral change until a dynamic source
+  exists.
+- **D-Z3 — Absence ≠ deletion (the durable/ephemeral split, applied to snapshots).** Work-graph
+  truth is DURABLE (dolt); presence is EPHEMERAL. A member going dark (mDNS goodbye, partition,
+  connection reap) is a presence event: its last snapshot is RETAINED frozen and marked stale in
+  the freshness vector (D-F3). The union NEVER synthesizes bead-disappearance from lost
+  connectivity — the tree must not see a network flap as a mass bead-deletion.
+- **D-Z4 — Staleness is fail-closed for NEW work only.** A stale member's ready set stops minting
+  NEW mounts (its truth can't be refreshed — fail-closed, LOUD in status); in-flight sessions
+  continue untouched (A40 positive-terminal-only unmount already protects them). Reappearance
+  refreshes the member snapshot and re-opens minting — one gated union emission either way.
+- **D-Z5 — Ownership (drive) ⊥ membership (observe).** Owning a substation = intent to DRIVE it =
+  must be rooted (D-M4 applies at the moment it joins the DRIVEN set — arming time for static
+  members, join time for dynamic ones). A member observed but not owned (e.g. a discovered peer's
+  store) mounts NO work here — its work is visible (status, future topology views), never driven
+  (claim-in-own-store stays with the owning station, per the parked ADR-0011 sketch). This
+  dissolves OQ-2's tension: refusal guards the DRIVEN set; observe-only needs no root.
+- **D-Z6 — Discovered ≠ blessed: the trust gate.** Entry from DISCOVERED (a zero-conf answer) to
+  OBSERVED (a mounted member) passes a Trust decision — allow-list now (LAN trust, the same
+  posture as `Peer.token`), reputation/ledger impls later (ADR-0008's `Trust` seam). Exactly the
+  store-hygiene shape: ready=in needed grooming; discovered=in needs a gate. The gate is LOUD both
+  ways (admitted / refused, with the claimed identity named) per the guard principle.
+- **D-Z7 — A remote member is just another `SnapshotSource` impl.** The union consumes the same
+  contract (change-gated, broadcast, non-replay, `current`, one push per real change) whether the
+  member is a local bd/SQL workspace or a future remote station surfacing its work graph over the
+  bus/control-plane transport (D-C5's unified-substrate want; ADR-0012's exploration transport).
+  Nothing in the union changes when members go remote — that is the test the seam must pass.
+- **D-Z8 — `zero_conf_grid_assets` is designed as its own surface, consumed twice.** One discovery
+  asset (mDNS/DNS-SD advertise + browse; service instance carrying station id, control endpoint,
+  offered substation prefixes, trust hints) slots behind BOTH existing seams: `grid_federation`'s
+  `Membership` (the lease bus) and D-Z1's `MembershipSource` (work-source observation). Designing
+  it belongs to the ADR-0011 orbit (Nico's parked ADR) — this SCRATCH only pins the contracts it
+  must drop behind; a companion `SCRATCH-zero-conf-membership.md` is drafted on Nico's word
+  (OQ-7). Build order unchanged: tg-7gm/tg-nsj ship with the static source; zero-conf is the
+  second source, not a prerequisite.
+
 ## 5. Open questions for Nico
 
 - **OQ-1 — Substation keys.** The foreign substations enter the allow-set as their id prefixes:
@@ -167,7 +234,9 @@ one state store (`tgdog`), one lock.
   grammar keys).
 - **OQ-2 — D-M4 strictness.** Live arm REFUSES when an owned substation lacks a root (proposed) —
   vs. loud mount-time skip. Refusal is stricter and can't silently under-cover; skip lets a
-  partially-rooted station run. Which?
+  partially-rooted station run. Which? *(Reframed by D-Z5: refusal guards only the DRIVEN set —
+  an observed-not-owned member needs no root, so strictness costs nothing at the federation
+  boundary.)*
 - **OQ-3 — The pairing grammar** (`--workspace/--root <substation>=<path>[@head]`, D-M2/D-F4) —
   bless the shape? (It lands twice by hand: `addStationFlags` + the `up` hand-mirror.)
 - **OQ-4 — Landing surface for foreign repos.** The land step would open PRs on
@@ -179,6 +248,11 @@ one state store (`tgdog`), one lock.
 - **OQ-6 — Scope of the first build.** tg-7gm alone already unlocks all-of-memento (4 repos, one
   store). tg-nsj adds the two foreign stores. Build strictly in that order (proposed), or demand
   both before the next boot?
+- **OQ-7 — The zero-conf companion.** Bless drafting `SCRATCH-zero-conf-membership.md` (the
+  `zero_conf_grid_assets` design surface, feeding the parked ADR-0011: mDNS/DNS-SD service shape,
+  what the TXT record carries, the D-Z6 trust-gate default, and the two consuming seams)? Design
+  only — build order stays static-first (D-Z8). And confirm the LAN-trust default for the gate:
+  allow-list-only this round (matching `Peer.token`)?
 
 ## 6. Rulings log
 
