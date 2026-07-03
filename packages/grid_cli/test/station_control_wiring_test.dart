@@ -170,6 +170,60 @@ void main() {
       h.signals.add(ProcessSignal.sigterm);
       expect(await run.timeout(const Duration(seconds: 10)), 0);
     });
+
+    test('(rework) /status.work.ready counts only the OWNED substation\'s '
+        'ready work — a shared store\'s OTHER substation never inflates it',
+        () async {
+      final store = _tempStore();
+      final owned = Bead(
+        id: 'tgdog-owned1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      final foreign = Bead(
+        id: 'otherrig-foreign1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      final snapshot = GraphSnapshot.fromParts(
+        beads: [owned, foreign],
+        dependencies: const [],
+        readyIds: {owned.id, foreign.id},
+        capturedAt: DateTime.utc(2026, 7, 2),
+      );
+      final h = _ControlHarness(store: store, workSnapshot: snapshot);
+      addTearDown(h.dispose);
+
+      final run = h.drive();
+      final lockFile = File(StationLockService.lockPath(store.path));
+      await _until(
+        () => _controlUrlIn(lockFile) != null && _tokenIn(lockFile) != null,
+        'the lock to carry controlUrl/token after boot',
+      );
+      final controlUrl = _controlUrlIn(lockFile)!;
+      final token = _tokenIn(lockFile)!;
+
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+      final request = await client.getUrl(Uri.parse('$controlUrl/status'));
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      final response = await request.close();
+      final body =
+          jsonDecode(await response.transform(utf8.decoder).join())
+              as Map<String, Object?>;
+      final work = body['work'] as Map<String, Object?>;
+      expect(
+        work['ready'],
+        1,
+        reason:
+            'both beads are ready, but only "tgdog-owned1" is owned by the '
+            'harness\'s "tgdog" substation — "otherrig-foreign1" must never '
+            'count (the graph.readyCount regression this fix closes)',
+      );
+
+      h.signals.add(ProcessSignal.sigterm);
+      expect(await run.timeout(const Duration(seconds: 10)), 0);
+    });
   });
 }
 
@@ -197,6 +251,15 @@ String? _controlUrlIn(File lockFile) {
   try {
     final json = jsonDecode(lockFile.readAsStringSync());
     return (json as Map<String, Object?>)['controlUrl'] as String?;
+  } on Object {
+    return null;
+  }
+}
+
+String? _tokenIn(File lockFile) {
+  try {
+    final json = jsonDecode(lockFile.readAsStringSync());
+    return (json as Map<String, Object?>)['token'] as String?;
   } on Object {
     return null;
   }
@@ -236,21 +299,24 @@ class _ControlHarness {
     bool resident = true,
     Future<void> Function()? sourcesStart,
     StationControlStarter? controlStarter,
+    GraphSnapshot? workSnapshot,
   }) : _store = store,
        _resident = resident,
        _sourcesStart = sourcesStart,
-       _controlStarter = controlStarter;
+       _controlStarter = controlStarter,
+       _workSnapshot = workSnapshot;
 
   final Directory _store;
   final bool _resident;
   final Future<void> Function()? _sourcesStart;
   final StationControlStarter? _controlStarter;
+  final GraphSnapshot? _workSnapshot;
 
   /// The injected signal seam.
   final StreamController<ProcessSignal> signals =
       StreamController<ProcessSignal>();
 
-  final _FakeSnapshotSource work = _FakeSnapshotSource();
+  late final _FakeSnapshotSource work = _FakeSnapshotSource(_workSnapshot);
   late final _NoopProvider provider = _NoopProvider();
 
   late final StationSources sources = StationSources(
@@ -359,9 +425,11 @@ class _MarkerCap extends ProcessCapability {
 
 /// A fake [SnapshotSource] — a broadcast controller + a settable current.
 class _FakeSnapshotSource implements SnapshotSource {
+  _FakeSnapshotSource([this._current]);
+
   final StreamController<GraphSnapshot> _controller =
       StreamController<GraphSnapshot>.broadcast();
-  GraphSnapshot? _current;
+  final GraphSnapshot? _current;
 
   @override
   Stream<GraphSnapshot> get snapshots => _controller.stream;

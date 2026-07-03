@@ -66,7 +66,9 @@ class StationStatus {
   /// The Dart runtime version this station is running under.
   final String version;
 
-  /// The size of the owned ready frontier.
+  /// The size of the OWNED ready frontier: `readyIds` filtered by the
+  /// ownership predicate and (under resident arming) the driveable-work
+  /// boundary — never a raw, workspace-wide `readyCount` (RS-3/D-R4).
   final int ready;
 
   /// A coarse count of owned work beads currently eligible to be mounted
@@ -132,6 +134,23 @@ StationStatus buildStationStatus({
   }
   final liveSessions = sessions.values.where((s) => !s.isTerminal).length;
 
+  // The OWNED ready frontier (RS-3/D-R4 semantics): readyIds filtered by the
+  // SAME ownership predicate `mounted` applies, PLUS the driveable-work
+  // boundary WorkList's own mount gate narrows to under resident arming
+  // (A41's `isCore` allow-list, further narrowed to `isDriveable` when
+  // resident). Unfiltered `graph.readyCount` is workspace-wide `bd ready` —
+  // in a shared store that leaks OTHER substations' ready work and
+  // organizational types (epic/milestone/decision) the drive set never
+  // mounts; this must match what `up` would actually drive, not `bd ready`.
+  var ready = 0;
+  for (final id in graph.readyIds) {
+    final bead = graph.beadsById[id];
+    if (bead == null || !ownership.owns(bead)) continue;
+    if (!bead.issueType.isCore) continue;
+    if (args.resident && !bead.issueType.isDriveable) continue;
+    ready++;
+  }
+
   return StationStatus(
     substation: args.substations.join(','),
     stateStore: sources.stateWorkspace?.root,
@@ -140,7 +159,7 @@ StationStatus buildStationStatus({
     pid: pid,
     startedAt: startedAt,
     version: Platform.version,
-    ready: graph.readyCount,
+    ready: ready,
     mounted: mounted,
     liveSessions: liveSessions,
     lastSyncAt: graph.capturedAt,
