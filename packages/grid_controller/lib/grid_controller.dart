@@ -3,6 +3,10 @@
 /// Layering follows predictable-flutter: Services (stateless I/O) →
 /// Repositories (own one source, emit state) → Interactors/Selectors/
 /// Transformers → consumers. See docs/adr/ADR-0001 and ADR-0002.
+///
+/// Framework-free at the package boundary (D-A7): Futures for acts, Streams
+/// for observations, a synchronous `current` where a seed value is needed. No
+/// riverpod, no StateNotifier — implementers build notifiers/providers on top.
 library;
 
 // Models (value types — plain names per ADR-0001 Decision 2).
@@ -42,11 +46,11 @@ export 'src/diff/diff_snapshots.dart';
 export 'src/diff/graph_event.dart';
 
 // Reactivity core (Track D): the controller runtime + its seams, the
-// repository/interactor/transformer, dirty-signal sources, and the Riverpod
-// provider surface.
+// repository/interactor/transformer, and the dirty-signal sources. Streams
+// for observations, Futures for acts, a synchronous `current` for the seed
+// value — no framework deps at the package boundary (D-A7).
 export 'src/interactors/graph_sync_interactor.dart'
     show GraphSyncStats, GraphSyncInteractor;
-export 'src/providers/grid_providers.dart';
 export 'src/reactivity/beads_repository.dart';
 export 'src/reactivity/dirty_signal.dart';
 export 'src/reactivity/grid_controller_runtime.dart';
@@ -57,10 +61,9 @@ export 'src/transformers/graph_events_transformer.dart';
 
 // Reactive domain projections (Track E; ADR-0002 Decision 2): the M1 proving
 // trio — sessions, messages, molecules/steps — as freezed value types plus
-// pure selectors over graphSnapshotProvider.
+// pure project() selectors a consumer runs over a GraphSnapshot.
 export 'src/projections/agent_session.dart';
 export 'src/projections/message.dart';
 export 'src/projections/molecule.dart';
 export 'src/projections/projection_error.dart';
-export 'src/projections/projection_providers.dart';
 export 'src/projections/step.dart';

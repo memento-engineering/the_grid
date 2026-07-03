@@ -1,12 +1,11 @@
 import 'package:grid_controller/grid_controller.dart';
-import 'package:riverpod/riverpod.dart';
 import 'package:test/test.dart';
 
 import '../support/reactivity_fakes.dart';
 
 void main() {
   group('BeadsRepository.refresh', () {
-    test('baseline refresh publishes a snapshot and AsyncData state', () async {
+    test('baseline refresh publishes a snapshot and sets current', () async {
       final reader = FakeSnapshotReader(() => snap([bead('a')], ready: {'a'}));
       final repo = BeadsRepository(reader);
       addTearDown(repo.dispose);
@@ -18,7 +17,6 @@ void main() {
 
       expect(snapshots, hasLength(1));
       expect(repo.current, isNotNull);
-      expect(repo.state, isA<AsyncData<GraphSnapshot>>());
       expect(repo.recentEvents, [isA<SnapshotInitialized>()]);
       await sub.cancel();
     });
@@ -54,14 +52,19 @@ void main() {
       await sub.cancel();
     });
 
-    test('a failed read becomes AsyncError without throwing', () async {
+    test('a failed read publishes on errors without throwing', () async {
       final reader = FakeSnapshotReader(() => snap([bead('a')]))
         ..error = StateError('dolt down');
       final repo = BeadsRepository(reader);
       addTearDown(repo.dispose);
 
+      final errors = <RefreshError>[];
+      final sub = repo.errors.listen(errors.add);
       await repo.refresh(); // must not throw
-      expect(repo.state, isA<AsyncError<GraphSnapshot>>());
+      await Future<void>.delayed(Duration.zero);
+      expect(errors, hasLength(1));
+      expect(errors.single.error, isA<StateError>());
+      await sub.cancel();
     });
 
     test('readyBeads maps the ready set to beads', () async {
