@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:grid_controller/grid_controller.dart';
-import 'package:riverpod/riverpod.dart';
 import 'package:test/test.dart';
 
 import '../support/reactivity_fakes.dart';
@@ -114,34 +113,23 @@ void main() {
       expect(events.whereType<BeadClosed>(), hasLength(1));
       await sub.cancel();
     });
-  });
 
-  group('Riverpod provider surface', () {
-    test('providers expose snapshot, ready set, and a bead by id', () async {
-      final reader = FakeSnapshotReader(
-        () => snap([bead('a'), bead('b')], ready: {'b'}),
-      );
+    test('errors forwards a failed refresh from the repository', () async {
+      final reader = FakeSnapshotReader(() => snap([bead('a')]))
+        ..error = StateError('dolt down');
       final runtime = GridControllerRuntime(
         reader: reader,
         dirtySources: const [],
       );
-      await runtime.start();
+      addTearDown(runtime.dispose);
 
-      final container = ProviderContainer(
-        overrides: [gridRuntimeProvider.overrideWithValue(runtime)],
-      );
-      // An active listener drives the seeded StreamProvider's generator.
-      container.listen(graphSnapshotProvider, (_, __) {});
-      addTearDown(() async {
-        container.dispose();
-        await runtime.dispose();
-      });
-
-      final snapshot = await container.read(graphSnapshotProvider.future);
-      expect(snapshot.beadCount, 2);
-      expect(container.read(readyBeadsProvider).map((b) => b.id), ['b']);
-      expect(container.read(beadProvider('a'))?.id, 'a');
-      expect(container.read(gridStatsProvider).refreshCount, greaterThan(0));
+      final errors = <RefreshError>[];
+      final sub = runtime.errors.listen(errors.add);
+      await runtime.start(); // baseline read fails
+      await Future<void>.delayed(Duration.zero);
+      expect(errors, hasLength(1));
+      expect(errors.single.error, isA<StateError>());
+      await sub.cancel();
     });
   });
 }

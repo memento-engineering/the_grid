@@ -1,8 +1,8 @@
 name: grid_controller
 description: >-
   Reactive beads controller SDK — bd CLI + Dolt SQL services, snapshot
-  repository, structural diff, typed graph events, Riverpod providers,
-  domain projections.
+  repository, structural diff, typed graph events, domain projections.
+  Framework-free: Streams for observations, Futures for acts.
 publish_to: none
 resolution: workspace
 
@@ -16,7 +16,6 @@ dependencies:
   meta: ^1.16.0
   mysql_client: ^0.0.27
   path: ^1.9.0
-  riverpod: ^3.0.0
   stream_transform: ^2.1.0
   watcher: ^1.1.0
   yaml: ^3.1.2

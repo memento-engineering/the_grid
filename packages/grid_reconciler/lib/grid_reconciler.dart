@@ -29,10 +29,9 @@ export 'src/convergence/reducer_event.dart';
 export 'src/convergence/verdict.dart';
 
 // Track A — projections over the GraphSnapshot (reuses grid_controller's
-// ProjectionResult boundary) and their Riverpod selectors (ADR-0002 D2).
+// ProjectionResult boundary; ADR-0002 D2 style).
 export 'src/projections/convergence.dart';
 export 'src/projections/wisp.dart';
-export 'src/providers/convergence_providers.dart';
 
 // Track B — the pure convergence reducer (ADR-0003 Decision 2): gc's
 // HandleWispClosed 9-step + operator/trigger handlers as a pure function.

@@ -14,7 +14,6 @@ dependencies:
   freezed_annotation: ^3.0.0
   grid_controller: any
   path: ^1.9.0
-  riverpod: ^3.0.0
 
 dev_dependencies:
   build_runner: ^2.4.0

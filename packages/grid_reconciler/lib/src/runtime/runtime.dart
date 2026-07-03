@@ -18,6 +18,5 @@ export 'graph_event_adapter.dart';
 export 'ownership.dart';
 export 'per_bead_queue.dart';
 export 'reconciler_runtime.dart';
-export 'runtime_providers.dart';
 export 'shadow_runtime.dart';
 export 'write_through_overlay.dart';

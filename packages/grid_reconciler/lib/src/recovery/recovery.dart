@@ -20,4 +20,3 @@ export 'recovery_action.dart';
 export 'recovery_event.dart';
 export 'recovery_outcome.dart';
 export 'recovery_pass.dart';
-export 'recovery_providers.dart';

@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'package:riverpod/riverpod.dart';
-
 import '../diff/graph_event.dart';
 import '../interactors/graph_sync_interactor.dart';
 import '../models/bead.dart';
@@ -55,9 +53,8 @@ class GridControllerRuntime {
   // ----- observable surface -----
   Stream<GraphSnapshot> get snapshots => repository.snapshots;
   Stream<GraphEvent> get events => repository.events;
-  Stream<AsyncValue<GraphSnapshot>> get states => repository.states;
+  Stream<RefreshError> get errors => repository.errors;
   GraphSnapshot? get current => repository.current;
-  AsyncValue<GraphSnapshot> get state => repository.state;
   List<Bead> get readyBeads => repository.readyBeads;
   List<GraphEvent> get recentEvents => repository.recentEvents;
   Bead? bead(String id) => repository.bead(id);
