@@ -140,4 +140,58 @@ void main() {
       },
     );
   });
+
+  group('StationArgs(rootPath: ...) — the deprecated back-compat alias '
+      '(tg-7gm rework r2)', () {
+    test('a bare rootPath-only construction folds into `roots` under the '
+        'FIRST substation\'s name — space_station\'s up_command still '
+        'compiles + behaves unchanged until it migrates', () {
+      const args = StationArgs(
+        substations: {'tgdog'},
+        rootPath: '/tmp/legacy-root',
+      );
+      expect(args.roots, {'tgdog': const RootSpec(path: '/tmp/legacy-root')});
+    });
+
+    test(
+      'an explicit `roots` entry under the same name wins over rootPath',
+      () {
+        const args = StationArgs(
+          substations: {'tgdog'},
+          roots: {'tgdog': RootSpec(path: '/tmp/explicit')},
+          rootPath: '/tmp/legacy-root',
+        );
+        expect(args.roots, {'tgdog': const RootSpec(path: '/tmp/explicit')});
+      },
+    );
+
+    test('rootPath is folded ALONGSIDE an explicit `roots` entry under a '
+        'DIFFERENT name — both survive', () {
+      const args = StationArgs(
+        substations: {'tgdog'},
+        roots: {'power_station': RootSpec(path: '/tmp/power')},
+        rootPath: '/tmp/legacy-root',
+      );
+      expect(args.roots, {
+        'power_station': const RootSpec(path: '/tmp/power'),
+        'tgdog': const RootSpec(path: '/tmp/legacy-root'),
+      });
+    });
+
+    test('no rootPath, no roots: unchanged (empty)', () {
+      const args = StationArgs(substations: {'tgdog'});
+      expect(args.roots, isEmpty);
+    });
+
+    test(
+      'the deprecated `rootPath` getter reads back the raw value unfolded',
+      () {
+        const args = StationArgs(
+          substations: {'tgdog'},
+          rootPath: '/tmp/legacy-root',
+        );
+        expect(args.rootPath, '/tmp/legacy-root');
+      },
+    );
+  });
 }

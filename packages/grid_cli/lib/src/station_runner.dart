@@ -93,6 +93,13 @@ class StationRefusal implements Exception {
 
 /// Adds the STANDARD station flags to an asset command's [parser] — composition,
 /// not inheritance (a runner adds these next to its own asset flags).
+///
+/// **Mirror-drift note (tg-7gm r2):** `space_station`'s `up` command
+/// hand-mirrors this flag surface (its OWN `ArgParser`, not a call through
+/// here — it lives in a sibling repo this worktree cannot reach), most
+/// recently missing this function's `--root` grammar change (bare →
+/// repeatable `<name>=<path>[@head]`). Bringing that mirror back in sync is
+/// deliberately its OWN bead — not attempted here.
 void addStationFlags(ArgParser parser) {
   parser
     ..addMultiOption(
@@ -278,7 +285,15 @@ class StationArgs {
   const StationArgs({
     required this.substations,
     this.provider = RuntimeProviderKind.subprocess,
-    this.roots = const <String, RootSpec>{},
+    Map<String, RootSpec> roots = const <String, RootSpec>{},
+    @Deprecated(
+      'Reinstated ONLY as a back-compat alias (tg-7gm rework r2) so a caller '
+      'still constructing `StationArgs(rootPath: ...)` (e.g. '
+      "space_station's `up_command`) compiles unchanged until it migrates. "
+      'Use `roots` (`--root <name>=<path>`) for new code — see the [roots] '
+      'getter doc for the fold.',
+    )
+    String? rootPath,
     this.head,
     this.workspacePath,
     this.stateWorkspacePath,
@@ -291,7 +306,8 @@ class StationArgs {
     this.runFor,
     this.resident = false,
     this.controlPort = 0,
-  });
+  }) : _roots = roots,
+       _rootPath = rootPath;
 
   /// Parses the standard flags added by [addStationFlags]. Throws
   /// [FormatException] on a malformed/duplicate `--root` registration (the
@@ -344,11 +360,32 @@ class StationArgs {
   /// The runtime provider kind for agent spawns.
   final RuntimeProviderKind provider;
 
+  final Map<String, RootSpec> _roots;
+  final String? _rootPath;
+
   /// The registered worktree roots (tg-7gm), keyed by registration NAME — a
   /// name equal to an owned substation is that substation's DEFAULT root; any
   /// other name is an EXTRA root a bead opts into via `metadata.grid.root`.
   /// At least one entry is required to arm a live run.
-  final Map<String, RootSpec> roots;
+  ///
+  /// Folds the deprecated [rootPath] alias in under the FIRST substation's
+  /// name (or `''` when [substations] is empty) — but only when non-null AND
+  /// no explicit `roots` entry already claims that name (an explicit
+  /// registration always wins). This reproduces the pre-tg-7gm single-root
+  /// shape exactly, so a caller still constructing `StationArgs(rootPath:
+  /// ...)` behaves as it did before the multi-root rework.
+  Map<String, RootSpec> get roots {
+    final legacy = _rootPath;
+    if (legacy == null) return _roots;
+    final name = substations.isNotEmpty ? substations.first : '';
+    if (_roots.containsKey(name)) return _roots;
+    return {..._roots, name: RootSpec(path: legacy)};
+  }
+
+  /// DEPRECATED (tg-7gm rework r2) — the single legacy root path, reinstated
+  /// only as a back-compat alias over [roots] (see its doc for the fold).
+  @Deprecated('Use `roots` (`--root <name>=<path>`).')
+  String? get rootPath => _rootPath;
 
   /// The assigned base branch worktrees cut from (null ⇒ probe origin/HEAD).
   final String? head;
