@@ -24,3 +24,6 @@ packages/*/extension/devtools/build/
 # Never tracked — they are throwaway working copies of this repo.
 .grid/
 *.iml
+
+# IDE (melos bootstrap regenerates IntelliJ run configs per checkout)
+.idea/
