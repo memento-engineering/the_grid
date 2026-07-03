@@ -1,8 +1,8 @@
 // Track A5 — the four derailment-invariants AT DEPTH with the NEW Track A seams
 // in play: a sibling-reading ServiceCapability (A2) + a Gate park (A3) + a flare
-// emit (A4), inside a committee-shaped (critics → route) sub-formula. Each new
+// emit (A4), inside a committee-shaped (critics → route) sub-circuit. Each new
 // assertion carries a positive control so it cannot be vacuous. Zero I/O —
-// fakes + the recording chokepoint (an inline formula keeps grid_engine/test
+// fakes + the recording chokepoint (an inline circuit keeps grid_engine/test
 // free of grid_assets, like track_j's _burn).
 import 'dart:async';
 
@@ -88,7 +88,7 @@ const _caps = <String, Capability>{
   'land': _LandCap(),
 };
 
-const _review = Formula(
+const _review = Circuit(
   id: 'review',
   terminalStepId: 'route',
   steps: [
@@ -103,12 +103,12 @@ const _review = Formula(
   ],
 );
 
-const _code = Formula(
+const _code = Circuit(
   id: 'code',
   terminalStepId: 'land',
   steps: [
     CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-    SubFormulaStep(stepId: 'review', formulaId: 'review', dependsOn: {'agent'}),
+    SubCircuitStep(stepId: 'review', circuitId: 'review', dependsOn: {'agent'}),
     CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'review'}),
   ],
 );
@@ -162,7 +162,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 /// Mounts the committee-wired `code` tree with FAKE hosts (no per-host
 /// subscription) — for the invariant-1 flush-graph gate.
 ({TreeOwner owner, Branch root}) _mountFake(JoinedSnapshotNotifier joined) {
-  final reg = RecordingCapabilityRegistry(formulas: const {'review': _review});
+  final reg = RecordingCapabilityRegistry(circuits: const {'review': _review});
   final fakes = buildFakes();
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -173,7 +173,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
         child: InheritedSeed<CapabilityRegistry>(
           value: reg,
           child: InheritedSeed<SessionResolver>(
-            value: FormulaResolver((_) => _code),
+            value: CircuitResolver((_) => _code),
             child: Station([
               SubstationScope(
                 configNotifier: SubstationConfigNotifier(_tg),
@@ -200,7 +200,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
   final flares = _RecordingTransport();
   final registry = DefaultCapabilityRegistry(
     capabilities: _caps,
-    formulas: const {'review': _review},
+    circuits: const {'review': _review},
     clock: () => DateTime(2026),
   );
   final owner = TreeOwner();
@@ -212,7 +212,7 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
         child: InheritedSeed<CapabilityRegistry>(
           value: registry,
           child: InheritedSeed<SessionResolver>(
-            value: FormulaResolver((_) => _code),
+            value: CircuitResolver((_) => _code),
             child: Station([
               SubstationScope(
                 configNotifier: SubstationConfigNotifier(config),
@@ -249,7 +249,7 @@ Iterable<Branch> _hostsFor(Branch root, String stepId) => _all(root).where(
 );
 
 /// A cursor with the agent + both critics already complete (so the review
-/// sub-formula's route mounts), plus the supplied critic [grades].
+/// sub-circuit's route mounts), plus the supplied critic [grades].
 SessionProjection _routeReady(Map<String, String> grades) => _session(
   'tg-b',
   cursor: const {
@@ -265,7 +265,7 @@ SessionProjection _routeReady(Map<String, String> grades) => _session(
 
 void main() {
   group('A5 invariant 1 AT DEPTH (with the ambient sibling seam present)', () {
-    test('a deep committee cursor tick → flush() == [WorkList]; no FormulaScope '
+    test('a deep committee cursor tick → flush() == [WorkList]; no CircuitScope '
         'is in the drain (the ambient results/cursor seam added no subscription)',
         () {
       final joined = JoinedSnapshotNotifier(
@@ -295,7 +295,7 @@ void main() {
       final flushed = m.owner.flush();
 
       expect(flushed, equals([_whereSeed(m.root, (s) => s is WorkList)]));
-      final scopes = _all(m.root).where((b) => b.seed is FormulaScope).toList();
+      final scopes = _all(m.root).where((b) => b.seed is CircuitScope).toList();
       // Positive control: the committee tree really is deep (outer + nested).
       expect(scopes.length, greaterThanOrEqualTo(2));
       for (final scope in scopes) {

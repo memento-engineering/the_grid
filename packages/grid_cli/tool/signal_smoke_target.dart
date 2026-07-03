@@ -34,10 +34,10 @@ Future<void> main() async {
     workRoot: live.workRoot,
     groups: live.groups,
     freshnessBarrier: live.freshnessBarrier,
-    resolver: const FormulaResolver(_formulaFor),
+    resolver: const CircuitResolver(_circuitFor),
     registry: DefaultCapabilityRegistry(
       capabilities: const {'noop': _NoopCap()},
-      formulas: const {'noop': _noopFormula},
+      circuits: const {'noop': _noopCircuit},
     ),
   );
   exitCode = await driveStation(
@@ -67,7 +67,7 @@ Stream<ProcessSignal> _announcingSignals() {
 
 // The empty work source mounts nothing, but the composer requires an asset
 // trio (ADR-0008 D1: no framework default) — a minimal never-run one.
-const Formula _noopFormula = Formula(
+const Circuit _noopCircuit = Circuit(
   id: 'noop',
   terminalStepId: 'noop',
   steps: [
@@ -75,7 +75,7 @@ const Formula _noopFormula = Formula(
   ],
 );
 
-Formula _formulaFor(Bead bead) => _noopFormula;
+Circuit _circuitFor(Bead bead) => _noopCircuit;
 
 class _NoopCap extends ProcessCapability {
   const _NoopCap();

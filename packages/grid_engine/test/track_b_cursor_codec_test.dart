@@ -1,7 +1,7 @@
 // Track B — the per-node reentrant cursor codec (D-3): the shared contract.
 //
 // FLAT, merge-safe `grid.cursor.{nodePath}.{field}` keys on the_grid's OWN
-// session bead round-trip a FormulaCursor; disjoint nodes never collide; the
+// session bead round-trip a CircuitCursor; disjoint nodes never collide; the
 // codec boundary (rig/work_bead) is untouched, and a stray legacy `grid.phase`
 // key is simply ignored.
 //
@@ -56,7 +56,7 @@ void main() {
     });
   });
 
-  group('Track B — projectFormulaCursor (the read)', () {
+  group('Track B — projectCircuitCursor (the read)', () {
     test('round-trips a multi-node cursor through metadata', () {
       final cursor = <String, NodeCursor>{
         'b/build': const NodeCursor(state: StepState.complete),
@@ -73,7 +73,7 @@ void main() {
       final metadata = <String, dynamic>{
         for (final e in cursor.entries) ...nodeCursorMetadata(e.key, e.value),
       };
-      expect(projectFormulaCursor(_sessionBead(metadata)), cursor);
+      expect(projectCircuitCursor(_sessionBead(metadata)), cursor);
     });
 
     test('disjoint nodes merge without collision (D-1/D-3 safety)', () {
@@ -82,7 +82,7 @@ void main() {
       final a = nodeCursorMetadata('n/x', const NodeCursor(state: StepState.complete));
       final b = nodeCursorMetadata('n/y', const NodeCursor(state: StepState.running));
       final merged = <String, dynamic>{...a, ...b};
-      final cursor = projectFormulaCursor(_sessionBead(merged));
+      final cursor = projectCircuitCursor(_sessionBead(merged));
       expect(cursor['n/x']!.state, StepState.complete);
       expect(cursor['n/y']!.state, StepState.running);
     });
@@ -90,9 +90,9 @@ void main() {
     test('every StepState name round-trips; unknown → pending', () {
       for (final s in StepState.values) {
         final meta = nodeCursorMetadata('p', NodeCursor(state: s));
-        expect(projectFormulaCursor(_sessionBead(meta))['p']!.state, s);
+        expect(projectCircuitCursor(_sessionBead(meta))['p']!.state, s);
       }
-      final bogus = projectFormulaCursor(
+      final bogus = projectCircuitCursor(
         _sessionBead(const {'grid.cursor.p.state': 'nonsense'}),
       );
       expect(bogus['p']!.state, StepState.pending);
@@ -100,7 +100,7 @@ void main() {
 
     test('numeric metadata read back as num (not String) still parses', () {
       // bd export can surface numbers as JSON numbers; the codec coerces.
-      final cursor = projectFormulaCursor(
+      final cursor = projectCircuitCursor(
         _sessionBead(const {
           'grid.cursor.p.state': 'running',
           'grid.cursor.p.pgid': 4242, // a num, not a string
@@ -112,7 +112,7 @@ void main() {
     });
 
     test('a malformed cursor key (no field segment) is skipped, not thrown', () {
-      final cursor = projectFormulaCursor(
+      final cursor = projectCircuitCursor(
         _sessionBead(const {
           'grid.cursor.': 'x', // no path, no field
           'grid.cursor.justpath': 'y', // no field separator
@@ -124,8 +124,8 @@ void main() {
   });
 
   group('Track B — codec boundary untouched (A37 / the law)', () {
-    test('projectFormulaCursor ignores rig/work_bead/grid.phase keys', () {
-      final cursor = projectFormulaCursor(
+    test('projectCircuitCursor ignores rig/work_bead/grid.phase keys', () {
+      final cursor = projectCircuitCursor(
         _sessionBead(const {
           'rig': 'tgdog',
           'work_bead': 'tg-1',

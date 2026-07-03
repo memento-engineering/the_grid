@@ -15,7 +15,7 @@ library;
 import 'package:grid_controller/grid_controller.dart';
 
 import '../sdk/cursor.dart';
-import '../sdk/formula.dart';
+import '../sdk/circuit.dart';
 import 'session_projection.dart';
 
 /// Metadata keys on a the_grid session bead. `work_bead` + `rig` are stamped at
@@ -118,9 +118,9 @@ abstract final class CursorKeys {
 /// recorded on the_grid's OWN session bead so a finished/ready step's artifact is
 /// durable (ADR-0006 D3: "record the PR on the lifecycle bead"). DISJOINT from
 /// the [CursorKeys] namespace (`grid.result.` vs `grid.cursor.`), so
-/// [projectFormulaCursor] never misreads a result key as cursor state; flat +
+/// [projectCircuitCursor] never misreads a result key as cursor state; flat +
 /// merge-safe like the cursor (D-1/D-3). Read back pull-free by a dependent step
-/// via [projectFormulaResults] → `SessionProjection.results` → the `SiblingView`
+/// via [projectCircuitResults] → `SessionProjection.results` → the `SiblingView`
 /// (a `route`/`burn-host` reads a sibling's grade/endpoint — never a re-query,
 /// A39). Also the human-/audit-facing record of what a step produced.
 abstract final class ResultKeys {
@@ -255,12 +255,12 @@ Map<String, String> nodeResultMetadata(
       ResultKeys.keyFor(nodePath, entry.key): entry.value,
 };
 
-/// Projects every `grid.cursor.*` key on [sessionBead] into a [FormulaCursor],
+/// Projects every `grid.cursor.*` key on [sessionBead] into a [CircuitCursor],
 /// keyed by `nodePath` (the read half of [nodeCursorMetadata]). A node's
 /// `nodePath` is everything between the prefix and the final `.field` segment.
 /// Non-cursor metadata is ignored; a malformed key (no field segment) is
 /// skipped.
-FormulaCursor projectFormulaCursor(Bead sessionBead) {
+CircuitCursor projectCircuitCursor(Bead sessionBead) {
   final byPath = <String, Map<String, Object?>>{};
   for (final entry in sessionBead.metadata.entries) {
     final key = entry.key;
@@ -294,10 +294,10 @@ FormulaCursor projectFormulaCursor(Bead sessionBead) {
 }
 
 /// Projects every `grid.result.*` key on [sessionBead] into a per-node result
-/// map (the read half of [nodeResultMetadata]). Mirrors [projectFormulaCursor]'s
+/// map (the read half of [nodeResultMetadata]). Mirrors [projectCircuitCursor]'s
 /// key parsing: `grid.result.{nodePath}.{field}` → results[nodePath][field].
 /// Values are stringified; a malformed key (no field segment) is skipped.
-Map<String, Map<String, String>> projectFormulaResults(Bead sessionBead) {
+Map<String, Map<String, String>> projectCircuitResults(Bead sessionBead) {
   final results = <String, Map<String, String>>{};
   for (final entry in sessionBead.metadata.entries) {
     final key = entry.key;
@@ -337,13 +337,13 @@ SessionProjection projectSession(Bead sessionBead) {
     pgid: _asInt(metadata[SessionBeadKeys.pgid]),
     pid: _asInt(metadata[SessionBeadKeys.pid]),
     token: metadata[SessionBeadKeys.token] as String?,
-    // The per-node reentrant cursor (D-3) — threaded down to FormulaScope
+    // The per-node reentrant cursor (D-3) — threaded down to CircuitScope
     // pull-free (A39). Empty for a legacy/freshly-minted session with no
     // `grid.cursor.*` keys yet.
-    cursor: projectFormulaCursor(sessionBead),
+    cursor: projectCircuitCursor(sessionBead),
     // The per-node result payloads (D-5) — threaded down pull-free so a `route`
     // step reads its siblings' grades. Empty until a step records a result.
-    results: projectFormulaResults(sessionBead),
+    results: projectCircuitResults(sessionBead),
     // Capture-only session lifecycle telemetry (FT-1) — surfaced typed; null
     // for a legacy bead / an open session.
     startedAt: _parseDate(metadata[SessionBeadKeys.startedAt]),

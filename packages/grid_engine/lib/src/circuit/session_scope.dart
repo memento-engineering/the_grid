@@ -1,9 +1,9 @@
 /// The engine-private session lifecycle owner (ADR-0008 D4 / M4-P1 D-2).
 ///
-/// `SessionScope` is mounted by `WorkBead` ABOVE the formula fan-out (the
+/// `SessionScope` is mounted by `WorkBead` ABOVE the circuit fan-out (the
 /// resolver returns it). It **adopt-or-mints** the the_grid session bead, holds
 /// `{resolving | ready | failed}`, and on `ready` provides a stable
-/// `InheritedSeed<SessionHandle>` over the `FormulaScope` so the inflater + every
+/// `InheritedSeed<SessionHandle>` over the `CircuitScope` so the inflater + every
 /// `CapabilityHost` attach to the SAME session — establishing the session is a
 /// tree *state* (a loading state, `const Idle()` until resolved), not a
 /// synchronous id injection. This is the "Route resolves before its Page
@@ -13,7 +13,7 @@
 /// cursor + results) — the values an effect reads with the non-binding lookup.
 ///
 /// It owns the session lifecycle END-TO-END: it also CLOSES the session on the
-/// formula's positive terminal (D-2 — one owner for open+close, not the terminal
+/// circuit's positive terminal (D-2 — one owner for open+close, not the terminal
 /// step's host). The close is SCHEDULED off `build` (never a write IN `build` —
 /// invariant 2) and latched once. Breaker-exhaustion close + escalation fold in
 /// at Track G.
@@ -37,37 +37,37 @@ import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
-import '../sdk/formula.dart';
+import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
 import 'capability_registry.dart';
-import 'formula_scope.dart';
+import 'circuit_scope.dart';
 import 'session_handle.dart';
 
-/// The adopt-or-mint session lifecycle owner for one work [bead]'s [formula]
+/// The adopt-or-mint session lifecycle owner for one work [bead]'s [circuit]
 /// (D-2). Key it `ValueKey('${bead.id}:session')` so it persists across cursor
 /// ticks while the work node keeps its branch identity.
 class SessionScope extends StatefulSeed {
-  /// Creates the scope for [bead] running [formula], with the bead's linked
+  /// Creates the scope for [bead] running [circuit], with the bead's linked
   /// [existingSession] (null until a session exists — then `SessionScope` mints
   /// one; non-null → it adopts).
   const SessionScope({
     required this.bead,
-    required this.formula,
+    required this.circuit,
     this.existingSession,
     super.key,
   });
 
-  /// The work bead this session drives (its id is the formula's root nodePath
+  /// The work bead this session drives (its id is the circuit's root nodePath
   /// and the mint's `work_bead` linkage).
   final Bead bead;
 
-  /// The root formula for this work bead.
-  final Formula formula;
+  /// The root circuit for this work bead.
+  final Circuit circuit;
 
   /// The bead's linked session projection (the JOIN row) — null when no session
   /// exists yet (mint), non-null once the bridge projects one (adopt). Its
   /// [SessionProjection.cursor] threads the per-node cursor down to
-  /// `FormulaScope` pull-free (A39).
+  /// `CircuitScope` pull-free (A39).
   final SessionProjection? existingSession;
 
   @override
@@ -79,7 +79,7 @@ class SessionScope extends StatefulSeed {
 /// the captured `_ctx`) are the same discipline as `CapabilityHostState`.
 class SessionScopeState extends State<SessionScope> {
   /// The the_grid-internal escalation marker key (NOT a codec-boundary key) — a
-  /// human picks it up when a formula's breaker exhausts (D-5).
+  /// human picks it up when a circuit's breaker exhausts (D-5).
   static const _escalationKey = 'grid.escalation';
 
   /// The capture-only escalation-diagnostic key (FT-1, tg-pez) — the final
@@ -232,10 +232,10 @@ class SessionScopeState extends State<SessionScope> {
         context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
     if (registry != null && !_terminalScheduled) {
       final broken = firstBrokenNode(
-        seed.formula,
+        seed.circuit,
         cursor,
         seed.bead.id,
-        formulaById: registry.formula,
+        circuitById: registry.circuit,
       );
       if (broken != null) {
         // Capture-only (FT-1): record WHICH node exhausted + its reason (read
@@ -245,11 +245,11 @@ class SessionScopeState extends State<SessionScope> {
           '${broken.nodePath}: ${broken.node.failureReason ?? ''}',
         );
         _scheduleEscalation(id, reason);
-      } else if (isFormulaComplete(
-        seed.formula,
+      } else if (isCircuitComplete(
+        seed.circuit,
         cursor,
         seed.bead.id,
-        formulaById: registry.formula,
+        circuitById: registry.circuit,
       )) {
         _scheduleClose(id);
       }
@@ -279,8 +279,8 @@ class SessionScopeState extends State<SessionScope> {
         value: workspace,
         child: InheritedSeed<SiblingView>(
           value: SiblingView(cursor: cursor, results: results),
-          child: FormulaScope(
-            formula: seed.formula,
+          child: CircuitScope(
+            circuit: seed.circuit,
             cursor: cursor,
             nodePath: seed.bead.id,
           ),

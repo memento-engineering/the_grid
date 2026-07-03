@@ -12,7 +12,7 @@
 /// allocation (in `didChangeDependencies`, so teardown is guaranteed on EVERY
 /// exit path) and **kicks** `startOrAdopt` once; on a context change resolves
 /// via `canUpdate` → `update` (or leaves the running effect — the base families
-/// re-key rather than update, and the FormulaScope owns the key); on unmount
+/// re-key rather than update, and the CircuitScope owns the key); on unmount
 /// kicks `dispose` (kill); and **persists** every [AllocationReport] the effect
 /// pushes — off `build`, latched, through the single [StationBeadWriter].
 ///
@@ -40,7 +40,7 @@ import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
-import '../sdk/formula.dart';
+import '../sdk/circuit.dart';
 import 'capability_registry.dart';
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
@@ -83,7 +83,7 @@ class CapabilityHostState extends State<CapabilityHost> {
   String get _sessionId => seed.mount.session.sessionId;
   String get _nodePath => seed.mount.nodePath;
 
-  /// The work bead id — the root segment of the nodePath (the root formula's
+  /// The work bead id — the root segment of the nodePath (the root circuit's
   /// nodePath IS the bead id, so every step path is `beadId/...`).
   String get _beadId =>
       _nodePath.contains('/') ? _nodePath.split('/').first : _nodePath;
@@ -135,7 +135,7 @@ class CapabilityHostState extends State<CapabilityHost> {
       // is the norm). Resolve coherently: `update` in place if the type supports
       // it, else leave the running effect untouched — the base process/service
       // families are not updatable, and a genuine replace is a re-key the
-      // FormulaScope owns (a `restartCount` bump → a new key → a fresh mount).
+      // CircuitScope owns (a `restartCount` bump → a new key → a fresh mount).
       // We NEVER re-key here.
       final next = seed.capability.createAllocation(_buildAllocationContext());
       if (existing.canUpdate(next)) unawaited(existing.update(next));

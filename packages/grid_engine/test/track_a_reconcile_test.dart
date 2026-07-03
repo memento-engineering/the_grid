@@ -5,7 +5,7 @@
 //
 // In the reentrant model the WorkBead's child is the bead's whole work SUBTREE
 // (a stable, bead-keyed root); progress is the per-node cursor advancing INSIDE
-// that subtree (FormulaScope — Track C/D/H), NOT a swap at the WorkBead level.
+// that subtree (CircuitScope — Track C/D/H), NOT a swap at the WorkBead level.
 // So this file pins the WorkBead/WorkList reconcile + the child-set predicate;
 // the in-subtree step swap is proven by track_c/track_h.
 //

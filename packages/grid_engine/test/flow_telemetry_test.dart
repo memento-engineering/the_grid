@@ -161,7 +161,7 @@ void main() {
         failureReason: 'partial',
       );
       final meta = nodeCursorMetadata('b/step', node);
-      final back = projectFormulaCursor(_sessionBead(meta))['b/step']!;
+      final back = projectCircuitCursor(_sessionBead(meta))['b/step']!;
       expect(back.startedAt, DateTime.utc(2026, 6, 1, 10));
       expect(back.finishedAt, DateTime.utc(2026, 6, 1, 10, 0, 5));
       expect(back.durationMs, 5000);
@@ -172,7 +172,7 @@ void main() {
 
     test('a legacy cursor with NO telemetry keys projects null fields (never '
         'throws)', () {
-      final back = projectFormulaCursor(
+      final back = projectCircuitCursor(
         _sessionBead(const {'grid.cursor.b/step.state': 'complete'}),
       )['b/step']!;
       expect(back.startedAt, isNull);
@@ -291,7 +291,7 @@ void main() {
       // Round-trip: the persisted write projects back into a NodeCursor whose
       // failureReason is intact (a mutation dropping the write, or reading the
       // wrong key, loses it here).
-      final node = projectFormulaCursor(_sessionBead(meta))['tg-1/agent']!;
+      final node = projectCircuitCursor(_sessionBead(meta))['tg-1/agent']!;
       expect(node.state, StepState.failed);
       expect(node.failureReason, 'the harness refused: exit 42');
       expect(node.startedAt, isNotNull);

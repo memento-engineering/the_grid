@@ -3,8 +3,8 @@
 // Promoted to a public testing-support library (`package:grid_engine/testing.dart`)
 // so BOTH grid_engine's own suite AND downstream asset packages (grid_assets)
 // drive the SAME controllable transport + recording chokepoint. The
-// code-asset-specific helpers (`kCodeResolver`/`_codeFormula`) do NOT live here
-// — they reference the moved `kCodeFormula`/`buildCodeRegistry` opinions and so
+// code-asset-specific helpers (`kCodeResolver`/`_codeCircuit`) do NOT live here
+// — they reference the moved `kCodeCircuit`/`buildCodeRegistry` opinions and so
 // belong in grid_assets's test support. Everything here is pure-Dart: no live
 // tg/gc/agent/git/network.
 import 'dart:async';
@@ -482,8 +482,8 @@ Bead bead(String id) =>
 /// projects + keys by `work_bead`, carrying the OWNED rig marker (so the
 /// chokepoint's ownership re-check passes) + the per-node reentrant cursor: each
 /// step id in [completed] is marked `complete` at nodePath `'$workBeadId/$step'`
-/// (the read half of the cursor the FormulaScope frontier advances on). The
-/// `code` formula's steps are `agent` → `verify` → `land`, so
+/// (the read half of the cursor the CircuitScope frontier advances on). The
+/// `code` circuit's steps are `agent` → `verify` → `land`, so
 /// `completed: {'agent'}` makes `verify` eligible, `{'agent','verify'}` makes
 /// `land` eligible, and `{'agent','verify','land'}` is the positive terminal.
 Bead sessionBead({
@@ -506,27 +506,27 @@ Bead sessionBead({
 // ---------------------------------------------------------------------------
 // The reentrant inflater fakes (Track C/D): a CapabilityRegistry whose `host`
 // returns a recording leaf (the spawn proxy, like the Track A _FakeEffect) and
-// whose `formula` resolves from an injected map; a fixed clock keeps the
+// whose `circuit` resolves from an injected map; a fixed clock keeps the
 // frontier predicate deterministic.
 // ---------------------------------------------------------------------------
 
 /// A recording [CapabilityRegistry]: `host` mounts a fake leaf that records
 /// `START`/`STOP <capabilityId>(<sessionId>/<nodePath>)` so a test asserts the
-/// inflation frontier AND the disjoint per-session routing; `formula` resolves
-/// from [formulas]; `now` is a fixed [clock].
+/// inflation frontier AND the disjoint per-session routing; `circuit` resolves
+/// from [circuits]; `now` is a fixed [clock].
 class RecordingCapabilityRegistry implements CapabilityRegistry {
-  /// Creates the recorder over the injected [formulas] + fixed [clock], or an
+  /// Creates the recorder over the injected [circuits] + fixed [clock], or an
   /// ADVANCING [nowFn] (FT-1, tg-pez) that returns a fresh instant per `now()`
   /// call so a test can prove `startedAt < finishedAt` / a non-zero `durationMs`
   /// (use [advancingClock]). [nowFn] wins when both are supplied.
   RecordingCapabilityRegistry({
-    Map<String, Formula> formulas = const {},
+    Map<String, Circuit> circuits = const {},
     DateTime? clock,
     DateTime Function()? nowFn,
-  }) : _formulas = formulas,
+  }) : _circuits = circuits,
        _now = nowFn ?? (() => clock ?? DateTime(2026));
 
-  final Map<String, Formula> _formulas;
+  final Map<String, Circuit> _circuits;
   final DateTime Function() _now;
 
   /// Leaf lifecycle in mount/unmount order — the observable proxy for
@@ -534,7 +534,7 @@ class RecordingCapabilityRegistry implements CapabilityRegistry {
   final List<String> events = [];
 
   @override
-  Formula? formula(String formulaId) => _formulas[formulaId];
+  Circuit? circuit(String circuitId) => _circuits[circuitId];
 
   @override
   DateTime now() => _now();

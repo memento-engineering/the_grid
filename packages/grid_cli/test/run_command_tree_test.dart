@@ -122,14 +122,14 @@ void main() {
   group('composeStation — the ASSET seam (ADR-0008 D1: default code, or inject)',
       () {
     test('an INJECTED asset (resolver + registry + services) drives the mount — a '
-        'non-code formula mounts its OWN step, so the burn composes WITHOUT '
+        'non-code circuit mounts its OWN step, so the burn composes WITHOUT '
         'editing the composer', () async {
       final h = _TreeHarness();
       final wiring = h.compose(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: DefaultCapabilityRegistry(
           capabilities: const {_markerStep: _MarkerCap()},
-          formulas: const {'marker': _markerFormula},
+          circuits: const {'marker': _markerCircuit},
         ),
         // An empty ServiceBundle (no SourceControl) — an asset that leases/drives
         // instead of cutting a git worktree (the burn). Proves `services` is
@@ -142,7 +142,7 @@ void main() {
       await wiring.start();
       await _settle();
 
-      // The injected formula/registry drove the mount: the sole recorded spawn is
+      // The injected circuit/registry drove the mount: the sole recorded spawn is
       // the MARKER node path, not the `code` asset's `agent` step.
       expect(h.provider.starts, hasLength(1));
       expect(
@@ -188,7 +188,7 @@ void main() {
     test('an empty allow-set is refused (exit 64, no composition)', () async {
       final errs = <String>[];
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(substations: {}, dryRun: true),
         out: (_) {},
@@ -203,7 +203,7 @@ void main() {
         'GitHub write, never armed under an observe-only run', () async {
       final errs = <String>[];
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'tgdog'},
@@ -221,7 +221,7 @@ void main() {
     test('a non-dry run with no --root is refused (exit 64)', () async {
       final errs = <String>[];
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'tgdog'},
@@ -241,7 +241,7 @@ void main() {
         () async {
       final errs = <String>[];
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'genesis'},
@@ -280,7 +280,7 @@ void main() {
       });
 
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'tgdog'},
@@ -327,7 +327,7 @@ void main() {
         'specific beads (the drive-list, ADR-0006)', () async {
       final errs = <String>[];
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'tgdog'},
@@ -369,7 +369,7 @@ void main() {
       });
 
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'tgdog'},
@@ -431,7 +431,7 @@ void main() {
       // A LIVE run (dryRun:false) with a --root but NO injected root checkout,
       // so registerRootCheckout is actually exercised — all other seams faked.
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'tgdog'},
@@ -593,7 +593,7 @@ void main() {
       });
 
       final code = await runStation(
-        resolver: const FormulaResolver(_markerFormulaFor),
+        resolver: const CircuitResolver(_markerCircuitFor),
         registry: _markerRegistry(),
         args: const StationArgs(
           substations: {'tgdog'},
@@ -816,7 +816,7 @@ Future<void> _settle() async {
 /// `buildLiveWiring` so the gating + dry-run wiring assertions run over fakes.
 Future<int> runStation({
   required StationArgs args,
-  required FormulaResolver resolver,
+  required CircuitResolver resolver,
   required CapabilityRegistry registry,
   SnapshotSource work = const EmptySnapshotSource(),
   SnapshotSource? state,
@@ -890,10 +890,10 @@ Future<int> runStation({
 
 const String _markerStep = 'marker';
 
-/// A one-step formula distinct from the `code` asset — its step id [_markerStep]
+/// A one-step circuit distinct from the `code` asset — its step id [_markerStep]
 /// is recognizable in the recorded spawn name, proving an injected asset (not the
 /// code default) drove the mount.
-const Formula _markerFormula = Formula(
+const Circuit _markerCircuit = Circuit(
   id: 'marker',
   terminalStepId: _markerStep,
   steps: [
@@ -905,13 +905,13 @@ const Formula _markerFormula = Formula(
   ],
 );
 
-/// The bead→formula policy for the injected asset (all work → the marker formula).
-Formula _markerFormulaFor(Bead bead) => _markerFormula;
+/// The bead→circuit policy for the injected asset (all work → the marker circuit).
+Circuit _markerCircuitFor(Bead bead) => _markerCircuit;
 
 /// The marker asset's registry (the harness default trio's second half).
 DefaultCapabilityRegistry _markerRegistry() => DefaultCapabilityRegistry(
   capabilities: const {_markerStep: _MarkerCap()},
-  formulas: const {'marker': _markerFormula},
+  circuits: const {'marker': _markerCircuit},
 );
 
 /// An in-test [SourceControl] over the recording [StationGitService] — replaces
@@ -1026,7 +1026,7 @@ class _TreeHarness {
   /// MARKER asset + a fake SourceControl over the recording git service (so the
   /// provisioning assertions still observe `git.provisioned`).
   TreeRunWiring compose({
-    FormulaResolver? resolver,
+    CircuitResolver? resolver,
     CapabilityRegistry? registry,
     ServiceBundle? services,
     SubstationConfig? config,
@@ -1063,7 +1063,7 @@ class _TreeHarness {
       ),
       groups: groups,
       freshnessBarrier: _barrier,
-      resolver: resolver ?? const FormulaResolver(_markerFormulaFor),
+      resolver: resolver ?? const CircuitResolver(_markerCircuitFor),
       registry: registry ?? _markerRegistry(),
       services: services ??
           ServiceBundle(sourceControl: _HarnessSourceControl(git.service)),

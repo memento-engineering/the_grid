@@ -56,7 +56,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../sdk/cursor.dart';
-import '../sdk/formula.dart';
+import '../sdk/circuit.dart';
 
 /// The adopt-decision seam (ADR-0009 D4, Track D): given a surviving LIVE node,
 /// returns whether the reconciler should ADOPT it — leave the group running for

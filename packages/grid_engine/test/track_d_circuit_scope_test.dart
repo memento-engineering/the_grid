@@ -1,6 +1,6 @@
-// Track D — the reentrant inflater: FormulaScope maps the eligible frontier to
+// Track D — the reentrant inflater: CircuitScope maps the eligible frontier to
 // keyed child Seeds (linear 1-wide, fan-out + ordering, the await-all barrier,
-// the keyed swap, nested sub-formula reentrancy), and the work-tick flush stays
+// the keyed swap, nested sub-circuit reentrancy), and the work-tick flush stays
 // isolated to WorkList (invariant 1 AT DEPTH).
 //
 // ADR-0008 D4 / M4-P1 §4, Track D. Zero I/O — fake registry + fake leaves.
@@ -10,9 +10,9 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
-// --- the canonical formulas (local copies; Track H ships the real ones) ------
+// --- the canonical circuits (local copies; Track H ships the real ones) ------
 
-const _code = Formula(
+const _code = Circuit(
   id: 'code',
   terminalStepId: 'land',
   steps: [
@@ -22,7 +22,7 @@ const _code = Formula(
   ],
 );
 
-const _deploy = Formula(
+const _deploy = Circuit(
   id: 'deploy',
   terminalStepId: 'waitWS',
   steps: [
@@ -38,15 +38,15 @@ const _deploy = Formula(
   ],
 );
 
-const _burn = Formula(
+const _burn = Circuit(
   id: 'burn',
   terminalStepId: 'report',
   supervision: SupervisionStrategy.restForOne,
   steps: [
-    SubFormulaStep(stepId: 'harnessPeripheral', formulaId: 'deploy'),
-    SubFormulaStep(
+    SubCircuitStep(stepId: 'harnessPeripheral', circuitId: 'deploy'),
+    SubCircuitStep(
       stepId: 'harnessCentral',
-      formulaId: 'deploy',
+      circuitId: 'deploy',
       dependsOn: {'harnessPeripheral'},
     ),
     CapabilityStep(
@@ -61,25 +61,25 @@ const _burn = Formula(
 NodeCursor _done() => const NodeCursor(state: StepState.complete);
 NodeCursor _ready() => const NodeCursor(state: StepState.ready);
 
-// --- a tiny harness that drives a cursor into a FormulaScope in isolation -----
+// --- a tiny harness that drives a cursor into a CircuitScope in isolation -----
 
 class _CursorHost extends StatefulSeed {
-  const _CursorHost(this.formula, this.initial);
-  final Formula formula;
-  final FormulaCursor initial;
+  const _CursorHost(this.circuit, this.initial);
+  final Circuit circuit;
+  final CircuitCursor initial;
   @override
   State<_CursorHost> createState() => _CursorHostState();
 }
 
 class _CursorHostState extends State<_CursorHost> {
-  late FormulaCursor _cursor;
+  late CircuitCursor _cursor;
   @override
   void initState() => _cursor = seed.initial;
-  void advance(FormulaCursor cursor) => setState(() => _cursor = cursor);
+  void advance(CircuitCursor cursor) => setState(() => _cursor = cursor);
   @override
   Seed build(TreeContext context) =>
-      FormulaScope(
-        formula: seed.formula,
+      CircuitScope(
+        circuit: seed.circuit,
         cursor: _cursor,
         nodePath: 'root',
       );
@@ -110,9 +110,9 @@ _CursorHostState _cursorState(Branch root) {
 /// returns the owner, the root branch, and the recording registry.
 ({TreeOwner owner, Branch root, RecordingCapabilityRegistry reg}) _mount(
   _CursorHost host, {
-  Map<String, Formula> formulas = const {},
+  Map<String, Circuit> circuits = const {},
 }) {
-  final reg = RecordingCapabilityRegistry(formulas: formulas);
+  final reg = RecordingCapabilityRegistry(circuits: circuits);
   final owner = TreeOwner();
   final root = owner.mountRoot(
     InheritedSeed<CapabilityRegistry>(
@@ -135,14 +135,14 @@ void main() {
     });
 
     test('a cursor advance swaps the leaf (old unmounts, new mounts) and keeps '
-        'the FormulaScope branch identity', () {
+        'the CircuitScope branch identity', () {
       final host = _CursorHost(_code, const {});
       final m = _mount(host);
       addTearDown(m.owner.dispose);
       expect(m.reg.events, ['START agent(sess/root/agent)']);
 
       final scopeIdBefore =
-          _whereSeed(m.root, (s) => s is FormulaScope).branchId;
+          _whereSeed(m.root, (s) => s is CircuitScope).branchId;
       m.reg.events.clear();
 
       // Advance the cursor: agent complete → verify enters, agent retires.
@@ -161,7 +161,7 @@ void main() {
         ]),
       );
       expect(
-        _whereSeed(m.root, (s) => s is FormulaScope).branchId,
+        _whereSeed(m.root, (s) => s is CircuitScope).branchId,
         scopeIdBefore,
         reason: 'the inflater branch persists across a cursor advance',
       );
@@ -265,22 +265,22 @@ void main() {
         () {
       final m = _mount(
         const _CursorHost(_burn, {}),
-        formulas: {'deploy': _deploy},
+        circuits: {'deploy': _deploy},
       );
       addTearDown(m.owner.dispose);
-      // The peripheral sub-formula inflates its own frontier {build}; central is
+      // The peripheral sub-circuit inflates its own frontier {build}; central is
       // withheld (its dep's terminal descendant is pending); coordinator too.
       expect(m.reg.events, ['START b(sess/root/harnessPeripheral/build)']);
-      // The nested FormulaScope for the peripheral exists.
+      // The nested CircuitScope for the peripheral exists.
       expect(
-        _all(m.root).where((b) => b.seed is FormulaScope).length,
+        _all(m.root).where((b) => b.seed is CircuitScope).length,
         2, // the outer burn scope + the peripheral deploy scope
       );
     });
 
     test('peripheral terminal → central enters; coordinator still withheld', () {
       final host = _CursorHost(_burn, const {});
-      final m = _mount(host, formulas: {'deploy': _deploy});
+      final m = _mount(host, circuits: {'deploy': _deploy});
       addTearDown(m.owner.dispose);
       final st = _cursorState(m.root);
 
@@ -315,7 +315,7 @@ void main() {
 
     test('BOTH harness terminals → the coordinator mounts (barrier opens)', () {
       final host = _CursorHost(_burn, const {});
-      final m = _mount(host, formulas: {'deploy': _deploy});
+      final m = _mount(host, circuits: {'deploy': _deploy});
       addTearDown(m.owner.dispose);
       final st = _cursorState(m.root);
 

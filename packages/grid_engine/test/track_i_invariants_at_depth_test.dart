@@ -3,7 +3,7 @@
 // The per-track suites prove the invariants where each mechanism lives
 // (invariant 1: track_a/c/d flush isolation; invariant 2: track_e sandbox +
 // the D-1 race in grid_runtime; invariant 3: track_a A41 allow-list; invariant
-// 4: track_c/restart). THIS file re-proves all four INSIDE a nested formula
+// 4: track_c/restart). THIS file re-proves all four INSIDE a nested circuit
 // subtree (the Burn shape), each as a mutation-resistant gate. Zero I/O.
 import 'dart:async';
 
@@ -48,7 +48,7 @@ const _burnCaps = <String, Capability>{
   'report': _WritingCap(),
 };
 
-const _deploy = Formula(
+const _deploy = Circuit(
   id: 'deploy',
   terminalStepId: 'waitWS',
   steps: [
@@ -57,11 +57,11 @@ const _deploy = Formula(
     CapabilityStep(stepId: 'waitWS', capabilityId: 'waitWS', dependsOn: {'install'}),
   ],
 );
-const _burn = Formula(
+const _burn = Circuit(
   id: 'burn',
   terminalStepId: 'report',
   steps: [
-    SubFormulaStep(stepId: 'harness', formulaId: 'deploy'),
+    SubCircuitStep(stepId: 'harness', circuitId: 'deploy'),
     CapabilityStep(stepId: 'report', capabilityId: 'report', dependsOn: {'harness'}),
   ],
 );
@@ -101,7 +101,7 @@ SessionProjection _session(
   required SubstationConfig config,
 }) {
   final fakes = buildFakes();
-  final reg = RecordingCapabilityRegistry(formulas: const {'deploy': _deploy});
+  final reg = RecordingCapabilityRegistry(circuits: const {'deploy': _deploy});
   final owner = TreeOwner();
   final root = owner.mountRoot(
     InheritedSeed<JoinedSnapshotNotifier>(
@@ -114,7 +114,7 @@ SessionProjection _session(
           // D5). With none set the scope provides the empty default (an offline
           // build wires no SourceControl).
           child: InheritedSeed<SessionResolver>(
-            value: FormulaResolver((_) => _burn),
+            value: CircuitResolver((_) => _burn),
             child: Station([
               SubstationScope(
                 configNotifier: SubstationConfigNotifier(config),
@@ -143,7 +143,7 @@ List<Branch> _all(Branch root) {
 Branch _whereSeed(Branch root, bool Function(Seed) test) =>
     _all(root).firstWhere((b) => test(b.seed));
 
-/// Mounts the burn formula with REAL CapabilityHosts (DefaultCapabilityRegistry
+/// Mounts the burn circuit with REAL CapabilityHosts (DefaultCapabilityRegistry
 /// over [_burnCaps]) so a host genuinely spawns + writes its cursor — for the
 /// invariant-2/4 write-target gates.
 ({TreeOwner owner, Branch root, Fakes fakes}) _mountReal({
@@ -153,7 +153,7 @@ Branch _whereSeed(Branch root, bool Function(Seed) test) =>
   final fakes = buildFakes();
   final registry = DefaultCapabilityRegistry(
     capabilities: _burnCaps,
-    formulas: const {'deploy': _deploy},
+    circuits: const {'deploy': _deploy},
     clock: () => DateTime(2026),
   );
   final owner = TreeOwner();
@@ -168,7 +168,7 @@ Branch _whereSeed(Branch root, bool Function(Seed) test) =>
           // D5). With none set the scope provides the empty default (an offline
           // build wires no SourceControl).
           child: InheritedSeed<SessionResolver>(
-            value: FormulaResolver((_) => _burn),
+            value: CircuitResolver((_) => _burn),
             child: Station([
               SubstationScope(
                 configNotifier: SubstationConfigNotifier(config),
@@ -187,8 +187,8 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 
 void main() {
   group('Invariant 1 AT DEPTH — only WorkList dirties on a work tick', () {
-    test('a deep (nested sub-formula) cursor tick → flush() == [WorkList]; the '
-        'nested FormulaScopes + hosts are force-rebuilt, NOT in the drain', () {
+    test('a deep (nested sub-circuit) cursor tick → flush() == [WorkList]; the '
+        'nested CircuitScopes + hosts are force-rebuilt, NOT in the drain', () {
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [_bead('tg-b')],
@@ -216,11 +216,11 @@ void main() {
       ));
       final flushed = m.owner.flush();
 
-      // Only WorkList drained — every FormulaScope (the outer burn + the nested
+      // Only WorkList drained — every CircuitScope (the outer burn + the nested
       // deploy) is force-rebuilt by the cascade, excluded. A mutation making any
       // of them subscribe the notifier would put it in the drain.
       expect(flushed, equals([_whereSeed(m.root, (s) => s is WorkList)]));
-      final scopes = _all(m.root).where((b) => b.seed is FormulaScope).toList();
+      final scopes = _all(m.root).where((b) => b.seed is CircuitScope).toList();
       expect(scopes.length, greaterThanOrEqualTo(2)); // outer + nested
       for (final scope in scopes) {
         expect(flushed, isNot(contains(scope)));
@@ -272,8 +272,8 @@ void main() {
     });
   });
 
-  group('Invariant 3 AT DEPTH — convergence never mounts a formula subtree', () {
-    test('a convergence-typed bead in the ready set mounts ZERO formula nodes; a '
+  group('Invariant 3 AT DEPTH — convergence never mounts a circuit subtree', () {
+    test('a convergence-typed bead in the ready set mounts ZERO circuit nodes; a '
         'plain owned bead mounts a full one', () {
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -285,7 +285,7 @@ void main() {
       addTearDown(m.owner.dispose);
 
       // Exactly one WorkBead (tg-ok) — the convergence bead mounts nothing (the
-      // A41 isCore allow-list excludes it; a formula selects capabilities, never
+      // A41 isCore allow-list excludes it; a circuit selects capabilities, never
       // beads-by-type, so it cannot sneak in at depth either).
       final workBeads = _all(m.root).where((b) => b.seed is WorkBead).toList();
       expect(workBeads, hasLength(1));
@@ -293,7 +293,7 @@ void main() {
     });
 
     test('resident mode (RS-3/D-R4, the filing CATCH): convergence AND an '
-        'organizational core type (epic) both mount ZERO formula nodes under '
+        'organizational core type (epic) both mount ZERO circuit nodes under '
         'an all-ready resident config, at depth — a plain owned task is the '
         'live sanity control proving the mount pipeline itself still works',
         () {

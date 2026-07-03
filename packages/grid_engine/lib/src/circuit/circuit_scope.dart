@@ -1,6 +1,7 @@
-/// The reentrant inflater (ADR-0008 D4 / M4-P1 §4, Track D).
+/// The reentrant inflater — it energizes (electrifies) a [Circuit] into a
+/// mounted subtree (ADR-0008 D4 / M4-P1 §4, Track D).
 ///
-/// `FormulaScope` is a PURE `StatelessSeed` — the depth-analogue of `WorkList` +
+/// `CircuitScope` is a PURE `StatelessSeed` — the depth-analogue of `WorkList` +
 /// `SessionResolver`, with ZERO pipeline subscription (invariant 1). Its `build`
 /// reads only the INJECTED cursor (threaded down from `WorkList`'s reconcile
 /// cascade, A39 — never a re-query), computes the eligible frontier with the
@@ -8,48 +9,48 @@
 ///
 /// - a [CapabilityStep] → an engine leaf via `CapabilityRegistry.host`
 ///   (a `CapabilityHost` — Track E; a fake in Track D tests);
-/// - a [SubFormulaStep] → a nested `FormulaScope` (REENTRANCY: the SAME inflater
+/// - a [SubCircuitStep] → a nested `CircuitScope` (REENTRANCY: the SAME inflater
 ///   one level down).
 ///
 /// The await-all barrier IS the predicate withholding a downstream step until
 /// its deps reach a positive terminal; a supervised restart bumps the
 /// incarnation in the child key, so keyed reconcile unmounts the old + mounts
-/// the new. `FormulaScope` compiles to a `ComponentBranch` (single child) →
-/// one `_FormulaChildren` (`MultiChildBranch`, keyed reconcile), mirroring the
+/// the new. `CircuitScope` compiles to a `ComponentBranch` (single child) →
+/// one `_CircuitChildren` (`MultiChildBranch`, keyed reconcile), mirroring the
 /// proven `WorkList → _WorkBeads` topology exactly.
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
 
 import '../sdk/cursor.dart';
-import '../sdk/formula.dart';
+import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
 import 'capability_registry.dart';
 import 'session_handle.dart';
 
-/// The pure inflater for one formula instance rooted at [nodePath], under
+/// The pure inflater for one circuit instance rooted at [nodePath], under
 /// [cursor] (M4-P1 §4). Engine-private — an asset never subclasses it.
-class FormulaScope extends StatelessSeed {
-  /// Inflates [formula] at [nodePath] under [cursor]. The work `Bead` and the
+class CircuitScope extends StatelessSeed {
+  /// Inflates [circuit] at [nodePath] under [cursor]. The work `Bead` and the
   /// session `SiblingView` are AMBIENT (mounted by `WorkBead`/`SessionScope`,
   /// 2026-07-02) — an effect reads them with the non-binding lookup; the
   /// inflater threads nothing but the frontier's own inputs.
-  const FormulaScope({
-    required this.formula,
+  const CircuitScope({
+    required this.circuit,
     required this.cursor,
     required this.nodePath,
     super.key,
   });
 
-  /// The formula to inflate.
-  final Formula formula;
+  /// The circuit to inflate.
+  final Circuit circuit;
 
   /// The injected cursor (config, threaded from `WorkList`'s cascade — NOT a
   /// subscription). A missing node reads as a fresh `pending` cursor.
-  final FormulaCursor cursor;
+  final CircuitCursor cursor;
 
-  /// This formula instance's path (`bead.id` at the root; `'$parent/$stepId'`
-  /// for a nested sub-formula).
+  /// This circuit instance's path (`bead.id` at the root; `'$parent/$stepId'`
+  /// for a nested sub-circuit).
   final String nodePath;
 
   @override
@@ -57,21 +58,21 @@ class FormulaScope extends StatelessSeed {
     final registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
     assert(
       registry != null,
-      'FormulaScope requires an ambient CapabilityRegistry (the kernel/extension '
+      'CircuitScope requires an ambient CapabilityRegistry (the kernel/extension '
       'provides one; tests inject a fake)',
     );
     final session = context.dependOnInheritedSeedOfExactType<SessionHandle>();
     assert(
       session != null,
-      'FormulaScope requires an ambient SessionHandle (SessionScope provides it '
+      'CircuitScope requires an ambient SessionHandle (SessionScope provides it '
       'once the session resolves)',
     );
     final reg = registry!;
     final eligible = eligibleSteps(
-      formula,
+      circuit,
       cursor,
       nodePath,
-      formulaById: reg.formula,
+      circuitById: reg.circuit,
       now: reg.now(),
     );
     final children = <Seed>[];
@@ -90,19 +91,19 @@ class FormulaScope extends StatelessSeed {
                 // The incarnation key: a supervised restart bumps restartCount
                 // → a new key → keyed reconcile swaps the leaf (D-5).
                 key: ValueKey('$path#${node.restartCount}'),
-                backoff: formula.backoff,
-                maxRestarts: formula.maxRestarts,
+                backoff: circuit.backoff,
+                maxRestarts: circuit.maxRestarts,
               ),
             ),
           );
-        case SubFormulaStep(:final formulaId):
-          final sub = reg.formula(formulaId);
-          // An unresolvable sub-formula is skipped (the predicate already
+        case SubCircuitStep(:final circuitId):
+          final sub = reg.circuit(circuitId);
+          // An unresolvable sub-circuit is skipped (the predicate already
           // fail-closes any dep ON it; nothing to inflate).
           if (sub == null) continue;
           children.add(
-            FormulaScope(
-              formula: sub,
+            CircuitScope(
+              circuit: sub,
               cursor: cursor,
               nodePath: path,
               key: ValueKey('$path/scope'),
@@ -110,17 +111,17 @@ class FormulaScope extends StatelessSeed {
           );
       }
     }
-    return _FormulaChildren(children);
+    return _CircuitChildren(children);
   }
 }
 
-/// The keyed-reconcile container `FormulaScope` builds — the ONE generic
-/// container kind for a formula's frontier (the depth-analogue of `_WorkBeads`).
+/// The keyed-reconcile container `CircuitScope` builds — the ONE generic
+/// container kind for a circuit's frontier (the depth-analogue of `_WorkBeads`).
 ///
 /// Each child is keyed (incarnation-keyed for a leaf, path-keyed for a nested
 /// scope), so reconcile preserves a still-eligible step's branch (and its
 /// running process) across cursor ticks; a step entering the frontier mounts
 /// (spawn), one leaving (job complete / supervised re-key) unmounts (kill).
-class _FormulaChildren extends MultiChildSeed {
-  _FormulaChildren(List<Seed> children) : super(children: children);
+class _CircuitChildren extends MultiChildSeed {
+  _CircuitChildren(List<Seed> children) : super(children: children);
 }

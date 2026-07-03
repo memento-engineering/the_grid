@@ -11,7 +11,7 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
-const _code = Formula(
+const _code = Circuit(
   id: 'code',
   terminalStepId: 'land',
   steps: [
@@ -21,7 +21,7 @@ const _code = Formula(
   ],
 );
 
-const _burn = Formula(
+const _burn = Circuit(
   id: 'burn',
   terminalStepId: 'report',
   steps: [
@@ -57,13 +57,13 @@ Bead _task(String id, {BeadStatus status = BeadStatus.open}) =>
 const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 
 /// The full new-path root: WorkList observes [joined]; WorkBead resolves through
-/// the FormulaResolver → SessionScope → FormulaScope; SessionScope mints via the
-/// StationServices writer; FormulaScope inflates via the registry.
+/// the CircuitResolver → SessionScope → CircuitScope; SessionScope mints via the
+/// StationServices writer; CircuitScope inflates via the registry.
 ({TreeOwner owner, Branch root}) _mountFull({
   required JoinedSnapshotNotifier joined,
   required StationServices ctx,
   required CapabilityRegistry registry,
-  required RootFormulaFor rootFormula,
+  required RootCircuitFor rootCircuit,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -74,7 +74,7 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
         child: InheritedSeed<CapabilityRegistry>(
           value: registry,
           child: InheritedSeed<SessionResolver>(
-            value: FormulaResolver(rootFormula),
+            value: CircuitResolver(rootCircuit),
             child: Station([
               SubstationScope(
                 configNotifier: SubstationConfigNotifier(_tgConfig),
@@ -108,7 +108,7 @@ void main() {
     test('a ready bead with no session mints exactly one session, then inflates',
         () async {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_task('tg-1')], ready: {'tg-1'}),
       );
@@ -116,7 +116,7 @@ void main() {
         joined: joined,
         ctx: f.ctx,
         registry: reg,
-        rootFormula: (_) => _code,
+        rootCircuit: (_) => _code,
       );
       addTearDown(m.owner.dispose);
 
@@ -131,9 +131,9 @@ void main() {
       expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
     });
 
-    test('a fan-out formula (two dep-free steps) still mints ONE session', () async {
+    test('a fan-out circuit (two dep-free steps) still mints ONE session', () async {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_task('tg-burn')], ready: {'tg-burn'}),
       );
@@ -141,7 +141,7 @@ void main() {
         joined: joined,
         ctx: f.ctx,
         registry: reg,
-        rootFormula: (_) => _burn,
+        rootCircuit: (_) => _burn,
       );
       addTearDown(m.owner.dispose);
       await _pump();
@@ -163,7 +163,7 @@ void main() {
   group('Track C — SessionScope adopts an existing session', () {
     test('a bead with a linked session adopts it synchronously (no mint)', () {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [_task('tg-1')],
@@ -179,7 +179,7 @@ void main() {
         joined: joined,
         ctx: f.ctx,
         registry: reg,
-        rootFormula: (_) => _code,
+        rootCircuit: (_) => _code,
       );
       addTearDown(m.owner.dispose);
 
@@ -194,7 +194,7 @@ void main() {
     test('when the terminal step completes, the session is closed exactly once',
         () async {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [_task('tg-1')],
@@ -210,7 +210,7 @@ void main() {
         joined: joined,
         ctx: f.ctx,
         registry: reg,
-        rootFormula: (_) => _code,
+        rootCircuit: (_) => _code,
       );
       addTearDown(m.owner.dispose);
 
@@ -251,7 +251,7 @@ void main() {
 
     test('the close is latched once across repeated terminal rebuilds', () async {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       const terminal = SessionProjection(
         workBeadId: 'tg-1',
         sessionId: 'tgdog-s',        cursor: {
@@ -271,7 +271,7 @@ void main() {
         joined: joined,
         ctx: f.ctx,
         registry: reg,
-        rootFormula: (_) => _code,
+        rootCircuit: (_) => _code,
       );
       addTearDown(m.owner.dispose);
       await _pump();
@@ -292,7 +292,7 @@ void main() {
     test('a cursor advance flush() returns exactly [WorkList]; config ancestors '
         '+ the inflater are absent from the drain', () {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [_task('tg-1')],
@@ -308,7 +308,7 @@ void main() {
         joined: joined,
         ctx: f.ctx,
         registry: reg,
-        rootFormula: (_) => _code,
+        rootCircuit: (_) => _code,
       );
       addTearDown(m.owner.dispose);
       expect(reg.events, ['START agent(tgdog-s/tg-1/agent)']);
@@ -329,7 +329,7 @@ void main() {
       );
       final flushed = m.owner.flush();
 
-      // Only the observing node drained — the SessionScope/FormulaScope/leaves
+      // Only the observing node drained — the SessionScope/CircuitScope/leaves
       // are force-rebuilt by WorkList's cascade, excluded from the drain.
       final workList = _whereSeed(m.root, (s) => s is WorkList);
       expect(flushed, equals([workList]));
@@ -344,7 +344,7 @@ void main() {
       // Config ancestors + the inflater are absent from the drain.
       expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is Station))));
       expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is SubstationScope))));
-      expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is FormulaScope))));
+      expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is CircuitScope))));
       expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is SessionScope))));
     });
   });

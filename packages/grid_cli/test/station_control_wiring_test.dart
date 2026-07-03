@@ -361,10 +361,10 @@ class _ControlHarness {
       ),
       groups: _FakeProcessGroupController(),
       freshnessBarrier: () async {},
-      resolver: const FormulaResolver(_markerFormulaFor),
+      resolver: const CircuitResolver(_markerCircuitFor),
       registry: DefaultCapabilityRegistry(
         capabilities: const {_markerStep: _MarkerCap()},
-        formulas: const {'marker': _markerFormula},
+        circuits: const {'marker': _markerCircuit},
       ),
     );
     return driveStation(
@@ -394,7 +394,7 @@ class _ControlHarness {
 
 const String _markerStep = 'marker';
 
-const Formula _markerFormula = Formula(
+const Circuit _markerCircuit = Circuit(
   id: 'marker',
   terminalStepId: _markerStep,
   steps: [
@@ -406,7 +406,7 @@ const Formula _markerFormula = Formula(
   ],
 );
 
-Formula _markerFormulaFor(Bead bead) => _markerFormula;
+Circuit _markerCircuitFor(Bead bead) => _markerCircuit;
 
 class _MarkerCap extends ProcessCapability {
   const _MarkerCap();

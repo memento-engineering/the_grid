@@ -1,10 +1,10 @@
 // Track J — the Burn (§9): the hardest case end-to-end, offline. A multi-step
-// formula with sub-formula harnesses (fan-out + ordering), an await-all barrier
+// circuit with sub-circuit harnesses (fan-out + ordering), an await-all barrier
 // gating a coordinator, a long-lived daemon, and guaranteed teardown — plus the
 // failure path (a half-up rig → escalate + tear down, no leaked daemon).
 //
-// Driven over the FULL new path (FormulaResolver → SessionScope → FormulaScope →
-// nested FormulaScope → CapabilityHosts), with the cursor advanced via the join
+// Driven over the FULL new path (CircuitResolver → SessionScope → CircuitScope →
+// nested CircuitScope → CapabilityHosts), with the cursor advanced via the join
 // (simulating the bridge re-projecting each chokepoint write). ADR-0008 D4 /
 // M4-P1 §9, Track J. Zero I/O.
 import 'package:genesis_tree/genesis_tree.dart';
@@ -14,9 +14,9 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
-// --- the Burn formulas (§9) --------------------------------------------------
+// --- the Burn circuits (§9) --------------------------------------------------
 
-const _deploy = Formula(
+const _deploy = Circuit(
   id: 'deploy',
   terminalStepId: 'waitWS',
   steps: [
@@ -32,16 +32,16 @@ const _deploy = Formula(
   ],
 );
 
-const _burn = Formula(
+const _burn = Circuit(
   id: 'burn',
   terminalStepId: 'report',
   supervision: SupervisionStrategy.restForOne,
   peak: ResourceRequest(builds: 2, processes: 3),
   steps: [
-    SubFormulaStep(stepId: 'harnessPeripheral', formulaId: 'deploy'),
-    SubFormulaStep(
+    SubCircuitStep(stepId: 'harnessPeripheral', circuitId: 'deploy'),
+    SubCircuitStep(
       stepId: 'harnessCentral',
-      formulaId: 'deploy',
+      circuitId: 'deploy',
       dependsOn: {'harnessPeripheral'},
     ),
     CapabilityStep(
@@ -63,7 +63,7 @@ NodeCursor _ready() => const NodeCursor(state: StepState.ready);
 class _Burn {
   _Burn(this.beadId)
     : fakes = buildFakes(),
-      reg = RecordingCapabilityRegistry(formulas: const {'deploy': _deploy}),
+      reg = RecordingCapabilityRegistry(circuits: const {'deploy': _deploy}),
       joined = JoinedSnapshotNotifier(JoinedSnapshot.empty()),
       owner = TreeOwner();
 
@@ -93,7 +93,7 @@ class _Burn {
             // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
             // D5). With none set the scope provides the empty default.
             child: InheritedSeed<SessionResolver>(
-              value: FormulaResolver((_) => _burn),
+              value: CircuitResolver((_) => _burn),
               child: Station([
                 SubstationScope(
                   configNotifier: SubstationConfigNotifier(_tgConfig),
@@ -159,7 +159,7 @@ void main() {
         'coordinator withheld)', () {
       final burn = _Burn('tg-burn')..mount();
       addTearDown(burn.dispose);
-      // The peripheral sub-formula inflates {build}; the ordering barrier holds
+      // The peripheral sub-circuit inflates {build}; the ordering barrier holds
       // central; the await-all barrier holds the coordinator.
       expect(burn.events, ['START build(tgdog-s/tg-burn/harnessPeripheral/build)']);
     });

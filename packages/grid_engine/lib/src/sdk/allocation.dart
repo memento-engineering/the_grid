@@ -32,7 +32,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import 'capability.dart';
-import 'formula.dart';
+import 'circuit.dart';
 
 /// The lifecycle state of an [Allocation] (ADR-0009 D5:
 /// `starting → live → [ready] → dying → gone`, plus `adopting`).
@@ -76,7 +76,7 @@ class AllocationAddress {
   /// The_grid's own session bead id this effect's cursor is written onto.
   final String sessionId;
 
-  /// The effect's full path within the formula tree (`beadId/…/stepId`).
+  /// The effect's full path within the circuit tree (`beadId/…/stepId`).
   final String nodePath;
 
   /// The runtime provider name — `<sessionId>/<nodePath>` — the disjoint

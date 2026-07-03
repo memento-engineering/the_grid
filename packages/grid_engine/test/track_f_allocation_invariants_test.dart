@@ -219,7 +219,7 @@ void main() {
   group('Track G — the P0 Host juggling is GONE (cleanup fence)', () {
     test('capability_host.dart names no _capCtx / _stepName / _writeSignal / '
         '_writeOutcome / Expando remnant', () async {
-      final src = await _readEngineSource('src/formula/capability_host.dart');
+      final src = await _readEngineSource('src/circuit/capability_host.dart');
       for (final dead in const [
         '_capCtx',
         '_stepName',

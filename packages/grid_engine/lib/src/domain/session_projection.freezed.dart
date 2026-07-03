@@ -30,10 +30,10 @@ mixin _$SessionProjection {
  String? get token;/// The spawned agent's pid (diagnostics).
  int? get pid;/// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
 /// node's [NodeCursor] keyed by its `nodePath`, projected from the session
-/// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+/// bead's `grid.cursor.*` metadata and threaded down to `CircuitScope`
 /// pull-free (A39). Empty for a freshly-minted session (no node has written
-/// its cursor yet — the root formula's frontier mounts from `pending`).
- FormulaCursor get cursor;/// The per-node `grid.result.*` payloads, threaded down pull-free so a
+/// its cursor yet — the root circuit's frontier mounts from `pending`).
+ CircuitCursor get cursor;/// The per-node `grid.result.*` payloads, threaded down pull-free so a
 /// `route` step reads its siblings' grades — D-5. Keyed by `nodePath`; empty
 /// until a step records a result.
  Map<String, Map<String, String>> get results;/// The nodePaths with an OPEN `type=gate` bead blocking this session (D-7) —
@@ -78,7 +78,7 @@ abstract mixin class $SessionProjectionCopyWith<$Res>  {
   factory $SessionProjectionCopyWith(SessionProjection value, $Res Function(SessionProjection) _then) = _$SessionProjectionCopyWithImpl;
 @useResult
 $Res call({
- String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, DateTime? startedAt, DateTime? closedAt
+ String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, CircuitCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, DateTime? startedAt, DateTime? closedAt
 });
 
 
@@ -104,7 +104,7 @@ as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_no
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
 as int?,cursor: null == cursor ? _self.cursor : cursor // ignore: cast_nullable_to_non_nullable
-as FormulaCursor,results: null == results ? _self.results : results // ignore: cast_nullable_to_non_nullable
+as CircuitCursor,results: null == results ? _self.results : results // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<String, String>>,openGateNodes: null == openGateNodes ? _self.openGateNodes : openGateNodes // ignore: cast_nullable_to_non_nullable
 as Set<String>,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
 as DateTime?,closedAt: freezed == closedAt ? _self.closedAt : closedAt // ignore: cast_nullable_to_non_nullable
@@ -193,7 +193,7 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
 return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.startedAt,_that.closedAt);case _:
@@ -214,7 +214,7 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection():
 return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.startedAt,_that.closedAt);case _:
@@ -234,7 +234,7 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  FormulaCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  bool isTerminal,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  DateTime? startedAt,  DateTime? closedAt)?  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
 return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.startedAt,_that.closedAt);case _:
@@ -249,7 +249,7 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.pgid,_th
 
 
 class _SessionProjection implements SessionProjection {
-  const _SessionProjection({required this.workBeadId, this.sessionId, this.isTerminal = false, this.pgid, this.token, this.pid, final  FormulaCursor cursor = const <String, NodeCursor>{}, final  Map<String, Map<String, String>> results = const <String, Map<String, String>>{}, final  Set<String> openGateNodes = const <String>{}, this.startedAt, this.closedAt}): _cursor = cursor,_results = results,_openGateNodes = openGateNodes;
+  const _SessionProjection({required this.workBeadId, this.sessionId, this.isTerminal = false, this.pgid, this.token, this.pid, final  CircuitCursor cursor = const <String, NodeCursor>{}, final  Map<String, Map<String, String>> results = const <String, Map<String, String>>{}, final  Set<String> openGateNodes = const <String>{}, this.startedAt, this.closedAt}): _cursor = cursor,_results = results,_openGateNodes = openGateNodes;
   
 
 /// The work bead this session drives (`metadata.work_bead`).
@@ -274,16 +274,16 @@ class _SessionProjection implements SessionProjection {
 @override final  int? pid;
 /// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
 /// node's [NodeCursor] keyed by its `nodePath`, projected from the session
-/// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+/// bead's `grid.cursor.*` metadata and threaded down to `CircuitScope`
 /// pull-free (A39). Empty for a freshly-minted session (no node has written
-/// its cursor yet — the root formula's frontier mounts from `pending`).
- final  FormulaCursor _cursor;
+/// its cursor yet — the root circuit's frontier mounts from `pending`).
+ final  CircuitCursor _cursor;
 /// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
 /// node's [NodeCursor] keyed by its `nodePath`, projected from the session
-/// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+/// bead's `grid.cursor.*` metadata and threaded down to `CircuitScope`
 /// pull-free (A39). Empty for a freshly-minted session (no node has written
-/// its cursor yet — the root formula's frontier mounts from `pending`).
-@override@JsonKey() FormulaCursor get cursor {
+/// its cursor yet — the root circuit's frontier mounts from `pending`).
+@override@JsonKey() CircuitCursor get cursor {
   if (_cursor is EqualUnmodifiableMapView) return _cursor;
   // ignore: implicit_dynamic_type
   return EqualUnmodifiableMapView(_cursor);
@@ -357,7 +357,7 @@ abstract mixin class _$SessionProjectionCopyWith<$Res> implements $SessionProjec
   factory _$SessionProjectionCopyWith(_SessionProjection value, $Res Function(_SessionProjection) _then) = __$SessionProjectionCopyWithImpl;
 @override @useResult
 $Res call({
- String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, FormulaCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, DateTime? startedAt, DateTime? closedAt
+ String workBeadId, String? sessionId, bool isTerminal, int? pgid, String? token, int? pid, CircuitCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, DateTime? startedAt, DateTime? closedAt
 });
 
 
@@ -383,7 +383,7 @@ as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_no
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
 as int?,cursor: null == cursor ? _self._cursor : cursor // ignore: cast_nullable_to_non_nullable
-as FormulaCursor,results: null == results ? _self._results : results // ignore: cast_nullable_to_non_nullable
+as CircuitCursor,results: null == results ? _self._results : results // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<String, String>>,openGateNodes: null == openGateNodes ? _self._openGateNodes : openGateNodes // ignore: cast_nullable_to_non_nullable
 as Set<String>,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
 as DateTime?,closedAt: freezed == closedAt ? _self.closedAt : closedAt // ignore: cast_nullable_to_non_nullable

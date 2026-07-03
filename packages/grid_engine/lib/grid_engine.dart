@@ -9,7 +9,7 @@
 ///
 /// The tree:
 /// `Station` → `SubstationScope` → `Substation` → `WorkList` → `WorkBead` →
-/// (`SessionResolver`) → `SessionScope` → `FormulaScope` → `CapabilityHost` →
+/// (`SessionResolver`) → `SessionScope` → `CircuitScope` → `CapabilityHost` →
 /// `Allocation` (the live effect — ADR-0009's third tree).
 /// Config flows down the *ancestors* (SubstationScope/Substation); the work axis is observed
 /// by exactly one node, `WorkList` (derailment-invariant 1).
@@ -27,15 +27,15 @@ export 'src/sdk/sdk.dart';
 
 // The reentrant engine (ENGINE-PRIVATE — never subclassed by an asset; the
 // public/private package split is deferred, D1): the SessionScope adopt-or-mint
-// lifecycle owner (D-2), the FormulaScope inflater + its registry/clock seam
+// lifecycle owner (D-2), the CircuitScope inflater + its registry/clock seam
 // (Track D), and the resolver that roots the subtree at the SessionResolver seam.
-export 'src/formula/capability_host.dart';
-export 'src/formula/capability_registry.dart';
-export 'src/formula/default_capability_registry.dart';
-export 'src/formula/formula_resolver.dart';
-export 'src/formula/formula_scope.dart';
-export 'src/formula/session_handle.dart';
-export 'src/formula/session_scope.dart';
+export 'src/circuit/capability_host.dart';
+export 'src/circuit/capability_registry.dart';
+export 'src/circuit/default_capability_registry.dart';
+export 'src/circuit/circuit_resolver.dart';
+export 'src/circuit/circuit_scope.dart';
+export 'src/circuit/session_handle.dart';
+export 'src/circuit/session_scope.dart';
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
@@ -49,7 +49,7 @@ export 'src/domain/session_projection.dart';
 // workspace/branch layout) live on the SubstationScope's ServiceBundle, not here.
 export 'src/kernel/station_services.dart';
 
-// The OPINIONS (agent/verify/land + the `code` formula + the git
+// The OPINIONS (agent/verify/land + the `code` circuit + the git
 // `SourceControl`) live in the `grid_assets` package, NEVER in the engine
 // (ADR-0007 §1: the opinion-free kernel — a structural fence keeps them out).
 

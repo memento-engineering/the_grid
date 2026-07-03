@@ -7,7 +7,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 /// `grid gate` — list and resolve the committee gates The Circuit parks (D-7).
 ///
-/// The Circuit's route step parks a work formula at a `type=gate` bead when the
+/// The Circuit's route step parks a work circuit at a `type=gate` bead when the
 /// committee blocks (a gating-F, a grade spread ≥ 3 across the lanes, or any
 /// non-gating critic at D/F). The gate bead lives in the_grid's OWN state store
 /// (the `--state-substation`, e.g. `tgdog`); it carries `metadata.blocks` (the
@@ -40,7 +40,7 @@ class GateCommand extends Command<int> {
   final String description =
       'List and resolve the committee gates The Circuit parks (ADR-0008 D-7). '
       'A gate bead lives in the_grid\'s OWN state store (--state-substation); '
-      'closing it re-arms the parked formula node (gated → pending) on the next '
+      'closing it re-arms the parked circuit node (gated → pending) on the next '
       '`grid run` snapshot.';
 
   @override
@@ -109,7 +109,7 @@ class GateResolveCommand extends Command<int> {
   @override
   final String description =
       'Resolve (close) ONE committee gate through the StationBeadWriter '
-      'chokepoint (--actor grid-controller), re-arming the parked formula node. '
+      'chokepoint (--actor grid-controller), re-arming the parked circuit node. '
       'Fail-closed: refuses (non-zero, zero writes) unless the id names a found, '
       'OPEN, owned type=gate bead. REQUIRES --state-workspace.';
 
@@ -206,7 +206,7 @@ Future<int> runGateLs({
 }
 
 /// Runs `grid gate resolve <gateId>`: closes the named gate THROUGH the
-/// [StationBeadWriter] chokepoint, re-arming the parked formula node.
+/// [StationBeadWriter] chokepoint, re-arming the parked circuit node.
 ///
 /// **Fail-closed (non-zero exit, ZERO writes)** unless [gateId] names a bead
 /// that is (a) found in the store, (b) `type=gate`, (c) OPEN, and (d) owned by

@@ -1,6 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'formula.dart';
+part of 'circuit.dart';
 
 // **************************************************************************
 // JsonSerializableGenerator
@@ -63,10 +63,10 @@ Map<String, dynamic> _$CapabilityStepToJson(CapabilityStep instance) =>
 
 const _$StepKindEnumMap = {StepKind.job: 'job', StepKind.daemon: 'daemon'};
 
-SubFormulaStep _$SubFormulaStepFromJson(Map<String, dynamic> json) =>
-    SubFormulaStep(
+SubCircuitStep _$SubCircuitStepFromJson(Map<String, dynamic> json) =>
+    SubCircuitStep(
       stepId: json['stepId'] as String,
-      formulaId: json['formulaId'] as String,
+      circuitId: json['circuitId'] as String,
       params:
           (json['params'] as Map<String, dynamic>?)?.map(
             (k, e) => MapEntry(k, e as String),
@@ -80,19 +80,19 @@ SubFormulaStep _$SubFormulaStepFromJson(Map<String, dynamic> json) =>
       $type: json['type'] as String?,
     );
 
-Map<String, dynamic> _$SubFormulaStepToJson(SubFormulaStep instance) =>
+Map<String, dynamic> _$SubCircuitStepToJson(SubCircuitStep instance) =>
     <String, dynamic>{
       'stepId': instance.stepId,
-      'formulaId': instance.formulaId,
+      'circuitId': instance.circuitId,
       'params': instance.params,
       'dependsOn': instance.dependsOn.toList(),
       'type': instance.$type,
     };
 
-_Formula _$FormulaFromJson(Map<String, dynamic> json) => _Formula(
+_Circuit _$CircuitFromJson(Map<String, dynamic> json) => _Circuit(
   id: json['id'] as String,
   steps: (json['steps'] as List<dynamic>)
-      .map((e) => FormulaStep.fromJson(e as Map<String, dynamic>))
+      .map((e) => CircuitStep.fromJson(e as Map<String, dynamic>))
       .toList(),
   terminalStepId: json['terminalStepId'] as String,
   supervision:
@@ -107,7 +107,7 @@ _Formula _$FormulaFromJson(Map<String, dynamic> json) => _Formula(
       : ResourceRequest.fromJson(json['peak'] as Map<String, dynamic>),
 );
 
-Map<String, dynamic> _$FormulaToJson(_Formula instance) => <String, dynamic>{
+Map<String, dynamic> _$CircuitToJson(_Circuit instance) => <String, dynamic>{
   'id': instance.id,
   'steps': instance.steps,
   'terminalStepId': instance.terminalStepId,
