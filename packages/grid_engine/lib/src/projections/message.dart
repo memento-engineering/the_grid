@@ -1,9 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
-
-import '../models/bead.dart';
-import '../models/bead_status.dart';
-import '../models/issue_type.dart';
-import 'projection_error.dart';
+import 'package:grid_controller/grid_controller.dart';
 
 part 'message.freezed.dart';
 

@@ -50,17 +50,8 @@ extension type const IssueType(String wire) {
   /// `bd export --all`, which subsumes `--include-infra` (cmd/bd/export.go).
   static const infraTypes = <IssueType>[agent, rig, role];
 
-  /// The plain coding-work core types — the DRIVEABLE-WORK boundary a
-  /// resident station's all-ready arming narrows to (RS-3/D-R4): every other
-  /// core type (`epic`/`decision`/`spike`/`story`/`milestone`) is
-  /// organizational, not something an agent drives.
-  static const driveableTypes = <IssueType>[task, bug, feature, chore];
-
   bool get isCore => coreTypes.contains(this);
 
   /// True for types `bd list` hides; see [infraTypes].
   bool get isInfra => infraTypes.contains(this);
-
-  /// True for the four driveable core types; see [driveableTypes].
-  bool get isDriveable => driveableTypes.contains(this);
 }

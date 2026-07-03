@@ -59,11 +59,10 @@ export 'src/reactivity/snapshot_reader.dart';
 export 'src/reactivity/snapshot_readers.dart';
 export 'src/transformers/graph_events_transformer.dart';
 
-// Reactive domain projections (Track E; ADR-0002 Decision 2): the M1 proving
-// trio — sessions, messages, molecules/steps — as freezed value types plus
-// pure project() selectors a consumer runs over a GraphSnapshot.
-export 'src/projections/agent_session.dart';
-export 'src/projections/message.dart';
-export 'src/projections/molecule.dart';
+// Reactive domain projection primitives (Track E; ADR-0002 Decision 2): the
+// typed decode-failure result plus the [Step] value type — shared by
+// grid_reconciler's Wisp projection, so they stay in the pure beads client.
+// The grid-opinionated projections (sessions, messages, molecules — AL-1b)
+// moved to grid_engine; see grid_engine's barrel.
 export 'src/projections/projection_error.dart';
 export 'src/projections/step.dart';

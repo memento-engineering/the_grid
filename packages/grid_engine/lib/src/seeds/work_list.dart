@@ -3,6 +3,7 @@ import 'package:grid_controller/grid_controller.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:state_notifier/state_notifier.dart';
 
+import '../domain/driveable_work.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/substation_config.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
@@ -142,8 +143,8 @@ class _WorkListState extends State<WorkList> {
   /// was considered and left in scope.)
   ///
   /// Under [resident] arming (RS-3/D-R4) the allow-list narrows FURTHER to
-  /// the DRIVEABLE-WORK boundary ([IssueType.isDriveable]) — a resident
-  /// station's ready frontier IS the drive set, so an organizational core
+  /// the DRIVEABLE-WORK boundary ([IssueTypeDriveability.isDriveable]) — a
+  /// resident station's ready frontier IS the drive set, so an organizational core
   /// type (epic/milestone/decision/spike/story) must never auto-mount just
   /// because it surfaced ready (the filing-time CATCH on RS-3; a scoped
   /// refinement of A41, flagged for the graduation ADR, never a weakening of

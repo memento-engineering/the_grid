@@ -1,12 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
-
-import '../models/bead.dart';
-import '../models/bead_dependency.dart';
-import '../models/bead_status.dart';
-import '../models/dependency_type.dart';
-import '../models/issue_type.dart';
-import 'projection_error.dart';
-import 'step.dart';
+import 'package:grid_controller/grid_controller.dart';
 
 part 'molecule.freezed.dart';
 
