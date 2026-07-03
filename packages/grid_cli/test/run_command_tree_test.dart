@@ -869,6 +869,10 @@ Future<int> runStation({
       workRoot: live.workRoot,
       groups: live.groups,
       freshnessBarrier: live.freshnessBarrier,
+      // The adopt pair is threaded AS ONE (ADR-0009 D4 all-or-nothing): the
+      // liveness half rides live.stationServices, the reconciler half is this
+      // passthrough — both non-null iff --adopt armed a live run.
+      adoptProof: live.adoptProof,
       resolver: resolver,
       registry: registry,
       services: services,
