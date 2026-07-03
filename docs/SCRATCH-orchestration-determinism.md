@@ -87,6 +87,36 @@ Each row: what happened → root cause → the deterministic correction (**CODE*
   monitor keeps polling): **PROC** — don't arm the monitor until the runner banner confirms boot.
 - These are my harness patterns, not grid behavior; noted for completeness.
 
+### I-8 — Create-then-dep race: a blocker-less create mounts before its deps land (2026-07-03)
+- **What:** filing the tg-1di mirror bead against a LIVE resident station: `bd create` (open) and
+  the `bd batch` dep-add landed as two commits ~seconds apart; the station's watcher saw the
+  blocker-less create first → tg-1di momentarily READY → mounted + spawned. The dep landed right
+  after, but A40 (positive-terminal-only unmount) correctly keeps an in-flight session alive — so
+  a wrong mount survived its own cause. Compounded: the bead was foreign-rooted
+  (`grid.root: space_station`) on a pre-multi-root binary, so its agent got a the_grid worktree.
+- **Root:** bead authoring raced the reactive frontier. Ready = armed (D-R4) means the store is
+  the trigger surface — a create is LIVE the moment it commits, not when the author finishes.
+- **Correction (PROC, effective immediately):** dep-gated beads are **created deferred → deps
+  wired → undeferred**, always — the same discipline as the intake rule, now for a second reason
+  (the first: unblessed work; this: half-authored work). A create with `--deps` in one atomic
+  call would also close it (CODE candidate: verify plain `--deps <id>` semantics — the
+  `blocks:<id>` form is inverted).
+- **Inference eliminated:** the diagnose-why-did-that-mount pass + orphan cleanup.
+
+### I-9 — An in-flight spawn survived a graceful `space down` (2026-07-03)
+- **What:** the same wrong-mount agent (tg-1di, pid 49010 / pgid 49009) was STILL RUNNING after
+  `space down` completed and the lock released — teardown missed it. Found via the ps sweep during
+  cleanup; killed scoped by pgid.
+- **Root (suspected):** the mount/spawn was in flight while the teardown unmounted the tree — the
+  dispose-kill pass ran before the allocation registered its process, leaving the child
+  unparented. The A38 conservative-unwind covered the post-provision-failure path; this is the
+  teardown-vs-spawn window.
+- **Correction (CODE — FILED deferred):** the down path ends with an orphan sweep — after unmount
+  completes, reconcile `listRunning(<session prefix>)` (or the restart-fence pgids from the state
+  store) against zero-expected and terminate stragglers LOUD. Same liveness family as tg-9fl's
+  fences.
+- **Inference eliminated:** the post-down ps forensics.
+
 ## 2. The synthesis — what makes orchestration deterministic
 
 The manual steering today was **overwhelmingly the cost of the missing resident station + rework
