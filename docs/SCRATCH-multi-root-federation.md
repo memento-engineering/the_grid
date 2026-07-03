@@ -1,6 +1,14 @@
 # SCRATCH — one station, many roots + federated work sources
 
-**Status: discovery surface (2026-07-03), awaiting Nico's rulings.** Refines the two deferred P0
+**Status: PAUSED (2026-07-03) — architecture realignment in session.** Nico stopped the pass
+mid-read: the remote half of §4b (D-Z7 in particular) misreads his federation model
+(stations HOST substations and coordinate by WORK ASSIGNMENT with station-local credentials — not
+by observing remote stores as snapshot members), and the grid_controller/grid_engine split +
+residual Riverpod need an architecture look first. The LOCAL multi-root/multi-store content
+(§3, §4 D-F1..F7 minus the remote framing) is expected to survive; do not build anything here
+until the realignment surface lands.
+
+**Was: discovery surface (2026-07-03), awaiting Nico's rulings.** Refines the two deferred P0
 beads filed at the first live boot — **tg-7gm** (multi-root) and **tg-nsj** (federated work
 sources, dep: tg-7gm). Written from a read-only discovery pass (two seam scouts + operator
 verification against the live stores). Doc-before-code: nothing here is built until the rulings
