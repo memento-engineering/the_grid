@@ -116,7 +116,10 @@ own actor because under D-B1 it IS one — the union of everyone's brokers, not 
   The publish-own rule maps claim-in-own-store onto the wire: presence = your broker's liveness
   (+ LWT), advertisement = retained messages on your own broker, claims = notifications on your
   own broker, arbitration = deterministic at the work's owner.
-- **D-B2 — Broker IN-PROCESS, single-writer (PROPOSED — Nico's open question).** The publish-own
+- **D-B2 — Broker IN-PROCESS, single-writer (RULED 2026-07-03).** Nico: in-process; pub.dev has
+  "not a lot of good/maintained options" — so `federated_grid_assets` defines its **own abstract
+  broker interface** to shield the dependency: try existing packages behind the seam first, write
+  our own single-writer subset only if they fail, swap freely later. Original rationale stands: The publish-own
   rule makes each broker single-writer, collapsing it to a retained-topic map + subscriber fan-out
   + LWT — no fan-in races, no cross-publisher arbitration. Lifecycle unity becomes correctness:
   your broker IS your presence (station-dark = broker-dark; a subscriber's connection drop is the
@@ -136,6 +139,27 @@ own actor because under D-B1 it IS one — the union of everyone's brokers, not 
 - **D-B4 — A2A parked until model/agent routing (RULED).** Its agent-card shape overlaps our
   `Presence`/`CapabilityFacts` advertisement and "becomes more relevant when we start doing
   model/agent routing" — revisit there, not for the bus.
+- **D-B5 — NO MQTT IN THE ENGINE, EVER (explicit, per Nico's TBC 2026-07-03).** ALL bus machinery
+  — the in-process broker + its shielding interface (D-B2), MQTT bindings, topic layout, the
+  ACP-shaped wire protocol impl, topology — lives in power_station's `federated_grid_assets`
+  (+ `zero_conf_grid_assets` for discovery/topology opinions). The engine-level architectural
+  surface for federation is **transport-free contracts only**:
+  1. **the unclaimed-frontier hook** — the engine exposes "the unclaimed requirement set at the
+     end of a reconciliation phase" for an asset claim capability to consume (the D-A3 broadcast
+     trigger is engine-observable, asset-actioned);
+  2. **requirement-slot resolution at the `EffectResolver` seam** — a step requirement the local
+     station cannot fulfill resolves to an asset-provided claim+lease capability instead of a
+     local spawn (local-vs-remote is a resolver decision, the remote impl is the asset's);
+  3. **the SDK value types + seams** already ruled by D-A9 — `Presence`/`CapabilityFacts`,
+     claim/lease protocol contracts, the transport-agnostic bus seam;
+  4. **durable claim recording** rides the existing bd write chokepoint (claim-in-own-store).
+  Nothing else touches the engine.
+- **D-B6 — power_station gets its OWN ADR repository (RULED 2026-07-03).** It stops riding
+  the_grid's ADR line (it already carries its own ADR-0000). Asset-level federation/bus/zero-conf
+  ADRs land in power_station's `docs/adr/`; the_grid's line stays engine-scoped. This resolves
+  OQ-A4's vessel: the engine contracts (D-B5) graduate into **the_grid ADR-0011** once the claim
+  flow is proven end-to-end (spike-before-doctrine); the asset opinions graduate into
+  power_station's own ADR line.
 
 ## 4. What survives from the paused SCRATCH
 
@@ -160,15 +184,28 @@ rulings when that pass resumes.
 
 1–4 are independent of 5–7; the office grid needs 5–7 before the first cross-station claim.
 
-## 6. Open questions
+## 6. Open questions — ALL ANSWERED (2026-07-03)
 
-- **OQ-A1 — `beads_dart` ship-it.** Publication is outward-facing: confirm the publish (and the
-  publisher identity — pub.dev verified publisher `memento.engineering`?).
-- **OQ-A2 — D-B2 ruling.** Broker in-process (recommended) or out?
-- **OQ-A3 — the ladder.** Bless AL-1..7 ordering (and where the dash/butane grooming slots in —
-  it gates AL-3's arm, not its build).
-- **OQ-A4 — the vessel.** Does §1/§3 graduate into ADR-0011 (Federation — Nico's parked number)
-  now, or after the bus prototype proves the claim flow end-to-end?
+- **OQ-A1 — ANSWERED:** `beads_dart` extraction proceeds now; **publication rides the the_grid
+  publish wave** ("we will publish when we publish the rest of the_grid").
+- **OQ-A2 — ANSWERED:** in-process, behind our own abstract broker interface (→ D-B2).
+- **OQ-A3 — ANSWERED:** blessed — and the sequencing is DELEGATED: *"You're in charge of the DAG
+  as far as delivery. I just tell you what I wanted delivered and how, and right now this is one
+  unit of work that I want delivered with these technical requirements."* Delivery decomposition
+  below is the operator's, held to this surface's requirements.
+- **OQ-A4 — ANSWERED via D-B5/D-B6:** engine contracts → the_grid ADR-0011 after the claim flow
+  proves end-to-end; asset opinions → power_station's own new ADR line; no MQTT in the engine.
+
+### §4-amendment discovered while taking DAG ownership: D-M1 needs a per-bead root override
+
+The paused SCRATCH's D-M1 ("root granularity = per-substation, never per-bead") is WRONG for the
+tg substation: **substation↔repo is 1:N there** — one store spans the_grid, power_station,
+space_station, genesis. Per-substation roots are the correct DEFAULT, but tg-7gm (AL-2) must also
+deliver a **per-bead root selector**: roots register by name (`--root <name>=<path>[@head]`, the
+substation's own name = its default root), and a bead may select a registered root via its
+envelope (e.g. `grid.root: power_station`); an unregistered selection is an arming-class LOUD
+skip, never a gate. Without this, AL-5b/6/7 (power_station-repo beads in the tg store) stay
+undrivable by the resident station.
 
 ## 7. Rulings log
 
@@ -181,3 +218,7 @@ rulings when that pass resumes.
   cards → model/agent routing.
 - 2026-07-03 — Whiteboard clarified: X = "Station X|Y|Z" (more machines than point-to-point);
   triangle actor = the event bus.
+- 2026-07-03 — OQ-A1..4 answered (see §6): publish-with-the_grid; broker in-process behind our
+  own interface; ladder blessed + **delivery DAG delegated to the operator** ("one unit of work…
+  with these technical requirements"); no MQTT in the engine (D-B5), power_station gets its own
+  ADR repository (D-B6), ADR-0011 graduates post-proof.
