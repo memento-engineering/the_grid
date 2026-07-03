@@ -47,10 +47,10 @@ abstract class SessionProjection with _$SessionProjection {
 
     /// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
     /// node's [NodeCursor] keyed by its `nodePath`, projected from the session
-    /// bead's `grid.cursor.*` metadata and threaded down to `FormulaScope`
+    /// bead's `grid.cursor.*` metadata and threaded down to `CircuitScope`
     /// pull-free (A39). Empty for a freshly-minted session (no node has written
-    /// its cursor yet — the root formula's frontier mounts from `pending`).
-    @Default(<String, NodeCursor>{}) FormulaCursor cursor,
+    /// its cursor yet — the root circuit's frontier mounts from `pending`).
+    @Default(<String, NodeCursor>{}) CircuitCursor cursor,
 
     /// The per-node `grid.result.*` payloads, threaded down pull-free so a
     /// `route` step reads its siblings' grades — D-5. Keyed by `nodePath`; empty

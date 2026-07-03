@@ -1,6 +1,6 @@
-/// The restorable formula cursor (ADR-0008 D4 / M4-P1 §3, D-3).
+/// The restorable circuit cursor (ADR-0008 D4 / M4-P1 §3, D-3).
 ///
-/// The in-memory shape of a reentrant formula's progress — a per-node
+/// The in-memory shape of a reentrant circuit's progress — a per-node
 /// [StepState] position plus the per-node respawn fence (D-4) and the
 /// supervised-restart bookkeeping (D-5). Persisted as FLAT, merge-safe
 /// `grid.cursor.{nodePath}.*` keys on the_grid's OWN session bead (Track B does
@@ -10,13 +10,13 @@ library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-import 'formula.dart';
+import 'circuit.dart';
 
 part 'cursor.freezed.dart';
 part 'cursor.g.dart';
 
 /// One inflated node's cursor entry, keyed by its `nodePath` in a
-/// [FormulaCursor].
+/// [CircuitCursor].
 ///
 /// Flat per key so two concurrent leaf hosts writing DISJOINT keys never lose a
 /// write through bd's client-side metadata merge (the D-1 serialization gate
@@ -86,9 +86,9 @@ abstract class NodeCursor with _$NodeCursor {
       state == StepState.ready || state == StepState.complete;
 }
 
-/// A formula's cursor: every inflated node's [NodeCursor] keyed by its full
+/// A circuit's cursor: every inflated node's [NodeCursor] keyed by its full
 /// `nodePath` (e.g. `tg-7r9/harnessPeripheral/build`).
 ///
 /// A missing key reads as a default `pending` [NodeCursor] (a node that has
 /// never run). The empty cursor is the freshly-minted session's starting point.
-typedef FormulaCursor = Map<String, NodeCursor>;
+typedef CircuitCursor = Map<String, NodeCursor>;

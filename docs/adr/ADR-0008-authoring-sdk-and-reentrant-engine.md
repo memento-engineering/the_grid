@@ -84,6 +84,8 @@ The "full power grid" rename. Canonical:
 
 **Amended 2026-07-02 (ratified Nico; `docs/SCRATCH-agent-scope.md` D-D/D-G) — the Capability row's sandbox clause is SUPERSEDED** (quoted: *"Sandboxed to a narrow interface — no `TreeContext`, no detection pipeline, no `markNeedsRebuild`"*). Per ADR-0009's "depending on context is the norm" + genesis_tree 0.1.4's non-binding `getInheritedSeedOfExactType` (snapshot-at-read, callable outside build, `StateError` on an unmounted branch): a capability now receives the host's stable **`(TreeContext, StepArgs)`** and reads ambient values with the non-binding verb; the `CapabilityContext` grab-bag is **deleted**. **Two verbs, one lookup system:** `dependOn*` = the tree/build verb (branches always watch); `get*` = the effect verb (+ `initState` initial reads and teardown). The invariants move from wall to **mutation-verified gates extended to capability-land**: a capability never calls `dependOn*`, never `addListener`s anything reached from context, never subscribes to the pipeline, and writes only through the chokepoint.
 
+**Forward stamp (2026-07-02, `docs/SCRATCH-resident-station.md` §6, ratified Nico) — the Circuit rename:** the **Formula** row above (quoted: *"a value-typed declared step-graph… 'Energised' = mounted under a substation"*) is renamed **`Formula` → `Circuit`**, inflation verb **energize** ("electrify" an accepted synonym); executing as bead RS-7 (the_grid half, this doc's code) / RS-7b (power_station assets); full ADR-0008 text stamps land at graduation.
+
 ---
 
 ## Decision 4 — The engine is reentrant/recursive (turtles)

@@ -15,12 +15,12 @@ Map<String, dynamic> _roundTrip(Map<String, dynamic> json) =>
     jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
 
 // ---------------------------------------------------------------------------
-// The two canonical formulas (M4-P1 §6 + §9), and a registry over them.
+// The two canonical circuits (M4-P1 §6 + §9), and a registry over them.
 // ---------------------------------------------------------------------------
 
-/// agent → verify → land — the degenerate linear formula whose always-1-wide
+/// agent → verify → land — the degenerate linear circuit whose always-1-wide
 /// frontier reproduces P0 (§6).
-const code = Formula(
+const code = Circuit(
   id: 'code',
   terminalStepId: 'land',
   steps: [
@@ -36,7 +36,7 @@ const code = Formula(
 
 /// build → install → launch(daemon) → waitWS — the harness deploy (§9), with a
 /// long-lived daemon that satisfies on `ready` while staying mounted.
-const deploy = Formula(
+const deploy = Circuit(
   id: 'deploy',
   terminalStepId: 'waitWS',
   steps: [
@@ -52,18 +52,18 @@ const deploy = Formula(
   ],
 );
 
-/// The Burn (§9): two deploy sub-formulas (ordered: peripheral before central),
+/// The Burn (§9): two deploy sub-circuits (ordered: peripheral before central),
 /// a coordinator gated on an await-all barrier over both, then a report.
-const burn = Formula(
+const burn = Circuit(
   id: 'burn',
   terminalStepId: 'report',
   supervision: SupervisionStrategy.restForOne,
   peak: ResourceRequest(builds: 2, processes: 3),
   steps: [
-    SubFormulaStep(stepId: 'harnessPeripheral', formulaId: 'deploy'),
-    SubFormulaStep(
+    SubCircuitStep(stepId: 'harnessPeripheral', circuitId: 'deploy'),
+    SubCircuitStep(
       stepId: 'harnessCentral',
-      formulaId: 'deploy',
+      circuitId: 'deploy',
       dependsOn: {'harnessPeripheral'}, // ordering barrier
     ),
     CapabilityStep(
@@ -80,17 +80,17 @@ const burn = Formula(
 );
 
 const _registry = {'deploy': deploy};
-Formula? _byId(String id) => _registry[id];
+Circuit? _byId(String id) => _registry[id];
 
 final _now = DateTime(2026);
 
-/// The eligible step ids of [formula] under [cursor] at [nodePath], in order.
+/// The eligible step ids of [circuit] under [cursor] at [nodePath], in order.
 List<String> _frontier(
-  Formula formula,
-  FormulaCursor cursor,
+  Circuit circuit,
+  CircuitCursor cursor,
   String nodePath,
 ) =>
-    eligibleSteps(formula, cursor, nodePath, formulaById: _byId, now: _now)
+    eligibleSteps(circuit, cursor, nodePath, circuitById: _byId, now: _now)
         .map((s) => s.stepId)
         .toList();
 
@@ -132,7 +132,7 @@ void main() {
       );
     });
 
-    test('all complete → empty frontier, and the formula is complete', () {
+    test('all complete → empty frontier, and the circuit is complete', () {
       final cursor = {
         'tg-1/agent': _c(StepState.complete),
         'tg-1/verify': _c(StepState.complete),
@@ -140,10 +140,10 @@ void main() {
       };
       expect(_frontier(code, cursor, 'tg-1'), isEmpty);
       expect(
-        isFormulaComplete(code, cursor, 'tg-1', formulaById: _byId),
+        isCircuitComplete(code, cursor, 'tg-1', circuitById: _byId),
         isTrue,
       );
-      expect(isFormulaBroken(code, cursor, 'tg-1'), isFalse);
+      expect(isCircuitBroken(code, cursor, 'tg-1'), isFalse);
     });
 
     test('a running step stays in the frontier (not unmounted)', () {
@@ -166,7 +166,7 @@ void main() {
         final cursor = {
           'b/harnessPeripheral/waitWS': _c(StepState.complete),
         };
-        // The sub-formula step itself stays mounted (daemons live under it).
+        // The sub-circuit step itself stays mounted (daemons live under it).
         expect(
           _frontier(burn, cursor, 'b'),
           ['harnessPeripheral', 'harnessCentral'],
@@ -236,10 +236,10 @@ void main() {
         'd/build': _c(StepState.failed, restartCount: 3), // == maxRestarts(3)
       };
       expect(_frontier(deploy, cursor, 'd'), isEmpty);
-      expect(isCircuitBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
-      expect(isFormulaBroken(deploy, cursor, 'd'), isTrue);
+      expect(isStepBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
+      expect(isCircuitBroken(deploy, cursor, 'd'), isTrue);
       expect(
-        isFormulaComplete(deploy, cursor, 'd', formulaById: _byId),
+        isCircuitComplete(deploy, cursor, 'd', circuitById: _byId),
         isFalse,
         reason: 'empty-because-broken is NOT empty-because-complete (D-5)',
       );
@@ -251,8 +251,8 @@ void main() {
         'd/build': _c(StepState.failed, restartCount: 4), // > maxRestarts(3)
       };
       expect(_frontier(deploy, cursor, 'd'), isEmpty);
-      expect(isCircuitBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
-      expect(isFormulaBroken(deploy, cursor, 'd'), isTrue);
+      expect(isStepBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
+      expect(isCircuitBroken(deploy, cursor, 'd'), isTrue);
     });
 
     test('a failed step within budget but still cooling is withheld', () {
@@ -285,43 +285,43 @@ void main() {
     });
   });
 
-  group('Track A — isFormulaBrokenDeep descends into sub-formulas (D-5)', () {
+  group('Track A — isCircuitBrokenDeep descends into sub-circuits (D-5)', () {
     test('a nested deploy step exhausting its breaker is broken-deep, but the '
         'shallow check at the burn level misses it', () {
       final cursor = {
         // The peripheral deploy's build failed AND exhausted (>= maxRestarts 3).
         'b/harnessPeripheral/build': _c(StepState.failed, restartCount: 3),
       };
-      expect(isFormulaBrokenDeep(burn, cursor, 'b', formulaById: _byId), isTrue);
+      expect(isCircuitBrokenDeep(burn, cursor, 'b', circuitById: _byId), isTrue);
       // The shallow check (burn's OWN steps) sees no broken step — they are
-      // sub-formulas + withheld leaves.
-      expect(isFormulaBroken(burn, cursor, 'b'), isFalse);
+      // sub-circuits + withheld leaves.
+      expect(isCircuitBroken(burn, cursor, 'b'), isFalse);
     });
 
     test('a healthy burn is not broken-deep', () {
       expect(
-        isFormulaBrokenDeep(burn, const {}, 'b', formulaById: _byId),
+        isCircuitBrokenDeep(burn, const {}, 'b', circuitById: _byId),
         isFalse,
       );
     });
   });
 
-  group('Track A — isFormulaComplete descends into a sub-formula terminal', () {
+  group('Track A — isCircuitComplete descends into a sub-circuit terminal', () {
     // The regression guard for the asymmetry the adversarial review found: a
-    // SubFormulaStep has no host, so its OWN cursor node is never written.
-    // isFormulaComplete must resolve a sub-formula terminal to its terminal-step
+    // SubCircuitStep has no host, so its OWN cursor node is never written.
+    // isCircuitComplete must resolve a sub-circuit terminal to its terminal-step
     // DESCENDANT, or the session would never close (the indefinite mount D-5
     // forbids).
-    const outer = Formula(
+    const outer = Circuit(
       id: 'outer',
-      terminalStepId: 'wrap', // a sub-formula as the terminal step
-      steps: [SubFormulaStep(stepId: 'wrap', formulaId: 'deploy')],
+      terminalStepId: 'wrap', // a sub-circuit as the terminal step
+      steps: [SubCircuitStep(stepId: 'wrap', circuitId: 'deploy')],
     );
 
-    test('not complete while the sub-formula terminal descendant is pending',
+    test('not complete while the sub-circuit terminal descendant is pending',
         () {
       expect(
-        isFormulaComplete(outer, const {}, 'n', formulaById: _byId),
+        isCircuitComplete(outer, const {}, 'n', circuitById: _byId),
         isFalse,
       );
     });
@@ -332,7 +332,7 @@ void main() {
         'n/wrap/waitWS': _c(StepState.complete),
       };
       expect(
-        isFormulaComplete(outer, cursor, 'n', formulaById: _byId),
+        isCircuitComplete(outer, cursor, 'n', circuitById: _byId),
         isTrue,
       );
     });
@@ -340,7 +340,7 @@ void main() {
 
   group('Track A — fail-closed dep resolution', () {
     test('a dangling dep id is never satisfiable', () {
-      const f = Formula(
+      const f = Circuit(
         id: 'x',
         terminalStepId: 'a',
         steps: [
@@ -350,16 +350,16 @@ void main() {
       expect(_frontier(f, const {}, 'n'), isEmpty);
     });
 
-    test('a sub-formula dep with an unknown formulaId is never satisfiable', () {
-      const f = Formula(
+    test('a sub-circuit dep with an unknown circuitId is never satisfiable', () {
+      const f = Circuit(
         id: 'x',
         terminalStepId: 'b',
         steps: [
-          SubFormulaStep(stepId: 's', formulaId: 'missing'),
+          SubCircuitStep(stepId: 's', circuitId: 'missing'),
           CapabilityStep(stepId: 'b', capabilityId: 'b', dependsOn: {'s'}),
         ],
       );
-      // The sub-formula step itself is eligible (pending), but 'b' is withheld
+      // The sub-circuit step itself is eligible (pending), but 'b' is withheld
       // because 's' resolves to no terminal path (fail-closed).
       expect(_frontier(f, const {}, 'n'), ['s']);
     });
@@ -381,12 +381,12 @@ void main() {
   });
 
   group('Track A — one shape, two serializations (JSON round-trip)', () {
-    test('a multi-step fan-out Formula round-trips identically', () {
-      expect(Formula.fromJson(_roundTrip(burn.toJson())), burn);
+    test('a multi-step fan-out Circuit round-trips identically', () {
+      expect(Circuit.fromJson(_roundTrip(burn.toJson())), burn);
     });
 
-    test('the linear code Formula round-trips identically', () {
-      expect(Formula.fromJson(_roundTrip(code.toJson())), code);
+    test('the linear code Circuit round-trips identically', () {
+      expect(Circuit.fromJson(_roundTrip(code.toJson())), code);
     });
 
     test('a CapabilityStep with resources + a daemon kind round-trips', () {
@@ -398,21 +398,21 @@ void main() {
         kind: StepKind.daemon,
         resources: ResourceRequest(builds: 1, processes: 2),
       );
-      final back = FormulaStep.fromJson(_roundTrip(step.toJson()));
+      final back = CircuitStep.fromJson(_roundTrip(step.toJson()));
       expect(back, step);
       expect(back, isA<CapabilityStep>());
     });
 
-    test('a SubFormulaStep round-trips to the right union case', () {
-      const step = SubFormulaStep(
+    test('a SubCircuitStep round-trips to the right union case', () {
+      const step = SubCircuitStep(
         stepId: 's',
-        formulaId: 'deploy',
+        circuitId: 'deploy',
         params: {'selector': 'mdns:pi-a'},
         dependsOn: {'x'},
       );
-      final back = FormulaStep.fromJson(_roundTrip(step.toJson()));
+      final back = CircuitStep.fromJson(_roundTrip(step.toJson()));
       expect(back, step);
-      expect(back, isA<SubFormulaStep>());
+      expect(back, isA<SubCircuitStep>());
     });
 
     test('a NodeCursor round-trips (incl. identity + backoff fields)', () {

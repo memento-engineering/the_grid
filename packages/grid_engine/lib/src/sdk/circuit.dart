@@ -1,8 +1,8 @@
 /// The reentrant authoring surface (ADR-0008 D4 / M4-P1 Track A).
 ///
-/// A [Formula] is the value-typed step-graph the engine inflates into a
-/// reconciled subtree on `genesis_tree` — the depth-analogue of the work
-/// lifecycle. The author composes value-types ([Formula] / [FormulaStep]) +
+/// A [Circuit] is the value-typed step-graph the engine energizes (electrifies)
+/// — inflates — into a reconciled subtree on `genesis_tree` — the depth-analogue
+/// of the work lifecycle. The author composes value-types ([Circuit] / [CircuitStep]) +
 /// opaque `Capability` leaves and **never a `Seed`**; that is what holds the
 /// four derailment-invariants AT DEPTH by construction (ADR-0008 D2).
 ///
@@ -14,8 +14,8 @@ library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-part 'formula.freezed.dart';
-part 'formula.g.dart';
+part 'circuit.freezed.dart';
+part 'circuit.g.dart';
 
 /// The lifetime of a leaf step (M4-P1 §3 / OQ-1).
 ///
@@ -65,9 +65,9 @@ enum StepState {
   gated,
 }
 
-/// How a [Formula] supervises a failed child (M4-P1 §3 / D-5).
+/// How a [Circuit] supervises a failed child (M4-P1 §3 / D-5).
 ///
-/// Only [oneForOne] is exercised by the agent/verify/land `code` formula; the
+/// Only [oneForOne] is exercised by the agent/verify/land `code` circuit; the
 /// Burn uses [restForOne] (re-key the failed step ∪ its transitive dependents).
 /// [oneForAll] is reserved.
 enum SupervisionStrategy {
@@ -77,7 +77,7 @@ enum SupervisionStrategy {
   /// Restart the failed step and its transitive dependents.
   restForOne,
 
-  /// Restart the whole formula subtree.
+  /// Restart the whole circuit subtree.
   oneForAll,
 }
 
@@ -126,7 +126,7 @@ abstract class Backoff with _$Backoff {
 ///
 /// Declaration-only in P1: the `DartEnvironment` governor + leaf-permit
 /// acquisition are a separate, optional track the Burn does NOT block on (D-7).
-/// Carried on [Formula.peak] (the aggregate) and [CapabilityStep.resources] (the
+/// Carried on [Circuit.peak] (the aggregate) and [CapabilityStep.resources] (the
 /// per-leaf request) so a future governor can check both without a shape change.
 @freezed
 abstract class ResourceRequest with _$ResourceRequest {
@@ -141,25 +141,25 @@ abstract class ResourceRequest with _$ResourceRequest {
       _$ResourceRequestFromJson(json);
 }
 
-/// One step in a [Formula] — a sealed union the inflater maps to a child Seed
+/// One step in a [Circuit] — a sealed union the inflater maps to a child Seed
 /// (M4-P1 §3 / §4).
 ///
 /// - [CapabilityStep] → a `CapabilityHost` (an opaque `Capability` leaf);
-/// - [SubFormulaStep] → a nested `FormulaScope` (REENTRANCY: the SAME inflater
+/// - [SubCircuitStep] → a nested `CircuitScope` (REENTRANCY: the SAME inflater
 ///   one level down).
 ///
 /// `FanOutStep` (keyed dynamic-but-bounded) is deferred to dynamic planning
-/// (OQ-2 / §11) — the 2-device Burn uses explicit [SubFormulaStep]s. Every step
+/// (OQ-2 / §11) — the 2-device Burn uses explicit [SubCircuitStep]s. Every step
 /// carries [stepId], [params], and [dependsOn] (the barrier IS multiple deps);
 /// a dep names a sibling step id, and is satisfied only by that step's POSITIVE
-/// TERMINAL (a job `complete` or a daemon `ready`; a sub-formula dep resolves to
+/// TERMINAL (a job `complete` or a daemon `ready`; a sub-circuit dep resolves to
 /// its terminal-step descendant).
 @Freezed(unionKey: 'type', unionValueCase: FreezedUnionCase.snake)
-sealed class FormulaStep with _$FormulaStep {
+sealed class CircuitStep with _$CircuitStep {
   /// A leaf step resolved to an opaque `Capability` via the `CapabilityRegistry`.
   @FreezedUnionValue('capability')
-  const factory FormulaStep.capability({
-    /// The step's id (unique within its formula).
+  const factory CircuitStep.capability({
+    /// The step's id (unique within its circuit).
     required String stepId,
 
     /// The capability id resolved via the `CapabilityRegistry`.
@@ -181,25 +181,25 @@ sealed class FormulaStep with _$FormulaStep {
   }) = CapabilityStep;
 
   /// A reentrant step inflated by the SAME inflater one level down.
-  @FreezedUnionValue('sub_formula')
-  const factory FormulaStep.subFormula({
-    /// The step's id (unique within its formula).
+  @FreezedUnionValue('sub_circuit')
+  const factory CircuitStep.subCircuit({
+    /// The step's id (unique within its circuit).
     required String stepId,
 
-    /// The id of the nested formula (resolved via the `CapabilityRegistry`).
-    required String formulaId,
+    /// The id of the nested circuit (resolved via the `CapabilityRegistry`).
+    required String circuitId,
 
-    /// Opaque parameters threaded to the nested formula.
+    /// Opaque parameters threaded to the nested circuit.
     @Default(<String, String>{}) Map<String, String> params,
 
     /// The sibling step ids whose positive terminals gate this step.
     @Default(<String>{}) Set<String> dependsOn,
-  }) = SubFormulaStep;
+  }) = SubCircuitStep;
 
-  const FormulaStep._();
+  const CircuitStep._();
 
-  factory FormulaStep.fromJson(Map<String, dynamic> json) =>
-      _$FormulaStepFromJson(json);
+  factory CircuitStep.fromJson(Map<String, dynamic> json) =>
+      _$CircuitStepFromJson(json);
 
   // [stepId], [params], and [dependsOn] are declared in every union case, so
   // freezed exposes them on this sealed base directly — no hand-written getters.
@@ -208,24 +208,24 @@ sealed class FormulaStep with _$FormulaStep {
 /// A declared step-graph the engine inflates into a reconciled subtree
 /// (M4-P1 §3 — the reentrant unit).
 ///
-/// The agent/verify/land `code` formula is the degenerate linear case whose
+/// The agent/verify/land `code` circuit is the degenerate linear case whose
 /// always-1-wide frontier reproduces P0 byte-for-byte (§6); the Burn is the
 /// multi-step fan-out + barrier + long-lived-daemon stress case (§9).
 @freezed
-abstract class Formula with _$Formula {
-  /// Creates a formula [id]'d over [steps], with [terminalStepId] (its host's
+abstract class Circuit with _$Circuit {
+  /// Creates a circuit [id]'d over [steps], with [terminalStepId] (its host's
   /// positive terminal closes the session — D-2), a [supervision] strategy, a
   /// mandatory [backoff], a restart budget [maxRestarts], and an optional
   /// declared resource [peak].
-  const factory Formula({
-    /// The formula id (resolved via the `CapabilityRegistry` for a sub-formula).
+  const factory Circuit({
+    /// The circuit id (resolved via the `CapabilityRegistry` for a sub-circuit).
     required String id,
 
     /// The step-graph.
-    required List<FormulaStep> steps,
+    required List<CircuitStep> steps,
 
     /// The terminal step — its positive terminal drives the session close
-    /// (D-2). A `dependsOn` on this formula (as a sub-formula) resolves here.
+    /// (D-2). A `dependsOn` on this circuit (as a sub-circuit) resolves here.
     required String terminalStepId,
 
     /// How a failed child is supervised (default [SupervisionStrategy.oneForOne]).
@@ -240,17 +240,17 @@ abstract class Formula with _$Formula {
 
     /// The declared aggregate resource peak (declaration-only — D-7).
     ResourceRequest? peak,
-  }) = _Formula;
+  }) = _Circuit;
 
-  const Formula._();
+  const Circuit._();
 
-  factory Formula.fromJson(Map<String, dynamic> json) =>
-      _$FormulaFromJson(json);
+  factory Circuit.fromJson(Map<String, dynamic> json) =>
+      _$CircuitFromJson(json);
 
   /// The step with [stepId], or null when absent (a dangling `dependsOn` /
   /// `terminalStepId` resolves to null — the predicate treats that as
   /// unsatisfiable, fail-closed).
-  FormulaStep? stepById(String stepId) {
+  CircuitStep? stepById(String stepId) {
     for (final step in steps) {
       if (step.stepId == stepId) return step;
     }

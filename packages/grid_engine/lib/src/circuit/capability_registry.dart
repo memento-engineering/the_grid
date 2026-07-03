@@ -1,8 +1,8 @@
-/// The engine's capability/formula resolution seam (ADR-0008 D4 / M4-P1 §3,
+/// The engine's capability/circuit resolution seam (ADR-0008 D4 / M4-P1 §3,
 /// Track D).
 ///
-/// The `FormulaScope` inflater resolves THREE things through one stable ambient
-/// [CapabilityRegistry] (`updateShouldNotify => false`, D-6): a (sub-)formula by
+/// The `CircuitScope` inflater resolves THREE things through one stable ambient
+/// [CapabilityRegistry] (`updateShouldNotify => false`, D-6): a (sub-)circuit by
 /// id, the engine leaf Seed for an eligible [CapabilityStep] (a `CapabilityHost`
 /// in the default registry — Track E; a fake in Track D tests), and the wall
 /// clock the frontier predicate reads (injectable so the predicate stays pure).
@@ -17,7 +17,7 @@ library;
 import 'package:genesis_tree/genesis_tree.dart';
 
 import '../sdk/cursor.dart';
-import '../sdk/formula.dart';
+import '../sdk/circuit.dart';
 import 'session_handle.dart';
 
 /// Everything the registry's [CapabilityRegistry.host] needs to mount one
@@ -30,7 +30,7 @@ import 'session_handle.dart';
 class StepMount {
   /// Bundles the [step], its full [nodePath], the resolved [session], the
   /// step's current [node] cursor (identity/incarnation for respawn — D-4), the
-  /// incarnation-keyed reconcile [key], and the owning formula's supervision
+  /// incarnation-keyed reconcile [key], and the owning circuit's supervision
   /// params ([backoff]/[maxRestarts]) the host uses to author the
   /// supervised-restart cursor on failure (D-5).
   const StepMount({
@@ -46,7 +46,7 @@ class StepMount {
   /// The eligible step to mount.
   final CapabilityStep step;
 
-  /// The step's FULL path within the formula tree (`'$parentNodePath/$stepId'`)
+  /// The step's FULL path within the circuit tree (`'$parentNodePath/$stepId'`)
   /// — the cursor key + the per-step provider-name segment.
   final String nodePath;
 
@@ -61,22 +61,22 @@ class StepMount {
   /// reconcile unmounts the old incarnation and mounts the new.
   final Key key;
 
-  /// The owning formula's backoff schedule (D-5) — the host computes the
+  /// The owning circuit's backoff schedule (D-5) — the host computes the
   /// cooldown for the next restart attempt from it on failure.
   final Backoff backoff;
 
-  /// The owning formula's restart budget (D-5) — at `restartCount >= maxRestarts`
+  /// The owning circuit's restart budget (D-5) — at `restartCount >= maxRestarts`
   /// the host writes the exhausted failure (no cooldown) and SessionScope
   /// escalates.
   final int maxRestarts;
 }
 
-/// The engine's capability/formula/clock resolution seam (Track D). The default
+/// The engine's capability/circuit/clock resolution seam (Track D). The default
 /// impl ships in the extension (Track E/H); tests inject a fake.
 abstract interface class CapabilityRegistry {
-  /// Resolves a (sub-)formula by [formulaId]; null when unknown (fail-closed —
+  /// Resolves a (sub-)circuit by [circuitId]; null when unknown (fail-closed —
   /// the predicate then never satisfies a dep on it, and the inflater skips it).
-  Formula? formula(String formulaId);
+  Circuit? circuit(String circuitId);
 
   /// Builds the engine leaf Seed for the eligible [mount.step] — a
   /// `CapabilityHost` in the default registry (Track E), a recording fake in

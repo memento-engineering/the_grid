@@ -23,7 +23,7 @@
 /// A **daemon** lease (`context.kind == StepKind.daemon`) reports `ready` (a
 /// positive terminal that STAYS LIVE, publishing its rendezvous payload) and is
 /// adopt/detach-capable; a **job** lease reports `complete` (latches) —
-/// respawn-or-skip. The discriminator is the formula step's kind, threaded down
+/// respawn-or-skip. The discriminator is the circuit step's kind, threaded down
 /// on [AllocationContext.kind], exactly as [ProcessAllocation].
 ///
 /// **The effect layer holds no writer** (invariant 2): it REPORTS through the
@@ -34,7 +34,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 
 import 'allocation.dart';
 import 'capability.dart';
-import 'formula.dart';
+import 'circuit.dart';
 
 /// The outcome of a [LeaseCapability.acquire] (or an adopt resolution): a live
 /// binding carrying the opaque handle [H], or a fail-closed reason. Sealed so a
@@ -134,7 +134,7 @@ class LeaseAllocation<H> extends Allocation {
   bool get adopted => _adopted;
 
   /// A daemon lease is adopt-capable + detach-capable; a job lease is
-  /// respawn-or-skip (never adopts/detaches — D6). Keyed off the formula step's
+  /// respawn-or-skip (never adopts/detaches — D6). Keyed off the circuit step's
   /// kind on [AllocationContext.kind].
   @override
   bool get isAdoptable => context.kind == StepKind.daemon;

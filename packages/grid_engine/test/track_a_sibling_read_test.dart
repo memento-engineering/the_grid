@@ -75,7 +75,7 @@ void main() {
       expect(payload['critic1.grade'], 'A');
     });
 
-    test('projectFormulaResults parses grid.result.* into per-node maps; a '
+    test('projectCircuitResults parses grid.result.* into per-node maps; a '
         'malformed key is skipped', () {
       final sb = Bead(
         id: 'tgdog-s',
@@ -91,7 +91,7 @@ void main() {
           'grid.result.': 'junk',
         },
       );
-      final results = projectFormulaResults(sb);
+      final results = projectCircuitResults(sb);
       expect(results['b/critic1'], {'grade': 'A', 'rationale': 'clean'});
       expect(results['b/critic2'], {'grade': 'C'});
       // The cursor key did NOT leak into results.

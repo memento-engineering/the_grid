@@ -9,7 +9,7 @@
 /// public library so downstream asset packages (grid_assets) reuse the SAME
 /// fakes — the cross-package enabler for the opinion extraction (ADR-0007 §1).
 ///
-/// The code-asset-specific helpers (`kCodeResolver`, the `code` formula) are NOT
+/// The code-asset-specific helpers (`kCodeResolver`, the `code` circuit) are NOT
 /// here — they reference the moved opinions and live in grid_assets's test
 /// support. Pure-Dart: no live tg/gc/claude/git/network.
 library;

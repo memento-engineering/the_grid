@@ -691,7 +691,7 @@ TreeRunWiring composeStation({
   required RootCheckout workRoot,
   required ProcessGroupController groups,
   required Future<void> Function() freshnessBarrier,
-  required FormulaResolver resolver,
+  required CircuitResolver resolver,
   required CapabilityRegistry registry,
   ServiceBundle services = const ServiceBundle(),
   Seed Function(Seed root)? wrapRoot,

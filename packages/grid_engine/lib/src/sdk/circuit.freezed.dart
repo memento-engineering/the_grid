@@ -3,7 +3,7 @@
 // ignore_for_file: type=lint
 // ignore_for_file: unused_element, deprecated_member_use, deprecated_member_use_from_same_package, use_function_type_syntax_for_parameters, unnecessary_const, avoid_init_to_null, invalid_override_different_default_values_named, prefer_expression_function_bodies, annotate_overrides, invalid_annotation_target, unnecessary_question_mark
 
-part of 'formula.dart';
+part of 'circuit.dart';
 
 // **************************************************************************
 // FreezedGenerator
@@ -552,7 +552,7 @@ as int,
 
 }
 
-FormulaStep _$FormulaStepFromJson(
+CircuitStep _$CircuitStepFromJson(
   Map<String, dynamic> json
 ) {
         switch (json['type']) {
@@ -560,8 +560,8 @@ FormulaStep _$FormulaStepFromJson(
           return CapabilityStep.fromJson(
             json
           );
-                case 'sub_formula':
-          return SubFormulaStep.fromJson(
+                case 'sub_circuit':
+          return SubCircuitStep.fromJson(
             json
           );
         
@@ -569,7 +569,7 @@ FormulaStep _$FormulaStepFromJson(
             throw CheckedFromJsonException(
   json,
   'type',
-  'FormulaStep',
+  'CircuitStep',
   'Invalid union type "${json['type']}"!'
 );
         }
@@ -577,26 +577,26 @@ FormulaStep _$FormulaStepFromJson(
 }
 
 /// @nodoc
-mixin _$FormulaStep {
+mixin _$CircuitStep {
 
-/// The step's id (unique within its formula).
+/// The step's id (unique within its circuit).
  String get stepId;/// Opaque parameters threaded to the capability leaf.
  Map<String, String> get params;/// The sibling step ids whose positive terminals gate this step (the
 /// barrier).
  Set<String> get dependsOn;
-/// Create a copy of FormulaStep
+/// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$FormulaStepCopyWith<FormulaStep> get copyWith => _$FormulaStepCopyWithImpl<FormulaStep>(this as FormulaStep, _$identity);
+$CircuitStepCopyWith<CircuitStep> get copyWith => _$CircuitStepCopyWithImpl<CircuitStep>(this as CircuitStep, _$identity);
 
-  /// Serializes this FormulaStep to a JSON map.
+  /// Serializes this CircuitStep to a JSON map.
   Map<String, dynamic> toJson();
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is FormulaStep&&(identical(other.stepId, stepId) || other.stepId == stepId)&&const DeepCollectionEquality().equals(other.params, params)&&const DeepCollectionEquality().equals(other.dependsOn, dependsOn));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is CircuitStep&&(identical(other.stepId, stepId) || other.stepId == stepId)&&const DeepCollectionEquality().equals(other.params, params)&&const DeepCollectionEquality().equals(other.dependsOn, dependsOn));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -605,15 +605,15 @@ int get hashCode => Object.hash(runtimeType,stepId,const DeepCollectionEquality(
 
 @override
 String toString() {
-  return 'FormulaStep(stepId: $stepId, params: $params, dependsOn: $dependsOn)';
+  return 'CircuitStep(stepId: $stepId, params: $params, dependsOn: $dependsOn)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $FormulaStepCopyWith<$Res>  {
-  factory $FormulaStepCopyWith(FormulaStep value, $Res Function(FormulaStep) _then) = _$FormulaStepCopyWithImpl;
+abstract mixin class $CircuitStepCopyWith<$Res>  {
+  factory $CircuitStepCopyWith(CircuitStep value, $Res Function(CircuitStep) _then) = _$CircuitStepCopyWithImpl;
 @useResult
 $Res call({
  String stepId, Map<String, String> params, Set<String> dependsOn
@@ -624,14 +624,14 @@ $Res call({
 
 }
 /// @nodoc
-class _$FormulaStepCopyWithImpl<$Res>
-    implements $FormulaStepCopyWith<$Res> {
-  _$FormulaStepCopyWithImpl(this._self, this._then);
+class _$CircuitStepCopyWithImpl<$Res>
+    implements $CircuitStepCopyWith<$Res> {
+  _$CircuitStepCopyWithImpl(this._self, this._then);
 
-  final FormulaStep _self;
-  final $Res Function(FormulaStep) _then;
+  final CircuitStep _self;
+  final $Res Function(CircuitStep) _then;
 
-/// Create a copy of FormulaStep
+/// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') @override $Res call({Object? stepId = null,Object? params = null,Object? dependsOn = null,}) {
   return _then(_self.copyWith(
@@ -645,8 +645,8 @@ as Set<String>,
 }
 
 
-/// Adds pattern-matching-related methods to [FormulaStep].
-extension FormulaStepPatterns on FormulaStep {
+/// Adds pattern-matching-related methods to [CircuitStep].
+extension CircuitStepPatterns on CircuitStep {
 /// A variant of `map` that fallback to returning `orElse`.
 ///
 /// It is equivalent to doing:
@@ -659,12 +659,12 @@ extension FormulaStepPatterns on FormulaStep {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( CapabilityStep value)?  capability,TResult Function( SubFormulaStep value)?  subFormula,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( CapabilityStep value)?  capability,TResult Function( SubCircuitStep value)?  subCircuit,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case CapabilityStep() when capability != null:
-return capability(_that);case SubFormulaStep() when subFormula != null:
-return subFormula(_that);case _:
+return capability(_that);case SubCircuitStep() when subCircuit != null:
+return subCircuit(_that);case _:
   return orElse();
 
 }
@@ -682,12 +682,12 @@ return subFormula(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( CapabilityStep value)  capability,required TResult Function( SubFormulaStep value)  subFormula,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( CapabilityStep value)  capability,required TResult Function( SubCircuitStep value)  subCircuit,}){
 final _that = this;
 switch (_that) {
 case CapabilityStep():
-return capability(_that);case SubFormulaStep():
-return subFormula(_that);}
+return capability(_that);case SubCircuitStep():
+return subCircuit(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -701,12 +701,12 @@ return subFormula(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( CapabilityStep value)?  capability,TResult? Function( SubFormulaStep value)?  subFormula,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( CapabilityStep value)?  capability,TResult? Function( SubCircuitStep value)?  subCircuit,}){
 final _that = this;
 switch (_that) {
 case CapabilityStep() when capability != null:
-return capability(_that);case SubFormulaStep() when subFormula != null:
-return subFormula(_that);case _:
+return capability(_that);case SubCircuitStep() when subCircuit != null:
+return subCircuit(_that);case _:
   return null;
 
 }
@@ -723,11 +723,11 @@ return subFormula(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)?  capability,TResult Function( String stepId,  String formulaId,  Map<String, String> params,  Set<String> dependsOn)?  subFormula,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)?  capability,TResult Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)?  subCircuit,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case CapabilityStep() when capability != null:
-return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubFormulaStep() when subFormula != null:
-return subFormula(_that.stepId,_that.formulaId,_that.params,_that.dependsOn);case _:
+return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubCircuitStep() when subCircuit != null:
+return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);case _:
   return orElse();
 
 }
@@ -745,11 +745,11 @@ return subFormula(_that.stepId,_that.formulaId,_that.params,_that.dependsOn);cas
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)  capability,required TResult Function( String stepId,  String formulaId,  Map<String, String> params,  Set<String> dependsOn)  subFormula,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)  capability,required TResult Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)  subCircuit,}) {final _that = this;
 switch (_that) {
 case CapabilityStep():
-return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubFormulaStep():
-return subFormula(_that.stepId,_that.formulaId,_that.params,_that.dependsOn);}
+return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubCircuitStep():
+return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -763,11 +763,11 @@ return subFormula(_that.stepId,_that.formulaId,_that.params,_that.dependsOn);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)?  capability,TResult? Function( String stepId,  String formulaId,  Map<String, String> params,  Set<String> dependsOn)?  subFormula,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)?  capability,TResult? Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)?  subCircuit,}) {final _that = this;
 switch (_that) {
 case CapabilityStep() when capability != null:
-return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubFormulaStep() when subFormula != null:
-return subFormula(_that.stepId,_that.formulaId,_that.params,_that.dependsOn);case _:
+return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubCircuitStep() when subCircuit != null:
+return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);case _:
   return null;
 
 }
@@ -778,11 +778,11 @@ return subFormula(_that.stepId,_that.formulaId,_that.params,_that.dependsOn);cas
 /// @nodoc
 @JsonSerializable()
 
-class CapabilityStep extends FormulaStep {
+class CapabilityStep extends CircuitStep {
   const CapabilityStep({required this.stepId, required this.capabilityId, final  Map<String, String> params = const <String, String>{}, final  Set<String> dependsOn = const <String>{}, this.kind = StepKind.job, this.resources, final  String? $type}): _params = params,_dependsOn = dependsOn,$type = $type ?? 'capability',super._();
   factory CapabilityStep.fromJson(Map<String, dynamic> json) => _$CapabilityStepFromJson(json);
 
-/// The step's id (unique within its formula).
+/// The step's id (unique within its circuit).
 @override final  String stepId;
 /// The capability id resolved via the `CapabilityRegistry`.
  final  String capabilityId;
@@ -816,7 +816,7 @@ class CapabilityStep extends FormulaStep {
 final String $type;
 
 
-/// Create a copy of FormulaStep
+/// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
 @override @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
@@ -838,14 +838,14 @@ int get hashCode => Object.hash(runtimeType,stepId,capabilityId,const DeepCollec
 
 @override
 String toString() {
-  return 'FormulaStep.capability(stepId: $stepId, capabilityId: $capabilityId, params: $params, dependsOn: $dependsOn, kind: $kind, resources: $resources)';
+  return 'CircuitStep.capability(stepId: $stepId, capabilityId: $capabilityId, params: $params, dependsOn: $dependsOn, kind: $kind, resources: $resources)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $CapabilityStepCopyWith<$Res> implements $FormulaStepCopyWith<$Res> {
+abstract mixin class $CapabilityStepCopyWith<$Res> implements $CircuitStepCopyWith<$Res> {
   factory $CapabilityStepCopyWith(CapabilityStep value, $Res Function(CapabilityStep) _then) = _$CapabilityStepCopyWithImpl;
 @override @useResult
 $Res call({
@@ -864,7 +864,7 @@ class _$CapabilityStepCopyWithImpl<$Res>
   final CapabilityStep _self;
   final $Res Function(CapabilityStep) _then;
 
-/// Create a copy of FormulaStep
+/// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
 @override @pragma('vm:prefer-inline') $Res call({Object? stepId = null,Object? capabilityId = null,Object? params = null,Object? dependsOn = null,Object? kind = null,Object? resources = freezed,}) {
   return _then(CapabilityStep(
@@ -878,7 +878,7 @@ as ResourceRequest?,
   ));
 }
 
-/// Create a copy of FormulaStep
+/// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
 @override
 @pragma('vm:prefer-inline')
@@ -896,17 +896,17 @@ $ResourceRequestCopyWith<$Res>? get resources {
 /// @nodoc
 @JsonSerializable()
 
-class SubFormulaStep extends FormulaStep {
-  const SubFormulaStep({required this.stepId, required this.formulaId, final  Map<String, String> params = const <String, String>{}, final  Set<String> dependsOn = const <String>{}, final  String? $type}): _params = params,_dependsOn = dependsOn,$type = $type ?? 'sub_formula',super._();
-  factory SubFormulaStep.fromJson(Map<String, dynamic> json) => _$SubFormulaStepFromJson(json);
+class SubCircuitStep extends CircuitStep {
+  const SubCircuitStep({required this.stepId, required this.circuitId, final  Map<String, String> params = const <String, String>{}, final  Set<String> dependsOn = const <String>{}, final  String? $type}): _params = params,_dependsOn = dependsOn,$type = $type ?? 'sub_circuit',super._();
+  factory SubCircuitStep.fromJson(Map<String, dynamic> json) => _$SubCircuitStepFromJson(json);
 
-/// The step's id (unique within its formula).
+/// The step's id (unique within its circuit).
 @override final  String stepId;
-/// The id of the nested formula (resolved via the `CapabilityRegistry`).
- final  String formulaId;
-/// Opaque parameters threaded to the nested formula.
+/// The id of the nested circuit (resolved via the `CapabilityRegistry`).
+ final  String circuitId;
+/// Opaque parameters threaded to the nested circuit.
  final  Map<String, String> _params;
-/// Opaque parameters threaded to the nested formula.
+/// Opaque parameters threaded to the nested circuit.
 @override@JsonKey() Map<String, String> get params {
   if (_params is EqualUnmodifiableMapView) return _params;
   // ignore: implicit_dynamic_type
@@ -927,40 +927,40 @@ class SubFormulaStep extends FormulaStep {
 final String $type;
 
 
-/// Create a copy of FormulaStep
+/// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
 @override @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$SubFormulaStepCopyWith<SubFormulaStep> get copyWith => _$SubFormulaStepCopyWithImpl<SubFormulaStep>(this, _$identity);
+$SubCircuitStepCopyWith<SubCircuitStep> get copyWith => _$SubCircuitStepCopyWithImpl<SubCircuitStep>(this, _$identity);
 
 @override
 Map<String, dynamic> toJson() {
-  return _$SubFormulaStepToJson(this, );
+  return _$SubCircuitStepToJson(this, );
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubFormulaStep&&(identical(other.stepId, stepId) || other.stepId == stepId)&&(identical(other.formulaId, formulaId) || other.formulaId == formulaId)&&const DeepCollectionEquality().equals(other._params, _params)&&const DeepCollectionEquality().equals(other._dependsOn, _dependsOn));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubCircuitStep&&(identical(other.stepId, stepId) || other.stepId == stepId)&&(identical(other.circuitId, circuitId) || other.circuitId == circuitId)&&const DeepCollectionEquality().equals(other._params, _params)&&const DeepCollectionEquality().equals(other._dependsOn, _dependsOn));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,stepId,formulaId,const DeepCollectionEquality().hash(_params),const DeepCollectionEquality().hash(_dependsOn));
+int get hashCode => Object.hash(runtimeType,stepId,circuitId,const DeepCollectionEquality().hash(_params),const DeepCollectionEquality().hash(_dependsOn));
 
 @override
 String toString() {
-  return 'FormulaStep.subFormula(stepId: $stepId, formulaId: $formulaId, params: $params, dependsOn: $dependsOn)';
+  return 'CircuitStep.subCircuit(stepId: $stepId, circuitId: $circuitId, params: $params, dependsOn: $dependsOn)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $SubFormulaStepCopyWith<$Res> implements $FormulaStepCopyWith<$Res> {
-  factory $SubFormulaStepCopyWith(SubFormulaStep value, $Res Function(SubFormulaStep) _then) = _$SubFormulaStepCopyWithImpl;
+abstract mixin class $SubCircuitStepCopyWith<$Res> implements $CircuitStepCopyWith<$Res> {
+  factory $SubCircuitStepCopyWith(SubCircuitStep value, $Res Function(SubCircuitStep) _then) = _$SubCircuitStepCopyWithImpl;
 @override @useResult
 $Res call({
- String stepId, String formulaId, Map<String, String> params, Set<String> dependsOn
+ String stepId, String circuitId, Map<String, String> params, Set<String> dependsOn
 });
 
 
@@ -968,19 +968,19 @@ $Res call({
 
 }
 /// @nodoc
-class _$SubFormulaStepCopyWithImpl<$Res>
-    implements $SubFormulaStepCopyWith<$Res> {
-  _$SubFormulaStepCopyWithImpl(this._self, this._then);
+class _$SubCircuitStepCopyWithImpl<$Res>
+    implements $SubCircuitStepCopyWith<$Res> {
+  _$SubCircuitStepCopyWithImpl(this._self, this._then);
 
-  final SubFormulaStep _self;
-  final $Res Function(SubFormulaStep) _then;
+  final SubCircuitStep _self;
+  final $Res Function(SubCircuitStep) _then;
 
-/// Create a copy of FormulaStep
+/// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? stepId = null,Object? formulaId = null,Object? params = null,Object? dependsOn = null,}) {
-  return _then(SubFormulaStep(
+@override @pragma('vm:prefer-inline') $Res call({Object? stepId = null,Object? circuitId = null,Object? params = null,Object? dependsOn = null,}) {
+  return _then(SubCircuitStep(
 stepId: null == stepId ? _self.stepId : stepId // ignore: cast_nullable_to_non_nullable
-as String,formulaId: null == formulaId ? _self.formulaId : formulaId // ignore: cast_nullable_to_non_nullable
+as String,circuitId: null == circuitId ? _self.circuitId : circuitId // ignore: cast_nullable_to_non_nullable
 as String,params: null == params ? _self._params : params // ignore: cast_nullable_to_non_nullable
 as Map<String, String>,dependsOn: null == dependsOn ? _self._dependsOn : dependsOn // ignore: cast_nullable_to_non_nullable
 as Set<String>,
@@ -992,31 +992,31 @@ as Set<String>,
 
 
 /// @nodoc
-mixin _$Formula {
+mixin _$Circuit {
 
-/// The formula id (resolved via the `CapabilityRegistry` for a sub-formula).
+/// The circuit id (resolved via the `CapabilityRegistry` for a sub-circuit).
  String get id;/// The step-graph.
- List<FormulaStep> get steps;/// The terminal step — its positive terminal drives the session close
-/// (D-2). A `dependsOn` on this formula (as a sub-formula) resolves here.
+ List<CircuitStep> get steps;/// The terminal step — its positive terminal drives the session close
+/// (D-2). A `dependsOn` on this circuit (as a sub-circuit) resolves here.
  String get terminalStepId;/// How a failed child is supervised (default [SupervisionStrategy.oneForOne]).
  SupervisionStrategy get supervision;/// The mandatory restart backoff (default [Backoff.standard]).
  Backoff get backoff;/// The supervised-restart budget per step — beyond it the breaker trips and
 /// the step is circuit-broken (escalation, D-5).
  int get maxRestarts;/// The declared aggregate resource peak (declaration-only — D-7).
  ResourceRequest? get peak;
-/// Create a copy of Formula
+/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$FormulaCopyWith<Formula> get copyWith => _$FormulaCopyWithImpl<Formula>(this as Formula, _$identity);
+$CircuitCopyWith<Circuit> get copyWith => _$CircuitCopyWithImpl<Circuit>(this as Circuit, _$identity);
 
-  /// Serializes this Formula to a JSON map.
+  /// Serializes this Circuit to a JSON map.
   Map<String, dynamic> toJson();
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Formula&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other.steps, steps)&&(identical(other.terminalStepId, terminalStepId) || other.terminalStepId == terminalStepId)&&(identical(other.supervision, supervision) || other.supervision == supervision)&&(identical(other.backoff, backoff) || other.backoff == backoff)&&(identical(other.maxRestarts, maxRestarts) || other.maxRestarts == maxRestarts)&&(identical(other.peak, peak) || other.peak == peak));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Circuit&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other.steps, steps)&&(identical(other.terminalStepId, terminalStepId) || other.terminalStepId == terminalStepId)&&(identical(other.supervision, supervision) || other.supervision == supervision)&&(identical(other.backoff, backoff) || other.backoff == backoff)&&(identical(other.maxRestarts, maxRestarts) || other.maxRestarts == maxRestarts)&&(identical(other.peak, peak) || other.peak == peak));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -1025,18 +1025,18 @@ int get hashCode => Object.hash(runtimeType,id,const DeepCollectionEquality().ha
 
 @override
 String toString() {
-  return 'Formula(id: $id, steps: $steps, terminalStepId: $terminalStepId, supervision: $supervision, backoff: $backoff, maxRestarts: $maxRestarts, peak: $peak)';
+  return 'Circuit(id: $id, steps: $steps, terminalStepId: $terminalStepId, supervision: $supervision, backoff: $backoff, maxRestarts: $maxRestarts, peak: $peak)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $FormulaCopyWith<$Res>  {
-  factory $FormulaCopyWith(Formula value, $Res Function(Formula) _then) = _$FormulaCopyWithImpl;
+abstract mixin class $CircuitCopyWith<$Res>  {
+  factory $CircuitCopyWith(Circuit value, $Res Function(Circuit) _then) = _$CircuitCopyWithImpl;
 @useResult
 $Res call({
- String id, List<FormulaStep> steps, String terminalStepId, SupervisionStrategy supervision, Backoff backoff, int maxRestarts, ResourceRequest? peak
+ String id, List<CircuitStep> steps, String terminalStepId, SupervisionStrategy supervision, Backoff backoff, int maxRestarts, ResourceRequest? peak
 });
 
 
@@ -1044,20 +1044,20 @@ $BackoffCopyWith<$Res> get backoff;$ResourceRequestCopyWith<$Res>? get peak;
 
 }
 /// @nodoc
-class _$FormulaCopyWithImpl<$Res>
-    implements $FormulaCopyWith<$Res> {
-  _$FormulaCopyWithImpl(this._self, this._then);
+class _$CircuitCopyWithImpl<$Res>
+    implements $CircuitCopyWith<$Res> {
+  _$CircuitCopyWithImpl(this._self, this._then);
 
-  final Formula _self;
-  final $Res Function(Formula) _then;
+  final Circuit _self;
+  final $Res Function(Circuit) _then;
 
-/// Create a copy of Formula
+/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? steps = null,Object? terminalStepId = null,Object? supervision = null,Object? backoff = null,Object? maxRestarts = null,Object? peak = freezed,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,steps: null == steps ? _self.steps : steps // ignore: cast_nullable_to_non_nullable
-as List<FormulaStep>,terminalStepId: null == terminalStepId ? _self.terminalStepId : terminalStepId // ignore: cast_nullable_to_non_nullable
+as List<CircuitStep>,terminalStepId: null == terminalStepId ? _self.terminalStepId : terminalStepId // ignore: cast_nullable_to_non_nullable
 as String,supervision: null == supervision ? _self.supervision : supervision // ignore: cast_nullable_to_non_nullable
 as SupervisionStrategy,backoff: null == backoff ? _self.backoff : backoff // ignore: cast_nullable_to_non_nullable
 as Backoff,maxRestarts: null == maxRestarts ? _self.maxRestarts : maxRestarts // ignore: cast_nullable_to_non_nullable
@@ -1065,7 +1065,7 @@ as int,peak: freezed == peak ? _self.peak : peak // ignore: cast_nullable_to_non
 as ResourceRequest?,
   ));
 }
-/// Create a copy of Formula
+/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @override
 @pragma('vm:prefer-inline')
@@ -1074,7 +1074,7 @@ $BackoffCopyWith<$Res> get backoff {
   return $BackoffCopyWith<$Res>(_self.backoff, (value) {
     return _then(_self.copyWith(backoff: value));
   });
-}/// Create a copy of Formula
+}/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @override
 @pragma('vm:prefer-inline')
@@ -1090,8 +1090,8 @@ $ResourceRequestCopyWith<$Res>? get peak {
 }
 
 
-/// Adds pattern-matching-related methods to [Formula].
-extension FormulaPatterns on Formula {
+/// Adds pattern-matching-related methods to [Circuit].
+extension CircuitPatterns on Circuit {
 /// A variant of `map` that fallback to returning `orElse`.
 ///
 /// It is equivalent to doing:
@@ -1104,10 +1104,10 @@ extension FormulaPatterns on Formula {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _Formula value)?  $default,{required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _Circuit value)?  $default,{required TResult orElse(),}){
 final _that = this;
 switch (_that) {
-case _Formula() when $default != null:
+case _Circuit() when $default != null:
 return $default(_that);case _:
   return orElse();
 
@@ -1126,10 +1126,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _Formula value)  $default,){
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _Circuit value)  $default,){
 final _that = this;
 switch (_that) {
-case _Formula():
+case _Circuit():
 return $default(_that);case _:
   throw StateError('Unexpected subclass');
 
@@ -1147,10 +1147,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _Formula value)?  $default,){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _Circuit value)?  $default,){
 final _that = this;
 switch (_that) {
-case _Formula() when $default != null:
+case _Circuit() when $default != null:
 return $default(_that);case _:
   return null;
 
@@ -1168,9 +1168,9 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  List<FormulaStep> steps,  String terminalStepId,  SupervisionStrategy supervision,  Backoff backoff,  int maxRestarts,  ResourceRequest? peak)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  List<CircuitStep> steps,  String terminalStepId,  SupervisionStrategy supervision,  Backoff backoff,  int maxRestarts,  ResourceRequest? peak)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
-case _Formula() when $default != null:
+case _Circuit() when $default != null:
 return $default(_that.id,_that.steps,_that.terminalStepId,_that.supervision,_that.backoff,_that.maxRestarts,_that.peak);case _:
   return orElse();
 
@@ -1189,9 +1189,9 @@ return $default(_that.id,_that.steps,_that.terminalStepId,_that.supervision,_tha
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  List<FormulaStep> steps,  String terminalStepId,  SupervisionStrategy supervision,  Backoff backoff,  int maxRestarts,  ResourceRequest? peak)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  List<CircuitStep> steps,  String terminalStepId,  SupervisionStrategy supervision,  Backoff backoff,  int maxRestarts,  ResourceRequest? peak)  $default,) {final _that = this;
 switch (_that) {
-case _Formula():
+case _Circuit():
 return $default(_that.id,_that.steps,_that.terminalStepId,_that.supervision,_that.backoff,_that.maxRestarts,_that.peak);case _:
   throw StateError('Unexpected subclass');
 
@@ -1209,9 +1209,9 @@ return $default(_that.id,_that.steps,_that.terminalStepId,_that.supervision,_tha
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  List<FormulaStep> steps,  String terminalStepId,  SupervisionStrategy supervision,  Backoff backoff,  int maxRestarts,  ResourceRequest? peak)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  List<CircuitStep> steps,  String terminalStepId,  SupervisionStrategy supervision,  Backoff backoff,  int maxRestarts,  ResourceRequest? peak)?  $default,) {final _that = this;
 switch (_that) {
-case _Formula() when $default != null:
+case _Circuit() when $default != null:
 return $default(_that.id,_that.steps,_that.terminalStepId,_that.supervision,_that.backoff,_that.maxRestarts,_that.peak);case _:
   return null;
 
@@ -1223,23 +1223,23 @@ return $default(_that.id,_that.steps,_that.terminalStepId,_that.supervision,_tha
 /// @nodoc
 @JsonSerializable()
 
-class _Formula extends Formula {
-  const _Formula({required this.id, required final  List<FormulaStep> steps, required this.terminalStepId, this.supervision = SupervisionStrategy.oneForOne, this.backoff = Backoff.standard, this.maxRestarts = 3, this.peak}): _steps = steps,super._();
-  factory _Formula.fromJson(Map<String, dynamic> json) => _$FormulaFromJson(json);
+class _Circuit extends Circuit {
+  const _Circuit({required this.id, required final  List<CircuitStep> steps, required this.terminalStepId, this.supervision = SupervisionStrategy.oneForOne, this.backoff = Backoff.standard, this.maxRestarts = 3, this.peak}): _steps = steps,super._();
+  factory _Circuit.fromJson(Map<String, dynamic> json) => _$CircuitFromJson(json);
 
-/// The formula id (resolved via the `CapabilityRegistry` for a sub-formula).
+/// The circuit id (resolved via the `CapabilityRegistry` for a sub-circuit).
 @override final  String id;
 /// The step-graph.
- final  List<FormulaStep> _steps;
+ final  List<CircuitStep> _steps;
 /// The step-graph.
-@override List<FormulaStep> get steps {
+@override List<CircuitStep> get steps {
   if (_steps is EqualUnmodifiableListView) return _steps;
   // ignore: implicit_dynamic_type
   return EqualUnmodifiableListView(_steps);
 }
 
 /// The terminal step — its positive terminal drives the session close
-/// (D-2). A `dependsOn` on this formula (as a sub-formula) resolves here.
+/// (D-2). A `dependsOn` on this circuit (as a sub-circuit) resolves here.
 @override final  String terminalStepId;
 /// How a failed child is supervised (default [SupervisionStrategy.oneForOne]).
 @override@JsonKey() final  SupervisionStrategy supervision;
@@ -1251,20 +1251,20 @@ class _Formula extends Formula {
 /// The declared aggregate resource peak (declaration-only — D-7).
 @override final  ResourceRequest? peak;
 
-/// Create a copy of Formula
+/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @override @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-_$FormulaCopyWith<_Formula> get copyWith => __$FormulaCopyWithImpl<_Formula>(this, _$identity);
+_$CircuitCopyWith<_Circuit> get copyWith => __$CircuitCopyWithImpl<_Circuit>(this, _$identity);
 
 @override
 Map<String, dynamic> toJson() {
-  return _$FormulaToJson(this, );
+  return _$CircuitToJson(this, );
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Formula&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other._steps, _steps)&&(identical(other.terminalStepId, terminalStepId) || other.terminalStepId == terminalStepId)&&(identical(other.supervision, supervision) || other.supervision == supervision)&&(identical(other.backoff, backoff) || other.backoff == backoff)&&(identical(other.maxRestarts, maxRestarts) || other.maxRestarts == maxRestarts)&&(identical(other.peak, peak) || other.peak == peak));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _Circuit&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other._steps, _steps)&&(identical(other.terminalStepId, terminalStepId) || other.terminalStepId == terminalStepId)&&(identical(other.supervision, supervision) || other.supervision == supervision)&&(identical(other.backoff, backoff) || other.backoff == backoff)&&(identical(other.maxRestarts, maxRestarts) || other.maxRestarts == maxRestarts)&&(identical(other.peak, peak) || other.peak == peak));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -1273,18 +1273,18 @@ int get hashCode => Object.hash(runtimeType,id,const DeepCollectionEquality().ha
 
 @override
 String toString() {
-  return 'Formula(id: $id, steps: $steps, terminalStepId: $terminalStepId, supervision: $supervision, backoff: $backoff, maxRestarts: $maxRestarts, peak: $peak)';
+  return 'Circuit(id: $id, steps: $steps, terminalStepId: $terminalStepId, supervision: $supervision, backoff: $backoff, maxRestarts: $maxRestarts, peak: $peak)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class _$FormulaCopyWith<$Res> implements $FormulaCopyWith<$Res> {
-  factory _$FormulaCopyWith(_Formula value, $Res Function(_Formula) _then) = __$FormulaCopyWithImpl;
+abstract mixin class _$CircuitCopyWith<$Res> implements $CircuitCopyWith<$Res> {
+  factory _$CircuitCopyWith(_Circuit value, $Res Function(_Circuit) _then) = __$CircuitCopyWithImpl;
 @override @useResult
 $Res call({
- String id, List<FormulaStep> steps, String terminalStepId, SupervisionStrategy supervision, Backoff backoff, int maxRestarts, ResourceRequest? peak
+ String id, List<CircuitStep> steps, String terminalStepId, SupervisionStrategy supervision, Backoff backoff, int maxRestarts, ResourceRequest? peak
 });
 
 
@@ -1292,20 +1292,20 @@ $Res call({
 
 }
 /// @nodoc
-class __$FormulaCopyWithImpl<$Res>
-    implements _$FormulaCopyWith<$Res> {
-  __$FormulaCopyWithImpl(this._self, this._then);
+class __$CircuitCopyWithImpl<$Res>
+    implements _$CircuitCopyWith<$Res> {
+  __$CircuitCopyWithImpl(this._self, this._then);
 
-  final _Formula _self;
-  final $Res Function(_Formula) _then;
+  final _Circuit _self;
+  final $Res Function(_Circuit) _then;
 
-/// Create a copy of Formula
+/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? steps = null,Object? terminalStepId = null,Object? supervision = null,Object? backoff = null,Object? maxRestarts = null,Object? peak = freezed,}) {
-  return _then(_Formula(
+  return _then(_Circuit(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,steps: null == steps ? _self._steps : steps // ignore: cast_nullable_to_non_nullable
-as List<FormulaStep>,terminalStepId: null == terminalStepId ? _self.terminalStepId : terminalStepId // ignore: cast_nullable_to_non_nullable
+as List<CircuitStep>,terminalStepId: null == terminalStepId ? _self.terminalStepId : terminalStepId // ignore: cast_nullable_to_non_nullable
 as String,supervision: null == supervision ? _self.supervision : supervision // ignore: cast_nullable_to_non_nullable
 as SupervisionStrategy,backoff: null == backoff ? _self.backoff : backoff // ignore: cast_nullable_to_non_nullable
 as Backoff,maxRestarts: null == maxRestarts ? _self.maxRestarts : maxRestarts // ignore: cast_nullable_to_non_nullable
@@ -1314,7 +1314,7 @@ as ResourceRequest?,
   ));
 }
 
-/// Create a copy of Formula
+/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @override
 @pragma('vm:prefer-inline')
@@ -1323,7 +1323,7 @@ $BackoffCopyWith<$Res> get backoff {
   return $BackoffCopyWith<$Res>(_self.backoff, (value) {
     return _then(_self.copyWith(backoff: value));
   });
-}/// Create a copy of Formula
+}/// Create a copy of Circuit
 /// with the given fields replaced by the non-null parameter values.
 @override
 @pragma('vm:prefer-inline')

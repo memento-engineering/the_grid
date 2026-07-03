@@ -6,7 +6,7 @@ import '../kernel/session_resolver.dart';
 
 /// One unit of work as a persistent tree node (ADR-0007: a Branch IS the work
 /// lifecycle — mount = spawn, unmount = kill; progress is the per-node reentrant
-/// cursor advancing the inflated formula subtree).
+/// cursor advancing the inflated circuit subtree).
 ///
 /// Pure config → child: it resolves the bead's work Seed via the ambient
 /// [SessionResolver] (the reentrant `SessionScope` subtree root) and returns it.

@@ -23,7 +23,7 @@ class _RouteCap extends ServiceCapability {
   Future<StepOutcome> run(TreeContext context, StepArgs args) async => outcome;
 }
 
-const _gateFormula = Formula(
+const _gateCircuit = Circuit(
   id: 'f',
   terminalStepId: 'land',
   steps: [
@@ -121,10 +121,10 @@ void main() {
     test('a gated route excludes route AND land; positive control: route '
         'complete lets land enter', () {
       final gated = eligibleSteps(
-        _gateFormula,
+        _gateCircuit,
         const {'b/route': NodeCursor(state: StepState.gated)},
         'b',
-        formulaById: (_) => null,
+        circuitById: (_) => null,
         now: DateTime(2026),
       );
       expect(gated, isEmpty, reason: 'route parked + land withheld');
@@ -132,10 +132,10 @@ void main() {
       // Positive control: the SAME tree with route COMPLETE — land enters, so
       // the empty frontier above was the gate, not a structural bug.
       final advanced = eligibleSteps(
-        _gateFormula,
+        _gateCircuit,
         const {'b/route': NodeCursor(state: StepState.complete)},
         'b',
-        formulaById: (_) => null,
+        circuitById: (_) => null,
         now: DateTime(2026),
       );
       expect(advanced.map((s) => s.stepId), ['land']);
@@ -203,7 +203,7 @@ void main() {
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
             child: const SessionScope(
               bead: _bead,
-              formula: _gateFormula,
+              circuit: _gateCircuit,
               existingSession: SessionProjection(
                 workBeadId: 'tg-1',
                 sessionId: 'tgdog-s',
@@ -233,7 +233,7 @@ void main() {
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
             child: const SessionScope(
               bead: _bead,
-              formula: _gateFormula,
+              circuit: _gateCircuit,
               existingSession: SessionProjection(
                 workBeadId: 'tg-1',
                 sessionId: 'tgdog-s',

@@ -9,11 +9,11 @@ import '../domain/session_projection.dart';
 ///
 /// The kernel knows nothing of agents, processes, git, or PRs — the compiled
 /// extension contributes the concrete subtree root (the reentrant
-/// [FormulaResolver] returns a `SessionScope` that inflates the bead's root
-/// formula); tests inject a fake. This indirection is what keeps the engine
+/// [CircuitResolver] returns a `SessionScope` that inflates the bead's root
+/// circuit); tests inject a fake. This indirection is what keeps the engine
 /// landing/VCS/provider-opinion-free.
 ///
-/// The returned Seed MUST be keyed off `bead.id` (the [FormulaResolver] keys it
+/// The returned Seed MUST be keyed off `bead.id` (the [CircuitResolver] keys it
 /// `'<bead.id>:session'`) so that across snapshot ticks keyed reconcile keeps
 /// the bead's running subtree while config (the linked session cursor) flows
 /// down in place.

@@ -13,7 +13,7 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
-const _code = Formula(
+const _code = Circuit(
   id: 'code',
   terminalStepId: 'land',
   steps: [
@@ -80,7 +80,7 @@ void main() {
     test('an exhausted node → escalation marker written + session closed; a '
         'healthy terminal would just close', () async {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       // agent failed AND exhausted (restartCount 3 == maxRestarts 3).
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -110,7 +110,7 @@ void main() {
             child: InheritedSeed<CapabilityRegistry>(
               value: reg,
               child: InheritedSeed<SessionResolver>(
-                value: FormulaResolver((_) => _code),
+                value: CircuitResolver((_) => _code),
                 child: Station([
                   SubstationScope(
                     configNotifier: SubstationConfigNotifier(_tgConfig),
@@ -138,7 +138,7 @@ void main() {
     test('the escalation records grid.escalation_reason (the failing node + its '
         'persisted reason) beside the marker — capture-only (FT-1)', () async {
       final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(formulas: const {});
+      final reg = RecordingCapabilityRegistry(circuits: const {});
       // The broken node carries a persisted failureReason (as the failing leaf
       // host would have written it before exhausting the breaker).
       final joined = JoinedSnapshotNotifier(
@@ -170,7 +170,7 @@ void main() {
             child: InheritedSeed<CapabilityRegistry>(
               value: reg,
               child: InheritedSeed<SessionResolver>(
-                value: FormulaResolver((_) => _code),
+                value: CircuitResolver((_) => _code),
                 child: Station([
                   SubstationScope(
                     configNotifier: SubstationConfigNotifier(_tgConfig),

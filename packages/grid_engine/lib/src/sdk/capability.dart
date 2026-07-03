@@ -66,14 +66,14 @@ class StepArgs {
     this.logFile,
   });
 
-  /// The step's opaque params (from the `CapabilityStep`/`SubFormulaStep`).
+  /// The step's opaque params (from the `CapabilityStep`/`SubCircuitStep`).
   final Map<String, String> params;
 
-  /// This step's FULL path within the formula tree (`'$parentNodePath/$stepId'`)
+  /// This step's FULL path within the circuit tree (`'$parentNodePath/$stepId'`)
   /// — the cursor key; its root segment is the work bead id.
   final String nodePath;
 
-  /// The work bead id — the root segment of [nodePath] (the root formula's
+  /// The work bead id — the root segment of [nodePath] (the root circuit's
   /// nodePath IS the bead id).
   String get beadId =>
       nodePath.contains('/') ? nodePath.split('/').first : nodePath;
@@ -279,7 +279,7 @@ class SiblingView {
   const SiblingView({this.cursor = const {}, this.results = const {}});
 
   /// Every inflated node's [NodeCursor] in this session, keyed by `nodePath`.
-  final FormulaCursor cursor;
+  final CircuitCursor cursor;
 
   /// Every node's recorded result payload, keyed by `nodePath`.
   final Map<String, Map<String, String>> results;

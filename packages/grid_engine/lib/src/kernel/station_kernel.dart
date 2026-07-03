@@ -4,7 +4,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 
 import '../bridge/station_join_bridge.dart';
 import '../kernel/station_services.dart';
-import '../formula/capability_registry.dart';
+import '../circuit/capability_registry.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../seeds/station_seed.dart';
 import '../seeds/substation_scope.dart';
@@ -58,8 +58,8 @@ class StationKernel {
   final SessionResolver _resolver;
   final List<SubstationScope> _substations;
 
-  /// The reentrant capability/formula resolution seam (ADR-0008 D4) — provided
-  /// as a stable ambient value the `FormulaScope` inflater resolves. Null when
+  /// The reentrant capability/circuit resolution seam (ADR-0008 D4) — provided
+  /// as a stable ambient value the `CircuitScope` inflater resolves. Null when
   /// the resolver roots a non-reentrant subtree (a test fake that returns a
   /// plain leaf needs no registry).
   final CapabilityRegistry? _registry;
