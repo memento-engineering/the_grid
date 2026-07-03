@@ -16,7 +16,6 @@ dependencies:
   grid_engine: any
   grid_exploration: any
   grid_federation: any
-  grid_reconciler: any
   grid_runtime: any
   meta: ^1.15.0
 

@@ -1,6 +1,5 @@
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
-import 'package:grid_reconciler/grid_reconciler.dart' show OwnsSubstations;
 import 'package:test/test.dart';
 
 /// Unit proofs for the dispatch-side ownership gate (M3 Track 5; ADR-0006
@@ -64,18 +63,14 @@ void main() {
     });
   });
 
-  group('the shared allow-set is ONE Set<String>, not two predicate copies', () {
+  group('the shared allow-set is ONE Set<String>, not a copy', () {
     test(
-      'the IDENTICAL Set<String> instance feeds both OwnsSubstations (M2 actuation) '
-      'and BeadOwnershipPredicate (M3 dispatch) — they cannot drift (A32)',
+      'BeadOwnershipPredicate exposes the IDENTICAL allow-set it was built '
+      'from, so the write chokepoint can share the same instance (A32)',
       () {
         // ONE source of truth — the seed the dogfood uses.
         final allowSet = {'tgdog'};
         final dispatchGate = BeadOwnershipPredicate(allowSet);
-        // The SAME instance feeds the M2 convergence actuator (constructed here
-        // only to prove the one set wires both; OwnsSubstations operates on a
-        // Convergence, BeadOwnershipPredicate on a Bead — A32).
-        OwnsSubstations(allowSet);
 
         // The dispatch gate accepts the_grid's owned rig and rejects gc's.
         expect(dispatchGate.owns(workBead('tgdog-1')), isTrue);

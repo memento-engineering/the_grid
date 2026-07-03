@@ -33,17 +33,6 @@
 /// `--actor grid-controller`), and the `RuntimeActuator` that consumes Track-2
 /// `RuntimeEvent`s and writes session beads THROUGH the chokepoint — including
 /// crash detection → restart / crash-loop quarantine.
-///
-/// **Track 5 built.** The `DispatchInteractor` attaches as a SECOND consumer of
-/// the same observable surface M2 uses (a `ReadyWorkSource` over
-/// beads_dart's `GraphEvent` stream + `readyBeads`) and does NOT go
-/// through reduce→gate→actuate. It gates dispatch on the Track-4
-/// `BeadOwnershipPredicate` (the shared `{tgdog}` allow-set) — a non-owned bead
-/// is observed read-only, never dispatched — and on accept runs
-/// provision-worktree → provider.start → spawnSession, single-flight per bead
-/// (a `PerBeadQueue` keyed by bead id, mirroring the M2 runtime) so a re-fired
-/// ready event never double-spawns. On a `CrashDecision` it drives restart /
-/// quarantine-park / close-then-reap.
 library;
 
 // Track 0.1 — package scaffold marker (kept; the wiring asserts the package is
@@ -129,8 +118,7 @@ export 'src/lifecycle/session_state.dart'
         transition,
         transitionOrNull;
 
-// Track 5 — the DispatchInteractor (ready bead → spawn) + the ready-work seam.
-export 'src/dispatch/dispatch_interactor.dart'
-    show DispatchInteractor, DispatchRecord, DispatchRequest;
+// Track 5 — the ready-work read seam (a second consumer of beads_dart's
+// GraphEvent stream + readyBeads, alongside M2's ConvergenceSource).
 export 'src/dispatch/ready_work_source.dart'
     show GridReadyWorkSource, ReadyWorkSource;
