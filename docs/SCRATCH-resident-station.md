@@ -224,6 +224,17 @@ surface against the **AOT** binary; a bead blessed in-store picked up with no re
 `launchctl stop` shutting down clean (no leaked agent groups); `kill -9` + relaunch
 recovering through the barrier; a second `space up` refused LOUD by the lock.
 
+**✅ FIRST PROOF PASSED 8/8 (2026-07-02, operator-run, Nico installed the LaunchAgent):**
+AOT `space up` resident (lock + 0600 token + controlUrl) · AOT `status` attach over HTTP ·
+second `up` refused exit-64 naming pid+invariant · resident arming = the driveable owned
+frontier (epic excluded at the true mount gate; the `/status mounted` display over-count is
+filed as tg-8p9) · store bless reflected live in ~4s, no restart · `kill -9` under launchd →
+unattended relaunch + LOUD stale-lock steal · `space down` = graceful stop, lock released,
+labeled fallback, **no KeepAlive bounce** (`SuccessfulExit=false` composing with RS-1's
+exit-0). The ladder RS-1…RS-7b is fully landed (16 beads, all agent-built). **Remaining at
+the live gate:** the first LIVE `space up` (no drive-list — the blessed frontier IS the
+drive set), then RS-8 files (retire `run`), then the graduation ADR.
+
 ## 9. Rulings log (Nico, 2026-07-02)
 
 - **OQ-1 (bless surface)** → ready-in-owned-store confirmed: "when the bead enters the
