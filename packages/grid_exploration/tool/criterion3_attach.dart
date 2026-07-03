@@ -11,7 +11,7 @@ import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:isolate' as iso;
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 import 'package:vm_service/utils.dart';
 import 'package:vm_service/vm_service_io.dart';

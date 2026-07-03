@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import '../domain/joined_snapshot.dart';
 import '../domain/session_bead.dart';
@@ -26,7 +26,7 @@ import 'snapshot_source.dart';
 /// (the newly-emitted snapshot for the source that fired, `.current` for the
 /// other) and produces exactly one push.
 ///
-/// Seed-then-follow (replicates `grid_controller`'s `graphSnapshotProvider`):
+/// Seed-then-follow (replicates `beads_dart`'s `graphSnapshotProvider`):
 /// the underlying broadcast streams do not replay, so the notifier is seeded
 /// with the current join up front (or [JoinedSnapshot.empty] when no work
 /// baseline exists yet); a late notifier subscriber sees that baseline, and the

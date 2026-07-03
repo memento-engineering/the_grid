@@ -4,7 +4,7 @@ import 'package:grid_reconciler/src/gates/condition_env.dart';
 import 'package:grid_reconciler/src/gates/process_runner.dart';
 
 /// A programmable [ProcessRunner] for offline tests (ADR-0001 D7: Fakes, not
-/// mocks). Mirrors grid_controller's `FakeBdRunner` seam: replies are matched
+/// mocks). Mirrors beads_dart's `FakeBdRunner` seam: replies are matched
 /// against an invocation by an [executable]-keyed queue, the first reply for an
 /// executable is consumed per call (a queue), and every call is recorded for
 /// assertion (env contract, working dir, timeout).

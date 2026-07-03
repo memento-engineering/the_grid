@@ -1,4 +1,4 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import '../convergence/convergence_metadata.dart';
 import '../convergence/idempotency_key.dart';
@@ -24,7 +24,7 @@ class ActuationFailed implements Exception {
 }
 
 /// The production [Actuator]: executes a [ReduceResult]'s ordered actions
-/// through grid_controller's bd surface — the ONLY writer in the_grid.
+/// through beads_dart's bd surface — the ONLY writer in the_grid.
 ///
 /// Every metadata transition is a sequence of `bd update --metadata` writes
 /// **in the order Track A's getters dictate** (`last_processed_wisp` LAST, it

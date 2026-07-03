@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:grid_cli/src/event_renderer.dart';
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:test/test.dart';
 
 final _at = DateTime.utc(2026, 6, 11, 6, 45, 50, 784);

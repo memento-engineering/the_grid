@@ -50,7 +50,7 @@
 ///    reconciler kills-and-respawns rather than re-attaching to a survivor.
 library;
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';

@@ -1,18 +1,18 @@
 import 'dart:async';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
-/// The dispatch read seam over grid_controller's reactive surface — the
+/// The dispatch read seam over beads_dart's reactive surface — the
 /// second-consumer analog of grid_reconciler's `ConvergenceSource` (M3
 /// Track 5; ADR-0006 Decision 1). The [DispatchInteractor] attaches as a
 /// **SECOND consumer** of the same observable surface M2 uses; it does **not**
 /// go through reduce→gate→actuate.
 ///
-/// The live implementation ([GridReadyWorkSource]) reads grid_controller's
+/// The live implementation ([GridReadyWorkSource]) reads beads_dart's
 /// `GridControllerRuntime` — its `GraphEvent` stream and its `readyBeads`
 /// projection. Tests inject a [FakeReadyWorkSource] driving a synthetic event
 /// stream + a programmable ready set. The seam keeps the dispatcher free of
-/// Riverpod and of grid_controller's repository wiring (exactly how
+/// Riverpod and of beads_dart's repository wiring (exactly how
 /// `ConvergenceSource` keeps the reconciler free of them).
 ///
 /// **Why a `Bead` lookup, not just the entered-id set.** A
@@ -23,12 +23,12 @@ import 'package:grid_controller/grid_controller.dart';
 /// dispatcher can both react to events and reconcile the current ready set on
 /// start.
 abstract interface class ReadyWorkSource {
-  /// The live typed change events (grid_controller's `GraphEvent` stream); the
+  /// The live typed change events (beads_dart's `GraphEvent` stream); the
   /// dispatcher filters for `readySetChanged`.
   Stream<GraphEvent> get events;
 
   /// The current ready-work set — `bd ready`'s authoritative output projected
-  /// by grid_controller (`readyBeads`). Plain work [Bead]s, no
+  /// by beads_dart (`readyBeads`). Plain work [Bead]s, no
   /// `convergence.rig` key (so `OwnsSubstations` is uncallable on them; A32).
   List<Bead> get readyBeads;
 
@@ -37,7 +37,7 @@ abstract interface class ReadyWorkSource {
   Bead? bead(String id);
 }
 
-/// The live [ReadyWorkSource] over a grid_controller [GridControllerRuntime].
+/// The live [ReadyWorkSource] over a beads_dart [GridControllerRuntime].
 class GridReadyWorkSource implements ReadyWorkSource {
   GridReadyWorkSource(this._runtime);
 

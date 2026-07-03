@@ -9,7 +9,7 @@
 // reuse ConvergenceReducer.reduce — so their transition plans are asserted as
 // ReconcilerActions, exactly the actions Track G would actuate.
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_reconciler/grid_reconciler.dart';
 import 'package:test/test.dart';
 

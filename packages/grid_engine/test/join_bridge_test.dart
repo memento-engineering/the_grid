@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 

@@ -3,7 +3,7 @@
 // a side effect of a transition test) so a regression names the invariant it
 // broke.
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_reconciler/grid_reconciler.dart';
 import 'package:test/test.dart';
 

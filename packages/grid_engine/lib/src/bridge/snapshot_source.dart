@@ -1,4 +1,4 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 /// The observable snapshot seam the join bridge subscribes to — the narrow
 /// surface of a `GridControllerRuntime` the bridge actually needs.

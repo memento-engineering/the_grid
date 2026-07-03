@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 
 /// Renders [GraphEvent]s for `grid watch` — either a human-readable line or a

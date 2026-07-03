@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 /// A fake [ReadyWorkSource] (Fakes, not mocks): a programmable ready set + a
@@ -20,7 +20,7 @@ class FakeReadyWorkSource implements ReadyWorkSource {
   void addReady(Bead bead) => _beads[bead.id] = bead;
 
   /// Fires a `readySetChanged` carrying [entered] (and optional [exited]) — the
-  /// event shape grid_controller emits when the ready set changes.
+  /// event shape beads_dart emits when the ready set changes.
   void fireReady(Set<String> entered, {Set<String> exited = const {}}) {
     _events.add(GraphEvent.readySetChanged(entered: entered, exited: exited));
   }

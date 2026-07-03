@@ -1,4 +1,4 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 /// The plain coding-work core types — the DRIVEABLE-WORK boundary a resident
 /// station's all-ready arming narrows to (RS-3/D-R4): every other core type

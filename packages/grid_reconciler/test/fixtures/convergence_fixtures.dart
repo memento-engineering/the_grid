@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:path/path.dart' as p;
 
 /// Loads the version-pinned, gc-produced convergence fixtures
@@ -10,7 +10,7 @@ import 'package:path/path.dart' as p;
 /// writer, never authored; READ-ONLY (CLAUDE.md: re-capture only via the
 /// porting skill).
 ///
-/// Mirrors grid_controller's `test/support/fixtures.dart` directory walk so the
+/// Mirrors beads_dart's `test/support/fixtures.dart` directory walk so the
 /// suite resolves the repo-root `fixtures/` regardless of whether `dart test`
 /// runs from the package or the workspace root.
 const fixtureSet = '2026-06-11-bd-1.0.5';
@@ -170,7 +170,7 @@ class FixtureNode {
   final List<FixtureNode> children;
 
   /// This node as a [Bead]. The capture serializes a bead status string
-  /// (`open` / `closed`); map it through grid_controller's converter the same
+  /// (`open` / `closed`); map it through beads_dart's converter the same
   /// way `Bead.fromJson` would.
   Bead toBead() => Bead(
     id: id,

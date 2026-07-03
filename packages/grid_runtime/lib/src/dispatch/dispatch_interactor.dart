@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_reconciler/grid_reconciler.dart' show PerBeadQueue;
 
 import '../git/station_git_service.dart';
@@ -35,7 +35,7 @@ class DispatchRecord {
 /// worktree, tracked as a session bead.
 ///
 /// **It attaches as a SECOND consumer of the same observable surface M2 uses**
-/// (a [ReadyWorkSource] over grid_controller's `GraphEvent` stream +
+/// (a [ReadyWorkSource] over beads_dart's `GraphEvent` stream +
 /// `readyBeads`), and it does **NOT** go through reduce→gate→actuate — the M2
 /// `ReconcilerRuntime` owns that path for convergence beads; this is the
 /// dispatch path for plain ready work beads.

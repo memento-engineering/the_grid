@@ -36,7 +36,7 @@
 ///
 /// **Track 5 built.** The `DispatchInteractor` attaches as a SECOND consumer of
 /// the same observable surface M2 uses (a `ReadyWorkSource` over
-/// grid_controller's `GraphEvent` stream + `readyBeads`) and does NOT go
+/// beads_dart's `GraphEvent` stream + `readyBeads`) and does NOT go
 /// through reduce→gate→actuate. It gates dispatch on the Track-4
 /// `BeadOwnershipPredicate` (the shared `{tgdog}` allow-set) — a non-owned bead
 /// is observed read-only, never dispatched — and on accept runs

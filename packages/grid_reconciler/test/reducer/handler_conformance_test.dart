@@ -9,7 +9,7 @@
 // (gate_outcome_wisp == wisp), which runs the whole pipeline in one reduce —
 // so they map to a single wispClosed reduce here, exactly as in gc.
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_reconciler/grid_reconciler.dart';
 // Track B's reducer is not yet on the package barrel (the orchestrator wires
 // it after this track lands); import the sub-barrel by path until then.

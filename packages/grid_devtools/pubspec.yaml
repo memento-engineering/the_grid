@@ -1,7 +1,7 @@
 name: grid_devtools
 description: >-
   DevTools extension for the_grid. Attaches over the exploration protocol
-  only (ADR-0002 Decision 3) — no direct grid_controller dependency.
+  only (ADR-0002 Decision 3) — no direct beads_dart dependency.
 publish_to: none
 resolution: workspace
 

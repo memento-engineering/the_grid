@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 /// A recording [BdRunner] for actuator tests: records every argv (and stdin)
 /// in call order, and answers from registered stubs. This is the witness for

@@ -8,7 +8,7 @@ lifecycle **as a bead** (bd-only writes through the single write chokepoint,
 `--actor grid-controller`, never SQL), and lands finished work as a pushed
 branch / PR — **never an auto-merge**. It ports gc's `runtime.Provider` contract
 (`gascity/internal/runtime/`) into Dart per **ADR-0004**, consuming
-`grid_controller`'s ready-set seam and `grid_reconciler`'s actuator.
+`beads_dart`'s ready-set seam and `grid_reconciler`'s actuator.
 
 See `docs/adr/ADR-0004` (runtime providers, tmux first, tiered) and
 `docs/M3-BUILD-ORDER.md` (the dependency-ordered tracks).
@@ -122,7 +122,7 @@ surface lands across M3:
     convergence `RecoveryAction` actuator (now Track 4b, off the Friday path).
 - **Track 5 (built)** — `DispatchInteractor` (ready bead → spawn) + the
   `ReadyWorkSource` read seam. It attaches as a **SECOND consumer** of the same
-  observable surface M2 uses (a `ReadyWorkSource` over `grid_controller`'s
+  observable surface M2 uses (a `ReadyWorkSource` over `beads_dart`'s
   `GraphEvent` stream + `readyBeads`, mirroring the M2 `ConvergenceSource`) and
   does **not** go through reduce→gate→actuate. Two halves:
   - **Dispatch.** On `GraphEvent.readySetChanged.entered` (and a start-time

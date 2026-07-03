@@ -5,7 +5,7 @@ description: >-
   alternative), isolates each bead's work in a git worktree, and tracks each
   session's lifecycle as a bead through the single bd write chokepoint
   (bd-only, `--actor grid-controller`, never SQL). Ports gc's runtime.Provider
-  contract (ADR-0004) and consumes grid_controller's ready-set seam +
+  contract (ADR-0004) and consumes beads_dart's ready-set seam +
   grid_reconciler's actuator. Scaffold only; Track 2 fills it.
 publish_to: none
 resolution: workspace
@@ -14,8 +14,8 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
+  beads_dart: any
   freezed_annotation: ^3.0.0
-  grid_controller: any
   grid_reconciler: any
   json_annotation: ^4.9.0
   meta: ^1.16.0

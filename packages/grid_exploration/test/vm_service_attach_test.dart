@@ -4,7 +4,7 @@ library;
 import 'dart:developer' as developer;
 import 'dart:isolate' as iso;
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 import 'package:test/test.dart';
 import 'package:vm_service/utils.dart';

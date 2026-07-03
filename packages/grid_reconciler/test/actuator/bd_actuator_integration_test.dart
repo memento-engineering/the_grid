@@ -4,7 +4,7 @@ library;
 
 import 'dart:io';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_reconciler/src/actuator/bd_actuator.dart';
 import 'package:grid_reconciler/src/convergence/convergence_metadata.dart';
 import 'package:grid_reconciler/src/convergence/idempotency_key.dart';
@@ -20,7 +20,7 @@ import 'package:test/test.dart';
 /// second apply of the same idempotency key ADOPTS the existing wisp rather
 /// than pouring a duplicate.
 ///
-/// Self-skips when `bd` is not on PATH (mirrors grid_controller's hermetic
+/// Self-skips when `bd` is not on PATH (mirrors beads_dart's hermetic
 /// integration suite). NEVER touches a live workspace.
 void main() {
   late Directory root;

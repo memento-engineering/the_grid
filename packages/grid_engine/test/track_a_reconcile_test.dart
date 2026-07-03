@@ -11,7 +11,7 @@
 //
 // ADR-0007 §6.1 / M4-P0-BUILD-ORDER §3 Track A. Zero I/O — fakes only.
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
