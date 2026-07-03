@@ -1,12 +1,13 @@
 # SCRATCH — one station, many roots + federated work sources
 
-**Status: PAUSED (2026-07-03) — architecture realignment in session.** Nico stopped the pass
-mid-read: the remote half of §4b (D-Z7 in particular) misreads his federation model
-(stations HOST substations and coordinate by WORK ASSIGNMENT with station-local credentials — not
-by observing remote stores as snapshot members), and the grid_controller/grid_engine split +
-residual Riverpod need an architecture look first. The LOCAL multi-root/multi-store content
-(§3, §4 D-F1..F7 minus the remote framing) is expected to survive; do not build anything here
-until the realignment surface lands.
+**Status: SUPERSEDED-IN-PART (2026-07-03) — see `SCRATCH-grid-alignment.md`.** The realignment
+session ruled the remote half of §4b WRONG for the target model: remote substations are never
+snapshot members (D-Z7 is dead) — federation is by WORK ASSIGNMENT (claim-first-local →
+broadcast-unclaimed → capability-matched claim → lease), designed in the alignment surface. The
+LOCAL content SURVIVES and resumes under that frame: §3 multi-root (tg-7gm, D-M1..M7) and §4's
+local multi-store half (tg-nsj re-scoped to local stores, D-F1..F7) plus §4b's durable pieces
+(absence ≠ deletion, staleness fail-closed, discovered ≠ blessed, membership-as-observed-state).
+§5's OQ-1..6 still want rulings when this pass resumes (alignment ladder AL-2/AL-3).
 
 **Was: discovery surface (2026-07-03), awaiting Nico's rulings.** Refines the two deferred P0
 beads filed at the first live boot — **tg-7gm** (multi-root) and **tg-nsj** (federated work
