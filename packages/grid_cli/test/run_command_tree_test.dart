@@ -25,25 +25,30 @@ import 'package:test/test.dart';
 ///     `dispose` records a stop) and is idempotent.
 void main() {
   group('composeStation — pure composition (no I/O at construct time)', () {
-    test('assembles a kernel + restart reconciler; constructs nothing live',
-        () {
-      final h = _TreeHarness();
-      final wiring = h.compose();
-      addTearDown(h.dispose);
+    test(
+      'assembles a kernel + restart reconciler; constructs nothing live',
+      () {
+        final h = _TreeHarness();
+        final wiring = h.compose();
+        addTearDown(h.dispose);
 
-      // The wiring is built but NOT started: no barrier ran, no spawn, no bd
-      // write, no worktree probe — pure construction.
-      expect(wiring.kernel, isNotNull);
-      expect(wiring.restart, isNotNull);
-      expect(h.barrierRuns, 0, reason: 'composition never runs the barrier');
-      expect(h.provider.starts, isEmpty, reason: 'composition spawns nothing');
-      expect(h.bdRunner.calls, isEmpty, reason: 'composition writes no bead');
-      expect(h.git.listCalls, 0, reason: 'composition probes no worktrees');
-    });
+        // The wiring is built but NOT started: no barrier ran, no spawn, no bd
+        // write, no worktree probe — pure construction.
+        expect(wiring.kernel, isNotNull);
+        expect(wiring.restart, isNotNull);
+        expect(h.barrierRuns, 0, reason: 'composition never runs the barrier');
+        expect(
+          h.provider.starts,
+          isEmpty,
+          reason: 'composition spawns nothing',
+        );
+        expect(h.bdRunner.calls, isEmpty, reason: 'composition writes no bead');
+        expect(h.git.listCalls, 0, reason: 'composition probes no worktrees');
+      },
+    );
   });
 
-  group('composeStation — dry start smoke (kernel mounts, ready bead spawns)',
-      () {
+  group('composeStation — dry start smoke (kernel mounts, ready bead spawns)', () {
     test('a ready OWNED task mounts the tree and the DRY provider records a '
         'start (the bead would spawn live)', () async {
       final h = _TreeHarness();
@@ -61,8 +66,11 @@ void main() {
       expect(h.provider.starts, hasLength(1), reason: 'the ready bead spawned');
       // The host provisioned the worktree (via SourceControl) before spawning —
       // the agent never lands in a non-existent dir (the blocker fix).
-      expect(h.git.provisioned, contains('tgdog-w1'),
-          reason: 'the workspace was provisioned before the spawn');
+      expect(
+        h.git.provisioned,
+        contains('tgdog-w1'),
+        reason: 'the workspace was provisioned before the spawn',
+      );
       // The session bead was minted through the chokepoint over the recording
       // bd runner — a `create` was recorded, but NO live `bd` ran (the runner is
       // a fake returning a canned envelope).
@@ -102,25 +110,26 @@ void main() {
       await wiring.teardown();
     });
 
-    test('teardown() is idempotent (a second call does nothing, never throws)',
-        () async {
-      final h = _TreeHarness();
-      final wiring = h.compose();
-      addTearDown(h.dispose);
+    test(
+      'teardown() is idempotent (a second call does nothing, never throws)',
+      () async {
+        final h = _TreeHarness();
+        final wiring = h.compose();
+        addTearDown(h.dispose);
 
-      h.pushWork(Bead(id: 'tgdog-w3', title: 'idempotent'));
-      await wiring.start();
-      await _settle();
+        h.pushWork(Bead(id: 'tgdog-w3', title: 'idempotent'));
+        await wiring.start();
+        await _settle();
 
-      await wiring.teardown();
-      final stopsAfterFirst = h.provider.stops.length;
-      await wiring.teardown(); // second call — no double-kill, no throw.
-      expect(h.provider.stops.length, stopsAfterFirst);
-    });
+        await wiring.teardown();
+        final stopsAfterFirst = h.provider.stops.length;
+        await wiring.teardown(); // second call — no double-kill, no throw.
+        expect(h.provider.stops.length, stopsAfterFirst);
+      },
+    );
   });
 
-  group('composeStation — the ASSET seam (ADR-0008 D1: default code, or inject)',
-      () {
+  group('composeStation — the ASSET seam (ADR-0008 D1: default code, or inject)', () {
     test('an INJECTED asset (resolver + registry + services) drives the mount — a '
         'non-code circuit mounts its OWN step, so the burn composes WITHOUT '
         'editing the composer', () async {
@@ -161,29 +170,33 @@ void main() {
       await wiring.teardown();
     });
 
-    test('the framework composer carries NO asset default — an asset-supplied '
-        'SourceControl provisions; the empty bundle does not (the contrast)',
-        () async {
-      final h = _TreeHarness();
-      // The harness default trio + a SourceControl bundle (what an asset's
-      // servicesFor supplies) → provisioning happens before the spawn.
-      final wiring = h.compose();
-      addTearDown(h.dispose);
+    test(
+      'the framework composer carries NO asset default — an asset-supplied '
+      'SourceControl provisions; the empty bundle does not (the contrast)',
+      () async {
+        final h = _TreeHarness();
+        // The harness default trio + a SourceControl bundle (what an asset's
+        // servicesFor supplies) → provisioning happens before the spawn.
+        final wiring = h.compose();
+        addTearDown(h.dispose);
 
-      h.pushWork(Bead(id: 'tgdog-w1', title: 'asset services'));
-      await wiring.start();
-      await _settle();
+        h.pushWork(Bead(id: 'tgdog-w1', title: 'asset services'));
+        await wiring.start();
+        await _settle();
 
-      expect(h.provider.starts, hasLength(1));
-      expect(h.git.provisioned, contains('tgdog-w1'),
-          reason: 'the asset-supplied SourceControl owns provisioning');
+        expect(h.provider.starts, hasLength(1));
+        expect(
+          h.git.provisioned,
+          contains('tgdog-w1'),
+          reason: 'the asset-supplied SourceControl owns provisioning',
+        );
 
-      await wiring.teardown();
-    });
+        await wiring.teardown();
+      },
+    );
   });
 
-  group(
-      'the station-runner pieces (a file-local asset runner) — gating + '
+  group('the station-runner pieces (a file-local asset runner) — gating + '
       'dry-run wiring', () {
     test('an empty allow-set is refused (exit 64, no composition)', () async {
       final errs = <String>[];
@@ -215,7 +228,10 @@ void main() {
         runForever: false,
       );
       expect(code, 64);
-      expect(errs.join('\n'), contains('--land cannot be combined with --dry-run'));
+      expect(
+        errs.join('\n'),
+        contains('--land cannot be combined with --dry-run'),
+      );
     });
 
     test('a non-dry run with no --root is refused (exit 64)', () async {
@@ -236,26 +252,30 @@ void main() {
       expect(errs.join('\n'), contains('requires --root'));
     });
 
-    test('a non-dry run with --root but NO --state-workspace is refused (64) — '
-        'sessions must never default into the read --workspace (A36/A37)',
-        () async {
-      final errs = <String>[];
-      final code = await runStation(
-        resolver: const CircuitResolver(_markerCircuitFor),
-        registry: _markerRegistry(),
-        args: const StationArgs(
-          substations: {'genesis'},
-          dryRun: false,
-          rootPath: '/tmp/some-root', // past the root guard…
-          // …no --state-workspace → refused.
-        ),
-        out: (_) {},
-        err: errs.add,
-        runForever: false,
-      );
-      expect(code, 64);
-      expect(errs.join('\n'), contains('requires --state-workspace'));
-    });
+    test(
+      'a non-dry run with --root but NO --state-workspace is refused (64) — '
+      'sessions must never default into the read --workspace (A36/A37)',
+      () async {
+        final errs = <String>[];
+        final code = await runStation(
+          resolver: const CircuitResolver(_markerCircuitFor),
+          registry: _markerRegistry(),
+          args: const StationArgs(
+            substations: {'genesis'},
+            dryRun: false,
+            roots: {
+              'genesis': RootSpec(path: '/tmp/some-root'),
+            }, // past the root guard…
+            // …no --state-workspace → refused.
+          ),
+          out: (_) {},
+          err: errs.add,
+          runForever: false,
+        );
+        expect(code, 64);
+        expect(errs.join('\n'), contains('requires --state-workspace'));
+      },
+    );
 
     test('dry-run wires the M3 seams into the tree engine: an owned ready bead '
         'mounts + records a would-spawn through the chokepoint, NOTHING live; '
@@ -332,7 +352,9 @@ void main() {
         args: const StationArgs(
           substations: {'tgdog'},
           dryRun: false,
-          rootPath: '/tmp/some-root', // past the root guard…
+          roots: {
+            'tgdog': RootSpec(path: '/tmp/some-root'),
+          }, // past the root guard…
           stateWorkspacePath: '/tmp/some-state', // …past the state guard…
           // …no --bead → refused before any discovery/composition.
         ),
@@ -437,7 +459,7 @@ void main() {
           substations: {'tgdog'},
           stateSubstation: 'tgdog',
           dryRun: false,
-          rootPath: '/tmp/grid-tree-root',
+          roots: {'tgdog': RootSpec(path: '/tmp/grid-tree-root')},
           head: 'm4-p1-reentrant-engine',
           targetBeads: {'tgdog-w1'},
           runFor: Duration(milliseconds: 100),
@@ -458,31 +480,129 @@ void main() {
       expect(
         git.service.registeredHead,
         'm4-p1-reentrant-engine',
-        reason: '--head reaches registerRootCheckout as the assigned base branch',
+        reason:
+            '--head reaches registerRootCheckout as the assigned base branch',
       );
     });
 
-    test('the dry-run git service is INERT — a no-op runner yields a NON-NULL '
-        'empty worktree list (a real `git` over a non-repo path errors → null), '
-        'so the RestartReconciler finds no survivors without touching real git',
-        () async {
-      final result = await buildDryTreeGitService().listBeadWorktrees(
-        const RootCheckout(
-          path: '/tmp/grid-tree-root-does-not-exist',
-          defaultBranch: 'main',
-          substation: 'tgdog',
-        ),
-      );
-      // Exit-0 + empty output (the no-op runner) parses to [] — a real `git`
-      // over a non-existent repo would exit non-zero → worktreeList returns null.
-      expect(result, isNotNull,
-          reason: 'the no-op runner short-circuits real git (empty success)');
-      expect(result, isEmpty);
-    });
+    test(
+      'the dry-run git service is INERT — a no-op runner yields a NON-NULL '
+      'empty worktree list (a real `git` over a non-repo path errors → null), '
+      'so the RestartReconciler finds no survivors without touching real git',
+      () async {
+        final result = await buildDryTreeGitService().listBeadWorktrees(
+          const RootCheckout(
+            path: '/tmp/grid-tree-root-does-not-exist',
+            defaultBranch: 'main',
+            substation: 'tgdog',
+          ),
+        );
+        // Exit-0 + empty output (the no-op runner) parses to [] — a real `git`
+        // over a non-existent repo would exit non-zero → worktreeList returns null.
+        expect(
+          result,
+          isNotNull,
+          reason: 'the no-op runner short-circuits real git (empty success)',
+        );
+        expect(result, isEmpty);
+      },
+    );
   });
 
-  group('resident arming (RS-3, D-R4): the ready frontier is the drive set',
-      () {
+  group('multi-root (tg-7gm): per-substation DEFAULT roots + a per-bead '
+      'grid.root selector', () {
+    test(
+      'TWO named roots registered — a bead defaulting to its substation AND a '
+      'bead selecting an EXTRA root via metadata.grid.root both mount, each '
+      'provisioning through ITS OWN SourceControl; a THIRD bead selecting an '
+      'UNREGISTERED root is a LOUD skip (never a gate) — its siblings still mount',
+      () async {
+        final work = _FakeSnapshotSource();
+        work.push(
+          GraphSnapshot.fromParts(
+            beads: [
+              Bead(id: 'tg-1', title: 'defaults to substation tg'),
+              Bead(
+                id: 'tg-2',
+                title: 'selects the EXTRA power_station root',
+                metadata: const {'grid.root': 'power_station'},
+              ),
+              Bead(
+                id: 'tg-3',
+                title: 'selects an UNREGISTERED root',
+                metadata: const {'grid.root': 'genesis'},
+              ),
+            ],
+            dependencies: const [],
+            readyIds: {'tg-1', 'tg-2', 'tg-3'},
+            capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+        );
+        final state = _FakeSnapshotSource();
+        final provider = _RecordingDryProvider();
+        final bdRunner = RecordingBdRunner();
+        final groups = _FakeProcessGroupController();
+        addTearDown(() async {
+          await work.close();
+          await state.close();
+          await provider.close();
+        });
+
+        final code = await runStation(
+          resolver: const CircuitResolver(_markerCircuitFor),
+          registry: _markerRegistry(),
+          args: const StationArgs(
+            substations: {'tg'},
+            stateSubstation: 'tgdog',
+            dryRun: true,
+            roots: {
+              'tg': RootSpec(path: '/tmp/the_grid'),
+              'power_station': RootSpec(path: '/tmp/power_station'),
+              // NOTE: "genesis" is deliberately NOT registered.
+            },
+            runFor: Duration(milliseconds: 100),
+          ),
+          work: work,
+          state: state,
+          provider: provider,
+          stateBd: BdCliService(bdRunner),
+          groups: groups,
+          // ONE ServiceBundle for the ONE substation ("tg") carrying BOTH its
+          // default SourceControl and an EXTRA named one — exactly what an
+          // asset builds from `StationWiring.roots` (tg-7gm).
+          servicesByName: {
+            'tg': ServiceBundle(
+              sourceControl: _NamedSourceControl('default'),
+              sourceControlsByRoot: {
+                'power_station': _NamedSourceControl('power_station'),
+              },
+            ),
+          },
+          freshnessBarrier: () async {},
+          out: (_) {},
+          err: (_) {},
+        );
+
+        expect(code, 0);
+        // Only tg-1 and tg-2 mounted — tg-3 (unregistered root) never spawned.
+        expect(provider.starts, hasLength(2));
+        expect(
+          provider.starts.where((s) => s.name.contains('tg-3')),
+          isEmpty,
+          reason:
+              'tg-3 selected an unregistered root — LOUD skip, never mounts',
+        );
+        // Each mounted bead provisioned through ITS OWN SourceControl: tg-1's
+        // workDir carries the DEFAULT label, tg-2's carries the EXTRA root's.
+        final tg1 = provider.starts.singleWhere((s) => s.name.contains('tg-1'));
+        final tg2 = provider.starts.singleWhere((s) => s.name.contains('tg-2'));
+        expect(tg1.config.workDir, '/default/tg-1');
+        expect(tg2.config.workDir, '/power_station/tg-2');
+      },
+    );
+  });
+
+  group('resident arming (RS-3, D-R4): the ready frontier is the drive set', () {
     test('validateArming: resident live arming passes with ZERO beads — root '
         '+ state-workspace present, no --bead required', () {
       expect(
@@ -526,48 +646,51 @@ void main() {
     });
 
     test(
-        'validateArming: resident + --bead is refused LOUD in a LIVE arm too',
-        () {
-      expect(
-        () => validateArming(
-          const StationArgs(
-            substations: {'tgdog'},
-            stateSubstation: 'tgdog',
-            dryRun: false,
-            resident: true,
-            targetBeads: {'tgdog-w1'},
+      'validateArming: resident + --bead is refused LOUD in a LIVE arm too',
+      () {
+        expect(
+          () => validateArming(
+            const StationArgs(
+              substations: {'tgdog'},
+              stateSubstation: 'tgdog',
+              dryRun: false,
+              resident: true,
+              targetBeads: {'tgdog-w1'},
+            ),
+            rootInjected: true,
+            stateInjected: true,
           ),
-          rootInjected: true,
-          stateInjected: true,
-        ),
-        throwsA(
-          isA<StationRefusal>().having(
-            (r) => r.message,
-            'message',
-            contains('resident station takes no drive-list'),
+          throwsA(
+            isA<StationRefusal>().having(
+              (r) => r.message,
+              'message',
+              contains('resident station takes no drive-list'),
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
 
-    test('validateArming: the LEGACY (non-resident) live-arm bead '
-        'requirement is untouched — byte-identical refusal with zero beads',
-        () {
-      expect(
-        () => validateArming(
-          const StationArgs(substations: {'tgdog'}, dryRun: false),
-          rootInjected: true,
-          stateInjected: true,
-        ),
-        throwsA(
-          isA<StationRefusal>().having(
-            (r) => r.message,
-            'message',
-            contains('requires at least one --bead'),
+    test(
+      'validateArming: the LEGACY (non-resident) live-arm bead '
+      'requirement is untouched — byte-identical refusal with zero beads',
+      () {
+        expect(
+          () => validateArming(
+            const StationArgs(substations: {'tgdog'}, dryRun: false),
+            rootInjected: true,
+            stateInjected: true,
           ),
-        ),
-      );
-    });
+          throwsA(
+            isA<StationRefusal>().having(
+              (r) => r.message,
+              'message',
+              contains('requires at least one --bead'),
+            ),
+          ),
+        );
+      },
+    );
 
     test('a resident LIVE arm with root + state-workspace + zero beads mounts '
         'the ready frontier end-to-end (validateArming → buildLiveWiring → '
@@ -600,7 +723,7 @@ void main() {
           stateSubstation: 'tgdog',
           dryRun: false,
           resident: true,
-          rootPath: '/tmp/grid-resident-root',
+          roots: {'tgdog': RootSpec(path: '/tmp/grid-resident-root')},
           stateWorkspacePath: '/tmp/grid-resident-state',
           // no --bead — the ready frontier IS the drive set.
           // A short fixed run lets the mount→mint→spawn microtask chain
@@ -670,44 +793,46 @@ void main() {
       await wiring.teardown();
     });
 
-    test('resident all-ready still honors the EXISTING mount-boundary gates: '
-        'a non-core (convergence) bead and an unowned bead never mount',
-        () async {
-      final h = _TreeHarness();
-      final wiring = h.compose(
-        config: const SubstationConfig(
-          substationId: 'tgdog',
-          ownedSubstations: {'tgdog'},
-          resident: true,
-        ),
-      );
-      addTearDown(h.dispose);
+    test(
+      'resident all-ready still honors the EXISTING mount-boundary gates: '
+      'a non-core (convergence) bead and an unowned bead never mount',
+      () async {
+        final h = _TreeHarness();
+        final wiring = h.compose(
+          config: const SubstationConfig(
+            substationId: 'tgdog',
+            ownedSubstations: {'tgdog'},
+            resident: true,
+          ),
+        );
+        addTearDown(h.dispose);
 
-      h.work.push(
-        GraphSnapshot.fromParts(
-          beads: [
-            Bead(id: 'tgdog-w1', title: 'ok'),
-            Bead(
-              id: 'tgdog-conv',
-              title: 'convergence',
-              issueType: IssueType.convergence,
-            ),
-            Bead(id: 'gc-9', title: 'unowned'),
-          ],
-          dependencies: const [],
-          readyIds: const {'tgdog-w1', 'tgdog-conv', 'gc-9'},
-          capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
-        ),
-      );
+        h.work.push(
+          GraphSnapshot.fromParts(
+            beads: [
+              Bead(id: 'tgdog-w1', title: 'ok'),
+              Bead(
+                id: 'tgdog-conv',
+                title: 'convergence',
+                issueType: IssueType.convergence,
+              ),
+              Bead(id: 'gc-9', title: 'unowned'),
+            ],
+            dependencies: const [],
+            readyIds: const {'tgdog-w1', 'tgdog-conv', 'gc-9'},
+            capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+        );
 
-      await wiring.start();
-      await _settle();
+        await wiring.start();
+        await _settle();
 
-      expect(h.provider.starts, hasLength(1));
-      expect(h.provider.starts.single.name, contains('tgdog-w1'));
+        expect(h.provider.starts, hasLength(1));
+        expect(h.provider.starts.single.name, contains('tgdog-w1'));
 
-      await wiring.teardown();
-    });
+        await wiring.teardown();
+      },
+    );
 
     test('resident all-ready excludes organizational core types (epic / '
         'milestone / decision) — the DRIVEABLE-WORK boundary (the RS-3 '
@@ -746,8 +871,7 @@ void main() {
       await residentWiring.start();
       await _settle();
 
-      final startedNames =
-          resident.provider.starts.map((s) => s.name).toList();
+      final startedNames = resident.provider.starts.map((s) => s.name).toList();
       for (final driveable in [
         'tgdog-task',
         'tgdog-bug',
@@ -814,6 +938,12 @@ Future<void> _settle() async {
 /// [StationRefusal] catch mapping to (err, exit code) exactly like a runner's
 /// top level would. The optional seams thread straight through to
 /// `buildLiveWiring` so the gating + dry-run wiring assertions run over fakes.
+///
+/// [rootCheckout]/[services] stay the SINGLE-root/substation shorthand every
+/// existing (pre-tg-7gm) call site uses — internally wrapped into the
+/// multi-root [rootsOverride]/[servicesByName] maps keyed by
+/// `args.substations.first`. A NEW multi-root test passes [rootsOverride]/
+/// [servicesByName] directly instead.
 Future<int> runStation({
   required StationArgs args,
   required CircuitResolver resolver,
@@ -821,6 +951,7 @@ Future<int> runStation({
   SnapshotSource work = const EmptySnapshotSource(),
   SnapshotSource? state,
   ServiceBundle services = const ServiceBundle(),
+  Map<String, ServiceBundle>? servicesByName,
   void Function(String)? out,
   void Function(String)? err,
   BdCliService? stateBd,
@@ -828,14 +959,18 @@ Future<int> runStation({
   StationGitService? gitService,
   ProcessGroupController? groups,
   RootCheckout? rootCheckout,
+  Map<String, RootCheckout>? rootsOverride,
   Future<void> Function()? freshnessBarrier,
   bool runForever = true,
 }) async {
   final writeErr = err ?? (String _) {};
+  final effectiveRootsOverride =
+      rootsOverride ??
+      (rootCheckout != null ? {args.substations.first: rootCheckout} : null);
   try {
     validateArming(
       args,
-      rootInjected: rootCheckout != null,
+      rootInjected: effectiveRootsOverride != null,
       stateInjected: state != null || stateBd != null,
     );
     final sources = StationSources(
@@ -850,7 +985,7 @@ Future<int> runStation({
       providerOverride: provider,
       gitServiceOverride: gitService,
       groupsOverride: groups,
-      rootCheckoutOverride: rootCheckout,
+      rootsOverride: effectiveRootsOverride,
       freshnessBarrierOverride: freshnessBarrier,
     );
     final wiring = composeStation(
@@ -863,6 +998,7 @@ Future<int> runStation({
           ownedSubstations: args.substations,
           driveList: args.targetBeads,
           resident: args.resident,
+          registeredRoots: live.roots.keys.toSet(),
         ),
       ],
       git: live.git,
@@ -875,7 +1011,7 @@ Future<int> runStation({
       adoptProof: live.adoptProof,
       resolver: resolver,
       registry: registry,
-      services: services,
+      services: servicesByName ?? {args.substations.first: services},
     );
     return await driveStation(
       wiring: wiring,
@@ -917,6 +1053,54 @@ DefaultCapabilityRegistry _markerRegistry() => DefaultCapabilityRegistry(
   capabilities: const {_markerStep: _MarkerCap()},
   circuits: const {'marker': _markerCircuit},
 );
+
+/// A minimal, distinguishable [SourceControl] (tg-7gm's multi-root test): its
+/// [workspaceFor] embeds [label] so a test can tell WHICH registered root a
+/// bead actually provisioned through.
+class _NamedSourceControl implements SourceControl {
+  const _NamedSourceControl(this.label);
+
+  final String label;
+
+  @override
+  String workspaceFor(String beadId) => '/$label/$beadId';
+
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+
+  @override
+  String get baseBranch => 'main';
+
+  @override
+  bool get canLand => false;
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {}
+
+  @override
+  Future<void> commitAll({
+    required String workspaceDir,
+    required String message,
+  }) async {}
+
+  @override
+  Future<void> push({
+    required String workspaceDir,
+    required String remote,
+    required String branch,
+  }) async {}
+
+  @override
+  Future<PrRef?> openPr({
+    required String workspaceDir,
+    required String branch,
+    required String baseBranch,
+    required String title,
+  }) async => null;
+}
 
 /// An in-test [SourceControl] over the recording [StationGitService] — replaces
 /// the retired composer-side git default so the provisioning assertions still
@@ -1069,8 +1253,16 @@ class _TreeHarness {
       freshnessBarrier: _barrier,
       resolver: resolver ?? const CircuitResolver(_markerCircuitFor),
       registry: registry ?? _markerRegistry(),
-      services: services ??
-          ServiceBundle(sourceControl: _HarnessSourceControl(git.service)),
+      services: {
+        (config ??
+                    const SubstationConfig(
+                      substationId: 'tgdog',
+                      ownedSubstations: {'tgdog'},
+                    ))
+                .substationId:
+            services ??
+            ServiceBundle(sourceControl: _HarnessSourceControl(git.service)),
+      },
     );
   }
 
@@ -1194,7 +1386,7 @@ class _FakeGitService {
 /// call and always reports no worktrees (the live `git` is never touched).
 class _RecordingGitService extends StationGitService {
   _RecordingGitService({required this.onList})
-      : super(runner: _FakeGitRunner(), prOpener: _FakePrOpener());
+    : super(runner: _FakeGitRunner(), prOpener: _FakePrOpener());
 
   final void Function() onList;
 
@@ -1250,8 +1442,7 @@ class _FakeGitRunner implements GitRunner {
   Future<GitRunResult> run({
     required String workingDirectory,
     required List<String> args,
-  }) async =>
-      const GitRunResult(exitCode: 0, output: '');
+  }) async => const GitRunResult(exitCode: 0, output: '');
 }
 
 class _FakePrOpener implements PrOpener {
@@ -1262,10 +1453,9 @@ class _FakePrOpener implements PrOpener {
     required String baseBranch,
     required String title,
     String body = '',
-  }) async =>
-      PullRequestResult.opened(
-        PullRequestRef(url: 'https://example.test/pr/1', number: 1),
-      );
+  }) async => PullRequestResult.opened(
+    PullRequestRef(url: 'https://example.test/pr/1', number: 1),
+  );
 }
 
 /// A fake [ProcessGroupController] — never reached in the no-survivors smoke,
@@ -1288,7 +1478,8 @@ class _FakeProcessGroupController implements ProcessGroupController {
 /// the smoke can assert the session mint went through the chokepoint WITHOUT a
 /// real `bd`. Returns a canned envelope so the chokepoint runs end-to-end.
 class RecordingBdRunner implements BdRunner {
-  RecordingBdRunner({String createdId = 'tgdog-sess1'}) : _createdId = createdId;
+  RecordingBdRunner({String createdId = 'tgdog-sess1'})
+    : _createdId = createdId;
 
   final String _createdId;
   final List<List<String>> calls = <List<String>>[];
@@ -1297,9 +1488,7 @@ class RecordingBdRunner implements BdRunner {
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
     final sub = args.isNotEmpty ? args.first : '';
-    final id = sub == 'create'
-        ? _createdId
-        : (args.length >= 2 ? args[1] : '');
+    final id = sub == 'create' ? _createdId : (args.length >= 2 ? args[1] : '');
     return Future<BdResult>.value(
       BdResult(
         exitCode: 0,

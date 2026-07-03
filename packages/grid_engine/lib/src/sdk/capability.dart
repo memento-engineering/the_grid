@@ -150,8 +150,10 @@ abstract class ProcessCapability extends Capability {
   /// update). Defaults to null (no result). MUST be idempotent + side-effect-free
   /// beyond reading its inputs (e.g. a file the spawned process wrote); read
   /// [context] at entry and check [StepArgs.cancel] after any await.
-  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async =>
-      null;
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async => null;
 
   /// Idempotent belt-and-braces cleanup on unmount (TEARDOWN-11/12) — e.g.
   /// `pkill` a detached side-process by token. Defaults to a no-op (the host's
@@ -172,8 +174,7 @@ abstract class ProcessCapability extends Capability {
     AdoptFence fence,
     TreeContext context,
     StepArgs args,
-  ) async =>
-      false;
+  ) async => false;
 
   /// The default [Allocation] for a spawned process (ADR-0009 D6) — a
   /// [ProcessAllocation] driving [spawn]/[interpretEvent] over the transport.
@@ -286,7 +287,8 @@ class SiblingView {
 
   /// The [NodeCursor] at [nodePath] (a default `pending` cursor for an
   /// unknown/never-run node).
-  NodeCursor cursorOf(String nodePath) => cursor[nodePath] ?? const NodeCursor();
+  NodeCursor cursorOf(String nodePath) =>
+      cursor[nodePath] ?? const NodeCursor();
 
   /// The result payload at [nodePath] (an empty map for a node that recorded
   /// none).
@@ -298,12 +300,30 @@ class SiblingView {
 /// concrete bundle (genesis's exact-type inherited lookup can't resolve an
 /// abstract `<SourceControl>`), provided per-`SubstationScope`. Impls ship in
 /// assets.
+///
+/// [sourceControl] is the substation's DEFAULT (its own registered root).
+/// [sourceControlsByRoot] carries EXTRA named roots a bead in this substation
+/// may opt into via `metadata.grid.root` (tg-7gm, the alignment amendment: a
+/// substation can span N repos — `tg` beads building `power_station` select
+/// it by name). [sourceControlFor] is the one resolution point; a capability
+/// never reads the maps directly.
 class ServiceBundle {
   /// Creates a bundle of optional collaborators.
-  const ServiceBundle({this.sourceControl, this.trust, this.transport});
+  const ServiceBundle({
+    this.sourceControl,
+    this.trust,
+    this.transport,
+    this.sourceControlsByRoot = const {},
+  });
 
-  /// Source control (commit/push/PR) — the git impl ships in the asset.
+  /// Source control (commit/push/PR) for this substation's DEFAULT root — the
+  /// git impl ships in the asset.
   final SourceControl? sourceControl;
+
+  /// EXTRA named roots' source control, keyed by the registration name a
+  /// bead's `metadata.grid.root` selects. Does NOT include the default (that
+  /// is always [sourceControl]); empty when the substation has no extra roots.
+  final Map<String, SourceControl> sourceControlsByRoot;
 
   /// Reserved (OQ-7) — local/reputation/ledger trust, distinct from
   /// `genesis_consent`. Designed-to-be-lifted; null in P1.
@@ -312,6 +332,17 @@ class ServiceBundle {
   /// Reserved — the outbound exploration sink (no inbound pipeline handle);
   /// null in P1.
   final ExplorationTransport? transport;
+
+  /// Resolves the [SourceControl] a bead provisions under, given its resolved
+  /// [rootName] (null ⇒ no `metadata.grid.root` override — the substation
+  /// default). An unrecognized [rootName] falls back to [sourceControl] too:
+  /// the mount-boundary gate (`WorkList`, tg-7gm) is what refuses an
+  /// unregistered selection LOUD BEFORE a bead reaches this resolution, so a
+  /// [rootName] arriving here is expected to already be valid — this fallback
+  /// is defensive, not the enforcement point.
+  SourceControl? sourceControlFor(String? rootName) =>
+      (rootName != null ? sourceControlsByRoot[rootName] : null) ??
+      sourceControl;
 }
 
 /// The first [Service] — provision-workspace + commit/push/open-PR, abstracted
@@ -351,7 +382,10 @@ abstract interface class SourceControl {
   bool get canLand;
 
   /// Commits all changes in [workspaceDir] with [message].
-  Future<void> commitAll({required String workspaceDir, required String message});
+  Future<void> commitAll({
+    required String workspaceDir,
+    required String message,
+  });
 
   /// Pushes [branch] to [remote] from [workspaceDir], setting upstream.
   Future<void> push({

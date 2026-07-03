@@ -33,8 +33,10 @@ class BeadOwnershipPredicate {
   /// id-prefix alone is sufficient (a freshly minted session bead may carry the
   /// marker only after its first metadata stamp, but its id prefix is owned
   /// from birth).
-  BeadOwnershipPredicate(Iterable<String> substations, {this.requireSubstationMarker = false})
-    : _substations = substations.toSet();
+  BeadOwnershipPredicate(
+    Iterable<String> substations, {
+    this.requireSubstationMarker = false,
+  }) : _substations = substations.toSet();
 
   final Set<String> _substations;
   final bool requireSubstationMarker;
@@ -71,7 +73,8 @@ class BeadOwnershipPredicate {
 
   /// The bead's rig as derived from its axes (the owned prefix if any, else the
   /// `metadata.rig` marker) — for diagnostics / logging.
-  String? substationOf(Bead bead) => prefixOf(bead.id) ?? markerOf(bead.metadata);
+  String? substationOf(Bead bead) =>
+      prefixOf(bead.id) ?? markerOf(bead.metadata);
 
   /// The leading dash-delimited segment of an issue id (gc's rig prefix axis,
   /// ADR-0002 D2). `tgdog-abc123` → `tgdog`; a bare id with no dash → null.
@@ -85,6 +88,17 @@ class BeadOwnershipPredicate {
   static String? markerOf(Map<String, dynamic> metadata) {
     final rig = metadata['rig'];
     if (rig is String && rig.isNotEmpty) return rig;
+    return null;
+  }
+
+  /// The bead's explicit registered-root SELECTOR (`metadata.grid.root`,
+  /// tg-7gm) — lets a bead owned by one substation provision from a
+  /// DIFFERENT registered root (e.g. a `tg` bead building the `power_station`
+  /// repo names `grid.root: power_station`). Null when unset (the caller falls
+  /// back to the bead's own substation, [substationOf]).
+  static String? rootOf(Map<String, dynamic> metadata) {
+    final root = metadata['grid.root'];
+    if (root is String && root.isNotEmpty) return root;
     return null;
   }
 }

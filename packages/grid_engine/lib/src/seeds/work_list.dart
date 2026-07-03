@@ -7,6 +7,7 @@ import '../domain/driveable_work.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/substation_config.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
+import '../sdk/capability.dart';
 import 'work_bead.dart';
 
 /// The work axis observer and keyed-reconcile container — **the heart**.
@@ -77,7 +78,17 @@ class _WorkListState extends State<WorkList> {
 
   @override
   Seed build(TreeContext context) {
-    final ownership = BeadOwnershipPredicate(seed.substationConfig.ownedSubstations);
+    final ownership = BeadOwnershipPredicate(
+      seed.substationConfig.ownedSubstations,
+    );
+    // The ambient ServiceBundle (per-`SubstationScope`, fixed-at-mount —
+    // ADR-0008 D5) is depended on HERE, not just at `SessionScope`, so a
+    // rooting refusal can flare through its `ExplorationTransport` (D-8) —
+    // the SAME emit-only sink every other engine LOUD signal uses. This is a
+    // config-axis dependency (never notifies once mounted), not the snapshot
+    // pipeline — derailment-invariant 1 stays about the JOINED SNAPSHOT axis.
+    final services = context.dependOnInheritedSeedOfExactType<ServiceBundle>();
+    final registeredRoots = seed.substationConfig.registeredRoots;
     final children = <WorkBead>[];
     for (final bead in _snapshot.graph.beadsById.values) {
       // Dispatchable-type gate BEFORE ownership, as an ALLOW-list (fail-closed):
@@ -123,6 +134,22 @@ class _WorkListState extends State<WorkList> {
       // what keeps a transiently-unready bead's agent mounted).
       if (!inReady && !liveSession) continue;
 
+      // The per-bead ROOT MATCH (tg-7gm, `SCRATCH-grid-alignment.md` §6
+      // amendment): a bead selects a registered root via `metadata.grid.root`,
+      // defaulting to its own substation. An EMPTY [registeredRoots] means no
+      // `--root` is wired (dry-run's/an offline test's default) — unconstrained,
+      // matching pre-multi-root behavior. A NON-empty set activates the gate: a
+      // bead whose resolved root is unregistered is an ARMING-CLASS refusal —
+      // a LOUD skip naming the missing root, never a station-wide gate (other
+      // owned beads keep mounting; `SCRATCH-orchestration-determinism` §5).
+      final targetRoot =
+          BeadOwnershipPredicate.rootOf(bead.metadata) ??
+          ownership.substationOf(bead);
+      if (registeredRoots.isNotEmpty && !registeredRoots.contains(targetRoot)) {
+        _reportRootMissing(services, bead, targetRoot);
+        continue;
+      }
+
       children.add(
         WorkBead(bead: bead, session: session, key: ValueKey(bead.id)),
       );
@@ -151,6 +178,26 @@ class _WorkListState extends State<WorkList> {
   /// the gates themselves).
   static bool _isDispatchableWork(IssueType type, {required bool resident}) =>
       type.isCore && (!resident || type.isDriveable);
+
+  /// Emits the ARMING-CLASS LOUD skip (tg-7gm) through the reserved emit-only
+  /// [ExplorationTransport] (D-8) — mirrors `CapabilityHost._emitFlare`: a
+  /// throwing transport must NOT break the build, so errors are swallowed.
+  /// A null [services]/`transport` is the offline/no-op default — no flare, no
+  /// error (matching every other flare call site).
+  static void _reportRootMissing(
+    ServiceBundle? services,
+    Bead bead,
+    String? targetRoot,
+  ) {
+    try {
+      services?.transport?.flare('work.rootMissing', {
+        'beadId': bead.id,
+        'root': targetRoot ?? '',
+      });
+    } catch (_) {
+      // A throwing transport never breaks the mount reconcile — swallow.
+    }
+  }
 }
 
 /// The keyed-reconcile container `WorkList` builds — an impl detail of the work
