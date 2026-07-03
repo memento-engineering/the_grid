@@ -180,6 +180,7 @@ class BdCliService {
     IssueType? type,
     String? assignee,
     Map<String, String>? metadata,
+    String? appendNotes,
   }) async {
     // Decode asserts the schema version (drift guard) on the mutation path too;
     // a non-zero exit was already raised inside _runEnvelope.
@@ -193,6 +194,7 @@ class BdCliService {
         type: type,
         assignee: assignee,
         metadata: metadata,
+        appendNotes: appendNotes,
       ),
     );
   }
@@ -351,6 +353,7 @@ class BdCliService {
     IssueType? type,
     String? assignee,
     Map<String, String>? metadata,
+    String? appendNotes,
   }) => [
     'update',
     id,
@@ -367,6 +370,13 @@ class BdCliService {
     if (metadata != null && metadata.isNotEmpty) ...[
       '--metadata',
       jsonEncode(metadata),
+    ],
+    // `--append-notes '<text>'` appends to the bead's existing `notes` field
+    // (bd's own newline separator) — works on a closed bead exactly like
+    // `--metadata`. Empty/null ⇒ omitted.
+    if (appendNotes != null && appendNotes.isNotEmpty) ...[
+      '--append-notes',
+      appendNotes,
     ],
   ];
 
