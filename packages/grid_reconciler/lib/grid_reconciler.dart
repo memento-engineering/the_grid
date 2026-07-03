@@ -2,7 +2,7 @@
 ///
 /// Ports gc's convergence state machine (ADR-0003) into Dart: a pure
 /// `reduce(state, event, snapshot) → (state', actions)` reducer fed by
-/// grid_controller's `GraphEvent` stream, with actuation batched through bd.
+/// beads_dart's `GraphEvent` stream, with actuation batched through bd.
 /// Layering follows predictable-flutter (see docs/adr/ADR-0001..0003).
 ///
 /// Scope is **work convergence only** (ADR-0003 Decision 1); topology and
@@ -28,7 +28,7 @@ export 'src/convergence/reconciler_action.dart';
 export 'src/convergence/reducer_event.dart';
 export 'src/convergence/verdict.dart';
 
-// Track A — projections over the GraphSnapshot (reuses grid_controller's
+// Track A — projections over the GraphSnapshot (reuses beads_dart's
 // ProjectionResult boundary; ADR-0002 D2 style).
 export 'src/projections/convergence.dart';
 export 'src/projections/wisp.dart';

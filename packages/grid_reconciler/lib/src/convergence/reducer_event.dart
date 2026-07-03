@@ -7,7 +7,7 @@ part 'reducer_event.freezed.dart';
 /// The reducer's input union — the "event" in ADR-0003's
 /// `reduce(state, event, snapshot) → (state′, actions)`.
 ///
-/// grid_controller's `GraphEvent` carries bead-graph changes only; the
+/// beads_dart's `GraphEvent` carries bead-graph changes only; the
 /// convergence reducer additionally consumes **gate results** (computed
 /// asynchronously by the Track-D subprocess runner), **operator commands**
 /// (gc's socket verbs `approve`/`iterate`/`stop`, emulated by the_grid's

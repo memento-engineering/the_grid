@@ -12,7 +12,7 @@
 /// work source (A37 / invariant 2).
 library;
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';

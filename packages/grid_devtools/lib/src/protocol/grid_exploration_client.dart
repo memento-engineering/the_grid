@@ -1,7 +1,7 @@
 /// The thin, injectable protocol-call layer for grid_devtools.
 ///
 /// `grid_devtools` rides the exploration protocol ONLY (ADR-0002 Decision 3):
-/// it never links `grid_controller` for live data. To keep the widgets
+/// it never links `beads_dart` for live data. To keep the widgets
 /// testable without a live VM service, every call into the protocol goes
 /// through [GridExplorationClient]; production wires a `VmService`-backed
 /// implementation, tests inject a fake.

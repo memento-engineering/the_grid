@@ -1,5 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import '../convergence/idempotency_key.dart';
 import '../convergence/reconciler_action.dart' show DeferredWispFields;
@@ -51,7 +51,7 @@ abstract class SpeculativeNode with _$SpeculativeNode {
 /// handler.go:812-825) — so this projection requires only the key. Step
 /// children are resolved from parent-child dependency edges (the hierarchy is
 /// an edge; the `parent_id` column stays null — ADR-0000 A15) and reuse
-/// grid_controller's [Step].
+/// beads_dart's [Step].
 ///
 /// Two surfaces serve the speculative life-cycle, where [steps] is blind
 /// by design (speculative steps are gate-typed): [subtreeIds] (post-order

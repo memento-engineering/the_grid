@@ -1,8 +1,8 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import 'actuator.dart';
 
-/// The production [IdempotencyProbe]: grid_controller's pooled, SELECT-only
+/// The production [IdempotencyProbe]: beads_dart's pooled, SELECT-only
 /// `DoltQueryService.findWispByIdempotencyKey` — a LIVE query over the
 /// parent-child edge + `metadata.idempotency_key` (ADR-0000 A15/A17).
 ///

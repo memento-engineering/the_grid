@@ -6,7 +6,7 @@
 // key is simply ignored.
 //
 // ADR-0008 D4 / M4-P1 Track B. Zero I/O — pure codec.
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 

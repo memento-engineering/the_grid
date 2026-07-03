@@ -14,7 +14,7 @@
 #       grid_exploration, so attaching DevTools to a running `grid watch`
 #       surfaces the `grid` panel from here (ADR-0002 Decision 3: the panel
 #       rides the exploration protocol; grid_exploration is the pure-Dart host
-#       apps depend on, never grid_controller).
+#       apps depend on, never beads_dart).
 #
 # Both build/ destinations are gitignored — re-run after any change to
 # packages/grid_devtools/{lib,web,pubspec.yaml}.

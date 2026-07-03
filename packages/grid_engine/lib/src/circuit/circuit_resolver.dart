@@ -8,7 +8,7 @@
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import '../domain/session_projection.dart';
 import '../kernel/session_resolver.dart';

@@ -1,4 +1,4 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_reconciler/src/actuator/actuator.dart';
 import 'package:grid_reconciler/src/actuator/bd_actuator.dart';
 import 'package:grid_reconciler/src/convergence/convergence_metadata.dart';

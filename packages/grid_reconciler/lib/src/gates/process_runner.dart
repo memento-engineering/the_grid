@@ -103,7 +103,7 @@ class CancellationToken {
 /// The Process SEAM for gate execution — the single point where the gate runner
 /// touches `dart:io`.
 ///
-/// Mirrors grid_controller's [BdRunner] pattern: a real implementation
+/// Mirrors beads_dart's [BdRunner] pattern: a real implementation
 /// ([SystemProcessRunner]) spawns processes; tests inject a fake that returns
 /// programmed [ProcessRunResult]s, so the whole outcome/timeout/hybrid matrix
 /// runs offline (ADR-0001 D7: Fakes, not mocks). A reference type, so it carries

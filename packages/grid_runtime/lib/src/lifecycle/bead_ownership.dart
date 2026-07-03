@@ -1,4 +1,4 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 /// The bead-shaped ownership gate (ADR-0006 Decision 1; ADR-0000 A32) — the
 /// dispatch-side analog of grid_reconciler's `OwnsSubstations.owns(Convergence)`.

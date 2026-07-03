@@ -6,7 +6,7 @@ import '../reducer/reduce_result.dart';
 /// The ACTUATOR seam (ADR-0003 Decision 4): the ONLY component in the_grid
 /// that **writes**. It turns a reducer's [ReduceResult] — Track A's ordered,
 /// data-encoded effect plan — into the exact sequence of bd mutations gc would
-/// perform in-process, executed through grid_controller's bd surface
+/// perform in-process, executed through beads_dart's bd surface
 /// (`bd update --metadata` / `bd close` / `bd delete` / `bd cook` +
 /// `bd create --graph`).
 ///
@@ -68,7 +68,7 @@ class ActuationResult {
 
 /// The find-before-pour probe seam (ADR-0000 A15/A17): a **LIVE** query for
 /// the existing child wisp under `parentId` whose `metadata.idempotency_key`
-/// is `key`, or null. Implemented by grid_controller's
+/// is `key`, or null. Implemented by beads_dart's
 /// `DoltQueryService.findWispByIdempotencyKey` in production
 /// ([doltIdempotencyProbe]); a fake in tests.
 ///

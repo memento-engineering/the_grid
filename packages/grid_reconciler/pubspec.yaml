@@ -1,7 +1,7 @@
 name: grid_reconciler
 description: >-
   M2 work-convergence reconciler — ports gc's convergence state machine
-  (ADR-0003). Consumes grid_controller's GraphEvent stream + GraphSnapshot,
+  (ADR-0003). Consumes beads_dart's GraphEvent stream + GraphSnapshot,
   runs the pure (state, event, snapshot) → (state', actions) reducer, and
   actuates through bd batch. Work convergence only; topology is M3/M4.
 publish_to: none
@@ -11,8 +11,8 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
+  beads_dart: any
   freezed_annotation: ^3.0.0
-  grid_controller: any
   path: ^1.9.0
 
 dev_dependencies:

@@ -17,7 +17,7 @@ library;
 /// The fine-grained session lifecycle state stamped on `metadata.state`.
 ///
 /// Modeled as an extension type over the wire string (the same posture as
-/// `IssueType`/`BeadStatus` in grid_controller) because gc treats the value as
+/// `IssueType`/`BeadStatus` in beads_dart) because gc treats the value as
 /// a free-form string the projection preserves verbatim — a strict closed enum
 /// would throw on a gc-written state the_grid does not model. Named constants
 /// cover the M3 lifecycle; the type still round-trips any string gc writes.

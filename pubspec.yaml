@@ -3,7 +3,7 @@ publish_to: none
 environment:
   sdk: ^3.11.0
 workspace:
-  - packages/grid_controller
+  - packages/beads_dart
   - packages/grid_cli
   - packages/grid_exploration
   - packages/grid_devtools

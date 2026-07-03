@@ -1,9 +1,9 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 final fakeClock = DateTime.utc(2026, 6, 12, 12);
 
 /// Builds a snapshot from beads + optional deps (repo fake convention —
-/// grid_controller test/support/reactivity_fakes.dart).
+/// beads_dart test/support/reactivity_fakes.dart).
 GraphSnapshot snap(List<Bead> beads, {List<BeadDependency> deps = const []}) =>
     GraphSnapshot.fromParts(
       beads: beads,

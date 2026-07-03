@@ -9,7 +9,7 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  grid_controller: any
+  beads_dart: any
   meta: ^1.16.0
 
 dev_dependencies:

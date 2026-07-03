@@ -1,4 +1,4 @@
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_reconciler/grid_reconciler.dart' show OwnsSubstations;
 import 'package:test/test.dart';

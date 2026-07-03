@@ -1,7 +1,7 @@
 /// Track G — the reconciler runtime + shadow mode (ADR-0003 Decision 2 & 6).
 ///
 /// The composition that makes the convergence machine actually run: it ingests
-/// grid_controller's `GraphEvent` stream, serializes per-bead processing
+/// beads_dart's `GraphEvent` stream, serializes per-bead processing
 /// (invariant 7), runs gc's reduce→gate→actuate cycle (the A22 phase split + the
 /// A19 operator-stop drain) evaluated against post-actuation state (the A17
 /// write-through overlay), actuates only loops the_grid owns (the Decision 6

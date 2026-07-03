@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import '../actuator/actuator.dart';
 import '../actuator/bd_actuator.dart' show ActuationFailed;
@@ -22,7 +22,7 @@ import 'write_through_overlay.dart';
 /// The reconciler runtime — the composition that makes the convergence machine
 /// actually run (M2 Track G; ADR-0003 Decision 2).
 ///
-/// It subscribes to grid_controller's `GraphEvent` stream (via a
+/// It subscribes to beads_dart's `GraphEvent` stream (via a
 /// [ConvergenceSource]), routes each event to the convergence loop it concerns,
 /// and runs gc's reduce→gate→actuate cycle for that loop — serialized per bead
 /// (invariant 7), evaluated against post-actuation state (the write-through

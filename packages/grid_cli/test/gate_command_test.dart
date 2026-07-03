@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:grid_cli/src/gate_command.dart';
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:test/test.dart';
 
 /// Offline proofs for `grid gate` (committee-gate ls + resolve) — Fakes, not

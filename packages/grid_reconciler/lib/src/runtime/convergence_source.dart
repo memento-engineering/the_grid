@@ -1,21 +1,21 @@
 import 'dart:async';
 
-import 'package:grid_controller/grid_controller.dart';
+import 'package:beads_dart/beads_dart.dart';
 
 import '../projections/convergence.dart';
 
-/// The runtime's read seam over grid_controller's reactive surface — the
+/// The runtime's read seam over beads_dart's reactive surface — the
 /// current set of convergence loops + the snapshot they project from, plus the
 /// event and snapshot streams.
 ///
 /// The live implementation ([GridConvergenceSource]) reads
-/// grid_controller's `GridControllerRuntime` (its `events`/`snapshots` streams
+/// beads_dart's `GridControllerRuntime` (its `events`/`snapshots` streams
 /// and `current` snapshot, projecting `convergence`-typed beads exactly as
 /// `convergencesProvider` does). Tests inject a [FakeConvergenceSource] driving
 /// a synthetic event stream + a programmable snapshot. The seam keeps the
-/// orchestrator free of Riverpod and of grid_controller's projection wiring.
+/// orchestrator free of Riverpod and of beads_dart's projection wiring.
 abstract interface class ConvergenceSource {
-  /// The live typed change events (grid_controller's `GraphEvent` stream).
+  /// The live typed change events (beads_dart's `GraphEvent` stream).
   Stream<GraphEvent> get events;
 
   /// Fresh snapshots as the graph changes.
@@ -33,7 +33,7 @@ abstract interface class ConvergenceSource {
   Convergence? convergence(String id);
 }
 
-/// The live [ConvergenceSource] over a grid_controller [GridControllerRuntime].
+/// The live [ConvergenceSource] over a beads_dart [GridControllerRuntime].
 class GridConvergenceSource implements ConvergenceSource {
   GridConvergenceSource(this._runtime);
 

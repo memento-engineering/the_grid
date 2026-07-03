@@ -1,7 +1,7 @@
 /// DevTools extension for the_grid.
 ///
 /// Attaches to a running grid process over the exploration protocol only
-/// (ADR-0002 Decision 3) — never imports grid_controller directly. The
+/// (ADR-0002 Decision 3) — never imports beads_dart directly. The
 /// protocol-call layer ([GridExplorationClient]) is kept thin and separate
 /// from the widgets so the panels are unit-testable against a fake client
 /// with no live VM service.
