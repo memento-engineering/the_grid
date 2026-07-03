@@ -97,6 +97,7 @@ void main() {
         'mounted': 2,
         'liveSessions': 1,
         'lastSyncAt': null,
+        'perSubstation': <Object?>[],
       });
     });
 

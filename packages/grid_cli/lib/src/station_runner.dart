@@ -18,7 +18,13 @@
 ///   sources = await buildControllers(
 ///     work: ws.work, state: ws.state, noSql: args.noSql);
 ///   final live = await buildLiveWiring(args: args, sources: sources);
-///   final services = ServiceBundle(sourceControl: /* the asset's own */);
+///   // ONE ServiceBundle per substation (tg-7gm), each built from ITS OWN
+///   // registered root (`live.roots`, keyed by registration NAME — a name
+///   // equal to a substation id is that substation's default):
+///   final services = {
+///     for (final e in live.roots.entries)
+///       e.key: ServiceBundle(sourceControl: /* the asset's own, over e.value */),
+///   };
 ///   final wiring = composeStation(
 ///     work: sources.work, state: sources.state,
 ///     stationServices: live.stationServices, substations: [...],
@@ -87,6 +93,13 @@ class StationRefusal implements Exception {
 
 /// Adds the STANDARD station flags to an asset command's [parser] — composition,
 /// not inheritance (a runner adds these next to its own asset flags).
+///
+/// **Mirror-drift note (tg-7gm r2):** `space_station`'s `up` command
+/// hand-mirrors this flag surface (its OWN `ArgParser`, not a call through
+/// here — it lives in a sibling repo this worktree cannot reach), most
+/// recently missing this function's `--root` grammar change (bare →
+/// repeatable `<name>=<path>[@head]`). Bringing that mirror back in sync is
+/// deliberately its OWN bead — not attempted here.
 void addStationFlags(ArgParser parser) {
   parser
     ..addMultiOption(
@@ -107,17 +120,25 @@ void addStationFlags(ArgParser parser) {
       defaultsTo: 'subprocess',
       help: 'The runtime provider for agent spawns.',
     )
-    ..addOption(
+    ..addMultiOption(
       'root',
       help:
-          'The registered worktree root checkout. Required to ARM a non-dry '
-          'run; never created by the runner.',
+          'A registered worktree root checkout (repeatable, tg-7gm): '
+          '`--root <name>=<path>[@head]` registers <path> under <name> — a '
+          'name equal to an owned --substation becomes that substation\'s '
+          'DEFAULT root; any OTHER name is an EXTRA root a bead opts into via '
+          'its `metadata.grid.root` (e.g. a `tg` bead building `power_station` '
+          'names `--root power_station=<path>` + `grid.root: power_station`). '
+          'Bare `--root <path>` (no `=`) is the single-root shorthand — '
+          'back-compatible: registers under the first --substation. At least '
+          'one is required to ARM a non-dry run; never created by the runner.',
     )
     ..addOption(
       'head',
       help:
-          'ASSIGN the base branch per-bead worktrees cut from, overriding the '
-          'probed origin/HEAD. Omit to probe.',
+          'ASSIGN the base branch per-bead worktrees cut from for any --root '
+          'entry that does not carry its own @head, overriding the probed '
+          'origin/HEAD. Omit to probe.',
     )
     ..addOption(
       'workspace',
@@ -194,6 +215,69 @@ void addStationFlags(ArgParser parser) {
     );
 }
 
+/// One named root registration (tg-7gm, `docs/SCRATCH-grid-alignment.md` §6
+/// amendment): the checkout [path] plus an optional per-root [head] override
+/// (`--root <name>=<path>@<head>`). A root registered under a NAME equal to an
+/// owned `--substation` becomes that substation's DEFAULT root; any OTHER name
+/// is an EXTRA root a bead opts into via `metadata.grid.root`.
+class RootSpec {
+  /// Creates a root registration for [path], optionally pinning [head].
+  const RootSpec({required this.path, this.head});
+
+  /// The registered worktree root checkout path.
+  final String path;
+
+  /// The per-root ASSIGNED head (from `@head`); null falls back to the global
+  /// `--head` (if any), else probed from `origin/HEAD` at registration.
+  final String? head;
+
+  /// Parses one `--root` value: `<name>=<path>[@head]`, or a bare `<path>`
+  /// (the single-root shorthand — registered under [defaultName]). Throws
+  /// [FormatException] on a malformed registration (an explicit empty name,
+  /// or an empty path).
+  static MapEntry<String, RootSpec> parse(
+    String raw, {
+    required String defaultName,
+  }) {
+    final eq = raw.indexOf('=');
+    if (eq < 0) {
+      if (raw.trim().isEmpty) {
+        throw FormatException('grid run: malformed --root "$raw" — empty path');
+      }
+      return MapEntry(defaultName, RootSpec(path: raw));
+    }
+    final name = raw.substring(0, eq);
+    final rest = raw.substring(eq + 1);
+    if (name.trim().isEmpty) {
+      throw FormatException(
+        'grid run: malformed --root "$raw" — empty name before "="',
+      );
+    }
+    if (rest.trim().isEmpty) {
+      throw FormatException(
+        'grid run: malformed --root "$raw" — empty path after "="',
+      );
+    }
+    final at = rest.lastIndexOf('@');
+    final path = at < 0 ? rest : rest.substring(0, at);
+    final head = at < 0 ? null : rest.substring(at + 1);
+    return MapEntry(
+      name,
+      RootSpec(path: path, head: (head == null || head.isEmpty) ? null : head),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is RootSpec && other.path == path && other.head == head;
+
+  @override
+  int get hashCode => Object.hash(path, head);
+
+  @override
+  String toString() => 'RootSpec($path${head != null ? '@$head' : ''})';
+}
+
 /// The parsed standard station inputs — a plain value an asset runner builds
 /// from its [ArgResults] (or constructs directly in a test).
 class StationArgs {
@@ -201,7 +285,15 @@ class StationArgs {
   const StationArgs({
     required this.substations,
     this.provider = RuntimeProviderKind.subprocess,
-    this.rootPath,
+    Map<String, RootSpec> roots = const <String, RootSpec>{},
+    @Deprecated(
+      'Reinstated ONLY as a back-compat alias (tg-7gm rework r2) so a caller '
+      'still constructing `StationArgs(rootPath: ...)` (e.g. '
+      "space_station's `up_command`) compiles unchanged until it migrates. "
+      'Use `roots` (`--root <name>=<path>`) for new code — see the [roots] '
+      'getter doc for the fold.',
+    )
+    String? rootPath,
     this.head,
     this.workspacePath,
     this.stateWorkspacePath,
@@ -214,18 +306,37 @@ class StationArgs {
     this.runFor,
     this.resident = false,
     this.controlPort = 0,
-  });
+  }) : _roots = roots,
+       _rootPath = rootPath;
 
-  /// Parses the standard flags added by [addStationFlags].
+  /// Parses the standard flags added by [addStationFlags]. Throws
+  /// [FormatException] on a malformed/duplicate `--root` registration (the
+  /// same class of error `int.parse` below already raises for a malformed
+  /// `--control-port`/`--for-seconds`).
   factory StationArgs.from(ArgResults args) {
     final seconds = args.option('for-seconds');
+    final substations = <String>{
+      ...args.multiOption('substation'),
+      ...args.multiOption('owner'),
+    }..removeWhere((r) => r.trim().isEmpty);
+    final roots = <String, RootSpec>{};
+    for (final raw in args.multiOption('root')) {
+      if (raw.trim().isEmpty) continue;
+      final entry = RootSpec.parse(
+        raw,
+        defaultName: substations.isNotEmpty ? substations.first : '',
+      );
+      if (roots.containsKey(entry.key)) {
+        throw FormatException(
+          'grid run: --root "$raw" registers name "${entry.key}" more than once',
+        );
+      }
+      roots[entry.key] = entry.value;
+    }
     return StationArgs(
-      substations: <String>{
-        ...args.multiOption('substation'),
-        ...args.multiOption('owner'),
-      }..removeWhere((r) => r.trim().isEmpty),
+      substations: substations,
       provider: RuntimeProviderKind.parse(args.option('provider')),
-      rootPath: args.option('root'),
+      roots: roots,
       head: args.option('head'),
       workspacePath: args.option('workspace'),
       stateWorkspacePath: args.option('state-workspace'),
@@ -249,8 +360,32 @@ class StationArgs {
   /// The runtime provider kind for agent spawns.
   final RuntimeProviderKind provider;
 
-  /// The registered worktree root checkout (required to arm a live run).
-  final String? rootPath;
+  final Map<String, RootSpec> _roots;
+  final String? _rootPath;
+
+  /// The registered worktree roots (tg-7gm), keyed by registration NAME — a
+  /// name equal to an owned substation is that substation's DEFAULT root; any
+  /// other name is an EXTRA root a bead opts into via `metadata.grid.root`.
+  /// At least one entry is required to arm a live run.
+  ///
+  /// Folds the deprecated [rootPath] alias in under the FIRST substation's
+  /// name (or `''` when [substations] is empty) — but only when non-null AND
+  /// no explicit `roots` entry already claims that name (an explicit
+  /// registration always wins). This reproduces the pre-tg-7gm single-root
+  /// shape exactly, so a caller still constructing `StationArgs(rootPath:
+  /// ...)` behaves as it did before the multi-root rework.
+  Map<String, RootSpec> get roots {
+    final legacy = _rootPath;
+    if (legacy == null) return _roots;
+    final name = substations.isNotEmpty ? substations.first : '';
+    if (_roots.containsKey(name)) return _roots;
+    return {..._roots, name: RootSpec(path: legacy)};
+  }
+
+  /// DEPRECATED (tg-7gm rework r2) — the single legacy root path, reinstated
+  /// only as a back-compat alias over [roots] (see its doc for the fold).
+  @Deprecated('Use `roots` (`--root <name>=<path>`).')
+  String? get rootPath => _rootPath;
 
   /// The assigned base branch worktrees cut from (null ⇒ probe origin/HEAD).
   final String? head;
@@ -339,11 +474,13 @@ void validateArming(
       'drop --adopt to observe only.',
     );
   }
-  if (!args.dryRun && args.rootPath == null && !rootInjected) {
+  if (!args.dryRun && args.roots.isEmpty && !rootInjected) {
     throw const StationRefusal(
-      'grid run: a non-dry (live) run requires --root (the registered worktree '
-      'root under engineering.memento). Re-run with --dry-run (the default) to '
-      'observe only, or pass --root to ARM the writing arm.',
+      'grid run: a non-dry (live) run requires --root (at least one '
+      'registered worktree root under engineering.memento; repeatable — '
+      'tg-7gm). Re-run with --dry-run (the default) to observe only, or pass '
+      '--root to ARM the writing arm. Which OWNED substations actually need '
+      'one is a MOUNT-BOUNDARY concern (a LOUD per-bead skip), not this gate.',
     );
   }
   if (!args.dryRun && args.stateWorkspacePath == null && !stateInjected) {
@@ -533,6 +670,7 @@ class StationWiring {
     required this.stationServices,
     required this.git,
     required this.workRoot,
+    required this.roots,
     required this.groups,
     required this.freshnessBarrier,
     this.gitOps,
@@ -547,8 +685,21 @@ class StationWiring {
   /// substation leases (ADR-0008 D5) — inert in dry-run.
   final StationGitService git;
 
-  /// The registered root checkout (synthetic, empty-path in dry-run).
+  /// THE single-root consumer's registered root (`RestartReconciler` — D-M6
+  /// restart fan-out over N roots is a deferred follow-up): [roots] entry for
+  /// `args.substations.first`, falling back to whichever root registered,
+  /// falling back to a dry-run synthetic when none did.
   final RootCheckout workRoot;
+
+  /// EVERY registered root, keyed by its registration NAME (tg-7gm) — EMPTY
+  /// when no `--root` was wired (dry-run's unconstrained default; matches
+  /// [StationArgs.roots] being empty). The asset builds ONE [ServiceBundle]
+  /// per substation from this map (its own name's entry is that substation's
+  /// default; any OTHER entry is an extra root a bead opts into via
+  /// `metadata.grid.root`) and threads this map's key SET into each
+  /// `SubstationConfig.registeredRoots` so `WorkList`'s mount-boundary gate
+  /// can validate a bead's selection.
+  final Map<String, RootCheckout> roots;
 
   /// The process-group controller (the orphan-kill seam — REAL even offline so
   /// its `pgid <= 1` guard is exercised).
@@ -584,7 +735,7 @@ Future<StationWiring> buildLiveWiring({
   RuntimeProvider? providerOverride,
   StationGitService? gitServiceOverride,
   ProcessGroupController? groupsOverride,
-  RootCheckout? rootCheckoutOverride,
+  Map<String, RootCheckout>? rootsOverride,
   Future<void> Function()? freshnessBarrierOverride,
 }) async {
   // THE single ownership allow-set: the work substations + the_grid's own state
@@ -615,37 +766,68 @@ Future<StationWiring> buildLiveWiring({
       providerOverride ??
       (args.dryRun ? DryRunProvider() : _buildTreeProvider(args.provider));
 
-  // The worktree git service + the registered root. Dry-run gets an INERT
-  // service (no real `git` — the restart probe parses an empty worktree set).
+  // The worktree git service + EVERY registered root (tg-7gm). Dry-run gets
+  // an INERT service (no real `git` — the restart probe parses an empty
+  // worktree set).
   final git =
       gitServiceOverride ??
       (args.dryRun ? buildDryTreeGitService() : _buildTreeGitService());
-  final RootCheckout root;
-  if (rootCheckoutOverride != null) {
-    root = rootCheckoutOverride;
-  } else if (!args.dryRun && args.rootPath != null) {
-    try {
-      root = await git.registerRootCheckout(
-        path: args.rootPath!,
-        substation: args.substations.first,
-        // Assign-head: cut per-bead worktrees off this branch (e.g. the_grid's
-        // own feature branch) instead of the probed origin/HEAD. Null ⇒ probe.
-        head: args.head,
-      );
-    } on Object catch (e) {
-      throw StationRefusal(
-        'grid run: could not register root checkout "${args.rootPath}": $e',
-        code: 1,
-      );
-    }
+  final Map<String, RootCheckout> roots;
+  if (rootsOverride != null) {
+    roots = rootsOverride;
+  } else if (args.roots.isEmpty) {
+    // No --root at all: UNCONSTRAINED (a live run is already refused upstream
+    // by validateArming; this is dry-run's ordinary shape). An EMPTY map here
+    // means an EMPTY `SubstationConfig.registeredRoots` — the WorkList
+    // mount-boundary gate stays inert, matching pre-multi-root behavior.
+    roots = const {};
   } else {
-    // Dry-run synthetic root (nothing is provisioned under it).
-    root = RootCheckout(
-      path: '',
-      defaultBranch: 'main',
-      substation: args.substations.first,
-    );
+    final registered = <String, RootCheckout>{};
+    for (final entry in args.roots.entries) {
+      if (args.dryRun) {
+        // A dry-run with EXPLICIT --root flags still exercises the per-bead
+        // matching logic (WorkList's gate) — SYNTHETIC, so nothing real git
+        // touches (dry-run touches nothing live).
+        registered[entry.key] = RootCheckout(
+          path: '',
+          defaultBranch: 'main',
+          substation: entry.key,
+        );
+        continue;
+      }
+      try {
+        registered[entry.key] = await git.registerRootCheckout(
+          path: entry.value.path,
+          substation: entry.key,
+          // Assign-head: cut per-bead worktrees off this branch (e.g. the_grid's
+          // own feature branch) instead of the probed origin/HEAD. A per-root
+          // `@head` wins; null falls back to the global `--head`; both null ⇒
+          // probe.
+          head: entry.value.head ?? args.head,
+        );
+      } on Object catch (e) {
+        throw StationRefusal(
+          'grid run: could not register root "${entry.key}"='
+          '"${entry.value.path}": $e',
+          code: 1,
+        );
+      }
+    }
+    roots = registered;
   }
+
+  // THE single-root consumer's root (RestartReconciler, D-M6 restart fan-out
+  // deferred): the DEFAULT for `args.substations.first`, falling back to
+  // whichever root registered, falling back to a dry-run synthetic when none
+  // did — independent of whether [roots] itself stays empty (unconstrained).
+  final RootCheckout root =
+      (args.substations.isNotEmpty ? roots[args.substations.first] : null) ??
+      (roots.isNotEmpty ? roots.values.first : null) ??
+      RootCheckout(
+        path: '',
+        defaultBranch: 'main',
+        substation: args.substations.isNotEmpty ? args.substations.first : '',
+      );
 
   // Land ops are wired ONLY when --land armed a live run (ADR-0006 D3); they
   // flow into the ASSET's SourceControl, never through the station services.
@@ -689,6 +871,7 @@ Future<StationWiring> buildLiveWiring({
     stationServices: stationServices,
     git: git,
     workRoot: root,
+    roots: roots,
     groups: groups,
     freshnessBarrier: freshnessBarrierOverride ?? sources.requery,
     gitOps: gitOps,
@@ -752,8 +935,12 @@ class TreeRunWiring {
 /// The ASSET seam (ADR-0008 D1): [resolver] + [registry] are REQUIRED — the
 /// framework carries NO asset default. [services] is the asset's
 /// per-substation collaborators (built by the asset itself from a
-/// [StationWiring] — the composition inversion, 2026-07-02); [wrapRoot] is the
-/// asset's provider hook (its `main()` mounts station-default config values —
+/// [StationWiring] — the composition inversion, 2026-07-02), KEYED BY
+/// [SubstationConfig.substationId] — tg-7gm: each substation gets ITS OWN
+/// bundle (a missing entry defaults to an empty [ServiceBundle], exactly the
+/// prior single-bundle default), so two substations run against isolated
+/// source control instead of one shared instance. [wrapRoot] is the asset's
+/// provider hook (its `main()` mounts station-default config values —
 /// `InheritedSeed<AgentConfig>`-style — as ancestors of everything).
 ///
 /// [adoptProof] is a composition PASSTHROUGH into the [RestartReconciler]
@@ -772,20 +959,21 @@ TreeRunWiring composeStation({
   required Future<void> Function() freshnessBarrier,
   required CircuitResolver resolver,
   required CapabilityRegistry registry,
-  ServiceBundle services = const ServiceBundle(),
+  Map<String, ServiceBundle> services = const {},
   Seed Function(Seed root)? wrapRoot,
   AdoptProof? adoptProof,
 }) {
   final bridge = StationJoinBridge(work: work, state: state);
 
   // One config scope per substation, keyed by id so an add/remove mounts /
-  // unmounts exactly that scope. The asset [services] are provided AT THE SCOPE
-  // (ADR-0008 D5: source control is a per-substation responsibility).
+  // unmounts exactly that scope. The asset's OWN bundle is provided AT THE
+  // SCOPE (ADR-0008 D5: source control is a per-substation responsibility;
+  // tg-7gm: no longer ONE bundle shared across every scope).
   final substationScopes = substations
       .map(
         (config) => SubstationScope(
           configNotifier: SubstationConfigNotifier(config),
-          services: services,
+          services: services[config.substationId] ?? const ServiceBundle(),
           key: ValueKey('scope.${config.substationId}'),
         ),
       )

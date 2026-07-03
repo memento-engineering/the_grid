@@ -30,6 +30,7 @@ import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
@@ -228,8 +229,8 @@ class SessionScopeState extends State<SessionScope> {
     // Breaker-exhaustion (broken ANYWHERE in the subtree) escalates + tears
     // down; otherwise a positive terminal closes. Distinguishing
     // empty-because-broken from empty-because-complete is the whole point of D-5.
-    final registry =
-        context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    final registry = context
+        .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
     if (registry != null && !_terminalScheduled) {
       final broken = firstBrokenNode(
         seed.circuit,
@@ -263,10 +264,19 @@ class SessionScopeState extends State<SessionScope> {
     // (this session's whole cursor + results — capabilities read it with the
     // effect verb; nothing registers on it, so a fresh instance per build
     // notifies nobody).
+    //
+    // The SourceControl is resolved by the bead's `metadata.grid.root`
+    // selector (tg-7gm) — null ⇒ this substation's DEFAULT root
+    // (`services.sourceControl`). A reaching bead is guaranteed a REGISTERED
+    // selection by the `WorkList` mount-boundary gate, so this resolution
+    // never itself refuses; `sourceControlFor` falls back to the default
+    // defensively.
     final services =
         context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
         const ServiceBundle();
-    final sc = services.sourceControl;
+    final sc = services.sourceControlFor(
+      BeadOwnershipPredicate.rootOf(seed.bead.metadata),
+    );
     final beadId = seed.bead.id;
     final workspace = Workspace(
       workspaceDir: sc?.workspaceFor(beadId) ?? '/grid/workspaces/$beadId',

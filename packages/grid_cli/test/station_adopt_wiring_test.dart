@@ -165,7 +165,7 @@ Future<StationWiring> _wire(
   providerOverride: FakeRuntimeProvider(),
   gitServiceOverride: git ?? _SurvivorGitService(const []),
   groupsOverride: groups,
-  rootCheckoutOverride: _root,
+  rootsOverride: const {'tgdog': _root},
   freshnessBarrierOverride: () async {},
 );
 
