@@ -129,10 +129,7 @@ class StationBeadWriter {
     // Re-check ownership of the REQUESTED substation before the create — the id does
     // not exist yet, so the substation the caller declares is the authority, and it
     // must be owned.
-    if (!_ownership.ownsTarget(
-      id: '$substation-pending',
-      metadata: {rigKey: substation},
-    )) {
+    if (!_ownership.ownsTarget(id: '$substation-pending', metadata: {rigKey: substation})) {
       _refuse('create', substation, substation);
     }
     final id = await _bd.create(title: title, type: IssueType.session);
@@ -193,17 +190,13 @@ class StationBeadWriter {
     return id;
   }
 
-  /// A lifecycle `bd update --metadata <json> [--append-notes <text>]` (merge
-  /// semantics; works on closed beads) on a the_grid-owned bead.
+  /// A lifecycle `bd update --metadata <json>` (merge semantics; works on
+  /// closed beads) on a the_grid-owned session bead.
   ///
   /// Fail-closed: refuses when [id]'s substation is not owned. The chokepoint derives
   /// the substation from the id PREFIX (the owned-from-birth axis) plus any
   /// `metadata.rig` in the write — a write that does NOT itself carry the substation
   /// is still owned by virtue of its id prefix.
-  ///
-  /// [appendNotes] is the top-level `notes` field (bd's own newline-separated
-  /// append) — disjoint from [metadata] (`grid rework`'s operator-finding
-  /// note lands here, never in the metadata channel).
   ///
   /// Serialized per-id (D-1): ownership is checked synchronously (fail-closed
   /// immediately), then the bd write chains after any prior write on [id] so two
@@ -211,16 +204,12 @@ class StationBeadWriter {
   Future<void> update(
     String id, {
     required Map<String, String> metadata,
-    String? appendNotes,
   }) async {
     // `async` so the fail-closed `_assertOwned` throw surfaces as a rejected
     // future (not a synchronous throw at the call site); `_serialized` registers
     // its tail synchronously before the first await, so ordering is preserved.
     _assertOwned('update', id, metadata);
-    return _serialized(
-      id,
-      () => _bd.update(id, metadata: metadata, appendNotes: appendNotes),
-    );
+    return _serialized(id, () => _bd.update(id, metadata: metadata));
   }
 
   /// `bd close` on a the_grid-owned session bead (terminal lifecycle).
@@ -235,10 +224,9 @@ class StationBeadWriter {
   Future<void> close(String id, {String? reason}) async {
     _assertOwned('close', id, const {});
     return _serialized(id, () async {
-      await _bd.update(
-        id,
-        metadata: {closedAtKey: _clock().toUtc().toIso8601String()},
-      );
+      await _bd.update(id, metadata: {
+        closedAtKey: _clock().toUtc().toIso8601String(),
+      });
       await _bd.close(id, reason: reason);
     });
   }

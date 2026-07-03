@@ -23,7 +23,6 @@ export 'src/station_runner.dart';
 // The generic, asset-agnostic driving commands.
 export 'src/watch_command.dart';
 export 'src/gate_command.dart';
-export 'src/rework_command.dart';
 export 'src/serve_command.dart';
 export 'src/lease_command.dart';
 export 'src/demo_command.dart';

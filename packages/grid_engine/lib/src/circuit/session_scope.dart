@@ -88,16 +88,6 @@ class SessionScopeState extends State<SessionScope> {
   /// the SAME write so a human sees WHAT exhausted, not just THAT it did.
   static const _escalationReasonKey = 'grid.escalation_reason';
 
-  /// The the_grid-internal REWORK-DECLINE marker key (tg-x1j, NOT a
-  /// codec-boundary key) — a human picks it up when a rework re-key orphaned a
-  /// session this scope never observed parked at a gate (the guard principle:
-  /// a scope that declines to mint says WHY once, LOUD).
-  static const _reworkDeclinedKey = 'grid.rework_declined';
-
-  /// The capture-only decline-diagnostic key, recorded beside
-  /// [_reworkDeclinedKey] in the SAME write.
-  static const _reworkDeclinedReasonKey = 'grid.rework_declined_reason';
-
   StationServices? _ctx;
   String? _sessionId;
   bool _resolving = true;
@@ -108,27 +98,6 @@ class SessionScopeState extends State<SessionScope> {
   /// The nodePaths whose gate re-arm has already been scheduled — latched so a
   /// resolved gate flips its parked node back to `pending` exactly once (D-7).
   final Set<String> _rearmed = {};
-
-  /// Whether the CURRENTLY adopted session was last observed with a node
-  /// parked `gated` (tg-x1j v2) — refreshed every `build()` where
-  /// `seed.existingSession` matches [_sessionId]; read once it stops matching
-  /// (the rework orphan signal, see [build]) to decide whether re-minting is
-  /// safe.
-  bool _lastKnownGated = false;
-
-  /// Whether `seed.existingSession` has EVER matched [_sessionId] (tg-x1j v2)
-  /// — true once the join has genuinely reflected this scope's session at
-  /// least one build. Guards the orphan-check in [build]: a FRESH MINT'S
-  /// `existingSession` also reads null/mismatched until the join catches up
-  /// (offline tests may never push that catch-up snapshot at all), and that
-  /// must never be confused with an already-observed session vanishing.
-  bool _joinedOnce = false;
-
-  /// Latches the ONE-TIME rework transition (tg-x1j v2): `grid rework`
-  /// re-keyed the adopted session's `work_bead` off this bead.id while it was
-  /// still OPEN — scheduled off `build` (never a write IN `build`), so a
-  /// repeated build tick during the async gap never re-schedules.
-  bool _reworkScheduled = false;
 
   @override
   void didChangeDependencies() {
@@ -147,12 +116,9 @@ class SessionScopeState extends State<SessionScope> {
     final existing = seed.existingSession?.sessionId;
     if (existing != null && existing.isNotEmpty) {
       // ADOPT — synchronous, no mint (the restoration adopt seam is the same
-      // resolving→ready transition on restart). The join already reflects
-      // this session (that's how we're adopting it), so the rework
-      // orphan-check (tg-x1j v2) may fire from the very first build.
+      // resolving→ready transition on restart).
       _sessionId = existing;
       _resolving = false;
-      _joinedOnce = true;
     } else {
       // MINT — once, above the fan-out.
       unawaited(_mint());
@@ -218,71 +184,6 @@ class SessionScopeState extends State<SessionScope> {
     );
   }
 
-  /// Schedules the rework re-mint (tg-x1j v2): the just-retired [retiredId]
-  /// round is closed (D-2 fold: "on resolve, close the retired round session"
-  /// — today the operator hand-closes it every round), then this scope resets
-  /// to its pre-`initState` shape and mints round N+1 through the SAME
-  /// [_mint] path a fresh work-bead mount would use. Latched via
-  /// [_reworkScheduled], scheduled off `build`.
-  void _scheduleRework(String retiredId) {
-    if (_reworkScheduled) return;
-    _reworkScheduled = true;
-    scheduleMicrotask(() => unawaited(_reworkAndRemint(retiredId)));
-  }
-
-  Future<void> _reworkAndRemint(String retiredId) async {
-    final ctx = _ctx;
-    if (ctx == null) return;
-    try {
-      await ctx.writer.close(retiredId, reason: 'reworked');
-    } on Object {
-      // The close is a cleanup fold, not a precondition for the fresh mint
-      // below — a failure here just leaves the retired session open for a
-      // human to close by hand; it must never block round N+1.
-    }
-    if (_cancelled || !context.mounted) return;
-    setState(() {
-      _sessionId = null;
-      _resolving = true;
-      _reworkScheduled = false;
-      _terminalScheduled = false;
-      _rearmed.clear();
-      _lastKnownGated = false;
-      _joinedOnce = false;
-    });
-    unawaited(_mint());
-  }
-
-  /// Schedules a LOUD rework decline (tg-x1j v2, the guard principle): the
-  /// adopted session vanished from the join but this scope never observed it
-  /// parked at a gate — re-minting could silently abandon a live round, so it
-  /// marks the (still-reachable-by-id) session and goes permanently inert
-  /// (mirroring [_mint]'s `_failed` path). Latched via [_reworkScheduled].
-  void _scheduleReworkDecline(String retiredId) {
-    if (_reworkScheduled) return;
-    _reworkScheduled = true;
-    scheduleMicrotask(() => unawaited(_declineRework(retiredId)));
-  }
-
-  Future<void> _declineRework(String retiredId) async {
-    final ctx = _ctx;
-    if (ctx == null) return;
-    await ctx.writer.update(
-      retiredId,
-      metadata: {
-        _reworkDeclinedKey: 'true',
-        _reworkDeclinedReasonKey:
-            'session retired (work_bead re-keyed) while this scope never '
-            'observed it parked at a gate — refusing to abandon a possibly-'
-            'live round; a human must investigate',
-      },
-    );
-    if (_cancelled || !context.mounted) return;
-    setState(() {
-      _failed = true;
-    });
-  }
-
   Future<void> _escalateAndClose(String id, String reason) async {
     // Runs to completion even if SessionScope is mid-dispose — the escalation
     // marker + close must be durable (uses the captured ctx, never `context`).
@@ -306,50 +207,11 @@ class SessionScopeState extends State<SessionScope> {
 
   @override
   Seed build(TreeContext context) {
-    final matchesJoin = seed.existingSession?.sessionId == _sessionId;
-
-    // tg-x1j v2: the adopted session vanished from the join while this scope
-    // stayed MOUNTED — the only way that happens (once the join has ALREADY
-    // reflected this session at least once, [_joinedOnce]) is `grid rework`
-    // re-keying its `work_bead` off this bead.id while the session was still
-    // OPEN (a gated round; A40 keeps a GATED work bead mounted rather than
-    // unmounting it, so the usual close→unmount→remount→mint path never
-    // fires for it). [_joinedOnce] is the guard that keeps this from firing
-    // on a FRESH MINT, whose `existingSession` also reads unmatched until the
-    // join catches up. Detected BEFORE the stale-id/empty-cursor read below
-    // would otherwise silently keep serving the OLD id over an EMPTY cursor
-    // (a corrupted handle, not a parked one) — the session handle stays
-    // stable up to exactly this point, never past it.
-    if (!_resolving &&
-        !_failed &&
-        _sessionId != null &&
-        _joinedOnce &&
-        !matchesJoin &&
-        !_reworkScheduled) {
-      if (_lastKnownGated) {
-        _scheduleRework(_sessionId!);
-      } else {
-        // The guard principle: a scope that declines to mint says WHY once,
-        // LOUD — this scope never observed the retired session parked at a
-        // gate, so re-minting here could silently abandon a live round.
-        _scheduleReworkDecline(_sessionId!);
-      }
-    }
-
-    if (_resolving || _failed || _sessionId == null || _reworkScheduled) {
-      return const Idle();
-    }
+    if (_resolving || _failed || _sessionId == null) return const Idle();
     final id = _sessionId!;
     final cursor = seed.existingSession?.cursor ?? const <String, NodeCursor>{};
     final results =
         seed.existingSession?.results ?? const <String, Map<String, String>>{};
-    // The join reflects this session THIS build — latch it (fresh-mint guard,
-    // above) and remember whether it's CURRENTLY parked at a gate (the signal
-    // the orphan-check above reads once it stops matching).
-    if (matchesJoin) {
-      _joinedOnce = true;
-      _lastKnownGated = cursor.values.any((n) => n.state == StepState.gated);
-    }
 
     // D-7: re-arm any node parked at a gate whose gate bead has CLOSED (its
     // nodePath left `openGateNodes`). Read-only here; the flip to `pending` is
