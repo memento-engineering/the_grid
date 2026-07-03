@@ -24,6 +24,12 @@
 ///     stationServices: live.stationServices, substations: [...],
 ///     git: live.git, workRoot: live.workRoot, groups: live.groups,
 ///     freshnessBarrier: live.freshnessBarrier,
+///     // Adopt-across-restart (ADR-0009 D4) is ALL-OR-NOTHING: `--adopt`
+///     // arms BOTH halves off ONE ProcessGroupController — the reconciler's
+///     // `live.adoptProof` (leave a proven survivor running, pre-mount) and
+///     // `live.stationServices.liveness` (reattach it at mount). Thread the
+///     // proof through as-is; never wire one half alone (it double-runs).
+///     adoptProof: live.adoptProof,
 ///     resolver: myResolver, registry: myRegistry, services: services,
 ///     wrapRoot: (root) => /* mount the asset's ambient config values */ root);
 ///   return driveStation(wiring: wiring, sources: sources, ...);
@@ -159,6 +165,16 @@ void addStationFlags(ArgParser parser) {
           'open a PR (never auto-merges). OPT-IN, OFF by default; requires '
           '--no-dry-run.',
     )
+    ..addFlag(
+      'adopt',
+      negatable: false,
+      help:
+          'ARM adopt-across-restart (ADR-0009 D4): the restart reconciler '
+          'LEAVES a proven survivor running and the Host REATTACHES it at '
+          'mount — BOTH halves wired from one ProcessGroupController, or '
+          'neither (all-or-nothing; one alone double-runs). LIVE only; '
+          'refused with --dry-run.',
+    )
     ..addOption(
       'for-seconds',
       help: 'Run for a fixed number of seconds then exit (scripted / CI).',
@@ -193,6 +209,7 @@ class StationArgs {
     this.targetBeads = const {},
     this.dryRun = true,
     this.land = false,
+    this.adopt = false,
     this.noSql = false,
     this.runFor,
     this.resident = false,
@@ -219,6 +236,7 @@ class StationArgs {
         ..removeWhere((b) => b.trim().isEmpty),
       dryRun: args.flag('dry-run'),
       land: args.flag('land'),
+      adopt: args.flag('adopt'),
       noSql: args.flag('no-sql'),
       runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
       controlPort: int.parse(args.option('control-port')!),
@@ -254,6 +272,11 @@ class StationArgs {
 
   /// Whether the land step is armed (live only).
   final bool land;
+
+  /// Whether adopt-across-restart is armed (ADR-0009 D4, live only) — BOTH
+  /// halves (the reconciler's `AdoptProof` + the Host's `AllocationLiveness`)
+  /// or neither; see [buildLiveWiring].
+  final bool adopt;
 
   /// Force the bd-CLI read path.
   final bool noSql;
@@ -306,6 +329,14 @@ void validateArming(
       'grid run: --land cannot be combined with --dry-run. Land is a LIVE '
       'GitHub write (commit → push → PR); a dry run touches nothing. Re-run '
       'with --no-dry-run to arm land, or drop --land to observe only.',
+    );
+  }
+  if (args.adopt && args.dryRun) {
+    throw const StationRefusal(
+      'grid run: --adopt cannot be combined with --dry-run. Adopt reattaches '
+      'REAL surviving processes across a controller restart (ADR-0009 D4); a '
+      'dry run touches nothing. Re-run with --no-dry-run to arm adopt, or '
+      'drop --adopt to observe only.',
     );
   }
   if (!args.dryRun && args.rootPath == null && !rootInjected) {
@@ -506,6 +537,7 @@ class StationWiring {
     required this.freshnessBarrier,
     this.gitOps,
     this.prOpener,
+    this.adoptProof,
   });
 
   /// The station-level ambient services (transport + chokepoint + state rig).
@@ -530,6 +562,13 @@ class StationWiring {
 
   /// The PR opener — non-null ONLY when `--land` armed a live run.
   final PrOpener? prOpener;
+
+  /// The reconciler adopt half (ADR-0009 D4) — non-null ONLY when `--adopt`
+  /// armed a live run, and then ALWAYS built off the SAME [groups] controller
+  /// as [stationServices]' `liveness` (the Host adopt half): all-or-nothing,
+  /// wiring one half alone double-runs. The asset's runner threads this into
+  /// `composeStation(adoptProof:)` as-is.
+  final AdoptProof? adoptProof;
 }
 
 /// Builds the generic machine wiring from the validated [args] + [sources].
@@ -615,6 +654,26 @@ Future<StationWiring> buildLiveWiring({
   final gitOps = armLand ? GitOps(SystemGitRunner()) : null;
   final prOpener = armLand ? GhPrOpener(ghRunner) : null;
 
+  // Adopt-across-restart (ADR-0009 D4) — TWO cooperating halves, co-wired
+  // ALL-OR-NOTHING off the SAME [groups] controller: the reconciler's
+  // [AdoptProof] LEAVES a proven survivor running (pre-mount), and the Host's
+  // [AllocationLiveness] REATTACHES it at mount (via `StationServices.liveness`).
+  // Arming one half alone double-runs (the reconciler leaves a survivor AND the
+  // Host, unable to prove liveness, spawns fresh) — see the
+  // `AllocationContext.liveness` doc. Unarmed (the default), BOTH stay at their
+  // offline never-adopt defaults. Live-only: `validateArming` refuses
+  // --adopt + --dry-run; mirroring the `armLand` guard keeps this fail-closed
+  // even for a caller that skipped validation.
+  final groups = groupsOverride ?? const SystemProcessGroupController();
+  final bool armAdopt = args.adopt && !args.dryRun;
+  final AllocationLiveness? liveness = armAdopt
+      ? (fence) => _fenceAlive(groups, pgid: fence.pgid, pid: fence.pid)
+      : null;
+  final AdoptProof? adoptProof = armAdopt
+      ? (worktree, session, nodePath, node) async =>
+            _fenceAlive(groups, pgid: node.pgid, pid: node.pid)
+      : null;
+
   // Station-level ambient only (ADR-0009 D2): transport + chokepoint + state
   // rig. The workspace/branch layout is the per-substation SourceControl's.
   final stationServices = StationServices(
@@ -623,18 +682,32 @@ Future<StationWiring> buildLiveWiring({
     stateSubstation: (stateSubstation != null && stateSubstation.isNotEmpty)
         ? stateSubstation
         : args.substations.first,
+    liveness: liveness,
   );
 
   return StationWiring(
     stationServices: stationServices,
     git: git,
     workRoot: root,
-    groups: groupsOverride ?? SystemProcessGroupController(),
+    groups: groups,
     freshnessBarrier: freshnessBarrierOverride ?? sources.requery,
     gitOps: gitOps,
     prOpener: prOpener,
+    adoptProof: adoptProof,
   );
 }
+
+/// The engine pgid/pid-alive probe BOTH adopt halves share (ADR-0009 D4): true
+/// iff the prior identity is COMPLETE — a recorded [pgid] AND leader [pid] (see
+/// `AdoptFence`) — and the leader pid still names a live process
+/// ([ProcessGroupController.processAlive], the same liveness subject the
+/// guarded `terminateGroup` polls). A partial identity fails closed
+/// (no-adopt-on-faith: an unprovable survivor is killed-and-respawned, never
+/// left to leak). The domain half — token echoed over the effect's own
+/// endpoint — stays the capability's `proveFreshness`, run by the Host at
+/// mount on top of this engine half.
+bool _fenceAlive(ProcessGroupController groups, {int? pgid, int? pid}) =>
+    pgid != null && pid != null && groups.processAlive(pid);
 
 // ---------------------------------------------------------------------------
 // composeStation — pure composition (unchanged shape, + the wrapRoot hook)
@@ -682,6 +755,12 @@ class TreeRunWiring {
 /// [StationWiring] — the composition inversion, 2026-07-02); [wrapRoot] is the
 /// asset's provider hook (its `main()` mounts station-default config values —
 /// `InheritedSeed<AgentConfig>`-style — as ancestors of everything).
+///
+/// [adoptProof] is a composition PASSTHROUGH into the [RestartReconciler]
+/// (null ⇒ its never-adopt default). It is one half of the ALL-OR-NOTHING
+/// adopt-across-restart pair (ADR-0009 D4) — thread `StationWiring.adoptProof`
+/// through together with the [stationServices]' `liveness` half, or neither
+/// (`--adopt` in [buildLiveWiring] arms both off one controller).
 TreeRunWiring composeStation({
   required SnapshotSource work,
   required SnapshotSource state,
@@ -695,6 +774,7 @@ TreeRunWiring composeStation({
   required CapabilityRegistry registry,
   ServiceBundle services = const ServiceBundle(),
   Seed Function(Seed root)? wrapRoot,
+  AdoptProof? adoptProof,
 }) {
   final bridge = StationJoinBridge(work: work, state: state);
 
@@ -720,6 +800,7 @@ TreeRunWiring composeStation({
     groups: groups,
     freshnessBarrier: freshnessBarrier,
     stateSnapshot: () => state.current ?? emptyGraphSnapshot(),
+    adoptProof: adoptProof,
   );
 
   final kernel = StationKernel(
