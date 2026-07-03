@@ -64,10 +64,30 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
-import 'run_command.dart' show RuntimeProviderKind;
 import 'runtime_snapshot_source.dart';
 import 'station_control.dart';
 import 'station_lock.dart';
+
+// ---------------------------------------------------------------------------
+// RuntimeProviderKind
+// ---------------------------------------------------------------------------
+
+/// Which [RuntimeProvider] a composed station spawns agents through.
+enum RuntimeProviderKind {
+  /// The Friday dogfood default — [SubprocessProvider].
+  subprocess,
+
+  /// The gc-compatible alternative — `TmuxProvider` (Track 1; not on the
+  /// Friday critical path). The subprocess arm ships; the tmux arm is
+  /// reserved.
+  tmux;
+
+  /// Parses the `--provider` option value (defaults to [subprocess]).
+  static RuntimeProviderKind parse(String? value) => switch (value) {
+    'tmux' => RuntimeProviderKind.tmux,
+    _ => RuntimeProviderKind.subprocess,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Refusals + the standard station flags

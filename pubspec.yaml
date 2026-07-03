@@ -7,7 +7,6 @@ workspace:
   - packages/grid_cli
   - packages/grid_exploration
   - packages/grid_devtools
-  - packages/grid_reconciler
   - packages/grid_runtime
   - packages/grid_engine
   - packages/grid_federation

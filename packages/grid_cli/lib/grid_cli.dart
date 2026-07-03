@@ -19,7 +19,6 @@ export 'src/station_attach.dart';
 export 'src/station_control.dart';
 export 'src/station_lock.dart';
 export 'src/station_runner.dart';
-export 'src/run_command.dart' show RuntimeProviderKind;
 
 // The generic, asset-agnostic driving commands.
 export 'src/watch_command.dart';

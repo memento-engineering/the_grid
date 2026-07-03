@@ -5,8 +5,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 /// A fake [ReadyWorkSource] (Fakes, not mocks): a programmable ready set + a
-/// synthetic `GraphEvent` stream, mirroring grid_reconciler's
-/// `FakeConvergenceSource`. The dispatcher reacts to the events and resolves
+/// synthetic `GraphEvent` stream. A consumer reacts to the events and resolves
 /// entered ids via [bead] / [readyBeads] — both backed by the same in-memory
 /// map so a test can stage a ready bead then fire a `readySetChanged` for it.
 class FakeReadyWorkSource implements ReadyWorkSource {
@@ -36,87 +35,6 @@ class FakeReadyWorkSource implements ReadyWorkSource {
 
   @override
   Bead? bead(String id) => _beads[id];
-
-  Future<void> close() => _events.close();
-}
-
-/// A fake [RuntimeProvider] (Fakes, not mocks): records every `start`/`stop`
-/// call and the config it was handed, never spawns a real process, and lets a
-/// test drive the lifecycle by emitting `RuntimeEvent`s on its own `events`
-/// stream (the same stream the bound [RuntimeActuator] listens to).
-class FakeRuntimeProvider implements RuntimeProvider {
-  final StreamController<RuntimeEvent> _events =
-      StreamController<RuntimeEvent>.broadcast();
-
-  /// (name, config) of every `start` call, in order.
-  final List<({String name, RuntimeConfig config})> starts = [];
-
-  /// Every `stop`ped name, in order.
-  final List<String> stops = [];
-
-  final Set<String> _running = {};
-
-  /// Set false to make the next `start` throw [SessionAlreadyExists] for a
-  /// name already started (the real provider rejects a duplicate live name).
-  bool rejectDuplicateStart = true;
-
-  /// When non-null, the NEXT `start` throws this (then clears) — to drive the
-  /// dispatcher's conservative unwind on a provider spawn failure.
-  Object? failNextStartWith;
-
-  /// How many times a session [name] was started (proves no double-spawn).
-  int startCountFor(String name) => starts.where((s) => s.name == name).length;
-
-  @override
-  Future<void> start(String name, RuntimeConfig config) async {
-    final fail = failNextStartWith;
-    if (fail != null) {
-      failNextStartWith = null;
-      throw fail;
-    }
-    if (rejectDuplicateStart && _running.contains(name)) {
-      throw SessionAlreadyExists(name);
-    }
-    starts.add((name: name, config: config));
-    _running.add(name);
-  }
-
-  @override
-  Future<void> stop(String name) async {
-    stops.add(name);
-    _running.remove(name);
-  }
-
-  @override
-  Future<void> interrupt(String name) async {}
-
-  /// Emits [event] on the provider's stream (the actuator + dispatcher react).
-  void emit(RuntimeEvent event) => _events.add(event);
-
-  @override
-  Stream<RuntimeEvent> get events => _events.stream;
-
-  @override
-  Stream<String> output(String name) => const Stream.empty();
-
-  @override
-  bool isRunning(String name) => _running.contains(name);
-
-  @override
-  bool processAlive(String name) => _running.contains(name);
-
-  @override
-  String peek(String name, int lines) => '';
-
-  @override
-  List<String> listRunning(String prefix) =>
-      _running.where((n) => n.startsWith(prefix)).toList();
-
-  @override
-  DateTime? lastActivity(String name) => null;
-
-  @override
-  RuntimeCapabilities get capabilities => RuntimeCapabilities.subprocess;
 
   Future<void> close() => _events.close();
 }
