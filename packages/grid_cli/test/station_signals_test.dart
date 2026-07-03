@@ -81,6 +81,12 @@ void main() {
           final run = h.drive();
           h.pushWork(Bead(id: 'tgdog-w1', title: 'resident work'));
           await _settle();
+          // A bounded poll, not a second fixed pump: under heavier CPU
+          // contention (more concurrent test files/isolates competing for
+          // scheduler time) a fixed microtask-turn count can undershoot
+          // before the mount→spawn chain settles, even though it always
+          // completes well within this bound.
+          await _untilProviderStarted(h.provider);
           expect(
             h.provider.starts,
             hasLength(1),
@@ -245,6 +251,16 @@ void main() {
 Future<void> _settle() async {
   for (var i = 0; i < 12; i++) {
     await Future<void>.delayed(Duration.zero);
+  }
+}
+
+/// A bounded poll (not a fixed pump) for the mount→spawn chain to record its
+/// first start — robust to CPU-scheduling variance across concurrent test
+/// isolates, where a fixed microtask-turn count can occasionally undershoot.
+Future<void> _untilProviderStarted(_RecordingProvider provider) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (provider.starts.isEmpty && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 5));
   }
 }
 

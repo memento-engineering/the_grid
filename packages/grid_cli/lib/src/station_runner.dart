@@ -54,6 +54,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import 'run_command.dart' show RuntimeProviderKind;
 import 'runtime_snapshot_source.dart';
+import 'station_control.dart';
 import 'station_lock.dart';
 
 // ---------------------------------------------------------------------------
@@ -167,6 +168,13 @@ void addStationFlags(ArgParser parser) {
       negatable: false,
       help:
           'Force the bd-CLI read path even when pooled Dolt SQL is available.',
+    )
+    ..addOption(
+      'control-port',
+      defaultsTo: '0',
+      help:
+          'The StationControl loopback port (RS-4; resident mode only). '
+          '0 = ephemeral (default).',
     );
 }
 
@@ -188,6 +196,7 @@ class StationArgs {
     this.noSql = false,
     this.runFor,
     this.resident = false,
+    this.controlPort = 0,
   });
 
   /// Parses the standard flags added by [addStationFlags].
@@ -212,6 +221,7 @@ class StationArgs {
       land: args.flag('land'),
       noSql: args.flag('no-sql'),
       runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
+      controlPort: int.parse(args.option('control-port')!),
     );
   }
 
@@ -259,6 +269,11 @@ class StationArgs {
   /// (space_station's `up`, RS-5b) constructs [StationArgs] with this set
   /// directly.
   final bool resident;
+
+  /// The `StationControl` loopback port (RS-4, D-C2) — `0` = ephemeral
+  /// (default). Only consulted when [resident] is true; a non-resident
+  /// (`run`) arm never binds the control surface.
+  final int controlPort;
 }
 
 /// The arming/gating checks (ADR-0006 / A36/A37 / RS-3 D-R4) — every runner
@@ -772,6 +787,12 @@ Stream<ProcessSignal> terminationSignals() {
 /// store; a live holder is a [StationRefusal] — and released on the graceful
 /// shutdown path and on the start-throw unwind. [lock] injects the service
 /// (fake pid probe) for offline tests.
+///
+/// Under [StationArgs.resident] arming, with a state workspace held, the
+/// CONTROL SURFACE (RS-4, D-C2) binds right after the lock (so it always has
+/// a lock file to advertise `controlUrl`/`token` through) and is disposed
+/// BEFORE the lock releases, on both the graceful path and the start-throw
+/// unwind. [controlStarter] injects the bind seam for offline tests.
 Future<int> driveStation({
   required TreeRunWiring wiring,
   required StationSources sources,
@@ -780,6 +801,7 @@ Future<int> driveStation({
   bool runForever = true,
   Stream<ProcessSignal>? signals,
   StationLockService? lock,
+  StationControlStarter? controlStarter,
 }) async {
   final void Function(String) write = out ?? (m) => stdout.writeln(m);
 
@@ -834,14 +856,42 @@ Future<int> driveStation({
   // sources.start(). No state workspace (offline/dry with no split store) ⇒
   // no session store to guard ⇒ no lock.
   StationLockHandle? stationLock;
+  StationControl? stationControl;
   final stateStore = sources.stateWorkspace;
   if (stateStore != null) {
+    final bootTime = DateTime.now();
     stationLock = await (lock ?? StationLockService(log: write)).acquire(
       stateWorkspaceDir: stateStore.root,
       pid: pid,
       pgid: SystemProcessGroupController().currentGroupId(),
-      now: DateTime.now(),
+      now: bootTime,
     );
+
+    // --- the control surface (RS-4, D-C2): resident mode only ---------------
+    // Lock-advertised: bound right after the lock so it always has a lock
+    // file to write `controlUrl`/`token` into. A non-resident (`run`) arm
+    // never binds it — the drive-list flag surface stays untouched (D-R1).
+    if (args.resident) {
+      final token = mintControlToken();
+      stationControl = await (controlStarter ?? StationControl.start)(
+        port: args.controlPort,
+        token: token,
+        view: () => buildStationStatus(
+          args: args,
+          sources: sources,
+          wiring: wiring,
+          startedAt: bootTime,
+        ),
+      );
+      await stationLock.updateControl(
+        controlUrl: stationControl.url,
+        token: token,
+      );
+      write(
+        'control: ${stationControl.url}  ·  token: (see ${stationLock.path}, '
+        '0600)',
+      );
+    }
   }
 
   // --- start: controllers → host → barrier → restart → mount ---------------
@@ -851,7 +901,9 @@ Future<int> driveStation({
   } on Object {
     // The start-throw unwind (parity with the refusal-catch
     // `sources?.shutdown()` example above): a lock left naming a dead boot
-    // would wedge the next `up` behind a stale-steal.
+    // would wedge the next `up` behind a stale-steal. The control surface (if
+    // bound) is disposed BEFORE the lock releases (RS-4 scope fence).
+    await stationControl?.dispose();
     await stationLock?.release();
     rethrow;
   }
@@ -859,6 +911,10 @@ Future<int> driveStation({
   Future<void> shutdown() async {
     await wiring.teardown();
     await sources.shutdown();
+    // The control surface is disposed BEFORE the lock releases (RS-4 scope
+    // fence) — a released lock naming a dead control endpoint would mislead
+    // `space status`.
+    await stationControl?.dispose();
     // Release LAST: the store stays guarded until the tree is torn down and
     // the controllers are drained.
     await stationLock?.release();
