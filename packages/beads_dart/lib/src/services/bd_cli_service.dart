@@ -171,6 +171,11 @@ class BdCliService {
   /// promoted by restoring its real `gc.deferred_type`/`gc.deferred_assignee`
   /// via `-t`/`--assignee` (with the `gc.routed_to`/`gc.execution_routed_to`
   /// values riding [metadata]).
+  ///
+  /// [appendNotes] is a straight `--append-notes <text>` passthrough (bd
+  /// concatenates it onto the bead's existing notes with a newline separator,
+  /// `cmd/bd/update.go`); mutually exclusive with `--notes` upstream, but this
+  /// service never sends `--notes`, so no conflict arises here.
   Future<void> update(
     String id, {
     String? title,
@@ -180,6 +185,7 @@ class BdCliService {
     IssueType? type,
     String? assignee,
     Map<String, String>? metadata,
+    String? appendNotes,
   }) async {
     // Decode asserts the schema version (drift guard) on the mutation path too;
     // a non-zero exit was already raised inside _runEnvelope.
@@ -193,6 +199,7 @@ class BdCliService {
         type: type,
         assignee: assignee,
         metadata: metadata,
+        appendNotes: appendNotes,
       ),
     );
   }
@@ -351,6 +358,7 @@ class BdCliService {
     IssueType? type,
     String? assignee,
     Map<String, String>? metadata,
+    String? appendNotes,
   }) => [
     'update',
     id,
@@ -367,6 +375,10 @@ class BdCliService {
     if (metadata != null && metadata.isNotEmpty) ...[
       '--metadata',
       jsonEncode(metadata),
+    ],
+    if (appendNotes != null && appendNotes.isNotEmpty) ...[
+      '--append-notes',
+      appendNotes,
     ],
   ];
 
