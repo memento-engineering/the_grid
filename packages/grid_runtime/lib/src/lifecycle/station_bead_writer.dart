@@ -198,18 +198,27 @@ class StationBeadWriter {
   /// `metadata.rig` in the write — a write that does NOT itself carry the substation
   /// is still owned by virtue of its id prefix.
   ///
+  /// [appendNotes] is a straight `--append-notes` passthrough to
+  /// [BdCliService.update] (e.g. `grid rework`'s operator-finding append) — it
+  /// rides the SAME serialized, ownership-checked write as [metadata], never a
+  /// separate chokepoint call.
+  ///
   /// Serialized per-id (D-1): ownership is checked synchronously (fail-closed
   /// immediately), then the bd write chains after any prior write on [id] so two
   /// concurrent updates with disjoint keys can never last-writer-wins.
   Future<void> update(
     String id, {
     required Map<String, String> metadata,
+    String? appendNotes,
   }) async {
     // `async` so the fail-closed `_assertOwned` throw surfaces as a rejected
     // future (not a synchronous throw at the call site); `_serialized` registers
     // its tail synchronously before the first await, so ordering is preserved.
     _assertOwned('update', id, metadata);
-    return _serialized(id, () => _bd.update(id, metadata: metadata));
+    return _serialized(
+      id,
+      () => _bd.update(id, metadata: metadata, appendNotes: appendNotes),
+    );
   }
 
   /// `bd close` on a the_grid-owned session bead (terminal lifecycle).

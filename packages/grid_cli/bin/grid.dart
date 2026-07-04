@@ -16,6 +16,7 @@ Future<void> main(List<String> arguments) async {
       CommandRunner<int>('grid', 'the_grid — a reactive beads controller.')
         ..addCommand(WatchCommand())
         ..addCommand(GateCommand())
+        ..addCommand(ReworkCommand())
         ..addCommand(DemoCommand());
 
   try {
