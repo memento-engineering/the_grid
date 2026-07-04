@@ -10,8 +10,8 @@
 ///
 /// [federation_protocol.dart] + [capability_facts.dart] are the TRANSPORT-FREE
 /// federation contracts (ADR-0011, the honesty-pass D-A9/D-B5 split,
-/// 2026-07-03) — `grid_federation` supplies the transport impls over these same
-/// types.
+/// 2026-07-03) — power_station's `federated_grid_assets` supplies the transport
+/// impls over these same types.
 library;
 
 export 'allocation.dart';
