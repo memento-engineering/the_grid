@@ -44,6 +44,21 @@ class _WorkListState extends State<WorkList> {
   JoinedSnapshotNotifier? _notifier;
   late JoinedSnapshot _snapshot;
 
+  /// Bead ids whose `WorkBead` branch is mounted as of the last build — the
+  /// A40 "already-mounted work is never evicted for budget reasons" invariant's
+  /// OWN bookkeeping (tg-zat). `liveSession` alone misses a gap this invariant
+  /// must still cover: `grid rework` re-keys a session bead's `work_bead` OFF
+  /// this bead's id while it is still open (not yet closed) — so
+  /// `sessionsByWorkBead[bead.id]` reads null for one-or-more snapshots while
+  /// `SessionScope` schedules the close-then-re-mint transition. Without this
+  /// set, that gap reclassifies the bead as a budget-gated `pending` candidate,
+  /// and the concurrency governor can evict the very branch that would have
+  /// closed the retired session and minted the fresh round — wedging the
+  /// retired session open forever with no fresh mint. Membership tracks the
+  /// BRANCH, not the session: added whenever a bead mounts, removed only on a
+  /// genuine positive terminal.
+  final Set<String> _mountedIds = <String>{};
+
   @override
   void didChangeDependencies() {
     // Resolve the ambient work-axis notifier and subscribe. The notifier
@@ -143,13 +158,27 @@ class _WorkListState extends State<WorkList> {
       // can transiently leave readyIds (blocked, gc-edited) mid-flight, and
       // treating that as done would kill the live agent.
       final terminal = bead.isClosed || (session?.isTerminal ?? false);
-      if (terminal) continue;
+      if (terminal) {
+        _mountedIds.remove(bead.id);
+        continue;
+      }
 
       final inReady = _snapshot.graph.readyIds.contains(bead.id);
       final liveSession = session != null && !session.isTerminal;
-      // Mount if freshly ready OR still carrying a live session (the latter is
-      // what keeps a transiently-unready bead's agent mounted).
-      if (!inReady && !liveSession) continue;
+      // A40's "already-mounted work is never evicted for budget reasons" also
+      // covers a bead whose branch is ALREADY mounted even when `liveSession`
+      // reads false THIS build (tg-zat): `grid rework` re-keys a session's
+      // `work_bead` off this bead's id while it is still open, so
+      // `sessionsByWorkBead[bead.id]` reads null for one-or-more snapshots
+      // while `SessionScope` schedules its close-then-re-mint transition.
+      // Falling back to `liveSession` alone here would drop the branch from
+      // `mounted` and hand it to the budget gate below — evicting the very
+      // SessionScope that would have closed the retired session and minted
+      // the fresh round, wedging the retired session open forever.
+      final staysMounted = liveSession || _mountedIds.contains(bead.id);
+      // Mount if freshly ready OR still carrying/keeping a live session (the
+      // latter is what keeps a transiently-unready bead's agent mounted).
+      if (!inReady && !staysMounted) continue;
 
       // The per-bead ROOT MATCH (tg-7gm, `SCRATCH-grid-alignment.md` §6
       // amendment): a bead selects a registered root via `metadata.grid.root`,
@@ -167,7 +196,8 @@ class _WorkListState extends State<WorkList> {
         continue;
       }
 
-      if (liveSession) {
+      if (staysMounted) {
+        _mountedIds.add(bead.id);
         mounted.add(
           WorkBead(bead: bead, session: session, key: ValueKey(bead.id)),
         );
@@ -223,6 +253,7 @@ class _WorkListState extends State<WorkList> {
     final admitted = pending.take(slotsAvailable);
     final waiting = pending.skip(slotsAvailable).toList();
     for (final bead in admitted) {
+      _mountedIds.add(bead.id);
       mounted.add(WorkBead(bead: bead, key: ValueKey(bead.id)));
     }
     if (waiting.isNotEmpty) {

@@ -358,6 +358,83 @@ void main() {
       });
     });
 
+    test(
+      'a rework re-key (tg-zat): a bead whose session becomes momentarily '
+      'unkeyed (its retired session still counts, live, under a DIFFERENT '
+      'key) is NOT evicted for budget reasons even though `liveSession` '
+      'reads false this build — A40 covers the branch, not just the key',
+      () {
+        final recorder = _Recorder();
+        final transport = _RecordingTransport();
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_bead('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': const SessionProjection(
+                workBeadId: 'tg-1',
+                isTerminal: false,
+              ),
+            },
+          ),
+        );
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        owner.mountRoot(
+          _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+            stationServices: StationServices(
+              provider: FakeRuntimeProvider(),
+              writer: StationBeadWriter(
+                bd: BdCliService(RecordingBdRunner()),
+                ownership: BeadOwnershipPredicate(const {'tg'}),
+              ),
+              stateSubstation: 'tg',
+              // A tight station-wide ceiling: the retired session (still open,
+              // now keyed 'tg-1#r1') fills the ONLY slot on its own.
+              maxConcurrentWork: 1,
+            ),
+          ),
+        );
+        expect(recorder.events, ['START work(tg-1)']);
+        recorder.events.clear();
+
+        // `grid rework` re-keys the session's `work_bead` off 'tg-1' (D-2's
+        // close-then-mint has not run yet) — `sessionsByWorkBead['tg-1']`
+        // reads null, but the retired session is STILL non-terminal, still
+        // present in the joined map under its round-suffixed key, and STILL
+        // consumes the station-wide budget.
+        joined.push(
+          _joined(
+            beads: [_bead('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1#r1': const SessionProjection(
+                workBeadId: 'tg-1#r1',
+                isTerminal: false,
+              ),
+            },
+          ),
+        );
+        owner.flush();
+
+        // Pre-fix, `liveSession` alone reclassified 'tg-1' as a budget-gated
+        // `pending` candidate; with the ONE slot already "spent" by its own
+        // orphaned retired session, it was evicted (a STOP with no matching
+        // START) — killing the very branch that would close the retired
+        // session and mint the fresh round. Fixed: the branch stays mounted.
+        expect(recorder.events, isEmpty);
+      },
+    );
+
     test('the station-wide cap is a TOTAL across substations — a busy '
         'substation starves a quiet sibling of slots even though the '
         "sibling's own substation cap is untouched", () {
