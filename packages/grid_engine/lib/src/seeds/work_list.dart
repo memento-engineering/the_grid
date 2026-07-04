@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -6,6 +8,7 @@ import 'package:state_notifier/state_notifier.dart';
 import '../domain/driveable_work.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/substation_config.dart';
+import '../kernel/station_services.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../sdk/capability.dart';
 import 'work_bead.dart';
@@ -88,8 +91,22 @@ class _WorkListState extends State<WorkList> {
     // config-axis dependency (never notifies once mounted), not the snapshot
     // pipeline — derailment-invariant 1 stays about the JOINED SNAPSHOT axis.
     final services = context.dependOnInheritedSeedOfExactType<ServiceBundle>();
+    // The concurrency governor's ambient station default/ceiling (tg-42f) —
+    // a config-axis lookup exactly like `ServiceBundle` above: a stable,
+    // fixed-at-mount value that never notifies, so this new dependency stays
+    // outside derailment-invariant 1 (the snapshot axis). Null (no
+    // `StationServices` provided — the offline-test default) falls back to
+    // the same generous constant `StationServices` itself defaults to.
+    final stationServices = context
+        .dependOnInheritedSeedOfExactType<StationServices>();
     final registeredRoots = seed.substationConfig.registeredRoots;
-    final children = <WorkBead>[];
+    // Two bins: `mounted` already carries a live (non-terminal) session — an
+    // in-flight agent that is NEVER evicted for budget reasons (positive-
+    // terminal-only unmount stays the only unmount trigger). `pending` is
+    // freshly ready with no session yet — these are what the slot budget
+    // below actually governs.
+    final mounted = <WorkBead>[];
+    final pending = <Bead>[];
     for (final bead in _snapshot.graph.beadsById.values) {
       // Dispatchable-type gate BEFORE ownership, as an ALLOW-list (fail-closed):
       // only plain coding-work types mount a WorkBead + spawn an agent. A
@@ -150,14 +167,72 @@ class _WorkListState extends State<WorkList> {
         continue;
       }
 
-      children.add(
-        WorkBead(bead: bead, session: session, key: ValueKey(bead.id)),
-      );
+      if (liveSession) {
+        mounted.add(
+          WorkBead(bead: bead, session: session, key: ValueKey(bead.id)),
+        );
+      } else {
+        pending.add(bead);
+      }
     }
+
+    // The concurrency governor (tg-42f, declare-and-check — ADR-0008 D8's
+    // general per-leaf `DartEnvironment` permit governor is a separate,
+    // deferred track): a substation cap ABOVE which freshly-ready beads stay
+    // ready-unmounted — no session minted, no spawn, no cost — and mount on
+    // the natural reconcile once a slot frees (a mounted session closes and
+    // the positive-terminal unmount above drops it from `mounted` next tick).
+    // Already-mounted work (`mounted`, live session) is NEVER evicted for
+    // budget reasons — only `pending` candidates are gated.
+    //
+    // `stationCap` is null when no `StationServices` is ambient (an offline
+    // test that never wires the governor) — every REAL run always composes
+    // one (`buildLiveWiring`/`StationKernel`), so the station-wide ceiling
+    // below is only ever skipped by a test that doesn't care about it. A
+    // substation's own override still applies either way, defaulting to
+    // [kDefaultMaxConcurrentWork] when nothing is configured at all.
+    final stationCap = stationServices?.maxConcurrentWork;
+    final substationCap =
+        seed.substationConfig.maxConcurrentWork ??
+        stationCap ??
+        kDefaultMaxConcurrentWork;
+    final substationSlots = math.max(0, substationCap - mounted.length);
+    final int slotsAvailable;
+    if (stationCap == null) {
+      slotsAvailable = substationSlots;
+    } else {
+      // The station-wide total (tg-42f "and a station-wide cap above it"):
+      // every non-terminal session in the shared `JoinedSnapshot` — global
+      // across every substation this station mounts, read at zero extra cost
+      // since `_snapshot` is already the ambient value this node observes.
+      // This is a snapshot of the LAST SETTLED state (accurate across
+      // flushes); two substations deciding to admit in the SAME flush can
+      // transiently overshoot by however many substations raced —
+      // declare-and-check, not a distributed lock — and self-corrects once
+      // the newly-minted sessions land in the next snapshot.
+      final stationWideLive = _snapshot.sessionsByWorkBead.values
+          .where((s) => !s.isTerminal)
+          .length;
+      final stationSlots = math.max(0, stationCap - stationWideLive);
+      slotsAvailable = math.min(substationSlots, stationSlots);
+    }
+
+    // Deterministic admission order (lowest bead id first) — same tie-break
+    // the final sort below applies, so which beads get in is reproducible.
+    pending.sort((a, b) => a.id.compareTo(b.id));
+    final admitted = pending.take(slotsAvailable);
+    final waiting = pending.skip(slotsAvailable).toList();
+    for (final bead in admitted) {
+      mounted.add(WorkBead(bead: bead, key: ValueKey(bead.id)));
+    }
+    if (waiting.isNotEmpty) {
+      _reportThrottled(services, waiting);
+    }
+
     // Deterministic order by bead id — all children are keyed, so reconcile is
     // by key regardless, but a stable order keeps the tree legible.
-    children.sort((a, b) => a.bead.id.compareTo(b.bead.id));
-    return _WorkBeads(children);
+    mounted.sort((a, b) => a.bead.id.compareTo(b.bead.id));
+    return _WorkBeads(mounted);
   }
 
   /// The ALLOW-list: only plain, coding-dispatchable work mounts. `isCore` =
@@ -193,6 +268,24 @@ class _WorkListState extends State<WorkList> {
       services?.transport?.flare('work.rootMissing', {
         'beadId': bead.id,
         'root': targetRoot ?? '',
+      });
+    } catch (_) {
+      // A throwing transport never breaks the mount reconcile — swallow.
+    }
+  }
+
+  /// Emits ONE LOUD line (tg-42f) when the concurrency governor holds
+  /// [waiting] beads ready-unmounted for lack of a slot — count + which beads
+  /// wait, through the same reserved emit-only [ExplorationTransport] (D-8)
+  /// every other engine LOUD signal uses. ONE flare per build (never one per
+  /// throttled bead) so a wide backlog doesn't flood the sink. A null
+  /// [services]/`transport` is the offline/no-op default; a throwing
+  /// transport never breaks the mount reconcile.
+  static void _reportThrottled(ServiceBundle? services, List<Bead> waiting) {
+    try {
+      services?.transport?.flare('work.throttled', {
+        'count': '${waiting.length}',
+        'beadIds': waiting.map((b) => b.id).join(','),
       });
     } catch (_) {
       // A throwing transport never breaks the mount reconcile — swallow.

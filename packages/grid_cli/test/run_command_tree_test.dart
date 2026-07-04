@@ -1231,6 +1231,9 @@ class _TreeHarness {
       provider: provider,
       writer: writer,
       stateSubstation: 'tgdog',
+      // Concurrency governor (tg-42f) pinned generous — this harness's tests
+      // exercise composition/dispatch/wiring, not the governor's throttle.
+      maxConcurrentWork: 100,
     );
     return composeStation(
       work: work,

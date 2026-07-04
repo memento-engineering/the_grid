@@ -134,8 +134,15 @@ Branch _effectChild(Branch wb) {
   return found!;
 }
 
-/// Default rig config: rig `tg`, owning prefix `tg`.
-SubstationConfig _tgConfig() => const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
+/// Default rig config: rig `tg`, owning prefix `tg`. `maxConcurrentWork` is
+/// pinned generous (tg-42f's concurrency governor defaults to 4) — this file
+/// exercises the type-gate/reconcile-lifecycle predicate, not the governor,
+/// and some scenarios ready more than 4 beads at once.
+SubstationConfig _tgConfig() => const SubstationConfig(
+  substationId: 'tg',
+  ownedSubstations: {'tg'},
+  maxConcurrentWork: 100,
+);
 
 void main() {
   group('Track A — reconcile is the work lifecycle', () {

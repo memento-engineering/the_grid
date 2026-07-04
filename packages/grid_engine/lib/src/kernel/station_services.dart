@@ -22,12 +22,14 @@ import '../sdk/allocation.dart';
 /// throws post-unmount) for I/O.
 class StationServices {
   /// Bundles the station's process transport [provider], the bd write [writer],
-  /// the owned [stateSubstation], and the optional adopt-liveness seam [liveness].
+  /// the owned [stateSubstation], the optional adopt-liveness seam [liveness],
+  /// and the concurrency-governor station default/ceiling [maxConcurrentWork].
   const StationServices({
     required this.provider,
     required this.writer,
     required this.stateSubstation,
     this.liveness,
+    this.maxConcurrentWork = kDefaultMaxConcurrentWork,
   });
 
   /// The process transport — spawn (`start`), kill (`stop`), and the broadcast
@@ -51,4 +53,20 @@ class StationServices {
   /// arm, or leaves both off — wiring one alone double-runs. This makes the two
   /// adopt halves symmetrically wireable (closing the adversarial-review footgun).
   final AllocationLiveness? liveness;
+
+  /// The concurrency governor's STATION-WIDE default/ceiling (tg-42f,
+  /// declare-and-check — ADR-0008 D8 defers the general per-leaf
+  /// `DartEnvironment` permit governor; this is the narrower, cheaper
+  /// work-bead slot budget the mount boundary checks). Serves two roles: the
+  /// DEFAULT a substation's own `SubstationConfig.maxConcurrentWork` falls back
+  /// to when unset, AND the hard TOTAL ceiling across every substation
+  /// `WorkList` mounts under this station — a substation override only narrows
+  /// within that ceiling, never raises it. Threaded from `--max-agents`
+  /// (`StationArgs.maxAgents`); defaults to [kDefaultMaxConcurrentWork] so a
+  /// single-bead flow is unchanged.
+  final int maxConcurrentWork;
 }
+
+/// The concurrency governor's generous default station cap (tg-42f) — chosen
+/// so ordinary single/few-bead dev and dry-run flows never throttle.
+const int kDefaultMaxConcurrentWork = 4;
