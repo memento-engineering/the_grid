@@ -161,6 +161,46 @@ class GitOps {
     ]);
   }
 
+  /// Whether a LOCAL branch named [branch] exists in [rootRepo]. The
+  /// [provisionWorktree]-self-heal check (tg-e0p): `-b` fails FOREVER once a
+  /// `grid/<beadId>` branch outlives its worktree (a reaped worktree, or the
+  /// losing side of a double-provision race) — this is how the caller decides
+  /// whether to mint fresh or adopt what is already there. No gc analog (a
+  /// single-root system, no adopt path).
+  Future<bool> branchExists(String rootRepo, String branch) async {
+    final r = await _run(
+      rootRepo,
+      <String>['show-ref', '--verify', '--quiet', 'refs/heads/$branch'],
+    );
+    return r.ok;
+  }
+
+  /// Adds a worktree at [path] checked out on the EXISTING [branch] — no `-b`,
+  /// so git itself refuses (informatively) if [branch] is already checked out
+  /// elsewhere rather than silently duplicating it. The adopt half of the
+  /// [provisionWorktree] self-heal.
+  Future<GitRunResult> worktreeAddExisting({
+    required String rootRepo,
+    required String path,
+    required String branch,
+  }) {
+    return _run(rootRepo, <String>['worktree', 'add', path, branch]);
+  }
+
+  /// Force-deletes a LOCAL branch, run from [rootRepo] once its worktree is
+  /// gone. `-D` (not `-d`): the three-gate reap that calls this already proved
+  /// the branch carries no commits unreachable from a remote, so a merge-check
+  /// against whatever happens to be checked out in the root repo would only
+  /// produce a false-negative refusal, never protect real work. Best-effort —
+  /// [GitRunner] never throws, and the caller does not fail a clean reap over
+  /// this.
+  Future<GitRunResult> branchDelete({
+    required String rootRepo,
+    required String branch,
+  }) {
+    return _run(rootRepo, <String>['branch', '-D', branch]);
+  }
+
   /// Removes a worktree. MUST be run from the [rootRepo], never from inside the
   /// worktree being removed (gc `cmd/gc/bead_worktree_reaper.go:128-130`). gc's
   /// `WorktreeRemove` (`git.go:110-120`). [force] removes even with

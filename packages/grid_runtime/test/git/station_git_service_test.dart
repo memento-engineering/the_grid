@@ -292,6 +292,74 @@ void main() {
     });
   });
 
+  test(
+    'reap deletes the branch too (tg-e0p): symmetric cleanup so a done bead '
+    'never wedges a future re-mint',
+    () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-sym');
+
+      // Push so the unpushed gate is clear, then reap.
+      await git(wt.path, const <String>['push', '-u', 'origin', 'grid/lenny-sym']);
+      final reap = await svc.reap(root: root, worktree: wt);
+      expect(reap.removed, isTrue, reason: reap.refusedReason ?? '');
+
+      final branchGone = await runner.run(
+        workingDirectory: seeded.root,
+        args: <String>['show-ref', '--verify', '--quiet', 'refs/heads/${wt.branch}'],
+      );
+      expect(
+        branchGone.ok,
+        isFalse,
+        reason: 'the local branch must be deleted alongside the worktree',
+      );
+    },
+  );
+
+  test(
+    'provisionWorktree ADOPTS a branch that outlived its worktree — '
+    'self-heals the wedge (tg-e0p, tg-rm5/tg-457)',
+    () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
+
+      // First mint: succeeds, creates the branch + worktree.
+      final wt = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
+      expect(Directory(wt.path).existsSync(), isTrue);
+
+      // Simulate the wedge exactly as observed: the worktree vanishes WITHOUT
+      // the branch being deleted (an out-of-band removal, or any cleanup path
+      // that predates the symmetric reap fix above) — the branch survives
+      // with no worktree checked out against it.
+      await git(seeded.root, <String>['worktree', 'remove', wt.path]);
+      final stillThere = await runner.run(
+        workingDirectory: seeded.root,
+        args: <String>['show-ref', '--verify', '--quiet', 'refs/heads/${wt.branch}'],
+      );
+      expect(
+        stillThere.ok,
+        isTrue,
+        reason: 'the branch must survive the raw removal (the wedge setup)',
+      );
+
+      // Re-provisioning the SAME bead must ADOPT the surviving branch rather
+      // than fail forever on "already exists" — the exact operator-observed
+      // failure: every re-mint hit branch-exists with no self-healing path,
+      // costing 3 re-keys + 2 manual git bridges on one bead.
+      final wt2 = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
+      expect(wt2.branch, wt.branch);
+      expect(Directory(wt2.path).existsSync(), isTrue);
+      final onBranch = await runner.run(
+        workingDirectory: wt2.path,
+        args: const <String>['rev-parse', '--abbrev-ref', 'HEAD'],
+      );
+      expect(onBranch.output.trim(), wt.branch);
+    },
+  );
+
   test('land records a failure (does not throw) when push has no remote',
       () async {
     // A standalone repo with NO origin — push fails; land returns a recorded

@@ -1110,6 +1110,34 @@ class TreeRunWiring {
   Future<void> teardown() async => kernel.dispose();
 }
 
+/// Fail-closed: refuses [substations] when any two [SubstationConfig]s claim
+/// an OVERLAPPING owned substation id (tg-e0p). Each bead may be mounted by
+/// EXACTLY one [SubstationScope] — two scopes racing to mount (and
+/// `provisionWorktree` for) the same bead is the double-provision race that
+/// wedges a `grid/<beadId>` branch forever, with no visible prior branch at
+/// the time of the failing attempt (the winner just created it). Throws a
+/// [StateError] naming both owners and the overlapping id(s) — LOUD, at
+/// composition time, before any scope ever mounts.
+void _assertDisjointSubstationOwnership(List<SubstationConfig> substations) {
+  final ownerOf = <String, String>{};
+  for (final config in substations) {
+    for (final owned in config.ownedSubstations) {
+      final priorOwner = ownerOf[owned];
+      if (priorOwner != null && priorOwner != config.substationId) {
+        throw StateError(
+          'composeStation: substation "$owned" is claimed by BOTH '
+          '"$priorOwner" and "${config.substationId}" — two SubstationScopes '
+          'would both mount (and provision a worktree for) the SAME bead. '
+          'Give each substation a disjoint `ownedSubstations` set; route a '
+          'bead to a different repo via `metadata.grid.root`, never by '
+          'widening ownership.',
+        );
+      }
+      ownerOf[owned] = config.substationId;
+    }
+  }
+}
+
 /// Assembles the M4 tree-engine [TreeRunWiring] from injectable seams — PURE
 /// composition (no process, no socket, no bead write).
 ///
@@ -1144,6 +1172,18 @@ TreeRunWiring composeStation({
   Seed Function(Seed root)? wrapRoot,
   AdoptProof? adoptProof,
 }) {
+  // Fail-closed disjointness guard (tg-e0p): two `SubstationConfig`s with
+  // OVERLAPPING `ownedSubstations` would mount TWO `SubstationScope`s over the
+  // very SAME bead — each independently minting a session and calling
+  // `provisionWorktree` for it. That double-provision race is exactly what
+  // wedges a `grid/<beadId>` branch forever (tg-rm5/tg-457: the loser's `git
+  // worktree add -b` hits "already exists" with no visible prior branch,
+  // because the winner created it a moment earlier). Refuse the composition
+  // LOUDLY instead of racing two scopes at runtime — a bead that needs to
+  // build a DIFFERENT repo opts in via `metadata.grid.root` (tg-7gm), never
+  // by widening ownership.
+  _assertDisjointSubstationOwnership(substations);
+
   final bridge = StationJoinBridge(work: work, state: state);
 
   // One config scope per substation, keyed by id so an add/remove mounts /
