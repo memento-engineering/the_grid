@@ -13,8 +13,11 @@
 /// try {
 ///   validateArming(args);                          // throws StationRefusal
 ///   final ws = discoverWorkspaces(
-///     workspacePath: args.workspacePath,
+///     workspaces: args.workspaces,
+///     defaultSubstation: args.substations.isNotEmpty ? args.substations.first : '',
 ///     stateWorkspacePath: args.stateWorkspacePath);
+///   // ws.work is a Map<String, BeadsWorkspace> (tg-nsj) — buildControllers
+///   // fans N LOCAL stores into ONE FederatedSnapshotSource (D-F1).
 ///   sources = await buildControllers(
 ///     work: ws.work, state: ws.state, noSql: args.noSql);
 ///   final live = await buildLiveWiring(args: args, sources: sources);
@@ -160,13 +163,19 @@ void addStationFlags(ArgParser parser) {
           'entry that does not carry its own @head, overriding the probed '
           'origin/HEAD. Omit to probe.',
     )
-    ..addOption(
+    ..addMultiOption(
       'workspace',
       abbr: 'w',
       help:
-          'The beads workspace to read ready work from (a dir at or above a '
-          '`.beads/`). Defaults to discovery from the cwd; read-only under '
-          '--dry-run.',
+          'A LOCAL beads workspace to read ready work from (repeatable, '
+          'tg-nsj): `--workspace <substation>=<path>` registers <path> under '
+          '<substation> — the SAME `<name>=<path>` pairing `--root` uses '
+          '(one grammar, one join key). Bare `--workspace <path>` (no `=`) '
+          'is the single-store shorthand — back-compatible: registers under '
+          'the first --substation. N stores fan into ONE FederatedSnapshotSource '
+          '(D-F1) — a remote substation is never a member (D-A2; LOCAL stores '
+          'only). Omit entirely to discover ONE store from the cwd (a dir at '
+          'or above a `.beads/`); read-only under --dry-run.',
     )
     ..addOption(
       'state-workspace',
@@ -309,6 +318,40 @@ class RootSpec {
   String toString() => 'RootSpec($path${head != null ? '@$head' : ''})';
 }
 
+/// Parses one `--workspace` value: `<substation>=<path>` (repeatable,
+/// tg-nsj), or a bare `<path>` (the single-store shorthand — registered under
+/// [defaultName]). Mirrors `--root`'s pairing grammar ([RootSpec.parse]) minus
+/// the `@head` suffix — a beads workspace carries no branch. Throws
+/// [FormatException] on a malformed registration (an explicit empty name, or
+/// an empty path).
+MapEntry<String, String> parseWorkspaceSpec(
+  String raw, {
+  required String defaultName,
+}) {
+  final eq = raw.indexOf('=');
+  if (eq < 0) {
+    if (raw.trim().isEmpty) {
+      throw FormatException(
+        'grid run: malformed --workspace "$raw" — empty path',
+      );
+    }
+    return MapEntry(defaultName, raw);
+  }
+  final name = raw.substring(0, eq);
+  final path = raw.substring(eq + 1);
+  if (name.trim().isEmpty) {
+    throw FormatException(
+      'grid run: malformed --workspace "$raw" — empty name before "="',
+    );
+  }
+  if (path.trim().isEmpty) {
+    throw FormatException(
+      'grid run: malformed --workspace "$raw" — empty path after "="',
+    );
+  }
+  return MapEntry(name, path);
+}
+
 /// The parsed standard station inputs — a plain value an asset runner builds
 /// from its [ArgResults] (or constructs directly in a test).
 class StationArgs {
@@ -326,7 +369,14 @@ class StationArgs {
     )
     String? rootPath,
     this.head,
-    this.workspacePath,
+    Map<String, String> workspaces = const <String, String>{},
+    @Deprecated(
+      'Reinstated ONLY as a back-compat alias (tg-nsj) so a caller still '
+      'constructing `StationArgs(workspacePath: ...)` compiles unchanged '
+      'until it migrates. Use `workspaces` (`--workspace <name>=<path>`) for '
+      'new code — see the [workspaces] getter doc for the fold.',
+    )
+    String? workspacePath,
     this.stateWorkspacePath,
     this.stateSubstation,
     this.targetBeads = const {},
@@ -339,7 +389,9 @@ class StationArgs {
     this.controlPort = 0,
     this.maxAgents = kDefaultMaxConcurrentWork,
   }) : _roots = roots,
-       _rootPath = rootPath;
+       _rootPath = rootPath,
+       _workspaces = workspaces,
+       _workspacePath = workspacePath;
 
   /// Parses the standard flags added by [addStationFlags]. Throws
   /// [FormatException] on a malformed/duplicate `--root` registration (the
@@ -365,12 +417,27 @@ class StationArgs {
       }
       roots[entry.key] = entry.value;
     }
+    final workspaces = <String, String>{};
+    for (final raw in args.multiOption('workspace')) {
+      if (raw.trim().isEmpty) continue;
+      final entry = parseWorkspaceSpec(
+        raw,
+        defaultName: substations.isNotEmpty ? substations.first : '',
+      );
+      if (workspaces.containsKey(entry.key)) {
+        throw FormatException(
+          'grid run: --workspace "$raw" registers name "${entry.key}" more '
+          'than once',
+        );
+      }
+      workspaces[entry.key] = entry.value;
+    }
     return StationArgs(
       substations: substations,
       provider: RuntimeProviderKind.parse(args.option('provider')),
       roots: roots,
       head: args.option('head'),
-      workspacePath: args.option('workspace'),
+      workspaces: workspaces,
       stateWorkspacePath: args.option('state-workspace'),
       stateSubstation: args.option('state-workspace') == null
           ? null
@@ -423,8 +490,30 @@ class StationArgs {
   /// The assigned base branch worktrees cut from (null ⇒ probe origin/HEAD).
   final String? head;
 
-  /// The work workspace to read from (null ⇒ discover from cwd).
-  final String? workspacePath;
+  final Map<String, String> _workspaces;
+  final String? _workspacePath;
+
+  /// The registered LOCAL work workspaces (tg-nsj), keyed by substation id —
+  /// the join key `--root`/`--substation` also use. EMPTY ⇒ discover ONE
+  /// implicit workspace from the cwd (pre-federation behavior, unchanged).
+  ///
+  /// Folds the deprecated [workspacePath] alias in under the FIRST
+  /// substation's name (or `''` when [substations] is empty) — but only when
+  /// non-null AND no explicit `workspaces` entry already claims that name (an
+  /// explicit registration always wins), mirroring [roots]'s fold of
+  /// [rootPath].
+  Map<String, String> get workspaces {
+    final legacy = _workspacePath;
+    if (legacy == null) return _workspaces;
+    final name = substations.isNotEmpty ? substations.first : '';
+    if (_workspaces.containsKey(name)) return _workspaces;
+    return {..._workspaces, name: legacy};
+  }
+
+  /// DEPRECATED (tg-nsj) — the single legacy workspace path, reinstated only
+  /// as a back-compat alias over [workspaces] (see its doc for the fold).
+  @Deprecated('Use `workspaces` (`--workspace <name>=<path>`).')
+  String? get workspacePath => _workspacePath;
 
   /// The_grid-owned state workspace (A36/A37); null ⇒ no split store.
   final String? stateWorkspacePath;
@@ -555,17 +644,39 @@ void validateArming(
 
 /// Discovers the work (and optional state) beads workspaces. Throws a
 /// [StationRefusal] (exit 1) when a named workspace cannot be found.
-({BeadsWorkspace work, BeadsWorkspace? state}) discoverWorkspaces({
-  String? workspacePath,
+///
+/// [workspaces] is the tg-nsj federation registration (substation id → its
+/// LOCAL beads workspace path), mirroring [StationArgs.workspaces]. EMPTY ⇒
+/// the pre-federation shape: ONE implicit workspace discovered from the cwd,
+/// keyed under [defaultSubstation] (the caller's first owned substation, or
+/// `''`) — byte-identical to the single-workspace behavior this generalizes.
+({Map<String, BeadsWorkspace> work, BeadsWorkspace? state}) discoverWorkspaces({
+  Map<String, String> workspaces = const <String, String>{},
+  String defaultSubstation = '',
   String? stateWorkspacePath,
 }) {
-  final work = BeadsWorkspace.discover(start: workspacePath);
-  if (work == null) {
-    throw StationRefusal(
-      'grid run: no .beads/ workspace found from '
-      '${workspacePath ?? Directory.current.path}',
-      code: 1,
-    );
+  final work = <String, BeadsWorkspace>{};
+  if (workspaces.isEmpty) {
+    final ws = BeadsWorkspace.discover();
+    if (ws == null) {
+      throw StationRefusal(
+        'grid run: no .beads/ workspace found from ${Directory.current.path}',
+        code: 1,
+      );
+    }
+    work[defaultSubstation] = ws;
+  } else {
+    for (final entry in workspaces.entries) {
+      final ws = BeadsWorkspace.discover(start: entry.value);
+      if (ws == null) {
+        throw StationRefusal(
+          'grid run: no .beads/ workspace found for substation '
+          '"${entry.key}" from ${entry.value} (--workspace)',
+          code: 1,
+        );
+      }
+      work[entry.key] = ws;
+    }
   }
   BeadsWorkspace? state;
   if (stateWorkspacePath != null) {
@@ -638,23 +749,52 @@ class StationSources {
   Future<void> requery() async => _requery?.call();
 }
 
-/// Builds the LIVE controllers over the discovered workspaces (the M1 work axis
-/// + the split A36/A37 state axis), adapts both to [SnapshotSource], and wires
-/// the exploration host so a stock leonard can attach.
+/// Builds the LIVE controllers over the discovered workspaces (the M1 work
+/// axis — now N of them, tg-nsj — + the split A36/A37 state axis), adapts
+/// every one to [SnapshotSource], fans the N work runtimes into ONE
+/// [FederatedSnapshotSource] (D-F1), and wires the exploration host so a
+/// stock leonard can attach.
+///
+/// [onUnresolvedExternalDep] threads into the union's D-F2 guard (defaults to
+/// printing to stdout, matching [StationBeadWriter]'s own default refusal
+/// sink).
 Future<StationSources> buildControllers({
-  required BeadsWorkspace work,
+  required Map<String, BeadsWorkspace> work,
   BeadsWorkspace? state,
   bool noSql = false,
+  void Function(String message)? onUnresolvedExternalDep,
 }) async {
-  final bundle = await GridRuntimeFactory.build(
-    workspace: work,
-    preferSql: !noSql,
-  );
-  final workController = bundle.runtime;
-  final readPathName = bundle.readPath.name;
+  final bundles = <String, GridRuntimeBundle>{};
+  for (final entry in work.entries) {
+    bundles[entry.key] = await GridRuntimeFactory.build(
+      workspace: entry.value,
+      preferSql: !noSql,
+    );
+  }
+
+  final readPathName = bundles.length == 1
+      ? bundles.values.single.readPath.name
+      : bundles.entries
+            .map((e) => '${e.key}=${e.value.readPath.name}')
+            .join(', ');
+
+  // The exploration host attaches to ONE representative controller (the
+  // first-registered store) — leonard debugging the_grid's own kernel, not
+  // (yet) a per-store multi-host surface; a documented limitation, not a
+  // federation concern.
+  final primary = bundles.values.first.runtime;
   final host = GridExplorationHost(
-    workController,
-    plugin: GridControllerPlugin(workController, readPath: () => readPathName),
+    primary,
+    plugin: GridControllerPlugin(primary, readPath: () => readPathName),
+  );
+
+  final union = FederatedSnapshotSource(
+    {
+      for (final e in bundles.entries)
+        e.key: RuntimeSnapshotSource(e.value.runtime),
+    },
+    onUnresolvedExternalDep:
+        onUnresolvedExternalDep ?? (m) => stdout.writeln(m),
   );
 
   GridControllerRuntime? stateController;
@@ -672,22 +812,23 @@ Future<StationSources> buildControllers({
 
   final sc = stateController;
   return StationSources(
-    work: RuntimeSnapshotSource(workController),
+    work: union,
     state: stateSource,
     host: host,
     readPathName: readPathName,
     stateWorkspace: state,
     start: () async {
-      await workController.start();
+      await Future.wait(bundles.values.map((b) => b.runtime.start()));
       if (sc != null) await sc.start();
     },
     shutdown: () async {
       if (shutdownState != null) await shutdownState();
-      await bundle.shutdown();
+      await Future.wait(bundles.values.map((b) => b.shutdown()));
+      await union.dispose();
     },
     requery: () async {
       await Future.wait(<Future<void>>[
-        workController.requery(),
+        for (final b in bundles.values) b.runtime.requery(),
         if (sc != null) sc.requery(),
       ]);
     },
