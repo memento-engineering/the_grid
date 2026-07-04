@@ -1,10 +1,12 @@
 /// The capability MODEL (ADR-0011 D6): typed capability **facts**, per-fact
 /// composition (the cascade math), **containment** matching, toolchain
-/// **probes**, and **TTL re-validation** of a held lease.
+/// **probes**, and **TTL re-validation** of a held lease. Moved into the engine
+/// SDK from `grid_federation` (the honesty-pass D-A9/D-B5 split, 2026-07-03):
+/// the engine knows federation in CONCEPT only, and this is the transport-free
+/// half of it.
 ///
-/// This is the engine-free half of the model. The literal `InheritedSeed`
-/// cascade NODE — config nodes as ancestors of work nodes, nearest-wins — is a
-/// thin consumer wrapper realized in a later track over `grid_engine`; here we
+/// The literal `InheritedSeed` cascade NODE — config nodes as ancestors of work
+/// nodes, nearest-wins — is a later consumer wrapper over this model; here we
 /// deliver only the pure cascade MATH ([CapabilityFacts.compose] +
 /// [CapabilityFacts.deriveTargets]), the matching relation
 /// ([CapabilityFacts.matches]), the probe seam ([CapabilityProbe]), and the
@@ -98,7 +100,7 @@ class CapabilityFacts {
   /// facts UNION. Pure — returns a fresh bag, mutating neither input.
   ///
   /// This is the cascade MATH; stacking ancestors in tree order is the future
-  /// `InheritedSeed` node's job (a later track), not this package's.
+  /// `InheritedSeed` node's job (a later track), not this file's.
   static CapabilityFacts compose(CapabilityFacts parent, CapabilityFacts child) {
     final scalars = {...parent.scalars, ...child.scalars}; // child overrides
     final sets = <String, Set<String>>{};

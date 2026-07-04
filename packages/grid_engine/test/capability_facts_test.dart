@@ -3,7 +3,7 @@
 // the dynamic toolchain probe (driven by an INJECTED tool query — no real
 // toolchain), and TTL re-validation. The headline is the DYNAMIC-SHIFT test:
 // a probe loses a capability → re-match flips → the re-validator reports stale.
-import 'package:grid_federation/grid_federation.dart';
+import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
 /// A [ToolchainQuery] backed by a static table (exe → `--version` output, or

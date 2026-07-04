@@ -1,52 +1,15 @@
-/// The lessee side of the bus — the **pluggable, kind-agnostic transport seam**.
-/// [StationClient] is the abstract bus (the coordination operations a peer
-/// performs); [HttpStationClient] is impl #1 over HTTP (this pass). A future
-/// MQTT/WS bus implements the same interface, so nothing above the seam changes
-/// (Nico, 2026-06-29).
-///
-/// The seam carries only bus-level coordination types ([Presence], [LeaseRequest],
-/// [LeaseGrant]) plus an OPAQUE dispatch envelope ([Map]) — no domain/kind
-/// specifics leak in (ADR-0011 D3). The lessee holds the [LeaseGrant], so the
-/// fencing token rides every dispatch/release automatically.
+/// The lessee side of the bus — impl #1 of the [StationClient] transport seam
+/// (ADR-0011; the seam itself + the wire value types now live in
+/// `grid_engine`'s SDK, the honesty-pass D-A9/D-B5 split, 2026-07-03: the
+/// engine knows federation in CONCEPT only). [HttpStationClient] is the HTTP
+/// impl (this pass). A future MQTT/WS bus implements the same [StationClient]
+/// interface, so nothing above the seam changes (Nico, 2026-06-29).
 library;
 
 import 'dart:convert';
 import 'dart:io';
 
-import 'protocol.dart';
-
-/// The cross-station bus, lessee view: presence, lease, dispatch, release.
-abstract interface class StationClient {
-  /// Reads the peer's presence + free capacity. (An observation.)
-  Future<Presence> presence();
-
-  /// Requests one slot; throws [LeaseDeniedException] on refusal. (An act.)
-  Future<LeaseGrant> requestLease(LeaseRequest req);
-
-  /// Runs an opaque [payload] on the slot held by [lease], propagating its
-  /// fencing token. Returns the opaque result envelope. Throws
-  /// [LeaseInvalidException] if the lease is gone or the token is stale.
-  ///
-  /// [idempotencyKey] (when set) lets the owner dedup retries: the same key
-  /// returns the SAME result, never a second run.
-  Future<Map<String, dynamic>> dispatch(
-    LeaseGrant lease,
-    Map<String, dynamic> payload, {
-    String idempotencyKey,
-  });
-
-  /// Sends a liveness HEARTBEAT for [lease], propagating its fencing token, so the
-  /// owner does not reap the held slot as disconnected. Throws
-  /// [LeaseInvalidException] if the lease is gone or the token is stale. (An act.)
-  Future<void> heartbeat(LeaseGrant lease);
-
-  /// Releases the slot held by [lease] (idempotent), propagating its fencing
-  /// token so a stale holder cannot free a reissued slot.
-  Future<void> release(LeaseGrant lease);
-
-  /// Releases any held transport resources.
-  Future<void> close();
-}
+import 'package:grid_engine/grid_engine.dart';
 
 /// HTTP implementation of [StationClient] (impl #1).
 class HttpStationClient implements StationClient {
