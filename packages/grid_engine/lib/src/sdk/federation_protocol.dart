@@ -1,9 +1,10 @@
 /// The TRANSPORT-FREE federation contracts (ADR-0011 D3/D7/D8; the honesty-pass
 /// D-A9/D-B5 split, 2026-07-03): the wire value types + the abstract bus seam
 /// for cross-station resource leasing. The engine knows federation in CONCEPT
-/// only — no transport, no MQTT, no HTTP. `grid_federation` supplies the impls
-/// ([StationServer]/[HttpStationClient]/[LeaseManager] — the owner-authoritative
-/// arbitration policy) over these same types; a future bus (MQTT/WS) implements
+/// only — no transport, no MQTT, no HTTP. power_station's
+/// `federated_grid_assets` supplies the impls ([StationServer]/
+/// [HttpStationClient]/[LeaseManager] — the owner-authoritative arbitration
+/// policy) over these same types; a future bus (MQTT/WS) implements
 /// [StationClient] without this file changing.
 ///
 /// The bus seam is **kind-agnostic** (ADR-0011 D3/D7): [Presence], [LeaseRequest]
@@ -226,9 +227,9 @@ class LeaseGrant {
 
 /// The cross-station bus, lessee view: presence, lease, dispatch, release. The
 /// **pluggable, kind-agnostic transport seam** (ADR-0011): impl #1
-/// (`HttpStationClient`, over HTTP) lives in `grid_federation`; a future
-/// MQTT/WS bus implements this same interface, so nothing above the seam
-/// changes (Nico, 2026-06-29).
+/// (`HttpStationClient`, over HTTP) lives in power_station's
+/// `federated_grid_assets`; a future MQTT/WS bus implements this same
+/// interface, so nothing above the seam changes (Nico, 2026-06-29).
 ///
 /// The seam carries only these bus-level coordination types plus an OPAQUE
 /// dispatch envelope ([Map]) — no domain/kind specifics leak in (ADR-0011 D3).

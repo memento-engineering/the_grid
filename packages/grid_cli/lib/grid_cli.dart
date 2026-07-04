@@ -11,7 +11,9 @@
 /// `discoverWorkspaces` → `buildControllers` → `buildLiveWiring` → its OWN
 /// `ServiceBundle` → `composeStation` (+ `wrapRoot` for its ambient config
 /// providers) → `driveStation`. (`CodeRunCommand` lives in `power_station`'s
-/// `grid_assets`; memento's assembled runner is `space_station`.)
+/// `grid_assets`; `ServeCommand`/`LeaseCommand` live in its
+/// `federated_grid_assets` (AL-5b, D-A9); memento's assembled runner is
+/// `space_station`.)
 library;
 
 // The station-runner library pieces (the composition inversion, 2026-07-02).
@@ -24,6 +26,4 @@ export 'src/station_runner.dart';
 export 'src/watch_command.dart';
 export 'src/gate_command.dart';
 export 'src/rework_command.dart';
-export 'src/serve_command.dart';
-export 'src/lease_command.dart';
 export 'src/demo_command.dart';

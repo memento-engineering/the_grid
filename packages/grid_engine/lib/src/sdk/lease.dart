@@ -8,8 +8,8 @@
 /// the engine names no bus. A [LeaseCapability] carries an OPAQUE handle type `H`
 /// (the concrete lease binding — e.g. a federation `(StationClient, LeaseGrant)`,
 /// or a local `LeaseManager` slot) and wires the acquire/dispatch/heartbeat/
-/// release through its own hooks; `grid_federation` + the assets supply the
-/// transport, the engine never sees it.
+/// release through its own hooks; power_station's `federated_grid_assets` + the
+/// assets supply the transport, the engine never sees it.
 ///
 /// The four lifecycle verbs (D4), with the handle held as a [LeaseAllocation]
 /// instance field:
