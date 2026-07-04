@@ -31,6 +31,7 @@ library;
 
 import 'dart:io';
 
+import 'package:json_annotation/json_annotation.dart';
 import 'package:meta/meta.dart';
 
 /// The `system-os` fact key — the operating system(s) a station runs
@@ -344,6 +345,27 @@ class RevalidationResult {
   @override
   String toString() =>
       'RevalidationResult(stale: $stale, currentFacts: $currentFacts)';
+}
+
+/// Bridges [CapabilityFacts] into freezed/json_serializable's codec (the
+/// `CapabilityStep.requires` field, the honesty-pass D-B5, 2026-07-03) so a
+/// step's declared per-requirement [CapabilityFacts] round-trips through the
+/// SAME `Circuit`/`CircuitStep` JSON shape every other field already does.
+/// Reuses [CapabilityFacts.toProfile]/[fromProfile] — the identical wire form
+/// [Presence.profile] carries — rather than inventing a second serialization.
+/// Null-safe both ways: an undeclared requirement (the overwhelmingly common
+/// case — most steps resolve locally) round-trips as `null`, never `{}`.
+class CapabilityFactsConverter
+    implements JsonConverter<CapabilityFacts?, Map<String, dynamic>?> {
+  /// Const-constructible so it can annotate a freezed factory field.
+  const CapabilityFactsConverter();
+
+  @override
+  CapabilityFacts? fromJson(Map<String, dynamic>? json) =>
+      json == null ? null : CapabilityFacts.fromProfile(json);
+
+  @override
+  Map<String, dynamic>? toJson(CapabilityFacts? object) => object?.toProfile();
 }
 
 /// Re-validates a held lease against CURRENT capabilities at TTL renewal

@@ -403,6 +403,33 @@ void main() {
       expect(back, isA<CapabilityStep>());
     });
 
+    test('a CapabilityStep with a declared requires round-trips (the D-B5 '
+        'claim contract)', () {
+      const step = CapabilityStep(
+        stepId: 'follower',
+        capabilityId: 'burn-follower',
+        requires: CapabilityFacts(
+          sets: {
+            kSystemOs: {'linux'},
+            kRadio: {'ble'},
+          },
+        ),
+      );
+      final back = CircuitStep.fromJson(_roundTrip(step.toJson()));
+      expect(back, step);
+      expect(back, isA<CapabilityStep>());
+      expect((back as CapabilityStep).requires, step.requires);
+    });
+
+    test('a CapabilityStep with NO declared requires round-trips requires as '
+        'null (never an empty map)', () {
+      const step = CapabilityStep(stepId: 'agent', capabilityId: 'agent');
+      final json = step.toJson();
+      expect(json['requires'], isNull);
+      final back = CircuitStep.fromJson(_roundTrip(json));
+      expect((back as CapabilityStep).requires, isNull);
+    });
+
     test('a SubCircuitStep round-trips to the right union case', () {
       const step = SubCircuitStep(
         stepId: 's',

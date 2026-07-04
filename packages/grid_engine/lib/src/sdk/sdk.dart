@@ -11,11 +11,14 @@
 /// [federation_protocol.dart] + [capability_facts.dart] are the TRANSPORT-FREE
 /// federation contracts (ADR-0011, the honesty-pass D-A9/D-B5 split,
 /// 2026-07-03) — power_station's `federated_grid_assets` supplies the transport
-/// impls over these same types.
+/// impls over these same types. [claim.dart] is the pure D-A3 claim predicate
+/// over them (AL-6a, D-B5 hook #1) — an asset claim capability's whole input;
+/// still no transport, no bus.
 library;
 
 export 'allocation.dart';
 export 'capability_facts.dart';
+export 'claim.dart';
 export 'cursor.dart';
 export 'circuit.dart';
 export 'federation_protocol.dart';

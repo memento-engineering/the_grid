@@ -40,6 +40,7 @@ export 'src/circuit/circuit_resolver.dart';
 export 'src/circuit/circuit_scope.dart';
 export 'src/circuit/session_handle.dart';
 export 'src/circuit/session_scope.dart';
+export 'src/circuit/unclaimed_frontier.dart';
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';

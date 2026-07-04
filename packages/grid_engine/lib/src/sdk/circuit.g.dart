@@ -47,6 +47,9 @@ CapabilityStep _$CapabilityStepFromJson(
   resources: json['resources'] == null
       ? null
       : ResourceRequest.fromJson(json['resources'] as Map<String, dynamic>),
+  requires: const CapabilityFactsConverter().fromJson(
+    json['requires'] as Map<String, dynamic>?,
+  ),
   $type: json['type'] as String?,
 );
 
@@ -58,6 +61,7 @@ Map<String, dynamic> _$CapabilityStepToJson(CapabilityStep instance) =>
       'dependsOn': instance.dependsOn.toList(),
       'kind': _$StepKindEnumMap[instance.kind]!,
       'resources': instance.resources,
+      'requires': const CapabilityFactsConverter().toJson(instance.requires),
       'type': instance.$type,
     };
 
