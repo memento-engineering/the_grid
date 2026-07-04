@@ -225,6 +225,69 @@ class LeaseGrant {
   );
 }
 
+/// The keys [leaseGrantToResultPayload] writes / [leaseGrantFromResultPayload]
+/// reads — a granted lease's durable record, string-typed for the generic
+/// step-result payload (`Map<String, String>`).
+abstract final class ClaimResultKeys {
+  /// The granted [LeaseGrant.leaseId].
+  static const leaseId = 'leaseId';
+
+  /// The granting [LeaseGrant.station] — WHO claimed this requirement.
+  static const claimedBy = 'claimedBy';
+
+  /// The granted [LeaseGrant.fencingToken], stringified.
+  static const fencingToken = 'fencingToken';
+
+  /// The granted [LeaseGrant.kind].
+  static const kind = 'kind';
+}
+
+/// **The durable claim-recording contract (D-B5 hook #4)** — bridges a granted
+/// [LeaseGrant] into the step-result payload a [Capability]'s positive
+/// terminal (`Ok`/`AllocationReady`) already carries (`ADR-0006 D3`), so the
+/// EXISTING one bd write chokepoint durably records "who claimed this
+/// requirement" under the disjoint `grid.result.<nodePath>.*` namespace with
+/// **NO new write path**: a claim+lease `Capability`'s `dispatchOn` (or a
+/// daemon's `ready`) returns `Ok(leaseGrantToResultPayload(grant))` exactly
+/// like any other step recording a result (e.g. `land`'s `pr_url`) — the SAME
+/// merged write the cursor's terminal transition already makes (the Host
+/// persists it off-build, invariant 2). Claim-in-own-store (A37): this never
+/// touches the foreign work bead, only the_grid's OWN session bead.
+///
+/// [ttlSeconds]/[heartbeatSeconds] are deliberately NOT recorded — they govern
+/// the LIVE lease's renewal cadence, not the durable "who/what was claimed"
+/// record; a consumer re-derives them fresh from a live re-lease, never from
+/// history.
+Map<String, String> leaseGrantToResultPayload(LeaseGrant grant) => {
+  ClaimResultKeys.leaseId: grant.leaseId,
+  ClaimResultKeys.claimedBy: grant.station,
+  ClaimResultKeys.fencingToken: grant.fencingToken.toString(),
+  ClaimResultKeys.kind: grant.kind,
+};
+
+/// Reads a [LeaseGrant] back out of a step's recorded result [payload] (the
+/// read half of [leaseGrantToResultPayload]) — null when the payload carries
+/// no claim record (a locally-fulfilled step never writes these keys, or the
+/// step hasn't resolved yet). The returned grant's `ttlSeconds`/
+/// `heartbeatSeconds` are `0` (unrecorded by design — see
+/// [leaseGrantToResultPayload]); a consumer needing the live cadence re-leases
+/// rather than reading it from this durable record.
+LeaseGrant? leaseGrantFromResultPayload(Map<String, String> payload) {
+  final leaseId = payload[ClaimResultKeys.leaseId];
+  final claimedBy = payload[ClaimResultKeys.claimedBy];
+  final fencingToken = payload[ClaimResultKeys.fencingToken];
+  if (leaseId == null || claimedBy == null || fencingToken == null) {
+    return null;
+  }
+  return LeaseGrant(
+    leaseId: leaseId,
+    station: claimedBy,
+    ttlSeconds: 0,
+    fencingToken: int.tryParse(fencingToken) ?? 0,
+    kind: payload[ClaimResultKeys.kind] ?? kDefaultKind,
+  );
+}
+
 /// The cross-station bus, lessee view: presence, lease, dispatch, release. The
 /// **pluggable, kind-agnostic transport seam** (ADR-0011): impl #1
 /// (`HttpStationClient`, over HTTP) lives in power_station's

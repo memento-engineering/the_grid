@@ -14,6 +14,8 @@ library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import 'capability_facts.dart';
+
 part 'circuit.freezed.dart';
 part 'circuit.g.dart';
 
@@ -178,6 +180,19 @@ sealed class CircuitStep with _$CircuitStep {
 
     /// The per-leaf resource request (declared-now, honored-later — D-7).
     ResourceRequest? resources,
+
+    /// The per-leaf declared CAPABILITY REQUIREMENT (the honesty-pass D-A3/D-B5,
+    /// 2026-07-03) — e.g. `{system-os: linux, radio: ble}` (the Burn's
+    /// `Req macOS+BLE` / `Req Linux+BLE` split: ONE bead's fan-out is
+    /// PER-REQUIREMENT, never per-bead). Null/empty (the overwhelming default)
+    /// means "no declared requirement" — the step always resolves to its LOCAL
+    /// capability, today's P1-only behavior, unchanged. A non-empty [requires]
+    /// is checked by CONTAINMENT against the station's own [CapabilityFacts]
+    /// at the `CapabilityRegistry` resolution seam: a match still resolves
+    /// locally; a mismatch resolves to an asset-provided claim+lease capability
+    /// instead of a local spawn (local-vs-remote is a resolver decision — the
+    /// engine names no bus, D-B5).
+    @CapabilityFactsConverter() CapabilityFacts? requires,
   }) = CapabilityStep;
 
   /// A reentrant step inflated by the SAME inflater one level down.

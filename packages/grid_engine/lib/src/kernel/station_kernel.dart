@@ -5,7 +5,10 @@ import 'package:genesis_tree/genesis_tree.dart';
 import '../bridge/station_join_bridge.dart';
 import '../kernel/station_services.dart';
 import '../circuit/capability_registry.dart';
+import '../circuit/circuit_resolver.dart';
+import '../circuit/unclaimed_frontier.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
+import '../sdk/capability_facts.dart';
 import '../seeds/station_seed.dart';
 import '../seeds/substation_scope.dart';
 import 'session_resolver.dart';
@@ -34,6 +37,16 @@ class StationKernel {
   /// [clock] / [scheduleTimer] are the supervised-restart backoff seam (D-5/F1):
   /// the kernel owns the wall clock + the cooldown Timer (NEVER a Seed-owned
   /// timer), injectable so the re-poke is driven deterministically offline.
+  ///
+  /// [rootCircuitFor] + [onUnclaimedFrontier] wire the D-B5 hook #1 (the
+  /// unclaimed-frontier scan): [rootCircuitFor] is the SAME bead→circuit
+  /// policy the composed [resolver] roots the live tree with (a composer
+  /// passes the identical function to both — see `CircuitResolver`), and
+  /// [onUnclaimedFrontier], when supplied, is called once per reconciliation
+  /// phase (the baseline scan at [start] plus once per flush) with the
+  /// CURRENT station-wide unclaimed requirement set. Both default to null —
+  /// zero cost, and no behavior change, for a station composing no
+  /// federation asset.
   StationKernel({
     required this.bridge,
     required StationServices stationServices,
@@ -43,13 +56,19 @@ class StationKernel {
     Seed Function(Seed root)? wrapRoot,
     DateTime Function()? clock,
     Timer Function(Duration, void Function())? scheduleTimer,
+    RootCircuitFor? rootCircuitFor,
+    CapabilityFacts stationFacts = const CapabilityFacts(),
+    void Function(List<UnclaimedRequirement>)? onUnclaimedFrontier,
   }) : _stationServices = stationServices,
        _resolver = resolver,
        _substations = substations,
        _registry = registry,
        _wrapRoot = wrapRoot,
        _clock = clock ?? DateTime.now,
-       _scheduleTimer = scheduleTimer ?? Timer.new;
+       _scheduleTimer = scheduleTimer ?? Timer.new,
+       _rootCircuitFor = rootCircuitFor,
+       _stationFacts = stationFacts,
+       _onUnclaimedFrontier = onUnclaimedFrontier;
 
   /// The join bridge feeding the work axis — the kernel owns its lifecycle
   /// (started in [start], disposed in [dispose]).
@@ -73,6 +92,19 @@ class StationKernel {
 
   final DateTime Function() _clock;
   final Timer Function(Duration, void Function()) _scheduleTimer;
+
+  /// The bead→root-circuit policy (D-B5 hook #1) — null skips the unclaimed-
+  /// frontier scan entirely (no asset composed to consume it).
+  final RootCircuitFor? _rootCircuitFor;
+
+  /// This station's own capability profile, checked by containment against
+  /// each unclaimed candidate's declared requirement (ADR-0011 D6). Defaults
+  /// to empty.
+  final CapabilityFacts _stationFacts;
+
+  /// The composed asset's sink for the station-wide unclaimed requirement set
+  /// (D-B5 hook #1) — null means no federation asset is composed.
+  final void Function(List<UnclaimedRequirement>)? _onUnclaimedFrontier;
 
   final TreeOwner _owner = TreeOwner();
   bool _started = false;
@@ -115,6 +147,10 @@ class StationKernel {
     // cycle below, so the kernel adds NO persistent notifier listener (WorkList
     // stays the sole observer + dirtier, invariant 1).
     _scanCooldowns();
+    // The baseline unclaimed-frontier scan (D-B5 hook #1) — same posture as
+    // the cooldown scan above: computed once at start, then re-scanned once
+    // per flush below, off the SAME bridge.latest the kernel already holds.
+    _scanUnclaimedFrontier();
   }
 
   void _scheduleFlush() {
@@ -128,6 +164,10 @@ class StationKernel {
       // new cooldown to arm (or a re-keyed step may clear one). No persistent
       // subscription — the kernel already owns this cycle.
       _scanCooldowns();
+      // The unclaimed-frontier re-scan (D-B5 hook #1) — "the end of a
+      // reconciliation phase": whatever this flush left unfulfillable is what
+      // a composed claim asset sees next.
+      _scanUnclaimedFrontier();
     });
   }
 
@@ -154,6 +194,29 @@ class StationKernel {
     if (earliest != null) {
       _cooldownTimer = _scheduleTimer(earliest.difference(now), _repokeCooldown);
     }
+  }
+
+  /// Computes + hands the STATION-WIDE unclaimed requirement set to
+  /// [_onUnclaimedFrontier] (D-B5 hook #1) — a no-op unless BOTH a
+  /// [_rootCircuitFor] policy and an [_onUnclaimedFrontier] sink are wired
+  /// (no federation asset composed ⇒ nothing to compute, nothing to call).
+  /// Reads the PRODUCER-side [bridge.latest] — the exact same snapshot the
+  /// cooldown scan reads — never a sync pull off the notifier (D-H rule 2).
+  void _scanUnclaimedFrontier() {
+    final onUnclaimed = _onUnclaimedFrontier;
+    final rootCircuitFor = _rootCircuitFor;
+    final registry = _registry;
+    if (onUnclaimed == null || rootCircuitFor == null || registry == null) {
+      return;
+    }
+    onUnclaimed(
+      stationUnclaimedFrontier(
+        bridge.latest,
+        rootCircuitFor: rootCircuitFor,
+        registry: registry,
+        stationFacts: _stationFacts,
+      ),
+    );
   }
 
   /// A cooldown expired — re-emit a FRESH-instance copy of the latest snapshot

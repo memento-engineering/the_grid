@@ -277,6 +277,29 @@ void main() {
     });
   });
 
+  group('CapabilityFactsConverter (the CircuitStep.requires JSON bridge)', () {
+    test('null round-trips as null (the overwhelming default — no declared '
+        'requirement)', () {
+      const c = CapabilityFactsConverter();
+      expect(c.fromJson(null), isNull);
+      expect(c.toJson(null), isNull);
+    });
+
+    test('a populated CapabilityFacts round-trips via toProfile/fromProfile',
+        () {
+      const c = CapabilityFactsConverter();
+      const facts = CapabilityFacts(
+        sets: {
+          kSystemOs: {'linux'},
+          kRadio: {'ble'},
+        },
+      );
+      final json = c.toJson(facts);
+      expect(json, isNotNull);
+      expect(c.fromJson(json), facts);
+    });
+  });
+
   group('ToolchainProbe (injected query — offline, deterministic)', () {
     test('emits system-os from the host + host-default dart/flutter targets',
         () async {

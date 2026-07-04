@@ -723,10 +723,10 @@ return subCircuit(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)?  capability,TResult Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)?  subCircuit,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources, @CapabilityFactsConverter()  CapabilityFacts? requires)?  capability,TResult Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)?  subCircuit,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case CapabilityStep() when capability != null:
-return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubCircuitStep() when subCircuit != null:
+return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources,_that.requires);case SubCircuitStep() when subCircuit != null:
 return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);case _:
   return orElse();
 
@@ -745,10 +745,10 @@ return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);cas
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)  capability,required TResult Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)  subCircuit,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources, @CapabilityFactsConverter()  CapabilityFacts? requires)  capability,required TResult Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)  subCircuit,}) {final _that = this;
 switch (_that) {
 case CapabilityStep():
-return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubCircuitStep():
+return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources,_that.requires);case SubCircuitStep():
 return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -763,10 +763,10 @@ return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources)?  capability,TResult? Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)?  subCircuit,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String stepId,  String capabilityId,  Map<String, String> params,  Set<String> dependsOn,  StepKind kind,  ResourceRequest? resources, @CapabilityFactsConverter()  CapabilityFacts? requires)?  capability,TResult? Function( String stepId,  String circuitId,  Map<String, String> params,  Set<String> dependsOn)?  subCircuit,}) {final _that = this;
 switch (_that) {
 case CapabilityStep() when capability != null:
-return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources);case SubCircuitStep() when subCircuit != null:
+return capability(_that.stepId,_that.capabilityId,_that.params,_that.dependsOn,_that.kind,_that.resources,_that.requires);case SubCircuitStep() when subCircuit != null:
 return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);case _:
   return null;
 
@@ -779,7 +779,7 @@ return subCircuit(_that.stepId,_that.circuitId,_that.params,_that.dependsOn);cas
 @JsonSerializable()
 
 class CapabilityStep extends CircuitStep {
-  const CapabilityStep({required this.stepId, required this.capabilityId, final  Map<String, String> params = const <String, String>{}, final  Set<String> dependsOn = const <String>{}, this.kind = StepKind.job, this.resources, final  String? $type}): _params = params,_dependsOn = dependsOn,$type = $type ?? 'capability',super._();
+  const CapabilityStep({required this.stepId, required this.capabilityId, final  Map<String, String> params = const <String, String>{}, final  Set<String> dependsOn = const <String>{}, this.kind = StepKind.job, this.resources, @CapabilityFactsConverter() this.requires, final  String? $type}): _params = params,_dependsOn = dependsOn,$type = $type ?? 'capability',super._();
   factory CapabilityStep.fromJson(Map<String, dynamic> json) => _$CapabilityStepFromJson(json);
 
 /// The step's id (unique within its circuit).
@@ -811,6 +811,18 @@ class CapabilityStep extends CircuitStep {
 @JsonKey() final  StepKind kind;
 /// The per-leaf resource request (declared-now, honored-later — D-7).
  final  ResourceRequest? resources;
+/// The per-leaf declared CAPABILITY REQUIREMENT (the honesty-pass D-A3/D-B5,
+/// 2026-07-03) — e.g. `{system-os: linux, radio: ble}` (the Burn's
+/// `Req macOS+BLE` / `Req Linux+BLE` split: ONE bead's fan-out is
+/// PER-REQUIREMENT, never per-bead). Null/empty (the overwhelming default)
+/// means "no declared requirement" — the step always resolves to its LOCAL
+/// capability, today's P1-only behavior, unchanged. A non-empty [requires]
+/// is checked by CONTAINMENT against the station's own [CapabilityFacts]
+/// at the `CapabilityRegistry` resolution seam: a match still resolves
+/// locally; a mismatch resolves to an asset-provided claim+lease capability
+/// instead of a local spawn (local-vs-remote is a resolver decision — the
+/// engine names no bus, D-B5).
+@CapabilityFactsConverter() final  CapabilityFacts? requires;
 
 @JsonKey(name: 'type')
 final String $type;
@@ -829,16 +841,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is CapabilityStep&&(identical(other.stepId, stepId) || other.stepId == stepId)&&(identical(other.capabilityId, capabilityId) || other.capabilityId == capabilityId)&&const DeepCollectionEquality().equals(other._params, _params)&&const DeepCollectionEquality().equals(other._dependsOn, _dependsOn)&&(identical(other.kind, kind) || other.kind == kind)&&(identical(other.resources, resources) || other.resources == resources));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is CapabilityStep&&(identical(other.stepId, stepId) || other.stepId == stepId)&&(identical(other.capabilityId, capabilityId) || other.capabilityId == capabilityId)&&const DeepCollectionEquality().equals(other._params, _params)&&const DeepCollectionEquality().equals(other._dependsOn, _dependsOn)&&(identical(other.kind, kind) || other.kind == kind)&&(identical(other.resources, resources) || other.resources == resources)&&(identical(other.requires, requires) || other.requires == requires));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,stepId,capabilityId,const DeepCollectionEquality().hash(_params),const DeepCollectionEquality().hash(_dependsOn),kind,resources);
+int get hashCode => Object.hash(runtimeType,stepId,capabilityId,const DeepCollectionEquality().hash(_params),const DeepCollectionEquality().hash(_dependsOn),kind,resources,requires);
 
 @override
 String toString() {
-  return 'CircuitStep.capability(stepId: $stepId, capabilityId: $capabilityId, params: $params, dependsOn: $dependsOn, kind: $kind, resources: $resources)';
+  return 'CircuitStep.capability(stepId: $stepId, capabilityId: $capabilityId, params: $params, dependsOn: $dependsOn, kind: $kind, resources: $resources, requires: $requires)';
 }
 
 
@@ -849,7 +861,7 @@ abstract mixin class $CapabilityStepCopyWith<$Res> implements $CircuitStepCopyWi
   factory $CapabilityStepCopyWith(CapabilityStep value, $Res Function(CapabilityStep) _then) = _$CapabilityStepCopyWithImpl;
 @override @useResult
 $Res call({
- String stepId, String capabilityId, Map<String, String> params, Set<String> dependsOn, StepKind kind, ResourceRequest? resources
+ String stepId, String capabilityId, Map<String, String> params, Set<String> dependsOn, StepKind kind, ResourceRequest? resources,@CapabilityFactsConverter() CapabilityFacts? requires
 });
 
 
@@ -866,7 +878,7 @@ class _$CapabilityStepCopyWithImpl<$Res>
 
 /// Create a copy of CircuitStep
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? stepId = null,Object? capabilityId = null,Object? params = null,Object? dependsOn = null,Object? kind = null,Object? resources = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? stepId = null,Object? capabilityId = null,Object? params = null,Object? dependsOn = null,Object? kind = null,Object? resources = freezed,Object? requires = freezed,}) {
   return _then(CapabilityStep(
 stepId: null == stepId ? _self.stepId : stepId // ignore: cast_nullable_to_non_nullable
 as String,capabilityId: null == capabilityId ? _self.capabilityId : capabilityId // ignore: cast_nullable_to_non_nullable
@@ -874,7 +886,8 @@ as String,params: null == params ? _self._params : params // ignore: cast_nullab
 as Map<String, String>,dependsOn: null == dependsOn ? _self._dependsOn : dependsOn // ignore: cast_nullable_to_non_nullable
 as Set<String>,kind: null == kind ? _self.kind : kind // ignore: cast_nullable_to_non_nullable
 as StepKind,resources: freezed == resources ? _self.resources : resources // ignore: cast_nullable_to_non_nullable
-as ResourceRequest?,
+as ResourceRequest?,requires: freezed == requires ? _self.requires : requires // ignore: cast_nullable_to_non_nullable
+as CapabilityFacts?,
   ));
 }
 
