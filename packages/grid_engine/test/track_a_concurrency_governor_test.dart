@@ -101,6 +101,42 @@ Seed _root({
   return root;
 }
 
+/// Two sibling substations under one `Station`, sharing the SAME ambient
+/// [JoinedSnapshotNotifier] and [StationServices] — the shape needed to prove
+/// the station-wide cap is a TOTAL across substations, not a per-substation
+/// ceiling applied independently to each.
+Seed _twoSubstationRoot({
+  required JoinedSnapshotNotifier joined,
+  required SessionResolver resolver,
+  required SubstationConfigNotifier substationA,
+  required SubstationConfigNotifier substationB,
+  required StationServices stationServices,
+  ServiceBundle servicesA = const ServiceBundle(),
+  ServiceBundle servicesB = const ServiceBundle(),
+}) {
+  return InheritedSeed<StationServices>(
+    value: stationServices,
+    child: InheritedSeed<JoinedSnapshotNotifier>(
+      value: joined,
+      child: InheritedSeed<SessionResolver>(
+        value: resolver,
+        child: Station([
+          SubstationScope(
+            configNotifier: substationA,
+            services: servicesA,
+            key: const ValueKey('scope.a'),
+          ),
+          SubstationScope(
+            configNotifier: substationB,
+            services: servicesB,
+            key: const ValueKey('scope.b'),
+          ),
+        ]),
+      ),
+    ),
+  );
+}
+
 void main() {
   group('Track A — the concurrency governor (tg-42f)', () {
     test('N+2 ready beads (no session) -> only N mount, LOUD flare names the '
@@ -272,6 +308,94 @@ void main() {
       );
       expect(recorder.events, ['START work(tg-1)']);
       expect(transport.flares, isEmpty);
+    });
+
+    test('the station-wide cap is a TOTAL across substations — a busy '
+        'substation starves a quiet sibling of slots even though the '
+        "sibling's own substation cap is untouched", () {
+      final recorder = _Recorder();
+      final transportA = _RecordingTransport();
+      final transportB = _RecordingTransport();
+      // Substation `a` already has 3 live (non-terminal) sessions; substation
+      // `b` has 2 freshly-ready beads and no sessions of its own. The station
+      // ceiling is 3 — already exhausted by `a` alone.
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [
+            _bead('a-1'),
+            _bead('a-2'),
+            _bead('a-3'),
+            _bead('b-1'),
+            _bead('b-2'),
+          ],
+          ready: {'b-1', 'b-2'},
+          sessions: {
+            'a-1': const SessionProjection(
+              workBeadId: 'a-1',
+              isTerminal: false,
+            ),
+            'a-2': const SessionProjection(
+              workBeadId: 'a-2',
+              isTerminal: false,
+            ),
+            'a-3': const SessionProjection(
+              workBeadId: 'a-3',
+              isTerminal: false,
+            ),
+          },
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        _twoSubstationRoot(
+          joined: joined,
+          resolver: _FakeSessionResolver(recorder),
+          substationA: SubstationConfigNotifier(
+            const SubstationConfig(
+              substationId: 'a',
+              ownedSubstations: {'a'},
+            ),
+          ),
+          substationB: SubstationConfigNotifier(
+            const SubstationConfig(
+              substationId: 'b',
+              ownedSubstations: {'b'},
+            ),
+          ),
+          servicesA: ServiceBundle(transport: transportA),
+          servicesB: ServiceBundle(transport: transportB),
+          stationServices: StationServices(
+            provider: FakeRuntimeProvider(),
+            writer: StationBeadWriter(
+              bd: BdCliService(RecordingBdRunner()),
+              ownership: BeadOwnershipPredicate(const {'a', 'b'}),
+            ),
+            stateSubstation: 'a',
+            maxConcurrentWork: 3,
+          ),
+        ),
+      );
+
+      // `a`'s 3 already-live sessions mount (never evicted; they were never
+      // "pending" against the budget), leaving zero slots station-wide.
+      expect(recorder.events, [
+        'START work(a-1)',
+        'START work(a-2)',
+        'START work(a-3)',
+      ]);
+      // `a` itself never throttles — it had nothing genuinely WAITING (its
+      // ready beads all already carry a live session).
+      expect(transportA.flares, isEmpty);
+      // `b`'s two ready beads both wait: the station-wide total is already
+      // exhausted by `a`, even though `b`'s OWN substation cap (3, the
+      // station default) was never touched.
+      expect(transportB.flares, hasLength(1));
+      expect(transportB.flares.single.name, 'work.throttled');
+      expect(transportB.flares.single.data, {
+        'count': '2',
+        'beadIds': 'b-1,b-2',
+      });
     });
   });
 }
