@@ -298,6 +298,17 @@ class StationGitService {
   /// `git worktree add -b grid/<beadId> <root>/.grid/worktrees/<substation>/<beadId> <base>`.
   /// Idempotency / single-worktree-per-bead is the caller's job (Track 5's
   /// per-bead queue); this throws if the worktree path already exists.
+  ///
+  /// **Self-heals a WEDGED branch (tg-e0p).** `grid/<beadId>` can outlive its
+  /// worktree — a reaped worktree never used to delete the branch it was cut
+  /// from ([reap] now does, but an out-of-band `git worktree remove`, or the
+  /// losing side of a double-provision race, still leaves one behind). Left
+  /// alone, `-b` fails on "already exists" FOREVER — every subsequent mint
+  /// attempt hits the same wedge with no self-healing path (the exact
+  /// operator-observed failure: 3 re-mints, 2 manual git bridges, one bead).
+  /// So: when [branch] already exists locally, ADOPT it (`git worktree add`
+  /// with no `-b`) instead of minting fresh; only mint a new branch when it
+  /// genuinely is not there yet.
   Future<BeadWorktree> provisionWorktree({
     required RootCheckout root,
     required String beadId,
@@ -318,16 +329,26 @@ class StationGitService {
       substationDir.createSync(recursive: true);
     }
 
-    final result = await _ops.worktreeAdd(
-      rootRepo: root.path,
-      path: path,
-      newBranch: branch,
-      baseBranch: root.defaultBranch,
-    );
+    final preexisting = await _ops.branchExists(root.path, branch);
+    final result = preexisting
+        ? await _ops.worktreeAddExisting(
+            rootRepo: root.path,
+            path: path,
+            branch: branch,
+          )
+        : await _ops.worktreeAdd(
+            rootRepo: root.path,
+            path: path,
+            newBranch: branch,
+            baseBranch: root.defaultBranch,
+          );
     if (!result.ok) {
+      // LOUD + precise (tg-e0p): name exactly what was found so a human never
+      // has to re-derive it from a raw git stderr blob mid-incident.
       throw StateError(
-        'provisionWorktree: git worktree add failed for $beadId: '
-        '${result.output.trim()}',
+        'provisionWorktree: git worktree add failed for $beadId — branch '
+        '"$branch" ${preexisting ? 'already existed (adopt attempted, no -b)' : 'did not exist yet (minted fresh)'}, '
+        'target path "$path": ${result.output.trim()}',
       );
     }
     return BeadWorktree(beadId: beadId, path: path, branch: branch);
@@ -485,6 +506,14 @@ class StationGitService {
         reason: 'git worktree remove failed: ${result.output.trim()}',
       );
     }
+    // Symmetric cleanup (tg-e0p): the worktree is gone — also delete the
+    // branch it was cut from. Left behind, `grid/<beadId>` would wedge every
+    // future re-mint's `git worktree add -b` FOREVER ([provisionWorktree]'s
+    // own adopt fallback now self-heals that case too, but a reaped bead
+    // should never need to). Best-effort: [GitOps.branchDelete] never throws,
+    // and a delete failure must not flip an already-successful worktree
+    // removal into a refusal.
+    await _ops.branchDelete(rootRepo: root.path, branch: worktree.branch);
     return ReapOutcome.removed();
   }
 }

@@ -258,6 +258,111 @@ branch refs/heads/grid/lenny-1
       },
     );
   });
+
+  group(
+    'StationGitService.provisionWorktree self-heals a WEDGED branch '
+    '(tg-e0p, scripted runner)',
+    () {
+      late Directory tmp;
+
+      setUp(() {
+        tmp = Directory.systemTemp.createTempSync('grid_provision_wedge_');
+      });
+      tearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+
+      RootCheckout rootIn(Directory dir) =>
+          RootCheckout(path: dir.path, defaultBranch: 'main', substation: 'tgdog');
+
+      test('a branch that does not exist yet is MINTED FRESH (with -b)', () async {
+        final runner = _ScriptedGitRunner(<String, GitRunResult>{
+          // `git show-ref --verify` exits 1 when the ref is absent — this is
+          // ordinary git behaviour, not a probe error.
+          'show-ref': const GitRunResult(exitCode: 1, output: ''),
+          'worktree': const GitRunResult(exitCode: 0, output: ''),
+        });
+        final svc = StationGitService(runner: runner, prOpener: _NeverPrOpener());
+
+        final wt = await svc.provisionWorktree(
+          root: rootIn(tmp),
+          beadId: 'lenny-fresh',
+        );
+        expect(wt.branch, 'grid/lenny-fresh');
+        expect(
+          runner.calls,
+          contains('worktree add -b grid/lenny-fresh ${wt.path} main'),
+        );
+      });
+
+      test(
+        'a WEDGED branch (already exists, no worktree) is ADOPTED — never '
+        're-minted with -b',
+        () async {
+          final runner = _ScriptedGitRunner(<String, GitRunResult>{
+            'show-ref': const GitRunResult(exitCode: 0, output: ''),
+            'worktree': const GitRunResult(exitCode: 0, output: ''),
+          });
+          final svc = StationGitService(
+            runner: runner,
+            prOpener: _NeverPrOpener(),
+          );
+
+          final wt = await svc.provisionWorktree(
+            root: rootIn(tmp),
+            beadId: 'lenny-wedged',
+          );
+          expect(wt.branch, 'grid/lenny-wedged');
+          expect(
+            runner.calls,
+            contains('worktree add ${wt.path} grid/lenny-wedged'),
+          );
+          expect(
+            runner.calls.any((c) => c.startsWith('worktree add -b')),
+            isFalse,
+            reason:
+                'a pre-existing branch must be ADOPTED, never re-minted with '
+                '-b (that is the exact "already exists" wedge, '
+                'tg-rm5/tg-457)',
+          );
+        },
+      );
+
+      test(
+        'when even the adopt attempt fails, the thrown message names the '
+        'leftover state LOUD (branch pre-existed, target path)',
+        () async {
+          final runner = _ScriptedGitRunner(<String, GitRunResult>{
+            'show-ref': const GitRunResult(exitCode: 0, output: ''),
+            'worktree': const GitRunResult(
+              exitCode: 128,
+              output: 'fatal: some other worktree already checked it out',
+            ),
+          });
+          final svc = StationGitService(
+            runner: runner,
+            prOpener: _NeverPrOpener(),
+          );
+
+          await expectLater(
+            () =>
+                svc.provisionWorktree(root: rootIn(tmp), beadId: 'lenny-stuck'),
+            throwsA(
+              isA<StateError>().having(
+                (e) => e.message,
+                'message',
+                allOf(
+                  contains('lenny-stuck'),
+                  contains('grid/lenny-stuck'),
+                  contains('already existed'),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
 }
 
 /// A [PrOpener] that must never be called in the reap tests; throws if it is.
