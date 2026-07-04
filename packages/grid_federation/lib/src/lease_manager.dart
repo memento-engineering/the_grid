@@ -29,7 +29,7 @@ library;
 
 import 'dart:async';
 
-import 'protocol.dart';
+import 'package:grid_engine/grid_engine.dart';
 
 /// One held lease: its kind, the idle-TTL expiry (renewed by [LeaseManager.touch]),
 /// the immovable max-lifetime deadline, the optional heartbeat deadline (renewed

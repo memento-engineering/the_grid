@@ -1,5 +1,14 @@
 /// Cross-station federation: resource leasing over a pluggable bus (ADR-0011).
 ///
+/// The TRANSPORT-FREE contracts — [Presence]/[LeaseRequest]/[LeaseGrant]/the
+/// `Federation*Exception`s, the [StationClient] bus-seam interface, and the
+/// [CapabilityFacts] model (+ [CapabilityProbe]/[CapabilityRevalidator]) — now
+/// live in `grid_engine`'s SDK (the honesty-pass D-A9/D-B5 split, 2026-07-03:
+/// "the engine knows federation in CONCEPT, not detail") and are re-exported
+/// here so every existing consumer keeps compiling unchanged. This package is
+/// now IMPLS-ONLY over those types: it dies in AL-5b, when its impls move to
+/// power_station's `federated_grid_assets`.
+///
 /// A station OFFERS capacity ([StationServer]); a peer LEASES a slot
 /// ([StationClient]/[HttpStationClient]) and dispatches an OPAQUE payload (what
 /// it means + what "use" runs is defined by the asset domain that owns the kind,
@@ -15,14 +24,6 @@
 /// ephemeral capacity — and a lessee [StationClient.heartbeat]s so the owner
 /// reaps a disconnected lease by its own clock (a missed-heartbeat threshold).
 ///
-/// The CAPABILITY MODEL ([CapabilityFacts], ADR-0011 D6) types that profile:
-/// per-fact composition ([CapabilityFacts.compose] — scalar override / set
-/// union; derived target defaults), CONTAINMENT matching
-/// ([CapabilityFacts.matches]), the dynamic toolchain [CapabilityProbe]
-/// ([ToolchainProbe]/[FakeProbe]), and [CapabilityRevalidator] (re-check a held
-/// lease at TTL renewal — depth #2). The `InheritedSeed` cascade NODE is a later
-/// engine-side consumer; this package stays engine-free.
-///
 /// SYNC is a SEPARATE channel from the lease bus (ADR-0011 D7): [GitSyncService]
 /// distributes code/assets to a peer's bare repo over a git remote
 /// ([GitSyncService.ensureRemote]/[GitSyncService.push]/[GitSyncService.distribute]),
@@ -30,10 +31,33 @@
 /// coordination; git carries the code.
 library;
 
-export 'src/capability.dart';
+export 'package:grid_engine/grid_engine.dart'
+    show
+        CapabilityFacts,
+        CapabilityProbe,
+        CapabilityRevalidator,
+        FakeProbe,
+        FederationException,
+        LeaseDeniedException,
+        LeaseGrant,
+        LeaseInvalidException,
+        LeaseRequest,
+        Presence,
+        RevalidationResult,
+        StationClient,
+        ToolchainProbe,
+        ToolchainQuery,
+        kDartTarget,
+        kDefaultKind,
+        kFlutterTarget,
+        kRadio,
+        kSetFactKeys,
+        kSystemOs,
+        kTargetChain,
+        parseToolchainOs;
+
 export 'src/git_sync.dart';
 export 'src/lease_manager.dart';
 export 'src/membership.dart';
-export 'src/protocol.dart';
 export 'src/station_client.dart';
 export 'src/station_server.dart';

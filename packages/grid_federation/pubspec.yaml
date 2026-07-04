@@ -5,8 +5,11 @@ description: >-
   LEASES a slot and dispatches a GENERIC command to run there, collecting the
   result. Per-station dolt stays the truth; this package carries the lossy bus.
   Transport is an abstract seam — HTTP impl #1 (this pass), MQTT/WS droppable in
-  later (Nico, 2026-06-29). Standalone: `dart:io` only, no grid_* deps, so the
-  lessor runs anywhere dart runs.
+  later (Nico, 2026-06-29). IMPLS-ONLY (the honesty-pass D-A9/D-B5 split,
+  2026-07-03): the transport-free contracts (`Presence`/`CapabilityFacts`/the
+  claim-lease protocol/the `StationClient` seam) now live in `grid_engine`'s
+  SDK ("the engine knows federation in concept, not detail"); this package
+  supplies the impls over them and dies in AL-5b.
 publish_to: none
 resolution: workspace
 
@@ -14,6 +17,7 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
+  grid_engine: any
   meta: ^1.16.0
 
 dev_dependencies:

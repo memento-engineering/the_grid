@@ -21,8 +21,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:grid_engine/grid_engine.dart';
+
 import 'lease_manager.dart';
-import 'protocol.dart';
 
 /// Runs a dispatched OPAQUE payload and returns an opaque result — the
 /// kind-agnostic execution seam. Each asset domain supplies its own (decoding

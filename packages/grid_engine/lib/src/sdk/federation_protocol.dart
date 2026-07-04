@@ -1,14 +1,21 @@
-/// Wire value types for cross-station resource leasing — the lossy-bus payloads
-/// (ADR-0011). Plain immutable classes with hand-written JSON (no codegen): the
-/// federation wire is small and must stay dependency-light so the lessor runs
-/// anywhere `dart` runs.
+/// The TRANSPORT-FREE federation contracts (ADR-0011 D3/D7/D8; the honesty-pass
+/// D-A9/D-B5 split, 2026-07-03): the wire value types + the abstract bus seam
+/// for cross-station resource leasing. The engine knows federation in CONCEPT
+/// only — no transport, no MQTT, no HTTP. `grid_federation` supplies the impls
+/// ([StationServer]/[HttpStationClient]/[LeaseManager] — the owner-authoritative
+/// arbitration policy) over these same types; a future bus (MQTT/WS) implements
+/// [StationClient] without this file changing.
 ///
 /// The bus seam is **kind-agnostic** (ADR-0011 D3/D7): [Presence], [LeaseRequest]
 /// and [LeaseGrant] are bus-level coordination types. A `kind` is an opaque,
 /// equality-checked label — the core bakes in NO concrete asset kind; each ASSET
 /// DOMAIN names + interprets its own (the dispatch payload is an opaque envelope
-/// the domain (de)serializes; M6 Track D moved the domain payloads out to the
-/// asset packages in `grid_assets`).
+/// the domain (de)serializes; the domain payloads themselves live in the asset
+/// packages, never here).
+///
+/// Plain immutable classes with hand-written JSON (no codegen): the federation
+/// wire is small and must stay dependency-light so a lessor runs anywhere `dart`
+/// runs.
 library;
 
 import 'package:meta/meta.dart';
@@ -84,9 +91,9 @@ class Presence {
   /// (e.g. `{'system-os': 'linux', 'flutter-target': ['linux', 'android']}`).
   ///
   /// Carried here as opaque JSON so the wire is forward-compatible: the TYPED
-  /// fact model, per-fact composition, the `InheritedSeed` cascade, containment
-  /// matching, and the dart/flutter probes all land in M6 Track C — this is only
-  /// the transport of the profile alongside capacity.
+  /// fact model ([CapabilityFacts]) — per-fact composition, containment
+  /// matching, the dart/flutter probes — bridges onto this profile via
+  /// [CapabilityFacts.toProfile]/[CapabilityFacts.fromProfile].
   final Map<String, Object?> profile;
 
   /// Returns a copy overriding [profile] (capacity is read from the owner).
@@ -215,4 +222,46 @@ class LeaseGrant {
     heartbeatSeconds: (j['heartbeatSeconds'] as int?) ?? 0,
     kind: (j['kind'] as String?) ?? kDefaultKind,
   );
+}
+
+/// The cross-station bus, lessee view: presence, lease, dispatch, release. The
+/// **pluggable, kind-agnostic transport seam** (ADR-0011): impl #1
+/// (`HttpStationClient`, over HTTP) lives in `grid_federation`; a future
+/// MQTT/WS bus implements this same interface, so nothing above the seam
+/// changes (Nico, 2026-06-29).
+///
+/// The seam carries only these bus-level coordination types plus an OPAQUE
+/// dispatch envelope ([Map]) — no domain/kind specifics leak in (ADR-0011 D3).
+/// The lessee holds the [LeaseGrant], so the fencing token rides every
+/// dispatch/release automatically.
+abstract interface class StationClient {
+  /// Reads the peer's presence + free capacity. (An observation.)
+  Future<Presence> presence();
+
+  /// Requests one slot; throws [LeaseDeniedException] on refusal. (An act.)
+  Future<LeaseGrant> requestLease(LeaseRequest req);
+
+  /// Runs an opaque [payload] on the slot held by [lease], propagating its
+  /// fencing token. Returns the opaque result envelope. Throws
+  /// [LeaseInvalidException] if the lease is gone or the token is stale.
+  ///
+  /// [idempotencyKey] (when set) lets the owner dedup retries: the same key
+  /// returns the SAME result, never a second run.
+  Future<Map<String, dynamic>> dispatch(
+    LeaseGrant lease,
+    Map<String, dynamic> payload, {
+    String idempotencyKey,
+  });
+
+  /// Sends a liveness HEARTBEAT for [lease], propagating its fencing token, so the
+  /// owner does not reap the held slot as disconnected. Throws
+  /// [LeaseInvalidException] if the lease is gone or the token is stale. (An act.)
+  Future<void> heartbeat(LeaseGrant lease);
+
+  /// Releases the slot held by [lease] (idempotent), propagating its fencing
+  /// token so a stale holder cannot free a reissued slot.
+  Future<void> release(LeaseGrant lease);
+
+  /// Releases any held transport resources.
+  Future<void> close();
 }

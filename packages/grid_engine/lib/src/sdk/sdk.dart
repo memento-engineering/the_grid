@@ -7,10 +7,17 @@
 /// `grid_engine` (ADR-0008 D1, deferred) is a move, not a rewrite. The author
 /// NEVER touches a `Seed` — that is what holds the four derailment-invariants AT
 /// DEPTH by construction.
+///
+/// [federation_protocol.dart] + [capability_facts.dart] are the TRANSPORT-FREE
+/// federation contracts (ADR-0011, the honesty-pass D-A9/D-B5 split,
+/// 2026-07-03) — `grid_federation` supplies the transport impls over these same
+/// types.
 library;
 
 export 'allocation.dart';
+export 'capability_facts.dart';
 export 'cursor.dart';
 export 'circuit.dart';
+export 'federation_protocol.dart';
 export 'frontier.dart';
 export 'lease.dart';
