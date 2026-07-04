@@ -304,6 +304,11 @@ class FakeSnapshotSource implements SnapshotSource {
     _controller.add(snapshot);
   }
 
+  /// Emits an error on the stream WITHOUT touching [current] — a fake
+  /// connection blip, so a consumer's absence-≠-deletion handling (tg-nsj
+  /// D-Z3) can be proven without retracting the last known snapshot.
+  void raiseError(Object error) => _controller.addError(error);
+
   @override
   Stream<GraphSnapshot> get snapshots => _controller.stream;
 

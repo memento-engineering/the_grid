@@ -19,6 +19,10 @@ library;
 export 'src/bridge/station_join_bridge.dart';
 export 'src/bridge/snapshot_source.dart';
 
+// The federated work-source union (tg-nsj) — fans N LOCAL beads workspaces
+// into the ONE SnapshotSource the bridge's `work` axis observes.
+export 'src/bridge/federated_snapshot_source.dart';
+
 // The reentrant authoring SDK surface (ADR-0008 D2/D4 / M4-P1 Track A/E): the
 // value-types + the pure frontier predicate + the opaque Capability/Service
 // interfaces the author composes — never a Seed.
