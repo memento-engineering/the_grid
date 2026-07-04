@@ -232,6 +232,17 @@ void addStationFlags(ArgParser parser) {
       help:
           'The StationControl loopback port (RS-4; resident mode only). '
           '0 = ephemeral (default).',
+    )
+    ..addOption(
+      'max-agents',
+      defaultsTo: '$kDefaultMaxConcurrentWork',
+      help:
+          'The concurrency governor\'s STATION-WIDE slot budget (tg-42f, '
+          'declare-and-check): the default max concurrent work beads per '
+          'substation AND the hard total ceiling across every substation. '
+          'A bead beyond the budget stays ready-unmounted (no session, no '
+          'spawn, no cost) and mounts once a slot frees. Default is generous '
+          'so a single-bead flow is unchanged.',
     );
 }
 
@@ -326,6 +337,7 @@ class StationArgs {
     this.runFor,
     this.resident = false,
     this.controlPort = 0,
+    this.maxAgents = kDefaultMaxConcurrentWork,
   }) : _roots = roots,
        _rootPath = rootPath;
 
@@ -371,6 +383,7 @@ class StationArgs {
       noSql: args.flag('no-sql'),
       runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
       controlPort: int.parse(args.option('control-port')!),
+      maxAgents: int.parse(args.option('max-agents')!),
     );
   }
 
@@ -452,6 +465,12 @@ class StationArgs {
   /// (default). Only consulted when [resident] is true; a non-resident
   /// (`run`) arm never binds the control surface.
   final int controlPort;
+
+  /// The concurrency governor's station-wide slot budget (tg-42f,
+  /// `--max-agents`) — threaded into `StationServices.maxConcurrentWork` by
+  /// [buildLiveWiring]. Defaults to [kDefaultMaxConcurrentWork] so a
+  /// single-bead flow is unchanged.
+  final int maxAgents;
 }
 
 /// The arming/gating checks (ADR-0006 / A36/A37 / RS-3 D-R4) — every runner
@@ -885,6 +904,7 @@ Future<StationWiring> buildLiveWiring({
         ? stateSubstation
         : args.substations.first,
     liveness: liveness,
+    maxConcurrentWork: args.maxAgents,
   );
 
   return StationWiring(

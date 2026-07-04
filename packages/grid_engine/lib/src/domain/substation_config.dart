@@ -51,5 +51,15 @@ abstract class SubstationConfig with _$SubstationConfig {
     /// `SCRATCH-orchestration-determinism` §5 failure-discrimination
     /// principle) — other owned beads keep mounting.
     @Default(<String>{}) Set<String> registeredRoots,
+
+    /// The concurrency governor's PER-SUBSTATION override (tg-42f,
+    /// declare-and-check): the most `WorkList` will mount concurrently for
+    /// THIS substation. Null (the default) falls back to the station-wide
+    /// default (`StationServices.maxConcurrentWork`). Either way the
+    /// station-wide TOTAL across every substation is a hard ceiling this
+    /// override cannot raise — it only narrows within it. A bead beyond the
+    /// budget stays ready-unmounted (no session, no spawn, no cost) and mounts
+    /// on the next reconcile once a slot frees.
+    int? maxConcurrentWork,
   }) = _SubstationConfig;
 }
