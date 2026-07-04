@@ -310,6 +310,54 @@ void main() {
       expect(transport.flares, isEmpty);
     });
 
+    test('nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
+        'fallback binds — no substation override, no ambient StationServices', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
+      final beadIds = List.generate(
+        kDefaultMaxConcurrentWork + 2,
+        (i) => 'tg-${i + 1}',
+      );
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: beadIds.map(_bead).toList(),
+          ready: beadIds.toSet(),
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        _root(
+          joined: joined,
+          resolver: _FakeSessionResolver(recorder),
+          // No `maxConcurrentWork` override — falls all the way through to
+          // the compile-time default.
+          substationConfig: SubstationConfigNotifier(
+            const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
+          ),
+          services: ServiceBundle(transport: transport),
+          // No ambient `StationServices` at all — the offline-test default
+          // this file's other cases wire deliberately, exercised here as the
+          // genuinely-nothing-configured case.
+        ),
+      );
+
+      expect(
+        recorder.events,
+        List.generate(
+          kDefaultMaxConcurrentWork,
+          (i) => 'START work(tg-${i + 1})',
+        ),
+      );
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.name, 'work.throttled');
+      expect(transport.flares.single.data, {
+        'count': '2',
+        'beadIds': 'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
+      });
+    });
+
     test('the station-wide cap is a TOTAL across substations — a busy '
         'substation starves a quiet sibling of slots even though the '
         "sibling's own substation cap is untouched", () {
