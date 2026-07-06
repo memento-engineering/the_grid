@@ -3,8 +3,8 @@ import 'package:genesis_tree/genesis_tree.dart';
 import '../domain/substation_config.dart';
 import 'work_list.dart';
 
-/// A single rig's work root. Reads its ambient [SubstationConfig] (provided by the
-/// enclosing `SubstationScope`) and builds the rig's [WorkList].
+/// A single substation's work root. Reads its ambient [SubstationConfig] (provided by the
+/// enclosing `SubstationScope`) and builds the substation's [WorkList].
 ///
 /// It does NOT observe the work/snapshot axis — so a work tick never rebuilds
 /// it (the derailment-invariant-1 guardrail: only the observing node, the
@@ -12,7 +12,7 @@ import 'work_list.dart';
 /// `InheritedSeed<SubstationConfig>` dependency (`dependencyChanged`), the config
 /// axis, which is exactly when it *should* rebuild.
 class Substation extends StatefulSeed {
-  /// Creates a rig node, optionally [key]ed.
+  /// Creates a substation node, optionally [key]ed.
   const Substation({super.key});
 
   @override

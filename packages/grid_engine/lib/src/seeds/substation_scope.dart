@@ -6,10 +6,10 @@ import '../notifiers/substation_config_notifier.dart';
 import '../sdk/capability.dart';
 import 'substation.dart';
 
-/// The per-rig **config scope** — an ancestor of the rig's work nodes
+/// The per-substation **config scope** — an ancestor of the substation's work nodes
 /// (ADR-0007: config nodes are ancestors of work nodes).
 ///
-/// It OBSERVES the rig's [SubstationConfigNotifier] (the config axis, separate from
+/// It OBSERVES the substation's [SubstationConfigNotifier] (the config axis, separate from
 /// the work/snapshot axis) and re-provides the current [SubstationConfig] ambiently
 /// via `InheritedSeed<SubstationConfig>` to the work subtree below it.
 ///
@@ -36,7 +36,7 @@ import 'substation.dart';
 /// that does not occur in P0.
 class SubstationScope extends StatefulSeed {
   /// Creates a scope driven by [configNotifier], providing [services] to its
-  /// subtree. Key it by rig id at the Station level so a rig add/remove
+  /// subtree. Key it by substation id at the Station level so a substation add/remove
   /// mounts/unmounts exactly this scope.
   const SubstationScope({
     required this.configNotifier,

@@ -2,7 +2,7 @@ import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/substation_config.dart';
 
-/// The observable source of the **config axis** for one rig — a [StateNotifier]
+/// The observable source of the **config axis** for one substation — a [StateNotifier]
 /// `SubstationScope` observes.
 ///
 /// Distinct from the work/snapshot axis: config and work are observed by

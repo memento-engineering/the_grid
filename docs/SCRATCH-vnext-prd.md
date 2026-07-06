@@ -328,6 +328,16 @@ dynamic planning later).**
 
 ## 5. Station vs substation + virtual substations (→ future federation ADR)
 
+> **SUPERSEDED IN PART (stamp, 2026-07-05).** This section's **observation-federation
+> model is dead**: `SCRATCH-grid-alignment` **D-A2 (ratified 2026-07-03)** rules
+> *"Assignment-federation, never observation-federation. A remote substation is NEVER a
+> snapshot member of my station"* (D-Z7 killed accordingly). The term **"virtual
+> substation" is dropped** (Nico 2026-07-05, GLOSSARY review R10) — a remote station this
+> system knows about is simply **a station observed as an asset** (ADR-0011's
+> resource/capacity family). The station-per-machine framing and
+> capability/capacity-claim instincts below survived into the ratified claim→lease model;
+> read them as lineage, not as the live design.
+
 **Context.** The burn spans machines; multiple agents fighting over one BLE radio
 won't work. Nico's instinct: a **station per machine**, each configured with its
 **substation(s)**, advertising/claiming by capability **and** capacity.

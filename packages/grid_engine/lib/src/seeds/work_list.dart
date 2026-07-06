@@ -31,7 +31,7 @@ class WorkList extends StatefulSeed {
   /// value).
   const WorkList({required this.substationConfig, super.key});
 
-  /// The rig config, as data — its [SubstationConfig.ownedSubstations] builds the ownership
+  /// The substation config, as data — its [SubstationConfig.ownedSubstations] builds the ownership
   /// predicate.
   final SubstationConfig substationConfig;
 

@@ -437,7 +437,7 @@ Workspace testWorkspace(
 // Builders: the StationServices + a Bead, over the fakes.
 // ---------------------------------------------------------------------------
 
-/// The_grid's owned state rig in the offline fakes.
+/// The_grid's owned state substation in the offline fakes.
 const stateSubstation = 'tgdog';
 
 /// A bundle of an [StationServices] over the fakes plus the recording collaborators
@@ -464,7 +464,7 @@ Fakes buildFakes({String createdId = 'tgdog-sess1'}) {
   );
   return (
     // Station-level ambient only (ADR-0009 D2): transport + chokepoint + state
-    // rig. The git/PR recorders are returned separately so a test wires its own
+    // substation. The git/PR recorders are returned separately so a test wires its own
     // per-substation `GitSourceControl`/`ServiceBundle` (the workspace/branch
     // layout is the SourceControl's, not the station's — ADR-0008 D5).
     ctx: StationServices(
@@ -484,7 +484,8 @@ Bead bead(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
 /// A `type=session` state bead linking [workBeadId] — the row the join bridge
-/// projects + keys by `work_bead`, carrying the OWNED rig marker (so the
+/// projects + keys by `work_bead`, carrying the OWNED substation marker (the
+/// persisted `metadata.rig` key — codec law; so the
 /// chokepoint's ownership re-check passes) + the per-node reentrant cursor: each
 /// step id in [completed] is marked `complete` at nodePath `'$workBeadId/$step'`
 /// (the read half of the cursor the CircuitScope frontier advances on). The
