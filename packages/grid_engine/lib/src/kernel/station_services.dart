@@ -9,7 +9,7 @@ import '../sdk/allocation.dart';
 /// The kernel provides exactly one of these via an `InheritedSeed<StationServices>`
 /// at the tree root, so every mounted node reaches the machine's process
 /// transport ([provider]), the single bd write chokepoint ([writer]), the owned
-/// state rig ([stateSubstation]), and the optional adopt-liveness seam
+/// state substation ([stateSubstation]), and the optional adopt-liveness seam
 /// ([liveness]) — all genuinely per-machine. **Nothing substation-scoped lives
 /// here** (ADR-0008 D5): the workspace/branch layout + source control are the
 /// per-`SubstationScope` `SourceControl`'s (`ServiceBundle`), not the station's —
@@ -41,7 +41,7 @@ class StationServices {
   /// `--actor grid-controller`, fail-closed on ownership (ADR-0006 Decision 2).
   final StationBeadWriter writer;
 
-  /// The_grid's OWNED state rig (`tgdog`) — the partition session beads are
+  /// The_grid's OWNED state substation (`tgdog`) — the partition session beads are
   /// minted into, kept separate from the read-only work source (A37).
   final String stateSubstation;
 

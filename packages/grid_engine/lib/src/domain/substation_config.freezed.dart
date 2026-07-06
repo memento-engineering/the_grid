@@ -15,7 +15,7 @@ T _$identity<T>(T value) => value;
 mixin _$SubstationConfig {
 
 /// The rig's id (its issue-id prefix and `metadata.rig` marker).
- String get substationId;/// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
+ String get substationId;/// The substation allow-set: the prefixes/markers the_grid owns and may dispatch
 /// against (fail-closed — an empty set owns nothing).
  Set<String> get ownedSubstations;/// The blessed-bead **drive-list** (ADR-0006): when non-empty, ONLY these
 /// bead ids mount a work node + spawn an agent (`WorkList` enforces it at the
@@ -253,10 +253,10 @@ class _SubstationConfig implements SubstationConfig {
 
 /// The rig's id (its issue-id prefix and `metadata.rig` marker).
 @override final  String substationId;
-/// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
+/// The substation allow-set: the prefixes/markers the_grid owns and may dispatch
 /// against (fail-closed — an empty set owns nothing).
  final  Set<String> _ownedSubstations;
-/// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
+/// The substation allow-set: the prefixes/markers the_grid owns and may dispatch
 /// against (fail-closed — an empty set owns nothing).
 @override@JsonKey() Set<String> get ownedSubstations {
   if (_ownedSubstations is EqualUnmodifiableSetView) return _ownedSubstations;

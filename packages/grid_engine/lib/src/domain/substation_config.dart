@@ -2,21 +2,21 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 part 'substation_config.freezed.dart';
 
-/// A rig's configuration — the **config axis** (ADR-0007: config nodes are
+/// A substation's configuration — the **config axis** (ADR-0007: config nodes are
 /// *ancestors* of work nodes).
 ///
 /// Provided ambiently by `SubstationScope` via `InheritedSeed<SubstationConfig>` and read by
-/// `Substation`. Distinct from `RuntimeConfig`: this is the static, per-rig shape the
+/// `Substation`. Distinct from `RuntimeConfig`: this is the static, per-substation shape the
 /// work subtree reconciles under, not a runtime-transport handle.
 @freezed
 abstract class SubstationConfig with _$SubstationConfig {
-  /// Creates the config for rig [substationId] owning [ownedSubstations] (the shared
+  /// Creates the config for substation [substationId] owning [ownedSubstations] (the shared
   /// allow-set the ownership predicate is built from — A32).
   const factory SubstationConfig({
     /// The rig's id (its issue-id prefix and `metadata.rig` marker).
     required String substationId,
 
-    /// The rig allow-set: the prefixes/markers the_grid owns and may dispatch
+    /// The substation allow-set: the prefixes/markers the_grid owns and may dispatch
     /// against (fail-closed — an empty set owns nothing).
     @Default(<String>{}) Set<String> ownedSubstations,
 
