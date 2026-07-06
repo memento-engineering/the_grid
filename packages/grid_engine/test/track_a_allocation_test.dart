@@ -3,6 +3,7 @@
 // Capability.createAllocation factory defaults. The effect layer REPORTS through
 // the sink and holds NO writer — these tests drive it with a capturing sink + the
 // controllable FakeRuntimeProvider (Fakes, not mocks; zero I/O).
+import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -39,8 +40,10 @@ class _RecProcessCap extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async =>
-      payload;
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async => payload;
 
   @override
   Future<void> teardown(StepArgs args) async => log.add('teardown');
@@ -62,10 +65,14 @@ class _RecServiceCap extends ServiceCapability {
 }
 
 /// A [SourceControl] that records `provision(beadId)` so a test can assert
-/// provisioning fires BEFORE the spawn.
+/// provisioning fires BEFORE the spawn. An optional [root] label distinguishes
+/// which registered root's instance actually provisioned (tg-8tn: a
+/// `ServiceBundle` carries one instance per root, so a per-bead resolution bug
+/// shows up as the WRONG instance's log entry).
 class _RecordingProvisionSourceControl implements SourceControl {
-  _RecordingProvisionSourceControl(this.log);
+  _RecordingProvisionSourceControl(this.log, {this.root = ''});
   final List<String> log;
+  final String root;
 
   @override
   bool get canLand => false;
@@ -81,7 +88,8 @@ class _RecordingProvisionSourceControl implements SourceControl {
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,
-  }) async => log.add('provision($beadId)');
+  }) async =>
+      log.add(root.isEmpty ? 'provision($beadId)' : 'provision($root:$beadId)');
 
   @override
   Future<void> commitAll({
@@ -106,28 +114,34 @@ class _RecordingProvisionSourceControl implements SourceControl {
 // --- builders ----------------------------------------------------------------
 
 /// The ambient values the old CapabilityContext threaded, now read from the
-/// tree (the context rip-out): the workspace + the per-substation services.
-FakeTreeContext _treeCtx({ServiceBundle services = const ServiceBundle()}) =>
-    FakeTreeContext(
-      values: {
-        Workspace: testWorkspace(
-          'tg-1',
-          workspaceDir: '/w/tg-1',
-          branch: 'grid/tg-1',
-        ),
-        ServiceBundle: services,
-      },
-    );
+/// tree (the context rip-out): the workspace + the per-substation services +
+/// (optionally) the work bead (mounted by `WorkBead` in the real tree — omit
+/// to reproduce the pre-tg-8tn tests that never mounted one).
+FakeTreeContext _treeCtx({
+  ServiceBundle services = const ServiceBundle(),
+  Bead? bead,
+}) => FakeTreeContext(
+  values: {
+    Workspace: testWorkspace(
+      'tg-1',
+      workspaceDir: '/w/tg-1',
+      branch: 'grid/tg-1',
+    ),
+    ServiceBundle: services,
+    if (bead != null) Bead: bead,
+  },
+);
 
 AllocationContext _allocCtx({
   required RuntimeProvider transport,
   required AllocationSink sink,
   required CancelToken cancel,
   ServiceBundle services = const ServiceBundle(),
+  Bead? bead,
   AdoptFence fence = const AdoptFence(),
   Map<String, String> env = const {},
 }) => AllocationContext(
-  treeContext: _treeCtx(services: services),
+  treeContext: _treeCtx(services: services, bead: bead),
   args: stepArgs('tg-1/agent', cancel: cancel),
   transport: transport,
   address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
@@ -175,7 +189,10 @@ void main() {
         sink: (_) {},
         cancel: cancel,
       );
-      expect(_RecProcessCap([]).createAllocation(ctx), isA<ProcessAllocation>());
+      expect(
+        _RecProcessCap([]).createAllocation(ctx),
+        isA<ProcessAllocation>(),
+      );
       expect(
         _RecServiceCap(const Ok(), []).createAllocation(ctx),
         isA<ServiceAllocation>(),
@@ -211,76 +228,177 @@ void main() {
   });
 
   group('Track A — ServiceAllocation (the JobAllocation convenience)', () {
-    test('startOrAdopt runs the body → reports Completed(payload) for Ok', () async {
-      final log = <String>[];
-      final reports = <AllocationReport>[];
-      const pr = 'https://x/pr/1';
-      final cancel = CancelToken();
-      final alloc = _RecServiceCap(const Ok({'pr_url': pr}), log).createAllocation(
-        _allocCtx(transport: FakeRuntimeProvider(), sink: reports.add, cancel: cancel),
-      );
-      await alloc.startOrAdopt();
-      expect(log, contains('run(tg-1)'));
-      expect(reports.single, isA<AllocationCompleted>());
-      expect((reports.single as AllocationCompleted).payload, {'pr_url': pr});
-      expect(alloc.state, AllocationState.gone);
-    });
+    test(
+      'startOrAdopt runs the body → reports Completed(payload) for Ok',
+      () async {
+        final log = <String>[];
+        final reports = <AllocationReport>[];
+        const pr = 'https://x/pr/1';
+        final cancel = CancelToken();
+        final alloc = _RecServiceCap(const Ok({'pr_url': pr}), log)
+            .createAllocation(
+              _allocCtx(
+                transport: FakeRuntimeProvider(),
+                sink: reports.add,
+                cancel: cancel,
+              ),
+            );
+        await alloc.startOrAdopt();
+        expect(log, contains('run(tg-1)'));
+        expect(reports.single, isA<AllocationCompleted>());
+        expect((reports.single as AllocationCompleted).payload, {'pr_url': pr});
+        expect(alloc.state, AllocationState.gone);
+      },
+    );
 
     test('Failed → AllocationFailed; Gate → AllocationGated', () async {
       final reports = <AllocationReport>[];
       final cancel = CancelToken();
       await _RecServiceCap(const Failed('nope'), [])
-          .createAllocation(_allocCtx(
-            transport: FakeRuntimeProvider(),
-            sink: reports.add,
-            cancel: cancel,
-          ))
+          .createAllocation(
+            _allocCtx(
+              transport: FakeRuntimeProvider(),
+              sink: reports.add,
+              cancel: cancel,
+            ),
+          )
           .startOrAdopt();
       expect(reports.single, isA<AllocationFailed>());
       expect((reports.single as AllocationFailed).reason, 'nope');
 
       final gated = <AllocationReport>[];
       await _RecServiceCap(const Gate('block'), [])
-          .createAllocation(_allocCtx(
-            transport: FakeRuntimeProvider(),
-            sink: gated.add,
-            cancel: CancelToken(),
-          ))
+          .createAllocation(
+            _allocCtx(
+              transport: FakeRuntimeProvider(),
+              sink: gated.add,
+              cancel: CancelToken(),
+            ),
+          )
           .startOrAdopt();
       expect(gated.single, isA<AllocationGated>());
       expect((gated.single as AllocationGated).reason, 'block');
     });
 
-    test('a body that resolves AFTER cancel reports nothing (the cancel guard)',
-        () async {
-      final reports = <AllocationReport>[];
-      final cancel = CancelToken();
-      final alloc = _RecServiceCap(const Ok(), []).createAllocation(
-        _allocCtx(transport: FakeRuntimeProvider(), sink: reports.add, cancel: cancel),
-      );
-      cancel.cancel(); // the Host unmounted before run resolved
-      await alloc.startOrAdopt();
-      expect(reports, isEmpty);
-    });
+    test(
+      'a body that resolves AFTER cancel reports nothing (the cancel guard)',
+      () async {
+        final reports = <AllocationReport>[];
+        final cancel = CancelToken();
+        final alloc = _RecServiceCap(const Ok(), []).createAllocation(
+          _allocCtx(
+            transport: FakeRuntimeProvider(),
+            sink: reports.add,
+            cancel: cancel,
+          ),
+        );
+        cancel.cancel(); // the Host unmounted before run resolved
+        await alloc.startOrAdopt();
+        expect(reports, isEmpty);
+      },
+    );
 
-    test('dispose cancels the token + runs teardown (no process stop)', () async {
-      final log = <String>[];
-      final provider = FakeRuntimeProvider();
-      final cancel = CancelToken();
-      final alloc = _RecServiceCap(const Ok(), log).createAllocation(
-        _allocCtx(transport: provider, sink: (_) {}, cancel: cancel),
-      );
-      await alloc.startOrAdopt();
-      await alloc.dispose();
-      expect(cancel.isCancelled, isTrue);
-      expect(log, contains('svc-teardown'));
-      expect(provider.stopped, isEmpty); // a service is not a process
-    });
+    test(
+      'dispose cancels the token + runs teardown (no process stop)',
+      () async {
+        final log = <String>[];
+        final provider = FakeRuntimeProvider();
+        final cancel = CancelToken();
+        final alloc = _RecServiceCap(const Ok(), log).createAllocation(
+          _allocCtx(transport: provider, sink: (_) {}, cancel: cancel),
+        );
+        await alloc.startOrAdopt();
+        await alloc.dispose();
+        expect(cancel.isCancelled, isTrue);
+        expect(log, contains('svc-teardown'));
+        expect(provider.stopped, isEmpty); // a service is not a process
+      },
+    );
   });
 
   group('Track A — ProcessAllocation (the process family)', () {
-    test('startOrAdopt provisions BEFORE spawn, under the address, with the env '
-        'overlay layered over the base env', () async {
+    test(
+      'startOrAdopt provisions BEFORE spawn, under the address, with the env '
+      'overlay layered over the base env',
+      () async {
+        final log = <String>[];
+        final provider = FakeRuntimeProvider();
+        final alloc = _RecProcessCap(log).createAllocation(
+          _allocCtx(
+            transport: provider,
+            sink: (_) {},
+            cancel: CancelToken(),
+            services: ServiceBundle(
+              sourceControl: _RecordingProvisionSourceControl(log),
+            ),
+            env: const {'GRID_BEAD_ID': 'tg-1', 'GRID_INSTANCE_TOKEN': 'tok'},
+          ),
+        );
+        await alloc.startOrAdopt();
+        await _pump();
+
+        expect(provider.started, hasLength(1));
+        final started = provider.started.single;
+        expect(
+          started.name,
+          'tgdog-s/tg-1/agent',
+        ); // the address = provider name
+        expect(started.config.env['BASE'], '1'); // base env preserved
+        expect(started.config.env['GRID_BEAD_ID'], 'tg-1'); // overlay merged
+        expect(started.config.env['GRID_INSTANCE_TOKEN'], 'tok');
+        expect(
+          log.indexOf('provision(tg-1)') <
+              log.indexWhere((l) => l.startsWith('spawn(')),
+          isTrue,
+          reason: 'provision must precede spawn',
+        );
+        expect(alloc.state, AllocationState.live);
+      },
+    );
+
+    test(
+      'a bead with metadata.grid.root selects that root\'s SourceControl for '
+      'the CREATE-path provision — never the substation DEFAULT (tg-8tn: the '
+      'provision split-brain — SessionScope\'s ambient Workspace already '
+      'resolved per-bead; startOrAdopt must resolve the SAME instance, not '
+      'services.sourceControl)',
+      () async {
+        final log = <String>[];
+        final provider = FakeRuntimeProvider();
+        final alloc = _RecProcessCap(log).createAllocation(
+          _allocCtx(
+            transport: provider,
+            sink: (_) {},
+            cancel: CancelToken(),
+            bead: const Bead(
+              id: 'tg-1',
+              issueType: IssueType.task,
+              metadata: {'grid.root': 'power_station'},
+            ),
+            services: ServiceBundle(
+              sourceControl: _RecordingProvisionSourceControl(
+                log,
+                root: 'default',
+              ),
+              sourceControlsByRoot: {
+                'power_station': _RecordingProvisionSourceControl(
+                  log,
+                  root: 'power_station',
+                ),
+              },
+            ),
+          ),
+        );
+        await alloc.startOrAdopt();
+        await _pump();
+
+        expect(log, contains('provision(power_station:tg-1)'));
+        expect(log, isNot(contains('provision(default:tg-1)')));
+      },
+    );
+
+    test('no metadata.grid.root selector falls back to the substation DEFAULT '
+        'SourceControl (unchanged single-root behavior)', () async {
       final log = <String>[];
       final provider = FakeRuntimeProvider();
       final alloc = _RecProcessCap(log).createAllocation(
@@ -288,102 +406,137 @@ void main() {
           transport: provider,
           sink: (_) {},
           cancel: CancelToken(),
+          bead: const Bead(id: 'tg-1', issueType: IssueType.task),
           services: ServiceBundle(
-            sourceControl: _RecordingProvisionSourceControl(log),
+            sourceControl: _RecordingProvisionSourceControl(
+              log,
+              root: 'default',
+            ),
+            sourceControlsByRoot: {
+              'power_station': _RecordingProvisionSourceControl(
+                log,
+                root: 'power_station',
+              ),
+            },
           ),
-          env: const {'GRID_BEAD_ID': 'tg-1', 'GRID_INSTANCE_TOKEN': 'tok'},
         ),
       );
       await alloc.startOrAdopt();
       await _pump();
 
-      expect(provider.started, hasLength(1));
-      final started = provider.started.single;
-      expect(started.name, 'tgdog-s/tg-1/agent'); // the address = provider name
-      expect(started.config.env['BASE'], '1'); // base env preserved
-      expect(started.config.env['GRID_BEAD_ID'], 'tg-1'); // overlay merged
-      expect(started.config.env['GRID_INSTANCE_TOKEN'], 'tok');
-      expect(
-        log.indexOf('provision(tg-1)') <
-            log.indexWhere((l) => l.startsWith('spawn(')),
-        isTrue,
-        reason: 'provision must precede spawn',
-      );
-      expect(alloc.state, AllocationState.live);
+      expect(log, contains('provision(default:tg-1)'));
+      expect(log, isNot(contains('provision(power_station:tg-1)')));
     });
 
     test('SessionStarted → AllocationStarted(pid,pgid)', () async {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
       final alloc = _RecProcessCap([]).createAllocation(
-        _allocCtx(transport: provider, sink: reports.add, cancel: CancelToken()),
+        _allocCtx(
+          transport: provider,
+          sink: reports.add,
+          cancel: CancelToken(),
+        ),
       );
       await alloc.startOrAdopt();
-      provider.emit(const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200));
+      provider.emit(
+        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
+      );
       await _pump();
       final started = reports.whereType<AllocationStarted>().single;
       expect(started.pid, 100);
       expect(started.pgid, 200);
     });
 
-    test('a clean Exited(0) reports Completed(payload); a non-zero Exited reports '
-        'Failed', () async {
-      final reports = <AllocationReport>[];
-      final provider = FakeRuntimeProvider();
-      final alloc = _RecProcessCap([], payload: const {'grade': 'A'}).createAllocation(
-        _allocCtx(transport: provider, sink: reports.add, cancel: CancelToken()),
-      );
-      await alloc.startOrAdopt();
-      provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
-      await _pump();
-      final done = reports.whereType<AllocationCompleted>().single;
-      expect(done.payload, {'grade': 'A'});
-      expect(alloc.state, AllocationState.gone);
-    });
+    test(
+      'a clean Exited(0) reports Completed(payload); a non-zero Exited reports '
+      'Failed',
+      () async {
+        final reports = <AllocationReport>[];
+        final provider = FakeRuntimeProvider();
+        final alloc = _RecProcessCap([], payload: const {'grade': 'A'})
+            .createAllocation(
+              _allocCtx(
+                transport: provider,
+                sink: reports.add,
+                cancel: CancelToken(),
+              ),
+            );
+        await alloc.startOrAdopt();
+        provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
+        await _pump();
+        final done = reports.whereType<AllocationCompleted>().single;
+        expect(done.payload, {'grade': 'A'});
+        expect(alloc.state, AllocationState.gone);
+      },
+    );
 
-    test('a daemon reaches ready (state=ready) WITHOUT terminating, then a later '
-        'death reports Failed (no latch on ready — OQ-5)', () async {
-      final reports = <AllocationReport>[];
-      final provider = FakeRuntimeProvider();
-      final alloc = _RecProcessCap([]).createAllocation(
-        _allocCtx(transport: provider, sink: reports.add, cancel: CancelToken()),
-      );
-      await alloc.startOrAdopt();
-      provider.emit(const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true));
-      await _pump();
-      expect(reports.whereType<AllocationReady>(), hasLength(1));
-      expect(alloc.state, AllocationState.ready);
+    test(
+      'a daemon reaches ready (state=ready) WITHOUT terminating, then a later '
+      'death reports Failed (no latch on ready — OQ-5)',
+      () async {
+        final reports = <AllocationReport>[];
+        final provider = FakeRuntimeProvider();
+        final alloc = _RecProcessCap([]).createAllocation(
+          _allocCtx(
+            transport: provider,
+            sink: reports.add,
+            cancel: CancelToken(),
+          ),
+        );
+        await alloc.startOrAdopt();
+        provider.emit(
+          const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true),
+        );
+        await _pump();
+        expect(reports.whereType<AllocationReady>(), hasLength(1));
+        expect(alloc.state, AllocationState.ready);
 
-      provider.emit(const Died(name: 'tgdog-s/tg-1/agent'));
-      await _pump();
-      expect(reports.whereType<AllocationFailed>(), hasLength(1));
-    });
+        provider.emit(const Died(name: 'tgdog-s/tg-1/agent'));
+        await _pump();
+        expect(reports.whereType<AllocationFailed>(), hasLength(1));
+      },
+    );
 
-    test('dispose cancels the subscription, stops the group, runs teardown',
-        () async {
-      final log = <String>[];
-      final provider = FakeRuntimeProvider();
-      final alloc = _RecProcessCap(log).createAllocation(
-        _allocCtx(transport: provider, sink: (_) {}, cancel: CancelToken()),
-      ) as ProcessAllocation;
-      await alloc.startOrAdopt();
-      await _pump();
-      expect(provider.eventListenerCount, 1);
-      await alloc.dispose();
-      await _pump();
-      expect(provider.stopped, ['tgdog-s/tg-1/agent']);
-      expect(log, contains('teardown'));
-      expect(provider.eventListenerCount, 0, reason: 'the subscription is cancelled');
-    });
+    test(
+      'dispose cancels the subscription, stops the group, runs teardown',
+      () async {
+        final log = <String>[];
+        final provider = FakeRuntimeProvider();
+        final alloc =
+            _RecProcessCap(log).createAllocation(
+                  _allocCtx(
+                    transport: provider,
+                    sink: (_) {},
+                    cancel: CancelToken(),
+                  ),
+                )
+                as ProcessAllocation;
+        await alloc.startOrAdopt();
+        await _pump();
+        expect(provider.eventListenerCount, 1);
+        await alloc.dispose();
+        await _pump();
+        expect(provider.stopped, ['tgdog-s/tg-1/agent']);
+        expect(log, contains('teardown'));
+        expect(
+          provider.eventListenerCount,
+          0,
+          reason: 'the subscription is cancelled',
+        );
+      },
+    );
 
     test('a spawn never reached (disposed first) does NOT stop the group but '
         'still tears down', () async {
       final log = <String>[];
       final provider = FakeRuntimeProvider();
       final cancel = CancelToken();
-      final alloc = _RecProcessCap(log).createAllocation(
-        _allocCtx(transport: provider, sink: (_) {}, cancel: cancel),
-      ) as ProcessAllocation;
+      final alloc =
+          _RecProcessCap(log).createAllocation(
+                _allocCtx(transport: provider, sink: (_) {}, cancel: cancel),
+              )
+              as ProcessAllocation;
       // Cancel before startOrAdopt runs its body → the provision guard drops out
       // before the spawn.
       cancel.cancel();
