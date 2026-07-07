@@ -105,14 +105,19 @@ class Station extends StatelessSeed {
   Seed build(TreeContext context) {
     _requireName(name, 'Station');
     final explicit = root;
-    final resolved = explicit != null
-        ? _requireRoot(explicit, 'Station("$name")')
-        : (GridRoot.maybeOf(context) ??
+    // The defaulted grid root is RE-validated: a GridRoot can reach the tree
+    // from a consumer-authored InheritedSeed, not only RawAssetGrid.build —
+    // the refusal holds at every mount point, not just the canonical one.
+    final resolved = _requireRoot(
+      explicit ??
+          (GridRoot.maybeOf(context) ??
                   (throw StateError(
                     'Station("$name"): no root authored and no RawAssetGrid '
                     'encloses it — there is no default root (v3 §0).',
                   )))
-              .path;
+              .path,
+      'Station("$name")',
+    );
     return InheritedSeed<StationScope>(
       value: StationScope(name: name, root: resolved),
       child: AssetFanOut(assets),
@@ -142,12 +147,19 @@ class Substations extends MultiChildSeed {
 class Substation extends StatelessSeed {
   /// A substation named [name] with the single [root], mounting [assets]
   /// under its [SubstationScope].
-  const Substation({
+  ///
+  /// Carries an intrinsic identity key (`ValueKey('substation:<name>')`)
+  /// unless [key] overrides it: sibling substations reconcile by NAME, never
+  /// by position — so a conditional substation anywhere in the fan-out
+  /// (`if (kDebug) Substation(...)`) can appear or vanish without a
+  /// neighbour's live subtree (post-Track-C: its WorkList, worktrees, lock)
+  /// rebinding onto the wrong project identity.
+  Substation({
     required this.name,
     required this.root,
     this.assets = const <Seed>[],
-    super.key,
-  });
+    Key? key,
+  }) : super(key: key ?? ValueKey<String>('substation:$name'));
 
   /// The project's name.
   final String name;

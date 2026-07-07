@@ -10,6 +10,19 @@
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
+/// Runs [probe] against a live TreeContext at build time.
+class OfProbe extends StatelessSeed {
+  const OfProbe(this.probe, {super.key});
+
+  final void Function(TreeContext) probe;
+
+  @override
+  Seed build(TreeContext context) {
+    probe(context);
+    return const Leaf();
+  }
+}
+
 /// A terminal leaf (an empty fan-out).
 class Leaf extends MultiChildSeed {
   const Leaf({super.key}) : super(children: const []);
@@ -97,11 +110,11 @@ void main() {
 
     test('Substation refuses an empty name and a relative root', () {
       expect(
-        () => mount(const Substation(name: '', root: '/w')),
+        () => mount(Substation(name: '', root: '/w')),
         throwsA(isA<ArgumentError>()),
       );
       expect(
-        () => mount(const Substation(name: 'tg', root: 'w')),
+        () => mount(Substation(name: 'tg', root: 'w')),
         throwsA(isA<ArgumentError>()),
       );
     });
@@ -120,13 +133,36 @@ void main() {
       );
     });
 
-    test('scope lookups outside their scopes are loud via of()', () {
+    test('scope lookups outside their scopes: maybeOf is null', () {
       final seen =
           <({GridRoot? grid, StationScope? station, SubstationScope? sub})>[];
       mount(ScopeProbe(seen));
       expect(seen.single.grid, isNull);
       expect(seen.single.station, isNull);
       expect(seen.single.sub, isNull);
+    });
+
+    test('of() outside its scope throws StateError (loud, all three)', () {
+      mount(
+        OfProbe((ctx) {
+          expect(() => GridRoot.of(ctx), throwsStateError);
+          expect(() => StationScope.of(ctx), throwsStateError);
+          expect(() => SubstationScope.of(ctx), throwsStateError);
+        }),
+      );
+    });
+
+    test('a consumer-authored GridRoot cannot default a bad root into a '
+        'Station (re-validated at the mount point)', () {
+      expect(
+        () => mount(
+          InheritedSeed<GridRoot>(
+            value: const GridRoot(path: 'relative'),
+            child: const Station(name: 'x'),
+          ),
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
     });
   });
 
@@ -239,6 +275,12 @@ void main() {
 
       // Four substations mounted — literal, composed, and conditional alike.
       expect(probes, hasLength(4));
+      // The intrinsic identity key: sibling substations reconcile by NAME
+      // (a conditional anywhere in the list can never rebind a neighbour).
+      expect(
+        Substation(name: 'tg', root: '/w').key,
+        const ValueKey<String>('substation:tg'),
+      );
       expect(
         probes.map((s) => s.sub!.name),
         containsAll(<String>[
