@@ -172,6 +172,19 @@ vanish read as completion — were cataloged directly as deferred beads (tg-4rw,
   the live re-arm and the restart-with-closed-gate adopt path (today's only recovery, itself
   untested).
 - **Inference eliminated:** the wedged-gate forensics + the operator bounce.
+- **CORRECTION (2026-07-07 pm — the diagnosis above was wrong; the mechanism was worse):** the
+  D-7 re-arm was **never dead**. The resolve at 06:25Z re-armed correctly; route re-ran against
+  the **persisted** lane grades (`grid.result.<node>.grade`, still carrying the fail-closed F) —
+  not the fresh verdict files — and re-gated *seconds later*, **minting a second gate bead**
+  (tgdog-zp3) that nobody was watching. The 01:25 `last-touched` read as "close, then silence"
+  was the re-gate churn. Consequence: for a gate born from a transport-default F, `gate resolve`
+  alone is a guaranteed loop that mints one more gate bead per attempt. The working ruling flow
+  (proven live): chokepoint-correct the lane grade (+`transport: operator-ruling` + rationale),
+  THEN resolve — route advances. tg-boq's retry+flare fix stays valid (the latch compound was
+  real, latent). **Follow-up (CODE — FILED P1, tg-i08):** `gate resolve --grade <lane>=<A-F>`
+  ruling semantics; refuse-loud on a plain resolve of a fail-closed-F gate; gate **mint-dedup**
+  (a re-gating node reuses its open gate — the revalidate failure that followed minted TWO
+  duplicate gates in one minute); re-gates surfaced loud in `watch`/`gate ls`.
 
 ### I-15 — Rework/terminal-close leaks the round's gate beads (2026-07-07)
 - **What:** `space gate ls` shows 14 OPEN gates whose blocked sessions are long closed/retired
