@@ -12,6 +12,10 @@
 /// StationSources? sources;                         // held for refusal cleanup
 /// try {
 ///   validateArming(args);                          // throws StationRefusal
+///   // OP-1 (I-3): once the runner has read its blessed beads, re-check with
+///   // their plans so a validation_plan that cannot run in the worktree is an
+///   // arming refusal (never a gating F):
+///   //   validateArming(args, validationPlans: {for (b in blessed) b.id: b.validationPlan});
 ///   final ws = discoverWorkspaces(
 ///     workspaces: args.workspaces,
 ///     defaultSubstation: args.substations.isNotEmpty ? args.substations.first : '',
@@ -66,6 +70,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_exploration/grid_exploration.dart';
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:path/path.dart' as p;
 
 import 'runtime_snapshot_source.dart';
 import 'station_control.dart';
@@ -580,6 +585,9 @@ void validateArming(
   StationArgs args, {
   bool rootInjected = false,
   bool stateInjected = false,
+  Map<String, String?> validationPlans = const <String, String?>{},
+  String? worktreeRoot,
+  bool Function(String path)? dirExists,
 }) {
   if (args.substations.isEmpty) {
     throw const StationRefusal(
@@ -636,6 +644,184 @@ void validateArming(
       'or use --dry-run to observe all owned work.',
     );
   }
+  // OP-1 (I-3): a validation_plan that cannot execute inside the worktree is an
+  // ARMING refusal, not a gating F. Linted here — before any spawn — so a
+  // plan defect never masquerades as broken code at the gate. A no-op when the
+  // caller passes no plans (dry-run / a runner that skips the read).
+  preflightValidationPlans(
+    validationPlans,
+    worktreeRoot: worktreeRoot,
+    dirExists: dirExists,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// validation_plan preflight (OP-1 / I-3) — a plan that cannot run in the
+// worktree is an ARMING refusal, never a gate.
+// ---------------------------------------------------------------------------
+
+/// Preflights each blessed bead's `validation_plan` at arming (OP-1, I-3): a
+/// plan authored from the umbrella-dir view (`cd power_station && …`) cannot
+/// run inside the per-bead worktree (no `power_station/` subdir) → the gating
+/// lane exits non-zero → a FALSE gating **F** indistinguishable from broken
+/// code. This turns that class into an [StationRefusal] (exit 64) BEFORE any
+/// agent is spawned, naming the bead + the offending clause.
+///
+/// [plans] maps a blessed bead id → its `validation_plan` (null when the bead
+/// carries none — skipped, since the gating lane then runs the asset default).
+/// A runner reads these from the work store for its [StationArgs.targetBeads]
+/// and passes them through; an EMPTY map is a no-op (the dry-run / no-read
+/// shape), so no existing caller changes behavior.
+///
+/// [worktreeRoot] is the directory the gating lane runs in (the runner is
+/// already rooted there); defaults to [Directory.current]. [dirExists] is the
+/// directory-existence probe (defaults to a real filesystem check) — injectable
+/// so the lint is a pure, offline-testable function.
+void preflightValidationPlans(
+  Map<String, String?> plans, {
+  String? worktreeRoot,
+  bool Function(String path)? dirExists,
+}) {
+  if (plans.isEmpty) return;
+  final root = worktreeRoot ?? Directory.current.path;
+  for (final entry in plans.entries) {
+    // A null value means the bead carries NO validation_plan — not this
+    // preflight's business (the gating lane runs the asset default), so skip
+    // it rather than over-refuse a legitimately planless bead. A present-but-
+    // blank plan ('') is a real defect and is linted → refused below.
+    if (entry.value == null) continue;
+    final reason = lintValidationPlan(
+      entry.value,
+      worktreeRoot: root,
+      dirExists: dirExists,
+    );
+    if (reason != null) {
+      throw StationRefusal(
+        'grid run: bead ${entry.key} cannot be armed — its validation_plan '
+        '$reason. Validation plans are WORKTREE-RELATIVE only: the gating lane '
+        'runs inside the per-bead worktree (already rooted there) — never `cd` '
+        'into a named repo dir, never reference an absolute path. Fix the plan '
+        'on the bead and re-arm. This is an ARMING refusal, not a gate (I-3): '
+        'the plan could not execute, so no work was judged.',
+      );
+    }
+  }
+}
+
+/// Lints one `validation_plan` against the worktree it will run in. Returns a
+/// human-readable reason (naming the offending clause) when the plan cannot
+/// execute inside [worktreeRoot]; null when it is worktree-relative and
+/// runnable-shaped.
+///
+/// Conservative by design (I-3) — a DENY-LIST of the known-bad shapes, NOT a
+/// shell parser: **(a)** a `cd` into a directory absent at (or outside) the
+/// worktree root, **(b)** an empty/whitespace plan, **(c)** any reference to an
+/// absolute path outside the worktree. A false negative degrades to today's
+/// behavior (a diagnosable gating F); a false positive would wrongly refuse an
+/// armable bead, so the shapes are chosen to have (near-)zero of those.
+///
+/// [dirExists] probes directory existence (defaults to a real filesystem
+/// check); inject it to keep the lint pure and offline.
+String? lintValidationPlan(
+  String? plan, {
+  required String worktreeRoot,
+  bool Function(String path)? dirExists,
+}) {
+  // (b) empty / whitespace.
+  if (plan == null || plan.trim().isEmpty) {
+    return 'is empty — a validation plan must run at least one check inside '
+        'the worktree';
+  }
+  final exists = dirExists ?? ((path) => Directory(path).existsSync());
+  final root = p.normalize(worktreeRoot);
+  for (final rawClause in plan.split(RegExp(r'&&|\|\||;|\||\n'))) {
+    final clause = rawClause.trim();
+    if (clause.isEmpty) continue;
+    // (a) a `cd` into an absent / non-worktree-relative directory.
+    final target = _cdTarget(clause);
+    if (target != null) {
+      final reason = _lintCd(target, clause, root: root, exists: exists);
+      if (reason != null) return reason;
+      // A `cd` into an EXISTING worktree subdir is allowed — fall through so a
+      // later absolute-path token in the same clause is still caught.
+    }
+    // (c) an absolute path outside the worktree, referenced anywhere.
+    final abs = _firstAbsolutePathOutside(clause, root: root);
+    if (abs != null) {
+      return 'references the absolute path "$abs" outside the worktree '
+          '(clause `$clause`) — validation plans are worktree-relative only';
+    }
+  }
+  return null;
+}
+
+/// The directory a `cd` clause changes into, or null if [clause] is not a `cd`.
+/// Returns the empty string for a bare `cd` (which changes to `$HOME` — not
+/// worktree-relative, so [_lintCd] refuses it).
+String? _cdTarget(String clause) {
+  final m = RegExp(r'^cd(?:\s+(.*))?$').firstMatch(clause);
+  if (m == null) return null;
+  final rest = (m.group(1) ?? '').trim();
+  if (rest.isEmpty) return '';
+  final quoted = RegExp('''^(['"])(.*?)\\1''').firstMatch(rest);
+  if (quoted != null) return quoted.group(2)!;
+  return rest.split(RegExp(r'\s+')).first;
+}
+
+/// Lints one `cd` [target] (the directory of [clause]); null when it resolves
+/// to an existing directory inside [root].
+String? _lintCd(
+  String target,
+  String clause, {
+  required String root,
+  required bool Function(String path) exists,
+}) {
+  String reason(String desc) => '$desc (clause `$clause`)';
+  if (target.isEmpty) {
+    return reason('`cd`s to \$HOME — a validation plan must stay in the '
+        'worktree');
+  }
+  if (target == '-' ||
+      target == '~' ||
+      target.startsWith('~/') ||
+      target.contains(r'$')) {
+    return reason('`cd`s into "$target", which is not a literal '
+        'worktree-relative path');
+  }
+  final abs = p.isAbsolute(target)
+      ? p.normalize(target)
+      : p.normalize(p.join(root, target));
+  if (!p.equals(abs, root) && !p.isWithin(root, abs)) {
+    return reason('`cd`s into "$target", outside the worktree root');
+  }
+  if (!exists(abs)) {
+    return reason('`cd`s into "$target", a directory absent at the worktree '
+        'root');
+  }
+  return null;
+}
+
+/// The first absolute-path token in [clause] that points outside [root], or
+/// null. Conservative: skips option flags (`--out=…`) down to their value,
+/// strips surrounding quotes, and only considers tokens shaped like a real
+/// filesystem path (so a regex literal like `'/foo.*/'` is ignored).
+String? _firstAbsolutePathOutside(String clause, {required String root}) {
+  for (final raw in clause.split(RegExp(r'\s+'))) {
+    if (raw.isEmpty) continue;
+    var tok = raw;
+    final eq = tok.indexOf('=');
+    if (tok.startsWith('-') && eq != -1) tok = tok.substring(eq + 1);
+    if ((tok.startsWith('"') && tok.endsWith('"')) ||
+        (tok.startsWith("'") && tok.endsWith("'"))) {
+      if (tok.length >= 2) tok = tok.substring(1, tok.length - 1);
+    }
+    if (tok.length < 2 || !RegExp(r'^/[A-Za-z0-9._~/-]+$').hasMatch(tok)) {
+      continue;
+    }
+    final norm = p.normalize(tok);
+    if (!p.equals(norm, root) && !p.isWithin(root, norm)) return tok;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
