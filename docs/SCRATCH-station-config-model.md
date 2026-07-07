@@ -208,6 +208,203 @@ shims · `''` sentinels · cwd discovery under arming · `serviceBundleMapFor` +
 surface · the `workRoot` fallback chain · **the v2 delegate's buildServices/
 buildSources hook split** (assets in the tree, not framework layers).
 
+## 7a. Fossil-completeness inventory — Track 0(a) audit (2026-07-07, read-only)
+
+Swept `grid_cli` / `grid_engine` / `grid_runtime` (this repo, `packages/…`) +
+`space_station` / `power_station` (sibling checkouts under `engineering.memento/`).
+Tool: `rg` over `*.dart` (generated `*.g.dart`/`*.freezed.dart` excluded). `lib/…` =
+the fossil to delete or rewrite; `test/…` = migrates with it (never shimmed).
+**Verdict: §7's list is COMPLETE for everything it names** — every item has real code
+fossils below (the one exception, item 13, is a design-only fossil: no code). **6
+extensions (E1–E6) and a same-name NON-fossil set are added.** Epicenter =
+`grid_cli/lib/src/station_runner.dart` (the `addStationFlags` → `StationArgs` →
+`validateArming` → `discoverWorkspaces` → `buildControllers` → `buildLiveWiring` →
+`composeStation` assembly) and its by-hand mirror `space_station/lib/src/up_command.dart`.
+
+### CONFIRMED present — per kill-list item
+
+**1. `defaultSubstation`** — grid_cli `station_runner.dart`:17(doc),651–667 (the
+`buildControllers` default-key param `String defaultSubstation=''` + `work[defaultSubstation]=ws`);
+space_station `up_command.dart`:149,172,252–281 (`serviceBundleMapFor`'s default-key +
+its doc). Tests: space_station `service_bundle_map_test.dart`:37,49,64,79,100,117,130.
+
+**2. `substations.first` privilege** — grid_cli `station_runner.dart`:17,411,425,480,508,1004,1009,1046
+(+ doc 870,1000). space_station `up_command.dart`:149,172,186,416. Tests:
+`station_status_test.dart`:205; `run_command_tree_test.dart`:945(doc),969,997,998,1014.
+NOTE the `args.substations` SET itself survives (named substations); only the `.first`
+"pick a default" privilege dies.
+
+**3a. `RootSpec` type** — grid_cli `station_runner.dart`:263–318 (class + `==`/`toString`),
+278–306 (`RootSpec.parse`), 323–338 (`parseWorkspaceSpec` mirrors the same grammar),
+362,406,409,463,477,482. space_station `up_command.dart`:411,414. Tests:
+`root_flag_test.dart` (WHOLE FILE — E5), `station_status_test.dart`:31,173,
+`run_command_tree_test.dart`:267,356,462,559,560,726.
+
+**3b. `--root` grammar** — the option: grid_cli `station_runner.dart`:146–158
+(`addStationFlags`), mirrored space_station `up_command.dart`:321–333. Consumers:
+`station_runner.dart`:406–425 (`StationArgs.from` parse loop), `up_command.dart`:411–425.
+Tests: `root_flag_test.dart`:80,90,92,109,111,132,134; space `up_command_validation_test.dart`:96,111,126,145,147;
+`up_down_status_smoke_test.dart`:274,276. NOTE the `'root':` MAP keys at
+`station_control.dart`:59 and `work_list.dart`:301 are the observable/flare surface
+(they fall with `metadata.grid.root`, see E2), NOT the CLI flag.
+
+**4. `--workspace` axis** — the option: grid_cli `station_runner.dart`:166–178, mirrored
+`up_command.dart`:340–347; `parseWorkspaceSpec` 321–338; `StationArgs.workspaces` parse
+421–429; `discoverWorkspaces` 653–691 (the work-store fan-out). Consumers 762,819,932;
+grid_cli `watch_command.dart`:74,79; `gate_command.dart`:155,224,236,242;
+`rework_command.dart`:46,104,137,142,158,162,179–194. Tests: `workspace_flag_test.dart`
+(WHOLE FILE — E5), `discover_workspaces_test.dart` (WHOLE FILE — E5). NOTE the
+`BeadsWorkspace` beads_dart store type SURVIVES (E6); only the CLI axis + path plumbing die.
+
+**5. `--state-workspace` / `--state-substation`** —
+*`--state-workspace` / `stateWorkspacePath` / `stateWorkspace`:* grid_cli
+`station_runner.dart`:181–185,380,441,519,614–619 (live guard),656,682–687,706,729,819,932,1314,1316,1350,1354;
+`station_control.dart`:251; `station_lock.dart`:10,101,113–129 (`stateWorkspaceDir` — re-source not delete, E4);
+`gate_command.dart`:54,59,94,114,117,138,151,163,167,216,220,232,242,245;
+`rework_command.dart`:31,53,82,105,131,138,143,154,156,162–174. space_station
+`up_command.dart`:150,349–353,432; `attach_support.dart`:3–69 (`resolveStateWorkspace`,
+whole helper); `down_command.dart`:21,37,45; `status_command.dart`:32,67,77,136. Tests:
+`rework_command_test.dart`, `gate_command_test.dart`, `discover_workspaces_test.dart`,
+`run_command_tree_test.dart`:256,269,276,358,607,695,727, `station_lock_test.dart`,
+`station_attach_test.dart`, `station_control_wiring_test.dart`:324, space
+`up_command_validation_test.dart`, `up_down_status_smoke_test.dart`.
+*`--state-substation` / `stateSubstation`:* grid_cli `station_runner.dart`:188–192,381,442–444,522,619,923,926,1044–1046,1317;
+`gate_command.dart`:13,27,42,54,66,95,139,152,213,221,265,292;
+`rework_command.dart`:60,106,139,265; space `up_command.dart`:356,433–435. **Engine-deep
+(→ E3):** grid_engine `station_services.dart`:12,25,30,46 (`StationServices.stateSubstation`),
+consumed `capability_host.dart`:348 + `session_scope.dart`:169 to stamp `'rig':
+stateSubstation` on session beads. Test constant `stateSubstation='tgdog'`:
+`engine_fakes.dart`:441(+463,473,505) + ~30 grid_engine/grid_cli test refs; power_station
+`asset_fakes.dart`:85, acceptance tests.
+
+**6. `metadata.grid.root` (Q3′ — killed, replaced by reference-inflation)** — the READ:
+grid_runtime `bead_ownership.dart`:94–100 (`metadata['grid.root']`). Resolution/use:
+grid_engine `work_list.dart`:184–195,296–301 (targetRoot + `registeredRoots` gate +
+flare stamp), `session_scope.dart`:406, `capability.dart`:306,324,337 + `allocation.dart`:504,519
+(rootName selector), `substation_config.dart`:44. Doc/comments: `station_runner.dart`:153,262,468,879,1132,1183;
+space `up_command.dart`:167,193,256,328. Tests: `run_command_tree_test.dart`:513,516,528,533;
+`compose_station_disjoint_ownership_test.dart`:60; grid_engine `track_a_root_selector_test.dart`:158,164,197,234,
+`track_a_allocation_test.dart`:360,376,400. (Brief-side reads are Track 0(b)'s remit.)
+
+**7. `rootPath` / `workspacePath` shims** —
+*`rootPath` (StationArgs deprecated alias):* grid_cli `station_runner.dart`:365–370,392,464,471–488,504;
+tests `root_flag_test.dart`:144–193, `workspace_flag_test.dart`:118. NON-fossil same
+name (E6): grid_runtime `station_git_service.dart`:157–166 `WorktreeLayout.worktreePath(String rootPath,…)`
+is a plain param (+ its tests).
+*`workspacePath` (StationArgs deprecated alias):* grid_cli `station_runner.dart`:375–379,394,494,500–516;
+space `up_command.dart`:431; `rework_command.dart`:104,137,183,187; tests `workspace_flag_test.dart`:117–145.
+
+**8. `''` sentinels** — all trace to items 1/2 (the "no substation → empty string"
+fallback): grid_cli `station_runner.dart`:411,425,480,508,1007,1009,1044–1046; grid_engine
+`work_list.dart`:301 (`'root': targetRoot ?? ''`); space `up_command.dart`:416. (The
+`args.isNotEmpty ? args.first : ''` / `?? ''` at `station_runner.dart`:1591–1594, in
+projections, `subprocess_provider.dart`:174,225, and power_station committee/landing are
+ordinary arg-parse / JSON-default guards — NOT store sentinels.)
+
+**9. cwd store discovery under arming** — grid_cli `station_runner.dart`:660,663
+(`BeadsWorkspace.discover()` no-arg + `Directory.current.path` refusal);
+`watch_command.dart`:79,82; `gate_command.dart`:167, `rework_command.dart`:187
+(`?? Directory.current.path`); space `status_command.dart`:145; help text "Defaults to
+discovery from the cwd" at `station_runner.dart`:177 / `up_command.dart`:345. NON-fossil
+(E6): power_station `asset_loader.dart`:169,179 cwd walk-up is ASSET-PACK (TOML)
+discovery; `dart_command.dart`:112 is a capability workdir; `Directory.current` walk-ups
+in `*_test.dart`/`structural_test.dart`/`fixtures.dart` are test-infra locators.
+
+**10. `serviceBundleMapFor` + `ServiceBundle`** —
+*`serviceBundleMapFor`:* ONLY space_station `up_command.dart`:171,262(def)–288 + test
+`service_bundle_map_test.dart` (WHOLE FILE — E5). grid_cli passes `services:` directly.
+*`ServiceBundle` TYPE (large, central — Track F):* DEFINED grid_engine `capability.dart`:310
+(with the root selector 305–344, → E2). It is the engine's per-`SubstationScope` DI seam
+(ADR-0008 D5): `substation_scope.dart`:16–91 provides `InheritedSeed<ServiceBundle>`;
+consumed `work_list.dart`:102–108, `capability_host.dart`:69,115, `session_scope.dart`:413,
+`allocation.dart`:506; declared in `station_kernel.dart`:128, `station_services.dart`:15,
+`grid_engine.dart`:63. grid_cli `station_runner.dart`:24,29,846,876,1149,1171,1197 (the
+`services` map) + `grid_cli.dart`:12. power_station `code_capabilities.dart`:258,
+`landing.dart`:87,140. Test surface (migrates with F): ~34 files — grid_engine 20
+(incl. `service_bundle_root_test.dart` whole-file, `track_a_*`, `track_e_capability_host_test.dart`),
+grid_cli `run_command_tree_test.dart`, power_station 6 (`substation_service_bundle_test.dart`,
+acceptance). Dissolving the type = replacing the `InheritedSeed<ServiceBundle>` DI with
+per-substation git/GitHub ASSETS mounted at substation scope (§3).
+
+**11. hand-mirrored flag surface** — CONCRETE: space_station `up_command.dart`:301
+`_addResidentStationFlags` byte-duplicates grid_cli `station_runner.dart`:126
+`addStationFlags` (its own doc, `up_command.dart`:294–300, admits "Kept in lockstep with
+`addStationFlags` by hand"); `up_command.dart`:405 `_residentStationArgsFrom` mirrors
+`StationArgs.from` (`station_runner.dart`:400). Dies with Track G (absorbs tg-da7).
+
+**12. `workRoot` fallback chain** — the chain: grid_cli `station_runner.dart`:1003–1010
+(`roots[substations.first] ?? roots.values.first ?? RootCheckout(path:'')`), consumed 1054;
+the status projection `station_control.dart`:252–254 (`args.roots.isEmpty ? null : …`).
+The single-root CONSUMER = grid_engine `restart_reconciler.dart`:250–336 (`_workRoot`;
+"restart walks substations" D-M6 deferred → Track H subsumes tg-d7z). Fields/threading:
+`station_runner.dart`:34(doc),852,872,1166,1208; `station_control.dart`:73,95,137;
+space `up_command.dart`:173,201,205,264,286; `signal_smoke_target.dart`:34; space
+`status_command.dart`:114 (the lone `station['workRoot']` display CONSUMER of
+`station_control`'s emitted `'workRoot'` projection field at :137 — added round 2). Tests: many
+(grid_cli `station_lock_test`/`station_status_test`/`station_control_wiring_test`/`station_signals_test`/`station_attach_test`/`run_command_tree_test`/`compose_station_disjoint_ownership_test`;
+grid_engine `restart_reconciler_test.dart` ×13, `track_d_reconciler_adopt_test.dart`;
+power_station acceptance). NON-fossil (E6): the `RootCheckout` type (grid_runtime
+`station_git_service.dart`:19) survives — it becomes per-substation/plural, not the
+singular default.
+
+**13. v2 delegate `buildServices`/`buildSources` split** — **NO code fossil.** Zero hits
+for either symbol: the v2 delegate was never implemented. The framework-owned layering it
+names is instead the CURRENT station-runner assembly `discoverWorkspaces` (`station_runner.dart`:653)
+→ `buildControllers` (761) → `buildLiveWiring` (910) → `composeStation` (1160, + `wrapRoot`).
+Track G swaps that whole assembly for `runGrid(GridDelegate)` + composition Seeds; DoD #6
+removes the old boot path. (Recorded here so a §7-driven grep doesn't chase a phantom symbol.)
+
+### Extensions to §7 (fold into H / E / F / G scope)
+
+- **E1 — the `--head` flag.** A rider on the `--root <name>=<path>[@head]` grammar; dies
+  WITH `--root`. `station_runner.dart`:159–165; space `up_command.dart`:334–339;
+  `StationArgs.head` 430.
+- **E2 — the root-SELECTOR subsystem falls entirely with `metadata.grid.root` (Q3′).**
+  `ServiceBundle.sourceControlsByRoot` / `sourceControlFor(rootName)` (`capability.dart`:305–344),
+  `SubstationConfig.registeredRoots` (`substation_config.dart`:53) + the `WorkList`
+  targetRoot gate / `_reportRootMissing` (`work_list.dart`:117,184–195) + its flare `'root'`
+  stamp (301) + `StationControl`'s `'root'` field (`station_control.dart`:59) + the multi-`--root
+  <name>=<path>` grammar + `sourceControlsByRoot` builder (space `up_command.dart`:270–288).
+  ONE root per substation (v3) ⇒ the selector, the extra-roots map, and the registeredRoots
+  gate all vanish. Tests: `service_bundle_root_test.dart` (whole file), `track_a_root_selector_test.dart`.
+- **E3 — `StationServices.stateSubstation` + the `'rig': stateSubstation` session stamp.**
+  The session-ownership prefix currently derives from the killed `--state-substation` flag;
+  in v3 it must derive from the station/grid identity (Q5a). Engine-deep — survives in
+  CONCEPT but is re-sourced (not a blind delete). `station_services.dart`:46;
+  `capability_host.dart`:348; `session_scope.dart`:169.
+- **E4 — `station_lock.dart` input.** The lock ALREADY writes `<dir>/.grid/station.lock`
+  (matches Q5a); only its input `stateWorkspaceDir` (from `--state-workspace`) re-sources to
+  `<grid.root>`. A rename, not a delete (`station_lock.dart`:113–129; also
+  `station_attach.dart`:178–268).
+- **E5 — whole-file test fossils (delete, don't migrate).** grid_cli
+  `test/root_flag_test.dart`, `test/workspace_flag_test.dart`, `test/discover_workspaces_test.dart`;
+  space_station `test/service_bundle_map_test.dart`; grid_engine `test/service_bundle_root_test.dart`
+  (dies with E2/F).
+- **E6 — same-name NON-fossils to PRESERVE (don't delete on a blind grep).** `BeadsWorkspace`
+  (beads_dart store type); `RootCheckout` (grid_runtime `station_git_service.dart`:19 — becomes
+  plural/per-substation); `WorktreeLayout.worktreePath(String rootPath,…)` param; power_station
+  `asset_loader.dart` cwd walk-up (asset-pack discovery); the `--substation` / `--owner` /
+  `--bead` flags (all survive).
+
+### Round-2 verification (2026-07-07, read-only)
+
+The round-1 inventory was independently re-swept file-by-file: every sampled
+file:line citation across all 5 packages was confirmed ACCURATE at the exact lines
+(items 1–12, E1–E6 spot-checked against the live source). One genuine completeness
+gap was found and closed — item 12 now lists the `space_station/status_command.dart`:114
+`station['workRoot']` display consumer (the only read of the `'workRoot'` projection
+field besides its `station_control.dart`:137 emit site). Two same-name matches were
+re-confirmed as NON-fossils and left excluded: `git_ops.dart`'s `head`
+(git-HEAD/worktree parsing, not the `--head` flag — E1) and the surviving
+`substation`/`stateStore`/`dryRun` status-projection reads. No other lib-level fossil
+site was missing. §7's list stands COMPLETE.
+
+**Gate for Track H:** with the above, the fossil-deletion track has its full file:line
+worklist. The two structurally-large items are **10/E2** (dissolving the `ServiceBundle`
+DI seam + root selector across grid_engine's SubstationScope/CapabilityHost/WorkList/
+SessionScope + power_station code assets — Track F) and **11** (the space_station
+hand-mirror — Track G); the rest are flag/shim/sentinel deletions.
+
 ## 8. Track 0(b) — brief-inflation audit (findings, tg-7t7, 2026-07-07)
 
 READ-ONLY audit per `GRID-SDK-BUILD-ORDER.md` Track 0(b): *every place brief/prompt
