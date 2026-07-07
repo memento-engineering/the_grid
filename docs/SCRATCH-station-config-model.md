@@ -207,3 +207,125 @@ shims · `''` sentinels · cwd discovery under arming · `serviceBundleMapFor` +
 `ServiceBundle` (dissolved into substation-scoped assets) · the hand-mirrored flag
 surface · the `workRoot` fallback chain · **the v2 delegate's buildServices/
 buildSources hook split** (assets in the tree, not framework layers).
+
+## 8. Track 0(b) — brief-inflation audit (findings, tg-7t7, 2026-07-07)
+
+READ-ONLY audit per `GRID-SDK-BUILD-ORDER.md` Track 0(b): *every place brief/prompt
+building reads `metadata.grid.root` or any stamped path off a bead* (Q3′ requirement).
+Scope swept: `grid_engine` / `grid_runtime` / `grid_cli` (the_grid) · `grid_assets` /
+`dart_grid_assets` (power_station) · `space_station`. Lib code only (tests excluded).
+Two independent read-only traces (the grid_runtime provider chain; the power_station
+agent capability) corroborate the direct read.
+
+### 8.1 Headline verdict — Q3′ is ALREADY structurally satisfied on the brief path
+
+**No brief/prompt builder anywhere reads a resolved filesystem path off a bead.** There
+are exactly **two** brief builders in the whole org, both `(Bead, Workspace)` →
+`AgentBrief`, both in power_station:
+
+- `buildAgentBrief(bead, workspace)` — `grid_assets/lib/src/code/code_capabilities.dart:182`
+  (the coding-agent brief; called from `AgentCapability.spawn:121`).
+- `buildCriticPrompt(bead, rubric, nodePath)` — `grid_assets/lib/src/code/committee.dart:405`
+  (the critic brief; wrapped as `AgentBrief(task: …)` at `committee.dart:284`).
+
+Every filesystem path that reaches a spawned agent — the process cwd AND the path
+interpolated into the brief text — comes from the ambient **`Workspace`** inherited
+seed (`workspace.workspaceDir` / `.branch` / `.baseBranch`), **never a bead field**.
+`AgentBrief` (`agent_harness.dart:161`) has no path-typed field: only `task` /
+`workingAgreement` / `context`. All five harness `spawnFor`s set
+`RuntimeConfig(workDir: workspace.workspaceDir)` (`agent_harness.dart:327/349/403/442/481`).
+
+The one path *interpolated into brief text* is the working agreement's
+`${workspace.workspaceDir}` + `${workspace.branch}` (`code_capabilities.dart:207-208`) —
+from the seed, not the bead. The critic prompt's only path is the workspace-relative
+**constant** `.grid/critique/<rubric>.json` (`committee.dart:406`, `_critiqueDir` =
+`committee.dart:102`).
+
+### 8.2 What `metadata.grid.root` actually is — a SELECTOR (root NAME), never a path
+
+`grid.root` is a *registered-root name* a bead opts into (e.g. a `tg`-owned bead building
+`power_station` stamps `grid.root: power_station`), NOT a resolved path. The path is
+computed downstream from `RootCheckout.path` + substation + beadId. Every read:
+
+| # | file:line | code | what it reads | class |
+|---|---|---|---|---|
+| 1 | `grid_runtime/…/lifecycle/bead_ownership.dart:100` | `final root = metadata['grid.root'];` (the `rootOf` accessor) | selector name | **SELECTOR** — the ONE direct read; every consumer goes through this |
+| 2 | `grid_engine/…/circuit/session_scope.dart:416` | `services.sourceControlFor(BeadOwnershipPredicate.rootOf(seed.bead.metadata))` | name → `SourceControl`; then `sc.workspaceFor(beadId)` builds `Workspace.workspaceDir` (`:420`) | **REFERENCE** — the ONE inflation point (session-mount) |
+| 3 | `grid_engine/…/sdk/allocation.dart:524` | `services.sourceControlFor(… rootOf(bead.metadata) …)` then `sc.provisionWorkspace(beadId, workspace.workspaceDir)` (`:531-534`) | same name → SourceControl; provisions the worktree | **REFERENCE** — must match #2's SourceControl (split-brain wedged tg-rm5/tg-043) |
+| 4 | `grid_engine/…/seeds/work_list.dart:192` | `rootOf(bead.metadata) ?? ownership.substationOf(bead)` gated vs `registeredRoots` | selector name (defaulting to substation) | **SELECTOR** — mount-boundary name gate, no path |
+
+No `rootOf` / `metadata['grid.root']` read exists in `grid_assets`, `dart_grid_assets`,
+or `space_station` — the selector is consumed only in the_grid, and only to *pick a
+`SourceControl`*, never to read a path.
+
+### 8.3 Where the path is actually produced — config, keyed by beadId (no bead stamp)
+
+The name→path binding lives in CLI/substation config, not on any bead:
+
+- `SourceControl.workspaceFor(beadId)` is the beadId→path map (`capability.dart:359`); the
+  git impl computes `WorktreeLayout.worktreePath(root.path, root.substation, beadId)`
+  (`station_git_service.dart:165`; power_station's `GitSourceControl.workspaceFor` at
+  `code_capabilities.dart:404-415`) — **RootCheckout config + beadId, no bead field.**
+- `RootCheckout.path` originates from the CLI `--root name=path` flags →
+  `git.registerRootCheckout(path: …, substation: …)` (`station_runner.dart:978`;
+  space_station `serviceBundleMapFor` at `up_command.dart:262`). Registration is
+  reference-based root config; `ServiceBundle.sourceControlFor(name)` (`capability.dart:343`)
+  resolves the selector against it.
+- `SessionScope` (`session_scope.dart:419-423`) mounts the resulting `Workspace` seed;
+  the capabilities/brief-builders/harnesses consume it (`code_capabilities.dart:99`,
+  `committee.dart:251`, `landing.dart:89/143`).
+
+**Rebuild-track nuance:** Q3′ says "resolve at brief/prompt inflation time." Resolution
+today happens one layer UP, at `SessionScope` mount, not inside brief-building — but it is
+already config-derived and `grid.root` is already only a *name*, so there is **no
+bead-stamped path to strip from the brief path.** Track E's brief-side work is verification
++ (optionally) moving the resolution seam down to inflation; the substantive change is
+Track H killing the `grid.root` *selector* and the multi-root machinery
+(`sourceControlsByRoot` / `sourceControlFor`): once each Substation has ONE root and a
+bead's substation determines its root, reads #2–#4 collapse to "bead → its substation → its
+root."
+
+### 8.4 Adjacent stamped-path surfaces (NOT brief-inflation, flagged for Track E/H)
+
+These are the only places a resolved path is written *onto* a bead, or a second
+bead-carried-path surface exists — none is read to build a brief or a cwd:
+
+- **`runtime_actuator.dart:120-121`** — `spawnSession` stamps a resolved `'worktree'`
+  path (+ `'branch'`) onto the_grid's OWN **session** bead (via `StationBeadWriter
+  .createSession`'s `…metadata` passthrough). **STAMP**, but: M3-era API with **no
+  non-test caller**, and `metadata['worktree']`/`['branch']` are **never read back** in
+  lib code (write-only telemetry). A fossil — dies with the M3 grid_runtime path; the
+  live M4-P1 engine never constructs `RuntimeActuator`.
+- **The M4-P1 restart fence** (`AllocationStarted`/`AdoptFence`, `allocation.dart:132-143`)
+  persists `pgid`/`pid`/`token` + `state` onto the session bead — **identity, NOT a path**;
+  the worktree is re-inflated from `SourceControl`+beadId on restart. No path stamp.
+- **`StationBeadWriter.createSession`/`createGate`** (`station_bead_writer.dart:135-190`)
+  write only NAMES/IDS (`rig`=substation, `work_bead`, `blocks`, `node`, `started_at`) —
+  no path, and never `grid.root`. (`grid.root` is never *written* anywhere — purely
+  inbound selector.)
+- **The `grid.dart` pub-linkage envelope** (`code_capabilities.dart:142-156` `_linkWorkspace`
+  → `DartLinkService.applySync` → `pub_links.dart`) — the ONE place a bead carries declared
+  paths (per-package `devPath`s). But: (a) they are pub dependency-link paths, not the
+  agent's cwd/repo root; (b) they never touch brief/prompt text — written into
+  `pubspec_overrides.yaml` in the worktree; (c) relative values are absolutized against
+  `devRoot` = `RootCheckout.path` (config, threaded via `AgentCapability(devRoot:)`,
+  `code_capabilities.dart:517`), fail-closed refused without one (`pub_links.dart:222-237`).
+  A **second, independent bead-carried-path surface** — orthogonal to `grid.root`, but the
+  rebuild should decide whether these `devPath`s stay bead-declared or move to
+  substation/asset config (out of Q3′'s narrow "root stamp" remit, in Track E/H's spirit).
+
+### 8.5 Bead reads in brief-building, exhaustive (all REFERENCE / content — none a path)
+
+| file:line | code | reads | class |
+|---|---|---|---|
+| `code_capabilities.dart:184` | `bead.metadata['rig']` → `(substation \`$substation\`)` (`:190`) | substation NAME | **REFERENCE** (name) |
+| `code_capabilities.dart:183/201-204` | `bead.title/.description/.design/.acceptanceCriteria/.notes` | brief content | content, no path |
+| `committee.dart:579-595` (`_beadBlock`) · `asset_loader.dart:84-97` (`beadBlock`, `{{bead}}`) | same six content fields | critic/rubric content | content, no path |
+| `code_capabilities.dart:115` · `committee.dart:278` | `resolveAgentConfig(beadMetadata: bead.metadata …)` | `grid.agent` config envelope (harness/model/params) | **REFERENCE** (config, no path) |
+| `committee.dart:564` · `landing.dart:247` | `bead.metadata['validation_plan']` | gating `sh -c` command string | not brief text, not a path |
+
+**Conclusion:** DoD §3's "briefs inflate references (0(b) verified empty)" holds *today* for
+the brief path — no brief/prompt reads a stamped path off a bead. The residual work is
+Track H's deletion of the `grid.root` *selector* + multi-root resolution (reads #2–#4) and
+the fossil `worktree`/`branch` session-bead stamp, plus a Track E/H call on the `grid.dart`
+`devPath` surface (§8.4).
