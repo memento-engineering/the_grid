@@ -17,21 +17,30 @@
 ///
 /// ---
 ///
-/// **Track A (this commit) births the package with an intentionally empty
-/// export skeleton.** The surface fills in across later tracks; the sections
-/// below are the map, not yet the exports.
+/// **Track B fills the composition layer in.** The remaining sections are
+/// the map for the later tracks.
 library;
+
+// The tree vocabulary a station author needs (Seed / StatelessSeed / Nest /
+// TreeContext / keys) comes WITH the SDK — one import authors a station.
+export 'package:genesis_tree/genesis_tree.dart';
 
 // ── Composition Seeds (Track B — tg-vrz) ────────────────────────────────────
 // The pure, offline composition layer — a station authored as a tree:
 //   RawAssetGrid(root, assets)   · the raw root; the grid's state store lives
-//                                  at `root`.
+//                                  under `<root>/.grid/` (the grid has no
+//                                  work store).
 //   Station(root?, name, assets) · the machine; `root` defaults to grid.root.
-//   Substations(substations)     · the MultiChildSeed fan-out; each child
-//                                  establishes its WorkList.
-//   Substation(name, root, assets) · a project; ONE root, work store at it.
-// Asset slots are `List<Seed>` / `Seed`; validation lives in the types (an
-// invalid composition cannot be constructed). NOT YET exported.
+//   Substations(substations)     · the MultiChildSeed fan-out over the
+//                                  station's projects.
+//   Substation(name, root, assets) · a project; ONE root, work store at
+//                                  `<root>/.beads/`.
+// Asset slots are `List<Seed>` (Q7); validation lives in the types — an
+// invalid composition refuses LOUD at build (an authoring error, never a
+// default). Scope values (GridRoot / StationScope / SubstationScope) ride
+// InheritedSeeds and are read with `<Scope>.of(context)`.
+export 'src/composition/composition.dart' hide AssetFanOut;
+export 'src/composition/scopes.dart';
 
 // ── runGrid + GridDelegate (Track C) ────────────────────────────────────────
 // The entry point + lifecycle rails: `runGrid(GridDelegate)`, the observable
