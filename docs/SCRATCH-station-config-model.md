@@ -338,7 +338,9 @@ the status projection `station_control.dart`:252–254 (`args.roots.isEmpty ? nu
 The single-root CONSUMER = grid_engine `restart_reconciler.dart`:250–336 (`_workRoot`;
 "restart walks substations" D-M6 deferred → Track H subsumes tg-d7z). Fields/threading:
 `station_runner.dart`:34(doc),852,872,1166,1208; `station_control.dart`:73,95,137;
-space `up_command.dart`:173,201,205,264,286; `signal_smoke_target.dart`:34. Tests: many
+space `up_command.dart`:173,201,205,264,286; `signal_smoke_target.dart`:34; space
+`status_command.dart`:114 (the lone `station['workRoot']` display CONSUMER of
+`station_control`'s emitted `'workRoot'` projection field at :137 — added round 2). Tests: many
 (grid_cli `station_lock_test`/`station_status_test`/`station_control_wiring_test`/`station_signals_test`/`station_attach_test`/`run_command_tree_test`/`compose_station_disjoint_ownership_test`;
 grid_engine `restart_reconciler_test.dart` ×13, `track_d_reconciler_adopt_test.dart`;
 power_station acceptance). NON-fossil (E6): the `RootCheckout` type (grid_runtime
@@ -383,6 +385,19 @@ removes the old boot path. (Recorded here so a §7-driven grep doesn't chase a p
   plural/per-substation); `WorktreeLayout.worktreePath(String rootPath,…)` param; power_station
   `asset_loader.dart` cwd walk-up (asset-pack discovery); the `--substation` / `--owner` /
   `--bead` flags (all survive).
+
+### Round-2 verification (2026-07-07, read-only)
+
+The round-1 inventory was independently re-swept file-by-file: every sampled
+file:line citation across all 5 packages was confirmed ACCURATE at the exact lines
+(items 1–12, E1–E6 spot-checked against the live source). One genuine completeness
+gap was found and closed — item 12 now lists the `space_station/status_command.dart`:114
+`station['workRoot']` display consumer (the only read of the `'workRoot'` projection
+field besides its `station_control.dart`:137 emit site). Two same-name matches were
+re-confirmed as NON-fossils and left excluded: `git_ops.dart`'s `head`
+(git-HEAD/worktree parsing, not the `--head` flag — E1) and the surviving
+`substation`/`stateStore`/`dryRun` status-projection reads. No other lib-level fossil
+site was missing. §7's list stands COMPLETE.
 
 **Gate for Track H:** with the above, the fossil-deletion track has its full file:line
 worklist. The two structurally-large items are **10/E2** (dissolving the `ServiceBundle`
