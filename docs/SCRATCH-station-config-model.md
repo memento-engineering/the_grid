@@ -329,3 +329,16 @@ the brief path — no brief/prompt reads a stamped path off a bead. The residual
 Track H's deletion of the `grid.root` *selector* + multi-root resolution (reads #2–#4) and
 the fossil `worktree`/`branch` session-bead stamp, plus a Track E/H call on the `grid.dart`
 `devPath` surface (§8.4).
+
+### 8.6 Round-2 re-verification (2026-07-07)
+
+Every citation above was re-checked line-by-line against the current HEAD of all three
+repos; all still exact. Spot-confirmed: the four `grid.root` reads (`bead_ownership.dart:100`,
+`session_scope.dart:416`, `allocation.dart:524`, `work_list.dart:192`); the two — and only two
+— brief builders org-wide (`buildAgentBrief`/`buildCriticPrompt`, both power_station
+`grid_assets`); `AgentBrief` carries no path-typed field; all five harness `spawnFor`s source
+`workDir` from `workspace.workspaceDir`; the working-agreement interpolation and the
+`.grid/critique/<rubric>.json` critic path are workspace-derived, never bead-derived; the
+`runtime_actuator.dart:120-121` `worktree`/`branch` stamp has no non-test caller and is never
+read back; `dart_grid_assets` and `space_station` carry no `grid.root` read (space_station's
+mentions are comments) and no brief builder. **No findings changed.**
