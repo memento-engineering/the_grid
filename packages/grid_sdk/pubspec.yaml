@@ -1,0 +1,31 @@
+name: grid_sdk
+description: >-
+  The public authoring surface of the grid — "the grid" as concrete code
+  (GLOSSARY R9). A station is authored as a Seed: consumers COMPOSE this SDK's
+  composition types and drive them with `runGrid`; they never import the
+  private `grid_engine` (ADR-0008 Decision 2 — compose, never subclass). The
+  code-as-config thesis made a package: the tree IS the configuration
+  (`docs/SCRATCH-station-config-model.md`). Track A births the package
+  skeleton; the composition types land in Track B.
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  freezed_annotation: ^3.0.0
+  # The private element layer this SDK surfaces (ADR-0002 / ADR-0008 D2).
+  # Consumers compose `grid_sdk`; they never import `grid_engine` directly.
+  grid_engine: any
+  json_annotation: ^4.9.0
+  meta: ^1.16.0
+
+dev_dependencies:
+  build_runner: ^2.4.0
+  # freezed ALWAYS in grid packages — the 2026-07-04 boundary ruling
+  # (`beads_dart` never; grid packages always). tg-irs / tg-dbd.
+  freezed: ^3.0.0
+  json_serializable: ^6.9.0
+  lints: ^5.1.0
+  test: ^1.25.0
