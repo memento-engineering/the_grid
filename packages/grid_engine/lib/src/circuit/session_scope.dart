@@ -99,15 +99,35 @@ class SessionScopeState extends State<SessionScope> {
   static const _reworkDeclinedReasonKey = 'grid.rework_declined_reason';
 
   StationServices? _ctx;
+
+  /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
+  /// every `didChangeDependencies`, never `??=`-cached) — held so the off-build
+  /// re-arm microtask can LOUD-flare a dropped write through its
+  /// `transport` (tg-boq), the SAME emit-only sink `CapabilityHost._emitFlare`
+  /// uses.
+  ServiceBundle _services = const ServiceBundle();
+
   String? _sessionId;
   bool _resolving = true;
   bool _failed = false;
   bool _cancelled = false;
   bool _terminalScheduled = false;
 
-  /// The nodePaths whose gate re-arm has already been scheduled — latched so a
-  /// resolved gate flips its parked node back to `pending` exactly once (D-7).
-  final Set<String> _rearmed = {};
+  /// The nodePaths whose gate re-arm is IN FLIGHT (tg-boq) — an in-flight DEDUP
+  /// guard, **not** a permanent latch. A path is added before the write and
+  /// removed when the write SETTLES (success OR failure):
+  ///
+  /// - On **success** the store's `gated`→`pending` flip stops D-7 from
+  ///   re-firing on the next build, AND a legitimate SECOND gate cycle (a route
+  ///   that parks, resolves, re-runs, and parks again) can re-arm again — a
+  ///   permanent latch would wedge multi-round committee reruns.
+  /// - On **failure** the guard clears so the very next build (any state/work
+  ///   tick) RETRIES. The previous permanent `_rearmed` latch was set BEFORE the
+  ///   fire-and-forget write, so a dropped write made the drop PERMANENT and
+  ///   SILENT — the exact tg-boq incident (a gate closed, the parked node never
+  ///   re-armed, cursor stuck `gated` for 30+ min, operator recovery = a station
+  ///   bounce). LOUD or GONE (ADR-0008 D3).
+  final Set<String> _rearming = {};
 
   /// Whether the CURRENTLY adopted session was last observed with a node
   /// parked `gated` (tg-x1j v2) — refreshed every `build()` where
@@ -140,6 +160,11 @@ class SessionScopeState extends State<SessionScope> {
       'SessionScope requires an ambient InheritedSeed<StationServices>',
     );
     _ctx = ctx;
+    // Capture the (fixed-at-mount) ambient bundle for the off-build re-arm
+    // flare (tg-boq) — same discipline as `CapabilityHostState._services`.
+    _services =
+        context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
+        const ServiceBundle();
   }
 
   @override
@@ -203,19 +228,67 @@ class SessionScopeState extends State<SessionScope> {
   }
 
   /// Re-arms ONE parked node whose gate bead has closed (D-7): flips its cursor
-  /// `gated` → `pending` through the chokepoint so the route re-runs. Latched per
-  /// node (`_rearmed`), scheduled off `build` (never a write IN `build`).
+  /// `gated` → `pending` through the chokepoint so the route re-runs. Deduped
+  /// per node via the in-flight [_rearming] guard (see its doc), scheduled off
+  /// `build` (never a write IN `build`).
   void _scheduleRearm(String id, String nodePath) {
-    if (_rearmed.contains(nodePath)) return;
-    _rearmed.add(nodePath);
-    scheduleMicrotask(
-      () => unawaited(
-        _ctx?.writer.update(
-          id,
-          metadata: nodeStateMetadata(nodePath, StepState.pending),
-        ),
-      ),
-    );
+    if (_rearming.contains(nodePath)) return;
+    _rearming.add(nodePath);
+    scheduleMicrotask(() => unawaited(_rearm(id, nodePath)));
+  }
+
+  /// The re-arm write itself (tg-boq): flips the parked node to `pending`, then
+  /// clears the in-flight guard so the NEXT build retries on failure and a later
+  /// gate cycle can re-arm again. A dropped write is LOUD (a flare through the
+  /// emit-only transport) — never SILENT, never PERMANENT (the guard principle:
+  /// LOUD or GONE). It is NOT rethrown: an uncaught async error in a resident
+  /// station's root zone would terminate the isolate, so a transient bd blip
+  /// must not crash the whole station — the retry (via the cleared guard) is the
+  /// recovery, the flare is the signal.
+  Future<void> _rearm(String id, String nodePath) async {
+    final ctx = _ctx;
+    if (ctx == null) {
+      // Impossible for a mounted scope (`didChangeDependencies` captures `_ctx`
+      // before any build) — but do NOT drop silently if it ever happens: clear
+      // the guard (a later build retries) and flare.
+      _rearming.remove(nodePath);
+      _flareRearmFailed(nodePath, 'no StationServices captured');
+      return;
+    }
+    try {
+      await ctx.writer.update(
+        id,
+        metadata: nodeStateMetadata(nodePath, StepState.pending),
+      );
+      // Settled OK: clear the guard. The store's `gated`→`pending` flip stops
+      // D-7 from re-firing (and frees a future gate cycle to re-arm).
+      _rearming.remove(nodePath);
+    } on Object catch (error) {
+      // Settled FAILED: clear the guard so the next build retries, and flare so
+      // the drop is not silent. NOT rethrown (see the method doc — a crash would
+      // be worse than the wedge this fixes).
+      _rearming.remove(nodePath);
+      _flareRearmFailed(nodePath, '$error');
+    }
+  }
+
+  /// LOUD-signals a DROPPED gate re-arm (tg-boq) through the reserved emit-only
+  /// [ExplorationTransport] (D-8) — the same sink `CapabilityHost._emitFlare`
+  /// and `WorkList` use. A silently-swallowed re-arm failure wedged the parked
+  /// node `gated` forever (operator recovery was a station bounce); this makes
+  /// the failure observable (leonard reads it over the exploration host, A39/A40)
+  /// while the cleared guard makes it retryable. A throwing/absent transport
+  /// never re-breaks the microtask.
+  void _flareRearmFailed(String nodePath, String reason) {
+    try {
+      _services.transport?.flare('gate.rearmFailed', {
+        'sessionId': _sessionId ?? '',
+        'nodePath': nodePath,
+        'reason': truncateReason(reason),
+      });
+    } catch (_) {
+      // A throwing transport never re-breaks the re-arm microtask — swallow.
+    }
   }
 
   /// Schedules the rework re-mint (tg-x1j v2): the just-retired [retiredId]
@@ -246,7 +319,7 @@ class SessionScopeState extends State<SessionScope> {
       _resolving = true;
       _reworkScheduled = false;
       _terminalScheduled = false;
-      _rearmed.clear();
+      _rearming.clear();
       _lastKnownGated = false;
       _joinedOnce = false;
     });
@@ -409,9 +482,10 @@ class SessionScopeState extends State<SessionScope> {
     // selection by the `WorkList` mount-boundary gate, so this resolution
     // never itself refuses; `sourceControlFor` falls back to the default
     // defensively.
-    final services =
-        context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
-        const ServiceBundle();
+    // The bundle captured in `didChangeDependencies` (the dependency is
+    // registered there) — reused so `build` and the off-build re-arm flare read
+    // the SAME ambient value.
+    final services = _services;
     final sc = services.sourceControlFor(
       BeadOwnershipPredicate.rootOf(seed.bead.metadata),
     );
