@@ -17,14 +17,20 @@
 ///
 /// ---
 ///
-/// **Track B fills the composition layer in; Track D adds stores-at-roots +
-/// the substation init flow.** The remaining sections are the map for the
-/// later tracks.
+/// **Tracks B + C + D fill the authoring layer in** (composition Seeds +
+/// `runGrid`/`GridDelegate` + stores-at-roots + the substation init flow).
+/// The remaining commented sections map the later tracks.
 library;
 
 // The tree vocabulary a station author needs (Seed / StatelessSeed / Nest /
 // TreeContext / keys) comes WITH the SDK — one import authors a station.
 export 'package:genesis_tree/genesis_tree.dart';
+
+// The observable a `GridDelegate` IS. Re-exported so `addListener` / its
+// callback + remover types are usable from the one SDK import (a station author
+// never imports `state_notifier` directly).
+export 'package:state_notifier/state_notifier.dart'
+    show ErrorListener, Listener, RemoveListener, StateNotifier;
 
 // ── Composition Seeds (Track B — tg-vrz) ────────────────────────────────────
 // The pure, offline composition layer — a station authored as a tree:
@@ -42,6 +48,24 @@ export 'package:genesis_tree/genesis_tree.dart';
 // InheritedSeeds and are read with `<Scope>.of(context)`.
 export 'src/composition/composition.dart' hide AssetFanOut;
 export 'src/composition/scopes.dart';
+
+// ── runGrid + GridDelegate + GridConfiguration (Track C — tg-tv3) ────────────
+// The entry point + lifecycle rails: `runGrid(delegate)` mounts *delegate
+// provision → configuration provision → build*, returning a `GridHandle`.
+//   GridDelegate      · the observable `StateNotifier<GridConfiguration>`; the
+//                       lifecycle rails (`didLaunch` pre-tree / `initGrid`
+//                       post-mount async / `onReady` / `onTeardown`, failures
+//                       captured + attributed + loud as a `GridHookError`); and
+//                       the master `build(context, configuration)` returning
+//                       the §2 station tree (default: the `RawAssetGrid` root).
+//   GridConfiguration · a thin, plain value provided into the tree (Q6: no
+//                       domain/aspect machinery until something real earns it);
+//                       a watched value that re-composes on emission.
+// No framework service/source layers — that split DIED in v3; assets mount at
+// scope in the composition tree (Track B).
+export 'src/run/configuration.dart';
+export 'src/run/grid_delegate.dart';
+export 'src/run/run_grid.dart';
 
 // ── Stores at roots + substation init (Track D — tg-y1b) ────────────────────
 // A store lives at a root, uniformly (Q5a):
@@ -67,12 +91,3 @@ export 'src/composition/scopes.dart';
 export 'src/stores/stores.dart';
 export 'src/stores/substation_init.dart';
 
-// ── runGrid + GridDelegate (Track C) ────────────────────────────────────────
-// The entry point + lifecycle rails: `runGrid(GridDelegate)`, the observable
-// `StateNotifier<GridConfiguration>`, the lifecycle hooks (`didLaunch` /
-// `initGrid` / `onReady` / `onTeardown`), and the master `build(ctx, conf)`
-// returning the canonical station tree. NOT YET exported.
-
-// ── Configuration (Track C) ─────────────────────────────────────────────────
-// `GridConfiguration` — a thin, plain value provided into the tree (Q6: no
-// domain/aspect machinery until something real demands it). NOT YET exported.
