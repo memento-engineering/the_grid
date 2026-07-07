@@ -131,7 +131,52 @@ abstract final class ResultKeys {
   /// (`grid.result.{nodePath}.{field}`).
   static String keyFor(String nodePath, String field) =>
       '$prefix$nodePath.$field';
+
+  /// The committee VERDICT payload fields the code asset's `route` step reads
+  /// off each critic lane's result node (`grid.result.<lane>.<field>`). the_grid
+  /// does NOT own the committee schema (it ships in the code asset), but the
+  /// operator-ruling verb (`grid gate resolve --grade`, tg-i08) writes these to
+  /// override a false/transport gate, and the route re-reads them — so the field
+  /// NAMES are a shared contract pinned in ONE place to keep the ruling verb and
+  /// the route's read from drifting.
+
+  /// The letter grade A–F a critic lane records — the field `route` gates on
+  /// (a persisted `F` re-gates the parked node on every re-arm; that is the
+  /// I-14 no-op-resolve loop the ruling verb breaks).
+  static const grade = 'grade';
+
+  /// The verdict PROVENANCE — how the grade arrived (a critic's file/envelope,
+  /// the fail-closed default, or [kOperatorRulingTransport] for a human
+  /// override). Distinguishes a transport/false F from a true ran-and-failed F.
+  static const transport = 'transport';
+
+  /// The human-readable justification a critic — or an operator ruling — records
+  /// alongside a grade.
+  static const rationale = 'rationale';
 }
+
+/// The [ResultKeys.transport] provenance an OPERATOR RULING stamps on a lane
+/// result (tg-i08) — the marker distinguishing a human override from an
+/// automated verdict. A lane graded through the chokepoint with this transport
+/// is a deliberate operator decision, never a fail-closed/transport artifact.
+const String kOperatorRulingTransport = 'operator-ruling';
+
+/// The metadata payload of an OPERATOR RULING on ONE lane node (tg-i08): the
+/// corrected [grade] + the [kOperatorRulingTransport] provenance + the
+/// [rationale], namespaced under `grid.result.<nodePath>`. Written through the
+/// chokepoint on the_grid's OWN session bead — BEFORE the gate closes — so the
+/// route re-reads the corrected grade instead of the persisted fail-closed `F`
+/// (the I-14 loop where plain `gate resolve` re-gates seconds after re-arming).
+/// Merge-safe (disjoint per-node keys), like every other result write.
+Map<String, String> operatorRulingMetadata(
+  String nodePath, {
+  required String grade,
+  required String rationale,
+}) => {
+  ResultKeys.keyFor(nodePath, ResultKeys.grade): grade,
+  ResultKeys.keyFor(nodePath, ResultKeys.transport): kOperatorRulingTransport,
+  ResultKeys.keyFor(nodePath, ResultKeys.rationale): rationale,
+};
 
 /// The max persisted length of a capture-only failure/escalation diagnostic
 /// (FT-1, tg-pez) — a pathological multi-KB stderr is truncated so telemetry

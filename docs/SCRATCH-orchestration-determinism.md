@@ -180,11 +180,14 @@ vanish read as completion — were cataloged directly as deferred beads (tg-4rw,
   was the re-gate churn. Consequence: for a gate born from a transport-default F, `gate resolve`
   alone is a guaranteed loop that mints one more gate bead per attempt. The working ruling flow
   (proven live): chokepoint-correct the lane grade (+`transport: operator-ruling` + rationale),
-  THEN resolve — route advances. tg-boq's retry+flare fix stays valid (the latch compound was
-  real, latent). **Follow-up (CODE — FILED P1, tg-i08):** `gate resolve --grade <lane>=<A-F>`
-  ruling semantics; refuse-loud on a plain resolve of a fail-closed-F gate; gate **mint-dedup**
-  (a re-gating node reuses its open gate — the revalidate failure that followed minted TWO
-  duplicate gates in one minute); re-gates surfaced loud in `watch`/`gate ls`.
+  THEN resolve — route advances. tg-boq's retry+flare fix stays valid (the latch compound was.
+- **Correction (CODE — tg-i08):** `gate resolve` grows the **ruling verb** (`--grade <lane>=<A-F>`
+  + `--rationale` → corrected grade + `transport=operator-ruling` through the chokepoint, THEN
+  close) and **refuses LOUD** on a plain resolve of a still-F gate (a guaranteed re-gate) instead of
+  looping; **mint-dedup** (a re-gating node refreshes its existing OPEN gate rather than minting a
+  duplicate per cycle); and **re-gate visibility** in `gate ls` (reset age + `re-gated Nx`).
+- **Inference eliminated:** the wedged-gate forensics + the operator bounce + the per-attempt
+  gate-ruling ritual (chokepoint-correct the lane grade, then resolve).
 
 ### I-15 — Rework/terminal-close leaks the round's gate beads (2026-07-07)
 - **What:** `space gate ls` shows 14 OPEN gates whose blocked sessions are long closed/retired

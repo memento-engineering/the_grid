@@ -200,7 +200,265 @@ void main() {
       expect(store.writes, isEmpty);
     });
   });
+
+  // The tg-i08 ruling verb + the fail-closed-F re-gate-loop guard.
+  group('grid gate resolve — ruling + re-gate-loop guard (tg-i08)', () {
+    test('REFUSES plain resolve (64, ZERO writes) on a gate whose feeding lane '
+        'still grades F — naming the lane + its transport provenance', () async {
+      final store = _FakeStateStore([
+        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'tg-1/review/route',
+            reason: 'critic test-coverage failed'),
+        _session('tgdog-s1', workBead: 'tg-1', results: const {
+          'tg-1/review/test-coverage': {
+            'grade': 'F',
+            'transport': 'no parseable verdict via file or envelope',
+          },
+        }),
+      ]);
+      final errs = <String>[];
+
+      final code = await runGateResolve(
+        gateId: 'tgdog-g1',
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: (_) {},
+        err: errs.add,
+      );
+
+      expect(code, 64);
+      final text = errs.join('\n');
+      expect(text, contains('RE-GATE'));
+      expect(text, contains('tg-1/review/test-coverage'));
+      expect(text, contains('no parseable verdict via file or envelope'));
+      expect(text, contains('--grade'));
+      // The guaranteed-no-op loop never touched the store.
+      expect(store.writes, isEmpty);
+    });
+
+    test('--grade <lane>=<A> --rationale writes the operator ruling through the '
+        'chokepoint THEN closes the gate', () async {
+      final store = _FakeStateStore([
+        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'tg-1/review/route',
+            reason: 'critic test-coverage failed'),
+        _session('tgdog-s1', workBead: 'tg-1', results: const {
+          'tg-1/review/test-coverage': {'grade': 'F', 'transport': 'fail-closed'},
+        }),
+      ]);
+      final out = <String>[];
+      final errs = <String>[];
+
+      final code = await runGateResolve(
+        gateId: 'tgdog-g1',
+        grades: const ['test-coverage=A'],
+        rationale: 'critic cd\'d; verdict was A — transport F false gate',
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: out.add,
+        err: errs.add,
+      );
+
+      expect(code, 0, reason: errs.join('\n'));
+      expect(out.join('\n'),
+          contains('ruled tg-1/review/test-coverage → grade A'));
+
+      // A ruling `update` on the SESSION bead carrying the corrected grade +
+      // operator-ruling transport + rationale.
+      final updates = store.writes.where((c) => c.first == 'update').toList();
+      final ruling = updates.firstWhere(
+        (c) => c.contains('tgdog-s1') && c.join(' ').contains('operator-ruling'),
+      );
+      final meta = _metadataOf(ruling);
+      expect(meta['grid.result.tg-1/review/test-coverage.grade'], 'A');
+      expect(meta['grid.result.tg-1/review/test-coverage.transport'],
+          'operator-ruling');
+      expect(meta['grid.result.tg-1/review/test-coverage.rationale'],
+          contains('transport F false gate'));
+      // Then the gate closes through the chokepoint.
+      final closes = store.writes.where((c) => c.first == 'close').toList();
+      expect(closes, hasLength(1));
+      expect(closes.single, containsAllInOrder(['close', 'tgdog-g1']));
+      expect(closes.single, containsAllInOrder(['--actor', 'grid-controller']));
+    });
+
+    test('once ruled to a passing grade the lane is no longer a re-gate cause '
+        '— the resolve is NOT refused', () async {
+      final store = _FakeStateStore([
+        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'tg-1/review/route',
+            reason: 'critic1 F'),
+        _session('tgdog-s1', workBead: 'tg-1', results: const {
+          'tg-1/review/critic1': {'grade': 'F'},
+        }),
+      ]);
+      final code = await runGateResolve(
+        gateId: 'tgdog-g1',
+        grades: const ['critic1=B'],
+        rationale: 'false gate',
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: (_) {},
+        err: (_) {},
+      );
+      expect(code, 0);
+      expect(store.writes.where((c) => c.first == 'close'), hasLength(1));
+    });
+
+    test('--grade REQUIRES --rationale (refused 64, ZERO writes)', () async {
+      final store = _FakeStateStore([
+        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'tg-1/review/route',
+            reason: 'x'),
+        _session('tgdog-s1', workBead: 'tg-1', results: const {
+          'tg-1/review/critic1': {'grade': 'F'},
+        }),
+      ]);
+      final errs = <String>[];
+      final code = await runGateResolve(
+        gateId: 'tgdog-g1',
+        grades: const ['critic1=A'],
+        // no rationale
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: (_) {},
+        err: errs.add,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('requires --rationale'));
+      expect(store.writes, isEmpty);
+    });
+
+    test('--grade with a non-A–F letter is refused (64, ZERO writes)', () async {
+      final store = _FakeStateStore([
+        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'tg-1/review/route',
+            reason: 'x'),
+      ]);
+      final errs = <String>[];
+      final code = await runGateResolve(
+        gateId: 'tgdog-g1',
+        grades: const ['critic1=Z'],
+        rationale: 'why',
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: (_) {},
+        err: errs.add,
+      );
+      expect(code, 64);
+      expect(errs.join('\n'), contains('not a grade A–F'));
+      expect(store.writes, isEmpty);
+    });
+
+    test('a PARTIAL ruling that leaves another feeding lane at F is refused '
+        '(64, ZERO writes)', () async {
+      final store = _FakeStateStore([
+        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'tg-1/review/route',
+            reason: 'two critics F'),
+        _session('tgdog-s1', workBead: 'tg-1', results: const {
+          'tg-1/review/critic1': {'grade': 'F'},
+          'tg-1/review/critic2': {'grade': 'F'},
+        }),
+      ]);
+      final errs = <String>[];
+      final code = await runGateResolve(
+        gateId: 'tgdog-g1',
+        grades: const ['critic1=A'], // critic2 left at F
+        rationale: 'ruled only one',
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: (_) {},
+        err: errs.add,
+      );
+      expect(code, 64);
+      final text = errs.join('\n');
+      expect(text, contains('still grade F'));
+      expect(text, contains('tg-1/review/critic2'));
+      expect(store.writes, isEmpty);
+    });
+
+    test('a non-committee gate (no feeding lane grades) still resolves plainly',
+        () async {
+      final store = _FakeStateStore([
+        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'tg-1/code/agent',
+            reason: 'validation plan failed'),
+        // a session with NO F-graded sibling of the parked node.
+        _session('tgdog-s1', workBead: 'tg-1', results: const {}),
+      ]);
+      final code = await runGateResolve(
+        gateId: 'tgdog-g1',
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: (_) {},
+        err: (_) {},
+      );
+      expect(code, 0);
+      expect(store.writes.where((c) => c.first == 'close'), hasLength(1));
+    });
+  });
+
+  group('grid gate ls — re-gate visibility (tg-i08)', () {
+    test('a refreshed (re-gated) gate shows a reset age + a re-gated Nx marker',
+        () async {
+      final store = _FakeStateStore([
+        Bead(
+          id: 'tgdog-g1',
+          title: 'grid gate tgdog-s1@tg-1/review/route',
+          issueType: IssueType.gate,
+          status: BeadStatus.open,
+          createdAt: DateTime.utc(2026, 7, 1, 12), // birth: days ago
+          metadata: {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-s1',
+            'node': 'tg-1/review/route',
+            'reason': 're-gate: critic F again',
+            'regate_count': '3',
+            'regated_at': DateTime.utc(2026, 7, 7, 11, 59).toIso8601String(),
+          },
+        ),
+      ]);
+      final out = <String>[];
+      final code = await runGateLs(
+        workspaceOverride: _workspace(),
+        bdOverride: BdCliService(store),
+        out: out.add,
+        err: out.add,
+        now: DateTime.utc(2026, 7, 7, 12), // 1m after the last re-gate
+      );
+      expect(code, 0);
+      final text = out.join('\n');
+      expect(text, contains('re-gated 3x'));
+      // The age is measured from `regated_at` (1m ago), NOT `createdAt` (days).
+      expect(text, contains('age 1m'));
+      expect(text, isNot(contains('age 6d')));
+    });
+  });
 }
+
+/// The `--metadata <json>` payload of a recorded `bd update` argv, decoded.
+Map<String, dynamic> _metadataOf(List<String> argv) {
+  final i = argv.indexOf('--metadata');
+  if (i < 0 || i + 1 >= argv.length) return const {};
+  return jsonDecode(argv[i + 1]) as Map<String, dynamic>;
+}
+
+/// A the_grid-owned `type=session` bead carrying the per-node [results]
+/// (`grid.result.<node>.<field>`) the route re-reads — the substrate the ruling
+/// verb corrects and the re-gate-loop guard inspects.
+Bead _session(
+  String id, {
+  required String workBead,
+  Map<String, Map<String, String>> results = const {},
+  String substation = 'tgdog',
+}) =>
+    Bead(
+      id: id,
+      title: 'grid session',
+      issueType: IssueType.session,
+      status: BeadStatus.open,
+      metadata: {
+        'rig': substation,
+        'work_bead': workBead,
+        for (final node in results.entries)
+          for (final field in node.value.entries)
+            'grid.result.${node.key}.${field.key}': field.value,
+      },
+    );
 
 /// A direct/embedded state-store workspace (no real `.beads/` on disk needed —
 /// the bd runner is faked).
