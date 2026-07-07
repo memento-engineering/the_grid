@@ -9,6 +9,9 @@ workspace:
   - packages/grid_devtools
   - packages/grid_runtime
   - packages/grid_engine
+  # The public authoring surface over the private grid_engine (ADR-0008 D2 /
+  # ADR-0002; consumers never import the engine). Born in tg-4ab (Track A).
+  - packages/grid_sdk
 
 # genesis_tree is the M4 engine (ADR-0007). It is now consumed from pub.dev at
 # the `^0.1.3` pin (grid_engine/grid_cli) — the genesis ADR-0001 D8 stabilization
