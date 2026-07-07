@@ -41,12 +41,18 @@ Each row: what happened → root cause → the deterministic correction (**CODE*
   `power_station/` subdir → `rc=1` → gating **F** regardless of the work's quality.
 - **Root:** nothing checks that a `validation_plan` is actually runnable in the worktree before the
   bead is armed. A plan defect is indistinguishable from a code defect at the gate.
-- **Correction (CODE — TO FILE):** an **arming preflight** that lints `validation_plan`: reject (or
-  loudly warn) a plan that `cd`s outside the worktree, references a path absent in the worktree, or
-  is empty. Cheap, deterministic, runs at `validateArming`.
+- **Correction (CODE — LANDED, tg-a76):** an **arming preflight** (`lintValidationPlan` /
+  `preflightValidationPlans`, wired into `validateArming`) lints each blessed bead's
+  `validation_plan`: a conservative deny-list refuses (a) a `cd` into a dir absent at / outside the
+  worktree root, (b) an empty/whitespace plan, (c) a reference to an absolute path outside the
+  worktree — as a `StationRefusal` (exit 64) naming the bead + the offending clause, **before any
+  spawn**. Cheap, deterministic, offline-tested (`grid_cli`). The plan-defect class is now an
+  **arming refusal, never a gating F**.
 - **Correction (PROC):** validation plans are **worktree-relative only** — never `cd` into a named
-  repo dir (the runner is already rooted there). Fold into the bead-authoring rule.
-- **Status: TO FILE** (§4). Today handled by operator diagnosis + a plan rewrite + a rework round.
+  repo dir (the runner is already rooted there), never reference an absolute path. Fold into the
+  bead-authoring rule. Now also code-enforced by the preflight above (the refusal message states the
+  rule).
+- **Status: LANDED** (tg-a76). Was: operator diagnosis + a plan rewrite + a rework round.
 - **Inference eliminated:** "diagnose why code-validation F'd on obviously-correct work."
 
 ### I-4 — A cross-repo rename broke fresh compiles (butane)
@@ -208,9 +214,11 @@ Three things do **not** reduce to a guard, and are the honest Fable-worthy resid
 
 ## 4. Beads this surfaces (to file, deferred until blessed)
 
-- **OP-1 — arming validation-plan preflight (CODE, I-3).** `validateArming` lints `validation_plan`:
-  reject a plan that `cd`s outside the worktree / references an absent path / is empty; LOUD refusal
-  naming the offending clause. + the worktree-relative-plans authoring rule. `grid_cli`, offline.
+- **OP-1 — arming validation-plan preflight (CODE, I-3). LANDED (tg-a76).** `validateArming` lints
+  each blessed bead's `validation_plan` (`lintValidationPlan`/`preflightValidationPlans`): rejects a
+  plan that `cd`s outside/absent-at the worktree / references an absolute path / is empty; LOUD
+  `StationRefusal` (exit 64) naming the bead + the offending clause, before any spawn. + the
+  worktree-relative-plans authoring rule (now code-enforced). `grid_cli`, offline.
 - **OP-2 — substrate-health preflight (CODE, §3.2, smaller).** At `space run` boot, verify the state
   store actually reads (the `tg`-not-found class) before arming; on failure, a diagnostic naming the
   expected dolt root vs. the served one — turns the power-loss recovery into a named error, not a
