@@ -117,6 +117,65 @@ Each row: what happened → root cause → the deterministic correction (**CODE*
   fences.
 - **Inference eliminated:** the post-down ps forensics.
 
+*(I-10 — the closed-session-running-cursor mint wedge — and I-11 — a harness-murdered `oneTurn`
+vanish read as completion — were cataloged directly as deferred beads (tg-4rw, tg-uz3) on
+2026-07-03/04; numbering continues here.)*
+
+### I-12 — A prose `validation_plan` gates as F: rc=127 is a refusal, not a verdict (2026-07-07)
+- **What:** the two Track-0 audit beads (tg-3cn/tg-7t7) carried prose in `validation_plan`
+  ("read-only audit; no code changes…"). The deterministic code-validation lane executes that
+  field as `sh` → exit 127 (command not found) → fail-closed F → both rounds gated with the
+  other three lanes straight-A. Two rework rounds (~$16) to clear an operator authoring bug.
+- **Root:** `validation_plan` is an *executable contract*, but nothing enforces that at authoring
+  or arming time — free text flows all the way to the gate and comes back dressed as a code
+  verdict. Exactly §synthesis's first class: **a plan that won't execute is an arming refusal,
+  never a gate.**
+- **Correction (PROC, effective immediately):** every bead files with a runnable plan; the five
+  prose plans in the store were re-stamped (audits → a docs-only diff assertion; H/J → melos;
+  I → store-dir assertions). **(CODE — armed):** tg-a76 (OP-1 plan preflight) undeferred — rc=127
+  at preflight refuses arming instead of gating.
+- **Inference eliminated:** the gated-round forensics + two rework rounds per prose-planned bead.
+
+### I-13 — Critic verdict path is cwd-relative: a critic that `cd`s writes a stray verdict (2026-07-07)
+- **What:** tg-m2q round 1: test-coverage graded **A** ("mutation-verified") but wrote its verdict
+  to `packages/grid_assets/.grid/critique/test-coverage.json` — it had `cd`'d into the package to
+  run `dart test`, and the prompt's verdict path (`.grid/critique/<rubric>.json`) is relative. The
+  committee found no verdict at the canonical path, the envelope parse missed the `## Grade: A`
+  heading shape → ps#11 fail-closed F (provenance: "no parseable verdict via file or envelope")
+  → false gate. The same mechanism explains the 2-of-8 lane file-write failures of 2026-07-04 —
+  test-coverage is the chronically flaky lane *because* it is the lane that `cd`s.
+- **Root:** a relative path in an agent prompt is resolved against wherever the agent happens to
+  be standing when it writes.
+- **Correction (CODE — FILED P0, tg-r66):** absolute canonical verdict path interpolated into the
+  critic prompt; belt: round-fresh stray-file fallback under the worktree + envelope `## Grade:`
+  parsing. Provenance stamping stays — it is what made this diagnosable.
+- **Inference eliminated:** per-occurrence verdict archaeology + an operator gate ruling.
+
+### I-14 — `gate resolve` never re-arms the parked node in the resident station (2026-07-07)
+- **What:** the tg-m2q gate (tgdog-oxy) was resolved at 06:25:47Z with the verdict bridged to the
+  canonical path; the running station (pid 59603) left `review/route` parked `gated` for 30+
+  minutes, through subsequent work-store ticks. `tgdog/.beads/last-touched` mtime shows the gate
+  close was the last state-store touch — the D-7 re-arm write never happened. Recovery = bounce.
+- **Root (two suspects, to be proven offline):** (1) the external gate-close write never produced
+  a rebuild of the parked `SessionScope` (state-source re-emission or observational-flush
+  delivery); (2) `_scheduleRearm` latches `_rearmed` FIRST and writes via a **silent `_ctx?.`**
+  (session_scope.dart:205-220) — a dropped write is permanent and invisible, violating the
+  ratified guard principle (LOUD or GONE).
+- **Correction (CODE — FILED P0, tg-boq):** loud re-arm (failure → supervision; latch only after
+  a confirmed write), find+fix the missing rebuild, and wiring-shaped regression tests for BOTH
+  the live re-arm and the restart-with-closed-gate adopt path (today's only recovery, itself
+  untested).
+- **Inference eliminated:** the wedged-gate forensics + the operator bounce.
+
+### I-15 — Rework/terminal-close leaks the round's gate beads (2026-07-07)
+- **What:** `space gate ls` shows 14 OPEN gates whose blocked sessions are long closed/retired
+  (ages to 3d10h) — every pre-rework-era gated round leaked its gate bead on re-key/close. Inert,
+  but they pollute the operator's ultimatum surface and grow forever.
+- **Root:** no owner for gate lifecycle at session retire/terminal-close.
+- **Correction (CODE — FILED P2 deferred, tg-ycu):** rework/terminal-close sweeps the session's
+  open gates; boot-time sweep for orphans, loud; the current 14 swept by hand once tg-m2q lands.
+- **Inference eliminated:** "which gates are real" triage in `gate ls`.
+
 ## 2. The synthesis — what makes orchestration deterministic
 
 The manual steering today was **overwhelmingly the cost of the missing resident station + rework
