@@ -15,11 +15,16 @@ environment:
 
 dependencies:
   freezed_annotation: ^3.0.0
+  # The element model the composition Seeds are authored on (re-exported: one
+  # import authors a station). Floor = 0.1.5 (Nest + the non-binding effect
+  # lookup).
+  genesis_tree: ^0.1.5
   # The private element layer this SDK surfaces (ADR-0002 / ADR-0008 D2).
   # Consumers compose `grid_sdk`; they never import `grid_engine` directly.
   grid_engine: any
   json_annotation: ^4.9.0
   meta: ^1.16.0
+  path: ^1.9.0
 
 dev_dependencies:
   build_runner: ^2.4.0
