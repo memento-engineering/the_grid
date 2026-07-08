@@ -52,6 +52,11 @@ builds everything.**
 - Dart `^3.11.0`, pub workspace + melos (scripts: `bootstrap`, `test`, `analyze`, `format`), lints cloned from lenny (strict-casts/inference/raw-types, `prefer_single_quotes`, `unawaited_futures`, …).
 - **freezed** sealed unions + `json_serializable` codecs; consume with exhaustive `switch` expressions. `build_runner` via melos.
 - **`StateNotifier` + freezed** (the M4 tree-engine stack — ADR-0007 §6.6 Accepted 2026-06-24, reverses the former "Riverpod 3 / never StateNotifier" rule): StateNotifiers provided via `InheritedSeed`, observed by `StatefulSeed`s; `build()` stays pure (observe out-of-band, A39). *(Riverpod is removed with the M4 pivot; pre-M4 packages may still carry it until migrated.)*
+- **`genesis_tree` consumption doctrine (ADR-0008 D-H)** — the load-bearing rules for how the tree consumes reactive state; violations are fenced structurally (guards LOUD or GONE):
+  - **Always watch deps — never `??=`-cache.** Read ambient values by observing them (`dependOn*` in `build`, `didChangeDependencies` to cache-and-track); a `??=`-cached dep goes stale when its provider changes.
+  - **No public sync accessors over notifier state.** A `StateNotifier`'s `.state` must never escape through a public getter/method (nor may the notifier itself be handed out ambiently — that is the same leak). Configuration reaches consumers ONLY as an *observed value*: provide the emitted value via `InheritedSeed`, `build()` observes it; if a rail/hook needs the current value the framework passes it as a **parameter** (a value, not an accessor).
+  - **No services in branches except DI.** A branch holds config VALUES and effect handles, not service instances — services arrive by dependency injection.
+  - **Config = VALUES in the tree, impls = DI.** Configuration is plain values mounted in the tree; implementations (services, harnesses, providers) are injected.
 - predictable-flutter layering: Services (stateless I/O) → Repositories (own one source, emit state) → Interactors/Selectors/Transformers → View. Reference types carry classifiers (`BdCliService`); value types are plain (`Bead`).
 - Tests use **Fakes, not mocks**; pure logic (diff, projections, transitions) is tested before any IO is wired.
 - APIs: **Futures for acts, Streams for observations.**

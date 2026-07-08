@@ -50,8 +50,10 @@ export 'src/composition/composition.dart' hide AssetFanOut;
 export 'src/composition/scopes.dart';
 
 // ── runGrid + GridDelegate + GridConfiguration (Track C — tg-tv3) ────────────
-// The entry point + lifecycle rails: `runGrid(delegate)` mounts *delegate
-// provision → configuration provision → build*, returning a `GridHandle`.
+// The entry point + lifecycle rails: `runGrid(delegate)` mounts *configuration
+// provision → build*, returning a `GridHandle`. The delegate is held by
+// `runGrid` — it never rides the tree, so its `.state` can't be snapshotted
+// (ADR-0008 D-H); only its emitted `GridConfiguration` is ambient.
 //   GridDelegate      · the observable `StateNotifier<GridConfiguration>`; the
 //                       lifecycle rails (`didLaunch` pre-tree / `initGrid`
 //                       post-mount async / `onReady` / `onTeardown`, failures
