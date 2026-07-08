@@ -6,21 +6,21 @@
 /// `CommandRunner` from the Commands it wants — the generic ones here plus its
 /// assets' Commands. There is no baked-in `grid run` and no run BASE CLASS
 /// (ADR-0008 Decision 2, amended 2026-07-02 — consumers compose, never
-/// subclass): an asset's runner calls the station-runner LIBRARY PIECES in
-/// order — `addStationFlags`/`StationArgs` → `validateArming` →
-/// `discoverWorkspaces` → `buildControllers` → `buildLiveWiring` → its OWN
-/// `ServiceBundle` → `composeStation` (+ `wrapRoot` for its ambient config
-/// providers) → `driveStation`. (`CodeRunCommand` lives in `power_station`'s
-/// `grid_assets`; `ServeCommand`/`LeaseCommand` live in its
-/// `federated_grid_assets` (AL-5b, D-A9); memento's assembled runner is
-/// `space_station`.)
+/// subclass): an asset's runner authors its station as a `GridDelegate`, mounts
+/// it with `grid_sdk`'s `runGrid`, and drives its stores off their roots
+/// (`grid_sdk` `StoreLocator`). The old `station_runner` boot path
+/// (`StationArgs` / `RootSpec` / `discoverWorkspaces` / `buildControllers` /
+/// `buildLiveWiring` / `composeStation` / `driveStation`) is DELETED (DoD#6);
+/// what survives here are the resident-station RS-2/RS-4 pieces below plus the
+/// generic verbs. (`CodeRunCommand` lives in `power_station`'s `grid_assets`;
+/// memento's assembled runner is `space_station`.)
 library;
 
-// The station-runner library pieces (the composition inversion, 2026-07-02).
+// The resident-station survivors (RS-2 lock / RS-4 read-only control / RS-5a
+// attach client) an asset runner orchestrates around `runGrid`.
 export 'src/station_attach.dart';
 export 'src/station_control.dart';
 export 'src/station_lock.dart';
-export 'src/station_runner.dart';
 
 // The generic, asset-agnostic driving commands.
 export 'src/watch_command.dart';

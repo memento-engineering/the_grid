@@ -7,20 +7,37 @@
 /// scoped per STATION state store — substations are partitions *inside* the
 /// store and get no locks of their own (OQ-2, Nico's ruling).
 ///
-/// Mechanism: exclusive-create `<state-workspace>/.grid/station.lock` holding
+/// Mechanism: exclusive-create `<grid-root>/.grid/station.lock` holding
 /// a [StationLockRecord] (`pid`/`pgid`/`startedAt`; `controlUrl`/`token` are
-/// written LATER by the control surface — RS-4). Acquired in `driveStation`
-/// after `validateArming`, before `sources.start()`; released on the graceful
-/// shutdown path (rides RS-1's signal contract) and on the start-throw unwind.
-/// Stale detection is a pid-liveness probe behind a seam: a dead holder is
-/// stolen with a LOUD line; a live holder is a [StationRefusal] naming the
-/// pid, the store, and the invariant (the guard principle: LOUD or gone).
+/// written LATER by the control surface — RS-4). The runner acquires it before
+/// mounting the tree and releases it on the graceful shutdown path (rides
+/// RS-1's signal contract) and on the boot-throw unwind. Stale detection is a
+/// pid-liveness probe behind a seam: a dead holder is stolen with a LOUD line;
+/// a live holder is a [StationRefusal] naming the pid, the store, and the
+/// invariant (the guard principle: LOUD or gone).
 library;
 
 import 'dart:convert';
 import 'dart:io';
 
-import 'station_runner.dart' show StationRefusal;
+/// A composition-time refusal (a live lock holder, a lost steal race) — the
+/// runner prints [message] and exits with [code]. The one arming gate the
+/// resident-station survivors still throw (the old `station_runner` assembly
+/// that also raised it is deleted; the boot path moved to the asset's own
+/// runner + `runGrid`).
+class StationRefusal implements Exception {
+  /// Creates the refusal with its user-facing [message] and exit [code].
+  const StationRefusal(this.message, {this.code = 64});
+
+  /// The user-facing refusal text.
+  final String message;
+
+  /// The process exit code (64 = usage, 1 = environment).
+  final int code;
+
+  @override
+  String toString() => message;
+}
 
 /// The injected pid-liveness seam: true iff [pid] is a running process.
 /// The real probe is [defaultPidProbe]; offline tests inject a fake.
@@ -100,6 +117,8 @@ class StationLockRecord {
 /// type carries the classifier). Owns the exclusive-create / probe / steal /
 /// refuse choreography over `<state-workspace>/.grid/station.lock`. The
 /// pid-liveness probe and the log sink are injected seams (Fakes, not mocks).
+/// The choreography runs over `<state store root>/.grid/station.lock`
+/// ([stateWorkspaceDir] — the grid root the resident station locks).
 class StationLockService {
   /// Creates the service; [isPidAlive] defaults to the real [defaultPidProbe]
   /// and [log] to stdout.

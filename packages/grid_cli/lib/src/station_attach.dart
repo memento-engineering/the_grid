@@ -124,8 +124,8 @@ class AlreadyDown extends StopResult {
 }
 
 /// SIGTERM landed and, within the grace window, [pid] exited AND its lock
-/// file was removed (the target's own graceful-shutdown release,
-/// `station_runner.dart`'s `driveStation` shutdown path) — a clean stop.
+/// file was removed (the target runner's own graceful-shutdown release) — a
+/// clean stop.
 class Stopped extends StopResult {
   /// Creates a stopped result naming the [pid] that exited.
   const Stopped(this.pid);
@@ -236,8 +236,8 @@ class StationAttach {
   /// an unreadable one, or one naming an already-dead pid) → [AlreadyDown],
   /// a clean no-op. Otherwise SIGTERMs the lock's pid and polls (every
   /// [pollInterval]) for BOTH the pid exiting AND its lock file being
-  /// removed — the target's own graceful-shutdown release
-  /// (`station_runner.dart`'s `driveStation`) — up to [grace]. Returns
+  /// removed — the target runner's own graceful-shutdown release — up to
+  /// [grace]. Returns
   /// [Stopped] on a clean exit within the window, or [TimedOut] (LOUD —
   /// never silently escalated to SIGKILL) when the window elapses first.
   Future<StopResult> stop({
