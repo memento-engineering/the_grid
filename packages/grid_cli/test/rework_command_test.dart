@@ -1,12 +1,19 @@
 import 'dart:convert';
 
+import 'package:args/command_runner.dart';
 import 'package:grid_cli/grid_cli.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_sdk/grid_sdk.dart'
+    show GridStateStore, SubstationWorkStore;
 import 'package:test/test.dart';
 
 /// Offline proofs for `grid rework` (tg-x1j) — Fakes, not mocks, no live
-/// state, no real `bd`, NO writes to any live store. The DoD:
+/// state, no real `bd`, NO writes to any live store. Re-seated on the v3
+/// store-at-roots model (`SCRATCH-station-config-model.md`): the session lives
+/// in the grid state store addressed from a **grid root** (`GridStateStore`),
+/// the `--note` targets the WORK bead's substation work store (`--note-root`) —
+/// neither a `--state-workspace`/`--workspace` path arg-list. The DoD:
 ///
 ///  1. rework on a positively-closed bead re-keys `work_bead` to
 ///     `bead#rN` through the chokepoint and reports round N (a);
@@ -14,8 +21,8 @@ import 'package:test/test.dart';
 ///  3. an OPEN session PARKED AT A GATE (nothing running) is safe to rework
 ///     (the v2 gate-resolve transition's trigger) — proceeds;
 ///  4. the ~3-round cap refuses LOUD, zero writes (c);
-///  5. --note lands on the WORK bead (a separate workspace/store) under a
-///     ROUND N header (d).
+///  5. --note lands on the WORK bead (a separate store) under a ROUND N header
+///     (d); a --note without --note-root refuses LOUD before any write.
 void main() {
   group('grid rework — v1 acceptance', () {
     test('(a) a positively-closed session re-keys + reports round 1', () async {
@@ -27,6 +34,8 @@ void main() {
 
       final code = await runRework(
         beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
         out: out.add,
@@ -59,6 +68,8 @@ void main() {
 
         final code = await runRework(
           beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
           stateWorkspaceOverride: _ws('tgdog'),
           stateBdOverride: BdCliService(state),
           out: (_) {},
@@ -78,6 +89,8 @@ void main() {
 
       final code = await runRework(
         beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
         out: (_) {},
@@ -99,6 +112,8 @@ void main() {
 
       final code = await runRework(
         beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
         out: out.add,
@@ -125,6 +140,8 @@ void main() {
 
       final code = await runRework(
         beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
         out: (_) {},
@@ -147,6 +164,8 @@ void main() {
 
         final code = await runRework(
           beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
           stateWorkspaceOverride: _ws('tgdog'),
           stateBdOverride: BdCliService(state),
           out: out.add,
@@ -163,26 +182,14 @@ void main() {
       },
     );
 
-    test(
-      'requires --state-workspace (refused, exit 64, zero writes)',
-      () async {
-        final errs = <String>[];
-        final code = await runRework(
-          beadId: 'tg-9',
-          out: (_) {},
-          err: errs.add,
-        );
-        expect(code, 64);
-        expect(errs.join('\n'), contains('--state-workspace is required'));
-      },
-    );
-
     test('refuses (non-zero, zero writes) when no session is found', () async {
       final state = _FakeStore([]);
       final errs = <String>[];
 
       final code = await runRework(
         beadId: 'tg-nope',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
         out: (_) {},
@@ -205,6 +212,8 @@ void main() {
 
         final code = await runRework(
           beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
           stateWorkspaceOverride: _ws('tgdog'),
           stateBdOverride: BdCliService(state),
           out: (_) {},
@@ -220,7 +229,7 @@ void main() {
 
   group('grid rework — (d) --note lands on the WORK bead', () {
     test('appends the finding under a ROUND N header, into the WORK '
-        'workspace (a SEPARATE store from the state workspace)', () async {
+        'work store (a SEPARATE store from the state store)', () async {
       final state = _FakeStore([
         _session('tgdog-s1', workBead: 'tg-9', closed: true),
       ]);
@@ -233,8 +242,11 @@ void main() {
       final code = await runRework(
         beadId: 'tg-9',
         note: 'the committee rejected on validation_plan drift',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
         workspaceOverride: _ws('tg'),
         bdOverride: BdCliService(work),
         out: out.add,
@@ -257,8 +269,8 @@ void main() {
       expect(note, contains('the committee rejected on validation_plan drift'));
     });
 
-    test('--note without a discoverable work workspace refuses LOUD before '
-        'any write (the re-key never happens half-done)', () async {
+    test('--note without a --note-root refuses LOUD before any write (the '
+        're-key never happens half-done)', () async {
       final state = _FakeStore([
         _session('tgdog-s1', workBead: 'tg-9', closed: true),
       ]);
@@ -267,19 +279,98 @@ void main() {
       final code = await runRework(
         beadId: 'tg-9',
         note: 'a finding',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
-        workspacePath: '/definitely/not/a/beads/workspace',
+        // no noteStore + no workspaceOverride → refused.
         out: (_) {},
         err: errs.add,
       );
 
       expect(code, isNonZero);
-      expect(errs.join('\n'), contains('--workspace'));
+      expect(errs.join('\n'), contains('--note-root'));
       expect(state.writes, isEmpty);
     });
+
+    test(
+      '--note whose WORK store is unreachable refuses LOUD before any write',
+      () async {
+        final state = _FakeStore([
+          _session('tgdog-s1', workBead: 'tg-9', closed: true),
+        ]);
+        final errs = <String>[];
+
+        final code = await runRework(
+          beadId: 'tg-9',
+          note: 'a finding',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/definitely/not/a/store'),
+          dirExists: (_) => false, // the work store does not exist at the root.
+          out: (_) {},
+          err: errs.add,
+        );
+
+        expect(code, isNonZero);
+        expect(errs.join('\n'), contains('would silently drop'));
+        expect(state.writes, isEmpty);
+      },
+    );
+  });
+
+  group('CLI wiring — the store axis is the grid root (fossils dead)', () {
+    // The missing-flag refusals write to stderr inside the Command and return
+    // the fail-closed code (64) — the observable CLI contract. (The messages
+    // are asserted at the run-level tests, which take injectable sinks.)
+    test('rework without --grid-root refuses LOUD (exit 64)', () async {
+      final code = await _run(['rework', 'tg-9', '--prefix', 'tgdog']);
+      expect(code, 64);
+    });
+
+    test('rework without --prefix refuses LOUD (exit 64)', () async {
+      final code = await _run(['rework', 'tg-9', '--grid-root', '/home/grid']);
+      expect(code, 64);
+    });
+
+    test(
+      'the retired --state-workspace / --workspace flags are GONE',
+      () async {
+        final errs = <String>[];
+        final code = await _run([
+          'rework',
+          'tg-9',
+          '--state-workspace',
+          '/x',
+          '--workspace',
+          '/y',
+        ], err: errs.add);
+        expect(code, 64);
+        expect(errs.join('\n'), contains('Could not find an option'));
+      },
+    );
   });
 }
+
+/// Runs the `rework` command through a real [CommandRunner] so the CLI wiring
+/// (flag parsing + the missing-flag refusals) is exercised end to end.
+Future<int> _run(List<String> args, {void Function(String)? err}) async {
+  final writeErr = err ?? (_) {};
+  final runner = CommandRunner<int>('grid', 'test')
+    ..addCommand(ReworkCommand());
+  try {
+    return await runner.run(args) ?? 0;
+  } on UsageException catch (e) {
+    writeErr('$e');
+    return 64;
+  }
+}
+
+/// A state store addressed at a grid root (the v3 currency). Unused when a test
+/// passes a `stateWorkspaceOverride` — the required, model-shaped handle.
+GridStateStore _stateStore() => GridStateStore.forGridRoot('/home/grid');
 
 /// A direct/embedded workspace (no real `.beads/` on disk needed — the bd
 /// runner is faked).

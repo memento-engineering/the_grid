@@ -16,6 +16,7 @@ dependencies:
   grid_engine: any
   grid_exploration: any
   grid_runtime: any
+  grid_sdk: any
   meta: ^1.15.0
   path: ^1.9.0
 

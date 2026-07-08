@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_sdk/grid_sdk.dart' show SubstationWorkStore;
 
 import 'watch_command.dart';
 
@@ -37,20 +38,20 @@ class DemoCommand extends Command<int> {
         stderr.writeln('grid demo: `bd init` failed: ${init.stderr}');
         return 1;
       }
-      final workspace = BeadsWorkspace.discover(start: tmp.path);
-      if (workspace == null) {
-        stderr.writeln('grid demo: could not discover the demo workspace');
-        return 1;
-      }
 
-      log('▶ hermetic workspace: ${tmp.path}');
+      // The throwaway root is a substation whose `.beads/` work store `bd init`
+      // just seeded — the code-as-config store model (v3), self-contained: no
+      // cwd discovery, resolved exactly at the root (`<tmp>/.beads/`).
+      final store = SubstationWorkStore.forRoot(tmp.path);
+
+      log('▶ hermetic substation root: ${tmp.path}');
       log('▶ grid watch starts now; mutations begin in ~3s …\n');
 
       // Drive mutations on the event loop while `runWatch` holds for runFor.
       unawaited(_drive(tmp.path));
 
       final code = await runWatch(
-        workspaceOverride: workspace,
+        store: store,
         runFor: const Duration(seconds: 11),
       );
       log('\n▶ demo complete — workspace cleaned up');
