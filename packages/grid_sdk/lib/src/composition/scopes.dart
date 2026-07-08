@@ -62,11 +62,22 @@ abstract class StationScope with _$StationScope {
 /// The enclosing substation's identity — a project: a name and ONE root
 /// (v3 §0: never sets, never defaults). Its **work store** lives at
 /// `<root>/.beads/` — a store lives at a root, uniformly (Q5a).
+///
+/// [name] and [prefix] are SEPARATE axes (Nico, 2026-07-08 — the
+/// name-is-prefix conflation was never ratified; `SUBSTATION-INIT.md` §2): the
+/// name is the `metadata.rig` marker and the tree identity; the prefix is the
+/// store's short issue-id shape (`tg` precedent — `the_grid` names its beads
+/// `tg-…`). Ownership matches EITHER axis (`BeadOwnershipPredicate`: id prefix
+/// primary, marker belt-and-suspenders), so both ride the scope.
 @freezed
 abstract class SubstationScope with _$SubstationScope {
-  /// A substation named [name] whose single root is [root].
-  const factory SubstationScope({required String name, required String root}) =
-      _SubstationScope;
+  /// A substation named [name] whose single root is [root] and whose work
+  /// store mints `<prefix>-…` issue ids.
+  const factory SubstationScope({
+    required String name,
+    required String root,
+    required String prefix,
+  }) = _SubstationScope;
 
   /// The ambient [SubstationScope], or null when no `Substation` encloses
   /// [context].

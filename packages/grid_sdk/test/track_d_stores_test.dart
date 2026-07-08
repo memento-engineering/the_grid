@@ -86,7 +86,7 @@ void main() {
         const GridStateStore(gridRoot: '/g'),
       );
       expect(
-        const SubstationScope(name: 'tg', root: '/w/tg').workStore,
+        const SubstationScope(name: 'tg', root: '/w/tg', prefix: 'tg').workStore,
         const SubstationWorkStore(root: '/w/tg'),
       );
     });

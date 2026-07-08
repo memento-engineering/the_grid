@@ -36,9 +36,16 @@ import 'grid_delegate.dart';
 /// current zone (loud). A `didLaunch` failure does not go through [onError] —
 /// it is thrown from `runGrid` directly (the caller cannot proceed with a grid
 /// that never mounted).
+///
+/// [onFlushed] fires once after EVERY completed tree flush (the initial mount
+/// flush included) — the seam a runner hangs off-tree post-flush machinery on
+/// (the engine's `StationDriver.afterFlush` cooldown/unclaimed re-scans,
+/// tg-yl8). Nullable and opinion-free: `runGrid` neither knows nor cares what
+/// rides it.
 GridHandle runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
+  void Function()? onFlushed,
 }) {
   final report = onError ?? _rethrowToZone;
 
@@ -52,7 +59,7 @@ GridHandle runGrid(
   // 2. Mount: configuration provision → build. The delegate is held here (by
   //    construction), never provided ambiently (D-H).
   final owner = TreeOwner();
-  final handle = GridHandle._(owner, delegate, report);
+  final handle = GridHandle._(owner, delegate, report, onFlushed);
   // Wire the flush trigger BEFORE mounting: the first build runs synchronously
   // in mountRoot with no markNeedsRebuild (the config scope assigns its
   // baseline directly, never setState during mount), so onNeedsFlush cannot
@@ -60,6 +67,7 @@ GridHandle runGrid(
   handle._wireFlush();
   owner.mountRoot(_GridConfigurationScope(delegate: delegate));
   owner.flush();
+  onFlushed?.call();
 
   // 3. Post-mount async kickoff — unawaited by the caller; onReady chained
   // after it; both surfaced loud on failure.
@@ -104,11 +112,14 @@ Future<void> _kickoff(
 /// Call [teardown] to run the delegate's `onTeardown` rail and unmount the
 /// tree. Idempotent.
 class GridHandle {
-  GridHandle._(this._owner, this._delegate, this._report);
+  GridHandle._(this._owner, this._delegate, this._report, this._onFlushed);
 
   final TreeOwner _owner;
   final GridDelegate _delegate;
   final void Function(GridHookError) _report;
+
+  /// The runner's post-flush seam (see [runGrid]'s `onFlushed`).
+  final void Function()? _onFlushed;
   bool _tornDown = false;
   bool _flushScheduled = false;
 
@@ -122,6 +133,7 @@ class GridHandle {
         _flushScheduled = false;
         if (_tornDown) return;
         _owner.flush();
+        _onFlushed?.call();
       });
     };
   }

@@ -221,7 +221,7 @@ void main() {
       );
       expect(
         seen.single.sub,
-        const SubstationScope(name: 'tg', root: '/work/tg'),
+        const SubstationScope(name: 'tg', root: '/work/tg', prefix: 'tg'),
       );
       // The full ancestry is readable from the leaf: the asset serves the
       // project, inside the machine, inside the deployment.

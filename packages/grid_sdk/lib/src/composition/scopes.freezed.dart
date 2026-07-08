@@ -531,7 +531,7 @@ as String,
 /// @nodoc
 mixin _$SubstationScope {
 
- String get name; String get root;
+ String get name; String get root; String get prefix;
 /// Create a copy of SubstationScope
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -542,16 +542,16 @@ $SubstationScopeCopyWith<SubstationScope> get copyWith => _$SubstationScopeCopyW
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubstationScope&&(identical(other.name, name) || other.name == name)&&(identical(other.root, root) || other.root == root));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubstationScope&&(identical(other.name, name) || other.name == name)&&(identical(other.root, root) || other.root == root)&&(identical(other.prefix, prefix) || other.prefix == prefix));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,name,root);
+int get hashCode => Object.hash(runtimeType,name,root,prefix);
 
 @override
 String toString() {
-  return 'SubstationScope(name: $name, root: $root)';
+  return 'SubstationScope(name: $name, root: $root, prefix: $prefix)';
 }
 
 
@@ -562,7 +562,7 @@ abstract mixin class $SubstationScopeCopyWith<$Res>  {
   factory $SubstationScopeCopyWith(SubstationScope value, $Res Function(SubstationScope) _then) = _$SubstationScopeCopyWithImpl;
 @useResult
 $Res call({
- String name, String root
+ String name, String root, String prefix
 });
 
 
@@ -579,10 +579,11 @@ class _$SubstationScopeCopyWithImpl<$Res>
 
 /// Create a copy of SubstationScope
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? name = null,Object? root = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? name = null,Object? root = null,Object? prefix = null,}) {
   return _then(_self.copyWith(
 name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,root: null == root ? _self.root : root // ignore: cast_nullable_to_non_nullable
+as String,prefix: null == prefix ? _self.prefix : prefix // ignore: cast_nullable_to_non_nullable
 as String,
   ));
 }
@@ -668,10 +669,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String name,  String root)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String name,  String root,  String prefix)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SubstationScope() when $default != null:
-return $default(_that.name,_that.root);case _:
+return $default(_that.name,_that.root,_that.prefix);case _:
   return orElse();
 
 }
@@ -689,10 +690,10 @@ return $default(_that.name,_that.root);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String name,  String root)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String name,  String root,  String prefix)  $default,) {final _that = this;
 switch (_that) {
 case _SubstationScope():
-return $default(_that.name,_that.root);case _:
+return $default(_that.name,_that.root,_that.prefix);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -709,10 +710,10 @@ return $default(_that.name,_that.root);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String name,  String root)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String name,  String root,  String prefix)?  $default,) {final _that = this;
 switch (_that) {
 case _SubstationScope() when $default != null:
-return $default(_that.name,_that.root);case _:
+return $default(_that.name,_that.root,_that.prefix);case _:
   return null;
 
 }
@@ -724,11 +725,12 @@ return $default(_that.name,_that.root);case _:
 
 
 class _SubstationScope implements SubstationScope {
-  const _SubstationScope({required this.name, required this.root});
+  const _SubstationScope({required this.name, required this.root, required this.prefix});
   
 
 @override final  String name;
 @override final  String root;
+@override final  String prefix;
 
 /// Create a copy of SubstationScope
 /// with the given fields replaced by the non-null parameter values.
@@ -740,16 +742,16 @@ _$SubstationScopeCopyWith<_SubstationScope> get copyWith => __$SubstationScopeCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubstationScope&&(identical(other.name, name) || other.name == name)&&(identical(other.root, root) || other.root == root));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubstationScope&&(identical(other.name, name) || other.name == name)&&(identical(other.root, root) || other.root == root)&&(identical(other.prefix, prefix) || other.prefix == prefix));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,name,root);
+int get hashCode => Object.hash(runtimeType,name,root,prefix);
 
 @override
 String toString() {
-  return 'SubstationScope(name: $name, root: $root)';
+  return 'SubstationScope(name: $name, root: $root, prefix: $prefix)';
 }
 
 
@@ -760,7 +762,7 @@ abstract mixin class _$SubstationScopeCopyWith<$Res> implements $SubstationScope
   factory _$SubstationScopeCopyWith(_SubstationScope value, $Res Function(_SubstationScope) _then) = __$SubstationScopeCopyWithImpl;
 @override @useResult
 $Res call({
- String name, String root
+ String name, String root, String prefix
 });
 
 
@@ -777,10 +779,11 @@ class __$SubstationScopeCopyWithImpl<$Res>
 
 /// Create a copy of SubstationScope
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? name = null,Object? root = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? name = null,Object? root = null,Object? prefix = null,}) {
   return _then(_SubstationScope(
 name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,root: null == root ? _self.root : root // ignore: cast_nullable_to_non_nullable
+as String,prefix: null == prefix ? _self.prefix : prefix // ignore: cast_nullable_to_non_nullable
 as String,
   ));
 }
