@@ -262,7 +262,7 @@ void main() {
         isPidAlive: (_) => alive,
         signal: (pid, sig) {
           signalled.add((pid, sig));
-          // The target's own graceful-shutdown path (driveStation): it
+          // The target runner's own graceful-shutdown path: it
           // exits AND releases its lock — simulated synchronously so this
           // test needs no real wall-clock wait.
           alive = false;

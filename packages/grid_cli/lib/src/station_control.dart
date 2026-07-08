@@ -22,13 +22,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:beads_dart/beads_dart.dart' show GraphSnapshot;
-import 'package:grid_engine/grid_engine.dart'
-    show IssueTypeDriveability, SessionProjection;
-import 'package:grid_runtime/grid_runtime.dart';
-
-import 'station_runner.dart';
-
 /// One owned substation's slice of the station status (tg-7gm) — the
 /// per-substation breakdown of [StationStatus.ready]/[StationStatus.mounted],
 /// so a multi-root operator can see WHICH substation is actually driving.
@@ -44,7 +37,7 @@ class SubstationStatus {
   /// The owned substation id (an `args.substations` member).
   final String substation;
 
-  /// This substation's registered root path, or null (no `--root` named it).
+  /// This substation's registered root path, or null (no root resolved).
   final String? root;
 
   /// This substation's slice of [StationStatus.ready] (same narrowing).
@@ -63,8 +56,8 @@ class SubstationStatus {
 }
 
 /// A value-snapshot of the running station — the whole `/status` payload.
-/// Composed ONCE per request (never cached, never polled) by
-/// [buildStationStatus].
+/// Composed ONCE per request by the runner's own `/status` view (never
+/// cached, never polled).
 class StationStatus {
   /// Creates an immutable status snapshot.
   const StationStatus({
@@ -88,8 +81,8 @@ class StationStatus {
   /// The state store root, or null when no split store is wired.
   final String? stateStore;
 
-  /// EVERY registered root (tg-7gm), rendered `name=path` and joined for
-  /// display, or null (dry-run/no `--root`). [perSubstation] carries the
+  /// Every owned substation's root, rendered `name=path` and joined for
+  /// display, or null (no root resolved). [perSubstation] carries the
   /// structured per-substation breakdown; this stays a flat string for
   /// backward wire-compat with the pre-multi-root single-path field.
   final String? workRoot;
@@ -124,9 +117,9 @@ class StationStatus {
   /// from, or null when no work baseline has arrived yet.
   final DateTime? lastSyncAt;
 
-  /// The per-substation breakdown (tg-7gm) — one entry per `args.substations`
-  /// member; empty when [buildStationStatus] wasn't given a multi-substation
-  /// view (or a test constructs [StationStatus] directly without it).
+  /// The per-substation breakdown (tg-7gm) — one entry per owned substation;
+  /// empty when the runner's `/status` view has no multi-substation breakdown
+  /// (or a caller constructs [StationStatus] directly without it).
   final List<SubstationStatus> perSubstation;
 
   /// Serializes to the wire shape `/status` returns.
@@ -153,117 +146,6 @@ class StationStatus {
   };
 }
 
-/// The OWNED ready/mounted counts for [ownership] (tg-8p9 fix, folded into
-/// tg-7gm's per-substation breakdown): `mounted` now applies the SAME
-/// `isCore`/driveable-under-resident narrowing `ready` always has — the
-/// pre-fix `mounted` loop counted every ownership-passing ready-or-live bead,
-/// over-counting an epic/milestone/decision (an organizational bead) that
-/// never actually mounts a `WorkBead` (`WorkList`'s real mount gate,
-/// `work_list.dart`). Reused for BOTH the station-wide totals (over the FULL
-/// allow-set) and each [SubstationStatus] slice (over a singleton set) so the
-/// two never drift.
-({int ready, int mounted}) _countsFor(
-  GraphSnapshot graph,
-  Map<String, SessionProjection> sessions,
-  BeadOwnershipPredicate ownership, {
-  required bool resident,
-}) {
-  var mounted = 0;
-  for (final bead in graph.beads) {
-    if (bead.isClosed || !ownership.owns(bead)) continue;
-    if (!bead.issueType.isCore) continue;
-    if (resident && !bead.issueType.isDriveable) continue;
-    final session = sessions[bead.id];
-    if (session?.isTerminal ?? false) continue;
-    final inReady = graph.readyIds.contains(bead.id);
-    final liveSession = session != null && !session.isTerminal;
-    if (inReady || liveSession) mounted++;
-  }
-
-  // The OWNED ready frontier (RS-3/D-R4 semantics): readyIds filtered by the
-  // SAME ownership predicate `mounted` applies, PLUS the driveable-work
-  // boundary WorkList's own mount gate narrows to under resident arming
-  // (A41's `isCore` allow-list, further narrowed to `isDriveable` when
-  // resident). Unfiltered `graph.readyCount` is workspace-wide `bd ready` —
-  // in a shared store that leaks OTHER substations' ready work and
-  // organizational types (epic/milestone/decision) the drive set never
-  // mounts; this must match what `up` would actually drive, not `bd ready`.
-  var ready = 0;
-  for (final id in graph.readyIds) {
-    final bead = graph.beadsById[id];
-    if (bead == null || !ownership.owns(bead)) continue;
-    if (!bead.issueType.isCore) continue;
-    if (resident && !bead.issueType.isDriveable) continue;
-    ready++;
-  }
-
-  return (ready: ready, mounted: mounted);
-}
-
-/// Builds a [StationStatus] snapshot from ALREADY-HELD, read-only state:
-/// [wiring]'s kernel's join bridge (`bridge.latest` — the PRODUCER-side record
-/// of what it last pushed, the SAME seam the kernel's own cooldown scan reads;
-/// D-H rule 2). Never subscribes, never triggers [StationSources.requery],
-/// never invokes bd.
-StationStatus buildStationStatus({
-  required StationArgs args,
-  required StationSources sources,
-  required TreeRunWiring wiring,
-  required DateTime startedAt,
-}) {
-  final joined = wiring.kernel.bridge.latest;
-  final graph = joined.graph;
-  final sessions = joined.sessionsByWorkBead;
-  final ownership = BeadOwnershipPredicate(args.substations);
-
-  final totals = _countsFor(
-    graph,
-    sessions,
-    ownership,
-    resident: args.resident,
-  );
-  final liveSessions = sessions.values.where((s) => !s.isTerminal).length;
-
-  // The per-substation breakdown (tg-7gm) — a multi-root operator's window
-  // into WHICH owned substation is actually driving, not just the aggregate.
-  final perSubstation = <SubstationStatus>[
-    for (final substation in args.substations)
-      SubstationStatus(
-        substation: substation,
-        root: args.roots[substation]?.path,
-        ready: _countsFor(
-          graph,
-          sessions,
-          BeadOwnershipPredicate({substation}),
-          resident: args.resident,
-        ).ready,
-        mounted: _countsFor(
-          graph,
-          sessions,
-          BeadOwnershipPredicate({substation}),
-          resident: args.resident,
-        ).mounted,
-      ),
-  ]..sort((a, b) => a.substation.compareTo(b.substation));
-
-  return StationStatus(
-    substation: args.substations.join(','),
-    stateStore: sources.stateWorkspace?.root,
-    workRoot: args.roots.isEmpty
-        ? null
-        : args.roots.entries.map((e) => '${e.key}=${e.value.path}').join(', '),
-    dryRun: args.dryRun,
-    pid: pid,
-    startedAt: startedAt,
-    version: Platform.version,
-    ready: totals.ready,
-    mounted: totals.mounted,
-    liveSessions: liveSessions,
-    lastSyncAt: graph.capturedAt,
-    perSubstation: perSubstation,
-  );
-}
-
 /// Mints a fresh per-boot bearer token: 32 secure-random bytes, base64url
 /// encoded. The ONLY thing ever done with the result is writing it into the
 /// 0600 `station.lock` — never argv, never env.
@@ -272,16 +154,6 @@ String mintControlToken() {
   final bytes = List<int>.generate(32, (_) => random.nextInt(256));
   return base64Url.encode(bytes);
 }
-
-/// The seam [driveStation] calls through to bind the control surface —
-/// injectable for offline tests (no real socket needed to test the wiring
-/// order; the real impl is [StationControl.start]).
-typedef StationControlStarter =
-    Future<StationControl> Function({
-      required int port,
-      required String token,
-      required StationStatus Function() view,
-    });
 
 /// The read-only, loopback-only HTTP control surface (D-C2). GET-only,
 /// exact-match route table: `/healthz` (liveness) and `/status` (the
