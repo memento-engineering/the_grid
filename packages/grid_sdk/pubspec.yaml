@@ -25,6 +25,10 @@ dependencies:
   json_annotation: ^4.9.0
   meta: ^1.16.0
   path: ^1.9.0
+  # The observable the `GridDelegate` IS (`StateNotifier<GridConfiguration>`,
+  # v3 §4) — the M4 tree-engine stack (ADR-0007 §6.6): a StateNotifier provided
+  # via `InheritedSeed`, observed by a `StatefulSeed`. Pinned as in grid_engine.
+  state_notifier: ^1.0.0
 
 dev_dependencies:
   build_runner: ^2.4.0
