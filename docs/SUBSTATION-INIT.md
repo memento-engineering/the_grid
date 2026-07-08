@@ -55,13 +55,15 @@ It ships as code (`SubstationInitializer`) *and* as this documented procedure.
 
 ### Step 1 — Seed the store at the root
 
-The substation's **name is its store's id-prefix** — a substation's name is both
-its `metadata.rig` marker and its issue-id prefix (one axis, not two). Seeding is
-`bd init --prefix <name>` in the substation's root:
+A substation's **name and its store's id-prefix are SEPARATE axes** (Nico,
+2026-07-08 — correcting this doc's earlier name-is-prefix conflation, which was
+never ratified): the name is the `metadata.rig` marker and the tree identity;
+the prefix is the short id shape (`tg` precedent). Seeding is
+`bd init --prefix <prefix>` in the substation's root:
 
 ```bash
-cd /work/the_grid
-bd init --prefix the_grid          # creates /work/the_grid/.beads with prefix `the_grid`
+cd /work/power_station
+bd init --prefix pow               # creates /work/power_station/.beads, ids pow-…
 ```
 
 `SubstationInitializer` does this behind an injected `BeadStoreSeeder` seam (the
@@ -129,3 +131,30 @@ source it reads).
 `--state-substation` flag — is re-sourced from the grid identity rather than a
 flag in Track E/H; this doc records the target shape, Q5a. The location and the
 "no pseudo-substation" posture are settled here.)*
+
+## 4. As performed — Track I (tg-rh3, 2026-07-08)
+
+Executed live by the operator (station quiesced, frontier empty):
+
+| Store | Root | Prefix | How |
+|---|---|---|---|
+| power_station work | `power_station/.beads/` | `pow` | `bd init --prefix pow` |
+| space_station work | `space_station/.beads/` | `space` | `bd init --prefix space` |
+| grid state | `space_station/.grid/.beads/` | `houston` | `bd init --prefix houston` (see finding below) |
+
+- **Naming (Nico):** names ≠ prefixes (§2 corrected); state-store prefix =
+  **houston**. `SubstationInitializer` still conflates them — follow-up bead
+  gives it a `prefix:` parameter.
+- **FINDING — bd-init walk-up vs the nested state store:** `bd init` inside
+  `.grid/` walks UP, finds the root's work store, and refuses ("already
+  initialized"). The dual-role layout is fine at *runtime* (our discovery is
+  exact-at-root) but seeding the nested store needs a bridge: temporarily
+  `mv .beads .beads-hold` → init in `.grid/` → restore. The follow-up
+  initializer bead should own this (or upstream a no-walk-up init flag).
+- **Migration:** the three open `grid.root: power_station` beads moved:
+  tg-2dp→pow-ff4 · tg-r3l→pow-efv · tg-ghg→pow-yny (stamps stripped,
+  `migrated_from` provenance kept; originals closed in `tg` with pointers).
+  `tg` remains the_grid's own work store (city dolt, gc coexistence unchanged).
+- **tgdog retired:** archived read-only to `archive-tgdog-20260708` (~$750 of
+  session telemetry queryable until Nico deletes it). Nothing may ever be
+  named tgdog again.
