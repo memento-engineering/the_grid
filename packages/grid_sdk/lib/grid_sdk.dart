@@ -17,8 +17,9 @@
 ///
 /// ---
 ///
-/// **Track B fills the composition layer in.** The remaining sections are
-/// the map for the later tracks.
+/// **Track B fills the composition layer in; Track D adds stores-at-roots +
+/// the substation init flow.** The remaining sections are the map for the
+/// later tracks.
 library;
 
 // The tree vocabulary a station author needs (Seed / StatelessSeed / Nest /
@@ -41,6 +42,30 @@ export 'package:genesis_tree/genesis_tree.dart';
 // InheritedSeeds and are read with `<Scope>.of(context)`.
 export 'src/composition/composition.dart' hide AssetFanOut;
 export 'src/composition/scopes.dart';
+
+// ── Stores at roots + substation init (Track D — tg-y1b) ────────────────────
+// A store lives at a root, uniformly (Q5a):
+//   GridStateStore    · the grid's state store under `<grid.root>/.grid/`
+//                       (the station lock colocates); read from a `GridRoot`
+//                       via `gridRoot.stateStore`.
+//   SubstationWorkStore · a substation's work store at `<root>/.beads/`;
+//                       read from a `SubstationScope` via `scope.workStore`.
+//   StoreLocator      · discovers a work store EXACTLY at `<root>/.beads` (no
+//                       walk-up — the ambience fossil); a substation whose root
+//                       has no store is a LOUD `StoreRefusal` (boot refusal).
+// The substation initialization flow (Q-mig), first-class as code + a documented
+// process (`docs/SUBSTATION-INIT.md`):
+//   SubstationInitializer · seed a new substation's store at its root, adopt its
+//                       prefix (`bd init --prefix <name>`), yield a
+//                       SubstationInitResult whose `.toSeed()` mounts it in the
+//                       tree. Seams (BeadStoreSeeder / DirectoryProbe) injected —
+//                       pure + offline.
+// A37 (restated, no pseudo-substation): sessions/cursors write ONLY to the grid
+// state store, through the chokepoint — never a substation work store (a work
+// source is read-only). The state store is NOT a substation: distinct type,
+// distinct location (under `.grid/`), never in the `Substations` fan-out.
+export 'src/stores/stores.dart';
+export 'src/stores/substation_init.dart';
 
 // ── runGrid + GridDelegate (Track C) ────────────────────────────────────────
 // The entry point + lifecycle rails: `runGrid(GridDelegate)`, the observable
