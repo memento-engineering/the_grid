@@ -15,13 +15,15 @@ import 'grid_delegate.dart';
 ///  1. `delegate.didLaunch()` — **pre-tree**, synchronous. A failure is
 ///     terminal: it is wrapped as a [GridHookError] and **thrown** (the launch
 ///     aborts loudly — nothing mounts).
-///  2. **Mount the tree**: *delegate provision → configuration provision →
-///     `delegate.build`*. The delegate rides the tree as
-///     `InheritedSeed<GridDelegate>`; its observed `GridConfiguration` rides
-///     just below as `InheritedSeed<GridConfiguration>`, re-provided on every
-///     emission; `delegate.build(context, configuration)` roots the station
-///     subtree. A configuration re-emission re-composes that subtree on a
-///     coalesced microtask flush (the reactive loop, mirroring the kernel).
+///  2. **Mount the tree**: *configuration provision → `delegate.build`*. The
+///     delegate does **not** ride the tree — `runGrid` holds it and drives the
+///     configuration scope directly (by construction), because a
+///     `StateNotifier`'s `.state` must never be reachable as a snapshot
+///     (ADR-0008 D-H). Only its observed `GridConfiguration` is ambient,
+///     provided just below as `InheritedSeed<GridConfiguration>` and re-provided
+///     on every emission; `delegate.build(context, configuration)` roots the
+///     station subtree. A configuration re-emission re-composes that subtree on
+///     a coalesced microtask flush (the reactive loop, mirroring the kernel).
 ///  3. **Kick off** `delegate.initGrid()` — post-mount, async, **unawaited**;
 ///     on success `delegate.onReady()` fires. A failure in either is captured,
 ///     attributed, and reported loudly via [onError] — the running grid stands.
@@ -47,7 +49,8 @@ GridHandle runGrid(
     throw GridHookError('didLaunch', delegate.runtimeType, e, st);
   }
 
-  // 2. Mount: delegate provision → configuration provision → build.
+  // 2. Mount: configuration provision → build. The delegate is held here (by
+  //    construction), never provided ambiently (D-H).
   final owner = TreeOwner();
   final handle = GridHandle._(owner, delegate, report);
   // Wire the flush trigger BEFORE mounting: the first build runs synchronously
@@ -55,12 +58,7 @@ GridHandle runGrid(
   // baseline directly, never setState during mount), so onNeedsFlush cannot
   // fire during it.
   handle._wireFlush();
-  owner.mountRoot(
-    InheritedSeed<GridDelegate>(
-      value: delegate,
-      child: const _GridConfigurationScope(),
-    ),
-  );
+  owner.mountRoot(_GridConfigurationScope(delegate: delegate));
   owner.flush();
 
   // 3. Post-mount async kickoff — unawaited by the caller; onReady chained
@@ -149,15 +147,25 @@ class GridHandle {
   }
 }
 
-/// The **configuration provision** node: observes the ambient [GridDelegate]
-/// (`StateNotifier<GridConfiguration>`) and re-provides its current value as
-/// `InheritedSeed<GridConfiguration>` to the station subtree below.
+/// The **configuration provision** node: subscribes to the [GridDelegate]
+/// `runGrid` holds (`StateNotifier<GridConfiguration>`) and re-provides its
+/// current value as `InheritedSeed<GridConfiguration>` to the station subtree
+/// below.
+///
+/// The delegate is passed **by construction** ([delegate]), never as an ambient
+/// value the tree provides: the `StateNotifier` itself must not ride the tree,
+/// or a consumer could snapshot its `.state` synchronously (ADR-0008 D-H). Only
+/// the *value* it emits is made ambient — the `InheritedSeed<GridConfiguration>`
+/// this node provides.
 ///
 /// It is the tree's single observer of the delegate's config axis — a config
 /// emission rebuilds *only* this node (observational isolation), which
 /// re-composes the master build with the new configuration.
 class _GridConfigurationScope extends StatefulSeed {
-  const _GridConfigurationScope();
+  const _GridConfigurationScope({required this.delegate});
+
+  /// The observable `runGrid` holds — subscribed here, never provided ambiently.
+  final GridDelegate delegate;
 
   @override
   State<_GridConfigurationScope> createState() => _GridConfigurationScopeState();
@@ -170,9 +178,10 @@ class _GridConfigurationScopeState extends State<_GridConfigurationScope> {
 
   @override
   void initState() {
-    // The delegate provided just above — a stable instance; a one-shot,
-    // non-subscribing read is correct in initState (D-H rule).
-    _delegate = GridDelegate.of(context);
+    // The delegate is handed in by construction (runGrid holds it) — it never
+    // rides the tree as an ambient value, so its `.state` cannot be snapshotted
+    // by a consumer (D-H). This node is the sole subscriber.
+    _delegate = seed.delegate;
     // The initial read IS the subscription (D-H rule 2): fireImmediately
     // delivers the baseline synchronously into the listener, assigned directly
     // (no setState during mount); every later emission goes through setState

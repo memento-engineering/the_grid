@@ -102,25 +102,19 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// threw). Default: no-op. (Override to run; `runGrid` calls it.)
   void onTeardown() {}
 
-  /// The ambient delegate provided by `runGrid`, or null outside a running
-  /// grid. A **non-subscribing** lookup: the delegate *instance* is stable for
-  /// a launch (its observable configuration is read via `GridConfiguration.of`
-  /// instead), so a reader takes a snapshot, never a dependency.
-  static GridDelegate? maybeOf(TreeContext context) =>
-      context.getInheritedSeedOfExactType<GridDelegate>();
-
-  /// The ambient delegate, **loud when absent** — there is no delegate outside
-  /// a running grid (the guard principle).
-  static GridDelegate of(TreeContext context) {
-    final delegate = maybeOf(context);
-    if (delegate == null) {
-      throw StateError(
-        'GridDelegate.of: no runGrid encloses this context. The delegate is '
-        'provided by runGrid(delegate) — read it inside the grid tree.',
-      );
-    }
-    return delegate;
-  }
+  // Deliberately NO ambient `of`/`maybeOf` accessor for the delegate itself.
+  //
+  // A `GridDelegate` IS a `StateNotifier<GridConfiguration>`; handing its
+  // instance to a consumer is a public SYNCHRONOUS handle on reactive state —
+  // exactly the leak ADR-0008 D-H bans (no public sync accessors over notifier
+  // state). Configuration reaches consumers ONLY as an *observed value*:
+  // `runGrid` holds this delegate (it never rides the tree) and provides its
+  // emitted `GridConfiguration` below as an ambient value, read with
+  // `GridConfiguration.of(context)` — which SUBSCRIBES, so a re-emission
+  // re-composes the reader. If a rail ever needs the current configuration, the
+  // framework passes it as a parameter (a value), never an accessor.
+  //
+  // The `dh_state_leak_gate_test` fences this structurally.
 }
 
 /// A lifecycle-rail failure, **captured and attributed** — which [hook] threw,

@@ -21,16 +21,17 @@ class Leaf extends MultiChildSeed {
   const Leaf({super.key}) : super(children: const []);
 }
 
-/// Captures the ambient configuration + delegate it mounts under (subscribes to
-/// the configuration, so a re-emission rebuilds it).
+/// Captures the ambient configuration it mounts under (subscribes to it, so a
+/// re-emission rebuilds this probe). Configuration is the ONLY sanctioned
+/// observation — the delegate itself is not ambient (ADR-0008 D-H).
 class ConfigProbe extends StatelessSeed {
   const ConfigProbe(this.sink, {super.key});
 
-  final void Function(GridConfiguration config, GridDelegate delegate) sink;
+  final void Function(GridConfiguration config) sink;
 
   @override
   Seed build(TreeContext context) {
-    sink(GridConfiguration.of(context), GridDelegate.of(context));
+    sink(GridConfiguration.of(context));
     return const Leaf();
   }
 }
@@ -157,15 +158,13 @@ Future<void> pump() => Future<void>.delayed(Duration.zero);
 
 void main() {
   group('the observable + provision + master build', () {
-    test('runGrid mounts delegate + configuration; build sees the config; both '
-        'are ambient below', () {
-      final probed = <({GridConfiguration config, GridDelegate delegate})>[];
+    test('runGrid mounts configuration; build sees the config; the config is '
+        'ambient below (the delegate is NOT — D-H)', () {
+      final probed = <GridConfiguration>[];
       final delegate = RecordingDelegate(
         rootPath: '/home/space',
         assetsBuilder: () => [
-          ConfigProbe(
-            (config, del) => probed.add((config: config, delegate: del)),
-          ),
+          ConfigProbe(probed.add),
         ],
         initial: const GridConfiguration(settings: {'v': 1}),
       );
@@ -175,10 +174,10 @@ void main() {
 
       // The master build ran with the initial configuration.
       expect(delegate.builtWith.single, const GridConfiguration(settings: {'v': 1}));
-      // The probe (inside the built tree) saw the ambient configuration AND the
-      // ambient delegate — provision is real and load-bearing.
-      expect(probed.single.config, const GridConfiguration(settings: {'v': 1}));
-      expect(probed.single.delegate, same(delegate));
+      // The probe (inside the built tree) saw the ambient configuration —
+      // configuration provision is real and load-bearing. It reads the VALUE,
+      // never a handle on the notifier.
+      expect(probed.single, const GridConfiguration(settings: {'v': 1}));
     });
 
     test('the default build returns the §2 shape (RawAssetGrid → Station → '
@@ -390,7 +389,7 @@ void main() {
     test('emitting a new configuration re-runs the master build with it', () async {
       final probed = <GridConfiguration>[];
       final delegate = RecordingDelegate(
-        assetsBuilder: () => [ConfigProbe((config, _) => probed.add(config))],
+        assetsBuilder: () => [ConfigProbe(probed.add)],
         initial: const GridConfiguration(settings: {'v': 1}),
       );
       final handle = runGrid(delegate);
@@ -414,15 +413,40 @@ void main() {
 
   group('ambient lookups are loud outside a running grid (the guard principle)',
       () {
-    test('GridConfiguration.of / GridDelegate.of throw when unmounted', () {
+    test('GridConfiguration.of throws / maybeOf is null when unmounted', () {
       mount(
         _OfProbe((ctx) {
           expect(() => GridConfiguration.of(ctx), throwsStateError);
-          expect(() => GridDelegate.of(ctx), throwsStateError);
           expect(GridConfiguration.maybeOf(ctx), isNull);
-          expect(GridDelegate.maybeOf(ctx), isNull);
         }),
       );
+    });
+  });
+
+  group('the delegate is not ambient (ADR-0008 D-H)', () {
+    test('a running grid provides the configuration VALUE, never the delegate '
+        '(the StateNotifier) — it is not lookuppable from the tree', () {
+      GridDelegate? seenDelegate;
+      GridConfiguration? seenConfig;
+      final delegate = RecordingDelegate(
+        assetsBuilder: () => [
+          _RawLookupProbe((ctx) {
+            // The framework must not have provided the delegate ambiently: a
+            // consumer that reached the notifier could snapshot its `.state`.
+            seenDelegate = ctx.getInheritedSeedOfExactType<GridDelegate>();
+            // The configuration VALUE, however, IS ambient (the observed read).
+            seenConfig = GridConfiguration.maybeOf(ctx);
+          }),
+        ],
+        initial: const GridConfiguration(settings: {'v': 9}),
+      );
+      final handle = runGrid(delegate);
+      addTearDown(handle.teardown);
+
+      expect(seenDelegate, isNull,
+          reason: 'the delegate/notifier must not ride the tree (D-H)');
+      expect(seenConfig, const GridConfiguration(settings: {'v': 9}),
+          reason: 'only the observed configuration value is ambient');
     });
   });
 }
@@ -433,6 +457,21 @@ class _BareDelegate extends GridDelegate {}
 /// Runs [probe] against a live TreeContext at build time.
 class _OfProbe extends StatelessSeed {
   const _OfProbe(this.probe);
+
+  final void Function(TreeContext) probe;
+
+  @override
+  Seed build(TreeContext context) {
+    probe(context);
+    return const Leaf();
+  }
+}
+
+/// Probes the tree with the RAW effect verb (not any SDK accessor) to prove the
+/// delegate is not provided ambiently — a test-only reach-in, exactly the
+/// snapshot a consumer must not be handed.
+class _RawLookupProbe extends StatelessSeed {
+  const _RawLookupProbe(this.probe);
 
   final void Function(TreeContext) probe;
 
