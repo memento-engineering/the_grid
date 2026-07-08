@@ -12,6 +12,7 @@ import '../sdk/capability_facts.dart';
 import '../seeds/station_seed.dart';
 import '../seeds/substation_scope.dart';
 import 'session_resolver.dart';
+import 'station_driver.dart';
 
 /// The kernel: composes the running tree and drives it (ADR-0007 /
 /// M4-P0-BUILD-ORDER Track E/F).
@@ -64,11 +65,15 @@ class StationKernel {
        _substations = substations,
        _registry = registry,
        _wrapRoot = wrapRoot,
-       _clock = clock ?? DateTime.now,
-       _scheduleTimer = scheduleTimer ?? Timer.new,
-       _rootCircuitFor = rootCircuitFor,
-       _stationFacts = stationFacts,
-       _onUnclaimedFrontier = onUnclaimedFrontier;
+       _driver = StationDriver(
+         bridge: bridge,
+         clock: clock,
+         scheduleTimer: scheduleTimer,
+         rootCircuitFor: rootCircuitFor,
+         registry: registry,
+         stationFacts: stationFacts,
+         onUnclaimedFrontier: onUnclaimedFrontier,
+       );
 
   /// The join bridge feeding the work axis — the kernel owns its lifecycle
   /// (started in [start], disposed in [dispose]).
@@ -90,27 +95,16 @@ class StationKernel {
   /// opinion-free extension point; `Nest` chains multiple providers cleanly).
   final Seed Function(Seed root)? _wrapRoot;
 
-  final DateTime Function() _clock;
-  final Timer Function(Duration, void Function()) _scheduleTimer;
-
-  /// The bead→root-circuit policy (D-B5 hook #1) — null skips the unclaimed-
-  /// frontier scan entirely (no asset composed to consume it).
-  final RootCircuitFor? _rootCircuitFor;
-
-  /// This station's own capability profile, checked by containment against
-  /// each unclaimed candidate's declared requirement (ADR-0011 D6). Defaults
-  /// to empty.
-  final CapabilityFacts _stationFacts;
-
-  /// The composed asset's sink for the station-wide unclaimed requirement set
-  /// (D-B5 hook #1) — null means no federation asset is composed.
-  final void Function(List<UnclaimedRequirement>)? _onUnclaimedFrontier;
+  /// The off-tree work-axis machinery — the bridge lifecycle, the D-5/F1
+  /// cooldown Timer + backoff re-poke, and the unclaimed-frontier scan —
+  /// extracted to [StationDriver] (tg-yl8) so `runGrid`'s tree reuses it; the
+  /// kernel delegates the same duties it always owned.
+  final StationDriver _driver;
 
   final TreeOwner _owner = TreeOwner();
   bool _started = false;
   bool _disposed = false;
   bool _flushScheduled = false;
-  Timer? _cooldownTimer;
 
   /// Mounts the tree and starts the reactive loop. Idempotent.
   void start() {
@@ -119,7 +113,12 @@ class StationKernel {
     // Wire the flush trigger BEFORE mounting; the first build runs synchronously
     // in mountRoot (no markNeedsRebuild), so onNeedsFlush won't fire during it.
     _owner.onNeedsFlush = _scheduleFlush;
-    bridge.start();
+    // The driver starts the bridge (seeding the notifier's baseline BEFORE
+    // WorkList subscribes below) and runs the baseline scans — the cooldown
+    // arm for a restart that adopts a cooled-down session (D-5/F1) and the
+    // baseline unclaimed-frontier scan (D-B5 hook #1). Both read only
+    // bridge.latest, so running them before mount is value-identical.
+    _driver.start();
     // Build the ambient-provider stack inside-out. Every provider is a plain
     // InheritedSeed: the root never rebuilds, and genesis's default identity
     // check declines to notify for a re-provided handle anyway (ADR-0008 D-6,
@@ -142,15 +141,6 @@ class StationKernel {
     final wrap = _wrapRoot;
     if (wrap != null) root = wrap(root);
     _owner.mountRoot(root);
-    // Arm the backoff Timer for any baseline cooldown (a restart that adopts a
-    // cooled-down session — D-5/F1). Steady-state scans happen in the flush
-    // cycle below, so the kernel adds NO persistent notifier listener (WorkList
-    // stays the sole observer + dirtier, invariant 1).
-    _scanCooldowns();
-    // The baseline unclaimed-frontier scan (D-B5 hook #1) — same posture as
-    // the cooldown scan above: computed once at start, then re-scanned once
-    // per flush below, off the SAME bridge.latest the kernel already holds.
-    _scanUnclaimedFrontier();
   }
 
   void _scheduleFlush() {
@@ -160,84 +150,21 @@ class StationKernel {
       _flushScheduled = false;
       if (_disposed) return;
       _owner.flush();
-      // Re-scan after each flush: a failure cursor written this tick may carry a
-      // new cooldown to arm (or a re-keyed step may clear one). No persistent
-      // subscription — the kernel already owns this cycle.
-      _scanCooldowns();
-      // The unclaimed-frontier re-scan (D-B5 hook #1) — "the end of a
-      // reconciliation phase": whatever this flush left unfulfillable is what
-      // a composed claim asset sees next.
-      _scanUnclaimedFrontier();
+      // Re-scan after each flush (the driver's cooldown + unclaimed-frontier
+      // scans): a failure cursor written this tick may carry a new cooldown to
+      // arm, and whatever this flush left unfulfillable is what a composed
+      // claim asset sees next. No persistent subscription — the kernel already
+      // owns this cycle.
+      _driver.afterFlush();
     });
   }
 
-  /// Scans every owned session's cursor for the EARLIEST future cooldown and
-  /// (re)arms the backoff Timer for it (D-5/F1). Reads the PRODUCER-side latest
-  /// off the bridge (what it last pushed) — never a sync read of the notifier's
-  /// reactive state (D-H rule 2) and never a persistent listener.
-  void _scanCooldowns() {
-    if (_disposed) return;
-    final now = _clock();
-    DateTime? earliest;
-    for (final session in bridge.latest.sessionsByWorkBead.values) {
-      for (final node in session.cursor.values) {
-        final cooldown = node.cooldownUntil;
-        if (cooldown != null &&
-            cooldown.isAfter(now) &&
-            (earliest == null || cooldown.isBefore(earliest))) {
-          earliest = cooldown;
-        }
-      }
-    }
-    _cooldownTimer?.cancel();
-    _cooldownTimer = null;
-    if (earliest != null) {
-      _cooldownTimer = _scheduleTimer(earliest.difference(now), _repokeCooldown);
-    }
-  }
-
-  /// Computes + hands the STATION-WIDE unclaimed requirement set to
-  /// [_onUnclaimedFrontier] (D-B5 hook #1) — a no-op unless BOTH a
-  /// [_rootCircuitFor] policy and an [_onUnclaimedFrontier] sink are wired
-  /// (no federation asset composed ⇒ nothing to compute, nothing to call).
-  /// Reads the PRODUCER-side [bridge.latest] — the exact same snapshot the
-  /// cooldown scan reads — never a sync pull off the notifier (D-H rule 2).
-  void _scanUnclaimedFrontier() {
-    final onUnclaimed = _onUnclaimedFrontier;
-    final rootCircuitFor = _rootCircuitFor;
-    final registry = _registry;
-    if (onUnclaimed == null || rootCircuitFor == null || registry == null) {
-      return;
-    }
-    onUnclaimed(
-      stationUnclaimedFrontier(
-        bridge.latest,
-        rootCircuitFor: rootCircuitFor,
-        registry: registry,
-        stationFacts: _stationFacts,
-      ),
-    );
-  }
-
-  /// A cooldown expired — re-emit a FRESH-instance copy of the latest snapshot
-  /// (the bridge's `repush`) so `WorkList` re-runs the frontier predicate (now
-  /// past the cooldown) and re-keys the eligible failed step (the backoff
-  /// re-mount). The re-emit goes through the notifier (WorkList stays the sole
-  /// dirtier); `root.markNeedsRebuild` is NEVER called.
-  void _repokeCooldown() {
-    _cooldownTimer = null;
-    if (_disposed) return;
-    bridge.repush();
-  }
-
-  /// Tears down the tree (unmounting every effect → kill) and the bridge.
-  /// Idempotent.
+  /// Tears down the tree (unmounting every effect → kill) and the driver
+  /// (cancelling the backoff Timer, disposing the bridge). Idempotent.
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    _cooldownTimer?.cancel();
-    _cooldownTimer = null;
     _owner.dispose();
-    bridge.dispose();
+    _driver.dispose();
   }
 }

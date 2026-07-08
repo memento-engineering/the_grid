@@ -157,15 +157,23 @@ class Substation extends StatelessSeed {
   Substation({
     required this.name,
     required this.root,
+    String? prefix,
     this.assets = const <Seed>[],
     Key? key,
-  }) : super(key: key ?? ValueKey<String>('substation:$name'));
+  }) : prefix = prefix ?? name,
+       super(key: key ?? ValueKey<String>('substation:$name'));
 
-  /// The project's name.
+  /// The project's name (the tree identity + the `metadata.rig` marker axis).
   final String name;
 
   /// The project's single root (absolute; validated loud at build).
   final String root;
+
+  /// The work store's issue-id prefix — a SEPARATE axis from [name] (Nico,
+  /// 2026-07-08; `SUBSTATION-INIT.md` §2): `the_grid` (name) mints `tg-…`
+  /// (prefix). Defaults to [name] for the stations whose short name IS the
+  /// prefix. Ownership matches either axis.
+  final String prefix;
 
   /// Substation-scoped assets — serve the project (v3 §3).
   final List<Seed> assets;
@@ -173,9 +181,10 @@ class Substation extends StatelessSeed {
   @override
   Seed build(TreeContext context) {
     _requireName(name, 'Substation');
+    _requireName(prefix, 'Substation("$name").prefix');
     _requireRoot(root, 'Substation("$name")');
     return InheritedSeed<SubstationScope>(
-      value: SubstationScope(name: name, root: root),
+      value: SubstationScope(name: name, root: root, prefix: prefix),
       child: AssetFanOut(assets),
     );
   }

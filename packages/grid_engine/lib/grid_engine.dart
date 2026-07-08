@@ -67,8 +67,11 @@ export 'src/kernel/station_services.dart';
 // `SourceControl`) live in the `grid_assets` package, NEVER in the engine
 // (ADR-0007 §1: the opinion-free kernel — a structural fence keeps them out).
 
-// Kernel: the seams + the composition/flush driver.
+// Kernel: the seams + the composition/flush driver. StationDriver is the
+// off-tree work-axis machinery (bridge lifecycle + D-5 cooldown Timer +
+// unclaimed scan) extracted so runGrid's tree (grid_sdk, tg-yl8) reuses it.
 export 'src/kernel/session_resolver.dart';
+export 'src/kernel/station_driver.dart';
 export 'src/kernel/station_kernel.dart';
 export 'src/kernel/idle.dart';
 

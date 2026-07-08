@@ -216,7 +216,7 @@ void main() {
       );
       expect(
         seen.single.sub,
-        const SubstationScope(name: 'tg', root: '/work/tg'),
+        const SubstationScope(name: 'tg', root: '/work/tg', prefix: 'tg'),
       );
     });
 

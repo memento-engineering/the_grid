@@ -93,3 +93,36 @@ export 'src/run/run_grid.dart';
 export 'src/stores/stores.dart';
 export 'src/stores/substation_init.dart';
 
+// ── The work binding (Track J0 — tg-yl8) ────────────────────────────────────
+// The runGrid→engine bridge: the engine's work subtree mounts INSIDE the
+// composition tree ("each child `Substation` establishes its `WorkList`",
+// v3 §3), fed by runner-assembled off-tree machinery.
+//   StationWork(wiring)   · the station-scoped asset providing the engine's
+//                           ambient work-axis stack (notifier / services /
+//                           resolver / registry) — mounted ABOVE the
+//                           `Substations` fan-out.
+//   SubstationWork()      · the per-substation work seat (replaces H2's
+//                           placeholder leaf): derives the engine config from
+//                           the ambient `SubstationScope` (ownership =
+//                           {name, prefix} — BOTH identity axes) and mounts
+//                           the `WorkList`. Unarmed (no `StationWork` above)
+//                           it mounts nothing — the authored tree stands.
+//   buildStationWork(...) · assembles the off-tree machinery over REAL stores
+//                           at their roots (controllers → join bridge →
+//                           chokepoint → restart reconciler → driver), one
+//                           dry/live posture, exact-at-root store binding
+//                           (LOUD StoreRefusal, never a walk-up).
+//   StationWorkRuntime    · the runner-held lifecycle: `await start()` (the
+//                           pinned ordering: freshness → restart-reconcile →
+//                           bridge) BEFORE `runGrid`; `afterFlush` rides
+//                           `runGrid(onFlushed:)`; `shutdown()` AFTER
+//                           `grid.teardown()`.
+export 'src/work/station_work.dart';
+export 'src/work/work_assembly.dart';
+// The narrow engine seam a RUNNER names when assembling (ADR-0008 D2 —
+// consumers still never import grid_engine): the bead→circuit resolver + the
+// registry/resolver types `buildStationWork` accepts. An asset pack (e.g.
+// grid_assets' code circuit) supplies the values.
+export 'package:grid_engine/grid_engine.dart'
+    show CapabilityRegistry, Circuit, CircuitResolver, SessionResolver;
+
