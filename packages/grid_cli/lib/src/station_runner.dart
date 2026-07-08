@@ -1057,14 +1057,15 @@ class StationWiring {
   /// falling back to a dry-run synthetic when none did.
   final RootCheckout workRoot;
 
-  /// EVERY registered root, keyed by its registration NAME (tg-7gm) — EMPTY
-  /// when no `--root` was wired (dry-run's unconstrained default; matches
-  /// [StationArgs.roots] being empty). The asset builds ONE [ServiceBundle]
-  /// per substation from this map (its own name's entry is that substation's
-  /// default; any OTHER entry is an extra root a bead opts into via
-  /// `metadata.grid.root`) and threads this map's key SET into each
-  /// `SubstationConfig.registeredRoots` so `WorkList`'s mount-boundary gate
-  /// can validate a bead's selection.
+  /// EVERY registered root, keyed by its registration NAME — EMPTY when no
+  /// `--root` was wired (dry-run's default; matches [StationArgs.roots] being
+  /// empty). The asset builds ONE [ServiceBundle] per substation from this map
+  /// (its own name's entry is that substation's root). v3 single-root (tg-2gd):
+  /// the per-bead `metadata.grid.root` selector + the `registeredRoots` mount
+  /// gate are GONE — a bead's root is its substation's root. The multi-entry
+  /// map + `--root` grammar here are transitional station-runner scaffolding
+  /// (still consumed by `space_station`'s driving seam) pending the
+  /// runGrid→kernel bridge; the extra entries are now inert.
   final Map<String, RootCheckout> roots;
 
   /// The process-group controller (the orphan-kill seam — REAL even offline so
@@ -1142,10 +1143,10 @@ Future<StationWiring> buildLiveWiring({
   if (rootsOverride != null) {
     roots = rootsOverride;
   } else if (args.roots.isEmpty) {
-    // No --root at all: UNCONSTRAINED (a live run is already refused upstream
-    // by validateArming; this is dry-run's ordinary shape). An EMPTY map here
-    // means an EMPTY `SubstationConfig.registeredRoots` — the WorkList
-    // mount-boundary gate stays inert, matching pre-multi-root behavior.
+    // No --root at all (a live run is already refused upstream by
+    // validateArming; this is dry-run's ordinary shape). v3 single-root
+    // (tg-2gd): there is no `registeredRoots` mount gate — an owned, ready
+    // bead mounts against its substation's root.
     roots = const {};
   } else {
     final registered = <String, RootCheckout>{};

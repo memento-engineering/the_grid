@@ -30,7 +30,6 @@ import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
@@ -476,19 +475,13 @@ class SessionScopeState extends State<SessionScope> {
     // effect verb; nothing registers on it, so a fresh instance per build
     // notifies nobody).
     //
-    // The SourceControl is resolved by the bead's `metadata.grid.root`
-    // selector (tg-7gm) — null ⇒ this substation's DEFAULT root
-    // (`services.sourceControl`). A reaching bead is guaranteed a REGISTERED
-    // selection by the `WorkList` mount-boundary gate, so this resolution
-    // never itself refuses; `sourceControlFor` falls back to the default
-    // defensively.
+    // The SourceControl is this substation's ONE root (v3 single-root: a
+    // bead's root IS its substation's root — no `metadata.grid.root` selector).
     // The bundle captured in `didChangeDependencies` (the dependency is
     // registered there) — reused so `build` and the off-build re-arm flare read
     // the SAME ambient value.
     final services = _services;
-    final sc = services.sourceControlFor(
-      BeadOwnershipPredicate.rootOf(seed.bead.metadata),
-    );
+    final sc = services.sourceControl;
     final beadId = seed.bead.id;
     final workspace = Workspace(
       workspaceDir: sc?.workspaceFor(beadId) ?? '/grid/workspaces/$beadId',

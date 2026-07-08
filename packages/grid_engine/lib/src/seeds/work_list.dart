@@ -114,7 +114,6 @@ class _WorkListState extends State<WorkList> {
     // the same generous constant `StationServices` itself defaults to.
     final stationServices = context
         .dependOnInheritedSeedOfExactType<StationServices>();
-    final registeredRoots = seed.substationConfig.registeredRoots;
     // Two bins: `mounted` already carries a live (non-terminal) session — an
     // in-flight agent that is NEVER evicted for budget reasons (positive-
     // terminal-only unmount stays the only unmount trigger). `pending` is
@@ -180,22 +179,10 @@ class _WorkListState extends State<WorkList> {
       // latter is what keeps a transiently-unready bead's agent mounted).
       if (!inReady && !staysMounted) continue;
 
-      // The per-bead ROOT MATCH (tg-7gm, `SCRATCH-grid-alignment.md` §6
-      // amendment): a bead selects a registered root via `metadata.grid.root`,
-      // defaulting to its own substation. An EMPTY [registeredRoots] means no
-      // `--root` is wired (dry-run's/an offline test's default) — unconstrained,
-      // matching pre-multi-root behavior. A NON-empty set activates the gate: a
-      // bead whose resolved root is unregistered is an ARMING-CLASS refusal —
-      // a LOUD skip naming the missing root, never a station-wide gate (other
-      // owned beads keep mounting; `SCRATCH-orchestration-determinism` §5).
-      final targetRoot =
-          BeadOwnershipPredicate.rootOf(bead.metadata) ??
-          ownership.substationOf(bead);
-      if (registeredRoots.isNotEmpty && !registeredRoots.contains(targetRoot)) {
-        _reportRootMissing(services, bead, targetRoot);
-        continue;
-      }
-
+      // v3 single-root: a substation names ONE root, and an owned bead's root
+      // IS its substation's root (resolved bead → substation → root). There is
+      // no per-bead `metadata.grid.root` selector and no registered-root gate —
+      // an owned, dispatchable, ready bead mounts.
       if (staysMounted) {
         _mountedIds.add(bead.id);
         mounted.add(
@@ -284,26 +271,6 @@ class _WorkListState extends State<WorkList> {
   /// the gates themselves).
   static bool _isDispatchableWork(IssueType type, {required bool resident}) =>
       type.isCore && (!resident || type.isDriveable);
-
-  /// Emits the ARMING-CLASS LOUD skip (tg-7gm) through the reserved emit-only
-  /// [ExplorationTransport] (D-8) — mirrors `CapabilityHost._emitFlare`: a
-  /// throwing transport must NOT break the build, so errors are swallowed.
-  /// A null [services]/`transport` is the offline/no-op default — no flare, no
-  /// error (matching every other flare call site).
-  static void _reportRootMissing(
-    ServiceBundle? services,
-    Bead bead,
-    String? targetRoot,
-  ) {
-    try {
-      services?.transport?.flare('work.rootMissing', {
-        'beadId': bead.id,
-        'root': targetRoot ?? '',
-      });
-    } catch (_) {
-      // A throwing transport never breaks the mount reconcile — swallow.
-    }
-  }
 
   /// Emits ONE LOUD line (tg-42f) when the concurrency governor holds
   /// [waiting] beads ready-unmounted for lack of a slot — count + which beads

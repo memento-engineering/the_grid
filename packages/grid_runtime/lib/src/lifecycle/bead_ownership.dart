@@ -90,15 +90,4 @@ class BeadOwnershipPredicate {
     if (rig is String && rig.isNotEmpty) return rig;
     return null;
   }
-
-  /// The bead's explicit registered-root SELECTOR (`metadata.grid.root`,
-  /// tg-7gm) — lets a bead owned by one substation provision from a
-  /// DIFFERENT registered root (e.g. a `tg` bead building the `power_station`
-  /// repo names `grid.root: power_station`). Null when unset (the caller falls
-  /// back to the bead's own substation, [substationOf]).
-  static String? rootOf(Map<String, dynamic> metadata) {
-    final root = metadata['grid.root'];
-    if (root is String && root.isNotEmpty) return root;
-    return null;
-  }
 }

@@ -356,49 +356,8 @@ void main() {
       },
     );
 
-    test(
-      'a bead with metadata.grid.root selects that root\'s SourceControl for '
-      'the CREATE-path provision — never the substation DEFAULT (tg-8tn: the '
-      'provision split-brain — SessionScope\'s ambient Workspace already '
-      'resolved per-bead; startOrAdopt must resolve the SAME instance, not '
-      'services.sourceControl)',
-      () async {
-        final log = <String>[];
-        final provider = FakeRuntimeProvider();
-        final alloc = _RecProcessCap(log).createAllocation(
-          _allocCtx(
-            transport: provider,
-            sink: (_) {},
-            cancel: CancelToken(),
-            bead: const Bead(
-              id: 'tg-1',
-              issueType: IssueType.task,
-              metadata: {'grid.root': 'power_station'},
-            ),
-            services: ServiceBundle(
-              sourceControl: _RecordingProvisionSourceControl(
-                log,
-                root: 'default',
-              ),
-              sourceControlsByRoot: {
-                'power_station': _RecordingProvisionSourceControl(
-                  log,
-                  root: 'power_station',
-                ),
-              },
-            ),
-          ),
-        );
-        await alloc.startOrAdopt();
-        await _pump();
-
-        expect(log, contains('provision(power_station:tg-1)'));
-        expect(log, isNot(contains('provision(default:tg-1)')));
-      },
-    );
-
-    test('no metadata.grid.root selector falls back to the substation DEFAULT '
-        'SourceControl (unchanged single-root behavior)', () async {
+    test('the CREATE-path provision uses the substation\'s ONE '
+        'SourceControl (v3 single-root — no metadata.grid.root selector)', () async {
       final log = <String>[];
       final provider = FakeRuntimeProvider();
       final alloc = _RecProcessCap(log).createAllocation(
@@ -412,12 +371,6 @@ void main() {
               log,
               root: 'default',
             ),
-            sourceControlsByRoot: {
-              'power_station': _RecordingProvisionSourceControl(
-                log,
-                root: 'power_station',
-              ),
-            },
           ),
         ),
       );
@@ -425,7 +378,6 @@ void main() {
       await _pump();
 
       expect(log, contains('provision(default:tg-1)'));
-      expect(log, isNot(contains('provision(power_station:tg-1)')));
     });
 
     test('SessionStarted → AllocationStarted(pid,pgid)', () async {

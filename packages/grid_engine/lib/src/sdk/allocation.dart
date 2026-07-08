@@ -28,7 +28,6 @@ library;
 
 import 'dart:async';
 
-import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
@@ -501,28 +500,23 @@ class ProcessAllocation extends Allocation {
     try {
       // Read the ambient values at ENTRY (synchronously, while mounted — the
       // kick guarantees it): the per-substation services + the per-session
-      // workspace + the work bead (for its `grid.root` selector).
+      // workspace.
       final services =
           tree.getInheritedSeedOfExactType<ServiceBundle>() ??
           const ServiceBundle();
       final workspace = tree.getInheritedSeedOfExactType<Workspace>();
-      final bead = tree.getInheritedSeedOfExactType<Bead>();
       // Materialize the workspace BEFORE spawning into it (the effect owns
       // provisioning; ADR-0008 D5). Idempotent — a later step in the same
       // worktree no-ops, and an offline build with no source control no-ops. A
       // tree with source control wired MUST also mount a Workspace
       // (SessionScope does).
       //
-      // MUST resolve the SAME [SourceControl] `SessionScope` resolved for
-      // [workspace] (tg-7gm/tg-8tn) — `services.sourceControl` alone is
-      // always the substation's DEFAULT root, so a bead that opted into a
-      // DIFFERENT root via `metadata.grid.root` would provision a fresh
-      // worktree against the wrong repo (git worktree add -b lands `grid/
-      // <beadId>` in the default root) while `workspace.workspaceDir` still
-      // names the correct one — the split-brain that wedged tg-rm5/tg-043.
-      final sc = services.sourceControlFor(
-        bead != null ? BeadOwnershipPredicate.rootOf(bead.metadata) : null,
-      );
+      // The SourceControl is this substation's ONE root (v3 single-root — no
+      // `metadata.grid.root` selector); it MUST be the SAME control
+      // `SessionScope` resolved for [workspace] (both read `services
+      // .sourceControl`), so the provisioned worktree and `workspace
+      // .workspaceDir` always name the same repo.
+      final sc = services.sourceControl;
       assert(
         sc == null || workspace != null,
         'A tree wiring SourceControl must mount an ambient Workspace '

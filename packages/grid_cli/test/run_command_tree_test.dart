@@ -509,32 +509,28 @@ void main() {
     );
   });
 
-  group('multi-root (tg-7gm): per-substation DEFAULT roots + a per-bead '
-      'grid.root selector', () {
+  group('single-root (v3): a bead provisions through its substation\'s ONE '
+      'SourceControl (no per-bead grid.root selector)', () {
     test(
-      'TWO named roots registered — a bead defaulting to its substation AND a '
-      'bead selecting an EXTRA root via metadata.grid.root both mount, each '
-      'provisioning through ITS OWN SourceControl; a THIRD bead selecting an '
-      'UNREGISTERED root is a LOUD skip (never a gate) — its siblings still mount',
+      'an owned, ready bead mounts and provisions through its substation\'s '
+      'SourceControl; a metadata.grid.root stamp is INERT (v3 killed the '
+      'selector — a bead\'s root is its substation\'s root)',
       () async {
         final work = _FakeSnapshotSource();
         work.push(
           GraphSnapshot.fromParts(
             beads: [
               Bead(id: 'tg-1', title: 'defaults to substation tg'),
+              // A stray grid.root stamp no longer routes anywhere — the bead
+              // still mounts and provisions through the substation's root.
               Bead(
                 id: 'tg-2',
-                title: 'selects the EXTRA power_station root',
+                title: 'carries an inert grid.root stamp',
                 metadata: const {'grid.root': 'power_station'},
-              ),
-              Bead(
-                id: 'tg-3',
-                title: 'selects an UNREGISTERED root',
-                metadata: const {'grid.root': 'genesis'},
               ),
             ],
             dependencies: const [],
-            readyIds: {'tg-1', 'tg-2', 'tg-3'},
+            readyIds: {'tg-1', 'tg-2'},
             capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
           ),
         );
@@ -555,11 +551,7 @@ void main() {
             substations: {'tg'},
             stateSubstation: 'tgdog',
             dryRun: true,
-            roots: {
-              'tg': RootSpec(path: '/tmp/the_grid'),
-              'power_station': RootSpec(path: '/tmp/power_station'),
-              // NOTE: "genesis" is deliberately NOT registered.
-            },
+            roots: {'tg': RootSpec(path: '/tmp/the_grid')},
             runFor: Duration(milliseconds: 100),
           ),
           work: work,
@@ -567,16 +559,10 @@ void main() {
           provider: provider,
           stateBd: BdCliService(bdRunner),
           groups: groups,
-          // ONE ServiceBundle for the ONE substation ("tg") carrying BOTH its
-          // default SourceControl and an EXTRA named one — exactly what an
-          // asset builds from `StationWiring.roots` (tg-7gm).
+          // ONE ServiceBundle for the ONE substation ("tg") — its single
+          // SourceControl provisions every owned bead (v3 single-root).
           servicesByName: {
-            'tg': ServiceBundle(
-              sourceControl: _NamedSourceControl('default'),
-              sourceControlsByRoot: {
-                'power_station': _NamedSourceControl('power_station'),
-              },
-            ),
+            'tg': ServiceBundle(sourceControl: _NamedSourceControl('default')),
           },
           freshnessBarrier: () async {},
           out: (_) {},
@@ -584,20 +570,12 @@ void main() {
         );
 
         expect(code, 0);
-        // Only tg-1 and tg-2 mounted — tg-3 (unregistered root) never spawned.
+        // Both beads mounted; the grid.root stamp on tg-2 changed nothing.
         expect(provider.starts, hasLength(2));
-        expect(
-          provider.starts.where((s) => s.name.contains('tg-3')),
-          isEmpty,
-          reason:
-              'tg-3 selected an unregistered root — LOUD skip, never mounts',
-        );
-        // Each mounted bead provisioned through ITS OWN SourceControl: tg-1's
-        // workDir carries the DEFAULT label, tg-2's carries the EXTRA root's.
         final tg1 = provider.starts.singleWhere((s) => s.name.contains('tg-1'));
         final tg2 = provider.starts.singleWhere((s) => s.name.contains('tg-2'));
         expect(tg1.config.workDir, '/default/tg-1');
-        expect(tg2.config.workDir, '/power_station/tg-2');
+        expect(tg2.config.workDir, '/default/tg-2');
       },
     );
   });
@@ -998,7 +976,6 @@ Future<int> runStation({
           ownedSubstations: args.substations,
           driveList: args.targetBeads,
           resident: args.resident,
-          registeredRoots: live.roots.keys.toSet(),
         ),
       ],
       git: live.git,
