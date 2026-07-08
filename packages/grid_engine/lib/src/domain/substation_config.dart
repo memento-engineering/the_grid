@@ -39,19 +39,6 @@ abstract class SubstationConfig with _$SubstationConfig {
     /// WHICH TYPES of the all-ready frontier are driveable, not which ids.
     @Default(false) bool resident,
 
-    /// The registered root NAMES available to this substation's work (tg-7gm,
-    /// `docs/SCRATCH-grid-alignment.md` §6 amendment) — a bead mounts only when
-    /// its resolved target root (`metadata.grid.root`, defaulting to the
-    /// bead's own substation) is a member. EMPTY means UNCONSTRAINED (no
-    /// `--root` wired — dry-run's/an offline test's default): every owned
-    /// bead mounts regardless of rooting, exactly today's pre-multi-root
-    /// behavior. Non-empty activates the gate: an owned bead whose target
-    /// root is absent from this set is an ARMING-CLASS refusal AT THE MOUNT
-    /// BOUNDARY (a LOUD skip, never a station-wide gate — the
-    /// `SCRATCH-orchestration-determinism` §5 failure-discrimination
-    /// principle) — other owned beads keep mounting.
-    @Default(<String>{}) Set<String> registeredRoots,
-
     /// The concurrency governor's PER-SUBSTATION override (tg-42f,
     /// declare-and-check): the most `WorkList` will mount concurrently for
     /// THIS substation. Null (the default) falls back to the station-wide

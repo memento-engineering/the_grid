@@ -32,18 +32,7 @@ mixin _$SubstationConfig {
 /// ready. Orthogonal to [driveList]: under resident arming the drive-list
 /// is always empty (`validateArming` refuses a `--bead`) — this narrows
 /// WHICH TYPES of the all-ready frontier are driveable, not which ids.
- bool get resident;/// The registered root NAMES available to this substation's work (tg-7gm,
-/// `docs/SCRATCH-grid-alignment.md` §6 amendment) — a bead mounts only when
-/// its resolved target root (`metadata.grid.root`, defaulting to the
-/// bead's own substation) is a member. EMPTY means UNCONSTRAINED (no
-/// `--root` wired — dry-run's/an offline test's default): every owned
-/// bead mounts regardless of rooting, exactly today's pre-multi-root
-/// behavior. Non-empty activates the gate: an owned bead whose target
-/// root is absent from this set is an ARMING-CLASS refusal AT THE MOUNT
-/// BOUNDARY (a LOUD skip, never a station-wide gate — the
-/// `SCRATCH-orchestration-determinism` §5 failure-discrimination
-/// principle) — other owned beads keep mounting.
- Set<String> get registeredRoots;/// The concurrency governor's PER-SUBSTATION override (tg-42f,
+ bool get resident;/// The concurrency governor's PER-SUBSTATION override (tg-42f,
 /// declare-and-check): the most `WorkList` will mount concurrently for
 /// THIS substation. Null (the default) falls back to the station-wide
 /// default (`StationServices.maxConcurrentWork`). Either way the
@@ -62,16 +51,16 @@ $SubstationConfigCopyWith<SubstationConfig> get copyWith => _$SubstationConfigCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other.ownedSubstations, ownedSubstations)&&const DeepCollectionEquality().equals(other.driveList, driveList)&&(identical(other.resident, resident) || other.resident == resident)&&const DeepCollectionEquality().equals(other.registeredRoots, registeredRoots)&&(identical(other.maxConcurrentWork, maxConcurrentWork) || other.maxConcurrentWork == maxConcurrentWork));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other.ownedSubstations, ownedSubstations)&&const DeepCollectionEquality().equals(other.driveList, driveList)&&(identical(other.resident, resident) || other.resident == resident)&&(identical(other.maxConcurrentWork, maxConcurrentWork) || other.maxConcurrentWork == maxConcurrentWork));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(ownedSubstations),const DeepCollectionEquality().hash(driveList),resident,const DeepCollectionEquality().hash(registeredRoots),maxConcurrentWork);
+int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(ownedSubstations),const DeepCollectionEquality().hash(driveList),resident,maxConcurrentWork);
 
 @override
 String toString() {
-  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList, resident: $resident, registeredRoots: $registeredRoots, maxConcurrentWork: $maxConcurrentWork)';
+  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList, resident: $resident, maxConcurrentWork: $maxConcurrentWork)';
 }
 
 
@@ -82,7 +71,7 @@ abstract mixin class $SubstationConfigCopyWith<$Res>  {
   factory $SubstationConfigCopyWith(SubstationConfig value, $Res Function(SubstationConfig) _then) = _$SubstationConfigCopyWithImpl;
 @useResult
 $Res call({
- String substationId, Set<String> ownedSubstations, Set<String> driveList, bool resident, Set<String> registeredRoots, int? maxConcurrentWork
+ String substationId, Set<String> ownedSubstations, Set<String> driveList, bool resident, int? maxConcurrentWork
 });
 
 
@@ -99,14 +88,13 @@ class _$SubstationConfigCopyWithImpl<$Res>
 
 /// Create a copy of SubstationConfig
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,Object? resident = null,Object? registeredRoots = null,Object? maxConcurrentWork = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,Object? resident = null,Object? maxConcurrentWork = freezed,}) {
   return _then(_self.copyWith(
 substationId: null == substationId ? _self.substationId : substationId // ignore: cast_nullable_to_non_nullable
 as String,ownedSubstations: null == ownedSubstations ? _self.ownedSubstations : ownedSubstations // ignore: cast_nullable_to_non_nullable
 as Set<String>,driveList: null == driveList ? _self.driveList : driveList // ignore: cast_nullable_to_non_nullable
 as Set<String>,resident: null == resident ? _self.resident : resident // ignore: cast_nullable_to_non_nullable
-as bool,registeredRoots: null == registeredRoots ? _self.registeredRoots : registeredRoots // ignore: cast_nullable_to_non_nullable
-as Set<String>,maxConcurrentWork: freezed == maxConcurrentWork ? _self.maxConcurrentWork : maxConcurrentWork // ignore: cast_nullable_to_non_nullable
+as bool,maxConcurrentWork: freezed == maxConcurrentWork ? _self.maxConcurrentWork : maxConcurrentWork // ignore: cast_nullable_to_non_nullable
 as int?,
   ));
 }
@@ -192,10 +180,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident,  Set<String> registeredRoots,  int? maxConcurrentWork)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident,  int? maxConcurrentWork)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SubstationConfig() when $default != null:
-return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident,_that.registeredRoots,_that.maxConcurrentWork);case _:
+return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident,_that.maxConcurrentWork);case _:
   return orElse();
 
 }
@@ -213,10 +201,10 @@ return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident,  Set<String> registeredRoots,  int? maxConcurrentWork)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident,  int? maxConcurrentWork)  $default,) {final _that = this;
 switch (_that) {
 case _SubstationConfig():
-return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident,_that.registeredRoots,_that.maxConcurrentWork);case _:
+return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident,_that.maxConcurrentWork);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -233,10 +221,10 @@ return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident,  Set<String> registeredRoots,  int? maxConcurrentWork)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String substationId,  Set<String> ownedSubstations,  Set<String> driveList,  bool resident,  int? maxConcurrentWork)?  $default,) {final _that = this;
 switch (_that) {
 case _SubstationConfig() when $default != null:
-return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident,_that.registeredRoots,_that.maxConcurrentWork);case _:
+return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.resident,_that.maxConcurrentWork);case _:
   return null;
 
 }
@@ -248,7 +236,7 @@ return $default(_that.substationId,_that.ownedSubstations,_that.driveList,_that.
 
 
 class _SubstationConfig implements SubstationConfig {
-  const _SubstationConfig({required this.substationId, final  Set<String> ownedSubstations = const <String>{}, final  Set<String> driveList = const <String>{}, this.resident = false, final  Set<String> registeredRoots = const <String>{}, this.maxConcurrentWork}): _ownedSubstations = ownedSubstations,_driveList = driveList,_registeredRoots = registeredRoots;
+  const _SubstationConfig({required this.substationId, final  Set<String> ownedSubstations = const <String>{}, final  Set<String> driveList = const <String>{}, this.resident = false, this.maxConcurrentWork}): _ownedSubstations = ownedSubstations,_driveList = driveList;
   
 
 /// The rig's id (its issue-id prefix and `metadata.rig` marker).
@@ -294,35 +282,6 @@ class _SubstationConfig implements SubstationConfig {
 /// is always empty (`validateArming` refuses a `--bead`) — this narrows
 /// WHICH TYPES of the all-ready frontier are driveable, not which ids.
 @override@JsonKey() final  bool resident;
-/// The registered root NAMES available to this substation's work (tg-7gm,
-/// `docs/SCRATCH-grid-alignment.md` §6 amendment) — a bead mounts only when
-/// its resolved target root (`metadata.grid.root`, defaulting to the
-/// bead's own substation) is a member. EMPTY means UNCONSTRAINED (no
-/// `--root` wired — dry-run's/an offline test's default): every owned
-/// bead mounts regardless of rooting, exactly today's pre-multi-root
-/// behavior. Non-empty activates the gate: an owned bead whose target
-/// root is absent from this set is an ARMING-CLASS refusal AT THE MOUNT
-/// BOUNDARY (a LOUD skip, never a station-wide gate — the
-/// `SCRATCH-orchestration-determinism` §5 failure-discrimination
-/// principle) — other owned beads keep mounting.
- final  Set<String> _registeredRoots;
-/// The registered root NAMES available to this substation's work (tg-7gm,
-/// `docs/SCRATCH-grid-alignment.md` §6 amendment) — a bead mounts only when
-/// its resolved target root (`metadata.grid.root`, defaulting to the
-/// bead's own substation) is a member. EMPTY means UNCONSTRAINED (no
-/// `--root` wired — dry-run's/an offline test's default): every owned
-/// bead mounts regardless of rooting, exactly today's pre-multi-root
-/// behavior. Non-empty activates the gate: an owned bead whose target
-/// root is absent from this set is an ARMING-CLASS refusal AT THE MOUNT
-/// BOUNDARY (a LOUD skip, never a station-wide gate — the
-/// `SCRATCH-orchestration-determinism` §5 failure-discrimination
-/// principle) — other owned beads keep mounting.
-@override@JsonKey() Set<String> get registeredRoots {
-  if (_registeredRoots is EqualUnmodifiableSetView) return _registeredRoots;
-  // ignore: implicit_dynamic_type
-  return EqualUnmodifiableSetView(_registeredRoots);
-}
-
 /// The concurrency governor's PER-SUBSTATION override (tg-42f,
 /// declare-and-check): the most `WorkList` will mount concurrently for
 /// THIS substation. Null (the default) falls back to the station-wide
@@ -343,16 +302,16 @@ _$SubstationConfigCopyWith<_SubstationConfig> get copyWith => __$SubstationConfi
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other._ownedSubstations, _ownedSubstations)&&const DeepCollectionEquality().equals(other._driveList, _driveList)&&(identical(other.resident, resident) || other.resident == resident)&&const DeepCollectionEquality().equals(other._registeredRoots, _registeredRoots)&&(identical(other.maxConcurrentWork, maxConcurrentWork) || other.maxConcurrentWork == maxConcurrentWork));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SubstationConfig&&(identical(other.substationId, substationId) || other.substationId == substationId)&&const DeepCollectionEquality().equals(other._ownedSubstations, _ownedSubstations)&&const DeepCollectionEquality().equals(other._driveList, _driveList)&&(identical(other.resident, resident) || other.resident == resident)&&(identical(other.maxConcurrentWork, maxConcurrentWork) || other.maxConcurrentWork == maxConcurrentWork));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(_ownedSubstations),const DeepCollectionEquality().hash(_driveList),resident,const DeepCollectionEquality().hash(_registeredRoots),maxConcurrentWork);
+int get hashCode => Object.hash(runtimeType,substationId,const DeepCollectionEquality().hash(_ownedSubstations),const DeepCollectionEquality().hash(_driveList),resident,maxConcurrentWork);
 
 @override
 String toString() {
-  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList, resident: $resident, registeredRoots: $registeredRoots, maxConcurrentWork: $maxConcurrentWork)';
+  return 'SubstationConfig(substationId: $substationId, ownedSubstations: $ownedSubstations, driveList: $driveList, resident: $resident, maxConcurrentWork: $maxConcurrentWork)';
 }
 
 
@@ -363,7 +322,7 @@ abstract mixin class _$SubstationConfigCopyWith<$Res> implements $SubstationConf
   factory _$SubstationConfigCopyWith(_SubstationConfig value, $Res Function(_SubstationConfig) _then) = __$SubstationConfigCopyWithImpl;
 @override @useResult
 $Res call({
- String substationId, Set<String> ownedSubstations, Set<String> driveList, bool resident, Set<String> registeredRoots, int? maxConcurrentWork
+ String substationId, Set<String> ownedSubstations, Set<String> driveList, bool resident, int? maxConcurrentWork
 });
 
 
@@ -380,14 +339,13 @@ class __$SubstationConfigCopyWithImpl<$Res>
 
 /// Create a copy of SubstationConfig
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,Object? resident = null,Object? registeredRoots = null,Object? maxConcurrentWork = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? substationId = null,Object? ownedSubstations = null,Object? driveList = null,Object? resident = null,Object? maxConcurrentWork = freezed,}) {
   return _then(_SubstationConfig(
 substationId: null == substationId ? _self.substationId : substationId // ignore: cast_nullable_to_non_nullable
 as String,ownedSubstations: null == ownedSubstations ? _self._ownedSubstations : ownedSubstations // ignore: cast_nullable_to_non_nullable
 as Set<String>,driveList: null == driveList ? _self._driveList : driveList // ignore: cast_nullable_to_non_nullable
 as Set<String>,resident: null == resident ? _self.resident : resident // ignore: cast_nullable_to_non_nullable
-as bool,registeredRoots: null == registeredRoots ? _self._registeredRoots : registeredRoots // ignore: cast_nullable_to_non_nullable
-as Set<String>,maxConcurrentWork: freezed == maxConcurrentWork ? _self.maxConcurrentWork : maxConcurrentWork // ignore: cast_nullable_to_non_nullable
+as bool,maxConcurrentWork: freezed == maxConcurrentWork ? _self.maxConcurrentWork : maxConcurrentWork // ignore: cast_nullable_to_non_nullable
 as int?,
   ));
 }

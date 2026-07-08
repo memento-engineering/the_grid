@@ -301,29 +301,17 @@ class SiblingView {
 /// abstract `<SourceControl>`), provided per-`SubstationScope`. Impls ship in
 /// assets.
 ///
-/// [sourceControl] is the substation's DEFAULT (its own registered root).
-/// [sourceControlsByRoot] carries EXTRA named roots a bead in this substation
-/// may opt into via `metadata.grid.root` (tg-7gm, the alignment amendment: a
-/// substation can span N repos — `tg` beads building `power_station` select
-/// it by name). [sourceControlFor] is the one resolution point; a capability
-/// never reads the maps directly.
+/// [sourceControl] is the substation's source control (its ONE root — v3:
+/// a substation names ONE root, so there is no per-bead root SELECTOR; a
+/// bead's root is its substation's root, resolved bead → substation → root,
+/// never a `metadata.grid.root` stamp).
 class ServiceBundle {
   /// Creates a bundle of optional collaborators.
-  const ServiceBundle({
-    this.sourceControl,
-    this.trust,
-    this.transport,
-    this.sourceControlsByRoot = const {},
-  });
+  const ServiceBundle({this.sourceControl, this.trust, this.transport});
 
-  /// Source control (commit/push/PR) for this substation's DEFAULT root — the
-  /// git impl ships in the asset.
+  /// Source control (commit/push/PR) for this substation's root — the git
+  /// impl ships in the asset.
   final SourceControl? sourceControl;
-
-  /// EXTRA named roots' source control, keyed by the registration name a
-  /// bead's `metadata.grid.root` selects. Does NOT include the default (that
-  /// is always [sourceControl]); empty when the substation has no extra roots.
-  final Map<String, SourceControl> sourceControlsByRoot;
 
   /// Reserved (OQ-7) — local/reputation/ledger trust, distinct from
   /// `genesis_consent`. Designed-to-be-lifted; null in P1.
@@ -332,17 +320,6 @@ class ServiceBundle {
   /// Reserved — the outbound exploration sink (no inbound pipeline handle);
   /// null in P1.
   final ExplorationTransport? transport;
-
-  /// Resolves the [SourceControl] a bead provisions under, given its resolved
-  /// [rootName] (null ⇒ no `metadata.grid.root` override — the substation
-  /// default). An unrecognized [rootName] falls back to [sourceControl] too:
-  /// the mount-boundary gate (`WorkList`, tg-7gm) is what refuses an
-  /// unregistered selection LOUD BEFORE a bead reaches this resolution, so a
-  /// [rootName] arriving here is expected to already be valid — this fallback
-  /// is defensive, not the enforcement point.
-  SourceControl? sourceControlFor(String? rootName) =>
-      (rootName != null ? sourceControlsByRoot[rootName] : null) ??
-      sourceControl;
 }
 
 /// The first [Service] — provision-workspace + commit/push/open-PR, abstracted
