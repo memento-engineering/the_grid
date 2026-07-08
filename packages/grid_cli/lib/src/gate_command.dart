@@ -5,29 +5,42 @@ import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:grid_sdk/grid_sdk.dart'
+    show DirectoryProbe, GridStateStore, StoreRefusal;
+
+import 'station_stores.dart';
 
 /// `grid gate` — list and resolve the committee gates The Circuit parks (D-7).
 ///
 /// The Circuit's route step parks a work circuit at a `type=gate` bead when the
 /// committee blocks (a gating-F, a grade spread ≥ 3 across the lanes, or any
-/// non-gating critic at D/F). The gate bead lives in the_grid's OWN state store
-/// (the `--state-substation`, e.g. `tgdog`); it carries `metadata.blocks` (the
-/// session id), `metadata.node` (the parked node path), and `metadata.reason`.
-/// `StationJoinBridge._attachOpenGates` folds every OPEN gate into the matching
-/// session's `openGateNodes`, and `SessionScope` re-arms the parked node
-/// (`gated → pending`) on the next snapshot ONLY once that gate bead is CLOSED.
+/// non-gating critic at D/F). The gate bead lives in the_grid's OWN **state
+/// store** — under `<grid.root>/.grid/.beads/` (Q5a; the code-as-config store
+/// model, `SCRATCH-station-config-model.md` v3). It carries `metadata.blocks`
+/// (the session id), `metadata.node` (the parked node path), and
+/// `metadata.reason`. `StationJoinBridge._attachOpenGates` folds every OPEN gate
+/// into the matching session's `openGateNodes`, and `SessionScope` re-arms the
+/// parked node (`gated → pending`) on the next snapshot ONLY once that gate bead
+/// is CLOSED.
 ///
 /// This command is a CLI-only shim over the EXISTING re-arm mechanic — closing
 /// the gate bead is already sufficient. It groups two subcommands:
 ///
 ///  * `grid gate ls`            — list open gates (read-only);
 ///  * `grid gate resolve <id>`  — close one gate THROUGH the [StationBeadWriter]
-///    chokepoint (`--actor grid-controller`), fail-closed on ownership + type.
+///    chokepoint (`--actor grid-controller`), fail-closed on ownership + type,
+///    optionally RULING the lane grades that fed it first (tg-i08).
 ///
-/// **Coexistence safety.** Only the_grid's OWN state store (the
-/// `--state-substation`) is ever written; the read work source is never touched.
-/// All writes flow through the bd-only chokepoint — never raw SQL, never
-/// `bd show` from this controller path (it self-triggers the watcher).
+/// **Re-seated on the store-at-roots model (v3).** The grid state store is
+/// addressed from the **grid root** (`--grid-root`) at `<grid.root>/.grid/.beads/`,
+/// exactly — never `--state-workspace` / cwd discovery (the killed ambience). The
+/// state-store ownership prefix is a supplied **value** (`--prefix`), not the
+/// retired `--state-substation` flag (the `tgdog` home dies with the rebuild).
+///
+/// **Coexistence safety.** Only the_grid's OWN state store is ever written; the
+/// read work source is never touched. All writes flow through the bd-only
+/// chokepoint — never raw SQL, never `bd show` from this controller path (it
+/// self-triggers the watcher).
 class GateCommand extends Command<int> {
   GateCommand() {
     addSubcommand(GateLsCommand());
@@ -40,9 +53,9 @@ class GateCommand extends Command<int> {
   @override
   final String description =
       'List and resolve the committee gates The Circuit parks (ADR-0008 D-7). '
-      'A gate bead lives in the_grid\'s OWN state store (--state-substation); '
-      'closing it re-arms the parked circuit node (gated → pending) on the next '
-      '`grid run` snapshot.';
+      'A gate bead lives in the_grid\'s OWN state store '
+      '(<grid.root>/.grid/.beads/); closing it re-arms the parked circuit node '
+      '(gated → pending) on the next snapshot.';
 
   @override
   Future<int> run() async {
@@ -52,31 +65,45 @@ class GateCommand extends Command<int> {
   }
 }
 
-/// Adds the `--state-workspace` / `--state-substation` options shared by both
-/// subcommands — the SAME store `grid run` writes its session/gate beads to.
-void _addStateOptions(ArgParser parser) {
-  parser
-    ..addOption(
-      'state-workspace',
-      help:
-          'the_grid\'s OWN beads state store (the directory at or above the '
-          '`.beads/` `grid run` writes session/gate beads to). `resolve` '
-          'REQUIRES it; `ls` defaults to discovery from the cwd.',
-    )
-    ..addOption(
-      'state-substation',
-      defaultsTo: 'tgdog',
-      help:
-          'the_grid\'s OWNED session/gate partition (the prefix of the state '
-          'store, e.g. `tgdog`). Seeds the ownership allow-set the resolve '
-          'chokepoint re-checks fail-closed.',
+/// Adds the `--grid-root` option both subcommands share — the grid home from
+/// which the state store (`<grid.root>/.grid/.beads/`) is derived.
+void _addGridRootOption(ArgParser parser) {
+  parser.addOption(
+    'grid-root',
+    help:
+        'The grid HOME (an absolute path). The state store `grid run`/`space up` '
+        'writes session/gate beads to is derived at `<grid.root>/.grid/.beads/` '
+        '(Q5a) — no cwd discovery, no walk-up.',
+  );
+}
+
+/// Resolves the grid state store from a `--grid-root` value, or writes a refusal
+/// and returns null (the caller returns the exit code).
+GridStateStore? _stateStoreFromArgs(
+  ArgResults args,
+  void Function(String) writeErr,
+  String verb,
+) {
+  final gridRoot = args.option('grid-root');
+  if (gridRoot == null || gridRoot.trim().isEmpty) {
+    writeErr(
+      'grid $verb: --grid-root is required (the grid HOME; the state store is '
+      'at <grid.root>/.grid/.beads/). There is no cwd discovery.',
     );
+    return null;
+  }
+  try {
+    return GridStateStore.forGridRoot(gridRoot);
+  } on ArgumentError catch (e) {
+    writeErr('grid $verb: --grid-root ${e.message}');
+    return null;
+  }
 }
 
 /// `grid gate ls` — list every OPEN `type=gate` bead in the state store.
 class GateLsCommand extends Command<int> {
   GateLsCommand() {
-    _addStateOptions(argParser);
+    _addGridRootOption(argParser);
   }
 
   @override
@@ -89,12 +116,14 @@ class GateLsCommand extends Command<int> {
       'blocks, the parked node path, the reason, and the gate\'s age.';
 
   @override
+  String get invocation => 'grid gate ls --grid-root <dir>';
+
+  @override
   Future<int> run() async {
     final args = argResults!;
-    return runGateLs(
-      stateWorkspacePath: args.option('state-workspace'),
-      stateSubstation: args.option('state-substation') ?? 'tgdog',
-    );
+    final store = _stateStoreFromArgs(args, stderr.writeln, 'gate ls');
+    if (store == null) return 64;
+    return runGateLs(stateStore: store);
   }
 }
 
@@ -102,8 +131,15 @@ class GateLsCommand extends Command<int> {
 /// optionally RULING the lane grades that fed it first (tg-i08).
 class GateResolveCommand extends Command<int> {
   GateResolveCommand() {
-    _addStateOptions(argParser);
+    _addGridRootOption(argParser);
     argParser
+      ..addOption(
+        'prefix',
+        help:
+            'the_grid\'s OWNED session/gate id-prefix (the state store\'s '
+            'adopted prefix, e.g. the grid\'s own name). Seeds the ownership '
+            'allow-set the resolve chokepoint re-checks fail-closed. REQUIRED.',
+      )
       ..addMultiOption(
         'grade',
         help:
@@ -133,12 +169,13 @@ class GateResolveCommand extends Command<int> {
       'Fail-closed: refuses (non-zero, zero writes) unless the id names a found, '
       'OPEN, owned type=gate bead. A gate born from a persisted lane F is '
       'refused LOUD unless you RULE the lane (--grade/--rationale) — a plain '
-      'resolve would re-gate on the next snapshot. REQUIRES --state-workspace.';
+      'resolve would re-gate on the next snapshot. REQUIRES --grid-root and '
+      '--prefix.';
 
   @override
   String get invocation =>
       'grid gate resolve <gate-id> [--grade <lane>=<A-F> --rationale <why>] '
-      '[--state-workspace …]';
+      '--grid-root <dir> --prefix <name>';
 
   @override
   Future<int> run() async {
@@ -157,46 +194,61 @@ class GateResolveCommand extends Command<int> {
       );
       return 64;
     }
+    final store = _stateStoreFromArgs(args, stderr.writeln, 'gate resolve');
+    if (store == null) return 64;
+    final prefix = args.option('prefix');
+    if (prefix == null || prefix.trim().isEmpty) {
+      stderr.writeln(
+        'grid gate resolve: --prefix is required (the state store\'s owned '
+        'id-prefix — the ownership allow-set the chokepoint re-checks).',
+      );
+      return 64;
+    }
     return runGateResolve(
       gateId: rest.single,
       grades: args.multiOption('grade'),
       rationale: args.option('rationale'),
-      stateWorkspacePath: args.option('state-workspace'),
-      stateSubstation: args.option('state-substation') ?? 'tgdog',
+      stateStore: store,
+      stateStorePrefix: prefix,
     );
   }
 }
 
-/// Runs `grid gate ls`: discovers the state store, reads OPEN `type=gate` beads
-/// via the snapshot read path the controller already uses
+/// Runs `grid gate ls`: opens the grid state store at [stateStore]
+/// (`<grid.root>/.grid/.beads/`, exact — LOUD [StoreRefusal] if absent), reads
+/// OPEN `type=gate` beads via the snapshot read path the controller already uses
 /// ([BdCliService.exportAll] — never `bd show` in a loop), and prints each.
 ///
-/// Read-only — performs NO writes. Seams ([workspaceOverride]/[bdOverride]/[now])
-/// are injectable so an offline test drives it with a fake store.
+/// Read-only — performs NO writes. Seams
+/// ([workspaceOverride]/[bdOverride]/[dirExists]/[now]) are injectable so an
+/// offline test drives it with a fake store.
 Future<int> runGateLs({
-  String? stateWorkspacePath,
-  String stateSubstation = 'tgdog',
+  required GridStateStore stateStore,
   void Function(String)? out,
   void Function(String)? err,
   BeadsWorkspace? workspaceOverride,
   BdCliService? bdOverride,
+  DirectoryProbe? dirExists,
   DateTime? now,
 }) async {
   final void Function(String) write = out ?? (m) => stdout.writeln(m);
   final void Function(String) writeErr = err ?? (m) => stderr.writeln(m);
 
-  final workspace =
-      workspaceOverride ?? BeadsWorkspace.discover(start: stateWorkspacePath);
-  if (workspace == null) {
-    writeErr(
-      'grid gate ls: no .beads/ state store found from '
-      '${stateWorkspacePath ?? Directory.current.path}',
-    );
-    return 1;
+  final BeadsWorkspace workspace;
+  if (workspaceOverride != null) {
+    workspace = workspaceOverride;
+  } else {
+    try {
+      workspace = openStateStore(stateStore, dirExists: dirExists);
+    } on StoreRefusal catch (e) {
+      writeErr('grid gate ls: ${e.message}');
+      return 1;
+    }
   }
 
   final bd =
-      bdOverride ?? BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
+      bdOverride ??
+      BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
 
   // The COMPLETE-graph snapshot read (issues ∪ wisps, all statuses, gate-typed
   // beads included). `exportAll` is the safe snapshot path — unlike `bd show`,
@@ -249,7 +301,7 @@ Future<int> runGateLs({
 ///
 /// **Fail-closed (non-zero exit, ZERO writes)** unless [gateId] names a bead
 /// that is (a) found in the store, (b) `type=gate`, (c) OPEN, and (d) owned by
-/// [stateSubstation]. The chokepoint re-checks ownership independently; this
+/// [stateStorePrefix]. The chokepoint re-checks ownership independently; this
 /// command adds the found/type/open guards on top before the close ever runs.
 ///
 /// **The ruling verb (I-14 loop fix).** The route step gates on the PERSISTED
@@ -271,44 +323,40 @@ Future<int> runGateLs({
 /// used as a full node path verbatim. A non-committee gate (no feeding lane
 /// grades) resolves plainly, as before.
 ///
-/// REQUIRES a state store: an explicit `--state-workspace` (or [workspaceOverride]
-/// in tests) — resolve is a write and never discovers a store implicitly.
+/// Opens the state store at [stateStore] (`<grid.root>/.grid/.beads/`, exact —
+/// LOUD [StoreRefusal] if absent). The state store is the grid's OWN store,
+/// distinct from any work source (A37) — resolve never touches the read work
+/// source.
 Future<int> runGateResolve({
   required String gateId,
   List<String> grades = const [],
   String? rationale,
-  String? stateWorkspacePath,
-  String stateSubstation = 'tgdog',
+  required GridStateStore stateStore,
+  required String stateStorePrefix,
   void Function(String)? out,
   void Function(String)? err,
   BeadsWorkspace? workspaceOverride,
   BdCliService? bdOverride,
+  DirectoryProbe? dirExists,
 }) async {
   final void Function(String) write = out ?? (m) => stdout.writeln(m);
   final void Function(String) writeErr = err ?? (m) => stderr.writeln(m);
 
-  // resolve is a WRITE — it never discovers a store implicitly (the read work
-  // source must stay untouched). The state store must be named explicitly.
-  if (stateWorkspacePath == null && workspaceOverride == null) {
-    writeErr(
-      'grid gate resolve: --state-workspace is required (the_grid\'s OWN state '
-      'store where the gate bead lives). resolve is a write — it never defaults '
-      'to the read --workspace.',
-    );
-    return 64;
-  }
-
-  final workspace =
-      workspaceOverride ?? BeadsWorkspace.discover(start: stateWorkspacePath);
-  if (workspace == null) {
-    writeErr(
-      'grid gate resolve: no .beads/ state store found from $stateWorkspacePath',
-    );
-    return 1;
+  final BeadsWorkspace workspace;
+  if (workspaceOverride != null) {
+    workspace = workspaceOverride;
+  } else {
+    try {
+      workspace = openStateStore(stateStore, dirExists: dirExists);
+    } on StoreRefusal catch (e) {
+      writeErr('grid gate resolve: ${e.message}');
+      return 1;
+    }
   }
 
   final bd =
-      bdOverride ?? BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
+      bdOverride ??
+      BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
 
   // Locate the named bead via the safe snapshot read (NOT `bd show`).
   final export = await bd.exportAll();
@@ -322,7 +370,7 @@ Future<int> runGateResolve({
 
   // The shared ownership allow-set — the SAME Set<String> the chokepoint
   // re-checks fail-closed (ADR-0000 A32). One instance, no drift.
-  final ownership = BeadOwnershipPredicate({stateSubstation});
+  final ownership = BeadOwnershipPredicate({stateStorePrefix});
 
   // --- fail-closed guards (zero writes on any refusal) -----------------------
   if (bead == null) {
@@ -348,8 +396,8 @@ Future<int> runGateResolve({
   }
   if (!ownership.owns(bead)) {
     writeErr(
-      'grid gate resolve: gate "$gateId" is not owned by state substation '
-      '"$stateSubstation" — refused (fail-closed, ADR-0006 Decision 2).',
+      'grid gate resolve: gate "$gateId" is not owned by state prefix '
+      '"$stateStorePrefix" — refused (fail-closed, ADR-0006 Decision 2).',
     );
     return 64;
   }
@@ -498,9 +546,11 @@ Future<int> runGateResolve({
 
   final blocks = sessionId ?? '<no session>';
   final nodeLabel = node ?? '<no node>';
-  write('grid gate resolve — closed gate $gateId (blocks $blocks @ $nodeLabel).');
   write(
-    'The next/running `grid run` re-arms the parked node (gated → pending) on '
+    'grid gate resolve — closed gate $gateId (blocks $blocks @ $nodeLabel).',
+  );
+  write(
+    'The next/running station re-arms the parked node (gated → pending) on '
     'its next snapshot.',
   );
   return 0;
