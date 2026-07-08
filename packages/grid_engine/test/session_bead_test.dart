@@ -79,6 +79,35 @@ void main() {
       expect(nodeResultMetadata('genesis-7r9/land', const {}), isEmpty);
     });
 
+    test('operatorRulingMetadata (tg-i08) stamps grade + operator-ruling '
+        'transport + rationale under grid.result.<lane>, round-trippable by the '
+        'route\'s sibling read', () {
+      final ruling = operatorRulingMetadata(
+        'tg-1/review/test-coverage',
+        grade: 'A',
+        rationale: 'critic cd\'d; verdict was A — transport-F false gate',
+      );
+      expect(ruling, {
+        'grid.result.tg-1/review/test-coverage.grade': 'A',
+        'grid.result.tg-1/review/test-coverage.transport': 'operator-ruling',
+        'grid.result.tg-1/review/test-coverage.rationale':
+            'critic cd\'d; verdict was A — transport-F false gate',
+      });
+      expect(kOperatorRulingTransport, 'operator-ruling');
+      // The route re-reads it through projectCircuitResults → resultOf().
+      final session = Bead(
+        id: 'tgdog-9',
+        issueType: IssueType.session,
+        metadata: <String, dynamic>{'work_bead': 'tg-1', ...ruling},
+      );
+      final results = projectCircuitResults(session);
+      expect(results['tg-1/review/test-coverage']!['grade'], 'A');
+      expect(
+        results['tg-1/review/test-coverage']!['transport'],
+        'operator-ruling',
+      );
+    });
+
     test('a grid.result.* key is DISJOINT from the cursor namespace — the '
         'projection ignores it (no misread as cursor state)', () {
       final merged = <String, dynamic>{

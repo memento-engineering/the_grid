@@ -112,6 +112,14 @@ class StationBeadWriter {
   /// The owned-substation metadata key stamped on every minted session bead.
   static const String rigKey = 'rig';
 
+  /// The re-gate marker keys a [createGate] REFRESH stamps on a REUSED gate
+  /// bead (tg-i08 mint-dedup): the count of times the node re-gated onto the
+  /// SAME bead, and the ISO-8601 instant of the latest re-gate. `grid gate ls`
+  /// reads them to show a reset age + a `re-gated Nx` marker instead of a pile
+  /// of duplicate gate beads accumulating one-per-cycle.
+  static const String gateRegateCountKey = 'regate_count';
+  static const String gateRegatedAtKey = 'regated_at';
+
   /// Mints a the_grid-owned session bead for work bead [workBeadId] in [substation],
   /// stamped with the owned substation marker from birth, and returns its id.
   ///
@@ -157,6 +165,16 @@ class StationBeadWriter {
   /// a gate is a functional block in the_grid's OWN store, not a mutation of the
   /// parked work. `bd create -t gate` + a stamping `update` (the mint = birth,
   /// mirroring [createSession] — `bd create` carries no `--metadata`).
+  ///
+  /// **Mint-dedup (tg-i08).** A node that re-gates while a gate for the SAME
+  /// (session, node) is already OPEN must not pile up a fresh duplicate gate
+  /// bead per cycle (I-14). So before minting, the chokepoint probes for an
+  /// existing open gate on this (session, node) via the safe snapshot read; if
+  /// found it REFRESHES that bead (fresh [reason] + a bumped [gateRegateCountKey]
+  /// + a reset [gateRegatedAtKey]) and returns its id — one stable gate id the
+  /// operator keeps watching, with `grid gate ls` showing the reset age. The
+  /// probe is best-effort: a read error falls through to a fresh mint (a
+  /// duplicate gate is inert; a crashed mint is not).
   Future<String> createGate({
     required String substation,
     required String sessionId,
@@ -165,12 +183,29 @@ class StationBeadWriter {
   }) async {
     // Re-check ownership of the REQUESTED substation before the create — the
     // gate bead does not exist yet, so the declared substation is the authority,
-    // and it must be owned.
+    // and it must be owned. (Fail-closed BEFORE the dedup read, so a foreign
+    // substation never even reaches the wire — A37.)
     if (!_ownership.ownsTarget(
       id: '$substation-pending',
       metadata: {rigKey: substation},
     )) {
       _refuse('create', substation, substation);
+    }
+    // Mint-dedup: reuse+refresh an existing OPEN gate for this (session, node).
+    final existing =
+        await _findOpenGate(sessionId: sessionId, nodePath: nodePath);
+    if (existing != null) {
+      final priorCount =
+          int.tryParse('${existing.metadata[gateRegateCountKey] ?? ''}') ?? 0;
+      await update(
+        existing.id,
+        metadata: {
+          'reason': reason,
+          gateRegateCountKey: (priorCount + 1).toString(),
+          gateRegatedAtKey: _clock().toUtc().toIso8601String(),
+        },
+      );
+      return existing.id;
     }
     final id = await _bd.create(
       title: 'grid gate $sessionId@$nodePath',
@@ -303,6 +338,30 @@ class StationBeadWriter {
       }),
     );
     return run;
+  }
+
+  /// The OPEN `type=gate` bead already blocking [sessionId] at [nodePath], or
+  /// null when none exists (the mint-dedup probe, tg-i08). Reads the OWN state
+  /// store via the safe snapshot path (never `bd show` on a controller path);
+  /// returns null on ANY read error so dedup is best-effort and never blocks a
+  /// legitimate gate mint.
+  Future<Bead?> _findOpenGate({
+    required String sessionId,
+    required String nodePath,
+  }) async {
+    try {
+      final export = await _bd.exportAll();
+      for (final bead in export.beads) {
+        if (bead.issueType != IssueType.gate || bead.isClosed) continue;
+        if (bead.metadata['blocks'] == sessionId &&
+            bead.metadata['node'] == nodePath) {
+          return bead;
+        }
+      }
+    } catch (_) {
+      // Best-effort: a snapshot-read failure must never block a real gate mint.
+    }
+    return null;
   }
 
   void _assertOwned(

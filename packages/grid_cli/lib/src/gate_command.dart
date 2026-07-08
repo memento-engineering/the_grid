@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 /// `grid gate` — list and resolve the committee gates The Circuit parks (D-7).
@@ -97,10 +98,29 @@ class GateLsCommand extends Command<int> {
   }
 }
 
-/// `grid gate resolve <gate-id>` — close one gate through the chokepoint.
+/// `grid gate resolve <gate-id>` — close one gate through the chokepoint,
+/// optionally RULING the lane grades that fed it first (tg-i08).
 class GateResolveCommand extends Command<int> {
   GateResolveCommand() {
     _addStateOptions(argParser);
+    argParser
+      ..addMultiOption(
+        'grade',
+        help:
+            'Rule a committee lane grade BEFORE closing: <lane>=<A-F> '
+            '(repeatable). Writes the corrected grade + transport='
+            'operator-ruling through the chokepoint onto the session bead so '
+            'the route re-reads it instead of re-gating on the persisted F '
+            '(the I-14 no-op loop). A bare <lane> resolves to a sibling of the '
+            'parked node; pass a full node path to target elsewhere. Requires '
+            '--rationale.',
+      )
+      ..addOption(
+        'rationale',
+        help:
+            'Why you are overriding the lane grade(s) — REQUIRED with --grade. '
+            'Recorded on the session bead as the ruling audit trail.',
+      );
   }
 
   @override
@@ -111,10 +131,14 @@ class GateResolveCommand extends Command<int> {
       'Resolve (close) ONE committee gate through the StationBeadWriter '
       'chokepoint (--actor grid-controller), re-arming the parked circuit node. '
       'Fail-closed: refuses (non-zero, zero writes) unless the id names a found, '
-      'OPEN, owned type=gate bead. REQUIRES --state-workspace.';
+      'OPEN, owned type=gate bead. A gate born from a persisted lane F is '
+      'refused LOUD unless you RULE the lane (--grade/--rationale) — a plain '
+      'resolve would re-gate on the next snapshot. REQUIRES --state-workspace.';
 
   @override
-  String get invocation => 'grid gate resolve <gate-id> [--state-workspace …]';
+  String get invocation =>
+      'grid gate resolve <gate-id> [--grade <lane>=<A-F> --rationale <why>] '
+      '[--state-workspace …]';
 
   @override
   Future<int> run() async {
@@ -135,6 +159,8 @@ class GateResolveCommand extends Command<int> {
     }
     return runGateResolve(
       gateId: rest.single,
+      grades: args.multiOption('grade'),
+      rationale: args.option('rationale'),
       stateWorkspacePath: args.option('state-workspace'),
       stateSubstation: args.option('state-substation') ?? 'tgdog',
     );
@@ -196,27 +222,61 @@ Future<int> runGateLs({
     final blocks = _meta(gate, 'blocks') ?? '<no session>';
     final node = _meta(gate, 'node') ?? '<no node>';
     final reason = _meta(gate, 'reason') ?? '';
-    final age = _humanAge(gate.createdAt, clock);
+    // A re-gated gate (mint-dedup, tg-i08) shows a RESET age (from its last
+    // re-gate, not its birth) + a `re-gated Nx` marker, so a re-gate is visible
+    // on the same stable gate id instead of hidden behind an old creation date.
+    final regateCount =
+        int.tryParse(
+          '${gate.metadata[StationBeadWriter.gateRegateCountKey] ?? ''}',
+        ) ??
+        0;
+    final regatedAt = DateTime.tryParse(
+      '${gate.metadata[StationBeadWriter.gateRegatedAtKey] ?? ''}',
+    );
+    final age = _humanAge(regatedAt ?? gate.createdAt, clock);
+    final regateMark = regateCount > 0 ? '  re-gated ${regateCount}x' : '';
     write(
-      '  ${gate.id}  blocks $blocks  node $node  age $age'
+      '  ${gate.id}  blocks $blocks  node $node  age $age$regateMark'
       '${reason.isEmpty ? '' : '\n    reason: $reason'}',
     );
   }
   return 0;
 }
 
-/// Runs `grid gate resolve <gateId>`: closes the named gate THROUGH the
-/// [StationBeadWriter] chokepoint, re-arming the parked circuit node.
+/// Runs `grid gate resolve <gateId>`: optionally RULES the lane grades that fed
+/// the gate, then closes it THROUGH the [StationBeadWriter] chokepoint,
+/// re-arming the parked circuit node (tg-i08).
 ///
 /// **Fail-closed (non-zero exit, ZERO writes)** unless [gateId] names a bead
 /// that is (a) found in the store, (b) `type=gate`, (c) OPEN, and (d) owned by
 /// [stateSubstation]. The chokepoint re-checks ownership independently; this
 /// command adds the found/type/open guards on top before the close ever runs.
 ///
+/// **The ruling verb (I-14 loop fix).** The route step gates on the PERSISTED
+/// lane grades on the session bead (`grid.result.<lane>.grade`), not the fresh
+/// verdict files. So closing a gate born from a persisted `F` re-arms the node,
+/// the route re-reads the SAME `F`, and it re-gates seconds later — a plain
+/// resolve is a guaranteed no-op loop. This verb breaks it two ways:
+///
+///  * with [grades] (`<lane>=<A-F>`, requires [rationale]) it writes the
+///    corrected grade + `transport=operator-ruling` + the rationale through the
+///    chokepoint onto the session bead FIRST, so the route re-reads the
+///    corrected grade and advances instead of re-gating; then it closes;
+///  * WITHOUT a correction, if the parked node still has a feeding lane at `F`,
+///    it REFUSES LOUD (nothing written) — naming the offending lanes + their
+///    transport provenance — rather than silently looping.
+///
+/// A bare `<lane>` resolves to a sibling of the parked node (the committee
+/// shape: `route` and its critics share a parent); a `<lane>` containing `/` is
+/// used as a full node path verbatim. A non-committee gate (no feeding lane
+/// grades) resolves plainly, as before.
+///
 /// REQUIRES a state store: an explicit `--state-workspace` (or [workspaceOverride]
 /// in tests) — resolve is a write and never discovers a store implicitly.
 Future<int> runGateResolve({
   required String gateId,
+  List<String> grades = const [],
+  String? rationale,
   String? stateWorkspacePath,
   String stateSubstation = 'tgdog',
   void Function(String)? out,
@@ -294,8 +354,116 @@ Future<int> runGateResolve({
     return 64;
   }
 
-  // Close through the chokepoint (bd-only, --actor grid-controller). The
-  // chokepoint re-asserts ownership before the write — a second line of
+  final node = _meta(bead, 'node');
+  final sessionId = _meta(bead, 'blocks');
+
+  // --- parse the operator's --grade rulings (before ANY write) ---------------
+  final rulings = <_Ruling>[];
+  for (final raw in grades) {
+    final eq = raw.indexOf('=');
+    if (eq <= 0 || eq == raw.length - 1) {
+      writeErr('grid gate resolve: --grade must be <lane>=<A-F> (got "$raw").');
+      return 64;
+    }
+    final lane = raw.substring(0, eq).trim();
+    final letter = raw.substring(eq + 1).trim().toUpperCase();
+    if (!_isGrade(letter)) {
+      writeErr(
+        'grid gate resolve: --grade "$raw" — "$letter" is not a grade A–F.',
+      );
+      return 64;
+    }
+    final lanePath = _resolveLanePath(lane: lane, node: node);
+    if (lanePath == null) {
+      writeErr(
+        'grid gate resolve: cannot resolve lane "$lane" — gate "$gateId" '
+        'carries no node path; pass a full node path instead of a bare lane.',
+      );
+      return 64;
+    }
+    rulings.add(_Ruling(lane: lane, lanePath: lanePath, grade: letter));
+  }
+  if (rulings.isNotEmpty && (rationale == null || rationale.trim().isEmpty)) {
+    writeErr(
+      'grid gate resolve: --grade requires --rationale — a ruling must record '
+      'WHY you are overriding the lane grade (it is the audit trail).',
+    );
+    return 64;
+  }
+  if (rulings.isNotEmpty && sessionId == null) {
+    writeErr(
+      'grid gate resolve: gate "$gateId" carries no session (blocks) — cannot '
+      'record a ruling on a session bead.',
+    );
+    return 64;
+  }
+
+  // --- the re-gate-loop guard: which feeding lanes still grade F? ------------
+  // The route re-reads the parked node's SIBLING result-nodes; any at `F`
+  // re-gates the instant this gate closes. Detect them off the session bead,
+  // subtracting the lanes this resolve rules away from F.
+  Bead? sessionBead;
+  if (sessionId != null) {
+    for (final candidate in export.beads) {
+      if (candidate.id == sessionId) {
+        sessionBead = candidate;
+        break;
+      }
+    }
+  }
+  final ruledAwayFromF = <String>{
+    for (final r in rulings)
+      if (r.grade != 'F') r.lanePath,
+  };
+  final unresolvedF = <_FeedingF>[];
+  if (sessionBead != null && node != null) {
+    final results = projectCircuitResults(sessionBead);
+    final parent = node.contains('/')
+        ? node.substring(0, node.lastIndexOf('/'))
+        : '';
+    results.forEach((path, fields) {
+      if (path == node || !_isSiblingOf(path, parent)) return;
+      if ((fields[ResultKeys.grade] ?? '').toUpperCase() != 'F') return;
+      if (ruledAwayFromF.contains(path)) return; // ruled away this resolve
+      unresolvedF.add(
+        _FeedingF(path: path, transport: fields[ResultKeys.transport]),
+      );
+    });
+    unresolvedF.sort((a, b) => a.path.compareTo(b.path));
+  }
+
+  if (unresolvedF.isNotEmpty) {
+    // Closing now would re-gate — refuse LOUD, ZERO writes.
+    final lines = unresolvedF
+        .map(
+          (f) =>
+              '    - ${f.path}: grade F'
+              '${(f.transport == null || f.transport!.isEmpty) ? '' : ' (transport: ${f.transport})'}',
+        )
+        .join('\n');
+    if (rulings.isEmpty) {
+      final workBead = _meta(sessionBead!, 'work_bead') ?? '<bead>';
+      writeErr(
+        'grid gate resolve: REFUSED — gate "$gateId" parks $node, and the route '
+        'gates on these persisted lane grades on session $sessionId; closing '
+        'the gate alone re-arms the node and it RE-GATES on the next snapshot '
+        '(the I-14 no-op loop):\n$lines\n'
+        'Rule a false/transport gate: `grid gate resolve $gateId '
+        '--grade <lane>=<A-E> --rationale "<why>"`. For a TRUE code failure, fix '
+        'it and `grid rework $workBead`. Nothing written.',
+      );
+    } else {
+      writeErr(
+        'grid gate resolve: REFUSED — these feeding lanes still grade F after '
+        'your ruling, so closing would still re-gate:\n$lines\n'
+        'Rule them too (--grade <lane>=<A-E>) or rework. Nothing written.',
+      );
+    }
+    return 64;
+  }
+
+  // --- apply the rulings, THEN close (bd-only, --actor grid-controller) -------
+  // The chokepoint re-asserts ownership before every write — a second line of
   // defense behind the guards above.
   final writer = StationBeadWriter(
     bd: bd,
@@ -303,20 +471,88 @@ Future<int> runGateResolve({
     onRefusal: writeErr,
   );
   try {
-    await writer.close(gateId, reason: 'resolved via grid gate resolve');
+    for (final r in rulings) {
+      await writer.update(
+        sessionId!,
+        metadata: operatorRulingMetadata(
+          r.lanePath,
+          grade: r.grade,
+          rationale: rationale!.trim(),
+        ),
+      );
+      write(
+        'grid gate resolve — ruled ${r.lanePath} → grade ${r.grade} '
+        '(transport=$kOperatorRulingTransport).',
+      );
+    }
+    await writer.close(
+      gateId,
+      reason: rulings.isEmpty
+          ? 'resolved via grid gate resolve'
+          : 'resolved via grid gate resolve (operator ruling)',
+    );
   } on OwnershipRefused catch (e) {
     writeErr('grid gate resolve: $e');
     return 64;
   }
 
-  final blocks = _meta(bead, 'blocks') ?? '<no session>';
-  final node = _meta(bead, 'node') ?? '<no node>';
-  write('grid gate resolve — closed gate $gateId (blocks $blocks @ $node).');
+  final blocks = sessionId ?? '<no session>';
+  final nodeLabel = node ?? '<no node>';
+  write('grid gate resolve — closed gate $gateId (blocks $blocks @ $nodeLabel).');
   write(
     'The next/running `grid run` re-arms the parked node (gated → pending) on '
     'its next snapshot.',
   );
   return 0;
+}
+
+/// One parsed `--grade <lane>=<A-F>` ruling: the operator's lane token, its
+/// resolved full node path (`grid.result.<lanePath>.grade`), and the corrected
+/// letter grade (uppercased A–F).
+class _Ruling {
+  const _Ruling({
+    required this.lane,
+    required this.lanePath,
+    required this.grade,
+  });
+
+  final String lane;
+  final String lanePath;
+  final String grade;
+}
+
+/// A feeding lane still grading `F` on the session bead — a re-gate cause. Its
+/// [transport] provenance (when present) is surfaced in the refusal so the
+/// operator sees WHY it is F (a fail-closed transport artifact vs a real F).
+class _FeedingF {
+  const _FeedingF({required this.path, this.transport});
+
+  final String path;
+  final String? transport;
+}
+
+/// Whether [s] is a single letter grade A–F.
+bool _isGrade(String s) =>
+    s.length == 1 && s.codeUnitAt(0) >= 0x41 && s.codeUnitAt(0) <= 0x46;
+
+/// Resolves an operator lane token to a full node path. A token containing `/`
+/// is a full node path (verbatim); a bare lane resolves to a SIBLING of the
+/// parked [node] (the committee shape: `route` and its critics share a parent).
+/// Null when a bare lane is given but the gate carries no [node] to anchor it.
+String? _resolveLanePath({required String lane, required String? node}) {
+  if (lane.contains('/')) return lane;
+  if (node == null) return null;
+  final slash = node.lastIndexOf('/');
+  if (slash <= 0) return lane; // parked node is top-level; sibling == bare lane
+  return '${node.substring(0, slash)}/$lane';
+}
+
+/// Whether [path] is a DIRECT child of [parent] (a sibling of the parked node).
+/// An empty [parent] means top-level nodes (no `/`).
+bool _isSiblingOf(String path, String parent) {
+  if (parent.isEmpty) return !path.contains('/');
+  if (!path.startsWith('$parent/')) return false;
+  return !path.substring(parent.length + 1).contains('/');
 }
 
 /// Reads a string metadata value off a gate bead, or null when absent/empty.

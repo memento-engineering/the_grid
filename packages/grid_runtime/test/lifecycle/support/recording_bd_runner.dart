@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 
@@ -32,11 +33,25 @@ class RecordingBdRunner implements BdRunner {
   /// survives a create failure instead of crashing the controller.
   String? failCreateError;
 
+  /// The beads the `export` (snapshot) read returns as JSONL — the store the
+  /// chokepoint's mint-dedup probe (`createGate`, tg-i08) reads. Default empty
+  /// (a fresh store with no gates → every gate mints). Stage an OPEN gate here
+  /// to exercise the reuse-and-refresh path.
+  List<Bead> exportBeads = const <Bead>[];
+
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'export') {
+      // `bd export --all` emits RAW JSONL (one issue object per line), NOT an
+      // envelope — the snapshot read path `exportAll` parses.
+      final jsonl = exportBeads.map((b) => jsonEncode(b.toJson())).join('\n');
+      return Future<BdResult>.value(
+        BdResult(exitCode: 0, stdout: jsonl, stderr: ''),
+      );
+    }
     if (sub == 'create' && failCreateError != null) {
       return Future<BdResult>.value(
         BdResult(
