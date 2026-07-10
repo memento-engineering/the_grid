@@ -97,6 +97,24 @@ class SessionScopeState extends State<SessionScope> {
   /// [_reworkDeclinedKey] in the SAME write.
   static const _reworkDeclinedReasonKey = 'grid.rework_declined_reason';
 
+  /// The bounded `createSession` retry budget (tg-6nf) — a mint failure is
+  /// RETRIED up to this many TOTAL attempts before the scope escalates LOUD
+  /// (the circuit-breaker's bounded-retry discipline, D-5). Small on purpose:
+  /// the FIRST-LIVE-ARM incident (2026-07-10) was a PERSISTENT store
+  /// misconfiguration (`bd create -t session` rejected — no `types.custom`),
+  /// for which retry cannot help; the budget exists to ride out a TRANSIENT bd
+  /// blip, and its EXHAUSTION is the escalation trigger.
+  static const _maxMintAttempts = 5;
+
+  /// The per-attempt mint-failed flare (tg-6nf) — a mint attempt threw and the
+  /// scope is still RETRYING under [_maxMintAttempts].
+  static const _mintFailedFlare = 'session.mintFailed';
+
+  /// The terminal mint-EXHAUSTED flare (tg-6nf) — the [_maxMintAttempts] budget
+  /// is spent; the scope escalates LOUD and goes inert (a human must fix the
+  /// store — the exact FIRST-LIVE-ARM incident).
+  static const _mintExhaustedFlare = 'session.mintExhausted';
+
   StationServices? _ctx;
 
   /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
@@ -111,6 +129,11 @@ class SessionScopeState extends State<SessionScope> {
   bool _failed = false;
   bool _cancelled = false;
   bool _terminalScheduled = false;
+
+  /// How many `createSession` attempts this scope has made (tg-6nf) — bounded
+  /// by [_maxMintAttempts]; reaching the cap is the escalation trigger. Reset
+  /// to 0 by [_reworkAndRemint] so round N+1 gets its own fresh budget.
+  int _mintAttempts = 0;
 
   /// The nodePaths whose gate re-arm is IN FLIGHT (tg-boq) — an in-flight DEDUP
   /// guard, **not** a permanent latch. A path is added before the write and
@@ -188,6 +211,7 @@ class SessionScopeState extends State<SessionScope> {
     // didChangeDependencies within one performRebuild).
     await null;
     if (_cancelled || !context.mounted) return;
+    _mintAttempts++;
     try {
       final id = await _ctx!.writer.createSession(
         substation: _ctx!.stateSubstation,
@@ -199,12 +223,67 @@ class SessionScopeState extends State<SessionScope> {
         _sessionId = id;
         _resolving = false;
       });
-    } on Object {
+    } on Object catch (error) {
       if (_cancelled || !context.mounted) return;
-      setState(() {
-        _failed = true;
-        _resolving = false;
+      _onMintFailed('$error');
+    }
+  }
+
+  /// Handles a `createSession` failure (tg-6nf) — LOUD, bounded, never the
+  /// silent permanent latch it was (ADR-0008 D3: LOUD or GONE).
+  ///
+  /// Every failed attempt FLARES through the emit-only [ExplorationTransport]
+  /// (the SAME sink `CapabilityHost._emitFlare` and [_flareRearmFailed] use), so
+  /// a dead mint is OBSERVABLE — leonard reads it over the exploration host
+  /// (A39/A40), an operator counts which scopes are dead-minting — never an
+  /// invisible `mounted=0` (the FIRST-LIVE-ARM incident, 2026-07-10, boot #1:
+  /// every `createSession` threw and the station stood ARMED-but-silently-dead).
+  ///
+  /// Under the [_maxMintAttempts] budget it RETRIES (scheduled off `build`,
+  /// never a write IN `build`), so a TRANSIENT bd blip recovers with no
+  /// operator action. AT the budget it ESCALATES: a distinct terminal flare
+  /// then `_failed` inert — so the `_failed` state is now reached ONLY as an
+  /// EXPLICIT, flared escalation, never as the first-failure swallow.
+  ///
+  /// There is NO session bead on the mint path (the mint is what failed), so —
+  /// unlike breaker-exhaustion (D-5), which marks its OWN session bead — the
+  /// flare is the only escalation channel; a human fixes the store and bounces
+  /// the station.
+  void _onMintFailed(String reason) {
+    if (_mintAttempts < _maxMintAttempts) {
+      _flareMint(_mintFailedFlare, reason);
+      // Retry off `build` (invariant 2) — the scope stays `resolving` (it was
+      // never rendered ready), so no setState is needed. The guard re-checks
+      // liveness before re-entering the mint; a disposed scope drops the retry.
+      scheduleMicrotask(() {
+        if (_cancelled || !context.mounted) return;
+        unawaited(_mint());
       });
+      return;
+    }
+    _flareMint(_mintExhaustedFlare, reason);
+    setState(() {
+      _failed = true;
+      _resolving = false;
+    });
+  }
+
+  /// LOUD-signals a mint failure (tg-6nf) through the reserved emit-only
+  /// [ExplorationTransport] (D-8) — the SAME sink `CapabilityHost._emitFlare`
+  /// and [_flareRearmFailed] fire through. Carries the work bead + the attempt
+  /// budget so an observer can COUNT which scopes are dead-minting (the
+  /// visibility that replaces a silent `mounted=0`). A throwing/absent transport
+  /// never re-breaks the mint microtask.
+  void _flareMint(String name, String reason) {
+    try {
+      _services.transport?.flare(name, {
+        'workBeadId': seed.bead.id,
+        'attempt': '$_mintAttempts',
+        'maxAttempts': '$_maxMintAttempts',
+        'reason': truncateReason(reason),
+      });
+    } catch (_) {
+      // A throwing transport never re-breaks the mint microtask — swallow.
     }
   }
 
@@ -321,6 +400,7 @@ class SessionScopeState extends State<SessionScope> {
       _rearming.clear();
       _lastKnownGated = false;
       _joinedOnce = false;
+      _mintAttempts = 0; // round N+1 gets its own fresh mint budget (tg-6nf).
     });
     unawaited(_mint());
   }
