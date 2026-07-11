@@ -62,7 +62,7 @@ class SubstationInitResult {
   /// with the seeded [name]/[root] and the author's [assets]; the author places
   /// it in the station's `Substations`.
   Seed toSeed({List<Seed> assets = const <Seed>[]}) =>
-      Substation(name: name, root: root, assets: assets);
+      Substation(name, root, assets: assets);
 
   @override
   bool operator ==(Object other) =>

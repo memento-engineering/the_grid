@@ -7,6 +7,8 @@ import 'scopes.dart';
 ///
 /// cwd-relative roots are the ambience fossil the v3 model kills (§7:
 /// "cwd discovery under arming") — a root is authored absolute or refused.
+/// ([Substation] additionally accepts a GridRoot-relative root, resolved
+/// BEFORE this check — what reaches here is always the resolved path.)
 /// Returns [root] so callers can validate-and-use in one expression.
 String _requireRoot(String root, String owner) {
   if (root.trim().isEmpty) {
@@ -140,13 +142,22 @@ class Substations extends MultiChildSeed {
 /// never defaults (v3 §0). Its work store lives at `<root>/.beads/` —
 /// a store lives at a root, uniformly (Q5a).
 ///
+/// [root] is authored absolute, or **relative to the grid's home**: a
+/// relative root resolves against the ambient [GridRoot] at build, so a
+/// station tree reads declaratively —
+/// `Substation('genesis', '../genesis', assets: [...])` under a grid rooted
+/// at `/home/space_station` mounts `/home/genesis`. Resolution is the whole
+/// affordance (no strategies, no options — tg-32r); a relative root with no
+/// enclosing [GridRoot] refuses loud, mirroring [Station]'s refusal.
+///
 /// Substation-scoped [assets] serve the project: source control
 /// (git/GitHub assets), circuit providers, orders. Extend by **composition**:
 /// a domain substation is a seed whose `build` returns a `Substation` with
 /// its own assets folded in (v3 §2's `ButaneDevelopmentSubstation`).
 class Substation extends StatelessSeed {
-  /// A substation named [name] with the single [root], mounting [assets]
-  /// under its [SubstationScope].
+  /// A substation named [name] with the single [root] (absolute, or relative
+  /// to the ambient [GridRoot]), mounting [assets] under its
+  /// [SubstationScope].
   ///
   /// Carries an intrinsic identity key (`ValueKey('substation:<name>')`)
   /// unless [key] overrides it: sibling substations reconcile by NAME, never
@@ -154,9 +165,9 @@ class Substation extends StatelessSeed {
   /// (`if (kDebug) Substation(...)`) can appear or vanish without a
   /// neighbour's live subtree (post-Track-C: its WorkList, worktrees, lock)
   /// rebinding onto the wrong project identity.
-  Substation({
-    required this.name,
-    required this.root,
+  Substation(
+    this.name,
+    this.root, {
     String? prefix,
     this.assets = const <Seed>[],
     Key? key,
@@ -166,7 +177,8 @@ class Substation extends StatelessSeed {
   /// The project's name (the tree identity + the `metadata.rig` marker axis).
   final String name;
 
-  /// The project's single root (absolute; validated loud at build).
+  /// The project's single root — absolute, or relative to the ambient
+  /// [GridRoot] (resolved and validated loud at build).
   final String root;
 
   /// The work store's issue-id prefix — a SEPARATE axis from [name] (Nico,
@@ -182,10 +194,35 @@ class Substation extends StatelessSeed {
   Seed build(TreeContext context) {
     _requireName(name, 'Substation');
     _requireName(prefix, 'Substation("$name").prefix');
-    _requireRoot(root, 'Substation("$name")');
     return InheritedSeed<SubstationScope>(
-      value: SubstationScope(name: name, root: root, prefix: prefix),
+      value: SubstationScope(
+        name: name,
+        root: _resolveRoot(context),
+        prefix: prefix,
+      ),
       child: AssetFanOut(assets),
     );
+  }
+
+  /// Resolves [root]: absolute passes through unchanged; relative joins the
+  /// ambient [GridRoot] (subscribed — a changed grid home re-resolves the
+  /// project). Either way the RESOLVED path is validated loud, mirroring
+  /// `Station`'s re-validation of a consumer-authored grid root.
+  String _resolveRoot(TreeContext context) {
+    final owner = 'Substation("$name")';
+    // An empty root refuses OUTRIGHT (inside _requireRoot) — it must never
+    // silently resolve to the grid home itself.
+    if (root.trim().isEmpty || p.isAbsolute(root)) {
+      return _requireRoot(root, owner);
+    }
+    final grid = GridRoot.maybeOf(context);
+    if (grid == null) {
+      throw StateError(
+        '$owner: root "$root" is relative and no RawAssetGrid encloses it — '
+        'a relative root resolves against the ambient GridRoot; without one '
+        'it is unresolvable (v3 §0: unresolvable input = loud refusal).',
+      );
+    }
+    return _requireRoot(p.normalize(p.join(grid.path, root)), owner);
   }
 }

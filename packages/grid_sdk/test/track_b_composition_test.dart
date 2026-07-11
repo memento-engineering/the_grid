@@ -73,8 +73,8 @@ class ComposedSubstation extends StatelessSeed {
     // config/targets; here the ambient StationScope proves context flows).
     final station = StationScope.of(context);
     return Substation(
-      name: 'composed-under-${station.name}',
-      root: root,
+      'composed-under-${station.name}',
+      root,
       assets: [ScopeProbe(probe)],
     );
   }
@@ -108,14 +108,32 @@ void main() {
       );
     });
 
-    test('Substation refuses an empty name and a relative root', () {
+    test('Substation refuses an empty name and an empty root', () {
       expect(
-        () => mount(Substation(name: '', root: '/w')),
+        () => mount(Substation('', '/w')),
         throwsA(isA<ArgumentError>()),
       );
+      // Empty even UNDER a grid root: an empty root must never silently
+      // resolve to the grid home itself.
       expect(
-        () => mount(Substation(name: 'tg', root: 'w')),
+        () => mount(
+          RawAssetGrid(root: '/g', assets: [Substation('tg', '')]),
+        ),
         throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('Substation with a relative root and no enclosing RawAssetGrid '
+        'refuses LOUD', () {
+      expect(
+        () => mount(Substation('tg', '../w')),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('no RawAssetGrid encloses it'),
+          ),
+        ),
       );
     });
 
@@ -211,7 +229,7 @@ void main() {
           assets: [
             Station(name: 's', assets: [
               Substations(substations: [
-                Substation(name: 'tg', root: '/work/tg', assets: [
+                Substation('tg', '/work/tg', assets: [
                   ScopeProbe(seen),
                 ]),
               ]),
@@ -227,6 +245,84 @@ void main() {
       // project, inside the machine, inside the deployment.
       expect(seen.single.grid!.path, '/g');
       expect(seen.single.station!.name, 's');
+    });
+  });
+
+  group('relative root resolution against the grid home (tg-32r)', () {
+    test("Substation('genesis', '../genesis') under RawAssetGrid resolves to "
+        'the grid-home sibling', () {
+      final seen =
+          <({GridRoot? grid, StationScope? station, SubstationScope? sub})>[];
+      mount(
+        RawAssetGrid(
+          root: '/abs/space_station',
+          assets: [
+            Station(name: 's', assets: [
+              Substations(substations: [
+                Substation('genesis', '../genesis', assets: [
+                  ScopeProbe(seen),
+                ]),
+              ]),
+            ]),
+          ],
+        ),
+      );
+      expect(
+        seen.single.sub,
+        const SubstationScope(
+          name: 'genesis',
+          root: '/abs/genesis',
+          prefix: 'genesis',
+        ),
+      );
+    });
+
+    test('a dot root resolves to the grid home itself (the Q5a dual-role '
+        'repo, declaratively)', () {
+      final seen =
+          <({GridRoot? grid, StationScope? station, SubstationScope? sub})>[];
+      mount(
+        RawAssetGrid(
+          root: '/abs/space_station',
+          assets: [
+            Substation('space_station', '.', assets: [ScopeProbe(seen)]),
+          ],
+        ),
+      );
+      expect(seen.single.sub!.root, '/abs/space_station');
+    });
+
+    test('an absolute root passes through unchanged (never joined)', () {
+      final seen =
+          <({GridRoot? grid, StationScope? station, SubstationScope? sub})>[];
+      mount(
+        RawAssetGrid(
+          root: '/abs/space_station',
+          assets: [
+            Substation('tg', '/work/tg', assets: [ScopeProbe(seen)]),
+          ],
+        ),
+      );
+      expect(seen.single.sub!.root, '/work/tg');
+    });
+
+    test('a consumer-authored RELATIVE GridRoot cannot launder a relative '
+        'root (re-validated on the RESOLVED path)', () {
+      expect(
+        () => mount(
+          InheritedSeed<GridRoot>(
+            value: const GridRoot(path: 'relative'),
+            child: Substation('tg', '../w'),
+          ),
+        ),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => '${e.message}',
+            'message',
+            contains('ABSOLUTE'),
+          ),
+        ),
+      );
     });
   });
 
@@ -248,20 +344,20 @@ void main() {
                   Substations(
                     substations: [
                       Substation(
-                        name: 'the_grid',
-                        root: '/work/the_grid',
+                        'the_grid',
+                        '/work/the_grid',
                         assets: [ScopeProbe(probes)],
                       ),
                       Substation(
-                        name: 'power_station',
-                        root: '/work/power_station',
+                        'power_station',
+                        '/work/power_station',
                         assets: [ScopeProbe(probes)],
                       ),
                       ComposedSubstation(root: '/work/butane', probe: probes),
                       if (kDebug)
                         Substation(
-                          name: 'space_station',
-                          root: '/home/space_station',
+                          'space_station',
+                          '/home/space_station',
                           assets: [ScopeProbe(probes)],
                         ),
                     ],
@@ -278,7 +374,7 @@ void main() {
       // The intrinsic identity key: sibling substations reconcile by NAME
       // (a conditional anywhere in the list can never rebind a neighbour).
       expect(
-        Substation(name: 'tg', root: '/w').key,
+        Substation('tg', '/w').key,
         const ValueKey<String>('substation:tg'),
       );
       expect(
