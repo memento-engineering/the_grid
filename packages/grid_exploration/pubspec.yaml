@@ -3,6 +3,7 @@ description: >-
   Exploration-protocol host for the_grid — GridControllerPlugin speaking
   lenny's ext.exploration.* wire protocol over the Dart VM service.
 publish_to: none
+repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
 environment:

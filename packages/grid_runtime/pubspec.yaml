@@ -7,6 +7,7 @@ description: >-
   (bd-only, `--actor grid-controller`, never SQL). Ports gc's runtime.Provider
   contract (ADR-0004) and consumes beads_dart's ready-set seam.
 publish_to: none
+repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
 environment:

@@ -8,6 +8,7 @@ description: >-
   (`docs/SCRATCH-station-config-model.md`). Track A births the package
   skeleton; the composition types land in Track B.
 publish_to: none
+repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
 environment:

@@ -3,6 +3,7 @@ description: >-
   DevTools extension for the_grid. Attaches over the exploration protocol
   only (ADR-0002 Decision 3) — no direct beads_dart dependency.
 publish_to: none
+repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
 environment:

@@ -1,6 +1,7 @@
 name: grid_cli
 description: Management CLI for the_grid — `grid watch` and friends.
 publish_to: none
+repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
 environment:
