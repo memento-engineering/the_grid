@@ -193,8 +193,8 @@ void main() {
               Substations(
                 substations: [
                   Substation(
-                    name: 'tg',
-                    root: '/work/tg',
+                    'tg',
+                    '/work/tg',
                     assets: [ScopeProbe(seen)],
                   ),
                 ],

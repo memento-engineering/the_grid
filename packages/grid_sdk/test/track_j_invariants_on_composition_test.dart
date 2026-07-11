@@ -89,8 +89,8 @@ class _TestDelegate extends GridDelegate {
     final substations = Substations(
       substations: [
         Substation(
-          name: 'power_station',
-          root: '/work/power_station',
+          'power_station',
+          '/work/power_station',
           prefix: 'pow',
           assets: [
             Nest(
