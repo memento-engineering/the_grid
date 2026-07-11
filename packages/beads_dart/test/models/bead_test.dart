@@ -12,8 +12,8 @@ Bead _firstBead(String fixture) {
 void main() {
   group('Bead.fromJson against pinned fixtures', () {
     test('session bead decodes core + snake_case fields', () {
-      final bead = _firstBead('hq-session-sample.json');
-      expect(bead.id, 'ga-dvt2');
+      final bead = _firstBead('fx-session-sample.json');
+      expect(bead.id, 'fx-hbc');
       expect(bead.issueType, IssueType.session);
       expect(bead.status, BeadStatus.closed);
       expect(bead.isClosed, isTrue);
@@ -21,37 +21,37 @@ void main() {
       expect(bead.closeReason, contains('session drained'));
       expect(bead.closedAt, isNotNull);
       // metadata is an arbitrary JSON object, preserved verbatim.
-      expect(bead.metadata['agent_name'], 'lenny/pack.critique-1');
+      expect(bead.metadata['agent_name'], 'fx/pack.critique-1');
     });
 
     test('message bead decodes labels, ephemeral, assignee', () {
-      final bead = _firstBead('hq-message-sample.json');
+      final bead = _firstBead('fx-message-sample.json');
       expect(bead.issueType, IssueType.message);
-      expect(bead.assignee, 'mayor');
+      expect(bead.assignee, 'operator');
       expect(bead.ephemeral, isTrue);
-      expect(bead.labels, contains('thread:thread-067ce293d2d4'));
+      expect(bead.labels, contains('thread:thread-0001'));
       expect(bead.metadata['from'], 'controller');
     });
 
     test('molecule bead decodes', () {
-      final bead = _firstBead('hq-molecule-sample.json');
+      final bead = _firstBead('fx-molecule-sample.json');
       expect(bead.issueType, IssueType.molecule);
-      expect(bead.title, 'mol-dog-stale-db');
+      expect(bead.title, 'mol-fx-sample');
     });
 
     test('export record decodes comments + counts', () {
-      final records = fixtureJsonl('hq-export-sample.jsonl');
+      final records = fixtureJsonl('fx-export-sample.jsonl');
       final bead = Bead.fromJson(records.first);
-      expect(bead.id, 'ga-bdzf');
+      expect(bead.id, 'fx-eu5');
       expect(bead.issueType, IssueType.bug);
       expect(bead.priority, 0);
       expect(bead.commentCount, 3);
       expect(bead.comments, hasLength(3));
-      expect(bead.comments.first.author, 'Nico Spencer');
+      expect(bead.comments.first.author, 'operator');
     });
 
     test('all 25 export records round-trip without throwing', () {
-      final records = fixtureJsonl('hq-export-sample.jsonl');
+      final records = fixtureJsonl('fx-export-sample.jsonl');
       expect(records, hasLength(25));
       for (final record in records) {
         final bead = Bead.fromJson(record);
@@ -67,7 +67,7 @@ void main() {
 
   group('Bead value semantics', () {
     test('two beads with equal fields are == (the diff primitive)', () {
-      final records = fixtureJsonl('hq-export-sample.jsonl');
+      final records = fixtureJsonl('fx-export-sample.jsonl');
       final a = Bead.fromJson(records.first);
       final b = Bead.fromJson(records.first);
       expect(a, equals(b));
@@ -75,7 +75,7 @@ void main() {
     });
 
     test('copyWith changing a field breaks equality', () {
-      final bead = _firstBead('hq-message-sample.json');
+      final bead = _firstBead('fx-message-sample.json');
       expect(bead.copyWith(priority: 99), isNot(equals(bead)));
     });
 

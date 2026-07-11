@@ -49,13 +49,9 @@ export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
 
 // Grid opinions layered on beads' generic models (AL-1b): driveability
-// narrowing over IssueType, and session/message/molecule domain projections —
-// the_grid's own reading of the generic beads primitives, not part of the
-// pure beads client (`bd` itself has no notion of these).
+// narrowing over IssueType — the_grid's own reading of the generic beads
+// primitives, not part of the pure beads client.
 export 'src/domain/driveable_work.dart';
-export 'src/projections/agent_session.dart';
-export 'src/projections/message.dart';
-export 'src/projections/molecule.dart';
 
 // The station-level ambient services (kernel-provided) a node resolves in one
 // inherited lookup: process transport + the bd chokepoint + the owned state rig

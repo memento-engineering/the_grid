@@ -8,6 +8,7 @@ description: >-
   seams and grid_runtime's subprocess/git/chokepoint transport. ADR-0007
   (Accepted 2026-06-24).
 publish_to: none
+repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
 environment:

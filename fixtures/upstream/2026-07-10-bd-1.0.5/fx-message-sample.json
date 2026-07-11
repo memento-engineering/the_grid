@@ -1,0 +1,27 @@
+{
+  "data": [
+    {
+      "id": "fx-wisp-rf1",
+      "title": "Fixture message",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "message",
+      "assignee": "operator",
+      "owner": "operator@example.com",
+      "created_at": "2026-07-11T04:01:09Z",
+      "created_by": "operator",
+      "updated_at": "2026-07-11T04:01:09Z",
+      "metadata": {
+        "from": "controller"
+      },
+      "labels": [
+        "thread:thread-0001"
+      ],
+      "ephemeral": true,
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "schema_version": 1
+}

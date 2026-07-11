@@ -14,14 +14,14 @@ void main() {
       final runner = FakeBdRunner()
         ..stubCommand(
           'ready',
-          BdReply(stdout: fixtureText('hq-ready-sample.json')),
+          BdReply(stdout: fixtureText('fx-ready-sample.json')),
         );
       final service = BdCliService(runner);
 
       final beads = await service.ready();
 
       expect(beads, hasLength(5));
-      expect(beads.first.id, 'ga-bdzf');
+      expect(beads.first.id, 'fx-eu5');
       // argv: exactly `ready --json`.
       expect(runner.calls.single, ['ready', '--json']);
     });
@@ -30,17 +30,21 @@ void main() {
       final runner = FakeBdRunner()
         ..stubCommand(
           'export',
-          BdReply(stdout: fixtureText('hq-export-sample.jsonl')),
+          BdReply(stdout: fixtureText('fx-export-sample.jsonl')),
         );
       final service = BdCliService(runner);
 
       final snapshot = await service.exportAll();
 
       expect(snapshot.beads, hasLength(25));
-      expect(snapshot.beads.first.id, 'ga-bdzf');
-      // This HQ sample carries no edges; the parse-path for edges is covered
-      // by the synthetic-dependencies test below.
-      expect(snapshot.dependencies, isEmpty);
+      expect(snapshot.beads.first.id, 'fx-eu5');
+      // The fx sample carries real edges: the fixture epic's two parent-child
+      // links plus one blocks edge between its children.
+      expect(snapshot.dependencies, hasLength(3));
+      expect(
+        snapshot.dependencies.map((d) => d.type).toSet(),
+        {'blocks', 'parent-child'},
+      );
       // export is the single-spawn snapshot read: `export --all` (the
       // complete graph — `--all` subsumes `--include-infra` and lifts the
       // default template + ephemeral-wisp exclusions, export.go:96-126).
@@ -147,7 +151,7 @@ void main() {
       final runner = FakeBdRunner()
         ..stubCommand(
           'query',
-          BdReply(stdout: fixtureText('hq-ready-sample.json')),
+          BdReply(stdout: fixtureText('fx-ready-sample.json')),
         );
       final service = BdCliService(runner);
 
@@ -360,15 +364,15 @@ void main() {
       final runner = FakeBdRunner()
         ..stubCommand(
           'ready',
-          BdReply(stdout: fixtureText('hq-ready-sample.json')),
+          BdReply(stdout: fixtureText('fx-ready-sample.json')),
         )
         ..stubCommand(
           'export',
-          BdReply(stdout: fixtureText('hq-export-sample.jsonl')),
+          BdReply(stdout: fixtureText('fx-export-sample.jsonl')),
         )
         ..stubCommand(
           'query',
-          BdReply(stdout: fixtureText('hq-ready-sample.json')),
+          BdReply(stdout: fixtureText('fx-ready-sample.json')),
         )
         ..stubCommand(
           'statuses',

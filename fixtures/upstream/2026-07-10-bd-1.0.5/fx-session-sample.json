@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "id": "fx-hbc",
+      "title": "fx/pack.critique-1",
+      "status": "closed",
+      "priority": 2,
+      "issue_type": "session",
+      "owner": "operator@example.com",
+      "created_at": "2026-07-11T04:01:07Z",
+      "created_by": "operator",
+      "updated_at": "2026-07-11T04:01:08Z",
+      "closed_at": "2026-07-11T04:01:08Z",
+      "close_reason": "session drained; clean close",
+      "metadata": {
+        "agent_name": "fx/pack.critique-1"
+      },
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "schema_version": 1
+}
