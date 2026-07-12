@@ -465,7 +465,7 @@ typedef Fakes = ({
 /// Builds an [StationServices] over the fakes (the chokepoint writes through a
 /// recording bd runner; the transport is a controllable provider; land is wired
 /// to the recording git/PR ops) and returns it with the recorders.
-Fakes buildFakes({String createdId = 'tgdog-sess1'}) {
+Fakes buildFakes({String createdId = 'tgdog-sess1', WorkSignalProbe? workSignal}) {
   final runner = RecordingBdRunner(createdId: createdId);
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
@@ -483,6 +483,9 @@ Fakes buildFakes({String createdId = 'tgdog-sess1'}) {
       provider: provider,
       writer: writer,
       stateSubstation: stateSubstation,
+      // The COMPLETION FENCE's probe — null (the default) leaves the fence inert,
+      // so every existing test is unchanged.
+      workSignal: workSignal,
     ),
     runner: runner,
     provider: provider,

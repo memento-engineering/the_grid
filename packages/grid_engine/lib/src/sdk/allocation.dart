@@ -233,6 +233,20 @@ typedef AllocationLiveness = bool Function(AdoptFence fence);
 /// [AdoptProof] — must be co-wired; see [AllocationContext.liveness]).
 bool neverLive(AdoptFence fence) => false;
 
+/// The engine's WORK-SIGNAL seam: whether the workspace at [workspaceDir] still
+/// holds UNCOMMITTED work. The engine knows this in CONCEPT ("what a finished
+/// turn leaves behind"); the concrete probe is the COMPOSER's opinion — it binds
+/// this to its own source-control service (ADR-0008 D5: the engine names no VCS,
+/// and holds no worktree-layout opinion). Reuses [GateOutcome] so the fence
+/// inherits ADR-0006 D3's ratified fail-closed-on-probe-error posture verbatim.
+typedef WorkSignalProbe = Future<GateOutcome> Function(String workspaceDir);
+
+/// The offline work-signal default — nothing is wired, so nothing is fenced and
+/// an inferred completion is taken at face value (today's behavior). Public so
+/// the composer / [StationServices] can name the "fence disabled" value
+/// explicitly, like [neverLive].
+Future<GateOutcome> noWorkSignal(String workspaceDir) async => GateOutcome.clear;
+
 /// Everything an [Allocation] needs to manage its effect — assembled by the Host
 /// and handed to [Capability.createAllocation] (ADR-0009 D5).
 ///
@@ -257,6 +271,7 @@ class AllocationContext {
     this.fence = const AdoptFence(),
     this.kind = StepKind.job,
     this.liveness = neverLive,
+    this.workSignal = noWorkSignal,
   });
 
   /// The host branch's stable tree context — valid while the host is mounted,
@@ -304,6 +319,14 @@ class AllocationContext {
   /// or leave BOTH at their offline defaults. This is the human-gate live-arm
   /// wiring; P1 leaves both off.
   final AllocationLiveness liveness;
+
+  /// The work-signal probe the COMPLETION FENCE proves an inferred completion
+  /// with — bound by the composer via `StationServices.workSignal`; [noWorkSignal]
+  /// (the default) leaves the fence INERT, which is exactly today's behavior.
+  /// Only consulted for a capability declaring
+  /// [CompletionContract.committedWorkspace], and only when the tree actually
+  /// carries a real [SourceControl] + [Workspace] (see [ProcessAllocation]).
+  final WorkSignalProbe workSignal;
 }
 
 /// A node of the_grid's third tree — a persistent managed object holding one live

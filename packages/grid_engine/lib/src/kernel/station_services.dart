@@ -29,6 +29,7 @@ class StationServices {
     required this.writer,
     required this.stateSubstation,
     this.liveness,
+    this.workSignal,
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
   });
 
@@ -53,6 +54,17 @@ class StationServices {
   /// arm, or leaves both off — wiring one alone double-runs. This makes the two
   /// adopt halves symmetrically wireable (closing the adversarial-review footgun).
   final AllocationLiveness? liveness;
+
+  /// The station's work-signal probe — the COMPLETION FENCE's binding. The Host
+  /// threads it into each `AllocationContext.workSignal`. Null (the default) ⇒
+  /// [noWorkSignal] ⇒ the fence is INERT and an inferred one-shot exit is taken at
+  /// face value (today's behavior). The live composer binds it to its own
+  /// source-control service's uncommitted-work probe, EXCLUDING the grid's own
+  /// runtime dir (`grid_sdk`'s `stationWorkSignal`) — that impl is the composer's
+  /// opinion, never the engine's (ADR-0008 D5). Unlike the adopt seam, this one is
+  /// safe to arm ALONE: it can only WITHHOLD an unproven completion, never
+  /// double-run anything.
+  final WorkSignalProbe? workSignal;
 
   /// The concurrency governor's STATION-WIDE default/ceiling (tg-42f,
   /// declare-and-check — ADR-0008 D8 defers the general per-leaf
