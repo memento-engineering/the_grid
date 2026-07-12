@@ -53,9 +53,10 @@ class SubstationWorkSpec {
 /// await work.start();                       // controllers → freshness →
 ///                                           // restart-reconcile → bridge
 /// final grid = runGrid(delegate,            // NOW the tree mounts + spawns
-///     onFlushed: work.afterFlush);          // D-5 cooldown/unclaimed re-scan
+///     onFlushed: work.afterFlush,           // D-5 cooldown/unclaimed re-scan
+///     orphanSweep: work.sweepOrphans);      // the teardown reap
 /// // ... resident ...
-/// grid.teardown();                          // unmount → effects kill
+/// await grid.teardown();                    // unmount → effects kill → SWEEP
 /// await work.shutdown();                    // bridge + controllers down
 /// ```
 class StationWorkRuntime {
@@ -66,12 +67,16 @@ class StationWorkRuntime {
     required this.readPathName,
     required StationDriver driver,
     required RestartReconciler restart,
+    required RuntimeProvider provider,
+    required void Function(String message) onOrphan,
     required void Function(String message) onRefusal,
     required Future<void> Function() sourcesStart,
     required Future<void> Function() sourcesShutdown,
     required Future<void> Function() freshnessBarrier,
   }) : _driver = driver,
        _restart = restart,
+       _provider = provider,
+       _onOrphan = onOrphan,
        _onRefusal = onRefusal,
        _sourcesStart = sourcesStart,
        _sourcesShutdown = sourcesShutdown,
@@ -96,6 +101,8 @@ class StationWorkRuntime {
 
   final StationDriver _driver;
   final RestartReconciler _restart;
+  final RuntimeProvider _provider;
+  final void Function(String message) _onOrphan;
 
   /// The LOUD sink a dropped chokepoint write reports through (the same one the
   /// [StationBeadWriter] refuses on) — a dropped zombie reap (tg-szb) is never
@@ -155,6 +162,22 @@ class StationWorkRuntime {
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
   /// unclaimed-frontier re-scans (D-5/F1).
   void afterFlush() => _driver.afterFlush();
+
+  /// The `runGrid(orphanSweep:)` hook — the teardown-time ORPHAN SWEEP.
+  /// `GridHandle.teardown()` runs it AFTER the unmount, so the station is
+  /// reconciled against zero-expected: the transport's still-held sessions are
+  /// stopped (the unmount's kill chain is fire-and-forget) and this station's
+  /// OWN non-terminal session beads' live process groups are terminated. Scoped
+  /// to the OWNED state partition and never broad (ADR-0006 coexistence); LOUD
+  /// on every reap.
+  ///
+  /// It is the teardown twin of the boot [RestartReconciler.reconcile] [start]
+  /// runs — the SAME reconciler, the same fence, the same guarded kill.
+  Future<OrphanSweepReport> sweepOrphans() => _restart.sweepOrphans(
+    transport: _provider,
+    sessionPrefix: '$stateSubstation-',
+    onOrphan: _onOrphan,
+  );
 
   /// Tears the off-tree machinery down: the driver (backoff Timer + bridge),
   /// then the controllers. Call AFTER `grid.teardown()` unmounted the tree
@@ -216,6 +239,7 @@ Future<StationWorkRuntime> buildStationWork({
   BdCliService? stateBdOverride,
   ProcessGroupController? groupsOverride,
   void Function(String message)? onRefusal,
+  void Function(String message)? onOrphan,
   void Function(String message)? onUnresolvedExternalDep,
   ExplorationTransport? transport,
   Duration wedgeThreshold = kDefaultWedgeThreshold,
@@ -443,6 +467,8 @@ Future<StationWorkRuntime> buildStationWork({
     readPathName: readPathName,
     driver: driver,
     restart: restart,
+    provider: provider,
+    onOrphan: onOrphan ?? (m) => stdout.writeln(m),
     onRefusal: refusalSink,
     sourcesStart: () async {
       await Future.wait(bundles.values.map((b) => b.runtime.start()));

@@ -55,6 +55,12 @@ class FakeRuntimeProvider implements RuntimeProvider {
   /// When set, the next `start` throws this (e.g. SessionAlreadyExists).
   Object? throwOnStart;
 
+  /// The live session names — registered by a COMPLETED `start` (the spawn
+  /// LANDED), removed by `stop`. What `listRunning`/`isRunning`/`processAlive`
+  /// reflect, so a test can prove a spawn landing mid-teardown is visible to
+  /// `RestartReconciler.sweepOrphans`.
+  final Set<String> _live = <String>{};
+
   /// Emits [event] to subscribers (after a microtask, like a real stream).
   void emit(RuntimeEvent event) => _events.add(event);
 
@@ -67,10 +73,15 @@ class FakeRuntimeProvider implements RuntimeProvider {
       throwOnStart = null;
       throw t;
     }
+    // The spawn LANDED — only now does the transport hold the session.
+    _live.add(name);
   }
 
   @override
-  Future<void> stop(String name) async => stopped.add(name);
+  Future<void> stop(String name) async {
+    stopped.add(name);
+    _live.remove(name);
+  }
 
   @override
   Future<void> interrupt(String name) async {}
@@ -82,16 +93,17 @@ class FakeRuntimeProvider implements RuntimeProvider {
   Stream<String> output(String name) => const Stream.empty();
 
   @override
-  bool isRunning(String name) => false;
+  bool isRunning(String name) => _live.contains(name);
 
   @override
-  bool processAlive(String name) => false;
+  bool processAlive(String name) => _live.contains(name);
 
   @override
   String peek(String name, int lines) => '';
 
   @override
-  List<String> listRunning(String prefix) => const [];
+  List<String> listRunning(String prefix) =>
+      _live.where((n) => n.startsWith(prefix)).toList(growable: false);
 
   @override
   DateTime? lastActivity(String name) => null;
