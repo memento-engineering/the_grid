@@ -79,9 +79,11 @@ void main() {
                 mount: const StepMount(
                   step: CapabilityStep(stepId: 'route', capabilityId: 'route'),
                   nodePath: 'tg-1/route',
+                  circuit: _gateCircuit,
+                  circuitPath: 'tg-1',
                   session: SessionHandle('tgdog-s'),
                   node: NodeCursor(),
-                  key: ValueKey('tg-1/route#0'),
+                  key: ValueKey('tg-1/route#0.0'),
                 ),
               ),
             ),

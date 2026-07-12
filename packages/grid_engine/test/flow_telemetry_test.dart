@@ -55,13 +55,25 @@ Future<void> _pump() async {
   }
 }
 
+/// The circuit the mounted `agent` step belongs to (`StepMount.circuit` — the
+/// graph a Rewind would resolve siblings against; tg-o90).
+const _circuit = Circuit(
+  id: 'code',
+  terminalStepId: 'agent',
+  steps: [CapabilityStep(stepId: 'agent', capabilityId: 'agent')],
+);
+
 StepMount _mount({String nodePath = 'tg-1/agent', NodeCursor node = const NodeCursor()}) =>
     StepMount(
       step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
       nodePath: nodePath,
+      circuit: _circuit,
+      circuitPath: nodePath.contains('/')
+          ? nodePath.substring(0, nodePath.lastIndexOf('/'))
+          : '',
       session: const SessionHandle('tgdog-s'),
       node: node,
-      key: ValueKey('$nodePath#${node.restartCount}'),
+      key: ValueKey('$nodePath#${node.restartCount}.${node.rewindCount}'),
     );
 
 /// Mounts a bare [CapabilityHost] whose clock is the injected [nowFn] (an

@@ -35,12 +35,14 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
+import '../sdk/rewind.dart';
 import 'capability_registry.dart';
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
@@ -210,6 +212,10 @@ class CapabilityHostState extends State<CapabilityHost> {
         if (_completed) return;
         _completed = true;
         unawaited(_persistGate(reason));
+      case AllocationRewound(:final stepIds, :final reason):
+        if (_completed) return;
+        _completed = true;
+        unawaited(_persistRewind(stepIds, reason));
     }
   }
 
@@ -351,6 +357,87 @@ class CapabilityHostState extends State<CapabilityHost> {
       reason: reason,
     );
     _emitFlare('step.gated', {'reason': reason});
+  }
+
+  /// REWIND (routing — the dual of fan-out; M5 D-4 promoted to a first-class arm,
+  /// tg-o90): re-run the named SIBLING steps, every node transitively downstream
+  /// of them, and SELF. ONE merge-safe chokepoint write flips that whole sub-DAG
+  /// to `state=pending` with a bumped per-node `rewindCount`, which RE-KEYS each
+  /// node (`CircuitScope`) — so keyed reconcile disposes (KILLS, ADR-0009 D4) the
+  /// old incarnations and re-runs them virgin. NO `type=gate` bead is minted and
+  /// the session is NOT re-minted: the round happens INSIDE the live session, in
+  /// the same workspace, with no human in the loop.
+  ///
+  /// Two LOUD refusals (ADR-0008 D3 — a guard exists only where it protects a
+  /// named invariant with a concrete failure story, and is LOUD when violated):
+  ///
+  /// - an EMPTY or DANGLING [stepIds] would silently degrade into "re-run only
+  ///   myself, forever" → a supervised failure instead (bounded by the breaker,
+  ///   then escalation);
+  /// - a node whose own `rewindCount` already reached [kMaxReworkRounds] REFUSES
+  ///   to rewind again and parks at a human [Gate] (D-4's bounded rework rounds),
+  ///   so a mis-specified route can never spin the loop. The operator's lever to
+  ///   grant a fresh budget is `grid rework` (a new session ⇒ a new cursor).
+  Future<void> _persistRewind(Set<String> stepIds, String reason) async {
+    if (_cancelled || !context.mounted) return;
+    final circuit = seed.mount.circuit;
+    final unknown = stepIds.where((id) => circuit.stepById(id) == null).toList()
+      ..sort();
+    if (stepIds.isEmpty || unknown.isNotEmpty) {
+      await _persistFailure(
+        stepIds.isEmpty
+            ? 'rewind named no steps (circuit "${circuit.id}")'
+            : 'rewind names unknown step(s) ${unknown.join(', ')} in circuit '
+                  '"${circuit.id}"',
+      );
+      return;
+    }
+    final rounds = seed.mount.node.rewindCount;
+    if (rounds >= kMaxReworkRounds) {
+      await _persistGate(
+        'rework cap reached ($rounds/$kMaxReworkRounds) — a human decides: '
+        '$reason',
+      );
+      return;
+    }
+    final registry = _registry;
+    final paths = rewindNodePaths(
+      circuit,
+      seed.mount.circuitPath,
+      stepIds,
+      selfStepId: seed.mount.step.stepId,
+      circuitById: (id) => registry?.circuit(id),
+    );
+    // The per-node PRIOR counts, read with the EFFECT verb (ADR-0008 Decision 3,
+    // amended 2026-07-02): this runs OFF `build`, in the report path, on a
+    // still-mounted branch (guarded above). Never `dependOn` the SiblingView — it
+    // is a fresh instance per build, so binding to it would rebuild every host on
+    // every cursor tick. Each node's OWN count is bumped (monotonic per node), so
+    // the key ALWAYS changes; a shared round number could equal a node's existing
+    // count and silently skip its re-key.
+    final view =
+        context.getInheritedSeedOfExactType<SiblingView>() ??
+        const SiblingView();
+    await _ctx!.writer.update(
+      _sessionId,
+      metadata: {
+        for (final path in paths)
+          ...nodeRewoundMetadata(
+            path,
+            rewindCount: view.cursorOf(path).rewindCount + 1,
+          ),
+        // SELF's bump is authoritative from the mount (the view agrees in the
+        // tree; a bare-mounted host has no view at all).
+        ...nodeRewoundMetadata(_nodePath, rewindCount: rounds + 1),
+        ..._terminalTelemetry(),
+      },
+    );
+    _emitFlare('step.rewound', {
+      'steps': (stepIds.toList()..sort()).join(','),
+      'nodes': '${paths.length}',
+      'round': '${rounds + 1}',
+      'reason': truncateReason(reason),
+    });
   }
 
   /// Emits a fire-and-forget observability flare after a terminal cursor write

@@ -86,11 +86,18 @@ class CircuitScope extends StatelessSeed {
               StepMount(
                 step: step,
                 nodePath: path,
+                // The graph this step is a member of (a VALUE — the Rewind arm
+                // resolves its named siblings + their dependents against it).
+                circuit: circuit,
+                circuitPath: nodePath,
                 session: session!,
                 node: node,
                 // The incarnation key: a supervised restart bumps restartCount
-                // → a new key → keyed reconcile swaps the leaf (D-5).
-                key: ValueKey('$path#${node.restartCount}'),
+                // (D-5) and a routing REWIND bumps rewindCount (tg-o90) → a new
+                // key → keyed reconcile swaps the leaf. A rewound node that is
+                // still MOUNTED (a daemon) is therefore torn down and re-run,
+                // never left alive under a stale incarnation.
+                key: ValueKey('$path#${node.restartCount}.${node.rewindCount}'),
                 backoff: circuit.backoff,
                 maxRestarts: circuit.maxRestarts,
               ),

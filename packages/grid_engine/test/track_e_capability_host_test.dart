@@ -95,12 +95,24 @@ Future<void> _pump() async {
   }
 }
 
+/// The circuit the mounted `agent` step belongs to (`StepMount.circuit` — the
+/// graph a Rewind would resolve its siblings against; tg-o90).
+const _circuit = Circuit(
+  id: 'code',
+  terminalStepId: 'agent',
+  steps: [CapabilityStep(stepId: 'agent', capabilityId: 'agent')],
+);
+
 StepMount _mount(Capability cap, {String nodePath = 'tg-1/agent'}) => StepMount(
   step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
   nodePath: nodePath,
+  circuit: _circuit,
+  circuitPath: nodePath.contains('/')
+      ? nodePath.substring(0, nodePath.lastIndexOf('/'))
+      : '',
   session: const SessionHandle('tgdog-s'),
   node: const NodeCursor(),
-  key: ValueKey('$nodePath#0'),
+  key: ValueKey('$nodePath#0.0'),
 );
 
 /// The fixed clock the host's backoff cooldown is computed against.
@@ -383,9 +395,11 @@ void main() {
                       capabilityId: 'agent',
                     ),
                     nodePath: 'tg-1/agent',
+                    circuit: _circuit,
+                    circuitPath: 'tg-1',
                     session: const SessionHandle('tgdog-s'),
                     node: const NodeCursor(restartCount: 2),
-                    key: const ValueKey('tg-1/agent#2'),
+                    key: const ValueKey('tg-1/agent#2.0'),
                   ),
                 ),
               ),

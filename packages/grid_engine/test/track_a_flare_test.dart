@@ -13,6 +13,13 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
+/// The circuit the mounted `agent` step belongs to (`StepMount.circuit`, tg-o90).
+const _circuit = Circuit(
+  id: 'code',
+  terminalStepId: 'agent',
+  steps: [CapabilityStep(stepId: 'agent', capabilityId: 'agent')],
+);
+
 class _CompletingCap extends ProcessCapability {
   const _CompletingCap();
   @override
@@ -70,9 +77,11 @@ Future<void> _pump() async {
               mount: const StepMount(
                 step: CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
                 nodePath: 'tg-1/agent',
+                circuit: _circuit,
+                circuitPath: 'tg-1',
                 session: SessionHandle('tgdog-s'),
                 node: NodeCursor(),
-                key: ValueKey('tg-1/agent#0'),
+                key: ValueKey('tg-1/agent#0.0'),
               ),
             ),
           ),

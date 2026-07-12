@@ -195,6 +195,22 @@ class AllocationGated extends AllocationReport {
   final String reason;
 }
 
+/// The effect decided the work must REWIND — routing, the dual of fan-out
+/// (tg-o90). The Host re-keys the named sibling [stepIds] + their transitive
+/// dependents + this node back to `pending` in ONE chokepoint write; no gate bead
+/// is minted and the session is NOT re-minted. A LATCHING terminal for THIS
+/// incarnation (the node re-mounts as a fresh one once its deps re-complete).
+class AllocationRewound extends AllocationReport {
+  /// Reports a rewind of the sibling steps [stepIds], with an optional [reason].
+  const AllocationRewound(this.stepIds, [this.reason = '']);
+
+  /// The sibling step ids to re-run (in the rewinding node's own circuit).
+  final Set<String> stepIds;
+
+  /// Why the work rewound (diagnostics/telemetry; never parsed).
+  final String reason;
+}
+
 /// The emit-only channel an [Allocation] reports transitions through (ADR-0009
 /// D5). The Host supplies a guarded closure that persists each report off-build
 /// through the chokepoint — NEVER a writer/notifier handed into the effect layer
@@ -407,6 +423,7 @@ class ServiceAllocation extends Allocation {
     Ok(:final payload) => AllocationCompleted(payload),
     Failed(:final reason) => AllocationFailed(reason),
     Gate(:final reason) => AllocationGated(reason),
+    Rewind(:final stepIds, :final reason) => AllocationRewound(stepIds, reason),
   };
 
   @override
