@@ -262,7 +262,6 @@ class _Store {
 class _Rig {
   _Rig(
     Map<String, Capability> capabilities, {
-    this.beadId = 'tg-1',
     Circuit root = _code,
     Map<String, Circuit> circuits = const {'spec_review': _specReview},
   }) : _root = root,
@@ -281,7 +280,8 @@ class _Rig {
 
   static const _sessionId = 'tgdog-s';
 
-  final String beadId;
+  /// The work bead this rig drives (the circuit's root nodePath).
+  static const beadId = 'tg-1';
   final Fakes fakes;
   final TreeOwner owner;
   final JoinedSnapshotNotifier joined;
@@ -377,7 +377,7 @@ class _Rig {
   /// order — the ground truth for "what the hosts actually wrote, and when".
   List<String> get sessionWrites => [
     for (final call in fakes.runner.callsFor('update'))
-      if (call.indexOf('--metadata') >= 0 &&
+      if (call.contains('--metadata') &&
           call.length > 1 &&
           call[1] == _sessionId)
         call[call.indexOf('--metadata') + 1],
