@@ -107,14 +107,22 @@ class _Burn {
     );
   }
 
-  void advance(Map<String, NodeCursor> delta, {bool terminal = false}) {
+  void advance(
+    Map<String, NodeCursor> delta, {
+    bool terminal = false,
+    bool held = false,
+  }) {
     events.clear();
     _cursor.addAll(delta);
-    _push(cursor: _cursor, terminal: terminal);
+    _push(cursor: _cursor, terminal: terminal, held: held);
     owner.flush();
   }
 
-  void _push({required Map<String, NodeCursor> cursor, required bool terminal}) {
+  void _push({
+    required Map<String, NodeCursor> cursor,
+    required bool terminal,
+    bool held = false,
+  }) {
     joined.push(
       JoinedSnapshot(
         graph: GraphSnapshot.fromParts(
@@ -128,6 +136,11 @@ class _Burn {
             workBeadId: beadId,
             sessionId: 'tgdog-s',
             isTerminal: terminal,
+            // The escalation's OWN close stamps `grid.escalation` — a HUMAN-held
+            // terminal (tg-4rw / I-10). Without it the closed session reads as a
+            // dead key and the bead re-mints, which is exactly the loop the held
+            // disposition exists to prevent.
+            humanHeld: held,
             cursor: cursor,
           ),
         },
@@ -282,7 +295,7 @@ void main() {
 
       // Closing the session is terminal → WorkList unmounts the WorkBead → the
       // whole subtree tears down, killing the peripheral daemon (no leak).
-      burn.advance(const {}, terminal: true);
+      burn.advance(const {}, terminal: true, held: true);
       expect(
         burn.events.any((e) => e.contains('STOP launch(tgdog-s/tg-burn/harnessPeripheral/launch)')),
         isTrue,

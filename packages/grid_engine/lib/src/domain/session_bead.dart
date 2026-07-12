@@ -16,6 +16,7 @@ import 'package:beads_dart/beads_dart.dart';
 
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
+import 'rework.dart';
 import 'session_projection.dart';
 
 /// Metadata keys on a the_grid session bead. `work_bead` + `rig` are stamped at
@@ -46,6 +47,37 @@ abstract final class SessionBeadKeys {
   /// Capture-only session lifecycle telemetry — the ISO-8601 UTC instant the
   /// session bead was closed, stamped inside `StationBeadWriter.close`.
   static const closedAt = 'closed_at';
+
+  /// The engine's OWN durable close-outcome marker (I-10, tg-4rw) — stamped in
+  /// the chokepoint write that IMMEDIATELY precedes a POSITIVE-TERMINAL
+  /// `bd close`, so a later mount can tell "this round finished" from "somebody
+  /// closed this session mid-flight" without re-deriving the circuit. Cursor
+  /// shape alone cannot: a session closed BETWEEN steps has every WRITTEN node
+  /// `complete` while the circuit is nowhere near its terminal. the_grid-internal
+  /// (never a codec-boundary key), disjoint from the `grid.cursor.` /
+  /// `grid.result.` namespaces so neither projection misreads it.
+  static const outcome = 'grid.outcome';
+
+  /// The human-escalation marker `SessionScope` writes on breaker exhaustion
+  /// (D-5) — a human picks the session up. Was a private literal in
+  /// `SessionScope`; the read projection needs it now, so it lives with the rest
+  /// of the schema (same string — live beads carry it).
+  static const escalation = 'grid.escalation';
+
+  /// The capture-only escalation diagnostic (FT-1) written beside [escalation].
+  static const escalationReason = 'grid.escalation_reason';
+
+  /// The REWORK-DECLINE marker (tg-x1j) — a rework re-key orphaned a session
+  /// this scope never observed parked at a gate; a human must investigate.
+  static const reworkDeclined = 'grid.rework_declined';
+
+  /// The capture-only decline diagnostic written beside [reworkDeclined].
+  static const reworkDeclinedReason = 'grid.rework_declined_reason';
+
+  /// The capture-only diagnostic stamped on a VOIDED session when the engine
+  /// retires its dead JOIN key (I-10): WHY it was voided, written in the SAME
+  /// chokepoint update as the re-keyed [workBead].
+  static const voidedReason = 'grid.voided_reason';
 }
 
 /// The per-node reentrant cursor keys (ADR-0008 D4 / M4-P1 §3, D-3).
@@ -192,6 +224,34 @@ const int kMaxReasonChars = 500;
 /// allowed to grow unbounded, and never blocks a transition).
 String truncateReason(String reason) =>
     reason.length <= kMaxReasonChars ? reason : reason.substring(0, kMaxReasonChars);
+
+/// The [SessionBeadKeys.outcome] value a POSITIVE-TERMINAL close stamps (I-10).
+const String kSessionOutcomeComplete = 'complete';
+
+/// The metadata payload the positive-terminal close writes through the
+/// chokepoint IMMEDIATELY BEFORE `bd close` (I-10) — the durable "this round
+/// finished" evidence the mount boundary reads. Merge-safe (one disjoint key).
+Map<String, String> sessionCompleteMetadata() => <String, String>{
+  SessionBeadKeys.outcome: kSessionOutcomeComplete,
+};
+
+/// The metadata payload that RETIRES a VOIDED session's dead JOIN key (I-10) —
+/// the mechanized form of the operator's hand re-key (`work_bead=tg-1di#void-i8`),
+/// and the FOURTH (engine-automatic) member of A47's re-run taxonomy.
+///
+/// Re-keys `work_bead` to [voidKeyFor] so the dead session drops out of the join
+/// (the join holds ONE session per work bead — two would make the winner
+/// map-order-dependent, and `grid rework` would refuse the bead as ambiguous),
+/// and records WHY, capture-only. Written through the ONE chokepoint onto
+/// the_grid's OWN session bead — never the foreign work source (A37).
+Map<String, String> voidRetireMetadata({
+  required String workBeadId,
+  required String deadSessionId,
+  required String reason,
+}) => <String, String>{
+  SessionBeadKeys.workBead: voidKeyFor(workBeadId, deadSessionId),
+  SessionBeadKeys.voidedReason: truncateReason(reason),
+};
 
 /// The flat, CAPTURE-ONLY flow-telemetry payload for ONE node (FT-1, tg-pez) —
 /// step timing ([startedAt]/[finishedAt]/[durationMs]) + the failure diagnostic
@@ -409,6 +469,13 @@ SessionProjection projectSession(Bead sessionBead) {
     workBeadId: (metadata[SessionBeadKeys.workBead] as String?) ?? '',
     sessionId: sessionBead.id,
     isTerminal: sessionBead.isClosed,
+    // I-10: the engine's own close-outcome evidence + the human-held markers —
+    // what the mount boundary's disposition reads (never re-derived from the
+    // circuit, which the mount boundary does not have).
+    completed: metadata[SessionBeadKeys.outcome] == kSessionOutcomeComplete,
+    humanHeld:
+        metadata.containsKey(SessionBeadKeys.escalation) ||
+        metadata.containsKey(SessionBeadKeys.reworkDeclined),
     pgid: _asInt(metadata[SessionBeadKeys.pgid]),
     pid: _asInt(metadata[SessionBeadKeys.pid]),
     token: metadata[SessionBeadKeys.token] as String?,

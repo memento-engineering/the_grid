@@ -371,6 +371,12 @@ void main() {
               workBeadId: 'tg-1',
               sessionId: 'tgdog-s',
               isTerminal: true,
+              // A POSITIVE terminal: the engine's close path stamps
+              // `grid.outcome=complete` (tg-4rw / I-10) — that marker is what
+              // makes a closed session BLOCKING. Without it this row is a dead
+              // key (closed mid-flight) and the bead correctly re-mounts to
+              // re-mint, which is not the case under test here.
+              completed: true,
             ),
           },
         ),

@@ -497,6 +497,10 @@ Bead sessionBead({
   required String workBeadId,
   Set<String> completed = const {},
   bool closed = false,
+  bool outcomeComplete = false,
+  bool escalated = false,
+  Map<String, String> cursorStates = const {},
+  Map<String, String> metadata = const {},
 }) => Bead(
   id: id,
   issueType: IssueType.session,
@@ -506,6 +510,14 @@ Bead sessionBead({
     SessionBeadKeys.workBead: workBeadId,
     for (final step in completed)
       ...nodeStateMetadata('$workBeadId/$step', StepState.complete),
+    // The I-10 closed-session shapes: the engine's own DONE evidence, a HUMAN
+    // marker, and an arbitrary in-flight cursor (`{'agent': 'running'}`).
+    if (outcomeComplete) ...sessionCompleteMetadata(),
+    if (escalated) SessionBeadKeys.escalation: 'breaker-exhausted',
+    for (final entry in cursorStates.entries)
+      CursorKeys.keyFor('$workBeadId/${entry.key}', CursorKeys.state):
+          entry.value,
+    ...metadata,
   },
 );
 

@@ -7,6 +7,9 @@ import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/driveable_work.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/session_bead.dart';
+import '../domain/session_disposition.dart';
+import '../domain/session_projection.dart';
 import '../domain/substation_config.dart';
 import '../kernel/station_services.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
@@ -58,6 +61,11 @@ class _WorkListState extends State<WorkList> {
   /// BRANCH, not the session: added whenever a bead mounts, removed only on a
   /// genuine positive terminal.
   final Set<String> _mountedIds = <String>{};
+
+  /// Bead ids whose HELD session has already been reported (I-10) — the flare is
+  /// LOUD but said ONCE per bead per station lifetime, never once per build (the
+  /// same rising-edge discipline as the wedge monitor).
+  final Set<String> _heldReported = <String>{};
 
   @override
   void didChangeDependencies() {
@@ -120,7 +128,11 @@ class _WorkListState extends State<WorkList> {
     // freshly ready with no session yet — these are what the slot budget
     // below actually governs.
     final mounted = <WorkBead>[];
-    final pending = <Bead>[];
+    // A43's pending bin, unchanged in MEANING (freshly ready, no live session —
+    // the only bin the budget gates) and richer by one field: a VOIDED bead
+    // (I-10) enters it too, and its `SessionScope` needs the DEAD projection in
+    // order to retire it before minting.
+    final pending = <({Bead bead, SessionProjection? session})>[];
     for (final bead in _snapshot.graph.beadsById.values) {
       // Dispatchable-type gate BEFORE ownership, as an ALLOW-list (fail-closed):
       // only plain coding-work types mount a WorkBead + spawn an agent. A
@@ -151,18 +163,39 @@ class _WorkListState extends State<WorkList> {
       if (driveList.isNotEmpty && !driveList.contains(bead.id)) continue;
 
       final session = _snapshot.sessionsByWorkBead[bead.id];
+      final disposition = sessionDispositionOf(session);
 
-      // Positive-terminal-only unmount: the work bead `closed`, OR the owned
-      // session cursor terminal. NEVER a ready-set exit — a live agent's bead
-      // can transiently leave readyIds (blocked, gc-edited) mid-flight, and
-      // treating that as done would kill the live agent.
-      final terminal = bead.isClosed || (session?.isTerminal ?? false);
-      if (terminal) {
+      // Positive-terminal-only unmount, DISPOSITIONED (I-10, tg-4rw): the work
+      // bead `closed`, OR the joined session BLOCKS the mount — it is `done`
+      // (the engine's own close path stamped `grid.outcome=complete`, or a
+      // legacy all-positive-terminal cursor) or `held` (a human marker: an
+      // escalation / a declined rework). A `voided` session — closed mid-flight
+      // with an in-flight cursor and NO human marker — is a DEAD KEY: neither
+      // adoptable NOR blocking, so the bead MOUNTS and `SessionScope` retires
+      // the dead key and mints a fresh round. Before this, EVERY closed session
+      // blocked, so an operator-closed orphan wedged its bead forever, silently
+      // (I-10: 62 minutes, recovered by a hand re-key).
+      //
+      // Still NEVER a ready-set exit — a live agent's bead can transiently leave
+      // readyIds (blocked, gc-edited) mid-flight, and treating that as done
+      // would kill the live agent.
+      if (bead.isClosed || disposition.blocksMount) {
         _mountedIds.remove(bead.id);
+        if (disposition case HeldSession(:final reason)) {
+          _reportHeld(services, bead.id, session?.sessionId ?? '', reason);
+        }
         continue;
       }
 
       final inReady = _snapshot.graph.readyIds.contains(bead.id);
+      // A43's "live session" bin is about the ROW, not about what `SessionScope`
+      // will do with it: any non-terminal session row is in-flight work that is
+      // never evicted for budget reasons (a row that names no session bead is
+      // still a live round — only the adopt-or-mint decision cares about the id).
+      // The only CLOSED session that reaches here is a `voided` DEAD KEY, and it
+      // is deliberately NOT live: it carries no running work, so its bead is a
+      // budget-gated `pending` candidate exactly like a fresh one (a re-mint
+      // spawns an agent — it must cost a slot).
       final liveSession = session != null && !session.isTerminal;
       // A40's "already-mounted work is never evicted for budget reasons" also
       // covers a bead whose branch is ALREADY mounted even when `liveSession`
@@ -189,7 +222,7 @@ class _WorkListState extends State<WorkList> {
           WorkBead(bead: bead, session: session, key: ValueKey(bead.id)),
         );
       } else {
-        pending.add(bead);
+        pending.add((bead: bead, session: session));
       }
     }
 
@@ -236,15 +269,27 @@ class _WorkListState extends State<WorkList> {
 
     // Deterministic admission order (lowest bead id first) — same tie-break
     // the final sort below applies, so which beads get in is reproducible.
-    pending.sort((a, b) => a.id.compareTo(b.id));
+    pending.sort((a, b) => a.bead.id.compareTo(b.bead.id));
     final admitted = pending.take(slotsAvailable);
     final waiting = pending.skip(slotsAvailable).toList();
-    for (final bead in admitted) {
-      _mountedIds.add(bead.id);
-      mounted.add(WorkBead(bead: bead, key: ValueKey(bead.id)));
+    for (final entry in admitted) {
+      _mountedIds.add(entry.bead.id);
+      // The session rides down even for a freshly-admitted bead: null for a
+      // first round, and the DEAD projection for a voided one (I-10) — which is
+      // what `SessionScope` retires before it mints. Once admitted, `_mountedIds`
+      // keeps the branch mounted across the retire→mint gap (the same tg-zat
+      // mechanism that carries a `grid rework` re-key), so the governor can never
+      // evict the very scope that is minting the fresh round.
+      mounted.add(
+        WorkBead(
+          bead: entry.bead,
+          session: entry.session,
+          key: ValueKey(entry.bead.id),
+        ),
+      );
     }
     if (waiting.isNotEmpty) {
-      _reportThrottled(services, waiting);
+      _reportThrottled(services, [for (final w in waiting) w.bead]);
     }
 
     // Deterministic order by bead id — all children are keyed, so reconcile is
@@ -284,6 +329,30 @@ class _WorkListState extends State<WorkList> {
       services?.transport?.flare('work.throttled', {
         'count': '${waiting.length}',
         'beadIds': waiting.map((b) => b.id).join(','),
+      });
+    } catch (_) {
+      // A throwing transport never breaks the mount reconcile — swallow.
+    }
+  }
+
+  /// Emits ONE LOUD line (I-10) when a HELD session — an escalated or
+  /// declined-rework round a HUMAN owns — keeps its work bead unmounted. A
+  /// station that declines to drive ready work must say WHY, once: silent
+  /// forever-waits are exactly how I-10 hid for an hour (the guard principle,
+  /// ADR-0008 D3 — LOUD or GONE). Deduped per bead; a throwing/absent transport
+  /// never breaks the mount reconcile.
+  void _reportHeld(
+    ServiceBundle? services,
+    String beadId,
+    String sessionId,
+    String reason,
+  ) {
+    if (!_heldReported.add(beadId)) return;
+    try {
+      services?.transport?.flare('work.held', {
+        'beadId': beadId,
+        'sessionId': sessionId,
+        'reason': truncateReason(reason),
       });
     } catch (_) {
       // A throwing transport never breaks the mount reconcile — swallow.
