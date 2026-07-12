@@ -159,11 +159,11 @@ return activityChanged(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String name,  int pid,  int? pgid,  String beadId)?  sessionStarted,TResult Function( String name,  int exitCode)?  exited,TResult Function( String name,  String reason)?  died,TResult Function( String name,  int epoch)?  respawned,TResult Function( String name,  bool active)?  activityChanged,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String name,  int pid,  int? pgid,  String beadId)?  sessionStarted,TResult Function( String name,  int exitCode,  bool inferred)?  exited,TResult Function( String name,  String reason)?  died,TResult Function( String name,  int epoch)?  respawned,TResult Function( String name,  bool active)?  activityChanged,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
 return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId);case Exited() when exited != null:
-return exited(_that.name,_that.exitCode);case Died() when died != null:
+return exited(_that.name,_that.exitCode,_that.inferred);case Died() when died != null:
 return died(_that.name,_that.reason);case Respawned() when respawned != null:
 return respawned(_that.name,_that.epoch);case ActivityChanged() when activityChanged != null:
 return activityChanged(_that.name,_that.active);case _:
@@ -184,11 +184,11 @@ return activityChanged(_that.name,_that.active);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String name,  int pid,  int? pgid,  String beadId)  sessionStarted,required TResult Function( String name,  int exitCode)  exited,required TResult Function( String name,  String reason)  died,required TResult Function( String name,  int epoch)  respawned,required TResult Function( String name,  bool active)  activityChanged,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String name,  int pid,  int? pgid,  String beadId)  sessionStarted,required TResult Function( String name,  int exitCode,  bool inferred)  exited,required TResult Function( String name,  String reason)  died,required TResult Function( String name,  int epoch)  respawned,required TResult Function( String name,  bool active)  activityChanged,}) {final _that = this;
 switch (_that) {
 case SessionStarted():
 return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId);case Exited():
-return exited(_that.name,_that.exitCode);case Died():
+return exited(_that.name,_that.exitCode,_that.inferred);case Died():
 return died(_that.name,_that.reason);case Respawned():
 return respawned(_that.name,_that.epoch);case ActivityChanged():
 return activityChanged(_that.name,_that.active);}
@@ -205,11 +205,11 @@ return activityChanged(_that.name,_that.active);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String name,  int pid,  int? pgid,  String beadId)?  sessionStarted,TResult? Function( String name,  int exitCode)?  exited,TResult? Function( String name,  String reason)?  died,TResult? Function( String name,  int epoch)?  respawned,TResult? Function( String name,  bool active)?  activityChanged,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String name,  int pid,  int? pgid,  String beadId)?  sessionStarted,TResult? Function( String name,  int exitCode,  bool inferred)?  exited,TResult? Function( String name,  String reason)?  died,TResult? Function( String name,  int epoch)?  respawned,TResult? Function( String name,  bool active)?  activityChanged,}) {final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
 return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId);case Exited() when exited != null:
-return exited(_that.name,_that.exitCode);case Died() when died != null:
+return exited(_that.name,_that.exitCode,_that.inferred);case Died() when died != null:
 return died(_that.name,_that.reason);case Respawned() when respawned != null:
 return respawned(_that.name,_that.epoch);case ActivityChanged() when activityChanged != null:
 return activityChanged(_that.name,_that.active);case _:
@@ -296,11 +296,20 @@ as String,
 
 
 class Exited extends RuntimeEvent {
-  const Exited({required this.name, required this.exitCode}): super._();
+  const Exited({required this.name, required this.exitCode, this.inferred = false}): super._();
   
 
 @override final  String name;
  final  int exitCode;
+/// Whether [exitCode] was INFERRED rather than READ. A DETACHED one-shot
+/// exposes no readable exit code, so its vanish is reported as a clean
+/// `Exited(0)` by intent — but a MURDERED process vanishes EXACTLY like a
+/// finished one, so that 0 is a GUESS, not an observation. The transport
+/// says so rather than pretending (ADR-0004 Decision 1: providers "degrade
+/// explicitly rather than silently"), and the engine's completion fence
+/// PROVES an inferred completion before advancing a circuit on it. Defaults
+/// to false — an exit code we actually READ is proof.
+@JsonKey() final  bool inferred;
 
 /// Create a copy of RuntimeEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -312,16 +321,16 @@ $ExitedCopyWith<Exited> get copyWith => _$ExitedCopyWithImpl<Exited>(this, _$ide
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is Exited&&(identical(other.name, name) || other.name == name)&&(identical(other.exitCode, exitCode) || other.exitCode == exitCode));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Exited&&(identical(other.name, name) || other.name == name)&&(identical(other.exitCode, exitCode) || other.exitCode == exitCode)&&(identical(other.inferred, inferred) || other.inferred == inferred));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,name,exitCode);
+int get hashCode => Object.hash(runtimeType,name,exitCode,inferred);
 
 @override
 String toString() {
-  return 'RuntimeEvent.exited(name: $name, exitCode: $exitCode)';
+  return 'RuntimeEvent.exited(name: $name, exitCode: $exitCode, inferred: $inferred)';
 }
 
 
@@ -332,7 +341,7 @@ abstract mixin class $ExitedCopyWith<$Res> implements $RuntimeEventCopyWith<$Res
   factory $ExitedCopyWith(Exited value, $Res Function(Exited) _then) = _$ExitedCopyWithImpl;
 @override @useResult
 $Res call({
- String name, int exitCode
+ String name, int exitCode, bool inferred
 });
 
 
@@ -349,11 +358,12 @@ class _$ExitedCopyWithImpl<$Res>
 
 /// Create a copy of RuntimeEvent
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? name = null,Object? exitCode = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? name = null,Object? exitCode = null,Object? inferred = null,}) {
   return _then(Exited(
 name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,exitCode: null == exitCode ? _self.exitCode : exitCode // ignore: cast_nullable_to_non_nullable
-as int,
+as int,inferred: null == inferred ? _self.inferred : inferred // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 

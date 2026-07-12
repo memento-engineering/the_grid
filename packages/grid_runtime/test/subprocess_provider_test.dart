@@ -432,6 +432,52 @@ exit 0
       expect(events.whereType<Exited>(), isEmpty);
       expect(events.whereType<Died>(), hasLength(1));
     });
+
+    test('the vanish exit DECLARES itself INFERRED (the fence reads this flag)',
+        () async {
+      final events = await runUntilExit(Lifecycle.oneTurn);
+      expect(
+        events.whereType<Exited>().single.inferred,
+        isTrue,
+        reason: 'a vanish gives no readable code — the 0 is a GUESS, and the '
+            'transport must say so (a MURDER vanishes identically)',
+      );
+    });
+
+    test('an OBSERVED exit code is NOT inferred', () async {
+      final spawner = FakeSpawner(); // provideExitCode = true: the code is READ
+      final provider = SubprocessProvider(
+        spawner: spawner,
+        groupController: AliveGroupController(),
+        livenessPollPeriod: const Duration(milliseconds: 5),
+        parentEnvironment: const {},
+      );
+      final events = <RuntimeEvent>[];
+      final sub = provider.events.listen(events.add);
+      await provider.start(
+        'sess',
+        RuntimeConfig(
+          workDir: '/tmp',
+          command: 'claude',
+          args: const ['-p', 'x'],
+          lifecycle: Lifecycle.oneTurn,
+        ),
+      );
+      spawner.exit.complete(0);
+      for (var i = 0; i < 200 && events.whereType<Exited>().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      await sub.cancel();
+      await provider.dispose();
+
+      final exited = events.whereType<Exited>().single;
+      expect(exited.exitCode, 0);
+      expect(
+        exited.inferred,
+        isFalse,
+        reason: 'a code we READ is proof, not a guess — it is never fenced',
+      );
+    });
   });
 
   group('SubprocessProvider — the stop-vs-spawn window', () {
