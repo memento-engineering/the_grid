@@ -123,6 +123,22 @@ export 'src/work/work_assembly.dart';
 // consumers still never import grid_engine): the bead→circuit resolver + the
 // registry/resolver types `buildStationWork` accepts. An asset pack (e.g.
 // grid_assets' code circuit) supplies the values.
+// The wedge signal (tg-jwh) rides here too: a runner reads `work.wedge` for its
+// status view, and passes an `ExplorationTransport` to `buildStationWork` when it
+// adapts a sink for the `station.wedged` flare. `WedgeMonitor` itself is NOT
+// exported — the driver owns it; a runner only ever READS the state.
 export 'package:grid_engine/grid_engine.dart'
-    show CapabilityRegistry, Circuit, CircuitResolver, SessionResolver;
-
+    show
+        CapabilityRegistry,
+        Circuit,
+        CircuitResolver,
+        ExplorationTransport,
+        Flowing,
+        SessionResolver,
+        Stalling,
+        WedgeSample,
+        WedgeState,
+        Wedged,
+        kDefaultWedgePollInterval,
+        kDefaultWedgeThreshold,
+        kNotWedged;
