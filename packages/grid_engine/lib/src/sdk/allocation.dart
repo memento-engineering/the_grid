@@ -606,6 +606,29 @@ class ProcessAllocation extends Allocation {
       return;
     }
     final signal = capability.interpretEvent(e);
+    // THE COMPLETION FENCE — **no-complete-on-faith**, the dual of D4/D5's
+    // no-adopt-on-faith. A detached one-shot exposes NO readable exit code, so the
+    // transport INFERS its clean exit from the vanish — but a MURDERED agent
+    // vanishes exactly like a finished one (an operator restart killed an agent
+    // mid-edit; the circuit read the murder as completion and spent a full
+    // committee round grading a broken tree). An inferred exit a commit-contract
+    // capability would read as a completion is therefore a GUESS, and the engine
+    // never advances the circuit on a guess: it PROVES it with an independent WORK
+    // SIGNAL first.
+    //
+    // Scoped THREE ways, because the fence is a scalpel, not a gate:
+    //  - to an INFERRED exit (an OBSERVED code needs no proof);
+    //  - to a COMPLETION signal (a failure, a daemon's `ready` are untouched);
+    //  - to a capability that DECLARED the commit contract. A critic / `specify`
+    //    finishes by WRITING an uncommitted artifact and vanishing — that IS its
+    //    job, and fencing it on worktree dirtiness would fail it forever.
+    if (signal == StepSignal.complete && e is Exited && e.inferred && _fenced) {
+      // The process is GONE either way, so THIS incarnation is over: latch now, so
+      // a re-fired event can neither double-probe nor double-report.
+      _terminal = true;
+      unawaited(_settleInferredCompletion());
+      return;
+    }
     switch (signal) {
       case StepSignal.none:
         return;
@@ -623,6 +646,93 @@ class ProcessAllocation extends Allocation {
         state = AllocationState.gone;
         context.sink(const AllocationFailed());
     }
+  }
+
+  /// Whether an INFERRED completion of THIS capability must be PROVEN before it
+  /// advances the circuit — read off the capability's own declared
+  /// [CompletionContract] (never off [StepKind]: "one-shot" is not a promise, and
+  /// most one-shots leave uncommitted artifacts by design).
+  bool get _fenced => switch (capability.completionContract) {
+    CompletionContract.none => false,
+    CompletionContract.committedWorkspace => true,
+  };
+
+  /// Settles an inferred completion: PROVE it against the work signal, or report
+  /// it as the INTERRUPTED turn it is. Only a capability that DECLARED
+  /// [CompletionContract.committedWorkspace] ever reaches here (the fence is
+  /// per-capability, never per-one-shot).
+  ///
+  /// Interrupted ⇒ [AllocationFailed] ⇒ the EXISTING supervision path bumps
+  /// `restartCount`, re-keys the node, and respawns it in the SAME workspace —
+  /// where the agent's half-finished work still sits. `failed` is not a positive
+  /// terminal, so the frontier keeps a dependent review step withheld: the circuit
+  /// does NOT advance over a broken tree. LOUD (the reason lands on the cursor as
+  /// `failureReason` + a `step.failed` flare), bounded by the restart budget,
+  /// escalated at exhaustion.
+  Future<void> _settleInferredCompletion() async {
+    final args = context.args;
+    // Guard BEFORE the probe: a dispose racing the terminal event must not let the
+    // probe touch an unmounted tree context (which throws), nor report.
+    if (args.cancel.isCancelled) return;
+    final GateOutcome outcome;
+    try {
+      outcome = await _probeWorkSignal();
+    } on Object catch (e) {
+      // A THROWING probe routes to supervision exactly like a throwing
+      // spawn/result (the per-work fail-closed posture, ADR-0008 D10 / OQ-c):
+      // never an unhandled zone error, never a silently STUCK node.
+      state = AllocationState.gone;
+      if (!args.cancel.isCancelled) {
+        context.sink(AllocationFailed('work-signal probe threw: $e'));
+      }
+      return;
+    }
+    if (args.cancel.isCancelled) return;
+    if (gateBlocks(outcome)) {
+      // `present` (uncommitted work left behind) OR `probeError` (a real workspace
+      // we could not read) — ADR-0006 D3's fail-closed posture, reused verbatim.
+      // Neither is a PROVEN completion, so neither advances the circuit.
+      state = AllocationState.gone;
+      final why = outcome == GateOutcome.present
+          ? 'its workspace still holds UNCOMMITTED work'
+          : 'its workspace could not be read (probe error)';
+      context.sink(
+        AllocationFailed(
+          'interrupted: a vanished agent gives no readable exit code, and $why — '
+          'the turn did not finish; respawning instead of advancing',
+        ),
+      );
+      return;
+    }
+    // PROVEN clean: a finished turn. Advance exactly as an unfenced completion
+    // does (same result hook, same payload, same report).
+    await _reportComplete();
+  }
+
+  /// The work signal for THIS effect's workspace — read with the EFFECT verb
+  /// (off-build, after the cancel guard), and ONLY when both seams AGREE.
+  ///
+  /// The probe the composer bound is a REAL source-control probe expecting a REAL
+  /// workspace path. But `SessionScope` mounts a SYNTHETIC [Workspace] when the
+  /// tree has NO [SourceControl] — a path that names no repository. Probing THAT
+  /// would `probeError` and fail-CLOSED every inferred completion of a fenced
+  /// capability (an offline/bare composition would wedge). So the fence DISARMS
+  /// unless the tree carries BOTH halves: an ambient [SourceControl] (a real
+  /// workspace exists) AND an ambient [Workspace] (we know where it is). Missing
+  /// either ⇒ [GateOutcome.clear] ⇒ today's behavior.
+  ///
+  /// **Fail-SAFE here, fail-CLOSED there:** never fence a workspace we cannot even
+  /// address; always fence one that is real but merely unreadable.
+  Future<GateOutcome> _probeWorkSignal() async {
+    final tree = context.treeContext;
+    final services =
+        tree.getInheritedSeedOfExactType<ServiceBundle>() ??
+        const ServiceBundle();
+    final workspace = tree.getInheritedSeedOfExactType<Workspace>();
+    if (services.sourceControl == null || workspace == null) {
+      return GateOutcome.clear;
+    }
+    return context.workSignal(workspace.workspaceDir);
   }
 
   Future<void> _reportComplete() async {
