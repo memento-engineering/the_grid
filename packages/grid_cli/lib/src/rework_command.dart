@@ -9,6 +9,12 @@ import 'package:grid_sdk/grid_sdk.dart'
 
 import 'station_stores.dart';
 
+// The round cap + the `<bead>#r<N>` key shape now have ONE definition
+// (grid_engine `domain/rework.dart`) — the engine's auto-respec (tg-b3k) and this
+// operator verb must admit exactly the same rounds (M5 D-4's ratified cap).
+// Re-exported so `package:grid_cli`'s surface is unchanged for a composed runner.
+export 'package:grid_engine/grid_engine.dart' show kMaxReworkRounds;
+
 /// `grid rework <bead>` — mint a fresh rework round for a bead whose prior
 /// session has terminated (tg-x1j).
 ///
@@ -20,8 +26,10 @@ import 'station_stores.dart';
 /// chokepoint — the live tree re-projects, finds no session at `bead.id`, and
 /// mints round N+1 in the SAME worktree. This command makes that mechanic a
 /// verb: it re-keys, appends the operator's finding to the WORK bead's notes,
-/// reports the round number, and enforces the ~3-round cap (the factoryskills
-/// precedent) — refusing LOUD beyond it (a human decides).
+/// reports the round number, and enforces [kMaxReworkRounds] (M5 D-4's ratified
+/// cap, defined once in grid_engine) — refusing LOUD beyond it (a human decides).
+/// The engine's own auto-respec (tg-b3k) actuates the SAME mechanic off the SAME
+/// contract, so the verb and the engine admit exactly the same rounds.
 ///
 /// **The OPEN-session refusal.** A session that is still OPEN is a live round
 /// — rekeying it out from under an ACTIVELY RUNNING step would silently
@@ -152,17 +160,6 @@ class ReworkCommand extends Command<int> {
   }
 }
 
-/// The max rework rounds a bead may accumulate (~3, the factoryskills
-/// precedent) before `grid rework` refuses LOUD — a human decides beyond it.
-const int kMaxReworkRounds = 3;
-
-/// Matches a RETIRED session's `work_bead` value for [beadId] exactly
-/// (`'<beadId>#r<N>'`) — anchored full-string so a DIFFERENT bead id that
-/// merely starts with [beadId] (e.g. `tg-x1j2`) is never mistaken for one of
-/// its rounds.
-RegExp _roundSuffixFor(String beadId) =>
-    RegExp('^${RegExp.escape(beadId)}#r(\\d+)\$');
-
 /// Runs `grid rework <beadId>`: re-keys [beadId]'s terminated session through
 /// the [StationBeadWriter] chokepoint (the grid state store at [stateStore]),
 /// optionally appends [note] to the WORK bead's notes (the substation work store
@@ -250,7 +247,7 @@ Future<int> runRework({
 
   // The CURRENT (un-retired) session — `work_bead` matches EXACTLY.
   final current = sessions
-      .where((b) => _stringMeta(b, 'work_bead') == beadId)
+      .where((b) => _stringMeta(b, SessionBeadKeys.workBead) == beadId)
       .toList();
   if (current.isEmpty) {
     writeErr(
@@ -270,17 +267,11 @@ Future<int> runRework({
   final session = current.single;
 
   // Every RETIRED round already on record for this bead (`work_bead ==
-  // '<beadId>#r<N>'`) — the round-cap + next-round-number source.
-  final roundSuffix = _roundSuffixFor(beadId);
-  var maxRound = 0;
-  for (final s in sessions) {
-    final workBead = _stringMeta(s, 'work_bead');
-    if (workBead == null) continue;
-    final match = roundSuffix.firstMatch(workBead);
-    if (match == null) continue;
-    final n = int.parse(match.group(1)!);
-    if (n > maxRound) maxRound = n;
-  }
+  // '<beadId>#r<N>'`) — the round-cap + next-round-number source. The parser is
+  // grid_engine's (tg-b3k): the engine's auto-respec counts rounds the SAME way.
+  final maxRound = maxReworkRound(beadId, [
+    for (final s in sessions) _stringMeta(s, SessionBeadKeys.workBead) ?? '',
+  ]);
   if (maxRound >= kMaxReworkRounds) {
     writeErr(
       'grid rework: "$beadId" already has $maxRound rework rounds (cap '
@@ -319,7 +310,7 @@ Future<int> runRework({
   try {
     await stateWriter.update(
       session.id,
-      metadata: {'work_bead': '$beadId#r$round'},
+      metadata: {SessionBeadKeys.workBead: reworkKeyFor(beadId, round)},
     );
   } on OwnershipRefused catch (e) {
     writeErr('grid rework: $e');

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 
 import '../domain/joined_snapshot.dart';
+import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
@@ -161,20 +162,24 @@ class StationJoinBridge {
         sessions[projection.workBeadId] = projection;
       }
       _attachOpenGates(state, sessions);
+      _attachReworkRounds(sessions);
     }
     return JoinedSnapshot(graph: work, sessionsByWorkBead: sessions);
   }
 
-  /// Scans [state] for OPEN `type=gate` beads (D-7) and folds each one's blocked
-  /// node into the matching session projection's `openGateNodes` — the re-arm
-  /// signal `SessionScope` reads (a node leaves the set when its gate closes).
+  /// Scans [state] for OPEN `type=gate` beads (D-7) and folds each one into the
+  /// matching session projection's `openGates` — the re-arm signal
+  /// `SessionScope` reads (a node leaves the map when its gate closes), plus the
+  /// gate bead's own id + reason (tg-b3k), so the scope can auto-resolve a
+  /// MACHINE-ACTIONABLE park and close that exact bead through the chokepoint
+  /// without re-querying the store (A39).
   ///
   /// A gate bead carries `metadata.blocks` (a sessionId) + `metadata.node` (a
-  /// nodePath). Mutates [sessions] in place, rebuilding the touched projection
-  /// with `copyWith`. A gate whose `blocks` matches no known session — or that
-  /// is CLOSED (resolved) — is ignored, so `openGateNodes` reflects only live
-  /// gates. Like the session scan, this is the JOIN's job (`projectSession`
-  /// stays pure — a session bead never names its own gate).
+  /// nodePath) + `metadata.reason`. Mutates [sessions] in place, rebuilding the
+  /// touched projection with `copyWith`. A gate whose `blocks` matches no known
+  /// session — or that is CLOSED (resolved) — is ignored, so `openGates`
+  /// reflects only live gates. Like the session scan, this is the JOIN's job
+  /// (`projectSession` stays pure — a session bead never names its own gate).
   static void _attachOpenGates(
     GraphSnapshot state,
     Map<String, SessionProjection> sessions,
@@ -186,7 +191,7 @@ class StationJoinBridge {
       final sessionId = projection.sessionId;
       if (sessionId != null) workBeadBySessionId[sessionId] = workBeadId;
     });
-    final gateNodesByWorkBead = <String, Set<String>>{};
+    final gatesByWorkBead = <String, Map<String, OpenGate>>{};
     for (final bead in state.beadsById.values) {
       if (bead.issueType != IssueType.gate) continue;
       if (bead.isClosed) continue; // a resolved gate re-arms — drop it.
@@ -196,13 +201,40 @@ class StationJoinBridge {
       if (workBeadId == null) continue; // blocks an unknown session — ignore.
       final node = bead.metadata['node'] as String?;
       if (node == null) continue;
-      (gateNodesByWorkBead[workBeadId] ??= <String>{}).add(node);
+      (gatesByWorkBead[workBeadId] ??= <String, OpenGate>{})[node] = OpenGate(
+        gateId: bead.id,
+        nodePath: node,
+        // The gate's REASON is the asset↔engine contract the auto-respec
+        // transition reads (tg-b3k) — carried down pull-free (A39), so a tree
+        // node never re-queries the store to learn why it parked.
+        reason: (bead.metadata['reason'] as String?) ?? '',
+      );
     }
-    gateNodesByWorkBead.forEach((workBeadId, nodes) {
+    gatesByWorkBead.forEach((workBeadId, gates) {
       final projection = sessions[workBeadId];
       if (projection != null) {
-        sessions[workBeadId] = projection.copyWith(openGateNodes: nodes);
+        sessions[workBeadId] = projection.copyWith(openGates: gates);
       }
+    });
+  }
+
+  /// Folds each session's RETIRED-ROUND count into its projection (tg-b3k) — the
+  /// highest `N` across every session in this join keyed `<workBeadId>#r<N>`.
+  ///
+  /// Like [_attachOpenGates] this is the JOIN's job: a session bead never names
+  /// its own retired rounds (`projectSession` stays pure), but the join sees them
+  /// all (`_join` retains CLOSED sessions, so a retired round is a live map key)
+  /// — so `SessionScope` can pick the next round and honour [kMaxReworkRounds]
+  /// pull-free (A39), never re-querying the store from a tree node. `updateAll`
+  /// rewrites values in place (it adds/removes no keys, so iterating the same map
+  /// is safe).
+  static void _attachReworkRounds(Map<String, SessionProjection> sessions) {
+    final keys = sessions.keys.toList();
+    sessions.updateAll((workBeadId, projection) {
+      final rounds = maxReworkRound(workBeadId, keys);
+      return rounds == 0
+          ? projection
+          : projection.copyWith(reworkRounds: rounds);
     });
   }
 }

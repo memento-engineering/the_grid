@@ -31,6 +31,7 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 
+import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../kernel/station_services.dart';
@@ -97,6 +98,18 @@ class SessionScopeState extends State<SessionScope> {
   /// [_reworkDeclinedKey] in the SAME write.
   static const _reworkDeclinedReasonKey = 'grid.rework_declined_reason';
 
+  /// The the_grid-internal AUTO-RESPEC CAP marker keys (tg-b3k, NOT
+  /// codec-boundary keys — and outside the `grid.cursor.`/`grid.result.`
+  /// namespaces, so no projection misreads them): a machine-actionable gate was
+  /// REFUSED because the bead has already exhausted [kMaxReworkRounds]. The gate
+  /// bead stays OPEN — past the cap a human decides — so this marker is the
+  /// durable half of a LOUD refusal (the flare is the live half).
+  static const _respecCappedKey = 'grid.respec_capped';
+
+  /// The capture-only cap-diagnostic key, recorded beside [_respecCappedKey] in
+  /// the SAME write.
+  static const _respecCappedReasonKey = 'grid.respec_capped_reason';
+
   /// The bounded `createSession` retry budget (tg-6nf) — a mint failure is
   /// RETRIED up to this many TOTAL attempts before the scope escalates LOUD
   /// (the circuit-breaker's bounded-retry discipline, D-5). Small on purpose:
@@ -114,6 +127,12 @@ class SessionScopeState extends State<SessionScope> {
   /// is spent; the scope escalates LOUD and goes inert (a human must fix the
   /// store — the exact FIRST-LIVE-ARM incident).
   static const _mintExhaustedFlare = 'session.mintExhausted';
+
+  /// The auto-respec flares (tg-b3k): the successful retire, the LOUD cap
+  /// refusal, and any dropped write in the transition.
+  static const _autoRespecFlare = 'gate.autoRespec';
+  static const _respecCappedFlare = 'gate.respecCapped';
+  static const _autoRespecFailedFlare = 'gate.autoRespecFailed';
 
   StationServices? _ctx;
 
@@ -171,6 +190,19 @@ class SessionScopeState extends State<SessionScope> {
   /// still OPEN — scheduled off `build` (never a write IN `build`), so a
   /// repeated build tick during the async gap never re-schedules.
   bool _reworkScheduled = false;
+
+  /// Latches the ONE-SHOT auto-respec transition (tg-b3k). Set BEFORE the re-key
+  /// write; CLEARED if that write fails (the next build retries — the tg-boq
+  /// discipline: a latch set before a fire-and-forget write made a dropped write
+  /// PERMANENT and SILENT); left SET on success, because the transition is
+  /// one-shot for this round — the session leaves this bead's join key and
+  /// [_reworkAndRemint] resets the latch for round N+1.
+  bool _autoRespecScheduled = false;
+
+  /// Latches the LOUD cap refusal (tg-b3k) so a capped, still-parked gate marks
+  /// the session bead ONCE instead of on every build. Cleared on a dropped
+  /// marker write (retry next build) and by [_reworkAndRemint].
+  bool _respecCapMarked = false;
 
   @override
   void didChangeDependencies() {
@@ -401,8 +433,149 @@ class SessionScopeState extends State<SessionScope> {
       _lastKnownGated = false;
       _joinedOnce = false;
       _mintAttempts = 0; // round N+1 gets its own fresh mint budget (tg-6nf).
+      _autoRespecScheduled = false; // round N+1 may itself respec (tg-b3k).
+      _respecCapMarked = false;
     });
     unawaited(_mint());
+  }
+
+  /// Schedules the AUTO-RESPEC transition (tg-b3k) — latched, off `build`.
+  void _scheduleAutoRespec(String sessionId, OpenGate gate, int round) {
+    _autoRespecScheduled = true;
+    scheduleMicrotask(() => unawaited(_autoRespec(sessionId, gate, round)));
+  }
+
+  /// The auto-respec writes, in the ONE order that is safe:
+  ///
+  ///  1. **RE-KEY** this session's `work_bead` → `<bead>#r<N>` through the
+  ///     chokepoint — exactly the operator rework verb's mechanic. The session
+  ///     drops out of the join at `bead.id`; [build]'s orphan-check observes that
+  ///     with [_lastKnownGated] TRUE (the node IS parked — that is why we are
+  ///     here), so [_scheduleRework] closes the retired round and mints round N+1
+  ///     through the SAME [_mint] path, in the SAME workspace (it is derived from
+  ///     the bead id, invariant across rounds).
+  ///  2. **CLOSE the gate bead** — only now. Closing FIRST would open a window in
+  ///     which a build sees a CLOSED gate over a still-`gated` cursor on a session
+  ///     still keyed at `bead.id`: the D-7 re-arm would fire, flip the node back
+  ///     to `pending`, and — because [_lastKnownGated] is recomputed from the
+  ///     cursor on every build — the later re-key would land on a scope that no
+  ///     longer remembers a gated round, taking the [_scheduleReworkDecline] path
+  ///     and wedging the bead permanently inert. The store commits the re-key
+  ///     BEFORE the close, so no snapshot can show the close without the re-key.
+  ///
+  /// A failed RE-KEY clears the latch (the next build retries) and FLARES. A
+  /// failed CLOSE cannot be retried from here (the session has already left this
+  /// bead's join key, so the predicate can never re-fire), so it FLARES LOUD and
+  /// leaves an OPEN gate bead blocking a RETIRED session — inert (the join maps
+  /// it to the `<bead>#r<N>` projection, which nothing mounts) and visible to a
+  /// human in the gate listing; never silent. Neither is rethrown: an uncaught
+  /// async error in a resident station's root zone would terminate the isolate,
+  /// and a transient bd blip must not take the station down (the tg-boq posture).
+  Future<void> _autoRespec(String sessionId, OpenGate gate, int round) async {
+    final ctx = _ctx;
+    if (ctx == null) {
+      _autoRespecScheduled = false;
+      _flareRespec(
+        _autoRespecFailedFlare,
+        gate,
+        reason: 'no StationServices captured',
+      );
+      return;
+    }
+    try {
+      await ctx.writer.update(
+        sessionId,
+        metadata: {
+          SessionBeadKeys.workBead: reworkKeyFor(seed.bead.id, round),
+        },
+      );
+    } on Object catch (error) {
+      _autoRespecScheduled = false;
+      _flareRespec(_autoRespecFailedFlare, gate, reason: '$error');
+      return;
+    }
+    _flareRespec(_autoRespecFlare, gate, round: round);
+    try {
+      await ctx.writer.close(gate.gateId, reason: 'auto-respec round $round');
+    } on Object catch (error) {
+      _flareRespec(
+        _autoRespecFailedFlare,
+        gate,
+        reason: 'gate close failed: $error',
+      );
+    }
+  }
+
+  /// Schedules the LOUD cap refusal (tg-b3k) — latched once, off `build`. The
+  /// gate bead is NOT closed and the node stays parked: past [kMaxReworkRounds] a
+  /// human decides (the operator rework verb refuses at the same cap, with the
+  /// same comparison). The marker is durable on the OWN session bead so the
+  /// refusal survives a station bounce; the flare makes it observable live. LOUD
+  /// or GONE (ADR-0008 D3).
+  void _scheduleRespecCap(String sessionId, OpenGate gate, int rounds) {
+    if (_respecCapMarked) return;
+    _respecCapMarked = true;
+    final reason =
+        'auto-respec refused at ${gate.nodePath}: $rounds rework rounds already '
+        'retired (cap $kMaxReworkRounds) — the gate stays parked for a human';
+    _flareRespec(_respecCappedFlare, gate, reason: reason, rounds: rounds);
+    scheduleMicrotask(
+      () => unawaited(_markRespecCapped(sessionId, gate, reason)),
+    );
+  }
+
+  Future<void> _markRespecCapped(
+    String sessionId,
+    OpenGate gate,
+    String reason,
+  ) async {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    try {
+      await ctx.writer.update(
+        sessionId,
+        metadata: {
+          _respecCappedKey: 'true',
+          _respecCappedReasonKey: truncateReason(reason),
+        },
+      );
+    } on Object catch (error) {
+      // The live half already fired (the refusal is never silent). Clear the
+      // latch so a later build retries the DURABLE half, and flare the drop.
+      _respecCapMarked = false;
+      _flareRespec(
+        _autoRespecFailedFlare,
+        gate,
+        reason: 'respec-cap marker write failed: $error',
+      );
+    }
+  }
+
+  /// LOUD-signals an auto-respec transition (tg-b3k) through the reserved
+  /// emit-only [ExplorationTransport] (D-8) — the SAME sink every other engine
+  /// LOUD signal fires through ([_flareRearmFailed], `CapabilityHost._emitFlare`).
+  /// A throwing/absent transport never re-breaks the microtask.
+  void _flareRespec(
+    String name,
+    OpenGate gate, {
+    String reason = '',
+    int? round,
+    int? rounds,
+  }) {
+    try {
+      _services.transport?.flare(name, {
+        'sessionId': _sessionId ?? '',
+        'workBeadId': seed.bead.id,
+        'gateId': gate.gateId,
+        'nodePath': gate.nodePath,
+        'cap': '$kMaxReworkRounds',
+        if (round != null) 'round': '$round',
+        if (rounds != null) 'rounds': '$rounds',
+        if (reason.isNotEmpty) 'reason': truncateReason(reason),
+      });
+    } catch (_) {
+      // A throwing transport never re-breaks the transition — swallow.
+    }
   }
 
   /// Schedules a LOUD rework decline (tg-x1j v2, the guard principle): the
@@ -501,6 +674,25 @@ class SessionScopeState extends State<SessionScope> {
     if (matchesJoin) {
       _joinedOnce = true;
       _lastKnownGated = cursor.values.any((n) => n.state == StepState.gated);
+    }
+
+    // tg-b3k: AUTO-RESOLVE a MACHINE-ACTIONABLE gate. A `respec:` reason is the
+    // asset saying "this park is machine-actionable — rework it; the correction
+    // guidance is already durable in the workspace", so the engine performs the
+    // rework re-key an operator does by hand today instead of parking for a
+    // human. A gate with ANY other reason is a human checkpoint and falls through
+    // to the D-7 park/re-arm below, byte-for-byte untouched (ADR-0008 Decision
+    // 9). Read-only here; every write is scheduled off `build` (invariant 2).
+    final session = seed.existingSession;
+    if (matchesJoin && session != null && !_autoRespecScheduled) {
+      final gate = machineActionableGate(session);
+      if (gate != null) {
+        if (session.reworkRounds >= kMaxReworkRounds) {
+          _scheduleRespecCap(id, gate, session.reworkRounds);
+        } else {
+          _scheduleAutoRespec(id, gate, session.reworkRounds + 1);
+        }
+      }
     }
 
     // D-7: re-arm any node parked at a gate whose gate bead has CLOSED (its

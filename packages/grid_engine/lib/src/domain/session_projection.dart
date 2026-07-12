@@ -17,6 +17,8 @@ part 'session_projection.freezed.dart';
 /// then (the reentrant path stamps per-node identity inside [cursor] instead).
 @freezed
 abstract class SessionProjection with _$SessionProjection {
+  const SessionProjection._();
+
   /// Creates a projection of one session bead's cursor for [workBeadId].
   const factory SessionProjection({
     /// The work bead this session drives (`metadata.work_bead`).
@@ -58,11 +60,21 @@ abstract class SessionProjection with _$SessionProjection {
     @Default(<String, Map<String, String>>{})
     Map<String, Map<String, String>> results,
 
-    /// The nodePaths with an OPEN `type=gate` bead blocking this session (D-7) —
-    /// scanned from the state snapshot by the join bridge, not from this session
-    /// bead. A node leaves this set when its gate bead closes, which re-arms the
-    /// parked node (`SessionScope` flips it back to `pending`).
-    @Default(<String>{}) Set<String> openGateNodes,
+    /// The OPEN `type=gate` beads blocking this session (D-7), keyed by the
+    /// parked `nodePath` — scanned from the state snapshot by the join bridge,
+    /// not from this session bead. A node leaves this map when its gate bead
+    /// closes, which re-arms the parked node (`SessionScope` flips it back to
+    /// `pending`). Each entry carries the gate bead's OWN id + reason, so
+    /// `SessionScope` can BOTH decide whether the park is machine-actionable AND
+    /// close that exact bead through the chokepoint (tg-b3k) — pull-free (A39):
+    /// a tree node never re-queries the store.
+    @Default(<String, OpenGate>{}) Map<String, OpenGate> openGates,
+
+    /// The highest REWORK round already retired for this work bead (0 = none) —
+    /// computed by the join bridge off every session's `work_bead` key
+    /// (`<workBeadId>#r<N>`). The auto-respec transition mints round
+    /// `reworkRounds + 1` and refuses at `kMaxReworkRounds` (tg-b3k).
+    @Default(0) int reworkRounds,
 
     /// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the wall-clock
     /// instant the session bead was minted (its `started_at` metadata, stamped
@@ -75,4 +87,30 @@ abstract class SessionProjection with _$SessionProjection {
     /// chokepoint's `close`); null while the session is still open.
     DateTime? closedAt,
   }) = _SessionProjection;
+
+  /// The nodePaths with an OPEN gate blocking this session (D-7) — the re-arm
+  /// signal `SessionScope` reads. DERIVED from [openGates], so the signal and
+  /// the gate records can never drift apart (one source of truth).
+  Set<String> get openGateNodes => openGates.keys.toSet();
+}
+
+/// One OPEN `type=gate` bead blocking a session at [nodePath] (D-7) — the join's
+/// projection of that bead's identity + reason, threaded down pull-free (A39) so
+/// `SessionScope` can auto-resolve a machine-actionable park (tg-b3k) without
+/// ever re-querying the store from a tree node.
+@freezed
+abstract class OpenGate with _$OpenGate {
+  /// Creates the projection of the gate bead [gateId] parking [nodePath].
+  const factory OpenGate({
+    /// The gate bead's own id in the state store — the close target.
+    required String gateId,
+
+    /// The parked node's path (the gate bead's `metadata.node`).
+    required String nodePath,
+
+    /// Why the work parked (the gate bead's `metadata.reason`). A reason
+    /// carrying `kRespecGatePrefix` is MACHINE-ACTIONABLE; anything else is a
+    /// human gate.
+    @Default('') String reason,
+  }) = _OpenGate;
 }

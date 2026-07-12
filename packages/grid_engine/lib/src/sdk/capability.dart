@@ -244,7 +244,9 @@ class Failed extends StepOutcome {
 /// grade spread, a human-ultimatum). The host writes `state=gated` (parks the
 /// node + withholds its dependents) and mints a real `type=gate` bead in the
 /// OWN state store via the chokepoint — never a write to the foreign work bead
-/// (A37). Resolving that gate bead re-arms the node. D-7.
+/// (A37). Resolving that gate bead re-arms the node. D-7. A reason carrying
+/// [kRespecGatePrefix] is MACHINE-ACTIONABLE — the engine resolves it itself
+/// (tg-b3k); any other reason parks for a human.
 class Gate extends StepOutcome {
   /// Creates a gate park with an optional human-readable [reason].
   const Gate([this.reason = '']);
@@ -252,6 +254,32 @@ class Gate extends StepOutcome {
   /// Why the work parked at the gate (recorded on the minted gate bead).
   final String reason;
 }
+
+/// The MACHINE-ACTIONABLE gate-reason prefix (tg-b3k) — the asset↔engine
+/// contract that separates a gate the ENGINE resolves from a human ultimatum it
+/// must never touch.
+///
+/// A [Gate] whose [Gate.reason] starts with this token declares: *this park is
+/// machine-actionable — rework the work; the correction guidance is already
+/// durable in the workspace* (the asset writes its own on-disk ledger — e.g. a
+/// route step's failing-lane rationales — and renders it into the next ride's
+/// brief). The engine then AUTO-RESOLVES the gate: it closes the gate bead and
+/// retires the round, so the circuit re-runs from a fresh session in the SAME
+/// workspace with no human action (`SessionScope`).
+///
+/// Any OTHER reason is a HUMAN checkpoint and parks exactly as before (ADR-0008
+/// Decision 9) — the non-regression fence. The engine reads ONLY the prefix:
+/// everything after it (a `round=<N>` marker, the failing lanes' rationales) is
+/// the asset's payload and is never parsed here. The engine's own round count
+/// comes from the join (the retired-round sessions), never from this string.
+const String kRespecGatePrefix = 'respec:';
+
+/// Whether [reason] is a MACHINE-ACTIONABLE gate reason (tg-b3k) — it carries
+/// the [kRespecGatePrefix] token. Leading whitespace is tolerated; the match is
+/// otherwise exact and case-sensitive. Fail-closed: an unrecognised reason is a
+/// HUMAN gate.
+bool isRespecGate(String reason) =>
+    reason.trimLeft().startsWith(kRespecGatePrefix);
 
 /// A cooperative cancellation flag a [Capability] polls across async gaps — set
 /// when the host unmounts. The engine never force-kills a `ServiceCapability`

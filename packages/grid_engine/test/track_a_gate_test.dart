@@ -238,7 +238,14 @@ void main() {
                 workBeadId: 'tg-1',
                 sessionId: 'tgdog-s',
                 cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
-                openGateNodes: {'tg-1/route'},
+                // An empty `reason` is NOT machine-actionable (tg-b3k), so this
+                // is a HUMAN gate: it must park, never auto-respec.
+                openGates: {
+                  'tg-1/route': OpenGate(
+                    gateId: 'tgdog-g1',
+                    nodePath: 'tg-1/route',
+                  ),
+                },
               ),
             ),
           ),

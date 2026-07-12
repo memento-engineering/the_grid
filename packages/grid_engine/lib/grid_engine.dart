@@ -44,6 +44,7 @@ export 'src/circuit/unclaimed_frontier.dart';
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
+export 'src/domain/rework.dart';
 export 'src/domain/session_bead.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
