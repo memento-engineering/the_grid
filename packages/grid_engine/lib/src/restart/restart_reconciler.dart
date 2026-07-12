@@ -22,6 +22,15 @@
 ///  - **RESPAWN the rest** — a live session with no kill target, or a worktree
 ///    with no session record at all, is left in place and marked respawn-pending
 ///    for the tree to re-mount.
+///  - **REAP a zombie `running` marker** — a node a PRIOR generation left at
+///    `state=running` whose recorded pid is DEAD. Its process died and never got
+///    to report, because the station died with it, so the reap RE-MOUNTS it
+///    (`state=pending`) — never `failed`, never spending the restart budget (a
+///    station death is not a step failure; it is a THIRD incarnation cause with
+///    its own capture-only `reapCount`, per A47's two-axes rule). Left alone,
+///    that corpse blinds `sampleWedge` (which counts `running` as the ONLY
+///    evidence of an active stage, so `station.wedged` could never fire) and
+///    vetoes `grid rework` (which refuses while any node reads `running`).
 ///
 /// **Ordering invariant:** nothing is decided on stale state. [reconcile] awaits
 /// the injected [RestartReconciler.freshnessBarrier] (a COMPLETED re-query of
@@ -136,6 +145,56 @@ enum RestartDisposition {
   respawnPending,
 }
 
+/// One ZOMBIE running-node this pass reaped — a cursor node a PRIOR station
+/// generation left at [StepState.running] whose recorded process is DEAD.
+/// Carried on [RestartReport] so a caller/test can assert WHAT was reaped and
+/// WHY without scraping logs (the same posture as [RestartEntry]).
+class ZombieReap {
+  /// Records the reap of [nodePath] on [sessionId], carrying the dead
+  /// incarnation's [pgid]/[pid] and the [reapCount] the re-mount write bumped
+  /// to. [failure] is null when the cursor write landed.
+  const ZombieReap({
+    required this.sessionId,
+    required this.nodePath,
+    required this.reapCount,
+    this.pgid,
+    this.pid,
+    this.failure,
+  });
+
+  /// The_grid's OWN session bead the reaped cursor lives on — NEVER the foreign,
+  /// read-only work bead (A37).
+  final String sessionId;
+
+  /// The reaped node's full cursor path (`<beadId>/<stepId>`).
+  final String nodePath;
+
+  /// The bumped ADOPTION-reap count this write recorded (the dead incarnation's
+  /// `reapCount + 1`). Capture-only — it is NOT the supervised-restart budget,
+  /// NOT the rework belt, and NOT in the reconcile key (A47), so a bounce stays
+  /// FREE. It exists to make a crash-LOOPING station visible.
+  final int reapCount;
+
+  /// The dead group's recorded pgid (diagnostics; null when none was stamped).
+  final int? pgid;
+
+  /// The recorded leader pid the liveness probe refuted — null for a `running`
+  /// marker that carried NO pid at all (unprovable, so reaped fail-closed).
+  final int? pid;
+
+  /// Why the reap WRITE was dropped, or null when it landed — a transient bd
+  /// blip, an ownership refusal, or NO chokepoint wired at all.
+  final String? failure;
+
+  /// Whether the reap's cursor write landed.
+  bool get isWritten => failure == null;
+
+  @override
+  String toString() =>
+      'ZombieReap($sessionId/$nodePath, pid: $pid, reapCount: $reapCount'
+      '${failure == null ? '' : ', DROPPED: $failure'})';
+}
+
 /// One row of the [RestartReport]: the worktree, its disposition, and the
 /// mechanism outcome that produced it (so a caller/test can assert WHY without
 /// scraping logs).
@@ -174,8 +233,9 @@ class RestartEntry {
 /// entries bucketed by disposition, enough to assert in a test and to log a
 /// one-line restart summary.
 class RestartReport {
-  RestartReport(List<RestartEntry> entries)
+  RestartReport(List<RestartEntry> entries, {List<ZombieReap> reaped = const []})
     : entries = List.unmodifiable(entries),
+      reaped = List.unmodifiable(reaped),
       skipped = List.unmodifiable(
         entries.where((e) => e.disposition == RestartDisposition.skipped),
       ),
@@ -217,6 +277,12 @@ class RestartReport {
   /// "respawn-pending and nothing else happened" bucket).
   final List<RestartEntry> respawnPending;
 
+  /// The ZOMBIE running-nodes this pass reaped — a dead generation's `running`
+  /// markers, re-mounted as `pending` so the step re-runs and no observer reads
+  /// a corpse as an active stage. A reap whose write was DROPPED is still listed
+  /// (with its `failure`), so a caller can report it LOUD.
+  final List<ZombieReap> reaped;
+
   /// The total number of beads the tree must respawn on re-mount: everything
   /// except the skipped (done) beads AND the adopted (reattached) survivors.
   /// [refusedUnsafe] is included.
@@ -226,7 +292,7 @@ class RestartReport {
   String toString() =>
       'RestartReport(skipped: ${skipped.length}, adopted: ${adopted.length}, '
       'killed: ${killed.length}, refusedUnsafe: ${refusedUnsafe.length}, '
-      'respawnPending: ${respawnPending.length}, '
+      'respawnPending: ${respawnPending.length}, reaped: ${reaped.length}, '
       'respawnCount: $respawnCount)';
 }
 
@@ -297,11 +363,13 @@ class RestartReconciler {
     required ProcessGroupController groups,
     required Future<void> Function() freshnessBarrier,
     required GraphSnapshot Function() stateSnapshot,
+    StationBeadWriter? writer,
     AdoptProof? adoptProof,
   }) : _listWorktrees = listWorktrees,
        _reapWorktree = reapWorktree,
        _workRoot = workRoot,
        _groups = groups,
+       _writer = writer,
        _freshnessBarrier = freshnessBarrier,
        _stateSnapshot = stateSnapshot,
        _adoptProof = adoptProof ?? _neverAdopt;
@@ -311,9 +379,29 @@ class RestartReconciler {
   final RootCheckout _workRoot;
   final ProcessGroupController _groups;
 
+  /// The SINGLE bd write chokepoint (invariant 2) — the zombie reap writes the
+  /// re-mount through it, on the_grid's OWN session bead, BEFORE the tree
+  /// mounts.
+  ///
+  /// OPTIONAL, but never SILENT. This is a CROSS-REPO public ctor: a sibling
+  /// repo's asset guardrail suites construct this reconciler with no writer, and
+  /// a required param would darken them with a compile error. So a composer that
+  /// omits it still gets every zombie DETECTED and reported on
+  /// [RestartReport.reaped] with a `failure` saying no chokepoint was wired —
+  /// which the station runtime prints LOUD. That is ADR-0008 Decision 3's guard
+  /// principle honored honestly: a guard that cannot be silently skipped,
+  /// without breaking a caller who never asked for it.
+  final StationBeadWriter? _writer;
+
   /// The composer-supplied adopt-decision (D4). Offline default: never adopt
   /// (respawn-or-skip). No-adopt-on-faith.
   final AdoptProof _adoptProof;
+
+  /// Whether the ONE bd chokepoint reached this pass — so a composer (and the
+  /// assembly's own test) can assert the zombie reap is armed, rather than
+  /// discovering at 3am that it silently never ran. A capability query on an
+  /// off-tree machine, not an accessor over reactive state (D-H rule 2).
+  bool get hasChokepoint => _writer != null;
 
   /// A COMPLETED re-query of the read + state runtimes — awaited FIRST so no
   /// decision is made on stale state. Injected so it is fake-driveable.
@@ -332,6 +420,9 @@ class RestartReconciler {
   ///    keyed by `work_bead` (so SKIP fires for a foreign work bead).
   /// 4. For each worktree: SKIP-and-reap a terminal session; KILL-and-respawn a
   ///    live orphan with a usable kill target; else leave it respawn-pending.
+  /// 5. REAP every zombie `running` cursor node (a dead generation's corpse) on
+  ///    a worktree-backed session — LAST, so a group THIS pass terminated
+  ///    already reads dead to the liveness probe.
   Future<RestartReport> reconcile() async {
     // 1. The barrier — respawns happen only after this completes.
     await _freshnessBarrier();
@@ -342,12 +433,24 @@ class RestartReconciler {
     // 3. Build the cursor lookup from the OWNED state store, AFTER the barrier.
     final cursorByWorkBead = _projectOwnedCursors();
 
+    // 4. Reconcile each surviving worktree, collecting the sessions that BACK
+    //    one. Only these are reaped below: a session with no surviving worktree
+    //    has nothing to re-mount into, and walking every owned session in the
+    //    state store would turn a large backlog into an unbounded boot
+    //    write-burst.
     final entries = <RestartEntry>[];
+    final backed = <SessionProjection>[];
     for (final wt in worktrees) {
       final session = cursorByWorkBead[wt.beadId];
+      if (session != null) backed.add(session);
       entries.add(await _reconcileWorktree(wt, session));
     }
-    return RestartReport(entries);
+
+    // 5. REAP the ZOMBIE `running` markers — LAST, so a group THIS pass
+    //    terminated already reads DEAD to the liveness probe: an orphan we just
+    //    killed IS a corpse, and its cursor must say so.
+    final reaped = await _reapZombieRunners(backed);
+    return RestartReport(entries, reaped: reaped);
   }
 
   /// **The TEARDOWN orphan sweep** — the twin of [reconcile]: the boot pass
@@ -733,5 +836,103 @@ class RestartReconciler {
       }
     }
     return out;
+  }
+
+  /// Reconciles every ADOPTED `running` marker against PROCESS LIVENESS.
+  ///
+  /// A `running` cursor node is only trustworthy while its process is alive. This
+  /// pass runs ONCE, at boot, BEFORE the kernel mounts the tree (the ordering is
+  /// pinned by `StationWorkRuntime.start()`: reconcile, THEN `runGrid`), so — by
+  /// construction — every `running` marker it sees belongs to a PRIOR station
+  /// generation. None can be this station's own live incarnation.
+  ///
+  /// A marker whose recorded leader pid is NOT alive is a ZOMBIE: a STATION-DEATH
+  /// SURVIVOR whose process never got to report, because the station died with
+  /// it. The reap RE-MOUNTS it — [nodeReapedMetadata] writes `state=pending` + a
+  /// bumped capture-only `reapCount`, through the ONE chokepoint, on the_grid's
+  /// OWN session bead (A37) — and the frontier then mounts it fresh (a job never
+  /// adopts, so it genuinely re-spawns). It **never** writes `failed` and
+  /// **never** touches `restartCount`: a station death is not a step failure, and
+  /// charging the D-5 breaker for a bounce would make the operator's recovery
+  /// lever DESTRUCTIVE after `maxRestarts` uses. Per A47, the incarnation causes
+  /// never share a counter.
+  ///
+  /// Left alone, that corpse (a) lies to every observer, (b) blinds `sampleWedge`,
+  /// which counts `running` as the ONLY evidence of an active stage — so the
+  /// `station.wedged` alarm could never fire — and (c) vetoes `grid rework`,
+  /// which refuses while any node reads `running`, forcing the operator to close
+  /// the session and redo the work by hand.
+  ///
+  /// A marker whose pid IS alive is LEFT UNTOUCHED — it is a TRUE survivor (a
+  /// group the [AdoptProof] accepted, or one the pgid guard refused to kill). The
+  /// liveness probe is the SOLE discriminator, so an adopted/live node is never
+  /// disturbed.
+  ///
+  /// **Scope — [StepState.running] only.** A dead `ready` DAEMON is deliberately
+  /// NOT reaped: `ready` is a POSITIVE TERMINAL whose dependents have ALREADY
+  /// mounted, so flipping it would un-satisfy a satisfied barrier and tear down
+  /// completed downstream work. That case belongs to the daemon adopt-freshness
+  /// proof (ADR-0009 D4 — the all-or-nothing [AdoptProof] + liveness wiring), not
+  /// here.
+  ///
+  /// **Fail-closed on liveness:** a `running` marker with NO pid on record cannot
+  /// be PROVEN alive, so it is reaped. ([nodeStartedMetadata] always stamps a
+  /// pid, so this only arises for a legacy/hand-edited bead.)
+  ///
+  /// **Fail-open on the WRITE, LOUD either way:** a throwing reap (a transient bd
+  /// blip, an ownership refusal) — or NO chokepoint wired at all — is recorded on
+  /// the [ZombieReap] and the pass CONTINUES; it never crashes the station's boot.
+  /// A dropped reap degrades to the pre-reaper behavior (the frontier still
+  /// re-mounts a `running` node), so a blip must never turn the operator's
+  /// recovery lever into a new outage — but the station runtime prints every
+  /// dropped reap LOUD, because an operator has to know the cursor still reads
+  /// `running` over a corpse.
+  Future<List<ZombieReap>> _reapZombieRunners(
+    Iterable<SessionProjection> sessions,
+  ) async {
+    final reaped = <ZombieReap>[];
+    for (final session in sessions) {
+      // A CLOSED session's cursor is history — nothing re-mounts it.
+      if (session.isTerminal) continue;
+      final sessionId = session.sessionId;
+      if (sessionId == null) continue; // synthetic projection: no write target.
+      for (final entry in session.cursor.entries) {
+        final nodePath = entry.key;
+        final node = entry.value;
+        if (node.state != StepState.running) continue;
+        final pid = node.pid;
+        // A TRUE survivor — its `running` marker is HONEST. Leave it.
+        if (pid != null && _groups.processAlive(pid)) continue;
+
+        final reapCount = node.reapCount + 1;
+        final writer = _writer;
+        String? failure;
+        if (writer == null) {
+          failure =
+              'no bd chokepoint wired into this RestartReconciler — the reap '
+              'could not run';
+        } else {
+          try {
+            await writer.update(
+              sessionId,
+              metadata: nodeReapedMetadata(nodePath, reapCount: reapCount),
+            );
+          } on Object catch (error) {
+            failure = '$error';
+          }
+        }
+        reaped.add(
+          ZombieReap(
+            sessionId: sessionId,
+            nodePath: nodePath,
+            reapCount: reapCount,
+            pgid: node.pgid,
+            pid: pid,
+            failure: failure,
+          ),
+        );
+      }
+    }
+    return reaped;
   }
 }

@@ -19,7 +19,7 @@ Bead _sessionBead(Map<String, dynamic> metadata, {bool closed = false}) => Bead(
 
 void main() {
   group('Track B — nodeCursorMetadata (the flat write)', () {
-    test('writes state + restartCount + rewindCount always; omits null '
+    test('writes state + all three incarnation counters always; omits null '
         'optionals', () {
       final meta = nodeCursorMetadata(
         'tg-1/agent',
@@ -29,8 +29,33 @@ void main() {
         'grid.cursor.tg-1/agent.state': 'running',
         'grid.cursor.tg-1/agent.restartCount': '0',
         'grid.cursor.tg-1/agent.rewindCount': '0',
+        // The adoption-reap axis rides the full-cursor write like its two
+        // siblings — otherwise a re-write of a node that HAS been reaped would
+        // silently drop the count.
+        'grid.cursor.tg-1/agent.reapCount': '0',
       });
     });
+
+    test(
+      'the three incarnation counters round-trip INDEPENDENTLY — a crash '
+      'restart, a rework round, and a station-death reap never overwrite each '
+      "other's axis",
+      () {
+        final meta = nodeCursorMetadata(
+          'tg-1/agent',
+          const NodeCursor(
+            state: StepState.pending,
+            restartCount: 2,
+            rewindCount: 1,
+            reapCount: 3,
+          ),
+        );
+        final node = projectCircuitCursor(_sessionBead(meta))['tg-1/agent']!;
+        expect(node.restartCount, 2);
+        expect(node.rewindCount, 1);
+        expect(node.reapCount, 3);
+      },
+    );
 
     test('writes every set field with the right key + ISO date', () {
       final meta = nodeCursorMetadata(

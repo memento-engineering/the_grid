@@ -72,6 +72,33 @@ void main() {
       },
     );
 
+    test(
+      'a ZOMBIE running node reads as an ACTIVE STAGE — which is exactly why the '
+      'stall was INVISIBLE for hours; reaping it to `pending` lets the station '
+      'finally see the truth',
+      () {
+        // BEFORE the reap: the corpse still reads `running`, so the station calls
+        // itself healthy and `station.wedged` can NEVER fire, no matter how long
+        // the stall lasts.
+        final zombie = _join({'pow-77g': _running()});
+        expect(sampleWedge(zombie, now: t0).running, 1);
+        expect(sampleWedge(zombie, now: t0).isStalled, isFalse);
+        expect(
+          sampleWedge(zombie, now: t0.add(const Duration(hours: 2))).isStalled,
+          isFalse,
+          reason: 'two hours on it STILL reports flowing — the observed silence',
+        );
+
+        // AFTER the reap: `pending` is not an active stage. In the happy case the
+        // re-mounted step writes `running` within a flush (far under the wedge
+        // threshold, so no false alarm); if it never re-mounts, the stall is
+        // VISIBLE and the alarm can finally ripen.
+        final reaped = _join({'pow-77g': _pending()});
+        expect(sampleWedge(reaped, now: t0).running, 0);
+        expect(sampleWedge(reaped, now: t0).isStalled, isTrue);
+      },
+    );
+
     test('terminal sessions never count; no live session → never stalled', () {
       final sample = sampleWedge(
         _join({'tg-1': _gated(terminal: true)}),

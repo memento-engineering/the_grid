@@ -18,7 +18,6 @@ import 'dart:io';
 // (Station/Substation/SubstationScope), so only the sweep's own types are
 // pulled in here.
 import 'package:beads_dart/beads_dart.dart' show GraphSnapshot;
-import 'package:grid_engine/grid_engine.dart' show RestartReconciler;
 import 'package:grid_engine/testing.dart' show FakeRuntimeProvider;
 import 'package:grid_runtime/grid_runtime.dart'
     show ProcessGroupController, RootCheckout, RuntimeConfig;
