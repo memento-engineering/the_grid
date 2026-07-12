@@ -12,7 +12,16 @@
 //   (the guard principle); a didLaunch failure ABORTS the launch (throws).
 // - the master build default returns the §2 shape (`RawAssetGrid(root, assets)`).
 import 'dart:async';
+import 'dart:io';
 
+// Narrow shows: the engine + sdk barrels both carry the composition names
+// (Station/Substation/SubstationScope), so only the sweep's own types are
+// pulled in here.
+import 'package:beads_dart/beads_dart.dart' show GraphSnapshot;
+import 'package:grid_engine/grid_engine.dart' show RestartReconciler;
+import 'package:grid_engine/testing.dart' show FakeRuntimeProvider;
+import 'package:grid_runtime/grid_runtime.dart'
+    show ProcessGroupController, RootCheckout, RuntimeConfig;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -20,6 +29,43 @@ import 'package:test/test.dart';
 class Leaf extends MultiChildSeed {
   const Leaf({super.key}) : super(children: const []);
 }
+
+/// A process-group seam that signals nothing — the sweep's TRANSPORT half is
+/// what the teardown rail tests exercise.
+class _NoGroups implements ProcessGroupController {
+  const _NoGroups();
+
+  @override
+  Future<int?> resolvePgid(int pid) async => null;
+  @override
+  bool processAlive(int pid) => false;
+  @override
+  bool signalGroup(int pgid, ProcessSignal signal) => false;
+  @override
+  int currentGroupId() => 999;
+}
+
+/// The reconciler under test at the rail: no worktree seam is reachable from
+/// `sweepOrphans`, so both refuse loudly if it ever calls them.
+RestartReconciler _sweeper() => RestartReconciler(
+  listWorktrees: (root) async =>
+      throw StateError('sweepOrphans must not list worktrees'),
+  reapWorktree: ({required root, required worktree}) async =>
+      throw StateError('sweepOrphans must not reap worktrees'),
+  workRoot: const RootCheckout(
+    path: '/root',
+    defaultBranch: 'main',
+    substation: 'proj',
+  ),
+  groups: const _NoGroups(),
+  freshnessBarrier: () async {},
+  stateSnapshot: () => GraphSnapshot.fromParts(
+    beads: const [],
+    dependencies: const [],
+    readyIds: const [],
+    capturedAt: DateTime(2026, 7),
+  ),
+);
 
 /// Captures the ambient configuration it mounts under (subscribes to it, so a
 /// re-emission rebuilds this probe). Configuration is the ONLY sanctioned
@@ -382,6 +428,109 @@ void main() {
       // Teardown proceeded regardless — the effect still tore down.
       expect(disposed, 1);
       expect(delegate.mounted, isFalse);
+    });
+  });
+
+  group('teardown — the orphan sweep', () {
+    test('the sweep runs AFTER the tree unmounted, and teardown awaits it',
+        () async {
+      final order = <String>[];
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      // A session the transport still holds when the tree comes down — the
+      // agent that spawned into the teardown window.
+      await provider.start(
+        'st-1/tg-gpg/agent',
+        const RuntimeConfig(workDir: '/tmp', command: 'sh'),
+      );
+
+      final delegate = RecordingDelegate(
+        assetsBuilder: () => [DisposeProbe(() => order.add('unmount'))],
+      );
+      final handle = runGrid(
+        delegate,
+        orphanSweep: () => _sweeper().sweepOrphans(
+          transport: provider,
+          sessionPrefix: 'st-',
+          onOrphan: (_) => order.add('sweep'),
+          pollInterval: const Duration(milliseconds: 5),
+        ),
+      );
+      await pump();
+
+      await handle.teardown();
+
+      // The rail order: the tree unmounted BEFORE the sweep reconciled — the
+      // stragglers only exist once the kills are in flight.
+      expect(order.first, 'unmount');
+      expect(order, contains('sweep'));
+      expect(provider.stopped, contains('st-1/tg-gpg/agent'));
+      expect(
+        provider.listRunning('st-'),
+        isEmpty,
+        reason: 'zero-expected after teardown — no agent survives `down`',
+      );
+    });
+
+    test('teardown is idempotent — the sweep runs exactly once', () async {
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      await provider.start(
+        'st-1/tg-gpg/agent',
+        const RuntimeConfig(workDir: '/tmp', command: 'sh'),
+      );
+      final handle = runGrid(
+        RecordingDelegate(),
+        orphanSweep: () => _sweeper().sweepOrphans(
+          transport: provider,
+          sessionPrefix: 'st-',
+          onOrphan: (_) {},
+          pollInterval: const Duration(milliseconds: 5),
+        ),
+      );
+      await pump();
+
+      await handle.teardown();
+      await handle.teardown();
+
+      expect(provider.stopped, ['st-1/tg-gpg/agent']);
+    });
+
+    test('a THROWING sweep is LOUD (GridHookError on hook orphanSweep) and '
+        'teardown still completes', () async {
+      final refusals = <GridHookError>[];
+      var disposed = 0;
+      final delegate = RecordingDelegate(
+        assetsBuilder: () => [DisposeProbe(() => disposed++)],
+      );
+      final handle = runGrid(
+        delegate,
+        onError: refusals.add,
+        orphanSweep: () async => throw StateError('the state store blew up'),
+      );
+      await pump();
+
+      await handle.teardown();
+
+      expect(refusals.single.hook, 'orphanSweep');
+      expect(disposed, 1, reason: 'the tree still unmounted');
+      expect(handle.isTornDown, isTrue);
+    });
+
+    test('a station with no sweep wired tears down unchanged (the null default)',
+        () async {
+      var disposed = 0;
+      final handle = runGrid(
+        RecordingDelegate(
+          assetsBuilder: () => [DisposeProbe(() => disposed++)],
+        ),
+      );
+      await pump();
+
+      await handle.teardown();
+
+      expect(disposed, 1);
+      expect(handle.isTornDown, isTrue);
     });
   });
 
