@@ -221,6 +221,22 @@ const _workRoot = RootCheckout(
   substation: 'tgdog',
 );
 
+/// A minimal linear circuit mirroring the code asset's shape (`agent` gates
+/// `code_review`) — the end-to-end re-mount is asserted against THIS, so the
+/// engine's own test never depends on the asset package.
+const _codeish = Circuit(
+  id: 'codeish',
+  terminalStepId: 'code_review',
+  steps: [
+    CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
+    CapabilityStep(
+      stepId: 'code_review',
+      capabilityId: 'code_review',
+      dependsOn: {'agent'},
+    ),
+  ],
+);
+
 void main() {
   group('RestartReconciler — simulated restart, FOREIGN-rig arm', () {
     test(
@@ -768,78 +784,118 @@ void main() {
     );
   });
 
-  group('zombie running-node reap on adoption (tg-szb)', () {
+
+  group('zombie running-node reap on adoption', () {
     // The pow-77g / pow-edp shape: a FOREIGN work bead, an OWNED open session,
-    // and an `agent` node stuck `running` behind a pid that is GONE.
+    // and an `agent` node stuck `running` behind a pid that is GONE. The base
+    // restartCount/rewindCount are NON-ZERO on purpose — they are the two A47
+    // incarnation axes a bounce must never move.
     final clock = DateTime.utc(2026, 7, 12, 12);
 
-    GraphSnapshot zombieState({int pid = 29629, bool closed = false}) =>
-        _stateSnapshotOf([
-          _sessionWithCursor(
-            id: 'tgdog-1wb',
-            workBead: 'pow-77g',
-            closed: closed,
-            cursor: {
-              'pow-77g/agent': NodeCursor(
-                state: StepState.running,
-                pgid: pid,
-                pid: pid,
-              ),
-            },
+    GraphSnapshot zombieState({
+      int? pid = 29629,
+      bool closed = false,
+      int restartCount = 2,
+      int rewindCount = 1,
+      StepState state = StepState.running,
+    }) => _stateSnapshotOf([
+      _sessionWithCursor(
+        id: 'tgdog-1wb',
+        workBead: 'pow-77g',
+        closed: closed,
+        cursor: {
+          'pow-77g/agent': NodeCursor(
+            state: state,
+            pgid: pid,
+            pid: pid,
+            restartCount: restartCount,
+            rewindCount: rewindCount,
           ),
-        ]);
+        },
+      ),
+    ]);
+
+    Future<RestartReport> run({
+      required GraphSnapshot state,
+      required FakeProcessGroupController groups,
+      StationBeadWriter? writer,
+      AdoptProof? adoptProof,
+      List<BeadWorktree> worktrees = const [],
+    }) {
+      final git = FakeGit(worktrees: worktrees, log: <String>[]);
+      return RestartReconciler(
+        listWorktrees: git.listWorktrees,
+        reapWorktree: git.reapWorktree,
+        workRoot: _workRoot,
+        groups: groups,
+        writer: writer,
+        adoptProof: adoptProof,
+        freshnessBarrier: () async {},
+        stateSnapshot: () => state,
+      ).reconcile();
+    }
 
     test(
-      'a running node whose pid is DEAD is reaped as the MISSED supervised '
-      'failure — one chokepoint write, on the OWN session bead (never the '
-      'foreign work bead, A37)',
+      'THE REGRESSION GATE — a dead-pid `running` node RE-MOUNTS (state=pending) '
+      'and NEITHER incarnation axis is spent: restartCount and rewindCount are '
+      'both untouched from NON-ZERO bases, so a bounce can never trip maxRestarts '
+      'and close a session whose step never failed, and the reconcile key is '
+      'unchanged',
       () async {
-        final log = <String>[];
-        final git = FakeGit(worktrees: [_wt('pow-77g')], log: log);
-        // alivePids empty ⇒ pid 29629 is a corpse from a downed generation.
-        final groups = FakeProcessGroupController(ownGroupId: 999, log: log);
         final cp = _chokepoint();
-        final state = zombieState();
-
-        final report = await RestartReconciler(
-          listWorktrees: git.listWorktrees,
-          reapWorktree: git.reapWorktree,
-          workRoot: _workRoot,
-          groups: groups,
+        // alivePids empty ⇒ pid 29629 is a corpse from a downed generation.
+        final report = await run(
+          state: zombieState(restartCount: 2, rewindCount: 1),
+          groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
           writer: cp.writer,
-          freshnessBarrier: () async {},
-          stateSnapshot: () => state,
-          clock: () => clock,
-        ).reconcile();
+          worktrees: [_wt('pow-77g')],
+        );
 
         expect(report.reaped, hasLength(1));
         final reap = report.reaped.single;
         expect(reap.sessionId, 'tgdog-1wb');
         expect(reap.nodePath, 'pow-77g/agent');
         expect(reap.pid, 29629);
-        expect(reap.restartCount, 1, reason: 'the crash budget is SPENT');
+        expect(reap.reapCount, 1, reason: 'the ADOPTION axis is what moves');
         expect(reap.isWritten, isTrue);
 
-        // ONE chokepoint write, targeted at the_grid's OWN session bead.
+        // ONE chokepoint write, on the_grid's OWN session bead.
         final updates = cp.bd.callsFor('update');
         expect(updates, hasLength(1));
         expect(updates.single[1], 'tgdog-1wb');
 
         final meta = cp.bd.metadataOfUpdate(0);
-        expect(meta['grid.cursor.pow-77g/agent.state'], 'failed');
-        expect(meta['grid.cursor.pow-77g/agent.restartCount'], '1');
-        expect(
-          meta['grid.cursor.pow-77g/agent.cooldownUntil'],
-          isNotNull,
-          reason: 'a backoff cooldown schedules the re-mount (D-5)',
-        );
-        expect(
-          meta['grid.cursor.pow-77g/agent.failureReason'],
-          contains('not alive'),
-        );
+        expect(meta['grid.cursor.pow-77g/agent.state'], 'pending');
+        expect(meta['grid.cursor.pow-77g/agent.reapCount'], '1');
 
-        // A37: the FOREIGN work bead is never a bd TARGET (it appears only
-        // inside the cursor key of the metadata payload, never as an argv id).
+        // THE GATE: the failure breaker is NOT touched. Round 1 wrote
+        // state=failed + restartCount=3 here, which trips isStepBroken
+        // (maxRestarts=3) and makes SessionScope escalate + CLOSE the session.
+        expect(
+          meta.containsKey('grid.cursor.pow-77g/agent.restartCount'),
+          isFalse,
+          reason:
+              'a station death is NOT a step failure — never spend the breaker '
+              'budget on a bounce (the causes never share a counter)',
+        );
+        // The OTHER incarnation axis is equally untouched — so the node's
+        // reconcile key (ValueKey('<path>#<restartCount>.<rewindCount>')) is
+        // IDENTICAL across the reap. A re-key tears down a live effect; the reap
+        // runs pre-mount, so there is nothing live to displace.
+        expect(
+          meta.containsKey('grid.cursor.pow-77g/agent.rewindCount'),
+          isFalse,
+          reason: 'the reap is not a rework round — it must not re-key the node',
+        );
+        expect(
+          meta.containsKey('grid.cursor.pow-77g/agent.cooldownUntil'),
+          isFalse,
+          reason: 'a pending node mounts immediately; a cooldown is dead metadata',
+        );
+        expect(meta.values, isNot(contains('failed')));
+
+        // A37: the FOREIGN work bead is never a bd TARGET (it appears only inside
+        // the cursor KEY of the payload, never as an argv id).
         expect(
           cp.bd.calls.every((c) => !c.contains('pow-77g')),
           isTrue,
@@ -850,32 +906,102 @@ void main() {
     );
 
     test(
-      'a running node whose pid is ALIVE is NOT disturbed — the liveness probe '
-      'is the sole discriminator (a proven survivor keeps its honest marker)',
+      'END-TO-END RECOVERY — the EXACT metadata the reap wrote, fed back through '
+      'the codec, puts the step BACK IN THE FRONTIER (the bounce re-runs it, no '
+      'manual close+rework), leaves its dependents withheld, leaves BOTH '
+      'incarnation axes intact, and leaves the node NOT circuit-broken',
       () async {
-        final log = <String>[];
-        final git = FakeGit(worktrees: [_wt('pow-77g')], log: log);
-        final groups = FakeProcessGroupController(
-          ownGroupId: 999,
-          log: log,
-          alivePids: const {29629},
-        );
         final cp = _chokepoint();
-        final state = zombieState();
-
-        final report = await RestartReconciler(
-          listWorktrees: git.listWorktrees,
-          reapWorktree: git.reapWorktree,
-          workRoot: _workRoot,
-          groups: groups,
+        await run(
+          state: zombieState(restartCount: 2, rewindCount: 1),
+          groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
           writer: cp.writer,
-          freshnessBarrier: () async {},
-          stateSnapshot: () => state,
-          clock: () => clock,
+          worktrees: [_wt('pow-77g')],
+        );
+
+        // Replay the reap's REAL write onto the session bead, exactly as bd's
+        // metadata merge would — then re-project it through the PRODUCTION codec.
+        final written = cp.bd.metadataOfUpdate(0);
+        final before = _sessionWithCursor(
+          id: 'tgdog-1wb',
+          workBead: 'pow-77g',
+          cursor: {
+            'pow-77g/agent': const NodeCursor(
+              state: StepState.running,
+              pgid: 29629,
+              pid: 29629,
+              restartCount: 2,
+              rewindCount: 1,
+            ),
+          },
+        );
+        final after = Bead(
+          id: before.id,
+          issueType: before.issueType,
+          status: before.status,
+          metadata: <String, dynamic>{...before.metadata, ...written},
+        );
+        final cursor = projectCircuitCursor(after);
+        final node = cursor['pow-77g/agent']!;
+
+        expect(node.state, StepState.pending);
+        expect(node.reapCount, 1);
+        expect(
+          node.restartCount,
+          2,
+          reason: 'the crash budget survived the bounce untouched',
+        );
+        expect(
+          node.rewindCount,
+          1,
+          reason: 'the rework belt survived too — the key is unchanged',
+        );
+
+        // THE RECOVERY: the step is eligible again, immediately.
+        final eligible = eligibleSteps(
+          _codeish,
+          cursor,
+          'pow-77g',
+          circuitById: (_) => null,
+          now: clock,
+        ).map((s) => s.stepId).toList();
+        expect(eligible, ['agent']);
+        expect(
+          eligible,
+          isNot(contains('code_review')),
+          reason: 'the reap restores forward progress — it never fakes it',
+        );
+
+        // And it is NOT broken, so SessionScope cannot escalate + close it.
+        expect(
+          isStepBroken(_codeish, _codeish.stepById('agent')!, cursor, 'pow-77g'),
+          isFalse,
+        );
+        expect(
+          firstBrokenNode(_codeish, cursor, 'pow-77g', circuitById: (_) => null),
+          isNull,
+        );
+      },
+    );
+
+    test(
+      'a running node whose pid is ALIVE is NOT disturbed — the liveness probe is '
+      'the sole discriminator (a proven survivor keeps its honest marker)',
+      () async {
+        final cp = _chokepoint();
+        final report = await run(
+          state: zombieState(),
+          groups: FakeProcessGroupController(
+            ownGroupId: 999,
+            log: <String>[],
+            alivePids: const {29629},
+          ),
+          writer: cp.writer,
+          worktrees: [_wt('pow-77g')],
           // The composer PROVED it fresh: the group is left running for the
-          // re-mounted tree to reattach (D4) — it is NOT killed below.
+          // re-mounted tree to reattach (D4) — so it is not killed below either.
           adoptProof: (_, _, _, _) async => true,
-        ).reconcile();
+        );
 
         expect(report.adopted, hasLength(1));
         expect(report.reaped, isEmpty);
@@ -888,66 +1014,94 @@ void main() {
     );
 
     test(
-      'a LIVE orphan this pass terminated is ALSO reaped — the reap runs after '
-      'the kill loop, so no zombie survives a bounce either way',
+      'THE CARVE-OUT — a dead-pid `ready` DAEMON node is NOT reaped: `ready` is a '
+      'POSITIVE TERMINAL whose dependents have already mounted, so flipping it '
+      'would un-satisfy a satisfied barrier and tear down completed work',
       () async {
-        final log = <String>[];
-        final git = FakeGit(worktrees: [_wt('pow-77g')], log: log);
-        // Alive at the start of the pass — the never-adopt default KILLS it,
-        // and the fake then reports the leader pid gone.
-        final groups = FakeProcessGroupController(
-          ownGroupId: 999,
-          log: log,
-          alivePids: const {29629},
-        );
         final cp = _chokepoint();
-        final state = zombieState();
-
-        final report = await RestartReconciler(
-          listWorktrees: git.listWorktrees,
-          reapWorktree: git.reapWorktree,
-          workRoot: _workRoot,
-          groups: groups,
+        final report = await run(
+          state: zombieState(state: StepState.ready),
+          groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
           writer: cp.writer,
-          freshnessBarrier: () async {},
-          stateSnapshot: () => state,
-          clock: () => clock,
-        ).reconcile();
+          worktrees: [_wt('pow-77g')],
+        );
 
+        expect(report.reaped, isEmpty);
         expect(
-          report.killed,
-          hasLength(1),
-          reason: 'the orphan was terminated',
-        );
-        expect(
-          report.reaped,
-          hasLength(1),
-          reason: 'and its now-dead cursor marker was reaped',
-        );
-        expect(
-          cp.bd.metadataOfUpdate(0)['grid.cursor.pow-77g/agent.state'],
-          'failed',
+          cp.bd.callsFor('update'),
+          isEmpty,
+          reason: 'the reap touches `running` and NOTHING else',
         );
       },
     );
 
-    test('a TERMINAL session is never reaped (its cursor is history)', () async {
-      final log = <String>[];
-      final git = FakeGit(worktrees: [_wt('pow-77g')], log: log);
-      final groups = FakeProcessGroupController(ownGroupId: 999, log: log);
-      final cp = _chokepoint();
-      final state = zombieState(closed: true);
+    test(
+      'FAIL-CLOSED ON LIVENESS — a `running` node with NO pid on record cannot be '
+      'PROVEN alive, so it is reaped',
+      () async {
+        final cp = _chokepoint();
+        final report = await run(
+          state: zombieState(pid: null),
+          groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
+          writer: cp.writer,
+          worktrees: [_wt('pow-77g')],
+        );
 
-      final report = await RestartReconciler(
-        listWorktrees: git.listWorktrees,
-        reapWorktree: git.reapWorktree,
-        workRoot: _workRoot,
-        groups: groups,
+        expect(report.reaped, hasLength(1));
+        expect(report.reaped.single.pid, isNull);
+        expect(
+          cp.bd.metadataOfUpdate(0)['grid.cursor.pow-77g/agent.state'],
+          'pending',
+        );
+      },
+    );
+
+    test(
+      'NO CHOKEPOINT WIRED — the zombie is still DETECTED and reported un-written '
+      '(the cross-repo default: a sibling repo constructs this reconciler with no '
+      'writer and must keep compiling — but it is never SILENT)',
+      () async {
+        final report = await run(
+          state: zombieState(),
+          groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
+          worktrees: [_wt('pow-77g')],
+        );
+
+        expect(report.reaped, hasLength(1));
+        expect(report.reaped.single.isWritten, isFalse);
+        expect(report.reaped.single.failure, contains('no bd chokepoint'));
+      },
+    );
+
+    test(
+      'a DROPPED reap write is recorded and the pass CONTINUES — a bd blip never '
+      'crashes the station boot (LOUD, never fatal)',
+      () async {
+        final report = await run(
+          state: zombieState(),
+          groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
+          writer: StationBeadWriter(
+            bd: BdCliService(_ThrowingBdRunner()),
+            ownership: BeadOwnershipPredicate(const {'tgdog'}),
+          ),
+          worktrees: [_wt('pow-77g')],
+        );
+
+        // reconcile() did NOT throw; the drop is reported, not swallowed.
+        expect(report.reaped, hasLength(1));
+        expect(report.reaped.single.isWritten, isFalse);
+        expect(report.reaped.single.failure, contains('bd unavailable'));
+      },
+    );
+
+    test('a TERMINAL session is never reaped (its cursor is history)', () async {
+      final cp = _chokepoint();
+      final report = await run(
+        state: zombieState(closed: true),
+        groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
         writer: cp.writer,
-        freshnessBarrier: () async {},
-        stateSnapshot: () => state,
-        clock: () => clock,
-      ).reconcile();
+        worktrees: [_wt('pow-77g')],
+      );
 
       expect(report.skipped, hasLength(1));
       expect(report.reaped, isEmpty);
@@ -955,33 +1109,51 @@ void main() {
     });
 
     test(
-      'a DROPPED reap write is recorded and the pass CONTINUES — a bd blip '
-      'never crashes the station boot (LOUD, never fatal)',
+      'ONLY WORKTREE-BACKED sessions are reaped — a zombie cursor whose worktree is '
+      'gone has nothing to re-mount into, and walking the whole state store would '
+      'make a large backlog an unbounded boot write-burst',
       () async {
-        final log = <String>[];
-        final git = FakeGit(worktrees: [_wt('pow-77g')], log: log);
-        final groups = FakeProcessGroupController(ownGroupId: 999, log: log);
-        final writer = StationBeadWriter(
-          bd: BdCliService(_ThrowingBdRunner()),
-          ownership: BeadOwnershipPredicate(const {'tgdog'}),
+        final cp = _chokepoint();
+        final report = await run(
+          state: zombieState(),
+          groups: FakeProcessGroupController(ownGroupId: 999, log: <String>[]),
+          writer: cp.writer,
+          worktrees: const [], // the session survives; its worktree does not.
         );
-        final state = zombieState();
 
-        final report = await RestartReconciler(
-          listWorktrees: git.listWorktrees,
-          reapWorktree: git.reapWorktree,
-          workRoot: _workRoot,
-          groups: groups,
-          writer: writer,
-          freshnessBarrier: () async {},
-          stateSnapshot: () => state,
-          clock: () => clock,
-        ).reconcile();
+        expect(report.reaped, isEmpty);
+        expect(cp.bd.callsFor('update'), isEmpty);
+      },
+    );
 
-        // reconcile() did NOT throw; the drop is reported, not swallowed.
-        expect(report.reaped, hasLength(1));
-        expect(report.reaped.single.isWritten, isFalse);
-        expect(report.reaped.single.failure, contains('bd unavailable'));
+    test(
+      'ORDERING — a LIVE orphan this pass TERMINATED is also reaped (the reap runs '
+      'AFTER the kill loop), so no zombie survives a bounce either way',
+      () async {
+        final cp = _chokepoint();
+        final report = await run(
+          state: zombieState(),
+          // Alive at the start of the pass — the never-adopt default KILLS it, and
+          // the fake then reports the leader pid gone.
+          groups: FakeProcessGroupController(
+            ownGroupId: 999,
+            log: <String>[],
+            alivePids: const {29629},
+          ),
+          writer: cp.writer,
+          worktrees: [_wt('pow-77g')],
+        );
+
+        expect(report.killed, hasLength(1), reason: 'the orphan was terminated');
+        expect(
+          report.reaped,
+          hasLength(1),
+          reason: 'and its now-dead cursor marker was reaped',
+        );
+        expect(
+          cp.bd.metadataOfUpdate(0)['grid.cursor.pow-77g/agent.state'],
+          'pending',
+        );
       },
     );
   });
