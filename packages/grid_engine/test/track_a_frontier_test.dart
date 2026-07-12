@@ -237,38 +237,36 @@ void main() {
 
   group('Track A — positive-terminal-only + supervision', () {
     test(
-      'a REAPED zombie (tg-szb) re-enters the frontier once its cooldown lapses '
-      '— the bounce RE-RUNS the step instead of stalling on a corpse',
+      'a REAPED zombie is eligible IMMEDIATELY — the bounce re-runs the step '
+      'with NO cooldown wait and NO restart budget spent, even when a STALE '
+      'cooldownUntil from an earlier real failure is still on the node',
       () {
         final t = DateTime(2026, 7, 12, 12);
-        // What RestartReconciler._reapZombieRunners writes for a dead-pid
-        // `running` node: the missed supervised failure (state=failed,
-        // restartCount+1, a backoff cooldown).
+        // What RestartReconciler._reapZombieRunners leaves behind: state=pending,
+        // and — untouched — the node's prior restartCount AND a now-stale
+        // cooldownUntil from an earlier genuine failure.
         final reaped = {
           'tg-1/agent': _c(
-            StepState.failed,
-            restartCount: 1,
-            cooldownUntil: t.add(const Duration(seconds: 1)),
+            StepState.pending,
+            restartCount: 2,
+            cooldownUntil: t.add(const Duration(hours: 1)),
           ),
         };
 
-        // Still cooling down: withheld, but a restart is SCHEDULED — never lost.
-        expect(_frontierAt(code, reaped, 'tg-1', t), isEmpty);
+        // Eligible RIGHT NOW: the frontier's cooldown gate applies ONLY to a
+        // `failed` node, so a stale deadline cannot withhold a pending one.
+        expect(_frontierAt(code, reaped, 'tg-1', t), ['agent']);
 
-        // Past the cooldown and within `maxRestarts` (3): it MOUNTS again. The
-        // bumped restartCount re-keys it in CircuitScope, so this is a FRESH
-        // incarnation with a fresh token — not a reattach to the corpse.
+        // Within budget and NOT broken — SessionScope can never escalate + close
+        // it.
         expect(
-          _frontierAt(code, reaped, 'tg-1', t.add(const Duration(seconds: 2))),
-          ['agent'],
+          isStepBroken(code, code.stepById('agent')!, reaped, 'tg-1'),
+          isFalse,
         );
 
-        // And the dependents stay withheld until it genuinely completes — the
-        // reap restores forward progress, it never fakes it.
-        expect(
-          _frontierAt(code, reaped, 'tg-1', t.add(const Duration(seconds: 2))),
-          isNot(contains('verify')),
-        );
+        // Its dependents stay withheld until it genuinely completes: the reap
+        // restores forward progress, it never fakes it.
+        expect(_frontierAt(code, reaped, 'tg-1', t), isNot(contains('verify')));
       },
     );
 
