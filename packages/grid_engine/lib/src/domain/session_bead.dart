@@ -80,6 +80,11 @@ abstract final class CursorKeys {
   /// The supervised-restart counter suffix (gates the breaker — D-5).
   static const restartCount = 'restartCount';
 
+  /// The ROUTING rewind-round suffix (tg-o90) — the per-node count of rewind
+  /// waves that re-keyed this node. Flat + merge-safe like every other cursor
+  /// field; DISJOINT from [restartCount] (the crash-restart budget).
+  static const rewindCount = 'rewindCount';
+
   /// The backoff cooldown-deadline suffix (ISO-8601).
   static const cooldownUntil = 'cooldownUntil';
 
@@ -226,6 +231,8 @@ Map<String, String> nodeCursorMetadata(String nodePath, NodeCursor node) => {
   CursorKeys.keyFor(nodePath, CursorKeys.state): node.state.name,
   CursorKeys.keyFor(nodePath, CursorKeys.restartCount):
       node.restartCount.toString(),
+  CursorKeys.keyFor(nodePath, CursorKeys.rewindCount):
+      node.rewindCount.toString(),
   if (node.pgid != null)
     CursorKeys.keyFor(nodePath, CursorKeys.pgid): node.pgid.toString(),
   if (node.pid != null)
@@ -268,6 +275,26 @@ Map<String, String> nodeFailedMetadata(
   if (cooldownUntil != null)
     CursorKeys.keyFor(nodePath, CursorKeys.cooldownUntil):
         cooldownUntil.toIso8601String(),
+};
+
+/// The targeted metadata payload REWINDING ONE node (tg-o90 — routing, the dual
+/// of fan-out): `state=pending` + the bumped [rewindCount] (the incarnation axis
+/// — it RE-KEYS the node in `CircuitScope`, so a still-mounted effect is torn
+/// down and re-run virgin) + `restartCount=0` (a fresh round gets a fresh
+/// supervised-restart budget; and a stale `cooldownUntil` cannot block it — the
+/// frontier's cooldown gate only applies to a `failed` node).
+///
+/// Merge-safe (disjoint per-node keys) exactly like every other cursor write,
+/// and written through the ONE chokepoint onto the_grid's OWN session bead —
+/// never the foreign work bead (A37). NO gate bead and NO session re-mint ride
+/// along: those are `Gate` and the `grid rework` verb respectively.
+Map<String, String> nodeRewoundMetadata(
+  String nodePath, {
+  required int rewindCount,
+}) => {
+  CursorKeys.keyFor(nodePath, CursorKeys.state): StepState.pending.name,
+  CursorKeys.keyFor(nodePath, CursorKeys.rewindCount): rewindCount.toString(),
+  CursorKeys.keyFor(nodePath, CursorKeys.restartCount): '0',
 };
 
 /// The targeted metadata payload stamping ONE node's spawned identity at
@@ -325,6 +352,9 @@ CircuitCursor projectCircuitCursor(Bead sessionBead) {
       pid: _asInt(fields[CursorKeys.pid]),
       token: fields[CursorKeys.token]?.toString(),
       restartCount: _asInt(fields[CursorKeys.restartCount]) ?? 0,
+      // The routing rewind axis (tg-o90) — the second incarnation counter,
+      // disjoint from the crash-restart budget above.
+      rewindCount: _asInt(fields[CursorKeys.rewindCount]) ?? 0,
       cooldownUntil: _parseDate(fields[CursorKeys.cooldownUntil]),
       logOffset: _asInt(fields[CursorKeys.logOffset]),
       // Capture-only flow telemetry (FT-1) — surfaced typed for observers; never

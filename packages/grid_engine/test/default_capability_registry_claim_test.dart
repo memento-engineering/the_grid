@@ -22,9 +22,18 @@ class _NamedCapability extends Capability {
 StepMount _mount(CapabilityStep step) => StepMount(
   step: step,
   nodePath: 'tg-burn/follower',
+  // The graph the step is a member of (`StepMount.circuit`, tg-o90) — built from
+  // the step under test, so the mount stays honest whatever requirement it
+  // declares.
+  circuit: Circuit(
+    id: 'burn',
+    terminalStepId: step.stepId,
+    steps: [step],
+  ),
+  circuitPath: 'tg-burn',
   session: const SessionHandle('tgdog-s'),
   node: const NodeCursor(),
-  key: const ValueKey('tg-burn/follower#0'),
+  key: const ValueKey('tg-burn/follower#0.0'),
 );
 
 const _macos = CapabilityFacts(

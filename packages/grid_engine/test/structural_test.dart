@@ -43,6 +43,18 @@ const _opinionLiterals = <String>[
   '.grid/worktrees',
 ];
 
+/// The SUPERSEDED tg-b3k workaround (tg-o90): a machine-actionable GATE-REASON
+/// STRING convention (`kRespecGatePrefix` / `isRespecGate` / `machineActionableGate`),
+/// with `SessionScope` auto-resolving the gate beads it matched. Routing is a
+/// first-class `StepOutcome.Rewind` arm now — the engine NEVER parses a gate
+/// reason, and a gate is always a HUMAN's. If any of these identifiers reappears
+/// in the engine, the workaround came back.
+const _supersededWorkaroundLiterals = <String>[
+  'kRespecGatePrefix',
+  'isRespecGate',
+  'machineActionableGate',
+];
+
 /// Resolves this package's `lib/src` directory, walking up from the test's
 /// working dir to find `packages/grid_engine/lib/src` (robust whether the suite
 /// runs from the repo root or the package dir).
@@ -102,6 +114,46 @@ void main() {
         reason:
             'opinion literals must live ONLY in grid_assets — the engine holds '
             'no landing/VCS/provider opinion:\n  ${offences.join('\n  ')}',
+      );
+    });
+
+    test('tg-o90 — the superseded gate-reason-STRING workaround stays dead', () {
+      final offences = <String>[];
+      for (final file in engineFiles) {
+        final source = file.readAsStringSync();
+        for (final literal in _supersededWorkaroundLiterals) {
+          if (source.contains(literal)) {
+            offences.add(
+              '${p.relative(file.path, from: libSrc.path)} names "$literal"',
+            );
+          }
+        }
+      }
+      expect(
+        offences,
+        isEmpty,
+        reason:
+            'routing is the first-class `StepOutcome.Rewind` arm (tg-o90) — the '
+            'engine never parses a gate REASON, and SessionScope never '
+            'auto-resolves a gate bead. The tg-b3k workaround must not come '
+            'back:\n  ${offences.join('\n  ')}',
+      );
+    });
+
+    test('tg-o90 — SessionScope never CLOSES a gate bead (a gate is a HUMAN\'s; '
+        'its only gate write is the D-7 gated→pending re-arm)', () {
+      final source = File(
+        p.join(libSrc.path, 'circuit', 'session_scope.dart'),
+      ).readAsStringSync();
+      // The scope may close its OWN session (D-2 / breaker escalation / rework);
+      // it may never MINT or RESOLVE a gate bead — that is what made the tg-b3k
+      // workaround a machine loop wearing a human gate's clothes.
+      expect(source.contains('createGate'), isFalse);
+      expect(source.contains('closeGate'), isFalse);
+      expect(
+        source.contains('nodeStateMetadata'),
+        isTrue,
+        reason: 'sanity (non-vacuous): the D-7 re-arm write is still there',
       );
     });
   });

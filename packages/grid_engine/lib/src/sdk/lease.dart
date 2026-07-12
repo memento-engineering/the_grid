@@ -248,6 +248,11 @@ class LeaseAllocation<H> extends Allocation {
       case Gate(:final reason):
         state = AllocationState.gone;
         _reportTerminal(AllocationGated(reason));
+      case Rewind(:final stepIds, :final reason):
+        // Routing (tg-o90) — a latching terminal for THIS incarnation; the Host
+        // re-keys the named sub-DAG and this node re-mounts fresh.
+        state = AllocationState.gone;
+        _reportTerminal(AllocationRewound(stepIds, reason));
     }
   }
 

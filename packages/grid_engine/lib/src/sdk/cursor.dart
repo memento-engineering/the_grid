@@ -47,6 +47,20 @@ abstract class NodeCursor with _$NodeCursor {
     /// predicate — D-5).
     @Default(0) int restartCount,
 
+    /// How many times this node has been RE-KEYED BY A ROUTING REWIND
+    /// (`StepOutcome.Rewind` — tg-o90). Bumped monotonically per node on every
+    /// rewind wave that names it, and part of the node's reconcile key
+    /// (`CircuitScope`), so a rewound node that is still MOUNTED (a daemon) is
+    /// torn down and re-run rather than silently left alive under a stale
+    /// incarnation.
+    ///
+    /// DISTINCT from [restartCount] (a supervised CRASH restart, D-5): a rework
+    /// round never spends the restart budget and a crash never spends a rework
+    /// round. It is also the BOUNDED-ROUNDS counter — the host refuses a rewind
+    /// from a node that has reached `kMaxReworkRounds`, and a `route` reads its
+    /// own count back through the ambient `SiblingView` to escalate first.
+    @Default(0) int rewindCount,
+
     /// The earliest time a failed node may re-key (backoff — D-5); null when not
     /// cooling down.
     DateTime? cooldownUntil,

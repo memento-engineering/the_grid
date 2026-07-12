@@ -13,6 +13,13 @@ import 'package:test/test.dart';
 
 import 'support/engine_fakes.dart';
 
+/// The circuit the mounted `critic` step belongs to (`StepMount.circuit`, tg-o90).
+const _circuit = Circuit(
+  id: 'spec_review',
+  terminalStepId: 'critic',
+  steps: [CapabilityStep(stepId: 'critic', capabilityId: 'critic')],
+);
+
 /// A process critic whose [result] returns [grade] (or null for no result).
 class _GradingCritic extends ProcessCapability {
   const _GradingCritic(this.grade);
@@ -66,9 +73,11 @@ Future<void> _pump() async {
                   capabilityId: 'critic',
                 ),
                 nodePath: 'tg-1/critic',
+                circuit: _circuit,
+                circuitPath: 'tg-1',
                 session: const SessionHandle('tgdog-s'),
                 node: const NodeCursor(),
-                key: const ValueKey('tg-1/critic#0'),
+                key: const ValueKey('tg-1/critic#0.0'),
               ),
             ),
           ),

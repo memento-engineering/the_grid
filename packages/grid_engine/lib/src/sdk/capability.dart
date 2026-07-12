@@ -253,6 +253,47 @@ class Gate extends StepOutcome {
   final String reason;
 }
 
+/// The capability decided the work must REWIND — **routing, the dual of
+/// fan-out** (`docs/M5-THE-CIRCUIT-BUILD-ORDER.md` D-4: "the route capability
+/// returns a `StepOutcome` that advances/blocks/re-keys the formula cursor — it
+/// never writes the work bead"), promoted to a first-class arm 2026-07-12
+/// (tg-o90).
+///
+/// The host flips the named SIBLING steps, every node transitively DOWNSTREAM of
+/// them, and THIS node back to `state=pending` with a bumped per-node
+/// `rewindCount`, in ONE write through the chokepoint onto the_grid's OWN
+/// session bead (A37). The bump RE-KEYS each node, so keyed reconcile disposes
+/// (kills) the old incarnations and the sub-DAG re-runs VIRGIN — with **NO
+/// `type=gate` bead** (that is [Gate], a human park) and **NO session re-mint**
+/// (that is the `grid rework` operator verb, which retires the round).
+///
+/// The rewinding node writes itself `pending` too; since it depends —
+/// transitively — on a rewound target, the frontier withholds it until the
+/// sub-DAG re-completes. That is what makes the round a loop, not a race.
+///
+/// BOUNDED (D-4, "bounded rework rounds (factoryskills' cap 3)"): the host
+/// REFUSES a rewind from a node whose own `rewindCount` has reached
+/// `kMaxReworkRounds` and parks at a human [Gate] instead, so a mis-specified
+/// route can never spin the loop. A route escalates on its OWN policy first by
+/// reading its `rewindCount` back through the ambient [SiblingView].
+///
+/// [stepIds] must name steps of the rewinding node's OWN circuit; an empty or
+/// dangling name is an authoring bug and routes to a supervised [Failed] — never
+/// a silent no-op.
+class Rewind extends StepOutcome {
+  /// Rewinds the sibling steps [stepIds] (plus their transitive dependents and
+  /// this node), carrying a human-readable [reason] (flared + recorded as
+  /// diagnostics; the engine NEVER parses it — the correction guidance is the
+  /// asset's own durable ledger, in the workspace).
+  const Rewind(this.stepIds, [this.reason = '']);
+
+  /// The sibling step ids to re-run (in the rewinding node's own circuit).
+  final Set<String> stepIds;
+
+  /// Why the work rewound (diagnostics/telemetry only).
+  final String reason;
+}
+
 /// A cooperative cancellation flag a [Capability] polls across async gaps — set
 /// when the host unmounts. The engine never force-kills a `ServiceCapability`
 /// body; the capability checks [isCancelled] and unwinds. It is ALSO the

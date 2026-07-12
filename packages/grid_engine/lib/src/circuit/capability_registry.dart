@@ -28,14 +28,17 @@ import 'session_handle.dart';
 /// reads them with the non-binding lookup, so the mount threads only the
 /// step's own identity + supervision params.
 class StepMount {
-  /// Bundles the [step], its full [nodePath], the resolved [session], the
-  /// step's current [node] cursor (identity/incarnation for respawn — D-4), the
+  /// Bundles the [step], its full [nodePath], the [circuit] it is a member of
+  /// (+ that circuit's own [circuitPath]), the resolved [session], the step's
+  /// current [node] cursor (identity/incarnation for respawn — D-4), the
   /// incarnation-keyed reconcile [key], and the owning circuit's supervision
   /// params ([backoff]/[maxRestarts]) the host uses to author the
   /// supervised-restart cursor on failure (D-5).
   const StepMount({
     required this.step,
     required this.nodePath,
+    required this.circuit,
+    required this.circuitPath,
     required this.session,
     required this.node,
     required this.key,
@@ -50,15 +53,30 @@ class StepMount {
   /// — the cursor key + the per-step provider-name segment.
   final String nodePath;
 
+  /// The circuit this step is a MEMBER of — the graph a `Rewind` (tg-o90)
+  /// resolves its named siblings + their transitive dependents against. A VALUE
+  /// (config in the tree, ADR-0008 D-H), threaded by the inflater that owns it;
+  /// REQUIRED, because a step always belongs to a circuit and a null-branch
+  /// guard that can never fire in production is exactly the ceremony ADR-0008 D3
+  /// says to delete.
+  final Circuit circuit;
+
+  /// The node path of [circuit]'s own root, i.e.
+  /// `nodePath == '$circuitPath/${step.stepId}'` — the prefix every rewound
+  /// sibling path is built from.
+  final String circuitPath;
+
   /// The adopt-or-minted session this leaf writes its cursor onto.
   final SessionHandle session;
 
   /// The step's current cursor entry (drives respawn-or-skip + the incarnation).
   final NodeCursor node;
 
-  /// The incarnation-keyed reconcile identity (`ValueKey('$nodePath#$restartCount')`)
-  /// — a supervised restart bumps `restartCount`, changing the key, so keyed
-  /// reconcile unmounts the old incarnation and mounts the new.
+  /// The incarnation-keyed reconcile identity
+  /// (`ValueKey('$nodePath#$restartCount.$rewindCount')`) — a supervised restart
+  /// bumps `restartCount` (D-5) and a routing REWIND bumps `rewindCount`
+  /// (tg-o90); either changes the key, so keyed reconcile unmounts the old
+  /// incarnation and mounts the new.
   final Key key;
 
   /// The owning circuit's backoff schedule (D-5) — the host computes the

@@ -115,12 +115,21 @@ AllocationContext _allocCtx(
   liveness: (_) => live,
 );
 
+/// The circuit the mounted `agent` step belongs to (`StepMount.circuit`, tg-o90).
+const _circuit = Circuit(
+  id: 'code',
+  terminalStepId: 'agent',
+  steps: [CapabilityStep(stepId: 'agent', capabilityId: 'agent')],
+);
+
 StepMount _mount() => StepMount(
   step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
   nodePath: 'tg-1/agent',
+  circuit: _circuit,
+  circuitPath: 'tg-1',
   session: const SessionHandle('tgdog-s'),
   node: const NodeCursor(),
-  key: const ValueKey('tg-1/agent#0'),
+  key: const ValueKey('tg-1/agent#0.0'),
 );
 
 Future<void> _pump() async {

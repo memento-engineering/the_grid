@@ -114,6 +114,20 @@ StationServices _ctxWithLiveness(Fakes fakes, {AllocationLiveness? liveness}) =>
       liveness: liveness,
     );
 
+/// The circuit the mounted `harness` daemon belongs to (`StepMount.circuit`,
+/// tg-o90).
+const _circuit = Circuit(
+  id: 'deploy',
+  terminalStepId: 'harness',
+  steps: [
+    CapabilityStep(
+      stepId: 'harness',
+      capabilityId: 'harness',
+      kind: StepKind.daemon,
+    ),
+  ],
+);
+
 StepMount _daemonMount() => StepMount(
   step: const CapabilityStep(
     stepId: 'harness',
@@ -121,10 +135,12 @@ StepMount _daemonMount() => StepMount(
     kind: StepKind.daemon,
   ),
   nodePath: 'tg-1/harness',
+  circuit: _circuit,
+  circuitPath: 'tg-1',
   session: const SessionHandle('tgdog-s'),
   // A prior incarnation's identity (the fence) — so adopt has something to prove.
   node: const NodeCursor(pgid: 200, pid: 201, token: 't'),
-  key: const ValueKey('tg-1/harness#0'),
+  key: const ValueKey('tg-1/harness#0.0'),
 );
 
 Branch _hostBranch(Branch root) {
