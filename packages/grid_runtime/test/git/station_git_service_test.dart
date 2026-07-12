@@ -394,6 +394,105 @@ void main() {
     expect(res.pushed, isFalse);
     expect(res.failureReason, contains('push failed'));
   });
+
+  group('the WORK SIGNAL of the completion fence', () {
+    test('THE WEDGE: a NON-.grid-ignoring substation with grid residue + '
+        'COMMITTED code reads CLEAR when the grid dir is excluded', () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w3');
+
+      // The agent COMMITTED its work — a finished turn.
+      File(p.join(wt.path, 'work.dart')).writeAsStringSync('void main() {}\n');
+      await git(wt.path, const <String>['add', '-A']);
+      await git(wt.path, const <String>['commit', '-m', 'the agent committed']);
+
+      // ...and the grid's own steps left their residue behind, uncommitted, as
+      // they always do. This repo does NOT gitignore `.grid` (genesis / lenny).
+      for (final rel in const <String>[
+        '.grid/critique/pinned.diff',
+        '.grid/critique/correctness.json',
+        '.grid/spec/respec.json',
+        '.grid/telemetry/x.usage.json',
+      ]) {
+        final f = File(p.join(wt.path, rel));
+        f.parent.createSync(recursive: true);
+        f.writeAsStringSync('residue\n');
+      }
+
+      expect(
+        await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
+        GateOutcome.clear,
+        reason: "grid residue is not the agent's work — the turn FINISHED",
+      );
+      // ...and the SAME state with NO exclusion is `present` — proving both that
+      // the exclusion is load-bearing AND that ADR-0006 D3's reap Gate 1 is
+      // unchanged.
+      expect(await svc.hasUncommittedWork(wt.path), GateOutcome.present);
+    });
+
+    test('THE BUG: residue never MASKS a real interrupted agent (an uncommitted '
+        'TRACKED edit ⇒ present, exclusion or not)', () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w4');
+
+      File(p.join(wt.path, 'work.dart')).writeAsStringSync('void main() {}\n');
+      await git(wt.path, const <String>['add', '-A']);
+      await git(wt.path, const <String>['commit', '-m', 'base']);
+      // The murder: a tracked file left mid-edit.
+      File(p.join(wt.path, 'work.dart')).writeAsStringSync('void main() { // hal\n');
+      final residue = File(p.join(wt.path, '.grid/critique/pinned.diff'))
+        ..parent.createSync(recursive: true);
+      residue.writeAsStringSync('residue\n');
+
+      expect(
+        await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
+        GateOutcome.present,
+      );
+    });
+
+    test('an UNTRACKED source file (not under the grid dir) is still work',
+        () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w5');
+
+      File(p.join(wt.path, 'mid-edit.dart')).writeAsStringSync('wip\n');
+
+      expect(
+        await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
+        GateOutcome.present,
+      );
+    });
+
+    test('a CLEAN worktree is clear', () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w6');
+
+      expect(
+        await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
+        GateOutcome.clear,
+      );
+    });
+  });
 }
 
 /// A FAKE [PrOpener] (Fakes, not mocks): records the branch/base it was asked to

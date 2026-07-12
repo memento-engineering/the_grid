@@ -441,6 +441,32 @@ class StationGitService {
     return LandResult.landed(pr: pr.ref!);
   }
 
+  /// The **work signal** of the engine's completion fence: whether
+  /// [workspaceDir] still holds UNCOMMITTED work (staged, unstaged, or
+  /// untracked).
+  ///
+  /// A CODING AGENT's working agreement is "COMMIT your work in the worktree",
+  /// so a CLEAN tree is the observable trace of a FINISHED turn and a DIRTY one
+  /// is the trace of a turn CUT SHORT. The engine fences an INFERRED exit
+  /// (`Exited.inferred` — a detached agent's vanish, which a murder and a
+  /// completion produce identically) on this signal before it advances the
+  /// circuit. Only a capability that DECLARES that agreement
+  /// (`CompletionContract.committedWorkspace`) is fenced — a critic writes an
+  /// uncommitted verdict and vanishes by design.
+  ///
+  /// [excluding] names dir prefixes that do not count as work — the composer
+  /// passes the grid's own runtime dir (`.grid`), whose critique/spec/telemetry
+  /// artifacts no step commits. Default EMPTY ⇒ **ADR-0006 Decision 3's Gate 1
+  /// verbatim**, which is what [reap] still calls: the same
+  /// [GitOps.hasUncommittedWork], the same ratified fail-closed posture (a failed
+  /// `git status` is [GateOutcome.probeError], never a silent
+  /// [GateOutcome.clear]). This adds NO new reap gate and changes NO reap
+  /// behavior. Mutates nothing.
+  Future<GateOutcome> hasUncommittedWork(
+    String workspaceDir, {
+    Set<String> excluding = const <String>{},
+  }) => _ops.hasUncommittedWork(workspaceDir, excluding: excluding);
+
   /// **The three-gate reaper (ported VERBATIM from gc, `git.go:134-213` +
   /// `bead_worktree_reaper.go:100-141`).** Refuses to remove [worktree] if it
   /// has uncommitted work OR unpushed commits OR a stash — ALL fail-closed on
