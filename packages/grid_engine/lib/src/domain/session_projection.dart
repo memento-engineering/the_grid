@@ -28,10 +28,27 @@ abstract class SessionProjection with _$SessionProjection {
     /// projections — the join bridge always populates it.
     String? sessionId,
 
-    /// True once the session reached a positive terminal (the session bead
-    /// `closed`, or the cursor advanced past `land`). A terminal session means
-    /// the work node unmounts — never respawns.
+    /// True once the session bead is CLOSED. NOT on its own a statement that the
+    /// work is DONE — three different things close a session, and only the
+    /// disposition (`sessionDispositionOf`) tells them apart (I-10, tg-4rw). Read
+    /// it with [completed] / [humanHeld], never alone.
     @Default(false) bool isTerminal,
+
+    /// True when the_grid's OWN close path stamped the durable positive-terminal
+    /// marker (`grid.outcome=complete`) before `bd close` — the engine's own
+    /// evidence that THIS round FINISHED (I-10). It is what separates a closed
+    /// session that is `done` (never re-drive: the work source is read-only, so a
+    /// landed bead stays open+ready and this latch is all that stops a resident
+    /// station re-running it) from one somebody closed MID-FLIGHT (a dead key).
+    /// False for a legacy bead closed before the marker shipped — the disposition
+    /// falls back to the cursor shape there.
+    @Default(false) bool completed,
+
+    /// True when the session carries a HUMAN marker (`grid.escalation` from
+    /// breaker exhaustion, or `grid.rework_declined`) — a human owns this round.
+    /// The grid never re-drives it: an auto re-mint would loop
+    /// escalate→close→re-mint→fail→escalate, spawning agents forever.
+    @Default(false) bool humanHeld,
 
     /// The spawned agent's process-group id, stamped at `SessionStarted` for
     /// orphan-kill on restart (Track D).

@@ -2,19 +2,26 @@
 /// retired-round `work_bead` key shape (lifted from the superseded tg-b3k
 /// workaround, PR #48).
 ///
-/// TWO mechanics bound rework, and they share this cap:
+/// THREE mechanics re-run work, and they share this cap:
 ///
 /// - **`Rewind`** (the engine primitive, tg-o90) — an in-session re-run of a
 ///   sub-DAG. Its counter is the per-node `NodeCursor.rewindCount`; the
 ///   `CapabilityHost` refuses a rewind at [kMaxReworkRounds] and parks at a
 ///   human `Gate` instead.
 /// - **`grid rework`** (the operator verb, tg-x1j) — retires a round by
-///   re-keying its session's `work_bead` to `<beadId>#r<N>`, which drops it out
-///   of the join so `SessionScope` mints round N+1 in the SAME workspace. Its
-///   counter is the retired-round key below.
+///   re-keying its session's `work_bead` to `<beadId>#r<N>` ([reworkKeyFor]),
+///   which drops it out of the join so `SessionScope` mints round N+1 in the
+///   SAME workspace. Its counter is the retired-round key below.
+/// - **the VOID retire** (the engine-automatic one, tg-4rw / I-10) — a session
+///   somebody closed MID-FLIGHT is a DEAD KEY: `SessionScope` retires it by
+///   re-keying its `work_bead` to `<beadId>#void-<deadSessionId>` ([voidKeyFor])
+///   and mints a fresh round, with no human and no operator verb. It borrows
+///   `grid rework`'s re-key MECHANIC but sits deliberately OUTSIDE the round
+///   budget: a round nobody ran is not a round the operator spent, so a `#void-`
+///   key never matches [reworkKeyPattern].
 ///
-/// Both live here so the verb and the engine admit exactly the same number of
-/// rounds and cannot drift on the key shape.
+/// All three live here so the verbs and the engine admit exactly the same number
+/// of rounds and cannot drift on the key shapes.
 library;
 
 /// The max rework rounds one work bead may accumulate before the grid REFUSES to
@@ -58,3 +65,14 @@ int maxReworkRound(String beadId, Iterable<String> workBeadKeys) {
   }
   return highest;
 }
+
+/// The VOIDED-session `work_bead` value (I-10, tg-4rw) — the key a DEAD session
+/// is retired to when the engine mints fresh over it
+/// (`<beadId>#void-<deadSessionId>`).
+///
+/// Deterministic with no clock and no counter (the dead session's own id is
+/// already unique), and by construction it NEVER matches [reworkKeyPattern]
+/// (`^<beadId>#r(\d+)$`) — so a voided round is never counted against the
+/// [kMaxReworkRounds] budget.
+String voidKeyFor(String beadId, String deadSessionId) =>
+    '$beadId#void-$deadSessionId';
