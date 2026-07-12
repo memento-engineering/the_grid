@@ -106,6 +106,19 @@ class StationWorkRuntime {
   final Future<void> Function() _freshnessBarrier;
   bool _started = false;
   bool _shutdown = false;
+  RestartReport? _lastRestartReport;
+
+  /// The last boot's restart-reconcile report — null before [start]. What the
+  /// pass skipped / killed / adopted, and which ZOMBIE `running` markers it
+  /// reaped. A plain derived VALUE a runner's banner or status view can read.
+  RestartReport? get lastRestartReport => _lastRestartReport;
+
+  /// The off-tree restart reconciler this runtime owns — exposed so a composer
+  /// (and the assembly's own test) can assert the pass is fully armed, notably
+  /// that the ONE bd chokepoint reached it ([RestartReconciler.hasChokepoint]).
+  /// A capability query on an off-tree machine, not an accessor over reactive
+  /// state (D-H rule 2).
+  RestartReconciler get restart => _restart;
 
   /// The producer-side latest join — status counts read THIS (what the bridge
   /// last pushed), never the notifier's reactive state (D-H rule 2).
@@ -127,15 +140,14 @@ class StationWorkRuntime {
     await _sourcesStart();
     await _freshnessBarrier();
     final report = await _restart.reconcile();
-    // A DROPPED zombie reap (tg-szb) degrades to today's behavior (the frontier
-    // still re-mounts the node), but an operator MUST know the cursor still
-    // reads `running` over a corpse — LOUD or GONE (ADR-0008 D3).
-    for (final r in report.reaped.where((r) => !r.isWritten)) {
-      _onRefusal(
-        'grid: restart reap of ${r.sessionId}/${r.nodePath} was DROPPED '
-        '(${r.failure}) — that cursor node still reads `running` over a dead '
-        'pid ${r.pid}',
-      );
+    _lastRestartReport = report;
+    // A DROPPED zombie reap degrades to the pre-reaper behavior (the frontier
+    // still re-mounts the node), so it is never fatal — but an operator MUST
+    // know the cursor still reads `running` over a corpse, because that lie
+    // blinds the wedge monitor and vetoes `grid rework`. LOUD or GONE
+    // (ADR-0008 D3).
+    for (final line in droppedReapReports(report)) {
+      _onRefusal(line);
     }
     _driver.start();
   }
@@ -155,6 +167,22 @@ class StationWorkRuntime {
     await _sourcesShutdown();
   }
 }
+
+/// The LOUD lines a restart pass's DROPPED zombie reaps produce.
+///
+/// A reap write that was dropped — a transient bd blip, an ownership refusal, or
+/// no chokepoint wired at all — leaves that cursor node still claiming `running`
+/// over a dead process. That is never fatal (the frontier still re-mounts it),
+/// but it is the exact lie that blinds `sampleWedge` and vetoes `grid rework`,
+/// so it is reported rather than swallowed. Pure, so the message contract is
+/// pinned by a test instead of by scraping a log.
+List<String> droppedReapReports(RestartReport report) => [
+  for (final r in report.reaped)
+    if (!r.isWritten)
+      'grid: restart reap of ${r.sessionId}/${r.nodePath} was DROPPED '
+          '(${r.failure}) — that cursor node still reads `running` over a dead '
+          'pid ${r.pid ?? '<unrecorded>'}',
+];
 
 /// Assembles the station's off-tree work machinery over REAL stores at their
 /// roots — the v3 replacement for the deleted `buildControllers` +
@@ -373,9 +401,10 @@ Future<StationWorkRuntime> buildStationWork({
     reapWorktree: git.reap,
     workRoot: workRoot,
     groups: groups,
-    // The ONE bd chokepoint — the zombie-running reap (tg-szb) delivers a dead
-    // generation's missed supervised failure through it, on the_grid's OWN
-    // session bead, BEFORE the tree mounts.
+    // The ONE bd chokepoint — the zombie-running reap re-mounts a dead
+    // generation's corpse through it, on the_grid's OWN session bead, BEFORE the
+    // tree mounts. Optional on the ctor (a sibling repo's guardrails omit it),
+    // so `restart.hasChokepoint` is what proves it actually reached here.
     writer: writer,
     freshnessBarrier: freshnessBarrier,
     stateSnapshot: () => stateSource.current ?? _emptyGraphSnapshot(),
