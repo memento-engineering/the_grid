@@ -106,6 +106,53 @@ all pass (A–C)      → advance (→ land)
 Bounded rework rounds (factoryskills' cap 3). The route capability returns a `StepOutcome`
 that advances/blocks/re-keys the formula cursor — it never writes the work bead.
 
+### D-4a — Routing promoted to a FIRST-CLASS engine primitive (RATIFIED — Nico, 2026-07-12)
+D-4 framed routing as a `StepOutcome` variant + an asset matrix. Two live sessions with Nico
+(2026-07-12) promote it to a first-class primitive — bead **tg-tkm**, building on **tg-o90**
+(A47's `Rewind` arm, landed):
+
+- **The route returns a distinct `RouteVerdict {advance, rewind, escalate}`** — NOT a
+  `StepOutcome` variant. Ordinary steps keep `{Ok, Failed}`; only a route emits a verdict. One
+  engine **router** effects it through the chokepoint (A37). A route is a standalone reactive
+  unit: inputs (sibling verdicts via the D-5 `SiblingView`) → one output verdict.
+- **`deliver` replaces `land`** and is the ACTUATION of terminal `advance`, not a verdict. The
+  engine knows only "actuate the terminal delivery"; the **delivery method is DOMAIN** (asset/
+  circuit config): PR / merge-queue / direct-merge for code (tg-hlz), commit-a-chapter / export
+  for a book, hand-off for an agent supporting another agent. The `--land` flag is retired →
+  per-substation delivery config. `LandCapability → DeliverCapability`.
+- **`escalate` raises to a bound HANDLER, not "a human"** — the engine drops the human
+  assumption; the handler BINDING is the seam. human-gate (D-7) is the default binding
+  (reproduced exactly); parent-router / governor-queue are future handlers. Keep the word
+  "escalate".
+- **Doctrine:** the engine owns the VERBS (advance/rewind/escalate/deliver); the asset owns the
+  TARGETS (delivery destination, escalation authority). `rewind` is the only fully
+  engine-internal verb. This is genesis's domain-free doctrine applied to routing — the_grid
+  need not be about code.
+- **On the CURRENT circuit model.** A47's `Rewind` is re-homed under the router, not ripped out.
+  tg-tkm lands on today's circuit model; the **uniform-recursive-circuit** reshaping is its
+  foundational follow-on — now **D-4b** below (ratified the same session; bead **tg-w2r**).
+
+### D-4b — The uniform-recursive circuit (RATIFIED — Nico, 2026-07-12)
+Makes the circuit model genesis-idiomatic (Seed→Branch uniform recursion) so D-4a's `escalate`
+composes across nesting rather than being bolted on. Bead **tg-w2r** (blocks-on tg-tkm) carries
+the build; the grid_assets code-circuit migration is a companion (power_station).
+
+- **Collapse `SubCircuitStep` — resolution decides the key.** The `CircuitStep` union becomes ONE
+  `Step{id, resolvableId, params, dependsOn}`. The registry resolves the id to a capability OR a
+  circuit; `CircuitScope` (`circuit_scope.dart:82`) picks the reconcile key from the RESOLVED
+  type — capability → an incarnation-keyed leaf (`#restart.rewind`), circuit → a path-keyed
+  nested scope. The static kind-`switch` goes; exec attrs (`kind`/`resources`/`requires`) move
+  onto the resolved capability. A `Circuit` is now "a Step that yields Steps" — `Seed→Branch` on
+  the work graph.
+- **`escalate` propagates as a ROUTED terminal.** A route's `escalate` (D-4a) sets an `escalated`
+  circuit terminal; an enclosing route reads it via `SiblingView` (D-5) — the dep already
+  resolves through a sub-circuit's terminal (`circuit.dart:157`), so it is child-output →
+  parent-input dataflow, no imperative call-up (route = standalone reactive app). It is **routed,
+  not barrier-satisfying**: a plain `dependsOn` stays UNSATISFIED on escalate (D-2 preserved);
+  only an enclosing route — or, unhandled at the top, the default human-gate handler (D-7) —
+  consumes it. This makes D-4a's "bound escalation handler" concrete as the enclosing-route
+  chain; "governor-queue" is just a handler that raises to the operator.
+
 ### D-5 — The sibling-read affordance (THE one engine change)
 The route step must read its **sibling** steps' results. Today a `Capability` sees only its
 own sandboxed `CapabilityContext` (no `TreeContext`, no notifier — the invariant-1/2
