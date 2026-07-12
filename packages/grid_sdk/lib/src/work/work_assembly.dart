@@ -104,6 +104,11 @@ class StationWorkRuntime {
   /// last pushed), never the notifier's reactive state (D-H rule 2).
   JoinedSnapshot get latest => _driver.bridge.latest;
 
+  /// The station's WEDGE signal (tg-jwh) — the single source of truth a runner
+  /// hands to its status view, so a watcher never re-derives "is the grid
+  /// stuck?" from raw sessions. A plain derived VALUE, read fresh per request.
+  WedgeState get wedge => _driver.wedge;
+
   /// Brings the off-tree machinery up in the pinned ordering (ADR-0007 §4):
   /// controllers start → the freshness barrier completes → the restart
   /// reconciler reconciles survivors (respawn-or-skip, BEFORE any tree could
@@ -167,6 +172,9 @@ Future<StationWorkRuntime> buildStationWork({
   ProcessGroupController? groupsOverride,
   void Function(String message)? onRefusal,
   void Function(String message)? onUnresolvedExternalDep,
+  ExplorationTransport? transport,
+  Duration wedgeThreshold = kDefaultWedgeThreshold,
+  Duration wedgePollInterval = kDefaultWedgePollInterval,
 }) async {
   if (substations.isEmpty) {
     throw ArgumentError(
@@ -354,7 +362,16 @@ Future<StationWorkRuntime> buildStationWork({
   );
 
   final bridge = StationJoinBridge(work: work, state: stateSource);
-  final driver = StationDriver(bridge: bridge, registry: registry);
+  // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
+  // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
+  // parallel escalation channel.
+  final driver = StationDriver(
+    bridge: bridge,
+    registry: registry,
+    transport: transport,
+    wedgeThreshold: wedgeThreshold,
+    wedgePollInterval: wedgePollInterval,
+  );
 
   final services = StationServices(
     provider: provider,

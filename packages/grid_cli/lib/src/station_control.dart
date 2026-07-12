@@ -22,6 +22,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+// The wedge signal is the STATION's own derivation — this surface only reports
+// it. Named through the SDK, never the private engine (ADR-0008 D2).
+import 'package:grid_sdk/grid_sdk.dart' show WedgeState, kNotWedged;
+
 /// One owned substation's slice of the station status (tg-7gm) — the
 /// per-substation breakdown of [StationStatus.ready]/[StationStatus.mounted],
 /// so a multi-root operator can see WHICH substation is actually driving.
@@ -73,6 +77,7 @@ class StationStatus {
     required this.liveSessions,
     required this.lastSyncAt,
     this.perSubstation = const <SubstationStatus>[],
+    this.wedge = kNotWedged,
   });
 
   /// The owned substation allow-set, joined for display.
@@ -122,6 +127,14 @@ class StationStatus {
   /// (or a caller constructs [StationStatus] directly without it).
   final List<SubstationStatus> perSubstation;
 
+  /// The station's WEDGE signal (tg-jwh) — derived STATION-side over the
+  /// producer-side join (`StationWorkRuntime.wedge`) and reported here as a
+  /// first-class value, so a watcher reads ONE truth instead of re-deriving
+  /// "is the grid stuck?" from raw sessions. Defaults to [kNotWedged] for a
+  /// caller that builds a status without the work runtime — never a phantom
+  /// alarm.
+  final WedgeState wedge;
+
   /// Serializes to the wire shape `/status` returns.
   Map<String, Object?> toJson() => <String, Object?>{
     'station': <String, Object?>{
@@ -143,6 +156,8 @@ class StationStatus {
       'lastSyncAt': lastSyncAt?.toIso8601String(),
       'perSubstation': [for (final s in perSubstation) s.toJson()],
     },
+    // First-class, top-level — a watcher reads THIS, never the gate list.
+    'wedge': wedge.toJson(),
   };
 }
 

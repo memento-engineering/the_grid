@@ -4,7 +4,10 @@ import '../bridge/station_join_bridge.dart';
 import '../circuit/capability_registry.dart';
 import '../circuit/circuit_resolver.dart';
 import '../circuit/unclaimed_frontier.dart';
+import '../domain/wedge.dart';
+import '../sdk/capability.dart';
 import '../sdk/capability_facts.dart';
+import 'wedge_monitor.dart';
 
 /// The station's OFF-TREE work-axis machinery (extracted from [StationKernel]
 /// so a tree mounted by a DIFFERENT owner — `runGrid`'s, tg-yl8 — reuses it
@@ -28,10 +31,13 @@ import '../sdk/capability_facts.dart';
 /// `onFlushed` hook.
 class StationDriver {
   /// Assembles the driver over [bridge]. [clock] / [scheduleTimer] are the
-  /// backoff seam (injectable so the re-poke is driven deterministically
-  /// offline). [rootCircuitFor] + [registry] + [onUnclaimedFrontier] wire the
-  /// unclaimed-frontier scan — all-or-nothing: any of them null skips the scan
-  /// entirely (no federation asset composed ⇒ nothing to compute).
+  /// backoff seam (injectable so the re-poke — and the wedge poll — are driven
+  /// deterministically offline). [rootCircuitFor] + [registry] +
+  /// [onUnclaimedFrontier] wire the unclaimed-frontier scan — all-or-nothing:
+  /// any of them null skips the scan entirely (no federation asset composed ⇒
+  /// nothing to compute). [transport] is the emit-only observability sink the
+  /// wedge alarm flares through (D-8); null (the default) still computes the
+  /// state — it just flares to nobody.
   StationDriver({
     required this.bridge,
     DateTime Function()? clock,
@@ -40,12 +46,24 @@ class StationDriver {
     CapabilityRegistry? registry,
     CapabilityFacts stationFacts = const CapabilityFacts(),
     void Function(List<UnclaimedRequirement>)? onUnclaimedFrontier,
+    ExplorationTransport? transport,
+    Duration wedgeThreshold = kDefaultWedgeThreshold,
+    Duration wedgePollInterval = kDefaultWedgePollInterval,
   }) : _clock = clock ?? DateTime.now,
        _scheduleTimer = scheduleTimer ?? Timer.new,
        _rootCircuitFor = rootCircuitFor,
        _registry = registry,
        _stationFacts = stationFacts,
-       _onUnclaimedFrontier = onUnclaimedFrontier;
+       _onUnclaimedFrontier = onUnclaimedFrontier {
+    _wedge = WedgeMonitor(
+      latest: () => bridge.latest,
+      threshold: wedgeThreshold,
+      pollInterval: wedgePollInterval,
+      transport: transport,
+      clock: _clock,
+      scheduleTimer: _scheduleTimer,
+    );
+  }
 
   /// The join bridge feeding the work axis — the driver owns its lifecycle
   /// (started in [start], disposed in [dispose]).
@@ -58,9 +76,18 @@ class StationDriver {
   final CapabilityFacts _stationFacts;
   final void Function(List<UnclaimedRequirement>)? _onUnclaimedFrontier;
 
+  /// The station's own stuck-detector (tg-jwh) — sampled on the driver's timer
+  /// seam, never on a subscription; it flares `station.wedged` through the
+  /// emit-only transport, and the status surface reports [wedge].
+  late final WedgeMonitor _wedge;
+
   Timer? _cooldownTimer;
   bool _started = false;
   bool _disposed = false;
+
+  /// The station's current WEDGE signal — the single source of truth a watcher
+  /// reads instead of re-deriving "is the grid stuck?" from raw sessions (RS-4).
+  WedgeState get wedge => _wedge.state;
 
   /// Starts the bridge and runs the baseline scans (a restart that adopts a
   /// cooled-down session — D-5/F1 — plus the baseline unclaimed-frontier
@@ -71,6 +98,10 @@ class StationDriver {
     bridge.start();
     _scanCooldowns();
     _scanUnclaimedFrontier();
+    // The wedge baseline. It arms its own poll timer only while STALLED (a
+    // WEDGED station produces no flushes, so the alarm can never be
+    // flush-driven; a flowing one arms no wall clock at all) — tg-jwh.
+    _wedge.start();
   }
 
   /// Re-scans after a completed tree flush: a failure cursor written this tick
@@ -82,6 +113,8 @@ class StationDriver {
     if (_disposed) return;
     _scanCooldowns();
     _scanUnclaimedFrontier();
+    // A resumed grid clears the alarm on the very next flush.
+    _wedge.poll();
   }
 
   /// Scans every owned session's cursor for the EARLIEST future cooldown and
@@ -146,6 +179,7 @@ class StationDriver {
     _disposed = true;
     _cooldownTimer?.cancel();
     _cooldownTimer = null;
+    _wedge.dispose();
     bridge.dispose();
   }
 }
