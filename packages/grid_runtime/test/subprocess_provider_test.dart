@@ -29,6 +29,11 @@ class FakeSpawner implements SubprocessSpawner {
   /// `oneTurn` → Exited(0) vs `longLived` → Died branch in `_emitExit`.
   bool provideExitCode = true;
 
+  /// A gate a test holds to suspend `spawn` MID-FLIGHT — the stop-vs-spawn race
+  /// (the name is reserved, no pid is stamped yet). Null ⇒ spawn returns
+  /// immediately.
+  Completer<void>? spawnGate;
+
   @override
   Future<SpawnedProcess> spawn({
     required String executable,
@@ -36,6 +41,7 @@ class FakeSpawner implements SubprocessSpawner {
     required String workingDirectory,
     required Map<String, String> environment,
   }) async {
+    if (spawnGate != null) await spawnGate!.future;
     lastExecutable = executable;
     lastArgs = args;
     lastWorkDir = workingDirectory;
@@ -427,6 +433,91 @@ exit 0
       expect(events.whereType<Died>(), hasLength(1));
     });
   });
+
+  group('SubprocessProvider — the stop-vs-spawn window', () {
+    test('a `stop` that lands while the spawn is IN FLIGHT is HANDED OFF: the '
+        'landing spawn reaps its own group — never an orphan the transport '
+        'forgot', () async {
+      final spawner = FakeSpawner()..spawnGate = Completer<void>();
+      final groups = _DyingGroupController();
+      final provider = SubprocessProvider(
+        spawner: spawner,
+        groupController: groups,
+        parentEnvironment: const {},
+      );
+
+      // The spawn is IN FLIGHT: the name is reserved, but no pid/pgid is
+      // stamped — `stop` has no kill target. This is the window.
+      final starting = provider.start(
+        'tgstate-1/tg-gpg/agent',
+        const RuntimeConfig(workDir: '/tmp', command: 'claude'),
+      );
+      expect(provider.listRunning('tgstate-'), ['tgstate-1/tg-gpg/agent']);
+
+      // Teardown walks the tree and stops it mid-flight. Nothing to signal yet.
+      await provider.stop('tgstate-1/tg-gpg/agent');
+      expect(groups.signals, isEmpty);
+
+      // The spawn LANDS. It must reap ITSELF (the hand-off).
+      spawner.spawnGate!.complete();
+      await starting;
+
+      expect(
+        groups.signals.first,
+        (4242, ProcessSignal.sigterm),
+        reason: 'the landed spawn terminated its own process group',
+      );
+      expect(
+        provider.listRunning('tgstate-'),
+        isEmpty,
+        reason: 'zero-expected: the process was reaped, not orphaned',
+      );
+      expect(provider.isRunning('tgstate-1/tg-gpg/agent'), isFalse);
+    });
+
+    test('the normal stop path is unchanged: a live session is group-killed and '
+        'deregistered', () async {
+      final spawner = FakeSpawner();
+      final groups = _DyingGroupController();
+      final provider = SubprocessProvider(
+        spawner: spawner,
+        groupController: groups,
+        parentEnvironment: const {},
+      );
+      await provider.start(
+        'tgstate-1/tg-gpg/agent',
+        const RuntimeConfig(workDir: '/tmp', command: 'claude'),
+      );
+
+      await provider.stop('tgstate-1/tg-gpg/agent');
+
+      expect(groups.signals.first, (4242, ProcessSignal.sigterm));
+      expect(provider.listRunning('tgstate-'), isEmpty);
+    });
+  });
+}
+
+/// A group seam whose group DIES on the first signal, so the REAL
+/// [terminateGroup] returns `exitedOnTerm` at once (no grace-window wait).
+class _DyingGroupController implements ProcessGroupController {
+  bool alive = true;
+  final List<(int, ProcessSignal)> signals = [];
+
+  @override
+  Future<int?> resolvePgid(int pid) async => pid;
+
+  @override
+  bool processAlive(int pid) => alive;
+
+  @override
+  bool signalGroup(int pgid, ProcessSignal signal) {
+    signals.add((pgid, signal));
+    alive = false; // the group died
+    return true;
+  }
+
+  @override
+  int currentGroupId() => 99999;
 }
 
 /// True when [pid] still names a live process (SIGWINCH is a harmless probe).

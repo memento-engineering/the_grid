@@ -213,6 +213,17 @@ class SubprocessProvider implements RuntimeProvider {
     session.startedAt = DateTime.now();
     session.lastActivity = session.startedAt;
 
+    // A `stop` raced this spawn (a teardown walked the tree while we were
+    // suspended in the spawner). It found no pid to kill and deregistered us, so
+    // NOTHING else will ever reap this process — kill it HERE, through the same
+    // guarded path `stop` uses. No `sessionStarted` is emitted and no
+    // supervision is armed: the tree that asked for this agent is already gone.
+    if (session.stopping || !identical(_sessions[name], session)) {
+      await _terminateSession(session);
+      session.close();
+      return;
+    }
+
     // Pipe the transcript: merge stdout+stderr into the per-session line stream
     // and the bounded peek buffer.
     session.attachTranscript(spawned.stdout, spawned.stderr);
@@ -260,9 +271,31 @@ class SubprocessProvider implements RuntimeProvider {
     session.stopping = true;
     session.cancelSupervision();
 
-    final pgid = session.pgid;
+    // [start] reserves the name synchronously but stamps `pid`/`pgid` only once
+    // the spawner returns, so a `stop` that lands while the spawn is IN FLIGHT
+    // has NO kill target: it can signal nothing. HAND OFF instead — the session
+    // is already marked `stopping` and deregistered, so the landing spawn reaps
+    // its OWN group and closes. Closing the transcript here would pull it out
+    // from under that spawn, so leave it to the one that still owns it.
+    if (session.pid == null) return;
+
+    await _terminateSession(session);
+    session.close();
+  }
+
+  /// The guarded group kill for ONE session — SIGTERM→grace→SIGKILL over the
+  /// whole process group ([terminateGroup]), with a direct-pid fallback when the
+  /// pgid is unusable (unresolved, or refused by the `pgid <= 1`/own-group
+  /// safety guard — which is never bypassed) so an agent is never left running.
+  ///
+  /// THE single kill path: [stop] runs it, and so does a [start] whose spawn
+  /// landed into an already-stopped session (the hand-off) — the two can
+  /// therefore never drift.
+  Future<void> _terminateSession(_Session session) async {
     final pid = session.pid;
-    if (pgid != null && pid != null) {
+    if (pid == null) return; // no target (callers check; belt-and-braces)
+    final pgid = session.pgid;
+    if (pgid != null) {
       final result = await terminateGroup(
         controller: _groups,
         pgid: pgid,
@@ -274,12 +307,11 @@ class SubprocessProvider implements RuntimeProvider {
       if (result == GroupTerminateResult.refusedUnsafe) {
         Process.killPid(pid, ProcessSignal.sigkill);
       }
-    } else if (pid != null) {
-      // pgid resolution failed at spawn — best-effort direct kill.
-      Process.killPid(pid, ProcessSignal.sigterm);
-      Process.killPid(pid, ProcessSignal.sigkill);
+      return;
     }
-    session.close();
+    // pgid resolution failed at spawn — best-effort direct kill.
+    Process.killPid(pid, ProcessSignal.sigterm);
+    Process.killPid(pid, ProcessSignal.sigkill);
   }
 
   @override
