@@ -230,6 +230,52 @@ class RestartReport {
       'respawnCount: $respawnCount)';
 }
 
+/// One process group the orphan sweep walked: the node that recorded it, its
+/// `pgid` + leader `pid`, and the REAL guarded [terminateGroup] outcome — so a
+/// caller (and a test) can assert WHICH rung fired without scraping logs.
+typedef SweptGroup = ({
+  String nodePath,
+  int pgid,
+  int pid,
+  GroupTerminateResult result,
+});
+
+/// The immutable outcome of one [RestartReconciler.sweepOrphans] pass — enough
+/// to assert in a test and to log a one-line teardown summary.
+class OrphanSweepReport {
+  /// Bundles the transport sessions [stoppedSessions] and the fence groups
+  /// [terminatedGroups] this sweep reaped, and whether the station went quiet
+  /// within the settle window ([settled]).
+  OrphanSweepReport({
+    required List<String> stoppedSessions,
+    required List<SweptGroup> terminatedGroups,
+    required this.settled,
+  }) : stoppedSessions = List.unmodifiable(stoppedSessions),
+       terminatedGroups = List.unmodifiable(terminatedGroups);
+
+  /// The transport session names still held after the unmount, stopped by the
+  /// sweep (in reap order).
+  final List<String> stoppedSessions;
+
+  /// The persisted-fence process groups still alive after the unmount,
+  /// terminated by the sweep (in reap order).
+  final List<SweptGroup> terminatedGroups;
+
+  /// Whether the sweep reached its quiet threshold before the settle window
+  /// closed. False ⇒ the window closed with effects still landing (reported
+  /// LOUD — never a silent give-up).
+  final bool settled;
+
+  /// Whether the sweep reaped nothing — the clean teardown (the norm).
+  bool get isClean => stoppedSessions.isEmpty && terminatedGroups.isEmpty;
+
+  @override
+  String toString() =>
+      'OrphanSweepReport(stopped: $stoppedSessions, '
+      'terminated: ${terminatedGroups.map((g) => g.pgid).toList()}, '
+      'settled: $settled)';
+}
+
 /// Reconciles the restart survivors (worktrees + owned session cursors) into a
 /// respawn-or-skip plan, BEFORE the kernel re-mounts the tree.
 ///
@@ -439,14 +485,32 @@ class RestartReconciler {
     );
   }
 
-  /// Terminates EVERY live group a TERMINAL [session] left running — the orphan
-  /// sweep (D4). A done session is never adopted, so every live group is a leak;
-  /// each is reaped with the REAL guarded [terminateGroup] (a `pgid <= 1`/
+  /// Terminates EVERY live group a [session] left running — **the orphan
+  /// sweep** (D4). A done session is never adopted, so every live group is a
+  /// leak; each is reaped with the REAL guarded [terminateGroup] (a `pgid <= 1`/
   /// own-group group is left, the guard never bypassed — a bounded residual).
-  Future<void> _sweepLiveGroups(SessionProjection session) async {
+  ///
+  /// THE shared mechanism of both sweep moments: the boot pass runs it over a
+  /// TERMINAL session (a detached daemon nobody re-adopts) and ignores the
+  /// result; [sweepOrphans] runs it over the OWN NON-terminal sessions at
+  /// teardown and reports each outcome LOUD. Returns the per-group outcomes so
+  /// the two can never drift.
+  Future<List<SweptGroup>> _sweepLiveGroups(SessionProjection session) async {
+    final swept = <SweptGroup>[];
     for (final t in _liveGroups(session)) {
-      await terminateGroup(controller: _groups, pgid: t.pgid, leaderPid: t.pid);
+      final result = await terminateGroup(
+        controller: _groups,
+        pgid: t.pgid,
+        leaderPid: t.pid,
+      );
+      swept.add((
+        nodePath: t.nodePath,
+        pgid: t.pgid,
+        pid: t.pid,
+        result: result,
+      ));
     }
+    return swept;
   }
 
   /// The live process groups of [session] — the per-node cursor's live groups
