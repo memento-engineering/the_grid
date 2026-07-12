@@ -36,7 +36,31 @@ mixin _$NodeCursor {
 /// round. It is also the BOUNDED-ROUNDS counter — the host refuses a rewind
 /// from a node that has reached `kMaxReworkRounds`, and a `route` reads its
 /// own count back through the ambient `SiblingView` to escalate first.
- int get rewindCount;/// The earliest time a failed node may re-key (backoff — D-5); null when not
+ int get rewindCount;/// How many times this node was REAPED ON ADOPTION — a prior station
+/// generation left it at [StepState.running] and its recorded process was
+/// found DEAD at boot, so the reaper re-mounted it.
+///
+/// CAPTURE-ONLY, and deliberately a THIRD incarnation axis — disjoint from
+/// BOTH [restartCount] (a LIVE-supervised crash, D-5) and [rewindCount] (a
+/// routing rework round, A47). A47's rule is the law here: "Two axes, not
+/// one: a rework round never spends the supervised-restart budget, and a
+/// crash never spends a rework round." A STATION DEATH is a third cause, so
+/// it gets a third counter — **a station death is not a step failure:** the
+/// `maxRestarts` breaker is for a process that died while the station was
+/// ALIVE to supervise it, so charging a bounce to it would make the
+/// operator's recovery lever destructive (the third bounce that caught a
+/// long step mid-run would trip the breaker and close a session whose step
+/// never failed).
+///
+/// UNLIKE the other two axes it is **NOT part of the reconcile key**
+/// (`CircuitScope`'s `ValueKey('$path#$restartCount.$rewindCount')` — A47):
+/// a re-key exists to TEAR DOWN a still-mounted effect, and the reap runs at
+/// boot BEFORE the kernel mounts anything, so there is no live incarnation
+/// to displace and nothing to re-key. Nothing in the frontier reads it and
+/// no breaker trips on it — so a bounce stays FREE. Its ONLY job is to make
+/// a crash-LOOPING station visible ("this step has died with the station 4
+/// times") instead of silently invisible.
+ int get reapCount;/// The earliest time a failed node may re-key (backoff — D-5); null when not
 /// cooling down.
  DateTime? get cooldownUntil;/// The durable log byte-offset for the deferred adopt-a-live-process seam
 /// (§11); null until restoration ships.
@@ -64,16 +88,16 @@ $NodeCursorCopyWith<NodeCursor> get copyWith => _$NodeCursorCopyWithImpl<NodeCur
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.rewindCount, rewindCount) || other.rewindCount == rewindCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.finishedAt, finishedAt) || other.finishedAt == finishedAt)&&(identical(other.durationMs, durationMs) || other.durationMs == durationMs)&&(identical(other.failureReason, failureReason) || other.failureReason == failureReason));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.rewindCount, rewindCount) || other.rewindCount == rewindCount)&&(identical(other.reapCount, reapCount) || other.reapCount == reapCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.finishedAt, finishedAt) || other.finishedAt == finishedAt)&&(identical(other.durationMs, durationMs) || other.durationMs == durationMs)&&(identical(other.failureReason, failureReason) || other.failureReason == failureReason));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,rewindCount,cooldownUntil,logOffset,startedAt,finishedAt,durationMs,failureReason);
+int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,rewindCount,reapCount,cooldownUntil,logOffset,startedAt,finishedAt,durationMs,failureReason);
 
 @override
 String toString() {
-  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, rewindCount: $rewindCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset, startedAt: $startedAt, finishedAt: $finishedAt, durationMs: $durationMs, failureReason: $failureReason)';
+  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, rewindCount: $rewindCount, reapCount: $reapCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset, startedAt: $startedAt, finishedAt: $finishedAt, durationMs: $durationMs, failureReason: $failureReason)';
 }
 
 
@@ -84,7 +108,7 @@ abstract mixin class $NodeCursorCopyWith<$Res>  {
   factory $NodeCursorCopyWith(NodeCursor value, $Res Function(NodeCursor) _then) = _$NodeCursorCopyWithImpl;
 @useResult
 $Res call({
- StepState state, int? pgid, int? pid, String? token, int restartCount, int rewindCount, DateTime? cooldownUntil, int? logOffset, DateTime? startedAt, DateTime? finishedAt, int? durationMs, String? failureReason
+ StepState state, int? pgid, int? pid, String? token, int restartCount, int rewindCount, int reapCount, DateTime? cooldownUntil, int? logOffset, DateTime? startedAt, DateTime? finishedAt, int? durationMs, String? failureReason
 });
 
 
@@ -101,7 +125,7 @@ class _$NodeCursorCopyWithImpl<$Res>
 
 /// Create a copy of NodeCursor
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? rewindCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,Object? startedAt = freezed,Object? finishedAt = freezed,Object? durationMs = freezed,Object? failureReason = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? rewindCount = null,Object? reapCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,Object? startedAt = freezed,Object? finishedAt = freezed,Object? durationMs = freezed,Object? failureReason = freezed,}) {
   return _then(_self.copyWith(
 state: null == state ? _self.state : state // ignore: cast_nullable_to_non_nullable
 as StepState,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
@@ -109,6 +133,7 @@ as int?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nu
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,restartCount: null == restartCount ? _self.restartCount : restartCount // ignore: cast_nullable_to_non_nullable
 as int,rewindCount: null == rewindCount ? _self.rewindCount : rewindCount // ignore: cast_nullable_to_non_nullable
+as int,reapCount: null == reapCount ? _self.reapCount : reapCount // ignore: cast_nullable_to_non_nullable
 as int,cooldownUntil: freezed == cooldownUntil ? _self.cooldownUntil : cooldownUntil // ignore: cast_nullable_to_non_nullable
 as DateTime?,logOffset: freezed == logOffset ? _self.logOffset : logOffset // ignore: cast_nullable_to_non_nullable
 as int?,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
@@ -200,10 +225,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  int rewindCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  int rewindCount,  int reapCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _NodeCursor() when $default != null:
-return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.rewindCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
+return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.rewindCount,_that.reapCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
   return orElse();
 
 }
@@ -221,10 +246,10 @@ return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  int rewindCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  int rewindCount,  int reapCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)  $default,) {final _that = this;
 switch (_that) {
 case _NodeCursor():
-return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.rewindCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
+return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.rewindCount,_that.reapCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -241,10 +266,10 @@ return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  int rewindCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( StepState state,  int? pgid,  int? pid,  String? token,  int restartCount,  int rewindCount,  int reapCount,  DateTime? cooldownUntil,  int? logOffset,  DateTime? startedAt,  DateTime? finishedAt,  int? durationMs,  String? failureReason)?  $default,) {final _that = this;
 switch (_that) {
 case _NodeCursor() when $default != null:
-return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.rewindCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
+return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,_that.rewindCount,_that.reapCount,_that.cooldownUntil,_that.logOffset,_that.startedAt,_that.finishedAt,_that.durationMs,_that.failureReason);case _:
   return null;
 
 }
@@ -256,7 +281,7 @@ return $default(_that.state,_that.pgid,_that.pid,_that.token,_that.restartCount,
 @JsonSerializable()
 
 class _NodeCursor extends NodeCursor {
-  const _NodeCursor({this.state = StepState.pending, this.pgid, this.pid, this.token, this.restartCount = 0, this.rewindCount = 0, this.cooldownUntil, this.logOffset, this.startedAt, this.finishedAt, this.durationMs, this.failureReason}): super._();
+  const _NodeCursor({this.state = StepState.pending, this.pgid, this.pid, this.token, this.restartCount = 0, this.rewindCount = 0, this.reapCount = 0, this.cooldownUntil, this.logOffset, this.startedAt, this.finishedAt, this.durationMs, this.failureReason}): super._();
   factory _NodeCursor.fromJson(Map<String, dynamic> json) => _$NodeCursorFromJson(json);
 
 /// The node's lifecycle state.
@@ -286,6 +311,31 @@ class _NodeCursor extends NodeCursor {
 /// from a node that has reached `kMaxReworkRounds`, and a `route` reads its
 /// own count back through the ambient `SiblingView` to escalate first.
 @override@JsonKey() final  int rewindCount;
+/// How many times this node was REAPED ON ADOPTION — a prior station
+/// generation left it at [StepState.running] and its recorded process was
+/// found DEAD at boot, so the reaper re-mounted it.
+///
+/// CAPTURE-ONLY, and deliberately a THIRD incarnation axis — disjoint from
+/// BOTH [restartCount] (a LIVE-supervised crash, D-5) and [rewindCount] (a
+/// routing rework round, A47). A47's rule is the law here: "Two axes, not
+/// one: a rework round never spends the supervised-restart budget, and a
+/// crash never spends a rework round." A STATION DEATH is a third cause, so
+/// it gets a third counter — **a station death is not a step failure:** the
+/// `maxRestarts` breaker is for a process that died while the station was
+/// ALIVE to supervise it, so charging a bounce to it would make the
+/// operator's recovery lever destructive (the third bounce that caught a
+/// long step mid-run would trip the breaker and close a session whose step
+/// never failed).
+///
+/// UNLIKE the other two axes it is **NOT part of the reconcile key**
+/// (`CircuitScope`'s `ValueKey('$path#$restartCount.$rewindCount')` — A47):
+/// a re-key exists to TEAR DOWN a still-mounted effect, and the reap runs at
+/// boot BEFORE the kernel mounts anything, so there is no live incarnation
+/// to displace and nothing to re-key. Nothing in the frontier reads it and
+/// no breaker trips on it — so a bounce stays FREE. Its ONLY job is to make
+/// a crash-LOOPING station visible ("this step has died with the station 4
+/// times") instead of silently invisible.
+@override@JsonKey() final  int reapCount;
 /// The earliest time a failed node may re-key (backoff — D-5); null when not
 /// cooling down.
 @override final  DateTime? cooldownUntil;
@@ -321,16 +371,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.rewindCount, rewindCount) || other.rewindCount == rewindCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.finishedAt, finishedAt) || other.finishedAt == finishedAt)&&(identical(other.durationMs, durationMs) || other.durationMs == durationMs)&&(identical(other.failureReason, failureReason) || other.failureReason == failureReason));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _NodeCursor&&(identical(other.state, state) || other.state == state)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.token, token) || other.token == token)&&(identical(other.restartCount, restartCount) || other.restartCount == restartCount)&&(identical(other.rewindCount, rewindCount) || other.rewindCount == rewindCount)&&(identical(other.reapCount, reapCount) || other.reapCount == reapCount)&&(identical(other.cooldownUntil, cooldownUntil) || other.cooldownUntil == cooldownUntil)&&(identical(other.logOffset, logOffset) || other.logOffset == logOffset)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.finishedAt, finishedAt) || other.finishedAt == finishedAt)&&(identical(other.durationMs, durationMs) || other.durationMs == durationMs)&&(identical(other.failureReason, failureReason) || other.failureReason == failureReason));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,rewindCount,cooldownUntil,logOffset,startedAt,finishedAt,durationMs,failureReason);
+int get hashCode => Object.hash(runtimeType,state,pgid,pid,token,restartCount,rewindCount,reapCount,cooldownUntil,logOffset,startedAt,finishedAt,durationMs,failureReason);
 
 @override
 String toString() {
-  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, rewindCount: $rewindCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset, startedAt: $startedAt, finishedAt: $finishedAt, durationMs: $durationMs, failureReason: $failureReason)';
+  return 'NodeCursor(state: $state, pgid: $pgid, pid: $pid, token: $token, restartCount: $restartCount, rewindCount: $rewindCount, reapCount: $reapCount, cooldownUntil: $cooldownUntil, logOffset: $logOffset, startedAt: $startedAt, finishedAt: $finishedAt, durationMs: $durationMs, failureReason: $failureReason)';
 }
 
 
@@ -341,7 +391,7 @@ abstract mixin class _$NodeCursorCopyWith<$Res> implements $NodeCursorCopyWith<$
   factory _$NodeCursorCopyWith(_NodeCursor value, $Res Function(_NodeCursor) _then) = __$NodeCursorCopyWithImpl;
 @override @useResult
 $Res call({
- StepState state, int? pgid, int? pid, String? token, int restartCount, int rewindCount, DateTime? cooldownUntil, int? logOffset, DateTime? startedAt, DateTime? finishedAt, int? durationMs, String? failureReason
+ StepState state, int? pgid, int? pid, String? token, int restartCount, int rewindCount, int reapCount, DateTime? cooldownUntil, int? logOffset, DateTime? startedAt, DateTime? finishedAt, int? durationMs, String? failureReason
 });
 
 
@@ -358,7 +408,7 @@ class __$NodeCursorCopyWithImpl<$Res>
 
 /// Create a copy of NodeCursor
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? rewindCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,Object? startedAt = freezed,Object? finishedAt = freezed,Object? durationMs = freezed,Object? failureReason = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? state = null,Object? pgid = freezed,Object? pid = freezed,Object? token = freezed,Object? restartCount = null,Object? rewindCount = null,Object? reapCount = null,Object? cooldownUntil = freezed,Object? logOffset = freezed,Object? startedAt = freezed,Object? finishedAt = freezed,Object? durationMs = freezed,Object? failureReason = freezed,}) {
   return _then(_NodeCursor(
 state: null == state ? _self.state : state // ignore: cast_nullable_to_non_nullable
 as StepState,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
@@ -366,6 +416,7 @@ as int?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nu
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,restartCount: null == restartCount ? _self.restartCount : restartCount // ignore: cast_nullable_to_non_nullable
 as int,rewindCount: null == rewindCount ? _self.rewindCount : rewindCount // ignore: cast_nullable_to_non_nullable
+as int,reapCount: null == reapCount ? _self.reapCount : reapCount // ignore: cast_nullable_to_non_nullable
 as int,cooldownUntil: freezed == cooldownUntil ? _self.cooldownUntil : cooldownUntil // ignore: cast_nullable_to_non_nullable
 as DateTime?,logOffset: freezed == logOffset ? _self.logOffset : logOffset // ignore: cast_nullable_to_non_nullable
 as int?,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable

@@ -15,6 +15,7 @@ _NodeCursor _$NodeCursorFromJson(Map<String, dynamic> json) => _NodeCursor(
   token: json['token'] as String?,
   restartCount: (json['restartCount'] as num?)?.toInt() ?? 0,
   rewindCount: (json['rewindCount'] as num?)?.toInt() ?? 0,
+  reapCount: (json['reapCount'] as num?)?.toInt() ?? 0,
   cooldownUntil: json['cooldownUntil'] == null
       ? null
       : DateTime.parse(json['cooldownUntil'] as String),
@@ -37,6 +38,7 @@ Map<String, dynamic> _$NodeCursorToJson(_NodeCursor instance) =>
       'token': instance.token,
       'restartCount': instance.restartCount,
       'rewindCount': instance.rewindCount,
+      'reapCount': instance.reapCount,
       'cooldownUntil': instance.cooldownUntil?.toIso8601String(),
       'logOffset': instance.logOffset,
       'startedAt': instance.startedAt?.toIso8601String(),

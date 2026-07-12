@@ -117,6 +117,13 @@ abstract final class CursorKeys {
   /// field; DISJOINT from [restartCount] (the crash-restart budget).
   static const rewindCount = 'rewindCount';
 
+  /// The ADOPTION-REAP counter suffix — the per-node count of station
+  /// generations that died while this node was `running`. CAPTURE-ONLY: a THIRD
+  /// incarnation axis (A47), disjoint from both [restartCount] (the
+  /// crash-restart budget) and [rewindCount] (routing). Nothing gates on it and
+  /// it is not in the reconcile key.
+  static const reapCount = 'reapCount';
+
   /// The backoff cooldown-deadline suffix (ISO-8601).
   static const cooldownUntil = 'cooldownUntil';
 
@@ -293,6 +300,7 @@ Map<String, String> nodeCursorMetadata(String nodePath, NodeCursor node) => {
       node.restartCount.toString(),
   CursorKeys.keyFor(nodePath, CursorKeys.rewindCount):
       node.rewindCount.toString(),
+  CursorKeys.keyFor(nodePath, CursorKeys.reapCount): node.reapCount.toString(),
   if (node.pgid != null)
     CursorKeys.keyFor(nodePath, CursorKeys.pgid): node.pgid.toString(),
   if (node.pid != null)
@@ -357,6 +365,57 @@ Map<String, String> nodeRewoundMetadata(
   CursorKeys.keyFor(nodePath, CursorKeys.restartCount): '0',
 };
 
+/// The targeted metadata payload REAPING one ZOMBIE node on ADOPTION:
+/// `state=pending` (re-mount, virgin) + the bumped capture-only [reapCount].
+///
+/// A node a PRIOR station generation left at [StepState.running] whose recorded
+/// process is DEAD is a STATION-DEATH SURVIVOR, **not a step failure** — the
+/// process never got to report, because the station died with it. So the reap
+/// simply RE-MOUNTS it, which is exactly what an operator's manual recovery
+/// does (re-run the step; never fail the session).
+///
+/// **Deliberately does NOT touch `restartCount`** — the ONE place it diverges
+/// from its sibling [nodeRewoundMetadata], which writes `restartCount=0`. A
+/// REWIND opens a genuinely NEW round of work, bounded by its own `rewindCount`
+/// belt, so a fresh round earns a fresh supervised-restart budget. A REAP opens
+/// no new round: it resumes the SAME round after a station death, and has no
+/// bounding counter that gates. Zeroing the budget here would ERASE the record
+/// of the genuine crashes this round already suffered — a step that truly
+/// crash-loops could evade the D-5 breaker forever by being bounced. So the reap
+/// PRESERVES `restartCount` rather than resetting it, and never bumps it either
+/// (charging the D-5 breaker for a bounce would make the operator's recovery
+/// lever DESTRUCTIVE: with `maxRestarts: 3`, the third station bounce that
+/// caught a long `agent` step mid-run would trip `isStepBroken`, and
+/// `SessionScope` would escalate + CLOSE a session whose step never failed).
+///
+/// **No `rewindCount` either**, so the node's reconcile key
+/// (`ValueKey('$path#$restartCount.$rewindCount')` — A47) is UNCHANGED. A re-key
+/// exists to tear down a still-mounted effect; the reap runs at boot before the
+/// kernel mounts anything, so there is nothing live to displace.
+///
+/// **No `cooldownUntil` either.** The frontier's cooldown gate applies ONLY to a
+/// `failed` node, and a `pending` node mounts immediately — so a cooldown
+/// written here would be dead metadata (and a stale one left over from an
+/// earlier real failure is inert for the same reason).
+///
+/// **The stale `pgid`/`pid`/`token` are deliberately LEFT.** The chokepoint has
+/// no key-delete affordance, and an empty-string stand-in would be its own small
+/// lie. They are INERT on a `pending` node: the restart pass's live-group scan
+/// only ever selects `running`/`ready`, the frontier ignores them, and the next
+/// spawn overwrites all three via [nodeStartedMetadata]. The `state` field is the
+/// node's sole liveness claim, and that is the field this write corrects.
+///
+/// Merge-safe (disjoint per-node keys) like every other cursor write, and
+/// written through the ONE chokepoint onto the_grid's OWN session bead — never
+/// the foreign work bead (A37).
+Map<String, String> nodeReapedMetadata(
+  String nodePath, {
+  required int reapCount,
+}) => {
+  CursorKeys.keyFor(nodePath, CursorKeys.state): StepState.pending.name,
+  CursorKeys.keyFor(nodePath, CursorKeys.reapCount): reapCount.toString(),
+};
+
 /// The targeted metadata payload stamping ONE node's spawned identity at
 /// `SessionStarted` (Track E / D-4): `state=running` + the per-node pgid/pid/
 /// token (the respawn fence). [pgid] is omitted when null (an honest "no group
@@ -415,6 +474,9 @@ CircuitCursor projectCircuitCursor(Bead sessionBead) {
       // The routing rewind axis (tg-o90) — the second incarnation counter,
       // disjoint from the crash-restart budget above.
       rewindCount: _asInt(fields[CursorKeys.rewindCount]) ?? 0,
+      // The ADOPTION-reap axis — the third incarnation counter (A47),
+      // capture-only, disjoint from both counters above and absent from the key.
+      reapCount: _asInt(fields[CursorKeys.reapCount]) ?? 0,
       cooldownUntil: _parseDate(fields[CursorKeys.cooldownUntil]),
       logOffset: _asInt(fields[CursorKeys.logOffset]),
       // Capture-only flow telemetry (FT-1) — surfaced typed for observers; never
