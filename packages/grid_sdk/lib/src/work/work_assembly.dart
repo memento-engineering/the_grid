@@ -453,6 +453,16 @@ Future<StationWorkRuntime> buildStationWork({
     writer: writer,
     stateSubstation: stateSubstation,
     maxConcurrentWork: maxConcurrentWork,
+    // THE COMPLETION FENCE. A detached one-shot agent's vanish is reported as an
+    // INFERRED clean exit — a murder and a completion look identical on the wire.
+    // The engine advances the circuit on such an exit only for a capability that
+    // DECLARED `CompletionContract.committedWorkspace` (the coding agent), and
+    // only when THIS probe proves its workspace holds no uncommitted work OUTSIDE
+    // the grid's own runtime dir. Every other one-shot (a critic, a `specify` —
+    // which finish by writing an uncommitted artifact) is untouched. Dry-run gets
+    // the inert git service (its no-op runner returns empty output ⇒ every probe
+    // `clear`), so a dry run is unchanged.
+    workSignal: stationWorkSignal(git),
   );
 
   return StationWorkRuntime._(
@@ -482,6 +492,31 @@ Future<StationWorkRuntime> buildStationWork({
     freshnessBarrier: freshnessBarrier,
   );
 }
+
+/// The station's WORK-SIGNAL probe — the live binding of the engine's COMPLETION
+/// FENCE.
+///
+/// Asks [git] whether a bead's workspace still holds UNCOMMITTED work, EXCLUDING
+/// the grid's own runtime dir ([kGridRuntimeDirName]) — `.grid/critique/` (incl.
+/// the pinned diff), `.grid/spec/`, `.grid/telemetry/`. That residue is written by
+/// the grid's OWN steps (the critics, `pin-diff`, `specify`), none of which
+/// commits it, so it is NOT a work signal.
+///
+/// The exclusion is what makes the signal SUBSTATION-INDEPENDENT: the_grid
+/// gitignores `.grid` (git never reports it), while genesis and lenny do NOT (git
+/// reports `?? .grid/`). Without it, a coding agent that CORRECTLY committed on
+/// genesis would read as INTERRUPTED, respawn into the same residue, fail
+/// identically, burn its restart budget, and escalate — a working completion
+/// turned into a guaranteed failure loop.
+///
+/// [StationGitService.reap]'s three-gate check is untouched: it calls the same
+/// probe with NO exclusion (ADR-0006 Decision 3, verbatim — residue in a worktree
+/// it is about to REMOVE still blocks the removal).
+WorkSignalProbe stationWorkSignal(StationGitService git) =>
+    (workspaceDir) => git.hasUncommittedWork(
+      workspaceDir,
+      excluding: const <String>{kGridRuntimeDirName},
+    );
 
 /// The land ops a runner threads into its substations' git/GitHub assets when
 /// a live run arms landing (ADR-0006 D3) — they flow into the ASSET's
