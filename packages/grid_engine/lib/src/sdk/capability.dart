@@ -126,6 +126,38 @@ class Workspace {
   String toString() => 'Workspace($workspaceDir @ $branch → $baseBranch)';
 }
 
+/// What a capability's FINISHED turn leaves behind — the capability's own
+/// declared working agreement, and the ONLY thing that lets the engine PROVE an
+/// INFERRED completion (**no-complete-on-faith**, the dual of ADR-0009 D4/D5's
+/// no-adopt-on-faith).
+///
+/// A detached one-shot exposes no readable exit code, so its vanish is reported
+/// as an INFERRED clean exit (`Exited.inferred`) — and a MURDERED effect vanishes
+/// exactly like a finished one. The engine can only tell them apart for a
+/// capability that PROMISES an observable trace of a finished turn. **Most do
+/// not**: a critic, a `specify`, a probe finish by WRITING a verdict/artifact
+/// into the workspace and vanishing — leaving uncommitted files IS their job.
+/// Fencing those on workspace dirtiness would fail every one of them, forever.
+///
+/// So the contract is DECLARED, per capability, and defaults to [none]. The
+/// engine holds the CONCEPT ("what does a finished turn leave behind?"); the
+/// capability holds its own working agreement (ADR-0008 D5 / D2 — compose, never
+/// subclass).
+enum CompletionContract {
+  /// **The default.** This capability promises NOTHING observable about the
+  /// workspace when it finishes, so an inferred completion cannot be proven — and
+  /// is taken at face value (today's behavior). A critic, a `specify`, an
+  /// artifact writer, a probe: each completes by writing its output and
+  /// vanishing.
+  none,
+
+  /// This capability's working agreement is **commit your work in the workspace**
+  /// (the coding agent). A workspace left holding UNCOMMITTED work is therefore
+  /// the observable trace of a turn CUT SHORT: an inferred completion over one is
+  /// an INTERRUPTED turn, not a completion, and the step respawns.
+  committedWorkspace,
+}
+
 /// A capability backed by a spawned, supervised process. The carrier owns
 /// `provider.start/stop`; the capability is PURE description.
 abstract class ProcessCapability extends Capability {
@@ -154,6 +186,19 @@ abstract class ProcessCapability extends Capability {
     TreeContext context,
     StepArgs args,
   ) async => null;
+
+  /// This capability's declared [CompletionContract] — what a FINISHED turn of it
+  /// leaves behind, and so whether the engine may PROVE an INFERRED completion (a
+  /// detached vanish) before advancing the circuit.
+  ///
+  /// Defaults to [CompletionContract.none]: NOT fenced, taken at face value —
+  /// today's behavior, and the right default for every capability that finishes
+  /// by writing an artifact rather than a commit (a critic, a `specify`, a
+  /// probe). A CODING AGENT — whose working agreement IS "commit your work in the
+  /// worktree" — overrides this to [CompletionContract.committedWorkspace], and
+  /// its inferred completions are then proven against the workspace's work signal
+  /// before the circuit advances.
+  CompletionContract get completionContract => CompletionContract.none;
 
   /// Idempotent belt-and-braces cleanup on unmount (TEARDOWN-11/12) — e.g.
   /// `pkill` a detached side-process by token. Defaults to a no-op (the host's
