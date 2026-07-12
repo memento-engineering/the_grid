@@ -24,3 +24,4 @@ export 'circuit.dart';
 export 'federation_protocol.dart';
 export 'frontier.dart';
 export 'lease.dart';
+export 'rewind.dart';
