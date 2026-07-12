@@ -18,6 +18,15 @@
 /// invariant 2) and latched once. Breaker-exhaustion close + escalation fold in
 /// at Track G.
 ///
+/// **Adopt-or-mint DISPOSITIONS a closed session (I-10, tg-4rw).** An existing
+/// session bead is not simply "there or not": it is `live` (adopt), `done` /
+/// `held` (a blocking terminal — `WorkList` never mounts it), or a `voided` DEAD
+/// KEY — closed mid-flight with an in-flight cursor and no human marker. A dead
+/// key is never adoptable AND never blocking: the scope retires it (re-keys its
+/// `work_bead` off this bead — the engine-automatic member of A47's re-run
+/// taxonomy) and mints a fresh round, LOUD. Before that, a dead key blocked its
+/// work bead forever, silently.
+///
 /// Why above the fan-out (the D-2 break it fixes): P0 minted lazily at
 /// first-leaf-mount and named the provider session = the bead id, one per work
 /// bead. `MultiChildBranch` mounts all frontier children in one pass, so two
@@ -32,9 +41,11 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 
 import '../domain/session_bead.dart';
+import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
+import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
@@ -78,25 +89,6 @@ class SessionScope extends StatefulSeed {
 /// (`_cancelled` set first in `dispose`, `context.mounted` after every await,
 /// the captured `_ctx`) are the same discipline as `CapabilityHostState`.
 class SessionScopeState extends State<SessionScope> {
-  /// The the_grid-internal escalation marker key (NOT a codec-boundary key) — a
-  /// human picks it up when a circuit's breaker exhausts (D-5).
-  static const _escalationKey = 'grid.escalation';
-
-  /// The capture-only escalation-diagnostic key (FT-1, tg-pez) — the final
-  /// failing node + its truncated reason, recorded beside [_escalationKey] in
-  /// the SAME write so a human sees WHAT exhausted, not just THAT it did.
-  static const _escalationReasonKey = 'grid.escalation_reason';
-
-  /// The the_grid-internal REWORK-DECLINE marker key (tg-x1j, NOT a
-  /// codec-boundary key) — a human picks it up when a rework re-key orphaned a
-  /// session this scope never observed parked at a gate (the guard principle:
-  /// a scope that declines to mint says WHY once, LOUD).
-  static const _reworkDeclinedKey = 'grid.rework_declined';
-
-  /// The capture-only decline-diagnostic key, recorded beside
-  /// [_reworkDeclinedKey] in the SAME write.
-  static const _reworkDeclinedReasonKey = 'grid.rework_declined_reason';
-
   /// The bounded `createSession` retry budget (tg-6nf) — a mint failure is
   /// RETRIED up to this many TOTAL attempts before the scope escalates LOUD
   /// (the circuit-breaker's bounded-retry discipline, D-5). Small on purpose:
@@ -134,6 +126,16 @@ class SessionScopeState extends State<SessionScope> {
   /// by [_maxMintAttempts]; reaching the cap is the escalation trigger. Reset
   /// to 0 by [_reworkAndRemint] so round N+1 gets its own fresh budget.
   int _mintAttempts = 0;
+
+  /// The VOIDED session this scope must RETIRE before it mints (I-10) — set in
+  /// [initState] when the joined session is a DEAD KEY (closed mid-flight, no
+  /// human marker); cleared the instant the re-key lands, so a bounded mint RETRY
+  /// (tg-6nf) can never re-key twice.
+  SessionProjection? _voidSession;
+
+  /// WHY the joined session was voided — carried into the retire write (durable,
+  /// on the dead bead) and the `session.voided` flare (live). Empty when none.
+  String _voidReason = '';
 
   /// The nodePaths whose gate re-arm is IN FLIGHT (tg-boq) — an in-flight DEDUP
   /// guard, **not** a permanent latch. A path is added before the write and
@@ -191,19 +193,68 @@ class SessionScopeState extends State<SessionScope> {
 
   @override
   void initState() {
-    final existing = seed.existingSession?.sessionId;
-    if (existing != null && existing.isNotEmpty) {
-      // ADOPT — synchronous, no mint (the restoration adopt seam is the same
-      // resolving→ready transition on restart). The join already reflects
-      // this session (that's how we're adopting it), so the rework
-      // orphan-check (tg-x1j v2) may fire from the very first build.
-      _sessionId = existing;
-      _resolving = false;
-      _joinedOnce = true;
-    } else {
-      // MINT — once, above the fan-out.
-      unawaited(_mint());
+    // Adopt-or-mint DISPOSITIONS the joined session (I-10, tg-4rw): a CLOSED
+    // session is `done`, `held`, or a `voided` DEAD KEY — never "unadoptable but
+    // blocking", which is what wedged tg-1di for 62 minutes with no session and
+    // no line saying why.
+    final disposition = sessionDispositionOf(seed.existingSession);
+    switch (disposition) {
+      case LiveSession():
+        // ADOPT — synchronous, no mint (the restoration adopt seam is the same
+        // resolving→ready transition on restart). The join already reflects this
+        // session (that's how we're adopting it), so the rework orphan-check
+        // (tg-x1j v2) may fire from the very first build.
+        _sessionId = seed.existingSession!.sessionId;
+        _resolving = false;
+        _joinedOnce = true;
+      case VoidedSession(:final reason):
+        // A DEAD KEY: never adoptable, never blocking. Retire it, then mint
+        // round N+1 through the SAME bounded-budget path a fresh bead uses —
+        // LOUD, and fail-closed against a stale process that is still alive.
+        _voidSession = seed.existingSession;
+        _voidReason = reason;
+        unawaited(_mint());
+      case NoSession():
+        // MINT — once, above the fan-out.
+        unawaited(_mint());
+      case DoneSession() || HeldSession():
+        // Unreachable through `WorkList` (a blocking disposition never mounts a
+        // WorkBead). If any other composition mounts one anyway, say WHY once and
+        // go inert — never silently adopt a terminal session's id, never mint a
+        // second round over finished work (LOUD or GONE, ADR-0008 D3).
+        _declineMount(disposition);
     }
+  }
+
+  /// LOUD-declines a mount over a BLOCKING session (I-10) — a defensive guard
+  /// with a concrete failure story (a mis-composed tree re-running landed work),
+  /// loud when violated.
+  ///
+  /// The fields are assigned directly (this runs in `initState`, BEFORE the first
+  /// build — `setState` there is illegal), and the flare is scheduled off
+  /// `initState`: `_services` is captured in `didChangeDependencies`, which
+  /// genesis runs AFTER `initState` within one `performRebuild`, so flaring inline
+  /// would fire into the default (transport-less) bundle and be silently dropped
+  /// — the exact bug class this bead exists to kill.
+  void _declineMount(SessionDisposition disposition) {
+    final reason = switch (disposition) {
+      HeldSession(:final reason) => reason,
+      DoneSession() => 'the session already closed at a positive terminal',
+      // Unreachable: only the blocking arms decline (initState dispatches the
+      // other three) — named for exhaustiveness, never a silent default.
+      NoSession() || LiveSession() || VoidedSession() =>
+        'non-blocking disposition',
+    };
+    _failed = true;
+    _resolving = false;
+    scheduleMicrotask(() {
+      if (_cancelled) return;
+      _flare('session.mountDeclined', {
+        'workBeadId': seed.bead.id,
+        'sessionId': seed.existingSession?.sessionId ?? '',
+        'reason': truncateReason(reason),
+      });
+    });
   }
 
   Future<void> _mint() async {
@@ -213,6 +264,39 @@ class SessionScopeState extends State<SessionScope> {
     if (_cancelled || !context.mounted) return;
     _mintAttempts++;
     try {
+      // I-10: RETIRE a dead key before minting over it. Re-keying the voided
+      // session's `work_bead` off this bead (through the ONE chokepoint, onto
+      // the_grid's OWN bead — A37) keeps the join single-valued: two sessions on
+      // one work bead would make the join's winner map-order-dependent, and
+      // `grid rework` refuses an ambiguous bead outright. This is the operator's
+      // I-10 workaround, mechanized — A47's re-run taxonomy gains its fourth,
+      // engine-automatic member (`voidKeyFor`, never a `#r<N>` rework round).
+      final dead = _voidSession;
+      if (dead != null) {
+        if (!_staleFencesAreDead(dead)) {
+          _refuseVoidMint(dead);
+          return;
+        }
+        final deadId = dead.sessionId ?? '';
+        if (deadId.isNotEmpty) {
+          await _ctx!.writer.update(
+            deadId,
+            metadata: voidRetireMetadata(
+              workBeadId: seed.bead.id,
+              deadSessionId: deadId,
+              reason: _voidReason,
+            ),
+          );
+          if (_cancelled || !context.mounted) return;
+        }
+        // Retired — a bounded retry must never re-key twice.
+        _voidSession = null;
+        _flare('session.voided', {
+          'workBeadId': seed.bead.id,
+          'deadSessionId': deadId,
+          'reason': truncateReason(_voidReason),
+        });
+      }
       final id = await _ctx!.writer.createSession(
         substation: _ctx!.stateSubstation,
         title: 'grid session ${seed.bead.id}',
@@ -226,6 +310,55 @@ class SessionScopeState extends State<SessionScope> {
     } on Object catch (error) {
       if (_cancelled || !context.mounted) return;
       _onMintFailed('$error');
+    }
+  }
+
+  /// Whether EVERY process fence the VOIDED [session] still records is provably
+  /// DEAD — the fail-closed half of the I-10 re-mint.
+  ///
+  /// The probe is the ambient engine liveness seam (`StationServices.liveness`,
+  /// ADR-0009 D4) — the SAME pgid-alive half the daemon adopt-proof uses. It
+  /// NARROWS the re-mint; it is not its precondition. UNWIRED (the P1/offline
+  /// default, [neverLive]) nothing probes alive and the mint proceeds on the two
+  /// structural guarantees that stand without it: a work bead whose session went
+  /// terminal UNMOUNTS, and unmount DISPOSES its allocations (kill); and a station
+  /// restart SWEEPS a terminal session's live groups before the tree re-mounts
+  /// (`RestartReconciler`'s live-group sweep). WIRED (the live arm), a fence that
+  /// is STILL alive refuses the mint LOUD — a truly-live orphan is never
+  /// double-run.
+  bool _staleFencesAreDead(SessionProjection session) {
+    final probe = _ctx?.liveness ?? neverLive;
+    for (final fence in staleFences(session)) {
+      if (probe(fence)) return false;
+    }
+    return true;
+  }
+
+  /// LOUD-refuses the I-10 re-mint: the dead session still records a LIVE process
+  /// group, so minting would double-run it. Says WHY once (naming the pgids) and
+  /// goes inert — an operator kills the orphan group, or `grid rework` retires the
+  /// round. Never a silent wedge (the guard principle).
+  void _refuseVoidMint(SessionProjection session) {
+    _flare('session.voidRefused', {
+      'workBeadId': seed.bead.id,
+      'deadSessionId': session.sessionId ?? '',
+      'pgids': staleFences(session).map((f) => '${f.pgid}').join(','),
+      'reason': truncateReason(_voidReason),
+    });
+    setState(() {
+      _failed = true;
+      _resolving = false;
+    });
+  }
+
+  /// The generic emit-only flare sink (D-8) for this scope's I-10 signals — the
+  /// SAME `ExplorationTransport` `CapabilityHost._emitFlare` and `WorkList` fire
+  /// through. A throwing/absent transport never re-breaks the caller's microtask.
+  void _flare(String name, Map<String, String> data) {
+    try {
+      _services.transport?.flare(name, data);
+    } catch (_) {
+      // A throwing transport never breaks the scope's lifecycle — swallow.
     }
   }
 
@@ -287,12 +420,43 @@ class SessionScopeState extends State<SessionScope> {
     }
   }
 
-  /// Schedules the session close on the positive terminal — latched once, run
-  /// off `build` (never a write IN `build`).
+  /// Schedules the positive-terminal close — latched once, run off `build`
+  /// (never a write IN `build`).
   void _scheduleClose(String id) {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
-    scheduleMicrotask(() => unawaited(_ctx?.writer.close(id)));
+    scheduleMicrotask(() => unawaited(_completeAndClose(id)));
+  }
+
+  /// Stamps the durable POSITIVE-TERMINAL marker (`grid.outcome=complete`, I-10)
+  /// through the chokepoint, THEN closes. The marker is what a later mount reads
+  /// to tell a FINISHED round from a session somebody closed mid-flight — without
+  /// it, the disposition falls back to cursor shape, which cannot see a circuit
+  /// closed BETWEEN steps (every WRITTEN node complete, the circuit not).
+  ///
+  /// Neither write rethrows: an unhandled async error in a resident station's
+  /// root zone would terminate the isolate (the same discipline as `_rearm`). A
+  /// dropped marker is LOUD but not fatal (the legacy cursor fallback still reads
+  /// a finished round as `done`), so the close ALWAYS runs.
+  Future<void> _completeAndClose(String id) async {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    try {
+      await ctx.writer.update(id, metadata: sessionCompleteMetadata());
+    } on Object catch (error) {
+      _flare('session.outcomeUnmarked', {
+        'sessionId': id,
+        'reason': truncateReason('$error'),
+      });
+    }
+    try {
+      await ctx.writer.close(id);
+    } on Object catch (error) {
+      _flare('session.closeFailed', {
+        'sessionId': id,
+        'reason': truncateReason('$error'),
+      });
+    }
   }
 
   /// Schedules the breaker-exhaustion escalation (D-5): write the human marker
@@ -422,8 +586,8 @@ class SessionScopeState extends State<SessionScope> {
     await ctx.writer.update(
       retiredId,
       metadata: {
-        _reworkDeclinedKey: 'true',
-        _reworkDeclinedReasonKey:
+        SessionBeadKeys.reworkDeclined: 'true',
+        SessionBeadKeys.reworkDeclinedReason:
             'session retired (work_bead re-keyed) while this scope never '
             'observed it parked at a gate — refusing to abandon a possibly-'
             'live round; a human must investigate',
@@ -443,9 +607,9 @@ class SessionScopeState extends State<SessionScope> {
     await ctx.writer.update(
       id,
       metadata: {
-        _escalationKey: 'breaker-exhausted',
+        SessionBeadKeys.escalation: 'breaker-exhausted',
         // Capture-only (FT-1): the failing node + reason, beside the marker.
-        if (reason.isNotEmpty) _escalationReasonKey: reason,
+        if (reason.isNotEmpty) SessionBeadKeys.escalationReason: reason,
       },
     );
     await ctx.writer.close(id, reason: 'breaker-exhausted');
@@ -492,9 +656,16 @@ class SessionScopeState extends State<SessionScope> {
       return const Idle();
     }
     final id = _sessionId!;
-    final cursor = seed.existingSession?.cursor ?? const <String, NodeCursor>{};
-    final results =
-        seed.existingSession?.results ?? const <String, Map<String, String>>{};
+    // The join reflects THIS scope's session only when the ids match. A
+    // MISMATCHED projection is some other row — the DEAD key we just minted over
+    // (I-10), until the join catches up, or a rework-retired round — and
+    // threading ITS cursor down under OUR handle would corrupt the frontier
+    // (steps reading `complete`/`running` that this session never ran). So the
+    // cursor is read ONLY from a matching join; otherwise it is empty, which is
+    // exactly what a fresh round's cursor IS.
+    final joined = matchesJoin ? seed.existingSession : null;
+    final cursor = joined?.cursor ?? const <String, NodeCursor>{};
+    final results = joined?.results ?? const <String, Map<String, String>>{};
     // The join reflects this session THIS build — latch it (fresh-mint guard,
     // above) and remember whether it's CURRENTLY parked at a gate (the signal
     // the orphan-check above reads once it stops matching).
@@ -507,7 +678,7 @@ class SessionScopeState extends State<SessionScope> {
     // nodePath left `openGateNodes`). Read-only here; the flip to `pending` is
     // scheduled off build (invariant 2), latched once per node. A still-open
     // gate is left parked.
-    final openGates = seed.existingSession?.openGateNodes ?? const <String>{};
+    final openGates = joined?.openGateNodes ?? const <String>{};
     cursor.forEach((nodePath, node) {
       if (node.state == StepState.gated && !openGates.contains(nodePath)) {
         _scheduleRearm(id, nodePath);

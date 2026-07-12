@@ -221,6 +221,12 @@ void main() {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
               isTerminal: true,
+              // A POSITIVE terminal: the engine's close path stamps
+              // `grid.outcome=complete` (tg-4rw / I-10) — that marker is what
+              // makes a closed session BLOCKING. Without it this row is a dead
+              // key, the bead correctly re-mints, and it would re-occupy the very
+              // slot this test asserts is freed.
+              completed: true,
             ),
             'tg-2': const SessionProjection(
               workBeadId: 'tg-2',
