@@ -94,6 +94,18 @@ List<String> _frontier(
         .map((s) => s.stepId)
         .toList();
 
+/// The eligible step ids of [circuit] under [cursor] at [nodePath] AT [now] —
+/// the cooldown-sensitive variant (the supervised-restart gate is a clock gate).
+List<String> _frontierAt(
+  Circuit circuit,
+  CircuitCursor cursor,
+  String nodePath,
+  DateTime now,
+) =>
+    eligibleSteps(circuit, cursor, nodePath, circuitById: _byId, now: now)
+        .map((s) => s.stepId)
+        .toList();
+
 NodeCursor _c(
   StepState state, {
   int restartCount = 0,
@@ -224,6 +236,42 @@ void main() {
   });
 
   group('Track A — positive-terminal-only + supervision', () {
+    test(
+      'a REAPED zombie (tg-szb) re-enters the frontier once its cooldown lapses '
+      '— the bounce RE-RUNS the step instead of stalling on a corpse',
+      () {
+        final t = DateTime(2026, 7, 12, 12);
+        // What RestartReconciler._reapZombieRunners writes for a dead-pid
+        // `running` node: the missed supervised failure (state=failed,
+        // restartCount+1, a backoff cooldown).
+        final reaped = {
+          'tg-1/agent': _c(
+            StepState.failed,
+            restartCount: 1,
+            cooldownUntil: t.add(const Duration(seconds: 1)),
+          ),
+        };
+
+        // Still cooling down: withheld, but a restart is SCHEDULED — never lost.
+        expect(_frontierAt(code, reaped, 'tg-1', t), isEmpty);
+
+        // Past the cooldown and within `maxRestarts` (3): it MOUNTS again. The
+        // bumped restartCount re-keys it in CircuitScope, so this is a FRESH
+        // incarnation with a fresh token — not a reattach to the corpse.
+        expect(
+          _frontierAt(code, reaped, 'tg-1', t.add(const Duration(seconds: 2))),
+          ['agent'],
+        );
+
+        // And the dependents stay withheld until it genuinely completes — the
+        // reap restores forward progress, it never fakes it.
+        expect(
+          _frontierAt(code, reaped, 'tg-1', t.add(const Duration(seconds: 2))),
+          isNot(contains('verify')),
+        );
+      },
+    );
+
     test('a failed dep never satisfies (the half-up-rig guard)', () {
       final cursor = {'d/build': _c(StepState.failed)};
       // build re-keys (within budget); install/launch/waitWS all withheld.

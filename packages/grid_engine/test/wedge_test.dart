@@ -72,6 +72,38 @@ void main() {
       },
     );
 
+    test(
+      'a ZOMBIE running node reads as an ACTIVE STAGE — which is exactly why an '
+      'un-reaped stall was invisible (tg-szb); once the restart reconciler reaps '
+      'it to a supervised failure, the station can see the truth',
+      () {
+        // BEFORE the reap: a corpse still reads `running`, so the station calls
+        // itself healthy and `station.wedged` can NEVER fire (pow-77g/pow-edp).
+        final zombie = sampleWedge(_join({'pow-77g': _running()}), now: t0);
+        expect(zombie.running, 1);
+        expect(zombie.isStalled, isFalse);
+
+        // AFTER the reap: a supervised failure with a scheduled restart — real
+        // forward progress, honestly reported, so still no false alarm.
+        final reaped = _join({
+          'pow-77g': _cooling(until: t0.add(const Duration(seconds: 1))),
+        });
+        final scheduled = sampleWedge(reaped, now: t0);
+        expect(scheduled.running, 0);
+        expect(scheduled.cooling, 1);
+        expect(scheduled.isStalled, isFalse);
+
+        // …and if the restart never lands, the stall becomes VISIBLE — the
+        // alarm can finally ripen instead of reading a corpse as work forever.
+        final lapsed = sampleWedge(
+          reaped,
+          now: t0.add(const Duration(minutes: 1)),
+        );
+        expect(lapsed.cooling, 0);
+        expect(lapsed.isStalled, isTrue);
+      },
+    );
+
     test('terminal sessions never count; no live session → never stalled', () {
       final sample = sampleWedge(
         _join({'tg-1': _gated(terminal: true)}),

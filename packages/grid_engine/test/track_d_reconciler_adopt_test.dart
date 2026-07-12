@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
@@ -94,6 +95,13 @@ BeadWorktree _wt(String beadId) =>
 
 const _root = RootCheckout(path: '/root', defaultBranch: 'main', substation: 'tgdog');
 
+/// The recording bd chokepoint over the OWNED state substation — the zombie reap
+/// (tg-szb) writes through it; these tests assert dispositions, not writes.
+StationBeadWriter _chokepoint() => StationBeadWriter(
+  bd: BdCliService(RecordingBdRunner()),
+  ownership: BeadOwnershipPredicate(const {'tgdog'}),
+);
+
 RestartReconciler _reconciler({
   required _FakeGit git,
   required _Groups groups,
@@ -104,6 +112,7 @@ RestartReconciler _reconciler({
   reapWorktree: git.reapWorktree,
   workRoot: _root,
   groups: groups,
+  writer: _chokepoint(),
   freshnessBarrier: () async {},
   stateSnapshot: () => state,
   adoptProof: adoptProof,

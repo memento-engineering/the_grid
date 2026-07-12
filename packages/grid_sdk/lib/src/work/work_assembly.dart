@@ -66,11 +66,13 @@ class StationWorkRuntime {
     required this.readPathName,
     required StationDriver driver,
     required RestartReconciler restart,
+    required void Function(String message) onRefusal,
     required Future<void> Function() sourcesStart,
     required Future<void> Function() sourcesShutdown,
     required Future<void> Function() freshnessBarrier,
   }) : _driver = driver,
        _restart = restart,
+       _onRefusal = onRefusal,
        _sourcesStart = sourcesStart,
        _sourcesShutdown = sourcesShutdown,
        _freshnessBarrier = freshnessBarrier;
@@ -94,6 +96,11 @@ class StationWorkRuntime {
 
   final StationDriver _driver;
   final RestartReconciler _restart;
+
+  /// The LOUD sink a dropped chokepoint write reports through (the same one the
+  /// [StationBeadWriter] refuses on) — a dropped zombie reap (tg-szb) is never
+  /// silent.
+  final void Function(String message) _onRefusal;
   final Future<void> Function() _sourcesStart;
   final Future<void> Function() _sourcesShutdown;
   final Future<void> Function() _freshnessBarrier;
@@ -119,7 +126,17 @@ class StationWorkRuntime {
     _started = true;
     await _sourcesStart();
     await _freshnessBarrier();
-    await _restart.reconcile();
+    final report = await _restart.reconcile();
+    // A DROPPED zombie reap (tg-szb) degrades to today's behavior (the frontier
+    // still re-mounts the node), but an operator MUST know the cursor still
+    // reads `running` over a corpse — LOUD or GONE (ADR-0008 D3).
+    for (final r in report.reaped.where((r) => !r.isWritten)) {
+      _onRefusal(
+        'grid: restart reap of ${r.sessionId}/${r.nodePath} was DROPPED '
+        '(${r.failure}) — that cursor node still reads `running` over a dead '
+        'pid ${r.pid}',
+      );
+    }
     _driver.start();
   }
 
@@ -293,10 +310,11 @@ Future<StationWorkRuntime> buildStationWork({
       (dryRun
           ? BdCliService(NoOpBdRunner())
           : BdCliService(ProcessBdRunner(workspaceRoot: stateWs.root)));
+  final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
   final writer = StationBeadWriter(
     bd: bd,
     ownership: BeadOwnershipPredicate(allowSet),
-    onRefusal: onRefusal ?? (m) => stdout.writeln(m),
+    onRefusal: refusalSink,
   );
 
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
@@ -355,6 +373,10 @@ Future<StationWorkRuntime> buildStationWork({
     reapWorktree: git.reap,
     workRoot: workRoot,
     groups: groups,
+    // The ONE bd chokepoint — the zombie-running reap (tg-szb) delivers a dead
+    // generation's missed supervised failure through it, on the_grid's OWN
+    // session bead, BEFORE the tree mounts.
+    writer: writer,
     freshnessBarrier: freshnessBarrier,
     stateSnapshot: () => stateSource.current ?? _emptyGraphSnapshot(),
     // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
@@ -392,6 +414,7 @@ Future<StationWorkRuntime> buildStationWork({
     readPathName: readPathName,
     driver: driver,
     restart: restart,
+    onRefusal: refusalSink,
     sourcesStart: () async {
       await Future.wait(bundles.values.map((b) => b.runtime.start()));
       await stateBundle.runtime.start();
