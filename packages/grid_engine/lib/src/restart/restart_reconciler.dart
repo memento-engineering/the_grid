@@ -350,6 +350,192 @@ class RestartReconciler {
     return RestartReport(entries);
   }
 
+  /// **The TEARDOWN orphan sweep** — the twin of [reconcile]: the boot pass
+  /// reconciles SURVIVORS, this one reconciles STRAGGLERS. Same seams, same
+  /// fence projection ([_liveGroups]), same guarded kill ([_sweepLiveGroups]),
+  /// same owned-partition scope — only the moment differs.
+  ///
+  /// Call it AFTER the tree unmounted (`TreeOwner.dispose()` returned), which
+  /// `GridHandle.teardown()` does. Unmount = kill, but the kill chain is
+  /// FIRE-AND-FORGET (`unawaited(allocation.dispose())` →
+  /// `unawaited(transport.stop(...))`), so on return the kills are merely IN
+  /// FLIGHT: a runner that exits there sends no SIGTERM at all. This pass
+  /// reconciles the station against ZERO-EXPECTED from two independent kinds of
+  /// evidence:
+  ///
+  ///  1. **The transport half** — [RuntimeProvider.listRunning] under
+  ///     [sessionPrefix]. Nothing may still be held once the tree unmounted;
+  ///     each straggler is [RuntimeProvider.stop]ped, and the stop is AWAITED.
+  ///  2. **The fence half** — the restart fence persisted on this station's OWN
+  ///     NON-terminal session beads (the per-node `pgid`/`pid` cursor), swept
+  ///     with [_sweepLiveGroups]. A group whose LEADER PID is still alive after
+  ///     the unmount is an orphan the transport no longer knows about.
+  ///
+  /// It RE-PASSES until [quietPasses] consecutive passes reap nothing, so an
+  /// effect landing mid-sweep is still caught — bounded by [settleWindow]: a
+  /// window that closes with work still landing is reported LOUD and
+  /// `settled: false`, never a silent give-up.
+  ///
+  /// **Every reap is LOUD** ([onOrphan], required — there is no silent default):
+  /// an orphan is an invariant violation with a concrete failure story (a leaked
+  /// agent burning tokens against a worktree nobody owns), so it is never reaped
+  /// quietly (the ADR-0008 D-6 guard principle). A clean teardown logs NOTHING.
+  ///
+  /// **Kills are SCOPED, never broad** (ADR-0006 coexistence — a live gc spawns
+  /// its own agents beside us): the transport half only stops names the
+  /// transport itself holds under [sessionPrefix]; the fence half only signals a
+  /// pgid recorded on a session bead minted in the OWNED state partition (the
+  /// same prefix — A37), and only through [terminateGroup]'s `pgid <= 1`/
+  /// own-group guard, which is never bypassed.
+  ///
+  /// **Honest residuals** (documented, NOT "fixed" here):
+  ///  - *Recycled-pgid.* Identical to [reconcile]'s: a stale pgid on a
+  ///    non-terminal session bead could name an unrelated group if the OS
+  ///    recycled BOTH it and the recorded leader pid. Bounded by three guards —
+  ///    the `pgid <= 1`/own-group refusal, the leader-pid liveness fence inside
+  ///    [terminateGroup], and the owned-partition prefix scope — not eliminated.
+  ///  - *Detach is out of scope.* Zero-expected is exactly true today because
+  ///    nothing calls `Allocation.detach()` on unmount — the host's floor is
+  ///    `dispose` (KILL, ADR-0009 D4). A station that later arms detach must
+  ///    exclude its detached addresses; the LOUD log is what will surface it (a
+  ///    detached daemon would be reported reaped, by name).
+  ///
+  /// The transport + the owned prefix are parameters of THIS pass, not of the
+  /// reconciler: the boot pass reconciles worktrees and cursors and owns no
+  /// transport, and a caller cannot reach the sweep without naming both — so
+  /// there is no silently-unwired transport half.
+  Future<OrphanSweepReport> sweepOrphans({
+    required RuntimeProvider transport,
+    required String sessionPrefix,
+    required void Function(String message) onOrphan,
+    Duration pollInterval = const Duration(milliseconds: 50),
+    Duration settleWindow = const Duration(seconds: 5),
+    int quietPasses = 2,
+  }) async {
+    final stopped = <String>[];
+    final terminated = <SweptGroup>[];
+    final refused = <int>{};
+    final deadline = DateTime.now().add(settleWindow);
+    var quiet = 0;
+
+    while (quiet < quietPasses) {
+      final reaped = await _sweepPass(
+        transport: transport,
+        sessionPrefix: sessionPrefix,
+        onOrphan: onOrphan,
+        stopped: stopped,
+        terminated: terminated,
+        refused: refused,
+      );
+      // A reap proves the station was still landing effects — start the quiet
+      // count over, so a spawn that lands mid-sweep is never the last word.
+      quiet = reaped ? 0 : quiet + 1;
+      if (quiet >= quietPasses) break;
+
+      if (!DateTime.now().isBefore(deadline)) {
+        final report = OrphanSweepReport(
+          stoppedSessions: stopped,
+          terminatedGroups: terminated,
+          settled: false,
+        );
+        onOrphan(
+          'orphan sweep: the settle window (${settleWindow.inMilliseconds}ms) '
+          'closed before the station went quiet — effects are still landing '
+          'after the unmount. $report',
+        );
+        return report;
+      }
+      await Future<void>.delayed(pollInterval);
+    }
+
+    final report = OrphanSweepReport(
+      stoppedSessions: stopped,
+      terminatedGroups: terminated,
+      settled: true,
+    );
+    if (!report.isClean) onOrphan('orphan sweep: teardown reaped $report');
+    return report;
+  }
+
+  /// ONE reconcile-against-zero-expected pass. Returns whether it reaped
+  /// anything (a reap resets the quiet counter).
+  Future<bool> _sweepPass({
+    required RuntimeProvider transport,
+    required String sessionPrefix,
+    required void Function(String message) onOrphan,
+    required List<String> stopped,
+    required List<SweptGroup> terminated,
+    required Set<int> refused,
+  }) async {
+    var reaped = false;
+
+    // 1. THE TRANSPORT HALF — ZERO sessions are expected once the tree
+    //    unmounted. Anything the transport still holds under our OWN prefix
+    //    either spawned into the teardown window or had its fire-and-forget
+    //    `stop` never complete. Stop it — and AWAIT the stop, unlike the
+    //    unmount's `unawaited(...)` chain.
+    for (final name in transport.listRunning(sessionPrefix)) {
+      onOrphan(
+        'orphan sweep: session "$name" SURVIVED the unmount — stopping its '
+        'process group',
+      );
+      await transport.stop(name);
+      stopped.add(name);
+      reaped = true;
+    }
+
+    // 2. THE FENCE HALF — the same live-group sweep the boot pass runs, now
+    //    over our OWN non-terminal session beads: a persisted pgid whose leader
+    //    is still alive after the unmount is an orphan the transport no longer
+    //    knows about.
+    for (final session in _ownLiveSessions(sessionPrefix)) {
+      for (final swept in await _sweepLiveGroups(session)) {
+        switch (swept.result) {
+          case GroupTerminateResult.exitedOnTerm:
+          case GroupTerminateResult.killed:
+            onOrphan(
+              'orphan sweep: session "${session.sessionId}" node '
+              '"${swept.nodePath}" left process group ${swept.pgid} (leader pid '
+              '${swept.pid}) ALIVE after the unmount — terminated '
+              '(${swept.result.name})',
+            );
+            terminated.add(swept);
+            reaped = true;
+          case GroupTerminateResult.refusedUnsafe:
+            // The guard is NEVER bypassed — surface the residual once, loudly.
+            if (refused.add(swept.pgid)) {
+              onOrphan(
+                'orphan sweep: REFUSED to signal process group ${swept.pgid} '
+                'for session "${session.sessionId}" node "${swept.nodePath}" — '
+                'the terminateGroup guard (pgid <= 1, or the supervisor\'s own '
+                'group). It may still be running; terminate it by hand.',
+              );
+            }
+          case GroupTerminateResult.alreadyGone:
+            // Not an orphan: the leader was already dead, so no signal was sent
+            // and nothing was reaped (this is what lets the loop converge).
+            break;
+        }
+      }
+    }
+    return reaped;
+  }
+
+  /// This station's OWN NON-terminal session beads — the only fence targets.
+  /// Scoped THREE ways: `type=session` only; the owned [sessionPrefix] only
+  /// (never a foreign bead — A37/ADR-0006 coexistence); and non-terminal only (a
+  /// TERMINAL session's leftovers are [reconcile]'s sweep, which keeps this
+  /// pass's blast radius to the work that was actually interrupted).
+  Iterable<SessionProjection> _ownLiveSessions(String sessionPrefix) sync* {
+    for (final bead in _stateSnapshot().beadsById.values) {
+      if (bead.issueType != IssueType.session) continue;
+      if (!bead.id.startsWith(sessionPrefix)) continue;
+      final projection = projectSession(bead);
+      if (projection.isTerminal) continue;
+      yield projection;
+    }
+  }
+
   /// Projects the OWNED session cursors from the post-barrier state snapshot,
   /// keyed by the `work_bead` they drive. Only `type=session` beads are
   /// projected; a session with an empty `work_bead` is skipped (it joins to no
