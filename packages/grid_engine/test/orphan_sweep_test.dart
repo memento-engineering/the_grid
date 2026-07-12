@@ -262,6 +262,32 @@ void main() {
       expect(log.where((l) => l.contains('REFUSED')), hasLength(1));
     });
 
+    test('the guard\'s other arm: the SUPERVISOR\'S OWN group is never '
+        'signalled (that would kill the_grid itself)', () async {
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final groups = _FakeGroups(ownGroupId: 4242, alivePids: {77});
+      final log = <String>[];
+
+      final report =
+          await _reconciler(
+            groups: groups,
+            state: _state([
+              // A recycled pgid that now names OUR OWN process group.
+              _session(id: _sessionId, cursor: _running(pgid: 4242, pid: 77)),
+            ]),
+          ).sweepOrphans(
+            transport: provider,
+            sessionPrefix: _prefix,
+            onOrphan: log.add,
+            pollInterval: const Duration(milliseconds: 5),
+          );
+
+      expect(groups.signals, isEmpty);
+      expect(report.terminatedGroups, isEmpty);
+      expect(log.where((l) => l.contains('REFUSED')), hasLength(1));
+    });
+
     test('kills are SCOPED: a session bead outside the owned prefix is never '
         'touched', () async {
       final provider = FakeRuntimeProvider();

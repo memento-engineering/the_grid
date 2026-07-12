@@ -157,5 +157,21 @@ void main() {
         );
       },
     );
+
+    test('the built runtime sweeps orphans against the OWNED state partition '
+        '(the runner has one to hand to runGrid)', () async {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      final work = await build();
+      addTearDown(work.shutdown);
+
+      // A dry-run station spawns nothing, so a teardown sweep is CLEAN — and it
+      // reconciles the dry transport under the OWNED prefix, never a foreign
+      // one.
+      final report = await work.sweepOrphans();
+      expect(report.isClean, isTrue);
+      expect(report.settled, isTrue);
+      expect(work.stateSubstation, 'tgstate');
+    });
   });
 }
