@@ -61,6 +61,32 @@ abstract class NodeCursor with _$NodeCursor {
     /// own count back through the ambient `SiblingView` to escalate first.
     @Default(0) int rewindCount,
 
+    /// How many times this node was REAPED ON ADOPTION — a prior station
+    /// generation left it at [StepState.running] and its recorded process was
+    /// found DEAD at boot, so the reaper re-mounted it.
+    ///
+    /// CAPTURE-ONLY, and deliberately a THIRD incarnation axis — disjoint from
+    /// BOTH [restartCount] (a LIVE-supervised crash, D-5) and [rewindCount] (a
+    /// routing rework round, A47). A47's rule is the law here: "Two axes, not
+    /// one: a rework round never spends the supervised-restart budget, and a
+    /// crash never spends a rework round." A STATION DEATH is a third cause, so
+    /// it gets a third counter — **a station death is not a step failure:** the
+    /// `maxRestarts` breaker is for a process that died while the station was
+    /// ALIVE to supervise it, so charging a bounce to it would make the
+    /// operator's recovery lever destructive (the third bounce that caught a
+    /// long step mid-run would trip the breaker and close a session whose step
+    /// never failed).
+    ///
+    /// UNLIKE the other two axes it is **NOT part of the reconcile key**
+    /// (`CircuitScope`'s `ValueKey('$path#$restartCount.$rewindCount')` — A47):
+    /// a re-key exists to TEAR DOWN a still-mounted effect, and the reap runs at
+    /// boot BEFORE the kernel mounts anything, so there is no live incarnation
+    /// to displace and nothing to re-key. Nothing in the frontier reads it and
+    /// no breaker trips on it — so a bounce stays FREE. Its ONLY job is to make
+    /// a crash-LOOPING station visible ("this step has died with the station 4
+    /// times") instead of silently invisible.
+    @Default(0) int reapCount,
+
     /// The earliest time a failed node may re-key (backoff — D-5); null when not
     /// cooling down.
     DateTime? cooldownUntil,
