@@ -19,7 +19,8 @@ Bead _sessionBead(Map<String, dynamic> metadata, {bool closed = false}) => Bead(
 
 void main() {
   group('Track B — nodeCursorMetadata (the flat write)', () {
-    test('writes state + restartCount always; omits null optionals', () {
+    test('writes state + restartCount + rewindCount always; omits null '
+        'optionals', () {
       final meta = nodeCursorMetadata(
         'tg-1/agent',
         const NodeCursor(state: StepState.running),
@@ -27,6 +28,7 @@ void main() {
       expect(meta, {
         'grid.cursor.tg-1/agent.state': 'running',
         'grid.cursor.tg-1/agent.restartCount': '0',
+        'grid.cursor.tg-1/agent.rewindCount': '0',
       });
     });
 
@@ -159,6 +161,43 @@ void main() {
       );
       expect(session.isTerminal, isTrue);
       expect(session.cursor, isEmpty);
+    });
+  });
+
+  group('tg-o90 — the ROUTING rewind axis round-trips', () {
+    test('rewindCount survives write → project, DISJOINT from restartCount', () {
+      final wire = nodeCursorMetadata(
+        'tg-1/spec_review/specify',
+        const NodeCursor(
+          state: StepState.complete,
+          rewindCount: 2,
+          restartCount: 1,
+        ),
+      );
+      expect(wire['grid.cursor.tg-1/spec_review/specify.rewindCount'], '2');
+      expect(wire['grid.cursor.tg-1/spec_review/specify.restartCount'], '1');
+
+      final cursor = projectCircuitCursor(
+        _sessionBead(<String, dynamic>{...wire}),
+      );
+      expect(cursor['tg-1/spec_review/specify']!.rewindCount, 2);
+      expect(cursor['tg-1/spec_review/specify']!.restartCount, 1);
+    });
+
+    test('a legacy cursor with no rewindCount key reads as 0 (never null)', () {
+      final cursor = projectCircuitCursor(
+        _sessionBead(const {'grid.cursor.tg-1/agent.state': 'complete'}),
+      );
+      expect(cursor['tg-1/agent']!.rewindCount, 0);
+    });
+
+    test('nodeRewoundMetadata is EXACTLY pending + the bump + a fresh restart '
+        'budget', () {
+      expect(nodeRewoundMetadata('tg-1/route', rewindCount: 1), {
+        'grid.cursor.tg-1/route.state': 'pending',
+        'grid.cursor.tg-1/route.rewindCount': '1',
+        'grid.cursor.tg-1/route.restartCount': '0',
+      });
     });
   });
 }
