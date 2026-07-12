@@ -44,6 +44,9 @@ export 'src/circuit/unclaimed_frontier.dart';
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
+// The rework-round contract (tg-o90) — the ONE cap + retired-round key shape
+// shared by the `Rewind` arm (the engine) and `grid rework` (the operator verb).
+export 'src/domain/rework.dart';
 export 'src/domain/session_bead.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';

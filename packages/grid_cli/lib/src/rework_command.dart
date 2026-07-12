@@ -152,16 +152,11 @@ class ReworkCommand extends Command<int> {
   }
 }
 
-/// The max rework rounds a bead may accumulate (~3, the factoryskills
-/// precedent) before `grid rework` refuses LOUD — a human decides beyond it.
-const int kMaxReworkRounds = 3;
-
-/// Matches a RETIRED session's `work_bead` value for [beadId] exactly
-/// (`'<beadId>#r<N>'`) — anchored full-string so a DIFFERENT bead id that
-/// merely starts with [beadId] (e.g. `tg-x1j2`) is never mistaken for one of
-/// its rounds.
-RegExp _roundSuffixFor(String beadId) =>
-    RegExp('^${RegExp.escape(beadId)}#r(\\d+)\$');
+// The round cap (`kMaxReworkRounds`) and the retired-round key shape
+// (`reworkKeyFor`/`reworkKeyPattern`) live in the engine's rework contract
+// (`grid_engine`, `src/domain/rework.dart`, tg-o90) — this verb and the engine's
+// `Rewind` arm share ONE definition, so they admit exactly the same number of
+// rounds and cannot drift on the key.
 
 /// Runs `grid rework <beadId>`: re-keys [beadId]'s terminated session through
 /// the [StationBeadWriter] chokepoint (the grid state store at [stateStore]),
@@ -271,7 +266,7 @@ Future<int> runRework({
 
   // Every RETIRED round already on record for this bead (`work_bead ==
   // '<beadId>#r<N>'`) — the round-cap + next-round-number source.
-  final roundSuffix = _roundSuffixFor(beadId);
+  final roundSuffix = reworkKeyPattern(beadId);
   var maxRound = 0;
   for (final s in sessions) {
     final workBead = _stringMeta(s, 'work_bead');
@@ -319,7 +314,7 @@ Future<int> runRework({
   try {
     await stateWriter.update(
       session.id,
-      metadata: {'work_bead': '$beadId#r$round'},
+      metadata: {'work_bead': reworkKeyFor(beadId, round)},
     );
   } on OwnershipRefused catch (e) {
     writeErr('grid rework: $e');
