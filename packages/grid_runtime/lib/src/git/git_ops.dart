@@ -168,12 +168,24 @@ class GitOps {
   ///
   /// Fail-closed on an unparsable status line: a line whose path cannot be read
   /// COUNTS as work — never silently excluded.
+  ///
+  /// Fail-closed, too, on a WARNING: `git status` can exit **0** while writing to
+  /// stderr (`warning: could not open directory 'x/': Permission denied`), which
+  /// means it could not fully scan the tree. [GitRunResult.output] is combined
+  /// (gc fidelity), so a warning line would otherwise be parsed as a porcelain
+  /// entry and fabricate a phantom change — inventing "uncommitted work" that
+  /// does not exist. A degraded scan is [GateOutcome.probeError] ("couldn't
+  /// tell"), never an invented answer: it still BLOCKS a reap exactly as before,
+  /// and the completion fence reports it honestly as unreadable rather than as an
+  /// interrupted agent.
   Future<GateOutcome> hasUncommittedWork(
     String workDir, {
     Set<String> excluding = const <String>{},
   }) async {
     final r = await _run(workDir, const <String>['status', '--porcelain']);
     if (!r.ok) return GateOutcome.probeError;
+    if (r.stderr.trim().isNotEmpty) return GateOutcome.probeError;
+    // stderr is empty, so `output` IS stdout: every line is porcelain.
     final work = r.output
         .split('\n')
         .where((line) => line.trim().isNotEmpty)

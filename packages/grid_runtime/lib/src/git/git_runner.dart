@@ -8,6 +8,7 @@ class GitRunResult {
   const GitRunResult({
     required this.exitCode,
     required this.output,
+    this.stderr = '',
     this.launched = true,
   });
 
@@ -18,6 +19,18 @@ class GitRunResult {
   /// stdout and stderr combined, mirroring gc's `cmd.CombinedOutput()`
   /// (`internal/git/git.go:321`). Trimmed by callers where they care.
   final String output;
+
+  /// The error stream ALONE, when the runner can separate it (empty otherwise).
+  ///
+  /// [output] stays combined (gc fidelity — error text must survive in the one
+  /// field callers report), but a caller that PARSES structured stdout needs to
+  /// know whether any of it came from stderr. `git status --porcelain` can exit
+  /// **0** while warning on stderr (`warning: could not open directory …:
+  /// Permission denied`), and such a line is NOT a porcelain entry: parsing it as
+  /// one would fabricate a phantom change. [GitOps.hasUncommittedWork] fails
+  /// closed on a non-empty stderr instead — the scan was incomplete, so the
+  /// answer is "couldn't tell", never an invented one.
+  final String stderr;
 
   /// False when the `git` binary could not be exec'd at all (not found, not
   /// executable). The probe gates treat a non-launch as an error → fail closed.
@@ -119,8 +132,13 @@ class SystemGitRunner implements GitRunner {
     final stdout = (result.stdout as String);
     final stderr = (result.stderr as String);
     // gc combines stdout+stderr (CombinedOutput); preserve that so error text
-    // is visible to callers/tests.
+    // is visible to callers/tests. The error stream is ALSO surfaced alone, so a
+    // caller parsing structured stdout can refuse to read a warning as data.
     final combined = stderr.isEmpty ? stdout : '$stdout$stderr';
-    return GitRunResult(exitCode: result.exitCode, output: combined);
+    return GitRunResult(
+      exitCode: result.exitCode,
+      output: combined,
+      stderr: stderr,
+    );
   }
 }

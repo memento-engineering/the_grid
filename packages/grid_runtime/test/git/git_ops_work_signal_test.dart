@@ -5,18 +5,22 @@
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-/// A `git` that always returns [output] with [exitCode] — the porcelain the
-/// filter must read.
+/// A `git` that always returns [output] with [exitCode] (and optionally [stderr])
+/// — the porcelain the filter must read. Mirrors the real runner: `output` is
+/// stdout and stderr COMBINED (gc's `CombinedOutput`), `stderr` is the error
+/// stream alone.
 class _CannedGit implements GitRunner {
-  const _CannedGit(this.output, {this.exitCode = 0});
+  const _CannedGit(this.output, {this.exitCode = 0, this.stderr = ''});
   final String output;
   final int exitCode;
+  final String stderr;
 
   @override
   Future<GitRunResult> run({
     required String workingDirectory,
     required List<String> args,
-  }) async => GitRunResult(exitCode: exitCode, output: output);
+  }) async =>
+      GitRunResult(exitCode: exitCode, output: output, stderr: stderr);
 }
 
 Future<GateOutcome> probe(
@@ -115,6 +119,58 @@ void main() {
       expect(
         await probe('?? .gridlock/x\n', excluding: const {'.grid'}),
         GateOutcome.present,
+      );
+    });
+  });
+
+  group('a WARNING on stderr is never parsed as a change', () {
+    // `git status --porcelain` can exit 0 while warning on stderr (an unreadable
+    // dir in the worktree). `GitRunResult.output` is COMBINED (gc fidelity), so a
+    // naive line-split would read `warning: could not open directory …` as a
+    // porcelain entry and INVENT an uncommitted change — failing a coding agent
+    // that committed correctly, forever, on every respawn. A degraded scan is
+    // "couldn't tell", not a fabricated answer.
+    const warning =
+        "warning: could not open directory 'vendor/': Permission denied\n";
+
+    test('exit 0 + a stderr warning over a CLEAN tree is probeError, NOT a '
+        'phantom change', () async {
+      expect(
+        await GitOps(const _CannedGit(warning, stderr: warning))
+            .hasUncommittedWork('/w', excluding: const {'.grid'}),
+        GateOutcome.probeError,
+      );
+    });
+
+    test('exit 0 + a stderr warning ALONGSIDE real porcelain is still probeError '
+        '(the scan was incomplete — we cannot trust what it did NOT see)',
+        () async {
+      expect(
+        await GitOps(
+          const _CannedGit(' M lib/x.dart\n$warning', stderr: warning),
+        ).hasUncommittedWork('/w', excluding: const {'.grid'}),
+        GateOutcome.probeError,
+      );
+    });
+
+    test('the reap gate ALSO refuses on a degraded scan (probeError blocks, '
+        'exactly as `present` did)', () async {
+      final outcome = await GitOps(const _CannedGit(warning, stderr: warning))
+          .hasUncommittedWork('/w');
+      expect(outcome, GateOutcome.probeError);
+      expect(
+        gateBlocks(outcome),
+        isTrue,
+        reason: 'ADR-0006 D3: a reap must still refuse — the decision is '
+            'unchanged, only the (honest) reason differs',
+      );
+    });
+
+    test('a CLEAN probe with EMPTY stderr is unaffected', () async {
+      expect(
+        await GitOps(const _CannedGit('?? .grid/\n'))
+            .hasUncommittedWork('/w', excluding: const {'.grid'}),
+        GateOutcome.clear,
       );
     });
   });
