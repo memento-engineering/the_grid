@@ -28,8 +28,11 @@ import 'grid_delegate.dart';
 ///     on success `delegate.onReady()` fires. A failure in either is captured,
 ///     attributed, and reported loudly via [onError] — the running grid stands.
 ///
-/// Returns a [GridHandle]: `teardown()` runs `onTeardown` and unmounts the tree
-/// (every mounted effect tears down with it).
+/// Returns a [GridHandle]: `await teardown()` runs `onTeardown`, unmounts the
+/// tree (every mounted effect tears down with it), then runs [orphanSweep] —
+/// the teardown-vs-spawn reap. [orphanSweep] is null by default (a station with
+/// no process transport has nothing to sweep); a runner with work machinery
+/// passes `work.sweepOrphans`.
 ///
 /// [onError] receives the captured refusals from the **post-mount** rails
 /// (`initGrid` / `onReady` / `onTeardown`). It defaults to rethrowing into the
@@ -46,6 +49,7 @@ GridHandle runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
   void Function()? onFlushed,
+  Future<void> Function()? orphanSweep,
 }) {
   final report = onError ?? _rethrowToZone;
 
@@ -59,7 +63,7 @@ GridHandle runGrid(
   // 2. Mount: configuration provision → build. The delegate is held here (by
   //    construction), never provided ambiently (D-H).
   final owner = TreeOwner();
-  final handle = GridHandle._(owner, delegate, report, onFlushed);
+  final handle = GridHandle._(owner, delegate, report, onFlushed, orphanSweep);
   // Wire the flush trigger BEFORE mounting: the first build runs synchronously
   // in mountRoot with no markNeedsRebuild (the config scope assigns its
   // baseline directly, never setState during mount), so onNeedsFlush cannot
@@ -112,7 +116,13 @@ Future<void> _kickoff(
 /// Call [teardown] to run the delegate's `onTeardown` rail and unmount the
 /// tree. Idempotent.
 class GridHandle {
-  GridHandle._(this._owner, this._delegate, this._report, this._onFlushed);
+  GridHandle._(
+    this._owner,
+    this._delegate,
+    this._report,
+    this._onFlushed,
+    this._orphanSweep,
+  );
 
   final TreeOwner _owner;
   final GridDelegate _delegate;
@@ -120,8 +130,14 @@ class GridHandle {
 
   /// The runner's post-flush seam (see [runGrid]'s `onFlushed`).
   final void Function()? _onFlushed;
+
+  /// The teardown-vs-spawn orphan reap — null when the station has no process
+  /// transport to sweep.
+  final Future<void> Function()? _orphanSweep;
+
   bool _tornDown = false;
   bool _flushScheduled = false;
+  Future<void>? _teardown;
 
   /// Coalesces dirties into one microtask flush. Wired before mount so the
   /// synchronous first build never trips it.
@@ -142,10 +158,34 @@ class GridHandle {
   bool get isTornDown => _tornDown;
 
   /// Tears the grid down: runs `onTeardown` (loud on failure, non-aborting),
-  /// then unmounts the tree (every mounted effect tears down) and disposes the
-  /// delegate. Idempotent.
-  void teardown() {
-    if (_tornDown) return;
+  /// unmounts the tree (every mounted effect tears down), disposes the delegate,
+  /// and ENDS with the ORPHAN SWEEP when one is wired.
+  ///
+  /// **`await` it.** Unmount = kill, but the kill chain is fire-and-forget
+  /// (`CapabilityHost.dispose` → `unawaited(allocation.dispose())` →
+  /// `unawaited(transport.stop(...))`), so when the tree finishes unmounting the
+  /// kills are merely IN FLIGHT — a runner that exits here sends no SIGTERM at
+  /// all, and an effect that was itself mid-spawn can land afterwards (the
+  /// observed orphan: an agent spawned moments before `down`, alive after the
+  /// lock released). The returned future completes only once the sweep has
+  /// reconciled the station against zero-expected. A runner that drops this
+  /// future exits back into that window.
+  ///
+  /// The rails through `_owner.dispose()` still run SYNCHRONOUSLY (the body runs
+  /// to its first await), so a caller that only needs "the tree is down" sees no
+  /// behaviour change; only the sweep is awaited.
+  ///
+  /// A THROWING sweep is loud (a [GridHookError] on hook `orphanSweep`, through
+  /// [runGrid]'s error sink) and never breaks the teardown — the tree is already
+  /// unmounted by then.
+  ///
+  /// Idempotent: a second call returns the SAME future; the rails and the sweep
+  /// run exactly once.
+  Future<void> teardown() => _teardown ??= _runTeardown();
+
+  Future<void> _runTeardown() async {
+    // Set synchronously (an async body runs to its first await eagerly): the
+    // flush loop reads it to stop scheduling into a dying tree.
     _tornDown = true;
     try {
       _delegate.onTeardown();
@@ -156,6 +196,16 @@ class GridHandle {
     // off the delegate), then dispose the delegate.
     _owner.dispose();
     _delegate.dispose();
+    // ... and END with the sweep: no effect of this tree may outlive its
+    // unmount. It runs AFTER the unmount by construction — the stragglers it
+    // reconciles against zero-expected only exist once the kills are in flight.
+    final sweep = _orphanSweep;
+    if (sweep == null) return;
+    try {
+      await sweep();
+    } catch (e, st) {
+      _report(GridHookError('orphanSweep', _delegate.runtimeType, e, st));
+    }
   }
 }
 

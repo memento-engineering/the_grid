@@ -350,7 +350,7 @@ void main() {
       final handle = runGrid(delegate);
       await pump();
 
-      handle.teardown();
+      await handle.teardown();
       expect(delegate.events, contains('onTeardown'));
       // The tree unmounted (the effect tore down with it).
       expect(disposed, 1);
@@ -359,7 +359,7 @@ void main() {
       expect(handle.isTornDown, isTrue);
 
       // Idempotent — a second teardown is a no-op (onTeardown runs once).
-      handle.teardown();
+      await handle.teardown();
       expect(disposed, 1);
       expect(
         delegate.events.where((e) => e == 'onTeardown').length,
@@ -377,7 +377,7 @@ void main() {
       final handle = runGrid(delegate, onError: refusals.add);
       await pump();
 
-      handle.teardown();
+      await handle.teardown();
       expect(refusals.single.hook, 'onTeardown');
       // Teardown proceeded regardless — the effect still tore down.
       expect(disposed, 1);

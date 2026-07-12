@@ -221,7 +221,7 @@ void main() {
         expect(rig.fakes.provider.started, hasLength(1));
 
         // unmount = kill: tearing the grid down stops the live allocation.
-        rig.grid.teardown();
+        await rig.grid.teardown();
         await _pump();
         expect(rig.fakes.provider.stopped, isNotEmpty);
       },
