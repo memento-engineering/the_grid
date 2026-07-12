@@ -247,6 +247,14 @@ typedef WorkSignalProbe = Future<GateOutcome> Function(String workspaceDir);
 /// explicitly, like [neverLive].
 Future<GateOutcome> noWorkSignal(String workspaceDir) async => GateOutcome.clear;
 
+/// How long the completion fence waits for a [WorkSignalProbe] before calling the
+/// workspace unreadable ([GateOutcome.probeError] — fail closed, so the step
+/// respawns rather than stalling). Generous: the probe is one `status` call on a
+/// local workspace, so a breach means something is genuinely wedged (an index
+/// lock, a stalled network FS), not merely slow. Overridable per allocation via
+/// [AllocationContext.workSignalTimeout] (a test injects a short one).
+const Duration kWorkSignalTimeout = Duration(seconds: 30);
+
 /// Everything an [Allocation] needs to manage its effect — assembled by the Host
 /// and handed to [Capability.createAllocation] (ADR-0009 D5).
 ///
@@ -272,6 +280,7 @@ class AllocationContext {
     this.kind = StepKind.job,
     this.liveness = neverLive,
     this.workSignal = noWorkSignal,
+    this.workSignalTimeout = kWorkSignalTimeout,
   });
 
   /// The host branch's stable tree context — valid while the host is mounted,
@@ -327,6 +336,11 @@ class AllocationContext {
   /// [CompletionContract.committedWorkspace], and only when the tree actually
   /// carries a real [SourceControl] + [Workspace] (see [ProcessAllocation]).
   final WorkSignalProbe workSignal;
+
+  /// How long the fence waits for [workSignal] before treating the workspace as
+  /// unreadable (fail closed ⇒ respawn, never a stalled step). Defaults to
+  /// [kWorkSignalTimeout].
+  final Duration workSignalTimeout;
 }
 
 /// A node of the_grid's third tree — a persistent managed object holding one live
@@ -732,7 +746,18 @@ class ProcessAllocation extends Allocation {
     if (services.sourceControl == null || workspace == null) {
       return GateOutcome.clear;
     }
-    return context.workSignal(workspace.workspaceDir);
+    // BOUNDED. The probe is the only I/O the engine puts on a step's COMPLETION
+    // path, and a hung one (an index lock, a stalled network FS) would otherwise
+    // leave the node latched-terminal with no report ever — a silently STUCK step
+    // no supervision can see. A timeout is [GateOutcome.probeError]: fail-closed
+    // like every other unreadable workspace, so it respawns LOUDLY instead of
+    // stalling (ADR-0008 D3 — a guard is loud or it is gone).
+    return context
+        .workSignal(workspace.workspaceDir)
+        .timeout(
+          context.workSignalTimeout,
+          onTimeout: () => GateOutcome.probeError,
+        );
   }
 
   Future<void> _reportComplete() async {

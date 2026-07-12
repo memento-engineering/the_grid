@@ -165,6 +165,7 @@ AllocationContext _ctx({
   bool withWorkspace = true,
   bool withSourceControl = true,
   StepKind kind = StepKind.job,
+  Duration workSignalTimeout = kWorkSignalTimeout,
 }) => AllocationContext(
   treeContext: FakeTreeContext(
     values: {
@@ -182,6 +183,7 @@ AllocationContext _ctx({
   sink: sink,
   kind: kind,
   workSignal: workSignal ?? noWorkSignal,
+  workSignalTimeout: workSignalTimeout,
 );
 
 void main() {
@@ -287,6 +289,49 @@ void main() {
       expect(
         reports.whereType<AllocationFailed>().single.reason,
         contains('probe threw'),
+      );
+    });
+
+    test('BOUNDED: a HUNG probe fails closed instead of stalling the step '
+        'forever (never a silently stuck node)', () async {
+      final reports = <AllocationReport>[];
+      // A probe that NEVER completes — a wedged `git status` (an index lock, a
+      // stalled network FS). Without the timeout the node latches terminal and
+      // reports NOTHING, forever: supervision cannot see it, and the work is lost.
+      final alloc =
+          _AgentCap([]).createAllocation(
+                _ctx(
+                  sink: reports.add,
+                  cancel: CancelToken(),
+                  workSignal: (_) => Completer<GateOutcome>().future,
+                  workSignalTimeout: const Duration(milliseconds: 20),
+                ),
+              )
+              as ProcessAllocation;
+
+      alloc.deliverEventForTest(_inferredExit);
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(reports.whereType<AllocationCompleted>(), isEmpty);
+      expect(
+        reports.whereType<AllocationFailed>().single.reason,
+        contains('probe error'),
+        reason: 'a hung probe is an UNREADABLE workspace — fail closed, respawn',
+      );
+    });
+
+    test('the production timeout default is armed (a fence with no explicit '
+        'timeout is still bounded)', () {
+      expect(
+        AllocationContext(
+          treeContext: FakeTreeContext(),
+          args: stepArgs('tg-1/agent'),
+          transport: FakeRuntimeProvider(),
+          address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
+          env: const {},
+          sink: (_) {},
+        ).workSignalTimeout,
+        kWorkSignalTimeout,
       );
     });
 
