@@ -50,6 +50,10 @@ export 'src/domain/rework.dart';
 export 'src/domain/session_bead.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
+// Wedge detection (tg-jwh) — the station's own "is the grid stuck?" derivation
+// over the producer-side join; the status surface reports it, no watcher
+// re-derives it from raw sessions.
+export 'src/domain/wedge.dart';
 
 // Grid opinions layered on beads' generic models (AL-1b): driveability
 // narrowing over IssueType — the_grid's own reading of the generic beads
@@ -72,6 +76,8 @@ export 'src/kernel/station_services.dart';
 export 'src/kernel/session_resolver.dart';
 export 'src/kernel/station_driver.dart';
 export 'src/kernel/station_kernel.dart';
+// The station's own stuck-detector — owned + ticked by the StationDriver.
+export 'src/kernel/wedge_monitor.dart';
 export 'src/kernel/idle.dart';
 
 // Reactive sources (the only subscriptions into the pipelines live here).
