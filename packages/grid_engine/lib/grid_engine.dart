@@ -48,6 +48,11 @@ export 'src/domain/joined_snapshot.dart';
 // shared by the `Rewind` arm (the engine) and `grid rework` (the operator verb).
 export 'src/domain/rework.dart';
 export 'src/domain/session_bead.dart';
+// The session DISPOSITION (tg-4rw) — the pure done|held|voided reading of a
+// closed session, consumed by BOTH the mount boundary (WorkList) and the
+// adopt-or-mint decision (SessionScope). A closed session is never blanket-
+// blocking: a DEAD KEY (closed mid-flight) mints fresh instead of wedging.
+export 'src/domain/session_disposition.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
 // Wedge detection (tg-jwh) — the station's own "is the grid stuck?" derivation
