@@ -21,8 +21,12 @@ library;
 export 'src/station_attach.dart';
 export 'src/station_control.dart';
 export 'src/station_lock.dart';
+// The dev-mode reload client: a JIT station picks up landed code changes over
+// its VM service, with no down/up bounce and no killed agents.
+export 'src/station_reload.dart';
 
 // The generic, asset-agnostic driving commands.
+export 'src/reload_command.dart';
 export 'src/watch_command.dart';
 export 'src/gate_command.dart';
 export 'src/rework_command.dart';
