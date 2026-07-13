@@ -610,3 +610,84 @@ class _FakeCapabilityHostState extends State<FakeCapabilityHost> {
   @override
   Seed build(TreeContext context) => const Idle();
 }
+
+// ---------------------------------------------------------------------------
+// The ROUTE seams (M5 D-4a): the two domain-bound targets + a fixed-verdict
+// route. Public so an asset's own tests drive the SAME router with the SAME
+// fakes.
+// ---------------------------------------------------------------------------
+
+/// A recording [DeliveryMethod]: records every request and returns a settable
+/// [StepOutcome]. Set [throwNext] to prove the throwing-delivery → supervision
+/// path. Delivers nothing anywhere.
+class RecordingDeliveryMethod implements DeliveryMethod {
+  /// Creates the recorder; `deliver` returns [outcome] unless [throwNext].
+  RecordingDeliveryMethod({
+    this.id = 'fake-delivery',
+    this.outcome = const Ok({'pr_url': 'https://example.test/pr/1'}),
+    this.throwNext = false,
+  });
+
+  @override
+  final String id;
+
+  /// What a delivery resolves to.
+  StepOutcome outcome;
+
+  /// When true, a delivery THROWS instead of resolving.
+  bool throwNext;
+
+  /// Every request, in call order.
+  final List<DeliveryRequest> requests = <DeliveryRequest>[];
+
+  @override
+  Future<StepOutcome> deliver(DeliveryRequest request) async {
+    requests.add(request);
+    if (throwNext) throw StateError('delivery blew up');
+    return outcome;
+  }
+}
+
+/// A recording [EscalationHandler]: records every escalation and returns a
+/// settable [EscalationDecision] (default: park, like [HumanGate]).
+class RecordingEscalationHandler implements EscalationHandler {
+  /// Creates the recorder; an escalation returns [decision] unless [throwNext].
+  RecordingEscalationHandler({
+    this.id = 'fake-handler',
+    this.decision = const ParkAtGate('parked by the fake handler'),
+    this.throwNext = false,
+  });
+
+  @override
+  final String id;
+
+  /// What an escalation resolves to.
+  EscalationDecision decision;
+
+  /// When true, an escalation THROWS instead of resolving.
+  bool throwNext;
+
+  /// Every escalation, in call order.
+  final List<EscalationRequest> requests = <EscalationRequest>[];
+
+  @override
+  Future<EscalationDecision> escalate(EscalationRequest request) async {
+    requests.add(request);
+    if (throwNext) throw StateError('handler blew up');
+    return decision;
+  }
+}
+
+/// A [RouteCapability] that returns a FIXED [verdict] — the offline route
+/// stand-in every routing test drives the router with.
+class FixedRouteCapability extends RouteCapability {
+  /// Creates a route that always returns [verdict].
+  const FixedRouteCapability(this.verdict);
+
+  /// The verdict this route always emits.
+  final RouteVerdict verdict;
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async =>
+      verdict;
+}
