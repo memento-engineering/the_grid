@@ -140,7 +140,81 @@ Iterable<String> _allWrites(RecordingBdRunner runner) sync* {
   }
 }
 
+/// A route whose BODY blows up (a mis-authored asset) — the per-work
+/// fail-closed posture must catch it, never leak an unhandled zone error.
+class _ThrowingRouteCap extends RouteCapability {
+  const _ThrowingRouteCap();
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async =>
+      throw StateError('the route blew up');
+}
+
 void main() {
+  group('tg-6gn — the ALLOCATION layer maps each verdict to its OWN report', () {
+    Future<AllocationReport> reportFor(RouteCapability capability) async {
+      final reports = <AllocationReport>[];
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      await RouteAllocation(
+        capability,
+        AllocationContext(
+          treeContext: FakeTreeContext(),
+          args: stepArgs('tg-1/route'),
+          transport: provider,
+          address: const AllocationAddress('tgdog-s', 'tg-1/route'),
+          env: const {},
+          sink: reports.add,
+        ),
+      ).startOrAdopt();
+      return reports.single;
+    }
+
+    test('Advance → AllocationAdvanced (carrying its payload)', () async {
+      final report = await reportFor(
+        const FixedRouteCapability(Advance({'grade': 'A'})),
+      );
+      expect(report, isA<AllocationAdvanced>());
+      expect((report as AllocationAdvanced).payload, {'grade': 'A'});
+    });
+
+    test('Escalate → AllocationEscalated (carrying its reason)', () async {
+      final report = await reportFor(
+        const FixedRouteCapability(Escalate('declined')),
+      );
+      expect(report, isA<AllocationEscalated>());
+      expect((report as AllocationEscalated).reason, 'declined');
+    });
+
+    test('a THROWING route body routes to supervision as AllocationFailed — '
+        'never an unhandled zone error', () async {
+      final report = await reportFor(const _ThrowingRouteCap());
+      expect(report, isA<AllocationFailed>());
+      expect((report as AllocationFailed).reason, contains('route threw'));
+      expect(report.reason, contains('the route blew up'));
+    });
+  });
+
+  group('tg-6gn — a THROWING route reaches the ROUTER as a supervised failure',
+      () {
+    test('the host writes state=failed + a bumped restartCount, and NEVER '
+        'completes', () async {
+      final fakes = await _drive(const _ThrowingRouteCap());
+
+      final meta = fakes.runner.metadataOfUpdate(0);
+      expect(meta['grid.cursor.tg-1/route.state'], 'failed');
+      expect(meta['grid.cursor.tg-1/route.restartCount'], '1');
+      expect(
+        meta['grid.cursor.tg-1/route.failureReason'],
+        contains('route threw'),
+      );
+      expect(fakes.runner.callsFor('create'), isEmpty, reason: 'no gate bead');
+      for (final write in _allWrites(fakes.runner)) {
+        expect(write.contains('complete'), isFalse);
+      }
+    });
+  });
+
   group('tg-6gn — the two unions', () {
     test('RouteVerdict is sealed over exactly {Advance, Rewind, Escalate}', () {
       expect(_describeVerdict(const Advance()), 'advance');
