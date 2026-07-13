@@ -62,6 +62,7 @@ class StationLockRecord {
     required this.startedAt,
     this.controlUrl,
     this.token,
+    this.vmServiceUri,
   });
 
   /// Parses a lock payload. Throws (any [Object]) on a malformed shape — the
@@ -73,6 +74,7 @@ class StationLockRecord {
         startedAt: DateTime.parse(json['startedAt'] as String),
         controlUrl: json['controlUrl'] as String?,
         token: json['token'] as String?,
+        vmServiceUri: json['vmServiceUri'] as String?,
       );
 
   /// The holder's process id (the liveness-probe target).
@@ -91,13 +93,20 @@ class StationLockRecord {
   /// the lock file is 0600.
   final String? token;
 
-  /// Serializes the payload; absent control fields are OMITTED (not null).
+  /// The station's VM-service URI — advertised ONLY by a JIT station started
+  /// with `--enable-vm-service` (the dev-mode hot-reload target); null on an AOT
+  /// station, which cannot be reloaded. It carries the service auth code, which
+  /// is the OTHER reason this file is 0600.
+  final String? vmServiceUri;
+
+  /// Serializes the payload; absent optional fields are OMITTED (not null).
   Map<String, Object?> toJson() => <String, Object?>{
     'pid': pid,
     'pgid': pgid,
     'startedAt': startedAt.toIso8601String(),
     if (controlUrl != null) 'controlUrl': controlUrl,
     if (token != null) 'token': token,
+    if (vmServiceUri != null) 'vmServiceUri': vmServiceUri,
   };
 
   /// The RS-4 advertisement: the same identity with the control fields set.
@@ -110,6 +119,19 @@ class StationLockRecord {
     startedAt: startedAt,
     controlUrl: controlUrl,
     token: token,
+    // PRESERVED: the control advertisement must not erase a dev-mode station's
+    // VM-service URI — which advertisement lands first is the runner's business.
+    vmServiceUri: vmServiceUri,
+  );
+
+  /// The dev-mode advertisement: the same identity with [vmServiceUri] set.
+  StationLockRecord withVmService(String vmServiceUri) => StationLockRecord(
+    pid: pid,
+    pgid: pgid,
+    startedAt: startedAt,
+    controlUrl: controlUrl,
+    token: token,
+    vmServiceUri: vmServiceUri,
   );
 }
 
@@ -257,6 +279,16 @@ class StationLockHandle {
     required String token,
   }) async {
     _record = _record.withControl(controlUrl: controlUrl, token: token);
+    await _file.writeAsString(jsonEncode(_record.toJson()), flush: true);
+    await _chmod(_file.path);
+  }
+
+  /// Advertises this station's VM service: rewrites the lock with
+  /// [vmServiceUri], preserving every other field, and re-asserts 0600 (the URI
+  /// carries the service auth code). A JIT runner calls it with
+  /// `grid_exploration`'s `stationVmServiceUri()`; an AOT runner never does.
+  Future<void> updateVmService(String vmServiceUri) async {
+    _record = _record.withVmService(vmServiceUri);
     await _file.writeAsString(jsonEncode(_record.toJson()), flush: true);
     await _chmod(_file.path);
   }
