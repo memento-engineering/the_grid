@@ -67,6 +67,11 @@ export 'src/composition/scopes.dart';
 // scope in the composition tree (Track B).
 export 'src/run/configuration.dart';
 export 'src/run/grid_delegate.dart';
+// The dev-mode reassemble affordance: `GridHandle.hotReload` / `hotRestart`
+// return a `ReassembleReport`; a JIT station wires them into
+// `grid_exploration`'s `ReassembleTool`. No `dart:developer` here — the wire
+// lives in the package that owns the namespace.
+export 'src/run/reassemble.dart';
 export 'src/run/run_grid.dart';
 
 // ── Stores at roots + substation init (Track D — tg-y1b) ────────────────────
