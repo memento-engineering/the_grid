@@ -154,9 +154,6 @@ class _RecordingProvisionSourceControl implements SourceControl {
   final List<String> log;
 
   @override
-  bool get canLand => false;
-
-  @override
   String workspaceFor(String beadId) => '/w/$beadId';
   @override
   String branchFor(String beadId) => 'grid/$beadId';
@@ -169,12 +166,6 @@ class _RecordingProvisionSourceControl implements SourceControl {
     required String workspaceDir,
   }) async => log.add('provision($beadId)');
 
-  @override
-  Future<void> commitAll({required String workspaceDir, required String message}) async {}
-  @override
-  Future<void> push({required String workspaceDir, required String remote, required String branch}) async {}
-  @override
-  Future<PrRef?> openPr({required String workspaceDir, required String branch, required String baseBranch, required String title}) async => null;
 }
 
 /// A [SourceControl] with a KNOWN workspace/branch layout that records the
@@ -185,8 +176,6 @@ class _RecordingProvisionSourceControl implements SourceControl {
 class _DerivingSourceControl implements SourceControl {
   final List<String> provisionedDirs = [];
 
-  @override
-  bool get canLand => false;
   @override
   String workspaceFor(String beadId) => '/custom/ws/$beadId';
   @override
@@ -200,12 +189,6 @@ class _DerivingSourceControl implements SourceControl {
     required String workspaceDir,
   }) async => provisionedDirs.add(workspaceDir);
 
-  @override
-  Future<void> commitAll({required String workspaceDir, required String message}) async {}
-  @override
-  Future<void> push({required String workspaceDir, required String remote, required String branch}) async {}
-  @override
-  Future<PrRef?> openPr({required String workspaceDir, required String branch, required String baseBranch, required String title}) async => null;
 }
 
 Branch _hostBranch(Branch root) {
