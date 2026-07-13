@@ -37,6 +37,16 @@ sealed class RuntimeEvent with _$RuntimeEvent {
   const factory RuntimeEvent.exited({
     required String name,
     required int exitCode,
+
+    /// Whether [exitCode] was INFERRED rather than READ. A DETACHED one-shot
+    /// exposes no readable exit code, so its vanish is reported as a clean
+    /// `Exited(0)` by intent — but a MURDERED process vanishes EXACTLY like a
+    /// finished one, so that 0 is a GUESS, not an observation. The transport
+    /// says so rather than pretending (ADR-0004 Decision 1: providers "degrade
+    /// explicitly rather than silently"), and the engine's completion fence
+    /// PROVES an inferred completion before advancing a circuit on it. Defaults
+    /// to false — an exit code we actually READ is proof.
+    @Default(false) bool inferred,
   }) = Exited;
 
   /// The session died without a clean exit code we could read (e.g. the process

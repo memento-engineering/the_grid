@@ -37,6 +37,53 @@ enum GateOutcome {
 /// [GateOutcome.probeError] block; only [GateOutcome.clear] permits.
 bool gateBlocks(GateOutcome outcome) => outcome != GateOutcome.clear;
 
+/// Whether EVERY path a `git status --porcelain` [line] names lies under one of
+/// the [excluded] directory prefixes — the completion fence's residue filter. A
+/// line whose paths cannot be parsed is NEVER excluded (fail closed: unreadable
+/// ⇒ it counts as work). A rename that moves a file OUT of an excluded dir
+/// counts (only one of its two paths is excluded).
+bool _fullyExcluded(String line, Set<String> excluded) {
+  if (excluded.isEmpty) return false;
+  final paths = _porcelainPaths(line);
+  if (paths.isEmpty) return false;
+  return paths.every(
+    (path) => excluded.any((dir) => path == dir || path.startsWith('$dir/')),
+  );
+}
+
+/// The paths a `git status --porcelain` [line] names: one, or TWO for a
+/// rename/copy (`R  old -> new`). The format is `XY<space><path>`, so the path
+/// starts at index 3. Unquotes git's C-style quoting (a path with
+/// spaces/specials comes back `"quoted"`). Returns empty when the line is too
+/// short to carry a path — the caller fails closed on that. Git COLLAPSES an
+/// untracked directory to a single trailing-slash entry (`?? .grid/`), which the
+/// `startsWith('$dir/')` test in [_fullyExcluded] matches.
+List<String> _porcelainPaths(String line) {
+  if (line.length < 4) return const <String>[];
+  final rest = line.substring(3);
+  // Only a rename/copy status carries the ` -> ` pair, so a literal ' -> ' inside
+  // a plain path is never mis-split.
+  final renamed = line[0] == 'R' || line[0] == 'C';
+  final arrow = renamed ? rest.indexOf(' -> ') : -1;
+  final parts = arrow < 0
+      ? <String>[rest]
+      : <String>[rest.substring(0, arrow), rest.substring(arrow + 4)];
+  return parts
+      .map(_unquotePath)
+      .where((path) => path.isNotEmpty)
+      .toList(growable: false);
+}
+
+/// Strips git's C-style quoting from a porcelain [path] (`"a b.json"` →
+/// `a b.json`).
+String _unquotePath(String path) {
+  final trimmed = path.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.substring(1, trimmed.length - 1);
+  }
+  return trimmed;
+}
+
 /// Low-level git operations scoped to a working directory — the Dart port of
 /// gc's `Git` (`gascity/internal/git/git.go`), over the injectable [GitRunner]
 /// seam. This is a stateless Service in predictable-flutter terms (owns one
@@ -104,10 +151,46 @@ class GitOps {
   /// **Gate 1.** Whether the working dir has uncommitted changes (staged,
   /// unstaged, or untracked). gc's `HasUncommittedWork` (`git.go:134-140`):
   /// fail-closed — a probe error is [GateOutcome.probeError] ("assume dirty").
-  Future<GateOutcome> hasUncommittedWork(String workDir) async {
+  ///
+  /// [excluding] names directory prefixes, RELATIVE to [workDir], whose entries
+  /// do NOT count as work. It defaults to EMPTY, so ADR-0006 Decision 3's
+  /// three-gate [StationGitService.reap] check is UNCHANGED: the reap gate
+  /// protects work a removal would DESTROY, and residue in a worktree it is
+  /// about to remove still blocks it.
+  ///
+  /// The COMPLETION FENCE is the one caller that excludes — it asks "did the
+  /// coding agent leave its CODE uncommitted?", and the grid's OWN steps (the
+  /// critics, `pin-diff`, `specify`) write `.grid/critique/`, `.grid/spec/`, and
+  /// `.grid/telemetry/` by design, committing none of it. A substation that
+  /// gitignores `.grid` never shows that residue; one that does NOT shows
+  /// `?? .grid/`. Excluding it makes the work signal read the SAME on both,
+  /// instead of reading a substation's `.gitignore` as an interrupted agent.
+  ///
+  /// Fail-closed on an unparsable status line: a line whose path cannot be read
+  /// COUNTS as work — never silently excluded.
+  ///
+  /// Fail-closed, too, on a WARNING: `git status` can exit **0** while writing to
+  /// stderr (`warning: could not open directory 'x/': Permission denied`), which
+  /// means it could not fully scan the tree. [GitRunResult.output] is combined
+  /// (gc fidelity), so a warning line would otherwise be parsed as a porcelain
+  /// entry and fabricate a phantom change — inventing "uncommitted work" that
+  /// does not exist. A degraded scan is [GateOutcome.probeError] ("couldn't
+  /// tell"), never an invented answer: it still BLOCKS a reap exactly as before,
+  /// and the completion fence reports it honestly as unreadable rather than as an
+  /// interrupted agent.
+  Future<GateOutcome> hasUncommittedWork(
+    String workDir, {
+    Set<String> excluding = const <String>{},
+  }) async {
     final r = await _run(workDir, const <String>['status', '--porcelain']);
     if (!r.ok) return GateOutcome.probeError;
-    return r.output.trim().isEmpty ? GateOutcome.clear : GateOutcome.present;
+    if (r.stderr.trim().isNotEmpty) return GateOutcome.probeError;
+    // stderr is empty, so `output` IS stdout: every line is porcelain.
+    final work = r.output
+        .split('\n')
+        .where((line) => line.trim().isNotEmpty)
+        .where((line) => !_fullyExcluded(line, excluding));
+    return work.isEmpty ? GateOutcome.clear : GateOutcome.present;
   }
 
   /// **Gate 2.** Whether HEAD has commits not reachable from any remote

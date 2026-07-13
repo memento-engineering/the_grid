@@ -184,6 +184,8 @@ class CapabilityHostState extends State<CapabilityHost> {
       // The engine pgid-liveness half (D4), co-wired with the reconciler's
       // AdoptProof at the live arm; null → neverLive → no mount-time adopt (P1).
       liveness: _ctx!.liveness ?? neverLive,
+      // The COMPLETION FENCE's probe; null → noWorkSignal → inert.
+      workSignal: _ctx!.workSignal ?? noWorkSignal,
     );
   }
 

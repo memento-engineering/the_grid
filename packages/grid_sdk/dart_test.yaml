@@ -1,0 +1,14 @@
+# grid_sdk test configuration.
+#
+# The `git` tag marks tests that drive the REAL `git` binary against TEMP repos
+# only. They are hermetic — no network, no remote, no `gh`, no `claude`. `git` is
+# always present, so they run by default; select just them with `dart test -t git`.
+tags:
+  integration:
+    description: >-
+      Tier requiring an out-of-process dependency beyond the always-present git
+      binary; excluded from the offline default with `-x integration`.
+  git:
+    description: >-
+      Drives the real git binary against hermetic temp repos. No network, no
+      remote, no gh, no claude.

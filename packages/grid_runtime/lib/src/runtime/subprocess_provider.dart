@@ -375,7 +375,13 @@ class SubprocessProvider implements RuntimeProvider {
       // judged by its commit, separately). Emit a clean exit so the actuator
       // parks it asleep instead of treating success as a crash and
       // crash-looping/quarantining it (the bug the first genesis arm exposed).
-      _emit(RuntimeEvent.exited(name: session.name, exitCode: 0));
+      //
+      // ...and FLAG it: the 0 is inferred from the vanish, not read. A murdered
+      // agent vanishes identically, so the engine's completion fence proves an
+      // inferred exit against the workspace before it advances the circuit.
+      _emit(
+        RuntimeEvent.exited(name: session.name, exitCode: 0, inferred: true),
+      );
     } else {
       // A longLived agent that vanishes really did die unexpectedly → crash.
       _emit(RuntimeEvent.died(name: session.name, reason: 'process vanished'));
