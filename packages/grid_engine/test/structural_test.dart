@@ -41,12 +41,42 @@ const _opinionLiterals = <String>[
   // from `SourceControl.workspaceFor`/`branchFor`, so the engine names this layout
   // marker nowhere (it used to leak via `EffectContext.worktreeFor`).
   '.grid/worktrees',
+  // DELIVERY detail (M5 D-4a): "is landing armed?", "open a PR" and a PR ref are
+  // the CODE domain's, not the engine's. The engine knows only "actuate the
+  // terminal delivery" (`DeliveryMethod`); commit/push/open-a-PR left
+  // `SourceControl` and ship in the asset's bound method.
+  'canLand',
+  'openPr',
+  'PrRef',
 ];
+
+/// tg-6gn — the ONE ROUTER. A route verdict is effected in exactly ONE engine
+/// file: `circuit/capability_host.dart`. If any of these routing-effect call
+/// sites appears anywhere else under `lib/src`, a second seam started effecting
+/// routing and the "one router, one chokepoint" invariant (A37 / ADR-0009
+/// Decision 3's invariant 2) is gone.
+const _routingEffectCallSites = <String>[
+  'nodeRewoundMetadata(', // the rewind re-key write
+  '.createGate(', // the escalate → park effect
+  '.deliver(', // the terminal advance's actuation
+  '.escalate(', // the escalate → bound handler raise
+];
+
+/// The ONE file allowed to EFFECT them (the router).
+const _router = 'circuit/capability_host.dart';
+
+/// The DEFINITION sites the fence must not trip on. Only `session_bead.dart`
+/// needs the exemption — it DECLARES `nodeRewoundMetadata`. The `DeliveryMethod`
+/// / `EscalationHandler` interfaces (and their fakes) declare `deliver`/`escalate`
+/// with no leading dot, so they never match a CALL site and are deliberately NOT
+/// exempted: the fence stays tight enough to catch a second effector even inside
+/// the SDK.
+const _routingDefinitionFiles = <String>['domain/session_bead.dart'];
 
 /// The SUPERSEDED tg-b3k workaround (tg-o90): a machine-actionable GATE-REASON
 /// STRING convention (`kRespecGatePrefix` / `isRespecGate` / `machineActionableGate`),
 /// with `SessionScope` auto-resolving the gate beads it matched. Routing is a
-/// first-class `StepOutcome.Rewind` arm now — the engine NEVER parses a gate
+/// first-class `Rewind` VERDICT now — the engine NEVER parses a gate
 /// reason, and a gate is always a HUMAN's. If any of these identifiers reappears
 /// in the engine, the workaround came back.
 const _supersededWorkaroundLiterals = <String>[
@@ -117,6 +147,45 @@ void main() {
       );
     });
 
+    test('tg-6gn — the ONE ROUTER: no other lib/src file effects a route '
+        'verdict', () {
+      final offences = <String>[];
+      for (final file in engineFiles) {
+        final rel = p
+            .relative(file.path, from: libSrc.path)
+            .replaceAll(r'\', '/');
+        if (rel == _router || _routingDefinitionFiles.contains(rel)) continue;
+        final source = file.readAsStringSync();
+        for (final site in _routingEffectCallSites) {
+          if (source.contains(site)) offences.add('$rel effects "$site"');
+        }
+      }
+      expect(
+        offences,
+        isEmpty,
+        reason:
+            'a route verdict is effected in ONE seam — the CapabilityHost — '
+            'through the ONE bd chokepoint onto the_grid\'s OWN session bead '
+            '(A37 / ADR-0009 invariant 2):\n  ${offences.join('\n  ')}',
+      );
+    });
+
+    test('tg-6gn — MEANINGFULNESS: the router DOES effect all four (so the '
+        'fence above cannot pass vacuously)', () {
+      final source = File(
+        p.join(libSrc.path, 'circuit', 'capability_host.dart'),
+      ).readAsStringSync();
+      for (final site in _routingEffectCallSites) {
+        expect(
+          source.contains(site),
+          isTrue,
+          reason:
+              'the router must still effect "$site" — if it moved, the '
+              'one-router fence is watching an empty room',
+        );
+      }
+    });
+
     test('tg-o90 — the superseded gate-reason-STRING workaround stays dead', () {
       final offences = <String>[];
       for (final file in engineFiles) {
@@ -133,7 +202,7 @@ void main() {
         offences,
         isEmpty,
         reason:
-            'routing is the first-class `StepOutcome.Rewind` arm (tg-o90) — the '
+            'routing is the first-class `Rewind` verdict (tg-o90) — the '
             'engine never parses a gate REASON, and SessionScope never '
             'auto-resolves a gate bead. The tg-b3k workaround must not come '
             'back:\n  ${offences.join('\n  ')}',

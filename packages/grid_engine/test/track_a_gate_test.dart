@@ -15,14 +15,6 @@ import 'package:test/test.dart';
 import 'support/engine_fakes.dart';
 
 /// A ServiceCapability that returns the configured [outcome] (a `Gate` or `Ok`).
-class _RouteCap extends ServiceCapability {
-  const _RouteCap(this.outcome);
-  final StepOutcome outcome;
-
-  @override
-  Future<StepOutcome> run(TreeContext context, StepArgs args) async => outcome;
-}
-
 const _gateCircuit = Circuit(
   id: 'f',
   terminalStepId: 'land',
@@ -58,7 +50,7 @@ Bead _gate({
 );
 
 void main() {
-  group('Track A3 — host: a ServiceCapability Gate writes gated + mints a gate', () {
+  group('Track A3 — host: a route Escalate writes gated + mints a gate', () {
     test('writes state=gated AND mints a type=gate bead via the chokepoint, and '
         'does NOT write complete', () async {
       final fakes = buildFakes();
@@ -75,7 +67,7 @@ void main() {
             child: InheritedSeed<ServiceBundle>(
               value: const ServiceBundle(),
               child: CapabilityHost(
-                capability: const _RouteCap(Gate('x')),
+                capability: const FixedRouteCapability(Escalate('x')),
                 mount: const StepMount(
                   step: CapabilityStep(stepId: 'route', capabilityId: 'route'),
                   nodePath: 'tg-1/route',

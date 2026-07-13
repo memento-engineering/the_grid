@@ -518,17 +518,8 @@ WorkSignalProbe stationWorkSignal(StationGitService git) =>
       excluding: const <String>{kGridRuntimeDirName},
     );
 
-/// The land ops a runner threads into its substations' git/GitHub assets when
-/// a live run arms landing (ADR-0006 D3) — they flow into the ASSET's
-/// `SourceControl`, never through the station services. Unarmed (dry-run, or
-/// the commit-only arm) both are null ⇒ `canLand` false ⇒ land no-ops.
-({GitOps? gitOps, PrOpener? prOpener}) buildLandOps({required bool armed}) =>
-    armed
-        ? (gitOps: GitOps(SystemGitRunner()), prOpener: GhPrOpener(ghRunner))
-        : (gitOps: null, prOpener: null);
-
-/// Execs `gh` for the land PR opener (inherits the parent env so `gh` finds
-/// its own auth).
+/// Execs `gh` for a delivery method's PR opener (inherits the parent env so `gh`
+/// finds its own auth).
 Future<GitRunResult> ghRunner(String workDir, List<String> args) async {
   final result = await Process.run('gh', args, workingDirectory: workDir);
   return GitRunResult(

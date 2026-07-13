@@ -177,14 +177,6 @@ void main() {
       await alloc.dispose();
       expect(cap.releasedAny(), isTrue);
     });
-
-    test('Gate dispatch → AllocationGated', () async {
-      final reports = <AllocationReport>[];
-      final cap = _FakeLeaseCap(outcome: const Gate('needs a human'));
-      final alloc = _alloc(cap, sink: reports.add);
-      await alloc.startOrAdopt();
-      expect((reports.single as AllocationGated).reason, 'needs a human');
-    });
   });
 
   group('LeaseAllocation — acquire fail-closed', () {

@@ -48,7 +48,7 @@ abstract class NodeCursor with _$NodeCursor {
     @Default(0) int restartCount,
 
     /// How many times this node has been RE-KEYED BY A ROUTING REWIND
-    /// (`StepOutcome.Rewind` — tg-o90). Bumped monotonically per node on every
+    /// (the `Rewind` verdict — tg-o90). Bumped monotonically per node on every
     /// rewind wave that names it, and part of the node's reconcile key
     /// (`CircuitScope`), so a rewound node that is still MOUNTED (a daemon) is
     /// torn down and re-run rather than silently left alive under a stale

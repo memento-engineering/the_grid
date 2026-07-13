@@ -32,6 +32,7 @@ library;
 
 import 'dart:async';
 
+import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
@@ -43,6 +44,7 @@ import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
 import '../sdk/rewind.dart';
+import '../sdk/route.dart';
 import 'capability_registry.dart';
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
@@ -210,10 +212,14 @@ class CapabilityHostState extends State<CapabilityHost> {
         if (_completed) return;
         _completed = true;
         unawaited(_persistFailure(reason));
-      case AllocationGated(:final reason):
+      case AllocationAdvanced(:final payload):
         if (_completed) return;
         _completed = true;
-        unawaited(_persistGate(reason));
+        unawaited(_persistAdvance(payload));
+      case AllocationEscalated(:final reason):
+        if (_completed) return;
+        _completed = true;
+        unawaited(_persistEscalate(reason));
       case AllocationRewound(:final stepIds, :final reason):
         if (_completed) return;
         _completed = true;
@@ -338,10 +344,131 @@ class CapabilityHostState extends State<CapabilityHost> {
     _emitFlare('step.failed', const {});
   }
 
+  /// ADVANCE (M5 D-4a): move the cursor forward. At the ROOT circuit's TERMINAL
+  /// step this ACTUATES the substation's bound [DeliveryMethod] and merges its
+  /// receipt into the SAME `state=complete` chokepoint write (one atomic update).
+  ///
+  /// Three shapes, all of them a real posture:
+  ///  - NON-terminal advance → an ordinary completion (a sub-circuit's route);
+  ///  - terminal advance, NO method bound → COMMIT-ONLY: the work completes and
+  ///    nothing leaves the station (what the retired `--land` flag expressed as
+  ///    "unarmed", now a per-substation binding);
+  ///  - terminal advance WITH a method → deliver, then complete with the receipt.
+  ///
+  /// A delivery that FAILS (or THROWS) does NOT advance: it routes to supervision
+  /// (bounded restart → the breaker → SessionScope's escalation). Silently
+  /// completing un-delivered work is exactly the "stranded on a branch" failure
+  /// this unification exists to kill.
+  Future<void> _persistAdvance(Map<String, String>? payload) async {
+    if (_cancelled || !context.mounted) return;
+    final terminal = isDeliveryTerminal(
+      circuit: seed.mount.circuit,
+      circuitPath: seed.mount.circuitPath,
+      stepId: seed.mount.step.stepId,
+      beadId: _beadId,
+    );
+    final method = _services.delivery;
+    if (!terminal || method == null) {
+      if (terminal) _emitFlare('deliver.unarmed', const {});
+      await _persistComplete(payload);
+      return;
+    }
+    // The ambient values, read SYNCHRONOUSLY at entry with the EFFECT verb (this
+    // runs off `build`, on a still-mounted branch — guarded above) and handed to
+    // the method as VALUES, so a long push/PR round-trip cannot race an unmount
+    // into a thrown tree lookup (ADR-0013 items 1/4).
+    final workBead = context.getInheritedSeedOfExactType<Bead>();
+    final workspace = context.getInheritedSeedOfExactType<Workspace>();
+    if (workBead == null || workspace == null) {
+      // LOUD (ADR-0008 Decision 3): a delivery method bound under a tree that
+      // mounts no work bead / no workspace is a MIS-COMPOSITION — never a silent
+      // no-op that strands the work.
+      await _persistFailure(
+        'delivery "${method.id}" needs an ambient Bead + Workspace '
+        '(WorkBead/SessionScope provide them) — none found at $_nodePath',
+      );
+      return;
+    }
+    final StepOutcome outcome;
+    try {
+      outcome = await method.deliver(
+        DeliveryRequest(
+          bead: workBead,
+          sessionId: _sessionId,
+          nodePath: _nodePath,
+          workspace: workspace,
+          payload: payload ?? const {},
+        ),
+      );
+    } on Object catch (e) {
+      await _persistFailure('delivery "${method.id}" threw: $e');
+      return;
+    }
+    if (_cancelled || !context.mounted) return;
+    switch (outcome) {
+      case Ok(payload: final receipt):
+        await _persistComplete({
+          ...?payload,
+          ...?receipt,
+          ResultKeys.delivery: method.id,
+        });
+        _emitFlare('step.delivered', {'method': method.id});
+      case Failed(:final reason):
+        await _persistFailure('delivery "${method.id}" failed: $reason');
+    }
+  }
+
+  /// ESCALATE (M5 D-4a): the route declined — raise it to the substation's BOUND
+  /// [EscalationHandler]. UNBOUND ⇒ [HumanGate], the M5 D-7 default, which returns
+  /// [ParkAtGate] and so reproduces the old `Gate` outcome EXACTLY (`state=gated`
+  /// + a real `type=gate` bead through the chokepoint; `SessionScope` re-arms the
+  /// node when that gate CLOSES). The engine hardcodes no authority.
+  ///
+  /// A handler that DECLINES ([FailToSupervision]) — or THROWS — routes the node
+  /// to supervision instead of parking: an escalation nobody owns must never look
+  /// like a park somebody does (LOUD or GONE).
+  ///
+  /// DISTINCT from `SessionScope`'s breaker-exhaustion escalation (D-5), which is
+  /// supervision's, not routing's, and is untouched.
+  Future<void> _persistEscalate(String reason) async {
+    if (_cancelled || !context.mounted) return;
+    final handler = _services.escalation ?? const HumanGate();
+    _emitFlare('step.escalated', {
+      'handler': handler.id,
+      'reason': truncateReason(reason),
+    });
+    final EscalationDecision decision;
+    try {
+      decision = await handler.escalate(
+        EscalationRequest(
+          beadId: _beadId,
+          sessionId: _sessionId,
+          nodePath: _nodePath,
+          reason: reason,
+          rewindCount: seed.mount.node.rewindCount,
+        ),
+      );
+    } on Object catch (e) {
+      await _persistFailure('escalation handler "${handler.id}" threw: $e');
+      return;
+    }
+    if (_cancelled || !context.mounted) return;
+    switch (decision) {
+      case ParkAtGate(reason: final parkReason):
+        await _persistGate(parkReason);
+      case FailToSupervision(reason: final declineReason):
+        await _persistFailure(
+          'escalation handler "${handler.id}" declined: $declineReason',
+        );
+    }
+  }
+
   /// PARK at a human gate (D-7): write `state=gated` (parks the node + withholds
   /// its dependents) AND mint a real `type=gate` bead in the OWN state store
   /// through the chokepoint — never a write to the foreign work bead (A37).
-  /// Resolving that gate bead re-arms the node.
+  /// Resolving that gate bead re-arms the node. Reached ONLY through
+  /// [_persistEscalate] (M5 D-4a): a park is a DECISION of the bound handler, not
+  /// a verdict of its own.
   Future<void> _persistGate(String reason) async {
     if (_cancelled || !context.mounted) return;
     await _ctx!.writer.update(
@@ -377,7 +504,8 @@ class CapabilityHostState extends State<CapabilityHost> {
   ///   myself, forever" → a supervised failure instead (bounded by the breaker,
   ///   then escalation);
   /// - a node whose own `rewindCount` already reached [kMaxReworkRounds] REFUSES
-  ///   to rewind again and parks at a human [Gate] (D-4's bounded rework rounds),
+  ///   to rewind again and ESCALATES through the bound [EscalationHandler] (D-4's
+  ///   bounded rework rounds; the default [HumanGate] parks exactly as before),
   ///   so a mis-specified route can never spin the loop. The operator's lever to
   ///   grant a fresh budget is `grid rework` (a new session ⇒ a new cursor).
   Future<void> _persistRewind(Set<String> stepIds, String reason) async {
@@ -396,9 +524,11 @@ class CapabilityHostState extends State<CapabilityHost> {
     }
     final rounds = seed.mount.node.rewindCount;
     if (rounds >= kMaxReworkRounds) {
-      await _persistGate(
-        'rework cap reached ($rounds/$kMaxReworkRounds) — a human decides: '
-        '$reason',
+      // The BELT (M5 D-4/A47): refuse and ESCALATE to the bound handler — whose
+      // DEFAULT (HumanGate) parks exactly as before. The cap no longer assumes
+      // the authority is a human; it just refuses to spin the loop.
+      await _persistEscalate(
+        'rework cap reached ($rounds/$kMaxReworkRounds): $reason',
       );
       return;
     }

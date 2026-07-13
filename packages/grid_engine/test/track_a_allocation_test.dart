@@ -75,9 +75,6 @@ class _RecordingProvisionSourceControl implements SourceControl {
   final String root;
 
   @override
-  bool get canLand => false;
-
-  @override
   String workspaceFor(String beadId) => '/w/$beadId';
   @override
   String branchFor(String beadId) => 'grid/$beadId';
@@ -91,24 +88,6 @@ class _RecordingProvisionSourceControl implements SourceControl {
   }) async =>
       log.add(root.isEmpty ? 'provision($beadId)' : 'provision($root:$beadId)');
 
-  @override
-  Future<void> commitAll({
-    required String workspaceDir,
-    required String message,
-  }) async {}
-  @override
-  Future<void> push({
-    required String workspaceDir,
-    required String remote,
-    required String branch,
-  }) async {}
-  @override
-  Future<PrRef?> openPr({
-    required String workspaceDir,
-    required String branch,
-    required String baseBranch,
-    required String title,
-  }) async => null;
 }
 
 // --- builders ----------------------------------------------------------------
@@ -251,7 +230,7 @@ void main() {
       },
     );
 
-    test('Failed → AllocationFailed; Gate → AllocationGated', () async {
+    test('Failed → AllocationFailed', () async {
       final reports = <AllocationReport>[];
       final cancel = CancelToken();
       await _RecServiceCap(const Failed('nope'), [])
@@ -265,19 +244,6 @@ void main() {
           .startOrAdopt();
       expect(reports.single, isA<AllocationFailed>());
       expect((reports.single as AllocationFailed).reason, 'nope');
-
-      final gated = <AllocationReport>[];
-      await _RecServiceCap(const Gate('block'), [])
-          .createAllocation(
-            _allocCtx(
-              transport: FakeRuntimeProvider(),
-              sink: gated.add,
-              cancel: CancelToken(),
-            ),
-          )
-          .startOrAdopt();
-      expect(gated.single, isA<AllocationGated>());
-      expect((gated.single as AllocationGated).reason, 'block');
     });
 
     test(

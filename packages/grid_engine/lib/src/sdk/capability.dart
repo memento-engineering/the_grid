@@ -31,6 +31,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import 'allocation.dart';
 import 'cursor.dart';
+import 'route.dart';
 
 /// A leaf the engine mounts. The engine ships three families — [ProcessCapability]
 /// (a spawned process), [ServiceCapability] (an async body), and
@@ -260,7 +261,12 @@ abstract class ServiceCapability extends Capability {
 /// are POSITIVE TERMINALS (satisfy a `dependsOn`); `none` is "no cursor change".
 enum StepSignal { none, ready, complete, failed }
 
-/// The outcome of a [ServiceCapability.run].
+/// The outcome of an ordinary capability body — `{Ok, Failed}` and nothing else.
+///
+/// A build agent does not ROUTE: it succeeds or it fails; THEN the committee's
+/// [RouteCapability] decides (a distinct [RouteVerdict] — M5 D-4a). The `Gate`
+/// and `Rewind` arms this union used to carry are now the [Escalate] and
+/// [Rewind] VERDICTS, effected by the ONE router.
 sealed class StepOutcome {
   const StepOutcome();
 }
@@ -282,60 +288,6 @@ class Failed extends StepOutcome {
   const Failed([this.reason = '']);
 
   /// A human-readable failure reason.
-  final String reason;
-}
-
-/// The capability decided the work must PARK at a human gate (a hard block, a
-/// grade spread, a human-ultimatum). The host writes `state=gated` (parks the
-/// node + withholds its dependents) and mints a real `type=gate` bead in the
-/// OWN state store via the chokepoint — never a write to the foreign work bead
-/// (A37). Resolving that gate bead re-arms the node. D-7.
-class Gate extends StepOutcome {
-  /// Creates a gate park with an optional human-readable [reason].
-  const Gate([this.reason = '']);
-
-  /// Why the work parked at the gate (recorded on the minted gate bead).
-  final String reason;
-}
-
-/// The capability decided the work must REWIND — **routing, the dual of
-/// fan-out** (`docs/M5-THE-CIRCUIT-BUILD-ORDER.md` D-4: "the route capability
-/// returns a `StepOutcome` that advances/blocks/re-keys the formula cursor — it
-/// never writes the work bead"), promoted to a first-class arm 2026-07-12
-/// (tg-o90).
-///
-/// The host flips the named SIBLING steps, every node transitively DOWNSTREAM of
-/// them, and THIS node back to `state=pending` with a bumped per-node
-/// `rewindCount`, in ONE write through the chokepoint onto the_grid's OWN
-/// session bead (A37). The bump RE-KEYS each node, so keyed reconcile disposes
-/// (kills) the old incarnations and the sub-DAG re-runs VIRGIN — with **NO
-/// `type=gate` bead** (that is [Gate], a human park) and **NO session re-mint**
-/// (that is the `grid rework` operator verb, which retires the round).
-///
-/// The rewinding node writes itself `pending` too; since it depends —
-/// transitively — on a rewound target, the frontier withholds it until the
-/// sub-DAG re-completes. That is what makes the round a loop, not a race.
-///
-/// BOUNDED (D-4, "bounded rework rounds (factoryskills' cap 3)"): the host
-/// REFUSES a rewind from a node whose own `rewindCount` has reached
-/// `kMaxReworkRounds` and parks at a human [Gate] instead, so a mis-specified
-/// route can never spin the loop. A route escalates on its OWN policy first by
-/// reading its `rewindCount` back through the ambient [SiblingView].
-///
-/// [stepIds] must name steps of the rewinding node's OWN circuit; an empty or
-/// dangling name is an authoring bug and routes to a supervised [Failed] — never
-/// a silent no-op.
-class Rewind extends StepOutcome {
-  /// Rewinds the sibling steps [stepIds] (plus their transitive dependents and
-  /// this node), carrying a human-readable [reason] (flared + recorded as
-  /// diagnostics; the engine NEVER parses it — the correction guidance is the
-  /// asset's own durable ledger, in the workspace).
-  const Rewind(this.stepIds, [this.reason = '']);
-
-  /// The sibling step ids to re-run (in the rewinding node's own circuit).
-  final Set<String> stepIds;
-
-  /// Why the work rewound (diagnostics/telemetry only).
   final String reason;
 }
 
@@ -393,11 +345,28 @@ class SiblingView {
 /// never a `metadata.grid.root` stamp).
 class ServiceBundle {
   /// Creates a bundle of optional collaborators.
-  const ServiceBundle({this.sourceControl, this.trust, this.transport});
+  const ServiceBundle({
+    this.sourceControl,
+    this.delivery,
+    this.escalation,
+    this.trust,
+    this.transport,
+  });
 
-  /// Source control (commit/push/PR) for this substation's root — the git
-  /// impl ships in the asset.
+  /// Workspace provisioning for this substation's ONE root — the git impl ships
+  /// in the asset.
   final SourceControl? sourceControl;
+
+  /// This substation's bound DELIVERY METHOD — what a TERMINAL [Advance]
+  /// ACTUATES (M5 D-4a). NULL ⇒ commit-only: the terminal advance completes and
+  /// nothing is delivered (the posture the retired `--land` flag expressed as
+  /// "unarmed"). The impl ships in the asset.
+  final DeliveryMethod? delivery;
+
+  /// This substation's bound ESCALATION HANDLER — where an [Escalate] verdict is
+  /// raised. NULL ⇒ [HumanGate] (the M5 D-7 default: park + mint a `type=gate`
+  /// bead). The engine hardcodes no authority.
+  final EscalationHandler? escalation;
 
   /// Reserved (OQ-7) — local/reputation/ledger trust, distinct from
   /// `genesis_consent`. Designed-to-be-lifted; null in P1.
@@ -408,10 +377,15 @@ class ServiceBundle {
   final ExplorationTransport? transport;
 }
 
-/// The first [Service] — provision-workspace + commit/push/open-PR, abstracted
-/// so the engine knows it in CONCEPT, not detail (the git impl ships in the
-/// asset pack). Clean + dependency-free so a future genesis-shared home is a
-/// move, not a rewrite (designed-to-be-lifted).
+/// The first [Service] — WORKSPACE PROVISIONING, abstracted so the engine knows
+/// it in CONCEPT, not detail (the git impl ships in the asset pack). Clean +
+/// dependency-free so a future genesis-shared home is a move, not a rewrite
+/// (designed-to-be-lifted).
+///
+/// It NO LONGER commits/pushes/opens a PR (M5 D-4a): that is DELIVERY detail,
+/// and it lives behind the substation's bound [DeliveryMethod]. The engine knows
+/// only "actuate the terminal delivery" — it names no VCS verb beyond "give this
+/// work a workspace to happen in".
 abstract interface class SourceControl {
   /// The workspace directory the effect runs in for [beadId] — where the host
   /// spawns its process and the land step commits/pushes from. The LAYOUT is the
@@ -438,42 +412,6 @@ abstract interface class SourceControl {
     required String beadId,
     required String workspaceDir,
   });
-
-  /// Whether land (commit/push/PR) is wired. When false, the land capability
-  /// no-ops to `Ok` — the early-arm posture (commit-only working agreement; land
-  /// is a deliberate human follow-up). Provisioning is independent of this.
-  bool get canLand;
-
-  /// Commits all changes in [workspaceDir] with [message].
-  Future<void> commitAll({
-    required String workspaceDir,
-    required String message,
-  });
-
-  /// Pushes [branch] to [remote] from [workspaceDir], setting upstream.
-  Future<void> push({
-    required String workspaceDir,
-    required String remote,
-    required String branch,
-  });
-
-  /// Opens a PR for [branch] against [baseBranch]; returns the ref, or null on
-  /// failure (an honest "did not complete" — never throws for a normal refusal).
-  Future<PrRef?> openPr({
-    required String workspaceDir,
-    required String branch,
-    required String baseBranch,
-    required String title,
-  });
-}
-
-/// A reference to an opened pull request.
-class PrRef {
-  /// Wraps the PR [url].
-  const PrRef(this.url);
-
-  /// The PR url.
-  final String url;
 }
 
 /// Reserved trust abstraction (OQ-7) — local/reputation/ledger; designed to be

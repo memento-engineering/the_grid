@@ -1,6 +1,6 @@
 /// The pure REWIND SET — routing's actuation surface (the dual of fan-out;
-/// `docs/M5-THE-CIRCUIT-BUILD-ORDER.md` D-4 promoted to a first-class
-/// `StepOutcome` arm, tg-o90).
+/// `docs/M5-THE-CIRCUIT-BUILD-ORDER.md` D-4), re-homed onto the `Rewind` verdict
+/// of the ONE route primitive (D-4a; it was a `StepOutcome` arm under tg-o90).
 ///
 /// A `Rewind` names SIBLING step ids in the rewinding node's OWN circuit. The
 /// nodes that must re-run are: those steps, every step transitively DOWNSTREAM

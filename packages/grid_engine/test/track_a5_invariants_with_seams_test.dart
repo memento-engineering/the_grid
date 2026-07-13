@@ -53,10 +53,10 @@ class _CriticCap extends ProcessCapability {
 /// The sibling-reading aggregator (A2): reads each critic's grade through the
 /// AMBIENT [SiblingView] (mounted by `SessionScope`, read with the effect verb)
 /// and parks at a gate (A3) on any fail-closed `F`.
-class _RouteCap extends ServiceCapability {
+class _RouteCap extends RouteCapability {
   const _RouteCap();
   @override
-  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
     final path = args.nodePath;
     final parent = path.substring(0, path.lastIndexOf('/'));
     final siblings =
@@ -68,9 +68,9 @@ class _RouteCap extends ServiceCapability {
     for (final critic in critics) {
       // Fail-closed: a missing grade reads as `F` (it can never advance).
       final grade = siblings.resultOf('$parent/$critic')['grade'] ?? 'F';
-      if (grade == 'F') return Gate('critic $critic failed');
+      if (grade == 'F') return Escalate('critic $critic failed');
     }
-    return const Ok({'verdict': 'advance'});
+    return const Advance({'verdict': 'advance'});
   }
 }
 

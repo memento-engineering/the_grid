@@ -98,7 +98,7 @@ class _OkCap extends ServiceCapability {
 /// naming the `specify` SIBLING. It escalates on its OWN policy at the cap
 /// (reading its `rewindCount` back through the ambient SiblingView) rather than
 /// leaning on the engine belt.
-class _RouteCap extends ServiceCapability {
+class _RouteCap extends RouteCapability {
   const _RouteCap(this.ledger, {this.respecRounds = 1});
   final _Ledger ledger;
 
@@ -106,15 +106,15 @@ class _RouteCap extends ServiceCapability {
   final int respecRounds;
 
   @override
-  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
     final view =
         context.getInheritedSeedOfExactType<SiblingView>() ??
         const SiblingView();
     final rounds = view.cursorOf(args.nodePath).rewindCount;
     if (rounds >= kMaxReworkRounds) {
-      return const Gate('spec still failing at the cap — a human decides');
+      return const Escalate('spec still failing at the cap — a human decides');
     }
-    if (rounds >= respecRounds) return const Ok(); // advance.
+    if (rounds >= respecRounds) return const Advance(); // advance.
     ledger.guidance.add('round ${rounds + 1}: name the exact test command');
     return const Rewind({'specify'}, 'RESPEC: acceptance not falsifiable');
   }
@@ -122,19 +122,11 @@ class _RouteCap extends ServiceCapability {
 
 /// A RUNAWAY route (a mis-specified asset): rewinds unconditionally, ignoring the
 /// cap — the ENGINE BELT must refuse it.
-class _RunawayRouteCap extends ServiceCapability {
+class _RunawayRouteCap extends RouteCapability {
   const _RunawayRouteCap();
   @override
-  Future<StepOutcome> run(TreeContext context, StepArgs args) async =>
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async =>
       const Rewind({'specify'}, 'RESPEC: forever');
-}
-
-/// A route returning a FIXED outcome (the LOUD-refusal + fence + report cases).
-class _FixedCap extends ServiceCapability {
-  const _FixedCap(this.outcome);
-  final StepOutcome outcome;
-  @override
-  Future<StepOutcome> run(TreeContext context, StepArgs args) async => outcome;
 }
 
 // --- the RE-KEY isolation fixture (a still-mounted daemon) --------------------
@@ -185,15 +177,15 @@ class _HarnessDaemon extends ProcessCapability {
 
 /// The route in the re-key fixture: rewinds the DAEMON itself once, then
 /// advances.
-class _DaemonRouteCap extends ServiceCapability {
+class _DaemonRouteCap extends RouteCapability {
   const _DaemonRouteCap();
 
   @override
-  Future<StepOutcome> run(TreeContext context, StepArgs args) async {
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
     final view =
         context.getInheritedSeedOfExactType<SiblingView>() ??
         const SiblingView();
-    if (view.cursorOf(args.nodePath).rewindCount >= 1) return const Ok();
+    if (view.cursorOf(args.nodePath).rewindCount >= 1) return const Advance();
     return const Rewind({'harness'}, 'RESPEC: re-run the rig from scratch');
   }
 }
@@ -663,7 +655,7 @@ void main() {
   group('tg-o90 — LOUD refusal (a rewind naming nothing real)', () {
     test('an UNKNOWN step id routes to supervision as Failed, with no pending '
         'write and no gate bead', () async {
-      final h = _bareRoute(const _FixedCap(Rewind({'nope'}, 'typo')));
+      final h = _bareRoute(const FixedRouteCapability(Rewind({'nope'}, 'typo')));
       addTearDown(() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
@@ -685,7 +677,7 @@ void main() {
 
     test('an EMPTY stepIds routes to supervision as Failed — never a silent '
         '"re-run only myself, forever"', () async {
-      final h = _bareRoute(const _FixedCap(Rewind({}, 'oops')));
+      final h = _bareRoute(const FixedRouteCapability(Rewind({}, 'oops')));
       addTearDown(() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
@@ -702,11 +694,13 @@ void main() {
     });
   });
 
-  group('tg-o90 — the FENCE: an existing D-7 human Gate parks exactly as today',
+  group('tg-o90 — the FENCE: the D-7 human park still parks exactly as today',
       () {
-    test('a Gate from the SAME circuit writes gated + mints a gate bead and '
-        'rewinds NOTHING', () async {
-      final h = _bareRoute(const _FixedCap(Gate('human ultimatum')));
+    test('an Escalate from the SAME circuit writes gated + mints a gate bead '
+        'and rewinds NOTHING', () async {
+      final h = _bareRoute(
+        const FixedRouteCapability(Escalate('human ultimatum')),
+      );
       addTearDown(() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
@@ -732,13 +726,13 @@ void main() {
   });
 
   group('tg-o90 — the allocation layer maps a Rewind to a DISTINCT report', () {
-    test('ServiceAllocation reports AllocationRewound (never Gated/Failed)',
+    test('RouteAllocation reports AllocationRewound (never Escalated/Failed)',
         () async {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
       addTearDown(provider.close);
-      final alloc = ServiceAllocation(
-        const _FixedCap(Rewind({'specify'}, 'respec')),
+      final alloc = RouteAllocation(
+        const FixedRouteCapability(Rewind({'specify'}, 'respec')),
         AllocationContext(
           treeContext: FakeTreeContext(),
           args: stepArgs('tg-1/spec_review/route'),

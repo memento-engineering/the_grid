@@ -89,10 +89,9 @@ class _DaemonCap extends ProcessCapability {
 
 /// A minimal ambient [SourceControl] — its PRESENCE is what arms the fence (the
 /// tree has a real workspace); the fence's actual verdict comes from the injected
-/// probe. Land is unwired (`canLand` false) and the land ops are never called.
+/// probe. It provisions only — delivery is the substation's bound method (M5
+/// D-4a), and this fake binds none.
 class _FakeSourceControl implements SourceControl {
-  @override
-  bool get canLand => false;
 
   @override
   String workspaceFor(String beadId) => '/w/$beadId';
@@ -107,24 +106,6 @@ class _FakeSourceControl implements SourceControl {
     required String workspaceDir,
   }) async {}
 
-  @override
-  Future<void> commitAll({
-    required String workspaceDir,
-    required String message,
-  }) async {}
-  @override
-  Future<void> push({
-    required String workspaceDir,
-    required String remote,
-    required String branch,
-  }) async {}
-  @override
-  Future<PrRef?> openPr({
-    required String workspaceDir,
-    required String branch,
-    required String baseBranch,
-    required String title,
-  }) async => null;
 }
 
 /// A recording work-signal probe returning a programmed [outcome] (or throwing),
