@@ -25,7 +25,7 @@ mixin _$NodeCursor {
  String? get token;/// How many times this node has been supervised-restarted (gates the breaker
 /// predicate — D-5).
  int get restartCount;/// How many times this node has been RE-KEYED BY A ROUTING REWIND
-/// (`StepOutcome.Rewind` — tg-o90). Bumped monotonically per node on every
+/// (the `Rewind` verdict — tg-o90). Bumped monotonically per node on every
 /// rewind wave that names it, and part of the node's reconcile key
 /// (`CircuitScope`), so a rewound node that is still MOUNTED (a daemon) is
 /// torn down and re-run rather than silently left alive under a stale
@@ -299,7 +299,7 @@ class _NodeCursor extends NodeCursor {
 /// predicate — D-5).
 @override@JsonKey() final  int restartCount;
 /// How many times this node has been RE-KEYED BY A ROUTING REWIND
-/// (`StepOutcome.Rewind` — tg-o90). Bumped monotonically per node on every
+/// (the `Rewind` verdict — tg-o90). Bumped monotonically per node on every
 /// rewind wave that names it, and part of the node's reconcile key
 /// (`CircuitScope`), so a rewound node that is still MOUNTED (a daemon) is
 /// torn down and re-run rather than silently left alive under a stale

@@ -27,7 +27,7 @@ part 'wedge.freezed.dart';
 
 /// The default sustain window before a stall is called a WEDGE — long enough
 /// that no legitimate transition trips it (the supervised-restart backoff caps
-/// at 60s; a `StepOutcome.Rewind` wave re-keys within a microtask flush — A47),
+/// at 60s; a `Rewind` verdict's wave re-keys within a microtask flush — A47),
 /// short enough that the governor is pulled in within a poll or two rather than
 /// whenever a human happens to look.
 const kDefaultWedgeThreshold = Duration(minutes: 10);
