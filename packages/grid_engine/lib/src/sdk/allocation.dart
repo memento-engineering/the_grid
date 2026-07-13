@@ -33,6 +33,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import 'capability.dart';
 import 'circuit.dart';
+import 'route.dart';
 
 /// The lifecycle state of an [Allocation] (ADR-0009 D5:
 /// `starting → live → [ready] → dying → gone`, plus `adopting`).
@@ -184,14 +185,32 @@ class AllocationFailed extends AllocationReport {
   final String reason;
 }
 
-/// The work must PARK at a human gate (D7). The Host persists `state=gated` and
-/// mints a real `type=gate` bead in the OWN state store (never the foreign work
-/// bead — A37); resolving that gate re-arms the node.
-class AllocationGated extends AllocationReport {
-  /// Reports a gate park with an optional human-readable [reason].
-  const AllocationGated([this.reason = '']);
+/// The route ADVANCED (M5 D-4a) — the cursor moves forward. The Host persists
+/// `state=complete` (merged with the optional [payload]); at the ROOT circuit's
+/// TERMINAL step it FIRST actuates the bound [DeliveryMethod] and merges the
+/// receipt into that same write. A LATCHING terminal.
+///
+/// DISTINCT from [AllocationCompleted] on purpose: delivery is the actuation of a
+/// terminal route's ADVANCE, not of any terminal completion — an ordinary job
+/// that happens to sit at the terminal never delivers.
+class AllocationAdvanced extends AllocationReport {
+  /// Reports an advance, optionally carrying a result [payload].
+  const AllocationAdvanced([this.payload]);
 
-  /// Why the work parked (recorded on the minted gate bead).
+  /// The optional result payload (recorded on the session bead, never a pipeline
+  /// signal).
+  final Map<String, String>? payload;
+}
+
+/// The route ESCALATED (M5 D-4a) — the Host raises it to the substation's bound
+/// [EscalationHandler] (unbound ⇒ [HumanGate] ⇒ `state=gated` + a real
+/// `type=gate` bead, M5 D-7 exactly). Replaces the old `AllocationGated`: the
+/// engine no longer assumes the authority is a human. A LATCHING terminal.
+class AllocationEscalated extends AllocationReport {
+  /// Reports an escalation with the route's [reason].
+  const AllocationEscalated([this.reason = '']);
+
+  /// Why the route declined (recorded on the park; never parsed).
   final String reason;
 }
 
@@ -455,12 +474,11 @@ class ServiceAllocation extends Allocation {
     context.sink(_reportFor(outcome));
   }
 
-  /// Maps a [ServiceCapability] outcome to the report the Host persists.
+  /// Maps a [ServiceCapability] outcome to the report the Host persists. An
+  /// ordinary service does not route (M5 D-4a): its only arms are Ok/Failed.
   AllocationReport _reportFor(StepOutcome outcome) => switch (outcome) {
     Ok(:final payload) => AllocationCompleted(payload),
     Failed(:final reason) => AllocationFailed(reason),
-    Gate(:final reason) => AllocationGated(reason),
-    Rewind(:final stepIds, :final reason) => AllocationRewound(stepIds, reason),
   };
 
   @override

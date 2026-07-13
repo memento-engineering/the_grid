@@ -81,8 +81,10 @@ abstract class LeaseCapability<H> extends Capability {
 
   /// Dispatch the work on the leased slot [handle] and interpret the result into
   /// a [StepOutcome] — [Ok] (with the payload a daemon publishes on `ready` / a
-  /// job records on `complete`), [Failed], or [Gate]. Called once after a
-  /// successful [acquire]; NOT called on adopt.
+  /// job records on `complete`) or [Failed]. A lease dispatch does NOT route
+  /// (M5 D-4a): routing is a [RouteCapability]'s [RouteVerdict], never an
+  /// ordinary body's outcome. Called once after a successful [acquire]; NOT
+  /// called on adopt.
   Future<StepOutcome> dispatchOn(H handle, TreeContext context, StepArgs args);
 
   /// **No-adopt-on-faith** freshness proof (D4/D5): confirm [handle] is still a
@@ -245,14 +247,6 @@ class LeaseAllocation<H> extends Allocation {
       case Failed(:final reason):
         state = AllocationState.gone;
         _reportTerminal(AllocationFailed(reason));
-      case Gate(:final reason):
-        state = AllocationState.gone;
-        _reportTerminal(AllocationGated(reason));
-      case Rewind(:final stepIds, :final reason):
-        // Routing (tg-o90) — a latching terminal for THIS incarnation; the Host
-        // re-keys the named sub-DAG and this node re-mounts fresh.
-        state = AllocationState.gone;
-        _reportTerminal(AllocationRewound(stepIds, reason));
     }
   }
 

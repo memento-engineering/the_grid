@@ -197,6 +197,11 @@ abstract final class ResultKeys {
   /// The human-readable justification a critic — or an operator ruling — records
   /// alongside a grade.
   static const rationale = 'rationale';
+
+  /// The DELIVERY METHOD id a terminal advance actuated (M5 D-4a) — the audit
+  /// record of HOW the work left the station (`pr`, `export`, …). Written beside
+  /// the method's own receipt keys under `grid.result.<nodePath>.*`.
+  static const delivery = 'delivery';
 }
 
 /// The [ResultKeys.transport] provenance an OPERATOR RULING stamps on a lane
