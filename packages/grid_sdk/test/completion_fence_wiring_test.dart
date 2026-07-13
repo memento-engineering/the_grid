@@ -77,9 +77,6 @@ class _RepoSourceControl implements SourceControl {
   final String dir;
 
   @override
-  bool get canLand => false;
-
-  @override
   String workspaceFor(String beadId) => dir;
   @override
   String branchFor(String beadId) => 'grid/$beadId';
@@ -92,24 +89,6 @@ class _RepoSourceControl implements SourceControl {
     required String workspaceDir,
   }) async {}
 
-  @override
-  Future<void> commitAll({
-    required String workspaceDir,
-    required String message,
-  }) async {}
-  @override
-  Future<void> push({
-    required String workspaceDir,
-    required String remote,
-    required String branch,
-  }) async {}
-  @override
-  Future<PrRef?> openPr({
-    required String workspaceDir,
-    required String branch,
-    required String baseBranch,
-    required String title,
-  }) async => null;
 }
 
 /// A [PrOpener] the fence never reaches (no land step here) — the real
