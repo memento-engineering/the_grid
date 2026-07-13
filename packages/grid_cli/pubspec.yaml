@@ -20,6 +20,9 @@ dependencies:
   grid_sdk: any
   meta: ^1.15.0
   path: ^1.9.0
+  # The VM-service client `reload` drives: reloadSources + the
+  # ext.exploration.grid.reload invoke.
+  vm_service: ^14.2.0
 
 dev_dependencies:
   lints: ^5.1.0

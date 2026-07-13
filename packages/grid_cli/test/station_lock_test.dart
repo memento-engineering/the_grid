@@ -240,6 +240,50 @@ void main() {
       expect(back.token, isNull);
     });
 
+    test('round-trips the dev-mode vmServiceUri; ABSENT means omitted', () {
+      final dev = StationLockRecord(
+        pid: 7,
+        pgid: 8,
+        startedAt: DateTime.utc(2026, 7, 12),
+      ).withVmService('http://127.0.0.1:1234/tok=/');
+      final back = StationLockRecord.fromJson(
+        jsonDecode(jsonEncode(dev.toJson())) as Map<String, Object?>,
+      );
+      expect(back.vmServiceUri, 'http://127.0.0.1:1234/tok=/');
+
+      // An AOT station advertises none — the key is OMITTED, not null.
+      final aot = StationLockRecord(
+        pid: 9,
+        pgid: 9,
+        startedAt: DateTime.utc(2026, 7, 12),
+      );
+      expect(aot.toJson().containsKey('vmServiceUri'), isFalse);
+      expect(
+        StationLockRecord.fromJson(aot.toJson()).vmServiceUri,
+        isNull,
+      );
+    });
+
+    test('withControl PRESERVES an already-advertised vmServiceUri', () {
+      final record = StationLockRecord(
+        pid: 1,
+        pgid: 2,
+        startedAt: DateTime.utc(2026, 7, 12),
+      ).withVmService('http://127.0.0.1:1234/tok=/');
+
+      final advertised = record.withControl(
+        controlUrl: 'http://127.0.0.1:8137',
+        token: 's3cret',
+      );
+
+      expect(
+        advertised.vmServiceUri,
+        'http://127.0.0.1:1234/tok=/',
+        reason: 'the control advertisement must not erase the VM service',
+      );
+      expect(advertised.token, 's3cret');
+    });
+
     test('tolerates unknown extra keys (forward-compatible)', () {
       final back = StationLockRecord.fromJson(<String, Object?>{
         'pid': 5,

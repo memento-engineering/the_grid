@@ -163,4 +163,113 @@ void main() {
       expect(result['error'], contains('unknown grid tool'));
     });
   });
+
+  group('the dev-mode reload tool', () {
+    test(
+      'a dev-mode station advertises `reload` as a SIXTH tool — registered by '
+      'the host, so a registered tool is a DISCOVERABLE tool',
+      () async {
+        final runtime = await _startedRuntime(() => _snap([_bead('a')]));
+        addTearDown(runtime.dispose);
+        final host = GridExplorationHost(
+          runtime,
+          reassemble: ReassembleTool(
+            hotReload: () async => {'mode': 'reload', 'generation': 1},
+            hotRestart: () async => {'mode': 'restart', 'generation': 1},
+          ),
+        );
+
+        final extensions = host.handshakeJson()[kExtensionsKey]! as List;
+        expect((extensions.single as Map)['namespace'], 'grid');
+        expect((extensions.single as Map)['tools'], [
+          'requery',
+          'snapshot',
+          'ready',
+          'events',
+          'stats',
+          'reload',
+        ]);
+
+        // `mode` defaults to reload; the envelope matches the other five tools.
+        final result = await host.dispatchTool('reload', const {});
+        expect(result['ok'], isTrue);
+        expect((result['value']! as Map)['mode'], 'reload');
+        expect(
+          (await host.dispatchTool('reload', const {
+            'mode': 'restart',
+          }))['value'],
+          containsPair('mode', 'restart'),
+        );
+      },
+    );
+
+    test(
+      'WITHOUT a contributor the host is EXACTLY as-is: the five read-only '
+      'tools, no reload',
+      () async {
+        final runtime = await _startedRuntime(() => _snap([_bead('a')]));
+        addTearDown(runtime.dispose);
+        final host = GridExplorationHost(runtime);
+
+        expect(host.toolNames, [
+          'requery',
+          'snapshot',
+          'ready',
+          'events',
+          'stats',
+        ]);
+        final extensions = host.handshakeJson()[kExtensionsKey]! as List;
+        expect((extensions.single as Map)['tools'], isNot(contains('reload')));
+        // The observation plugin owns no such tool — it stays read-only.
+        final unknown = await host.dispatchTool('reload', const {});
+        expect(unknown['ok'], isFalse);
+      },
+    );
+
+    test('an unknown reassemble mode is refused LOUDLY (never a silent '
+        'reload)', () async {
+      final runtime = await _startedRuntime(() => _snap([_bead('a')]));
+      addTearDown(runtime.dispose);
+      final host = GridExplorationHost(
+        runtime,
+        reassemble: ReassembleTool(
+          hotReload: () async => fail('a bad mode must never reload'),
+          hotRestart: () async => fail('a bad mode must never restart'),
+        ),
+      );
+
+      await expectLater(
+        host.dispatchTool('reload', const {'mode': 'bounce'}),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('a colliding dev tool name refuses at CONSTRUCTION', () async {
+      final runtime = await _startedRuntime(() => _snap([_bead('a')]));
+      addTearDown(runtime.dispose);
+      expect(
+        () => GridExplorationHost(runtime, reassemble: _CollidingTool()),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+  });
+}
+
+/// A contributor that (wrongly) claims an observation tool name — the collision
+/// guard's positive control (Fakes, not mocks).
+class _CollidingTool implements ReassembleTool {
+  @override
+  StationReassemble get hotReload => () async => const {};
+
+  @override
+  StationReassemble get hotRestart => () async => const {};
+
+  @override
+  List<String> get toolNames => const ['stats'];
+
+  @override
+  Future<Map<String, Object?>> dispatch(
+    String name,
+    Map<String, String> params,
+  ) async => const {};
 }
