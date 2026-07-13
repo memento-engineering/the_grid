@@ -52,9 +52,15 @@ class ReassembleBus extends StateNotifier<ReassembleRequest> {
   /// Creates the bus at the launch baseline (generation 0).
   ReassembleBus() : super(const ReloadRequest(0));
 
-  /// Emits [request]. A fresh instance ALWAYS notifies (`StateNotifier`'s
+  /// Emits [next]. A fresh instance ALWAYS notifies (`StateNotifier`'s
   /// `updateShouldNotify` is `!identical`), so back-to-back reloads both land.
-  void request(ReassembleRequest request) => state = request;
+  ///
+  /// A statement body, not an expression one: the D-H fence bans `=> state` in
+  /// this package's source outright (it cannot tell a write from a re-surfacing
+  /// read), and a structural guard is worth more than a saved line.
+  void request(ReassembleRequest next) {
+    state = next;
+  }
 }
 
 /// What a dev-mode re-composition DID — returned by `GridHandle.hotReload` /
