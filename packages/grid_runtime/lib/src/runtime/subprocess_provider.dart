@@ -86,6 +86,14 @@ class SystemSubprocessSpawner implements SubprocessSpawner {
       runInShell: false,
       mode: ProcessStartMode.detachedWithStdio,
     );
+    // CLOSE the child's stdin immediately: the agent transport is ARGV-ONLY
+    // ([SpawnedProcess] exposes no stdin, so nothing can ever write to it). An
+    // open, never-written pipe does not mean "no input" — it means "input still
+    // pending", and a harness that READS stdin blocks on it forever. `claude -p`
+    // ignores stdin and so never noticed; `codex exec` prints "Reading additional
+    // input from stdin..." and hangs BEFORE opening its thread — no rollout, no
+    // telemetry, no error, the session latched at `running` until killed.
+    unawaited(process.stdin.close().catchError((Object _) {}));
     return _SystemSpawnedProcess(process);
   }
 }
