@@ -132,6 +132,16 @@ class _SystemSpawnedProcess implements SpawnedProcess {
 /// **CUT (Track 2):** no inference-provider abstraction, no per-session Unix
 /// control socket (this in-process registry of [_Session] handles suffices for
 /// Tier-1), no attach/nudge. The `TmuxProvider` adapter lands with Track 1.
+/// Renders [d] for a human reading a death reason ('2h', '90m', '30s', '300ms')
+/// — a watchdog that cannot say what limit it enforced is half a refusal. Never
+/// rounds a real duration to a bare '0'.
+String _humanize(Duration d) {
+  if (d.inHours > 0 && d.inMinutes % 60 == 0) return '${d.inHours}h';
+  if (d.inMinutes > 0 && d.inSeconds % 60 == 0) return '${d.inMinutes}m';
+  if (d.inSeconds > 0) return '${d.inSeconds}s';
+  return '${d.inMilliseconds}ms';
+}
+
 class SubprocessProvider implements RuntimeProvider {
   SubprocessProvider({
     SubprocessSpawner spawner = const SystemSubprocessSpawner(),
@@ -141,6 +151,7 @@ class SubprocessProvider implements RuntimeProvider {
     Map<String, String>? parentEnvironment,
     Duration stopGrace = const Duration(seconds: 2),
     Duration livenessPollPeriod = const Duration(milliseconds: 100),
+    Duration? agentDeadline = const Duration(hours: 2),
     int peekBufferLines = 2000,
     Random? random,
   }) : _spawner = spawner,
@@ -149,6 +160,7 @@ class SubprocessProvider implements RuntimeProvider {
        _parentEnv = parentEnvironment ?? systemEnvironment(),
        _stopGrace = stopGrace,
        _pollPeriod = livenessPollPeriod,
+       _agentDeadline = agentDeadline,
        _peekBufferLines = peekBufferLines,
        _random = random;
 
@@ -158,6 +170,26 @@ class SubprocessProvider implements RuntimeProvider {
   final Map<String, String> _parentEnv;
   final Duration _stopGrace;
   final Duration _pollPeriod;
+
+  /// The WATCHDOG deadline: how long ONE agent may live before it is presumed
+  /// hung and killed. Null disarms it (the tests' default posture).
+  ///
+  /// The station could see an agent DIE, but never an agent that was ALIVE and
+  /// doing NOTHING — so a hang latched its node at `running` FOREVER, silently,
+  /// with no telemetry and no error. That is exactly how a one-line stdin bug
+  /// (the_grid #57) cost an overnight arm: the wedge had no time limit, so it
+  /// had no end.
+  ///
+  /// It is an ABSOLUTE deadline from spawn, deliberately NOT an inactivity
+  /// timer: `claude -p --output-format json` prints NOTHING until it finishes,
+  /// so "no output for N minutes" would shoot every healthy claude agent. Time
+  /// since spawn is the one signal that means the same thing for every harness.
+  ///
+  /// Generous by design — this is a BACKSTOP against the infinite, not a
+  /// performance budget. It must sit well above the slowest legitimate step (a
+  /// grinding specify has burned ~137K tokens over tens of minutes), because a
+  /// false kill costs a whole round while a missed hang costs the whole arm.
+  final Duration? _agentDeadline;
   final int _peekBufferLines;
   final Random? _random;
 
@@ -269,6 +301,24 @@ class SubprocessProvider implements RuntimeProvider {
         _emitExit(session);
       },
     );
+    // The WATCHDOG (see [_agentDeadline]): an agent that outlives its deadline is
+    // presumed hung. Kill its whole group and report a DEATH, so the node fails
+    // and reaches supervision instead of latching at `running` forever.
+    final deadline = _agentDeadline;
+    if (deadline != null) {
+      session.armDeadline(deadline, () {
+        if (!_sessions.containsKey(name)) return;
+        session.deadlineReason =
+            'watchdog: agent exceeded its ${_humanize(deadline)} deadline and '
+            'was killed (presumed hung)';
+        unawaited(
+          _terminateSession(session).whenComplete(() {
+            session.cancelSupervision();
+            _emitExit(session);
+          }),
+        );
+      });
+    }
     return;
   }
 
@@ -373,6 +423,15 @@ class SubprocessProvider implements RuntimeProvider {
     if (session.exitEmitted) return;
     session.exitEmitted = true;
     _sessions.remove(session.name);
+    // A WATCHDOG kill is a DEATH, and outranks every other reading. A `oneTurn`
+    // agent that vanishes is normally an inferred success — and a hung agent we
+    // just shot vanishes EXACTLY like a finished one, so without this branch the
+    // watchdog would report the hang it caught as a clean completion.
+    final killed = session.deadlineReason;
+    if (killed != null) {
+      _emit(RuntimeEvent.died(name: session.name, reason: killed));
+      return;
+    }
     final code = session.observedExitCode;
     if (code != null) {
       _emit(RuntimeEvent.exited(name: session.name, exitCode: code));
@@ -444,6 +503,28 @@ class _Session {
   /// death is reported as [RuntimeEvent.died].
   int? observedExitCode;
 
+  /// Set when the WATCHDOG killed this session for outliving its deadline —
+  /// carries the reason for the [RuntimeEvent.died]. Its presence also FORCES
+  /// the died path: a `oneTurn` agent that vanishes is normally reported as an
+  /// inferred success, and a hung agent we shot must NEVER look like one.
+  String? deadlineReason;
+
+  Timer? _deadlineTimer;
+
+  /// Arms the watchdog: [onDeadline] fires once if this session is still alive
+  /// [after] its start.
+  void armDeadline(Duration after, void Function() onDeadline) {
+    _deadlineTimer = Timer(after, () {
+      if (_closed || stopping) return;
+      onDeadline();
+    });
+  }
+
+  void cancelDeadline() {
+    _deadlineTimer?.cancel();
+    _deadlineTimer = null;
+  }
+
   final StreamController<String> _transcript =
       StreamController<String>.broadcast();
   final List<String> _peekBuffer = <String>[];
@@ -496,6 +577,7 @@ class _Session {
   void cancelSupervision() {
     _superviseTimer?.cancel();
     _superviseTimer = null;
+    cancelDeadline();
   }
 
   String peek(int lines) {
