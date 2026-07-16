@@ -200,31 +200,60 @@ class CapabilityHostState extends State<CapabilityHost> {
     if (_cancelled || !context.mounted) return;
     switch (report) {
       case AllocationStarted(:final pid, :final pgid):
-        unawaited(_persistStarted(pid: pid, pgid: pgid));
+        _firePersist('started', () => _persistStarted(pid: pid, pgid: pgid));
       case AllocationReady(:final payload):
         if (_completed) return;
-        unawaited(_persistReady(payload));
+        _firePersist('ready', () => _persistReady(payload));
       case AllocationCompleted(:final payload):
         if (_completed) return;
         _completed = true;
-        unawaited(_persistComplete(payload));
+        _firePersist('complete', () => _persistComplete(payload));
       case AllocationFailed(:final reason):
         if (_completed) return;
         _completed = true;
-        unawaited(_persistFailure(reason));
+        _firePersist('failure', () => _persistFailure(reason));
       case AllocationAdvanced(:final payload):
         if (_completed) return;
         _completed = true;
-        unawaited(_persistAdvance(payload));
+        _firePersist('advance', () => _persistAdvance(payload));
       case AllocationEscalated(:final reason):
         if (_completed) return;
         _completed = true;
-        unawaited(_persistEscalate(reason));
+        _firePersist('escalate', () => _persistEscalate(reason));
       case AllocationRewound(:final stepIds, :final reason):
         if (_completed) return;
         _completed = true;
-        unawaited(_persistRewind(stepIds, reason));
+        _firePersist('rewind', () => _persistRewind(stepIds, reason));
     }
+  }
+
+  /// Fires a persist path that must NEVER take the station down (bead `tg-7ux`).
+  ///
+  /// [_onReport] is a SYNCHRONOUS callback, so every persist is fired without
+  /// being awaited — and a bare `unawaited` turns any throw into an UNHANDLED
+  /// async error that kills the whole isolate. Each of these paths WRITES to the
+  /// state store, and a store write fails for reasons that are none of this
+  /// node's business and usually transient: a bd timeout, a Dolt server that
+  /// died with the power, an open circuit breaker. Unguarded, ONE substation's
+  /// flaky store takes down every OTHER substation's in-flight agents.
+  ///
+  /// So the failure is contained to its own node: the cursor is left where it
+  /// is, and the throw is flared as `step.persistFailed`. A stuck node is
+  /// recoverable — the governor sees it and reworks it; a dead station is not.
+  /// LOUD, not silent, and never fatal.
+  ///
+  /// NOT a retry: a timed-out write is AMBIGUOUS (it may well have landed), and
+  /// blindly re-issuing `createGate` would mint duplicate gates — the mint-dedup
+  /// race is a known hazard. Retry is a separate decision from not-crashing.
+  void _firePersist(String op, Future<void> Function() persist) {
+    unawaited(
+      persist().catchError((Object e) {
+        _emitFlare('step.persistFailed', {
+          'op': op,
+          'error': truncateReason('$e'),
+        });
+      }),
+    );
   }
 
   /// Test affordance: deliver [event] directly into the process allocation's
