@@ -375,6 +375,54 @@ exit 0
       await evSub.cancel();
       await provider.dispose();
     }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test(
+        '(e real) the child gets stdin EOF — a harness that READS stdin must not '
+        'hang forever', () async {
+      // The agent transport is argv-only, so NOTHING ever writes to the child's
+      // stdin. Before the fix the pipe was left open and never closed: a harness
+      // that reads stdin (`codex exec` — "Reading additional input from
+      // stdin...") blocked forever BEFORE opening its thread, so the session
+      // latched at `running` with no output, no telemetry and no error. This stub
+      // stands in for such a harness: it can only reach its marker via EOF.
+      final tmp = await Directory.systemTemp.createTemp('grid_runtime_stdin_');
+      addTearDown(() => tmp.delete(recursive: true));
+      final stub = File('${tmp.path}/stub.sh')
+        ..writeAsStringSync('''
+#!/bin/sh
+# Blocks until stdin reaches EOF — exactly what `codex exec` does.
+cat > /dev/null
+echo "stdin-eof"
+''');
+      await Process.run('chmod', ['+x', stub.path]);
+
+      final provider = SubprocessProvider(
+        parentEnvironment: const {'PATH': '/usr/bin:/bin'},
+        livenessPollPeriod: const Duration(milliseconds: 25),
+      );
+
+      final lines = <String>[];
+      await provider.start(
+        'stdin-reader',
+        RuntimeConfig(workDir: tmp.path, command: '/bin/sh', args: [stub.path]),
+      );
+      final outSub = provider.output('stdin-reader').listen(lines.add);
+
+      for (var i = 0; i < 200 && lines.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+
+      expect(
+        lines,
+        contains('stdin-eof'),
+        reason: 'the spawner must CLOSE the child stdin it never writes to — '
+            'an open pipe means "input pending", and a stdin-reading harness '
+            'hangs on it forever',
+      );
+
+      await outSub.cancel();
+      await provider.dispose();
+    }, timeout: const Timeout(Duration(seconds: 20)));
   });
 
   group('lifecycle-aware exit: a oneTurn completion is NOT a crash (A37)', () {
