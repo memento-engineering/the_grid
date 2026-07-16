@@ -423,6 +423,133 @@ echo "stdin-eof"
       await outSub.cancel();
       await provider.dispose();
     }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test(
+        '(f real) THE WATCHDOG: an agent that outlives its deadline is KILLED and '
+        'reported DIED — a hang must never latch forever', () async {
+      // The station could see an agent DIE, but never an agent ALIVE and doing
+      // NOTHING — so a hang latched its node at `running` forever with no
+      // telemetry and no error (the stdin hang, #57). This stub IS that hang:
+      // alive, silent, indefinite.
+      final tmp = await Directory.systemTemp.createTemp('grid_runtime_wd_');
+      addTearDown(() => tmp.delete(recursive: true));
+      final stub = File('${tmp.path}/stub.sh')
+        ..writeAsStringSync('''
+#!/bin/sh
+sleep 600
+''');
+      await Process.run('chmod', ['+x', stub.path]);
+
+      final provider = SubprocessProvider(
+        parentEnvironment: const {'PATH': '/usr/bin:/bin'},
+        livenessPollPeriod: const Duration(milliseconds: 25),
+        agentDeadline: const Duration(milliseconds: 300),
+        stopGrace: const Duration(milliseconds: 100),
+      );
+
+      final events = <RuntimeEvent>[];
+      final evSub = provider.events.listen(events.add);
+
+      await provider.start(
+        'hung',
+        RuntimeConfig(
+          workDir: tmp.path,
+          command: '/bin/sh',
+          args: [stub.path],
+          // oneTurn is the TRAP: a vanished oneTurn agent is normally an
+          // INFERRED SUCCESS, and an agent we killed vanishes identically.
+          lifecycle: Lifecycle.oneTurn,
+        ),
+      );
+      // The event stream is a broadcast — let SessionStarted land before its
+      // pid is read.
+      for (var i = 0; i < 40 && events.whereType<SessionStarted>().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      final pid = events.whereType<SessionStarted>().single.pid;
+
+      for (var i = 0; i < 160 && events.whereType<Died>().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+
+      final died = events.whereType<Died>().toList();
+      expect(
+        died,
+        hasLength(1),
+        reason: 'the watchdog must report a DEATH, so the node fails and reaches '
+            'supervision instead of latching at `running` forever',
+      );
+      expect(died.single.reason, contains('watchdog'));
+      expect(died.single.reason, contains('300ms'));
+      expect(
+        events.whereType<Exited>(),
+        isEmpty,
+        reason: 'a killed hang must NEVER read as a completion — a oneTurn '
+            'vanish is otherwise an INFERRED SUCCESS',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(
+        _pidAlive(pid),
+        isFalse,
+        reason: 'the watchdog must actually KILL the agent it gave up on',
+      );
+
+      await evSub.cancel();
+      await provider.dispose();
+    }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test(
+        'the watchdog does NOT shoot a healthy agent that finishes inside its '
+        'deadline (the false-kill control)', () async {
+      final tmp = await Directory.systemTemp.createTemp('grid_runtime_wd_ok_');
+      addTearDown(() => tmp.delete(recursive: true));
+      final stub = File('${tmp.path}/stub.sh')
+        ..writeAsStringSync('''
+#!/bin/sh
+echo "done"
+''');
+      await Process.run('chmod', ['+x', stub.path]);
+
+      final provider = SubprocessProvider(
+        parentEnvironment: const {'PATH': '/usr/bin:/bin'},
+        livenessPollPeriod: const Duration(milliseconds: 25),
+        agentDeadline: const Duration(seconds: 10),
+        stopGrace: const Duration(milliseconds: 100),
+      );
+
+      final events = <RuntimeEvent>[];
+      final evSub = provider.events.listen(events.add);
+
+      await provider.start(
+        'healthy',
+        RuntimeConfig(
+          workDir: tmp.path,
+          command: '/bin/sh',
+          args: [stub.path],
+          lifecycle: Lifecycle.oneTurn,
+        ),
+      );
+
+      for (var i = 0; i < 80; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        if (events.whereType<Exited>().isNotEmpty) break;
+      }
+
+      expect(
+        events.whereType<Exited>(),
+        hasLength(1),
+        reason: 'a healthy oneTurn agent still completes normally',
+      );
+      expect(
+        events.whereType<Died>().where((d) => d.reason.contains('watchdog')),
+        isEmpty,
+        reason: 'the watchdog is a BACKSTOP — it must never fire on an agent '
+            'that finished inside its deadline',
+      );
+
+      await evSub.cancel();
+      await provider.dispose();
+    }, timeout: const Timeout(Duration(seconds: 20)));
   });
 
   group('lifecycle-aware exit: a oneTurn completion is NOT a crash (A37)', () {
