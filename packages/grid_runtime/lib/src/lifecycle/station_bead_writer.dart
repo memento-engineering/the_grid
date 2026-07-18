@@ -129,13 +129,16 @@ class StationBeadWriter {
   /// `grid.step.*`), so [createMolecule]'s dedup probe and [reapMolecule]'s
   /// collection scan both check EITHER key against the matching [IssueType].
   static const String moleculeSessionKey = 'grid.circuit.session';
+  static const String moleculeCrumbKey = 'grid.circuit.crumb';
   static const String stepSessionKey = 'grid.step.session';
+  static const String stepCrumbKey = 'grid.step.crumb';
   static const String stepPathKey = 'grid.step.path';
   static const String stepStateKey = 'grid.step.state';
   static const String stepStartedAtKey = 'grid.step.startedAt';
   static const String stepFinishedAtKey = 'grid.step.finishedAt';
   static const String stepDurationMsKey = 'grid.step.durationMs';
   static const String stepFailureReasonKey = 'grid.step.failureReason';
+  static const String _moleculeCrumbSeparator = '/';
 
   /// Mints a the_grid-owned session bead for work bead [workBeadId] in [substation],
   /// stamped with the owned substation marker from birth, and returns its id.
@@ -285,6 +288,7 @@ class StationBeadWriter {
     GraphApplyPlan plan, {
     required String substation,
     required String sessionId,
+    required Iterable<String> rootCrumbs,
   }) async {
     // `async` so a fail-closed throw below surfaces as a rejected future (not
     // a synchronous throw at the call site) — mirrors [update]'s own note.
@@ -293,6 +297,14 @@ class StationBeadWriter {
         plan,
         'plan',
         'createMolecule requires at least one node',
+      );
+    }
+    final rootCrumbList = _dedupeCrumbs(rootCrumbs);
+    if (rootCrumbList.isEmpty) {
+      throw ArgumentError.value(
+        rootCrumbs,
+        'rootCrumbs',
+        'createMolecule requires at least one root crumb',
       );
     }
     // Re-check ownership BEFORE any node is wired — per node, so one foreign
@@ -314,8 +326,77 @@ class StationBeadWriter {
       if (await _moleculeAlreadyMinted(sessionId: sessionId)) {
         return const <String, String>{};
       }
-      return _bd.applyGraph(plan, ephemeral: false);
+      final ids = await _bd.applyGraph(plan, ephemeral: false);
+      await _stampMoleculeCrumbs(plan, ids, rootCrumbList);
+      return ids;
     });
+  }
+
+  Future<void> _stampMoleculeCrumbs(
+    GraphApplyPlan plan,
+    Map<String, String> ids,
+    List<String> rootCrumbs,
+  ) async {
+    final parentKeyByChildKey = <String, String>{
+      for (final node in plan.nodes)
+        if (node.parentKey != null) node.key: node.parentKey!,
+      for (final edge in plan.edges)
+        if (edge.type == DependencyType.parentChild.wire)
+          edge.fromKey: edge.toKey,
+    };
+    for (final node in plan.nodes) {
+      final id = ids[node.key];
+      if (id == null) continue;
+      final metadataKey = _moleculeCrumbMetadataKey(node);
+      if (metadataKey == null) continue;
+      _assertOwned('update', id, const {});
+      await _bd.update(
+        id,
+        metadata: {
+          metadataKey: _canonicalMoleculeCrumb(
+            rootCrumbs,
+            node.key,
+            ids,
+            parentKeyByChildKey,
+          ),
+        },
+      );
+    }
+  }
+
+  static String? _moleculeCrumbMetadataKey(GraphNode node) =>
+      switch (node.type) {
+        'molecule' => moleculeCrumbKey,
+        'step' => stepCrumbKey,
+        _ => null,
+      };
+
+  static String _canonicalMoleculeCrumb(
+    List<String> rootCrumbs,
+    String nodeKey,
+    Map<String, String> ids,
+    Map<String, String> parentKeyByChildKey,
+  ) {
+    final chain = <String>[];
+    String? cursor = nodeKey;
+    while (cursor != null) {
+      final id = ids[cursor];
+      if (id != null) chain.add(id);
+      cursor = parentKeyByChildKey[cursor];
+    }
+    return _dedupeCrumbs([
+      ...rootCrumbs,
+      ...chain.reversed,
+    ]).join(_moleculeCrumbSeparator);
+  }
+
+  static List<String> _dedupeCrumbs(Iterable<String> crumbs) {
+    final seen = <String>{};
+    final ordered = <String>[];
+    for (final crumb in crumbs) {
+      if (seen.add(crumb)) ordered.add(crumb);
+    }
+    return List<String>.unmodifiable(ordered);
   }
 
   /// Mints the A52 Ratified successor incarnation bead for an invalidated
@@ -345,10 +426,12 @@ class StationBeadWriter {
       final existing = await _findOpenSuccessor(priorStep.id);
       if (existing != null) return existing.id;
       final id = await _bd.create(title: priorStep.title, type: IssueType.step);
+      final successorCrumb = _successorStepCrumb(priorStep, id);
       final metadata = <String, String>{
         rigKey: substation,
         for (final entry in priorStep.metadata.entries)
           if (entry.value is String &&
+              entry.key != stepCrumbKey &&
               entry.key != stepStateKey &&
               entry.key != stepStartedAtKey &&
               entry.key != stepFinishedAtKey &&
@@ -356,12 +439,27 @@ class StationBeadWriter {
               entry.key != stepFailureReasonKey &&
               !entry.key.startsWith('grid.result.'))
             entry.key: entry.value as String,
+        if (successorCrumb != null) stepCrumbKey: successorCrumb,
         stepStateKey: 'pending',
       };
       await _bd.update(id, metadata: metadata);
       await _bd.depAdd(id, priorStep.id, type: DependencyType.supersedes);
       return id;
     });
+  }
+
+  static String? _successorStepCrumb(Bead priorStep, String successorId) {
+    final priorCrumb = priorStep.metadata[stepCrumbKey];
+    if (priorCrumb is! String || priorCrumb.isEmpty) return null;
+    final crumbs = priorCrumb
+        .split(_moleculeCrumbSeparator)
+        .where((crumb) => crumb.isNotEmpty)
+        .toList(growable: false);
+    if (crumbs.isEmpty) return successorId;
+    return _dedupeCrumbs([
+      ...crumbs.take(crumbs.length - 1),
+      successorId,
+    ]).join(_moleculeCrumbSeparator);
   }
 
   /// Session-close collection for the molecule model (item 1): `bd purge`
