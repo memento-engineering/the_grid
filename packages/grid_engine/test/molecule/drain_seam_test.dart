@@ -17,7 +17,10 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/molecule_schema.dart';
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
+import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 /// The `code` circuit `track_c_session_scope_test.dart` also drives
@@ -95,13 +98,17 @@ Bead _task(String id) =>
 
 /// A `type=molecule` bead owned by [sessionId] (mirrors
 /// `molecule_join_test.dart`'s own fixture).
-Bead _moleculeBead(String id, {required String sessionId}) => Bead(
+Bead _moleculeBead(
+  String id, {
+  required String sessionId,
+  String formula = 'code',
+}) => Bead(
   id: id,
   issueType: IssueType.molecule,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
-    MoleculeCircuitKeys.formula: 'code',
+    MoleculeCircuitKeys.formula: formula,
     MoleculeCircuitKeys.session: sessionId,
   },
 );
@@ -155,12 +162,15 @@ Bead _stepBead(
           value: registry,
           child: InheritedSeed<SessionResolver>(
             value: CircuitResolver(rootCircuit),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(config),
-                key: const ValueKey('scope.tg'),
-              ),
-            ]),
+            child: InheritedSeed<ProcessLeaseVendor>(
+              value: defaultProcessLeaseVendor(ctx),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(config),
+                  key: const ValueKey('scope.tg'),
+                ),
+              ]),
+            ),
           ),
         ),
       ),
@@ -176,6 +186,34 @@ const _flatConfig = SubstationConfig(
 final _moleculeConfig = _flatConfig.copyWith(
   circuitMintMode: CircuitMintMode.molecule,
 );
+
+class _LiveArmProcessCap extends ProcessCapability {
+  const _LiveArmProcessCap(this.id, {this.payload = const <String, String>{}});
+
+  final String id;
+  final Map<String, String> payload;
+
+  @override
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
+    command: 'sh',
+    args: const ['-c', 'true'],
+    lifecycle: Lifecycle.oneTurn,
+  );
+
+  @override
+  StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
+    Exited(:final exitCode) when exitCode == 0 => StepSignal.complete,
+    Exited() || Died() => StepSignal.failed,
+    _ => StepSignal.none,
+  };
+
+  @override
+  Future<Map<String, String>> result(
+    TreeContext context,
+    StepArgs args,
+  ) async => payload;
+}
 
 void main() {
   group(
@@ -375,6 +413,212 @@ void main() {
           hasLength(1),
         );
         expect(f.runner.graphApplyCalls, hasLength(1));
+      },
+    );
+
+    test(
+      'mints molecule, stamps step beads, derives one invalidation round, and reaps at close',
+      () async {
+        final f = buildFakes();
+        f.runner.graphApplyIds = {
+          'tg-9': 'tgdog-mol9',
+          'tg-9/build': 'tgdog-step9-build',
+          'tg-9/critic': 'tgdog-step9-critic',
+          'tg-9/land': 'tgdog-step9-land',
+        };
+        final reg = DefaultCapabilityRegistry(
+          capabilities: const {
+            'build': _LiveArmProcessCap('build'),
+            'critic': _LiveArmProcessCap('critic'),
+            'land': _LiveArmProcessCap('land'),
+          },
+          circuits: const {'validated': _validatedCode},
+        );
+        var joinedState = _joined(beads: [_task('tg-9')], ready: {'tg-9'});
+        final joined = JoinedSnapshotNotifier(joinedState);
+        var currentBuildStepId = 'tgdog-step9-build';
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _validatedCode,
+          config: _moleculeConfig,
+        );
+        addTearDown(m.owner.dispose);
+
+        Future<void> pushMolecule({
+          StepState build = StepState.pending,
+          StepState critic = StepState.pending,
+          StepState land = StepState.pending,
+          String criticGrade = 'A',
+          bool includeSuccessor = false,
+        }) async {
+          currentBuildStepId = includeSuccessor
+              ? 'tgdog-step9-build-r1'
+              : 'tgdog-step9-build';
+          final beads = <Bead>[
+            _moleculeBead(
+              'tgdog-mol9',
+              sessionId: 'tgdog-sess1',
+              formula: 'validated',
+            ),
+            _stepBead(
+              currentBuildStepId,
+              sessionId: 'tgdog-sess1',
+              path: 'tg-9/build',
+              state: build,
+            ),
+            _stepBead(
+              'tgdog-step9-critic',
+              sessionId: 'tgdog-sess1',
+              path: 'tg-9/critic',
+              state: critic,
+              extra: {
+                ResultKeys.keyFor('tg-9/critic', ResultKeys.grade): criticGrade,
+              },
+            ),
+            _stepBead(
+              'tgdog-step9-land',
+              sessionId: 'tgdog-sess1',
+              path: 'tg-9/land',
+              state: land,
+            ),
+          ];
+          final deps = includeSuccessor
+              ? const [
+                  BeadDependency(
+                    issueId: 'tgdog-step9-build-r1',
+                    dependsOnId: 'tgdog-step9-build',
+                    type: DependencyType.supersedes,
+                  ),
+                ]
+              : const <BeadDependency>[];
+          f.runner.exportBeads = beads;
+          joinedState = _joined(
+            beads: [_task('tg-9')],
+            ready: {'tg-9'},
+            dependencies: deps,
+            sessions: {
+              'tg-9': SessionProjection(
+                workBeadId: 'tg-9',
+                sessionId: 'tgdog-sess1',
+                isMolecule: true,
+                moleculeBeads: beads,
+                moleculeDependencies: deps,
+              ),
+            },
+          );
+          joined.push(joinedState);
+          m.owner.flush();
+          await _pump();
+          m.owner.flush();
+          await _pump();
+        }
+
+        bool hasStepStamp(String beadId, StepState state) {
+          final updates = f.runner.callsFor('update');
+          for (var i = 0; i < updates.length; i++) {
+            if (updates[i].length > 1 &&
+                updates[i][1] == beadId &&
+                f.runner.metadataOfUpdate(i)[MoleculeStepKeys.state] ==
+                    state.name) {
+              return true;
+            }
+          }
+          return false;
+        }
+
+        Future<void> finish(String path) async {
+          final name = 'tgdog-sess1/$path';
+          final beadId = switch (path) {
+            'tg-9/build' => currentBuildStepId,
+            'tg-9/critic' => 'tgdog-step9-critic',
+            'tg-9/land' => 'tgdog-step9-land',
+            _ => throw StateError('unknown step path $path'),
+          };
+          await _pumpUntil(() => f.provider.started.any((s) => s.name == name));
+          f.provider.emit(SessionStarted(name: name, pid: 10, pgid: 10));
+          await _pumpUntil(() => hasStepStamp(beadId, StepState.running));
+          f.provider.emit(Exited(name: name, exitCode: 0));
+          await _pumpUntil(() => hasStepStamp(beadId, StepState.complete));
+        }
+
+        await _pump();
+        m.owner.flush();
+        await _pumpUntil(() => f.runner.graphApplyCalls.isNotEmpty);
+
+        expect(
+          f.runner.callsFor('create').where((c) => !c.contains('--graph')),
+          hasLength(1),
+        );
+        expect(f.runner.graphApplyCalls, hasLength(1));
+        expect(
+          f.runner.metadataOfUpdate(0)[SessionBeadKeys.model],
+          kSessionModelMolecule,
+        );
+        expect(f.runner.graphApplyCalls.single, isNot(contains('--ephemeral')));
+
+        await pushMolecule();
+        await finish('tg-9/build');
+        expect(hasStepStamp('tgdog-step9-build', StepState.running), isTrue);
+        expect(hasStepStamp('tgdog-step9-build', StepState.complete), isTrue);
+
+        await pushMolecule(build: StepState.complete);
+        await finish('tg-9/critic');
+        await pushMolecule(
+          build: StepState.complete,
+          critic: StepState.complete,
+          criticGrade: 'F',
+        );
+        await _pumpUntil(
+          () => f.runner
+              .callsFor('dep')
+              .any(
+                (call) =>
+                    call.length >= 4 &&
+                    call[3] == 'tgdog-step9-build' &&
+                    call.contains('supersedes'),
+              ),
+        );
+        expect(
+          f.runner
+              .callsFor('dep')
+              .where(
+                (call) =>
+                    call.length >= 4 &&
+                    call[3] == 'tgdog-step9-build' &&
+                    call.contains('supersedes'),
+              ),
+          hasLength(1),
+        );
+
+        await pushMolecule(
+          build: StepState.pending,
+          critic: StepState.complete,
+          criticGrade: 'A',
+          includeSuccessor: true,
+        );
+        await finish('tg-9/build');
+        await pushMolecule(
+          build: StepState.complete,
+          critic: StepState.complete,
+          criticGrade: 'A',
+          includeSuccessor: true,
+        );
+        await finish('tg-9/land');
+        await pushMolecule(
+          build: StepState.complete,
+          critic: StepState.complete,
+          land: StepState.complete,
+          criticGrade: 'A',
+          includeSuccessor: true,
+        );
+        await _pumpUntil(() => f.runner.callsFor('batch').isNotEmpty);
+        final batch = f.runner.callsFor('batch').single;
+        expect(
+          f.runner.stdins[f.runner.calls.indexOf(batch)],
+          contains('close'),
+        );
       },
     );
   });

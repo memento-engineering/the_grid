@@ -72,16 +72,18 @@ class _BuildProbe extends SingleChildStatelessSeed {
 /// The test station: the canonical v3 tree with the work binding mounted —
 /// `power_station` authored with name ≠ prefix (`pow`), the Track I ruling.
 class _TestDelegate extends GridDelegate {
-  _TestDelegate({required this.wiring, required this.stationProbe,
-      required this.substationProbe});
+  _TestDelegate({
+    required this.wiring,
+    required this.stationProbe,
+    required this.substationProbe,
+  });
 
   /// Null ⇒ the unarmed authoring-only mount (H2's shape).
   final StationWorkWiring? wiring;
   final List<int> stationProbe;
   final List<int> substationProbe;
 
-  void emitTick(int n) =>
-      state = GridConfiguration(settings: {'tick': '$n'});
+  void emitTick(int n) => state = GridConfiguration(settings: {'tick': '$n'});
 
   @override
   Seed build(TreeContext context, GridConfiguration configuration) {
@@ -112,7 +114,8 @@ class _TestDelegate extends GridDelegate {
             Nest(
               children: [
                 _BuildProbe(builds: stationProbe, key: const ValueKey('stp')),
-                if (w != null) StationWork(wiring: w, key: const ValueKey('sw')),
+                if (w != null)
+                  StationWork(wiring: w, key: const ValueKey('sw')),
               ],
               child: substations,
             ),
@@ -196,36 +199,37 @@ _Rig _arm({bool armed = true}) {
 
 void main() {
   group('Track J — the invariants re-anchored on the runGrid composition', () {
-    test(
-      'the baseline: an owned ready bead mounts THROUGH the composition — '
-      'resolver rooted it, the session minted through the chokepoint, the '
-      'transport spawned (mount = spawn)',
-      () async {
-        final rig = _arm();
-        addTearDown(rig.grid.teardown);
-        rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
-        await _pump();
+    test('the baseline: an owned ready bead mounts THROUGH the composition — '
+        'resolver rooted it, the session minted through the chokepoint, the '
+        'transport spawned (mount = spawn)', () async {
+      final rig = _arm();
+      addTearDown(rig.grid.teardown);
+      rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
+      await _pump();
 
-        // The mount-boundary witness: the ownership axes are name ≠ prefix —
-        // the substation is NAMED power_station; the bead carries the pow
-        // PREFIX. Mounting proves ownership matched the prefix axis.
-        expect(rig.resolver.resolved, ['pow-1']);
-        // The session minted through the ONE chokepoint (a real bd create was
-        // recorded — the write went nowhere else; there IS nowhere else).
-        expect(
-          rig.fakes.runner.calls.where((c) => c.first == 'create'),
-          isNotEmpty,
-          reason: 'SessionScope must mint through StationBeadWriter',
-        );
-        // The transport spawned the agent step (mount = spawn).
-        expect(rig.fakes.provider.started, hasLength(1));
+      // The mount-boundary witness: the ownership axes are name ≠ prefix —
+      // the substation is NAMED power_station; the bead carries the pow
+      // PREFIX. Mounting proves ownership matched the prefix axis.
+      expect(rig.resolver.resolved, ['pow-1']);
+      expect(
+        const SubstationWork().circuitMintMode,
+        engine.CircuitMintMode.molecule,
+      );
+      // The session minted through the ONE chokepoint (a real bd create was
+      // recorded — the write went nowhere else; there IS nowhere else).
+      expect(
+        rig.fakes.runner.calls.where((c) => c.first == 'create'),
+        isNotEmpty,
+        reason: 'SessionScope must mint through StationBeadWriter',
+      );
+      // The transport spawned the agent step (mount = spawn).
+      expect(rig.fakes.provider.started, hasLength(1));
 
-        // unmount = kill: tearing the grid down stops the live allocation.
-        await rig.grid.teardown();
-        await _pump();
-        expect(rig.fakes.provider.stopped, isNotEmpty);
-      },
-    );
+      // unmount = kill: tearing the grid down stops the live allocation.
+      await rig.grid.teardown();
+      await _pump();
+      expect(rig.fakes.provider.stopped, isNotEmpty);
+    });
 
     test(
       'invariant 1 (flush isolation): a work tick rebuilds NOTHING above the '
@@ -242,10 +246,9 @@ void main() {
 
         // A work tick: a SECOND bead surfaces ready. Only WorkList (and the
         // new work subtree) reconciles — the probes must not rebuild.
-        rig.work.push(_graph([_bead('pow-1'), _bead('pow-2')], {
-          'pow-1',
-          'pow-2',
-        }));
+        rig.work.push(
+          _graph([_bead('pow-1'), _bead('pow-2')], {'pow-1', 'pow-2'}),
+        );
         await _pump();
         expect(rig.resolver.resolved, contains('pow-2')); // the tick LANDED
         expect(
@@ -281,8 +284,11 @@ void main() {
         final calls = rig.fakes.runner.calls;
         // Positive control: the chokepoint genuinely wrote (mint + cursor).
         expect(calls, isNotEmpty);
-        expect(calls.where((c) => c.first == 'update'), isNotEmpty,
-            reason: 'the host kick must stamp its cursor through the writer');
+        expect(
+          calls.where((c) => c.first == 'update'),
+          isNotEmpty,
+          reason: 'the host kick must stamp its cursor through the writer',
+        );
         // The pristine-source gate (A37): no mutating bd call TARGETS a work
         // bead id. Session/cursor writes target the minted session (the state
         // partition); `pow-…` may appear only as a metadata VALUE
@@ -302,46 +308,37 @@ void main() {
       },
     );
 
-    test(
-      'invariant 3 (the mount boundary): a convergence bead and an epic in '
-      'the ready set NEVER mount — fail-closed type gate (A41 + the RS-3 '
-      'resident narrowing) with the task as the positive control',
-      () async {
-        final rig = _arm();
-        addTearDown(rig.grid.teardown);
-        rig.work.push(
-          _graph(
-            [
-              _bead('pow-1'),
-              _bead('pow-2', type: IssueType.convergence),
-              _bead('pow-3', type: IssueType.epic),
-            ],
-            {'pow-1', 'pow-2', 'pow-3'},
-          ),
-        );
-        await _pump();
-        expect(rig.resolver.resolved, ['pow-1']);
-        expect(rig.fakes.provider.started, hasLength(1));
-      },
-    );
+    test('invariant 3 (the mount boundary): a convergence bead and an epic in '
+        'the ready set NEVER mount — fail-closed type gate (A41 + the RS-3 '
+        'resident narrowing) with the task as the positive control', () async {
+      final rig = _arm();
+      addTearDown(rig.grid.teardown);
+      rig.work.push(
+        _graph(
+          [
+            _bead('pow-1'),
+            _bead('pow-2', type: IssueType.convergence),
+            _bead('pow-3', type: IssueType.epic),
+          ],
+          {'pow-1', 'pow-2', 'pow-3'},
+        ),
+      );
+      await _pump();
+      expect(rig.resolver.resolved, ['pow-1']);
+      expect(rig.fakes.provider.started, hasLength(1));
+    });
 
-    test(
-      'ownership is fail-closed across substation boundaries: a ready bead '
-      'with a foreign prefix (neither the name nor the prefix axis) never '
-      'mounts',
-      () async {
-        final rig = _arm();
-        addTearDown(rig.grid.teardown);
-        rig.work.push(
-          _graph(
-            [_bead('pow-1'), _bead('other-9')],
-            {'pow-1', 'other-9'},
-          ),
-        );
-        await _pump();
-        expect(rig.resolver.resolved, ['pow-1']);
-      },
-    );
+    test('ownership is fail-closed across substation boundaries: a ready bead '
+        'with a foreign prefix (neither the name nor the prefix axis) never '
+        'mounts', () async {
+      final rig = _arm();
+      addTearDown(rig.grid.teardown);
+      rig.work.push(
+        _graph([_bead('pow-1'), _bead('other-9')], {'pow-1', 'other-9'}),
+      );
+      await _pump();
+      expect(rig.resolver.resolved, ['pow-1']);
+    });
 
     test(
       'the unarmed grace (H2\'s shape survives): with no StationWork mounted, '

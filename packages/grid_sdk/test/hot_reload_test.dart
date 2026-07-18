@@ -117,7 +117,9 @@ class _TestDelegate extends GridDelegate {
               children: [
                 _BuildProbe(builds: substationProbe, key: const ValueKey('sp')),
               ],
-              child: const SubstationWork(),
+              child: const SubstationWork(
+                circuitMintMode: engine.CircuitMintMode.flatCursor,
+              ),
             ),
           ],
         ),
