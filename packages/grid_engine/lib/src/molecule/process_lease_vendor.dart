@@ -42,28 +42,20 @@
 /// narrowed to a namespace (`grid.lease.*`) nothing else in the molecule
 /// model ever writes.
 ///
-/// **STILL deferred, deliberately not built here:** the REAL
-/// [ProcessSpawner]/[ProcessDispatcher]/[StepMetadataReader] backing this
-/// vendor's four hooks (a real `RuntimeProvider` spawn + event wait, a real bd
-/// read of a step bead's current metadata) — these are the composer's
-/// transport opinion (mirrors [LeaseCapability]'s own "the engine names no
-/// bus"). `kernel/station_kernel.dart` accepts an ambient
-/// `ProcessLeaseVendor?` beside `CapabilityRegistry` (`_processLeaseVendor`,
-/// wrapped in `start()`), but `pm6-r5-drain` landed WITHOUT ever
-/// constructing a real [StationProcessLeaseVendor] and passing it in — no
-/// composer anywhere (grid_engine, space_station) does today, and
-/// `CapabilityHost._persistStarted` (`circuit/capability_host.dart`) never
-/// calls [ProcessLeaseVendor.leaseFor] either; it only asserts a vendor is
-/// present. So even where a real vendor WERE mounted, nothing routes a
-/// process-backed molecule step's actual spawn/dispatch through it yet — the
-/// flat model's `ProcessAllocation`/`RuntimeProvider` path still does all the
-/// real work. This is currently inert in practice: `circuitMintMode`
-/// defaults to `flatCursor` and nothing in any shipped composition sets it to
-/// `molecule`. What this rung proves is the CONTRACT: given ANY such
-/// collaborators, adopt/proveFresh/acquire/release behave exactly as Decided
-/// item 5 requires — wiring a real vendor AND routing `CapabilityHost`'s
-/// process allocation through `leaseFor`/`LeaseCapability` is its own
-/// follow-up rung, not delivered by `pm6-r5-drain`.
+/// **The real wiring (tg-h4u, the A53 follow-up rung — DELIVERED).** The REAL
+/// [ProcessSpawner]/[ProcessDispatcher] live in `station_process_transport.dart`
+/// (a `RuntimeProvider` spawn + event wait, mirroring `ProcessAllocation`);
+/// the real [StepMetadataReader] is `StationBeadWriter.metadataOf` (a snapshot
+/// read in grid_runtime — the exact `grid_engine ──► grid_runtime`
+/// "subprocess/git/chokepoint transport" edge ADR-0002 Decision 1 names, an
+/// ALLOWED direction). `kernel/station_kernel.dart` now composes a real
+/// [StationProcessLeaseVendor] over `StationServices` by DEFAULT at the kernel
+/// root (a composer-supplied vendor overrides it), and
+/// `CapabilityHost._createAllocationOrFlare` routes a molecule-mode
+/// [ProcessCapability] through [ProcessLeaseVendor.leaseFor] →
+/// `LeaseAllocation` instead of the flat `ProcessAllocation` path. Still inert
+/// in practice until a composition sets `circuitMintMode: molecule` (the live
+/// arm, tg-6gi); the flat path is untouched.
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';
@@ -83,7 +75,11 @@ class ProcessHandle {
   /// Creates the handle from a spawned process's [pgid]/[pid] plus the
   /// engine-minted freshness [token] (the SAME three-part identity
   /// [AdoptFence] carries for the flat model's `ProcessAllocation`).
-  const ProcessHandle({required this.pgid, required this.pid, required this.token});
+  const ProcessHandle({
+    required this.pgid,
+    required this.pid,
+    required this.token,
+  });
 
   /// The spawned process-group id (the respawn/liveness kill target).
   final int pgid;
@@ -123,13 +119,42 @@ class ProcessHandle {
 /// ever possible). A THIRD outcome — no vendor mounted at all — is refused
 /// loudly by [requireProcessLeaseVendor], never silently substituted.
 abstract class ProcessLeaseVendor {
-  /// Vends the lease capability for the step bead [stepBeadId] — the ADDRESS a
-  /// crash-restart re-adopts by (topology-stable; Decided item 2), not an
-  /// in-run `nodePath`. [args] is this incarnation's step args, carried
-  /// through for a vendor that wants them (e.g. diagnostics); this rung's two
-  /// vendors do not read it — everything they need is already `stepBeadId` +
-  /// their own injected collaborators.
-  LeaseCapability<ProcessHandle> leaseFor(String stepBeadId, StepArgs args);
+  /// Vends the lease capability for [request] — keyed by
+  /// [ProcessLeaseRequest.stepBeadId], the ADDRESS a crash-restart re-adopts
+  /// by (topology-stable; Decided item 2), never an in-run `nodePath`. The
+  /// request-carrying shape (tg-h4u round-3 spec): the REAL spawner/dispatcher
+  /// need the pure [ProcessCapability] and the host-assembled
+  /// [AllocationContext] (transport/env/address/sink), and they are captured
+  /// HERE — `LeaseCapability.acquire`'s own `(TreeContext, StepArgs)`
+  /// signature cannot carry them.
+  LeaseCapability<ProcessHandle> leaseFor(ProcessLeaseRequest request);
+}
+
+/// The per-mount request a [ProcessLeaseVendor] vends against (tg-h4u): the
+/// durable step-bead address the lease is keyed by, the pure
+/// [ProcessCapability] describing what to spawn and how to read its events,
+/// and the [AllocationContext] the host assembled — transport, env overlay
+/// (incl. the freshness token), address, and the report sink the REAL spawner
+/// surfaces `AllocationStarted` through.
+class ProcessLeaseRequest {
+  /// Bundles the [stepBeadId] lease address, the pure [capability], and the
+  /// host-assembled [allocation] context.
+  const ProcessLeaseRequest({
+    required this.stepBeadId,
+    required this.capability,
+    required this.allocation,
+  });
+
+  /// The durable step-bead id this lease is keyed by (Decided items 2/5).
+  final String stepBeadId;
+
+  /// The pure process capability (spawn config + event interpretation +
+  /// optional result payload).
+  final ProcessCapability capability;
+
+  /// The host-assembled context — transport/env/address/sink — everything the
+  /// REAL spawner/dispatcher need beyond the lease family's `(context, args)`.
+  final AllocationContext allocation;
 }
 
 /// LOUD-or-GONE (Decided item 5): resolves the ambient [ProcessLeaseVendor], a
@@ -203,27 +228,31 @@ ProcessHandle? leaseBreadcrumbOf(Map<String, String> metadata) {
   return ProcessHandle(pgid: pgid, pid: pid, token: token);
 }
 
-/// Mints a fresh [ProcessHandle] for [stepBeadId]'s incarnation — the real
-/// spawn (a `RuntimeProvider.start` + wait for its `SessionStarted` pgid/pid,
-/// plus minting a freshness token). Injected rather than built here: the
-/// engine names no transport at this seam (mirrors [LeaseCapability]'s own
-/// transport-agnostic contract) — the live composer wires this at
-/// `pm6-r5-drain`'s kernel-root provision; a test supplies a fake.
-typedef ProcessSpawner = Future<ProcessHandle> Function(
-  TreeContext context,
-  StepArgs args,
-);
+/// Mints a fresh [ProcessHandle] for the request's incarnation — the real
+/// spawn (a `RuntimeProvider.start` + wait for its `SessionStarted` pgid/pid;
+/// the freshness token rides the request's env overlay). The REAL
+/// implementation is `stationProcessSpawner`
+/// (`station_process_transport.dart`); a test supplies a fake with the SAME
+/// request-carrying shape.
+typedef ProcessSpawner =
+    Future<ProcessHandle> Function(
+      ProcessLeaseRequest request,
+      TreeContext context,
+      StepArgs args,
+    );
 
 /// Runs the work on the already-bound [handle] and interprets it into a
 /// [StepOutcome] — the real dispatch (waiting on the SAME process's
-/// `RuntimeProvider` events for `ready`/`complete`/`failed`). Injected for the
-/// same reason as [ProcessSpawner]; NOT called on adopt (`LeaseCapability`'s
-/// own contract, `sdk/lease.dart`).
-typedef ProcessDispatcher = Future<StepOutcome> Function(
-  ProcessHandle handle,
-  TreeContext context,
-  StepArgs args,
-);
+/// `RuntimeProvider` events for `ready`/`complete`/`failed`;
+/// `stationProcessDispatcher` in `station_process_transport.dart`). NOT called
+/// on adopt (`LeaseCapability`'s own contract, `sdk/lease.dart`).
+typedef ProcessDispatcher =
+    Future<StepOutcome> Function(
+      ProcessHandle handle,
+      ProcessLeaseRequest request,
+      TreeContext context,
+      StepArgs args,
+    );
 
 /// Reads a step bead's CURRENT metadata — the real bd lookup
 /// [StationProcessLeaseVendor.adoptable] needs to see a prior incarnation's
@@ -233,9 +262,8 @@ typedef ProcessDispatcher = Future<StepOutcome> Function(
 /// query) at kernel-root provision time. Returns null when the bead carries no
 /// metadata at all (never happens for a real step bead, but keeps the seam
 /// total for a test double).
-typedef StepMetadataReader = Future<Map<String, String>?> Function(
-  String stepBeadId,
-);
+typedef StepMetadataReader =
+    Future<Map<String, String>?> Function(String stepBeadId);
 
 /// The real, breadcrumb-persisting [ProcessLeaseVendor] (Decided item 5's
 /// non-degraded mode). Holds the four collaborators [leaseFor]'s vended lease
@@ -276,9 +304,9 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
   final AllocationLiveness liveness;
 
   @override
-  LeaseCapability<ProcessHandle> leaseFor(String stepBeadId, StepArgs args) =>
+  LeaseCapability<ProcessHandle> leaseFor(ProcessLeaseRequest request) =>
       _VendedProcessLease(
-        stepBeadId: stepBeadId,
+        request: request,
         writer: writer,
         spawn: spawn,
         dispatch: dispatch,
@@ -294,7 +322,7 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
 /// so daemon-only adopt + no-adopt-on-faith fall out for free.
 class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
   const _VendedProcessLease({
-    required this.stepBeadId,
+    required this.request,
     required this.writer,
     required this.spawn,
     required this.dispatch,
@@ -302,12 +330,14 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     required this.liveness,
   });
 
-  final String stepBeadId;
+  final ProcessLeaseRequest request;
   final StationBeadWriter writer;
   final ProcessSpawner spawn;
   final ProcessDispatcher dispatch;
   final StepMetadataReader metadataOf;
   final AllocationLiveness liveness;
+
+  String get stepBeadId => request.stepBeadId;
 
   /// Reads the vendor-owned breadcrumb off THIS step bead. Only ever consulted
   /// by `LeaseAllocation` for a daemon (`isAdoptable`, `sdk/lease.dart`) — a
@@ -335,8 +365,9 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     ProcessHandle handle,
     TreeContext context,
     StepArgs args,
-  ) async =>
-      liveness(AdoptFence(pgid: handle.pgid, pid: handle.pid, token: handle.token));
+  ) async => liveness(
+    AdoptFence(pgid: handle.pgid, pid: handle.pid, token: handle.token),
+  );
 
   /// Spawns fresh + writes the breadcrumb — the ONLY write of `grid.lease.*`
   /// this lease issues (adopt never re-persists; it reattaches what is already
@@ -346,7 +377,7 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     TreeContext context,
     StepArgs args,
   ) async {
-    final handle = await spawn(context, args);
+    final handle = await spawn(request, context, args);
     await writer.update(stepBeadId, metadata: leaseBreadcrumb(handle));
     return LeaseBound(handle);
   }
@@ -356,14 +387,26 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     ProcessHandle handle,
     TreeContext context,
     StepArgs args,
-  ) => dispatch(handle, context, args);
+  ) => dispatch(handle, request, context, args);
 
-  /// Clears the breadcrumb. Idempotent: the write is the SAME
+  /// Frees the SLOT — which for a process lease is the running GROUP plus the
+  /// durable breadcrumb: stop the spawned group at the request's transport
+  /// (dispose == RELEASE, the kill floor, ADR-0009 D4 — mirrors
+  /// `ProcessAllocation.dispose`'s own `transport.stop`; best-effort, a
+  /// stop of a never-started/already-reaped name must not break release),
+  /// then clear the breadcrumb. Idempotent: the write is the SAME
   /// [kClearedLeaseKeys] payload every time, so a repeated release (the
   /// carrier's own idempotency contract, `sdk/lease.dart`) merges to the exact
   /// same cleared state rather than erroring or double-writing anything new.
   @override
   Future<void> release(ProcessHandle handle) async {
+    try {
+      await request.allocation.transport.stop(
+        request.allocation.address.providerName,
+      );
+    } on Object {
+      // Best-effort: an unreachable/already-stopped group never breaks release.
+    }
     await writer.update(stepBeadId, metadata: kClearedLeaseKeys);
   }
 }
@@ -388,16 +431,27 @@ class SelfManagedProcessVendor implements ProcessLeaseVendor {
   final ProcessDispatcher dispatch;
 
   @override
-  LeaseCapability<ProcessHandle> leaseFor(String stepBeadId, StepArgs args) =>
-      _SelfManagedProcessLease(spawn: spawn, dispatch: dispatch);
+  LeaseCapability<ProcessHandle> leaseFor(ProcessLeaseRequest request) =>
+      _SelfManagedProcessLease(
+        request: request,
+        spawn: spawn,
+        dispatch: dispatch,
+      );
 }
 
 /// The self-managed lease: [adoptable] is left at [LeaseCapability]'s own
 /// default (always null — never adopt), which IS this vendor's whole degraded
-/// story. `release` is a no-op: nothing was ever persisted to clear.
+/// story. `release` stops the spawned group (dispose == RELEASE, the kill
+/// floor — no durable identity does not mean a leaked process) but persists
+/// nothing: there was never a breadcrumb to clear.
 class _SelfManagedProcessLease extends LeaseCapability<ProcessHandle> {
-  const _SelfManagedProcessLease({required this.spawn, required this.dispatch});
+  const _SelfManagedProcessLease({
+    required this.request,
+    required this.spawn,
+    required this.dispatch,
+  });
 
+  final ProcessLeaseRequest request;
   final ProcessSpawner spawn;
   final ProcessDispatcher dispatch;
 
@@ -405,15 +459,23 @@ class _SelfManagedProcessLease extends LeaseCapability<ProcessHandle> {
   Future<LeaseResolution<ProcessHandle>> acquire(
     TreeContext context,
     StepArgs args,
-  ) async => LeaseBound(await spawn(context, args));
+  ) async => LeaseBound(await spawn(request, context, args));
 
   @override
   Future<StepOutcome> dispatchOn(
     ProcessHandle handle,
     TreeContext context,
     StepArgs args,
-  ) => dispatch(handle, context, args);
+  ) => dispatch(handle, request, context, args);
 
   @override
-  Future<void> release(ProcessHandle handle) async {}
+  Future<void> release(ProcessHandle handle) async {
+    try {
+      await request.allocation.transport.stop(
+        request.allocation.address.providerName,
+      );
+    } on Object {
+      // Best-effort: an unreachable/already-stopped group never breaks release.
+    }
+  }
 }
