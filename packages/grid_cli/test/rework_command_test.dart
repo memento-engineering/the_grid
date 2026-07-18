@@ -22,13 +22,14 @@ import 'package:test/test.dart';
 ///     (the v2 gate-resolve transition's trigger) — proceeds;
 ///  4. the ~3-round cap refuses LOUD, zero writes (c);
 ///  5. --note lands on the WORK bead (a separate store) under a ROUND N header
-///     (d); a --note without --note-root refuses LOUD before any write.
+///     (d); missing --note-root refuses LOUD before any write.
 void main() {
   group('grid rework — v1 acceptance', () {
     test('(a) a positively-closed session re-keys + reports round 1', () async {
       final state = _FakeStore([
         _session('tgdog-s1', workBead: 'tg-9', closed: true),
       ]);
+      final work = _FakeStore([_workBead('tg-9')]);
       final out = <String>[];
       final errs = <String>[];
 
@@ -38,6 +39,9 @@ void main() {
         stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
         out: out.add,
         err: errs.add,
       );
@@ -56,6 +60,8 @@ void main() {
       final meta =
           jsonDecode(updates.single[metaIdx + 1]) as Map<String, dynamic>;
       expect(meta, {'work_bead': 'tg-9#r1'});
+      final workUpdates = work.writes.where((c) => c.first == 'update');
+      expect(workUpdates, hasLength(1));
     });
 
     test(
@@ -64,6 +70,7 @@ void main() {
         final state = _FakeStore([
           _session('tgdog-s1', workBead: 'tg-9', running: true),
         ]);
+        final work = _FakeStore([_workBead('tg-9')]);
         final errs = <String>[];
 
         final code = await runRework(
@@ -72,6 +79,9 @@ void main() {
           stateStorePrefix: 'tgdog',
           stateWorkspaceOverride: _ws('tgdog'),
           stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
           out: (_) {},
           err: errs.add,
         );
@@ -79,12 +89,14 @@ void main() {
         expect(code, isNonZero);
         expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
         expect(state.writes, isEmpty);
+        expect(work.writes, isEmpty);
       },
     );
 
     test('(b) an OPEN session with no cursor at all (freshly spawning) '
         'refuses LOUD (zero writes)', () async {
       final state = _FakeStore([_session('tgdog-s1', workBead: 'tg-9')]);
+      final work = _FakeStore([_workBead('tg-9')]);
       final errs = <String>[];
 
       final code = await runRework(
@@ -93,6 +105,9 @@ void main() {
         stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
         out: (_) {},
         err: errs.add,
       );
@@ -100,6 +115,7 @@ void main() {
       expect(code, isNonZero);
       expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
       expect(state.writes, isEmpty);
+      expect(work.writes, isEmpty);
     });
 
     test('an OPEN session parked at a gate (nothing running) proceeds — '
@@ -107,6 +123,7 @@ void main() {
       final state = _FakeStore([
         _session('tgdog-s1', workBead: 'tg-9', gated: true),
       ]);
+      final work = _FakeStore([_workBead('tg-9')]);
       final out = <String>[];
       final errs = <String>[];
 
@@ -116,6 +133,9 @@ void main() {
         stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
         out: out.add,
         err: errs.add,
       );
@@ -127,6 +147,7 @@ void main() {
       final meta =
           jsonDecode(updates.single[metaIdx + 1]) as Map<String, dynamic>;
       expect(meta, {'work_bead': 'tg-9#r1'});
+      expect(work.writes.where((c) => c.first == 'update'), hasLength(1));
     });
 
     test('(c) the ~3-round cap refuses LOUD (zero writes)', () async {
@@ -136,6 +157,7 @@ void main() {
         _session('tgdog-r3', workBead: 'tg-9#r3', closed: true),
         _session('tgdog-cur', workBead: 'tg-9', closed: true),
       ]);
+      final work = _FakeStore([_workBead('tg-9')]);
       final errs = <String>[];
 
       final code = await runRework(
@@ -144,6 +166,9 @@ void main() {
         stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
         out: (_) {},
         err: errs.add,
       );
@@ -151,6 +176,7 @@ void main() {
       expect(code, isNonZero);
       expect(errs.join('\n'), contains('cap 3'));
       expect(state.writes, isEmpty);
+      expect(work.writes, isEmpty);
     });
 
     test(
@@ -160,6 +186,7 @@ void main() {
           _session('tgdog-r1', workBead: 'tg-9#r1', closed: true),
           _session('tgdog-cur', workBead: 'tg-9', closed: true),
         ]);
+        final work = _FakeStore([_workBead('tg-9')]);
         final out = <String>[];
 
         final code = await runRework(
@@ -168,6 +195,9 @@ void main() {
           stateStorePrefix: 'tgdog',
           stateWorkspaceOverride: _ws('tgdog'),
           stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
           out: out.add,
           err: (_) {},
         );
@@ -179,11 +209,13 @@ void main() {
         final meta =
             jsonDecode(updates.single[metaIdx + 1]) as Map<String, dynamic>;
         expect(meta, {'work_bead': 'tg-9#r2'});
+        expect(work.writes.where((c) => c.first == 'update'), hasLength(1));
       },
     );
 
     test('refuses (non-zero, zero writes) when no session is found', () async {
       final state = _FakeStore([]);
+      final work = _FakeStore([_workBead('tg-nope')]);
       final errs = <String>[];
 
       final code = await runRework(
@@ -192,6 +224,9 @@ void main() {
         stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
         out: (_) {},
         err: errs.add,
       );
@@ -199,6 +234,7 @@ void main() {
       expect(code, isNonZero);
       expect(errs.join('\n'), contains('no session found'));
       expect(state.writes, isEmpty);
+      expect(work.writes, isEmpty);
     });
 
     test(
@@ -208,6 +244,7 @@ void main() {
           _session('tgdog-a', workBead: 'tg-9', closed: true),
           _session('tgdog-b', workBead: 'tg-9', closed: true),
         ]);
+        final work = _FakeStore([_workBead('tg-9')]);
         final errs = <String>[];
 
         final code = await runRework(
@@ -216,12 +253,93 @@ void main() {
           stateStorePrefix: 'tgdog',
           stateWorkspaceOverride: _ws('tgdog'),
           stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
           out: (_) {},
           err: errs.add,
         );
 
         expect(code, isNonZero);
         expect(errs.join('\n'), contains('ambiguous'));
+        expect(state.writes, isEmpty);
+        expect(work.writes, isEmpty);
+      },
+    );
+
+    test(
+      'clears stale work-bead spec before the session re-key and advances round',
+      () async {
+        final state = _FakeStore([
+          _session('tgdog-r1', workBead: 'tg-9#r1', closed: true),
+          _session('tgdog-cur', workBead: 'tg-9', closed: true),
+        ]);
+        final work = _FakeStore([_workBead('tg-9')]);
+        final out = <String>[];
+        final errs = <String>[];
+
+        final code = await runRework(
+          beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
+          out: out.add,
+          err: errs.add,
+        );
+
+        expect(code, 0, reason: errs.join('\n'));
+        expect(out.join('\n'), contains('round 2'));
+        final workUpdates = work.writes
+            .where((c) => c.first == 'update')
+            .toList();
+        expect(workUpdates, hasLength(1));
+        expect(workUpdates.single, containsAllInOrder(['update', 'tg-9']));
+        expect(workUpdates.single, containsAllInOrder(['--design', '']));
+        expect(workUpdates.single, containsAllInOrder(['--acceptance', '']));
+        expect(workUpdates.single, isNot(contains('--description')));
+        expect(workUpdates.single, isNot(contains('--notes')));
+        expect(workUpdates.single, isNot(contains('--append-notes')));
+        final stateUpdates = state.writes
+            .where((c) => c.first == 'update')
+            .toList();
+        expect(stateUpdates, hasLength(1));
+        final metaIdx = stateUpdates.single.indexOf('--metadata');
+        final meta =
+            jsonDecode(stateUpdates.single[metaIdx + 1])
+                as Map<String, dynamic>;
+        expect(meta, {'work_bead': 'tg-9#r2'});
+      },
+    );
+
+    test(
+      'work spec clear failure exits loud and leaves the state round untouched',
+      () async {
+        final state = _FakeStore([
+          _session('tgdog-s1', workBead: 'tg-9', closed: true),
+        ]);
+        final work = _FailingUpdateStore([_workBead('tg-9')]);
+        final errs = <String>[];
+
+        final code = await runRework(
+          beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
+          out: (_) {},
+          err: errs.add,
+        );
+
+        expect(code, isNonZero);
+        expect(errs.join('\n'), contains('work bead spec clear failed'));
+        expect(work.writes.where((c) => c.first == 'update'), hasLength(1));
         expect(state.writes, isEmpty);
       },
     );
@@ -233,9 +351,7 @@ void main() {
       final state = _FakeStore([
         _session('tgdog-s1', workBead: 'tg-9', closed: true),
       ]);
-      final work = _FakeStore([
-        Bead(id: 'tg-9', title: 'work', issueType: IssueType.task),
-      ]);
+      final work = _FakeStore([_workBead('tg-9')]);
       final out = <String>[];
       final errs = <String>[];
 
@@ -256,21 +372,26 @@ void main() {
       expect(code, 0, reason: errs.join('\n'));
       // The state store gets exactly the re-key write.
       expect(state.writes.where((c) => c.first == 'update'), hasLength(1));
-      // The WORK store gets exactly one append-notes write, on the WORK bead.
+      // The WORK store clears stale spec first, then appends notes.
       final workUpdates = work.writes
           .where((c) => c.first == 'update')
           .toList();
-      expect(workUpdates, hasLength(1));
-      expect(workUpdates.single, containsAllInOrder(['update', 'tg-9']));
-      final noteIdx = workUpdates.single.indexOf('--append-notes');
+      expect(workUpdates, hasLength(2));
+      expect(workUpdates.first, containsAllInOrder(['update', 'tg-9']));
+      expect(workUpdates.first, containsAllInOrder(['--design', '']));
+      expect(workUpdates.first, containsAllInOrder(['--acceptance', '']));
+      expect(workUpdates.first, isNot(contains('--append-notes')));
+      expect(workUpdates.last, containsAllInOrder(['update', 'tg-9']));
+      final noteIdx = workUpdates.last.indexOf('--append-notes');
       expect(noteIdx, greaterThan(-1));
-      final note = workUpdates.single[noteIdx + 1];
+      final note = workUpdates.last[noteIdx + 1];
       expect(note, contains('ROUND 1'));
       expect(note, contains('the committee rejected on validation_plan drift'));
+      expect(workUpdates.last, isNot(contains('--design')));
+      expect(workUpdates.last, isNot(contains('--acceptance')));
     });
 
-    test('--note without a --note-root refuses LOUD before any write (the '
-        're-key never happens half-done)', () async {
+    test('without --note-root refuses LOUD before any write', () async {
       final state = _FakeStore([
         _session('tgdog-s1', workBead: 'tg-9', closed: true),
       ]);
@@ -278,18 +399,16 @@ void main() {
 
       final code = await runRework(
         beadId: 'tg-9',
-        note: 'a finding',
         stateStore: _stateStore(),
         stateStorePrefix: 'tgdog',
         stateWorkspaceOverride: _ws('tgdog'),
         stateBdOverride: BdCliService(state),
-        // no noteStore + no workspaceOverride → refused.
         out: (_) {},
         err: errs.add,
       );
 
-      expect(code, isNonZero);
-      expect(errs.join('\n'), contains('--note-root'));
+      expect(code, 64);
+      expect(errs.join('\n'), contains('--note-root is required'));
       expect(state.writes, isEmpty);
     });
 
@@ -315,7 +434,7 @@ void main() {
         );
 
         expect(code, isNonZero);
-        expect(errs.join('\n'), contains('would silently drop'));
+        expect(errs.join('\n'), contains('WORK store is unreachable'));
         expect(state.writes, isEmpty);
       },
     );
@@ -332,6 +451,18 @@ void main() {
 
     test('rework without --prefix refuses LOUD (exit 64)', () async {
       final code = await _run(['rework', 'tg-9', '--grid-root', '/home/grid']);
+      expect(code, 64);
+    });
+
+    test('rework without --note-root refuses LOUD (exit 64)', () async {
+      final code = await _run([
+        'rework',
+        'tg-9',
+        '--grid-root',
+        '/home/grid',
+        '--prefix',
+        'tgdog',
+      ]);
       expect(code, 64);
     });
 
@@ -405,6 +536,22 @@ Bead _session(
   },
 );
 
+Bead _workBead(
+  String id, {
+  String description = 'operator description',
+  String design = 'stale round design',
+  String acceptanceCriteria = '- [ ] stale round criterion',
+  String notes = 'operator note history',
+}) => Bead(
+  id: id,
+  title: 'work',
+  description: description,
+  design: design,
+  acceptanceCriteria: acceptanceCriteria,
+  notes: notes,
+  issueType: IssueType.task,
+);
+
 /// A fake [BdRunner] over a fixed set of staged beads (Fakes, not mocks): the
 /// `export` read returns the staged beads as JSONL; mutations return a canned
 /// envelope and are recorded so a test can assert a refusal performed ZERO
@@ -437,5 +584,24 @@ class _FakeStore implements BdRunner {
         stderr: '',
       ),
     );
+  }
+}
+
+class _FailingUpdateStore extends _FakeStore {
+  _FailingUpdateStore(List<Bead> beads) : super(beads);
+
+  @override
+  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
+    if (args.isNotEmpty && args.first == 'update') {
+      calls.add(List<String>.unmodifiable(args));
+      return Future<BdResult>.value(
+        const BdResult(
+          exitCode: 1,
+          stdout: '{"schema_version":1,"data":{"error":"spec clear failed"}}',
+          stderr: '',
+        ),
+      );
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
   }
 }

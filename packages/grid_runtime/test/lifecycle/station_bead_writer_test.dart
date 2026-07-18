@@ -79,6 +79,19 @@ void main() {
     });
 
     test(
+      'clearSpecifyAuthoredSpec refuses a non-owned bead before bd update',
+      () async {
+        await expectLater(
+          writer().clearSpecifyAuthoredSpec('gascity-work1'),
+          throwsA(isA<OwnershipRefused>()),
+        );
+        expect(runner.calls, isEmpty);
+        expect(refusals, hasLength(1));
+        expect(refusals.single, contains('not in the owned allow-set'));
+      },
+    );
+
+    test(
       'update on a bead with NO rig prefix at all is refused (absent rig)',
       () async {
         await expectLater(
@@ -187,6 +200,23 @@ void main() {
             jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
         expect(meta, {'state': 'active'});
         expect(runner.everyMutationHasActor, isTrue);
+      },
+    );
+
+    test(
+      'clearSpecifyAuthoredSpec clears only design and acceptance',
+      () async {
+        await writer().clearSpecifyAuthoredSpec('tgdog-work1');
+        final updates = runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
+        expect(updates.single, containsAllInOrder(['--design', '']));
+        expect(updates.single, containsAllInOrder(['--acceptance', '']));
+        expect(updates.single, isNot(contains('--description')));
+        expect(updates.single, isNot(contains('--notes')));
+        expect(updates.single, isNot(contains('--append-notes')));
+        expect(runner.everyMutationHasActor, isTrue);
+        expect(refusals, isEmpty);
       },
     );
 
