@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:path/path.dart' as p;
 
 import '../stores/stores.dart';
 import 'station_work.dart';
@@ -207,6 +208,9 @@ List<String> droppedReapReports(RestartReport report) => [
           'pid ${r.pid ?? '<unrecorded>'}',
 ];
 
+bool _sameCanonicalRoot(String left, String right) =>
+    p.equals(p.canonicalize(left), p.canonicalize(right));
+
 /// Assembles the station's off-tree work machinery over REAL stores at their
 /// roots — the v3 replacement for the deleted `buildControllers` +
 /// `buildLiveWiring` + `composeStation` assembly (H3), consumed by every
@@ -281,9 +285,12 @@ Future<StationWorkRuntime> buildStationWork({
   final locator = StoreLocator();
   final workspacesByName = <String, BeadsWorkspace>{};
   for (final s in substations) {
-    locator.locateWorkStore(root: s.root, substationName: s.name);
+    locator.locateWorkStore(
+      root: p.canonicalize(s.root),
+      substationName: s.name,
+    );
     final ws = BeadsWorkspace.discover(start: s.root);
-    if (ws == null || ws.root != s.root) {
+    if (ws == null || !_sameCanonicalRoot(ws.root, s.root)) {
       throw StoreRefusal(
         'buildStationWork: substation "${s.name}": could not parse the work '
         'store at ${s.root}/.beads (resolved: ${ws?.root ?? 'nothing'}).',
@@ -299,7 +306,8 @@ Future<StationWorkRuntime> buildStationWork({
     );
   }
   final stateWs = BeadsWorkspace.discover(start: stateStore.runtimeDir);
-  if (stateWs == null || stateWs.root != stateStore.runtimeDir) {
+  if (stateWs == null ||
+      !_sameCanonicalRoot(stateWs.root, stateStore.runtimeDir)) {
     throw StoreRefusal(
       'buildStationWork: could not parse the grid state store at '
       '${stateStore.beadsDir} (resolved: ${stateWs?.root ?? 'nothing'}).',
