@@ -78,7 +78,34 @@ abstract final class SessionBeadKeys {
   /// retires its dead JOIN key (I-10): WHY it was voided, written in the SAME
   /// chokepoint update as the re-keyed [workBead].
   static const voidedReason = 'grid.voided_reason';
+
+  /// The EXPLICIT mint-mode discriminator (`DESIGN-tg-pm6.md` §10, R5a,
+  /// Decided item 8 / §3 conflict 2): [kSessionModelFlat] or
+  /// [kSessionModelMolecule]. Stamped ONCE, in the SAME `createSession` mint
+  /// metadata as [workBead] — never rewritten after mint. **ABSENT ⇒ flat**:
+  /// every session minted before this key existed, and every session minted
+  /// on the legacy path, projects flat BY CONSTRUCTION (the drain guarantee —
+  /// `DESIGN-tg-pm6.md` §12's "Drain proof").
+  ///
+  /// Deliberately explicit rather than sniffed from whether a `type=molecule`
+  /// child bead exists: a molecule pour that crashes AFTER `createSession`
+  /// lands but BEFORE its first step bead pours would sniff as "no molecule
+  /// child" and mis-adopt down the flat path. This key is stamped in the same
+  /// write as [workBead], so it is never absent for a session that intended to
+  /// mint molecule.
+  static const model = 'grid.session.model';
 }
+
+/// The [SessionBeadKeys.model] value a LEGACY / flat-cursor session carries —
+/// written here for symmetry with [kSessionModelMolecule] even though the
+/// read side ([projectSession]) treats ABSENT the same as this value; a
+/// later rung (R5/R6) may stamp it explicitly rather than omitting the key.
+const String kSessionModelFlat = 'flat';
+
+/// The [SessionBeadKeys.model] value a MOLECULE-MINTED session carries,
+/// stamped once at `createSession` time by a later rung (R5) in the SAME
+/// write as [SessionBeadKeys.workBead].
+const String kSessionModelMolecule = 'molecule';
 
 /// The per-node reentrant cursor keys (ADR-0008 D4 / M4-P1 §3, D-3).
 ///
@@ -234,8 +261,9 @@ const int kMaxReasonChars = 500;
 
 /// Truncates [reason] to [kMaxReasonChars] (capture-only telemetry is never
 /// allowed to grow unbounded, and never blocks a transition).
-String truncateReason(String reason) =>
-    reason.length <= kMaxReasonChars ? reason : reason.substring(0, kMaxReasonChars);
+String truncateReason(String reason) => reason.length <= kMaxReasonChars
+    ? reason
+    : reason.substring(0, kMaxReasonChars);
 
 /// The [SessionBeadKeys.outcome] value a POSITIVE-TERMINAL close stamps (I-10).
 const String kSessionOutcomeComplete = 'complete';
@@ -282,16 +310,19 @@ Map<String, String> nodeTelemetryMetadata(
   String? failureReason,
 }) => {
   if (startedAt != null)
-    CursorKeys.keyFor(nodePath, CursorKeys.startedAt):
-        startedAt.toUtc().toIso8601String(),
+    CursorKeys.keyFor(nodePath, CursorKeys.startedAt): startedAt
+        .toUtc()
+        .toIso8601String(),
   if (finishedAt != null)
-    CursorKeys.keyFor(nodePath, CursorKeys.finishedAt):
-        finishedAt.toUtc().toIso8601String(),
+    CursorKeys.keyFor(nodePath, CursorKeys.finishedAt): finishedAt
+        .toUtc()
+        .toIso8601String(),
   if (durationMs != null)
     CursorKeys.keyFor(nodePath, CursorKeys.durationMs): durationMs.toString(),
   if (failureReason != null)
-    CursorKeys.keyFor(nodePath, CursorKeys.failureReason):
-        truncateReason(failureReason),
+    CursorKeys.keyFor(nodePath, CursorKeys.failureReason): truncateReason(
+      failureReason,
+    ),
 };
 
 /// The flat metadata payload for ONE node's cursor entry — the merge-safe,
@@ -301,10 +332,10 @@ Map<String, String> nodeTelemetryMetadata(
 /// (FT-1) round-trip through [nodeTelemetryMetadata].
 Map<String, String> nodeCursorMetadata(String nodePath, NodeCursor node) => {
   CursorKeys.keyFor(nodePath, CursorKeys.state): node.state.name,
-  CursorKeys.keyFor(nodePath, CursorKeys.restartCount):
-      node.restartCount.toString(),
-  CursorKeys.keyFor(nodePath, CursorKeys.rewindCount):
-      node.rewindCount.toString(),
+  CursorKeys.keyFor(nodePath, CursorKeys.restartCount): node.restartCount
+      .toString(),
+  CursorKeys.keyFor(nodePath, CursorKeys.rewindCount): node.rewindCount
+      .toString(),
   CursorKeys.keyFor(nodePath, CursorKeys.reapCount): node.reapCount.toString(),
   if (node.pgid != null)
     CursorKeys.keyFor(nodePath, CursorKeys.pgid): node.pgid.toString(),
@@ -313,10 +344,11 @@ Map<String, String> nodeCursorMetadata(String nodePath, NodeCursor node) => {
   if (node.token != null)
     CursorKeys.keyFor(nodePath, CursorKeys.token): node.token!,
   if (node.cooldownUntil != null)
-    CursorKeys.keyFor(nodePath, CursorKeys.cooldownUntil):
-        node.cooldownUntil!.toIso8601String(),
+    CursorKeys.keyFor(nodePath, CursorKeys.cooldownUntil): node.cooldownUntil!
+        .toIso8601String(),
   if (node.logOffset != null)
-    CursorKeys.keyFor(nodePath, CursorKeys.logOffset): node.logOffset.toString(),
+    CursorKeys.keyFor(nodePath, CursorKeys.logOffset): node.logOffset
+        .toString(),
   ...nodeTelemetryMetadata(
     nodePath,
     startedAt: node.startedAt,
@@ -346,8 +378,8 @@ Map<String, String> nodeFailedMetadata(
   CursorKeys.keyFor(nodePath, CursorKeys.state): StepState.failed.name,
   CursorKeys.keyFor(nodePath, CursorKeys.restartCount): restartCount.toString(),
   if (cooldownUntil != null)
-    CursorKeys.keyFor(nodePath, CursorKeys.cooldownUntil):
-        cooldownUntil.toIso8601String(),
+    CursorKeys.keyFor(nodePath, CursorKeys.cooldownUntil): cooldownUntil
+        .toIso8601String(),
 };
 
 /// The targeted metadata payload REWINDING ONE node (tg-o90 — routing, the dual
@@ -432,7 +464,8 @@ Map<String, String> nodeStartedMetadata(
   required String token,
 }) => {
   CursorKeys.keyFor(nodePath, CursorKeys.state): StepState.running.name,
-  if (pgid != null) CursorKeys.keyFor(nodePath, CursorKeys.pgid): pgid.toString(),
+  if (pgid != null)
+    CursorKeys.keyFor(nodePath, CursorKeys.pgid): pgid.toString(),
   CursorKeys.keyFor(nodePath, CursorKeys.pid): pid.toString(),
   CursorKeys.keyFor(nodePath, CursorKeys.token): token,
 };
@@ -543,6 +576,12 @@ SessionProjection projectSession(Bead sessionBead) {
     humanHeld:
         metadata.containsKey(SessionBeadKeys.escalation) ||
         metadata.containsKey(SessionBeadKeys.reworkDeclined),
+    // R5a's read-path substrate (DESIGN-tg-pm6.md §10): the EXPLICIT
+    // discriminator, never sniffed from [moleculeBeads] presence — a
+    // molecule-mode session with no molecule beads yet (a crashed pour) must
+    // still read true here (Decided item 8 / §3 conflict 2). Any value other
+    // than [kSessionModelMolecule] — including ABSENT — projects false.
+    isMolecule: metadata[SessionBeadKeys.model] == kSessionModelMolecule,
     pgid: _asInt(metadata[SessionBeadKeys.pgid]),
     pid: _asInt(metadata[SessionBeadKeys.pid]),
     token: metadata[SessionBeadKeys.token] as String?,

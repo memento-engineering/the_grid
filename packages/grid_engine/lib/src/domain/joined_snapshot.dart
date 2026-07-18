@@ -15,7 +15,10 @@ import 'session_projection.dart';
 /// needs no deep value equality.
 class JoinedSnapshot {
   /// Creates a joined value over [graph] and [sessionsByWorkBead].
-  const JoinedSnapshot({required this.graph, this.sessionsByWorkBead = const {}});
+  const JoinedSnapshot({
+    required this.graph,
+    this.sessionsByWorkBead = const {},
+  });
 
   /// An empty baseline — the notifier's seed value before the first refresh
   /// (Track B: `runtime.current` may be null immediately after a fresh start;
@@ -33,5 +36,14 @@ class JoinedSnapshot {
   final GraphSnapshot graph;
 
   /// The_grid's owned session cursor per work bead id (from the state store).
+  ///
+  /// Each [SessionProjection] carries its own model discriminator
+  /// ([SessionProjection.isMolecule]) and, for a molecule-mode session, its
+  /// own `type=molecule`/`type=step` beads bucketed by the join into
+  /// [SessionProjection.moleculeBeads] (`DESIGN-tg-pm6.md` §10, R5a) — always
+  /// empty for a flat session. [JoinedSnapshot] itself carries no new field
+  /// for the molecule model: the bucket rides inside the per-session
+  /// projection it already holds, so a molecule session is additive, not a
+  /// second parallel join.
   final Map<String, SessionProjection> sessionsByWorkBead;
 }

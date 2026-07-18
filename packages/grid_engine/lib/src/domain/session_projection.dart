@@ -1,3 +1,4 @@
+import 'package:beads_dart/beads_dart.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/cursor.dart';
@@ -91,5 +92,28 @@ abstract class SessionProjection with _$SessionProjection {
     /// session bead was closed (its `closed_at` metadata, stamped inside the
     /// chokepoint's `close`); null while the session is still open.
     DateTime? closedAt,
+
+    /// True when the session bead carries the EXPLICIT `grid.session.model=
+    /// molecule` discriminator (`SessionBeadKeys.model`, `DESIGN-tg-pm6.md`
+    /// §10, R5a) — this session mints on the molecule model rather than the
+    /// legacy flat `grid.cursor.*` model. **False for ABSENT** (every session
+    /// minted before this key existed, and every ordinary flat session), so
+    /// an in-flight session stays on the flat path by construction (the drain
+    /// guarantee, §12's "Drain proof"). Never derived from [moleculeBeads]
+    /// being non-empty — a molecule pour that crashed before its first step
+    /// bead landed must still read `true` here, or a restart would mis-adopt
+    /// it down the flat path (Decided item 8 / §3 conflict 2).
+    @Default(false) bool isMolecule,
+
+    /// This session's OWN `type=molecule`/`type=step` beads (R1's schema),
+    /// bucketed by the join off their `grid.circuit.session`/
+    /// `grid.step.session` stamp — the read-path substrate neither original
+    /// proposal specified (`DESIGN-tg-pm6.md` §2, §10/R5a). Always empty for
+    /// a flat session ([isMolecule] false). Raw beads, not yet a
+    /// [CircuitCursor] — projecting these into the in-memory shape
+    /// `CircuitScope` consumes is `projectMoleculeCursor`'s job
+    /// (`molecule_codec.dart`), run once over exactly this list by a LATER
+    /// rung (R5, the drain seam).
+    @Default(<Bead>[]) List<Bead> moleculeBeads,
   }) = _SessionProjection;
 }

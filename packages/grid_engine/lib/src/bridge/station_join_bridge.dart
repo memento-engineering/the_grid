@@ -5,6 +5,7 @@ import 'package:beads_dart/beads_dart.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
+import '../molecule/molecule_schema.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import 'snapshot_source.dart';
 
@@ -19,7 +20,12 @@ import 'snapshot_source.dart';
 ///   [JoinedSnapshot.graph].
 /// - **state** — the_grid's own state store, from which `type=session` beads are
 ///   projected ([projectSession]) and keyed by `metadata.work_bead` into
-///   [JoinedSnapshot.sessionsByWorkBead].
+///   [JoinedSnapshot.sessionsByWorkBead]. Every `type=molecule`/`type=step`
+///   bead in the same state store (R1's molecule schema) is ALSO bucketed
+///   here, by its `grid.circuit.session`/`grid.step.session` stamp, into the
+///   owning session's own [SessionProjection.moleculeBeads]
+///   (`DESIGN-tg-pm6.md` §10, R5a) — empty for a flat session, the additive
+///   read-path substrate neither original proposal specified.
 ///
 /// The tree only ever *consumes* the joined value — it never re-detects. Each
 /// real change on either source recomputes the join from the **latest of both**
@@ -161,8 +167,24 @@ class StationJoinBridge {
         sessions[projection.workBeadId] = projection;
       }
       _attachOpenGates(state, sessions);
+      _attachMoleculeBeads(state, sessions);
     }
     return JoinedSnapshot(graph: work, sessionsByWorkBead: sessions);
+  }
+
+  /// sessionId → workBeadId, shared by [_attachOpenGates] and
+  /// [_attachMoleculeBeads] — both resolve a foreign bead's own `blocks`/
+  /// `session` stamp (a sessionId) back to the [sessions] map's workBeadId
+  /// keying.
+  static Map<String, String> _workBeadIdBySessionId(
+    Map<String, SessionProjection> sessions,
+  ) {
+    final byId = <String, String>{};
+    sessions.forEach((workBeadId, projection) {
+      final sessionId = projection.sessionId;
+      if (sessionId != null) byId[sessionId] = workBeadId;
+    });
+    return byId;
   }
 
   /// Scans [state] for OPEN `type=gate` beads (D-7) and folds each one's blocked
@@ -181,11 +203,7 @@ class StationJoinBridge {
   ) {
     // sessionId → workBeadId, so a gate's `blocks` (a sessionId) finds its
     // projection (keyed by workBeadId).
-    final workBeadBySessionId = <String, String>{};
-    sessions.forEach((workBeadId, projection) {
-      final sessionId = projection.sessionId;
-      if (sessionId != null) workBeadBySessionId[sessionId] = workBeadId;
-    });
+    final workBeadBySessionId = _workBeadIdBySessionId(sessions);
     final gateNodesByWorkBead = <String, Set<String>>{};
     for (final bead in state.beadsById.values) {
       if (bead.issueType != IssueType.gate) continue;
@@ -202,6 +220,54 @@ class StationJoinBridge {
       final projection = sessions[workBeadId];
       if (projection != null) {
         sessions[workBeadId] = projection.copyWith(openGateNodes: nodes);
+      }
+    });
+  }
+
+  /// Scans [state] for `type=molecule`/`type=step` beads (R1's molecule
+  /// schema, `DESIGN-tg-pm6.md` §4) and folds each one into the matching
+  /// session projection's [SessionProjection.moleculeBeads] — the read-path
+  /// substrate neither original proposal specified (§2, §10/R5a).
+  ///
+  /// A molecule bead carries its owning session id under
+  /// [MoleculeCircuitKeys.session]; a step bead under
+  /// [MoleculeStepKeys.session]. Mutates [sessions] in place, rebuilding the
+  /// touched projection with `copyWith`, exactly like [_attachOpenGates]. A
+  /// bead with no session stamp, or one stamped for a session this join does
+  /// not know about, is skipped fail-closed — it never leaks into any
+  /// session's bucket, and (being `type=molecule`/`type=step`, both non-core
+  /// — `IssueType.isCore` — `driveable_work.dart`) it was never eligible to
+  /// leak into a work/drive projection in the first place (the
+  /// `work_list.dart:317` gate holds independently of this join).
+  ///
+  /// A FLAT session (no `type=molecule`/`type=step` beads ever minted for it)
+  /// folds nothing here, so [SessionProjection.moleculeBeads] stays the
+  /// freezed-default empty list — the additivity story: a flat projection's
+  /// other fields are never touched by this scan.
+  static void _attachMoleculeBeads(
+    GraphSnapshot state,
+    Map<String, SessionProjection> sessions,
+  ) {
+    final workBeadBySessionId = _workBeadIdBySessionId(sessions);
+    final beadsByWorkBead = <String, List<Bead>>{};
+    for (final bead in state.beadsById.values) {
+      final String? sessionId;
+      if (bead.issueType == IssueType.molecule) {
+        sessionId = bead.metadata[MoleculeCircuitKeys.session] as String?;
+      } else if (bead.issueType == IssueType.step) {
+        sessionId = bead.metadata[MoleculeStepKeys.session] as String?;
+      } else {
+        continue;
+      }
+      if (sessionId == null) continue; // unstamped — skip, fail-closed.
+      final workBeadId = workBeadBySessionId[sessionId];
+      if (workBeadId == null) continue; // stamped for an unknown session.
+      (beadsByWorkBead[workBeadId] ??= <Bead>[]).add(bead);
+    }
+    beadsByWorkBead.forEach((workBeadId, beads) {
+      final projection = sessions[workBeadId];
+      if (projection != null) {
+        sessions[workBeadId] = projection.copyWith(moleculeBeads: beads);
       }
     });
   }
