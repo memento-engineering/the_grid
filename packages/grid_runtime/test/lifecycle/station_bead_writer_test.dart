@@ -451,4 +451,44 @@ void main() {
       },
     );
   });
+
+  group('metadataOf — the molecule StepMetadataReader (tg-h4u, R3)', () {
+    test("returns the bead's string metadata via the snapshot read — and NEVER "
+        'calls bd show (ADR-0006 Decision 2 / ADR-0001 Decision 5)', () async {
+      runner.exportBeads = [
+        _step(
+          'tgdog-step-1',
+          metadata: {
+            'grid.lease.pgid': '4242',
+            'grid.lease.pid': '4343',
+            'grid.lease.token': 'tok-abc',
+          },
+        ),
+      ];
+
+      final metadata = await writer().metadataOf('tgdog-step-1');
+
+      expect(metadata, isNotNull);
+      expect(metadata!['grid.lease.pgid'], '4242');
+      expect(metadata['grid.lease.pid'], '4343');
+      expect(metadata['grid.lease.token'], 'tok-abc');
+      expect(metadata[StationBeadWriter.stepSessionKey], 'tgdog-sess1');
+      // The read rides `bd export` — the safe snapshot path, never `show`.
+      expect(runner.callsFor('export'), hasLength(1));
+      expect(runner.neverCalledShow, isTrue);
+    });
+
+    test(
+      'an absent bead reads as null — not adoptable, never a crash',
+      () async {
+        runner.exportBeads = [_step('tgdog-step-1')];
+        expect(await writer().metadataOf('tgdog-step-9'), isNull);
+      },
+    );
+
+    test('an empty store reads as null', () async {
+      runner.exportBeads = const [];
+      expect(await writer().metadataOf('tgdog-step-1'), isNull);
+    });
+  });
 }

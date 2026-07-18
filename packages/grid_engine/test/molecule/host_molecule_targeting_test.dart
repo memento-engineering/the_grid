@@ -1,5 +1,5 @@
 // pm6-r5b-host — CapabilityHost molecule targeting: the write fork
-// (DESIGN-tg-pm6.md §11).
+// (DESIGN-tg-pm6.md §11) + the R3 routing fork (tg-h4u).
 //
 // The additive fork: an ambient `InheritedCircuit` (R2) means every `_persistX`
 // targets its OWN durable step bead (`beadIdByNodePath[_nodePath]`), using the
@@ -7,11 +7,21 @@
 // `stepBeadMetadata` — no `{nodePath}` infix, no `rewindCount`, no
 // `grid.cursor.*` key). ABSENT `InheritedCircuit` falls back to today's flat
 // target (`_sessionId`) — proven BYTE-IDENTICAL to
-// `track_e_capability_host_test.dart`'s own assertions. A process-backed
-// capability on the molecule path additionally requires a mounted
-// `ProcessLeaseVendor` (LOUD-or-GONE, R3) before its `SessionStarted` report
-// lands anywhere; a molecule circuit's `AllocationRewound` report is dead-code
-// on `_persistRewind`'s write cascade (backward motion is derived, R4) and
+// `track_e_capability_host_test.dart`'s own assertions.
+//
+// THE ROUTING FORK (tg-h4u): a molecule-mode `ProcessCapability` no longer
+// mounts a flat `ProcessAllocation` — `_createAllocationOrFlare` routes it
+// through the ambient `ProcessLeaseVendor` (`leaseFor(request)` →
+// `LeaseAllocation`), so the fake VENDOR's spawn/dispatch stand where the
+// provider's event stream used to: the spawn surfaces `AllocationStarted`
+// through the request's sink, and the dispatch is GATED behind an uncompleted
+// Completer where a test must hold the incarnation at `running` (a
+// `StepKind.job`'s immediate Ok would otherwise chain a SECOND terminal
+// write in the same pump window — the round-3 committee's double-fire proof).
+// A missing vendor is caught at MOUNT: flared `step.allocationFailed` +
+// routed to a supervised failure (per-work fail-closed, ADR-0008 D10). A
+// molecule circuit's `AllocationRewound` report is dead-code on
+// `_persistRewind`'s write cascade (backward motion is derived, R4) and
 // routes to a supervised failure instead.
 //
 // Zero I/O — Fakes throughout (a real TreeOwner-mounted tree + the recording
@@ -92,14 +102,32 @@ class _DaemonCap extends ProcessCapability {
   Future<void> teardown(StepArgs args) async {}
 }
 
-Future<ProcessHandle> _neverSpawn(TreeContext context, StepArgs args) =>
-    Future.error(StateError('spawn must not be called'));
+Future<ProcessHandle> _neverSpawn(
+  ProcessLeaseRequest request,
+  TreeContext context,
+  StepArgs args,
+) => Future.error(StateError('spawn must not be called'));
 
 Future<StepOutcome> _neverDispatch(
   ProcessHandle handle,
+  ProcessLeaseRequest request,
   TreeContext context,
   StepArgs args,
 ) => Future.error(StateError('dispatch must not be called'));
+
+/// A vendor whose spawn surfaces [AllocationStarted] through the REQUEST's
+/// sink (exactly what the real `stationProcessSpawner` does) and whose
+/// dispatch is GATED behind [gate] — an uncompleted gate holds the
+/// incarnation at `running` so a `StepKind.job`'s Ok cannot chain a second
+/// terminal write into the same pump window (the round-3 double-fire fix).
+SelfManagedProcessVendor _sinkingVendor(Completer<StepOutcome> gate) =>
+    SelfManagedProcessVendor(
+      spawn: (request, context, args) async {
+        request.allocation.sink(const AllocationStarted(pid: 100, pgid: 200));
+        return const ProcessHandle(pgid: 200, pid: 100, token: 'tok-h4u');
+      },
+      dispatch: (handle, request, context, args) => gate.future,
+    );
 
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
@@ -125,6 +153,24 @@ StepMount _mount({String nodePath = 'tg-1/agent', int restartCount = 0}) =>
       node: NodeCursor(restartCount: restartCount),
       key: ValueKey('$nodePath#$restartCount.0'),
     );
+
+/// A daemon-kind mount — the lease maps a daemon's Ok to `ready`
+/// (non-latching) instead of a job's `complete` (tg-h4u routing tests).
+StepMount _daemonMount({String nodePath = 'tg-1/agent'}) => StepMount(
+  step: const CapabilityStep(
+    stepId: 'agent',
+    capabilityId: 'agent',
+    kind: StepKind.daemon,
+  ),
+  nodePath: nodePath,
+  circuit: _circuit,
+  circuitPath: nodePath.contains('/')
+      ? nodePath.substring(0, nodePath.lastIndexOf('/'))
+      : '',
+  session: const SessionHandle('tgdog-s'),
+  node: const NodeCursor(),
+  key: ValueKey('$nodePath#0.0'),
+);
 
 /// The fixed clock the host's backoff cooldown / telemetry is computed
 /// against.
@@ -192,27 +238,22 @@ void main() {
   group('molecule mode — every persist targets the STEP bead (R5b)', () {
     test(
       'SessionStarted targets the step bead: grid.step.state=running, no '
-      'pgid/pid/token, no grid.cursor.* key (the vendor owns grid.lease.*)',
+      'pgid/pid/token, no grid.cursor.* key (the vendor owns grid.lease.*). '
+      'The spawn is routed through the VENDOR (leaseFor → LeaseAllocation, '
+      'tg-h4u): its spawn sinks AllocationStarted; its dispatch stays GATED '
+      'behind an uncompleted Completer, so a job Ok cannot chain a second '
+      'terminal write into this pump window (the round-3 double-fire fix)',
       () async {
-        final log = <String>[];
-        final vendor = const SelfManagedProcessVendor(
-          spawn: _neverSpawn,
-          dispatch: _neverDispatch,
-        );
+        final gate = Completer<StepOutcome>();
         final h = _host(
-          _RecordingProcessCap(log),
+          _RecordingProcessCap(<String>[]),
           circuit: _moleculeCircuit,
-          leaseVendor: vendor,
+          leaseVendor: _sinkingVendor(gate),
         );
         addTearDown(() {
           h.owner.dispose();
           unawaited(h.fakes.provider.close());
         });
-        await _pump();
-
-        h.fakes.provider.emit(
-          const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
-        );
         await _pump();
 
         final updates = h.fakes.runner.callsFor('update');
@@ -243,18 +284,27 @@ void main() {
     );
 
     test(
-      'a daemon ready targets the step bead: grid.step.state=ready',
+      'a daemon ready targets the step bead: grid.step.state=ready — routed '
+      'through the vendor (a daemon Ok maps to AllocationReady, non-latching)',
       () async {
-        final h = _host(_DaemonCap(), circuit: _moleculeCircuit);
+        // The daemon step: dispatch resolves Ok immediately — for a
+        // StepKind.daemon the lease maps that to `ready` (never a latching
+        // terminal), so ONE write lands and the effect stays live.
+        final vendor = SelfManagedProcessVendor(
+          spawn: (request, context, args) async =>
+              const ProcessHandle(pgid: 200, pid: 100, token: 'tok-h4u'),
+          dispatch: (handle, request, context, args) async => const Ok(),
+        );
+        final h = _host(
+          _DaemonCap(),
+          circuit: _moleculeCircuit,
+          leaseVendor: vendor,
+          mount: _daemonMount(),
+        );
         addTearDown(() {
           h.owner.dispose();
           unawaited(h.fakes.provider.close());
         });
-        await _pump();
-
-        h.fakes.provider.emit(
-          const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true),
-        );
         await _pump();
 
         expect(h.fakes.runner.callsFor('update').single[1], _stepBeadId);
@@ -293,9 +343,14 @@ void main() {
     );
 
     test('a supervised failure targets the step bead: state=failed + a bumped '
-        'restartCount + cooldown, no grid.cursor.* key', () async {
+        'restartCount + cooldown, no grid.cursor.* key. The failure arrives '
+        'through the LEASE (a throwing spawn → "acquire threw" → '
+        'AllocationFailed), replacing the old provider-event trigger — the '
+        'restated expectation for the routed path (tg-h4u)', () async {
       final log = <String>[];
-      final vendor = const SelfManagedProcessVendor(
+      // _neverSpawn throws → LeaseAllocation contains it as a supervised
+      // `acquire threw` failure (ADR-0008 D10) — no provider event needed.
+      const vendor = SelfManagedProcessVendor(
         spawn: _neverSpawn,
         dispatch: _neverDispatch,
       );
@@ -309,15 +364,12 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _pump();
-      h.fakes.provider.emit(
-        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1),
-      );
-      await _pump();
 
       expect(h.fakes.runner.callsFor('update').single[1], _stepBeadId);
       final meta = h.fakes.runner.metadataOfUpdate(0);
       expect(meta['grid.step.state'], 'failed');
       expect(meta['grid.step.restartCount'], '1');
+      expect(meta['grid.step.failureReason'], contains('acquire threw'));
       expect(
         // The molecule codec normalizes to UTC (`stepBeadMetadata`); the
         // flat codec (`nodeFailedMetadata`) does not — an intentional,
@@ -473,8 +525,10 @@ void main() {
 
   group('LOUD-or-GONE — a process-backed molecule capability needs a mounted '
       'ProcessLeaseVendor (item 5)', () {
-    test('no vendor mounted ⇒ NO write lands + a step.persistFailed flare '
-        '(contained, never crashes)', () async {
+    test('no vendor mounted ⇒ the refusal fires at MOUNT (tg-h4u routing): a '
+        'step.allocationFailed flare + a SUPERVISED failure on the step bead '
+        '(per-work fail-closed, ADR-0008 D10 — contained, never crashes, '
+        'never a silent stall)', () async {
       final log = <String>[];
       final h = _host(
         _RecordingProcessCap(log),
@@ -486,24 +540,24 @@ void main() {
       });
       await _pump();
 
-      h.fakes.provider.emit(
-        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
-      );
-      await _pump();
-
-      expect(
-        h.fakes.runner.callsFor('update'),
-        isEmpty,
-        reason: 'the throw must land BEFORE any write is issued',
-      );
+      // The refusal happened at mount — no spawn was ever attempted, so a
+      // provider event is irrelevant; the ONLY write is the supervised
+      // failure routing the mis-composition to the restart/breaker chain.
+      final updates = h.fakes.runner.callsFor('update');
+      expect(updates, hasLength(1));
+      expect(updates.single[1], _stepBeadId);
+      final meta = h.fakes.runner.metadataOfUpdate(0);
+      expect(meta['grid.step.state'], 'failed');
+      expect(meta['grid.step.failureReason'], contains('ProcessLeaseVendor'));
       expect(
         h.transport.flares.map((f) => f.name),
-        contains('step.persistFailed'),
+        contains('step.allocationFailed'),
       );
       final f = h.transport.flares.firstWhere(
-        (f) => f.name == 'step.persistFailed',
+        (f) => f.name == 'step.allocationFailed',
       );
       expect(f.data['error'], contains('ProcessLeaseVendor'));
+      expect(log, isEmpty, reason: 'the capability was never spawned');
     });
 
     test(

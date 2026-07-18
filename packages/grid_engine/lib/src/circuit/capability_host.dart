@@ -42,7 +42,8 @@ import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../molecule/inherited_circuit.dart' show InheritedCircuit;
 import '../molecule/molecule_codec.dart' show stepBeadMetadata;
-import '../molecule/process_lease_vendor.dart' show requireProcessLeaseVendor;
+import '../molecule/process_lease_vendor.dart'
+    show ProcessLeaseRequest, requireProcessLeaseVendor;
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
@@ -169,7 +170,8 @@ class CapabilityHostState extends State<CapabilityHost> {
       // EVERY exit path — even a dispose that races the kick before it spawns
       // (the Track E finding #1). Then kick `startOrAdopt` exactly once,
       // fire-and-forget (reconcile never awaits I/O — D5).
-      final alloc = seed.capability.createAllocation(_buildAllocationContext());
+      final alloc = _createAllocationOrFlare();
+      if (alloc == null) return;
       _allocation = alloc;
       unawaited(alloc.startOrAdopt());
     } else {
@@ -179,8 +181,54 @@ class CapabilityHostState extends State<CapabilityHost> {
       // families are not updatable, and a genuine replace is a re-key the
       // CircuitScope owns (a `restartCount` bump → a new key → a fresh mount).
       // We NEVER re-key here.
-      final next = seed.capability.createAllocation(_buildAllocationContext());
-      if (existing.canUpdate(next)) unawaited(existing.update(next));
+      final next = _createAllocationOrFlare();
+      if (next != null && existing.canUpdate(next)) {
+        unawaited(existing.update(next));
+      }
+    }
+  }
+
+  /// Mints this incarnation's [Allocation] — the R3 routing fork (tg-h4u).
+  ///
+  /// On the MOLECULE path a [ProcessCapability] routes through the ambient
+  /// [ProcessLeaseVendor]: `leaseFor(request)` vends the
+  /// `LeaseCapability<ProcessHandle>` whose `LeaseAllocation` replaces the
+  /// flat `ProcessAllocation` — so process identity is LEASED (`grid.lease.*`
+  /// on the step bead, written only by the vendor; Decided item 5) instead of
+  /// node-cursor state, and crash-adoption rides the lease family's
+  /// adopt-or-reacquire. Every other capability — and the whole FLAT path
+  /// (`_moleculeTarget == null`) — is byte-identical to before.
+  ///
+  /// A throw (no vendor mounted — `requireProcessLeaseVendor`'s LOUD-or-GONE
+  /// refusal; a missing step-bead mapping — `_moleculeTarget`'s guard) is
+  /// contained PER-WORK (ADR-0008 Decision 10: one bad bead never crashes the
+  /// station): flared `step.allocationFailed` + routed to a supervised
+  /// failure, so the bounded restart budget → breaker → escalation chain
+  /// surfaces it to a human instead of a silent stall or a dead station.
+  Allocation? _createAllocationOrFlare() {
+    try {
+      final ctx = _buildAllocationContext();
+      final capability = seed.capability;
+      final target = _moleculeTarget;
+      if (target != null && capability is ProcessCapability) {
+        final vendor = requireProcessLeaseVendor(context);
+        final lease = vendor.leaseFor(
+          ProcessLeaseRequest(
+            stepBeadId: target,
+            capability: capability,
+            allocation: ctx,
+          ),
+        );
+        return lease.createAllocation(ctx);
+      }
+      return capability.createAllocation(ctx);
+    } on Object catch (e) {
+      _emitFlare('step.allocationFailed', {'error': truncateReason('$e')});
+      _firePersist(
+        'allocation',
+        () => _persistFailure('allocation failed: $e'),
+      );
+      return null;
     }
   }
 
@@ -389,14 +437,12 @@ class CapabilityHostState extends State<CapabilityHost> {
     if (target != null) {
       // LOUD-or-GONE (Decided item 5, R3): every process-backed capability on
       // the molecule path MUST have a mounted lease vendor — the vendor, not
-      // this write, owns `grid.lease.*`. This call is ONLY the presence
-      // assertion (a process-backed capability is exactly what reaches this
-      // method — only `ProcessAllocation` ever reports `AllocationStarted`);
-      // it does not itself call `leaseFor`/`acquire`. Routing this Host's
-      // actual process spawn/dispatch through the vendor (instead of the
-      // unchanged `ProcessAllocation`/`RuntimeProvider` path below) is a
-      // follow-up rung, NOT delivered by `pm6-r5-drain` — see
-      // `process_lease_vendor.dart`'s library doc.
+      // this write, owns `grid.lease.*`. Belt-and-braces: the routing fork
+      // (`_createAllocationOrFlare`, tg-h4u) already resolved the vendor at
+      // mount and routed the spawn through `leaseFor`/`acquire` (the real
+      // `stationProcessSpawner` surfaces this very report through the sink);
+      // this assertion re-checks presence on the persist path so a report
+      // arriving through any OTHER composition still refuses loud.
       requireProcessLeaseVendor(context);
       await _ctx!.writer.update(
         target,

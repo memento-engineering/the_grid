@@ -446,6 +446,39 @@ class StationBeadWriter {
     });
   }
 
+  /// A bead's CURRENT metadata via the safe snapshot read — the molecule
+  /// model's `StepMetadataReader` (tg-h4u, R3): what the process-lease
+  /// vendor's `adoptable` consults to see a prior incarnation's `grid.lease.*`
+  /// breadcrumb after a station restart.
+  ///
+  /// **Never `bd show`.** ADR-0006 Decision 2's FORBIDDEN list is verbatim:
+  /// "No `bd show` from any controller/re-query/dispatch path (self-triggers
+  /// the watcher) — use snapshot reads / `bd export` / the SELECT probe" (the
+  /// same posture ADR-0001 Decision 5 ratifies for the re-query path). This
+  /// read rides [BdCliService.exportAll], the SAME snapshot path
+  /// [_findOpenGate]/[_moleculeBeadsFor] already use, under the SAME
+  /// chokepoint authority (ADR-0000 A32).
+  ///
+  /// Best-effort (mirrors [_findOpenGate]): returns null when the bead is
+  /// absent OR the read fails — a partial/unreadable breadcrumb is simply not
+  /// adoptable (no-adopt-on-faith starts at this read), never a crash.
+  Future<Map<String, String>?> metadataOf(String beadId) async {
+    try {
+      final export = await _bd.exportAll();
+      for (final bead in export.beads) {
+        if (bead.id != beadId) continue;
+        return {
+          for (final entry in bead.metadata.entries)
+            if (entry.value is String) entry.key: entry.value as String,
+        };
+      }
+    } catch (_) {
+      // Best-effort: a snapshot-read failure reads as "no metadata" — the
+      // vendor then acquires fresh rather than adopting blind (or crashing).
+    }
+    return null;
+  }
+
   /// `bd delete <id> --force` — the burn primitive, used only for speculative
   /// wisp burns (never close-as-burn; A16). Fail-closed on the target's substation.
   /// Serialized per-id (D-1).
