@@ -11,6 +11,7 @@
 library;
 
 export 'bead_path_key.dart';
+export 'inherited_circuit.dart';
 export 'live_frontier.dart';
 export 'molecule_codec.dart';
 export 'molecule_schema.dart';
