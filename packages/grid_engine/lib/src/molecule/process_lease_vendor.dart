@@ -42,15 +42,28 @@
 /// narrowed to a namespace (`grid.lease.*`) nothing else in the molecule
 /// model ever writes.
 ///
-/// **Deferred to later rungs, deliberately not built here:** the REAL
+/// **STILL deferred, deliberately not built here:** the REAL
 /// [ProcessSpawner]/[ProcessDispatcher]/[StepMetadataReader] backing this
 /// vendor's four hooks (a real `RuntimeProvider` spawn + event wait, a real bd
 /// read of a step bead's current metadata) — these are the composer's
 /// transport opinion (mirrors [LeaseCapability]'s own "the engine names no
-/// bus"), wired at the kernel root beside `CapabilityRegistry`
-/// (`kernel/station_kernel.dart:130-137`) when `pm6-r5-drain` lands. What this
-/// rung proves is the CONTRACT: given ANY such collaborators, adopt/proveFresh/
-/// acquire/release behave exactly as Decided item 5 requires.
+/// bus"). `kernel/station_kernel.dart` accepts an ambient
+/// `ProcessLeaseVendor?` beside `CapabilityRegistry` (`_processLeaseVendor`,
+/// wrapped in `start()`), but `pm6-r5-drain` landed WITHOUT ever
+/// constructing a real [StationProcessLeaseVendor] and passing it in — no
+/// composer anywhere (grid_engine, space_station) does today, and
+/// `CapabilityHost._persistStarted` (`circuit/capability_host.dart`) never
+/// calls [ProcessLeaseVendor.leaseFor] either; it only asserts a vendor is
+/// present. So even where a real vendor WERE mounted, nothing routes a
+/// process-backed molecule step's actual spawn/dispatch through it yet — the
+/// flat model's `ProcessAllocation`/`RuntimeProvider` path still does all the
+/// real work. This is currently inert in practice: `circuitMintMode`
+/// defaults to `flatCursor` and nothing in any shipped composition sets it to
+/// `molecule`. What this rung proves is the CONTRACT: given ANY such
+/// collaborators, adopt/proveFresh/acquire/release behave exactly as Decided
+/// item 5 requires — wiring a real vendor AND routing `CapabilityHost`'s
+/// process allocation through `leaseFor`/`LeaseCapability` is its own
+/// follow-up rung, not delivered by `pm6-r5-drain`.
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';

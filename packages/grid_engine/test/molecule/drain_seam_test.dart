@@ -528,6 +528,15 @@ void main() {
   );
 
   group('the drain seam — end-to-end derivation (R4 wired live)', () {
+    // Blocked on ADR-0000 A52 (pending): `derivedGeneration` counts
+    // simultaneous-stamp WIDTH, not the ratified TEMPORAL rework-round count
+    // `DESIGN-tg-pm6.md` §8 mandates — and A52's own recorded disposition is
+    // "R5b/R5 must not wire `effectiveCursor`/`derivedEscalation` live
+    // before this is resolved." `SessionScope.build()` no longer wires R4's
+    // derivation (see `session_scope.dart`'s library doc) until A52 is
+    // ratified, so this end-to-end proof is skipped rather than deleted —
+    // re-enable it once the wiring returns. `live_frontier_test.dart` keeps
+    // covering the derivation itself, pure and offline.
     test('a downstream invalidating stamp (critic grade F) remounts the '
         'upstream build step — a PURE re-derivation, ZERO bd calls', () async {
       final f = buildFakes();
@@ -636,6 +645,10 @@ void main() {
         callsBeforeRound2,
         reason: 'backward motion is derived, never written (item 7)',
       );
-    });
+    },
+        skip: 'blocked on ADR-0000 A52 — SessionScope.build() no longer '
+            'wires R4\'s derivation live (see the group doc above and '
+            'session_scope.dart\'s library doc); re-enable once A52 '
+            'resolves');
   });
 }

@@ -389,11 +389,14 @@ class CapabilityHostState extends State<CapabilityHost> {
     if (target != null) {
       // LOUD-or-GONE (Decided item 5, R3): every process-backed capability on
       // the molecule path MUST have a mounted lease vendor — the vendor, not
-      // this write, owns `grid.lease.*`; the real spawn/acquire wiring
-      // through it lands at `pm6-r5-drain`'s kernel-root provision. This call
-      // is the assertion itself (a process-backed capability is exactly what
-      // reaches this method — only `ProcessAllocation` ever reports
-      // `AllocationStarted`).
+      // this write, owns `grid.lease.*`. This call is ONLY the presence
+      // assertion (a process-backed capability is exactly what reaches this
+      // method — only `ProcessAllocation` ever reports `AllocationStarted`);
+      // it does not itself call `leaseFor`/`acquire`. Routing this Host's
+      // actual process spawn/dispatch through the vendor (instead of the
+      // unchanged `ProcessAllocation`/`RuntimeProvider` path below) is a
+      // follow-up rung, NOT delivered by `pm6-r5-drain` — see
+      // `process_lease_vendor.dart`'s library doc.
       requireProcessLeaseVendor(context);
       await _ctx!.writer.update(
         target,

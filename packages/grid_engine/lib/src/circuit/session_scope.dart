@@ -42,15 +42,28 @@
 /// durable `type=molecule`/`type=step` graph (`instantiateMolecule` → R6's
 /// `createMolecule`) under the SAME [_maxMintAttempts] budget. [build] then
 /// projects a molecule session's OWN beads
-/// (`SessionProjection.moleculeBeads`) through `projectMoleculeCursor` +
-/// `effectiveCursor` (R4's derivation collapse) into the IDENTICAL
-/// `CircuitCursor` shape the flat path already feeds `CircuitScope` — so the
-/// inflater is consumed UNCHANGED in both modes — and wraps it in a 4th
-/// `InheritedSeed<InheritedCircuit>` so `CapabilityHost` (R5b) targets each
-/// step's own durable bead. **Drain, never convert:** [initState]'s
-/// `LiveSession()` arm adopts synchronously, before any mode check runs — an
-/// in-flight session (flat OR molecule) is never reinterpreted mid-round; only
-/// a FRESH mint ever reads [CircuitMintMode].
+/// (`SessionProjection.moleculeBeads`) through `projectMoleculeCursor` into
+/// the IDENTICAL `CircuitCursor` shape the flat path already feeds
+/// `CircuitScope` — so the inflater is consumed UNCHANGED in both modes —
+/// and wraps it in a 4th `InheritedSeed<InheritedCircuit>` so
+/// `CapabilityHost` (R5b) targets each step's own durable bead. **Drain,
+/// never convert:** [initState]'s `LiveSession()` arm adopts synchronously,
+/// before any mode check runs — an in-flight session (flat OR molecule) is
+/// never reinterpreted mid-round; only a FRESH mint ever reads
+/// [CircuitMintMode].
+///
+/// **R4's `live_frontier.dart` derivation (`effectiveCursor`/
+/// `invalidatedNodes`/`derivedEscalation`) is DELIBERATELY NOT wired here.**
+/// It ships pure and offline-tested (`test/molecule/live_frontier_test.dart`)
+/// but `derivedGeneration` counts simultaneous-stamp WIDTH, not the ratified
+/// TEMPORAL rework-round count `DESIGN-tg-pm6.md` §8 mandates — an
+/// unresolved deviation logged pending Nico at ADR-0000 A52, whose own
+/// recorded disposition is explicit: "R5b/R5 must not wire
+/// `effectiveCursor`/`derivedEscalation` live before this is resolved." A
+/// molecule session's [build] therefore projects its RAW cursor
+/// (`projectMoleculeCursor`, undemoted) — forward motion works exactly like
+/// the flat path; backward motion (rework/invalidation) is not yet live for
+/// molecule-mode sessions. Re-wire once A52 is ratified.
 library;
 
 import 'dart:async';
@@ -66,7 +79,6 @@ import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../molecule/bead_path_key.dart';
 import '../molecule/inherited_circuit.dart';
-import '../molecule/live_frontier.dart';
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
 import '../sdk/allocation.dart';
@@ -835,32 +847,33 @@ class SessionScopeState extends State<SessionScope> {
     // exactly what a fresh round's cursor IS.
     final joined = matchesJoin ? seed.existingSession : null;
 
-    // The reentrant capability/circuit resolution seam — read ONCE, ambient,
-    // and shared by BOTH the flat broken/complete check below AND the
-    // molecule projection/derivation (`DESIGN-tg-pm6.md` §12): a molecule
-    // session's `effectiveCursor`/`invalidatedNodes`/`derivedEscalation` all
-    // need to resolve a `SubCircuitStep`'s own nested circuit exactly like
-    // `firstBrokenNode`/`isCircuitComplete` already do.
+    // The reentrant capability/circuit resolution seam — read ONCE, ambient;
+    // the flat broken/complete check below needs it to resolve a
+    // `SubCircuitStep`'s own nested circuit (`firstBrokenNode`/
+    // `isCircuitComplete`).
     final registry = context
         .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
-    final circuitById = registry?.circuit ?? (String _) => null;
 
     // The drain seam's molecule arm (`DESIGN-tg-pm6.md` §12, R5): project this
     // session's OWN `type=molecule`/`type=step` beads (R5a's join bucket) to
-    // the SAME in-memory shape the flat codec yields, then layer R4's
-    // derivation (invalidation demotion + the derived generation) on top —
-    // `effectiveCursor` is what `CircuitScope`/`frontier.dart` consume,
-    // UNCHANGED, in EITHER mode. The flat `else` arm is BYTE-FOR-BYTE today's
-    // code (Decided conflict 2's "absent key ⇒ flat", by construction).
+    // the SAME in-memory shape the flat codec yields. R4's derivation
+    // (invalidation demotion + the derived generation, `effectiveCursor`/
+    // `invalidatedNodes`/`derivedEscalation`) is DELIBERATELY NOT layered on
+    // top here — see this class's library doc and ADR-0000 A52: the axis it
+    // derives is not yet the ratified one, and its own guard says not to wire
+    // it live before that is resolved. So the RAW projected cursor is what
+    // `CircuitScope`/`frontier.dart` consume — forward motion works exactly
+    // like the flat path; backward motion (rework/invalidation) is not yet
+    // live for molecule-mode sessions. The flat `else` arm is BYTE-FOR-BYTE
+    // today's code (Decided conflict 2's "absent key ⇒ flat", by
+    // construction).
     final isMolecule = joined?.isMolecule ?? false;
     final CircuitCursor cursor;
     final Map<String, Map<String, String>> results;
-    var rawMoleculeCursor = const <String, NodeCursor>{};
     var beadIdByNodePath = const <String, String>{};
-    var invalidated = const <String>{};
+    const invalidated = <String>{};
     if (isMolecule) {
       final projected = projectMoleculeCursor(joined!.moleculeBeads);
-      rawMoleculeCursor = projected.cursor;
       beadIdByNodePath = projected.beadIdByNodePath;
       // ResultKeys is reused VERBATIM on the step bead (R1) — each step
       // bead's OWN `grid.result.<itsOwnNodePath>.*` keys project through the
@@ -872,28 +885,7 @@ class SessionScopeState extends State<SessionScope> {
         stepResults.addAll(projectCircuitResults(b));
       }
       results = stepResults;
-      cursor = effectiveCursor(
-        seed.circuit,
-        rawMoleculeCursor,
-        results,
-        seed.bead.id,
-        circuitById: circuitById,
-      );
-      // The re-arm exclusion below (D-7): a node the DERIVATION currently
-      // holds back must never be manually re-armed — its un-gating is driven
-      // entirely by the invalidating source's grade changing, re-evaluated
-      // fresh every build (R4's zero-write backward motion). Without this
-      // exclusion, an at-cap GATED node (no real gate bead exists for it, so
-      // `openGates` never contains it) would be re-armed, then re-demoted to
-      // `gated` by `effectiveCursor` on the very next build, forever — an
-      // unbounded spurious-write loop the derivation exists to avoid.
-      invalidated = invalidatedNodes(
-        seed.circuit,
-        rawMoleculeCursor,
-        results,
-        seed.bead.id,
-        circuitById: circuitById,
-      );
+      cursor = projected.cursor;
     } else {
       cursor = joined?.cursor ?? const <String, NodeCursor>{};
       results = joined?.results ?? const <String, Map<String, String>>{};
@@ -930,23 +922,10 @@ class SessionScopeState extends State<SessionScope> {
     // down; otherwise a positive terminal closes. Distinguishing
     // empty-because-broken from empty-because-complete is the whole point of D-5.
     if (registry != null && !_terminalScheduled) {
-      if (isMolecule) {
-        // R4's rework-cap belt (`DESIGN-tg-pm6.md` §8): a node
-        // `effectiveCursor` GATES instead of demoting (its derived
-        // generation reached the cap) is surfaced here and fed into the
-        // EXISTING breaker-exhaustion escalation path below — no
-        // router-side check, no new engine primitive.
-        final escalation = derivedEscalation(
-          seed.circuit,
-          rawMoleculeCursor,
-          results,
-          seed.bead.id,
-          circuitById: circuitById,
-        );
-        if (escalation != null) {
-          _scheduleEscalation(id, truncateReason(escalation.reason));
-        }
-      }
+      // R4's rework-cap belt (`derivedEscalation`, `DESIGN-tg-pm6.md` §8) is
+      // NOT consulted here for molecule sessions — see this class's library
+      // doc and ADR-0000 A52. Nothing yet surfaces a molecule-mode node past
+      // the ratified rework budget; that lands when A52 is resolved.
       if (!_terminalScheduled) {
         final broken = firstBrokenNode(
           seed.circuit,
