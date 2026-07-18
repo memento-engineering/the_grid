@@ -6,6 +6,7 @@
 import 'dart:io';
 
 import 'package:grid_sdk/grid_sdk.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 /// A minimal resolver — assembly refusals fire before anything resolves.
@@ -33,8 +34,11 @@ void main() {
   Future<StationWorkRuntime> build({
     List<SubstationWorkSpec>? substations,
     String? gridRoot,
+    GridStateStore? stateStore,
   }) => buildStationWork(
-    stateStore: GridStateStore.forGridRoot(gridRoot ?? '${tmp.path}/home'),
+    stateStore:
+        stateStore ??
+        GridStateStore.forGridRoot(gridRoot ?? '${tmp.path}/home'),
     substations:
         substations ??
         [SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj')],
@@ -43,11 +47,11 @@ void main() {
   );
 
   group('Track J — the assembly is fail-closed at the stores', () {
+    String relativeUnnormalized(String absolute) =>
+        '${p.relative(absolute)}${p.separator}.';
+
     test('an empty substation list refuses (no default substation)', () {
-      expect(
-        () => build(substations: []),
-        throwsA(isA<ArgumentError>()),
-      );
+      expect(() => build(substations: []), throwsA(isA<ArgumentError>()));
     });
 
     test('a duplicate substation name refuses (two WorkLists would race)', () {
@@ -115,19 +119,62 @@ void main() {
       expect(() => build(), throwsA(isA<StoreRefusal>()));
     });
 
+    test('THE A37 GATE: a missing grid state store refuses — even when the '
+        'dual-role grid root itself holds a work store the old walk-up would '
+        'have silently bound (sessions must never land in a work source)', () {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      // The grid HOME has a work store at its root (the dual-role repo
+      // shape) — but NO state store under .grid/. Walk-up discovery from
+      // <home>/.grid would find <home>/.beads; the assembly must refuse
+      // instead.
+      _seedStore('${tmp.path}/home', database: 'space');
+      expect(
+        () => build(),
+        throwsA(
+          isA<StoreRefusal>().having(
+            (r) => r.message,
+            'message',
+            contains('.grid'),
+          ),
+        ),
+      );
+    });
+
     test(
-      'THE A37 GATE: a missing grid state store refuses — even when the '
-      'dual-role grid root itself holds a work store the old walk-up would '
-      'have silently bound (sessions must never land in a work source)',
+      'canonical-equivalent relative and unnormalized store roots bind',
+      () async {
+        _seedStore('${tmp.path}/proj', database: 'pow');
+        _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+
+        final work = await build(
+          substations: [
+            SubstationWorkSpec(
+              name: 'proj',
+              root: relativeUnnormalized('${tmp.path}/proj'),
+            ),
+          ],
+          stateStore: GridStateStore(
+            gridRoot: relativeUnnormalized('${tmp.path}/home'),
+          ),
+        );
+        addTearDown(work.shutdown);
+
+        expect(work.stateSubstation, 'tgstate');
+      },
+    );
+
+    test(
+      'a canonical-different state store still refuses instead of walking up',
       () {
         _seedStore('${tmp.path}/proj', database: 'pow');
-        // The grid HOME has a work store at its root (the dual-role repo
-        // shape) — but NO state store under .grid/. Walk-up discovery from
-        // <home>/.grid would find <home>/.beads; the assembly must refuse
-        // instead.
         _seedStore('${tmp.path}/home', database: 'space');
+
         expect(
-          () => build(),
+          () => build(
+            stateStore: GridStateStore(
+              gridRoot: relativeUnnormalized('${tmp.path}/home'),
+            ),
+          ),
           throwsA(
             isA<StoreRefusal>().having(
               (r) => r.message,
@@ -139,24 +186,21 @@ void main() {
       },
     );
 
-    test(
-      'a state store naming no dolt_database refuses — the owned state '
-      'partition derives from the store identity, never a flag (Q5a)',
-      () {
-        _seedStore('${tmp.path}/proj', database: 'pow');
-        _seedStore('${tmp.path}/home/.grid');
-        expect(
-          () => build(),
-          throwsA(
-            isA<StoreRefusal>().having(
-              (r) => r.message,
-              'message',
-              contains('dolt_database'),
-            ),
+    test('a state store naming no dolt_database refuses — the owned state '
+        'partition derives from the store identity, never a flag (Q5a)', () {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedStore('${tmp.path}/home/.grid');
+      expect(
+        () => build(),
+        throwsA(
+          isA<StoreRefusal>().having(
+            (r) => r.message,
+            'message',
+            contains('dolt_database'),
           ),
-        );
-      },
-    );
+        ),
+      );
+    });
 
     test('the built runtime sweeps orphans against the OWNED state partition '
         '(the runner has one to hand to runGrid)', () async {
