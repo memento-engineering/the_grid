@@ -11,3 +11,5 @@
 library;
 
 export 'bead_path_key.dart';
+export 'molecule_codec.dart';
+export 'molecule_schema.dart';
