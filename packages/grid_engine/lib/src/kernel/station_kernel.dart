@@ -7,6 +7,7 @@ import '../kernel/station_services.dart';
 import '../circuit/capability_registry.dart';
 import '../circuit/circuit_resolver.dart';
 import '../circuit/unclaimed_frontier.dart';
+import '../molecule/process_lease_vendor.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../sdk/capability_facts.dart';
 import '../seeds/station_seed.dart';
@@ -48,12 +49,21 @@ class StationKernel {
   /// CURRENT station-wide unclaimed requirement set. Both default to null —
   /// zero cost, and no behavior change, for a station composing no
   /// federation asset.
+  ///
+  /// [processLeaseVendor] is the molecule model's process-identity seam
+  /// (`DESIGN-tg-pm6.md` §7, R3/R5; Decided item 5) — provided ambient
+  /// beside [registry], the SAME kernel-tier trust level. Null (the default)
+  /// mounts NOTHING: a molecule-mode process-backed capability then throws
+  /// LOUD via `requireProcessLeaseVendor` (never a silent fallback) — a
+  /// composer arming molecule mode with process-backed steps must supply one
+  /// explicitly. Zero cost for a station that never opts into molecule mode.
   StationKernel({
     required this.bridge,
     required StationServices stationServices,
     required SessionResolver resolver,
     required List<SubstationScope> substations,
     CapabilityRegistry? registry,
+    ProcessLeaseVendor? processLeaseVendor,
     Seed Function(Seed root)? wrapRoot,
     DateTime Function()? clock,
     Timer Function(Duration, void Function())? scheduleTimer,
@@ -64,6 +74,7 @@ class StationKernel {
        _resolver = resolver,
        _substations = substations,
        _registry = registry,
+       _processLeaseVendor = processLeaseVendor,
        _wrapRoot = wrapRoot,
        _driver = StationDriver(
          bridge: bridge,
@@ -87,6 +98,13 @@ class StationKernel {
   /// the resolver roots a non-reentrant subtree (a test fake that returns a
   /// plain leaf needs no registry).
   final CapabilityRegistry? _registry;
+
+  /// The molecule model's ambient process-lease seam (`DESIGN-tg-pm6.md` §7,
+  /// R3/R5) — provided at the SAME kernel-tier trust level as [_registry].
+  /// Null for a station that never arms molecule mode (zero cost); a
+  /// molecule-mode process-backed capability with no vendor mounted throws
+  /// LOUD via `requireProcessLeaseVendor` rather than silently degrading.
+  final ProcessLeaseVendor? _processLeaseVendor;
 
   /// The composer's provider hook (ADR-0008 D-A, 2026-07-02): applied OUTERMOST
   /// around the kernel's own ambient stack, so an asset's `main()` mounts its
@@ -131,6 +149,12 @@ class StationKernel {
     final registry = _registry;
     if (registry != null) {
       root = InheritedSeed<CapabilityRegistry>(value: registry, child: root);
+    }
+    // The molecule model's process-lease seam (R3/R5) — wrapped only when
+    // present, at the SAME kernel-tier trust level as the registry above.
+    final leaseVendor = _processLeaseVendor;
+    if (leaseVendor != null) {
+      root = InheritedSeed<ProcessLeaseVendor>(value: leaseVendor, child: root);
     }
     root = InheritedSeed<SessionResolver>(value: _resolver, child: root);
     root = InheritedSeed<StationServices>(value: _stationServices, child: root);

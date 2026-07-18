@@ -2,6 +2,24 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 part 'substation_config.freezed.dart';
 
+/// The drain migration's EXPLICIT mint-mode discriminator
+/// (`DESIGN-tg-pm6.md` §12, R5) — the COMPOSER's opinion about which model a
+/// FRESH `SessionScope` mint uses. Read off [SubstationConfig.circuitMintMode]
+/// ONLY at mint time; an ALREADY-adopted (in-flight) session never consults
+/// it — its own durable `SessionBeadKeys.model` stamp governs (the drain
+/// guarantee, `DESIGN-tg-pm6.md` §12's "Drain proof": adoption short-circuits
+/// before any mode check).
+enum CircuitMintMode {
+  /// Today's flat `grid.cursor.*` model — the default. Every substation that
+  /// never opts in mints byte-for-byte what it always has.
+  flatCursor,
+
+  /// The molecule model: a durable `type=molecule`/`type=step` graph pour
+  /// (R1/R6) + derivation-based backward motion (R4), threaded through the
+  /// ambient `InheritedCircuit` seam (R2/R5b).
+  molecule,
+}
+
 /// A substation's configuration — the **config axis** (ADR-0007: config nodes are
 /// *ancestors* of work nodes).
 ///
@@ -48,5 +66,13 @@ abstract class SubstationConfig with _$SubstationConfig {
     /// budget stays ready-unmounted (no session, no spawn, no cost) and mounts
     /// on the next reconcile once a slot frees.
     int? maxConcurrentWork,
+
+    /// The DRAIN MIGRATION's mint-mode (`DESIGN-tg-pm6.md` §12, R5): which
+    /// model a FRESH `SessionScope` mint uses for THIS substation's work.
+    /// Default [CircuitMintMode.flatCursor] — every substation that never
+    /// opts in mints exactly as before. Read by `SessionScope._mint()` off
+    /// this ambient config; an ADOPTED in-flight session ignores it entirely
+    /// (its own durable `grid.session.model` stamp governs instead).
+    @Default(CircuitMintMode.flatCursor) CircuitMintMode circuitMintMode,
   }) = _SubstationConfig;
 }

@@ -127,7 +127,8 @@ class FakeRuntimeProvider implements RuntimeProvider {
 /// `bd`.
 class RecordingBdRunner implements BdRunner {
   /// Creates the recorder; `create` returns [createdId].
-  RecordingBdRunner({String createdId = 'tgdog-sess1'}) : _createdId = createdId;
+  RecordingBdRunner({String createdId = 'tgdog-sess1'})
+    : _createdId = createdId;
 
   final String _createdId;
 
@@ -137,11 +138,47 @@ class RecordingBdRunner implements BdRunner {
   /// The `--stdin` payload of every recorded call (null when none), in order.
   final List<String?> stdins = <String?>[];
 
+  /// The beads an `export --all` scan returns as JSONL (`DESIGN-tg-pm6.md`
+  /// R6) — the store `StationBeadWriter.createMolecule`'s mint-dedup probe
+  /// and `reapMolecule`'s collection scan both read via `exportAll`. Default
+  /// empty (a fresh store); a molecule test stages the OPEN molecule/step
+  /// beads it expects those scans to see.
+  List<Bead> exportBeads = const <Bead>[];
+
+  /// The `key → id` map the next `bd create --graph` invocation reports
+  /// (`applyGraph`'s `data.ids`) — `StationBeadWriter.createMolecule`'s pour
+  /// reads this back through `BdCliService.applyGraph`. A molecule-mode test
+  /// stages the ids it expects `instantiateMolecule`'s plan-local keys to
+  /// receive.
+  Map<String, String> graphApplyIds = const <String, String>{};
+
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'export') {
+      // `bd export --all` emits RAW JSONL (one issue object per line), NOT an
+      // envelope — the snapshot read path `exportAll` parses it that way.
+      final jsonl = exportBeads.map((b) => jsonEncode(b.toJson())).join('\n');
+      return Future<BdResult>.value(
+        BdResult(exitCode: 0, stdout: jsonl, stderr: ''),
+      );
+    }
+    if (sub == 'create' && args.length > 1 && args[1] == '--graph') {
+      // `bd create --graph <plan-file> [--ephemeral] --json` — a graph-apply
+      // pour reports a `key → id` MAP (`data.ids`), never a single `data.id`.
+      return Future<BdResult>.value(
+        BdResult(
+          exitCode: 0,
+          stdout: jsonEncode({
+            'schema_version': 1,
+            'data': {'ids': graphApplyIds},
+          }),
+          stderr: '',
+        ),
+      );
+    }
     final data = switch (sub) {
       'create' => '{"id":"$_createdId"}',
       _ => '{"id":"${args.length >= 2 ? args[1] : ''}"}',
@@ -155,9 +192,19 @@ class RecordingBdRunner implements BdRunner {
     );
   }
 
-  /// All calls whose leading subcommand is [sub].
+  /// All calls whose leading subcommand is [sub]. For `'create'`, this
+  /// INCLUDES graph-apply pours (`create --graph …`) — use [graphApplyCalls]
+  /// to isolate those from a plain single-bead `create`.
   List<List<String>> callsFor(String sub) =>
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
+
+  /// The `bd create --graph <plan-file> …` pours only
+  /// (`StationBeadWriter.createMolecule`'s mint) — disjoint from
+  /// `callsFor('create')`'s plain single-bead creates, which never carry
+  /// `--graph`.
+  List<List<String>> get graphApplyCalls => calls
+      .where((c) => c.length > 1 && c[0] == 'create' && c[1] == '--graph')
+      .toList();
 
   /// The decoded `--metadata` JSON object of the `update` call at [index].
   Map<String, dynamic> metadataOfUpdate(int index) {
@@ -170,9 +217,8 @@ class RecordingBdRunner implements BdRunner {
   /// True if no call was `bd show` (forbidden on a controller path) and no call
   /// looks like raw SQL (defense — the chokepoint cannot issue SQL by
   /// construction).
-  bool get neverShowOrSql => calls.every(
-    (c) => c.isEmpty || (c.first != 'show' && c.first != 'sql'),
-  );
+  bool get neverShowOrSql =>
+      calls.every((c) => c.isEmpty || (c.first != 'show' && c.first != 'sql'));
 }
 
 /// A [BdRunner] whose `create` parks until [releaseCreate] is called, so a test
@@ -240,8 +286,9 @@ class RecordingGitRunner implements GitRunner {
 
   /// The flattened leading subcommands of every recorded `git` call, in order
   /// (`['add', 'commit', 'push']` for a clean land).
-  List<String> get subcommands =>
-      [for (final c in calls) c.args.isNotEmpty ? c.args.first : ''];
+  List<String> get subcommands => [
+    for (final c in calls) c.args.isNotEmpty ? c.args.first : '',
+  ];
 }
 
 /// A recording [PrOpener]: records every `open` call and returns a settable
@@ -287,7 +334,9 @@ class FakePrOpener implements PrOpener {
       body: body,
     ));
     if (failNext) {
-      return PullRequestResult.failed(const PrOpenFailure('fake: open refused'));
+      return PullRequestResult.failed(
+        const PrOpenFailure('fake: open refused'),
+      );
     }
     return PullRequestResult.opened(PullRequestRef(url: url));
   }
@@ -391,7 +440,11 @@ StepArgs stepArgs(
   String nodePath, {
   Map<String, String> params = const {},
   CancelToken? cancel,
-}) => StepArgs(params: params, nodePath: nodePath, cancel: cancel ?? CancelToken());
+}) => StepArgs(
+  params: params,
+  nodePath: nodePath,
+  cancel: cancel ?? CancelToken(),
+);
 
 /// The capture-only flow-telemetry keys (FT-1, tg-pez) a TERMINAL cursor write
 /// carries under a FIXED test clock (default [DateTime]`(2026)`): the host
@@ -465,7 +518,10 @@ typedef Fakes = ({
 /// Builds an [StationServices] over the fakes (the chokepoint writes through a
 /// recording bd runner; the transport is a controllable provider; land is wired
 /// to the recording git/PR ops) and returns it with the recorders.
-Fakes buildFakes({String createdId = 'tgdog-sess1', WorkSignalProbe? workSignal}) {
+Fakes buildFakes({
+  String createdId = 'tgdog-sess1',
+  WorkSignalProbe? workSignal,
+}) {
   final runner = RecordingBdRunner(createdId: createdId);
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
@@ -573,7 +629,8 @@ class RecordingCapabilityRegistry implements CapabilityRegistry {
   DateTime now() => _now();
 
   @override
-  Seed host(StepMount mount) => FakeCapabilityHost(registry: this, mount: mount, key: mount.key);
+  Seed host(StepMount mount) =>
+      FakeCapabilityHost(registry: this, mount: mount, key: mount.key);
 }
 
 /// A recording fake leaf (NOT the real `CapabilityHost`): records its mount /
