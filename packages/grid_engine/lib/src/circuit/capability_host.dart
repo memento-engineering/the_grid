@@ -297,6 +297,11 @@ class CapabilityHostState extends State<CapabilityHost> {
       case AllocationFailed(:final reason):
         if (_completed) return;
         _completed = true;
+        if (reason.contains('sourceless-workspace')) {
+          _emitFlare('step.allocationFailed', {
+            'error': truncateReason(reason),
+          });
+        }
         _firePersist('failure', () => _persistFailure(reason));
       case AllocationAdvanced(:final payload):
         if (_completed) return;

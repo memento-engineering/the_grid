@@ -27,9 +27,12 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/molecule_schema.dart';
 import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
+import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
+
+void _ignoreAllocationReport(AllocationReport report) {}
 
 /// A minimal pure [ProcessCapability] for the request — never spawned by the
 /// vendor tests themselves (the fake spawner/dispatcher stand in for the real
@@ -39,7 +42,7 @@ class _FakeProcessCap extends ProcessCapability {
 
   @override
   RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
-    workDir: '/grid/workspaces/tg-1',
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
     command: 'sh',
     args: const ['-c', 'echo hi'],
     lifecycle: Lifecycle.oneTurn,
@@ -53,6 +56,29 @@ class _FakeProcessCap extends ProcessCapability {
   };
 }
 
+class _ProvisionSourceControl implements SourceControl {
+  _ProvisionSourceControl({this.createGitEntry = false});
+  final bool createGitEntry;
+
+  @override
+  String workspaceFor(String beadId) => '/w/$beadId';
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+  @override
+  String get baseBranch => 'main';
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {
+    if (createGitEntry) {
+      Directory(workspaceDir).createSync(recursive: true);
+      Directory('$workspaceDir/.git').createSync();
+    }
+  }
+}
+
 /// The LITERAL [ProcessLeaseRequest] construction (the round-3 committee's
 /// binding fix: the fake AllocationContext/ProcessCapability shown in full,
 /// never prose). [transport] defaults to a fresh [FakeRuntimeProvider]; pass
@@ -60,6 +86,7 @@ class _FakeProcessCap extends ProcessCapability {
 ProcessLeaseRequest _request(
   String stepBeadId, {
   FakeRuntimeProvider? transport,
+  AllocationSink sink = _ignoreAllocationReport,
 }) => ProcessLeaseRequest(
   stepBeadId: stepBeadId,
   capability: const _FakeProcessCap(),
@@ -68,10 +95,19 @@ ProcessLeaseRequest _request(
     args: stepArgs('tg-1/lease'),
     transport: transport ?? FakeRuntimeProvider(),
     address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
-    env: const {},
-    sink: (_) {},
+    env: const {'GRID_INSTANCE_TOKEN': 'tok-molecule'},
+    sink: sink,
   ),
 );
+
+FakeTreeContext _stationCtx({
+  required String workspaceDir,
+  required SourceControl sourceControl,
+}) => FakeTreeContext()
+  ..provide<ServiceBundle>(ServiceBundle(sourceControl: sourceControl))
+  ..provide<Workspace>(
+    testWorkspace('tg-1', workspaceDir: workspaceDir, branch: 'grid/tg-1'),
+  );
 
 Future<ProcessHandle> _neverSpawn(
   ProcessLeaseRequest request,
@@ -121,6 +157,77 @@ void main() {
       );
       final ctx = FakeTreeContext()..provide<ProcessLeaseVendor>(vendor);
       expect(requireProcessLeaseVendor(ctx), same(vendor));
+    });
+  });
+
+  group('stationProcessSpawner — provisioned workspace checkout guard', () {
+    test('sourceless provision fails before start', () async {
+      final workspaceDir = Directory.systemTemp
+          .createTempSync('grid-molecule-sourceless-')
+          .path;
+      addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
+      final transport = FakeRuntimeProvider();
+      final reports = <AllocationReport>[];
+      final request = _request(
+        'tgdog-step-1',
+        transport: transport,
+        sink: reports.add,
+      );
+      final ctx = _stationCtx(
+        workspaceDir: workspaceDir,
+        sourceControl: _ProvisionSourceControl(),
+      );
+
+      await expectLater(
+        stationProcessSpawner(request, ctx, stepArgs('tg-1/lease')),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('sourceless-workspace'),
+          ),
+        ),
+      );
+
+      expect(reports.whereType<AllocationStarted>(), isEmpty);
+      expect(transport.started, isEmpty);
+    });
+
+    test('provisioned checkout starts and resolves a process handle', () async {
+      final workspaceDir = Directory.systemTemp
+          .createTempSync('grid-molecule-checkout-')
+          .path;
+      addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
+      final transport = FakeRuntimeProvider();
+      final reports = <AllocationReport>[];
+      final request = _request(
+        'tgdog-step-1',
+        transport: transport,
+        sink: reports.add,
+      );
+      final ctx = _stationCtx(
+        workspaceDir: workspaceDir,
+        sourceControl: _ProvisionSourceControl(createGitEntry: true),
+      );
+
+      final future = stationProcessSpawner(
+        request,
+        ctx,
+        stepArgs('tg-1/lease'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(
+        const SessionStarted(name: 'tgdog-s/tg-1/lease', pid: 10, pgid: 20),
+      );
+      final handle = await future;
+
+      expect(
+        handle,
+        const ProcessHandle(pgid: 20, pid: 10, token: 'tok-molecule'),
+      );
+      expect(reports.whereType<AllocationStarted>(), hasLength(1));
+      expect(transport.started, hasLength(1));
+      expect(transport.started.single.config.workDir, workspaceDir);
     });
   });
 

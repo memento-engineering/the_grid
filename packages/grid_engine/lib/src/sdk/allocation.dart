@@ -27,6 +27,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -34,6 +35,27 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'capability.dart';
 import 'circuit.dart';
 import 'route.dart';
+
+/// Verifies that [workspaceDir] is a Git checkout after workspace provisioning.
+///
+/// `SourceControl.provisionWorkspace` is the engine-facing write for workspace
+/// materialization (ADR-0000 A51.2); this Track A guard validates that write's
+/// result before an effect can spawn into a sourceless directory (ADR-0009 D3,
+/// ADR-0006 D3, ADR-0008 D5/D6).
+void assertProvisionedCheckout(String workspaceDir) {
+  final gitEntry = FileSystemEntity.typeSync(
+    '$workspaceDir/.git',
+    followLinks: false,
+  );
+  if (gitEntry == FileSystemEntityType.file ||
+      gitEntry == FileSystemEntityType.directory) {
+    return;
+  }
+  throw StateError(
+    'sourceless-workspace: provisionWorkspace returned without a checkout '
+    'at $workspaceDir (.git missing)',
+  );
+}
 
 /// The lifecycle state of an [Allocation] (ADR-0009 D5:
 /// `starting → live → [ready] → dying → gone`, plus `adopting`).
@@ -599,6 +621,7 @@ class ProcessAllocation extends Allocation {
           beadId: args.beadId,
           workspaceDir: workspace.workspaceDir,
         );
+        assertProvisionedCheckout(workspace.workspaceDir);
       }
       if (args.cancel.isCancelled) {
         state = AllocationState.gone;
