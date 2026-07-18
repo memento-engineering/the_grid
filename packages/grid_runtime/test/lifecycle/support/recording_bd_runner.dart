@@ -38,6 +38,7 @@ class RecordingBdRunner implements BdRunner {
   /// (a fresh store with no gates → every gate mints). Stage an OPEN gate here
   /// to exercise the reuse-and-refresh path.
   List<Bead> exportBeads = const <Bead>[];
+  List<BeadDependency> exportDependencies = const <BeadDependency>[];
 
   /// The `key → id` map the next `bd create --graph` invocation reports
   /// (`applyGraph`'s `data.ids`; mirrors `FakeBdRunner`'s stubbed-envelope
@@ -55,7 +56,20 @@ class RecordingBdRunner implements BdRunner {
     if (sub == 'export') {
       // `bd export --all` emits RAW JSONL (one issue object per line), NOT an
       // envelope — the snapshot read path `exportAll` parses.
-      final jsonl = exportBeads.map((b) => jsonEncode(b.toJson())).join('\n');
+      final depsByIssue = <String, List<Map<String, dynamic>>>{};
+      for (final dep in exportDependencies) {
+        (depsByIssue[dep.issueId] ??= <Map<String, dynamic>>[]).add(
+          dep.toJson(),
+        );
+      }
+      final jsonl = exportBeads
+          .map((b) {
+            final json = b.toJson();
+            final deps = depsByIssue[b.id];
+            if (deps != null) json['dependencies'] = deps;
+            return jsonEncode(json);
+          })
+          .join('\n');
       return Future<BdResult>.value(
         BdResult(exitCode: 0, stdout: jsonl, stderr: ''),
       );

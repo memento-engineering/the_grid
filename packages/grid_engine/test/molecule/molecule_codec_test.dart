@@ -253,6 +253,69 @@ void main() {
       },
     );
 
+    test('supersedes chain selects the active step bead for a path', () {
+      final prior = _stepBead(
+        's0',
+        'tg-1/build',
+        extra: stepBeadMetadata(const NodeCursor(state: StepState.complete)),
+      );
+      final successor = _stepBead(
+        's1',
+        'tg-1/build',
+        extra: stepBeadMetadata(const NodeCursor(state: StepState.pending)),
+      );
+      const deps = [
+        BeadDependency(
+          issueId: 's1',
+          dependsOnId: 's0',
+          type: DependencyType.supersedes,
+        ),
+      ];
+
+      final active = activeStepBeadsByPath([prior, successor], deps);
+      expect(active['tg-1/build']!.id, 's1');
+      expect(supersedesDepthByStepId([prior, successor], deps), {
+        's0': 0,
+        's1': 1,
+      });
+      expect(supersedesDepthByPath([prior, successor], deps), {
+        'tg-1/build': 1,
+      });
+
+      final projected = projectMoleculeCursor([
+        prior,
+        successor,
+      ], dependencies: deps);
+      expect(projected.beadIdByNodePath['tg-1/build'], 's1');
+      expect(projected.cursor['tg-1/build']!.state, StepState.pending);
+    });
+
+    test('supersedes depth is monotonic across successor beads', () {
+      final a = _stepBead('s0', 'tg-1/build');
+      final b = _stepBead('s1', 'tg-1/build');
+      final c = _stepBead('s2', 'tg-1/build');
+      const deps = [
+        BeadDependency(
+          issueId: 's1',
+          dependsOnId: 's0',
+          type: DependencyType.supersedes,
+        ),
+        BeadDependency(
+          issueId: 's2',
+          dependsOnId: 's1',
+          type: DependencyType.supersedes,
+        ),
+      ];
+
+      expect(supersedesDepthByStepId([a, b, c], deps), {
+        's0': 0,
+        's1': 1,
+        's2': 2,
+      });
+      expect(activeStepBeadsByPath([a, b, c], deps)['tg-1/build']!.id, 's2');
+      expect(supersedesDepthByPath([a, b, c], deps), {'tg-1/build': 2});
+    });
+
     test(
       'projected rewindCount is always 0 — R4 layers the derived generation in memory only',
       () {

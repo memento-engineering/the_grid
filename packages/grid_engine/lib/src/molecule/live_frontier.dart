@@ -13,40 +13,15 @@
 ///
 /// [effectiveCursor] is the collapse the design calls out as stronger than
 /// either proposal it synthesizes: projection ∘ invalidation-demotion ∘
-/// derived-generation compose into ONE effective [CircuitCursor] whose
-/// [NodeCursor.rewindCount] field carries [derivedGeneration] — so the
-/// UNCHANGED `ValueKey('$path#$restart.$rewind')` (`circuit_scope.dart:100`)
-/// re-keys a still-mounted incarnation with ZERO edits to `circuit_scope.dart`.
+/// derived-generation compose into ONE effective [CircuitCursor].
 /// [liveFrontier] is then just `eligibleSteps` over it — no second predicate,
 /// no `RouteVerdict`, no route naming a step.
 ///
-/// **What "generation" counts, precisely** (there is no persisted counter to
-/// read back — item 7 forbids one): [derivedGeneration] is the number of
-/// DISTINCT `validates`-source stamps currently invalidating a node — i.e. how
-/// many independent structured verdicts are, on THIS snapshot, holding it back.
-/// A single always-failing critic can never re-derive "round 3" from a
-/// snapshot that only ever remembers ITS OWN latest grade (that would require
-/// a persisted history item 7 forbids); a SWARM of same-capability critics
-/// each independently validating the SAME target (the established
-/// `critic-correctness` / `critic-security` shape, `molecule_codec_test.dart`)
-/// gives a genuinely deterministic, snapshot-pure width instead — and widens
-/// exactly the case [kMaxReworkRounds] exists to bound: too many simultaneous
-/// objections park the work for a human rather than looping it forever.
-///
-/// **This is a stand-in, not the ratified axis — UNRESOLVED, see ADR-0000
-/// A52.** `DESIGN-tg-pm6.md` §8 names the intended axis as a TEMPORAL count of
-/// invalidation *rounds*, monotonic across successive re-runs of the SAME
-/// recurring source (mirroring the flat model's own `Rewind` counter,
-/// `capability_host.dart:588`, +1 per rewind). WIDTH is a different axis: a
-/// single recurring critic holds width at `1` forever (never escalates — the
-/// exact loop [kMaxReworkRounds] exists to bound), and it also means
-/// `rewindCount` never changes across successive rounds from that one source,
-/// so the [effectiveCursor] re-key this file exists to provide (compensation
-/// item 1, §8) does not fire past the FIRST invalidation either. A 2-3-critic
-/// committee failing all at once on its FIRST review instead GATES
-/// immediately (width reaches [kMaxReworkRounds] with zero rework rounds
-/// spent) — see A52 for both directions, proven against this file's own
-/// fixtures. Do not wire this live (R5b/R5) before A52 is resolved.
+/// A52 Ratified makes [derivedGeneration] the depth of the active step bead's
+/// `supersedes` chain. A single recurring critic therefore advances depth 1,
+/// 2, 3 across successor beads; three critics failing the first review still
+/// spend only round depth 1. History is graph structure, never a mutable
+/// counter.
 ///
 /// Reads ONLY structured stamps — [ResultKeys.grade], never
 /// [ResultKeys.rationale] — the boolean-not-prose rule (pow-hf2,
@@ -79,7 +54,11 @@ typedef CircuitResults = Map<String, Map<String, String>>;
 /// invalidation would demote (mirrors [rewindNodePaths]'s own closure shape
 /// exactly — target ∪ transitive dependents ∪ [target itself], each expanded
 /// to its whole subtree).
-typedef _ValidatesEdge = ({String sourcePath, Set<String> closure});
+typedef _ValidatesEdge = ({
+  String sourcePath,
+  String targetPath,
+  Set<String> closure,
+});
 
 /// Whether the `validates`-SOURCE step at [sourcePath] currently stamps an
 /// INVALIDATING verdict. Two conditions, both structural, neither prose:
@@ -120,9 +99,11 @@ Iterable<_ValidatesEdge> _validatesEdges(
   for (final step in circuit.steps) {
     final sourcePath = stepPath(nodePath, step.stepId);
     final targetId = step.params[kValidatesParam];
-    if (targetId != null && circuit.stepById(targetId) != null) {
+    final target = targetId == null ? null : circuit.stepById(targetId);
+    if (targetId != null && target != null) {
       yield (
         sourcePath: sourcePath,
+        targetPath: stepPath(nodePath, targetId),
         closure: rewindNodePaths(
           circuit,
           nodePath,
@@ -155,6 +136,7 @@ Map<String, int> _generationsByPath(
   CircuitResults results,
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
+  required Map<String, int> supersedesDepthByPath,
 }) {
   final generations = <String, int>{};
   for (final edge in _validatesEdges(
@@ -163,8 +145,9 @@ Map<String, int> _generationsByPath(
     circuitById: circuitById,
   )) {
     if (!_stampInvalidates(projected, results, edge.sourcePath)) continue;
+    final generation = supersedesDepthByPath[edge.targetPath] ?? 0;
     for (final path in edge.closure) {
-      generations[path] = (generations[path] ?? 0) + 1;
+      generations[path] = generation;
     }
   }
   return generations;
@@ -182,22 +165,21 @@ Set<String> invalidatedNodes(
   CircuitResults results,
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
+  required Map<String, int> supersedesDepthByPath,
 }) => _generationsByPath(
   circuit,
   projected,
   results,
   nodePath,
   circuitById: circuitById,
+  supersedesDepthByPath: supersedesDepthByPath,
 ).keys.toSet();
 
-/// The derived incarnation axis for [path] (item 7): how many DISTINCT
-/// `validates`-source stamps currently invalidate it — NOT a persisted
-/// `rewindCount`, and NOT read back from any durable counter (there is none).
-/// Zero when [path] is not currently invalidated by anything. See this file's
-/// library doc for why a snapshot-pure derivation counts WIDTH (independent
-/// simultaneous objections) rather than a temporal round number — **and for
-/// why that is an unresolved deviation from the ratified axis, ADR-0000
-/// A52**.
+/// The derived incarnation axis for [path] (item 7): the active step bead's
+/// supersedes-chain depth when [path] is currently invalidated. Zero when
+/// [path] is not currently invalidated by anything. A52 Ratified makes that
+/// chain the durable rework-round history; this reads graph structure, never a
+/// mutable counter.
 int derivedGeneration(
   Circuit circuit,
   CircuitCursor projected,
@@ -205,6 +187,7 @@ int derivedGeneration(
   String nodePath, {
   required String path,
   required Circuit? Function(String circuitId) circuitById,
+  required Map<String, int> supersedesDepthByPath,
 }) =>
     _generationsByPath(
       circuit,
@@ -212,17 +195,17 @@ int derivedGeneration(
       results,
       nodePath,
       circuitById: circuitById,
+      supersedesDepthByPath: supersedesDepthByPath,
     )[path] ??
     0;
 
 /// The projected cursor with every currently-invalidated node DEMOTED and
 /// re-keyed (item 7/8's collapse — DESIGN-tg-pm6.md §3 conflict 8): a node
 /// [derivedGeneration] counts below [kMaxReworkRounds] is set to
-/// [StepState.pending] with `rewindCount := derivedGeneration`, so the
-/// UNCHANGED `ValueKey('$path#$restart.$rewind')` (`circuit_scope.dart:100`)
-/// changes and keyed reconcile tears a still-mounted incarnation down
-/// (`LeaseAllocation.dispose` releases the process lease — R3) and re-mounts
-/// it virgin; a node AT the cap is set to [StepState.gated] instead —
+/// [StepState.pending] with `rewindCount := derivedGeneration` only as a
+/// compatibility read for existing `CircuitScope`. A52 Ratified makes the
+/// successor bead id the real incarnation identity: new bead id -> new
+/// breadcrumb -> new ValueKey. A node AT the cap is set to [StepState.gated] —
 /// "surfaces escalation instead of demoting" — which `frontier.dart`'s
 /// UNCHANGED runnable-state gate already withholds from the frontier exactly
 /// like a human-parked node today (D-7: `StepState.gated => false`), so
@@ -233,19 +216,13 @@ int derivedGeneration(
 /// carries (always `0` under the molecule codec, R1). Pure, total, cheap,
 /// idempotent (Q4): calling this twice on the identical snapshot returns
 /// value-equal cursors.
-///
-/// **Known gap, ADR-0000 A52:** because [derivedGeneration] counts WIDTH, not
-/// temporal rounds, a node held back by ONE recurring source is demoted with
-/// the SAME `rewindCount` every round (no re-key past the first invalidation,
-/// [derivedEscalation] never fires), while a node failing SEVERAL sources at
-/// once on its first pass can reach [kMaxReworkRounds] and [StepState.gated]
-/// with zero rework rounds spent. Unresolved pending Nico.
 CircuitCursor effectiveCursor(
   Circuit circuit,
   CircuitCursor projected,
   CircuitResults results,
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
+  required Map<String, int> supersedesDepthByPath,
 }) {
   final generations = _generationsByPath(
     circuit,
@@ -253,6 +230,7 @@ CircuitCursor effectiveCursor(
     results,
     nodePath,
     circuitById: circuitById,
+    supersedesDepthByPath: supersedesDepthByPath,
   );
   if (generations.isEmpty) return projected;
   final effective = <String, NodeCursor>{...projected};
@@ -279,6 +257,7 @@ List<CircuitStep> liveFrontier(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
   required DateTime now,
+  required Map<String, int> supersedesDepthByPath,
 }) => eligibleSteps(
   circuit,
   effectiveCursor(
@@ -287,6 +266,7 @@ List<CircuitStep> liveFrontier(
     results,
     nodePath,
     circuitById: circuitById,
+    supersedesDepthByPath: supersedesDepthByPath,
   ),
   nodePath,
   circuitById: circuitById,
@@ -328,6 +308,7 @@ Iterable<String> _declarationOrderPaths(
   CircuitResults results,
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
+  required Map<String, int> supersedesDepthByPath,
 }) {
   final generations = _generationsByPath(
     circuit,
@@ -335,6 +316,7 @@ Iterable<String> _declarationOrderPaths(
     results,
     nodePath,
     circuitById: circuitById,
+    supersedesDepthByPath: supersedesDepthByPath,
   );
   for (final path in _declarationOrderPaths(
     circuit,

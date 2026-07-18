@@ -73,8 +73,8 @@ fan-out is a **swarm**; the committee is one swarm type of several to come.
 | 4 | `InheritedCircuit.==`: over (root, cursor) (A) vs root-only (B) | **A** | root-only equality would never notify dependents on a state change; (root, cursor) notifies exactly when projected state changes and never on a same-state re-provide (the `SessionHandle` discipline, `session_handle.dart`) |
 | 5 | Persisted `rewindCount`: kept in the key set (A, self-contradictory) vs removed (B) | **B** | DECIDED item 7 is binding: incarnation is derived from stamps. Supervision keys are `restartCount` + `cooldownUntil` only |
 | 6 | pgid/pid/token: vendor-written durable breadcrumb (A) vs removed from durable state entirely (B) | **A**, hardened | full removal breaks crash-adopt: `adoptable` (`lease.dart:108`) needs a durable prior handle to prove fresh. Resolution: a DISTINCT `grid.lease.*` namespace on the step bead, written ONLY by the vendor, never read by the cursor codec — leased, not node-owned, and structurally testable |
-| 7 | `supersedes` edges between rework incarnation beads (both gestured) | **RESERVED, not minted in v1** | derived generation re-keys the SAME step bead (demoted to pending); minting per-round incarnation beads would grow the molecule unboundedly and reshape identity. `supersedes`/`until` are documented edge vocabulary for future rounds-materialization / daemon-lifetime work |
-| 8 | Derivation surface: separate `liveFrontier` re-implementation (both) | **effectiveCursor collapse** (stronger than either) | projection + invalidation demotion + derived generation compose into ONE effective `CircuitCursor`; `liveFrontier` = the UNCHANGED `eligibleSteps` over it, and the UNCHANGED `ValueKey('$path#$restart.$rewind')` (`circuit_scope.dart:100`) re-keys because the projected `rewindCount` field carries the derived generation. Zero edits to `frontier.dart` and `circuit_scope.dart` |
+| 7 | `supersedes` edges between rework incarnation beads (both gestured) | **MINTED for A52 successor incarnations** | A52 Ratified makes each rework round a new `type=step` bead that supersedes the prior incarnation. The chain is the round history; no mutable counter or `rewindCount` metadata key is introduced. `until` remains reserved for daemon-lifetime work |
+| 8 | Derivation surface: separate `liveFrontier` re-implementation (both) | **effectiveCursor collapse** (stronger than either) | projection + invalidation demotion + supersedes-chain depth compose into ONE effective `CircuitCursor`; `liveFrontier` = the UNCHANGED `eligibleSteps` over it. New bead id -> new breadcrumb -> new `ValueKey`; `rewindCount` is only a compatibility read for existing `CircuitScope` |
 | 9 | Build order: R6 after R5 (A) vs framed-late (B) | **R6 BEFORE R5** | `_mintMolecule` calls `createMolecule`; the drain seam cannot land without the minter. R6's "gating write-cost validation before any live arm" is satisfied by its tests |
 | 10 | Collection: `reapMolecule` writer method (A) vs `MoleculeReaper` class (B) | **A** | fewer moving parts, same chokepoint; triggered from the session-close path the engine already owns (`session_scope.dart:716` `_scheduleClose`) |
 | 11 | Swarm typing: open enum `SwarmKind` (B) vs id slot only (A) | **open string vocabulary** | `MoleculeStepKeys.swarm` (`'committee'` first). The doc forbids hardcoding committee-as-the-swarm; a closed enum reintroduces that as rework |
@@ -105,7 +105,9 @@ projection). Never edits `session_bead.dart`.
   `kValidatesParam = 'validates'`: a step whose `params['validates']` names a
   sibling stepId gets a validates edge to it. The convention is declared by the
   circuit content (power_station opinion); the engine stays domain-free.
-- `supersedes` (`:20`) and `until` (`:26`): RESERVED vocabulary (§3.7).
+- `supersedes` (`:20`): A52 Ratified successor-incarnation edge from the new
+  step bead to the prior step bead. `until` (`:26`) remains reserved vocabulary
+  for daemon lifetimes.
 - Coarse state: bd STATUS (open = pre-terminal, closed = positive-terminal /
   reaped). Fine state (`StepState` is 6-valued; bd status is 2-valued) lives in
   metadata.
@@ -315,18 +317,22 @@ COMPOSES over `frontier.dart` and `rewind.dart`; edits neither.
 /// transitive-dependent closure (∪ the target itself) invalidated.
 Set<String> invalidatedNodes(Circuit circuit, CircuitCursor projected,
     CircuitResults results, String nodePath,
-    {required Circuit? Function(String) circuitById});
+    {required Circuit? Function(String) circuitById,
+     required Map<String, int> supersedesDepthByPath});
 
-/// The derived incarnation axis (item 7): a deterministic count of the
-/// invalidation rounds observed against this node's stamps — NOT a persisted
+/// The derived incarnation axis (A52 Ratified): supersedes-chain depth of the
+/// active step bead when the node is currently invalidated — NOT a persisted
 /// rewindCount.
-int derivedGeneration(String path, CircuitResults results, ...);
+int derivedGeneration(String path, CircuitResults results, ...,
+    {required Map<String, int> supersedesDepthByPath});
 
 /// Projection ∘ invalidation ∘ generation: the projected cursor with every
 /// invalidated node DEMOTED to pending and NodeCursor.rewindCount carrying
-/// derivedGeneration. CircuitScope + eligibleSteps consume it UNCHANGED.
+/// derivedGeneration as a compatibility read. CircuitScope + eligibleSteps
+/// consume it UNCHANGED.
 CircuitCursor effectiveCursor(Circuit circuit, CircuitCursor projected,
-    CircuitResults results, String nodePath, {required circuitById});
+    CircuitResults results, String nodePath,
+    {required circuitById, required Map<String, int> supersedesDepthByPath});
 
 /// = eligibleSteps(circuit, effectiveCursor(...), ...). Pure, total, cheap,
 /// idempotent (Q4). No signal, no RouteVerdict, no route naming a step
@@ -343,13 +349,11 @@ List<CircuitStep> liveFrontier(...);
 irreducible engine-side nuances):**
 
 1. **Live teardown / re-key of a still-mounted incarnation flipped stale
-   mid-flight.** A pure derivation bumps nothing, so
-   `ValueKey('$path#$restart.$rewind')` (`circuit_scope.dart:100`) would leave
-   a stale daemon mounted. COMPENSATION: `effectiveCursor` writes
-   `derivedGeneration` into the in-memory `rewindCount` field → the key
-   changes because the DERIVED count changed → keyed reconcile tears down and
-   remounts, `LeaseAllocation.dispose` (`lease.dart`) releases the process
-   lease. NO persisted write; zero edits to `circuit_scope.dart`.
+   mid-flight.** A52 Ratified makes incarnation identity structural: new bead
+   id -> new breadcrumb -> new `ValueKey`. `effectiveCursor` still writes
+   `derivedGeneration` into the in-memory `rewindCount` field as a
+   compatibility read for existing `CircuitScope`; the durable history is the
+   `supersedes` chain, never a persisted counter.
 2. **Restart budget** (`isStepBroken`, `frontier.dart:93`): no native home;
    `restartCount` persists per step bead; read over the projection, unchanged.
 3. **Cooldown backoff** (`_runnableState`, `frontier.dart:107-121`):
@@ -364,11 +368,10 @@ engine derivation", not "pure `bd ready`" (model item 5).
 **Tests** (`test/molecule/live_frontier_test.dart`, pure golden, mirrors
 `rewind_set_test` / `rewind_arm_test`): forward AND backward both fall out of
 `liveFrontier`; a downstream invalidating stamp derives its `validates` target
-(and closure) live with NO cursor write; `derivedGeneration` increments
-monotonically on repeated invalidation and re-keys a `_daemonSpec`-style
-daemon fixture (mirrors `rewind_arm_test.dart`); the cap surfaces
-`derivedEscalation` instead of demoting; totality/idempotency on
-partial/missing stamps (Q4).
+(and closure) live with NO cursor write; one recurring critic derives
+generation 1 then 2 across two successor rounds; three first-round critics
+stay at depth 1 and do not gate; the cap surfaces `derivedEscalation` instead
+of demoting; totality/idempotency on partial/missing stamps (Q4).
 
 ## 9. R6 — the chokepoint mint + collection (BEFORE the drain seam)
 
@@ -493,7 +496,7 @@ the identical writes it does today; close fires the reap.
 | 5 | Process identity leased; throw-required if absent | R3 `ProcessLeaseVendor` + LOUD-or-GONE assert; `SelfManagedProcessVendor` only as an explicit mode |
 | 6 | Not GlobalKeys — identity from the beads in play | R7: key derived from crumbs; `ValueKey` composition unchanged |
 | 7 | Durable = stamped state; live = derivation; backward = INVALIDATION | R4 `invalidatedNodes`/`effectiveCursor`/`liveFrontier`; no `RouteVerdict`, no persisted rewindCount, no signal |
-| 8 | bd-native naming EXTENDS bd's concepts | `type=molecule/step`; `parent-child`/`blocks`/`validates` (+ `supersedes`/`until` reserved); circuit = Dart FORMULA, `instantiateMolecule` = cook's role; fan-out = SWARM, committee one swarm type (open vocabulary) |
+| 8 | bd-native naming EXTENDS bd's concepts | `type=molecule/step`; `parent-child`/`blocks`/`validates` + A52 `supersedes` (`until` reserved); circuit = Dart FORMULA, `instantiateMolecule` = cook's role; fan-out = SWARM, committee one swarm type (open vocabulary) |
 
 Naming law: `BeadPathKey`, `InheritedCircuit`, `ProcessLeaseVendor`,
 `liveFrontier`, `instantiateMolecule` — genesis-tree/Dart idioms and bd

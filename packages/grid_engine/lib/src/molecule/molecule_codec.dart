@@ -68,14 +68,85 @@ Map<String, String> stepBeadMetadata(NodeCursor node) => {
 /// no per-node state of its own — its role is nesting, `DependencyType.parentChild`).
 /// A step bead missing [MoleculeStepKeys.path] is malformed and is skipped,
 /// fail-closed, exactly like a malformed flat cursor key.
-({CircuitCursor cursor, Map<String, String> beadIdByNodePath})
-projectMoleculeCursor(Iterable<Bead> moleculeBeads) {
-  final cursor = <String, NodeCursor>{};
-  final beadIdByNodePath = <String, String>{};
+Map<String, int> supersedesDepthByStepId(
+  Iterable<Bead> moleculeBeads,
+  Iterable<BeadDependency> dependencies,
+) {
+  final steps = {
+    for (final b in moleculeBeads.where((b) => b.issueType == IssueType.step))
+      b.id: b,
+  };
+  final priorBySuccessor = <String, String>{};
+  for (final dep in dependencies) {
+    if (dep.type != DependencyType.supersedes) continue;
+    if (!steps.containsKey(dep.issueId) ||
+        !steps.containsKey(dep.dependsOnId)) {
+      continue;
+    }
+    priorBySuccessor[dep.issueId] = dep.dependsOnId;
+  }
+  final memo = <String, int>{};
+  int depthOf(String id, Set<String> visiting) {
+    final cached = memo[id];
+    if (cached != null) return cached;
+    final prior = priorBySuccessor[id];
+    if (prior == null || !visiting.add(id)) return memo[id] = 0;
+    final depth = 1 + depthOf(prior, visiting);
+    visiting.remove(id);
+    return memo[id] = depth;
+  }
+
+  for (final id in steps.keys) {
+    depthOf(id, <String>{});
+  }
+  return memo;
+}
+
+Map<String, Bead> activeStepBeadsByPath(
+  Iterable<Bead> moleculeBeads,
+  Iterable<BeadDependency> dependencies,
+) {
+  final depths = supersedesDepthByStepId(moleculeBeads, dependencies);
+  final active = <String, Bead>{};
   for (final bead in moleculeBeads) {
     if (bead.issueType != IssueType.step) continue;
     final path = bead.metadata[MoleculeStepKeys.path];
     if (path is! String || path.isEmpty) continue;
+    final prior = active[path];
+    if (prior == null || (depths[bead.id] ?? 0) > (depths[prior.id] ?? 0)) {
+      active[path] = bead;
+    }
+  }
+  return active;
+}
+
+Map<String, int> supersedesDepthByPath(
+  Iterable<Bead> moleculeBeads,
+  Iterable<BeadDependency> dependencies,
+) {
+  final depths = supersedesDepthByStepId(moleculeBeads, dependencies);
+  return {
+    for (final entry in activeStepBeadsByPath(
+      moleculeBeads,
+      dependencies,
+    ).entries)
+      entry.key: depths[entry.value.id] ?? 0,
+  };
+}
+
+({CircuitCursor cursor, Map<String, String> beadIdByNodePath})
+projectMoleculeCursor(
+  Iterable<Bead> moleculeBeads, {
+  Iterable<BeadDependency> dependencies = const [],
+}) {
+  final cursor = <String, NodeCursor>{};
+  final beadIdByNodePath = <String, String>{};
+  for (final entry in activeStepBeadsByPath(
+    moleculeBeads,
+    dependencies,
+  ).entries) {
+    final path = entry.key;
+    final bead = entry.value;
     beadIdByNodePath[path] = bead.id;
     cursor[path] = NodeCursor(
       state: _stepState(bead),
@@ -85,8 +156,9 @@ projectMoleculeCursor(Iterable<Bead> moleculeBeads) {
       finishedAt: _parseDate(bead.metadata[MoleculeStepKeys.finishedAt]),
       durationMs: _asInt(bead.metadata[MoleculeStepKeys.durationMs]),
       failureReason: bead.metadata[MoleculeStepKeys.failureReason]?.toString(),
-      // rewindCount stays the freezed default 0 — R4's `effectiveCursor`
-      // layers the DERIVED generation in, in memory only, never here.
+      // rewindCount stays the freezed default 0. A52 Ratified makes the
+      // successor bead id the incarnation identity; live_frontier.dart exposes
+      // chain depth only as a compatibility read for existing CircuitScope.
       // pgid/pid/token stay null — LeaseKeys is a namespace this codec NEVER
       // reads (structurally tested in molecule_codec_test.dart).
     );

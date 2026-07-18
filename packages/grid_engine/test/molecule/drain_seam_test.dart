@@ -79,10 +79,11 @@ JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
   Map<String, SessionProjection> sessions = const {},
+  List<BeadDependency> dependencies = const [],
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
-    dependencies: const [],
+    dependencies: dependencies,
     readyIds: ready,
     capturedAt: DateTime(2026),
   ),
@@ -528,18 +529,9 @@ void main() {
   );
 
   group('the drain seam — end-to-end derivation (R4 wired live)', () {
-    // Blocked on ADR-0000 A52 (pending): `derivedGeneration` counts
-    // simultaneous-stamp WIDTH, not the ratified TEMPORAL rework-round count
-    // `DESIGN-tg-pm6.md` §8 mandates — and A52's own recorded disposition is
-    // "R5b/R5 must not wire `effectiveCursor`/`derivedEscalation` live
-    // before this is resolved." `SessionScope.build()` no longer wires R4's
-    // derivation (see `session_scope.dart`'s library doc) until A52 is
-    // ratified, so this end-to-end proof is skipped rather than deleted —
-    // re-enable it once the wiring returns. `live_frontier_test.dart` keeps
-    // covering the derivation itself, pure and offline.
     test('a downstream invalidating stamp (critic grade F) remounts the '
-        'upstream build step — a PURE re-derivation, ZERO bd calls', () async {
-      final f = buildFakes();
+        'upstream build step on a successor incarnation bead', () async {
+      final f = buildFakes(createdId: 'tgdog-step7-build-r1');
       const sessionId = 'tgdog-mol-sess';
       const workBead = 'tg-7';
       final moleculeRoot = _moleculeBead('tgdog-mol7', sessionId: sessionId);
@@ -560,6 +552,16 @@ void main() {
         'tgdog-step7-land',
         sessionId: sessionId,
         path: '$workBead/land',
+      );
+      final successor = _stepBead(
+        'tgdog-step7-build-r1',
+        sessionId: sessionId,
+        path: '$workBead/build',
+      );
+      const supersedes = BeadDependency(
+        issueId: 'tgdog-step7-build-r1',
+        dependsOnId: 'tgdog-step7-build',
+        type: DependencyType.supersedes,
       );
 
       final reg = RecordingCapabilityRegistry(circuits: const {});
@@ -601,7 +603,8 @@ void main() {
       final callsBeforeRound2 = f.runner.calls.length;
 
       // Round 2: critic's grade flips to F — a validates-source stamp,
-      // nothing else changes.
+      // nothing else changes. SessionScope holds the retired build bead and
+      // schedules the A52 successor mint off build.
       joined.push(
         _joined(
           beads: [_task(workBead)],
@@ -624,31 +627,80 @@ void main() {
       m.owner.flush();
       await _pump();
 
-      // The derivation demotes build + critic + land (the whole
-      // invalidated closure: target ∪ transitive dependents ∪ self) —
-      // `build` (previously retired/unmounted) is newly ELIGIBLE and
-      // remounts; `land` (previously mounted) is no longer eligible
-      // (critic is back to pending) and unmounts. `critic` itself was
-      // never mounted (it was `complete`/retired both rounds), so no
-      // critic event either way.
+      final round2Calls = f.runner.calls.skip(callsBeforeRound2).toList();
       expect(
         reg.events,
-        unorderedEquals([
-          'STOP land(tgdog-mol-sess/tg-7/land)',
-          'START build(tgdog-mol-sess/tg-7/build)',
-        ]),
+        ['STOP land(tgdog-mol-sess/tg-7/land)'],
+        reason:
+            'the old terminal build bead is withheld until its successor '
+            'arrives in the joined snapshot',
       );
-      // The whole re-derivation is a PURE in-memory recompute (R4) — no
-      // cursor write anywhere, on either bead.
       expect(
-        f.runner.calls.length,
-        callsBeforeRound2,
-        reason: 'backward motion is derived, never written (item 7)',
+        round2Calls.any(
+          (c) => c.length >= 2 && c[0] == 'export' && c[1] == '--all',
+        ),
+        isTrue,
       );
-    },
-        skip: 'blocked on ADR-0000 A52 — SessionScope.build() no longer '
-            'wires R4\'s derivation live (see the group doc above and '
-            'session_scope.dart\'s library doc); re-enable once A52 '
-            'resolves');
+      expect(
+        round2Calls.any(
+          (c) =>
+              c.isNotEmpty &&
+              c[0] == 'create' &&
+              c.contains('--type') &&
+              c.contains(IssueType.step.wire),
+        ),
+        isTrue,
+      );
+      expect(
+        round2Calls.any(
+          (c) =>
+              c.length >= 2 &&
+              c[0] == 'update' &&
+              c[1] == 'tgdog-step7-build-r1',
+        ),
+        isTrue,
+      );
+      expect(
+        round2Calls.any(
+          (c) =>
+              c.length >= 6 &&
+              c[0] == 'dep' &&
+              c[1] == 'add' &&
+              c[2] == 'tgdog-step7-build-r1' &&
+              c[3] == 'tgdog-step7-build' &&
+              c.contains('--type') &&
+              c.contains(DependencyType.supersedes.wire),
+        ),
+        isTrue,
+      );
+
+      reg.events.clear();
+      joined.push(
+        _joined(
+          beads: [_task(workBead)],
+          ready: {workBead},
+          dependencies: const [supersedes],
+          sessions: {
+            workBead: SessionProjection(
+              workBeadId: workBead,
+              sessionId: sessionId,
+              isMolecule: true,
+              moleculeBeads: [
+                moleculeRoot,
+                buildBead(),
+                successor,
+                criticBead('F'),
+                landBead(),
+              ],
+              moleculeDependencies: const [supersedes],
+            ),
+          },
+        ),
+      );
+      m.owner.flush();
+      await _pump();
+
+      expect(reg.events, ['START build(tgdog-mol-sess/tg-7/build)']);
+    });
   });
 }
