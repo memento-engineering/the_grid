@@ -39,6 +39,14 @@ class RecordingBdRunner implements BdRunner {
   /// to exercise the reuse-and-refresh path.
   List<Bead> exportBeads = const <Bead>[];
 
+  /// The `key → id` map the next `bd create --graph` invocation reports
+  /// (`applyGraph`'s `data.ids`; mirrors `FakeBdRunner`'s stubbed-envelope
+  /// pattern in `bd_cli_service_actuator_test.dart`'s own `applyGraph`
+  /// coverage) — `StationBeadWriter.createMolecule`'s pour reads this back
+  /// through `BdCliService.applyGraph`. A test stages the ids it expects
+  /// `instantiateMolecule`'s plan-local keys to receive.
+  Map<String, String> graphApplyIds = const <String, String>{};
+
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
@@ -56,8 +64,21 @@ class RecordingBdRunner implements BdRunner {
       return Future<BdResult>.value(
         BdResult(
           exitCode: 1,
-          stdout:
-              '{"schema_version":1,"data":{"error":"$failCreateError"}}',
+          stdout: '{"schema_version":1,"data":{"error":"$failCreateError"}}',
+          stderr: '',
+        ),
+      );
+    }
+    if (sub == 'create' && args.length > 1 && args[1] == '--graph') {
+      // `bd create --graph <plan-file> [--ephemeral] --json` — a graph-apply
+      // pour reports a `key → id` MAP (`data.ids`), never a single `data.id`.
+      return Future<BdResult>.value(
+        BdResult(
+          exitCode: 0,
+          stdout: jsonEncode({
+            'schema_version': 1,
+            'data': {'ids': graphApplyIds},
+          }),
           stderr: '',
         ),
       );
@@ -83,9 +104,18 @@ class RecordingBdRunner implements BdRunner {
 
   // ---- assertion helpers --------------------------------------------------
 
-  /// All calls whose leading subcommand is [sub].
+  /// All calls whose leading subcommand is [sub]. For `'create'`, this
+  /// INCLUDES graph-apply pours (`create --graph …`) — use [graphApplyCalls]
+  /// to isolate those from a plain single-bead `create`.
   List<List<String>> callsFor(String sub) =>
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
+
+  /// The `bd create --graph <plan-file> …` pours only (`StationBeadWriter
+  /// .createMolecule`'s mint) — disjoint from [callsFor]`('create')`'s plain
+  /// single-bead creates, which never carry `--graph`.
+  List<List<String>> get graphApplyCalls => calls
+      .where((c) => c.length > 1 && c[0] == 'create' && c[1] == '--graph')
+      .toList();
 
   /// True if EVERY mutation carried `--actor grid-controller`.
   bool get everyMutationHasActor {

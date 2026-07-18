@@ -120,6 +120,17 @@ class StationBeadWriter {
   static const String gateRegateCountKey = 'regate_count';
   static const String gateRegatedAtKey = 'regated_at';
 
+  /// The molecule model's owning-session JOIN keys (`DESIGN-tg-pm6.md` R1/R6)
+  /// — string literals here (grid_runtime cannot import grid_engine's
+  /// `MoleculeCircuitKeys`/`MoleculeStepKeys`; the dependency arc is
+  /// one-directional), kept wire-identical to them. [moleculeSessionKey]
+  /// stamps a `type=molecule` bead; [stepSessionKey] stamps a `type=step`
+  /// bead — DIFFERENT wire strings by design (`grid.circuit.*` vs
+  /// `grid.step.*`), so [createMolecule]'s dedup probe and [reapMolecule]'s
+  /// collection scan both check EITHER key against the matching [IssueType].
+  static const String moleculeSessionKey = 'grid.circuit.session';
+  static const String stepSessionKey = 'grid.step.session';
+
   /// Mints a the_grid-owned session bead for work bead [workBeadId] in [substation],
   /// stamped with the owned substation marker from birth, and returns its id.
   ///
@@ -137,7 +148,10 @@ class StationBeadWriter {
     // Re-check ownership of the REQUESTED substation before the create — the id does
     // not exist yet, so the substation the caller declares is the authority, and it
     // must be owned.
-    if (!_ownership.ownsTarget(id: '$substation-pending', metadata: {rigKey: substation})) {
+    if (!_ownership.ownsTarget(
+      id: '$substation-pending',
+      metadata: {rigKey: substation},
+    )) {
       _refuse('create', substation, substation);
     }
     final id = await _bd.create(title: title, type: IssueType.session);
@@ -192,8 +206,10 @@ class StationBeadWriter {
       _refuse('create', substation, substation);
     }
     // Mint-dedup: reuse+refresh an existing OPEN gate for this (session, node).
-    final existing =
-        await _findOpenGate(sessionId: sessionId, nodePath: nodePath);
+    final existing = await _findOpenGate(
+      sessionId: sessionId,
+      nodePath: nodePath,
+    );
     if (existing != null) {
       final priorCount =
           int.tryParse('${existing.metadata[gateRegateCountKey] ?? ''}') ?? 0;
@@ -223,6 +239,104 @@ class StationBeadWriter {
       },
     );
     return id;
+  }
+
+  /// Mints a the_grid-owned MOLECULE — the durable, graph-shaped mint
+  /// parallel to [createSession]/[createGate] (`DESIGN-tg-pm6.md` R6): one
+  /// `bd create --graph` pour = one Dolt transaction
+  /// (`BdCliService.applyGraph`, `ephemeral: false` — Decided item 1:
+  /// durable-until-session-close, never a wisp). [plan] is
+  /// `instantiateMolecule`'s pure output (grid_engine's cook's-role compile
+  /// step — this chokepoint never imports it and stays domain-free; it only
+  /// pours the plan and guards ownership + dedup, exactly like it does for a
+  /// session or a gate).
+  ///
+  /// **Fail-closed BEFORE the wire, per node** (mirrors [batch]'s per-line
+  /// loop: a batch is one transaction, so a single unowned target must poison
+  /// the WHOLE pour, not just its own row). [plan]'s nodes are pre-mint — no
+  /// real id exists yet — so each is checked the same way [createSession]/
+  /// [createGate] check their own not-yet-existing target: against the
+  /// REQUESTED [substation] (belt-and-suspenders with any `rig` the node's
+  /// own metadata might carry). A node parented onto an EXISTING bead
+  /// ([GraphNode.parentId] — `instantiateMolecule`'s root node parents onto
+  /// the owning session) must ALSO itself be an owned bead: never silently
+  /// nest a molecule under a foreign session.
+  ///
+  /// **Mint-dedup on re-entry** (the [_findOpenGate] precedent, tg-i08):
+  /// serialized on [sessionId] (D-1, extended past single beads to a mint
+  /// operation) so two concurrent [createMolecule] calls for the SAME session
+  /// cannot both observe "nothing minted yet" and both pour — the second
+  /// chains behind the first's dedup-probe-then-pour exactly as a same-id
+  /// [update] would. The probe itself reads the OWN store via the safe
+  /// snapshot path (never `bd show`) for an OPEN `type=molecule`/`type=step`
+  /// bead already stamped with [sessionId]; when found, a prior pour already
+  /// landed (a crashed or re-entered mint) and this call returns an EMPTY id
+  /// map rather than pouring a duplicate graph — the persisted beads are the
+  /// source of truth from here; a caller re-derives bead ids from the
+  /// state-store JOIN projection (R5a), never from this return value on the
+  /// dedup path.
+  Future<Map<String, String>> createMolecule(
+    GraphApplyPlan plan, {
+    required String substation,
+    required String sessionId,
+  }) async {
+    // `async` so a fail-closed throw below surfaces as a rejected future (not
+    // a synchronous throw at the call site) — mirrors [update]'s own note.
+    if (plan.nodes.isEmpty) {
+      throw ArgumentError.value(
+        plan,
+        'plan',
+        'createMolecule requires at least one node',
+      );
+    }
+    // Re-check ownership BEFORE any node is wired — per node, so one foreign
+    // target (declared substation OR an existing parent bead) poisons the
+    // whole pour before the first byte reaches bd.
+    for (final node in plan.nodes) {
+      if (!_ownership.ownsTarget(
+        id: '$substation-pending',
+        metadata: {rigKey: substation, ...node.metadata},
+      )) {
+        _refuse('create', node.key, substation);
+      }
+      final parentId = node.parentId;
+      if (parentId != null) {
+        _assertOwned('create', parentId, const {});
+      }
+    }
+    return _serializedMulti({sessionId}, () async {
+      if (await _moleculeAlreadyMinted(sessionId: sessionId)) {
+        return const <String, String>{};
+      }
+      return _bd.applyGraph(plan, ephemeral: false);
+    });
+  }
+
+  /// Session-close collection for the molecule model (item 1): `bd purge`
+  /// reaps only ephemerals, and [createMolecule] pours are deliberately
+  /// PERSISTENT (never wisps), so a completed session's molecule/step beads
+  /// need their OWN collection — this scans the OWN store for every OPEN
+  /// `type=molecule`/`type=step` bead stamped with [sessionId] and closes
+  /// EXACTLY that set through the grouped [batch] path (one transaction,
+  /// per-line ownership-checked — fail-closed — and D-1 serialized). Never
+  /// touches the entire store, a different session's beads, or an
+  /// already-closed bead.
+  ///
+  /// No separate `substation` parameter: [batch] already derives and asserts
+  /// ownership from each matched bead's OWN id prefix, so a bead that somehow
+  /// carries a foreign id refuses the WHOLE reap exactly like an unowned
+  /// [createMolecule] node does.
+  ///
+  /// Best-effort on the scan (mirrors [_findOpenGate]): a snapshot-read
+  /// failure closes nothing rather than crashing session close; the beads
+  /// stay open for a later reap attempt. An empty match set — a flat-mode
+  /// session, or a molecule already reaped — is a silent no-op.
+  Future<void> reapMolecule({required String sessionId}) async {
+    final matched = await _moleculeBeadsFor(sessionId: sessionId);
+    if (matched.isEmpty) return;
+    await batch([
+      for (final bead in matched) (id: bead.id, line: 'close ${bead.id}'),
+    ]);
   }
 
   /// A lifecycle `bd update --metadata <json>` (merge semantics; works on
@@ -268,9 +382,10 @@ class StationBeadWriter {
   Future<void> close(String id, {String? reason}) async {
     _assertOwned('close', id, const {});
     return _serialized(id, () async {
-      await _bd.update(id, metadata: {
-        closedAtKey: _clock().toUtc().toIso8601String(),
-      });
+      await _bd.update(
+        id,
+        metadata: {closedAtKey: _clock().toUtc().toIso8601String()},
+      );
       await _bd.close(id, reason: reason);
     });
   }
@@ -362,6 +477,39 @@ class StationBeadWriter {
       // Best-effort: a snapshot-read failure must never block a real gate mint.
     }
     return null;
+  }
+
+  /// True when an OPEN `type=molecule`/`type=step` bead already carries
+  /// [sessionId] in the molecule-model JOIN keys — [createMolecule]'s
+  /// dedup probe. A read failure is treated as "not yet minted" (best-effort,
+  /// mirrors [_findOpenGate]: a probe failure must never block a legitimate
+  /// mint).
+  Future<bool> _moleculeAlreadyMinted({required String sessionId}) async =>
+      (await _moleculeBeadsFor(sessionId: sessionId)).isNotEmpty;
+
+  /// The OPEN molecule/step beads stamped with [sessionId] — the shared scan
+  /// [_moleculeAlreadyMinted] and [reapMolecule] both read. Reads the OWN
+  /// state store via the safe snapshot path (never `bd show` on a controller
+  /// path); returns an empty list on ANY read error so both callers degrade
+  /// gracefully instead of throwing (mirrors [_findOpenGate]).
+  Future<List<Bead>> _moleculeBeadsFor({required String sessionId}) async {
+    final matched = <Bead>[];
+    try {
+      final export = await _bd.exportAll();
+      for (final bead in export.beads) {
+        if (bead.isClosed) continue;
+        final owns =
+            (bead.issueType == IssueType.molecule &&
+                bead.metadata[moleculeSessionKey] == sessionId) ||
+            (bead.issueType == IssueType.step &&
+                bead.metadata[stepSessionKey] == sessionId);
+        if (owns) matched.add(bead);
+      }
+    } catch (_) {
+      // Best-effort: a snapshot-read failure must never block a mint or
+      // crash a session close.
+    }
+    return matched;
   }
 
   void _assertOwned(
