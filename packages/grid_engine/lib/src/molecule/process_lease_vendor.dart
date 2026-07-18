@@ -126,14 +126,17 @@ abstract class ProcessLeaseVendor {
 /// but choosing it is the composer's decision to make explicitly (mount one),
 /// never this call's decision to make for them.
 ///
-/// Uses the TREE verb (`dependOnInheritedSeedOfExactType`), not the effect
-/// verb: a `CapabilityHost` reads this at BUILD time (mirrors how
-/// `InheritedCircuit`, R2, is consulted), the same way `session_scope.dart`
-/// provides both as nested `InheritedSeed`s. Host wiring — actually calling
-/// this from `CapabilityHost` — lands in `pm6-r5b-host`; this is the assertion
-/// itself, unit-tested at the seam level in this rung.
+/// Uses the EFFECT verb (`getInheritedSeedOfExactType`), not the tree verb: a
+/// `CapabilityHost` consults this OFF `build`, in the async report/persist
+/// path (`_persistStarted`, mirroring `_moleculeTarget`'s own
+/// `InheritedCircuit` read one method above) — a one-shot presence guard, not
+/// a value the host must rebuild on. Registering a `dependOn` there would
+/// couple every daemon host that ever reported `AllocationStarted` to the
+/// vendor's object identity (no `==` override), so any kernel rebuild that
+/// re-instantiates the vendor would fire a spurious `didChangeDependencies`
+/// on an already-live process.
 ProcessLeaseVendor requireProcessLeaseVendor(TreeContext context) {
-  final vendor = context.dependOnInheritedSeedOfExactType<ProcessLeaseVendor>();
+  final vendor = context.getInheritedSeedOfExactType<ProcessLeaseVendor>();
   if (vendor == null) {
     throw StateError(
       'No ProcessLeaseVendor is mounted ambient to this branch. A '

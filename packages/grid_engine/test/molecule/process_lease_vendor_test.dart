@@ -29,8 +29,8 @@ void main() {
       );
     });
 
-    test('resolves the mounted vendor via the TREE verb (dependOn…), never '
-        'throwing', () {
+    test('resolves the mounted vendor via the EFFECT verb (getInherited…), '
+        'never throwing', () {
       const vendor = SelfManagedProcessVendor(
         spawn: _neverSpawn,
         dispatch: _neverDispatch,
