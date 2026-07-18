@@ -397,6 +397,18 @@ void main() {
       // — no write exists on this path at all.
       expect(projected['tg-1/harness']!.state, StepState.ready);
     });
+
+    // NOT COVERED (ADR-0000 A52, unresolved): a SECOND successive
+    // invalidation round from the SAME recurring `route` source. Under the
+    // delivered WIDTH semantics `derivedGeneration` would stay `1` on that
+    // second round too (still exactly one distinct invalidating source), so
+    // the re-key this test proves for round one does NOT repeat — the
+    // "increments monotonically on repeated invalidation" acceptance
+    // criterion (`DESIGN-tg-pm6.md` §8) is unmet for the common
+    // single-recurring-source case. A golden driving two successive rounds
+    // and asserting the key changes each time would fail under current
+    // semantics; it is deliberately not added here (would red-gate the
+    // house build) pending A52's resolution.
   });
 
   group('effectiveCursor — the collapse: demote to pending under the cap, '

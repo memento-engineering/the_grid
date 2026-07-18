@@ -33,6 +33,21 @@
 /// exactly the case [kMaxReworkRounds] exists to bound: too many simultaneous
 /// objections park the work for a human rather than looping it forever.
 ///
+/// **This is a stand-in, not the ratified axis — UNRESOLVED, see ADR-0000
+/// A52.** `DESIGN-tg-pm6.md` §8 names the intended axis as a TEMPORAL count of
+/// invalidation *rounds*, monotonic across successive re-runs of the SAME
+/// recurring source (mirroring the flat model's own `Rewind` counter,
+/// `capability_host.dart:588`, +1 per rewind). WIDTH is a different axis: a
+/// single recurring critic holds width at `1` forever (never escalates — the
+/// exact loop [kMaxReworkRounds] exists to bound), and it also means
+/// `rewindCount` never changes across successive rounds from that one source,
+/// so the [effectiveCursor] re-key this file exists to provide (compensation
+/// item 1, §8) does not fire past the FIRST invalidation either. A 2-3-critic
+/// committee failing all at once on its FIRST review instead GATES
+/// immediately (width reaches [kMaxReworkRounds] with zero rework rounds
+/// spent) — see A52 for both directions, proven against this file's own
+/// fixtures. Do not wire this live (R5b/R5) before A52 is resolved.
+///
 /// Reads ONLY structured stamps — [ResultKeys.grade], never
 /// [ResultKeys.rationale] — the boolean-not-prose rule (pow-hf2,
 /// institutionalized structurally in `molecule_codec_test.dart`). A
@@ -180,7 +195,9 @@ Set<String> invalidatedNodes(
 /// `rewindCount`, and NOT read back from any durable counter (there is none).
 /// Zero when [path] is not currently invalidated by anything. See this file's
 /// library doc for why a snapshot-pure derivation counts WIDTH (independent
-/// simultaneous objections) rather than a temporal round number.
+/// simultaneous objections) rather than a temporal round number — **and for
+/// why that is an unresolved deviation from the ratified axis, ADR-0000
+/// A52**.
 int derivedGeneration(
   Circuit circuit,
   CircuitCursor projected,
@@ -216,6 +233,13 @@ int derivedGeneration(
 /// carries (always `0` under the molecule codec, R1). Pure, total, cheap,
 /// idempotent (Q4): calling this twice on the identical snapshot returns
 /// value-equal cursors.
+///
+/// **Known gap, ADR-0000 A52:** because [derivedGeneration] counts WIDTH, not
+/// temporal rounds, a node held back by ONE recurring source is demoted with
+/// the SAME `rewindCount` every round (no re-key past the first invalidation,
+/// [derivedEscalation] never fires), while a node failing SEVERAL sources at
+/// once on its first pass can reach [kMaxReworkRounds] and [StepState.gated]
+/// with zero rework rounds spent. Unresolved pending Nico.
 CircuitCursor effectiveCursor(
   Circuit circuit,
   CircuitCursor projected,
