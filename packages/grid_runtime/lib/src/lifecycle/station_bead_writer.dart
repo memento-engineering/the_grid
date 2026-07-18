@@ -130,6 +130,12 @@ class StationBeadWriter {
   /// collection scan both check EITHER key against the matching [IssueType].
   static const String moleculeSessionKey = 'grid.circuit.session';
   static const String stepSessionKey = 'grid.step.session';
+  static const String stepPathKey = 'grid.step.path';
+  static const String stepStateKey = 'grid.step.state';
+  static const String stepStartedAtKey = 'grid.step.startedAt';
+  static const String stepFinishedAtKey = 'grid.step.finishedAt';
+  static const String stepDurationMsKey = 'grid.step.durationMs';
+  static const String stepFailureReasonKey = 'grid.step.failureReason';
 
   /// Mints a the_grid-owned session bead for work bead [workBeadId] in [substation],
   /// stamped with the owned substation marker from birth, and returns its id.
@@ -312,6 +318,52 @@ class StationBeadWriter {
     });
   }
 
+  /// Mints the A52 Ratified successor incarnation bead for an invalidated
+  /// terminal molecule step. The prior bead stays terminal with its verdict
+  /// stamps; the new `type=step` bead carries the same structural identity and
+  /// one `supersedes` edge back to the prior incarnation.
+  Future<String> createStepSuccessor({
+    required String substation,
+    required Bead priorStep,
+    required int currentDepth,
+    required int maxDepth,
+  }) async {
+    if (priorStep.issueType != IssueType.step) {
+      throw ArgumentError.value(priorStep.id, 'priorStep', 'must be type=step');
+    }
+    if (currentDepth >= maxDepth) {
+      throw StateError('rework cap reached ($currentDepth/$maxDepth)');
+    }
+    if (!_ownership.ownsTarget(
+      id: '$substation-pending',
+      metadata: {rigKey: substation},
+    )) {
+      _refuse('create', substation, substation);
+    }
+    _assertOwned('create', priorStep.id, const {});
+    return _serializedMulti({priorStep.id}, () async {
+      final existing = await _findOpenSuccessor(priorStep.id);
+      if (existing != null) return existing.id;
+      final id = await _bd.create(title: priorStep.title, type: IssueType.step);
+      final metadata = <String, String>{
+        rigKey: substation,
+        for (final entry in priorStep.metadata.entries)
+          if (entry.value is String &&
+              entry.key != stepStateKey &&
+              entry.key != stepStartedAtKey &&
+              entry.key != stepFinishedAtKey &&
+              entry.key != stepDurationMsKey &&
+              entry.key != stepFailureReasonKey &&
+              !entry.key.startsWith('grid.result.'))
+            entry.key: entry.value as String,
+        stepStateKey: 'pending',
+      };
+      await _bd.update(id, metadata: metadata);
+      await _bd.depAdd(id, priorStep.id, type: DependencyType.supersedes);
+      return id;
+    });
+  }
+
   /// Session-close collection for the molecule model (item 1): `bd purge`
   /// reaps only ephemerals, and [createMolecule] pours are deliberately
   /// PERSISTENT (never wisps), so a completed session's molecule/step beads
@@ -334,8 +386,12 @@ class StationBeadWriter {
   Future<void> reapMolecule({required String sessionId}) async {
     final matched = await _moleculeBeadsFor(sessionId: sessionId);
     if (matched.isEmpty) return;
+    final chain = await _supersedesChainFor(matched);
+    final beads = {
+      for (final bead in [...matched, ...chain]) bead.id: bead,
+    };
     await batch([
-      for (final bead in matched) (id: bead.id, line: 'close ${bead.id}'),
+      for (final bead in beads.values) (id: bead.id, line: 'close ${bead.id}'),
     ]);
   }
 
@@ -486,6 +542,52 @@ class StationBeadWriter {
   /// mint).
   Future<bool> _moleculeAlreadyMinted({required String sessionId}) async =>
       (await _moleculeBeadsFor(sessionId: sessionId)).isNotEmpty;
+
+  Future<Bead?> _findOpenSuccessor(String priorStepId) async {
+    try {
+      final export = await _bd.exportAll();
+      final beadsById = {for (final bead in export.beads) bead.id: bead};
+      for (final dep in export.dependencies) {
+        if (dep.type != DependencyType.supersedes ||
+            dep.dependsOnId != priorStepId) {
+          continue;
+        }
+        final bead = beadsById[dep.issueId];
+        if (bead != null && !bead.isClosed) return bead;
+      }
+    } catch (_) {
+      // Best-effort: a snapshot-read failure must never block a successor mint.
+    }
+    return null;
+  }
+
+  Future<List<Bead>> _supersedesChainFor(List<Bead> roots) async {
+    if (roots.isEmpty) return const [];
+    try {
+      final export = await _bd.exportAll();
+      final beadsById = {for (final bead in export.beads) bead.id: bead};
+      final successorsByPrior = <String, List<String>>{};
+      for (final dep in export.dependencies) {
+        if (dep.type != DependencyType.supersedes) continue;
+        (successorsByPrior[dep.dependsOnId] ??= <String>[]).add(dep.issueId);
+      }
+      final seen = {for (final bead in roots) bead.id};
+      final queue = roots.map((b) => b.id).toList();
+      final found = <Bead>[];
+      for (var i = 0; i < queue.length; i++) {
+        for (final id in successorsByPrior[queue[i]] ?? const <String>[]) {
+          if (!seen.add(id)) continue;
+          queue.add(id);
+          final bead = beadsById[id];
+          if (bead != null && !bead.isClosed) found.add(bead);
+        }
+      }
+      return found;
+    } catch (_) {
+      // Best-effort: a snapshot-read failure leaves successors for a later reap.
+      return const [];
+    }
+  }
 
   /// The OPEN molecule/step beads stamped with [sessionId] — the shared scan
   /// [_moleculeAlreadyMinted] and [reapMolecule] both read. Reads the OWN

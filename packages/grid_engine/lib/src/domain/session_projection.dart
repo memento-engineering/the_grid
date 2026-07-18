@@ -115,5 +115,11 @@ abstract class SessionProjection with _$SessionProjection {
     /// (`molecule_codec.dart`), run once over exactly this list by a LATER
     /// rung (R5, the drain seam).
     @Default(<Bead>[]) List<Bead> moleculeBeads,
+
+    /// This session's OWN dependency edges whose issue and target are both in
+    /// [moleculeBeads]. A52 (Ratified a2, ADR-0000) makes `supersedes` edges
+    /// the durable incarnation-round structure, so `live_frontier.dart` derives
+    /// generation from graph structure rather than from mutable metadata.
+    @Default(<BeadDependency>[]) List<BeadDependency> moleculeDependencies,
   }) = _SessionProjection;
 }

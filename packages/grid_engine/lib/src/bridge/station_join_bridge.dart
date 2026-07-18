@@ -250,6 +250,7 @@ class StationJoinBridge {
   ) {
     final workBeadBySessionId = _workBeadIdBySessionId(sessions);
     final beadsByWorkBead = <String, List<Bead>>{};
+    final workBeadByMoleculeBeadId = <String, String>{};
     for (final bead in state.beadsById.values) {
       final String? sessionId;
       if (bead.issueType == IssueType.molecule) {
@@ -263,11 +264,22 @@ class StationJoinBridge {
       final workBeadId = workBeadBySessionId[sessionId];
       if (workBeadId == null) continue; // stamped for an unknown session.
       (beadsByWorkBead[workBeadId] ??= <Bead>[]).add(bead);
+      workBeadByMoleculeBeadId[bead.id] = workBeadId;
+    }
+    final depsByWorkBead = <String, List<BeadDependency>>{};
+    for (final dep in state.dependencies) {
+      final workBeadId = workBeadByMoleculeBeadId[dep.issueId];
+      if (workBeadId == null) continue;
+      if (workBeadByMoleculeBeadId[dep.dependsOnId] != workBeadId) continue;
+      (depsByWorkBead[workBeadId] ??= <BeadDependency>[]).add(dep);
     }
     beadsByWorkBead.forEach((workBeadId, beads) {
       final projection = sessions[workBeadId];
       if (projection != null) {
-        sessions[workBeadId] = projection.copyWith(moleculeBeads: beads);
+        sessions[workBeadId] = projection.copyWith(
+          moleculeBeads: beads,
+          moleculeDependencies: depsByWorkBead[workBeadId] ?? const [],
+        );
       }
     });
   }

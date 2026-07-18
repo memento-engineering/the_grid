@@ -52,18 +52,9 @@
 /// never reinterpreted mid-round; only a FRESH mint ever reads
 /// [CircuitMintMode].
 ///
-/// **R4's `live_frontier.dart` derivation (`effectiveCursor`/
-/// `invalidatedNodes`/`derivedEscalation`) is DELIBERATELY NOT wired here.**
-/// It ships pure and offline-tested (`test/molecule/live_frontier_test.dart`)
-/// but `derivedGeneration` counts simultaneous-stamp WIDTH, not the ratified
-/// TEMPORAL rework-round count `DESIGN-tg-pm6.md` §8 mandates — an
-/// unresolved deviation logged pending Nico at ADR-0000 A52, whose own
-/// recorded disposition is explicit: "R5b/R5 must not wire
-/// `effectiveCursor`/`derivedEscalation` live before this is resolved." A
-/// molecule session's [build] therefore projects its RAW cursor
-/// (`projectMoleculeCursor`, undemoted) — forward motion works exactly like
-/// the flat path; backward motion (rework/invalidation) is not yet live for
-/// molecule-mode sessions. Re-wire once A52 is ratified.
+/// A52 Ratified wires R4 live for molecule sessions: invalidated terminal
+/// steps mint successor incarnation beads on a `supersedes` chain, and
+/// `live_frontier.dart` derives generation from that chain depth.
 library;
 
 import 'dart:async';
@@ -74,11 +65,14 @@ import 'package:beads_dart/beads_dart.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
+import '../domain/rework.dart' show kMaxReworkRounds;
 import '../domain/substation_config.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../molecule/bead_path_key.dart';
 import '../molecule/inherited_circuit.dart';
+import '../molecule/live_frontier.dart'
+    show derivedEscalation, effectiveCursor, invalidatedNodes;
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
 import '../sdk/allocation.dart';
@@ -224,6 +218,7 @@ class SessionScopeState extends State<SessionScope> {
   ///   re-armed, cursor stuck `gated` for 30+ min, operator recovery = a station
   ///   bounce). LOUD or GONE (ADR-0008 D3).
   final Set<String> _rearming = {};
+  final Set<String> _mintingSuccessorForPath = {};
 
   /// Whether the CURRENTLY adopted session was last observed with a node
   /// parked `gated` (tg-x1j v2) — refreshed every `build()` where
@@ -643,6 +638,55 @@ class SessionScopeState extends State<SessionScope> {
     scheduleMicrotask(() => unawaited(_rearm(id, nodePath, moleculeTarget)));
   }
 
+  void _scheduleStepSuccessorMint({
+    required String sessionId,
+    required String nodePath,
+    required Bead priorStep,
+    required int currentDepth,
+  }) {
+    if (_mintingSuccessorForPath.contains(nodePath)) return;
+    _mintingSuccessorForPath.add(nodePath);
+    scheduleMicrotask(
+      () => unawaited(
+        _mintStepSuccessor(
+          sessionId: sessionId,
+          nodePath: nodePath,
+          priorStep: priorStep,
+          currentDepth: currentDepth,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _mintStepSuccessor({
+    required String sessionId,
+    required String nodePath,
+    required Bead priorStep,
+    required int currentDepth,
+  }) async {
+    final ctx = _ctx;
+    if (ctx == null) {
+      _mintingSuccessorForPath.remove(nodePath);
+      return;
+    }
+    try {
+      await ctx.writer.createStepSuccessor(
+        substation: ctx.stateSubstation,
+        priorStep: priorStep,
+        currentDepth: currentDepth,
+        maxDepth: kMaxReworkRounds,
+      );
+    } on Object catch (error) {
+      _flare('session.stepSuccessorMintFailed', {
+        'sessionId': sessionId,
+        'nodePath': nodePath,
+        'reason': truncateReason('$error'),
+      });
+    } finally {
+      _mintingSuccessorForPath.remove(nodePath);
+    }
+  }
+
   /// The re-arm write itself (tg-boq): flips the parked node to `pending`, then
   /// clears the in-flight guard so the NEXT build retries on failure and a later
   /// gate cycle can re-arm again. A dropped write is LOUD (a flare through the
@@ -740,6 +784,7 @@ class SessionScopeState extends State<SessionScope> {
       _reworkScheduled = false;
       _terminalScheduled = false;
       _rearming.clear();
+      _mintingSuccessorForPath.clear();
       _lastKnownGated = false;
       _joinedOnce = false;
       _mintAttempts = 0; // round N+1 gets its own fresh mint budget (tg-6nf).
@@ -800,6 +845,7 @@ class SessionScopeState extends State<SessionScope> {
   @override
   void dispose() {
     _cancelled = true;
+    _mintingSuccessorForPath.clear();
   }
 
   @override
@@ -855,26 +901,31 @@ class SessionScopeState extends State<SessionScope> {
         .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
 
     // The drain seam's molecule arm (`DESIGN-tg-pm6.md` §12, R5): project this
-    // session's OWN `type=molecule`/`type=step` beads (R5a's join bucket) to
-    // the SAME in-memory shape the flat codec yields. R4's derivation
-    // (invalidation demotion + the derived generation, `effectiveCursor`/
-    // `invalidatedNodes`/`derivedEscalation`) is DELIBERATELY NOT layered on
-    // top here — see this class's library doc and ADR-0000 A52: the axis it
-    // derives is not yet the ratified one, and its own guard says not to wire
-    // it live before that is resolved. So the RAW projected cursor is what
-    // `CircuitScope`/`frontier.dart` consume — forward motion works exactly
-    // like the flat path; backward motion (rework/invalidation) is not yet
-    // live for molecule-mode sessions. The flat `else` arm is BYTE-FOR-BYTE
-    // today's code (Decided conflict 2's "absent key ⇒ flat", by
-    // construction).
+    // session's OWN molecule graph into the same in-memory shape the flat path
+    // consumes, then layer A52 Ratified live derivation over it. The flat `else`
+    // arm remains the absent-key drain guarantee by construction.
     final isMolecule = joined?.isMolecule ?? false;
     final CircuitCursor cursor;
     final Map<String, Map<String, String>> results;
     var beadIdByNodePath = const <String, String>{};
-    const invalidated = <String>{};
+    var invalidated = const <String>{};
+    var heldForSuccessor = const <String>{};
+    var moleculeProjectedCursor = const <String, NodeCursor>{};
     if (isMolecule) {
-      final projected = projectMoleculeCursor(joined!.moleculeBeads);
+      final projected = projectMoleculeCursor(
+        joined!.moleculeBeads,
+        dependencies: joined.moleculeDependencies,
+      );
+      moleculeProjectedCursor = projected.cursor;
       beadIdByNodePath = projected.beadIdByNodePath;
+      final depthByPath = supersedesDepthByPath(
+        joined.moleculeBeads,
+        joined.moleculeDependencies,
+      );
+      final activeByPath = activeStepBeadsByPath(
+        joined.moleculeBeads,
+        joined.moleculeDependencies,
+      );
       // ResultKeys is reused VERBATIM on the step bead (R1) — each step
       // bead's OWN `grid.result.<itsOwnNodePath>.*` keys project through the
       // SAME `projectCircuitResults` the flat codec uses on the session bead;
@@ -885,7 +936,47 @@ class SessionScopeState extends State<SessionScope> {
         stepResults.addAll(projectCircuitResults(b));
       }
       results = stepResults;
-      cursor = projected.cursor;
+      invalidated = invalidatedNodes(
+        seed.circuit,
+        projected.cursor,
+        results,
+        seed.bead.id,
+        circuitById: registry?.circuit ?? (String _) => null,
+        supersedesDepthByPath: depthByPath,
+      );
+      final effective = effectiveCursor(
+        seed.circuit,
+        projected.cursor,
+        results,
+        seed.bead.id,
+        circuitById: registry?.circuit ?? (String _) => null,
+        supersedesDepthByPath: depthByPath,
+      );
+      final holds = <String>{};
+      for (final path in invalidated) {
+        final depth = depthByPath[path] ?? 0;
+        if (depth >= kMaxReworkRounds) continue;
+        final priorStep = activeByPath[path];
+        final node = projected.cursor[path];
+        if (priorStep == null || node == null || !node.isPositiveTerminal) {
+          continue;
+        }
+        _scheduleStepSuccessorMint(
+          sessionId: id,
+          nodePath: path,
+          priorStep: priorStep,
+          currentDepth: depth,
+        );
+        holds.add(path);
+      }
+      heldForSuccessor = holds;
+      cursor = {
+        ...effective,
+        for (final path in holds)
+          path: (effective[path] ?? const NodeCursor()).copyWith(
+            state: StepState.gated,
+          ),
+      };
     } else {
       cursor = joined?.cursor ?? const <String, NodeCursor>{};
       results = joined?.results ?? const <String, Map<String, String>>{};
@@ -922,32 +1013,45 @@ class SessionScopeState extends State<SessionScope> {
     // down; otherwise a positive terminal closes. Distinguishing
     // empty-because-broken from empty-because-complete is the whole point of D-5.
     if (registry != null && !_terminalScheduled) {
-      // R4's rework-cap belt (`derivedEscalation`, `DESIGN-tg-pm6.md` §8) is
-      // NOT consulted here for molecule sessions — see this class's library
-      // doc and ADR-0000 A52. Nothing yet surfaces a molecule-mode node past
-      // the ratified rework budget; that lands when A52 is resolved.
       if (!_terminalScheduled) {
-        final broken = firstBrokenNode(
-          seed.circuit,
-          cursor,
-          seed.bead.id,
-          circuitById: registry.circuit,
-        );
-        if (broken != null) {
-          // Capture-only (FT-1): record WHICH node exhausted + its reason (read
-          // from the cursor's persisted telemetry) beside the escalation marker.
-          // Read-only here; the write is scheduled off build (invariant 2).
-          final reason = truncateReason(
-            '${broken.nodePath}: ${broken.node.failureReason ?? ''}',
+        final derived = isMolecule && heldForSuccessor.isEmpty
+            ? derivedEscalation(
+                seed.circuit,
+                moleculeProjectedCursor,
+                results,
+                seed.bead.id,
+                circuitById: registry.circuit,
+                supersedesDepthByPath: supersedesDepthByPath(
+                  joined!.moleculeBeads,
+                  joined.moleculeDependencies,
+                ),
+              )
+            : null;
+        if (derived != null) {
+          _scheduleEscalation(id, '${derived.path}: ${derived.reason}');
+        } else {
+          final broken = firstBrokenNode(
+            seed.circuit,
+            cursor,
+            seed.bead.id,
+            circuitById: registry.circuit,
           );
-          _scheduleEscalation(id, reason);
-        } else if (isCircuitComplete(
-          seed.circuit,
-          cursor,
-          seed.bead.id,
-          circuitById: registry.circuit,
-        )) {
-          _scheduleClose(id);
+          if (broken != null) {
+            // Capture-only (FT-1): record WHICH node exhausted + its reason (read
+            // from the cursor's persisted telemetry) beside the escalation marker.
+            // Read-only here; the write is scheduled off build (invariant 2).
+            final reason = truncateReason(
+              '${broken.nodePath}: ${broken.node.failureReason ?? ''}',
+            );
+            _scheduleEscalation(id, reason);
+          } else if (isCircuitComplete(
+            seed.circuit,
+            cursor,
+            seed.bead.id,
+            circuitById: registry.circuit,
+          )) {
+            _scheduleClose(id);
+          }
         }
       }
     }

@@ -18,9 +18,12 @@ import 'package:test/test.dart';
 /// A work-graph snapshot from [beads] (every bead ready, for brevity) —
 /// mirrors `track_a_gate_test.dart`'s `_graph` / `join_bridge_test.dart`'s
 /// `graphOf`.
-GraphSnapshot _graph(List<Bead> beads) => GraphSnapshot.fromParts(
+GraphSnapshot _graph(
+  List<Bead> beads, {
+  List<BeadDependency> dependencies = const [],
+}) => GraphSnapshot.fromParts(
   beads: beads,
-  dependencies: const [],
+  dependencies: dependencies,
   readyIds: {for (final b in beads) b.id},
   capturedAt: DateTime(2026),
 );
@@ -151,6 +154,52 @@ void main() {
       );
       expect(molecule.moleculeBeads, hasLength(2));
     });
+
+    test(
+      'molecule-local supersedes dependencies project with the bead bucket',
+      () {
+        final work = FakeSnapshotSource(_graph([bead('w1'), bead('w2')]));
+        const local = BeadDependency(
+          issueId: 'st2',
+          dependsOnId: 'st1',
+          type: DependencyType.supersedes,
+        );
+        const crossSession = BeadDependency(
+          issueId: 'st2',
+          dependsOnId: 'other-step',
+          type: DependencyType.supersedes,
+        );
+        final state = FakeSnapshotSource(
+          _graph(
+            [
+              sessionBead(
+                id: 's1',
+                workBeadId: 'w1',
+                metadata: {SessionBeadKeys.model: kSessionModelMolecule},
+              ),
+              sessionBead(
+                id: 's2',
+                workBeadId: 'w2',
+                metadata: {SessionBeadKeys.model: kSessionModelMolecule},
+              ),
+              _stepBead('st1', sessionId: 's1', path: 'w1/build'),
+              _stepBead('st2', sessionId: 's1', path: 'w1/build'),
+              _stepBead('other-step', sessionId: 's2', path: 'w2/build'),
+            ],
+            dependencies: const [local, crossSession],
+          ),
+        );
+        final bridge = StationJoinBridge(work: work, state: state);
+        addTearDown(bridge.dispose);
+
+        final molecule = bridge.latest.sessionsByWorkBead['w1']!;
+        expect(molecule.moleculeDependencies, [local]);
+        expect(
+          bridge.latest.sessionsByWorkBead['w2']!.moleculeDependencies,
+          isEmpty,
+        );
+      },
+    );
 
     test('a step/molecule bead stamped for an UNKNOWN session is skipped, '
         'fail-closed (no crash, no stray bucket)', () {

@@ -146,12 +146,9 @@ const String kValidatesParam = 'validates';
 /// enum; a new swarm type is new circuit content, not new engine code.
 const String kSwarmParam = 'swarm';
 
-/// `DependencyType.supersedes` and `DependencyType.until` are RESERVED
-/// bd-native dependency vocabulary for a future rounds-materialization /
-/// daemon-lifetime model (`DESIGN-tg-pm6.md` §3 conflict 7) — NOT minted
-/// anywhere by this model. A rework round demotes and re-keys the SAME step
-/// bead (the derived generation, R4); minting a fresh incarnation bead per
-/// round would grow the molecule unboundedly and reshape identity, which
-/// Decided item 2 (topology-stable breadcrumb identity) forbids. Documented
-/// here, beside the vocabulary constants it sits next to, so a future reader
-/// finds the reservation without having to go back to the design doc prose.
+/// A52 (ADR-0000, Ratified a2 by Nico on 2026-07-18) materializes
+/// `DependencyType.supersedes` for molecule rework rounds: each invalidated
+/// terminal step mints a successor `type=step` bead that supersedes the prior
+/// incarnation. The chain is the round history; no `rewindCount` metadata key
+/// is introduced. `DependencyType.until` remains reserved for daemon lifetime
+/// modeling.

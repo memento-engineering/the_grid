@@ -64,6 +64,8 @@ CircuitResults _committeeResults(Iterable<String> failing) => {
 
 DateTime _clock() => DateTime.utc(2026, 7, 17);
 
+Map<String, int> _depths(int depth) => {'tg-1/build': depth};
+
 // --- the daemon fixture (mirrors rewind_arm_test.dart's _daemonSpec) --------
 
 /// `harness` is a dep-free DAEMON validated by `route` — the re-key isolation
@@ -137,6 +139,7 @@ void main() {
         const {},
         'tg-1',
         circuitById: _none,
+        supersedesDepthByPath: const {},
         now: _clock(),
       );
       expect(actual, expected);
@@ -156,6 +159,7 @@ void main() {
         results,
         'tg-1',
         circuitById: _none,
+        supersedesDepthByPath: const {},
         now: _clock(),
       );
       // build re-enters the frontier purely from the derivation; its
@@ -180,6 +184,7 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         {
           'tg-1/build',
@@ -201,6 +206,7 @@ void main() {
           },
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         isEmpty,
       );
@@ -221,6 +227,7 @@ void main() {
           staleResults,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         isEmpty,
       );
@@ -237,6 +244,7 @@ void main() {
           },
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         contains('tg-1/build'),
       );
@@ -268,6 +276,7 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         returnsNormally,
       );
@@ -278,6 +287,7 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         isEmpty,
       );
@@ -299,122 +309,122 @@ void main() {
         results,
         'tg-1',
         circuitById: _resolveInner,
+        supersedesDepthByPath: const {},
       );
       expect(invalidated, {'tg-1/inner/work', 'tg-1/inner/route'});
       expect(invalidated, isNot(contains('tg-1/inner')));
     });
   });
 
-  group('derivedGeneration — the derived incarnation axis widens '
-      'monotonically as independent objections accumulate', () {
-    test('1, 2, then 3 independently-F critics widen build\'s generation '
-        'monotonically: 1, 2, 3', () {
-      expect(
-        derivedGeneration(
-          _committee,
-          _committeeProjected,
-          _committeeResults(['critic-correctness']),
+  group(
+    'derivedGeneration — the derived incarnation axis is supersedes depth',
+    () {
+      test('one recurring critic derives generation 1 then 2 across two '
+          'successor rounds', () {
+        final results = _committeeResults(['critic-correctness']);
+        expect(
+          derivedGeneration(
+            _committee,
+            _committeeProjected,
+            results,
+            'tg-1',
+            path: 'tg-1/build',
+            circuitById: _none,
+            supersedesDepthByPath: _depths(1),
+          ),
+          1,
+        );
+        expect(
+          derivedGeneration(
+            _committee,
+            _committeeProjected,
+            results,
+            'tg-1',
+            path: 'tg-1/build',
+            circuitById: _none,
+            supersedesDepthByPath: _depths(2),
+          ),
+          2,
+        );
+      });
+
+      test('three first-round critics still spend only round depth 1', () {
+        expect(
+          derivedGeneration(
+            _committee,
+            _committeeProjected,
+            _committeeResults([
+              'critic-correctness',
+              'critic-security',
+              'critic-style',
+            ]),
+            'tg-1',
+            path: 'tg-1/build',
+            circuitById: _none,
+            supersedesDepthByPath: _depths(1),
+          ),
+          1,
+        );
+      });
+
+      test('zero for a node nothing currently invalidates', () {
+        expect(
+          derivedGeneration(
+            _committee,
+            _committeeProjected,
+            const {},
+            'tg-1',
+            path: 'tg-1/build',
+            circuitById: _none,
+            supersedesDepthByPath: const {},
+          ),
+          0,
+        );
+      });
+
+      test('re-keys a _daemonSpec-style daemon fixture: the derived generation '
+          "bump changes CircuitScope's reconcile-key material even though "
+          'NOTHING wrote to the daemon\'s node', () {
+        const projected = <String, NodeCursor>{
+          'tg-1/harness': NodeCursor(state: StepState.ready),
+          'tg-1/route': NodeCursor(state: StepState.complete),
+        };
+        final beforeKey = _keyMaterial(projected['tg-1/harness']!);
+
+        final results = {
+          'tg-1/route': {ResultKeys.grade: 'F'},
+        };
+        final effective = effectiveCursor(
+          _daemonSpec,
+          projected,
+          results,
           'tg-1',
-          path: 'tg-1/build',
           circuitById: _none,
-        ),
-        1,
-      );
-      expect(
-        derivedGeneration(
-          _committee,
-          _committeeProjected,
-          _committeeResults(['critic-correctness', 'critic-security']),
-          'tg-1',
-          path: 'tg-1/build',
-          circuitById: _none,
-        ),
-        2,
-      );
-      expect(
-        derivedGeneration(
-          _committee,
-          _committeeProjected,
-          _committeeResults([
-            'critic-correctness',
-            'critic-security',
-            'critic-style',
-          ]),
-          'tg-1',
-          path: 'tg-1/build',
-          circuitById: _none,
-        ),
-        3,
-      );
-    });
+          supersedesDepthByPath: {'tg-1/harness': 1},
+        );
+        final afterKey = _keyMaterial(effective['tg-1/harness']!);
 
-    test('zero for a node nothing currently invalidates', () {
-      expect(
-        derivedGeneration(
-          _committee,
-          _committeeProjected,
-          const {},
-          'tg-1',
-          path: 'tg-1/build',
-          circuitById: _none,
-        ),
-        0,
-      );
-    });
-
-    test('re-keys a _daemonSpec-style daemon fixture: the derived generation '
-        "bump changes CircuitScope's reconcile-key material even though "
-        'NOTHING wrote to the daemon\'s node', () {
-      const projected = <String, NodeCursor>{
-        'tg-1/harness': NodeCursor(state: StepState.ready),
-        'tg-1/route': NodeCursor(state: StepState.complete),
-      };
-      final beforeKey = _keyMaterial(projected['tg-1/harness']!);
-
-      final results = {
-        'tg-1/route': {ResultKeys.grade: 'F'},
-      };
-      final effective = effectiveCursor(
-        _daemonSpec,
-        projected,
-        results,
-        'tg-1',
-        circuitById: _none,
-      );
-      final afterKey = _keyMaterial(effective['tg-1/harness']!);
-
-      expect(
-        afterKey,
-        isNot(beforeKey),
-        reason:
-            'the reconcile key must '
-            'change so keyed reconcile tears the still-mounted daemon down and '
-            're-mounts it virgin',
-      );
-      expect(effective['tg-1/harness']!.state, StepState.pending);
-      expect(effective['tg-1/harness']!.rewindCount, 1);
-      // The still-mounted daemon's TRUE underlying cursor entry is untouched
-      // — no write exists on this path at all.
-      expect(projected['tg-1/harness']!.state, StepState.ready);
-    });
-
-    // NOT COVERED (ADR-0000 A52, unresolved): a SECOND successive
-    // invalidation round from the SAME recurring `route` source. Under the
-    // delivered WIDTH semantics `derivedGeneration` would stay `1` on that
-    // second round too (still exactly one distinct invalidating source), so
-    // the re-key this test proves for round one does NOT repeat — the
-    // "increments monotonically on repeated invalidation" acceptance
-    // criterion (`DESIGN-tg-pm6.md` §8) is unmet for the common
-    // single-recurring-source case. A golden driving two successive rounds
-    // and asserting the key changes each time would fail under current
-    // semantics; it is deliberately not added here (would red-gate the
-    // house build) pending A52's resolution.
-  });
+        expect(
+          afterKey,
+          isNot(beforeKey),
+          reason:
+              'the reconcile key must '
+              'change so keyed reconcile tears the still-mounted daemon down and '
+              're-mounts it virgin',
+        );
+        expect(effective['tg-1/harness']!.state, StepState.pending);
+        expect(effective['tg-1/harness']!.rewindCount, 1);
+        // The still-mounted daemon's TRUE underlying cursor entry is untouched
+        // — no write exists on this path at all.
+        expect(projected['tg-1/harness']!.state, StepState.ready);
+      });
+    },
+  );
 
   group('effectiveCursor — the collapse: demote to pending under the cap, '
       'GATE at the cap (derivedEscalation surfaces it instead)', () {
     test('below kMaxReworkRounds: build + its whole closure demote to '
-        'pending, keyed by the width', () {
+        'pending, keyed by supersedes depth', () {
       final results = _committeeResults([
         'critic-correctness',
         'critic-security',
@@ -425,6 +435,7 @@ void main() {
         results,
         'tg-1',
         circuitById: _none,
+        supersedesDepthByPath: _depths(1),
       );
       for (final path in [
         'tg-1/build',
@@ -433,7 +444,7 @@ void main() {
         'tg-1/critic-style',
       ]) {
         expect(effective[path]!.state, StepState.pending, reason: path);
-        expect(effective[path]!.rewindCount, 2, reason: path);
+        expect(effective[path]!.rewindCount, 1, reason: path);
       }
       expect(
         derivedEscalation(
@@ -442,6 +453,36 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: _depths(1),
+        ),
+        isNull,
+      );
+    });
+
+    test('three first-round critics do not gate at depth 1', () {
+      final results = _committeeResults([
+        'critic-correctness',
+        'critic-security',
+        'critic-style',
+      ]);
+      final effective = effectiveCursor(
+        _committee,
+        _committeeProjected,
+        results,
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: _depths(1),
+      );
+      expect(effective['tg-1/build']!.state, StepState.pending);
+      expect(effective['tg-1/build']!.rewindCount, 1);
+      expect(
+        derivedEscalation(
+          _committee,
+          _committeeProjected,
+          results,
+          'tg-1',
+          circuitById: _none,
+          supersedesDepthByPath: _depths(1),
         ),
         isNull,
       );
@@ -469,6 +510,7 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: _depths(kMaxReworkRounds),
         );
         expect(effective['tg-1/build']!.state, StepState.gated);
         expect(effective['tg-1/build']!.rewindCount, kMaxReworkRounds);
@@ -479,6 +521,7 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: _depths(kMaxReworkRounds),
         );
         expect(escalation, isNotNull);
         expect(escalation!.path, 'tg-1/build');
@@ -493,6 +536,7 @@ void main() {
             results,
             'tg-1',
             circuitById: _none,
+            supersedesDepthByPath: _depths(kMaxReworkRounds),
             now: _clock(),
           ),
           isEmpty,
@@ -511,6 +555,7 @@ void main() {
           const {},
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         same(_committeeProjected),
       );
@@ -525,6 +570,7 @@ void main() {
         results,
         'tg-1',
         circuitById: _none,
+        supersedesDepthByPath: _depths(1),
       );
       final b = effectiveCursor(
         _committee,
@@ -532,6 +578,7 @@ void main() {
         results,
         'tg-1',
         circuitById: _none,
+        supersedesDepthByPath: _depths(1),
       );
       expect(a, b);
     });
@@ -551,6 +598,7 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
+          supersedesDepthByPath: const {},
         ),
         returnsNormally,
       );
@@ -560,6 +608,7 @@ void main() {
         results,
         'tg-1',
         circuitById: _none,
+        supersedesDepthByPath: const {},
       );
       expect(effective['tg-1/build']!.state, StepState.pending);
     });
@@ -580,6 +629,7 @@ void main() {
             const {},
             'tg-1',
             circuitById: _none,
+            supersedesDepthByPath: const {},
             now: _clock(),
           ),
           eligibleSteps(
