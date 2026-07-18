@@ -65,29 +65,140 @@ class ReassembleBus extends StateNotifier<ReassembleRequest> {
 
 /// What a dev-mode re-composition DID — returned by `GridHandle.hotReload` /
 /// `GridHandle.hotRestart`, and (as [toJson]) the `value` body of the reload
-/// tool's reply.
-class ReassembleReport {
-  /// Creates the report.
-  const ReassembleReport({
+/// tool's reply when successful. A post-source-swap tree failure is represented
+/// as a refused variant so the VM-service caller receives a structured refusal
+/// instead of an unhandled microtask error.
+sealed class ReassembleReport {
+  /// Creates a successful report.
+  const factory ReassembleReport({
+    required ReassembleMode mode,
+    required int generation,
+    required int rebuiltBranches,
+  }) = ReassembleReportSuccess;
+
+  /// Creates the transactional-refuse report for a re-compose failure after the
+  /// VM has already accepted swapped sources.
+  const factory ReassembleReport.refusedAfterSourceSwap({
+    required ReassembleMode mode,
+    required int generation,
+    required String details,
+  }) = ReassembleReportRefused;
+
+  const ReassembleReport._();
+
+  /// Which verb ran.
+  ReassembleMode get mode;
+
+  /// The generation this re-composition produced (1 for the first reload).
+  int get generation;
+
+  /// How many branches the resulting flush rebuilt — the drained dirty set.
+  int get rebuiltBranches;
+
+  /// True when the station caught a post-source-swap re-compose failure.
+  bool get refused;
+
+  /// The operator-facing refusal text, present only when [refused] is true.
+  String? get error;
+
+  /// The machine-readable refusal reason, present only when [refused] is true.
+  String? get reason;
+
+  /// True when the swapped sources may have left the live tree unrecoverable.
+  bool get requiresBounce;
+
+  /// The captured cause text, present only when [refused] is true.
+  String? get details;
+
+  /// The wire body the reload tool returns under `value` on success, or promotes
+  /// into an `ok:false` tool envelope on refusal.
+  Map<String, Object?> toJson();
+}
+
+/// A successful dev-mode re-composition report.
+class ReassembleReportSuccess extends ReassembleReport {
+  /// Creates a successful report.
+  const ReassembleReportSuccess({
     required this.mode,
     required this.generation,
     required this.rebuiltBranches,
-  });
+  }) : super._();
 
-  /// Which verb ran.
+  @override
   final ReassembleMode mode;
 
-  /// The generation this re-composition produced (1 for the first reload).
+  @override
   final int generation;
 
-  /// How many branches the resulting flush actually rebuilt — the drained dirty
-  /// set (`TreeOwner.flush()`'s return).
+  @override
   final int rebuiltBranches;
 
-  /// The wire body the reload tool returns under `value`.
+  @override
+  bool get refused => false;
+
+  @override
+  String? get error => null;
+
+  @override
+  String? get reason => null;
+
+  @override
+  bool get requiresBounce => false;
+
+  @override
+  String? get details => null;
+
+  @override
   Map<String, Object?> toJson() => <String, Object?>{
     'mode': mode.wire,
     'generation': generation,
     'rebuiltBranches': rebuiltBranches,
+  };
+}
+
+/// A refused dev-mode re-composition after sources were already swapped.
+class ReassembleReportRefused extends ReassembleReport {
+  /// Creates the post-source-swap refusal report.
+  const ReassembleReportRefused({
+    required this.mode,
+    required this.generation,
+    required this.details,
+  }) : super._();
+
+  @override
+  final ReassembleMode mode;
+
+  @override
+  final int generation;
+
+  @override
+  int get rebuiltBranches => 0;
+
+  @override
+  bool get refused => true;
+
+  @override
+  String get error =>
+      'refused: re-compose failed after source swap - bounce the station';
+
+  @override
+  String get reason => 'post_swap_recompose_failed';
+
+  @override
+  bool get requiresBounce => true;
+
+  @override
+  final String details;
+
+  @override
+  Map<String, Object?> toJson() => <String, Object?>{
+    'mode': mode.wire,
+    'generation': generation,
+    'rebuiltBranches': rebuiltBranches,
+    'refused': true,
+    'error': error,
+    'reason': reason,
+    'requiresBounce': requiresBounce,
+    'details': details,
   };
 }

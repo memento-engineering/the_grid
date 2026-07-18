@@ -2,6 +2,8 @@
 // live node. The witness is the transport itself — FakeRuntimeProvider records
 // every spawn (`started`) and every kill (`stopped`), so "the running agent
 // survived" is an assertion, not a story. Zero I/O.
+import 'dart:async';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart' as engine;
 import 'package:grid_engine/testing.dart';
@@ -14,16 +16,18 @@ import 'package:test/test.dart';
 class _AgentCap extends engine.ProcessCapability {
   const _AgentCap();
   @override
-  RuntimeConfig spawn(TreeContext context, engine.StepArgs args) => RuntimeConfig(
-    workDir: context
-        .getInheritedSeedOfExactType<engine.Workspace>()!
-        .workspaceDir,
-    command: 'sh',
-    args: const ['-c', 'echo'],
-    lifecycle: Lifecycle.oneTurn,
-  );
+  RuntimeConfig spawn(TreeContext context, engine.StepArgs args) =>
+      RuntimeConfig(
+        workDir: context
+            .getInheritedSeedOfExactType<engine.Workspace>()!
+            .workspaceDir,
+        command: 'sh',
+        args: const ['-c', 'echo'],
+        lifecycle: Lifecycle.oneTurn,
+      );
   @override
-  engine.StepSignal interpretEvent(RuntimeEvent event) => engine.StepSignal.none;
+  engine.StepSignal interpretEvent(RuntimeEvent event) =>
+      engine.StepSignal.none;
 }
 
 const _code = engine.Circuit(
@@ -54,6 +58,29 @@ class _BuildProbe extends SingleChildStatelessSeed {
     builds.add(1);
     return child;
   }
+}
+
+/// Throws only when the test flips [shouldThrow]; initial mount stays valid.
+class _ThrowOnBuildSeed extends StatelessSeed {
+  const _ThrowOnBuildSeed(this.shouldThrow);
+
+  final bool Function() shouldThrow;
+
+  @override
+  Seed build(TreeContext context) {
+    if (shouldThrow()) {
+      throw StateError('fake post-swap rebuild failure');
+    }
+    return const RawAssetGrid(root: '/grid/home');
+  }
+}
+
+class _ThrowingReloadDelegate extends GridDelegate {
+  bool failOnBuild = false;
+
+  @override
+  Seed build(TreeContext context, GridConfiguration configuration) =>
+      _ThrowOnBuildSeed(() => failOnBuild);
 }
 
 /// The test station — the canonical v3 tree, with the rails recorded so a
@@ -196,32 +223,68 @@ _Rig _arm({bool withFactory = true}) {
 
 void main() {
   group('the dev-mode re-composition ADOPTS, never kills', () {
-    test('hot RELOAD re-runs the master build and ADOPTS the running agent',
-        () async {
-      final rig = _arm();
-      addTearDown(rig.grid.teardown);
-      rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
-      await _pump();
-      expect(rig.fakes.provider.started, hasLength(1)); // mount = spawn
-      final buildsBefore = rig.substationProbe.length;
-      final writesBefore = rig.fakes.runner.calls.length;
+    test(
+      'hot RELOAD re-runs the master build and ADOPTS the running agent',
+      () async {
+        final rig = _arm();
+        addTearDown(rig.grid.teardown);
+        rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
+        await _pump();
+        expect(rig.fakes.provider.started, hasLength(1)); // mount = spawn
+        final buildsBefore = rig.substationProbe.length;
+        final writesBefore = rig.fakes.runner.calls.length;
 
-      final report = await rig.grid.hotReload();
-      await _pump();
+        final report = await rig.grid.hotReload();
+        await _pump();
 
-      expect(report.mode, ReassembleMode.reload);
-      expect(report.generation, 1);
-      expect(report.rebuiltBranches, greaterThan(0));
-      // The master build RE-RAN (a changed build body takes effect)…
-      expect(rig.substationProbe.length, greaterThan(buildsBefore));
-      // …and the live agent was ADOPTED: no kill (ADR-0009 D4 — dispose = KILL)
-      // and no respawn (no rework-from-top).
-      expect(rig.fakes.provider.stopped, isEmpty);
-      expect(rig.fakes.provider.started, hasLength(1));
-      // NO NEW TRIGGER: nothing new resolved, nothing new was written.
-      expect(rig.resolver.resolved, ['pow-1']);
-      expect(rig.fakes.runner.calls, hasLength(writesBefore));
-    });
+        expect(report.mode, ReassembleMode.reload);
+        expect(report.generation, 1);
+        expect(report.rebuiltBranches, greaterThan(0));
+        // The master build RE-RAN (a changed build body takes effect)…
+        expect(rig.substationProbe.length, greaterThan(buildsBefore));
+        // …and the live agent was ADOPTED: no kill (ADR-0009 D4 — dispose = KILL)
+        // and no respawn (no rework-from-top).
+        expect(rig.fakes.provider.stopped, isEmpty);
+        expect(rig.fakes.provider.started, hasLength(1));
+        // NO NEW TRIGGER: nothing new resolved, nothing new was written.
+        expect(rig.resolver.resolved, ['pow-1']);
+        expect(rig.fakes.runner.calls, hasLength(writesBefore));
+      },
+    );
+
+    test(
+      'post-swap flush throw refuses reload and leaves the grid alive',
+      () async {
+        Object? uncaught;
+        StackTrace? uncaughtStack;
+        ReassembleReport? report;
+        final delegate = _ThrowingReloadDelegate();
+        final grid = runGrid(delegate);
+        addTearDown(grid.teardown);
+
+        await runZonedGuarded(
+          () async {
+            delegate.failOnBuild = true;
+            report = await grid.hotReload();
+            await _pump();
+          },
+          (error, stackTrace) {
+            uncaught = error;
+            uncaughtStack = stackTrace;
+          },
+        );
+
+        expect(uncaught, isNull, reason: '$uncaughtStack');
+        expect(grid.isTornDown, isFalse);
+        final refused = report!;
+        expect(refused, isA<ReassembleReportRefused>());
+        expect(refused.refused, isTrue);
+        expect(refused.reason, 'post_swap_recompose_failed');
+        expect(refused.requiresBounce, isTrue);
+        expect(refused.error, contains('bounce the station'));
+        expect(refused.details, contains('fake post-swap rebuild failure'));
+      },
+    );
 
     test('hot RESTART re-runs the delegate FACTORY and STILL adopts', () async {
       final rig = _arm();
@@ -238,7 +301,11 @@ void main() {
       // A FRESH delegate drives the tree; the retired one is disposed…
       expect(rig.delegates, hasLength(2));
       expect(identical(rig.delegates.last, first), isFalse);
-      expect(first.mounted, isFalse, reason: 'the retired delegate is disposed');
+      expect(
+        first.mounted,
+        isFalse,
+        reason: 'the retired delegate is disposed',
+      );
       // …the POST-MOUNT rails ran on the fresh delegate, and `didLaunch` — the
       // pre-tree, terminal rail — did NOT (the tree never re-mounted).
       expect(rig.inits, ['initGrid', 'initGrid']);

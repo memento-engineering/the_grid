@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:state_notifier/state_notifier.dart';
@@ -170,9 +171,9 @@ class GridHandle {
   final GridDelegate Function()? _delegateFactory;
 
   /// Callers awaiting the NEXT completed flush (one per in-flight reassemble),
-  /// completed with the rebuilt-branch count — or failed LOUDLY if the grid
-  /// tears down before the flush lands (never a future that hangs forever).
-  final List<Completer<int>> _flushWaiters = <Completer<int>>[];
+  /// completed with the reassemble report — or failed LOUDLY if the grid tears
+  /// down before the flush lands.
+  final List<_ReassembleWaiter> _flushWaiters = <_ReassembleWaiter>[];
 
   /// The monotonic re-composition counter; 0 is the launch baseline.
   int _generation = 0;
@@ -193,27 +194,61 @@ class GridHandle {
           _failWaiters();
           return;
         }
-        final rebuilt = _owner.flush();
-        _onFlushed?.call();
-        _completeWaiters(rebuilt.length);
+        try {
+          final rebuilt = _owner.flush();
+          _onFlushed?.call();
+          _completeWaiters(rebuilt.length);
+        } catch (error, stackTrace) {
+          _refusePostSwapFlush(error, stackTrace);
+        }
       });
     };
   }
 
   void _completeWaiters(int rebuilt) {
-    final waiters = List<Completer<int>>.of(_flushWaiters);
+    final waiters = List<_ReassembleWaiter>.of(_flushWaiters);
     _flushWaiters.clear();
     for (final waiter in waiters) {
-      waiter.complete(rebuilt);
+      waiter.completer.complete(
+        ReassembleReport(
+          mode: waiter.mode,
+          generation: waiter.generation,
+          rebuiltBranches: rebuilt,
+        ),
+      );
     }
   }
 
   void _failWaiters() {
-    final waiters = List<Completer<int>>.of(_flushWaiters);
+    final waiters = List<_ReassembleWaiter>.of(_flushWaiters);
     _flushWaiters.clear();
     for (final waiter in waiters) {
-      waiter.completeError(
+      waiter.completer.completeError(
         StateError('the grid tore down before the flush landed'),
+      );
+    }
+  }
+
+  void _refusePostSwapFlush(Object error, StackTrace stackTrace) {
+    developer.log(
+      'refused: re-compose failed after source swap - bounce the station',
+      name: 'grid.reassemble',
+      error: error,
+      stackTrace: stackTrace,
+    );
+    final waiters = List<_ReassembleWaiter>.of(_flushWaiters);
+    _flushWaiters.clear();
+    if (waiters.isEmpty) {
+      _report(GridHookError('flush', _delegate.runtimeType, error, stackTrace));
+      return;
+    }
+    for (final waiter in waiters) {
+      waiter.completer.complete(
+        ReassembleReport.refusedAfterSourceSwap(
+          mode: waiter.mode,
+          generation: waiter.generation,
+          details: '$error',
+        ),
       );
     }
   }
@@ -301,22 +336,33 @@ class GridHandle {
   }
 
   /// Emits [request] on the bus the configuration scope observes — dirtying
-  /// that ONE branch — and reports what the resulting flush rebuilt.
+  /// that ONE branch — and reports what the resulting flush rebuilt or refused.
   Future<ReassembleReport> _reassemble0(
     ReassembleRequest request,
     ReassembleMode mode,
     int generation,
   ) {
-    final completer = Completer<int>();
-    _flushWaiters.add(completer);
-    _reassemble.request(request);
-    return completer.future.then(
-      (rebuilt) => ReassembleReport(
-        mode: mode,
-        generation: generation,
-        rebuiltBranches: rebuilt,
-      ),
-    );
+    final waiter = _ReassembleWaiter(mode: mode, generation: generation);
+    _flushWaiters.add(waiter);
+    try {
+      _reassemble.request(request);
+    } catch (error, stackTrace) {
+      _flushWaiters.remove(waiter);
+      developer.log(
+        'refused: re-compose failed after source swap - bounce the station',
+        name: 'grid.reassemble',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      waiter.completer.complete(
+        ReassembleReport.refusedAfterSourceSwap(
+          mode: mode,
+          generation: generation,
+          details: '$error',
+        ),
+      );
+    }
+    return waiter.completer.future;
   }
 
   void _refuseIfTornDown(String verb) {
@@ -384,6 +430,14 @@ class GridHandle {
   }
 }
 
+class _ReassembleWaiter {
+  _ReassembleWaiter({required this.mode, required this.generation});
+
+  final ReassembleMode mode;
+  final int generation;
+  final Completer<ReassembleReport> completer = Completer<ReassembleReport>();
+}
+
 /// The **configuration provision** node: subscribes to the [GridDelegate]
 /// `runGrid` holds (`StateNotifier<GridConfiguration>`) and re-provides its
 /// current value as `InheritedSeed<GridConfiguration>` to the station subtree
@@ -416,7 +470,8 @@ class _GridConfigurationScope extends StatefulSeed {
   final ReassembleBus reassemble;
 
   @override
-  State<_GridConfigurationScope> createState() => _GridConfigurationScopeState();
+  State<_GridConfigurationScope> createState() =>
+      _GridConfigurationScopeState();
 }
 
 class _GridConfigurationScopeState extends State<_GridConfigurationScope> {

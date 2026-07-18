@@ -204,27 +204,59 @@ void main() {
     );
 
     test(
-      'WITHOUT a contributor the host is EXACTLY as-is: the five read-only '
-      'tools, no reload',
+      'a post-swap re-compose refusal rides the reload wire as ok:false',
       () async {
         final runtime = await _startedRuntime(() => _snap([_bead('a')]));
         addTearDown(runtime.dispose);
-        final host = GridExplorationHost(runtime);
+        final host = GridExplorationHost(
+          runtime,
+          reassemble: ReassembleTool(
+            hotReload: () async => const {
+              'mode': 'reload',
+              'generation': 1,
+              'rebuiltBranches': 0,
+              'refused': true,
+              'error':
+                  'refused: re-compose failed after source swap - bounce the station',
+              'reason': 'post_swap_recompose_failed',
+              'requiresBounce': true,
+              'details': 'StateError: fake post-swap rebuild failure',
+            },
+            hotRestart: () async => {'mode': 'restart', 'generation': 1},
+          ),
+        );
 
-        expect(host.toolNames, [
-          'requery',
-          'snapshot',
-          'ready',
-          'events',
-          'stats',
-        ]);
-        final extensions = host.handshakeJson()[kExtensionsKey]! as List;
-        expect((extensions.single as Map)['tools'], isNot(contains('reload')));
-        // The observation plugin owns no such tool — it stays read-only.
-        final unknown = await host.dispatchTool('reload', const {});
-        expect(unknown['ok'], isFalse);
+        final result = await host.dispatchTool('reload', const {});
+
+        expect(result['ok'], isFalse);
+        expect(result['error'], contains('bounce the station'));
+        expect(result['reason'], 'post_swap_recompose_failed');
+        expect(result['requiresBounce'], isTrue);
+        final value = result['value']! as Map<String, Object?>;
+        expect(value['refused'], isTrue);
+        expect(value['details'], contains('fake post-swap rebuild failure'));
       },
     );
+
+    test('WITHOUT a contributor the host is EXACTLY as-is: the five read-only '
+        'tools, no reload', () async {
+      final runtime = await _startedRuntime(() => _snap([_bead('a')]));
+      addTearDown(runtime.dispose);
+      final host = GridExplorationHost(runtime);
+
+      expect(host.toolNames, [
+        'requery',
+        'snapshot',
+        'ready',
+        'events',
+        'stats',
+      ]);
+      final extensions = host.handshakeJson()[kExtensionsKey]! as List;
+      expect((extensions.single as Map)['tools'], isNot(contains('reload')));
+      // The observation plugin owns no such tool — it stays read-only.
+      final unknown = await host.dispatchTool('reload', const {});
+      expect(unknown['ok'], isFalse);
+    });
 
     test('an unknown reassemble mode is refused LOUDLY (never a silent '
         'reload)', () async {
@@ -259,10 +291,12 @@ void main() {
 /// guard's positive control (Fakes, not mocks).
 class _CollidingTool implements ReassembleTool {
   @override
-  StationReassemble get hotReload => () async => const {};
+  StationReassemble get hotReload =>
+      () async => const {};
 
   @override
-  StationReassemble get hotRestart => () async => const {};
+  StationReassemble get hotRestart =>
+      () async => const {};
 
   @override
   List<String> get toolNames => const ['stats'];

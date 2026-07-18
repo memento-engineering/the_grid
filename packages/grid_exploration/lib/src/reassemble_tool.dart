@@ -92,7 +92,8 @@ class ReassembleTool {
   /// Dispatches the tool. An unknown tool or an unknown `mode` THROWS — the
   /// host's registrar turns a throw into a `ServiceExtensionResponse.error`, so
   /// an operator who fat-fingers the mode gets a LOUD refusal, never a silent
-  /// reload (the guard principle).
+  /// reload (the guard principle). A post-source-swap re-compose refusal is a
+  /// station result, so it rides this tool's JSON envelope as `ok:false`.
   Future<Map<String, Object?>> dispatch(
     String name,
     Map<String, String> params,
@@ -106,14 +107,30 @@ class ReassembleTool {
     }
     final mode = params['mode'] ?? modes.first;
     return switch (mode) {
-      'reload' => {'ok': true, 'value': await hotReload()},
-      'restart' => {'ok': true, 'value': await hotRestart()},
+      'reload' => _dispatchReassemble(hotReload),
+      'restart' => _dispatchReassemble(hotRestart),
       _ => throw ArgumentError.value(
         mode,
         'mode',
         'unknown reassemble mode — expected one of $modes',
       ),
     };
+  }
+
+  Future<Map<String, Object?>> _dispatchReassemble(
+    StationReassemble reassemble,
+  ) async {
+    final value = await reassemble();
+    if (value['refused'] == true) {
+      return <String, Object?>{
+        'ok': false,
+        'error': value['error'],
+        'reason': value['reason'],
+        'requiresBounce': value['requiresBounce'],
+        'value': value,
+      };
+    }
+    return <String, Object?>{'ok': true, 'value': value};
   }
 }
 
