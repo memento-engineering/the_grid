@@ -85,6 +85,29 @@ Bead _gate(String id, {required String sessionId, bool closed = false}) => Bead(
   metadata: {'rig': stateSubstation, 'blocks': sessionId, 'node': 'tg-1/route'},
 );
 
+Bead _doneGatedSession(String id, {required String workBead}) => Bead(
+  id: id,
+  issueType: IssueType.session,
+  status: BeadStatus.closed,
+  metadata: {
+    'rig': stateSubstation,
+    SessionBeadKeys.workBead: workBead,
+    SessionBeadKeys.outcome: kSessionOutcomeComplete,
+    ...nodeStateMetadata('tg-1/route', StepState.gated),
+  },
+);
+
+List<Branch> _allBranches(Branch root) {
+  final out = <Branch>[];
+  void walk(Branch branch) {
+    out.add(branch);
+    branch.visitChildren(walk);
+  }
+
+  walk(root);
+  return out;
+}
+
 /// An [ExplorationTransport] that records every LOUD flare — the emit-only sink
 /// the re-arm-failed signal fires through.
 class _RecordingTransport implements ExplorationTransport {
@@ -248,6 +271,61 @@ void main() {
     );
 
     test(
+      'a CLOSED done session whose gate resolves does not re-arm and its scope '
+      'unmounts',
+      () async {
+        final runner = RecordingBdRunner();
+        final ctx = _ctxOver(runner);
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final state = FakeSnapshotSource(
+          _state([
+            _gatedSession('tgdog-s', workBead: 'tg-1'),
+            _gate('gate-1', sessionId: 'tgdog-s'),
+          ]),
+        );
+        final bridge = StationJoinBridge(work: work, state: state)..start();
+        addTearDown(bridge.dispose);
+
+        final m = _mountFull(joined: bridge.notifier, ctx: ctx, registry: reg);
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        expect(
+          _allBranches(m.root).where((b) => b.seed is SessionScope),
+          isNotEmpty,
+          reason: 'the live gated session starts mounted',
+        );
+        expect(runner.callsFor('update'), isEmpty);
+
+        state.push(
+          _state([
+            _doneGatedSession('tgdog-s', workBead: 'tg-1'),
+            _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+          ], tick: 1),
+        );
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        expect(
+          runner.callsFor('update'),
+          isEmpty,
+          reason: 'closing the gate must not flip a closed session to pending',
+        );
+        expect(
+          _allBranches(m.root).where((b) => b.seed is SessionScope),
+          isEmpty,
+          reason:
+              'WorkList blocks done sessions and unmounts the session scope',
+        );
+        expect(runner.neverShowOrSql, isTrue);
+      },
+    );
+
+    test(
       'RESTART recovery — a station that BOOTS adopting a gated cursor whose '
       'gate is ALREADY closed re-arms on adopt (the operator\'s only recovery '
       'path today: a station bounce)',
@@ -278,7 +356,8 @@ void main() {
         expect(
           updates,
           hasLength(1),
-          reason: 'adopt sees the already-resolved gate and re-arms immediately',
+          reason:
+              'adopt sees the already-resolved gate and re-arms immediately',
         );
         expect(runner.metadataOfUpdate(0), {
           'grid.cursor.tg-1/route.state': 'pending',
@@ -286,84 +365,81 @@ void main() {
       },
     );
 
-    test(
-      'SUSPECT 2 — a DROPPED re-arm write RETRIES on the next build (never a '
-      'permanent silent latch) and FLARES loud',
-      () async {
-        final runner = _FailFirstUpdateRunner(failUpdates: 1);
-        final ctx = _ctxOver(runner);
-        final transport = _RecordingTransport();
-        final reg = RecordingCapabilityRegistry(circuits: const {});
-        final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
-        final state = FakeSnapshotSource(
-          _state([
-            _gatedSession('tgdog-s', workBead: 'tg-1'),
-            _gate('gate-1', sessionId: 'tgdog-s'),
-          ]),
-        );
-        final bridge = StationJoinBridge(work: work, state: state)..start();
-        addTearDown(bridge.dispose);
+    test('SUSPECT 2 — a DROPPED re-arm write RETRIES on the next build (never a '
+        'permanent silent latch) and FLARES loud', () async {
+      final runner = _FailFirstUpdateRunner(failUpdates: 1);
+      final ctx = _ctxOver(runner);
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+      final state = FakeSnapshotSource(
+        _state([
+          _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _gate('gate-1', sessionId: 'tgdog-s'),
+        ]),
+      );
+      final bridge = StationJoinBridge(work: work, state: state)..start();
+      addTearDown(bridge.dispose);
 
-        final m = _mountFull(
-          joined: bridge.notifier,
-          ctx: ctx,
-          registry: reg,
-          services: ServiceBundle(transport: transport),
-        );
-        addTearDown(m.owner.dispose);
-        await _pump();
-        m.owner.flush();
-        await _pump();
+      final m = _mountFull(
+        joined: bridge.notifier,
+        ctx: ctx,
+        registry: reg,
+        services: ServiceBundle(transport: transport),
+      );
+      addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
+      await _pump();
 
-        // First resolve → re-arm attempt #1, which DROPS (the runner throws).
-        state.push(
-          _state([
-            _gatedSession('tgdog-s', workBead: 'tg-1'),
-            _gate('gate-1', sessionId: 'tgdog-s', closed: true),
-          ], tick: 1),
-        );
-        await _pump();
-        m.owner.flush();
-        await _pump();
+      // First resolve → re-arm attempt #1, which DROPS (the runner throws).
+      state.push(
+        _state([
+          _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+        ], tick: 1),
+      );
+      await _pump();
+      m.owner.flush();
+      await _pump();
 
-        // The drop is LOUD — a flare fired — and NOT silent-swallowed.
-        expect(
-          transport.flares.map((f) => f.name),
-          contains('gate.rearmFailed'),
-          reason: 'a dropped re-arm write must flare (LOUD or GONE)',
-        );
-        expect(transport.flares.single.data['nodePath'], 'tg-1/route');
+      // The drop is LOUD — a flare fired — and NOT silent-swallowed.
+      expect(
+        transport.flares.map((f) => f.name),
+        contains('gate.rearmFailed'),
+        reason: 'a dropped re-arm write must flare (LOUD or GONE)',
+      );
+      expect(transport.flares.single.data['nodePath'], 'tg-1/route');
 
-        // A SECOND store tick (still the resolved gate) — with the OLD permanent
-        // latch this build would be a no-op (the node stays wedged `gated`
-        // forever). With the in-flight guard cleared on failure, D-7 re-fires
-        // and the retry SUCCEEDS.
-        state.push(
-          _state([
-            _gatedSession('tgdog-s', workBead: 'tg-1'),
-            _gate('gate-1', sessionId: 'tgdog-s', closed: true),
-          ], tick: 2),
-        );
-        await _pump();
-        m.owner.flush();
-        await _pump();
+      // A SECOND store tick (still the resolved gate) — with the OLD permanent
+      // latch this build would be a no-op (the node stays wedged `gated`
+      // forever). With the in-flight guard cleared on failure, D-7 re-fires
+      // and the retry SUCCEEDS.
+      state.push(
+        _state([
+          _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+        ], tick: 2),
+      );
+      await _pump();
+      m.owner.flush();
+      await _pump();
 
-        final updates = runner.callsFor('update');
-        expect(
-          updates,
-          hasLength(2),
-          reason: 'attempt #1 dropped + attempt #2 retried — never latched off',
-        );
-        // Both attempts carry the same pending flip; #2 (index 1) succeeded.
-        expect(runner.metadataOfUpdate(1), {
-          'grid.cursor.tg-1/route.state': 'pending',
-        });
-        // Exactly ONE flare — the retry succeeded, so it did not re-flare.
-        expect(
-          transport.flares.where((f) => f.name == 'gate.rearmFailed'),
-          hasLength(1),
-        );
-      },
-    );
+      final updates = runner.callsFor('update');
+      expect(
+        updates,
+        hasLength(2),
+        reason: 'attempt #1 dropped + attempt #2 retried — never latched off',
+      );
+      // Both attempts carry the same pending flip; #2 (index 1) succeeded.
+      expect(runner.metadataOfUpdate(1), {
+        'grid.cursor.tg-1/route.state': 'pending',
+      });
+      // Exactly ONE flare — the retry succeeded, so it did not re-flare.
+      expect(
+        transport.flares.where((f) => f.name == 'gate.rearmFailed'),
+        hasLength(1),
+      );
+    });
   });
 }
