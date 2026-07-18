@@ -41,10 +41,10 @@ void main() {
       // The fx sample carries real edges: the fixture epic's two parent-child
       // links plus one blocks edge between its children.
       expect(snapshot.dependencies, hasLength(3));
-      expect(
-        snapshot.dependencies.map((d) => d.type).toSet(),
-        {'blocks', 'parent-child'},
-      );
+      expect(snapshot.dependencies.map((d) => d.type).toSet(), {
+        'blocks',
+        'parent-child',
+      });
       // export is the single-spawn snapshot read: `export --all` (the
       // complete graph — `--all` subsumes `--include-infra` and lifts the
       // default template + ephemeral-wisp exclusions, export.go:96-126).
@@ -313,6 +313,22 @@ void main() {
       expect(argv, isNot(contains('--title')));
       expect(argv, isNot(contains('--description')));
     });
+
+    test(
+      'update() can clear design and acceptance without touching body text',
+      () async {
+        await service.update('tg-7', design: '', acceptanceCriteria: '');
+        final argv = runner.calls.single;
+        expect(argv.first, 'update');
+        expect(argv[1], 'tg-7');
+        expectActor(argv);
+        expect(argv, containsAllInOrder(['--design', '']));
+        expect(argv, containsAllInOrder(['--acceptance', '']));
+        expect(argv, isNot(contains('--description')));
+        expect(argv, isNot(contains('--notes')));
+        expect(argv, isNot(contains('--append-notes')));
+      },
+    );
 
     test('close() stamps actor and forwards the reason', () async {
       await service.close('tg-7', reason: 'done');

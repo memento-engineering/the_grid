@@ -524,6 +524,17 @@ class StationBeadWriter {
     );
   }
 
+  /// Clears specify-authored spec fields on an owned WORK bead before a rework
+  /// session is retired. The next specify round re-authors these fields fresh;
+  /// description and notes are intentionally untouched.
+  Future<void> clearSpecifyAuthoredSpec(String id) async {
+    _assertOwned('clearSpecifyAuthoredSpec', id, const {});
+    return _serialized(
+      id,
+      () => _bd.update(id, design: '', acceptanceCriteria: ''),
+    );
+  }
+
   /// `bd close` on a the_grid-owned session bead (terminal lifecycle).
   /// Fail-closed: refuses when [id]'s substation is not owned. Serialized per-id
   /// (D-1) so a close cannot race an in-flight cursor update on the same bead.

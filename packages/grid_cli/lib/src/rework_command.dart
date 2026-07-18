@@ -19,7 +19,8 @@ import 'station_stores.dart';
 /// `tgdog-4it`): re-key the session's `work_bead` → `'<bead>#r<N>'` through the
 /// chokepoint — the live tree re-projects, finds no session at `bead.id`, and
 /// mints round N+1 in the SAME worktree. This command makes that mechanic a
-/// verb: it re-keys, appends the operator's finding to the WORK bead's notes,
+/// verb: it clears stale specify-authored fields on the WORK bead, re-keys the
+/// session, optionally appends the operator's finding to the WORK bead's notes,
 /// reports the round number, and enforces the ~3-round cap (the factoryskills
 /// precedent) — refusing LOUD beyond it (a human decides).
 ///
@@ -34,10 +35,11 @@ import 'station_stores.dart';
 /// **Re-seated on the store-at-roots model (v3).** The session lives in the_grid's
 /// OWN **state store** at `<grid.root>/.grid/.beads/` (`--grid-root`; Q5a) — never
 /// `--state-workspace` / cwd discovery. The state-store ownership prefix is a
-/// supplied value (`--prefix`), not the retired `--state-substation`. A `--note`
-/// appends to the WORK bead in its substation's work store at `<note-root>/.beads/`
-/// (`--note-root`) — a SEPARATE store, scoped to the WORK bead's own prefix, never
-/// the state store, and never raw SQL/`bd show` on a controller path.
+/// supplied value (`--prefix`), not the retired `--state-substation`.
+/// `--note-root` points at the WORK bead's substation work store at
+/// `<note-root>/.beads/` — a SEPARATE store, scoped to the WORK bead's own
+/// prefix, never the state store, and never raw SQL/`bd show` on a controller
+/// path.
 class ReworkCommand extends Command<int> {
   ReworkCommand() {
     argParser
@@ -53,7 +55,8 @@ class ReworkCommand extends Command<int> {
         help:
             'The substation ROOT whose `.beads/` work store holds the WORK '
             'bead (an absolute path; the store is at `<note-root>/.beads/`). '
-            'Only used with --note.',
+            'REQUIRED - rework clears stale specify-authored design and '
+            'acceptance before retiring the current round.',
       )
       ..addOption(
         'grid-root',
@@ -85,7 +88,7 @@ class ReworkCommand extends Command<int> {
   @override
   String get invocation =>
       'grid rework <bead-id> --grid-root <dir> --prefix <name> '
-      '[--note <finding> --note-root <dir>]';
+      '--note-root <dir> [--note <finding>]';
 
   @override
   Future<int> run() async {
@@ -132,14 +135,20 @@ class ReworkCommand extends Command<int> {
     }
 
     final noteRoot = args.option('note-root');
-    SubstationWorkStore? noteStore;
-    if (noteRoot != null && noteRoot.trim().isNotEmpty) {
-      try {
-        noteStore = SubstationWorkStore.forRoot(noteRoot);
-      } on ArgumentError catch (e) {
-        stderr.writeln('grid rework: --note-root ${e.message}');
-        return 64;
-      }
+    if (noteRoot == null || noteRoot.trim().isEmpty) {
+      stderr.writeln(
+        'grid rework: --note-root is required (the WORK bead\'s substation '
+        'root, whose `.beads/` work store holds the bead). rework clears '
+        'stale specify-authored design and acceptance before retiring a round.',
+      );
+      return 64;
+    }
+    final SubstationWorkStore noteStore;
+    try {
+      noteStore = SubstationWorkStore.forRoot(noteRoot);
+    } on ArgumentError catch (e) {
+      stderr.writeln('grid rework: --note-root ${e.message}');
+      return 64;
     }
 
     return runRework(
@@ -158,16 +167,19 @@ class ReworkCommand extends Command<int> {
 // `Rewind` arm share ONE definition, so they admit exactly the same number of
 // rounds and cannot drift on the key.
 
-/// Runs `grid rework <beadId>`: re-keys [beadId]'s terminated session through
-/// the [StationBeadWriter] chokepoint (the grid state store at [stateStore]),
-/// optionally appends [note] to the WORK bead's notes (the substation work store
-/// at [noteStore]), and reports the round number.
+/// Runs `grid rework <beadId>`: clears stale specify-authored `design` and
+/// `acceptance_criteria` on the WORK bead through the [StationBeadWriter]
+/// chokepoint, then re-keys [beadId]'s terminated session through the state
+/// store [StationBeadWriter], optionally appends [note] to the WORK bead's
+/// notes after the re-key succeeds, and reports the round number.
 ///
 /// **Fail-closed (non-zero exit, ZERO writes)** unless exactly one session is
 /// found for [beadId] and it is either CLOSED, or OPEN-and-parked-at-a-gate
-/// with nothing running; the round cap is not yet reached; and (when [note] is
-/// given) [noteStore] is provided and openable. Seams
-/// ([stateWorkspaceOverride]/[workspaceOverride]/[bdOverride]/
+/// with nothing running; the round cap is not yet reached; and [noteStore] is
+/// provided and openable. The WORK store is required even when [note] is absent
+/// because every rework clears stale spec fields before session retirement.
+/// `--note` only adds a second work-bead write after the state re-key succeeds.
+/// Seams ([stateWorkspaceOverride]/[workspaceOverride]/[bdOverride]/
 /// [stateBdOverride]/[dirExists]/[now]) are injectable so an offline test drives
 /// it with fake stores.
 Future<int> runRework({
@@ -204,37 +216,31 @@ Future<int> runRework({
       stateBdOverride ??
       BdCliService(ProcessBdRunner(workspaceRoot: stateWorkspace.root));
 
-  // --note needs the WORK store — resolved (and verified reachable) up front,
-  // BEFORE any write, so a missing store never leaves the re-key half done and
-  // the note half silently dropped.
   final wantsNote = note != null && note.isNotEmpty;
-  BeadsWorkspace? workWorkspace;
-  BdCliService? workBd;
-  if (wantsNote) {
-    if (workspaceOverride != null) {
-      workWorkspace = workspaceOverride;
-    } else if (noteStore != null) {
-      try {
-        workWorkspace = openWorkStore(noteStore, dirExists: dirExists);
-      } on StoreRefusal catch (e) {
-        writeErr(
-          'grid rework: --note given but the WORK store is unreachable — '
-          '${e.message} — refusing (the note would silently drop).',
-        );
-        return 1;
-      }
-    } else {
+  final BeadsWorkspace workWorkspace;
+  if (workspaceOverride != null) {
+    workWorkspace = workspaceOverride;
+  } else if (noteStore != null) {
+    try {
+      workWorkspace = openWorkStore(noteStore, dirExists: dirExists);
+    } on StoreRefusal catch (e) {
       writeErr(
-        'grid rework: --note requires --note-root (the WORK bead\'s substation '
-        'root, whose `.beads/` work store holds the bead) — refusing (the note '
-        'would silently drop).',
+        'grid rework: the WORK store is unreachable - ${e.message} - '
+        'refusing before the session is retired.',
       );
-      return 64;
+      return 1;
     }
-    workBd =
-        bdOverride ??
-        BdCliService(ProcessBdRunner(workspaceRoot: workWorkspace.root));
+  } else {
+    writeErr(
+      'grid rework: --note-root is required (the WORK bead\'s substation root, '
+      'whose `.beads/` work store holds the bead) - refusing before the '
+      'session is retired.',
+    );
+    return 64;
   }
+  final workBd =
+      bdOverride ??
+      BdCliService(ProcessBdRunner(workspaceRoot: workWorkspace.root));
 
   // The complete-graph snapshot read (never `bd show` on this controller
   // path — it self-triggers the watcher).
@@ -304,6 +310,25 @@ Future<int> runRework({
     // runner restart needed).
   }
 
+  final workOwnership = BeadOwnershipPredicate({
+    BeadOwnershipPredicate.prefixOf(beadId) ?? beadId,
+  });
+  final workWriter = StationBeadWriter(
+    bd: workBd,
+    ownership: workOwnership,
+    onRefusal: writeErr,
+    clock: clock,
+  );
+  try {
+    await workWriter.clearSpecifyAuthoredSpec(beadId);
+  } on OwnershipRefused catch (e) {
+    writeErr('grid rework: work bead spec clear refused: $e');
+    return 64;
+  } on Object catch (e) {
+    writeErr('grid rework: work bead spec clear failed: $e');
+    return 1;
+  }
+
   final ownership = BeadOwnershipPredicate({stateStorePrefix});
   final stateWriter = StationBeadWriter(
     bd: stateBd,
@@ -321,16 +346,7 @@ Future<int> runRework({
     return 64;
   }
 
-  if (wantsNote && workBd != null) {
-    final workOwnership = BeadOwnershipPredicate({
-      BeadOwnershipPredicate.prefixOf(beadId) ?? beadId,
-    });
-    final workWriter = StationBeadWriter(
-      bd: workBd,
-      ownership: workOwnership,
-      onRefusal: writeErr,
-      clock: clock,
-    );
+  if (wantsNote) {
     final header =
         '--- grid rework ROUND $round '
         '(${clock().toUtc().toIso8601String()}) ---';
