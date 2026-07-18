@@ -74,6 +74,7 @@ void main() {
           planFor('tgdog-sess1'),
           substation: 'tgdog',
           sessionId: 'tgdog-sess1',
+          rootCrumbs: const ['tgdog-work1', 'tgdog-sess1'],
         );
 
         expect(ids, {'root': 'tgdog-mol1', 'root.step-a': 'tgdog-step1'});
@@ -87,10 +88,38 @@ void main() {
         // PERSISTENT (Decided item 1): never a wisp.
         expect(argv, isNot(contains('--ephemeral')));
 
-        // The dedup probe reads the store BEFORE pouring, but no OTHER bd
-        // call happened besides that read + the one pour.
+        // The dedup probe reads the store BEFORE pouring, then the pour is
+        // followed by one crumb stamp per minted molecule/step bead.
         expect(runner.callsFor('export'), hasLength(1));
-        expect(runner.calls, hasLength(2));
+        expect(runner.calls, hasLength(4));
+      },
+    );
+
+    test(
+      'stamps canonical molecule and step crumbs after the graph pour',
+      () async {
+        final ids = await writer().createMolecule(
+          planFor('tgdog-sess1'),
+          substation: 'tgdog',
+          sessionId: 'tgdog-sess1',
+          rootCrumbs: const ['tgdog-work1', 'tgdog-sess1', 'tgdog-work1'],
+        );
+
+        expect(ids, {'root': 'tgdog-mol1', 'root.step-a': 'tgdog-step1'});
+        final updates = runner.callsFor('update');
+        expect(updates, hasLength(2));
+        expect(updates[0], containsAllInOrder(['update', 'tgdog-mol1']));
+        expect(updates[1], containsAllInOrder(['update', 'tgdog-step1']));
+        expect(
+          runner.metadataOfUpdate(0),
+          '{"grid.circuit.crumb":"tgdog-work1/tgdog-sess1/tgdog-mol1"}',
+        );
+        expect(
+          runner.metadataOfUpdate(1),
+          '{"grid.step.crumb":"tgdog-work1/tgdog-sess1/tgdog-mol1/tgdog-step1"}',
+        );
+        expect(runner.everyMutationHasActor, isTrue);
+        expect(runner.neverCalledShow, isTrue);
       },
     );
 
@@ -101,6 +130,7 @@ void main() {
           planFor('gascity-sess1'),
           substation: 'gascity',
           sessionId: 'gascity-sess1',
+          rootCrumbs: const ['gascity-work1', 'gascity-sess1'],
         ),
         throwsA(
           isA<OwnershipRefused>().having(
@@ -141,6 +171,7 @@ void main() {
             plan,
             substation: 'tgdog',
             sessionId: 'tgdog-sess1',
+            rootCrumbs: const ['tgdog-work1', 'tgdog-sess1'],
           ),
           throwsA(isA<OwnershipRefused>()),
         );
@@ -155,6 +186,20 @@ void main() {
           const GraphApplyPlan(commitMessage: 'empty'),
           substation: 'tgdog',
           sessionId: 'tgdog-sess1',
+          rootCrumbs: const ['tgdog-work1', 'tgdog-sess1'],
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(runner.calls, isEmpty);
+    });
+
+    test('refuses empty root crumbs before touching bd', () async {
+      await expectLater(
+        writer().createMolecule(
+          planFor('tgdog-sess1'),
+          substation: 'tgdog',
+          sessionId: 'tgdog-sess1',
+          rootCrumbs: const [],
         ),
         throwsA(isA<ArgumentError>()),
       );
@@ -182,10 +227,12 @@ void main() {
           planFor('tgdog-sess1'),
           substation: 'tgdog',
           sessionId: 'tgdog-sess1',
+          rootCrumbs: const ['tgdog-work1', 'tgdog-sess1'],
         );
 
         expect(ids, isEmpty);
         expect(runner.graphApplyCalls, isEmpty);
+        expect(runner.callsFor('update'), isEmpty);
       },
     );
 
@@ -205,10 +252,12 @@ void main() {
         planFor('tgdog-sess1'),
         substation: 'tgdog',
         sessionId: 'tgdog-sess1',
+        rootCrumbs: const ['tgdog-work1', 'tgdog-sess1'],
       );
 
       expect(ids, isEmpty);
       expect(runner.graphApplyCalls, isEmpty);
+      expect(runner.callsFor('update'), isEmpty);
     });
 
     test(
@@ -228,6 +277,7 @@ void main() {
           planFor('tgdog-sess1'),
           substation: 'tgdog',
           sessionId: 'tgdog-sess1',
+          rootCrumbs: const ['tgdog-work1', 'tgdog-sess1'],
         );
 
         expect(ids, isNotEmpty);
@@ -253,6 +303,7 @@ void main() {
           planFor('tgdog-sess1'),
           substation: 'tgdog',
           sessionId: 'tgdog-sess1',
+          rootCrumbs: const ['tgdog-work1', 'tgdog-sess1'],
         );
 
         expect(ids, isNotEmpty);

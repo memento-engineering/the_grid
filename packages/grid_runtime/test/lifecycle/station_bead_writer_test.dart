@@ -317,6 +317,8 @@ void main() {
           priorStep: _step(
             'tgdog-step-old',
             metadata: {
+              StationBeadWriter.stepCrumbKey:
+                  'tgdog-work1/tgdog-sess1/tgdog-mol1/tgdog-step-old',
               StationBeadWriter.stepStateKey: 'complete',
               StationBeadWriter.stepStartedAtKey: 'old-start',
               StationBeadWriter.stepFinishedAtKey: 'old-finish',
@@ -338,6 +340,14 @@ void main() {
             jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
         expect(metadata[StationBeadWriter.rigKey], 'tgdog');
         expect(metadata[StationBeadWriter.stepPathKey], 'tgdog-work/build');
+        expect(
+          metadata[StationBeadWriter.stepCrumbKey],
+          'tgdog-work1/tgdog-sess1/tgdog-mol1/tgdog-step-new',
+        );
+        expect(
+          metadata[StationBeadWriter.stepCrumbKey],
+          isNot(contains('tgdog-step-old')),
+        );
         expect(metadata[StationBeadWriter.stepStateKey], 'pending');
         expect(metadata, isNot(contains(StationBeadWriter.stepStartedAtKey)));
         expect(metadata, isNot(contains(StationBeadWriter.stepFinishedAtKey)));

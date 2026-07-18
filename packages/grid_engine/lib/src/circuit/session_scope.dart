@@ -424,10 +424,11 @@ class SessionScopeState extends State<SessionScope> {
       metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
     );
     if (_cancelled || !context.mounted) return;
+    final root = BeadPathKey([seed.bead.id, id]);
     final plan = instantiateMolecule(
       seed.circuit,
       sessionId: id,
-      root: BeadPathKey([seed.bead.id, id]),
+      root: root,
       nodePath: seed.bead.id,
       circuitById: _registry?.circuit,
     );
@@ -435,6 +436,7 @@ class SessionScopeState extends State<SessionScope> {
       plan,
       substation: _ctx!.stateSubstation,
       sessionId: id,
+      rootCrumbs: root.crumbs,
     );
     if (_cancelled || !context.mounted) return;
     setState(() {
