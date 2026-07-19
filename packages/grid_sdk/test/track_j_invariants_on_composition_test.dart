@@ -146,9 +146,49 @@ GraphSnapshot _graph(List<Bead> beads, Set<String> ready) =>
 Bead _bead(String id, {IssueType type = IssueType.task}) =>
     Bead(id: id, issueType: type, status: BeadStatus.open);
 
+Bead _sessionBead(String id, {required String workBeadId}) => Bead(
+  id: id,
+  issueType: IssueType.session,
+  status: BeadStatus.open,
+  metadata: {
+    engine.SessionBeadKeys.workBead: workBeadId,
+    engine.SessionBeadKeys.model: engine.kSessionModelMolecule,
+  },
+);
+
+Bead _moleculeBead(String id, {required String sessionId}) => Bead(
+  id: id,
+  issueType: IssueType.molecule,
+  status: BeadStatus.open,
+  metadata: {'grid.circuit.formula': 'code', 'grid.circuit.session': sessionId},
+);
+
+Bead _stepBead(String id, {required String sessionId, required String path}) =>
+    Bead(
+      id: id,
+      issueType: IssueType.step,
+      status: BeadStatus.open,
+      metadata: {
+        'grid.step.id': path.split('/').last,
+        'grid.step.capability': path.split('/').last,
+        'grid.step.kind': engine.StepKind.job.name,
+        'grid.step.path': path,
+        'grid.step.session': sessionId,
+      },
+    );
+
 Future<void> _pump([int turns = 12]) async {
   for (var i = 0; i < turns; i++) {
     await Future<void>.delayed(Duration.zero);
+  }
+}
+
+Future<void> _pumpUntil(
+  bool Function() condition, {
+  int maxTries = 2000,
+}) async {
+  for (var i = 0; i < maxTries && !condition(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
   }
 }
 
@@ -172,6 +212,10 @@ _Rig _arm({bool armed = true, engine.CircuitMintMode? mintMode}) {
   final state = FakeSnapshotSource();
   final bridge = engine.StationJoinBridge(work: work, state: state);
   final fakes = buildFakes();
+  fakes.runner.graphApplyIds = const {
+    'pow-1': 'tgdog-mol-pow-1',
+    'pow-1/agent': 'tgdog-step-pow-1-agent',
+  };
   final registry = engine.DefaultCapabilityRegistry(
     capabilities: const {'agent': _AgentCap()},
     clock: () => DateTime(2026),
@@ -207,6 +251,24 @@ _Rig _arm({bool armed = true, engine.CircuitMintMode? mintMode}) {
   );
 }
 
+Future<void> _pushMoleculeState(_Rig rig, String workBeadId) async {
+  const sessionId = 'tgdog-sess1';
+  await _pumpUntil(() => rig.fakes.runner.graphApplyCalls.isNotEmpty);
+  await _pumpUntil(() => rig.fakes.runner.callsFor('update').length >= 3);
+  rig.state.push(
+    _graph([
+      _sessionBead(sessionId, workBeadId: workBeadId),
+      _moleculeBead('tgdog-mol-$workBeadId', sessionId: sessionId),
+      _stepBead(
+        'tgdog-step-$workBeadId-agent',
+        sessionId: sessionId,
+        path: '$workBeadId/agent',
+      ),
+    ], const {}),
+  );
+  await _pumpUntil(() => rig.fakes.provider.started.isNotEmpty);
+}
+
 void main() {
   group('Track J — the invariants re-anchored on the runGrid composition', () {
     test('the baseline: an owned ready bead mounts THROUGH the composition — '
@@ -225,14 +287,24 @@ void main() {
         const SubstationWork().circuitMintMode,
         engine.CircuitMintMode.molecule,
       );
-      // The session minted through the ONE chokepoint (a real bd create was
-      // recorded — the write went nowhere else; there IS nowhere else).
+      await _pumpUntil(() => rig.fakes.runner.graphApplyCalls.isNotEmpty);
+      final plainCreates = rig.fakes.runner
+          .callsFor('create')
+          .where((c) => !c.contains('--graph'));
       expect(
-        rig.fakes.runner.calls.where((c) => c.first == 'create'),
-        isNotEmpty,
-        reason: 'SessionScope must mint through StationBeadWriter',
+        plainCreates,
+        hasLength(1),
+        reason: 'the molecule path still creates exactly one session bead',
+      );
+      final stamp = rig.fakes.runner.metadataOfUpdate(0);
+      expect(stamp[engine.SessionBeadKeys.model], engine.kSessionModelMolecule);
+      expect(
+        rig.fakes.runner.graphApplyCalls,
+        hasLength(1),
+        reason: 'const SubstationWork must reach the molecule graph pour',
       );
       // The transport spawned the agent step (mount = spawn).
+      await _pushMoleculeState(rig, 'pow-1');
       expect(rig.fakes.provider.started, hasLength(1));
 
       // unmount = kill: tearing the grid down stops the live allocation.
@@ -252,11 +324,21 @@ void main() {
       await _pump();
 
       expect(rig.resolver.resolved, ['pow-1']);
+      final plainCreates = rig.fakes.runner
+          .callsFor('create')
+          .where((c) => !c.contains('--graph'));
       expect(
-        rig.fakes.runner.calls.where((c) => c.first == 'create'),
-        isNotEmpty,
+        plainCreates,
+        hasLength(1),
         reason: 'the flat session still mints through StationBeadWriter',
       );
+      expect(
+        rig.fakes.runner.graphApplyCalls,
+        isEmpty,
+        reason: 'explicit flatCursor never pours molecule beads',
+      );
+      final stamp = rig.fakes.runner.metadataOfUpdate(0);
+      expect(stamp.containsKey(engine.SessionBeadKeys.model), isFalse);
       expect(rig.fakes.provider.started, hasLength(1));
     });
 
@@ -354,6 +436,7 @@ void main() {
       );
       await _pump();
       expect(rig.resolver.resolved, ['pow-1']);
+      await _pushMoleculeState(rig, 'pow-1');
       expect(rig.fakes.provider.started, hasLength(1));
     });
 
