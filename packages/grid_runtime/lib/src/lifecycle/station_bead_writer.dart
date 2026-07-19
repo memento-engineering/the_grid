@@ -37,6 +37,30 @@ class OwnershipRefused implements Exception {
       'ADR-0006 Decision 2)';
 }
 
+/// Raised when [StationBeadWriter] refuses to mint or refresh a gate for a
+/// session bead that the state snapshot already shows as closed.
+class SessionClosedRefused implements Exception {
+  SessionClosedRefused({
+    required this.operation,
+    required this.sessionId,
+    required this.reason,
+  });
+
+  /// The bd operation that was refused.
+  final String operation;
+
+  /// The session bead that the gate would have blocked.
+  final String sessionId;
+
+  /// The concrete refusal reason recorded for the operator.
+  final String reason;
+
+  @override
+  String toString() =>
+      'SessionClosedRefused: $operation for session "$sessionId" refused — '
+      '$reason (fail-closed)';
+}
+
 /// The single bd write chokepoint (ADR-0006 Decision 2; ADR-0000 A32) — the
 /// ONLY path through which the_grid's session/lifecycle/recovery beads are
 /// written, wrapping the M2 [BdCliService].
@@ -214,6 +238,7 @@ class StationBeadWriter {
     )) {
       _refuse('create', substation, substation);
     }
+    await _assertGateSessionOpen(sessionId);
     // Mint-dedup: reuse+refresh an existing OPEN gate for this (session, node).
     final existing = await _findOpenGate(
       sessionId: sessionId,
@@ -675,6 +700,43 @@ class StationBeadWriter {
       // Best-effort: a snapshot-read failure must never block a real gate mint.
     }
     return null;
+  }
+
+  /// Refuses gate mint/refresh when the snapshot proves [sessionId] is closed.
+  ///
+  /// The snapshot probe is intentionally narrow: an absent session keeps the
+  /// existing fake/offline behavior, while a present closed session is a hard
+  /// refusal before `bd create` or a dedup refresh can run.
+  Future<void> _assertGateSessionOpen(String sessionId) async {
+    try {
+      final export = await _bd.exportAll();
+      for (final bead in export.beads) {
+        if (bead.id != sessionId) continue;
+        if (bead.issueType != IssueType.session) return;
+        if (!bead.isClosed) return;
+        _refuseClosedSession('create', sessionId, 'session bead is closed');
+      }
+    } on SessionClosedRefused {
+      rethrow;
+    } catch (_) {
+      // The existing gate-dedup probe is best-effort. A snapshot read failure
+      // cannot prove the session is closed, so the legacy mint path remains
+      // available; proven-closed sessions are refused above.
+    }
+  }
+
+  Never _refuseClosedSession(
+    String operation,
+    String sessionId,
+    String reason,
+  ) {
+    final refusal = SessionClosedRefused(
+      operation: operation,
+      sessionId: sessionId,
+      reason: reason,
+    );
+    _onRefusal?.call(refusal.toString());
+    throw refusal;
   }
 
   /// True when an OPEN `type=molecule`/`type=step` bead already carries

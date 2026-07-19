@@ -338,6 +338,12 @@ class SessionScopeState extends State<SessionScope> {
     });
   }
 
+  bool _isBlockingDisposition(SessionDisposition disposition) =>
+      switch (disposition) {
+        DoneSession() || HeldSession() => true,
+        NoSession() || LiveSession() || VoidedSession() => false,
+      };
+
   Future<void> _mint() async {
     // Yield so didChangeDependencies captures _ctx (genesis runs initState then
     // didChangeDependencies within one performRebuild).
@@ -719,6 +725,19 @@ class SessionScopeState extends State<SessionScope> {
       _flareRearmFailed(nodePath, 'no StationServices captured');
       return;
     }
+    final current = seed.existingSession;
+    final disposition = sessionDispositionOf(
+      current?.sessionId == id ? current : null,
+    );
+    if (_isBlockingDisposition(disposition)) {
+      _rearming.remove(nodePath);
+      _flare('gate.rearmRefused', {
+        'sessionId': id,
+        'nodePath': nodePath,
+        'reason': 'session is closed',
+      });
+      return;
+    }
     try {
       await ctx.writer.update(
         moleculeTarget ?? id,
@@ -879,6 +898,15 @@ class SessionScopeState extends State<SessionScope> {
         // LOUD — this scope never observed the retired session parked at a
         // gate, so re-minting here could silently abandon a live round.
         _scheduleReworkDecline(_sessionId!);
+      }
+    }
+
+    if (!_failed && matchesJoin) {
+      final disposition = sessionDispositionOf(seed.existingSession);
+      if (_isBlockingDisposition(disposition)) {
+        _rearming.clear();
+        _declineMount(disposition);
+        return const Idle();
       }
     }
 
