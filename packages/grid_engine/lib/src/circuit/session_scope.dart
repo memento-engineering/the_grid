@@ -167,6 +167,7 @@ class SessionScopeState extends State<SessionScope> {
   bool _failed = false;
   bool _cancelled = false;
   bool _terminalScheduled = false;
+  bool _deliveryOutcomeBlocked = false;
 
   /// True once THIS scope's session is known to be molecule-mode — set on
   /// ADOPT (`initState`'s `LiveSession()` arm reads
@@ -566,6 +567,27 @@ class SessionScopeState extends State<SessionScope> {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
     scheduleMicrotask(() => unawaited(_completeAndClose(id)));
+  }
+
+  String get _rootDeliveryNodePath =>
+      stepPath(seed.bead.id, seed.circuit.terminalStepId);
+
+  bool _deliveryOutcomeReady(Map<String, Map<String, String>> results) {
+    final method = _services.delivery;
+    if (method == null) return true;
+    return results[_rootDeliveryNodePath]?[ResultKeys.delivery] != null;
+  }
+
+  void _flareDeliveryOutcomeMissing(String id) {
+    if (_deliveryOutcomeBlocked) return;
+    _deliveryOutcomeBlocked = true;
+    final method = _services.delivery;
+    _flare('delivery.outcomeMissing', {
+      'sessionId': id,
+      'workBeadId': seed.bead.id,
+      'nodePath': _rootDeliveryNodePath,
+      'method': method?.id ?? '',
+    });
   }
 
   /// Stamps the durable POSITIVE-TERMINAL marker (`grid.outcome=complete`, I-10)
@@ -1080,7 +1102,11 @@ class SessionScopeState extends State<SessionScope> {
             seed.bead.id,
             circuitById: registry.circuit,
           )) {
-            _scheduleClose(id);
+            if (_deliveryOutcomeReady(results)) {
+              _scheduleClose(id);
+            } else {
+              _flareDeliveryOutcomeMissing(id);
+            }
           }
         }
       }
