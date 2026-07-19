@@ -47,10 +47,9 @@ void assertProvisionedCheckout(String workspaceDir) {
     '$workspaceDir/.git',
     followLinks: false,
   );
-  if (gitEntry == FileSystemEntityType.file ||
-      gitEntry == FileSystemEntityType.directory) {
-    return;
-  }
+  // A `.git` FILE is a linked worktree, a DIRECTORY a standalone checkout, and
+  // a LINK a symlinked gitdir — all legitimate. Only ABSENCE is sourceless.
+  if (gitEntry != FileSystemEntityType.notFound) return;
   throw StateError(
     'sourceless-workspace: provisionWorkspace returned without a checkout '
     'at $workspaceDir (.git missing)',

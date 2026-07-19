@@ -6,6 +6,7 @@
 // uncommitted verdict — is NEVER fenced. Zero I/O: fakes + an injected
 // work-signal probe.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -90,11 +91,16 @@ class _DaemonCap extends ProcessCapability {
 /// A minimal ambient [SourceControl] — its PRESENCE is what arms the fence (the
 /// tree has a real workspace); the fence's actual verdict comes from the injected
 /// probe. It provisions only — delivery is the substation's bound method (M5
-/// D-4a), and this fake binds none.
+/// D-4a), and this fake binds none. Provisioning MATERIALIZES a `.git` marker
+/// under [root] — the post-provision guard ([assertProvisionedCheckout], bead
+/// tg-6jn) gives "provisioned" a checkable meaning; direct-allocation tests
+/// that never provision keep the synthetic `/w` root.
 class _FakeSourceControl implements SourceControl {
+  _FakeSourceControl(this.root);
+  final String root;
 
   @override
-  String workspaceFor(String beadId) => '/w/$beadId';
+  String workspaceFor(String beadId) => '$root/$beadId';
   @override
   String branchFor(String beadId) => 'grid/$beadId';
   @override
@@ -104,8 +110,9 @@ class _FakeSourceControl implements SourceControl {
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,
-  }) async {}
-
+  }) async {
+    Directory('$workspaceDir/.git').createSync(recursive: true);
+  }
 }
 
 /// A recording work-signal probe returning a programmed [outcome] (or throwing),
@@ -151,7 +158,7 @@ AllocationContext _ctx({
   treeContext: FakeTreeContext(
     values: {
       ServiceBundle: withSourceControl
-          ? ServiceBundle(sourceControl: _FakeSourceControl())
+          ? ServiceBundle(sourceControl: _FakeSourceControl('/w'))
           : const ServiceBundle(),
       if (withWorkspace)
         Workspace: testWorkspace('tg-1', workspaceDir: '/w/tg-1'),
@@ -562,6 +569,14 @@ void main() {
       WorkSignalProbe probe, {
       bool withSourceControl = true,
     }) {
+      // AT DEPTH the REAL host provisions before spawning, and the
+      // post-provision guard (bead tg-6jn) checks the result on disk — so
+      // this harness roots the workspace at a REAL temp dir the fake
+      // provisions into (the direct-allocation tests above never provision
+      // and keep their synthetic paths).
+      final root = Directory.systemTemp.createTempSync('fence-depth-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final sc = _FakeSourceControl(root.path);
       final fakes = buildFakes(workSignal: probe);
       final owner = TreeOwner();
       owner.mountRoot(
@@ -571,10 +586,13 @@ void main() {
             value: RecordingCapabilityRegistry(clock: clock),
             child: InheritedSeed<ServiceBundle>(
               value: withSourceControl
-                  ? ServiceBundle(sourceControl: _FakeSourceControl())
+                  ? ServiceBundle(sourceControl: sc)
                   : const ServiceBundle(),
               child: InheritedSeed<Workspace>(
-                value: testWorkspace('tg-1', workspaceDir: '/w/tg-1'),
+                value: testWorkspace(
+                  'tg-1',
+                  workspaceDir: sc.workspaceFor('tg-1'),
+                ),
                 child: CapabilityHost(
                   capability: _AgentCap([]),
                   mount: const StepMount(
