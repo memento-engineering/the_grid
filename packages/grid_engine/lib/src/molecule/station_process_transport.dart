@@ -88,6 +88,7 @@ Future<ProcessHandle> stationProcessSpawner(
         beadId: args.beadId,
         workspaceDir: workspace.workspaceDir,
       );
+      assertProvisionedCheckout(workspace.workspaceDir);
     }
     if (args.cancel.isCancelled) {
       throw StateError('cancelled before spawn ($name)');

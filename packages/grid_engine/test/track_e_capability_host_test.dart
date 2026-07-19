@@ -148,13 +148,17 @@ final _clock = DateTime(2026);
 }
 
 /// A [SourceControl] that records `provision(beadId)` into a shared [log] so a
-/// test can assert provisioning fires BEFORE the spawn. Land is irrelevant here.
+/// test can assert provisioning fires BEFORE the spawn. Land is irrelevant
+/// here. Rooted at a REAL temp dir, and provisioning MATERIALIZES a `.git`
+/// marker — the post-provision guard ([assertProvisionedCheckout], bead
+/// tg-6jn) gives "provisioned" a checkable meaning a fake may not skip.
 class _RecordingProvisionSourceControl implements SourceControl {
-  _RecordingProvisionSourceControl(this.log);
+  _RecordingProvisionSourceControl(this.log, this.root);
   final List<String> log;
+  final String root;
 
   @override
-  String workspaceFor(String beadId) => '/w/$beadId';
+  String workspaceFor(String beadId) => '$root/$beadId';
   @override
   String branchFor(String beadId) => 'grid/$beadId';
   @override
@@ -164,20 +168,26 @@ class _RecordingProvisionSourceControl implements SourceControl {
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,
-  }) async => log.add('provision($beadId)');
-
+  }) async {
+    log.add('provision($beadId)');
+    Directory('$workspaceDir/.git').createSync(recursive: true);
+  }
 }
 
 /// A [SourceControl] with a KNOWN workspace/branch layout that records the
 /// workspaceDir it is asked to provision — so a test can prove the effect
 /// spawns into + provisions the AMBIENT [Workspace] derived from the inherited
 /// SourceControl (ADR-0008 D5; SessionScope owns the derivation since the
-/// context rip-out), not a baked-in engine path.
+/// context rip-out), not a baked-in engine path. Rooted at a REAL temp dir and
+/// materializes a `.git` marker for the same reason as
+/// [_RecordingProvisionSourceControl].
 class _DerivingSourceControl implements SourceControl {
+  _DerivingSourceControl(this.root);
+  final String root;
   final List<String> provisionedDirs = [];
 
   @override
-  String workspaceFor(String beadId) => '/custom/ws/$beadId';
+  String workspaceFor(String beadId) => '$root/custom-ws-$beadId';
   @override
   String branchFor(String beadId) => 'custom/$beadId';
   @override
@@ -187,8 +197,10 @@ class _DerivingSourceControl implements SourceControl {
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,
-  }) async => provisionedDirs.add(workspaceDir);
-
+  }) async {
+    provisionedDirs.add(workspaceDir);
+    Directory('$workspaceDir/.git').createSync(recursive: true);
+  }
 }
 
 Branch _hostBranch(Branch root) {
@@ -225,7 +237,9 @@ void main() {
 
     test('the host provisions the workspace BEFORE spawning into it', () async {
       final log = <String>[];
-      final sc = _RecordingProvisionSourceControl(log);
+      final root = Directory.systemTemp.createTempSync('track-e-prov-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final sc = _RecordingProvisionSourceControl(log, root.path);
       final h = _host(
         _RecordingProcessCap(log),
         services: ServiceBundle(sourceControl: sc),
@@ -251,7 +265,9 @@ void main() {
         'from the SourceControl (ADR-0008 D5) — the engine holds no worktree '
         'layout', () async {
       final log = <String>[];
-      final sc = _DerivingSourceControl();
+      final root = Directory.systemTemp.createTempSync('track-e-derive-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final sc = _DerivingSourceControl(root.path);
       final h = _host(
         _RecordingProcessCap(log),
         services: ServiceBundle(sourceControl: sc),
@@ -275,9 +291,10 @@ void main() {
       // spawn config AND the provision call, NOT a baked engine path. (A
       // mutation that hardcodes the workspace in the Host/Allocation, or
       // resolves the wrong ambient, fails all three.)
-      expect(h.fakes.provider.started.single.config.workDir, '/custom/ws/tg-1');
-      expect(log.first, 'spawn(tg-1@/custom/ws/tg-1)');
-      expect(sc.provisionedDirs, ['/custom/ws/tg-1'],
+      final ws = sc.workspaceFor('tg-1');
+      expect(h.fakes.provider.started.single.config.workDir, ws);
+      expect(log.first, 'spawn(tg-1@$ws)');
+      expect(sc.provisionedDirs, [ws],
           reason: 'the SAME derived path is provisioned');
     });
 
@@ -446,7 +463,9 @@ void main() {
       final log = <String>[];
       // The pre-spawn async gap is the provisioning await (without source
       // control the new kick spawns synchronously at mount — nothing to race).
-      final sc = _RecordingProvisionSourceControl(log);
+      final root = Directory.systemTemp.createTempSync('track-e-race-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final sc = _RecordingProvisionSourceControl(log, root.path);
       final h = _host(
         _RecordingProcessCap(log),
         services: ServiceBundle(sourceControl: sc),

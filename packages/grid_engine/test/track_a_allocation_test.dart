@@ -3,6 +3,8 @@
 // Capability.createAllocation factory defaults. The effect layer REPORTS through
 // the sink and holds NO writer — these tests drive it with a capturing sink + the
 // controllable FakeRuntimeProvider (Fakes, not mocks; zero I/O).
+import 'dart:io';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -70,9 +72,14 @@ class _RecServiceCap extends ServiceCapability {
 /// `ServiceBundle` carries one instance per root, so a per-bead resolution bug
 /// shows up as the WRONG instance's log entry).
 class _RecordingProvisionSourceControl implements SourceControl {
-  _RecordingProvisionSourceControl(this.log, {this.root = ''});
+  _RecordingProvisionSourceControl(
+    this.log, {
+    this.root = '',
+    this.createGitEntry = false,
+  });
   final List<String> log;
   final String root;
+  final bool createGitEntry;
 
   @override
   String workspaceFor(String beadId) => '/w/$beadId';
@@ -85,9 +92,13 @@ class _RecordingProvisionSourceControl implements SourceControl {
   Future<void> provisionWorkspace({
     required String beadId,
     required String workspaceDir,
-  }) async =>
-      log.add(root.isEmpty ? 'provision($beadId)' : 'provision($root:$beadId)');
-
+  }) async {
+    log.add(root.isEmpty ? 'provision($beadId)' : 'provision($root:$beadId)');
+    if (createGitEntry) {
+      Directory(workspaceDir).createSync(recursive: true);
+      Directory('$workspaceDir/.git').createSync();
+    }
+  }
 }
 
 // --- builders ----------------------------------------------------------------
@@ -99,11 +110,12 @@ class _RecordingProvisionSourceControl implements SourceControl {
 FakeTreeContext _treeCtx({
   ServiceBundle services = const ServiceBundle(),
   Bead? bead,
+  String workspaceDir = '/w/tg-1',
 }) => FakeTreeContext(
   values: {
     Workspace: testWorkspace(
       'tg-1',
-      workspaceDir: '/w/tg-1',
+      workspaceDir: workspaceDir,
       branch: 'grid/tg-1',
     ),
     ServiceBundle: services,
@@ -119,8 +131,13 @@ AllocationContext _allocCtx({
   Bead? bead,
   AdoptFence fence = const AdoptFence(),
   Map<String, String> env = const {},
+  String workspaceDir = '/w/tg-1',
 }) => AllocationContext(
-  treeContext: _treeCtx(services: services, bead: bead),
+  treeContext: _treeCtx(
+    services: services,
+    bead: bead,
+    workspaceDir: workspaceDir,
+  ),
   args: stepArgs('tg-1/agent', cancel: cancel),
   transport: transport,
   address: const AllocationAddress('tgdog-s', 'tg-1/agent'),
@@ -287,6 +304,10 @@ void main() {
       'startOrAdopt provisions BEFORE spawn, under the address, with the env '
       'overlay layered over the base env',
       () async {
+        final workspaceDir = Directory.systemTemp
+            .createTempSync('grid-flat-checkout-')
+            .path;
+        addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
         final log = <String>[];
         final provider = FakeRuntimeProvider();
         final alloc = _RecProcessCap(log).createAllocation(
@@ -295,9 +316,13 @@ void main() {
             sink: (_) {},
             cancel: CancelToken(),
             services: ServiceBundle(
-              sourceControl: _RecordingProvisionSourceControl(log),
+              sourceControl: _RecordingProvisionSourceControl(
+                log,
+                createGitEntry: true,
+              ),
             ),
             env: const {'GRID_BEAD_ID': 'tg-1', 'GRID_INSTANCE_TOKEN': 'tok'},
+            workspaceDir: workspaceDir,
           ),
         );
         await alloc.startOrAdopt();
@@ -322,29 +347,71 @@ void main() {
       },
     );
 
-    test('the CREATE-path provision uses the substation\'s ONE '
-        'SourceControl (v3 single-root — no metadata.grid.root selector)', () async {
-      final log = <String>[];
-      final provider = FakeRuntimeProvider();
-      final alloc = _RecProcessCap(log).createAllocation(
-        _allocCtx(
-          transport: provider,
-          sink: (_) {},
-          cancel: CancelToken(),
-          bead: const Bead(id: 'tg-1', issueType: IssueType.task),
-          services: ServiceBundle(
-            sourceControl: _RecordingProvisionSourceControl(
-              log,
-              root: 'default',
+    test(
+      'a provisioned workspace without .git fails LOUD before spawn',
+      () async {
+        final workspaceDir = Directory.systemTemp
+            .createTempSync('grid-flat-sourceless-')
+            .path;
+        addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
+        final log = <String>[];
+        final reports = <AllocationReport>[];
+        final provider = FakeRuntimeProvider();
+        final alloc = _RecProcessCap(log).createAllocation(
+          _allocCtx(
+            transport: provider,
+            sink: reports.add,
+            cancel: CancelToken(),
+            services: ServiceBundle(
+              sourceControl: _RecordingProvisionSourceControl(log),
             ),
+            workspaceDir: workspaceDir,
           ),
-        ),
-      );
-      await alloc.startOrAdopt();
-      await _pump();
+        );
 
-      expect(log, contains('provision(default:tg-1)'));
-    });
+        await alloc.startOrAdopt();
+        await _pump();
+
+        expect(provider.started, isEmpty);
+        expect(log, ['provision(tg-1)']);
+        final failed = reports.whereType<AllocationFailed>().single;
+        expect(failed.reason, contains('sourceless-workspace'));
+        expect(alloc.state, AllocationState.gone);
+      },
+    );
+
+    test(
+      'the CREATE-path provision uses the substation\'s ONE '
+      'SourceControl (v3 single-root — no metadata.grid.root selector)',
+      () async {
+        final workspaceDir = Directory.systemTemp
+            .createTempSync('grid-flat-root-checkout-')
+            .path;
+        addTearDown(() => Directory(workspaceDir).deleteSync(recursive: true));
+        final log = <String>[];
+        final provider = FakeRuntimeProvider();
+        final alloc = _RecProcessCap(log).createAllocation(
+          _allocCtx(
+            transport: provider,
+            sink: (_) {},
+            cancel: CancelToken(),
+            bead: const Bead(id: 'tg-1', issueType: IssueType.task),
+            services: ServiceBundle(
+              sourceControl: _RecordingProvisionSourceControl(
+                log,
+                root: 'default',
+                createGitEntry: true,
+              ),
+            ),
+            workspaceDir: workspaceDir,
+          ),
+        );
+        await alloc.startOrAdopt();
+        await _pump();
+
+        expect(log, contains('provision(default:tg-1)'));
+      },
+    );
 
     test('SessionStarted → AllocationStarted(pid,pgid)', () async {
       final reports = <AllocationReport>[];

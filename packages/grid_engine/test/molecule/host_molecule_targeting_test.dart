@@ -34,6 +34,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
+import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -100,6 +101,21 @@ class _DaemonCap extends ProcessCapability {
 
   @override
   Future<void> teardown(StepArgs args) async {}
+}
+
+class _ProvisionSourceControl implements SourceControl {
+  @override
+  String workspaceFor(String beadId) => '/w/$beadId';
+  @override
+  String branchFor(String beadId) => 'grid/$beadId';
+  @override
+  String get baseBranch => 'main';
+
+  @override
+  Future<void> provisionWorkspace({
+    required String beadId,
+    required String workspaceDir,
+  }) async {}
 }
 
 Future<ProcessHandle> _neverSpawn(
@@ -205,6 +221,7 @@ _host(
   ProcessLeaseVendor? leaseVendor,
   EscalationHandler? escalation,
   StepMount? mount,
+  SourceControl? sourceControl,
 }) {
   final fakes = buildFakes();
   final owner = TreeOwner();
@@ -222,7 +239,11 @@ _host(
       child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: _clock),
         child: InheritedSeed<ServiceBundle>(
-          value: ServiceBundle(transport: transport, escalation: escalation),
+          value: ServiceBundle(
+            transport: transport,
+            escalation: escalation,
+            sourceControl: sourceControl,
+          ),
           child: InheritedSeed<Workspace>(
             value: testWorkspace('tg-1'),
             child: tree,
@@ -559,6 +580,52 @@ void main() {
       expect(f.data['error'], contains('ProcessLeaseVendor'));
       expect(log, isEmpty, reason: 'the capability was never spawned');
     });
+
+    test(
+      'real stationProcessSpawner sourceless failure gates the step bead',
+      () async {
+        final log = <String>[];
+        const vendor = SelfManagedProcessVendor(
+          spawn: stationProcessSpawner,
+          dispatch: _neverDispatch,
+        );
+        final h = _host(
+          _RecordingProcessCap(log),
+          circuit: _moleculeCircuit,
+          leaseVendor: vendor,
+          sourceControl: _ProvisionSourceControl(),
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+
+        final updates = h.fakes.runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single[1], _stepBeadId);
+        final meta = h.fakes.runner.metadataOfUpdate(0);
+        expect(meta['grid.step.state'], 'failed');
+        expect(
+          meta['grid.step.failureReason'],
+          contains('sourceless-workspace'),
+        );
+        expect(
+          h.transport.flares.map((f) => f.name),
+          contains('step.allocationFailed'),
+        );
+        final f = h.transport.flares.firstWhere(
+          (f) => f.name == 'step.allocationFailed',
+        );
+        expect(f.data['error'], contains('sourceless-workspace'));
+        expect(h.fakes.provider.started, isEmpty);
+        expect(
+          log,
+          isEmpty,
+          reason: 'spawn is guarded before capability.spawn',
+        );
+      },
+    );
 
     test(
       'the throw is MOLECULE-PATH-ONLY: a flat session (no InheritedCircuit) '
