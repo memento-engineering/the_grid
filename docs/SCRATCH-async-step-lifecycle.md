@@ -257,8 +257,11 @@ TmuxProvider-not-built / `listBeadWorktrees`-no-caller level. This section *exte
    cross-stamps ("on the molecule path, superseded by DESIGN-tg-pm6 R3").
 5. **Smaller stale claims:** M4-P1's `StepState` is 5-valued (code has 6, with `gated`);
    ADR-0007 D4's "adopt is deferred net-new work" predates `startOrAdopt`/`AdoptProof`
-   landing; ADR-0009-BUILD-ORDER Track G's "dissolved" smells (`Expando`, `_capCtx`,
-   `CancelToken` juggling) still exist in code.
+   landing. *(Correction, 2026-07-19 debt-pass verification: an earlier draft of this
+   item claimed Track G's "dissolved" smells still existed — they do not. `Expando` and
+   live `_capCtx` are gone from lib (only a lineage comment at `sdk/allocation.dart:12`
+   remains) and `CancelToken` is now the intended typed `StepArgs.cancel` field, not
+   juggling. Track G executed.)*
 6. **What the incident catalog already holds:** SCRATCH-orchestration-determinism I-9 (a
    graceful down leaked an in-flight spawn; down-path orphan sweep filed-deferred, not
    landed) and I-11 (murdered-vanish-as-completion → A49) are this surface's prior art —
