@@ -16,7 +16,11 @@ const _code = Circuit(
   terminalStepId: 'land',
   steps: [
     CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-    CapabilityStep(stepId: 'verify', capabilityId: 'verify', dependsOn: {'agent'}),
+    CapabilityStep(
+      stepId: 'verify',
+      capabilityId: 'verify',
+      dependsOn: {'agent'},
+    ),
     CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'verify'}),
   ],
 );
@@ -27,7 +31,11 @@ const _burn = Circuit(
   steps: [
     CapabilityStep(stepId: 'a', capabilityId: 'a'),
     CapabilityStep(stepId: 'b', capabilityId: 'b'), // also dep-free → fan-out
-    CapabilityStep(stepId: 'report', capabilityId: 'report', dependsOn: {'a', 'b'}),
+    CapabilityStep(
+      stepId: 'report',
+      capabilityId: 'report',
+      dependsOn: {'a', 'b'},
+    ),
   ],
 );
 
@@ -54,7 +62,10 @@ JoinedSnapshot _joined({
 Bead _task(String id, {BeadStatus status = BeadStatus.open}) =>
     Bead(id: id, issueType: IssueType.task, status: status);
 
-const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
+const _tgConfig = SubstationConfig(
+  substationId: 'tg',
+  ownedSubstations: {'tg'},
+);
 
 /// The full new-path root: WorkList observes [joined]; WorkBead resolves through
 /// the CircuitResolver → SessionScope → CircuitScope; SessionScope mints via the
@@ -64,6 +75,7 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
   required StationServices ctx,
   required CapabilityRegistry registry,
   required RootCircuitFor rootCircuit,
+  ServiceBundle services = const ServiceBundle(),
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -78,6 +90,7 @@ const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'})
             child: Station([
               SubstationScope(
                 configNotifier: SubstationConfigNotifier(_tgConfig),
+                services: services,
                 key: const ValueKey('scope.tg'),
               ),
             ]),
@@ -105,59 +118,64 @@ Branch _whereSeed(Branch root, bool Function(Seed seed) test) =>
 
 void main() {
   group('Track C — SessionScope mints ONCE, above the fan-out', () {
-    test('a ready bead with no session mints exactly one session, then inflates',
-        () async {
-      final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(circuits: const {});
-      final joined = JoinedSnapshotNotifier(
-        _joined(beads: [_task('tg-1')], ready: {'tg-1'}),
-      );
-      final m = _mountFull(
-        joined: joined,
-        ctx: f.ctx,
-        registry: reg,
-        rootCircuit: (_) => _code,
-      );
-      addTearDown(m.owner.dispose);
+    test(
+      'a ready bead with no session mints exactly one session, then inflates',
+      () async {
+        final f = buildFakes();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final joined = JoinedSnapshotNotifier(
+          _joined(beads: [_task('tg-1')], ready: {'tg-1'}),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+        );
+        addTearDown(m.owner.dispose);
 
-      // Resolving: no leaf yet (the session mint is async).
-      expect(reg.events, isEmpty);
-      await _pump();
-      m.owner.flush();
+        // Resolving: no leaf yet (the session mint is async).
+        expect(reg.events, isEmpty);
+        await _pump();
+        m.owner.flush();
 
-      // Exactly ONE createSession (minted above the fan-out), then the first
-      // step inflates under the minted SessionHandle (id = tgdog-sess1).
-      expect(f.runner.callsFor('create'), hasLength(1));
-      expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
-    });
+        // Exactly ONE createSession (minted above the fan-out), then the first
+        // step inflates under the minted SessionHandle (id = tgdog-sess1).
+        expect(f.runner.callsFor('create'), hasLength(1));
+        expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
+      },
+    );
 
-    test('a fan-out circuit (two dep-free steps) still mints ONE session', () async {
-      final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(circuits: const {});
-      final joined = JoinedSnapshotNotifier(
-        _joined(beads: [_task('tg-burn')], ready: {'tg-burn'}),
-      );
-      final m = _mountFull(
-        joined: joined,
-        ctx: f.ctx,
-        registry: reg,
-        rootCircuit: (_) => _burn,
-      );
-      addTearDown(m.owner.dispose);
-      await _pump();
-      m.owner.flush();
+    test(
+      'a fan-out circuit (two dep-free steps) still mints ONE session',
+      () async {
+        final f = buildFakes();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final joined = JoinedSnapshotNotifier(
+          _joined(beads: [_task('tg-burn')], ready: {'tg-burn'}),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _burn,
+        );
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
 
-      // ONE mint, both dep-free leaves mounted under the SAME session id, with
-      // DISJOINT paths (disjoint routing) — never two mints / two sessions.
-      expect(f.runner.callsFor('create'), hasLength(1));
-      expect(
-        reg.events,
-        unorderedEquals([
-          'START a(tgdog-sess1/tg-burn/a)',
-          'START b(tgdog-sess1/tg-burn/b)',
-        ]),
-      );
-    });
+        // ONE mint, both dep-free leaves mounted under the SAME session id, with
+        // DISJOINT paths (disjoint routing) — never two mints / two sessions.
+        expect(f.runner.callsFor('create'), hasLength(1));
+        expect(
+          reg.events,
+          unorderedEquals([
+            'START a(tgdog-sess1/tg-burn/a)',
+            'START b(tgdog-sess1/tg-burn/b)',
+          ]),
+        );
+      },
+    );
   });
 
   group('Track C — SessionScope adopts an existing session', () {
@@ -171,7 +189,8 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
-              sessionId: 'tgdog-existing',            ),
+              sessionId: 'tgdog-existing',
+            ),
           },
         ),
       );
@@ -191,70 +210,79 @@ void main() {
   });
 
   group('Track C — SessionScope owns the positive-terminal close (D-2)', () {
-    test('when the terminal step completes, the session is closed exactly once',
-        () async {
-      final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(circuits: const {});
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [_task('tg-1')],
-          ready: {'tg-1'},
-          sessions: {
-            'tg-1': const SessionProjection(
-              workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',            ),
-          },
-        ),
-      );
-      final m = _mountFull(
-        joined: joined,
-        ctx: f.ctx,
-        registry: reg,
-        rootCircuit: (_) => _code,
-      );
-      addTearDown(m.owner.dispose);
+    test(
+      'when the terminal step completes, the session is closed exactly once',
+      () async {
+        final f = buildFakes();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': const SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-s',
+              ),
+            },
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+        );
+        addTearDown(m.owner.dispose);
 
-      // Drive the cursor to the terminal (land complete).
-      joined.push(
-        _joined(
-          beads: [_task('tg-1')],
-          ready: {'tg-1'},
-          sessions: {
-            'tg-1': const SessionProjection(
-              workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',              cursor: {
-                'tg-1/agent': NodeCursor(state: StepState.complete),
-                'tg-1/verify': NodeCursor(state: StepState.complete),
-                'tg-1/land': NodeCursor(state: StepState.complete),
-              },
-            ),
-          },
-        ),
-      );
-      m.owner.flush();
+        // Drive the cursor to the terminal (land complete).
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': const SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-s',
+                cursor: {
+                  'tg-1/agent': NodeCursor(state: StepState.complete),
+                  'tg-1/verify': NodeCursor(state: StepState.complete),
+                  'tg-1/land': NodeCursor(state: StepState.complete),
+                },
+              ),
+            },
+          ),
+        );
+        m.owner.flush();
 
-      // The close is SCHEDULED off build, NOT written during build (invariant 2:
-      // no writes in build()) — so immediately after the synchronous flush, no
-      // close has been issued yet.
-      expect(
-        f.runner.callsFor('close'),
-        isEmpty,
-        reason: 'the close must be scheduled off build, not written in build()',
-      );
+        // The close is SCHEDULED off build, NOT written during build (invariant 2:
+        // no writes in build()) — so immediately after the synchronous flush, no
+        // close has been issued yet.
+        expect(
+          f.runner.callsFor('close'),
+          isEmpty,
+          reason:
+              'the close must be scheduled off build, not written in build()',
+        );
 
-      await _pump();
+        await _pump();
 
-      // After the microtask drains, SessionScope closed the session, exactly once
-      // (latched).
-      expect(f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'), hasLength(1));
-    });
+        // After the microtask drains, SessionScope closed the session, exactly once
+        // (latched).
+        expect(
+          f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
+          hasLength(1),
+        );
+      },
+    );
 
     test('the close is latched once across repeated terminal rebuilds', () async {
       final f = buildFakes();
       final reg = RecordingCapabilityRegistry(circuits: const {});
       const terminal = SessionProjection(
         workBeadId: 'tg-1',
-        sessionId: 'tgdog-s',        cursor: {
+        sessionId: 'tgdog-s',
+        cursor: {
           'tg-1/agent': NodeCursor(state: StepState.complete),
           'tg-1/verify': NodeCursor(state: StepState.complete),
           'tg-1/land': NodeCursor(state: StepState.complete),
@@ -279,73 +307,217 @@ void main() {
       // Re-push the SAME terminal snapshot twice → SessionScope rebuilds, but the
       // _closeScheduled latch fires the close exactly once.
       joined.push(
-        _joined(beads: [_task('tg-1')], ready: {'tg-1'}, sessions: {'tg-1': terminal}),
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          sessions: {'tg-1': terminal},
+        ),
       );
       m.owner.flush();
       await _pump();
-      expect(f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'), hasLength(1));
-    });
-  });
-
-  group('Track C — invariant 1 at depth: only WorkList dirties on a work tick',
-      () {
-    test('a cursor advance flush() returns exactly [WorkList]; config ancestors '
-        '+ the inflater are absent from the drain', () {
-      final f = buildFakes();
-      final reg = RecordingCapabilityRegistry(circuits: const {});
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [_task('tg-1')],
-          ready: {'tg-1'},
-          sessions: {
-            'tg-1': const SessionProjection(
-              workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',            ),
-          },
-        ),
-      );
-      final m = _mountFull(
-        joined: joined,
-        ctx: f.ctx,
-        registry: reg,
-        rootCircuit: (_) => _code,
-      );
-      addTearDown(m.owner.dispose);
-      expect(reg.events, ['START agent(tgdog-s/tg-1/agent)']);
-      reg.events.clear();
-
-      // Advance the per-node cursor (agent complete) via the join.
-      joined.push(
-        _joined(
-          beads: [_task('tg-1')],
-          ready: {'tg-1'},
-          sessions: {
-            'tg-1': const SessionProjection(
-              workBeadId: 'tg-1',
-              sessionId: 'tgdog-s',              cursor: {'tg-1/agent': NodeCursor(state: StepState.complete)},
-            ),
-          },
-        ),
-      );
-      final flushed = m.owner.flush();
-
-      // Only the observing node drained — the SessionScope/CircuitScope/leaves
-      // are force-rebuilt by WorkList's cascade, excluded from the drain.
-      final workList = _whereSeed(m.root, (s) => s is WorkList);
-      expect(flushed, equals([workList]));
-      // The swap happened (agent retired, verify entered).
       expect(
-        reg.events,
-        unorderedEquals([
-          'STOP agent(tgdog-s/tg-1/agent)',
-          'START verify(tgdog-s/tg-1/verify)',
-        ]),
+        f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
+        hasLength(1),
       );
-      // Config ancestors + the inflater are absent from the drain.
-      expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is Station))));
-      expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is SubstationScope))));
-      expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is CircuitScope))));
-      expect(flushed, isNot(contains(_whereSeed(m.root, (s) => s is SessionScope))));
     });
+
+    test(
+      'delivery-bound terminal without recorded outcome blocks close and flares',
+      () async {
+        final f = buildFakes();
+        final transport = RecordingExplorationTransport();
+        final method = RecordingDeliveryMethod(id: 'github-pr');
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        const terminal = SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s',
+          cursor: {
+            'tg-1/agent': NodeCursor(state: StepState.complete),
+            'tg-1/verify': NodeCursor(state: StepState.complete),
+            'tg-1/land': NodeCursor(state: StepState.complete),
+          },
+          results: {
+            'tg-1/land': {'grade': 'A'},
+          },
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+          services: ServiceBundle(delivery: method, transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        expect(f.runner.callsFor('close'), isEmpty);
+        expect(f.runner.callsFor('update'), isEmpty);
+        expect(method.requests, isEmpty);
+        final flares = transport.named('delivery.outcomeMissing').toList();
+        expect(flares, hasLength(1));
+        expect(flares.single.data, {
+          'sessionId': 'tgdog-s',
+          'workBeadId': 'tg-1',
+          'nodePath': 'tg-1/land',
+          'method': 'github-pr',
+        });
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        m.owner.flush();
+        await _pump();
+
+        expect(f.runner.callsFor('close'), isEmpty);
+        expect(transport.named('delivery.outcomeMissing'), hasLength(1));
+      },
+    );
+
+    test(
+      'delivery-bound terminal with recorded outcome closes exactly once',
+      () async {
+        final f = buildFakes();
+        final transport = RecordingExplorationTransport();
+        final method = RecordingDeliveryMethod(id: 'github-pr');
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        const terminal = SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s',
+          cursor: {
+            'tg-1/agent': NodeCursor(state: StepState.complete),
+            'tg-1/verify': NodeCursor(state: StepState.complete),
+            'tg-1/land': NodeCursor(state: StepState.complete),
+          },
+          results: {
+            'tg-1/land': {
+              ResultKeys.delivery: 'github-pr',
+              'pr_url': 'https://example.test/pr/66',
+            },
+          },
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+          services: ServiceBundle(delivery: method, transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        expect(
+          f.runner.callsFor('close').where((call) => call[1] == 'tgdog-s'),
+          hasLength(1),
+        );
+        expect(f.runner.metadataOfUpdate(0), sessionCompleteMetadata());
+        expect(transport.named('delivery.outcomeMissing'), isEmpty);
+        expect(method.requests, isEmpty);
+      },
+    );
   });
+
+  group(
+    'Track C — invariant 1 at depth: only WorkList dirties on a work tick',
+    () {
+      test(
+        'a cursor advance flush() returns exactly [WorkList]; config ancestors '
+        '+ the inflater are absent from the drain',
+        () {
+          final f = buildFakes();
+          final reg = RecordingCapabilityRegistry(circuits: const {});
+          final joined = JoinedSnapshotNotifier(
+            _joined(
+              beads: [_task('tg-1')],
+              ready: {'tg-1'},
+              sessions: {
+                'tg-1': const SessionProjection(
+                  workBeadId: 'tg-1',
+                  sessionId: 'tgdog-s',
+                ),
+              },
+            ),
+          );
+          final m = _mountFull(
+            joined: joined,
+            ctx: f.ctx,
+            registry: reg,
+            rootCircuit: (_) => _code,
+          );
+          addTearDown(m.owner.dispose);
+          expect(reg.events, ['START agent(tgdog-s/tg-1/agent)']);
+          reg.events.clear();
+
+          // Advance the per-node cursor (agent complete) via the join.
+          joined.push(
+            _joined(
+              beads: [_task('tg-1')],
+              ready: {'tg-1'},
+              sessions: {
+                'tg-1': const SessionProjection(
+                  workBeadId: 'tg-1',
+                  sessionId: 'tgdog-s',
+                  cursor: {'tg-1/agent': NodeCursor(state: StepState.complete)},
+                ),
+              },
+            ),
+          );
+          final flushed = m.owner.flush();
+
+          // Only the observing node drained — the SessionScope/CircuitScope/leaves
+          // are force-rebuilt by WorkList's cascade, excluded from the drain.
+          final workList = _whereSeed(m.root, (s) => s is WorkList);
+          expect(flushed, equals([workList]));
+          // The swap happened (agent retired, verify entered).
+          expect(
+            reg.events,
+            unorderedEquals([
+              'STOP agent(tgdog-s/tg-1/agent)',
+              'START verify(tgdog-s/tg-1/verify)',
+            ]),
+          );
+          // Config ancestors + the inflater are absent from the drain.
+          expect(
+            flushed,
+            isNot(contains(_whereSeed(m.root, (s) => s is Station))),
+          );
+          expect(
+            flushed,
+            isNot(contains(_whereSeed(m.root, (s) => s is SubstationScope))),
+          );
+          expect(
+            flushed,
+            isNot(contains(_whereSeed(m.root, (s) => s is CircuitScope))),
+          );
+          expect(
+            flushed,
+            isNot(contains(_whereSeed(m.root, (s) => s is SessionScope))),
+          );
+        },
+      );
+    },
+  );
 }

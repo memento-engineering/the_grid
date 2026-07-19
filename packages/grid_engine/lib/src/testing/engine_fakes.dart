@@ -688,6 +688,23 @@ class _FakeCapabilityHostState extends State<FakeCapabilityHost> {
 // fakes.
 // ---------------------------------------------------------------------------
 
+/// Records [ExplorationTransport.flare] calls for offline tests.
+class RecordingExplorationTransport implements ExplorationTransport {
+  /// Creates an empty recording transport.
+  RecordingExplorationTransport();
+
+  /// Recorded flares in call order.
+  final List<({String name, Map<String, String> data})> flares = [];
+
+  /// Recorded flares whose name equals [name].
+  Iterable<({String name, Map<String, String> data})> named(String name) =>
+      flares.where((flare) => flare.name == name);
+
+  @override
+  void flare(String name, Map<String, String> data) =>
+      flares.add((name: name, data: data));
+}
+
 /// A recording [DeliveryMethod]: records every request and returns a settable
 /// [StepOutcome]. Set [throwNext] to prove the throwing-delivery → supervision
 /// path. Delivers nothing anywhere.
