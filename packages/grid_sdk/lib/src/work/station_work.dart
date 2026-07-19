@@ -9,7 +9,10 @@ import '../composition/scopes.dart';
 /// provides to the work subtree (the same stack `StationKernel.start` mounts
 /// above the engine's `Station` seed, tg-yl8): the work-axis
 /// [JoinedSnapshotNotifier], the machine's [StationServices], the
-/// bead→work-Seed [SessionResolver], and the reentrant [CapabilityRegistry].
+/// bead→work-Seed [SessionResolver], the reentrant [CapabilityRegistry], and
+/// the molecule model's [ProcessLeaseVendor] (tg-2mb — the seam a circuit's
+/// allocation resolves; without it a molecule step's `requireProcessLeaseVendor`
+/// throws at the readiness gate and the station wedges to zero).
 ///
 /// Impls = DI (ADR-0008 D-H): every field is constructed OFF-tree by the
 /// runner's assembly (`buildStationWork`) and enters the tree only as a
@@ -22,6 +25,7 @@ class StationWorkWiring {
     required this.services,
     required this.resolver,
     this.registry,
+    this.processLeaseVendor,
   });
 
   /// The work-axis notifier the substations' `WorkList`s observe — driven by
@@ -38,6 +42,13 @@ class StationWorkWiring {
   /// The reentrant capability/circuit registry; null when the resolver roots a
   /// non-reentrant subtree (a fake returning a plain leaf needs none).
   final CapabilityRegistry? registry;
+
+  /// The molecule model's process-lease seam (tg-2mb): the vendor a circuit's
+  /// allocation resolves. Built OFF-tree by `buildStationWork`
+  /// (`defaultProcessLeaseVendor` over [services]); null falls back to that
+  /// same default at mount, mirroring `StationKernel.start`'s
+  /// `_processLeaseVendor ?? defaultProcessLeaseVendor` provision.
+  final ProcessLeaseVendor? processLeaseVendor;
 }
 
 /// The STATION-scoped work asset (tg-yl8): provides the engine's ambient
@@ -69,6 +80,19 @@ class StationWork extends SingleChildStatelessSeed {
     if (registry != null) {
       out = InheritedSeed<CapabilityRegistry>(value: registry, child: out);
     }
+    // The molecule model's process-lease seam — mounted at the SAME position
+    // `StationKernel.start` mounts it (between the registry and the resolver,
+    // tg-h4u / tg-2mb). The PRODUCTION runGrid path uses THIS seat, not
+    // `StationKernel.start`, so without this seed a molecule step's
+    // `requireProcessLeaseVendor` throws at readiness and the station wedges to
+    // zero. Null wiring falls back to the real production vendor over the
+    // ambient services, mirroring the kernel's `?? defaultProcessLeaseVendor`.
+    out = InheritedSeed<ProcessLeaseVendor>(
+      value:
+          wiring.processLeaseVendor ??
+          defaultProcessLeaseVendor(wiring.services),
+      child: out,
+    );
     out = InheritedSeed<SessionResolver>(value: wiring.resolver, child: out);
     out = InheritedSeed<StationServices>(value: wiring.services, child: out);
     return InheritedSeed<JoinedSnapshotNotifier>(

@@ -479,6 +479,11 @@ Future<StationWorkRuntime> buildStationWork({
       services: services,
       resolver: resolver,
       registry: registry,
+      // tg-2mb: build the vendor OFF-tree (the DI rule — a branch never builds a
+      // service) so the production work subtree resolves the SAME real vendor
+      // StationKernel.start mounts. Without this the molecule allocation at the
+      // readiness gate throws `No ProcessLeaseVendor` and the station wedges.
+      processLeaseVendor: defaultProcessLeaseVendor(services),
     ),
     git: git,
     stateSubstation: stateSubstation,
