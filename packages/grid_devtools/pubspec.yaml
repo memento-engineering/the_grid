@@ -20,6 +20,12 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # Dev-only conformance pin: grid_devtools re-declares the exploration wire
+  # constants it consumes (ADR-0002 Decision 3 says it never links this
+  # package at runtime) — this dependency exists solely so the test suite can
+  # assert the hand-pinned strings against the real protocol constants. Ship
+  # graph is unchanged.
+  grid_exploration: any
   lints: ^5.1.0
   test: any
 
