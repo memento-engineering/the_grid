@@ -36,7 +36,11 @@ mixin _$RuntimeConfig {
 /// startup-reliability hints (`runtime.go:483-577`) collapsed to a single
 /// opaque note for M3 (the prompt-prefix / ready-delay / dialog machinery is
 /// CUT). Null when unset.
- String? get startupHint;
+ String? get startupHint;/// Absolute lifetime limit for this process. Null means the provider's
+/// default applies; callers set this for validation and critic lanes so a
+/// hung lane reaches a terminal event instead of occupying its cursor
+/// forever.
+ Duration? get deadline;
 /// Create a copy of RuntimeConfig
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -47,16 +51,16 @@ $RuntimeConfigCopyWith<RuntimeConfig> get copyWith => _$RuntimeConfigCopyWithImp
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is RuntimeConfig&&(identical(other.workDir, workDir) || other.workDir == workDir)&&(identical(other.command, command) || other.command == command)&&const DeepCollectionEquality().equals(other.args, args)&&(identical(other.lifecycle, lifecycle) || other.lifecycle == lifecycle)&&const DeepCollectionEquality().equals(other.env, env)&&(identical(other.startupHint, startupHint) || other.startupHint == startupHint));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is RuntimeConfig&&(identical(other.workDir, workDir) || other.workDir == workDir)&&(identical(other.command, command) || other.command == command)&&const DeepCollectionEquality().equals(other.args, args)&&(identical(other.lifecycle, lifecycle) || other.lifecycle == lifecycle)&&const DeepCollectionEquality().equals(other.env, env)&&(identical(other.startupHint, startupHint) || other.startupHint == startupHint)&&(identical(other.deadline, deadline) || other.deadline == deadline));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workDir,command,const DeepCollectionEquality().hash(args),lifecycle,const DeepCollectionEquality().hash(env),startupHint);
+int get hashCode => Object.hash(runtimeType,workDir,command,const DeepCollectionEquality().hash(args),lifecycle,const DeepCollectionEquality().hash(env),startupHint,deadline);
 
 @override
 String toString() {
-  return 'RuntimeConfig(workDir: $workDir, command: $command, args: $args, lifecycle: $lifecycle, env: $env, startupHint: $startupHint)';
+  return 'RuntimeConfig(workDir: $workDir, command: $command, args: $args, lifecycle: $lifecycle, env: $env, startupHint: $startupHint, deadline: $deadline)';
 }
 
 
@@ -67,7 +71,7 @@ abstract mixin class $RuntimeConfigCopyWith<$Res>  {
   factory $RuntimeConfigCopyWith(RuntimeConfig value, $Res Function(RuntimeConfig) _then) = _$RuntimeConfigCopyWithImpl;
 @useResult
 $Res call({
- String workDir, String command, List<String> args, Lifecycle lifecycle, Map<String, String> env, String? startupHint
+ String workDir, String command, List<String> args, Lifecycle lifecycle, Map<String, String> env, String? startupHint, Duration? deadline
 });
 
 
@@ -84,7 +88,7 @@ class _$RuntimeConfigCopyWithImpl<$Res>
 
 /// Create a copy of RuntimeConfig
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? workDir = null,Object? command = null,Object? args = null,Object? lifecycle = null,Object? env = null,Object? startupHint = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? workDir = null,Object? command = null,Object? args = null,Object? lifecycle = null,Object? env = null,Object? startupHint = freezed,Object? deadline = freezed,}) {
   return _then(_self.copyWith(
 workDir: null == workDir ? _self.workDir : workDir // ignore: cast_nullable_to_non_nullable
 as String,command: null == command ? _self.command : command // ignore: cast_nullable_to_non_nullable
@@ -92,7 +96,8 @@ as String,args: null == args ? _self.args : args // ignore: cast_nullable_to_non
 as List<String>,lifecycle: null == lifecycle ? _self.lifecycle : lifecycle // ignore: cast_nullable_to_non_nullable
 as Lifecycle,env: null == env ? _self.env : env // ignore: cast_nullable_to_non_nullable
 as Map<String, String>,startupHint: freezed == startupHint ? _self.startupHint : startupHint // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,deadline: freezed == deadline ? _self.deadline : deadline // ignore: cast_nullable_to_non_nullable
+as Duration?,
   ));
 }
 
@@ -177,10 +182,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workDir,  String command,  List<String> args,  Lifecycle lifecycle,  Map<String, String> env,  String? startupHint)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workDir,  String command,  List<String> args,  Lifecycle lifecycle,  Map<String, String> env,  String? startupHint,  Duration? deadline)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _RuntimeConfig() when $default != null:
-return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env,_that.startupHint);case _:
+return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env,_that.startupHint,_that.deadline);case _:
   return orElse();
 
 }
@@ -198,10 +203,10 @@ return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workDir,  String command,  List<String> args,  Lifecycle lifecycle,  Map<String, String> env,  String? startupHint)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workDir,  String command,  List<String> args,  Lifecycle lifecycle,  Map<String, String> env,  String? startupHint,  Duration? deadline)  $default,) {final _that = this;
 switch (_that) {
 case _RuntimeConfig():
-return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env,_that.startupHint);case _:
+return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env,_that.startupHint,_that.deadline);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -218,10 +223,10 @@ return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workDir,  String command,  List<String> args,  Lifecycle lifecycle,  Map<String, String> env,  String? startupHint)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workDir,  String command,  List<String> args,  Lifecycle lifecycle,  Map<String, String> env,  String? startupHint,  Duration? deadline)?  $default,) {final _that = this;
 switch (_that) {
 case _RuntimeConfig() when $default != null:
-return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env,_that.startupHint);case _:
+return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env,_that.startupHint,_that.deadline);case _:
   return null;
 
 }
@@ -233,7 +238,7 @@ return $default(_that.workDir,_that.command,_that.args,_that.lifecycle,_that.env
 
 
 class _RuntimeConfig extends RuntimeConfig {
-  const _RuntimeConfig({required this.workDir, required this.command, final  List<String> args = const <String>[], this.lifecycle = Lifecycle.longLived, final  Map<String, String> env = const <String, String>{}, this.startupHint}): _args = args,_env = env,super._();
+  const _RuntimeConfig({required this.workDir, required this.command, final  List<String> args = const <String>[], this.lifecycle = Lifecycle.longLived, final  Map<String, String> env = const <String, String>{}, this.startupHint, this.deadline}): _args = args,_env = env,super._();
   
 
 /// The working directory for the session process — **the per-bead git
@@ -285,6 +290,11 @@ class _RuntimeConfig extends RuntimeConfig {
 /// opaque note for M3 (the prompt-prefix / ready-delay / dialog machinery is
 /// CUT). Null when unset.
 @override final  String? startupHint;
+/// Absolute lifetime limit for this process. Null means the provider's
+/// default applies; callers set this for validation and critic lanes so a
+/// hung lane reaches a terminal event instead of occupying its cursor
+/// forever.
+@override final  Duration? deadline;
 
 /// Create a copy of RuntimeConfig
 /// with the given fields replaced by the non-null parameter values.
@@ -296,16 +306,16 @@ _$RuntimeConfigCopyWith<_RuntimeConfig> get copyWith => __$RuntimeConfigCopyWith
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _RuntimeConfig&&(identical(other.workDir, workDir) || other.workDir == workDir)&&(identical(other.command, command) || other.command == command)&&const DeepCollectionEquality().equals(other._args, _args)&&(identical(other.lifecycle, lifecycle) || other.lifecycle == lifecycle)&&const DeepCollectionEquality().equals(other._env, _env)&&(identical(other.startupHint, startupHint) || other.startupHint == startupHint));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _RuntimeConfig&&(identical(other.workDir, workDir) || other.workDir == workDir)&&(identical(other.command, command) || other.command == command)&&const DeepCollectionEquality().equals(other._args, _args)&&(identical(other.lifecycle, lifecycle) || other.lifecycle == lifecycle)&&const DeepCollectionEquality().equals(other._env, _env)&&(identical(other.startupHint, startupHint) || other.startupHint == startupHint)&&(identical(other.deadline, deadline) || other.deadline == deadline));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workDir,command,const DeepCollectionEquality().hash(_args),lifecycle,const DeepCollectionEquality().hash(_env),startupHint);
+int get hashCode => Object.hash(runtimeType,workDir,command,const DeepCollectionEquality().hash(_args),lifecycle,const DeepCollectionEquality().hash(_env),startupHint,deadline);
 
 @override
 String toString() {
-  return 'RuntimeConfig(workDir: $workDir, command: $command, args: $args, lifecycle: $lifecycle, env: $env, startupHint: $startupHint)';
+  return 'RuntimeConfig(workDir: $workDir, command: $command, args: $args, lifecycle: $lifecycle, env: $env, startupHint: $startupHint, deadline: $deadline)';
 }
 
 
@@ -316,7 +326,7 @@ abstract mixin class _$RuntimeConfigCopyWith<$Res> implements $RuntimeConfigCopy
   factory _$RuntimeConfigCopyWith(_RuntimeConfig value, $Res Function(_RuntimeConfig) _then) = __$RuntimeConfigCopyWithImpl;
 @override @useResult
 $Res call({
- String workDir, String command, List<String> args, Lifecycle lifecycle, Map<String, String> env, String? startupHint
+ String workDir, String command, List<String> args, Lifecycle lifecycle, Map<String, String> env, String? startupHint, Duration? deadline
 });
 
 
@@ -333,7 +343,7 @@ class __$RuntimeConfigCopyWithImpl<$Res>
 
 /// Create a copy of RuntimeConfig
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? workDir = null,Object? command = null,Object? args = null,Object? lifecycle = null,Object? env = null,Object? startupHint = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? workDir = null,Object? command = null,Object? args = null,Object? lifecycle = null,Object? env = null,Object? startupHint = freezed,Object? deadline = freezed,}) {
   return _then(_RuntimeConfig(
 workDir: null == workDir ? _self.workDir : workDir // ignore: cast_nullable_to_non_nullable
 as String,command: null == command ? _self.command : command // ignore: cast_nullable_to_non_nullable
@@ -341,7 +351,8 @@ as String,args: null == args ? _self._args : args // ignore: cast_nullable_to_no
 as List<String>,lifecycle: null == lifecycle ? _self.lifecycle : lifecycle // ignore: cast_nullable_to_non_nullable
 as Lifecycle,env: null == env ? _self._env : env // ignore: cast_nullable_to_non_nullable
 as Map<String, String>,startupHint: freezed == startupHint ? _self.startupHint : startupHint // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,deadline: freezed == deadline ? _self.deadline : deadline // ignore: cast_nullable_to_non_nullable
+as Duration?,
   ));
 }
 

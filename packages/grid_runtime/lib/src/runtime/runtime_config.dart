@@ -62,6 +62,12 @@ abstract class RuntimeConfig with _$RuntimeConfig {
     /// opaque note for M3 (the prompt-prefix / ready-delay / dialog machinery is
     /// CUT). Null when unset.
     String? startupHint,
+
+    /// Absolute lifetime limit for this process. Null means the provider's
+    /// default applies; callers set this for validation and critic lanes so a
+    /// hung lane reaches a terminal event instead of occupying its cursor
+    /// forever.
+    Duration? deadline,
   }) = _RuntimeConfig;
 }
 

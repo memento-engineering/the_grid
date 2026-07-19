@@ -27,6 +27,10 @@ sealed class RuntimeEvent with _$RuntimeEvent {
     required int pid,
     int? pgid,
     @Default('') String beadId,
+
+    /// The effective deadline armed for this session, after provider defaults
+    /// are applied. Null means no watchdog is armed for this process.
+    Duration? deadline,
   }) = SessionStarted;
 
   /// The session's process exited with [exitCode] (negative for signal-killed,
