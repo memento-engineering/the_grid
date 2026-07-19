@@ -11,13 +11,11 @@
 /// transport" edge **ADR-0002 Decision 1** names (an ALLOWED dependency
 /// direction, not a new seam).
 ///
-/// **What is deliberately NOT replicated here (yet):** the flat path's
-/// COMPLETION FENCE (`ProcessAllocation`'s no-complete-on-faith proof of an
-/// INFERRED exit). Molecule mode is inert until a composition sets
-/// `circuitMintMode: molecule` (the live arm, tg-6gi); arming that fence on
-/// the leased path is scoped to the live arm, where the work-signal probe is
-/// actually wired. The dispatcher takes the capability's event interpretation
-/// at face value — exactly the flat path's behavior when no probe is bound.
+/// The leased dispatcher uses the SAME work-signal probe as `ProcessAllocation`
+/// for [CompletionContract.committedWorkspace] capabilities, with the SAME A49
+/// scope: only an `Exited(inferred: true)` event that the capability interprets
+/// as [StepSignal.complete] is proven before the circuit advances. An observed
+/// exit code is already evidence and is not fenced.
 library;
 
 import 'dart:async';
@@ -121,15 +119,17 @@ Future<StepOutcome> stationProcessDispatcher(
 ) async {
   final ctx = request.allocation;
   final name = ctx.address.providerName;
-  final signalled = Completer<StepSignal>();
+  final signalled = Completer<({StepSignal signal, RuntimeEvent event})>();
   final sub = ctx.transport.events.where((e) => e.name == name).listen((e) {
     if (signalled.isCompleted) return;
     final signal = request.capability.interpretEvent(e);
-    if (signal != StepSignal.none) signalled.complete(signal);
+    if (signal != StepSignal.none) {
+      signalled.complete((signal: signal, event: e));
+    }
   });
   try {
-    final signal = await signalled.future;
-    switch (signal) {
+    final resolved = await signalled.future;
+    switch (resolved.signal) {
       case StepSignal.none:
         // Unreachable (the listener never completes on none) — but the switch
         // stays exhaustive (house style) and honest.
@@ -137,6 +137,18 @@ Future<StepOutcome> stationProcessDispatcher(
       case StepSignal.ready:
         return const Ok();
       case StepSignal.complete:
+        if (args.cancel.isCancelled) return const Ok();
+        if (_mustFenceLeasedCompletion(request.capability, resolved.event)) {
+          final signal = await _probeLeasedWorkSignal(context, ctx);
+          switch (signal) {
+            case GateOutcome.clear:
+              break;
+            case GateOutcome.present:
+              return const Failed('interrupted: uncommitted work remains');
+            case GateOutcome.probeError:
+              return const Failed('interrupted: work-signal probe failed');
+          }
+        }
         if (args.cancel.isCancelled) return const Ok();
         try {
           return Ok(await request.capability.result(context, args));
@@ -151,6 +163,32 @@ Future<StepOutcome> stationProcessDispatcher(
   } finally {
     unawaited(sub.cancel());
   }
+}
+
+bool _mustFenceLeasedCompletion(
+  ProcessCapability capability,
+  RuntimeEvent event,
+) {
+  if (capability.completionContract != CompletionContract.committedWorkspace) {
+    return false;
+  }
+  return event is Exited && event.inferred;
+}
+
+Future<GateOutcome> _probeLeasedWorkSignal(
+  TreeContext context,
+  AllocationContext ctx,
+) {
+  final services =
+      context.getInheritedSeedOfExactType<ServiceBundle>() ??
+      const ServiceBundle();
+  final workspace = context.getInheritedSeedOfExactType<Workspace>();
+  if (services.sourceControl == null || workspace == null) {
+    return Future<GateOutcome>.value(GateOutcome.clear);
+  }
+  return ctx
+      .workSignal(workspace.workspaceDir)
+      .timeout(ctx.workSignalTimeout, onTimeout: () => GateOutcome.probeError);
 }
 
 /// The production [ProcessLeaseVendor] over [services] — the kernel-root
