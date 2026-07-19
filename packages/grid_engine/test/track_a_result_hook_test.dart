@@ -11,7 +11,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 /// The circuit the mounted `critic` step belongs to (`StepMount.circuit`, tg-o90).
 const _circuit = Circuit(

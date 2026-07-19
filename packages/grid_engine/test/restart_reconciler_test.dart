@@ -210,13 +210,13 @@ GraphSnapshot _stateSnapshotOf(List<Bead> beads) => GraphSnapshot.fromParts(
 
 BeadWorktree _wt(String beadId) => BeadWorktree(
   beadId: beadId,
-  path: '/Users/nico/development/engineering.memento/lenny-tgdog/'
+  path: '/workspace/example-substation/'
       '.grid/worktrees/tgdog/$beadId',
   branch: 'grid/$beadId',
 );
 
 const _workRoot = RootCheckout(
-  path: '/Users/nico/development/engineering.memento/lenny-tgdog',
+  path: '/workspace/example-substation',
   defaultBranch: 'main',
   substation: 'tgdog',
 );

@@ -43,7 +43,7 @@ class GitRunResult {
 /// The git-command SEAM — the single point where [StationGitService] shells out to
 /// `git`. A reference type (carries the `Runner` role name; predictable-flutter).
 ///
-/// Mirrors grid_reconciler's [ProcessRunner] / grid_runtime's
+/// Mirrors grid_runtime's
 /// [SubprocessSpawner] / [ProcessGroupController]: [SystemGitRunner] does the
 /// real `dart:io` work; tests inject a fake (or, for the worktree integration
 /// tier, the real runner against temp repos) so the gate/land/reap LOGIC runs

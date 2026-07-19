@@ -13,7 +13,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 /// A real (writing) fake ProcessCapability — so a CapabilityHost actually mounts,
 /// spawns, and WRITES its cursor through the chokepoint (the invariant-2/4 gates

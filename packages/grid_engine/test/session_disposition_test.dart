@@ -3,7 +3,7 @@
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 SessionProjection _closed({
   Map<String, NodeCursor> cursor = const {},

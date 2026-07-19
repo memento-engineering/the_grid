@@ -1,7 +1,8 @@
 import 'package:beads_dart/beads_dart.dart';
 
 /// The bead-shaped ownership gate (ADR-0006 Decision 1; ADR-0000 A32) — the
-/// dispatch-side analog of grid_reconciler's `OwnsSubstations.owns(Convergence)`.
+/// dispatch-side analog of the substation-ownership check grid_engine's
+/// convergence path applies to convergence beads.
 ///
 /// M2's `OwnsSubstations` reads `convergence.metadata.rig`, a key gc stamps **only**
 /// into convergence beads, so it is structurally uncallable on a plain ready

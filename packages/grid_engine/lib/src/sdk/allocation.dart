@@ -243,7 +243,7 @@ class AllocationAdvanced extends AllocationReport {
 
 /// The route ESCALATED (M5 D-4a) — the Host raises it to the substation's bound
 /// [EscalationHandler] (unbound ⇒ [HumanGate] ⇒ `state=gated` + a real
-/// `type=gate` bead, M5 D-7 exactly). Replaces the old `AllocationGated`: the
+/// `type=gate` bead, M5 D-7 exactly). Replaces the earlier gated-allocation type: the
 /// engine no longer assumes the authority is a human. A LATCHING terminal.
 class AllocationEscalated extends AllocationReport {
   /// Reports an escalation with the route's [reason].

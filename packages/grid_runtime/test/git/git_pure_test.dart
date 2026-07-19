@@ -118,7 +118,7 @@ branch refs/heads/grid/lenny-1
   });
 
   group('WorktreeLayout — path + branch + bead-id round-trip', () {
-    const root = '/Users/nico/development/engineering.memento/lenny-tgdog';
+    const root = '/workspace/example-substation';
     const rig = 'tgdog';
 
     test('worktree path mirrors gc .gc/worktrees/<rig>/<name>', () {

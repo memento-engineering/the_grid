@@ -9,7 +9,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 /// A daemon-style process capability: `ready` when up, `failed` on death, and a
 /// programmable [fresh] endpoint/token proof (the domain half of adopt).

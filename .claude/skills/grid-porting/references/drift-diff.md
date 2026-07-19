@@ -16,9 +16,9 @@ export BD_JSON_ENVELOPE=1
 # Any bd JSON call carries the version at top level. Read it directly:
 bd statuses --json | jq '.schema_version'      # → 1
 
-# Cross-check the const the parser pins against:
+# Cross-check the const the parser pins against (run from the_grid repo root):
 grep -n 'kBdSchemaVersion' \
-  /Users/nico/development/engineering.memento/the_grid/packages/grid_controller/lib/src/codecs/envelope.dart
+  packages/grid_controller/lib/src/codecs/envelope.dart
 ```
 
 If `bd`'s `schema_version` ≠ `kBdSchemaVersion`, the envelope contract changed. This is a **hard stop**:
@@ -38,12 +38,12 @@ hand-written `SELECT`s were written against. Three numbers must agree:
 #     SELECT COALESCE(MAX(version), 0) FROM schema_migrations;
 
 # (b) The highest migration shipped by the PINNED beads checkout.
-ls ~/development/com.gastownhall/beads/internal/storage/schema/migrations/*.up.sql \
+ls ~/development/gastownhall/beads/internal/storage/schema/migrations/*.up.sql \
   | sed -E 's@.*/([0-9]+)_.*@\1@' | sort -n | tail -1      # → 0050
 
-# (c) The const the_grid targets.
+# (c) The const the_grid targets (run from the_grid repo root).
 grep -rn 'targetedMigration\|migrationVersion\|schemaVersion' \
-  /Users/nico/development/engineering.memento/the_grid/packages/grid_controller/lib/src/
+  packages/grid_controller/lib/src/
 ```
 
 Interpretation:
@@ -62,12 +62,12 @@ To see *what* changed between two migration high-water marks (e.g. an old pin's 
 
 ```bash
 # List the migrations added since the old targeted version:
-ls ~/development/com.gastownhall/beads/internal/storage/schema/migrations/ \
+ls ~/development/gastownhall/beads/internal/storage/schema/migrations/ \
   | awk -F_ '$1+0 > 47 {print}'        # migrations after 0047, adjust the bound
 
 # Diff the actual DDL of a specific new migration:
-git -C ~/development/com.gastownhall/beads log --oneline -- internal/storage/schema/migrations/
-cat ~/development/com.gastownhall/beads/internal/storage/schema/migrations/0050_*.up.sql
+git -C ~/development/gastownhall/beads log --oneline -- internal/storage/schema/migrations/
+cat ~/development/gastownhall/beads/internal/storage/schema/migrations/0050_*.up.sql
 ```
 
 The **SQL-vs-CLI equivalence test** (tagged, ADR-0001 Decision 7) is the in-CI version of this probe:
@@ -81,14 +81,14 @@ Relevant from M3 (`grid_runtime`) onward. gc's pack and city shapes are the cano
 
 ```bash
 # Canonical pack schema(s) in the pinned gascity checkout:
-ls ~/development/com.gastownhall/gascity/schemas/pack
+ls ~/development/gastownhall/gascity/schemas/pack
 
 # Example city.toml shapes (the structural reference for parsing):
-find ~/development/com.gastownhall/gascity/examples -name city.toml
+find ~/development/gastownhall/gascity/examples -name city.toml
 
 # Diff a shape against the pin after a gc bump (git-level — the checkout IS the pin):
-git -C ~/development/com.gastownhall/gascity log --oneline -- schemas/pack
-git -C ~/development/com.gastownhall/gascity diff <old-pin>..<new-pin> -- schemas/pack examples/*/city.toml
+git -C ~/development/gastownhall/gascity log --oneline -- schemas/pack
+git -C ~/development/gastownhall/gascity diff <old-pin>..<new-pin> -- schemas/pack examples/*/city.toml
 ```
 
 A change in `schemas/pack` or the `city.toml` shape that the_grid parses is drift: treat it like any
@@ -99,11 +99,11 @@ controller's response. Until M3 consumes these, this probe is informational only
 
 ```bash
 export BD_JSON_ENVELOPE=1
-echo "pin (recorded):"; grep 'Pinned upstream' /Users/nico/development/engineering.memento/the_grid/CLAUDE.md
+echo "pin (recorded):"; grep 'Pinned upstream' CLAUDE.md   # run from the_grid repo root
 echo "bd binary:";      bd version
-echo "beads checkout:"; git -C ~/development/com.gastownhall/beads rev-parse --short HEAD
+echo "beads checkout:"; git -C ~/development/gastownhall/beads rev-parse --short HEAD
 echo "envelope:";       bd statuses --json | jq '.schema_version'
-echo "migrations max:"; ls ~/development/com.gastownhall/beads/internal/storage/schema/migrations/*.up.sql | sed -E 's@.*/([0-9]+)_.*@\1@' | sort -n | tail -1
+echo "migrations max:"; ls ~/development/gastownhall/beads/internal/storage/schema/migrations/*.up.sql | sed -E 's@.*/([0-9]+)_.*@\1@' | sort -n | tail -1
 ```
 
 All five should line up with each other and with the dated fixture dir. Any disagreement is the signal

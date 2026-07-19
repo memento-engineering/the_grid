@@ -41,7 +41,7 @@ import 'package:test/test.dart';
 ///   2. a `leonard_drive` executable on `$PATH`;
 ///   3. the sibling lenny checkout's
 ///      `packages/leonard_cli/bin/leonard_drive.dart` (run via `dart run`) at
-///      `~/development/com.nicospencer/lenny`.
+///      `~/development/engineering.memento/lenny`.
 
 /// How to invoke `leonard_drive` once discovered.
 typedef _DriveInvocation = ({
@@ -90,7 +90,7 @@ _DriveInvocation? _discoverLeonardDrive() {
   final home = Platform.environment['HOME'];
   if (home != null) {
     final entry = File(
-      '$home/development/com.nicospencer/lenny/'
+      '$home/development/engineering.memento/lenny/'
       'packages/leonard_cli/bin/leonard_drive.dart',
     );
     if (entry.existsSync()) {
@@ -205,7 +205,7 @@ void main() {
     if (discovered == null) {
       markTestSkipped(
         r'leonard_drive not found (set $LEONARD_DRIVE or check out lenny at '
-        '~/development/com.nicospencer/lenny) — cross-process attach skipped.',
+        '~/development/engineering.memento/lenny) — cross-process attach skipped.',
       );
       return;
     }

@@ -4,7 +4,8 @@
 /// roots a subtree with no change to `WorkBead`): instead of a single effect
 /// leaf, it returns an engine-private `SessionScope` that adopt-or-mints the
 /// session and inflates the work bead's root circuit. This is the live work
-/// path — the per-node reentrant cursor (D-3) replaced the 3-value `WorkPhase`.
+/// path — the per-node reentrant cursor (D-3) replaced the earlier 3-value
+/// phase enum.
 library;
 
 import 'package:genesis_tree/genesis_tree.dart';

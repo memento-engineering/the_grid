@@ -12,7 +12,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 // --- the inline committee-shaped capabilities (the author leaves) ------------
 

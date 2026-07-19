@@ -5,7 +5,7 @@ gc's **work-convergence** state machine into a new `grid_reconciler` package tha
 `grid_controller`'s `GraphEvent` stream + `GraphSnapshot` (M1) and actuates through bd.
 Tracks run in parallel where inputs allow; ⊣ marks a hard dependency. AI decisions made
 en route: ADR-0000 amendments, never silent. Conventions: CLAUDE.md. Source spec on disk:
-`~/development/com.gastownhall/gascity/internal/convergence/` (~4.1k LOC non-test, 21 test
+`~/development/gastownhall/gascity/internal/convergence/` (~4.1k LOC non-test, 21 test
 files = the conformance oracle, ADR-0003 D7).
 
 **Scope (ADR-0003 D1):** work convergence ONLY. Topology/session reconciliation is M3/M4.

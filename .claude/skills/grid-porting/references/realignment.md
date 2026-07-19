@@ -16,8 +16,8 @@ upstream checkout.
 ### 1. Pin the new version everywhere it's recorded
 
 ```bash
-# The authoritative record:
-grep -n 'Pinned upstream' /Users/nico/development/engineering.memento/the_grid/CLAUDE.md
+# The authoritative record (run from the_grid repo root):
+grep -n 'Pinned upstream' CLAUDE.md
 ```
 
 Edit `CLAUDE.md` "Environment facts" → *Pinned upstream* to the new `bd X.Y.Z (commit)`. Update any
@@ -25,7 +25,7 @@ const that names the bd version. Confirm the beads checkout is at the matching c
 
 ```bash
 bd version
-git -C ~/development/com.gastownhall/beads rev-parse --short HEAD   # must match the bd binary
+git -C ~/development/gastownhall/beads rev-parse --short HEAD   # must match the bd binary
 ```
 
 ### 2. Re-capture fixtures wholesale into a new dated dir
@@ -43,7 +43,7 @@ Do **not**:
 ### 3. Update the targeted migration version
 
 ```bash
-ls ~/development/com.gastownhall/beads/internal/storage/schema/migrations/*.up.sql \
+ls ~/development/gastownhall/beads/internal/storage/schema/migrations/*.up.sql \
   | sed -E 's@.*/([0-9]+)_.*@\1@' | sort -n | tail -1      # new high-water mark
 ```
 

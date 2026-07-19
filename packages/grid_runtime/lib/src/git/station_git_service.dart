@@ -25,7 +25,7 @@ class RootCheckout {
   });
 
   /// The absolute path of the registered root checkout (e.g.
-  /// `/Users/nico/development/engineering.memento/lenny-tgdog`).
+  /// `/workspace/example-substation`).
   final String path;
 
   /// The mainline branch probed from `origin/HEAD` at registration

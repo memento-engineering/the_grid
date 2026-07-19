@@ -1,12 +1,11 @@
 name: grid_engine
 description: >-
-  M4 tree engine — `genesis_tree` IS the engine. `build(observed)` reconciles
-  the running system: keyed reconcile + Branch lifecycle = work lifecycle
-  (mount = spawn, unmount = kill, phase = a reconcile transition). An
-  opinion-light kernel whose capabilities are effect Seeds; the engine holds no
-  landing/VCS/provider opinion. Consumes beads_dart's snapshot/ownership
-  seams and grid_runtime's subprocess/git/chokepoint transport. ADR-0007
-  (Accepted 2026-06-24).
+  M4 tree engine — `genesis_tree` IS the engine (ADR-0007): `build(observed)`
+  reconciles the running system (mount = spawn, unmount = kill, a cursor tick =
+  a reconcile transition), circuits inflate into engine-private CapabilityHost
+  carriers driving opaque Capability leaves whose progress is the per-node
+  StepState cursor on the_grid's own session bead, and the kernel holds no
+  landing/VCS/provider opinion.
 publish_to: none
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
@@ -17,10 +16,10 @@ environment:
 dependencies:
   beads_dart: any
   freezed_annotation: ^3.0.0
-  # The engine. Pinned (^0.1.3) — the composition layer is EXPERIMENTAL and
+  # The engine. Pinned (^0.1.5) — the composition layer is EXPERIMENTAL and
   # the_grid is its triggering 2nd consumer (ADR-0007 / A34 precedent). A
   # workspace-root dependency_overrides path dep supplies it during dev.
-  genesis_tree: ^0.1.3
+  genesis_tree: ^0.1.5
   grid_runtime: any
   json_annotation: ^4.9.0
   meta: ^1.16.0

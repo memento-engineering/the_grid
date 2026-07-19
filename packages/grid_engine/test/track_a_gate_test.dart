@@ -12,7 +12,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 /// A ServiceCapability that returns the configured [outcome] (a `Gate` or `Ok`).
 const _gateCircuit = Circuit(

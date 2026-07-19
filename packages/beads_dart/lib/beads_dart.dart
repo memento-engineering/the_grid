@@ -80,9 +80,9 @@ export 'src/reactivity/snapshot_readers.dart';
 export 'src/transformers/graph_events_transformer.dart';
 
 // Reactive domain projection primitives (Track E; ADR-0002 Decision 2): the
-// typed decode-failure result plus the [Step] value type — shared by
-// grid_reconciler's Wisp projection, so they stay in the pure beads client.
-// The grid-opinionated projections (sessions, messages, molecules — AL-1b)
-// moved to grid_engine; see grid_engine's barrel.
+// typed decode-failure result plus the [Step] value type — shared across
+// consumers of beads_dart's reactive surface, so they stay in the pure beads
+// client. The grid-opinionated projections (sessions, messages, molecules —
+// AL-1b) moved to grid_engine; see grid_engine's barrel.
 export 'src/projections/projection_error.dart';
 export 'src/projections/step.dart';

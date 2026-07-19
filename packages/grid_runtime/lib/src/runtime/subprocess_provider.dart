@@ -11,8 +11,8 @@ import 'runtime_event.dart';
 import 'runtime_provider.dart';
 
 /// The Process SEAM for spawning agents — the single point where
-/// [SubprocessProvider] touches `Process.start`. Mirrors grid_reconciler's
-/// [ProcessRunner] / beads_dart's [BdRunner]: the real impl
+/// [SubprocessProvider] touches `Process.start`. Mirrors
+/// beads_dart's [BdRunner]: the real impl
 /// ([SystemSubprocessSpawner]) spawns; tests inject a fake that returns a
 /// programmed handle, so the supervision/event/env logic runs offline (Fakes,
 /// not mocks). A reference type (the `Spawner` role name).

@@ -30,7 +30,7 @@ void main() {
         'CLAUDE_CODE_OAUTH_TOKEN': 'fake-oauth',
         'GC_DOLT_PASSWORD': 'super-secret-dolt-pw',
         'GC_DOLT_USER': 'gc',
-        'GT_ROOT': '/Users/nico/gascity',
+        'GT_ROOT': '/workspace/gascity-root',
         'SOME_OTHER_SECRET': 'nope',
       };
 

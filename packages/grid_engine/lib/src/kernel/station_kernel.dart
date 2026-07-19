@@ -146,7 +146,7 @@ class StationKernel {
     // Build the ambient-provider stack inside-out. Every provider is a plain
     // InheritedSeed: the root never rebuilds, and genesis's default identity
     // check declines to notify for a re-provided handle anyway (ADR-0008 D-6,
-    // superseded 2026-07-02 — the StableInheritedSeed guard type is deleted).
+    // superseded 2026-07-02 — the prior stable-inherited-seed guard is deleted).
     // The registry is wrapped only when present (a non-reentrant fake resolver
     // needs none). The `ServiceBundle` is NOT provided here — it is a
     // per-substation responsibility provided by each `SubstationScope` so two

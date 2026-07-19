@@ -16,7 +16,7 @@ en route: ADR-0000 amendments (A32+), never silent.
 > tracks (Track I live shadow, `grid top`). DoD STATUS markers (✅/◐, as M2 carries) **fill in as
 > tracks land** — nothing is built yet, so every criterion below is forward-looking.
 
-**Conventions:** CLAUDE.md. **Source spec on disk** (gascity = the Go prior art, `~/development/com.gastownhall/gascity/`):
+**Conventions:** CLAUDE.md. **Source spec on disk** (gascity = the Go prior art, `~/development/gastownhall/gascity/`):
 
 - **Runtime port:** `internal/runtime/tmux/` (tmux.go ~5.9k LOC + ~8.1k test LOC = the conformance
   oracle, ADR-0004 D5) and `internal/runtime/subprocess/` (subprocess.go, the process supervision
@@ -47,7 +47,7 @@ Friday critical path** (see the spine).
    a the_grid-owned, **disjoint, prefixed** set of lenny work beads (ADR-0006). For each *owned*
    ready bead — owned per the **new `BeadOwnershipPredicate`** that shares the rig allow-set with M2's
    `OwnsRigs` (Track 5; ADR-0006 Decision 1) — the DispatchInteractor allocates a git worktree under
-   the the_grid-owned lenny root checkout in `/Users/nico/development/engineering.memento/`, spawns a
+   the the_grid-owned lenny root checkout in the engineering.memento umbrella checkout, spawns a
    `claude` subprocess in that worktree (auth via an **inherited env var on an explicit allowlist**,
    never argv), supervises it (process-group kill on stop, crash → quarantine/requeue), tracks the
    session **as a the_grid-owned bead** through the single **bd write chokepoint** (Track 4;
@@ -155,7 +155,7 @@ the gc-replacement dogfood rung on the fs adoption ladder (drive-one-rig; M4-SCO
   A `GridGitService` in `grid_runtime` (do the git ops directly — the_grid is subprocess-first with
   no t3 daemon; reference only gc's RPC **param shape** cwd/branch/newBranch/path, not its transport).
   **Two layers, copied from gc's rig model:** Layer 1 = a the_grid-OWNED **root checkout** of lenny
-  under `/Users/nico/development/engineering.memento/` (a real clone with `origin` set, registered
+  under the engineering.memento umbrella checkout (a real clone with `origin` set, registered
   once — analogous to a gc rig, *not* a worktree; default branch recorded by porting gc's
   `ProbeDefaultBranch` from `origin/HEAD`, `internal/git/git.go:92-133`). Layer 2 = per-bead
   `git worktree add -b grid/<beadId> <root>/.grid/worktrees/<rig>/<beadId> <baseBranch>` (mirror gc's
@@ -457,6 +457,6 @@ spawned pool; tmux Tier 2/3 heuristics as failures surface; per-rig cutover (M4f
   **not** A29 — A29 is the M2 codec-fidelity capture); reported here as a mechanism only, no secret
   value read. `GC_DOLT_PASSWORD` stays operator-provided and is never extracted from process memory.
 - **Worktree containment.** the_grid's worktrees + root checkout live entirely under
-  `/Users/nico/development/engineering.memento/` on a grid-prefixed set; the reaper mirrors gc's
+  the engineering.memento umbrella checkout on a grid-prefixed set; the reaper mirrors gc's
   strictly-under-dir scope gate so it can only ever delete inside the_grid's own worktrees root, and
   the three-gate fail-closed check guarantees no uncommitted/unpushed/stashed work is lost.

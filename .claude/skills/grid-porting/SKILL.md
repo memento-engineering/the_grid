@@ -46,25 +46,25 @@ Upstream source checkouts on disk (from `CLAUDE.md` "Environment facts" / "Pinne
 
 | Repo | Path | Used for |
 |---|---|---|
-| gascity (gc) | `~/development/com.gastownhall/gascity` | pack-protocol, `city.toml`, schemas (`schemas/pack`), reconciler behaviour |
-| beads (bd) | `~/development/com.gastownhall/beads` | bd source, Dolt migrations (`internal/storage/schema/migrations/`) |
-| lenny | `~/development/com.nicospencer/lenny` | `exploration_contract` path dep (M0 prereq) |
-| predictable-flutter | `~/development/com.nicospencer/predictable-flutter` | architecture skill |
+| gascity (gc) | `~/development/gastownhall/gascity` | pack-protocol, `city.toml`, schemas (`schemas/pack`), reconciler behaviour |
+| beads (bd) | `~/development/gastownhall/beads` | bd source, Dolt migrations (`internal/storage/schema/migrations/`) |
+| lenny | `~/development/engineering.memento/lenny` | `exploration_contract` path dep (M0 prereq) |
+| predictable-flutter | `~/development/predictable-flutter` | architecture skill |
 
 ### Reading the current pin
 
 ```bash
 # The recorded pin (source of truth):
-grep -n 'Pinned upstream' /Users/nico/development/engineering.memento/the_grid/CLAUDE.md
+grep -n 'Pinned upstream' CLAUDE.md   # run from the_grid repo root
 
 # The bd binary actually on PATH — must match the recorded commit:
 bd version            # → bd version 1.0.5 (f9fe4ef2a: main@f9fe4ef2a6d3)
 
 # The beads checkout commit — must match the bd binary:
-git -C ~/development/com.gastownhall/beads rev-parse --short HEAD   # → f9fe4ef2a
+git -C ~/development/gastownhall/beads rev-parse --short HEAD   # → f9fe4ef2a
 
 # The dated fixture dir encodes date + version:
-ls /Users/nico/development/engineering.memento/the_grid/fixtures/upstream/
+ls fixtures/upstream/   # run from the_grid repo root
 ```
 
 If `bd version`, the beads checkout commit, and the recorded pin disagree, **stop** — you are not on the
@@ -98,7 +98,7 @@ Read **`references/drift-diff.md`** for the concrete probe commands. The three d
    the store's `MAX(version)` exceeds the binary's `LatestVersion()`; the_grid mirrors that guard by
    falling back to CLI reads (ADR-0001 Decision 4 "Schema-drift guard").
 3. **pack-protocol / city.toml** — later milestones (M3 runtime) read gc's pack and city shapes. The
-   canonical shapes live in `~/development/com.gastownhall/gascity/schemas/pack` and the example
+   canonical shapes live in `~/development/gastownhall/gascity/schemas/pack` and the example
    `city.toml`s under `examples/*/`. Snapshot-diff these against the pinned checkout.
 
 The **SQL-vs-CLI snapshot equivalence test** (tagged, ADR-0001 Decision 7) is the in-CI drift canary: if

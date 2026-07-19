@@ -28,7 +28,7 @@ import 'package:test/test.dart';
 ///   2. a `leonard_cli` executable on `$PATH`;
 ///   3. the sibling lenny checkout's `packages/leonard_cli/bin/leonard_cli.dart`
 ///      (run via `dart run`) at the conventional
-///      `~/development/com.nicospencer/lenny` location.
+///      `~/development/engineering.memento/lenny` location.
 
 /// How to invoke leonard_cli once discovered: either a direct executable or a
 /// `dart run <entrypoint>` pair.
@@ -58,7 +58,7 @@ _LeonardInvocation? _discoverLeonardCli() {
   final home = Platform.environment['HOME'];
   if (home != null) {
     final entry = File(
-      '$home/development/com.nicospencer/lenny/'
+      '$home/development/engineering.memento/lenny/'
       'packages/leonard_cli/bin/leonard_cli.dart',
     );
     if (entry.existsSync()) {
@@ -90,7 +90,7 @@ void main() {
     if (leonard == null) {
       markTestSkipped(
         r'leonard_cli not found (set $LEONARD_CLI or check out lenny at '
-        '~/development/com.nicospencer/lenny) — cross-process attach skipped.',
+        '~/development/engineering.memento/lenny) — cross-process attach skipped.',
       );
       return;
     }

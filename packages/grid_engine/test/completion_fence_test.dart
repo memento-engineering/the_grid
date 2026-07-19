@@ -13,7 +13,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 /// THE CODING AGENT: its working agreement is "commit your work in the worktree",
 /// so it DECLARES the commit contract and its inferred completions are fenced.

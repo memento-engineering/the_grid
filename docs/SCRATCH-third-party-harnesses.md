@@ -92,7 +92,7 @@ dependency-ordered:
 
 ### The inference server + prior wires
 
-- **swift-infer** (`~/development/com.nicospencer/swift-infer`, Hummingbird, default `0.0.0.0:8080`)
+- **swift-infer** (`~/development/swift-infer`, Hummingbird, default `0.0.0.0:8080`)
   serves **both wires**: OpenAI-compat `POST /v1/chat/completions` AND Anthropic-compat
   `POST /v1/messages`, plus `/v1/models`, embeddings, bearer tokens with scopes
   (`SWIFT_INFER_AGENT_TOKEN` = inference scope). Models: qwen3.6-35b-a3b(-8bit) + bge-small.

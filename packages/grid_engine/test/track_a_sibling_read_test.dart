@@ -11,7 +11,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 /// A ServiceCapability that reads its siblings' states + results from the
 /// AMBIENT SiblingView with the effect verb — pull-free, read-only (D-5) — and

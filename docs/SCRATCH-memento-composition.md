@@ -36,7 +36,7 @@ Scanned 2026-07-10. **Five** memento-engineering repos have bead stores with rea
 | **the_grid** | `the_grid/.beads` (Dolt **server** `tg`) | 24 | the framework — **self-host** | shared server w/ gc → coexistence, §4 |
 | **power_station** | `power_station/.beads` · `pow` | 3 (+1 re-homed today) | the asset packs — **self-host** | embedded Dolt |
 | **space_station** | `space_station/.beads` · `space` | ~0 | the runner — **self-host** | embedded Dolt; this bead lands here |
-| **lenny** | `lenny/.beads` | 50 | the debug harness | **memento-engineering** (`origin`=`memento-engineering/lenny`); **relocated 2026-07-10** from `com.nicospencer/lenny` → `engineering.memento/lenny`, so the coded `../lenny` root now resolves |
+| **lenny** | `lenny/.beads` | 50 | the debug harness | **memento-engineering** (`origin`=`memento-engineering/lenny`); **relocated 2026-07-10** from its prior personal-checkout home → `engineering.memento/lenny`, so the coded `../lenny` root now resolves |
 
 So composing "the entire memento-engineering" means the grid **self-hosts** its own three
 construction repos, drives the substrate (genesis), and drives the debug harness (lenny).

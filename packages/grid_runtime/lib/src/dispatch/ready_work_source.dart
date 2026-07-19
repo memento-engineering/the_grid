@@ -2,9 +2,10 @@ import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
 
-/// The dispatch read seam over beads_dart's reactive surface — the
-/// second-consumer analog of grid_reconciler's `ConvergenceSource` (M3
-/// Track 5; ADR-0006 Decision 1). The [DispatchInteractor] attaches as a
+/// The dispatch read seam over beads_dart's reactive surface (M3
+/// Track 5; ADR-0006 Decision 1) — a second consumer of the same
+/// observable surface grid_engine's convergence path reads. The
+/// [DispatchInteractor] attaches as a
 /// **SECOND consumer** of the same observable surface M2 uses; it does **not**
 /// go through reduce→gate→actuate.
 ///

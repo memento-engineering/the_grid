@@ -10,7 +10,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
-import 'support/engine_fakes.dart';
+import 'package:grid_engine/testing.dart';
 
 /// The ROOT circuit: `route` IS the terminal (landing is no longer a step — it is
 /// the actuation of this route's advance).
