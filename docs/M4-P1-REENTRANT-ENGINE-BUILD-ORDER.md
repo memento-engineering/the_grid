@@ -104,6 +104,8 @@ P1 is **the reentrant engine, for real**: a value-typed `Formula` step-graph tha
 
 ## 3. The API sketch (the gating surface — freezed value-types + opaque interfaces)
 
+**Reality stamp (2026-07-19, public-readiness pass):** the `StepState` sketch below is era-bound — the shipped enum (`grid_engine/lib/src/sdk/circuit.dart`) is **6-valued**: `pending / running / ready / complete / failed / gated`. `gated` (parked at a human gate — a non-positive, non-failed state that satisfies no `dependsOn` and does not re-mount until the gate resolves) landed with ADR-0008 D9's gate primitive.
+
 > **Value-types (author surface; freezed + `json_serializable`; TOML or Dart).** This is the wire the author writes — they never see a `Seed`.
 
 ```

@@ -62,6 +62,8 @@ the_grid drops Riverpod entirely for the standalone `state_notifier` package + f
 
 ## Decision 4 — Crash-safety is **respawn-or-skip** (P0); adopt-a-live-process is **deferred** net-new work
 
+**Reality stamp (2026-07-19, public-readiness pass):** "adopt-a-live-process is **deferred** net-new work" is era-bound — adopt has since landed as the **floor, not the reach**: `startOrAdopt` (`grid_engine/lib/src/sdk/lease.dart`) + the `AdoptProof` seam (`grid_engine/lib/src/restart/restart_reconciler.dart`) shipped via ADR-0008 D6 + ADR-0009 D4. And on the molecule path (DESIGN-tg-pm6 R3), process identity (pgid/pid/token) is no longer node-owned durable state — it lives in the vendor-owned `grid.lease.*` namespace on the step bead, written only by `StationProcessLeaseVendor`; the per-cursor pgid/token fence described here remains flat-path-only.
+
 The mounted tree is in-memory; a controller restart loses the tree, **not the work** (the work is durable in the bead store + git worktrees). On restart, rebuild the tree from the observed snapshot; each effect-Branch's `mount`:
 
 - **SKIPS** if the bead's observed phase shows the work already finished (reconcile straight to the next phase); else

@@ -5,6 +5,8 @@
 **Deciders:** Nico Spencer
 **Context:** M3 gives the_grid hands — spawning and supervising coding-agent sessions for ready work. Source assessed 2026-06-11: gc's tmux provider (`gascity/internal/runtime/tmux/`, ~5.9k LOC production + ~8.1k tests; PDR §7a) and the `runtime.Provider` contract (`gascity/internal/runtime/runtime.go`). gc's provider is pure subprocess invocation of the `tmux` binary — no library, no control mode — so the port is `Process.run` plus the reliability heuristics.
 
+**Reality stamp (2026-07-19, public-readiness pass):** the `TmuxProvider` and the `Attached`/`Detached` events described below were never built. `SubprocessProvider` (`grid_runtime/lib/src/runtime/subprocess_provider.dart`) is the only shipped provider (`grid_sdk`'s `DryRunProvider` is a spawn-nothing dry-run stand-in, not a supervisor), and the shipped `RuntimeEvent` sealed set is `SessionStarted / Exited / Died / Respawned / ActivityChanged` — no attach surface. The tiered tmux plan — including the Tier-3 kill sequence and the Decision 4 quirk table — remains unimplemented reference material.
+
 ---
 
 ## Decision 1 — Provider contract: Futures for acts, Streams for observations

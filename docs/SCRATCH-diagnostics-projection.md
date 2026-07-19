@@ -12,6 +12,17 @@ self-describes (§4), so no inventory is load-bearing.
 (Observability, PARTIAL — amendment = `tg-0ds.8`) · ADR-0013 (no side-channels) ·
 ADR-0009 (the Allocation tree) · genesis ADR-0006 (pull-free) · `docs/SCRATCH-cockpit.md`.
 
+**Reality stamp (2026-07-19, public-readiness pass):** §3's era-claim that molecule
+mode is "currently inert (default `flatCursor`; no `ProcessLeaseVendor` ever
+constructed)" is obsolete. As of `tg-h4u` (drive `ProcessLeaseVendor`, #62),
+`tg-6gi` (arm live molecule mint mode, #70) and `tg-2mb` (mount the vendor on the
+production work seat, #73), molecule is the **live default at the production work
+seat** — `grid_sdk`'s `SubstationWork` (`station_work.dart`) defaults
+`CircuitMintMode.molecule` — and `StationProcessLeaseVendor` is composed on the
+production path. The engine-level `SubstationConfig.circuitMintMode` default
+remains `flatCursor` as a fallback; its retirement stays staged under `tg-eli`
+(flat-path retirement), per the plan below.
+
 ## 1. The want (one sentence)
 
 **Observe the running grid: the tree describes itself, and one or more reporters —

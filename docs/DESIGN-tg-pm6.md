@@ -11,6 +11,17 @@ byte-for-byte untouched; the molecule model arrives alongside it behind an
 explicit mint-mode. In-flight sessions finish on the old model; new sessions
 mint on the new. Nothing existing may break.
 
+**Reality stamp (2026-07-19, public-readiness pass):** the staging above has since
+been armed — molecule is the **live default at the production work seat**.
+`tg-h4u` (#62) drives `ProcessLeaseVendor` through `CapabilityHost`, `tg-6gi`
+(#70) armed live molecule mint mode, and `tg-2mb` (#73) mounted the vendor on the
+production work seat: `grid_sdk`'s `SubstationWork` (`station_work.dart`) now
+defaults `circuitMintMode: CircuitMintMode.molecule`, and
+`StationProcessLeaseVendor` (§R3, shipped) is composed on the production path
+(the kernel root falls back to `defaultProcessLeaseVendor` when no vendor is
+mounted). The engine-level `SubstationConfig.circuitMintMode` default remains
+`flatCursor` as the fallback; flat-path retirement is staged under `tg-eli`.
+
 ---
 
 ## 1. The model in one paragraph
@@ -305,6 +316,15 @@ a String-handle `LeaseCapability` (mirrors `lease_allocation_test.dart`'s
 adopts; missing vendor throws; release clears the breadcrumb.
 
 ## 8. R4 — the thin frontier derivation (the risk lens)
+
+**Reality stamp (2026-07-19, public-readiness pass):** A52 resolved **a2** and
+shipped (`tg-43o`, PR #61 — derive rework rounds from supersedes chains),
+superseding this rung's earlier width-vs-temporal treatment of incarnation: a
+rework round is a **successor incarnation bead on a `supersedes` chain** (never a
+mutable counter), and `derivedGeneration` is the **chain depth**, derived from the
+snapshot — same-round fan-out widens a round without deepening it; only a
+successor round deepens the chain. The treatment below is landed code, not staged
+design.
 
 **New file** `packages/grid_engine/lib/src/molecule/live_frontier.dart`.
 COMPOSES over `frontier.dart` and `rewind.dart`; edits neither.
