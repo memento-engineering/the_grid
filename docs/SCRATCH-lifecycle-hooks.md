@@ -1,8 +1,9 @@
 # SCRATCH — the lifecycle-hooks system (deterministic dispatch · asset contributions · the git surface)
 
 **Status: DESIGN — decision-complete (design session with Nico, 2026-07-18); awaiting
-ratification.** Graduation target: **one new ADR** (the harness lifecycle-hook seam — number
-assigned by Nico at graduation; next free is 0014), cross-referencing **power_station ADR-0001**
+ratification.** Graduation target: **one new ADR** (the harness lifecycle-hook seam — **number
+assigned by Nico 2026-07-19 (D-P7): ADR-0015**; the self-claimed 0014 went to the residency
+ADR, which graduates first), cross-referencing **power_station ADR-0001**
 (packaged-AI-asset skill↔command coupling — the contribution/command coupling this generalizes).
 Build: **grid agents, per fully-briefed beads (§8) — not hand-written.** Beads are drafted only
 after ratification and filed **deferred** (the intake convention: Nico's bless flips them open).

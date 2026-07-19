@@ -52,12 +52,11 @@ secrets spot-probes all classify as test fakes / env-var names; no personal emai
   branches; ~60 stale merged `grid/tg-*` heads on origin; GitHub `deleteBranchOnMerge`
   still **false**; worktrees grew 9 → **29**. The interim auto-delete enablement never
   happened. One-time prune rides `tg-8gv.12` (2).
-- **D-P7 · ADR-number assignment (NEW, 2026-07-19).** ADR-0013 was consumed by
-  *state-holding-value-types* (2026-07-12), but `ADR-0000:466` still routes the
-  resident-station graduation (`tg-8gv.4`) to "ADR-0013", and
-  `SCRATCH-lifecycle-hooks.md:5` claims "next free is 0014" for its own graduation — the
-  two now contend for 0014. Nico assigns both numbers; `tg-8gv.4` and the lifecycle-hooks
-  epic are blocked-in-spirit until then (decision bead filed under tg-8gv).
+- **D-P7 · ADR-number assignment — RESOLVED (Nico, 2026-07-19): residency = ADR-0014,
+  lifecycle-hooks = ADR-0015.** (0005 retired, 0010 stays reserved for
+  convergence-as-subtree.) Executed same day: Nico-directed dated correction at
+  `ADR-0000:466`, matching stamps on both SCRATCH headers; `tg-8gv.13` closed,
+  `tg-8gv.4` retargeted to ADR-0014.
 - **In-flight, not a pass decision:** the signal-vs-derivation routing fork (RouteVerdict
   live vs `SCRATCH-declarative-routing`'s derivation model) is an open Nico ratification;
   until ruled, the three docs designing RouteVerdict's deletion need "the signal model is
@@ -188,7 +187,8 @@ fossils), tg-3vq (doc-status stamps), tg-d4k, tg-2ds, tg-wiz, tg-qkc, tg-3s8
 `tg-8gv` (epic) → .1 fixtures ✅ · .2 history ✅ · .3 license ✅ (committed `da9cbf7`) ·
 .4 residency ADR (number per **D-P7**) · .5 config-model · .6 grid-alignment+multi-root ·
 .7 ops doc · .8 SCRATCH endgame (waits on .4–.7; commit-half of the untracked surfaces done
-2026-07-19 via `0cef37a`) · .9 README reality (+ molecule-era additions) · .10 package
-READMEs · .11 dead/dup sweep (ledger refreshed 2026-07-19) · .12 flip checklist (waits on
-all; branch/worktree prune + scanner install + interactions ruling + D-P5) · **.13 (NEW)
-decision: D-P7 ADR-number assignment**. All born deferred; Nico's bless flips open.
+2026-07-19 via `0cef37a`) · .9 README reality ✅ · .10 package READMEs ✅ ·
+.11 dead/dup sweep (executed 2026-07-19 but for three rulings) · .12 flip checklist (waits
+on all; branch/worktree prune + scanner install + interactions ruling + D-P5) · .13
+decision D-P7 ✅ (residency 0014 / hooks 0015). `.7` ops doc ✅ and `tg-6i8` re-stamps ✅
+closed 2026-07-19 (commits a216eb0/bb5d239/cab6d46/4090800/ac7afed).
