@@ -41,6 +41,31 @@ const _code = engine.Circuit(
   steps: [engine.CapabilityStep(stepId: 'agent', capabilityId: 'agent')],
 );
 
+/// Resolves the ambient [engine.ProcessLeaseVendor] at a work-node context —
+/// the tg-2mb witness. `requireProcessLeaseVendor` is exactly what a molecule
+/// allocation calls; if StationWork omits the seed (the wedge) it THROWS here,
+/// the spawn never happens, and [seen] stays empty.
+class _VendorProbeCap extends engine.ProcessCapability {
+  const _VendorProbeCap(this.seen);
+  final List<engine.ProcessLeaseVendor> seen;
+  @override
+  RuntimeConfig spawn(TreeContext context, engine.StepArgs args) {
+    seen.add(engine.requireProcessLeaseVendor(context));
+    return RuntimeConfig(
+      workDir: context
+          .getInheritedSeedOfExactType<engine.Workspace>()!
+          .workspaceDir,
+      command: 'sh',
+      args: const ['-c', 'echo'],
+      lifecycle: Lifecycle.oneTurn,
+    );
+  }
+
+  @override
+  engine.StepSignal interpretEvent(RuntimeEvent event) =>
+      engine.StepSignal.none;
+}
+
 /// Records WHICH beads the resolver was asked to root — the mount-boundary
 /// witness for the type/ownership gates.
 class _RecordingResolver implements engine.SessionResolver {
@@ -207,7 +232,11 @@ typedef _Rig = ({
 /// Mounts the FULL new composition via runGrid over fakes — the bridge started
 /// first (the pinned ordering's tail: barrier/restart are runner concerns
 /// proven in the assembly; here the bridge simply precedes the mount).
-_Rig _arm({bool armed = true, engine.CircuitMintMode? mintMode}) {
+_Rig _arm({
+  bool armed = true,
+  engine.CircuitMintMode? mintMode,
+  engine.CapabilityRegistry? registryOverride,
+}) {
   final work = FakeSnapshotSource();
   final state = FakeSnapshotSource();
   final bridge = engine.StationJoinBridge(work: work, state: state);
@@ -216,10 +245,12 @@ _Rig _arm({bool armed = true, engine.CircuitMintMode? mintMode}) {
     'pow-1': 'tgdog-mol-pow-1',
     'pow-1/agent': 'tgdog-step-pow-1-agent',
   };
-  final registry = engine.DefaultCapabilityRegistry(
-    capabilities: const {'agent': _AgentCap()},
-    clock: () => DateTime(2026),
-  );
+  final registry =
+      registryOverride ??
+      engine.DefaultCapabilityRegistry(
+        capabilities: const {'agent': _AgentCap()},
+        clock: () => DateTime(2026),
+      );
   final resolver = _RecordingResolver(engine.CircuitResolver((_) => _code));
   final stationProbe = <int>[];
   final substationProbe = <int>[];
@@ -311,6 +342,41 @@ void main() {
       await rig.grid.teardown();
       await _pump();
       expect(rig.fakes.provider.stopped, isNotEmpty);
+    });
+
+    test('tg-2mb: StationWork mounts the ProcessLeaseVendor AMBIENT to the '
+        'work subtree — a molecule allocation resolves the vendor '
+        '`requireProcessLeaseVendor` needs (the seed StationKernel.start '
+        'mounts, restored on the production runGrid seat). Without it the '
+        'readiness gate throws `No ProcessLeaseVendor` and the station wedges '
+        'to zero; positive control: the probe capability actually spawns.',
+        () async {
+      final seen = <engine.ProcessLeaseVendor>[];
+      final rig = _arm(
+        registryOverride: engine.DefaultCapabilityRegistry(
+          capabilities: {'agent': _VendorProbeCap(seen)},
+          clock: () => DateTime(2026),
+        ),
+      );
+      addTearDown(rig.grid.teardown);
+      rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
+      await _pump();
+      // Drive to the spawn point: the probe cap resolves the vendor at the work
+      // node (mount = spawn). With the seed missing, spawn throws and the
+      // provider never starts — this push would time out and `seen` stay empty.
+      await _pushMoleculeState(rig, 'pow-1');
+      expect(
+        seen,
+        isNotEmpty,
+        reason: 'positive control — the probe capability spawned, which means '
+            'requireProcessLeaseVendor resolved at the work node',
+      );
+      expect(
+        seen.first,
+        isA<engine.StationProcessLeaseVendor>(),
+        reason: 'the ambient vendor is the real production vendor '
+            '(defaultProcessLeaseVendor), not a stub or a foreign instance',
+      );
     });
 
     test('the FLAT opt-out stays wired at the composition seam: an explicit '

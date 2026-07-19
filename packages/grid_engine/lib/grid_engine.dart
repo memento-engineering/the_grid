@@ -42,6 +42,14 @@ export 'src/circuit/session_handle.dart';
 export 'src/circuit/session_scope.dart';
 export 'src/circuit/unclaimed_frontier.dart';
 
+// Molecule model — the process-lease seam the circuit's allocation resolves
+// (the vendor StationKernel.start / StationWork mount ambient to the work
+// subtree, tg-h4u / tg-2mb).
+export 'src/molecule/process_lease_vendor.dart'
+    show ProcessLeaseVendor, requireProcessLeaseVendor, StationProcessLeaseVendor;
+export 'src/molecule/station_process_transport.dart'
+    show defaultProcessLeaseVendor;
+
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';
 // The rework-round contract (tg-o90) — the ONE cap + retired-round key shape
