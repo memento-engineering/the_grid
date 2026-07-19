@@ -76,6 +76,7 @@ class _TestDelegate extends GridDelegate {
     required this.wiring,
     required this.stationProbe,
     required this.substationProbe,
+    this.mintMode,
   });
 
   /// Null ⇒ the unarmed authoring-only mount (H2's shape).
@@ -83,11 +84,17 @@ class _TestDelegate extends GridDelegate {
   final List<int> stationProbe;
   final List<int> substationProbe;
 
+  /// Null ⇒ `const SubstationWork()` — the DEFAULT the baseline test pins
+  /// (molecule since the live arm). Non-null ⇒ the explicit opt-out, so the
+  /// flat path keeps composition-seam coverage (tg-6gi regression pin).
+  final engine.CircuitMintMode? mintMode;
+
   void emitTick(int n) => state = GridConfiguration(settings: {'tick': '$n'});
 
   @override
   Seed build(TreeContext context, GridConfiguration configuration) {
     final w = wiring;
+    final mode = mintMode;
     final substations = Substations(
       substations: [
         Substation(
@@ -99,7 +106,9 @@ class _TestDelegate extends GridDelegate {
               children: [
                 _BuildProbe(builds: substationProbe, key: const ValueKey('sp')),
               ],
-              child: const SubstationWork(),
+              child: mode == null
+                  ? const SubstationWork()
+                  : SubstationWork(circuitMintMode: mode),
             ),
           ],
         ),
@@ -158,7 +167,7 @@ typedef _Rig = ({
 /// Mounts the FULL new composition via runGrid over fakes — the bridge started
 /// first (the pinned ordering's tail: barrier/restart are runner concerns
 /// proven in the assembly; here the bridge simply precedes the mount).
-_Rig _arm({bool armed = true}) {
+_Rig _arm({bool armed = true, engine.CircuitMintMode? mintMode}) {
   final work = FakeSnapshotSource();
   final state = FakeSnapshotSource();
   final bridge = engine.StationJoinBridge(work: work, state: state);
@@ -181,6 +190,7 @@ _Rig _arm({bool armed = true}) {
         : null,
     stationProbe: stationProbe,
     substationProbe: substationProbe,
+    mintMode: mintMode,
   );
   bridge.start();
   final grid = runGrid(delegate);
@@ -229,6 +239,25 @@ void main() {
       await rig.grid.teardown();
       await _pump();
       expect(rig.fakes.provider.stopped, isNotEmpty);
+    });
+
+    test('the FLAT opt-out stays wired at the composition seam: an explicit '
+        'CircuitMintMode.flatCursor SubstationWork mounts, mints through the '
+        'chokepoint, and spawns exactly like the baseline — the molecule '
+        'default flip never strands the opt-out (tg-6gi regression pin; the '
+        'engine-level flat/molecule parity is drain_seam_test\'s)', () async {
+      final rig = _arm(mintMode: engine.CircuitMintMode.flatCursor);
+      addTearDown(rig.grid.teardown);
+      rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
+      await _pump();
+
+      expect(rig.resolver.resolved, ['pow-1']);
+      expect(
+        rig.fakes.runner.calls.where((c) => c.first == 'create'),
+        isNotEmpty,
+        reason: 'the flat session still mints through StationBeadWriter',
+      );
+      expect(rig.fakes.provider.started, hasLength(1));
     });
 
     test(

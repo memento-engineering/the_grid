@@ -188,10 +188,9 @@ final _moleculeConfig = _flatConfig.copyWith(
 );
 
 class _LiveArmProcessCap extends ProcessCapability {
-  const _LiveArmProcessCap(this.id, {this.payload = const <String, String>{}});
+  const _LiveArmProcessCap(this.id);
 
   final String id;
-  final Map<String, String> payload;
 
   @override
   RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
@@ -212,7 +211,7 @@ class _LiveArmProcessCap extends ProcessCapability {
   Future<Map<String, String>> result(
     TreeContext context,
     StepArgs args,
-  ) async => payload;
+  ) async => const <String, String>{};
 }
 
 void main() {
