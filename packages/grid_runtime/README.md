@@ -8,7 +8,9 @@ lifecycle **as a bead** (bd-only writes through the single write chokepoint,
 `--actor grid-controller`, never SQL), and lands finished work as a pushed
 branch / PR — **never an auto-merge**. It ports gc's `runtime.Provider` contract
 (`gascity/internal/runtime/`) into Dart per **ADR-0004**, consuming
-`beads_dart`'s ready-set seam and `grid_reconciler`'s actuator.
+`beads_dart`'s ready-set seam. `grid_engine` consumes it from above as the
+engine's subprocess/git/chokepoint transport (ADR-0002 Decision 1;
+`grid_reconciler`, the original M2 consumer, is deleted).
 
 See `docs/adr/ADR-0004` (runtime providers, tmux first, tiered) and
 `docs/M3-BUILD-ORDER.md` (the dependency-ordered tracks).
@@ -17,7 +19,7 @@ See `docs/adr/ADR-0004` (runtime providers, tmux first, tiered) and
 
 The **runtime seam + the subprocess provider** are implemented (offline,
 fakes-not-mocks; `dart analyze` clean, the offline suite green). The rest of the
-surface lands across M3:
+surface landed across M3; what has since moved is noted per track:
 
 - **Track 2 (built)** — `RuntimeProvider` interface + `RuntimeConfig` /
   `RuntimeEvent` / `RuntimeCapabilities` value types + `SubprocessProvider` (the
@@ -31,8 +33,10 @@ surface lands across M3:
   so `stop()` can SIGTERM→2s grace→SIGKILL the **whole tree** with the
   `pgid<=1`/self-group guard. Per-incarnation `GRID_SESSION_ID`/`GRID_BEAD_ID`/
   `GRID_INSTANCE_TOKEN`/`GRID_RUNTIME_EPOCH` are injected. **CUT (Track 2):** the
-  inference-provider abstraction, gc's per-session Unix control socket, the
-  `TmuxProvider` adapter (⊣ Track 1), attach/nudge.
+  inference-provider abstraction, gc's per-session Unix control socket,
+  attach/nudge. ADR-0004's `TmuxProvider` was never built — `SubprocessProvider`
+  is the only `RuntimeProvider` (`detachedWithStdio` spawn, liveness-poll death
+  detection, the watchdog deadline).
 
   **Spawn-mode choice (`detachedWithStdio`), justified.** Dart exposes no
   `Setpgid`; `setsid` is absent on macOS and a `sh -c` wrapper does not start a
@@ -44,7 +48,7 @@ surface lands across M3:
   detached exit therefore surfaces as `RuntimeEvent.died`; a precise
   `RuntimeEvent.exited` with a code is emitted whenever the spawner can read one
   (the fake spawner / any non-detached path).
-- **Track 3 (built)** — `GridGitService`: git-worktree-per-bead isolation +
+- **Track 3 (built)** — `StationGitService`: git-worktree-per-bead isolation +
   the three-gate fail-closed reaper + land-to-PR (ADR-0006 Decision 3). All git
   I/O runs through the injectable **`GitRunner`** seam (real impl
   `SystemGitRunner`; tests use the real `git` binary against temp repos, or a
@@ -57,7 +61,7 @@ surface lands across M3:
     create the real `lenny-tgdog` clone — that is Nico's one-time out-of-band
     step (auto-provision is the gascity#1556 stale-ancestor hazard).
   - **Layer 2 — per-bead worktree** (`provisionWorktree`):
-    `git worktree add -b grid/<beadId> <root>/.grid/worktrees/<rig>/<beadId> <base>`
+    `git worktree add -b grid/<beadId> <root>/.grid/worktrees/<substation>/<beadId> <base>`
     (mirrors gc's `.gc/worktrees/<rig>/<name>`,
     `internal/workdir/workdir.go:76-86`). The dir name **encodes the bead id**
     so `listBeadWorktrees` re-binds an orphaned worktree to its lifecycle bead
@@ -78,7 +82,7 @@ surface lands across M3:
   to record on the lifecycle bead. **Never auto-merges.** **CUT (Track 3):**
   per-bead retry-on-new-branch; an offline periodic reaper sweep; registry-
   removal-deletes-disk (registry removal ≠ disk deletion, mirror gc).
-- **Track 4 (built)** — lifecycle-as-beads + the single `GridBeadWriter` bd
+- **Track 4 (built)** — lifecycle-as-beads + the single `StationBeadWriter` bd
   write chokepoint. Three pieces:
   - **`session_state.dart`** — a Dart port of gc's session `state` transition
     table (`internal/session/state_machine.go:106-144`):
@@ -91,20 +95,20 @@ surface lands across M3:
     preserved verbatim, never dropped (ADR-0000 A14).
   - **`BeadOwnershipPredicate`** — the bead-shaped ownership gate (ADR-0006
     Decision 1; ADR-0000 A32) the chokepoint and (Track 5) the dispatcher share.
-    M2's `OwnsRigs.owns(Convergence)` reads `convergence.metadata.rig`, a key gc
+    M2's `OwnsSubstations.owns(Convergence)` reads `convergence.metadata.rig`, a key gc
     stamps only into convergence beads, so it is structurally uncallable on a
     plain `Bead`; this predicate derives a bead's rig from the **issue-id
     prefix** (primary) and/or `metadata.rig`. **The shared artifact with the M2
     actuator is the rig allow-set `Set<String>`, not the predicate object**
     (seeded `{tgdog}`, A35) so the two gates cannot drift. A no-rig/no-prefix
     bead is **not owned, fail-closed**.
-  - **`GridBeadWriter`** — the single bd write chokepoint (ADR-0006 Decision 2)
+  - **`StationBeadWriter`** — the single bd write chokepoint (ADR-0006 Decision 2)
     wrapping the M2 `BdCliService`. Before **every** `create` / `update
     --metadata` / `close` / `delete` it re-checks ownership fail-closed on the
     target rig and **refuses + logs loudly** ([`OwnershipRefused`]) any write
     whose rig is absent / not owned — the second line of defense behind the
     dispatch predicate (session/recovery writes never flow through a
-    `Convergence`, so the `ReconcilerRuntime` convergence gate cannot cover
+    `Convergence`, so a convergence-side ownership gate cannot cover
     them). `createSession` mints + stamps `metadata.rig` **from birth** (the M2
     `BdCliService.create` carries no `--metadata`, so the mint is `create` + a
     stamping merge `update`). `--actor grid-controller`, merge semantics (works
@@ -120,8 +124,11 @@ surface lands across M3:
     `lifecycle_transition.go:468-497`). Crash bookkeeping is in-memory (the live
     supervisor); the durable counters it writes mirror it. **CUT (Track 4):** the
     convergence `RecoveryAction` actuator (now Track 4b, off the Friday path).
-- **Track 5 (built)** — `DispatchInteractor` (ready bead → spawn) + the
-  `ReadyWorkSource` read seam. It attaches as a **SECOND consumer** of the same
+- **Track 5 (built; the interactor since deleted)** — `DispatchInteractor`
+  (ready bead → spawn) + the `ReadyWorkSource` read seam. The interactor was
+  deleted with `grid_reconciler` (RS-8) — dispatch is now `grid_engine`'s tree
+  reconcile (mount = spawn); `ReadyWorkSource` + `GridReadyWorkSource` remain
+  this package's read seam. As built, it attached as a **SECOND consumer** of the same
   observable surface M2 uses (a `ReadyWorkSource` over `beads_dart`'s
   `GraphEvent` stream + `readyBeads`, mirroring the M2 `ConvergenceSource`) and
   does **not** go through reduce→gate→actuate. Two halves:
@@ -129,11 +136,11 @@ surface lands across M3:
     reconcile of the current `readyBeads`), each entered id is resolved to its
     `Bead` and gated on the Track-4 `BeadOwnershipPredicate` (the shared
     `{tgdog}` allow-set). A **non-owned bead is observed read-only, NEVER
-    dispatched and NEVER mutated** (`OwnsRigs` is structurally uncallable on a
+    dispatched and NEVER mutated** (`OwnsSubstations` is structurally uncallable on a
     plain `Bead`, A32). On accept the pipeline runs
-    `GridGitService.provisionWorktree` (Track 3) → `RuntimeProvider.start`
+    `StationGitService.provisionWorktree` (Track 3) → `RuntimeProvider.start`
     (Track 2) → `RuntimeActuator.spawnSession` (Track 4, the session bead minted
-    through the `GridBeadWriter` chokepoint). **Idempotent + single-flight per
+    through the `StationBeadWriter` chokepoint). **Idempotent + single-flight per
     bead:** a `PerBeadQueue` (reused from the M2 runtime) serializes per
     work-bead id and a synchronous slot **reservation** is taken before the
     first `await`, so a re-fired ready event — even a burst racing the first
@@ -143,18 +150,21 @@ surface lands across M3:
     `RestartSession` re-spawns the same bead in its existing worktree (the
     session bead is left open); a `QuarantineSession` parks it (no respawn, no
     reap); a `SessionParked` (clean exit) drives the **removal trigger** — close
-    the session bead through the chokepoint, then `GridGitService.reap`, which
+    the session bead through the chokepoint, then `StationGitService.reap`, which
     only removes the worktree once the three fail-closed gates pass (an
     unpushed/uncommitted/stashed worktree is refused and kept for the land step).
   - **`--dry-run`** is observe-only: no worktree, no spawn, no `bd` write — the
     safe default for the first live run (the live arm is Track 7 + ADR-0006's
     live gate). **CUT (Track 5):** the demand-spawned pool / backpressure beyond
     the max-in-flight cap (the full pool is M4).
-- **Track 6** — the exploration-attach (`plugins`→`extensions`) wire-key fix.
-- **Track 7** — `grid run` CLI + dogfood wiring (composes the Track-5
-  dispatcher with the M2 `ReconcilerRuntime` + the chosen provider).
+- **Track 6 (shipped)** — the exploration-attach (`plugins`→`extensions`)
+  wire-key fix (`grid_exploration`'s `kExtensionsKey` is `extensions`).
+- **Track 7 (built; since deleted)** — the `grid run` CLI + dogfood wiring
+  (composed the Track-5 dispatcher with the M2 reconciler runtime + the chosen
+  provider). Deleted in RS-8 with the interactor — composition now lives in
+  `grid_sdk`'s `runGrid`.
 
-All Track-4 `bd` calls go through the `GridBeadWriter` chokepoint over the M2
+All Track-4 `bd` calls go through the `StationBeadWriter` chokepoint over the M2
 `BdCliService`; the offline suite drives them with a **recording fake bd
 runner** (records argv + stdin), asserting the exact `--actor grid-controller` +
 metadata-merge commands, no SQL, no `bd show`, and the fail-closed refusal of a
@@ -167,7 +177,7 @@ wrong/absent rig. **No live state is touched.**
   one rig allow-set so they cannot drift. Non-owned ready beads are observed
   read-only, never spawned, never mutated.
 - **bd-only writes.** All session/lifecycle/recovery mutations flow through the
-  one `GridBeadWriter` over the M2 `BdCliService` (`--actor grid-controller`).
+  one `StationBeadWriter` over the M2 `BdCliService` (`--actor grid-controller`).
   Never raw SQL; never `bd show` on a controller/re-query path; never touch
   `.beads/hooks/` (gc owns them).
 - **Auth: flag-not-extract, explicit allowlist.** The agent OAuth token is an

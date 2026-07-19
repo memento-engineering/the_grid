@@ -1,5 +1,12 @@
 # PDR — the_grid: a reactive work-graph orchestrator in Dart
 
+> **Supersession notice (2026-07-19).** Accepted 2026-06-11; since **superseded in part** by later
+> ratified decisions: `grid_controller` → `beads_dart` (ADR-0002 as amended, rename applied
+> 2026-07-03); `grid_reconciler` folded away (package deleted 2026-07-03 — its live duties moved
+> into the engine's exclusion rules + codec); Riverpod → `StateNotifier` (ADR-0007 §6.6,
+> 2026-06-24); rig → substation (ADR-0008 D1, applied in code 2026-06-27). The body below is left
+> intact as the design of record — read it with those renames applied.
+
 **Status:** Accepted 2026-06-11 — **gate open** (ADR-0001–0004 Accepted; ADR-0000 A1–A7 promoted)
 **Date:** 2026-06-11
 **Author:** Nico Spencer (with Claude)

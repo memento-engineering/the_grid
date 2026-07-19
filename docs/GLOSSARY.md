@@ -9,8 +9,8 @@ the detailed drift analysis this index only summarizes. It records **the system 
 is** — including where docs and code disagree. Nothing here ratifies anything; where a term
 is contested, §12 says so instead of smoothing it over.
 
-Scope: `the_grid`, `power_station`, `space_station`, `tgdog`, plus the genesis/lenny seams
-the_grid touches. Each entry carries a **status tag**:
+Scope: `the_grid`, `power_station`, `space_station`, `tgdog` (retired 2026-07-08 —
+`SUBSTATION-INIT.md` §4), plus the genesis/lenny seams the_grid touches. Each entry carries a **status tag**:
 
 - `ratified` — defined in an Accepted ADR or a Nico-ratified surface, and code agrees
 - `proposed` — designed/written but not ratified, or ratified but not yet built
@@ -32,7 +32,7 @@ the_grid touches. Each entry carries a **status tag**:
 | `the_grid` | The orchestrator: observes bead stores, mounts work as a reconciled tree, spawns a coding agent per ready bead, lands the result |
 | `power_station` | The asset packs: the code circuit, committee, landing, agent harnesses, compute/lease, federation, zero-conf |
 | `space_station` | The composed station runner: the `space` binary and its resident-station verbs |
-| `tgdog` | the_grid's own state store: session/lifecycle beads live here so work sources stay pristine (A37) |
+| `tgdog` | **Retired** — archived read-only as `archive-tgdog-20260708` (`SUBSTATION-INIT.md` §4). The former separate state DB; the A37 split lives on, with the state store now the grid home's own `.grid/.beads/` (prefix `houston`) |
 | `lenny` (external) | The **org's** debugging arm — a genesis sibling, not a grid component: attaches to a running Dart VM over `ext.exploration.*`. The grid and lenny share genesis patterns but deliberately avoid coupling to each other (R1) |
 
 ---
@@ -79,7 +79,9 @@ membership).
 
 **Work source vs state store (the A37 split)** `ratified · ADR-0000 A36/A37; model R-2026-07-05` —
 **One store per station; one store per substation.** A station writes its
-session/lifecycle beads to its own single state store (`tgdog`) and reads work from one
+session/lifecycle beads to its own single state store (the grid home's nested
+`.grid/.beads/`, prefix `houston`; the former separate `tgdog` DB is retired —
+`SUBSTATION-INIT.md` §§3–4) and reads work from one
 store per owned substation (today's lived shape is one substation → one work store,
 `tg`; the N-substation union from tg-nsj is built, its arms deferred). A foreign work
 source is never written; a live run refuses to default sessions into a read store
@@ -311,7 +313,7 @@ tg-291) and a **fail-closed default** (no parseable verdict ⇒ F). Transport ha
 round-start clears, freshness stamps, transport provenance, review-after-durable-completion
 — is tg-bns (PR open).
 
-**Gate / false gate / failure discrimination** `ratified · SCRATCH-orchestration-determinism §5` —
+**Gate / false gate / failure discrimination** `ratified · OPERATIONS.md` —
 A gate is the committee refusing to land. The discrimination ladder: a validation plan
 that *cannot run* in the worktree = **environment** failure (arming-class); *no parseable
 verdict* = **transport** failure (fail-closed F with no rationale); only *ran-and-failed*
@@ -455,7 +457,7 @@ LaunchAgent plist template (`KeepAlive` with `SuccessfulExit=false` so a gracefu
 `space down` does **not** bounce; only a crash relaunches), `RunAtLoad`, logs to files.
 No `space install` yet — a template earns automation by being hand-operated.
 
-**The incident catalog (I-1…I-11)** `ratified · SCRATCH-orchestration-determinism` — The
+**The incident catalog (I-1…I-11)** `ratified · OPERATIONS.md` — The
 numbered determinism incidents and their disciplines. Load-bearing ones: **I-8**
 create-then-dep race → create deferred/wire/undefer; **I-9** teardown-vs-spawn orphan
 window on `down` (tg-gpg); **I-10** closed-session-with-running-cursor mint wedge
@@ -504,7 +506,8 @@ boundary, A41); retires per-substation as gc rigs convert (reserved ADR-0010). T
 and the codec.
 
 **Operator footguns** `recorded` — `bd update` with an *empty* id resolves last-touched;
-bd routes by CWD (never mix tgdog and work-store mutations in one compound command);
+bd routes by CWD (never mix state-store (`houston`) and work-store mutations in one
+compound command; `tgdog` itself is retired — `SUBSTATION-INIT.md` §4);
 zsh aborts a whole command on a failed glob; piping analyze output can swallow its rc.
 
 ---
@@ -605,10 +608,13 @@ lints. **The freezed boundary (2026-07-04):** grid packages use freezed **always
 shape: `runGrid(delegate)` — a final root driven by an observable delegate with ordered
 default-implemented hooks; the pattern is documented in SCRATCH-docs-debt-sweep §3.2a.)*
 `space up --substation … --workspace … --state-workspace … --state-substation …
---root <name>=<path>… [--no-dry-run --land]` → acquire the station lock →
+--root <name>=<path>… [--no-dry-run]` → acquire the station lock →
 `validateArming` (refusal ladder) → `discoverWorkspaces` (work stores + state store) →
 `buildControllers` (Dolt/bd snapshot sources) → `buildLiveWiring` (roots, writer
-chokepoint, runtime provider, land ops iff `--land`) → asset `ServiceBundle`s (on notice,
+chokepoint, runtime provider — no land flag: the `--land` arming seam is retired; delivery
+is a per-substation `DeliveryMethod` bound on the substation's `ServiceBundle`, and binding
+none is the commit-only posture — tg-6gn, pinned by
+`grid_sdk/test/land_seam_retired_test.dart`) → asset `ServiceBundle`s (on notice,
 R16) → `composeStation` + `wrapRoot` (ambient AgentConfig/HarnessRegistry) →
 `driveStation` (kernel mounts, flush loop runs, control surface binds, lock gains
 controlUrl/token).
