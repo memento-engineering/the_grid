@@ -29,9 +29,10 @@ import 'work_bead.dart';
 /// `root.markNeedsRebuild()` is banned; a single over-broad observation would
 /// re-create the "config built 100×" bug ADR-0007 §6.1 exists to prevent.
 class WorkList extends StatefulSeed {
-  /// Creates the work list under [substationConfig] (passed down as data by `Substation`;
-  /// the WorkList depends on the work axis only, never on the config inherited
-  /// value).
+  /// Creates the work list under [substationConfig]. The list itself uses the
+  /// value as data for ownership, drive-list, resident, and budget decisions;
+  /// its build output re-provides the same value as `InheritedSeed` so
+  /// descendant lifecycle owners observe the one substation config value.
   const WorkList({required this.substationConfig, super.key});
 
   /// The substation config, as data — its [SubstationConfig.ownedSubstations] builds the ownership
@@ -295,7 +296,13 @@ class _WorkListState extends State<WorkList> {
     // Deterministic order by bead id — all children are keyed, so reconcile is
     // by key regardless, but a stable order keeps the tree legible.
     mounted.sort((a, b) => a.bead.id.compareTo(b.bead.id));
-    return _WorkBeads(mounted);
+    // Re-provide the data config as an observed VALUE for descendants. WorkList
+    // still observes only the joined snapshot; SessionScope consumes the value
+    // through the ambient config seam it already depends on.
+    return InheritedSeed<SubstationConfig>(
+      value: seed.substationConfig,
+      child: _WorkBeads(mounted),
+    );
   }
 
   /// The ALLOW-list: only plain, coding-dispatchable work mounts. `isCore` =
