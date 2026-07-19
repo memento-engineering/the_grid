@@ -106,8 +106,7 @@ class AliveGroupController implements ProcessGroupController {
 
 void main() {
   group('SubprocessProvider — env policy (fake spawner)', () {
-    test(
-        'child env contains the token allowlist and NOT GC_DOLT_PASSWORD; '
+    test('child env contains the token allowlist and NOT GC_DOLT_PASSWORD; '
         'injects GRID_* incarnation env', () async {
       final spawner = FakeSpawner();
       final provider = SubprocessProvider(
@@ -179,39 +178,41 @@ void main() {
       await provider.dispose();
     });
 
-    test('(d) RuntimeEvent.exited fires with the exit code on process exit',
-        () async {
-      final spawner = FakeSpawner();
-      final group = AliveGroupController();
-      final provider = SubprocessProvider(
-        spawner: spawner,
-        groupController: group,
-        parentEnvironment: const {'PATH': '/usr/bin'},
-      );
+    test(
+      '(d) RuntimeEvent.exited fires with the exit code on process exit',
+      () async {
+        final spawner = FakeSpawner();
+        final group = AliveGroupController();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: group,
+          parentEnvironment: const {'PATH': '/usr/bin'},
+        );
 
-      final events = <RuntimeEvent>[];
-      final sub = provider.events.listen(events.add);
+        final events = <RuntimeEvent>[];
+        final sub = provider.events.listen(events.add);
 
-      await provider.start(
-        'sess',
-        const RuntimeConfig(workDir: '/tmp', command: 'claude'),
-      );
+        await provider.start(
+          'sess',
+          const RuntimeConfig(workDir: '/tmp', command: 'claude'),
+        );
 
-      // Process exits with code 7 (the fake resolves the exit future).
-      spawner.finish(7);
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+        // Process exits with code 7 (the fake resolves the exit future).
+        spawner.finish(7);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
 
-      expect(events.whereType<SessionStarted>(), hasLength(1));
-      final exited = events.whereType<Exited>().toList();
-      expect(exited, hasLength(1));
-      expect(exited.single.exitCode, 7);
-      expect(exited.single.name, 'sess');
-      // The session is no longer running after exit.
-      expect(provider.isRunning('sess'), isFalse);
+        expect(events.whereType<SessionStarted>(), hasLength(1));
+        final exited = events.whereType<Exited>().toList();
+        expect(exited, hasLength(1));
+        expect(exited.single.exitCode, 7);
+        expect(exited.single.name, 'sess');
+        // The session is no longer running after exit.
+        expect(provider.isRunning('sess'), isFalse);
 
-      await sub.cancel();
-      await provider.dispose();
-    });
+        await sub.cancel();
+        await provider.dispose();
+      },
+    );
 
     test('duplicate start rejects with SessionAlreadyExists', () async {
       final spawner = FakeSpawner();
@@ -268,8 +269,7 @@ void main() {
   });
 
   group('SubprocessProvider — whole-tree kill (REAL stub, never claude)', () {
-    test(
-        '(b) stop() SIGKILLs the whole process group — a child that spawns a '
+    test('(b) stop() SIGKILLs the whole process group — a child that spawns a '
         'grandchild: BOTH die', () async {
       // A stub that records its grandchild pid to a marker file, then both the
       // child and the grandchild sleep "forever". NEVER the real claude binary.
@@ -311,73 +311,88 @@ sleep 120
           }
         }
       }
-      expect(grandchildPid, greaterThan(0),
-          reason: 'stub should have recorded its grandchild pid');
-      expect(_pidAlive(grandchildPid), isTrue,
-          reason: 'grandchild sleep should be alive before stop()');
+      expect(
+        grandchildPid,
+        greaterThan(0),
+        reason: 'stub should have recorded its grandchild pid',
+      );
+      expect(
+        _pidAlive(grandchildPid),
+        isTrue,
+        reason: 'grandchild sleep should be alive before stop()',
+      );
 
       await provider.stop('kill-tree');
       // Give the OS a moment to reap.
       await Future<void>.delayed(const Duration(milliseconds: 200));
 
-      expect(_pidAlive(grandchildPid), isFalse,
-          reason: 'stop() must SIGKILL the WHOLE group — grandchild dies too');
+      expect(
+        _pidAlive(grandchildPid),
+        isFalse,
+        reason: 'stop() must SIGKILL the WHOLE group — grandchild dies too',
+      );
 
       await provider.dispose();
     }, timeout: const Timeout(Duration(seconds: 20)));
 
-    test('(c)+(d real) a real stub streams output and death is observed',
-        () async {
-      final tmp = await Directory.systemTemp.createTemp('grid_runtime_out_');
-      addTearDown(() => tmp.delete(recursive: true));
-      final stub = File('${tmp.path}/stub.sh')
-        ..writeAsStringSync('''
+    test(
+      '(c)+(d real) a real stub streams output and death is observed',
+      () async {
+        final tmp = await Directory.systemTemp.createTemp('grid_runtime_out_');
+        addTearDown(() => tmp.delete(recursive: true));
+        final stub = File('${tmp.path}/stub.sh')
+          ..writeAsStringSync('''
 #!/bin/sh
 echo "line-one"
 echo "line-two"
 exit 0
 ''');
-      await Process.run('chmod', ['+x', stub.path]);
+        await Process.run('chmod', ['+x', stub.path]);
 
-      final provider = SubprocessProvider(
-        parentEnvironment: const {'PATH': '/usr/bin:/bin'},
-        livenessPollPeriod: const Duration(milliseconds: 25),
-      );
+        final provider = SubprocessProvider(
+          parentEnvironment: const {'PATH': '/usr/bin:/bin'},
+          livenessPollPeriod: const Duration(milliseconds: 25),
+        );
 
-      final lines = <String>[];
-      final events = <RuntimeEvent>[];
-      final evSub = provider.events.listen(events.add);
+        final lines = <String>[];
+        final events = <RuntimeEvent>[];
+        final evSub = provider.events.listen(events.add);
 
-      await provider.start(
-        'streamer',
-        RuntimeConfig(workDir: tmp.path, command: '/bin/sh', args: [stub.path]),
-      );
-      final outSub = provider.output('streamer').listen(lines.add);
+        await provider.start(
+          'streamer',
+          RuntimeConfig(
+            workDir: tmp.path,
+            command: '/bin/sh',
+            args: [stub.path],
+          ),
+        );
+        final outSub = provider.output('streamer').listen(lines.add);
 
-      // Wait for death to be observed (detached path → Died, no readable code).
-      for (var i = 0; i < 80; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-        if (events.whereType<Died>().isNotEmpty ||
-            events.whereType<Exited>().isNotEmpty) {
-          break;
+        // Wait for death to be observed (detached path → Died, no readable code).
+        for (var i = 0; i < 80; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 25));
+          if (events.whereType<Died>().isNotEmpty ||
+              events.whereType<Exited>().isNotEmpty) {
+            break;
+          }
         }
-      }
 
-      expect(lines, containsAll(['line-one', 'line-two']));
-      // Real detached process: death observed as Died (no readable exit code).
-      expect(
-        events.any((e) => e is Died || e is Exited),
-        isTrue,
-        reason: 'death of a real stub must surface as a RuntimeEvent',
-      );
+        expect(lines, containsAll(['line-one', 'line-two']));
+        // Real detached process: death observed as Died (no readable exit code).
+        expect(
+          events.any((e) => e is Died || e is Exited),
+          isTrue,
+          reason: 'death of a real stub must surface as a RuntimeEvent',
+        );
 
-      await outSub.cancel();
-      await evSub.cancel();
-      await provider.dispose();
-    }, timeout: const Timeout(Duration(seconds: 20)));
+        await outSub.cancel();
+        await evSub.cancel();
+        await provider.dispose();
+      },
+      timeout: const Timeout(Duration(seconds: 20)),
+    );
 
-    test(
-        '(e real) the child gets stdin EOF — a harness that READS stdin must not '
+    test('(e real) the child gets stdin EOF — a harness that READS stdin must not '
         'hang forever', () async {
       // The agent transport is argv-only, so NOTHING ever writes to the child's
       // stdin. Before the fix the pipe was left open and never closed: a harness
@@ -415,7 +430,8 @@ echo "stdin-eof"
       expect(
         lines,
         contains('stdin-eof'),
-        reason: 'the spawner must CLOSE the child stdin it never writes to — '
+        reason:
+            'the spawner must CLOSE the child stdin it never writes to — '
             'an open pipe means "input pending", and a stdin-reading harness '
             'hangs on it forever',
       );
@@ -425,81 +441,92 @@ echo "stdin-eof"
     }, timeout: const Timeout(Duration(seconds: 20)));
 
     test(
-        '(f real) THE WATCHDOG: an agent that outlives its deadline is KILLED and '
-        'reported DIED — a hang must never latch forever', () async {
-      // The station could see an agent DIE, but never an agent ALIVE and doing
-      // NOTHING — so a hang latched its node at `running` forever with no
-      // telemetry and no error (the stdin hang, #57). This stub IS that hang:
-      // alive, silent, indefinite.
-      final tmp = await Directory.systemTemp.createTemp('grid_runtime_wd_');
-      addTearDown(() => tmp.delete(recursive: true));
-      final stub = File('${tmp.path}/stub.sh')
-        ..writeAsStringSync('''
+      '(f real) THE WATCHDOG: an agent that outlives its deadline is KILLED and '
+      'reported DIED — a hang must never latch forever',
+      () async {
+        // The station could see an agent DIE, but never an agent ALIVE and doing
+        // NOTHING — so a hang latched its node at `running` forever with no
+        // telemetry and no error (the stdin hang, #57). This stub IS that hang:
+        // alive, silent, indefinite.
+        final tmp = await Directory.systemTemp.createTemp('grid_runtime_wd_');
+        addTearDown(() => tmp.delete(recursive: true));
+        final stub = File('${tmp.path}/stub.sh')
+          ..writeAsStringSync('''
 #!/bin/sh
 sleep 600
 ''');
-      await Process.run('chmod', ['+x', stub.path]);
+        await Process.run('chmod', ['+x', stub.path]);
 
-      final provider = SubprocessProvider(
-        parentEnvironment: const {'PATH': '/usr/bin:/bin'},
-        livenessPollPeriod: const Duration(milliseconds: 25),
-        agentDeadline: const Duration(milliseconds: 300),
-        stopGrace: const Duration(milliseconds: 100),
-      );
+        final provider = SubprocessProvider(
+          parentEnvironment: const {'PATH': '/usr/bin:/bin'},
+          livenessPollPeriod: const Duration(milliseconds: 25),
+          agentDeadline: const Duration(hours: 1),
+          stopGrace: const Duration(milliseconds: 100),
+        );
 
-      final events = <RuntimeEvent>[];
-      final evSub = provider.events.listen(events.add);
+        final events = <RuntimeEvent>[];
+        final evSub = provider.events.listen(events.add);
 
-      await provider.start(
-        'hung',
-        RuntimeConfig(
-          workDir: tmp.path,
-          command: '/bin/sh',
-          args: [stub.path],
-          // oneTurn is the TRAP: a vanished oneTurn agent is normally an
-          // INFERRED SUCCESS, and an agent we killed vanishes identically.
-          lifecycle: Lifecycle.oneTurn,
-        ),
-      );
-      // The event stream is a broadcast — let SessionStarted land before its
-      // pid is read.
-      for (var i = 0; i < 40 && events.whereType<SessionStarted>().isEmpty; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
-      final pid = events.whereType<SessionStarted>().single.pid;
+        await provider.start(
+          'hung',
+          RuntimeConfig(
+            workDir: tmp.path,
+            command: '/bin/sh',
+            args: [stub.path],
+            // oneTurn is the TRAP: a vanished oneTurn agent is normally an
+            // INFERRED SUCCESS, and an agent we killed vanishes identically.
+            lifecycle: Lifecycle.oneTurn,
+            deadline: const Duration(milliseconds: 300),
+          ),
+        );
+        // The event stream is a broadcast — let SessionStarted land before its
+        // pid is read.
+        for (
+          var i = 0;
+          i < 40 && events.whereType<SessionStarted>().isEmpty;
+          i++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        final started = events.whereType<SessionStarted>().single;
+        expect(started.deadline, const Duration(milliseconds: 300));
+        final pid = started.pid;
 
-      for (var i = 0; i < 160 && events.whereType<Died>().isEmpty; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-      }
+        for (var i = 0; i < 160 && events.whereType<Died>().isEmpty; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 25));
+        }
 
-      final died = events.whereType<Died>().toList();
-      expect(
-        died,
-        hasLength(1),
-        reason: 'the watchdog must report a DEATH, so the node fails and reaches '
-            'supervision instead of latching at `running` forever',
-      );
-      expect(died.single.reason, contains('watchdog'));
-      expect(died.single.reason, contains('300ms'));
-      expect(
-        events.whereType<Exited>(),
-        isEmpty,
-        reason: 'a killed hang must NEVER read as a completion — a oneTurn '
-            'vanish is otherwise an INFERRED SUCCESS',
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      expect(
-        _pidAlive(pid),
-        isFalse,
-        reason: 'the watchdog must actually KILL the agent it gave up on',
-      );
+        final died = events.whereType<Died>().toList();
+        expect(
+          died,
+          hasLength(1),
+          reason:
+              'the watchdog must report a DEATH, so the node fails and reaches '
+              'supervision instead of latching at `running` forever',
+        );
+        expect(died.single.reason, contains('watchdog'));
+        expect(died.single.reason, contains('300ms'));
+        expect(
+          events.whereType<Exited>(),
+          isEmpty,
+          reason:
+              'a killed hang must NEVER read as a completion — a oneTurn '
+              'vanish is otherwise an INFERRED SUCCESS',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        expect(
+          _pidAlive(pid),
+          isFalse,
+          reason: 'the watchdog must actually KILL the agent it gave up on',
+        );
 
-      await evSub.cancel();
-      await provider.dispose();
-    }, timeout: const Timeout(Duration(seconds: 20)));
+        await evSub.cancel();
+        await provider.dispose();
+      },
+      timeout: const Timeout(Duration(seconds: 20)),
+    );
 
-    test(
-        'the watchdog does NOT shoot a healthy agent that finishes inside its '
+    test('the watchdog does NOT shoot a healthy agent that finishes inside its '
         'deadline (the false-kill control)', () async {
       final tmp = await Directory.systemTemp.createTemp('grid_runtime_wd_ok_');
       addTearDown(() => tmp.delete(recursive: true));
@@ -543,7 +570,8 @@ echo "done"
       expect(
         events.whereType<Died>().where((d) => d.reason.contains('watchdog')),
         isEmpty,
-        reason: 'the watchdog is a BACKSTOP — it must never fire on an agent '
+        reason:
+            'the watchdog is a BACKSTOP — it must never fire on an agent '
             'that finished inside its deadline',
       );
 
@@ -577,11 +605,13 @@ echo "done"
         ),
       );
       group.alive = false; // the process disappears; no readable exit code
-      for (var i = 0;
-          i < 200 &&
-              events.whereType<Exited>().isEmpty &&
-              events.whereType<Died>().isEmpty;
-          i++) {
+      for (
+        var i = 0;
+        i < 200 &&
+            events.whereType<Exited>().isEmpty &&
+            events.whereType<Died>().isEmpty;
+        i++
+      ) {
         await Future<void>.delayed(const Duration(milliseconds: 5));
       }
       await sub.cancel();
@@ -601,23 +631,28 @@ echo "done"
       expect(exited.single.exitCode, 0);
     });
 
-    test('a longLived agent that vanishes still emits Died (a real crash)',
-        () async {
-      final events = await runUntilExit(Lifecycle.longLived);
-      expect(events.whereType<Exited>(), isEmpty);
-      expect(events.whereType<Died>(), hasLength(1));
-    });
+    test(
+      'a longLived agent that vanishes still emits Died (a real crash)',
+      () async {
+        final events = await runUntilExit(Lifecycle.longLived);
+        expect(events.whereType<Exited>(), isEmpty);
+        expect(events.whereType<Died>(), hasLength(1));
+      },
+    );
 
-    test('the vanish exit DECLARES itself INFERRED (the fence reads this flag)',
-        () async {
-      final events = await runUntilExit(Lifecycle.oneTurn);
-      expect(
-        events.whereType<Exited>().single.inferred,
-        isTrue,
-        reason: 'a vanish gives no readable code — the 0 is a GUESS, and the '
-            'transport must say so (a MURDER vanishes identically)',
-      );
-    });
+    test(
+      'the vanish exit DECLARES itself INFERRED (the fence reads this flag)',
+      () async {
+        final events = await runUntilExit(Lifecycle.oneTurn);
+        expect(
+          events.whereType<Exited>().single.inferred,
+          isTrue,
+          reason:
+              'a vanish gives no readable code — the 0 is a GUESS, and the '
+              'transport must say so (a MURDER vanishes identically)',
+        );
+      },
+    );
 
     test('an OBSERVED exit code is NOT inferred', () async {
       final spawner = FakeSpawner(); // provideExitCode = true: the code is READ
@@ -696,25 +731,28 @@ echo "done"
       expect(provider.isRunning('tgstate-1/tg-gpg/agent'), isFalse);
     });
 
-    test('the normal stop path is unchanged: a live session is group-killed and '
-        'deregistered', () async {
-      final spawner = FakeSpawner();
-      final groups = _DyingGroupController();
-      final provider = SubprocessProvider(
-        spawner: spawner,
-        groupController: groups,
-        parentEnvironment: const {},
-      );
-      await provider.start(
-        'tgstate-1/tg-gpg/agent',
-        const RuntimeConfig(workDir: '/tmp', command: 'claude'),
-      );
+    test(
+      'the normal stop path is unchanged: a live session is group-killed and '
+      'deregistered',
+      () async {
+        final spawner = FakeSpawner();
+        final groups = _DyingGroupController();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: groups,
+          parentEnvironment: const {},
+        );
+        await provider.start(
+          'tgstate-1/tg-gpg/agent',
+          const RuntimeConfig(workDir: '/tmp', command: 'claude'),
+        );
 
-      await provider.stop('tgstate-1/tg-gpg/agent');
+        await provider.stop('tgstate-1/tg-gpg/agent');
 
-      expect(groups.signals.first, (4242, ProcessSignal.sigterm));
-      expect(provider.listRunning('tgstate-'), isEmpty);
-    });
+        expect(groups.signals.first, (4242, ProcessSignal.sigterm));
+        expect(provider.listRunning('tgstate-'), isEmpty);
+      },
+    );
   });
 }
 

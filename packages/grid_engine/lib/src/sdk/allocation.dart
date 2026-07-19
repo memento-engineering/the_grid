@@ -31,6 +31,7 @@ import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:path/path.dart' as p;
 
 import 'capability.dart';
 import 'circuit.dart';
@@ -54,6 +55,23 @@ void assertProvisionedCheckout(String workspaceDir) {
     'sourceless-workspace: provisionWorkspace returned without a checkout '
     'at $workspaceDir (.git missing)',
   );
+}
+
+/// Whether [workDir] names [workspaceDir] itself or a descendant directory.
+/// Symlinks are resolved when they exist so a cwd cannot escape by path alias.
+bool _isInsideWorkspace(String workspaceDir, String workDir) {
+  String canonical(String value) {
+    final dir = Directory(value);
+    try {
+      return p.normalize(dir.resolveSymbolicLinksSync());
+    } on FileSystemException {
+      return p.normalize(dir.absolute.path);
+    }
+  }
+
+  final workspace = canonical(workspaceDir);
+  final cwd = canonical(workDir);
+  return cwd == workspace || p.isWithin(workspace, cwd);
 }
 
 /// The lifecycle state of an [Allocation] (ADR-0009 D5:
@@ -285,7 +303,8 @@ typedef WorkSignalProbe = Future<GateOutcome> Function(String workspaceDir);
 /// an inferred completion is taken at face value (today's behavior). Public so
 /// the composer / [StationServices] can name the "fence disabled" value
 /// explicitly, like [neverLive].
-Future<GateOutcome> noWorkSignal(String workspaceDir) async => GateOutcome.clear;
+Future<GateOutcome> noWorkSignal(String workspaceDir) async =>
+    GateOutcome.clear;
 
 /// How long the completion fence waits for a [WorkSignalProbe] before calling the
 /// workspace unreadable ([GateOutcome.probeError] — fail closed, so the step
@@ -632,12 +651,19 @@ class ProcessAllocation extends Allocation {
           .where((e) => e.name == name)
           .listen(_onEvent);
       final base = capability.spawn(tree, args);
+      if (workspace != null &&
+          !_isInsideWorkspace(workspace.workspaceDir, base.workDir)) {
+        throw StateError(
+          'refused process workDir outside workspace: '
+          'workDir=${base.workDir} workspace=${workspace.workspaceDir}',
+        );
+      }
       final config = base.copyWith(env: {...base.env, ...context.env});
       _started = true;
       try {
         await context.transport.start(name, config);
       } on SessionAlreadyExists {
-        // A re-fired ready event raced the spawn — fine (the group is up).
+        // A re-fired ready event raced the spawn, and the group is up.
       }
     } on Object catch (e) {
       if (_terminal) return;
@@ -698,7 +724,8 @@ class ProcessAllocation extends Allocation {
       case StepSignal.failed:
         _terminal = true;
         state = AllocationState.gone;
-        context.sink(const AllocationFailed());
+        final reason = e is Died && e.reason.isNotEmpty ? e.reason : '';
+        context.sink(AllocationFailed(reason));
     }
   }
 

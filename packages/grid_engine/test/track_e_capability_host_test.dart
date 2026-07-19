@@ -3,6 +3,7 @@
 // async-gap guards, teardown, and the write fence (a Capability sees no
 // writer/notifier — the sandbox DISSOLVED into layering with the context
 // rip-out, ADR-0009: it reads the tree with the effect verb, it never writes).
+// ignore_for_file: invalid_use_of_protected_member
 //
 // ADR-0008 D4 / M4-P1 §5, Track E. Zero I/O — fakes + the recording chokepoint.
 import 'dart:async';
@@ -27,8 +28,9 @@ class _RecordingProcessCap extends ProcessCapability {
   RuntimeConfig spawn(TreeContext context, StepArgs args) {
     // The effect verb: the per-session Workspace is AMBIENT (mounted by
     // SessionScope in the full tree; by the harness here).
-    final workspaceDir =
-        context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir;
+    final workspaceDir = context
+        .getInheritedSeedOfExactType<Workspace>()!
+        .workspaceDir;
     log.add('spawn(${args.beadId}@$workspaceDir)');
     return RuntimeConfig(
       workDir: workspaceDir,
@@ -216,24 +218,27 @@ Branch _hostBranch(Branch root) {
 
 void main() {
   group('Track E — ProcessCapability: mount=spawn, identity, terminal', () {
-    test('mount spawns under the per-step name with the engine env layered', () async {
-      final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
+    test(
+      'mount spawns under the per-step name with the engine env layered',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
 
-      expect(h.fakes.provider.started, hasLength(1));
-      final started = h.fakes.provider.started.single;
-      expect(started.name, 'tgdog-s/tg-1/agent'); // $sessionId/$nodePath
-      expect(started.config.env['GRID_BEAD_ID'], 'tg-1');
-      expect(started.config.env['GRID_SESSION_ID'], 'tgdog-s');
-      expect(started.config.env['GRID_STEP_PATH'], 'tg-1/agent');
-      expect(started.config.env['GRID_INSTANCE_TOKEN'], isNotEmpty);
-      expect(log.first, startsWith('spawn(tg-1@'));
-    });
+        expect(h.fakes.provider.started, hasLength(1));
+        final started = h.fakes.provider.started.single;
+        expect(started.name, 'tgdog-s/tg-1/agent'); // $sessionId/$nodePath
+        expect(started.config.env['GRID_BEAD_ID'], 'tg-1');
+        expect(started.config.env['GRID_SESSION_ID'], 'tgdog-s');
+        expect(started.config.env['GRID_STEP_PATH'], 'tg-1/agent');
+        expect(started.config.env['GRID_INSTANCE_TOKEN'], isNotEmpty);
+        expect(log.first, startsWith('spawn(tg-1@'));
+      },
+    );
 
     test('the host provisions the workspace BEFORE spawning into it', () async {
       final log = <String>[];
@@ -255,7 +260,8 @@ void main() {
       // in a non-existent worktree (the M3-dispatcher parity the tree path lost).
       expect(log, contains('provision(tg-1)'));
       expect(
-        log.indexOf('provision(tg-1)') < log.indexWhere((l) => l.startsWith('spawn(')),
+        log.indexOf('provision(tg-1)') <
+            log.indexWhere((l) => l.startsWith('spawn(')),
         isTrue,
         reason: 'provision must precede spawn',
       );
@@ -294,55 +300,62 @@ void main() {
       final ws = sc.workspaceFor('tg-1');
       expect(h.fakes.provider.started.single.config.workDir, ws);
       expect(log.first, 'spawn(tg-1@$ws)');
-      expect(sc.provisionedDirs, [ws],
-          reason: 'the SAME derived path is provisioned');
+      expect(sc.provisionedDirs, [
+        ws,
+      ], reason: 'the SAME derived path is provisioned');
     });
 
-    test('SessionStarted persists the per-node identity (pgid/pid/token/running)',
-        () async {
-      final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
+    test(
+      'SessionStarted persists the per-node identity (pgid/pid/token/running)',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
 
-      h.fakes.provider.emit(
-        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
-      );
-      await _pump();
+        h.fakes.provider.emit(
+          const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
+        );
+        await _pump();
 
-      final meta = h.fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/agent.state'], 'running');
-      expect(meta['grid.cursor.tg-1/agent.pgid'], '200');
-      expect(meta['grid.cursor.tg-1/agent.pid'], '100');
-      expect(meta['grid.cursor.tg-1/agent.token'], isNotEmpty);
-      // The step-begin instant is stamped on the `running` write (FT-1), so a
-      // live step's start is durable BEFORE its terminal.
-      expect(meta['grid.cursor.tg-1/agent.startedAt'], isNotEmpty);
-    });
+        final meta = h.fakes.runner.metadataOfUpdate(0);
+        expect(meta['grid.cursor.tg-1/agent.state'], 'running');
+        expect(meta['grid.cursor.tg-1/agent.pgid'], '200');
+        expect(meta['grid.cursor.tg-1/agent.pid'], '100');
+        expect(meta['grid.cursor.tg-1/agent.token'], isNotEmpty);
+        // The step-begin instant is stamped on the `running` write (FT-1), so a
+        // live step's start is durable BEFORE its terminal.
+        expect(meta['grid.cursor.tg-1/agent.startedAt'], isNotEmpty);
+      },
+    );
 
-    test('a clean Exited(0) writes the node cursor complete (interpretEvent)',
-        () async {
-      final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
+    test(
+      'a clean Exited(0) writes the node cursor complete (interpretEvent)',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
 
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
-      await _pump();
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+        );
+        await _pump();
 
-      // The terminal cursor write (the only update — no SessionStarted here).
-      // Carries capture-only timing (FT-1) MERGED into the same single write.
-      expect(h.fakes.runner.metadataOfUpdate(0), {
-        'grid.cursor.tg-1/agent.state': 'complete',
-        ...expectedTiming('tg-1/agent'),
-      });
-    });
+        // The terminal cursor write (the only update — no SessionStarted here).
+        // Carries capture-only timing (FT-1) MERGED into the same single write.
+        expect(h.fakes.runner.metadataOfUpdate(0), {
+          'grid.cursor.tg-1/agent.state': 'complete',
+          ...expectedTiming('tg-1/agent'),
+        });
+      },
+    );
 
     test('a non-zero Exited writes the SUPERVISED failure (failed + restartCount '
         '+ backoff cooldown — D-5)', () async {
@@ -353,7 +366,9 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _pump();
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1));
+      h.fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1),
+      );
       await _pump();
       // restartCount bumped to 1; cooldown = clock + Backoff.standard.delayFor(1)
       // (= 1s). Within budget (maxRestarts default 3), so a cooldown is written.
@@ -361,11 +376,47 @@ void main() {
       expect(h.fakes.runner.metadataOfUpdate(0), {
         'grid.cursor.tg-1/agent.state': 'failed',
         'grid.cursor.tg-1/agent.restartCount': '1',
-        'grid.cursor.tg-1/agent.cooldownUntil':
-            _clock.add(const Duration(seconds: 1)).toIso8601String(),
+        'grid.cursor.tg-1/agent.cooldownUntil': _clock
+            .add(const Duration(seconds: 1))
+            .toIso8601String(),
         ...expectedTiming('tg-1/agent'),
       });
     });
+
+    test(
+      'a killed process event writes failed, never leaving the node running',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+
+        expect(h.fakes.provider.started, hasLength(1));
+        h.fakes.provider.emit(
+          const Died(
+            name: 'tgdog-s/tg-1/agent',
+            reason: 'governor killed validation lane process group',
+          ),
+        );
+        await _pump();
+
+        expect(h.fakes.runner.callsFor('update'), hasLength(1));
+        expect(
+          h.fakes.runner.metadataOfUpdate(0),
+          containsPair('grid.cursor.tg-1/agent.state', 'failed'),
+        );
+        expect(
+          h.fakes.runner.metadataOfUpdate(0),
+          containsPair(
+            'grid.cursor.tg-1/agent.failureReason',
+            'governor killed validation lane process group',
+          ),
+        );
+      },
+    );
 
     test('the LAST restart (exhausted) writes failed + restartCount, NO cooldown '
         '(circuit-broken → SessionScope escalates)', () async {
@@ -408,55 +459,62 @@ void main() {
         ),
       );
       await _pump();
-      fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1));
+      fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1),
+      );
       await _pump();
       expect(fakes.runner.metadataOfUpdate(0), {
         'grid.cursor.tg-1/agent.state': 'failed',
-        'grid.cursor.tg-1/agent.restartCount': '3', // == maxRestarts → exhausted
+        'grid.cursor.tg-1/agent.restartCount':
+            '3', // == maxRestarts → exhausted
         // no cooldownUntil key — the breaker is tripped.
         ...expectedTiming('tg-1/agent'),
       });
     });
 
-    test('dispose kills the managed group AND runs the belt-and-braces teardown',
-        () async {
-      final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      await _pump();
-      h.owner.dispose();
-      await _pump();
-      unawaited(h.fakes.provider.close());
+    test(
+      'dispose kills the managed group AND runs the belt-and-braces teardown',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log));
+        await _pump();
+        h.owner.dispose();
+        await _pump();
+        unawaited(h.fakes.provider.close());
 
-      expect(h.fakes.provider.stopped, ['tgdog-s/tg-1/agent']);
-      expect(log, contains('teardown'));
-    });
+        expect(h.fakes.provider.stopped, ['tgdog-s/tg-1/agent']);
+        expect(log, contains('teardown'));
+      },
+    );
   });
 
   group('Track E — the async-gap guards (ported from EffectSeed)', () {
-    test('a terminal delivered AFTER dispose writes nothing + does not throw',
-        () async {
-      final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      await _pump();
-      // Capture the State BEFORE dispose (the branch leaves the tree on unmount).
-      // ignore: invalid_use_of_protected_member
-      final state = (_hostBranch(h.root) as StatefulBranch).state
-          as CapabilityHostState;
-      h.fakes.runner.calls.clear();
-      h.owner.dispose(); // _cancelled = true FIRST
-      // Deliver a terminal straight to the handler (the subscription is gone).
-      state.deliverEventForTest(
-        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
-      );
-      await _pump();
-      unawaited(h.fakes.provider.close());
+    test(
+      'a terminal delivered AFTER dispose writes nothing + does not throw',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log));
+        await _pump();
+        // Capture the State BEFORE dispose (the branch leaves the tree on unmount).
+        final state =
+            (_hostBranch(h.root) as StatefulBranch).state
+                as CapabilityHostState;
+        h.fakes.runner.calls.clear();
+        h.owner.dispose(); // _cancelled = true FIRST
+        // Deliver a terminal straight to the handler (the subscription is gone).
+        state.deliverEventForTest(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+        );
+        await _pump();
+        unawaited(h.fakes.provider.close());
 
-      expect(
-        h.fakes.runner.callsFor('update'),
-        isEmpty,
-        reason: 'a post-dispose completion is dropped (the _cancelled guard)',
-      );
-    });
+        expect(
+          h.fakes.runner.callsFor('update'),
+          isEmpty,
+          reason: 'a post-dispose completion is dropped (the _cancelled guard)',
+        );
+      },
+    );
 
     test('teardown fires even when disposed BEFORE the kick reaches spawn '
         '(finding #1: guaranteed on every exit path)', () async {
@@ -486,22 +544,28 @@ void main() {
       );
     });
 
-    test('two terminals in one incarnation write the cursor only ONCE (latch)',
-        () async {
-      final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
+    test(
+      'two terminals in one incarnation write the cursor only ONCE (latch)',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
 
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
-      await _pump();
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+        );
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+        );
+        await _pump();
 
-      expect(h.fakes.runner.callsFor('update'), hasLength(1));
-    });
+        expect(h.fakes.runner.callsFor('update'), hasLength(1));
+      },
+    );
   });
 
   group('Track E — ServiceCapability', () {
@@ -558,8 +622,9 @@ void main() {
       expect(h.fakes.runner.metadataOfUpdate(0), {
         'grid.cursor.tg-1/agent.state': 'failed',
         'grid.cursor.tg-1/agent.restartCount': '1',
-        'grid.cursor.tg-1/agent.cooldownUntil':
-            _clock.add(const Duration(seconds: 1)).toIso8601String(),
+        'grid.cursor.tg-1/agent.cooldownUntil': _clock
+            .add(const Duration(seconds: 1))
+            .toIso8601String(),
         'grid.cursor.tg-1/agent.failureReason': 'nope',
         ...expectedTiming('tg-1/agent'),
       });
@@ -594,8 +659,10 @@ void main() {
       h.fakes.provider.emit(const Died(name: 'tgdog-s/tg-1/agent'));
       await _pump();
       expect(h.fakes.runner.callsFor('update'), hasLength(2));
-      expect(h.fakes.runner.metadataOfUpdate(1)['grid.cursor.tg-1/agent.state'],
-          'failed');
+      expect(
+        h.fakes.runner.metadataOfUpdate(1)['grid.cursor.tg-1/agent.state'],
+        'failed',
+      );
     });
   });
 
@@ -621,7 +688,10 @@ void main() {
       // the post-rip-out SDK file. What remains fenced is the WRITE surface.
       expect(imports.any((l) => l.contains('genesis_tree')), isTrue);
       expect(imports.any((l) => l.contains('station_bead_writer')), isFalse);
-      expect(imports.any((l) => l.contains('joined_snapshot_notifier')), isFalse);
+      expect(
+        imports.any((l) => l.contains('joined_snapshot_notifier')),
+        isFalse,
+      );
       expect(imports.any((l) => l.contains('station_services')), isFalse);
     });
 

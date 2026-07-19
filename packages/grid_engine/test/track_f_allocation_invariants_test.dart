@@ -35,10 +35,8 @@ Future<String> _readEngineSource(String libRelative) async {
   return File(uri!.toFilePath()).readAsStringSync();
 }
 
-List<String> _importLines(String src) => src
-    .split('\n')
-    .where((l) => l.trimLeft().startsWith('import '))
-    .toList();
+List<String> _importLines(String src) =>
+    src.split('\n').where((l) => l.trimLeft().startsWith('import ')).toList();
 
 class _RecProcessCap extends ProcessCapability {
   _RecProcessCap(this.log);
@@ -54,6 +52,27 @@ class _RecProcessCap extends ProcessCapability {
       lifecycle: Lifecycle.oneTurn,
     );
   }
+
+  @override
+  StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
+    Exited(:final exitCode) when exitCode == 0 => StepSignal.complete,
+    Exited() || Died() => StepSignal.failed,
+    _ => StepSignal.none,
+  };
+}
+
+class _WorkDirCap extends ProcessCapability {
+  const _WorkDirCap(this.workDir);
+
+  final String workDir;
+
+  @override
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: workDir,
+    command: 'sh',
+    args: const ['-c', 'echo hi'],
+    lifecycle: Lifecycle.oneTurn,
+  );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
@@ -86,8 +105,7 @@ class _DaemonCap extends ProcessCapability {
     AdoptFence fence,
     TreeContext context,
     StepArgs args,
-  ) async =>
-      fresh;
+  ) async => fresh;
 }
 
 /// The ambient values the old CapabilityContext threaded, now read from the
@@ -140,66 +158,84 @@ Future<void> _pump() async {
 
 void main() {
   group('Track F/G — D3: the effect layer holds NO writer (structural fence)', () {
-    test('allocation.dart imports no writer / notifier / station-services',
-        () async {
-      final imports = _importLines(await _readEngineSource('src/sdk/allocation.dart'));
-      // The invariant is about IMPORTS — the effect layer cannot even NAME a
-      // writer/notifier, so invariant 2 holds by construction (not a wall).
-      // (The context rip-out, ADR-0009 D3: depending on the TREE is the norm —
-      // the effect reads its ambient values through the host's TreeContext, so
-      // genesis_tree is now a LEGITIMATE import; the write locus stays out.)
-      expect(imports.any((l) => l.contains('station_bead_writer')), isFalse);
-      expect(imports.any((l) => l.contains('joined_snapshot_notifier')), isFalse);
-      expect(imports.any((l) => l.contains('station_services')), isFalse);
-      // Sanity control: it DOES import its legitimate transport (grid_runtime)
-      // and the tree it reads ambient values from (genesis_tree) — proving the
-      // fence above is meaningful, not vacuously true on an empty set.
-      expect(imports.any((l) => l.contains('grid_runtime')), isTrue);
-      expect(imports.any((l) => l.contains('genesis_tree')), isTrue);
-    });
+    test(
+      'allocation.dart imports no writer / notifier / station-services',
+      () async {
+        final imports = _importLines(
+          await _readEngineSource('src/sdk/allocation.dart'),
+        );
+        // The invariant is about IMPORTS — the effect layer cannot even NAME a
+        // writer/notifier, so invariant 2 holds by construction (not a wall).
+        // (The context rip-out, ADR-0009 D3: depending on the TREE is the norm —
+        // the effect reads its ambient values through the host's TreeContext, so
+        // genesis_tree is now a LEGITIMATE import; the write locus stays out.)
+        expect(imports.any((l) => l.contains('station_bead_writer')), isFalse);
+        expect(
+          imports.any((l) => l.contains('joined_snapshot_notifier')),
+          isFalse,
+        );
+        expect(imports.any((l) => l.contains('station_services')), isFalse);
+        // Sanity control: it DOES import its legitimate transport (grid_runtime)
+        // and the tree it reads ambient values from (genesis_tree) — proving the
+        // fence above is meaningful, not vacuously true on an empty set.
+        expect(imports.any((l) => l.contains('grid_runtime')), isTrue);
+        expect(imports.any((l) => l.contains('genesis_tree')), isTrue);
+      },
+    );
 
-    test('AllocationContext exposes only the effect-layer shape (no writer field)',
-        () {
-      final ctx = _allocCtx(FakeRuntimeProvider());
-      // Compile-time shape: the effect gets transport (process), a report sink,
-      // the host's tree context + the per-step args, address, env, fence, kind,
-      // liveness — and NO writer/notifier. Reading these proves the shape.
-      expect(ctx.transport, isA<RuntimeProvider>());
-      expect(ctx.sink, isA<AllocationSink>());
-      expect(ctx.treeContext, isA<TreeContext>());
-      expect(ctx.args, isA<StepArgs>());
-      expect(ctx.address.providerName, 's/tg-1/n');
-    });
+    test(
+      'AllocationContext exposes only the effect-layer shape (no writer field)',
+      () {
+        final ctx = _allocCtx(FakeRuntimeProvider());
+        // Compile-time shape: the effect gets transport (process), a report sink,
+        // the host's tree context + the per-step args, address, env, fence, kind,
+        // liveness — and NO writer/notifier. Reading these proves the shape.
+        expect(ctx.transport, isA<RuntimeProvider>());
+        expect(ctx.sink, isA<AllocationSink>());
+        expect(ctx.treeContext, isA<TreeContext>());
+        expect(ctx.args, isA<StepArgs>());
+        expect(ctx.address.providerName, 's/tg-1/n');
+      },
+    );
   });
 
-  group('Track F/G — D4: dispose (kill) and detach (leave) are DISTINCT verbs', () {
-    test('a job/service is not detachable and its detach() THROWS (never an '
-        'overloaded dispose)', () {
-      final svc = ServiceAllocation(
-        _NoopService(),
-        _allocCtx(FakeRuntimeProvider(), kind: StepKind.job),
-      );
-      expect(svc.isDetachable, isFalse);
-      expect(svc.detach, throwsA(isA<UnsupportedError>()));
-    });
+  group(
+    'Track F/G — D4: dispose (kill) and detach (leave) are DISTINCT verbs',
+    () {
+      test('a job/service is not detachable and its detach() THROWS (never an '
+          'overloaded dispose)', () {
+        final svc = ServiceAllocation(
+          _NoopService(),
+          _allocCtx(FakeRuntimeProvider(), kind: StepKind.job),
+        );
+        expect(svc.isDetachable, isFalse);
+        expect(svc.detach, throwsA(isA<UnsupportedError>()));
+      });
 
-    test('ProcessAllocation.detach LEAVES the group; dispose KILLS it — a '
-        'mutation aliasing them fails this pair', () async {
-      final p1 = FakeRuntimeProvider();
-      final left = ProcessAllocation(_RecProcessCap([]), _allocCtx(p1, live: false));
-      await left.startOrAdopt();
-      await _pump();
-      await left.detach();
-      expect(p1.stopped, isEmpty, reason: 'detach must NOT stop the group');
+      test('ProcessAllocation.detach LEAVES the group; dispose KILLS it — a '
+          'mutation aliasing them fails this pair', () async {
+        final p1 = FakeRuntimeProvider();
+        final left = ProcessAllocation(
+          _RecProcessCap([]),
+          _allocCtx(p1, live: false),
+        );
+        await left.startOrAdopt();
+        await _pump();
+        await left.detach();
+        expect(p1.stopped, isEmpty, reason: 'detach must NOT stop the group');
 
-      final p2 = FakeRuntimeProvider();
-      final killed = ProcessAllocation(_RecProcessCap([]), _allocCtx(p2, live: false));
-      await killed.startOrAdopt();
-      await _pump();
-      await killed.dispose();
-      expect(p2.stopped, hasLength(1), reason: 'dispose MUST kill the group');
-    });
-  });
+        final p2 = FakeRuntimeProvider();
+        final killed = ProcessAllocation(
+          _RecProcessCap([]),
+          _allocCtx(p2, live: false),
+        );
+        await killed.startOrAdopt();
+        await _pump();
+        await killed.dispose();
+        expect(p2.stopped, hasLength(1), reason: 'dispose MUST kill the group');
+      });
+    },
+  );
 
   group('Track F/G — D5: no-adopt-on-faith is non-vacuous', () {
     Future<bool> didAdopt({required bool live, required bool fresh}) async {
@@ -215,10 +251,16 @@ void main() {
 
     test('either freshness half missing → spawn (no adopt); BOTH present → adopt '
         '(the sanity control proves the guard is real)', () async {
-      expect(await didAdopt(live: false, fresh: true), isFalse,
-          reason: 'engine pgid-liveness half missing');
-      expect(await didAdopt(live: true, fresh: false), isFalse,
-          reason: 'capability endpoint/token half missing');
+      expect(
+        await didAdopt(live: false, fresh: true),
+        isFalse,
+        reason: 'engine pgid-liveness half missing',
+      );
+      expect(
+        await didAdopt(live: true, fresh: false),
+        isFalse,
+        reason: 'capability endpoint/token half missing',
+      );
       // Sanity control: BOTH halves present DOES adopt — so the two asserts above
       // are non-vacuous (a mutation dropping a guard would flip one of them).
       expect(await didAdopt(live: true, fresh: true), isTrue);
@@ -236,8 +278,11 @@ void main() {
         '_writeOutcome',
         'Expando',
       ]) {
-        expect(src.contains(dead), isFalse,
-            reason: 'the thin-driver Host must not carry the P0 remnant "$dead"');
+        expect(
+          src.contains(dead),
+          isFalse,
+          reason: 'the thin-driver Host must not carry the P0 remnant "$dead"',
+        );
       }
       // Sanity control: it DOES drive an Allocation now (the new shape) — so the
       // absence above is the refactor, not an empty/renamed file.
@@ -282,7 +327,9 @@ void main() {
       // A reported terminal is PERSISTED through the chokepoint — one write, the
       // node cursor advanced. (A mutation dropping the sink→persist wiring writes
       // nothing here.)
-      fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
+      fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+      );
       await _pump();
       expect(fakes.runner.callsFor('update'), hasLength(1));
       expect(fakes.runner.metadataOfUpdate(0), {
@@ -291,6 +338,88 @@ void main() {
       });
       expect(root, isNotNull);
     });
+
+    test(
+      'ProcessAllocation refuses a workDir outside the ambient Workspace before start',
+      () async {
+        final provider = FakeRuntimeProvider();
+        addTearDown(provider.close);
+        final reports = <AllocationReport>[];
+        final alloc = ProcessAllocation(
+          const _WorkDirCap('/grid/main-checkout'),
+          AllocationContext(
+            treeContext: FakeTreeContext(
+              values: {
+                Workspace: testWorkspace(
+                  'tg-1',
+                  workspaceDir: '/grid/workspaces/tg-1',
+                ),
+              },
+            ),
+            args: stepArgs('tg-1/critic'),
+            transport: provider,
+            address: const AllocationAddress('sess-1', 'tg-1/critic'),
+            env: const {},
+            sink: reports.add,
+            kind: StepKind.job,
+          ),
+        );
+
+        await alloc.startOrAdopt();
+        await _pump();
+
+        expect(provider.started, isEmpty);
+        expect(reports, hasLength(1));
+        expect(
+          reports.single,
+          isA<AllocationFailed>().having(
+            (f) => f.reason,
+            'reason',
+            contains('refused process workDir outside workspace'),
+          ),
+        );
+      },
+    );
+
+    test(
+      'ProcessAllocation accepts the workspace root and descendants',
+      () async {
+        for (final workDir in const [
+          '/grid/workspaces/tg-1',
+          '/grid/workspaces/tg-1/packages/grid_runtime',
+        ]) {
+          final provider = FakeRuntimeProvider();
+          addTearDown(provider.close);
+          final reports = <AllocationReport>[];
+          final alloc = ProcessAllocation(
+            _WorkDirCap(workDir),
+            AllocationContext(
+              treeContext: FakeTreeContext(
+                values: {
+                  Workspace: testWorkspace(
+                    'tg-1',
+                    workspaceDir: '/grid/workspaces/tg-1',
+                  ),
+                },
+              ),
+              args: stepArgs('tg-1/critic'),
+              transport: provider,
+              address: AllocationAddress('sess-1', 'tg-1/critic-$workDir'),
+              env: const {},
+              sink: reports.add,
+              kind: StepKind.job,
+            ),
+          );
+
+          await alloc.startOrAdopt();
+          await _pump();
+
+          expect(provider.started, hasLength(1));
+          expect(provider.started.single.config.workDir, workDir);
+          expect(reports.whereType<AllocationFailed>(), isEmpty);
+        }
+      },
+    );
   });
 }
 

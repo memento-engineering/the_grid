@@ -268,12 +268,15 @@ class SubprocessProvider implements RuntimeProvider {
     // and the bounded peek buffer.
     session.attachTranscript(spawned.stdout, spawned.stderr);
 
+    final effectiveDeadline = config.deadline ?? _agentDeadline;
+
     _emit(
       RuntimeEvent.sessionStarted(
         name: name,
         pid: spawned.pid,
         pgid: session.pgid,
         beadId: config.env['GRID_BEAD_ID'] ?? '',
+        deadline: effectiveDeadline,
       ),
     );
 
@@ -285,32 +288,32 @@ class SubprocessProvider implements RuntimeProvider {
     final exitFuture = spawned.exitCode;
     if (exitFuture != null) {
       unawaited(
-        exitFuture.then((code) {
-          if (session.stopping || !_sessions.containsKey(name)) return;
-          session.observedExitCode = code;
-          session.cancelSupervision();
-          _emitExit(session);
-        }).catchError((_) {}),
+        exitFuture
+            .then((code) {
+              if (session.stopping || !_sessions.containsKey(name)) return;
+              session.observedExitCode = code;
+              session.cancelSupervision();
+              _emitExit(session);
+            })
+            .catchError((_) {}),
       );
     }
     session.supervise(
       poll: () => session.pid != null && _groups.processAlive(session.pid!),
       pollPeriod: _pollPeriod,
       onDeath: () {
-        if (!_sessions.containsKey(name)) return; // stopped, not died
+        if (!_sessions.containsKey(name)) return;
         _emitExit(session);
       },
     );
-    // The WATCHDOG (see [_agentDeadline]): an agent that outlives its deadline is
-    // presumed hung. Kill its whole group and report a DEATH, so the node fails
-    // and reaches supervision instead of latching at `running` forever.
-    final deadline = _agentDeadline;
-    if (deadline != null) {
-      session.armDeadline(deadline, () {
+    // The watchdog is per spawned runtime session: agents use the provider
+    // default; validation and critic lanes can pass a tighter config deadline.
+    if (effectiveDeadline != null) {
+      session.armDeadline(effectiveDeadline, () {
         if (!_sessions.containsKey(name)) return;
         session.deadlineReason =
-            'watchdog: agent exceeded its ${_humanize(deadline)} deadline and '
-            'was killed (presumed hung)';
+            'watchdog: session exceeded its ${_humanize(effectiveDeadline)} '
+            'deadline and was killed (presumed hung)';
         unawaited(
           _terminateSession(session).whenComplete(() {
             session.cancelSupervision();

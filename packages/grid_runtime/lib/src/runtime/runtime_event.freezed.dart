@@ -159,10 +159,10 @@ return activityChanged(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String name,  int pid,  int? pgid,  String beadId)?  sessionStarted,TResult Function( String name,  int exitCode,  bool inferred)?  exited,TResult Function( String name,  String reason)?  died,TResult Function( String name,  int epoch)?  respawned,TResult Function( String name,  bool active)?  activityChanged,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline)?  sessionStarted,TResult Function( String name,  int exitCode,  bool inferred)?  exited,TResult Function( String name,  String reason)?  died,TResult Function( String name,  int epoch)?  respawned,TResult Function( String name,  bool active)?  activityChanged,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
-return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId);case Exited() when exited != null:
+return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId,_that.deadline);case Exited() when exited != null:
 return exited(_that.name,_that.exitCode,_that.inferred);case Died() when died != null:
 return died(_that.name,_that.reason);case Respawned() when respawned != null:
 return respawned(_that.name,_that.epoch);case ActivityChanged() when activityChanged != null:
@@ -184,10 +184,10 @@ return activityChanged(_that.name,_that.active);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String name,  int pid,  int? pgid,  String beadId)  sessionStarted,required TResult Function( String name,  int exitCode,  bool inferred)  exited,required TResult Function( String name,  String reason)  died,required TResult Function( String name,  int epoch)  respawned,required TResult Function( String name,  bool active)  activityChanged,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline)  sessionStarted,required TResult Function( String name,  int exitCode,  bool inferred)  exited,required TResult Function( String name,  String reason)  died,required TResult Function( String name,  int epoch)  respawned,required TResult Function( String name,  bool active)  activityChanged,}) {final _that = this;
 switch (_that) {
 case SessionStarted():
-return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId);case Exited():
+return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId,_that.deadline);case Exited():
 return exited(_that.name,_that.exitCode,_that.inferred);case Died():
 return died(_that.name,_that.reason);case Respawned():
 return respawned(_that.name,_that.epoch);case ActivityChanged():
@@ -205,10 +205,10 @@ return activityChanged(_that.name,_that.active);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String name,  int pid,  int? pgid,  String beadId)?  sessionStarted,TResult? Function( String name,  int exitCode,  bool inferred)?  exited,TResult? Function( String name,  String reason)?  died,TResult? Function( String name,  int epoch)?  respawned,TResult? Function( String name,  bool active)?  activityChanged,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline)?  sessionStarted,TResult? Function( String name,  int exitCode,  bool inferred)?  exited,TResult? Function( String name,  String reason)?  died,TResult? Function( String name,  int epoch)?  respawned,TResult? Function( String name,  bool active)?  activityChanged,}) {final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
-return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId);case Exited() when exited != null:
+return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId,_that.deadline);case Exited() when exited != null:
 return exited(_that.name,_that.exitCode,_that.inferred);case Died() when died != null:
 return died(_that.name,_that.reason);case Respawned() when respawned != null:
 return respawned(_that.name,_that.epoch);case ActivityChanged() when activityChanged != null:
@@ -224,13 +224,16 @@ return activityChanged(_that.name,_that.active);case _:
 
 
 class SessionStarted extends RuntimeEvent {
-  const SessionStarted({required this.name, required this.pid, this.pgid, this.beadId = ''}): super._();
+  const SessionStarted({required this.name, required this.pid, this.pgid, this.beadId = '', this.deadline}): super._();
   
 
 @override final  String name;
  final  int pid;
  final  int? pgid;
 @JsonKey() final  String beadId;
+/// The effective deadline armed for this session, after provider defaults
+/// are applied. Null means no watchdog is armed for this process.
+ final  Duration? deadline;
 
 /// Create a copy of RuntimeEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -242,16 +245,16 @@ $SessionStartedCopyWith<SessionStarted> get copyWith => _$SessionStartedCopyWith
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionStarted&&(identical(other.name, name) || other.name == name)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.beadId, beadId) || other.beadId == beadId));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionStarted&&(identical(other.name, name) || other.name == name)&&(identical(other.pid, pid) || other.pid == pid)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.beadId, beadId) || other.beadId == beadId)&&(identical(other.deadline, deadline) || other.deadline == deadline));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,name,pid,pgid,beadId);
+int get hashCode => Object.hash(runtimeType,name,pid,pgid,beadId,deadline);
 
 @override
 String toString() {
-  return 'RuntimeEvent.sessionStarted(name: $name, pid: $pid, pgid: $pgid, beadId: $beadId)';
+  return 'RuntimeEvent.sessionStarted(name: $name, pid: $pid, pgid: $pgid, beadId: $beadId, deadline: $deadline)';
 }
 
 
@@ -262,7 +265,7 @@ abstract mixin class $SessionStartedCopyWith<$Res> implements $RuntimeEventCopyW
   factory $SessionStartedCopyWith(SessionStarted value, $Res Function(SessionStarted) _then) = _$SessionStartedCopyWithImpl;
 @override @useResult
 $Res call({
- String name, int pid, int? pgid, String beadId
+ String name, int pid, int? pgid, String beadId, Duration? deadline
 });
 
 
@@ -279,13 +282,14 @@ class _$SessionStartedCopyWithImpl<$Res>
 
 /// Create a copy of RuntimeEvent
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? name = null,Object? pid = null,Object? pgid = freezed,Object? beadId = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? name = null,Object? pid = null,Object? pgid = freezed,Object? beadId = null,Object? deadline = freezed,}) {
   return _then(SessionStarted(
 name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,pid: null == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
 as int,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
 as int?,beadId: null == beadId ? _self.beadId : beadId // ignore: cast_nullable_to_non_nullable
-as String,
+as String,deadline: freezed == deadline ? _self.deadline : deadline // ignore: cast_nullable_to_non_nullable
+as Duration?,
   ));
 }
 
