@@ -131,3 +131,164 @@ The codec boundary, **gc-coexistence** (single-writer-per-bead; never reconcile/
 Pins the remaining mechanical items: presence/heartbeat + reaping specifics; the bus wire + endpoint handoff; the **lessor-as-domain-artifact packaging** (the compute domain — not the engine — owns the spike's command/result payload types); the capability cascade + dart/flutter probes + TTL re-validation; git-over-LAN asset/code sync; the burn formula in `butane_grid_assets`.
 
 The first proof slice (settled scope): the **loopback thin slice** (two `grid` procs on one box: presence → lease → dispatch → result → release) → then **cross-machine to `linux-dashboard.local`**, with **no inference on the lessor** (a generic command). Acceptance: deny-when-no-capacity; TTL reaps an abandoned lease; coexistence-safe. **No code until this ADR is ratified.**
+
+---
+
+## Proposed amendment (2026-07-19, public-readiness tg-8gv.6) — AWAITING RATIFICATION
+
+**Status of THIS text: Proposed — awaiting Nico's ratification. Nothing above this line changes.**
+Provenance is mixed and stated per section: the §A engine contracts were **RULED by Nico
+in-session** (2026-07-03; `docs/SCRATCH-grid-alignment.md` §7 rulings log) — those underlying
+decisions are human-made and binding *as rulings* — but their promotion into this ADR's durable
+record is what this amendment proposes, and that promotion has NOT been ratified. The §B multi-root
+design was only ever **PROPOSED** in its SCRATCH (its §6 rulings log reads "awaiting Nico") and is
+carried forward as design, never as a ruling. Decision IDs are preserved verbatim from the source
+SCRATCHes. Neither SCRATCH is modified or retired by this amendment — their disposition is a
+separate pass.
+
+**Sequencing note (for the ratifier).** D-B6/OQ-A4 gated this promotion on the claim flow proving
+end-to-end ("spike-before-doctrine": engine contracts graduate into ADR-0011 *once proven*). That
+proof has not run. This amendment promotes the **contracts** — already load-bearing in shipped
+engine code (§A.4) — while marking the bus **implementation** pending-proof (§A.5). Ratifying it
+means accepting that ordering: the contracts get a durable, citable home now; the implementation
+stays behind the original gate.
+
+### §A — The office-grid engine contracts (RULED 2026-07-03; promoted from `docs/SCRATCH-grid-alignment.md`)
+
+Source: the 2026-07-03 realignment session ("the office grid" — stations on ~every machine, not
+configured identically, credentials station-local: "no credentials leaked, just work assigned"),
+which superseded the remote half of `docs/SCRATCH-multi-root-federation.md` and reframed federation
+as **assignment-federation, never observation-federation** (D-A2): a remote substation is NEVER a
+snapshot member of my station; work reaches it by assignment over the bus. D-A1 (stations host
+substations; hosting = store + clone + roots = the right to DRIVE locally, configuration never
+travels) and D-A5 (the bus carries coordination; dolt stays truth; git carries the code —
+reaffirming Decision 7's two-channel split) are the frame the contracts below sit in.
+
+#### §A.1 — The claim→lease assignment flow (D-A3, D-A4)
+
+- **D-A3 — The claim flow** (the whiteboard, 2026-07-03). A station minting new work tries to
+  **claim it first, locally**. Whatever is still unclaimed **at the end of a reconciliation phase
+  is broadcast** for pickup by any station that fulfills the requirements. Claims are
+  **per-requirement (capability slots), never per-bead** — one bead can fan out (the Burn:
+  `Req macOS+BLE` claimed locally, `Req Linux+BLE` broadcast, claimed by `dashboard.local`).
+  Requirements are grid-runner configuration, asset-based — exactly `CapabilityFacts` containment
+  matching (Decision 6, shipped with `ToolchainProbe`); a public/private key exchange with the
+  public key riding the durable bead is an admissible `Trust` variant (Decision 8's seam).
+- **D-A4 — Claim → lease is two-phase.** The claim bus does *assignment*; the already-designed
+  lease machinery (Decision 7 + the hazards table: owner-authoritative arbitration, monotonic
+  fencing token, heartbeat, owner-clock reaping) does *execution*. "Federation + Leasing." This
+  *extends* Decisions 5/7 above; it changes neither.
+
+#### §A.2 — The bus shape (D-B1, D-B2, D-B3) + the mesh/GridHub topology rulings
+
+- **D-B1 — Decentralized MQTT as the primitive shape.** Every station **publishes only on its own
+  broker** and subscribes to others per topology. The publish-own rule maps claim-in-own-store onto
+  the wire: presence = your broker's liveness (+ LWT); advertisement = retained messages on your
+  own broker; claims = notifications on your own broker; arbitration = deterministic at the work's
+  owner. Federation primitives are PRIMITIVES — **topology is the implementer's choice**, and the
+  topology opinion ships in `zero_conf_grid_assets`:
+  - **mesh** — everyone subscribes to everyone (O(N²) connections; the office runs this, N=5);
+  - **GridHub** — spokes subscribe only to a hub; the hub is *just a station running nothing but
+    federation assets*, doling claimable work off its own broker (the ADR-0008 "optional downstream
+    product" slot). Same binary, same primitive, topology by configuration.
+- **D-B2 — Broker IN-PROCESS, single-writer.** No external daemon. `federated_grid_assets` defines
+  its **own abstract broker interface** to shield the dependency: vet the existing pub.dev brokers
+  behind the seam first; write a bounded single-writer subset (CONNECT/SUB/PUB, QoS 0–1, retained,
+  will, ping) only if they fail. The publish-own rule makes each broker single-writer — a
+  retained-topic map + subscriber fan-out + LWT, no fan-in races. Lifecycle unity is correctness:
+  your broker IS your presence (station-dark = broker-dark; no zombie retained ads from an
+  out-of-process broker outliving its station). MQTT being wire-standard keeps mosquitto as the
+  escape hatch behind the same seam.
+- **D-B3 — Bus schema: ACP-shaped, MQTT-carried.** ACP = Zed's Agent Client Protocol
+  (agentclientprotocol.com), the dialect the harness seam already speaks — NOT IBM's retired ACP;
+  MCP is NOT being introduced now (RULED). Borrow the JSON-RPC 2.0 envelope + method namespacing +
+  initialize-time capability negotiation; carry it as MQTT messages: broadcast-unclaimed = a
+  *notification* on your own broker; claim-resp/confirm = request/response pairs correlated by id
+  across two brokers. The concrete method surface (claims + presence + advertisement, versioned)
+  extends the protocol contracts, not the engine.
+- (**D-B4** — A2A parked until model/agent routing — recorded for completeness; it rules nothing
+  in. Its agent-card shape overlaps `Presence`/`CapabilityFacts`; revisit there.)
+
+#### §A.3 — The boundary: NO MQTT IN THE ENGINE, EVER (D-B5)
+
+The engine-level federation surface is **transport-free contracts only**:
+1. **the unclaimed-frontier hook** — the engine exposes "the unclaimed requirement set at the end
+   of a reconciliation phase" for an asset claim capability to consume (the D-A3 broadcast trigger
+   is engine-observable, asset-actioned);
+2. **requirement-slot resolution at the `EffectResolver` seam** — a step requirement the local
+   station cannot fulfill resolves to an asset-provided claim+lease capability instead of a local
+   spawn (local-vs-remote is a resolver decision; the remote impl is the asset's);
+3. **the SDK value types + seams** ruled by D-A9 — `Presence`/`CapabilityFacts`, claim/lease
+   protocol contracts, the transport-agnostic bus seam;
+4. **durable claim recording** rides the existing bd write chokepoint (claim-in-own-store).
+ALL bus machinery — the in-process broker + its shielding interface, MQTT bindings, topic layout,
+the ACP-shaped wire impl, topology — lives in power_station's `federated_grid_assets`
+(+ `zero_conf_grid_assets` for discovery/topology opinions). Nothing else touches the engine.
+
+#### §A.4 — Already load-bearing in shipped code (verified 2026-07-19)
+
+These contracts are not aspirational; the engine already cites the SCRATCH as its authority — the
+citation needs a home that is not a SCRATCH:
+- `packages/grid_engine/lib/src/sdk/claim.dart` — header: "the honesty-pass D-A3/D-B5,
+  `docs/SCRATCH-grid-alignment.md`". `unclaimedSteps` is the pure per-circuit claim predicate over
+  the eligible frontier (containment per Decision 6); `UnclaimedStep` is the broadcast unit. Zero
+  I/O, engine-observable only — what an asset does with one is its own affair (D-B5 honored).
+- `packages/grid_engine/lib/src/bridge/federated_snapshot_source.dart` — header cites the D-A2
+  rescope ("a remote substation is never a snapshot member") and the multi-root SCRATCH's
+  D-F3/D-Z3/D-Z4 for its per-member freshness vector.
+- The SDK directory also carries `capability_facts.dart`, `lease.dart`, `federation_protocol.dart`
+  — the D-A9 concepts→SDK dissolution of `grid_federation`, observable on disk.
+
+#### §A.5 — Implementation status: PENDING-PROOF (per the SCRATCH's own gate)
+
+The bus **implementation** — broker vet, the in-process broker, the ACP-shaped wire, topology
+opinions, discovery (alignment ladder AL-6/AL-7) — is NOT ratified by this amendment and remains
+behind the spike-before-doctrine gate: the claim flow must prove end-to-end before implementation
+doctrine is written. **This amendment ratifies contracts, not an implementation.**
+
+### §B — Multi-root design carried forward (D-M1..M7; bead tg-7gm) — design-carried-forward, unbuilt as-designed
+
+From `docs/SCRATCH-multi-root-federation.md` §3, PROPOSED there and never ruled — folded forward so
+the unbuilt design has a durable home:
+- **D-M1** — root granularity = per-substation (the scope), not per-bead; a bead inherits its root
+  from the scope it mounts under. *Amended* by the alignment SCRATCH's §6 discovery (operator-made
+  while taking DAG ownership, NOT a Nico ruling): substation↔repo is 1:N for the tg store, so
+  per-substation stays the DEFAULT but tg-7gm must also deliver a **per-bead root selector** —
+  roots register by name, a bead selects one via its envelope (e.g. `grid.root: power_station`),
+  and an unregistered selection is an arming-class LOUD skip, never a gate.
+- **D-M2** — symmetric pairing grammar: repeatable `--root <substation>=<path>[@<head>]`; bare
+  `--root <path>` as single-substation shorthand; global `--head` refused when >1 root.
+- **D-M3** — one scope per substation, `ownedSubstations: {itself}`; overlapping owned-sets refused
+  LOUD (the double-mount guard: one bead, one agent). The writer's allow-set stays the union.
+- **D-M4** — rooting is a DRIVEN-SET obligation: a live arm refuses at arming when any OWNED work
+  substation lacks a registered root; an observed-not-owned member needs no root.
+- **D-M5** — `devRoot` (pub-link absolutization) resolves per scope, not as a station-wide
+  constructor bake.
+- **D-M6** — ONE `RestartReconciler` fanning out over N roots (list+reap per root; one freshness
+  barrier; one pass in the pinned start ordering).
+- **D-M7** — roots multiply; the state store and lock do not (N work roots, ONE state store, ONE
+  session partition, ONE lock).
+
+**Build status (verified 2026-07-19, for the ratifier's calibration).** The v3 SDK rail has since
+delivered part of this intent by a different route: `buildStationWork`
+(`packages/grid_sdk/lib/src/work/work_assembly.dart`) registers one root per `SubstationWorkSpec`
+with fail-closed name/prefix disjointness (the D-M1/D-M3 intent), and the per-substation status
+breakdown shipped (`packages/grid_cli/lib/src/station_control.dart`, stamped tg-7gm). D-M2's
+`--root` pairing grammar was superseded by the `--substation <name>@<prefix>=<path>` surface.
+Explicitly UNBUILT: **D-M6** (the code says so — `RestartReconciler` takes "THE single-root
+consumer's root … the FIRST substation's; the D-M6 restart fan-out across N substations stays
+deferred", `work_assembly.dart`), the **per-bead root override**, and **D-M5**, whose target
+machinery (`devRoot` pub-link absolutization) no longer exists in the current tree — its premise
+must be re-checked before any build. Whether the remainder survives as beads is a refinement
+decision, not this amendment's.
+
+The **already-promoted D-F/D-Z half** (federated work sources, tg-nsj — `FederatedSnapshotSource`,
+the `--workspace` grammar, staleness/removal semantics, the cross-store block guard) lives in
+**ADR-0000 A44 (2026-07-03)** — referenced here, not duplicated.
+
+### §C — Where the opinion half lives (D-B6)
+
+Per **D-B6** (RULED 2026-07-03): the bus/asset **opinion** half — which broker, deployment,
+topology opinions, MQTT bindings, discovery — belongs to **power_station's own ADR line** (it stops
+riding the_grid's, which stays engine-scoped); that document is filed separately in that repo, not
+here.

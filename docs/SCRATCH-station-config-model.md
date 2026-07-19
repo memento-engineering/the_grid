@@ -1,7 +1,10 @@
 # SCRATCH — code as config: the grid composition model & `runGrid`
 
-**Status: PROPOSAL v3 — decision-complete (all open questions closed 2026-07-06);
-awaiting Nico's ratification. NO CODE until ratified.**
+**Status: RATIFIED v3 (Nico, 2026-07-06) — decision-complete, all open questions
+closed 2026-07-06. GRADUATED 2026-07-19: the durable restatement of §1–6 (incl.
+Q3′, Q5–Q8) is [`CONFIG-MODEL.md`](CONFIG-MODEL.md); this SCRATCH remains as
+design history, and the §7a/§8 point-in-time fossil audits (2026-07-07) remain
+here as archive-only history.**
 Lineage: v1 (2026-07-05) rejected — re-committed the ambience sins (root *sets*,
 `defaultRoot`, a `Root` type, `stateSubstation`). v2 corrected the value model
 (substation = name + ONE root; the grid has only a state store; store-lives-at-root).

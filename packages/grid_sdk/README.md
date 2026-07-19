@@ -69,7 +69,7 @@ class SpaceStationDelegate extends GridDelegate {
 
 The full model — the canonical tree, `runGrid` / `GridDelegate`, the asset
 scopes, the closed questions — lives in
-**[`docs/SCRATCH-station-config-model.md`](../../docs/SCRATCH-station-config-model.md)**
+**[`docs/CONFIG-MODEL.md`](../../docs/CONFIG-MODEL.md)**
 (the ratified v3 model). The build breakdown is
 **[`docs/GRID-SDK-BUILD-ORDER.md`](../../docs/GRID-SDK-BUILD-ORDER.md)**.
 
