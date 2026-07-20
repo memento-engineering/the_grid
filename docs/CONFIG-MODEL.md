@@ -14,8 +14,10 @@ shipped `packages/grid_sdk` surface on 2026-07-19 (see §7).
 
 ## 1. The thesis: code as config
 
-Just as the org went Dart-first before TOML, the grid goes **code-first before
-configuration**. A station is not "configured" by a value the framework
+The grid goes **code-first before configuration** — Dart-first, a deliberate
+departure from Gas City's TOML-configuration approach (not a repeat of any
+org-wide "TOML first" era; there wasn't one — Nico, 2026-07-19 review). A
+station is not "configured" by a value the framework
 interprets — it is **built**, as a tree, in Dart, by its author. Plain language
 features *are* the configuration language: an `if (kDebug)` mounts a
 substation; a `for` fans out; a watched value re-composes. `GridConfiguration`

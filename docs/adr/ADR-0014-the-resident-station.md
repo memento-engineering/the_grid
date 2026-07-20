@@ -73,7 +73,9 @@ pre-existing: **inter-bead** — bd dependency edges gate the ready frontier (a 
 dependents are not ready until it closes; closing it flips them ready, the dirty signal fires
 within ~1 s, and the station mounts the newly-ready work — pipelines are dep chains in the
 store, no new mechanism); **intra-bead** — the circuit's step-graph gates steps by the frontier
-predicate over the per-node `grid.cursor.*`. The drive set under `up` = the ready frontier of
+predicate over per-node step state (on the flat path this is the session bead's
+`grid.cursor.*` namespace — the persistence form slated for retirement under tg-eli; on the
+molecule path, the live default since tg-6gi, it is `grid.step.*` on per-step beads). The drive set under `up` = the ready frontier of
 the owned substation through the existing fail-closed gates, all unchanged: the A41
 `IssueType.isCore` allow-list, `OwnsSubstations`, convergence-never-mounts, the A32 chokepoint
 re-check, default-dry-run, and the operator being the only bd writer on the store. Every other
@@ -96,13 +98,18 @@ seam, no host changes in this pass. **ADR-0012's reserved scope** (observability
 exploration transport under perception + consent) is **untouched** — it remains the future
 debug/observability story, not the control plane. This is ADR-0012's boundary.
 
-**D-C2 — `StationControl`: a dedicated, read-only, loopback HTTP surface.** Owned by the runner
-shell (grid_cli), started under `up`, disposed on the graceful path. `GET /healthz` — cheap
-liveness; `GET /status` — identity (station, substation, state store, work root, dry/live),
-process (pid, uptime, version), and counts (ready, mounted, live sessions, last sync time).
-Bind **127.0.0.1 only**; bearer token minted per boot, living only in the 0600 lock file (never
-argv — the ADR-0006 precedent); endpoint advertised via the lock (D-A1). **No mutation
-endpoints, by construction** — the control plane cannot be a trigger.
+**D-C2 — `StationControl`: a dedicated, read-only HTTP surface, loopback by default.** Owned
+by the runner shell (grid_cli), started under `up`, disposed on the graceful path. `GET
+/healthz` — cheap liveness; `GET /status` — identity (station, substation, state store, work
+root, dry/live), process (pid, uptime, version), and counts (ready, mounted, live sessions,
+last sync time). Binds **127.0.0.1 by default**; binding a LAN interface is a deliberate,
+explicit composition choice (Nico, 2026-07-19 ratification review — LAN access is a wanted
+posture, consistent with the LAN cockpit in ADR-0012 D1), never a silent default. The bearer
+token — minted per boot, living only in the 0600 lock file (never argv — the ADR-0006
+precedent), endpoint advertised via the lock (D-A1) — is required on **every** endpoint
+including `/healthz` (the landed tightening, adopted here: no unauthenticated probe is exactly
+what makes a LAN bind sane). **No mutation endpoints, by construction** — the control plane
+cannot be a trigger.
 
 **D-C3 — lifecycle rides OS signals, not HTTP.** `space down` — read the lock → SIGTERM the pid
 (graceful via D-R2) → wait for exit + lock release → report. `space status` — read the lock →
@@ -126,10 +133,17 @@ a floor, not the end-state.
 ### Arbitration (D-A1)
 
 **D-A1 — the station lock, scoped per STATION state store (confirmed by Nico, OQ-2).** One
-`space up` per station state store — substations are partitions *inside* the station's store and
-get no locks of their own. Named invariant: **one supervisor per state store** — two stations
-over the same session store observe the same ready bead, double-spawn agents at it, and
-double-write session beads. Mechanism: exclusive-create `<state-workspace>/.grid/station.lock`
+`space up` per station state store. Store vocabulary (Nico, 2026-07-19 ratification review):
+the **station** owns exactly one **state store** (session/lifecycle beads, at the grid home);
+each **substation** contributes its own **work store** (the work source — read-only to the
+station, per the A37 split) and gets no lock of its own; the session-side of every substation
+lives as partitions *inside* the station's one state store. A dual-role repo (e.g.
+space_station: the grid home AND a substation of its own running station) holds both — the
+lock belongs to its station role, never its substation role. Named invariant: **one supervisor
+per state store** — two stations over the same session store observe the same ready bead,
+double-spawn agents at it, and double-write session beads. Mechanism: exclusive-create
+`<grid home>/.grid/station.lock` (the grid home being the root that holds the state store; the
+`--state-workspace` flag names the same root)
 (JSON: `pid`, `pgid`, `startedAt`, `controlUrl`, `token`); acquired after arming validation,
 before sources start; released on the graceful path. Stale detection: pid-liveness probe — dead
 holder → steal + LOUD log; live holder → `StationRefusal` naming the pid and the `space status`
@@ -187,9 +201,9 @@ Commands, never a binding:
 - `packages/grid_cli/lib/src/station_lock.dart` — `StationLockService` / `StationLockRecord` /
   `StationLockHandle` / `StationRefusal` (D-A1; RS-2).
 - `packages/grid_cli/lib/src/station_control.dart` — `StationControl` / `StationStatus` /
-  `SubstationStatus` (D-C2; RS-4). *Build refinement beyond the SCRATCH contract: the landed
-  surface requires the bearer on `/healthz` too — one posture, no unauthenticated liveness
-  probe. Flagged for ratification: whether D-C2's text adopts the tightening.*
+  `SubstationStatus` (D-C2; RS-4). *The landed surface requires the bearer on `/healthz` too —
+  one posture, no unauthenticated liveness probe. **Adopted into D-C2** (Nico, 2026-07-19
+  ratification review), where it also underwrites the LAN-bindable posture.*
 - `packages/grid_cli/lib/src/station_attach.dart` — `StationAttach` + sealed
   `AttachResult`/`StopResult` (D-C3's client; RS-5a).
 - `packages/grid_cli/lib/src/station_reload.dart` + `reload_command.dart` — `StationReload` /
@@ -197,12 +211,12 @@ Commands, never a binding:
   same lock contract; never touches the GET-only HTTP surface and never signals the process —
   consistent with D-R2/D-C3 (it is a VM-service dev tool, not a lifecycle or SIGHUP semantics).
 
-Two drift notes for ratification: (1) the transitional `run` assembly (`station_runner.dart`)
+One drift note for ratification: the transitional `run` assembly (`station_runner.dart`)
 has since been **deleted** from grid_cli — the boot path moved to the asset's own runner +
-`runGrid` — but RS-8's formal filing/close-out is a store question, not settled by this text;
-(2) the landed lock keys off the station's grid home root (`<grid-home>/.grid/station.lock`)
-where D-A1's SCRATCH text says `<state-workspace>` — same store-scoped invariant, naming to be
-reconciled at ratification.
+`runGrid` — but RS-8's formal filing/close-out is a store question, not settled by this text.
+*(The second drift note — `<state-workspace>` vs `<grid-home>` lock-path naming — was resolved
+in the 2026-07-19 ratification review: canonical is `<grid home>/.grid/station.lock`, the grid
+home being the root that holds the state store; see D-A1's store vocabulary.)*
 
 ## Consequences
 
