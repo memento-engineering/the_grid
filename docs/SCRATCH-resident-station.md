@@ -1,6 +1,8 @@
 # SCRATCH — the resident station (residency · control plane · arbitration)
 
-**Status: RATIFIED (Nico, 2026-07-02), with amendments recorded in §3/§6/§9.** Graduation
+**Status: RATIFIED (Nico, 2026-07-02), with amendments recorded in §3/§6/§9. GRADUATED
+(2026-07-19): [ADR-0014](adr/ADR-0014-the-resident-station.md) is ratified and canonical —
+this doc is design history (its per-incident forensics stay here).** Graduation
 target: **one new ADR** (residency + control plane + arbitration; **number assigned by Nico
 2026-07-19 (D-P7): ADR-0014** — the "next free is 0013" originally claimed here was consumed
 by state-holding-value-types). **ADR-0012 stays fully reserved** — the control plane

@@ -218,7 +218,11 @@ memento-engineering org):
   paths. (6) *Two writers on one convergence* → single-writer partition + read-only live shadow + the
   recovery chokepoint refusing a not-owned convergence.
 - **Rollback.** The live dogfood is opt-in behind `grid run` (default `--dry-run` observe-only).
-  Disarming = stop `grid run`; the_grid holds no durable lifecycle the gc reconciler depends on. The
+  Disarming = stop `grid run`; the_grid holds no durable lifecycle the gc reconciler depends on.
+  *[Superseded (ADR-0014, ratified Nico 2026-07-19): the per-invocation `grid run` posture and
+  its drive-list arming clause are retired — the resident `space up` + store-bless (D-R1/D-R4)
+  is the live-arm model; `run` was transitional scaffolding, removed at RS-8. Disarming = `space
+  down`. This stamp was applied at ADR-0014's ratification, never silently.]* The
   the_grid-owned session beads can be closed/deleted (they are in the partition); worktrees are
   reaped once safe; pushed PR branches are abandoned/closed by Nico. gc is unaffected throughout
   because it never shared a writer with the_grid.

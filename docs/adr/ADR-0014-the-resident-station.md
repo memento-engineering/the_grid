@@ -1,11 +1,12 @@
 # ADR-0014 — The resident station (residency · control plane · arbitration)
 
-**Status:** gate MET 2026-07-19 (tg-eli phases 1+2 landed) — awaiting Nico's ratification.
+**Status:** **Accepted — ratified by Nico, 2026-07-19.** (Underlying decisions Nico-ratified
+2026-07-02; the ratification gate — remove the flat cursor from code and documentation — was
+met the same day via tg-eli phases 1+2.)
 
-**Source of record:** [docs/SCRATCH-resident-station.md](../SCRATCH-resident-station.md) —
-RATIFIED (Nico, 2026-07-02), with amendments recorded in its §3/§6/§9. This document graduates
-the SCRATCH's decisions and contracts (not its per-incident forensics); until Nico ratifies this
-text, on any divergence the SCRATCH wins. The number **0014** was assigned by Nico 2026-07-19
+**Source of record:** this document. It graduated
+[docs/SCRATCH-resident-station.md](../SCRATCH-resident-station.md) (RATIFIED Nico 2026-07-02,
+amendments in its §3/§6/§9 — now design history; its per-incident forensics remain there). The number **0014** was assigned by Nico 2026-07-19
 (**D-P7**) — the "next free is 0013" originally claimed in the SCRATCH was consumed by
 [ADR-0013](ADR-0013-state-holding-value-types.md).
 
@@ -153,11 +154,10 @@ containers for multiples. **The ceiling (later, separate passes):** the ADR-0008
 leasing-is-core for substation attention-scheduling — this ADR deliberately builds neither; the
 lock is the only arbitration a single-machine dogfood needs.
 
-## Supersessions (pending ratification)
+## Supersessions (APPLIED at ratification, 2026-07-19)
 
-Carried from the SCRATCH's §5 ledger. **Applied only when Nico ratifies this text — never
-silent.** In particular, ADR-0006's body is untouched by this draft; its forward stamp is
-applied at ratification.
+Carried from the SCRATCH's §5 ledger; the forward stamps below were applied to their targets
+on ratification day — never silent.
 
 - **ADR-0006** — the "live arm requires ≥1 `--bead`" drive-list clause and "Disarming = stop
   `grid run`" get forward stamps: superseded by `up` + store-bless (D-R1/D-R4); `run`
