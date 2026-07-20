@@ -52,7 +52,7 @@ asset-agnostic verbs only.
 | `grid_runtime` | The hands: the `SubprocessProvider` process transport (the only `RuntimeProvider` — ADR-0004's `TmuxProvider` was never built), `StationGitService` git-worktree-per-bead isolation + the land step, lifecycle-as-beads through the `StationBeadWriter` chokepoint |
 | `grid_cli` | The CLI SDK a composed runner assembles: the generic verbs (`watch`/`gate`/`rework`/`demo`), the dev-mode `reload` command a runner binds, and the resident-station lock/control/attach pieces. Ships the minimal generic `grid` bin |
 | `grid_exploration` | Exploration-protocol host: registers `ext.exploration.*` over the Dart VM service so exploration clients (lenny) can observe and drive a running station; carries the hot-reload `ReassembleTool` |
-| `grid_devtools` | DevTools extension (the only Flutter package) — attaches over the exploration protocol only, no direct `beads_dart` dependency |
+| `grid_devtools` | DevTools extension (the only Flutter package — test it with `flutter test`, not `dart test`) — attaches over the exploration protocol only, no direct `beads_dart` dependency |
 
 ## Quickstart
 
@@ -95,6 +95,29 @@ sources without a bounce (live sessions are adopted, never killed).
 ADR-0005 was retired by ADR-0007; ADR-0010 is reserved, unwritten. The
 `docs/M*-BUILD-ORDER.md` files are the dependency-ordered implementation plans each
 milestone executed.
+
+`docs/SCRATCH-*.md` files are **pre-ratification design surfaces** — live working
+documents, each carrying its own status line. The lifecycle is deliberate: a design
+converges on a SCRATCH surface, its decisions ratify into an ADR, and the surface is
+then retired to git history. What you see mid-flight is real, current design work.
+
+## Sibling repositories
+
+the_grid is one repo of the [memento-engineering](https://github.com/memento-engineering)
+org. Docs here reference siblings by name:
+
+- [`power_station`](https://github.com/memento-engineering/power_station) — the
+  Packaged-AI-Asset packs (the `code` circuit's committee, skills, and overlays).
+- `space_station` — the org's grid *instance*: composition + config over this repo's
+  CLI-SDK (public release to follow).
+- [`lenny`](https://github.com/memento-engineering/lenny) — the debugging harness that
+  attaches to a running station over the VM service.
+- **houston** is not a repo — it is the id prefix of the station's *state store* (the
+  Dolt database holding session/lifecycle beads).
+- **Gas City** (`gc`) is the predecessor system this project reimplements in Dart. It
+  is not ours: see the original project's docs at
+  [docs.gascityhall.com](https://docs.gascityhall.com). References here describe port
+  lineage, not a dependency.
 
 ## License
 
