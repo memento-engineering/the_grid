@@ -1,13 +1,13 @@
 // pm6-r5b-host — CapabilityHost molecule targeting: the write fork
 // (DESIGN-tg-pm6.md §11) + the R3 routing fork (tg-h4u).
 //
-// The additive fork: an ambient `InheritedCircuit` (R2) means every `_persistX`
-// targets its OWN durable step bead (`beadIdByNodePath[_nodePath]`), using the
-// per-bead molecule metadata builders (`molecule_codec.dart`'s
-// `stepBeadMetadata` — no `{nodePath}` infix, no `rewindCount`, no
-// `grid.cursor.*` key). ABSENT `InheritedCircuit` falls back to today's flat
-// target (`_sessionId`) — proven BYTE-IDENTICAL to
-// `track_e_capability_host_test.dart`'s own assertions.
+// Every `_persistX` targets the step's OWN durable bead
+// (`beadIdByNodePath[_nodePath]`), using the per-bead molecule metadata
+// builders (`molecule_codec.dart`'s `stepBeadMetadata` — no `{nodePath}`
+// infix, no `rewindCount`, no `grid.cursor.*` key). An ABSENT
+// `InheritedCircuit` — a host mounted under an ADOPTED historical flat
+// session — REFUSES LOUD at mount (tg-eli phase 2: the flat session-bead
+// fallback retired with the flat model), proven in the legacy group below.
 //
 // THE ROUTING FORK (tg-h4u): a molecule-mode `ProcessCapability` no longer
 // mounts a flat `ProcessAllocation` — `_createAllocationOrFlare` routes it
@@ -472,11 +472,14 @@ void main() {
   });
 
   group(
-    'flat mode — an ABSENT InheritedCircuit is byte-identical to today',
+    'legacy flat sessions — an ABSENT InheritedCircuit refuses LOUD '
+    '(tg-eli phase 2: the molecule model is the only circuit engine)',
     () {
       test(
-        'SessionStarted persists the per-node identity on the SESSION bead — '
-        'the SAME shape track_e_capability_host_test.dart asserts',
+        'a ProcessCapability host with NO InheritedCircuit never spawns and '
+        'never writes — it flares step.allocationFailed at mount and its '
+        'supervised-failure persist is itself contained '
+        '(step.persistFailed): a historical flat session cannot be driven',
         () async {
           final log = <String>[];
           final h = _host(_RecordingProcessCap(log)); // no InheritedCircuit
@@ -486,59 +489,43 @@ void main() {
           });
           await _pump();
 
-          h.fakes.provider.emit(
-            const SessionStarted(
-              name: 'tgdog-s/tg-1/agent',
-              pid: 100,
-              pgid: 200,
-            ),
+          expect(log, isEmpty, reason: 'the capability was never spawned');
+          expect(h.fakes.provider.started, isEmpty);
+          expect(
+            h.fakes.runner.calls,
+            isEmpty,
+            reason:
+                'no write target exists — the retired flat session-bead '
+                'write must never come back',
           );
-          await _pump();
-
-          expect(h.fakes.runner.callsFor('update').single[1], 'tgdog-s');
-          final meta = h.fakes.runner.metadataOfUpdate(0);
-          expect(meta['grid.cursor.tg-1/agent.state'], 'running');
-          expect(meta['grid.cursor.tg-1/agent.pgid'], '200');
-          expect(meta['grid.cursor.tg-1/agent.pid'], '100');
-          expect(meta['grid.cursor.tg-1/agent.token'], isNotEmpty);
-          expect(meta['grid.cursor.tg-1/agent.startedAt'], isNotEmpty);
+          expect(
+            h.transport.flares.map((f) => f.name),
+            containsAll(['step.allocationFailed', 'step.persistFailed']),
+          );
+          final flare = h.transport.flares.firstWhere(
+            (f) => f.name == 'step.allocationFailed',
+          );
+          expect(flare.data['error'], contains('InheritedCircuit'));
         },
       );
 
-      test('a clean completion writes the SESSION bead cursor — transcript '
-          'equality with expectedTiming (the flat codec, unchanged)', () async {
-        final h = _host(_ServiceCap(const Ok()));
-        addTearDown(() {
-          h.owner.dispose();
-          unawaited(h.fakes.provider.close());
-        });
-        await _pump();
-
-        expect(h.fakes.runner.callsFor('update').single[1], 'tgdog-s');
-        expect(h.fakes.runner.metadataOfUpdate(0), {
-          'grid.cursor.tg-1/agent.state': 'complete',
-          ...expectedTiming('tg-1/agent'),
-        });
-      });
-
       test(
-        'AllocationRewound still runs the flat cascade (session bead, '
-        'rewindCount bumped) — the molecule fork never touches this path',
+        'the refusal covers EVERY capability kind: a ServiceCapability host '
+        'with NO InheritedCircuit is refused at MOUNT too — its effect never '
+        'runs and no write ever lands on the session bead',
         () async {
-          // 'agent' is the only step in `_circuit` — a legal self-rewind (the
-          // dangling/empty-stepIds guard only rejects an UNKNOWN sibling).
-          final h = _host(
-            const FixedRouteCapability(Rewind({'agent'}, 'because')),
-          );
+          final h = _host(_ServiceCap(const Ok()));
           addTearDown(() {
             h.owner.dispose();
             unawaited(h.fakes.provider.close());
           });
           await _pump();
 
-          final meta = h.fakes.runner.metadataOfUpdate(0);
-          expect(meta['grid.cursor.tg-1/agent.state'], 'pending');
-          expect(meta['grid.cursor.tg-1/agent.rewindCount'], '1');
+          expect(h.fakes.runner.calls, isEmpty);
+          expect(
+            h.transport.flares.map((f) => f.name),
+            containsAll(['step.allocationFailed', 'step.persistFailed']),
+          );
         },
       );
     },
@@ -627,26 +614,5 @@ void main() {
       },
     );
 
-    test(
-      'the throw is MOLECULE-PATH-ONLY: a flat session (no InheritedCircuit) '
-      'needs no vendor at all — the write lands exactly as before',
-      () async {
-        final log = <String>[];
-        final h = _host(_RecordingProcessCap(log)); // flat, NO vendor
-        addTearDown(() {
-          h.owner.dispose();
-          unawaited(h.fakes.provider.close());
-        });
-        await _pump();
-
-        h.fakes.provider.emit(
-          const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
-        );
-        await _pump();
-
-        expect(h.fakes.runner.callsFor('update'), hasLength(1));
-        expect(h.transport.flares, isEmpty);
-      },
-    );
   });
 }

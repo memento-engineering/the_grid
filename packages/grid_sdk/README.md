@@ -166,10 +166,9 @@ composition tree, fed by runner-assembled off-tree machinery.
   work. Knobs: `resident` (default `true` — a resident station's ready
   frontier IS the drive set; there is no drive-list), `maxConcurrentWork` (the
   per-substation override), `driveList` (the blessed-bead gate for a
-  NON-resident arm), and `circuitMintMode` — **defaults to
-  `CircuitMintMode.molecule`** (the live-arm mint model);
-  `CircuitMintMode.flatCursor` is the explicit opt-out, and existing sessions
-  keep their durable model stamp either way.
+  NON-resident arm). *(tg-eli, 2026-07-19: `circuitMintMode` /
+  `CircuitMintMode` no longer exist — molecule is the only circuit engine,
+  unconditionally; there is no mint-mode knob or flat-cursor opt-out.)*
 - **`buildStationWork(...)`** — assembles the off-tree machinery over REAL
   stores at their roots (controllers → join bridge → bd write chokepoint →
   restart reconciler → driver). Required: `stateStore`, `substations` (a

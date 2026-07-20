@@ -11,7 +11,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart' as engine;
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart'
-    show Lifecycle, RuntimeConfig, RuntimeEvent;
+    show Lifecycle, RuntimeConfig, RuntimeEvent, SessionStarted;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -101,7 +101,6 @@ class _TestDelegate extends GridDelegate {
     required this.wiring,
     required this.stationProbe,
     required this.substationProbe,
-    this.mintMode,
   });
 
   /// Null ⇒ the unarmed authoring-only mount (H2's shape).
@@ -109,17 +108,11 @@ class _TestDelegate extends GridDelegate {
   final List<int> stationProbe;
   final List<int> substationProbe;
 
-  /// Null ⇒ `const SubstationWork()` — the DEFAULT the baseline test pins
-  /// (molecule since the live arm). Non-null ⇒ the explicit opt-out, so the
-  /// flat path keeps composition-seam coverage (tg-6gi regression pin).
-  final engine.CircuitMintMode? mintMode;
-
   void emitTick(int n) => state = GridConfiguration(settings: {'tick': '$n'});
 
   @override
   Seed build(TreeContext context, GridConfiguration configuration) {
     final w = wiring;
-    final mode = mintMode;
     final substations = Substations(
       substations: [
         Substation(
@@ -131,9 +124,7 @@ class _TestDelegate extends GridDelegate {
               children: [
                 _BuildProbe(builds: substationProbe, key: const ValueKey('sp')),
               ],
-              child: mode == null
-                  ? const SubstationWork()
-                  : SubstationWork(circuitMintMode: mode),
+              child: const SubstationWork(),
             ),
           ],
         ),
@@ -232,11 +223,7 @@ typedef _Rig = ({
 /// Mounts the FULL new composition via runGrid over fakes — the bridge started
 /// first (the pinned ordering's tail: barrier/restart are runner concerns
 /// proven in the assembly; here the bridge simply precedes the mount).
-_Rig _arm({
-  bool armed = true,
-  engine.CircuitMintMode? mintMode,
-  engine.CapabilityRegistry? registryOverride,
-}) {
+_Rig _arm({bool armed = true, engine.CapabilityRegistry? registryOverride}) {
   final work = FakeSnapshotSource();
   final state = FakeSnapshotSource();
   final bridge = engine.StationJoinBridge(work: work, state: state);
@@ -265,7 +252,6 @@ _Rig _arm({
         : null,
     stationProbe: stationProbe,
     substationProbe: substationProbe,
-    mintMode: mintMode,
   );
   bridge.start();
   final grid = runGrid(delegate);
@@ -298,6 +284,24 @@ Future<void> _pushMoleculeState(_Rig rig, String workBeadId) async {
     ], const {}),
   );
   await _pumpUntil(() => rig.fakes.provider.started.isNotEmpty);
+  // Resolve the leased spawn's HANDLE: `stationProcessSpawner` binds it off
+  // the spawn's own `SessionStarted` event (the vendor then persists the
+  // `grid.lease.*` breadcrumb; the host persists `state=running`). Without
+  // this, the acquire stays pending and dispose has no group to release —
+  // the same drive `drain_seam_test`'s `finish()` performs.
+  rig.fakes.provider.emit(
+    SessionStarted(name: '$sessionId/$workBeadId/agent', pid: 10, pgid: 10),
+  );
+  await _pumpUntil(
+    () =>
+        rig.fakes.runner
+            .callsFor('update')
+            .where(
+              (c) => c.length > 1 && c[1] == 'tgdog-step-$workBeadId-agent',
+            )
+            .length >=
+        2,
+  );
 }
 
 void main() {
@@ -314,10 +318,6 @@ void main() {
       // the substation is NAMED power_station; the bead carries the pow
       // PREFIX. Mounting proves ownership matched the prefix axis.
       expect(rig.resolver.resolved, ['pow-1']);
-      expect(
-        const SubstationWork().circuitMintMode,
-        engine.CircuitMintMode.molecule,
-      );
       await _pumpUntil(() => rig.fakes.runner.graphApplyCalls.isNotEmpty);
       final plainCreates = rig.fakes.runner
           .callsFor('create')
@@ -377,35 +377,6 @@ void main() {
         reason: 'the ambient vendor is the real production vendor '
             '(defaultProcessLeaseVendor), not a stub or a foreign instance',
       );
-    });
-
-    test('the FLAT opt-out stays wired at the composition seam: an explicit '
-        'CircuitMintMode.flatCursor SubstationWork mounts, mints through the '
-        'chokepoint, and spawns exactly like the baseline — the molecule '
-        'default flip never strands the opt-out (tg-6gi regression pin; the '
-        'engine-level flat/molecule parity is drain_seam_test\'s)', () async {
-      final rig = _arm(mintMode: engine.CircuitMintMode.flatCursor);
-      addTearDown(rig.grid.teardown);
-      rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
-      await _pump();
-
-      expect(rig.resolver.resolved, ['pow-1']);
-      final plainCreates = rig.fakes.runner
-          .callsFor('create')
-          .where((c) => !c.contains('--graph'));
-      expect(
-        plainCreates,
-        hasLength(1),
-        reason: 'the flat session still mints through StationBeadWriter',
-      );
-      expect(
-        rig.fakes.runner.graphApplyCalls,
-        isEmpty,
-        reason: 'explicit flatCursor never pours molecule beads',
-      );
-      final stamp = rig.fakes.runner.metadataOfUpdate(0);
-      expect(stamp.containsKey(engine.SessionBeadKeys.model), isFalse);
-      expect(rig.fakes.provider.started, hasLength(1));
     });
 
     test(

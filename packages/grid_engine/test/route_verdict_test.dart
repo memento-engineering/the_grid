@@ -8,6 +8,8 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
@@ -19,7 +21,11 @@ const _code = Circuit(
   terminalStepId: 'route',
   steps: [
     CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-    CapabilityStep(stepId: 'route', capabilityId: 'route', dependsOn: {'agent'}),
+    CapabilityStep(
+      stepId: 'route',
+      capabilityId: 'route',
+      dependsOn: {'agent'},
+    ),
   ],
 );
 
@@ -31,6 +37,14 @@ const _sub = Circuit(
 );
 
 const _routeStep = CapabilityStep(stepId: 'route', capabilityId: 'route');
+
+/// The step bead id [InheritedCircuit.beadIdByNodePath] resolves the route
+/// node to — the molecule model is the ONLY circuit engine (tg-eli phase 2),
+/// so [CapabilityHost] refuses LOUD at mount without one (proven in
+/// `host_molecule_targeting_test.dart`'s legacy group); every routing
+/// scenario here needs an ambient circuit before its verdict can even reach a
+/// chokepoint write.
+const _stepBeadId = 'tgdog-step1';
 
 // The COMPILE-TIME half of the exhaustiveness proof: no default arm, so adding,
 // removing or renaming an arm stops these compiling.
@@ -79,6 +93,17 @@ Future<void> _pump() async {
       node: node,
       key: ValueKey('$nodePath#${node.restartCount}.${node.rewindCount}'),
     ),
+  );
+  // Ambient REGARDLESS of `ambient:` — that flag only toggles the WorkBead/
+  // Workspace pair (the mis-composition scenario below); every route needs
+  // its OWN step bead to write to, molecule-mode's only circuit engine.
+  child = InheritedSeed<InheritedCircuit>(
+    value: InheritedCircuit(
+      root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+      beadIdByNodePath: {nodePath: _stepBeadId},
+      cursor: const {},
+    ),
+    child: child,
   );
   if (ambient) {
     child = InheritedSeed<Bead>(
@@ -151,69 +176,75 @@ class _ThrowingRouteCap extends RouteCapability {
 }
 
 void main() {
-  group('tg-6gn — the ALLOCATION layer maps each verdict to its OWN report', () {
-    Future<AllocationReport> reportFor(RouteCapability capability) async {
-      final reports = <AllocationReport>[];
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      await RouteAllocation(
-        capability,
-        AllocationContext(
-          treeContext: FakeTreeContext(),
-          args: stepArgs('tg-1/route'),
-          transport: provider,
-          address: const AllocationAddress('tgdog-s', 'tg-1/route'),
-          env: const {},
-          sink: reports.add,
-        ),
-      ).startOrAdopt();
-      return reports.single;
-    }
-
-    test('Advance → AllocationAdvanced (carrying its payload)', () async {
-      final report = await reportFor(
-        const FixedRouteCapability(Advance({'grade': 'A'})),
-      );
-      expect(report, isA<AllocationAdvanced>());
-      expect((report as AllocationAdvanced).payload, {'grade': 'A'});
-    });
-
-    test('Escalate → AllocationEscalated (carrying its reason)', () async {
-      final report = await reportFor(
-        const FixedRouteCapability(Escalate('declined')),
-      );
-      expect(report, isA<AllocationEscalated>());
-      expect((report as AllocationEscalated).reason, 'declined');
-    });
-
-    test('a THROWING route body routes to supervision as AllocationFailed — '
-        'never an unhandled zone error', () async {
-      final report = await reportFor(const _ThrowingRouteCap());
-      expect(report, isA<AllocationFailed>());
-      expect((report as AllocationFailed).reason, contains('route threw'));
-      expect(report.reason, contains('the route blew up'));
-    });
-  });
-
-  group('tg-6gn — a THROWING route reaches the ROUTER as a supervised failure',
-      () {
-    test('the host writes state=failed + a bumped restartCount, and NEVER '
-        'completes', () async {
-      final fakes = await _drive(const _ThrowingRouteCap());
-
-      final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'failed');
-      expect(meta['grid.cursor.tg-1/route.restartCount'], '1');
-      expect(
-        meta['grid.cursor.tg-1/route.failureReason'],
-        contains('route threw'),
-      );
-      expect(fakes.runner.callsFor('create'), isEmpty, reason: 'no gate bead');
-      for (final write in _allWrites(fakes.runner)) {
-        expect(write.contains('complete'), isFalse);
+  group(
+    'tg-6gn — the ALLOCATION layer maps each verdict to its OWN report',
+    () {
+      Future<AllocationReport> reportFor(RouteCapability capability) async {
+        final reports = <AllocationReport>[];
+        final provider = FakeRuntimeProvider();
+        addTearDown(provider.close);
+        await RouteAllocation(
+          capability,
+          AllocationContext(
+            treeContext: FakeTreeContext(),
+            args: stepArgs('tg-1/route'),
+            transport: provider,
+            address: const AllocationAddress('tgdog-s', 'tg-1/route'),
+            env: const {},
+            sink: reports.add,
+          ),
+        ).startOrAdopt();
+        return reports.single;
       }
-    });
-  });
+
+      test('Advance → AllocationAdvanced (carrying its payload)', () async {
+        final report = await reportFor(
+          const FixedRouteCapability(Advance({'grade': 'A'})),
+        );
+        expect(report, isA<AllocationAdvanced>());
+        expect((report as AllocationAdvanced).payload, {'grade': 'A'});
+      });
+
+      test('Escalate → AllocationEscalated (carrying its reason)', () async {
+        final report = await reportFor(
+          const FixedRouteCapability(Escalate('declined')),
+        );
+        expect(report, isA<AllocationEscalated>());
+        expect((report as AllocationEscalated).reason, 'declined');
+      });
+
+      test('a THROWING route body routes to supervision as AllocationFailed — '
+          'never an unhandled zone error', () async {
+        final report = await reportFor(const _ThrowingRouteCap());
+        expect(report, isA<AllocationFailed>());
+        expect((report as AllocationFailed).reason, contains('route threw'));
+        expect(report.reason, contains('the route blew up'));
+      });
+    },
+  );
+
+  group(
+    'tg-6gn — a THROWING route reaches the ROUTER as a supervised failure',
+    () {
+      test('the host writes state=failed + a bumped restartCount, and NEVER '
+          'completes', () async {
+        final fakes = await _drive(const _ThrowingRouteCap());
+
+        final meta = fakes.runner.metadataOfUpdate(0);
+        expect(meta['grid.step.state'], 'failed');
+        expect(meta['grid.step.restartCount'], '1');
+        expect(meta['grid.step.failureReason'], contains('route threw'));
+        expect(
+          fakes.runner.callsFor('create'),
+          isEmpty,
+          reason: 'no gate bead',
+        );
+        for (final write in _allWrites(fakes.runner)) {
+          expect(write.contains('complete'), isFalse);
+        }
+      });
+    },
+  );
 
   group('tg-6gn — the two unions', () {
     test('RouteVerdict is sealed over exactly {Advance, Rewind, Escalate}', () {
@@ -249,9 +280,12 @@ void main() {
       // ONE write: the cursor advance, the route's payload, the method's
       // receipt, and the audit record of HOW the work left — atomically.
       final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'complete');
+      expect(meta['grid.step.state'], 'complete');
       expect(meta['grid.result.tg-1/route.grade'], 'A');
-      expect(meta['grid.result.tg-1/route.pr_url'], 'https://example.test/pr/1');
+      expect(
+        meta['grid.result.tg-1/route.pr_url'],
+        'https://example.test/pr/1',
+      );
       expect(meta['grid.result.tg-1/route.delivery'], 'fake-delivery');
     });
 
@@ -260,7 +294,7 @@ void main() {
       final fakes = await _drive(const FixedRouteCapability(Advance()));
 
       final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'complete');
+      expect(meta['grid.step.state'], 'complete');
       for (final write in _allWrites(fakes.runner)) {
         expect(write.contains('.delivery'), isFalse);
         expect(write.contains('failed'), isFalse);
@@ -277,31 +311,34 @@ void main() {
         services: ServiceBundle(delivery: method),
       );
 
-      expect(method.requests, isEmpty, reason: 'only the ROOT terminal delivers');
       expect(
-        fakes.runner.metadataOfUpdate(0)['grid.cursor.tg-1/spec/route.state'],
-        'complete',
+        method.requests,
+        isEmpty,
+        reason: 'only the ROOT terminal delivers',
       );
+      expect(fakes.runner.metadataOfUpdate(0)['grid.step.state'], 'complete');
     });
   });
 
   group('tg-6gn — a delivery that does not happen NEVER advances', () {
-    test('a FAILED delivery routes to supervision (never state=complete)',
-        () async {
-      final method = RecordingDeliveryMethod()
-        ..outcome = const Failed('gh exploded');
-      final fakes = await _drive(
-        const FixedRouteCapability(Advance()),
-        services: ServiceBundle(delivery: method),
-      );
+    test(
+      'a FAILED delivery routes to supervision (never state=complete)',
+      () async {
+        final method = RecordingDeliveryMethod()
+          ..outcome = const Failed('gh exploded');
+        final fakes = await _drive(
+          const FixedRouteCapability(Advance()),
+          services: ServiceBundle(delivery: method),
+        );
 
-      final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'failed');
-      expect(meta['grid.cursor.tg-1/route.restartCount'], '1');
-      for (final write in _allWrites(fakes.runner)) {
-        expect(write.contains('complete'), isFalse);
-      }
-    });
+        final meta = fakes.runner.metadataOfUpdate(0);
+        expect(meta['grid.step.state'], 'failed');
+        expect(meta['grid.step.restartCount'], '1');
+        for (final write in _allWrites(fakes.runner)) {
+          expect(write.contains('complete'), isFalse);
+        }
+      },
+    );
 
     test('a THROWING delivery is identical, and NAMES the method', () async {
       final method = RecordingDeliveryMethod()..throwNext = true;
@@ -311,11 +348,8 @@ void main() {
       );
 
       final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'failed');
-      expect(
-        meta['grid.cursor.tg-1/route.failureReason'],
-        contains('fake-delivery'),
-      );
+      expect(meta['grid.step.state'], 'failed');
+      expect(meta['grid.step.failureReason'], contains('fake-delivery'));
     });
 
     test('a MIS-COMPOSITION (a bound method under a tree with no ambient '
@@ -328,9 +362,9 @@ void main() {
       );
 
       final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'failed');
+      expect(meta['grid.step.state'], 'failed');
       expect(
-        meta['grid.cursor.tg-1/route.failureReason'],
+        meta['grid.step.failureReason'],
         contains('ambient Bead + Workspace'),
       );
       expect(method.requests, isEmpty);
@@ -345,10 +379,7 @@ void main() {
         'type=gate bead, and no rewind write', () async {
       final fakes = await _drive(const FixedRouteCapability(Escalate('x')));
 
-      expect(
-        fakes.runner.metadataOfUpdate(0)['grid.cursor.tg-1/route.state'],
-        'gated',
-      );
+      expect(fakes.runner.metadataOfUpdate(0)['grid.step.state'], 'gated');
       final creates = fakes.runner.callsFor('create');
       expect(creates, hasLength(1));
       expect(creates.single, containsAllInOrder(['--type', 'gate']));
@@ -357,51 +388,52 @@ void main() {
       }
     });
 
-    test('a BOUND handler receives plain VALUES and parks with ITS OWN reason',
-        () async {
-      final handler = RecordingEscalationHandler();
-      final fakes = await _drive(
-        const FixedRouteCapability(Escalate('x')),
-        services: ServiceBundle(escalation: handler),
-      );
+    test(
+      'a BOUND handler receives plain VALUES and parks with ITS OWN reason',
+      () async {
+        final handler = RecordingEscalationHandler();
+        final fakes = await _drive(
+          const FixedRouteCapability(Escalate('x')),
+          services: ServiceBundle(escalation: handler),
+        );
 
-      // The escalation rides IN the value — the handler never probes the world
-      // to reconstruct it (ADR-0013 item 2).
-      final request = handler.requests.single;
-      expect(request.beadId, 'tg-1');
-      expect(request.sessionId, 'tgdog-s');
-      expect(request.nodePath, 'tg-1/route');
-      expect(request.reason, 'x');
-      expect(request.rewindCount, 0);
+        // The escalation rides IN the value — the handler never probes the world
+        // to reconstruct it (ADR-0013 item 2).
+        final request = handler.requests.single;
+        expect(request.beadId, 'tg-1');
+        expect(request.sessionId, 'tgdog-s');
+        expect(request.nodePath, 'tg-1/route');
+        expect(request.reason, 'x');
+        expect(request.rewindCount, 0);
 
-      // The gate bead carries the HANDLER's words, not the route's — the reason
-      // rides the bead's birth stamp (the LAST recorded update).
-      final creates = fakes.runner.callsFor('create');
-      expect(creates, hasLength(1));
-      final births = fakes.runner.callsFor('update');
-      expect(
-        fakes.runner.metadataOfUpdate(births.length - 1)['reason'],
-        'parked by the fake handler',
-      );
-    });
+        // The gate bead carries the HANDLER's words, not the route's — the reason
+        // rides the bead's birth stamp (the LAST recorded update).
+        final creates = fakes.runner.callsFor('create');
+        expect(creates, hasLength(1));
+        final births = fakes.runner.callsFor('update');
+        expect(
+          fakes.runner.metadataOfUpdate(births.length - 1)['reason'],
+          'parked by the fake handler',
+        );
+      },
+    );
 
-    test('a DECLINING handler fails to supervision and mints NO gate bead',
-        () async {
-      final handler = RecordingEscalationHandler()
-        ..decision = const FailToSupervision('queue full');
-      final fakes = await _drive(
-        const FixedRouteCapability(Escalate('x')),
-        services: ServiceBundle(escalation: handler),
-      );
+    test(
+      'a DECLINING handler fails to supervision and mints NO gate bead',
+      () async {
+        final handler = RecordingEscalationHandler()
+          ..decision = const FailToSupervision('queue full');
+        final fakes = await _drive(
+          const FixedRouteCapability(Escalate('x')),
+          services: ServiceBundle(escalation: handler),
+        );
 
-      final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'failed');
-      expect(
-        meta['grid.cursor.tg-1/route.failureReason'],
-        contains('fake-handler'),
-      );
-      expect(fakes.runner.callsFor('create'), isEmpty);
-    });
+        final meta = fakes.runner.metadataOfUpdate(0);
+        expect(meta['grid.step.state'], 'failed');
+        expect(meta['grid.step.failureReason'], contains('fake-handler'));
+        expect(fakes.runner.callsFor('create'), isEmpty);
+      },
+    );
 
     test('a THROWING handler is identical — an escalation nobody owns must '
         'never look like a park somebody does', () async {
@@ -412,35 +444,23 @@ void main() {
       );
 
       final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/route.state'], 'failed');
-      expect(
-        meta['grid.cursor.tg-1/route.failureReason'],
-        contains('fake-handler'),
-      );
+      expect(meta['grid.step.state'], 'failed');
+      expect(meta['grid.step.failureReason'], contains('fake-handler'));
       expect(fakes.runner.callsFor('create'), isEmpty);
     });
   });
 
-  group('tg-6gn — the BELT escalates through the bound handler', () {
-    test('a node AT the rework cap escalates (carrying its spent rewindCount) '
-        'instead of rewinding again', () async {
-      final handler = RecordingEscalationHandler();
-      final fakes = await _drive(
-        const FixedRouteCapability(Rewind({'agent'}, 'again')),
-        services: ServiceBundle(escalation: handler),
-        node: const NodeCursor(rewindCount: kMaxReworkRounds),
-      );
-
-      final request = handler.requests.single;
-      expect(request.rewindCount, kMaxReworkRounds);
-      expect(request.reason, contains('rework cap reached'));
-
-      // The loop does NOT spin: nothing was flipped back to pending.
-      for (final write in _allWrites(fakes.runner)) {
-        expect(write.contains('pending'), isFalse);
-      }
-    });
-  });
+  // "the BELT escalates through the bound handler" (a Rewind verdict AT
+  // kMaxReworkRounds escalating to the bound handler) is STRUCTURALLY
+  // IMPOSSIBLE post tg-eli phase 2: the belt moved off the RouteAllocation
+  // report path entirely — `AllocationRewound` is now dead code that ALWAYS
+  // routes to a supervised failure (see host_molecule_targeting_test.dart's
+  // "AllocationRewound is DEAD CODE" case), and the cap itself is enforced
+  // earlier, DECLARATIVELY, by the molecule frontier's derived generation
+  // (`live_frontier.dart`'s "AT kMaxReworkRounds: the node GATES instead of
+  // demoting" — already covered by `live_frontier_test.dart:492`). There is no
+  // longer a bare-CapabilityHost scenario that reaches a RouteCapability at
+  // the cap at all.
 
   group('tg-6gn — the delivery seam is PER-SUBSTATION and MODE-AGNOSTIC', () {
     test('two substations binding two different methods each actuate their '
@@ -464,7 +484,7 @@ void main() {
       expect(directMerge.requests, hasLength(1));
 
       final metaA = a.runner.metadataOfUpdate(0);
-      expect(metaA['grid.cursor.tg-1/route.state'], 'complete');
+      expect(metaA['grid.step.state'], 'complete');
       expect(metaA['grid.result.tg-1/route.delivery'], 'pr-no-merge');
       expect(
         metaA['grid.result.tg-1/route.pr_url'],
@@ -472,7 +492,7 @@ void main() {
       );
 
       final metaB = b.runner.metadataOfUpdate(0);
-      expect(metaB['grid.cursor.tg-1/route.state'], 'complete');
+      expect(metaB['grid.step.state'], 'complete');
       expect(metaB['grid.result.tg-1/route.delivery'], 'direct-merge');
       expect(metaB['grid.result.tg-1/route.merged_sha'], 'abc123');
     });

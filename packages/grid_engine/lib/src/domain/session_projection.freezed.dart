@@ -41,11 +41,17 @@ mixin _$SessionProjection {
 /// the freshness fence against a stale prior-incarnation completion
 /// (Track C/D).
  String? get token;/// The spawned agent's pid (diagnostics).
- int? get pid;/// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
-/// node's [NodeCursor] keyed by its `nodePath`, projected from the session
-/// bead's `grid.cursor.*` metadata and threaded down to `CircuitScope`
-/// pull-free (A39). Empty for a freshly-minted session (no node has written
-/// its cursor yet — the root circuit's frontier mounts from `pending`).
+ int? get pid;/// The per-node reentrant cursor SLOT (ADR-0008 D4 / D-3) — every
+/// inflated node's [NodeCursor] keyed by its `nodePath`.
+///
+/// Since tg-eli phase 2 (the flat `grid.cursor.*` model retired),
+/// `projectSession` NEVER fills this: it keeps its empty default for
+/// every projected session bead, including a historical flat one still
+/// bearing `grid.cursor.*` metadata (those keys are ignored, never
+/// parsed). The live circuit cursor is computed at the consumer from
+/// [moleculeBeads] via `projectMoleculeCursor`. The field survives as the
+/// projection's in-memory cursor shape — synthetic/test projections
+/// populate it directly.
  CircuitCursor get cursor;/// The per-node `grid.result.*` payloads, threaded down pull-free so a
 /// `route` step reads its siblings' grades — D-5. Keyed by `nodePath`; empty
 /// until a step records a result.
@@ -328,17 +334,29 @@ class _SessionProjection implements SessionProjection {
 @override final  String? token;
 /// The spawned agent's pid (diagnostics).
 @override final  int? pid;
-/// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
-/// node's [NodeCursor] keyed by its `nodePath`, projected from the session
-/// bead's `grid.cursor.*` metadata and threaded down to `CircuitScope`
-/// pull-free (A39). Empty for a freshly-minted session (no node has written
-/// its cursor yet — the root circuit's frontier mounts from `pending`).
+/// The per-node reentrant cursor SLOT (ADR-0008 D4 / D-3) — every
+/// inflated node's [NodeCursor] keyed by its `nodePath`.
+///
+/// Since tg-eli phase 2 (the flat `grid.cursor.*` model retired),
+/// `projectSession` NEVER fills this: it keeps its empty default for
+/// every projected session bead, including a historical flat one still
+/// bearing `grid.cursor.*` metadata (those keys are ignored, never
+/// parsed). The live circuit cursor is computed at the consumer from
+/// [moleculeBeads] via `projectMoleculeCursor`. The field survives as the
+/// projection's in-memory cursor shape — synthetic/test projections
+/// populate it directly.
  final  CircuitCursor _cursor;
-/// The per-node reentrant cursor (ADR-0008 D4 / D-3) — every inflated
-/// node's [NodeCursor] keyed by its `nodePath`, projected from the session
-/// bead's `grid.cursor.*` metadata and threaded down to `CircuitScope`
-/// pull-free (A39). Empty for a freshly-minted session (no node has written
-/// its cursor yet — the root circuit's frontier mounts from `pending`).
+/// The per-node reentrant cursor SLOT (ADR-0008 D4 / D-3) — every
+/// inflated node's [NodeCursor] keyed by its `nodePath`.
+///
+/// Since tg-eli phase 2 (the flat `grid.cursor.*` model retired),
+/// `projectSession` NEVER fills this: it keeps its empty default for
+/// every projected session bead, including a historical flat one still
+/// bearing `grid.cursor.*` metadata (those keys are ignored, never
+/// parsed). The live circuit cursor is computed at the consumer from
+/// [moleculeBeads] via `projectMoleculeCursor`. The field survives as the
+/// projection's in-memory cursor shape — synthetic/test projections
+/// populate it directly.
 @override@JsonKey() CircuitCursor get cursor {
   if (_cursor is EqualUnmodifiableMapView) return _cursor;
   // ignore: implicit_dynamic_type

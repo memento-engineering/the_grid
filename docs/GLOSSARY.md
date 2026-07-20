@@ -215,10 +215,12 @@ activation is the thing; the bead is its ledger entry.
 close, and escalates breaker exhaustion to a human. A retired (re-keyed) session is
 auto-closed and a fresh one minted (the rework mechanic's engine half, tg-zat).
 
-**Cursor** `ratified · M4-P1 D-3` — Per-node progress metadata on the **session bead**:
-`grid.cursor.<nodePath>.*`, advanced at completion through the chokepoint. Step events are
-named `<sessionId>/<nodePath>`. (The v1 "phase on the work bead" shape was A40-corrected —
-a foreign work source is read-only.)
+**Cursor** `ratified · M4-P1 D-3` — Per-node progress metadata on the **session bead**,
+advanced at completion through the chokepoint. Step events are named
+`<sessionId>/<nodePath>`. (The v1 "phase on the work bead" shape was A40-corrected — a
+foreign work source is read-only.) *(tg-eli, 2026-07-19: the flat-cursor persistence form
+this entry originally described — `grid.cursor.<nodePath>.*` — has been removed; molecule's
+per-step `grid.step.*` metadata is now the only circuit engine.)*
 
 **Spawn fence** `ratified · M4-P0` — The persisted `pgid`/`pid`/`token` scalars that make
 respawn decisions honest across restarts: liveness is probed against the fence, never

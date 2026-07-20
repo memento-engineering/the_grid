@@ -11,7 +11,6 @@
 // DESIGN-tg-pm6.md §10 / §14. Zero I/O: FakeSnapshotSource only.
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/src/molecule/molecule_schema.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
 
@@ -124,8 +123,15 @@ void main() {
       final work = FakeSnapshotSource(_graph([bead('w1'), bead('w2')]));
       final state = FakeSnapshotSource(
         _graph([
-          // w1: an ordinary flat session — no model key, no molecule beads.
-          sessionBead(id: 's1', workBeadId: 'w1', completed: {'agent'}),
+          // w1: a HISTORICAL flat session — no model key, no molecule beads;
+          // its legacy grid.cursor.* keys (raw wire literals — the flat codec
+          // is deleted, tg-eli phase 2) must stay INERT: never bucketed,
+          // never projected.
+          sessionBead(
+            id: 's1',
+            workBeadId: 'w1',
+            metadata: const {'grid.cursor.w1/agent.state': 'complete'},
+          ),
           // w2: a molecule-mode session with its own molecule + step beads.
           sessionBead(
             id: 's2',
@@ -142,9 +148,9 @@ void main() {
       final flat = bridge.latest.sessionsByWorkBead['w1']!;
       expect(flat.isMolecule, isFalse);
       expect(flat.moleculeBeads, isEmpty);
-      // The flat session's OTHER fields stay byte-for-byte what they always
-      // were — the molecule bucket touches nothing else on this projection.
-      expect(flat.cursor['w1/agent']?.state, StepState.complete);
+      // The legacy flat cursor no longer projects (tg-eli phase 2) — the keys
+      // are ignored, never parsed, never thrown on.
+      expect(flat.cursor, isEmpty);
 
       final molecule = bridge.latest.sessionsByWorkBead['w2']!;
       expect(molecule.isMolecule, isTrue);

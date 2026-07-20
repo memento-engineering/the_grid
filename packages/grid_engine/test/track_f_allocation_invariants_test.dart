@@ -21,10 +21,33 @@ import 'dart:isolate';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
+import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+
+/// The step bead id [InheritedCircuit.beadIdByNodePath] resolves `tg-1/agent`
+/// to — every persist now targets the step's OWN durable bead (R5b; tg-eli
+/// phase 2 retired the flat `grid.cursor.*` session-bead write).
+const _interlockStepBeadId = 'tgdog-step1';
+
+final _interlockCircuit = InheritedCircuit(
+  root: BeadPathKey(const ['tg-1', 'tgdog-s', _interlockStepBeadId]),
+  beadIdByNodePath: const {'tg-1/agent': _interlockStepBeadId},
+  cursor: const {},
+);
+
+/// The REAL transport-backed lease vendor (tg-h4u) — routes the molecule-mode
+/// `_RecProcessCap` through the SAME `RuntimeProvider` machinery the retired
+/// flat `ProcessAllocation` drove.
+const _interlockVendor = SelfManagedProcessVendor(
+  spawn: stationProcessSpawner,
+  dispatch: stationProcessDispatcher,
+);
 
 // --- helpers -----------------------------------------------------------------
 
@@ -304,12 +327,20 @@ void main() {
             child: InheritedSeed<ServiceBundle>(
               value: const ServiceBundle(),
               // The workspace is an AMBIENT value now (mounted by SessionScope
-              // in the real tree) — the capability's spawn reads it.
+              // in the real tree) — the capability's spawn reads it. The
+              // molecule ambients (InheritedCircuit, R2; a ProcessLeaseVendor,
+              // tg-h4u) are likewise every host's requirement now.
               child: InheritedSeed<Workspace>(
                 value: testWorkspace('tg-1', workspaceDir: '/w'),
-                child: CapabilityHost(
-                  capability: _RecProcessCap([]),
-                  mount: _mount(),
+                child: InheritedSeed<InheritedCircuit>(
+                  value: _interlockCircuit,
+                  child: InheritedSeed<ProcessLeaseVendor>(
+                    value: _interlockVendor,
+                    child: CapabilityHost(
+                      capability: _RecProcessCap([]),
+                      mount: _mount(),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -324,18 +355,28 @@ void main() {
 
       // The Allocation was created + spawned (the interlock kicked).
       expect(fakes.provider.started, hasLength(1));
-      // A reported terminal is PERSISTED through the chokepoint — one write, the
-      // node cursor advanced. (A mutation dropping the sink→persist wiring writes
-      // nothing here.)
+      // The `SessionStarted` handshake `stationProcessSpawner`'s acquire hook
+      // waits on to resolve its `ProcessHandle` before dispatch can observe a
+      // terminal event.
+      fakes.provider.emit(
+        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 100, pgid: 200),
+      );
+      await _pump();
+      fakes.runner.calls.clear();
+      // A reported terminal is PERSISTED through the chokepoint — one write,
+      // targeting the step's OWN bead (R5b). (A mutation dropping the
+      // sink→persist wiring writes nothing here.)
       fakes.provider.emit(
         const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
       );
       await _pump();
-      expect(fakes.runner.callsFor('update'), hasLength(1));
-      expect(fakes.runner.metadataOfUpdate(0), {
-        'grid.cursor.tg-1/agent.state': 'complete',
-        ...expectedTiming('tg-1/agent'),
-      });
+      final updates = fakes.runner.callsFor('update');
+      expect(updates, hasLength(1));
+      expect(updates.single[1], _interlockStepBeadId);
+      expect(
+        fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+        'complete',
+      );
       expect(root, isNotNull);
     });
 

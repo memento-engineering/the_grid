@@ -242,7 +242,9 @@ TmuxProvider-not-built / `listBeadWorktrees`-no-caller level. This section *exte
    production seat) landed: **molecule is the live default** (`station_work.dart`
    `circuitMintMode = CircuitMintMode.molecule`; space unpinned its flat pins). A reader —
    or a subagent — following the docs concludes the opposite of reality. Needs a dated
-   re-stamp on all three.
+   re-stamp on all three. *(tg-eli, 2026-07-19: superseded — `CircuitMintMode`/
+   `flatCursor` are now deleted outright; molecule is the only circuit engine, so the
+   mint-mode question this item raises no longer applies.)*
 3. **The signal-vs-derivation fork is open and undated.** A47/A51 (`RouteVerdict
    {advance, rewind, escalate}`) are ratified *and live*; SCRATCH-declarative-routing +
    SCRATCH-beads-all-the-way-down + DESIGN-tg-pm6 R4 design its deletion ("no RouteVerdict,

@@ -9,6 +9,11 @@ import 'package:test/test.dart';
 /// tg-jwh — wedge detection: the station computes + exposes a WEDGE state and
 /// flares it LOUD (ADR-0008 D9's flare primitive, through the shipped
 /// `ExplorationTransport` sink), distinct from a routine gate-open.
+///
+/// Post tg-eli phase 2 the sampler reads ONLY molecule step state, so the
+/// session fixtures here are MOLECULE projections (isMolecule + `type=step`
+/// beads); the predicate/monitor semantics under test are model-independent
+/// and unchanged.
 void main() {
   final t0 = DateTime.utc(2026, 7, 12, 10);
 
@@ -337,32 +342,46 @@ JoinedSnapshot _join(Map<String, SessionProjection> sessions) => JoinedSnapshot(
   sessionsByWorkBead: sessions,
 );
 
-SessionProjection _gated({bool terminal = false}) => SessionProjection(
-  workBeadId: 'tg-x',
-  sessionId: 'tgdog-x',
-  isTerminal: terminal,
-  cursor: const {'tg-x/spec_review': NodeCursor(state: StepState.gated)},
-);
-
-SessionProjection _running() => const SessionProjection(
-  workBeadId: 'tg-x',
-  sessionId: 'tgdog-x',
-  cursor: {'tg-x/build': NodeCursor(state: StepState.running)},
-);
-
-SessionProjection _pending() => const SessionProjection(
-  workBeadId: 'tg-x',
-  sessionId: 'tgdog-x',
-  cursor: {'tg-x/build': NodeCursor(state: StepState.pending)},
-);
-
-SessionProjection _cooling({required DateTime until}) => SessionProjection(
-  workBeadId: 'tg-x',
-  sessionId: 'tgdog-x',
-  cursor: {
-    'tg-x/build': NodeCursor(state: StepState.failed, cooldownUntil: until),
+/// One `type=step` bead carrying its fine state under `grid.step.*` — the
+/// molecule sampling substrate (mirrors wedge_molecule_test.dart's builder).
+Bead _step(
+  String nodePath, {
+  required StepState state,
+  DateTime? cooldownUntil,
+}) => Bead(
+  id: 'tgdog-step-${nodePath.replaceAll('/', '-')}',
+  issueType: IssueType.step,
+  status: BeadStatus.open,
+  metadata: {
+    MoleculeStepKeys.path: nodePath,
+    MoleculeStepKeys.state: state.name,
+    if (cooldownUntil != null)
+      MoleculeStepKeys.cooldownUntil: cooldownUntil.toUtc().toIso8601String(),
   },
 );
+
+SessionProjection _molecule(List<Bead> steps, {bool terminal = false}) =>
+    SessionProjection(
+      workBeadId: 'tg-x',
+      sessionId: 'tgdog-x',
+      isTerminal: terminal,
+      isMolecule: true,
+      moleculeBeads: steps,
+    );
+
+SessionProjection _gated({bool terminal = false}) => _molecule([
+  _step('tg-x/spec_review', state: StepState.gated),
+], terminal: terminal);
+
+SessionProjection _running() =>
+    _molecule([_step('tg-x/build', state: StepState.running)]);
+
+SessionProjection _pending() =>
+    _molecule([_step('tg-x/build', state: StepState.pending)]);
+
+SessionProjection _cooling({required DateTime until}) => _molecule([
+  _step('tg-x/build', state: StepState.failed, cooldownUntil: until),
+]);
 
 /// A hand-driven clock (Fakes, not mocks).
 class _FakeClock {

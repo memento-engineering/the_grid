@@ -18,6 +18,8 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -79,6 +81,19 @@ StepMount _mount() => const StepMount(
   key: ValueKey('tg-1/agent#0.0'),
 );
 
+/// The step bead id [InheritedCircuit.beadIdByNodePath] resolves `tg-1/agent`
+/// to — the molecule model is the ONLY circuit engine (tg-eli phase 2), so a
+/// terminal persist needs this ambient to have anywhere to WRITE at all
+/// before it can prove that write's throw is contained (mirrors
+/// `host_molecule_targeting_test.dart`'s `_moleculeCircuit` fixture).
+const _stepBeadId = 'tgdog-step1';
+
+final _moleculeCircuit = InheritedCircuit(
+  root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+  beadIdByNodePath: const {'tg-1/agent': _stepBeadId},
+  cursor: const {},
+);
+
 void main() {
   group('tg-7ux — a dead state store never crashes the station', () {
     test(
@@ -105,7 +120,13 @@ void main() {
                 value: ServiceBundle(transport: transport),
                 child: InheritedSeed<Workspace>(
                   value: testWorkspace('tg-1'),
-                  child: CapabilityHost(capability: _OkCap(), mount: _mount()),
+                  child: InheritedSeed<InheritedCircuit>(
+                    value: _moleculeCircuit,
+                    child: CapabilityHost(
+                      capability: _OkCap(),
+                      mount: _mount(),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -122,7 +143,8 @@ void main() {
         expect(
           runner.calls,
           greaterThan(0),
-          reason: 'the persist must actually have ATTEMPTED a store write — '
+          reason:
+              'the persist must actually have ATTEMPTED a store write — '
               'otherwise this test proves nothing about a failing one',
         );
         expect(

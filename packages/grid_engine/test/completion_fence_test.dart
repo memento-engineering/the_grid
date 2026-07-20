@@ -10,6 +10,10 @@ import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
+import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
@@ -565,6 +569,18 @@ void main() {
     );
     final clock = DateTime(2026);
 
+    // The step bead id [InheritedCircuit.beadIdByNodePath] resolves
+    // `tg-1/agent` to — every AT-DEPTH write below targets THIS bead (R5b;
+    // tg-eli phase 2: the molecule model is the only circuit engine, so a
+    // `CapabilityHost` needs an ambient `InheritedCircuit` to resolve its
+    // write target at all).
+    const stepBeadId = 'tgdog-step1';
+    final moleculeCircuit = InheritedCircuit(
+      root: BeadPathKey(const ['tg-1', 'tgdog-s', stepBeadId]),
+      beadIdByNodePath: const {'tg-1/agent': stepBeadId},
+      cursor: const {},
+    );
+
     ({TreeOwner owner, Fakes fakes}) host(
       WorkSignalProbe probe, {
       bool withSourceControl = true,
@@ -593,16 +609,28 @@ void main() {
                   'tg-1',
                   workspaceDir: sc.workspaceFor('tg-1'),
                 ),
-                child: CapabilityHost(
-                  capability: _AgentCap([]),
-                  mount: const StepMount(
-                    step: CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-                    nodePath: 'tg-1/agent',
-                    circuit: circuit,
-                    circuitPath: 'tg-1',
-                    session: SessionHandle('tgdog-s'),
-                    node: NodeCursor(),
-                    key: ValueKey('tg-1/agent#0.0'),
+                child: InheritedSeed<InheritedCircuit>(
+                  value: moleculeCircuit,
+                  child: InheritedSeed<ProcessLeaseVendor>(
+                    value: const SelfManagedProcessVendor(
+                      spawn: stationProcessSpawner,
+                      dispatch: stationProcessDispatcher,
+                    ),
+                    child: CapabilityHost(
+                      capability: _AgentCap([]),
+                      mount: const StepMount(
+                        step: CapabilityStep(
+                          stepId: 'agent',
+                          capabilityId: 'agent',
+                        ),
+                        nodePath: 'tg-1/agent',
+                        circuit: circuit,
+                        circuitPath: 'tg-1',
+                        session: SessionHandle('tgdog-s'),
+                        node: NodeCursor(),
+                        key: ValueKey('tg-1/agent#0.0'),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -622,20 +650,38 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _pump();
+      // The lease vendor's real spawner resolves the ProcessHandle off the
+      // spawn's own SessionStarted (station_process_transport.dart) BEFORE the
+      // dispatcher starts listening for a terminal — bind it first, mirroring
+      // `flow_telemetry_test.dart`'s host harness.
+      h.fakes.provider.emit(
+        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
+      );
+      await _pump();
+      // The `running` write already landed above; clear so index 0 below is
+      // unambiguously the TERMINAL write.
+      h.fakes.runner.calls.clear();
 
       h.fakes.provider.emit(_inferredExit);
       await _pump();
 
-      final meta = h.fakes.runner.metadataOfUpdate(0);
-      expect(meta['grid.cursor.tg-1/agent.state'], 'failed');
-      expect(meta['grid.cursor.tg-1/agent.restartCount'], '1');
-      // Within budget → a backoff cooldown → the node RE-KEYS and RESPAWNS.
       expect(
-        meta['grid.cursor.tg-1/agent.cooldownUntil'],
-        clock.add(const Duration(seconds: 1)).toIso8601String(),
+        h.fakes.runner.callsFor('update').first[1],
+        stepBeadId,
+        reason: 'the write targets the STEP bead, never the session bead',
+      );
+      final meta = h.fakes.runner.metadataOfUpdate(0);
+      expect(meta[MoleculeStepKeys.state], 'failed');
+      expect(meta[MoleculeStepKeys.restartCount], '1');
+      // Within budget → a backoff cooldown → the node RE-KEYS and RESPAWNS.
+      // (The molecule codec normalizes cooldownUntil to UTC on the wire — a
+      // pre-existing, intentional divergence from the retired flat codec.)
+      expect(
+        meta[MoleculeStepKeys.cooldownUntil],
+        clock.add(const Duration(seconds: 1)).toUtc().toIso8601String(),
       );
       expect(
-        meta['grid.cursor.tg-1/agent.failureReason'],
+        meta[MoleculeStepKeys.failureReason],
         contains('interrupted'),
       );
       // The whole point: the cursor NEVER says complete.
@@ -667,12 +713,17 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _pump();
+      h.fakes.provider.emit(
+        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
+      );
+      await _pump();
+      h.fakes.runner.calls.clear();
 
       h.fakes.provider.emit(_inferredExit);
       await _pump();
 
       expect(
-        h.fakes.runner.metadataOfUpdate(0)['grid.cursor.tg-1/agent.state'],
+        h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
         'complete',
       );
       expect(
@@ -699,12 +750,17 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _pump();
+      h.fakes.provider.emit(
+        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
+      );
+      await _pump();
+      h.fakes.runner.calls.clear();
 
       h.fakes.provider.emit(_inferredExit);
       await _pump();
 
       expect(
-        h.fakes.runner.metadataOfUpdate(0)['grid.cursor.tg-1/agent.state'],
+        h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
         'complete',
       );
     });

@@ -1,10 +1,6 @@
 # ADR-0014 — The resident station (residency · control plane · arbitration)
 
-**Status:** **Proposed — drafted 2026-07-19 from the ratified SCRATCH-resident-station (the
-underlying decisions are Nico-ratified 2026-07-02). Ratification GATED (Nico, 2026-07-19):
-this text is not ratified until the flat cursor is removed from code and documentation
-(tg-eli) — its D-R4 frontier text and D-A1 store vocabulary must then describe the only
-remaining (molecule) model with no legacy caveats.**
+**Status:** gate MET 2026-07-19 (tg-eli phases 1+2 landed) — awaiting Nico's ratification.
 
 **Source of record:** [docs/SCRATCH-resident-station.md](../SCRATCH-resident-station.md) —
 RATIFIED (Nico, 2026-07-02), with amendments recorded in its §3/§6/§9. This document graduates
@@ -76,9 +72,9 @@ pre-existing: **inter-bead** — bd dependency edges gate the ready frontier (a 
 dependents are not ready until it closes; closing it flips them ready, the dirty signal fires
 within ~1 s, and the station mounts the newly-ready work — pipelines are dep chains in the
 store, no new mechanism); **intra-bead** — the circuit's step-graph gates steps by the frontier
-predicate over per-node step state (on the flat path this is the session bead's
-`grid.cursor.*` namespace — the persistence form slated for retirement under tg-eli; on the
-molecule path, the live default since tg-6gi, it is `grid.step.*` on per-step beads). The drive set under `up` = the ready frontier of
+predicate over per-node step state — `grid.step.*` on per-step beads (molecule is the only
+circuit engine as of tg-eli phase 2; `grid.cursor.*` / the flat-cursor path no longer exist).
+The drive set under `up` = the ready frontier of
 the owned substation through the existing fail-closed gates, all unchanged: the A41
 `IssueType.isCore` allow-list, `OwnsSubstations`, convergence-never-mounts, the A32 chokepoint
 re-check, default-dry-run, and the operator being the only bd writer on the store. Every other

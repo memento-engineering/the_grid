@@ -125,13 +125,15 @@ void main() {
       expect(work.writes, isEmpty);
     });
 
-    test('an OPEN session parked at a gate (nothing running) proceeds — '
-        'the v2 gate-resolve transition\'s trigger', () async {
+    test('an OPEN HISTORICAL FLAT session parked at a gate now REFUSES — its '
+        'legacy grid.cursor.* keys no longer project (tg-eli phase 2), so the '
+        'empty cursor takes the refusal path; moot by construction (the '
+        'engine can no longer drive a flat session; the molecule gated case '
+        'proceeds — see the molecule group)', () async {
       final state = _FakeStore([
         _session('tgdog-s1', workBead: 'tg-9', gated: true),
       ]);
       final work = _FakeStore([_workBead('tg-9')]);
-      final out = <String>[];
       final errs = <String>[];
 
       final code = await runRework(
@@ -143,18 +145,14 @@ void main() {
         noteStore: SubstationWorkStore.forRoot('/work/tg'),
         workspaceOverride: _ws('tg'),
         bdOverride: BdCliService(work),
-        out: out.add,
+        out: (_) {},
         err: errs.add,
       );
 
-      expect(code, 0, reason: errs.join('\n'));
-      final updates = state.writes.where((c) => c.first == 'update').toList();
-      expect(updates, hasLength(1));
-      final metaIdx = updates.single.indexOf('--metadata');
-      final meta =
-          jsonDecode(updates.single[metaIdx + 1]) as Map<String, dynamic>;
-      expect(meta, {'work_bead': 'tg-9#r1'});
-      expect(work.writes.where((c) => c.first == 'update'), hasLength(1));
+      expect(code, isNonZero);
+      expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
+      expect(state.writes, isEmpty, reason: 'fail-closed: zero writes');
+      expect(work.writes, isEmpty);
     });
 
     test('(c) the ~3-round cap refuses LOUD (zero writes)', () async {
@@ -763,9 +761,11 @@ BeadsWorkspace _ws(String database) => BeadsWorkspace(
   endpoint: null,
 );
 
-/// Builds a `type=session` bead carrying the `work_bead` linkage, optionally
-/// closed, and optionally carrying a per-node cursor entry (`running` or
-/// `gated`, mutually exclusive in these tests) at a fixed nodePath.
+/// Builds a HISTORICAL flat `type=session` bead carrying the `work_bead`
+/// linkage, optionally closed, and optionally carrying legacy `grid.cursor.*`
+/// entries (`running` or `gated`) as RAW WIRE LITERALS — the flat codec is
+/// deleted (tg-eli phase 2), so these keys are exactly what a pre-phase-2
+/// store row still holds, and the verb must treat them as INERT.
 Bead _session(
   String id, {
   required String workBead,
@@ -781,8 +781,8 @@ Bead _session(
   metadata: {
     'rig': 'tgdog',
     'work_bead': workBead,
-    if (running) ...nodeStateMetadata('$workBead/agent', StepState.running),
-    if (gated) ...nodeStateMetadata('$workBead/route', StepState.gated),
+    if (running) 'grid.cursor.$workBead/agent.state': 'running',
+    if (gated) 'grid.cursor.$workBead/route.state': 'gated',
   },
 );
 
@@ -805,10 +805,10 @@ Bead _moleculeSession(String id, {required String workBead, bool closed = false}
     );
 
 /// Builds a `type=step` bead owned by [sessionId] at [nodePath], carrying the
-/// fine state under the molecule schema's wire literals (`grid.step.*`,
-/// mirrored — grid_engine's `MoleculeStepKeys` is not exported from the
-/// package root). A null [state] mirrors a freshly-minted step bead: no fine
-/// state yet, read back as `pending`.
+/// fine state under the molecule schema's wire literals (`grid.step.*` —
+/// `MoleculeStepKeys` now rides grid_engine's package root). A null [state]
+/// mirrors a freshly-minted step bead: no fine state yet, read back as
+/// `pending`.
 Bead _stepBead(
   String id, {
   required String sessionId,

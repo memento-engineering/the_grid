@@ -127,15 +127,13 @@ class SubstationWork extends StatelessSeed {
   /// override (null falls back to the station ceiling); [driveList] is the
   /// ADR-0006 blessed-bead gate for a NON-resident arm (when non-empty, ONLY
   /// those bead ids mount) — a resident station never sets it (D-R1/D-R4: no
-  /// drive-list, ever; the frontier is the drive set). [circuitMintMode] is
-  /// the live-arm switch for the molecule model: the SDK's single work-seat
-  /// composition now mints molecule sessions by default, while tests and
-  /// future non-live callers can name [CircuitMintMode.flatCursor] explicitly.
+  /// drive-list, ever; the frontier is the drive set). Every fresh session
+  /// mints on the molecule model — there is no mint-mode switch (tg-eli
+  /// phase 2 retired the flat cursor).
   const SubstationWork({
     this.resident = true,
     this.maxConcurrentWork,
     this.driveList = const <String>{},
-    this.circuitMintMode = CircuitMintMode.molecule,
     super.key,
   });
 
@@ -147,11 +145,6 @@ class SubstationWork extends StatelessSeed {
 
   /// The blessed-bead drive-list (ADR-0006) — empty for a resident station.
   final Set<String> driveList;
-
-  /// The circuit mint model a fresh [SessionScope] reads from
-  /// [SubstationConfig]. Existing sessions keep their durable
-  /// `grid.session.model` stamp and are never reinterpreted by this value.
-  final CircuitMintMode circuitMintMode;
 
   @override
   Seed build(TreeContext context) {
@@ -168,7 +161,6 @@ class SubstationWork extends StatelessSeed {
         resident: resident,
         driveList: driveList,
         maxConcurrentWork: maxConcurrentWork,
-        circuitMintMode: circuitMintMode,
       ),
       key: ValueKey<String>('worklist:${scope.name}'),
     );

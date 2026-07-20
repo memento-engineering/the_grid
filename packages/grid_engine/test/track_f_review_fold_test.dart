@@ -11,8 +11,12 @@
 //     mount-time adopt (co-wireable), with a sanity control (unwired → spawn).
 import 'dart:async';
 
+import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
@@ -41,7 +45,10 @@ class _ResultCountingCap extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async {
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async {
     resultCalls++;
     return {'n': '$resultCalls'};
   }
@@ -74,8 +81,7 @@ class _AlwaysFreshDaemon extends ProcessCapability {
     AdoptFence fence,
     TreeContext context,
     StepArgs args,
-  ) async =>
-      true;
+  ) async => true;
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -138,10 +144,46 @@ StepMount _daemonMount() => StepMount(
   circuit: _circuit,
   circuitPath: 'tg-1',
   session: const SessionHandle('tgdog-s'),
-  // A prior incarnation's identity (the fence) — so adopt has something to prove.
-  node: const NodeCursor(pgid: 200, pid: 201, token: 't'),
+  node: const NodeCursor(),
   key: const ValueKey('tg-1/harness#0.0'),
 );
+
+/// The step bead id [InheritedCircuit.beadIdByNodePath] resolves `tg-1/harness`
+/// to — the molecule model is the ONLY circuit engine (tg-eli phase 2), so the
+/// daemon host needs somewhere durable to write before either latch test or
+/// either adopt test can even reach a chokepoint.
+const _stepBeadId = 'tgdog-step-harness';
+
+final _moleculeCircuit = InheritedCircuit(
+  root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+  beadIdByNodePath: const {'tg-1/harness': _stepBeadId},
+  cursor: const {},
+);
+
+/// The prior incarnation's LEASED identity (Decided item 5) — on the molecule
+/// path a daemon's adopt-freshness proof is no longer the flat `NodeCursor`
+/// fence ([StepMount.node]'s pgid/pid/token, which `LeaseAllocation` never
+/// reads): it is the vendor-owned `grid.lease.*` breadcrumb on the step bead
+/// itself, read back by [StationProcessLeaseVendor.metadataOf]. So an adopt
+/// proof needs a REAL breadcrumb staged on the fake export scan, not a mount
+/// field.
+const _priorHandle = ProcessHandle(pgid: 4200, pid: 4201, token: 'prior-token');
+
+/// Stages [_priorHandle]'s breadcrumb on the daemon's OWN step bead — the
+/// SAME adoptable prior BOTH leak-safety tests present identically, so
+/// `StationServices.liveness` is the only variable that differs between them
+/// (the sanity control's whole point: proving the wired case adopts BECAUSE
+/// of liveness, not merely because there was nothing to adopt).
+void _stagePriorBreadcrumb(Fakes fakes) {
+  fakes.runner.exportBeads = [
+    Bead(
+      id: _stepBeadId,
+      issueType: IssueType.step,
+      status: BeadStatus.open,
+      metadata: {'rig': stateSubstation, ...leaseBreadcrumb(_priorHandle)},
+    ),
+  ];
+}
 
 Branch _hostBranch(Branch root) {
   Branch? found;
@@ -159,9 +201,10 @@ CapabilityHostState _mountDaemonHost(
   Fakes fakes, {
   AllocationLiveness? liveness,
 }) {
+  final services = _ctxWithLiveness(fakes, liveness: liveness);
   final root = owner.mountRoot(
     InheritedSeed<StationServices>(
-      value: _ctxWithLiveness(fakes, liveness: liveness),
+      value: services,
       child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: DateTime(2026)),
         child: InheritedSeed<ServiceBundle>(
@@ -170,9 +213,19 @@ CapabilityHostState _mountDaemonHost(
           // the real tree) — the daemon's spawn reads it with the effect verb.
           child: InheritedSeed<Workspace>(
             value: testWorkspace('tg-1', workspaceDir: '/w'),
-            child: CapabilityHost(
-              capability: _AlwaysFreshDaemon(),
-              mount: _daemonMount(),
+            child: InheritedSeed<InheritedCircuit>(
+              value: _moleculeCircuit,
+              // The REAL vendor (tg-h4u) — `StationServices.liveness` flows
+              // into it EXACTLY as the kernel-root composition wires it
+              // (`defaultProcessLeaseVendor`'s own doc), so this proves the
+              // co-wiring end to end rather than asserting on a stand-in.
+              child: InheritedSeed<ProcessLeaseVendor>(
+                value: defaultProcessLeaseVendor(services),
+                child: CapabilityHost(
+                  capability: _AlwaysFreshDaemon(),
+                  mount: _daemonMount(),
+                ),
+              ),
             ),
           ),
         ),
@@ -190,22 +243,32 @@ void main() {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
       final cap = _ResultCountingCap();
-      final alloc =
-          ProcessAllocation(cap, _allocCtx(provider, reports.add));
+      final alloc = ProcessAllocation(cap, _allocCtx(provider, reports.add));
       await alloc.startOrAdopt();
       await _pump();
 
       // Two terminal events straight to the allocation's handler (bypassing the
       // Host entirely, so ONLY the allocation `_terminal` latch is under test).
-      alloc.deliverEventForTest(const Exited(name: 's/tg-1/agent', exitCode: 0));
-      alloc.deliverEventForTest(const Exited(name: 's/tg-1/agent', exitCode: 0));
+      alloc.deliverEventForTest(
+        const Exited(name: 's/tg-1/agent', exitCode: 0),
+      );
+      alloc.deliverEventForTest(
+        const Exited(name: 's/tg-1/agent', exitCode: 0),
+      );
       await _pump();
 
-      expect(reports.whereType<AllocationCompleted>(), hasLength(1),
-          reason: 'the allocation latch dedupes the terminal');
-      expect(cap.resultCalls, 1,
-          reason: 'result() is read once (a non-idempotent result must not '
-              'double-fire) — this fails if the _terminal latch is removed');
+      expect(
+        reports.whereType<AllocationCompleted>(),
+        hasLength(1),
+        reason: 'the allocation latch dedupes the terminal',
+      );
+      expect(
+        cap.resultCalls,
+        1,
+        reason:
+            'result() is read once (a non-idempotent result must not '
+            'double-fire) — this fails if the _terminal latch is removed',
+      );
     });
 
     test('the HOST latch alone: two AllocationCompleted reports delivered '
@@ -226,44 +289,69 @@ void main() {
       state.deliverReportForTest(const AllocationCompleted());
       await _pump();
 
-      expect(fakes.runner.callsFor('update'), hasLength(1),
-          reason: 'the Host _completed latch dedupes — fails if it is removed');
+      expect(
+        fakes.runner.callsFor('update'),
+        hasLength(1),
+        reason: 'the Host _completed latch dedupes — fails if it is removed',
+      );
     });
   });
 
   group('review fold — leak-safety: the adopt halves are SYMMETRICALLY '
       'wireable (StationServices.liveness)', () {
-    test('liveness WIRED (live arm) → the Host ADOPTS at mount (no respawn)',
-        () async {
-      final fakes = buildFakes();
-      final owner = TreeOwner();
-      final state = _mountDaemonHost(owner, fakes, liveness: (_) => true);
-      addTearDown(() {
-        owner.dispose();
-        unawaited(fakes.provider.close());
-      });
-      await _pump();
+    test(
+      'liveness WIRED (live arm) → the Host ADOPTS at mount (no respawn)',
+      () async {
+        final fakes = buildFakes();
+        _stagePriorBreadcrumb(fakes); // a prior lease worth adopting
+        final owner = TreeOwner();
+        final state = _mountDaemonHost(
+          owner,
+          fakes,
+          liveness: (fence) => fence.pgid == _priorHandle.pgid,
+        );
+        addTearDown(() {
+          owner.dispose();
+          unawaited(fakes.provider.close());
+        });
+        await _pump();
 
-      // Both halves proven (StationServices.liveness=true + the daemon's endpoint
-      // proof) → the survivor is reattached, NOT respawned. This is the mount
-      // half that was previously unwireable (the review footgun): now it fires.
-      expect(fakes.provider.started, isEmpty, reason: 'adopt must not respawn');
-      expect(state, isNotNull);
-    });
+        // Both halves proven (StationServices.liveness=true, threaded into the
+        // REAL vendor exactly as the kernel-root composes it) → the survivor is
+        // reattached, NOT respawned. This is the mount half that was previously
+        // unwireable (the review footgun): now it fires.
+        expect(
+          fakes.provider.started,
+          isEmpty,
+          reason: 'adopt must not respawn',
+        );
+        expect(state, isNotNull);
+      },
+    );
 
-    test('liveness UNWIRED (P1 default) → the Host SPAWNS fresh (no adopt) — the '
-        'sanity control proving the wired case is non-vacuous', () async {
-      final fakes = buildFakes();
-      final owner = TreeOwner();
-      _mountDaemonHost(owner, fakes); // liveness null → neverLive
-      addTearDown(() {
-        owner.dispose();
-        unawaited(fakes.provider.close());
-      });
-      await _pump();
+    test(
+      'liveness UNWIRED (P1 default) → the Host SPAWNS fresh (no adopt) — the '
+      'sanity control proving the wired case is non-vacuous',
+      () async {
+        final fakes = buildFakes();
+        // The SAME adoptable prior as the wired case above — proves the wired
+        // test passed BECAUSE of liveness, not merely because nothing was there
+        // to adopt.
+        _stagePriorBreadcrumb(fakes);
+        final owner = TreeOwner();
+        _mountDaemonHost(owner, fakes); // liveness null → neverLive
+        addTearDown(() {
+          owner.dispose();
+          unawaited(fakes.provider.close());
+        });
+        await _pump();
 
-      expect(fakes.provider.started, hasLength(1),
-          reason: 'no liveness half → no mount-time adopt → spawn fresh (P1)');
-    });
+        expect(
+          fakes.provider.started,
+          hasLength(1),
+          reason: 'no liveness half → no mount-time adopt → spawn fresh (P1)',
+        );
+      },
+    );
   });
 }

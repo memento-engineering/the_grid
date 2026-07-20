@@ -36,9 +36,11 @@ Each inflated node's progress is a `StepState` cursor
 (`pending / running / ready / complete / failed / gated`): `ready` and
 `complete` are the two positive terminals that satisfy a `dependsOn`; `failed`
 routes to supervision (re-key within the `Backoff` budget — the kernel owns the
-cooldown Timer — then escalation). On the flat model the cursor persists as
-flat, merge-safe `grid.cursor.{nodePath}.*` keys on the_grid's OWN session
-bead — never the foreign work bead (A37). `CircuitScope` re-keys a node on
+cooldown Timer — then escalation). The cursor persists as a **molecule of
+durable beads** on the_grid's OWN session bead — never the foreign work bead
+(A37); `(tg-eli, 2026-07-19)` the flat, merge-safe `grid.cursor.{nodePath}.*`
+key model this section previously described has been removed — molecule is
+the only circuit engine. `CircuitScope` re-keys a node on
 `ValueKey('$path#$restartCount.$rewindCount')`, so a supervised restart or a
 routing rewind tears down the still-mounted effect instead of leaving a stale
 incarnation alive.
@@ -57,8 +59,9 @@ persists off-build through the single `StationBeadWriter` chokepoint.
 
 ## The molecule model
 
-Opt-in per substation (`SubstationConfig.circuitMintMode: molecule`; the
-default is `flatCursor`): a fresh session's circuit instantiates as **beads** —
+`(tg-eli, 2026-07-19)` The only circuit engine — `SubstationConfig.circuitMintMode`
+and the `flatCursor` opt-in it once gated are deleted; there is no mint-mode
+switch. Every session's circuit instantiates as **beads** —
 one `type=molecule` bead per circuit instance and one `type=step` bead per leaf
 `CapabilityStep` — under the `grid.circuit.*` / `grid.step.*` metadata
 namespaces (the bead IS the node, so there is no `{nodePath}` infix). Spawned

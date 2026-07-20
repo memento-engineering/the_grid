@@ -8,10 +8,33 @@ import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
+import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+
+/// The step bead id [InheritedCircuit.beadIdByNodePath] resolves `tg-1/agent`
+/// to — every persist now targets the step's OWN durable bead (R5b; tg-eli
+/// phase 2 retired the flat `grid.cursor.*` session-bead write).
+const _stepBeadId = 'tgdog-step1';
+
+final _moleculeCircuit = InheritedCircuit(
+  root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+  beadIdByNodePath: const {'tg-1/agent': _stepBeadId},
+  cursor: const {},
+);
+
+/// The REAL transport-backed lease vendor (tg-h4u) — routes the molecule-mode
+/// `_CompletingCap` through the SAME `RuntimeProvider` machinery the retired
+/// flat `ProcessAllocation` drove.
+const _realVendor = SelfManagedProcessVendor(
+  spawn: stationProcessSpawner,
+  dispatch: stationProcessDispatcher,
+);
 
 /// The circuit the mounted `agent` step belongs to (`StepMount.circuit`, tg-o90).
 const _circuit = Circuit(
@@ -69,19 +92,30 @@ Future<void> _pump() async {
         child: InheritedSeed<ServiceBundle>(
           value: services,
           // A bare host (no real SessionScope) — mount the ambient Workspace
-          // the capability's spawn reads with the effect verb.
+          // the capability's spawn reads with the effect verb, plus the
+          // molecule ambients every host now requires (InheritedCircuit,
+          // R2; a ProcessLeaseVendor for a ProcessCapability, tg-h4u).
           child: InheritedSeed<Workspace>(
             value: testWorkspace('tg-1'),
-            child: CapabilityHost(
-              capability: const _CompletingCap(),
-              mount: const StepMount(
-                step: CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-                nodePath: 'tg-1/agent',
-                circuit: _circuit,
-                circuitPath: 'tg-1',
-                session: SessionHandle('tgdog-s'),
-                node: NodeCursor(),
-                key: ValueKey('tg-1/agent#0.0'),
+            child: InheritedSeed<InheritedCircuit>(
+              value: _moleculeCircuit,
+              child: const InheritedSeed<ProcessLeaseVendor>(
+                value: _realVendor,
+                child: CapabilityHost(
+                  capability: _CompletingCap(),
+                  mount: StepMount(
+                    step: CapabilityStep(
+                      stepId: 'agent',
+                      capabilityId: 'agent',
+                    ),
+                    nodePath: 'tg-1/agent',
+                    circuit: _circuit,
+                    circuitPath: 'tg-1',
+                    session: SessionHandle('tgdog-s'),
+                    node: NodeCursor(),
+                    key: ValueKey('tg-1/agent#0.0'),
+                  ),
+                ),
               ),
             ),
           ),
@@ -90,6 +124,18 @@ Future<void> _pump() async {
     ),
   );
   return (owner: owner, fakes: fakes);
+}
+
+/// Emits `SessionStarted` for [name] then pumps — the handshake
+/// `stationProcessSpawner`'s acquire hook waits on to resolve its
+/// `ProcessHandle` (mirrors `track_e_capability_host_test.dart`'s
+/// `_startThenIsolate`), clearing recorded chokepoint calls afterward so a
+/// terminal-write assertion reads only the ONE write that follows.
+Future<void> _startThenIsolate(Fakes fakes, String name) async {
+  await _pump();
+  fakes.provider.emit(SessionStarted(name: name, pid: 100, pgid: 200));
+  await _pump();
+  fakes.runner.calls.clear();
 }
 
 void main() {
@@ -101,7 +147,7 @@ void main() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
       });
-      await _pump();
+      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
 
       h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
       await _pump();
@@ -119,17 +165,18 @@ void main() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
       });
-      await _pump();
+      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
 
       h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
       await _pump();
 
       // The flare threw, but the terminal cursor write STILL landed (the flush
-      // completed). Positive control vs the recording case above.
-      expect(h.fakes.runner.metadataOfUpdate(0), {
-        'grid.cursor.tg-1/agent.state': 'complete',
-        ...expectedTiming('tg-1/agent'),
-      });
+      // completed) — targeting the step's OWN bead (R5b). Positive control vs
+      // the recording case above.
+      final updates = h.fakes.runner.callsFor('update');
+      expect(updates.single[1], _stepBeadId);
+      expect(h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+          'complete');
     });
 
     test('no transport (null) — no flare, no error', () async {
@@ -138,13 +185,13 @@ void main() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
       });
-      await _pump();
+      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
       h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
       await _pump();
-      expect(h.fakes.runner.metadataOfUpdate(0), {
-        'grid.cursor.tg-1/agent.state': 'complete',
-        ...expectedTiming('tg-1/agent'),
-      });
+      final updates = h.fakes.runner.callsFor('update');
+      expect(updates.single[1], _stepBeadId);
+      expect(h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+          'complete');
     });
   });
 }

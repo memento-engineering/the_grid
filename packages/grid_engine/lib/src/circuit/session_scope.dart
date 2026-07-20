@@ -34,23 +34,20 @@
 /// would call `provider.start` with the same name → collisions. Minting ONCE,
 /// above the fan-out, is the fix.
 ///
-/// **The drain seam (`DESIGN-tg-pm6.md` §12, R5) — the ADDITIVE molecule
-/// mint-mode.** [_mint] branches on the ambient `SubstationConfig.circuitMintMode`
-/// (default [CircuitMintMode.flatCursor]) ONLY when minting a FRESH session:
-/// `flatCursor` mints exactly today's `writer.createSession(...)`, untouched;
-/// `molecule` additionally stamps `grid.session.model=molecule` and pours a
-/// durable `type=molecule`/`type=step` graph (`instantiateMolecule` → R6's
-/// `createMolecule`) under the SAME [_maxMintAttempts] budget. [build] then
-/// projects a molecule session's OWN beads
-/// (`SessionProjection.moleculeBeads`) through `projectMoleculeCursor` into
-/// the IDENTICAL `CircuitCursor` shape the flat path already feeds
-/// `CircuitScope` — so the inflater is consumed UNCHANGED in both modes —
-/// and wraps it in a 4th `InheritedSeed<InheritedCircuit>` so
+/// **Molecule is the ONLY mint (tg-eli phase 2 — the flat cursor retired).**
+/// Every FRESH mint stamps `grid.session.model=molecule` and pours a durable
+/// `type=molecule`/`type=step` graph (`instantiateMolecule` → R6's
+/// `createMolecule`) under the [_maxMintAttempts] budget. [build] projects a
+/// molecule session's OWN beads (`SessionProjection.moleculeBeads`) through
+/// `projectMoleculeCursor` into the `CircuitCursor` shape `CircuitScope`
+/// consumes, and wraps it in a 4th `InheritedSeed<InheritedCircuit>` so
 /// `CapabilityHost` (R5b) targets each step's own durable bead. **Drain,
-/// never convert:** [initState]'s `LiveSession()` arm adopts synchronously,
-/// before any mode check runs — an in-flight session (flat OR molecule) is
-/// never reinterpreted mid-round; only a FRESH mint ever reads
-/// [CircuitMintMode].
+/// never convert:** [initState]'s `LiveSession()` arm adopts synchronously —
+/// an in-flight session is never reinterpreted mid-round. A HISTORICAL flat
+/// session (no `grid.session.model` marker) still ADOPTS, but the engine can
+/// no longer drive it: its cursor no longer projects (empty), no
+/// `InheritedCircuit` mounts under it, and every host persist refuses LOUD —
+/// the operator's lever is `grid rework` on the closed round.
 ///
 /// A52 Ratified wires R4 live for molecule sessions: invalidated terminal
 /// steps mint successor incarnation beads on a `supersedes` chain, and
@@ -66,7 +63,6 @@ import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/rework.dart' show kMaxReworkRounds;
-import '../domain/substation_config.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../molecule/bead_path_key.dart';
@@ -156,12 +152,6 @@ class SessionScopeState extends State<SessionScope> {
   /// default).
   CapabilityRegistry? _registry;
 
-  /// The DRAIN MIGRATION's mint-mode (`DESIGN-tg-pm6.md` §12, R5), captured
-  /// off the ambient `SubstationConfig` for [_mint]'s async use — D-H rule 1.
-  /// Consulted ONLY at [_mint] time; an ADOPTED session (`LiveSession()` in
-  /// [initState]) never reads this at all (the drain guarantee).
-  CircuitMintMode _mintMode = CircuitMintMode.flatCursor;
-
   String? _sessionId;
   bool _resolving = true;
   bool _failed = false;
@@ -171,11 +161,13 @@ class SessionScopeState extends State<SessionScope> {
 
   /// True once THIS scope's session is known to be molecule-mode — set on
   /// ADOPT (`initState`'s `LiveSession()` arm reads
-  /// `seed.existingSession!.isMolecule`) or on a successful molecule
-  /// [_mint]; reset by [_reworkAndRemint] so round N+1 re-derives it fresh
-  /// from [_mintMode]. Read by [_completeAndClose] (captured-field async use,
-  /// D-H rule 1) to decide whether the positive-terminal close ALSO fires
-  /// [StationBeadWriter.reapMolecule] (R6's session-close collection).
+  /// `seed.existingSession!.isMolecule`) or on a successful [_mint] (every
+  /// fresh mint is molecule); reset by [_reworkAndRemint] so round N+1
+  /// re-derives it fresh. False only for an ADOPTED historical flat session,
+  /// which the engine no longer drives. Read by [_completeAndClose]
+  /// (captured-field async use, D-H rule 1) to decide whether the
+  /// positive-terminal close ALSO fires [StationBeadWriter.reapMolecule]
+  /// (R6's session-close collection).
   bool _isMolecule = false;
 
   /// The session id already minted for an IN-PROGRESS molecule mint (tg-6nf)
@@ -185,8 +177,7 @@ class SessionScopeState extends State<SessionScope> {
   /// `createSession` — that would strand the first session bead un-poured
   /// and mint a SECOND, exactly the "crashed pour" ambiguity
   /// `SessionBeadKeys.model` exists to prevent (`DESIGN-tg-pm6.md` §3
-  /// conflict 2). Null on every flat-mode mint and before any molecule mint
-  /// attempt.
+  /// conflict 2). Null before any mint attempt.
   String? _moleculeSessionId;
 
   /// How many `createSession` attempts this scope has made (tg-6nf) — bounded
@@ -258,15 +249,8 @@ class SessionScopeState extends State<SessionScope> {
         context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
         const ServiceBundle();
     // Captured for [_mint]'s async use (D-H rule 1) — the reentrant registry
-    // (a molecule mint's sub-circuit resolution) and the drain seam's
-    // mint-mode (`DESIGN-tg-pm6.md` §12, R5), read off the SAME ambient
-    // `SubstationConfig` `WorkBead`'s subtree already provides.
+    // (a molecule mint's sub-circuit resolution).
     _registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
-    _mintMode =
-        context
-            .dependOnInheritedSeedOfExactType<SubstationConfig>()
-            ?.circuitMintMode ??
-        CircuitMintMode.flatCursor;
   }
 
   @override
@@ -281,9 +265,10 @@ class SessionScopeState extends State<SessionScope> {
         // ADOPT — synchronous, no mint (the restoration adopt seam is the same
         // resolving→ready transition on restart). The join already reflects this
         // session (that's how we're adopting it), so the rework orphan-check
-        // (tg-x1j v2) may fire from the very first build. DRAIN (§12): this is
-        // the short-circuit BEFORE any [CircuitMintMode] check — an in-flight
-        // session's OWN durable model stamp governs, never the ambient config.
+        // (tg-x1j v2) may fire from the very first build. An in-flight
+        // session's OWN durable model stamp governs — a historical flat
+        // session adopts here too, but the engine no longer drives it (see
+        // the library doc).
         _sessionId = seed.existingSession!.sessionId;
         _resolving = false;
         _joinedOnce = true;
@@ -385,24 +370,9 @@ class SessionScopeState extends State<SessionScope> {
           'reason': truncateReason(_voidReason),
         });
       }
-      // The drain seam (`DESIGN-tg-pm6.md` §12, R5): branches AFTER the
-      // void-retire block above — a fresh mint over a retired dead key still
-      // reads the SAME ambient mode. `flatCursor` (the default) is today's
-      // path, byte-for-byte; `molecule` mints the additive graph.
-      if (_mintMode == CircuitMintMode.molecule) {
-        await _mintMolecule();
-      } else {
-        final id = await _ctx!.writer.createSession(
-          substation: _ctx!.stateSubstation,
-          title: 'grid session ${seed.bead.id}',
-          workBeadId: seed.bead.id,
-        );
-        if (_cancelled || !context.mounted) return;
-        setState(() {
-          _sessionId = id;
-          _resolving = false;
-        });
-      }
+      // Every fresh mint — including one over a retired dead key — pours the
+      // molecule graph (tg-eli phase 2: molecule is the only circuit engine).
+      await _mintMolecule();
     } on Object catch (error) {
       if (_cancelled || !context.mounted) return;
       _onMintFailed('$error');
@@ -658,10 +628,12 @@ class SessionScopeState extends State<SessionScope> {
   /// per node via the in-flight [_rearming] guard (see its doc), scheduled off
   /// `build` (never a write IN `build`).
   ///
-  /// [moleculeTarget] is the STEP bead id to target instead of [id] when this
-  /// node belongs to a MOLECULE session (`build`'s `beadIdByNodePath[nodePath]`,
-  /// resolved at SCHEDULE time — the write itself runs off-build); null on
-  /// the flat path, whose write is BYTE-FOR-BYTE unchanged.
+  /// [moleculeTarget] is the STEP bead id the flip targets (`build`'s
+  /// `beadIdByNodePath[nodePath]`, resolved at SCHEDULE time — the write
+  /// itself runs off-build). Null is unreachable by construction (a legacy
+  /// flat session's cursor is empty, so no gated node ever schedules) and is
+  /// refused LOUD in [_rearm] rather than falling back to a session-bead
+  /// write the flat model used to make.
   void _scheduleRearm(String id, String nodePath, {String? moleculeTarget}) {
     if (_rearming.contains(nodePath)) return;
     _rearming.add(nodePath);
@@ -726,11 +698,10 @@ class SessionScopeState extends State<SessionScope> {
   /// must not crash the whole station — the retry (via the cleared guard) is the
   /// recovery, the flare is the signal.
   ///
-  /// [moleculeTarget] (R5b's additive write fork): a MINIMAL single-key
-  /// `grid.step.state` merge write on the STEP bead — mirrors
-  /// [nodeStateMetadata]'s own merge-safety (never a full [stepBeadMetadata]
-  /// rebuild, which would clobber the persisted `restartCount`/telemetry with
-  /// fresh defaults). `build` never schedules a re-arm for a node the R4
+  /// The write is a MINIMAL single-key `grid.step.state` merge write on the
+  /// STEP bead [moleculeTarget] (never a full [stepBeadMetadata] rebuild,
+  /// which would clobber the persisted `restartCount`/telemetry with fresh
+  /// defaults). `build` never schedules a re-arm for a node the R4
   /// DERIVATION currently holds back (its own `invalidated` exclusion), so
   /// this write only ever targets a node parked by a REAL `HumanGate`.
   Future<void> _rearm(
@@ -745,6 +716,16 @@ class SessionScopeState extends State<SessionScope> {
       // the guard (a later build retries) and flare.
       _rearming.remove(nodePath);
       _flareRearmFailed(nodePath, 'no StationServices captured');
+      return;
+    }
+    if (moleculeTarget == null) {
+      // Unreachable by construction (see [_scheduleRearm]'s doc) — but never
+      // fall back to the retired flat session-bead write; refuse LOUD.
+      _rearming.remove(nodePath);
+      _flareRearmFailed(
+        nodePath,
+        'no step bead maps nodePath "$nodePath" — cannot re-arm',
+      );
       return;
     }
     final current = seed.existingSession;
@@ -762,10 +743,8 @@ class SessionScopeState extends State<SessionScope> {
     }
     try {
       await ctx.writer.update(
-        moleculeTarget ?? id,
-        metadata: moleculeTarget != null
-            ? {MoleculeStepKeys.state: StepState.pending.name}
-            : nodeStateMetadata(nodePath, StepState.pending),
+        moleculeTarget,
+        metadata: {MoleculeStepKeys.state: StepState.pending.name},
       );
       // Settled OK: clear the guard. The store's `gated`→`pending` flip stops
       // D-7 from re-firing (and frees a future gate cycle to re-arm).
@@ -831,8 +810,8 @@ class SessionScopeState extends State<SessionScope> {
       _lastKnownGated = false;
       _joinedOnce = false;
       _mintAttempts = 0; // round N+1 gets its own fresh mint budget (tg-6nf).
-      // Round N+1 re-derives its mode fresh from the ambient [_mintMode] the
-      // NEXT [_mint] call reads — never inherits the retired round's mode.
+      // Round N+1 re-derives this on its own mint — never inherits the
+      // retired round's flag.
       _isMolecule = false;
       _moleculeSessionId = null;
     });
@@ -952,10 +931,13 @@ class SessionScopeState extends State<SessionScope> {
     final registry = context
         .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
 
-    // The drain seam's molecule arm (`DESIGN-tg-pm6.md` §12, R5): project this
-    // session's OWN molecule graph into the same in-memory shape the flat path
-    // consumes, then layer A52 Ratified live derivation over it. The flat `else`
-    // arm remains the absent-key drain guarantee by construction.
+    // Project this session's OWN molecule graph into the in-memory
+    // CircuitCursor shape, then layer A52 Ratified live derivation over it.
+    // The `else` arm is the HISTORICAL-flat-adopt residual (tg-eli phase 2):
+    // a legacy session's `grid.cursor.*` keys no longer project
+    // (`SessionProjection.cursor` is always empty), so it feeds an empty
+    // cursor/results — the frontier would mount from `pending`, and every
+    // host persist under it refuses LOUD (no `InheritedCircuit` mounts).
     final isMolecule = joined?.isMolecule ?? false;
     final CircuitCursor cursor;
     final Map<String, Map<String, String>> results;

@@ -36,7 +36,6 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
-import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
@@ -48,7 +47,6 @@ import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
 import '../sdk/cursor.dart';
-import '../sdk/rewind.dart';
 import '../sdk/route.dart';
 import 'capability_registry.dart';
 
@@ -97,30 +95,33 @@ class CapabilityHostState extends State<CapabilityHost> {
   String get _beadId =>
       _nodePath.contains('/') ? _nodePath.split('/').first : _nodePath;
 
-  /// Resolves this incarnation's write target — the additive fork
-  /// (`DESIGN-tg-pm6.md` §11, pm6-r5b-host): an ambient [InheritedCircuit]
-  /// (R2) means a MOLECULE session, and every `_persistX` below targets its
-  /// OWN durable step bead (`beadIdByNodePath[_nodePath]`) instead of the
-  /// session bead. Absent (no [InheritedCircuit] provided — every in-flight
-  /// and every not-yet-molecule-minted session) → null, and every persist
-  /// falls back to today's FLAT target (`_sessionId`), byte-for-byte
-  /// unchanged (conflict 2's "absent key ⇒ flat", by construction).
+  /// Resolves this incarnation's write target — the step's OWN durable bead
+  /// (`InheritedCircuit.beadIdByNodePath[_nodePath]`, R2/R5b). The molecule
+  /// model is the ONLY circuit engine (tg-eli phase 2): there is no flat
+  /// session-bead fallback any more.
   ///
   /// Read with the EFFECT verb (`getInheritedSeedOfExactType`, ADR-0008
   /// Decision 3): every `_persistX` runs OFF `build`, in the report path, on
   /// a still-mounted branch (guarded by its own caller) — exactly like the
   /// existing `Bead`/`Workspace` reads in [_persistAdvance].
   ///
-  /// A MOUNTED [InheritedCircuit] missing its own node in
-  /// [InheritedCircuit.beadIdByNodePath] is a join/mint mis-composition —
-  /// LOUD (a thrown [StateError]; every call site below is itself `async`, so
-  /// the throw is captured as a rejected Future and safely contained by
-  /// [_firePersist]'s `catchError`), never a silent fall-through to the
-  /// session bead, which would quietly reintroduce the flat write shape
-  /// mid-molecule-session.
-  String? get _moleculeTarget {
+  /// A missing ambient [InheritedCircuit] — a host mounted under an ADOPTED
+  /// HISTORICAL flat session, or a mis-composed tree — refuses LOUD (a thrown
+  /// [StateError]; [_createAllocationOrFlare] catches it at mount and every
+  /// persist call site is itself `async`, so a report-path throw is captured
+  /// as a rejected Future and safely contained by [_firePersist]'s
+  /// `catchError`). So a legacy flat session never spawns and never writes —
+  /// it flares. Same for a MOUNTED circuit missing its own node in
+  /// [InheritedCircuit.beadIdByNodePath] (a join/mint mis-composition).
+  String get _stepBeadId {
     final circuit = context.getInheritedSeedOfExactType<InheritedCircuit>();
-    if (circuit == null) return null;
+    if (circuit == null) {
+      throw StateError(
+        'No InheritedCircuit at "$_nodePath" (session "$_sessionId") — the '
+        'molecule model is the only circuit engine; a historical flat '
+        'session cannot be driven (rework the round instead)',
+      );
+    }
     final beadId = circuit.beadIdByNodePath[_nodePath];
     if (beadId == null) {
       throw StateError(
@@ -190,27 +191,28 @@ class CapabilityHostState extends State<CapabilityHost> {
 
   /// Mints this incarnation's [Allocation] — the R3 routing fork (tg-h4u).
   ///
-  /// On the MOLECULE path a [ProcessCapability] routes through the ambient
-  /// [ProcessLeaseVendor]: `leaseFor(request)` vends the
-  /// `LeaseCapability<ProcessHandle>` whose `LeaseAllocation` replaces the
-  /// flat `ProcessAllocation` — so process identity is LEASED (`grid.lease.*`
-  /// on the step bead, written only by the vendor; Decided item 5) instead of
-  /// node-cursor state, and crash-adoption rides the lease family's
-  /// adopt-or-reacquire. Every other capability — and the whole FLAT path
-  /// (`_moleculeTarget == null`) — is byte-identical to before.
+  /// A [ProcessCapability] routes through the ambient [ProcessLeaseVendor]:
+  /// `leaseFor(request)` vends the `LeaseCapability<ProcessHandle>` whose
+  /// `LeaseAllocation` drives the spawn — so process identity is LEASED
+  /// (`grid.lease.*` on the step bead, written only by the vendor; Decided
+  /// item 5), and crash-adoption rides the lease family's adopt-or-reacquire.
+  /// Every other capability keeps its own `createAllocation` default.
   ///
-  /// A throw (no vendor mounted — `requireProcessLeaseVendor`'s LOUD-or-GONE
-  /// refusal; a missing step-bead mapping — `_moleculeTarget`'s guard) is
-  /// contained PER-WORK (ADR-0008 Decision 10: one bad bead never crashes the
-  /// station): flared `step.allocationFailed` + routed to a supervised
-  /// failure, so the bounded restart budget → breaker → escalation chain
-  /// surfaces it to a human instead of a silent stall or a dead station.
+  /// A throw (no [InheritedCircuit] ambient — a historical flat session,
+  /// [_stepBeadId]'s guard; no vendor mounted — `requireProcessLeaseVendor`'s
+  /// LOUD-or-GONE refusal; a missing step-bead mapping) is contained PER-WORK
+  /// (ADR-0008 Decision 10: one bad bead never crashes the station): flared
+  /// `step.allocationFailed` + routed to a supervised failure, so the bounded
+  /// restart budget → breaker → escalation chain surfaces it to a human
+  /// instead of a silent stall or a dead station.
   Allocation? _createAllocationOrFlare() {
     try {
       final ctx = _buildAllocationContext();
       final capability = seed.capability;
-      final target = _moleculeTarget;
-      if (target != null && capability is ProcessCapability) {
+      // Resolve the write target at MOUNT for every capability — a host that
+      // cannot name its step bead must never run an effect it cannot persist.
+      final target = _stepBeadId;
+      if (capability is ProcessCapability) {
         final vendor = requireProcessLeaseVendor(context);
         final lease = vendor.leaseFor(
           ProcessLeaseRequest(
@@ -285,8 +287,11 @@ class CapabilityHostState extends State<CapabilityHost> {
   void _onReport(AllocationReport report) {
     if (_cancelled || !context.mounted) return;
     switch (report) {
-      case AllocationStarted(:final pid, :final pgid):
-        _firePersist('started', () => _persistStarted(pid: pid, pgid: pgid));
+      case AllocationStarted():
+        // The report's pid/pgid are NOT persisted here: process identity is
+        // vendor-owned (`grid.lease.*` on the step bead, R3) — this write
+        // records only the `running` transition.
+        _firePersist('started', _persistStarted);
       case AllocationReady(:final payload):
         if (_completed) return;
         _firePersist('ready', () => _persistReady(payload));
@@ -363,12 +368,10 @@ class CapabilityHostState extends State<CapabilityHost> {
   void deliverReportForTest(AllocationReport report) => _onReport(report);
 
   /// The raw (startedAt, finishedAt, durationMs) triple a TERMINAL
-  /// transition's telemetry derives from — factored out of
-  /// [_terminalTelemetry] so the molecule-mode writes ([_moleculeMetadata],
-  /// R5b) can feed the SAME triple into a [NodeCursor] instead of the flat
-  /// [nodeTelemetryMetadata] keys. Prefers the in-memory kick instant
-  /// (race-free, per-incarnation); falls back to the persisted projection the
-  /// host already holds (the adopt/restore seam). Null [startedAt] → omit the
+  /// transition's telemetry derives from — fed into [_moleculeMetadata]'s
+  /// [NodeCursor] (R5b). Prefers the in-memory kick instant (race-free,
+  /// per-incarnation); falls back to the persisted projection the host
+  /// already holds (the adopt/restore seam). Null [startedAt] → omit the
   /// derived duration.
   ({DateTime? startedAt, DateTime finishedAt, int? durationMs})
   _terminalTiming() {
@@ -384,37 +387,17 @@ class CapabilityHostState extends State<CapabilityHost> {
     );
   }
 
-  /// The capture-only flow-telemetry keys (FT-1, tg-pez) for a terminal
-  /// transition — the step's start + finish + derived duration (+ an optional
-  /// [failureReason]), MERGED into the SAME chokepoint write as the cursor state
-  /// (no extra write traffic). Fail-safe: a start that was never measured
-  /// (`_startedAt` null AND no persisted `startedAt`) omits both `startedAt` and
-  /// `durationMs` rather than blocking the transition.
-  Map<String, String> _terminalTelemetry({String? failureReason}) {
-    final t = _terminalTiming();
-    return nodeTelemetryMetadata(
-      _nodePath,
-      startedAt: t.startedAt,
-      finishedAt: t.finishedAt,
-      durationMs: t.durationMs,
-      failureReason: failureReason,
-    );
-  }
-
-  /// The molecule-mode metadata payload for a transition to [state] — the
-  /// per-bead, no-`{nodePath}`-infix mirror of the flat model's per-call
-  /// builders ([nodeStateMetadata] / [nodeFailedMetadata] /
-  /// [nodeStartedMetadata] + [nodeTelemetryMetadata]), collapsed into ONE
-  /// [stepBeadMetadata] call since the step bead itself IS the node (R1) — no
-  /// infix left to disambiguate.
+  /// The metadata payload for a transition to [state] — ONE
+  /// [stepBeadMetadata] call, per-bead with no `{nodePath}` infix, since the
+  /// step bead itself IS the node (R1).
   ///
   /// [restartCount] defaults to the CURRENT persisted value
   /// ([StepMount.node]'s — an unrelated transition never touches it);
   /// [terminal] (the default) pulls in [_terminalTiming]'s
-  /// startedAt/finishedAt/durationMs triple, exactly like [_terminalTelemetry]
-  /// does for the flat write; the non-terminal `running` transition
-  /// ([_persistStarted]) passes `terminal: false` and carries only the kick
-  /// instant [_startedAt].
+  /// startedAt/finishedAt/durationMs triple (FT-1 capture-only telemetry,
+  /// merged into the same chokepoint write); the non-terminal `running`
+  /// transition ([_persistStarted]) passes `terminal: false` and carries only
+  /// the kick instant [_startedAt].
   Map<String, String> _moleculeMetadata(
     StepState state, {
     int? restartCount,
@@ -436,35 +419,22 @@ class CapabilityHostState extends State<CapabilityHost> {
     );
   }
 
-  Future<void> _persistStarted({required int pid, int? pgid}) async {
+  Future<void> _persistStarted() async {
     if (_cancelled || !context.mounted) return;
-    final target = _moleculeTarget;
-    if (target != null) {
-      // LOUD-or-GONE (Decided item 5, R3): every process-backed capability on
-      // the molecule path MUST have a mounted lease vendor — the vendor, not
-      // this write, owns `grid.lease.*`. Belt-and-braces: the routing fork
-      // (`_createAllocationOrFlare`, tg-h4u) already resolved the vendor at
-      // mount and routed the spawn through `leaseFor`/`acquire` (the real
-      // `stationProcessSpawner` surfaces this very report through the sink);
-      // this assertion re-checks presence on the persist path so a report
-      // arriving through any OTHER composition still refuses loud.
-      requireProcessLeaseVendor(context);
-      await _ctx!.writer.update(
-        target,
-        // pgid/pid/token are DELIBERATELY absent here (R3): the vendor owns
-        // `grid.lease.*`, never the step bead's cursor keys.
-        metadata: _moleculeMetadata(StepState.running, terminal: false),
-      );
-      return;
-    }
+    // LOUD-or-GONE (Decided item 5, R3): every process-backed capability
+    // MUST have a mounted lease vendor — the vendor, not this write, owns
+    // `grid.lease.*`. Belt-and-braces: the routing fork
+    // (`_createAllocationOrFlare`, tg-h4u) already resolved the vendor at
+    // mount and routed the spawn through `leaseFor`/`acquire` (the real
+    // `stationProcessSpawner` surfaces this very report through the sink);
+    // this assertion re-checks presence on the persist path so a report
+    // arriving through any OTHER composition still refuses loud.
+    requireProcessLeaseVendor(context);
     await _ctx!.writer.update(
-      _sessionId,
-      metadata: {
-        ...nodeStartedMetadata(_nodePath, pgid: pgid, pid: pid, token: _token),
-        // Capture-only (FT-1): stamp the step-begin instant on the `running`
-        // write so a live step's start is durable before its terminal.
-        ...nodeTelemetryMetadata(_nodePath, startedAt: _startedAt),
-      },
+      _stepBeadId,
+      // pgid/pid/token are DELIBERATELY absent here (R3): the vendor owns
+      // `grid.lease.*`, never the step bead's cursor keys.
+      metadata: _moleculeMetadata(StepState.running, terminal: false),
     );
   }
 
@@ -477,21 +447,14 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// keys — a plain up-signal, today's behavior).
   Future<void> _persistReady([Map<String, String>? payload]) async {
     if (_cancelled || !context.mounted) return;
-    final target = _moleculeTarget;
     await _ctx!.writer.update(
-      target ?? _sessionId,
-      metadata: target != null
-          ? {
-              ..._moleculeMetadata(StepState.ready),
-              // ResultKeys is reused VERBATIM on the step bead (R1) — only its
-              // host bead moves.
-              ...nodeResultMetadata(_nodePath, payload),
-            }
-          : {
-              ...nodeStateMetadata(_nodePath, StepState.ready),
-              ...nodeResultMetadata(_nodePath, payload),
-              ..._terminalTelemetry(),
-            },
+      _stepBeadId,
+      metadata: {
+        ..._moleculeMetadata(StepState.ready),
+        // ResultKeys is reused VERBATIM on the step bead (R1) — only its
+        // host bead moved.
+        ...nodeResultMetadata(_nodePath, payload),
+      },
     );
     _emitFlare('step.ready', const {});
   }
@@ -501,19 +464,12 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// atomically alongside the cursor advance — A1/D-5).
   Future<void> _persistComplete(Map<String, String>? payload) async {
     if (_cancelled || !context.mounted) return;
-    final target = _moleculeTarget;
     await _ctx!.writer.update(
-      target ?? _sessionId,
-      metadata: target != null
-          ? {
-              ..._moleculeMetadata(StepState.complete),
-              ...nodeResultMetadata(_nodePath, payload),
-            }
-          : {
-              ...nodeStateMetadata(_nodePath, StepState.complete),
-              ...nodeResultMetadata(_nodePath, payload),
-              ..._terminalTelemetry(),
-            },
+      _stepBeadId,
+      metadata: {
+        ..._moleculeMetadata(StepState.complete),
+        ...nodeResultMetadata(_nodePath, payload),
+      },
     );
     _emitFlare('step.complete', const {});
   }
@@ -535,24 +491,14 @@ class CapabilityHostState extends State<CapabilityHost> {
         ? null
         : _now().add(seed.mount.backoff.delayFor(next));
     final failureReason = reason.isEmpty ? null : reason;
-    final target = _moleculeTarget;
     await _ctx!.writer.update(
-      target ?? _sessionId,
-      metadata: target != null
-          ? _moleculeMetadata(
-              StepState.failed,
-              restartCount: next,
-              cooldownUntil: cooldown,
-              failureReason: failureReason,
-            )
-          : {
-              ...nodeFailedMetadata(
-                _nodePath,
-                restartCount: next,
-                cooldownUntil: cooldown,
-              ),
-              ..._terminalTelemetry(failureReason: failureReason),
-            },
+      _stepBeadId,
+      metadata: _moleculeMetadata(
+        StepState.failed,
+        restartCount: next,
+        cooldownUntil: cooldown,
+        failureReason: failureReason,
+      ),
     );
     _emitFlare('step.failed', const {});
   }
@@ -684,21 +630,15 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// a verdict of its own.
   Future<void> _persistGate(String reason) async {
     if (_cancelled || !context.mounted) return;
-    final target = _moleculeTarget;
     await _ctx!.writer.update(
-      target ?? _sessionId,
-      metadata: target != null
-          ? _moleculeMetadata(StepState.gated)
-          : {
-              ...nodeStateMetadata(_nodePath, StepState.gated),
-              ..._terminalTelemetry(),
-            },
+      _stepBeadId,
+      metadata: _moleculeMetadata(StepState.gated),
     );
     if (_cancelled || !context.mounted) return;
-    // The gate bead itself stays keyed to the OWNING SESSION regardless of
-    // mode (unchanged from today) — `createGate`'s `blocks`/`node` linkage
-    // re-arms this exact `nodePath` on resolve; which bead carries the
-    // `state=gated` cursor write above is an orthogonal, R5b-only concern.
+    // The gate bead itself stays keyed to the OWNING SESSION —
+    // `createGate`'s `blocks`/`node` linkage re-arms this exact `nodePath`
+    // on resolve; the `state=gated` cursor write above rides the step bead
+    // (R5b), an orthogonal concern.
     await _ctx!.writer.createGate(
       substation: _ctx!.stateSubstation,
       sessionId: _sessionId,
@@ -708,112 +648,21 @@ class CapabilityHostState extends State<CapabilityHost> {
     _emitFlare('step.gated', {'reason': reason});
   }
 
-  /// The [AllocationRewound] report's target-aware dispatch (R5b, the
-  /// additive fork): on the FLAT path (`_moleculeTarget == null`), this calls
-  /// exactly today's [_persistRewind] — unchanged. On the MOLECULE path,
-  /// [_persistRewind]'s write cascade is DEAD CODE and is NEVER called
-  /// (Decided item 7 / `DESIGN-tg-pm6.md` §8/§11: backward motion is a pure
-  /// DERIVATION over `validates`-edge stamps, "no RouteVerdict, no persisted
-  /// rewindCount, no signal"). A molecule circuit step reporting an explicit
-  /// rewind decision is therefore a mis-composition — routed to a supervised
-  /// failure instead, LOUD, not silent, exactly like [_persistRewind]'s own
-  /// empty/dangling-[stepIds] guard below.
+  /// The [AllocationRewound] report's dispatch — a REFUSAL, always (Decided
+  /// item 7 / `DESIGN-tg-pm6.md` §8/§11): backward motion on the molecule
+  /// model is a pure DERIVATION over `validates`-edge stamps ("no
+  /// RouteVerdict, no persisted rewindCount, no signal"), so a circuit step
+  /// reporting an explicit rewind decision is a mis-composition — routed to a
+  /// supervised failure, LOUD, not silent. This was already the molecule
+  /// path's exact behavior; the flat model's write cascade (`_persistRewind`)
+  /// retired with the flat cursor (tg-eli phase 2), leaving the refusal as
+  /// the only behavior.
   Future<void> _persistRewindReport(Set<String> stepIds, String reason) async {
-    if (_moleculeTarget != null) {
-      await _persistFailure(
-        'AllocationRewound reached a molecule-mode step at $_nodePath — '
-        'backward motion is derived there (R4); this circuit must not report '
-        'a rewind decision',
-      );
-      return;
-    }
-    await _persistRewind(stepIds, reason);
-  }
-
-  /// REWIND (routing — the dual of fan-out; M5 D-4 promoted to a first-class arm,
-  /// tg-o90): re-run the named SIBLING steps, every node transitively downstream
-  /// of them, and SELF. FLAT-MODEL ONLY (R5b): [_persistRewindReport] never
-  /// calls this on the molecule path (backward motion is derived there, R4).
-  /// ONE merge-safe chokepoint write flips that whole sub-DAG to
-  /// `state=pending` with a bumped per-node `rewindCount`, which RE-KEYS each
-  /// node (`CircuitScope`) — so keyed reconcile disposes (KILLS, ADR-0009 D4) the
-  /// old incarnations and re-runs them virgin. NO `type=gate` bead is minted and
-  /// the session is NOT re-minted: the round happens INSIDE the live session, in
-  /// the same workspace, with no human in the loop.
-  ///
-  /// Two LOUD refusals (ADR-0008 D3 — a guard exists only where it protects a
-  /// named invariant with a concrete failure story, and is LOUD when violated):
-  ///
-  /// - an EMPTY or DANGLING [stepIds] would silently degrade into "re-run only
-  ///   myself, forever" → a supervised failure instead (bounded by the breaker,
-  ///   then escalation);
-  /// - a node whose own `rewindCount` already reached [kMaxReworkRounds] REFUSES
-  ///   to rewind again and ESCALATES through the bound [EscalationHandler] (D-4's
-  ///   bounded rework rounds; the default [HumanGate] parks exactly as before),
-  ///   so a mis-specified route can never spin the loop. The operator's lever to
-  ///   grant a fresh budget is `grid rework` (a new session ⇒ a new cursor).
-  Future<void> _persistRewind(Set<String> stepIds, String reason) async {
-    if (_cancelled || !context.mounted) return;
-    final circuit = seed.mount.circuit;
-    final unknown = stepIds.where((id) => circuit.stepById(id) == null).toList()
-      ..sort();
-    if (stepIds.isEmpty || unknown.isNotEmpty) {
-      await _persistFailure(
-        stepIds.isEmpty
-            ? 'rewind named no steps (circuit "${circuit.id}")'
-            : 'rewind names unknown step(s) ${unknown.join(', ')} in circuit '
-                  '"${circuit.id}"',
-      );
-      return;
-    }
-    final rounds = seed.mount.node.rewindCount;
-    if (rounds >= kMaxReworkRounds) {
-      // The BELT (M5 D-4/A47): refuse and ESCALATE to the bound handler — whose
-      // DEFAULT (HumanGate) parks exactly as before. The cap no longer assumes
-      // the authority is a human; it just refuses to spin the loop.
-      await _persistEscalate(
-        'rework cap reached ($rounds/$kMaxReworkRounds): $reason',
-      );
-      return;
-    }
-    final registry = _registry;
-    final paths = rewindNodePaths(
-      circuit,
-      seed.mount.circuitPath,
-      stepIds,
-      selfStepId: seed.mount.step.stepId,
-      circuitById: (id) => registry?.circuit(id),
+    await _persistFailure(
+      'AllocationRewound reached a molecule-mode step at $_nodePath — '
+      'backward motion is derived there (R4); this circuit must not report '
+      'a rewind decision',
     );
-    // The per-node PRIOR counts, read with the EFFECT verb (ADR-0008 Decision 3,
-    // amended 2026-07-02): this runs OFF `build`, in the report path, on a
-    // still-mounted branch (guarded above). Never `dependOn` the SiblingView — it
-    // is a fresh instance per build, so binding to it would rebuild every host on
-    // every cursor tick. Each node's OWN count is bumped (monotonic per node), so
-    // the key ALWAYS changes; a shared round number could equal a node's existing
-    // count and silently skip its re-key.
-    final view =
-        context.getInheritedSeedOfExactType<SiblingView>() ??
-        const SiblingView();
-    await _ctx!.writer.update(
-      _sessionId,
-      metadata: {
-        for (final path in paths)
-          ...nodeRewoundMetadata(
-            path,
-            rewindCount: view.cursorOf(path).rewindCount + 1,
-          ),
-        // SELF's bump is authoritative from the mount (the view agrees in the
-        // tree; a bare-mounted host has no view at all).
-        ...nodeRewoundMetadata(_nodePath, rewindCount: rounds + 1),
-        ..._terminalTelemetry(),
-      },
-    );
-    _emitFlare('step.rewound', {
-      'steps': (stepIds.toList()..sort()).join(','),
-      'nodes': '${paths.length}',
-      'round': '${rounds + 1}',
-      'reason': truncateReason(reason),
-    });
   }
 
   /// Emits a fire-and-forget observability flare after a terminal cursor write

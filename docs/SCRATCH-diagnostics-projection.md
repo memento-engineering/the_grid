@@ -23,6 +23,10 @@ production path. The engine-level `SubstationConfig.circuitMintMode` default
 remains `flatCursor` as a fallback; its retirement stays staged under `tg-eli`
 (flat-path retirement), per the plan below.
 
+**Further reality stamp (tg-eli, 2026-07-19):** flat-path retirement above is now
+complete — `CircuitMintMode`/`flatCursor` are deleted; molecule is the only
+circuit engine, no mint-mode switch remains.
+
 ## 1. The want (one sentence)
 
 **Observe the running grid: the tree describes itself, and one or more reporters —

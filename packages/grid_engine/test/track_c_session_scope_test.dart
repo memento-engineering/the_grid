@@ -45,6 +45,29 @@ Future<void> _pump() async {
   }
 }
 
+/// Drains the microtask queue and renders every dirty rebuild it produced,
+/// repeating until [condition] is satisfied or [maxRounds] is spent. A
+/// molecule mint chains TWO bd round-trips (`createSession`, then
+/// `createMolecule`'s dedup-probe export + graph-apply pour, each its own
+/// async gap) rather than the flat model's single `create` — polling is what
+/// makes waiting for a fresh mint's inflated leaf deterministic (tg-eli
+/// phase 2).
+Future<void> _pumpUntil(
+  TreeOwner owner,
+  bool Function() condition, {
+  int maxRounds = 500,
+}) async {
+  for (var i = 0; i < maxRounds && !condition(); i++) {
+    // A molecule mint's `create --graph` pour writes a REAL temp file
+    // (`BdCliService.applyGraph`'s plan.json) — genuine disk I/O, not just
+    // microtask chaining — so a short real-time cushion is what makes
+    // waiting for it deterministic under load (tg-eli phase 2: the flat
+    // model's in-memory-only mint never hit disk).
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    owner.flush();
+  }
+}
+
 JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
@@ -136,12 +159,21 @@ void main() {
 
         // Resolving: no leaf yet (the session mint is async).
         expect(reg.events, isEmpty);
-        await _pump();
-        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+        );
 
-        // Exactly ONE createSession (minted above the fan-out), then the first
+        // Exactly ONE createSession (minted above the fan-out) plus its
+        // molecule pour (tg-eli phase 2: every fresh mint pours a molecule
+        // graph — a second `create` call, `create --graph`), then the first
         // step inflates under the minted SessionHandle (id = tgdog-sess1).
-        expect(f.runner.callsFor('create'), hasLength(1));
+        final creates = f.runner.callsFor('create');
+        expect(creates, hasLength(2));
+        expect(
+          creates.where((c) => c.length > 1 && c[1] == '--graph'),
+          hasLength(1),
+        );
         expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
       },
     );
@@ -161,12 +193,20 @@ void main() {
           rootCircuit: (_) => _burn,
         );
         addTearDown(m.owner.dispose);
-        await _pump();
-        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.length >= 2 && f.runner.callsFor('create').length >= 2,
+        );
 
-        // ONE mint, both dep-free leaves mounted under the SAME session id, with
-        // DISJOINT paths (disjoint routing) — never two mints / two sessions.
-        expect(f.runner.callsFor('create'), hasLength(1));
+        // ONE mint (+ its molecule pour, tg-eli phase 2), both dep-free leaves
+        // mounted under the SAME session id, with DISJOINT paths (disjoint
+        // routing) — never two mints / two sessions.
+        final creates = f.runner.callsFor('create');
+        expect(creates, hasLength(2));
+        expect(
+          creates.where((c) => c.length > 1 && c[1] == '--graph'),
+          hasLength(1),
+        );
         expect(
           reg.events,
           unorderedEquals([

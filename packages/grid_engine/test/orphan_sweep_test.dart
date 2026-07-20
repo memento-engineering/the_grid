@@ -1,10 +1,14 @@
 // The teardown-vs-spawn window: an agent spawned moments before `down`
-// survived the graceful teardown (pid alive after the lock released).
-// `RestartReconciler.sweepOrphans` reconciles the transport + the persisted
-// restart fence against ZERO-EXPECTED after the unmount and reaps the straggler
-// LOUDLY. Fully offline (Fakes, not mocks): the REAL terminateGroup runs over a
-// fake ProcessGroupController, so its `pgid <= 1`/own-group guard and its
-// leader-pid liveness fence are genuinely exercised.
+// survived the graceful teardown. `RestartReconciler.sweepOrphans` reconciles
+// the TRANSPORT against ZERO-EXPECTED after the unmount and reaps the
+// straggler LOUDLY.
+//
+// The FENCE half (per-node `grid.cursor.*` pgid/pid fences on the own session
+// beads) retired with the flat model (tg-eli phase 2): a session's process
+// identity is the lease vendor's `grid.lease.*` breadcrumb, reconciled by the
+// BOOT pass's molecule lease sweep — so `terminatedGroups` is always empty
+// and a legacy cursor-bearing session bead is inert here (proven below).
+// Fully offline (Fakes, not mocks).
 import 'dart:async';
 import 'dart:io';
 
@@ -18,14 +22,11 @@ const _prefix = 'tgstate-';
 const _sessionId = 'tgstate-1';
 const _agentName = '$_sessionId/tg-gpg/agent';
 
-/// A fake process-group seam: records every signal, reports a fixed own-group id
-/// (so the own-group guard is testable) and programmed per-pid liveness. The
-/// REAL [terminateGroup] runs over this.
+/// A fake process-group seam: records every signal + programmed per-pid
+/// liveness — the sweep must NEVER signal now that the fence half is retired.
 class _FakeGroups implements ProcessGroupController {
-  _FakeGroups({this.ownGroupId = 999, Set<int> alivePids = const {}})
-    : _alive = {...alivePids};
+  _FakeGroups({Set<int> alivePids = const {}}) : _alive = {...alivePids};
 
-  final int ownGroupId;
   final Set<int> _alive;
 
   /// Every (pgid, signal) sent, in order.
@@ -45,7 +46,7 @@ class _FakeGroups implements ProcessGroupController {
   }
 
   @override
-  int currentGroupId() => ownGroupId;
+  int currentGroupId() => 999;
 }
 
 /// A transport that never lets go — proves the settle window is BOUNDED.
@@ -79,7 +80,7 @@ class _StubbornProvider implements RuntimeProvider {
 }
 
 /// The worktree seams: the teardown pass touches NEITHER (it reconciles the
-/// transport + the cursors), so both refuse loudly if the sweep ever calls them.
+/// transport only), so both refuse loudly if the sweep ever calls them.
 Future<List<BeadWorktree>?> _noWorktrees(RootCheckout root) async =>
     throw StateError('sweepOrphans must not list worktrees');
 
@@ -101,31 +102,23 @@ GraphSnapshot _state(List<Bead> beads) => GraphSnapshot.fromParts(
   capturedAt: DateTime(2026, 7),
 );
 
-/// A STATE-store session bead carrying a per-node cursor (the restart fence).
-Bead _session({
-  required String id,
-  required Map<String, NodeCursor> cursor,
-  bool closed = false,
-}) {
-  final meta = <String, dynamic>{'rig': 'tgstate', 'work_bead': 'tg-gpg'};
-  cursor.forEach((path, node) => meta.addAll(nodeCursorMetadata(path, node)));
-  return Bead(
-    id: id,
-    issueType: IssueType.session,
-    status: closed ? BeadStatus.closed : BeadStatus.open,
-    metadata: meta,
-  );
-}
-
-/// A running node holding a live process group.
-Map<String, NodeCursor> _running({required int pgid, required int pid}) => {
-  'tg-gpg/agent': NodeCursor(
-    state: StepState.running,
-    pgid: pgid,
-    pid: pid,
-    token: 'tok',
-  ),
-};
+/// A HISTORICAL flat session bead still carrying the retired per-node
+/// `grid.cursor.*` process fence (raw wire literals — the flat codec is
+/// deleted). The sweep must treat it as INERT.
+Bead _legacySession({required String id, required int pgid, required int pid}) =>
+    Bead(
+      id: id,
+      issueType: IssueType.session,
+      status: BeadStatus.open,
+      metadata: <String, dynamic>{
+        'rig': 'tgstate',
+        'work_bead': 'tg-gpg',
+        'grid.cursor.tg-gpg/agent.state': 'running',
+        'grid.cursor.tg-gpg/agent.pgid': '$pgid',
+        'grid.cursor.tg-gpg/agent.pid': '$pid',
+        'grid.cursor.tg-gpg/agent.token': 'tok',
+      },
+    );
 
 RestartReconciler _reconciler({
   required ProcessGroupController groups,
@@ -182,164 +175,35 @@ void main() {
       expect(log.join('\n'), contains('SURVIVED the unmount'));
     });
 
-    test('the FENCE half reaps a live group the transport no longer holds',
-        () async {
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final groups = _FakeGroups(alivePids: {77});
-      final log = <String>[];
+    test(
+      'EXISTING-STORE SAFETY: a legacy flat session bead with a live-pid '
+      'grid.cursor.* fence is INERT — no crash, no signal, no '
+      'terminatedGroups (the fence half retired, tg-eli phase 2)',
+      () async {
+        final provider = FakeRuntimeProvider();
+        addTearDown(provider.close);
+        final groups = _FakeGroups(alivePids: {77});
+        final log = <String>[];
 
-      final report =
-          await _reconciler(
-            groups: groups,
-            state: _state([
-              _session(id: _sessionId, cursor: _running(pgid: 4242, pid: 77)),
-            ]),
-          ).sweepOrphans(
-            transport: provider,
-            sessionPrefix: _prefix,
-            onOrphan: log.add,
-            pollInterval: const Duration(milliseconds: 5),
-          );
+        final report =
+            await _reconciler(
+              groups: groups,
+              state: _state([
+                _legacySession(id: _sessionId, pgid: 4242, pid: 77),
+              ]),
+            ).sweepOrphans(
+              transport: provider,
+              sessionPrefix: _prefix,
+              onOrphan: log.add,
+              pollInterval: const Duration(milliseconds: 5),
+            );
 
-      expect(report.terminatedGroups.single.pgid, 4242);
-      expect(
-        report.terminatedGroups.single.result,
-        GroupTerminateResult.exitedOnTerm,
-      );
-      expect(groups.signals.first, (4242, ProcessSignal.sigterm));
-      expect(log.join('\n'), contains('ALIVE after the unmount'));
-    });
-
-    test('the liveness fence holds: a DEAD leader pid is never signalled',
-        () async {
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final groups = _FakeGroups(); // nothing alive
-      final log = <String>[];
-
-      final report =
-          await _reconciler(
-            groups: groups,
-            state: _state([
-              _session(id: _sessionId, cursor: _running(pgid: 4242, pid: 77)),
-            ]),
-          ).sweepOrphans(
-            transport: provider,
-            sessionPrefix: _prefix,
-            onOrphan: log.add,
-            pollInterval: const Duration(milliseconds: 5),
-          );
-
-      expect(groups.signals, isEmpty);
-      expect(report.isClean, isTrue);
-      expect(log, isEmpty);
-    });
-
-    test('the terminateGroup guard is NEVER bypassed: pgid 1 is refused, LOUD, '
-        'once', () async {
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final groups = _FakeGroups(alivePids: {77});
-      final log = <String>[];
-
-      final report =
-          await _reconciler(
-            groups: groups,
-            state: _state([
-              _session(id: _sessionId, cursor: _running(pgid: 1, pid: 77)),
-            ]),
-          ).sweepOrphans(
-            transport: provider,
-            sessionPrefix: _prefix,
-            onOrphan: log.add,
-            pollInterval: const Duration(milliseconds: 5),
-          );
-
-      expect(groups.signals, isEmpty, reason: 'the guard sent NO signal');
-      expect(report.terminatedGroups, isEmpty);
-      expect(report.settled, isTrue, reason: 'a refusal never spins the loop');
-      expect(log.where((l) => l.contains('REFUSED')), hasLength(1));
-    });
-
-    test('the guard\'s other arm: the SUPERVISOR\'S OWN group is never '
-        'signalled (that would kill the_grid itself)', () async {
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final groups = _FakeGroups(ownGroupId: 4242, alivePids: {77});
-      final log = <String>[];
-
-      final report =
-          await _reconciler(
-            groups: groups,
-            state: _state([
-              // A recycled pgid that now names OUR OWN process group.
-              _session(id: _sessionId, cursor: _running(pgid: 4242, pid: 77)),
-            ]),
-          ).sweepOrphans(
-            transport: provider,
-            sessionPrefix: _prefix,
-            onOrphan: log.add,
-            pollInterval: const Duration(milliseconds: 5),
-          );
-
-      expect(groups.signals, isEmpty);
-      expect(report.terminatedGroups, isEmpty);
-      expect(log.where((l) => l.contains('REFUSED')), hasLength(1));
-    });
-
-    test('kills are SCOPED: a session bead outside the owned prefix is never '
-        'touched', () async {
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final groups = _FakeGroups(alivePids: {77});
-      final log = <String>[];
-
-      final report =
-          await _reconciler(
-            groups: groups,
-            state: _state([
-              // A foreign partition's session (a live gc's, say) — NOT ours.
-              _session(id: 'gc-9', cursor: _running(pgid: 4242, pid: 77)),
-            ]),
-          ).sweepOrphans(
-            transport: provider,
-            sessionPrefix: _prefix,
-            onOrphan: log.add,
-            pollInterval: const Duration(milliseconds: 5),
-          );
-
-      expect(groups.signals, isEmpty);
-      expect(report.isClean, isTrue);
-      expect(log, isEmpty);
-    });
-
-    test('a TERMINAL session is not a fence target (the boot reconcile owns its '
-        'leftovers)', () async {
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final groups = _FakeGroups(alivePids: {77});
-
-      final report =
-          await _reconciler(
-            groups: groups,
-            state: _state([
-              _session(
-                id: _sessionId,
-                cursor: _running(pgid: 4242, pid: 77),
-                closed: true,
-              ),
-            ]),
-          ).sweepOrphans(
-            transport: provider,
-            sessionPrefix: _prefix,
-            onOrphan: (_) {},
-            pollInterval: const Duration(milliseconds: 5),
-          );
-
-      expect(groups.signals, isEmpty);
-      expect(report.isClean, isTrue);
-    });
+        expect(groups.signals, isEmpty);
+        expect(report.terminatedGroups, isEmpty);
+        expect(report.isClean, isTrue);
+        expect(log, isEmpty);
+      },
+    );
 
     test('a clean teardown reaps nothing and logs NOTHING', () async {
       final provider = FakeRuntimeProvider();

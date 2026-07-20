@@ -99,7 +99,10 @@ void main() {
     });
 
     test('projectSession threads results onto the projection (read half of '
-        'nodeResultMetadata)', () {
+        'nodeResultMetadata); the cursor slot stays empty — since tg-eli '
+        'phase 2 the flat `grid.cursor.*` model retired and projectSession '
+        'never fills it any more (the live cursor is derived from '
+        '`moleculeBeads` by a later rung)', () {
       final sb = Bead(
         id: 'tgdog-s',
         issueType: IssueType.session,
@@ -107,13 +110,12 @@ void main() {
         metadata: {
           'rig': stateSubstation,
           SessionBeadKeys.workBead: 'tg-1',
-          ...nodeStateMetadata('tg-1/review/critic1', StepState.complete),
           ...nodeResultMetadata('tg-1/review/critic1', const {'grade': 'A'}),
         },
       );
       final proj = projectSession(sb);
       expect(proj.results['tg-1/review/critic1'], {'grade': 'A'});
-      expect(proj.cursor['tg-1/review/critic1']?.state, StepState.complete);
+      expect(proj.cursor, isEmpty);
     });
   });
 }

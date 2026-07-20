@@ -41,29 +41,48 @@ GraphSnapshot graphOf(List<Bead> beads, {int tick = 0}) => GraphSnapshot.fromPar
 /// A work bead.
 Bead work(String id) => Bead(id: id, issueType: IssueType.feature, status: BeadStatus.open);
 
-/// A the_grid session bead linked to [workBeadId], carrying the per-node cursor:
-/// each step id in [completed] is marked `complete` at `'$workBeadId/$step'` (the
-/// distinguishing payload the JOIN must pair + reflect on a change).
-Bead session(
-  String id, {
+/// A the_grid session bead linked to [workBeadId] (the molecule model,
+/// tg-eli phase 2 — the flat `grid.cursor.*` model retired). Per-node state
+/// no longer lives on the session bead itself; it lives on separate
+/// `type=step` beads (see [stepBead]) the JOIN buckets into
+/// `SessionProjection.moleculeBeads`.
+Bead session(String id, {required String workBeadId, bool closed = false}) =>
+    Bead(
+      id: id,
+      issueType: IssueType.session,
+      status: closed ? BeadStatus.closed : BeadStatus.open,
+      metadata: {'rig': 'tgdog', 'work_bead': workBeadId},
+    );
+
+/// A `type=step` bead owned by [sessionId] at engine coordinate
+/// `'$workBeadId/$step'`, carrying [state] (default `complete`) — the
+/// distinguishing payload the JOIN's molecule bucketing (`_attachMoleculeBeads`)
+/// must pair to its session + reflect on a change.
+Bead stepBead(
+  String sessionId, {
   required String workBeadId,
-  Set<String> completed = const {},
-  bool closed = false,
+  required String step,
+  StepState state = StepState.complete,
 }) => Bead(
-  id: id,
-  issueType: IssueType.session,
-  status: closed ? BeadStatus.closed : BeadStatus.open,
+  id: '$sessionId-$step',
+  issueType: IssueType.step,
+  status: BeadStatus.open,
   metadata: {
     'rig': 'tgdog',
-    'work_bead': workBeadId,
-    for (final step in completed)
-      ...nodeStateMetadata('$workBeadId/$step', StepState.complete),
+    MoleculeStepKeys.path: '$workBeadId/$step',
+    MoleculeStepKeys.session: sessionId,
+    MoleculeStepKeys.state: state.name,
   },
 );
 
-/// The cursor state of [node] in [s]'s session for [workBead], or null.
-StepState? _stateOf(JoinedSnapshot s, String workBead, String node) =>
-    s.sessionsByWorkBead[workBead]?.cursor[node]?.state;
+/// The molecule cursor state of [node] in [s]'s session for [workBead], or
+/// null — projected from the session projection's own `moleculeBeads` bucket
+/// (mirrors `session_scope.dart`'s consumer-side `projectMoleculeCursor` call).
+StepState? _stateOf(JoinedSnapshot s, String workBead, String node) {
+  final projection = s.sessionsByWorkBead[workBead];
+  if (projection == null) return null;
+  return projectMoleculeCursor(projection.moleculeBeads).cursor[node]?.state;
+}
 
 /// Reads [notifier]'s value the consumer way (D-H rule 2: no public sync
 /// accessor over reactive state): subscribe (`fireImmediately` delivers the
@@ -93,7 +112,10 @@ void main() {
     test('a LATE subscriber sees the baseline join, not nothing', () {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
       stateSrc = FakeSnapshotSource(
-        graphOf([session('s1', workBeadId: 'w1', completed: {'agent'})]),
+        graphOf([
+          session('s1', workBeadId: 'w1'),
+          stepBead('s1', workBeadId: 'w1', step: 'agent'),
+        ]),
       );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
@@ -117,7 +139,10 @@ void main() {
 
     test('one work change → exactly ONE push, new graph + unchanged sessions', () async {
       stateSrc = FakeSnapshotSource(
-        graphOf([session('s1', workBeadId: 'w1', completed: {'agent'})]),
+        graphOf([
+          session('s1', workBeadId: 'w1'),
+          stepBead('s1', workBeadId: 'w1', step: 'agent'),
+        ]),
       );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
@@ -147,11 +172,14 @@ void main() {
       final pushes = <JoinedSnapshot>[];
       bridge.notifier.addListener(pushes.add);
       expect(pushes, hasLength(1));
-      expect(pushes.last.sessionsByWorkBead['w1']?.cursor, isEmpty);
+      expect(pushes.last.sessionsByWorkBead['w1']?.moleculeBeads, isEmpty);
 
-      // The cursor advances on the work_bead-linked session bead (agent done).
+      // The cursor advances when the session's own step bead lands.
       stateSrc.emit(
-        graphOf([session('s1', workBeadId: 'w1', completed: {'agent'})], tick: 1),
+        graphOf([
+          session('s1', workBeadId: 'w1'),
+          stepBead('s1', workBeadId: 'w1', step: 'agent'),
+        ], tick: 1),
       );
       await pumpEventQueue();
 
@@ -201,7 +229,11 @@ void main() {
         metadata: const {'work_bead': 'w1'},
       );
       stateSrc = FakeSnapshotSource(
-        graphOf([decoy, session('s1', workBeadId: 'w1', completed: {'agent'})]),
+        graphOf([
+          decoy,
+          session('s1', workBeadId: 'w1'),
+          stepBead('s1', workBeadId: 'w1', step: 'agent'),
+        ]),
       );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);

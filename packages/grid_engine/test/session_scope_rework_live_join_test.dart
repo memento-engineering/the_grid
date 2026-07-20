@@ -32,6 +32,25 @@ Future<void> _pump() async {
   }
 }
 
+/// Drains the microtask queue and renders every dirty rebuild it produced,
+/// repeating until [condition] is satisfied or [maxRounds] is spent. A
+/// molecule mint chains multiple bd round-trips (`createSession`, THEN
+/// `createMolecule`'s dedup-probe export + graph-apply pour — the latter a
+/// REAL temp-file write, `BdCliService.applyGraph`'s plan.json) rather than
+/// the flat model's single in-memory `create`, so a real-time cushion is
+/// what makes waiting for round N+1's mint deterministic under load
+/// (tg-eli phase 2).
+Future<void> _pumpUntil(
+  TreeOwner owner,
+  bool Function() condition, {
+  int maxRounds = 500,
+}) async {
+  for (var i = 0; i < maxRounds && !condition(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    owner.flush();
+  }
+}
+
 GraphSnapshot _work(List<Bead> beads, Set<String> ready, {int tick = 0}) =>
     GraphSnapshot.fromParts(
       beads: beads,
@@ -47,11 +66,13 @@ GraphSnapshot _state(List<Bead> beads, {int tick = 0}) => GraphSnapshot.fromPart
   capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
 );
 
-/// A the_grid session bead exactly as `grid rework`'s CLI-observed shape: round
-/// 1's `agent`/`verify` complete, `route` GATED (a committee park), linked to
-/// [workBead] — or, after the CLI's re-key, linked to `'$originalBead#r1'`
-/// while every OTHER key (including the stale `route` gate cursor) is left
-/// untouched (bd's `--metadata` merge, not a replace).
+/// A the_grid MOLECULE session bead exactly as `grid rework`'s CLI-observed
+/// shape: linked to [workBead] — or, after the CLI's re-key, linked to
+/// `'$originalBead#r1'` while every OTHER key is left untouched (bd's
+/// `--metadata` merge, not a replace). Round 1's PER-NODE state (`agent`/
+/// `verify` complete, `route` GATED — a committee park) lives on its own
+/// companion `type=step` beads ([_round1Steps], tg-eli phase 2), never on
+/// this bead's metadata.
 Bead _round1Session(String id, {required String workBead}) => Bead(
   id: id,
   issueType: IssueType.session,
@@ -59,11 +80,58 @@ Bead _round1Session(String id, {required String workBead}) => Bead(
   metadata: {
     'rig': stateSubstation,
     SessionBeadKeys.workBead: workBead,
-    ...nodeStateMetadata('tg-1/agent', StepState.complete),
-    ...nodeStateMetadata('tg-1/verify', StepState.complete),
-    ...nodeStateMetadata('tg-1/route', StepState.gated),
+    SessionBeadKeys.model: kSessionModelMolecule,
   },
 );
+
+/// Round 1's per-node `type=step` beads, owned by [sessionId]: `agent`/
+/// `verify` complete, `route` GATED (a committee park) — the stale gate
+/// cursor `grid rework` leaves standing across the re-key (it re-keys the
+/// SESSION's `work_bead` only, never these step beads).
+List<Bead> _round1Steps(String sessionId) => [
+  Bead(
+    id: 'tgdog-step-agent',
+    issueType: IssueType.step,
+    status: BeadStatus.closed,
+    metadata: {
+      'rig': stateSubstation,
+      MoleculeStepKeys.stepId: 'agent',
+      MoleculeStepKeys.capability: 'agent',
+      MoleculeStepKeys.kind: StepKind.job.name,
+      MoleculeStepKeys.path: 'tg-1/agent',
+      MoleculeStepKeys.session: sessionId,
+      MoleculeStepKeys.state: StepState.complete.name,
+    },
+  ),
+  Bead(
+    id: 'tgdog-step-verify',
+    issueType: IssueType.step,
+    status: BeadStatus.closed,
+    metadata: {
+      'rig': stateSubstation,
+      MoleculeStepKeys.stepId: 'verify',
+      MoleculeStepKeys.capability: 'verify',
+      MoleculeStepKeys.kind: StepKind.job.name,
+      MoleculeStepKeys.path: 'tg-1/verify',
+      MoleculeStepKeys.session: sessionId,
+      MoleculeStepKeys.state: StepState.complete.name,
+    },
+  ),
+  Bead(
+    id: 'tgdog-step-route',
+    issueType: IssueType.step,
+    status: BeadStatus.open,
+    metadata: {
+      'rig': stateSubstation,
+      MoleculeStepKeys.stepId: 'route',
+      MoleculeStepKeys.capability: 'route',
+      MoleculeStepKeys.kind: StepKind.job.name,
+      MoleculeStepKeys.path: 'tg-1/route',
+      MoleculeStepKeys.session: sessionId,
+      MoleculeStepKeys.state: StepState.gated.name,
+    },
+  ),
+];
 
 /// The OPEN committee gate `grid rework` leaves standing (D-7) — it blocks
 /// [sessionId] at `tg-1/route`; `grid rework` re-keys the SESSION, never this
@@ -127,6 +195,7 @@ void main() {
         final stateSrc = FakeSnapshotSource(
           _state([
             _round1Session('tgdog-round1', workBead: 'tg-1'),
+            ..._round1Steps('tgdog-round1'),
             _openGate('gate-1', sessionId: 'tgdog-round1'),
           ]),
         );
@@ -155,23 +224,30 @@ void main() {
         stateSrc.push(
           _state([
             _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
+            ..._round1Steps('tgdog-round1'),
             _openGate('gate-1', sessionId: 'tgdog-round1'),
           ], tick: 1),
         );
-        await _pump();
-        m.owner.flush();
-        await _pump();
-        m.owner.flush();
-        await _pump();
+        await _pumpUntil(
+          m.owner,
+          () =>
+              reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
+              f.runner.callsFor('create').length >= 2,
+        );
 
         // The retired round-1 session is closed (D-2 fold).
         final closes = f.runner.callsFor('close');
         expect(closes.where((c) => c[1] == 'tgdog-round1'), hasLength(1));
         expect(closes.first.join(' '), contains('reworked'));
 
-        // Round 2 minted fresh — a SECOND createSession, a NEW id — never a
-        // reuse of tgdog-round1.
-        expect(f.runner.callsFor('create'), hasLength(1));
+        // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
+        // tg-eli phase 2), a NEW id — never a reuse of tgdog-round1.
+        final creates = f.runner.callsFor('create');
+        expect(creates.where((c) => c.length <= 1 || c[1] != '--graph'), hasLength(1));
+        expect(
+          creates.where((c) => c.length > 1 && c[1] == '--graph'),
+          hasLength(1),
+        );
 
         // The fresh round's leaf mounts under the NEW session id, from a
         // virgin cursor (never the stale `route: gated` carried over).

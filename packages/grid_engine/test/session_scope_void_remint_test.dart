@@ -42,6 +42,25 @@ Future<void> _pump() async {
   }
 }
 
+/// Drains the microtask queue and renders every dirty rebuild it produced,
+/// repeating until [condition] is satisfied or [maxRounds] is spent. A
+/// molecule mint chains multiple bd round-trips (`createSession`, THEN
+/// `createMolecule`'s dedup-probe export + graph-apply pour — the latter a
+/// REAL temp-file write, `BdCliService.applyGraph`'s plan.json) rather than
+/// the flat model's single in-memory `create`, so a real-time cushion (not
+/// only microtask draining) is what makes waiting for a fresh mint's
+/// inflated leaf deterministic under load (tg-eli phase 2).
+Future<void> _pumpUntil(
+  TreeOwner owner,
+  bool Function() condition, {
+  int maxRounds = 500,
+}) async {
+  for (var i = 0; i < maxRounds && !condition(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    owner.flush();
+  }
+}
+
 Bead _task(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
@@ -141,10 +160,20 @@ void main() {
       addTearDown(m.owner.dispose);
       await _pump();
       m.owner.flush();
+      await _pumpUntil(
+        m.owner,
+        () => reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+      );
 
-      // MINT: exactly one fresh session (the pre-fix behavior was ZERO — the
-      // bead never even mounted).
-      expect(f.runner.callsFor('create'), hasLength(1));
+      // MINT: exactly one fresh session, plus its molecule pour (tg-eli
+      // phase 2: every fresh mint pours a molecule graph) — the pre-fix
+      // behavior was ZERO creates at all (the bead never even mounted).
+      final creates = f.runner.callsFor('create');
+      expect(creates, hasLength(2));
+      expect(
+        creates.where((c) => c.length > 1 && c[1] == '--graph'),
+        hasLength(1),
+      );
 
       // RETIRE: the dead key is re-keyed off this bead through the chokepoint,
       // with the WHY recorded beside it.
@@ -185,7 +214,16 @@ void main() {
       addTearDown(m.owner.dispose);
       await _pump();
       m.owner.flush();
-      expect(f.runner.callsFor('create'), hasLength(1));
+      await _pumpUntil(
+        m.owner,
+        () => reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+      );
+      final creates = f.runner.callsFor('create');
+      expect(creates, hasLength(2));
+      expect(
+        creates.where((c) => c.length > 1 && c[1] == '--graph'),
+        hasLength(1),
+      );
       reg.events.clear();
 
       // The bd write has not propagated yet — the join STILL projects the dead
@@ -195,7 +233,7 @@ void main() {
       joined.push(_joined(const {'tg-1': _deadKey}));
       m.owner.flush();
       await _pump();
-      expect(f.runner.callsFor('create'), hasLength(1), reason: 'no second mint');
+      expect(f.runner.callsFor('create'), hasLength(2), reason: 'no second mint');
       expect(_updatesFor(f.runner, 'tgdog-dead'), hasLength(1), reason: 'once');
       expect(transport.named('session.voided'), hasLength(1));
       expect(reg.events, isEmpty, reason: 'the agent leaf stays mounted in place');
@@ -217,7 +255,7 @@ void main() {
         'START verify(tgdog-sess1/tg-1/verify)',
         'STOP agent(tgdog-sess1/tg-1/agent)',
       ]);
-      expect(f.runner.callsFor('create'), hasLength(1));
+      expect(f.runner.callsFor('create'), hasLength(2));
     });
 
     test('FAIL-CLOSED: a stale fence that still probes ALIVE refuses the mint — '

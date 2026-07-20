@@ -460,27 +460,6 @@ StepArgs stepArgs(
   cancel: cancel ?? CancelToken(),
 );
 
-/// The capture-only flow-telemetry keys (FT-1, tg-pez) a TERMINAL cursor write
-/// carries under a FIXED test clock (default [DateTime]`(2026)`): the host
-/// captures `startedAt` at its kick and `finishedAt` at the terminal, so under a
-/// non-advancing clock they are the SAME instant and `durationMs` is 0. Spread
-/// into an exact-map assertion for a terminal transition. Reuses the production
-/// codec ([nodeTelemetryMetadata]) so the expectation tracks the wire format —
-/// the timing VALUES/ordering are proven independently in the codec + host tests.
-Map<String, String> expectedTiming(
-  String nodePath, {
-  DateTime? clock,
-  int durationMs = 0,
-}) {
-  final t = clock ?? DateTime(2026);
-  return nodeTelemetryMetadata(
-    nodePath,
-    startedAt: t,
-    finishedAt: t,
-    durationMs: durationMs,
-  );
-}
-
 /// A monotonically ADVANCING clock (FT-1, tg-pez) — each call returns the next
 /// instant [step] apart, starting at [from] (default [DateTime]`(2026)`). Feed to
 /// [RecordingCapabilityRegistry.new]'s `nowFn` so the host's kick and terminal
@@ -570,21 +549,20 @@ Bead bead(String id) =>
 
 /// A `type=session` state bead linking [workBeadId] — the row the join bridge
 /// projects + keys by `work_bead`, carrying the OWNED substation marker (the
-/// persisted `metadata.rig` key — codec law; so the
-/// chokepoint's ownership re-check passes) + the per-node reentrant cursor: each
-/// step id in [completed] is marked `complete` at nodePath `'$workBeadId/$step'`
-/// (the read half of the cursor the CircuitScope frontier advances on). The
-/// `code` circuit's steps are `agent` → `verify` → `land`, so
-/// `completed: {'agent'}` makes `verify` eligible, `{'agent','verify'}` makes
-/// `land` eligible, and `{'agent','verify','land'}` is the positive terminal.
+/// persisted `metadata.rig` key — codec law; so the chokepoint's ownership
+/// re-check passes) + the I-10 closed-session shapes (the engine's own DONE
+/// evidence via [outcomeComplete], a HUMAN marker via [escalated]).
+///
+/// The flat per-node cursor params retired with the flat `grid.cursor.*`
+/// model (tg-eli phase 2): per-node circuit state is a `type=step` bead's —
+/// stage it in a molecule fixture instead ([metadata] still takes arbitrary
+/// keys for legacy-bead shapes).
 Bead sessionBead({
   required String id,
   required String workBeadId,
-  Set<String> completed = const {},
   bool closed = false,
   bool outcomeComplete = false,
   bool escalated = false,
-  Map<String, String> cursorStates = const {},
   Map<String, String> metadata = const {},
 }) => Bead(
   id: id,
@@ -593,15 +571,8 @@ Bead sessionBead({
   metadata: {
     'rig': stateSubstation,
     SessionBeadKeys.workBead: workBeadId,
-    for (final step in completed)
-      ...nodeStateMetadata('$workBeadId/$step', StepState.complete),
-    // The I-10 closed-session shapes: the engine's own DONE evidence, a HUMAN
-    // marker, and an arbitrary in-flight cursor (`{'agent': 'running'}`).
     if (outcomeComplete) ...sessionCompleteMetadata(),
     if (escalated) SessionBeadKeys.escalation: 'breaker-exhausted',
-    for (final entry in cursorStates.entries)
-      CursorKeys.keyFor('$workBeadId/${entry.key}', CursorKeys.state):
-          entry.value,
     ...metadata,
   },
 );

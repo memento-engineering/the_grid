@@ -4,8 +4,9 @@ import 'package:test/test.dart';
 
 void main() {
   group('projectSession (the read half of the contract)', () {
-    test('projects work-bead linkage, the per-node cursor, identity, terminal',
-        () {
+    test('projects work-bead linkage, identity, terminal; a legacy '
+        'grid.cursor.* key is inert (tg-eli phase 2: the flat cursor '
+        'projection retired — cursor stays empty)', () {
       final session = Bead(
         id: 'tgdog-9a',
         issueType: IssueType.session,
@@ -24,7 +25,7 @@ void main() {
       final p = projectSession(session);
       expect(p.workBeadId, 'genesis-7r9');
       expect(p.sessionId, 'tgdog-9a');
-      expect(p.cursor['genesis-7r9/agent']!.state, StepState.complete);
+      expect(p.cursor, isEmpty);
       expect(p.isTerminal, isFalse);
       expect(p.pgid, 4242);
       expect(p.pid, 4243);
@@ -44,7 +45,8 @@ void main() {
       expect(p.token, isNull);
     });
 
-    test('a closed session bead is terminal (the unmount signal)', () {
+    test('a closed session bead is terminal (the unmount signal); a legacy '
+        'grid.cursor.* key is inert', () {
       final session = Bead(
         id: 'tgdog-2',
         issueType: IssueType.session,
@@ -56,7 +58,7 @@ void main() {
       );
       final p = projectSession(session);
       expect(p.isTerminal, isTrue);
-      expect(p.cursor['genesis-q8h/land']!.state, StepState.complete);
+      expect(p.cursor, isEmpty);
     });
   });
 
@@ -108,11 +110,11 @@ void main() {
       );
     });
 
-    test('a grid.result.* key is DISJOINT from the cursor namespace — the '
-        'projection ignores it (no misread as cursor state)', () {
+    test('a grid.result.* key is never misread as cursor state — cursor '
+        'stays empty (tg-eli phase 2: the flat projection retired, so a '
+        'grid.result.* key has nothing left to collide with)', () {
       final merged = <String, dynamic>{
         'work_bead': 'genesis-7r9',
-        ...nodeStateMetadata('genesis-7r9/land', StepState.complete),
         ...nodeResultMetadata('genesis-7r9/land', {'pr_url': 'https://x/pull/9'}),
       };
       final session = Bead(
@@ -121,19 +123,20 @@ void main() {
         metadata: merged,
       );
       final p = projectSession(session);
-      // The cursor reads the state; the result key is NOT projected as a node.
-      expect(p.cursor['genesis-7r9/land']!.state, StepState.complete);
-      expect(p.cursor.keys, ['genesis-7r9/land']);
+      expect(p.cursor, isEmpty);
+      expect(
+        p.results['genesis-7r9/land']!['pr_url'],
+        'https://x/pull/9',
+      );
     });
 
-    test('round-trip: a per-node cursor write then projection reads it back', () {
-      // Simulate the chokepoint merge of a node cursor write onto a minted
-      // session (the disjoint-key, merge-safe write of D-1/D-3).
+    test('a legacy grid.cursor.* key on a historical bead is INERT — ignored, '
+        'never parsed, never crashes (tg-eli phase 2 drain guarantee)', () {
       final merged = <String, dynamic>{
         'rig': 'tgdog',
         'work_bead': 'genesis-7r9',
-        ...nodeStateMetadata('genesis-7r9/agent', StepState.complete),
-        ...nodeFailedMetadata('genesis-7r9/verify', restartCount: 2),
+        'grid.cursor.genesis-7r9/agent.state': 'complete',
+        'grid.cursor.genesis-7r9/verify.state': 'failed',
         ...startedIdentityMetadata(pgid: 99, pid: 100, token: 'fade'),
       };
       final session = Bead(
@@ -142,9 +145,7 @@ void main() {
         metadata: merged,
       );
       final p = projectSession(session);
-      expect(p.cursor['genesis-7r9/agent']!.state, StepState.complete);
-      expect(p.cursor['genesis-7r9/verify']!.state, StepState.failed);
-      expect(p.cursor['genesis-7r9/verify']!.restartCount, 2);
+      expect(p.cursor, isEmpty);
       expect(p.pgid, 99);
       expect(p.token, 'fade');
       expect(p.workBeadId, 'genesis-7r9');

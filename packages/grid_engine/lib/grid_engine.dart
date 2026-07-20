@@ -49,11 +49,17 @@ export 'src/molecule/process_lease_vendor.dart'
     show ProcessLeaseVendor, requireProcessLeaseVendor, StationProcessLeaseVendor;
 export 'src/molecule/station_process_transport.dart'
     show defaultProcessLeaseVendor;
-// The molecule read projection (the molecule analogue of projectCircuitCursor)
-// — consumed by OUT-OF-PACKAGE operator surfaces (grid_cli rework) that must
-// read molecule step state (tg-eli phase 1). In-package readers (wedge
-// sampling) import the codec relatively and do not ride this export.
+// The molecule read projection — consumed by OUT-OF-PACKAGE operator surfaces
+// (grid_cli rework) that must read molecule step state (tg-eli phase 1).
+// In-package readers (wedge sampling) import the codec relatively and do not
+// ride this export.
 export 'src/molecule/molecule_codec.dart' show projectMoleculeCursor;
+// The molecule bead-metadata schema (R1) — the durable wire keys a
+// `type=molecule`/`type=step` bead carries. Exported so an out-of-package
+// reader (grid_cli rework's step→session JOIN) names the ONE definition
+// instead of hand-mirroring the wire literal (tg-eli phase 2).
+export 'src/molecule/molecule_schema.dart'
+    show MoleculeCircuitKeys, MoleculeStepKeys;
 
 // Domain (value types).
 export 'src/domain/joined_snapshot.dart';

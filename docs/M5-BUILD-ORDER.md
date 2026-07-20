@@ -12,6 +12,10 @@
 **Builds on (all ratified/built):** ADR-0006 (dogfood rig + live-write authorization + the ownership gate + land policy), ADR-0007 (the tree engine + crash-safety: freshness barrier, respawn-or-skip), ADR-0008 (the authoring SDK + reentrant engine + the `*_grid_assets` asset model), the M3 runtime (the entire live-seam stack), and the M4-P0/P1 tree engine (offline-green, 141 tests; the WorkPhase path retired 2026-06-28).
 **Supersedes nothing.** It sequences the deferred "live arm" + the vNext build backlog into tracks.
 
+**Reality stamp (tg-eli, 2026-07-19):** Track 2's `grid.cursor.{path}.*` reference
+below describes the flat-cursor persistence model, since removed — molecule is now
+the only circuit engine.
+
 ---
 
 ## ★ DECISIONS RESOLVED (Nico, 2026-06-28) — these govern; the draft recommendations in the body below are reconciled to them

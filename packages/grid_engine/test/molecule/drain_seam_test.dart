@@ -1,16 +1,13 @@
-// pm6-r5-drain — the drain seam: SessionScope's molecule mint-mode branch,
-// the effective-cursor `build()` feed, and the reap-on-close collection
-// (`DESIGN-tg-pm6.md` §12).
+// pm6-r5-drain — the molecule mint, the effective-cursor `build()` feed, and
+// the reap-on-close collection (`DESIGN-tg-pm6.md` §12). Since tg-eli phase 2
+// molecule is the ONLY circuit engine — there is no mint mode; the drain
+// guarantee survives as the ADOPT short-circuit (`SessionScope.initState`'s
+// `LiveSession()` arm adopts synchronously — an in-flight session, including
+// a HISTORICAL flat one, is never reinterpreted).
 //
 // Mirrors `track_c_session_scope_test.dart`'s harness (`_mountFull`) — a REAL
 // `TreeOwner`-mounted station tree over the grid_engine testing Fakes
 // (`buildFakes`/`RecordingBdRunner`/`RecordingCapabilityRegistry`). Zero I/O.
-//
-// The drain proof (Q3 dissolves, `DESIGN-tg-pm6.md` §12): adoption
-// short-circuits at `SessionScope.initState`'s `LiveSession()` arm BEFORE any
-// `CircuitMintMode` check — an in-flight session (flat OR molecule) is never
-// reinterpreted; only a FRESH mint ever reads the ambient mode. That is the
-// load-bearing claim this suite proves end-to-end, not just per-file.
 import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
@@ -138,8 +135,7 @@ Bead _stepBead(
 );
 
 /// The full new-path root (mirrors `track_c_session_scope_test.dart`'s
-/// `_mountFull`, parameterized over [config] so a test can arm
-/// `CircuitMintMode.molecule`): `WorkList` observes [joined]; `WorkBead`
+/// `_mountFull`): `WorkList` observes [joined]; `WorkBead`
 /// resolves through the `CircuitResolver` → `SessionScope` → `CircuitScope`;
 /// `SessionScope` mints via the `StationServices` writer; `CircuitScope`
 /// inflates via the registry.
@@ -177,13 +173,7 @@ Bead _stepBead(
   return (owner: owner, root: root);
 }
 
-const _flatConfig = SubstationConfig(
-  substationId: 'tg',
-  ownedSubstations: {'tg'},
-);
-final _moleculeConfig = _flatConfig.copyWith(
-  circuitMintMode: CircuitMintMode.molecule,
-);
+const _config = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 
 class _LiveArmProcessCap extends ProcessCapability {
   const _LiveArmProcessCap(this.id);
@@ -213,138 +203,53 @@ class _LiveArmProcessCap extends ProcessCapability {
 }
 
 void main() {
-  group(
-    'the drain seam — flat mode is byte-for-byte (default CircuitMintMode.flatCursor)',
-    () {
-      test(
-        'a flat mint stamps NO grid.session.model key — default mode is flatCursor',
-        () async {
-          final f = buildFakes();
-          final reg = RecordingCapabilityRegistry(circuits: const {});
-          final joined = JoinedSnapshotNotifier(
-            _joined(beads: [_task('tg-2')], ready: {'tg-2'}),
-          );
-          final m = _mountFull(
-            joined: joined,
-            ctx: f.ctx,
-            registry: reg,
-            rootCircuit: (_) => _code,
-            config: _flatConfig,
-          );
-          addTearDown(m.owner.dispose);
+  group('the drain seam — a historical flat session still ADOPTS', () {
+    test(
+      'a mid-flight legacy FLAT session (no grid.session.model marker) adopts '
+      'with ZERO bd calls — adoption short-circuits synchronously; the mint '
+      'path (always molecule now) is never consulted for an in-flight round',
+      () async {
+        final f = buildFakes();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': const SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-existing',
+                // isMolecule defaults false: a HISTORICAL flat session. Its
+                // cursor no longer projects (empty), so the frontier mounts
+                // its first step from `pending` — and that host refuses its
+                // persists LOUD (no InheritedCircuit; proven in
+                // host_molecule_targeting_test.dart). What matters HERE: no
+                // second mint over a live round, no bd traffic.
+              ),
+            },
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+          config: _config,
+        );
+        addTearDown(m.owner.dispose);
 
-          await _pump();
-          m.owner.flush();
+        await _pump();
+        m.owner.flush();
 
-          expect(f.runner.callsFor('create'), hasLength(1));
-          expect(f.runner.graphApplyCalls, isEmpty);
-          final stamp = f.runner.metadataOfUpdate(0);
-          expect(stamp.containsKey(SessionBeadKeys.model), isFalse);
-          expect(stamp.keys.toSet(), {'rig', 'work_bead', 'started_at'});
-          expect(reg.events, ['START agent(tgdog-sess1/tg-2/agent)']);
-        },
-      );
-
-      test(
-        'a flat sessionBead fixture (no grid.session.model key) adopts through '
-        'the unchanged flat path and completes — no export/batch call ever '
-        '(reapMolecule is molecule-only)',
-        () async {
-          final f = buildFakes();
-          final reg = RecordingCapabilityRegistry(circuits: const {});
-          final bead = sessionBead(
-            id: 'tgdog-flat1',
-            workBeadId: 'tg-1',
-            completed: {'agent', 'verify', 'land'},
-          );
-          expect(
-            bead.metadata.containsKey(SessionBeadKeys.model),
-            isFalse,
-            reason: 'no model key — the ABSENT ⇒ flat drain guarantee',
-          );
-          final projection = projectSession(bead);
-          expect(projection.isMolecule, isFalse);
-
-          final joined = JoinedSnapshotNotifier(
-            _joined(
-              beads: [_task('tg-1')],
-              ready: {'tg-1'},
-              sessions: {'tg-1': projection},
-            ),
-          );
-          final m = _mountFull(
-            joined: joined,
-            ctx: f.ctx,
-            registry: reg,
-            rootCircuit: (_) => _code,
-            config: _flatConfig,
-          );
-          addTearDown(m.owner.dispose);
-
-          await _pump();
-          m.owner.flush();
-          await _pump();
-
-          // Adoption is synchronous — no createSession; the positive terminal
-          // closes exactly once; the close transcript is IDENTICAL to today's
-          // (no export scan, no batch — reapMolecule never fires on this arm).
-          expect(f.runner.callsFor('create'), isEmpty);
-          expect(f.runner.callsFor('export'), isEmpty);
-          expect(f.runner.callsFor('batch'), isEmpty);
-          expect(
-            f.runner
-                .callsFor('close')
-                .where((c) => c.length > 1 && c[1] == 'tgdog-flat1'),
-            hasLength(1),
-          );
-        },
-      );
-
-      test(
-        'a mid-flight FLAT session adopts with ZERO bd calls even under AMBIENT '
-        'molecule-mode config — adoption short-circuits before any '
-        '`CircuitMintMode` check (the drain guarantee, Q3 dissolves)',
-        () async {
-          final f = buildFakes();
-          final reg = RecordingCapabilityRegistry(circuits: const {});
-          final joined = JoinedSnapshotNotifier(
-            _joined(
-              beads: [_task('tg-1')],
-              ready: {'tg-1'},
-              sessions: {
-                'tg-1': const SessionProjection(
-                  workBeadId: 'tg-1',
-                  sessionId: 'tgdog-existing',
-                  // isMolecule defaults false: a FLAT session, already adopted
-                  // — even though the ambient config below is molecule mode.
-                ),
-              },
-            ),
-          );
-          final m = _mountFull(
-            joined: joined,
-            ctx: f.ctx,
-            registry: reg,
-            rootCircuit: (_) => _code,
-            // The station-wide default is MOLECULE — proving the in-flight
-            // session's OWN durable shape governs, never the ambient config.
-            config: _moleculeConfig,
-          );
-          addTearDown(m.owner.dispose);
-
-          await _pump();
-          m.owner.flush();
-
-          expect(
-            f.runner.calls,
-            isEmpty,
-            reason: 'adoption is synchronous — never a bd call of any kind',
-          );
-          expect(reg.events, ['START agent(tgdog-existing/tg-1/agent)']);
-        },
-      );
-    },
-  );
+        expect(
+          f.runner.calls,
+          isEmpty,
+          reason: 'adoption is synchronous — never a bd call of any kind',
+        );
+        expect(reg.events, ['START agent(tgdog-existing/tg-1/agent)']);
+      },
+    );
+  });
 
   group('the drain seam — molecule mint mode', () {
     test(
@@ -367,7 +272,7 @@ void main() {
           ctx: f.ctx,
           registry: reg,
           rootCircuit: (_) => _code,
-          config: _moleculeConfig,
+          config: _config,
         );
         addTearDown(m.owner.dispose);
 
@@ -439,7 +344,7 @@ void main() {
           ctx: f.ctx,
           registry: reg,
           rootCircuit: (_) => _validatedCode,
-          config: _moleculeConfig,
+          config: _config,
         );
         addTearDown(m.owner.dispose);
 
@@ -659,7 +564,7 @@ void main() {
           ctx: f.ctx,
           registry: reg,
           rootCircuit: (_) => _code,
-          config: _moleculeConfig,
+          config: _config,
         );
         addTearDown(m.owner.dispose);
 
@@ -732,7 +637,7 @@ void main() {
             ctx: f.ctx,
             registry: reg,
             rootCircuit: (_) => _code,
-            config: _moleculeConfig,
+            config: _config,
           );
           addTearDown(m.owner.dispose);
 
@@ -830,7 +735,7 @@ void main() {
         ctx: f.ctx,
         registry: reg,
         rootCircuit: (_) => _validatedCode,
-        config: _moleculeConfig,
+        config: _config,
       );
       addTearDown(m.owner.dispose);
       await _pump();

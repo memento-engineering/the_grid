@@ -8,7 +8,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart' as engine;
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart'
-    show Lifecycle, RuntimeConfig, RuntimeEvent;
+    show Lifecycle, RuntimeConfig, RuntimeEvent, SessionStarted;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -117,9 +117,7 @@ class _TestDelegate extends GridDelegate {
               children: [
                 _BuildProbe(builds: substationProbe, key: const ValueKey('sp')),
               ],
-              child: const SubstationWork(
-                circuitMintMode: engine.CircuitMintMode.flatCursor,
-              ),
+              child: const SubstationWork(),
             ),
           ],
         ),
@@ -155,9 +153,49 @@ GraphSnapshot _graph(List<Bead> beads, Set<String> ready) =>
 Bead _bead(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
+Bead _sessionBead(String id, {required String workBeadId}) => Bead(
+  id: id,
+  issueType: IssueType.session,
+  status: BeadStatus.open,
+  metadata: {
+    engine.SessionBeadKeys.workBead: workBeadId,
+    engine.SessionBeadKeys.model: engine.kSessionModelMolecule,
+  },
+);
+
+Bead _moleculeBead(String id, {required String sessionId}) => Bead(
+  id: id,
+  issueType: IssueType.molecule,
+  status: BeadStatus.open,
+  metadata: {'grid.circuit.formula': 'code', 'grid.circuit.session': sessionId},
+);
+
+Bead _stepBead(String id, {required String sessionId, required String path}) =>
+    Bead(
+      id: id,
+      issueType: IssueType.step,
+      status: BeadStatus.open,
+      metadata: {
+        'grid.step.id': path.split('/').last,
+        'grid.step.capability': path.split('/').last,
+        'grid.step.kind': engine.StepKind.job.name,
+        'grid.step.path': path,
+        'grid.step.session': sessionId,
+      },
+    );
+
 Future<void> _pump([int turns = 12]) async {
   for (var i = 0; i < turns; i++) {
     await Future<void>.delayed(Duration.zero);
+  }
+}
+
+Future<void> _pumpUntil(
+  bool Function() condition, {
+  int maxTries = 2000,
+}) async {
+  for (var i = 0; i < maxTries && !condition(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
   }
 }
 
@@ -165,12 +203,52 @@ typedef _Rig = ({
   GridHandle grid,
   List<_TestDelegate> delegates,
   FakeSnapshotSource work,
+  FakeSnapshotSource state,
   _RecordingResolver resolver,
   Fakes fakes,
   List<int> substationProbe,
   List<String> launches,
   List<String> inits,
 });
+
+/// Drives a freshly-mounted molecule session to a bound, running spawn — the
+/// join catch-up window a molecule mint needs before its `ProcessCapability`
+/// actually spawns (mirrors `track_j_invariants_on_composition_test.dart`'s
+/// `_pushMoleculeState`): pushes the session/molecule/step beads through the
+/// STATE side of the join bridge, then resolves the leased spawn's handle off
+/// its own `SessionStarted` event (the vendor binds it there; without this the
+/// acquire stays pending and there is nothing running for hot-reload/restart
+/// to ADOPT).
+Future<void> _pushMoleculeState(_Rig rig, String workBeadId) async {
+  const sessionId = 'tgdog-sess1';
+  await _pumpUntil(() => rig.fakes.runner.graphApplyCalls.isNotEmpty);
+  rig.state.push(
+    _graph([
+      _sessionBead(sessionId, workBeadId: workBeadId),
+      _moleculeBead('tgdog-mol-$workBeadId', sessionId: sessionId),
+      _stepBead(
+        'tgdog-step-$workBeadId-agent',
+        sessionId: sessionId,
+        path: '$workBeadId/agent',
+      ),
+    ], const {}),
+  );
+  await _pumpUntil(() => rig.fakes.provider.started.isNotEmpty);
+  rig.fakes.provider.emit(
+    SessionStarted(name: '$sessionId/$workBeadId/agent', pid: 10, pgid: 10),
+  );
+  await _pumpUntil(
+    () =>
+        rig.fakes.runner
+            .callsFor('update')
+            .where(
+              (c) =>
+                  c.length > 1 && c[1] == 'tgdog-step-$workBeadId-agent',
+            )
+            .length >=
+        2,
+  );
+}
 
 /// Mounts the full composition via runGrid over fakes, with the delegate built
 /// by a FACTORY the handle can re-run.
@@ -179,6 +257,10 @@ _Rig _arm({bool withFactory = true}) {
   final state = FakeSnapshotSource();
   final bridge = engine.StationJoinBridge(work: work, state: state);
   final fakes = buildFakes();
+  fakes.runner.graphApplyIds = const {
+    'pow-1': 'tgdog-mol-pow-1',
+    'pow-1/agent': 'tgdog-step-pow-1-agent',
+  };
   final registry = engine.DefaultCapabilityRegistry(
     capabilities: const {'agent': _AgentCap()},
     clock: () => DateTime(2026),
@@ -215,6 +297,7 @@ _Rig _arm({bool withFactory = true}) {
     grid: grid,
     delegates: delegates,
     work: work,
+    state: state,
     resolver: resolver,
     fakes: fakes,
     substationProbe: substationProbe,
@@ -232,9 +315,11 @@ void main() {
         addTearDown(rig.grid.teardown);
         rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
         await _pump();
+        await _pushMoleculeState(rig, 'pow-1');
         expect(rig.fakes.provider.started, hasLength(1)); // mount = spawn
         final buildsBefore = rig.substationProbe.length;
         final writesBefore = rig.fakes.runner.calls.length;
+        final resolvedBefore = List<String>.of(rig.resolver.resolved);
 
         final report = await rig.grid.hotReload();
         await _pump();
@@ -248,8 +333,10 @@ void main() {
         // and no respawn (no rework-from-top).
         expect(rig.fakes.provider.stopped, isEmpty);
         expect(rig.fakes.provider.started, hasLength(1));
-        // NO NEW TRIGGER: nothing new resolved, nothing new was written.
-        expect(rig.resolver.resolved, ['pow-1']);
+        // NO NEW TRIGGER: nothing new resolved, nothing new was written (the
+        // molecule join catch-up above legitimately resolves the session's
+        // ready bead a second time — the RELOAD itself must add no more).
+        expect(rig.resolver.resolved, resolvedBefore);
         expect(rig.fakes.runner.calls, hasLength(writesBefore));
       },
     );
@@ -293,8 +380,10 @@ void main() {
       addTearDown(rig.grid.teardown);
       rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
       await _pump();
+      await _pushMoleculeState(rig, 'pow-1');
       final first = rig.delegates.single;
       final writesBefore = rig.fakes.runner.calls.length;
+      final resolvedBefore = List<String>.of(rig.resolver.resolved);
 
       final report = await rig.grid.hotRestart();
       await _pump();
@@ -315,7 +404,7 @@ void main() {
       // …and the session's agent is still the SAME running process.
       expect(rig.fakes.provider.stopped, isEmpty);
       expect(rig.fakes.provider.started, hasLength(1));
-      expect(rig.resolver.resolved, ['pow-1']);
+      expect(rig.resolver.resolved, resolvedBefore);
       expect(rig.fakes.runner.calls, hasLength(writesBefore));
     });
 
@@ -324,6 +413,7 @@ void main() {
       final rig = _arm();
       rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
       await _pump();
+      await _pushMoleculeState(rig, 'pow-1');
       expect(rig.fakes.provider.stopped, isEmpty);
 
       await rig.grid.teardown();

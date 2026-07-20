@@ -22,6 +22,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../molecule/molecule_codec.dart' show projectMoleculeCursor;
 import '../sdk/circuit.dart';
+import '../sdk/cursor.dart' show NodeCursor;
 import 'joined_snapshot.dart';
 
 part 'wedge.freezed.dart';
@@ -170,8 +171,13 @@ const kNotWedged = Flowing(sample: kNoWedgeSample);
 /// (`SessionProjection.moleculeBeads` — the SAME snapshot the caller holds,
 /// A39: no new read). The projection keeps only the ACTIVE incarnation per
 /// path (A52 supersedes chains), so a stale superseded step still stamped
-/// `running` can never mask a molecule stall. Flat sampling rides unchanged
-/// beside it (tg-eli phase 2 retires it).
+/// `running` can never mask a molecule stall.
+///
+/// A NON-molecule live session — only a HISTORICAL flat one can exist since
+/// tg-eli phase 2 retired the flat model — counts `live` but contributes NO
+/// nodes (its `grid.cursor.*` keys no longer project). That is honest: the
+/// engine cannot drive it, so it genuinely is not advancing, and a store
+/// holding one can ripen into a visible stall instead of a silent wedge.
 WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
   var live = 0;
   var running = 0;
@@ -181,15 +187,16 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
     if (session.isTerminal) continue;
     live++;
     // The model split is the EXPLICIT discriminator, never inferred from the
-    // buckets (the drain guarantee, `DESIGN-tg-pm6.md` §12): a molecule pour
-    // that crashed before its first step bead landed still samples down the
-    // molecule arm (an empty cursor — a stall that can honestly ripen).
+    // buckets (`DESIGN-tg-pm6.md` §12): a molecule pour that crashed before
+    // its first step bead landed still samples down the molecule arm (an
+    // empty cursor — a stall that can honestly ripen). A non-molecule (legacy
+    // flat) session contributes no nodes at all — see the function doc.
     final nodes = session.isMolecule
         ? projectMoleculeCursor(
             session.moleculeBeads,
             dependencies: session.moleculeDependencies,
           ).cursor.values
-        : session.cursor.values;
+        : const <NodeCursor>[];
     var isRunning = false;
     var isGated = false;
     var isCooling = false;

@@ -10,9 +10,24 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+
+/// The step bead id [InheritedCircuit.beadIdByNodePath] resolves `tg-1/route`
+/// to across the host-level tests in this file (every persist now targets the
+/// step's OWN durable bead, R5b — tg-eli phase 2 retired the flat
+/// `grid.cursor.*` session-bead write).
+const _stepBeadId = 'tgdog-step1';
+
+InheritedCircuit _moleculeCircuit({String nodePath = 'tg-1/route'}) =>
+    InheritedCircuit(
+      root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+      beadIdByNodePath: {nodePath: _stepBeadId},
+      cursor: const {},
+    );
 
 /// A ServiceCapability that returns the configured [outcome] (a `Gate` or `Ok`).
 const _gateCircuit = Circuit(
@@ -49,6 +64,31 @@ Bead _gate({
   metadata: {'rig': stateSubstation, 'blocks': blocks, 'node': node},
 );
 
+/// A `type=step` bead owned by [sessionId] at engine coordinate [path]
+/// (mirrors `test/molecule/drain_seam_test.dart`'s own fixture) — the
+/// molecule-mode session `SessionScope`'s re-arm now requires
+/// (`_rearm`/`moleculeTarget`, tg-eli phase 2: the flat session-bead re-arm
+/// write retired).
+Bead _stepBead(
+  String id, {
+  required String sessionId,
+  required String path,
+  StepState? state,
+}) => Bead(
+  id: id,
+  issueType: IssueType.step,
+  status: BeadStatus.open,
+  metadata: {
+    'rig': stateSubstation,
+    MoleculeStepKeys.stepId: path.split('/').last,
+    MoleculeStepKeys.capability: path.split('/').last,
+    MoleculeStepKeys.kind: StepKind.job.name,
+    MoleculeStepKeys.path: path,
+    MoleculeStepKeys.session: sessionId,
+    if (state != null) MoleculeStepKeys.state: state.name,
+  },
+);
+
 void main() {
   group('Track A3 — host: a route Escalate writes gated + mints a gate', () {
     test('writes state=gated AND mints a type=gate bead via the chokepoint, and '
@@ -66,16 +106,19 @@ void main() {
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
             child: InheritedSeed<ServiceBundle>(
               value: const ServiceBundle(),
-              child: CapabilityHost(
-                capability: const FixedRouteCapability(Escalate('x')),
-                mount: const StepMount(
-                  step: CapabilityStep(stepId: 'route', capabilityId: 'route'),
-                  nodePath: 'tg-1/route',
-                  circuit: _gateCircuit,
-                  circuitPath: 'tg-1',
-                  session: SessionHandle('tgdog-s'),
-                  node: NodeCursor(),
-                  key: ValueKey('tg-1/route#0.0'),
+              child: InheritedSeed<InheritedCircuit>(
+                value: _moleculeCircuit(),
+                child: CapabilityHost(
+                  capability: const FixedRouteCapability(Escalate('x')),
+                  mount: const StepMount(
+                    step: CapabilityStep(stepId: 'route', capabilityId: 'route'),
+                    nodePath: 'tg-1/route',
+                    circuit: _gateCircuit,
+                    circuitPath: 'tg-1',
+                    session: SessionHandle('tgdog-s'),
+                    node: NodeCursor(),
+                    key: ValueKey('tg-1/route#0.0'),
+                  ),
                 ),
               ),
             ),
@@ -84,13 +127,17 @@ void main() {
       );
       await _pump();
 
-      // 1) the parked cursor write (onto the OWN session, never the work bead).
-      // A gate is a terminal transition too → it carries capture-only timing.
+      // 1) the parked cursor write — targets the step's OWN bead (R5b), never
+      // the session bead. A gate is a terminal transition too → it carries
+      // capture-only timing (FT-1).
       final updates = fakes.runner.callsFor('update');
-      expect(fakes.runner.metadataOfUpdate(0), {
-        'grid.cursor.tg-1/route.state': 'gated',
-        ...expectedTiming('tg-1/route'),
-      });
+      expect(updates.first[1], _stepBeadId);
+      final meta = fakes.runner.metadataOfUpdate(0);
+      expect(meta[MoleculeStepKeys.state], 'gated');
+      expect(meta[MoleculeStepKeys.startedAt], isNotEmpty);
+      expect(meta[MoleculeStepKeys.finishedAt], isNotEmpty);
+      expect(meta[MoleculeStepKeys.durationMs], isNotNull);
+      expect(meta.keys.where((k) => k.startsWith('grid.cursor.')), isEmpty);
 
       // 2) a real type=gate bead was minted (create -t gate) + stamped.
       final creates = fakes.runner.callsFor('create');
@@ -195,13 +242,21 @@ void main() {
           value: closed.ctx,
           child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-            child: const SessionScope(
+            child: SessionScope(
               bead: _bead,
               circuit: _gateCircuit,
               existingSession: SessionProjection(
                 workBeadId: 'tg-1',
                 sessionId: 'tgdog-s',
-                cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+                isMolecule: true,
+                moleculeBeads: [
+                  _stepBead(
+                    _stepBeadId,
+                    sessionId: 'tgdog-s',
+                    path: 'tg-1/route',
+                    state: StepState.gated,
+                  ),
+                ],
               ),
             ),
           ),
@@ -210,8 +265,9 @@ void main() {
       await _pump();
       final rearm = closed.runner.callsFor('update');
       expect(rearm, hasLength(1));
+      expect(rearm.single[1], _stepBeadId);
       expect(closed.runner.metadataOfUpdate(0),
-          {'grid.cursor.tg-1/route.state': 'pending'});
+          {MoleculeStepKeys.state: 'pending'});
 
       // STILL-OPEN gate (node present in openGateNodes) → NO re-arm.
       final open = buildFakes();
@@ -225,13 +281,21 @@ void main() {
           value: open.ctx,
           child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-            child: const SessionScope(
+            child: SessionScope(
               bead: _bead,
               circuit: _gateCircuit,
               existingSession: SessionProjection(
                 workBeadId: 'tg-1',
                 sessionId: 'tgdog-s',
-                cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+                isMolecule: true,
+                moleculeBeads: [
+                  _stepBead(
+                    _stepBeadId,
+                    sessionId: 'tgdog-s',
+                    path: 'tg-1/route',
+                    state: StepState.gated,
+                  ),
+                ],
                 openGateNodes: {'tg-1/route'},
               ),
             ),

@@ -55,8 +55,11 @@ const _opinionLiterals = <String>[
 /// sites appears anywhere else under `lib/src`, a second seam started effecting
 /// routing and the "one router, one chokepoint" invariant (A37 / ADR-0009
 /// Decision 3's invariant 2) is gone.
+// `nodeRewoundMetadata(` (the flat rewind re-key write) left this list with
+// the flat cursor (tg-eli phase 2): backward motion is a pure derivation on
+// the molecule model, and an `AllocationRewound` report routes to a
+// supervised failure — there is no rewind write left to fence.
 const _routingEffectCallSites = <String>[
-  'nodeRewoundMetadata(', // the rewind re-key write
   '.createGate(', // the escalate → park effect
   '.deliver(', // the terminal advance's actuation
   '.escalate(', // the escalate → bound handler raise
@@ -65,13 +68,13 @@ const _routingEffectCallSites = <String>[
 /// The ONE file allowed to EFFECT them (the router).
 const _router = 'circuit/capability_host.dart';
 
-/// The DEFINITION sites the fence must not trip on. Only `session_bead.dart`
-/// needs the exemption — it DECLARES `nodeRewoundMetadata`. The `DeliveryMethod`
-/// / `EscalationHandler` interfaces (and their fakes) declare `deliver`/`escalate`
-/// with no leading dot, so they never match a CALL site and are deliberately NOT
-/// exempted: the fence stays tight enough to catch a second effector even inside
-/// the SDK.
-const _routingDefinitionFiles = <String>['domain/session_bead.dart'];
+/// The DEFINITION sites the fence must not trip on. None currently need an
+/// exemption (the flat `nodeRewoundMetadata` declaration retired with the
+/// flat cursor). The `DeliveryMethod` / `EscalationHandler` interfaces (and
+/// their fakes) declare `deliver`/`escalate` with no leading dot, so they
+/// never match a CALL site and are deliberately NOT exempted: the fence stays
+/// tight enough to catch a second effector even inside the SDK.
+const _routingDefinitionFiles = <String>[];
 
 /// The SUPERSEDED tg-b3k workaround (tg-o90): a machine-actionable GATE-REASON
 /// STRING convention (`kRespecGatePrefix` / `isRespecGate` / `machineActionableGate`),
@@ -220,7 +223,9 @@ void main() {
       expect(source.contains('createGate'), isFalse);
       expect(source.contains('closeGate'), isFalse);
       expect(
-        source.contains('nodeStateMetadata'),
+        // The D-7 re-arm write targets the STEP bead's molecule state key
+        // (tg-eli phase 2 — the flat `nodeStateMetadata` write retired).
+        source.contains('MoleculeStepKeys.state: StepState.pending.name'),
         isTrue,
         reason: 'sanity (non-vacuous): the D-7 re-arm write is still there',
       );

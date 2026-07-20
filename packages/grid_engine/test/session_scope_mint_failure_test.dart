@@ -18,6 +18,8 @@
 //       give up" but genuine bounded retry.
 //
 // Zero I/O: fakes + the recording chokepoint + a fake transport.
+import 'dart:convert';
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -37,6 +39,29 @@ const _code = Circuit(
 Future<void> _pump() async {
   for (var i = 0; i < 12; i++) {
     await Future<void>.delayed(Duration.zero);
+  }
+}
+
+/// Drains the microtask queue and renders every dirty rebuild it produced,
+/// repeating until [condition] is satisfied or [maxRounds] is spent. A
+/// molecule mint chains multiple bd round-trips (`createSession`, THEN
+/// `createMolecule`'s dedup-probe export + graph-apply pour, each its own
+/// async gap) — a single pump/flush pair can settle mid-chain, so polling
+/// (rather than a fixed pump count) is what makes this deterministic
+/// (tg-eli phase 2: the flat model's one-hop `create` no longer applies).
+Future<void> _pumpUntil(
+  TreeOwner owner,
+  bool Function() condition, {
+  int maxRounds = 500,
+}) async {
+  for (var i = 0; i < maxRounds && !condition(); i++) {
+    // A molecule mint's `create --graph` pour writes a REAL temp file
+    // (`BdCliService.applyGraph`'s plan.json) — genuine disk I/O, not just
+    // microtask chaining — so a short real-time cushion is what makes
+    // waiting for it deterministic under load (tg-eli phase 2: the flat
+    // model's in-memory-only mint never hit disk).
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    owner.flush();
   }
 }
 
@@ -79,6 +104,13 @@ class _FailCreateRunner implements BdRunner {
   final List<List<String>> calls = <List<String>>[];
   int _creates = 0;
 
+  /// The `key → id` map a `bd create --graph` pour reports (mirrors
+  /// [RecordingBdRunner.graphApplyIds]) — `createMolecule`'s graph-apply pour
+  /// throws `BdParseException` on a missing `ids` map, so every successful
+  /// mint attempt (this fake's `create --graph` branch) must report one, even
+  /// when empty.
+  Map<String, String> graphApplyIds = const <String, String>{};
+
   List<List<String>> callsFor(String sub) =>
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
 
@@ -86,11 +118,22 @@ class _FailCreateRunner implements BdRunner {
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) async {
     calls.add(List<String>.unmodifiable(args));
     final sub = args.isNotEmpty ? args.first : '';
+    final isGraphApply = sub == 'create' && args.length > 1 && args[1] == '--graph';
     if (sub == 'create') {
       _creates++;
       if (_creates <= failCreates) {
         throw StateError('fake bd create rejected #$_creates (no types.custom)');
       }
+    }
+    if (isGraphApply) {
+      return BdResult(
+        exitCode: 0,
+        stdout: jsonEncode({
+          'schema_version': 1,
+          'data': {'ids': graphApplyIds},
+        }),
+        stderr: '',
+      );
     }
     final data = switch (sub) {
       'create' => '{"id":"tgdog-sess1"}',
@@ -245,10 +288,23 @@ void main() {
         addTearDown(m.owner.dispose);
         await _pump();
         m.owner.flush();
-        await _pump();
+        await _pumpUntil(
+          m.owner,
+          () => reg.events.isNotEmpty && runner.callsFor('create').length >= 3,
+        );
 
-        // RETRIED: attempt #1 dropped, attempt #2 succeeded — never latched off.
-        expect(runner.callsFor('create'), hasLength(2));
+        // RETRIED: attempt #1's `createSession` dropped, attempt #2's
+        // succeeded — never latched off. `callsFor('create')` also carries
+        // the successful attempt's `create --graph` molecule pour (tg-eli
+        // phase 2: every fresh mint pours a molecule), so the plain-create
+        // count is 2 (the failed + the recovered `createSession`) plus one
+        // graph-apply.
+        final creates = runner.callsFor('create');
+        expect(creates, hasLength(3));
+        expect(
+          creates.where((c) => c.length > 1 && c[1] == '--graph'),
+          hasLength(1),
+        );
         // The single drop was LOUD but there was NO escalation.
         expect(transport.named('session.mintFailed'), hasLength(1));
         expect(

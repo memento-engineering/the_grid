@@ -63,8 +63,9 @@ GraphSnapshot _state(List<Bead> beads, {int tick = 0}) =>
       capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
     );
 
-/// A session bead parked at `tg-1/route` = `gated` (the committee park), linked
-/// to [workBead].
+/// A MOLECULE session bead (tg-eli phase 2: the flat cursor model is
+/// retired), linked to [workBead] — its OWN parked state lives on a
+/// companion `type=step` bead ([_routeStep]), never on this bead's metadata.
 Bead _gatedSession(String id, {required String workBead}) => Bead(
   id: id,
   issueType: IssueType.session,
@@ -72,9 +73,31 @@ Bead _gatedSession(String id, {required String workBead}) => Bead(
   metadata: {
     'rig': stateSubstation,
     SessionBeadKeys.workBead: workBead,
-    ...nodeStateMetadata('tg-1/route', StepState.gated),
+    SessionBeadKeys.model: kSessionModelMolecule,
   },
 );
+
+/// The `type=step` bead at `tg-1/route`, owned by [sessionId] — the molecule
+/// model's per-node cursor slot (`MoleculeStepKeys`, tg-eli phase 2). Its own
+/// bead id (never a `grid.cursor.*` key on the session bead) is what a re-arm
+/// write targets.
+const _routeStepId = 'tgdog-step-route';
+
+Bead _routeStep(String id, {required String sessionId, required StepState state}) =>
+    Bead(
+      id: id,
+      issueType: IssueType.step,
+      status: BeadStatus.open,
+      metadata: {
+        'rig': stateSubstation,
+        MoleculeStepKeys.stepId: 'route',
+        MoleculeStepKeys.capability: 'route',
+        MoleculeStepKeys.kind: StepKind.job.name,
+        MoleculeStepKeys.path: 'tg-1/route',
+        MoleculeStepKeys.session: sessionId,
+        MoleculeStepKeys.state: state.name,
+      },
+    );
 
 /// The `type=gate` bead blocking [sessionId] at `tg-1/route` — OPEN parks the
 /// node; CLOSED (a space gate resolve) re-arms it.
@@ -85,6 +108,8 @@ Bead _gate(String id, {required String sessionId, bool closed = false}) => Bead(
   metadata: {'rig': stateSubstation, 'blocks': sessionId, 'node': 'tg-1/route'},
 );
 
+/// A CLOSED, outcome-marked (done) session — the I-10 blocking disposition
+/// never reads the cursor at all, so no companion step bead is needed here.
 Bead _doneGatedSession(String id, {required String workBead}) => Bead(
   id: id,
   issueType: IssueType.session,
@@ -93,7 +118,6 @@ Bead _doneGatedSession(String id, {required String workBead}) => Bead(
     'rig': stateSubstation,
     SessionBeadKeys.workBead: workBead,
     SessionBeadKeys.outcome: kSessionOutcomeComplete,
-    ...nodeStateMetadata('tg-1/route', StepState.gated),
   },
 );
 
@@ -225,6 +249,7 @@ void main() {
         final state = FakeSnapshotSource(
           _state([
             _gatedSession('tgdog-s', workBead: 'tg-1'),
+            _routeStep(_routeStepId, sessionId: 'tgdog-s', state: StepState.gated),
             _gate('gate-1', sessionId: 'tgdog-s'),
           ]),
         );
@@ -249,6 +274,7 @@ void main() {
         state.push(
           _state([
             _gatedSession('tgdog-s', workBead: 'tg-1'),
+            _routeStep(_routeStepId, sessionId: 'tgdog-s', state: StepState.gated),
             _gate('gate-1', sessionId: 'tgdog-s', closed: true),
           ], tick: 1),
         );
@@ -262,8 +288,11 @@ void main() {
           hasLength(1),
           reason: 'the resolved gate flips the parked node back to pending',
         );
+        // The write targets the STEP bead (tg-eli phase 2: molecule is the
+        // only circuit engine — no `grid.cursor.*` on the session bead).
+        expect(updates.single[1], _routeStepId);
         expect(runner.metadataOfUpdate(0), {
-          'grid.cursor.tg-1/route.state': 'pending',
+          MoleculeStepKeys.state: 'pending',
         });
         // The chokepoint stayed pristine (never `bd show`, never SQL).
         expect(runner.neverShowOrSql, isTrue);
@@ -281,6 +310,7 @@ void main() {
         final state = FakeSnapshotSource(
           _state([
             _gatedSession('tgdog-s', workBead: 'tg-1'),
+            _routeStep(_routeStepId, sessionId: 'tgdog-s', state: StepState.gated),
             _gate('gate-1', sessionId: 'tgdog-s'),
           ]),
         );
@@ -340,6 +370,7 @@ void main() {
         final state = FakeSnapshotSource(
           _state([
             _gatedSession('tgdog-s', workBead: 'tg-1'),
+            _routeStep(_routeStepId, sessionId: 'tgdog-s', state: StepState.gated),
             _gate('gate-1', sessionId: 'tgdog-s', closed: true),
           ]),
         );
@@ -359,8 +390,9 @@ void main() {
           reason:
               'adopt sees the already-resolved gate and re-arms immediately',
         );
+        expect(updates.single[1], _routeStepId);
         expect(runner.metadataOfUpdate(0), {
-          'grid.cursor.tg-1/route.state': 'pending',
+          MoleculeStepKeys.state: 'pending',
         });
       },
     );
@@ -375,6 +407,7 @@ void main() {
       final state = FakeSnapshotSource(
         _state([
           _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _routeStep(_routeStepId, sessionId: 'tgdog-s', state: StepState.gated),
           _gate('gate-1', sessionId: 'tgdog-s'),
         ]),
       );
@@ -396,6 +429,7 @@ void main() {
       state.push(
         _state([
           _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _routeStep(_routeStepId, sessionId: 'tgdog-s', state: StepState.gated),
           _gate('gate-1', sessionId: 'tgdog-s', closed: true),
         ], tick: 1),
       );
@@ -418,6 +452,7 @@ void main() {
       state.push(
         _state([
           _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _routeStep(_routeStepId, sessionId: 'tgdog-s', state: StepState.gated),
           _gate('gate-1', sessionId: 'tgdog-s', closed: true),
         ], tick: 2),
       );
@@ -431,9 +466,11 @@ void main() {
         hasLength(2),
         reason: 'attempt #1 dropped + attempt #2 retried — never latched off',
       );
-      // Both attempts carry the same pending flip; #2 (index 1) succeeded.
+      // Both attempts targeted the STEP bead and carry the same pending
+      // flip; #2 (index 1) succeeded.
+      expect(updates[1][1], _routeStepId);
       expect(runner.metadataOfUpdate(1), {
-        'grid.cursor.tg-1/route.state': 'pending',
+        MoleculeStepKeys.state: 'pending',
       });
       // Exactly ONE flare — the retry succeeded, so it did not re-flare.
       expect(

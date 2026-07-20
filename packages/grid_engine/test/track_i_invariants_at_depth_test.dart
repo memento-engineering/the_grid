@@ -10,10 +10,22 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/molecule_codec.dart' show stepBeadMetadata;
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
+import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+
+/// The REAL transport-backed lease vendor (tg-h4u) — routes a molecule-mode
+/// `ProcessCapability` through the SAME `RuntimeProvider` machinery the
+/// retired flat `ProcessAllocation` drove (tg-eli phase 2: every
+/// `ProcessCapability` host now needs an ambient `ProcessLeaseVendor`).
+const _realVendor = SelfManagedProcessVendor(
+  spawn: stationProcessSpawner,
+  dispatch: stationProcessDispatcher,
+);
 
 /// A real (writing) fake ProcessCapability — so a CapabilityHost actually mounts,
 /// spawns, and WRITES its cursor through the chokepoint (the invariant-2/4 gates
@@ -95,6 +107,81 @@ SessionProjection _session(
   cursor: cursor,
 );
 
+/// The synthetic step-bead id [nodePath] mints in this suite's fixtures.
+/// Prefixed `tgdog-` (the fakes' own [stateSubstation]) so the chokepoint's
+/// ownership check (`OwnershipRefused` fail-closed) accepts it.
+String _stepBeadId(String nodePath) => 'tgdog-step-${nodePath.replaceAll('/', '-')}';
+
+/// Walks [circuit] (recursing into a [SubCircuitStep] via [circuitsById]) and
+/// emits one `type=step` bead per `CapabilityStep` leaf at its engine
+/// `nodePath` — the molecule model's per-node state (tg-eli phase 2: the flat
+/// `grid.cursor.*` model retired; a `CapabilityHost` now targets its OWN step
+/// bead, resolved through `InheritedCircuit.beadIdByNodePath`, never the
+/// session bead). [cursor] supplies the per-node `NodeCursor` a step starts
+/// at (default `pending`, via [stepBeadMetadata]).
+List<Bead> _stepBeads(
+  Circuit circuit,
+  String nodePath, {
+  required String sessionId,
+  Map<String, Circuit> circuitsById = const {},
+  Map<String, NodeCursor> cursor = const {},
+}) {
+  final beads = <Bead>[];
+  for (final step in circuit.steps) {
+    final stepNodePath = '$nodePath/${step.stepId}';
+    switch (step) {
+      case CapabilityStep():
+        beads.add(Bead(
+          id: _stepBeadId(stepNodePath),
+          issueType: IssueType.step,
+          status: BeadStatus.open,
+          metadata: {
+            MoleculeStepKeys.path: stepNodePath,
+            MoleculeStepKeys.session: sessionId,
+            ...stepBeadMetadata(cursor[stepNodePath] ?? const NodeCursor()),
+          },
+        ));
+      case SubCircuitStep(:final circuitId):
+        final nested = circuitsById[circuitId];
+        if (nested != null) {
+          beads.addAll(_stepBeads(
+            nested,
+            stepNodePath,
+            sessionId: sessionId,
+            circuitsById: circuitsById,
+            cursor: cursor,
+          ));
+        }
+    }
+  }
+  return beads;
+}
+
+/// A molecule-mode [SessionProjection] for [workBead]/[sessionId] over
+/// [circuit] — the real-host tests' session shape (unlike [_session]'s bare
+/// in-memory `cursor:` slot, this stamps `isMolecule: true` + a
+/// `moleculeBeads` list a real `SessionScope` build derives its
+/// `InheritedCircuit` from, so a `CapabilityHost` actually persists instead
+/// of refusing LOUD).
+SessionProjection _moleculeSession(
+  String workBead,
+  String sessionId, {
+  required Circuit circuit,
+  Map<String, Circuit> circuitsById = const {},
+  Map<String, NodeCursor> cursor = const {},
+}) => SessionProjection(
+  workBeadId: workBead,
+  sessionId: sessionId,
+  isMolecule: true,
+  moleculeBeads: _stepBeads(
+    circuit,
+    workBead,
+    sessionId: sessionId,
+    circuitsById: circuitsById,
+    cursor: cursor,
+  ),
+);
+
 ({TreeOwner owner, Branch root, Fakes fakes, RecordingCapabilityRegistry reg})
     _mount({
   required JoinedSnapshotNotifier joined,
@@ -169,12 +256,15 @@ Branch _whereSeed(Branch root, bool Function(Seed) test) =>
           // build wires no SourceControl).
           child: InheritedSeed<SessionResolver>(
             value: CircuitResolver((_) => _burn),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(config),
-                key: const ValueKey('scope'),
-              ),
-            ]),
+            child: InheritedSeed<ProcessLeaseVendor>(
+              value: _realVendor,
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(config),
+                  key: const ValueKey('scope'),
+                ),
+              ]),
+            ),
           ),
         ),
       ),
@@ -237,7 +327,14 @@ void main() {
         _joined(
           beads: [_bead('tg-b')],
           ready: {'tg-b'},
-          sessions: {'tg-b': _session('tg-b', 'tgdog-s')},
+          sessions: {
+            'tg-b': _moleculeSession(
+              'tg-b',
+              'tgdog-s',
+              circuit: _burn,
+              circuitsById: const {'deploy': _deploy},
+            ),
+          },
         ),
       );
       final m = _mountReal(joined: joined, config: _tg);
@@ -251,19 +348,29 @@ void main() {
       expect(m.fakes.provider.started.map((s) => s.name),
           contains('tgdog-s/tg-b/harness/build'));
 
+      // The vendor's spawn (tg-h4u) waits on the SessionStarted handshake
+      // before it resolves the lease — mirrors `track_a_flare_test.dart`'s
+      // `_startThenIsolate`.
+      m.fakes.provider.emit(
+        const SessionStarted(name: 'tgdog-s/tg-b/harness/build', pid: 100, pgid: 200),
+      );
+      await _pump();
+
       // It completes → the host writes the node cursor THROUGH the chokepoint.
       m.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-b/harness/build', exitCode: 0));
       await _pump();
 
-      // The write landed on the OWN session (tgdog-s), at the deep node path —
-      // and NO bd call targets the work bead (invariant 2 + A37, at depth).
+      // The write landed on the build step's OWN bead (the molecule model,
+      // tg-eli phase 2) — never the session bead, never the work bead
+      // (invariant 2 + A37, at depth).
+      final buildBead = _stepBeadId('tg-b/harness/build');
       final writes = m.fakes.runner
           .callsFor('update')
-          .where((c) => c[1] == 'tgdog-s')
+          .where((c) => c[1] == buildBead)
           .toList();
       expect(writes, isNotEmpty);
       expect(
-        writes.any((c) => c.join(' ').contains('grid.cursor.tg-b/harness/build.state')),
+        writes.any((c) => c.join(' ').contains('"grid.step.state":"complete"')),
         isTrue,
       );
       for (final call in m.fakes.runner.calls) {
@@ -343,7 +450,14 @@ void main() {
           beads: [_bead('genesis-x')],
           ready: {'genesis-x'},
           // Empty cursor → the deep build host actually RUNS + writes.
-          sessions: {'genesis-x': _session('genesis-x', 'tgdog-s')},
+          sessions: {
+            'genesis-x': _moleculeSession(
+              'genesis-x',
+              'tgdog-s',
+              circuit: _burn,
+              circuitsById: const {'deploy': _deploy},
+            ),
+          },
         ),
       );
       final m = _mountReal(joined: joined, config: foreignConfig);
@@ -359,16 +473,35 @@ void main() {
         _all(m.root).where((b) => b.seed is WorkBead),
         hasLength(1),
       );
+      expect(m.fakes.provider.started.map((s) => s.name),
+          contains('tgdog-s/genesis-x/harness/build'));
+      // The vendor's spawn (tg-h4u) waits on the SessionStarted handshake
+      // before it resolves the lease.
+      m.fakes.provider.emit(
+        const SessionStarted(
+          name: 'tgdog-s/genesis-x/harness/build',
+          pid: 100,
+          pgid: 200,
+        ),
+      );
+      await _pump();
       m.fakes.provider.emit(
         const Exited(name: 'tgdog-s/genesis-x/harness/build', exitCode: 0),
       );
       await _pump();
 
-      // The cursor write targeted the OWN session — and NOT ONE bd call touches
-      // the foreign work bead `genesis-x` (A37, at depth, with a running host).
+      // The write targeted the build step's OWN bead in the OWNED state store
+      // — and NOT ONE bd call touches the foreign work bead `genesis-x` (A37,
+      // at depth, with a running host).
+      final buildBead = _stepBeadId('genesis-x/harness/build');
+      final writes = m.fakes.runner
+          .callsFor('update')
+          .where((c) => c[1] == buildBead)
+          .toList();
+      expect(writes, isNotEmpty);
       expect(
-        m.fakes.runner.callsFor('update').where((c) => c[1] == 'tgdog-s'),
-        isNotEmpty,
+        writes.any((c) => c.join(' ').contains('"grid.step.state":"complete"')),
+        isTrue,
       );
       for (final call in m.fakes.runner.calls) {
         if (call.length > 1) expect(call[1], isNot('genesis-x'));

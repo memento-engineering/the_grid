@@ -22,6 +22,10 @@ defaults `circuitMintMode: CircuitMintMode.molecule`, and
 mounted). The engine-level `SubstationConfig.circuitMintMode` default remains
 `flatCursor` as the fallback; flat-path retirement is staged under `tg-eli`.
 
+**Further reality stamp (tg-eli, 2026-07-19):** flat-path retirement above is now
+complete — `CircuitMintMode` and `SubstationConfig.circuitMintMode` are deleted;
+molecule is the only circuit engine, unconditionally, with no mint-mode switch.
+
 ---
 
 ## 1. The model in one paragraph
@@ -72,7 +76,11 @@ fan-out is a **swarm**; the committee is one swarm type of several to come.
   cursor arrives via `joined?.cursor` (`session_scope.dart:667`, projected by
   `projectCircuitCursor`, `session_bead.dart:459`). Molecule beads live in the
   same state store and must reach `SessionScope.build` through the join: the
-  projection grows a molecule bucket (§R5a, its own rung).
+  projection grows a molecule bucket (§R5a, its own rung). *(tg-eli,
+  2026-07-19: history — `projectCircuitCursor` and the flat-cursor read path
+  it describes are deleted; `session_bead.dart` is now 335 lines, so the
+  `:459` citation no longer resolves. `projectMoleculeCursor` is the only
+  cursor projection left.)*
 
 ## 3. Conflict resolutions (the synthesis picks)
 
@@ -475,7 +483,10 @@ to today (RecordingBdRunner transcript equality); molecule path never writes a
 
 - `enum CircuitMintMode { flatCursor, molecule }` read off ambient config
   (`SubstationConfig` via `_ctx`/`_services`, `:180-190`). Default
-  `flatCursor` — the existing path untouched.
+  `flatCursor` — the existing path untouched. *(tg-eli, 2026-07-19: history —
+  `CircuitMintMode` and `SubstationConfig.circuitMintMode` are deleted from
+  both `grid_engine` and `grid_sdk`; molecule is now the only circuit engine,
+  unconditionally, with no mint-mode switch.)*
 - `_mint()` (`:260`) branches AFTER the void-retire block: flat → today's
   `writer.createSession` (`:300`) untouched; molecule → `createSession`
   (stamping `grid.session.model=molecule`) THEN

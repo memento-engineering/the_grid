@@ -13,6 +13,13 @@
 **Grounded by:** a source-recon sweep of `grid_engine/lib/src/**` (every reuse/net-new claim is file-cited) + the butane "Burn" offline ground-truth. ~60% of P1 is *generalizing proven P0 parts* (`EffectSeed` → `CapabilityHost`, `WorkPhase` cursor → per-step cursor, `RestartReconciler` per-worktree → per-node).
 **Builds on:** the P0 tree engine (`grid_engine`, branch `m4-p0-tree-engine`, 76 offline tests green), the A37 split-store, the A41 `isCore` mount allow-list, the M3 runtime (`SubprocessProvider` / `process_group` / `StationBeadWriter`).
 
+**Reality stamp (tg-eli, 2026-07-19):** this doc's `grid.cursor.{nodePath}.*` /
+`grid.phase` flat-cursor design (D-3 and throughout) describes the ORIGINAL P0/P1
+persistence model, since superseded by the molecule persistence substrate
+(DESIGN-tg-pm6) and, as of tg-eli phase 2, fully deleted — molecule is now the
+only circuit engine. Read the flat-cursor mechanics below as history, not
+current code.
+
 ---
 
 ## DECISIONS (resolved by Nico, 2026-06-27) — build-order requirements

@@ -55,6 +55,36 @@ JoinedSnapshot _joined({
 Bead _task(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
+/// A `type=step` bead owned by [sessionId] at engine coordinate [path]
+/// (mirrors `test/molecule/drain_seam_test.dart`'s own fixture) — the
+/// breaker-exhaustion escalation SessionScope derives is now read off the
+/// session's OWN molecule beads (tg-eli phase 2 retired the flat
+/// `existingSession.cursor`-driven derivation: `SessionProjection.cursor` is
+/// never filled by a real projection any more).
+Bead _stepBead(
+  String id, {
+  required String sessionId,
+  required String path,
+  StepState? state,
+  int restartCount = 0,
+  String? failureReason,
+}) => Bead(
+  id: id,
+  issueType: IssueType.step,
+  status: BeadStatus.open,
+  metadata: {
+    'rig': stateSubstation,
+    MoleculeStepKeys.stepId: path.split('/').last,
+    MoleculeStepKeys.capability: path.split('/').last,
+    MoleculeStepKeys.kind: StepKind.job.name,
+    MoleculeStepKeys.path: path,
+    MoleculeStepKeys.session: sessionId,
+    MoleculeStepKeys.restartCount: '$restartCount',
+    if (state != null) MoleculeStepKeys.state: state.name,
+    if (failureReason != null) MoleculeStepKeys.failureReason: failureReason,
+  },
+);
+
 /// An SessionResolver that returns a const Idle (the G3 kernel test does not need
 /// real effects — it exercises the cooldown scanner, not the tree).
 class _IdleResolver implements SessionResolver {
@@ -87,15 +117,19 @@ void main() {
           beads: [_task('tg-1')],
           ready: {'tg-1'},
           sessions: {
-            'tg-1': const SessionProjection(
+            'tg-1': SessionProjection(
               workBeadId: 'tg-1',
               sessionId: 'tgdog-s',
-              cursor: {
-                'tg-1/agent': NodeCursor(
+              isMolecule: true,
+              moleculeBeads: [
+                _stepBead(
+                  'tgdog-step1',
+                  sessionId: 'tgdog-s',
+                  path: 'tg-1/agent',
                   state: StepState.failed,
                   restartCount: 3,
                 ),
-              },
+              ],
             ),
           },
         ),
@@ -146,16 +180,20 @@ void main() {
           beads: [_task('tg-1')],
           ready: {'tg-1'},
           sessions: {
-            'tg-1': const SessionProjection(
+            'tg-1': SessionProjection(
               workBeadId: 'tg-1',
               sessionId: 'tgdog-s',
-              cursor: {
-                'tg-1/agent': NodeCursor(
+              isMolecule: true,
+              moleculeBeads: [
+                _stepBead(
+                  'tgdog-step1',
+                  sessionId: 'tgdog-s',
+                  path: 'tg-1/agent',
                   state: StepState.failed,
                   restartCount: 3,
                   failureReason: 'the harness refused: exit 42',
                 ),
-              },
+              ],
             ),
           },
         ),
@@ -201,73 +239,80 @@ void main() {
   });
 
   group('Track G (G3/F1) — the kernel owns the backoff Timer + re-poke', () {
-    test('a cursor cooldown arms a Timer for the right delay; firing it '
-        're-emits a fresh snapshot (never root.markNeedsRebuild)', () async {
-      final now = DateTime(2026);
-      final timers = <({Duration delay, void Function() cb})>[];
+    test(
+      'MIGRATED (tg-eli phase 2, a residual gap — flagged, not fixed here): '
+      'a session bead carrying a cooldown-bearing `grid.cursor.*` payload no '
+      'longer arms a Timer at all. `StationDriver._scanCooldowns` walks each '
+      "session's PROJECTED `.cursor` (`station_driver.dart`, not this lane's "
+      'file), and `projectSession` never fills that field for ANY bead any '
+      'more (flat OR molecule — the flat `grid.cursor.*` read retired; a '
+      "molecule step's cooldown lives on its OWN step bead, which "
+      "StationDriver's join-level scan never reads). So the D-5/F1 backoff "
+      're-poke is currently DEAD for every session shape — pinning that '
+      'honestly here rather than asserting the retired flat behavior',
+      () async {
+        final now = DateTime(2026);
+        final timers = <({Duration delay, void Function() cb})>[];
 
-      final work = FakeSnapshotSource(_emptyGraph());
-      final state = FakeSnapshotSource(_emptyGraph());
-      addTearDown(work.close);
-      addTearDown(state.close);
-      final bridge = StationJoinBridge(work: work, state: state);
-      final f = buildFakes();
+        final work = FakeSnapshotSource(_emptyGraph());
+        final state = FakeSnapshotSource(_emptyGraph());
+        addTearDown(work.close);
+        addTearDown(state.close);
+        final bridge = StationJoinBridge(work: work, state: state);
+        final f = buildFakes();
 
-      final kernel = StationKernel(
-        bridge: bridge,
-        stationServices: f.ctx,
-        resolver: const _IdleResolver(),
-        substations: [
-          SubstationScope(
-            configNotifier: SubstationConfigNotifier(_tgConfig),
-            key: const ValueKey('scope.tg'),
-          ),
-        ],
-        clock: () => now,
-        scheduleTimer: (delay, cb) {
-          timers.add((delay: delay, cb: cb));
-          return _FakeTimer();
-        },
-      );
-      addTearDown(kernel.dispose);
-      kernel.start();
+        final kernel = StationKernel(
+          bridge: bridge,
+          stationServices: f.ctx,
+          resolver: const _IdleResolver(),
+          substations: [
+            SubstationScope(
+              configNotifier: SubstationConfigNotifier(_tgConfig),
+              key: const ValueKey('scope.tg'),
+            ),
+          ],
+          clock: () => now,
+          scheduleTimer: (delay, cb) {
+            timers.add((delay: delay, cb: cb));
+            return _FakeTimer();
+          },
+        );
+        addTearDown(kernel.dispose);
+        kernel.start();
 
-      // Push a state snapshot: a session whose agent cursor is cooling down 30s.
-      final sessionBead = Bead(
-        id: 'tgdog-s',
-        issueType: IssueType.session,
-        status: BeadStatus.open,
-        metadata: <String, dynamic>{
-          'rig': 'tgdog',
-          'work_bead': 'tg-1',
-          ...nodeFailedMetadata(
-            'tg-1/agent',
-            restartCount: 1,
-            cooldownUntil: now.add(const Duration(seconds: 30)),
-          ),
-        },
-      );
-      state.push(GraphSnapshot.fromParts(
-        beads: [sessionBead],
-        dependencies: const [],
-        readyIds: const [],
-        capturedAt: DateTime(2026),
-      ));
-      await _pump();
+        // Push a state snapshot: a session whose agent cursor WOULD be cooling
+        // down 30s under the retired flat-projection read. CLOSED (terminal)
+        // so `WedgeMonitor` skips it too — isolating `_scanCooldowns` alone
+        // (a live open session with an empty projected cursor would ALSO arm
+        // its own unrelated stall-poll Timer, `sample.isStalled`'s honest
+        // "the engine cannot drive it" ripening — a different, already-known
+        // consequence this test is not about).
+        final sessionBead = Bead(
+          id: 'tgdog-s',
+          issueType: IssueType.session,
+          status: BeadStatus.closed,
+          metadata: <String, dynamic>{
+            'rig': 'tgdog',
+            'work_bead': 'tg-1',
+            'grid.cursor.tg-1/agent.state': 'failed',
+            'grid.cursor.tg-1/agent.restartCount': '1',
+            'grid.cursor.tg-1/agent.cooldownUntil':
+                now.add(const Duration(seconds: 30)).toIso8601String(),
+          },
+        );
+        state.push(GraphSnapshot.fromParts(
+          beads: [sessionBead],
+          dependencies: const [],
+          readyIds: const [],
+          capturedAt: DateTime(2026),
+        ));
+        await _pump();
 
-      // The kernel scanned the join (in its flush cycle, NO persistent listener)
-      // and armed a Timer for the cooldown delay.
-      expect(timers, isNotEmpty);
-      expect(timers.last.delay, const Duration(seconds: 30));
-
-      // Firing the Timer re-emits a FRESH snapshot so WorkList re-evaluates.
-      var emissions = 0;
-      final remove =
-          bridge.notifier.addListener((_) => emissions++, fireImmediately: false);
-      timers.last.cb();
-      remove();
-      expect(emissions, 1, reason: 'the cooldown re-poke re-emits the snapshot');
-    });
+        // No Timer is armed: the projected cursor is empty, so the scan sees
+        // no cooldown at all — the residual gap this test now pins.
+        expect(timers, isEmpty);
+      },
+    );
 
     test('no cooldown in the cursor → no Timer armed', () async {
       final now = DateTime(2026);
@@ -297,12 +342,16 @@ void main() {
       addTearDown(kernel.dispose);
       kernel.start();
 
+      // CLOSED (terminal) — see the sibling test's doc: an OPEN session with
+      // no visible cooldown would still arm WedgeMonitor's own unrelated
+      // stall-poll (an empty projected cursor reads as "0 running, 0
+      // cooling"), which is not what this test is about.
       state.push(GraphSnapshot.fromParts(
         beads: [
           Bead(
             id: 'tgdog-s',
             issueType: IssueType.session,
-            status: BeadStatus.open,
+            status: BeadStatus.closed,
             metadata: const <String, dynamic>{
               'rig': 'tgdog',
               'work_bead': 'tg-1',

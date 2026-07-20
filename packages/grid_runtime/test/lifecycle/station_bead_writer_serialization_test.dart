@@ -3,9 +3,13 @@
 //
 // `bd update --metadata` is a client-side read-modify-write with no row lock, so
 // two concurrent updates on the SAME bead with DISJOINT keys can last-writer-win
-// → a `grid.cursor.{path}.state` key is lost → the barrier never opens (a silent
-// liveness stall at depth). The per-target-id queue closes it. These tests fail
-// on the un-serialized writer. Zero I/O — pure fakes.
+// → a metadata key is lost → the barrier never opens (a silent liveness stall at
+// depth). The per-target-id queue closes it. These tests fail on the
+// un-serialized writer. The sample payload keys are deliberately NEUTRAL
+// (`meta.*`, not `grid.cursor.*`) — this suite proves the writer's generic
+// per-target-id serialization, independent of any one caller's key schema
+// (the flat `grid.cursor.*` model this file's keys once echoed retired with
+// tg-eli phase 2). Zero I/O — pure fakes.
 import 'dart:async';
 import 'dart:convert';
 
@@ -94,8 +98,8 @@ void main() {
       final r = GatedBdRunner();
       final w = _writer(r);
 
-      final f1 = w.update('tgdog-s', metadata: {'grid.cursor.a.state': 'complete'});
-      final f2 = w.update('tgdog-s', metadata: {'grid.cursor.b.state': 'running'});
+      final f1 = w.update('tgdog-s', metadata: {'meta.a.state': 'complete'});
+      final f2 = w.update('tgdog-s', metadata: {'meta.b.state': 'running'});
       await _settle();
 
       expect(
@@ -115,8 +119,8 @@ void main() {
       final r = GatedBdRunner();
       final w = _writer(r);
 
-      final fx = w.update('tgdog-x', metadata: {'grid.cursor.a.state': 'complete'});
-      final fy = w.update('tgdog-y', metadata: {'grid.cursor.a.state': 'complete'});
+      final fx = w.update('tgdog-x', metadata: {'meta.a.state': 'complete'});
+      final fy = w.update('tgdog-y', metadata: {'meta.a.state': 'complete'});
       await _settle();
 
       expect(
@@ -134,17 +138,17 @@ void main() {
       final r = MergingBdRunner();
       final w = _writer(r);
 
-      // Fire 5 concurrent updates, each writing ONE distinct cursor key.
+      // Fire 5 concurrent updates, each writing ONE distinct metadata key.
       await Future.wait([
         for (var i = 0; i < 5; i++)
-          w.update('tgdog-s', metadata: {'grid.cursor.n$i.state': 'complete'}),
+          w.update('tgdog-s', metadata: {'meta.n$i.state': 'complete'}),
       ]);
 
       // Serialized → all 5 keys present. The un-serialized writer's race window
       // would clobber down to 1 (last-writer-wins).
       expect(r.store['tgdog-s'], hasLength(5));
       for (var i = 0; i < 5; i++) {
-        expect(r.store['tgdog-s']!['grid.cursor.n$i.state'], 'complete');
+        expect(r.store['tgdog-s']!['meta.n$i.state'], 'complete');
       }
     });
 
@@ -153,8 +157,8 @@ void main() {
       final r = GatedBdRunner()..failIndexes = {0};
       final w = _writer(r);
 
-      final f1 = w.update('tgdog-s', metadata: {'grid.cursor.a.state': 'failed'});
-      final f2 = w.update('tgdog-s', metadata: {'grid.cursor.b.state': 'running'});
+      final f1 = w.update('tgdog-s', metadata: {'meta.a.state': 'failed'});
+      final f2 = w.update('tgdog-s', metadata: {'meta.b.state': 'running'});
 
       // Swallow f1's error (it is expected to throw).
       final f1Result = f1.then<Object?>((_) => null, onError: (Object e) => e);

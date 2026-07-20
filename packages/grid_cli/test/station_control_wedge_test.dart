@@ -54,15 +54,31 @@ void main() {
     return control;
   }
 
+  // Molecule fixtures (tg-eli phase 2: the sampler reads ONLY molecule step
+  // state — a non-molecule session contributes no nodes).
+  Bead step(String id, String nodePath, StepState state) => Bead(
+    id: id,
+    issueType: IssueType.step,
+    status: BeadStatus.open,
+    metadata: {
+      MoleculeStepKeys.path: nodePath,
+      MoleculeStepKeys.state: state.name,
+    },
+  );
+
+  SessionProjection moleculeSession(String id, StepState state) =>
+      SessionProjection(
+        workBeadId: id,
+        sessionId: 'tgdog-$id',
+        isMolecule: true,
+        moleculeBeads: [step('tgdog-$id-step', 'n/x', state)],
+      );
+
   setUp(() {
     now = t0;
     sessions = {
       for (final id in ['tg-a', 'tg-b', 'tg-c'])
-        id: SessionProjection(
-          workBeadId: id,
-          sessionId: 'tgdog-$id',
-          cursor: const {'n/spec_review': NodeCursor(state: StepState.gated)},
-        ),
+        id: moleculeSession(id, StepState.gated),
     };
     monitor = WedgeMonitor(
       latest: () => JoinedSnapshot(
@@ -119,11 +135,7 @@ void main() {
 
     monitor.poll();
     now = t0.add(const Duration(minutes: 20));
-    sessions['tg-a'] = const SessionProjection(
-      workBeadId: 'tg-a',
-      sessionId: 'tgdog-a',
-      cursor: {'n/build': NodeCursor(state: StepState.running)},
-    );
+    sessions['tg-a'] = moleculeSession('tg-a', StepState.running);
     monitor.poll();
 
     final wedge = (await statusOf(control))['wedge']! as Map<String, Object?>;

@@ -36,7 +36,9 @@ committee = a parallel expansion, route = a join that decides, orders = the loop
 **almost 1:1** onto the_grid's reentrant engine — minus two deltas the_grid owns: we
 replace factoryskills' cadence ORDERS with **reactive reconcile** (the kernel flush *is*
 the loop), and we keep the work source **read-only** (A37) so lifecycle/grades are per-node
-`grid.cursor.*` / `grid.result.*` writes on the_grid's OWN session bead.
+`grid.cursor.*` / `grid.result.*` writes on the_grid's OWN session bead. *(tg-eli,
+2026-07-19: `grid.cursor.*` no longer exists — molecule's per-step `grid.step.*` is now
+the only circuit persistence; `grid.result.*` is unaffected.)*
 
 **Verify-first.** We ship the **code-committee** (the post-build review) first — it is the
 self-contained, highest-value upgrade. The spec front-half (discover/architect) is phase 2.
@@ -245,7 +247,9 @@ pipeline stage). A minimal `spec` step (discover/architect front-half) is **phas
   {factoryskills,lenny,wedding,butane_flutter,swift-infer}, not tg. The codec boundary
   (`metadata.rig`, convergence schema, `kGridNamespace`) is unchanged.
 - **Gates/flares + sibling-read are ADDITIVE** — no NodeCursor/codec churn beyond the
-  read-only projection; `grid.cursor.*` / `grid.result.*` namespaces unchanged.
+  read-only projection; `grid.cursor.*` / `grid.result.*` namespaces unchanged. *(tg-eli,
+  2026-07-19: history — `grid.cursor.*` no longer exists, see the reality stamp above;
+  `grid.result.*` is unaffected.)*
 - **DEFERRED:** the spec front-half (discover/architect — phase 2, D-10); the spec-committee
   (the first review point — verify-first ships the code-committee only); the TOML
   `PackInflater` (D-9); the `power_station` repo extraction (D-1; starts in-repo); full
