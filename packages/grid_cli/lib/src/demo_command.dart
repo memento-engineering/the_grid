@@ -29,11 +29,8 @@ class DemoCommand extends Command<int> {
     void log(String m) => stdout.writeln(m);
 
     try {
-      final init = await Process.run('bd', [
-        'init',
-        '--prefix',
-        'demo',
-      ], workingDirectory: tmp.path);
+      final initRunner = ProcessBdRunner(workspaceRoot: tmp.path);
+      final init = await initRunner.run(['init', '--prefix', 'demo']);
       if (init.exitCode != 0) {
         stderr.writeln('grid demo: `bd init` failed: ${init.stderr}');
         return 1;

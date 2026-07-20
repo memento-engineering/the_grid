@@ -162,6 +162,14 @@ class FakeRuntimeProvider implements RuntimeProvider {
 // stdin so a test asserts the EXACT bd commands, and `create` returns a
 // caller-controlled synthetic id so the mint+stamp runs with no real `bd`.
 // ---------------------------------------------------------------------------
+//
+// DRIFT NOTE (tg-8gv.11(e)): this class has a twin,
+// `package:grid_runtime/test/lifecycle/support/recording_bd_runner.dart`.
+// The duplication is dependency-direction-forced — grid_engine cannot
+// depend on grid_runtime's test sources, so each package keeps its own
+// `BdRunner` fake — and is accepted as-is rather than factored out. If you
+// change the recorded-call shape or add coverage here, check whether the
+// grid_runtime twin needs the same change.
 
 /// A recording [BdRunner] (the grid_runtime fake shape): records full argv +
 /// stdin so a test asserts the EXACT bd commands, and `create` returns a

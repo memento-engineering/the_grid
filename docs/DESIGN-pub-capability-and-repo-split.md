@@ -3,7 +3,9 @@
 **Status:** DESIGN — from the direction session with Nico (2026-07-01), after the Dart-runner-model
 landed + pushed. **Not an ADR, not ratified.** Doc-before-code; Nico ratifies. Sequences before the
 physical repo split it enables; refines the split-deferral notes in
-`docs/SCRATCH-dart-runner-and-cli-sdk.md`.
+`docs/SCRATCH-dart-runner-and-cli-sdk.md` (retired to git history — tg-8gv.8; its core shapes
+were superseded, never ratified — see `docs/adr/ADR-0008-authoring-sdk-and-reentrant-engine.md`'s
+2026-07-02 amendment).
 
 ## Why — the linkage reality (surveyed)
 

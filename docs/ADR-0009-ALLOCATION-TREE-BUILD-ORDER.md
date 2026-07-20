@@ -2,7 +2,7 @@
 
 **Status:** READY TO BUILD (offline) — **ADR-0009 Accepted 2026-07-01.** Source of decisions:
 **`docs/adr/ADR-0009-the-allocation-tree.md`** + the design surface
-`docs/SCRATCH-allocation-tree.md`. This refactors the effect layer of the reentrant engine
+**`docs/SCRATCH-allocation-tree.md`** (retired to git history — tg-8gv.8). This refactors the effect layer of the reentrant engine
 (ADR-0007/0008) into the_grid's **third tree** — nodes = `Allocation`s — dissolving the
 `Expando` / `_capCtx ??=` / `CancelToken` smears and adding **adopt / detach / reattach**.
 

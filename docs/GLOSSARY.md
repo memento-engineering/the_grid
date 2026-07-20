@@ -4,8 +4,9 @@
 opening artifact of the docs pass, from an 8-surface research sweep (all ADRs, PDR +
 milestone build orders, all SCRATCH surfaces, the code surfaces of all four repos, and the
 org seams) plus a conflict audit and a completeness critique. **Corrected 2026-07-05 per
-Nico's review** — rulings R1–R17 in `SCRATCH-docs-debt-sweep.md` §1, which also carries
-the detailed drift analysis this index only summarizes. It records **the system as it
+Nico's review** — rulings R1–R17 in `docs/SCRATCH-docs-debt-sweep.md` (retired to git history —
+tg-8gv.8) §1, which also carries the detailed drift analysis this index only summarizes (folded
+into `docs/OPERATIONS.md` §4 at the public-readiness pass, 2026-07-20). It records **the system as it
 is** — including where docs and code disagree. Nothing here ratifies anything; where a term
 is contested, §12 says so instead of smoothing it over.
 
@@ -121,7 +122,7 @@ loudly stolen. Flow in §13-F10.
 should exist" (Nico, 2026-07-05). The ambient "first owned substation" currently keys the
 implicit store, the default root, the state-substation fallback, and space_station's
 ServiceBundle map — positional privilege plus substation-ids and root-names sharing a
-namespace. Dies in the config redesign (`SCRATCH-docs-debt-sweep.md` §3).
+namespace. Dies in the config redesign (`docs/CONFIG-MODEL.md`).
 
 ---
 
@@ -575,7 +576,9 @@ lints. **The freezed boundary (2026-07-04):** grid packages use freezed **always
 
 ---
 
-## 12. Drift ledger (rulings applied 2026-07-05; details in SCRATCH-docs-debt-sweep.md §2)
+## 12. Drift ledger (rulings applied 2026-07-05; details in `docs/SCRATCH-docs-debt-sweep.md`
+(retired to git history — tg-8gv.8) §2, folded into `docs/OPERATIONS.md` §4 at the
+public-readiness pass, 2026-07-20)
 
 1. ~~agent~~ — **Not managed** (R6). The lenny/industry homonym is English; no org
    resolution attempted.
@@ -598,7 +601,7 @@ lints. **The freezed boundary (2026-07-04):** grid packages use freezed **always
    amendment drafted as W6.
 9. **defaultSubstation / `substations.first`** — **Ruled out of existence** (R14). The
    config-layer D-M5 disease; dies in the config-model redesign
-   (`SCRATCH-docs-debt-sweep.md` §3), which also collapses the separate "workspace" axis
+   (`docs/CONFIG-MODEL.md`), which also collapses the separate "workspace" axis
    (R4), retires the resident qualifier (R5), targets the `runGrid(delegate)` boot shape
    (R15), and dissolves ServiceBundle (R16).
 
@@ -608,7 +611,7 @@ lints. **The freezed boundary (2026-07-04):** grid packages use freezed **always
 
 **F1 · Boot.** *(As-built; ruled "entirely too free-form, library-level" — R15. Target
 shape: `runGrid(delegate)` — a final root driven by an observable delegate with ordered
-default-implemented hooks; the pattern is documented in SCRATCH-docs-debt-sweep §3.2a.)*
+default-implemented hooks; the pattern is documented in `docs/CONFIG-MODEL.md`.)*
 `space up --substation … --workspace … --state-workspace … --state-substation …
 --root <name>=<path>… [--no-dry-run]` → acquire the station lock →
 `validateArming` (refusal ladder) → `discoverWorkspaces` (work stores + state store) →

@@ -7,7 +7,10 @@ addressable topology nodes), generalized as the_grid's *third tree* on `genesis_
 **Additive** — it **extends ADR-0007** (the running grid *is* a `genesis_tree`) and **ADR-0008**
 (the restoration floor D6 / resource governance); it **supersedes nothing.** Forward-pointer
 stamps **applied on ratification (2026-07-01)** to ADR-0007 §5 (the reserved-0009 entry) and
-ADR-0008 (out-of-scope §) — never silent. Design surface: `docs/SCRATCH-allocation-tree.md`.
+ADR-0008 (out-of-scope §) — never silent. Design surface: `docs/SCRATCH-allocation-tree.md`
+(retired to git history — tg-8gv.8).
+
+*[2026-07-20 — tg-8gv.8 (public-readiness): citation-form edits only in this document — retired SCRATCH design filenames re-annotated to their git-history fate. No decision text altered. Review: the flip commit's diff.]*
 
 ---
 
@@ -93,7 +96,7 @@ lookup** (genesis FR, optional) is only for read-once-and-ignore. This **retires
 `ResourceBag` / parallel engine container — *the tree is the bag.*
 
 **Amended 2026-07-02 (ratified Nico; ADR-0008 Decisions 3/4 amendments + `docs/SCRATCH-agent-scope.md`
-D-F/D-G):** the FR **landed** — genesis_tree 0.1.4 ships `getInheritedSeedOfExactType` (non-binding,
+(retired to git history — tg-8gv.8) D-F/D-G):** the FR **landed** — genesis_tree 0.1.4 ships `getInheritedSeedOfExactType` (non-binding,
 callable outside build, `StateError` on an unmounted branch) — and is **upgraded from optional
 optimization to the EFFECT verb**: `dependOn*` = the tree/build verb (branches always watch), `get*`
 = the effect verb (+ `initState` initial reads, teardown). **`StableInheritedSeed` is DELETED** (its

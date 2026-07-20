@@ -3,6 +3,13 @@ import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 
+// DRIFT NOTE (tg-8gv.11(e)): this class has a twin,
+// `package:grid_engine/src/testing/engine_fakes.dart`'s `RecordingBdRunner`.
+// The duplication is dependency-direction-forced — grid_runtime's test
+// support cannot depend on grid_engine — and is accepted as-is rather than
+// factored out. If you change the recorded-call shape or add coverage here,
+// check whether the grid_engine twin needs the same change.
+
 /// A recording [BdRunner] for offline Track-4 tests (Fakes, not mocks).
 ///
 /// Records the full argv + piped stdin of every `bd` invocation so tests can

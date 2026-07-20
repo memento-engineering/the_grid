@@ -10,7 +10,9 @@ Lineage: v1 (2026-07-05) rejected — re-committed the ambience sins (root *sets
 (substation = name + ONE root; the grid has only a state store; store-lives-at-root).
 **v3 (2026-07-06) reframes on Nico's ruling: *code as config*** — the tree IS the
 configuration; a station is *authored as a Seed*. Configuration objects are thin and
-subordinate. Rulings log: `SCRATCH-docs-debt-sweep.md` §1 + the 2026-07-05/06 reviews.
+subordinate. Rulings log: `docs/SCRATCH-docs-debt-sweep.md` (retired to git history — tg-8gv.8)
+§1 (folded into `docs/OPERATIONS.md` §4 at the public-readiness pass, 2026-07-20)
++ the 2026-07-05/06 reviews.
 
 ## 1. The thesis: code as config
 

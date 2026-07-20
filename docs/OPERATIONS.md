@@ -134,7 +134,8 @@ cost). The ladder's purpose is to spend human judgment only there.
 
 ## 4. Worklist state (the docs-debt sweep, W0–W9)
 
-The companion `SCRATCH-docs-debt-sweep.md` executed its worklist in full (2026-07-05):
+The companion `docs/SCRATCH-docs-debt-sweep.md` (retired to git history — tg-8gv.8) executed
+its worklist in full (2026-07-05):
 `GLOSSARY.md` was authored and corrected per the rulings log (W0), the emptied package
 stubs deleted (W1), supersession stamps applied to ADR-0008 (Formula→Circuit + the
 `grid_sdk` naming) and ADR-0002 (package topology) with vnext-prd §5 banner'd (W2, W3,

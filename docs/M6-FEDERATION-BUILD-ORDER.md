@@ -2,7 +2,8 @@
 
 **Status:** READY TO BUILD (offline) — **ADR-0011 Accepted 2026-06-29.** Source of
 decisions: **`docs/adr/ADR-0011-federation-and-asset-management.md`** + the design
-surface `docs/SCRATCH-asset-management.md`. **Starting point:** the parked
+surface `docs/SCRATCH-asset-management.md` (retired to git history — tg-8gv.8).
+**Starting point:** the parked
 point-to-point spike on branch **`m6-federation`** (`grid_federation` pkg + `grid
 serve`/`grid lease`) — M6 HARDENS the spike into the ADR-0011 design; it is not a
 greenfield.

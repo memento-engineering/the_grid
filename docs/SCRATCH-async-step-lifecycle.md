@@ -225,10 +225,13 @@ fallback.
 
 ---
 
-## 5. The doc-drift ledger (reconciled against ORG-REVIEW.md and SCRATCH-docs-debt-sweep.md)
+## 5. The doc-drift ledger (reconciled against ORG-REVIEW.md and `docs/SCRATCH-docs-debt-sweep.md`
+(retired to git history — tg-8gv.8), folded into `docs/OPERATIONS.md` §4 at the
+public-readiness pass, 2026-07-20)
 
-The prior sweeps deliberately did not cover this surface: SCRATCH-docs-debt-sweep was
-terminology/topology ("no new code in this pass") and ORG-REVIEW touched it only at the
+The prior sweeps deliberately did not cover this surface: `docs/SCRATCH-docs-debt-sweep.md`
+(retired to git history — tg-8gv.8) was terminology/topology ("no new code in this pass")
+and ORG-REVIEW touched it only at the
 TmuxProvider-not-built / `listBeadWorktrees`-no-caller level. This section *extends* them.
 
 1. **ADR-0004 is materially stale.** `TmuxProvider` — described as the *primary* provider,

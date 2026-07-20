@@ -1,9 +1,11 @@
 # ADR-0012 — Observability (perception ⊥ telemetry; the LAN activity cockpit)
 
 **Status:** **Proposed — PARTIAL / UNRESOLVED.** This ADR is *opened*, not settled. Exactly **one slice is ratified: Decision 1 (the LAN activity cockpit — a read-only observability transport over the session ledger), Nico 2026-07-11.** Observability at large — OTel export, perception co-emission, cross-federation health, the unified-surfaces substrate, `consent` — remains **reserved/open** (see § Open questions). Fulfils the **ADR-0012 "Observability"** number Nico assigned (`the_grid/CLAUDE.md`, 2026-06-27); it does **not** close it.
+
+*[2026-07-20 — tg-8gv.8 (public-readiness): citation-form edits only in this document — retired SCRATCH design filenames re-annotated to their git-history fate. No decision text altered. Review: the flip commit's diff.]*
 **Date:** 2026-07-11
 **Deciders:** Nico Spencer (ratified Decision 1's calls in the 2026-07-11 design session). Drafted by AI per the register rule; the balance of this ADR is undecided and awaits future design.
-**Source of record:** `docs/SCRATCH-cockpit.md` (the cockpit design surface — full wire contract + the ratified decisions); `docs/SCRATCH-vnext-prd.md` §8 (the original observability framing).
+**Source of record:** `docs/SCRATCH-cockpit.md` (the cockpit design surface — full wire contract + the ratified decisions); `docs/SCRATCH-vnext-prd.md` (retired to git history — tg-8gv.8) §8 (the original observability framing).
 **Builds on / relates to (explicit):**
 - **ADR-0008 (perception + consent)** — observability is a *sink* under the same perception/consent posture; the cockpit's static-token auth is the seam genesis `consent` later replaces.
 - **ADR-0011 (Federation)** — restates **perception ⊥ observability**; the federation *bus* (HTTP/WS impl #1, MQTT long-run, **D-B5 "no MQTT in the engine"**) and the observability *transport* are distinct channels that may later share one unified substrate.
@@ -14,7 +16,7 @@
 
 ## Context
 
-`SCRATCH-vnext-prd.md` §8 framed observability as: **observable-source is a first-class engine primitive** (bd, runtime lifecycle, timers, governors — one shape, projected into observed state a Seed reconciles against), and **OTel ⊥ perception are two sinks on one reconcile-event stream** — a WorkBead mount→unmount *is* a span AND a perception-tree delta; they fight only if one becomes the *source* of the other. OTel = AOT, system-wide, cross-federation prod health; perception = machine-to-AI, per-station, JIT. **That whole design is unbuilt and unresolved.**
+`docs/SCRATCH-vnext-prd.md` (retired to git history — tg-8gv.8) §8 framed observability as: **observable-source is a first-class engine primitive** (bd, runtime lifecycle, timers, governors — one shape, projected into observed state a Seed reconciles against), and **OTel ⊥ perception are two sinks on one reconcile-event stream** — a WorkBead mount→unmount *is* a span AND a perception-tree delta; they fight only if one becomes the *source* of the other. OTel = AOT, system-wide, cross-federation prod health; perception = machine-to-AI, per-station, JIT. **That whole design is unbuilt and unresolved.**
 
 What forced an early slice: the operator has **no view of the running factory** — the only live signal is watching his own Claude session-window token burn and asking the assistant. The session ledger (`space_station/.grid/.beads/`, the `type=session` beads) already records every unit of work + its per-node phase, cost, tokens, grades, and PR — grid-wide across substations — but nothing reads it. A **watch-only operator cockpit** over that ledger is high-value and low-risk, and it is the LAN/watch corner of this ADR. It is designed in full in `SCRATCH-cockpit.md`; this ADR promotes only its load-bearing decisions and leaves the rest of observability open.
 

@@ -19,6 +19,12 @@ typedef BeadStoreSeeder =
 
 /// The real seeder: `bd init --prefix <prefix>` in [root]. Throws on a non-zero
 /// exit (LOUD — a failed seed must never look like a seeded store).
+///
+/// Deliberately raw `Process.run`, NOT routed through the `BdRunner`/
+/// `beads_dart` chokepoint: this call runs BEFORE any `.beads/` store exists
+/// at [root] for a runner to bind to (a runner is constructed against a
+/// `workspaceRoot` that already holds a store). This is bootstrap, not a
+/// controller-path spawn — exempted by ruling, tg-8gv.11(d).
 Future<void> defaultBeadStoreSeeder({
   required String root,
   required String prefix,

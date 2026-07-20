@@ -1,10 +1,12 @@
 # ADR-0011 — Federation + Asset Management (leasing resources across stations)
 
 **Status:** **Accepted 2026-06-29** (ratified by Nico; drafted by AI from his decisions in the 2026-06-29 design session, per the ADR-0000 register rule). The forward-pointer stamp was **applied on ratification** to **ADR-0008 Decision 2** (the `Asset` definition — extended here to an umbrella, never a silent rewrite). Per the gate — doc before code — implementation proceeds via **`docs/M6-FEDERATION-BUILD-ORDER.md`**; the first LIVE cross-machine arm remains the **human gate**.
+
+*[2026-07-20 — tg-8gv.8 (public-readiness): citation-form edits only in this document — retired SCRATCH design filenames re-annotated to their git-history fate. No decision text altered. Review: the flip commit's diff.]*
 **Date:** 2026-06-29
 **Deciders:** Nico Spencer (decided each call in the design session; ratifier). Drafted by AI per the register rule.
-**Gates:** a federation milestone (number TBD — `docs/SCRATCH-asset-management.md` left this open). Fulfils the **ADR-0011 "Federation"** number Nico assigned (the_grid/CLAUDE.md, 2026-06-27) — per-station `Grid` views; the multi-station story ADR-0008 deliberately deferred.
-**Source of record:** `docs/SCRATCH-asset-management.md` (the design surface; this ADR promotes its converged decisions and states the load-bearing ones).
+**Gates:** a federation milestone (number TBD — `docs/SCRATCH-asset-management.md` (retired to git history — tg-8gv.8) left this open). Fulfils the **ADR-0011 "Federation"** number Nico assigned (the_grid/CLAUDE.md, 2026-06-27) — per-station `Grid` views; the multi-station story ADR-0008 deliberately deferred.
+**Source of record:** `docs/SCRATCH-asset-management.md` (retired to git history — tg-8gv.8) (the design surface; this ADR promotes its converged decisions and states the load-bearing ones).
 **Builds on / relates to (explicit):**
 - **ADR-0008** — makes its reserved **`Grid` = federation** object concrete (Decision 1) and **extends its `Asset`** from "a pack" to an umbrella with two families (Decision 2). Reuses the **pluggable-abstract-domain** meta-pattern and `Trust`.
 - **ADR-0007** — the reentrant engine is the substrate: orders/leases are formula steps; capability config cascades via `InheritedSeed`; a shift re-matches through the reactive flush. No engine semantics change.

@@ -169,7 +169,8 @@ machine** — one agentic fabric across the station's assets; spin containers if
 multiples.
 
 **The ceiling (later, separate passes):** the D8 `DartEnvironment` governor + leaf permits
-(designed, D-7-deferred) for capacity, and leasing-is-core (`SCRATCH-dart-runner-and-cli-sdk.md`)
+(designed, D-7-deferred) for capacity, and leasing-is-core (`docs/SCRATCH-dart-runner-and-cli-sdk.md`
+(retired to git history — tg-8gv.8); superseded, now `docs/adr/ADR-0008-authoring-sdk-and-reentrant-engine.md`)
 for substation attention-scheduling. This doc deliberately builds neither — the lock is the
 only arbitration a single-machine dogfood needs.
 

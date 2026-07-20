@@ -162,13 +162,12 @@ memento-engineering org):
   allowlist — so `GC_DOLT_PASSWORD` and other host secrets are **never** leaked into the agent child.
   For `TmuxProvider`, the same allowlist is injected via tmux `-e KEY=VAL` / `set-environment`. The
   token is **NEVER placed on argv**, structurally avoiding the plaintext-on-argv leak.
-- **Report-only side-finding (standalone, recorded in CLAUDE.md — NOT ADR-0000 A29, which is the M2
-  codec-fidelity capture):** a plaintext `CLAUDE_CODE_OAUTH_TOKEN` is visible on the live gascity
-  control-dispatcher's process argv. This ADR **reports the mechanism** (the env var name) and
-  explicitly **does not read, print, or extract any secret value**. the_grid sources its own agent
-  token from an operator-provided env channel (the same posture as `GC_DOLT_PASSWORD`); the exact
-  source env var / path is an open decision for Nico. *(If Nico wants the side-finding tracked in the
-  register, it can be carried into ADR-0000 as its own amendment.)*
+- **[Edited 2026-07-20 — tg-8gv.11(g), public-flip redaction directed by Nico: a report-only
+  side-finding describing a specific third-party (gascity) process-argv credential-exposure
+  weakness was removed here ahead of the public flip — it named a live external system's
+  security posture, not a the_grid decision, and is not appropriate for a public repo.]**
+  the_grid sources its own agent token from an operator-provided env channel (the same posture
+  as `GC_DOLT_PASSWORD`); the exact source env var / path is an open decision for Nico.
 
 ---
 
