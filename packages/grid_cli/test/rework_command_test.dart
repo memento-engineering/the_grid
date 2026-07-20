@@ -23,6 +23,13 @@ import 'package:test/test.dart';
 ///  4. the ~3-round cap refuses LOUD, zero writes (c);
 ///  5. --note lands on the WORK bead (a separate store) under a ROUND N header
 ///     (d); missing --note-root refuses LOUD before any write.
+///
+/// The molecule group (tg-eli phase 1) proves refusal-semantics PARITY for a
+/// `grid.session.model=molecule` session, whose per-node state lives on its
+/// own `type=step` beads rather than flat `grid.cursor.*` keys: running →
+/// refuse (the live veto), gated-not-running → allow, open-non-gated →
+/// refuse — identical to the flat cases above, which stand UNCHANGED as the
+/// negative control.
 void main() {
   group('grid rework — v1 acceptance', () {
     test('(a) a positively-closed session re-keys + reports round 1', () async {
@@ -345,6 +352,249 @@ void main() {
     );
   });
 
+  group('grid rework — molecule sessions (tg-eli phase 1 parity)', () {
+    test('(a) an OPEN molecule session with a RUNNING step refuses LOUD — '
+        'the live veto (zero writes)', () async {
+      final state = _FakeStore([
+        _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+        _stepBead(
+          'tgdog-m1',
+          sessionId: 'tgdog-s1',
+          nodePath: 'tg-9/agent',
+          state: StepState.running,
+        ),
+        _stepBead('tgdog-m2', sessionId: 'tgdog-s1', nodePath: 'tg-9/route'),
+      ]);
+      final work = _FakeStore([_workBead('tg-9')]);
+      final errs = <String>[];
+
+      final code = await runRework(
+        beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
+        stateWorkspaceOverride: _ws('tgdog'),
+        stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
+        out: (_) {},
+        err: errs.add,
+      );
+
+      expect(code, isNonZero);
+      expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
+      expect(state.writes, isEmpty);
+      expect(work.writes, isEmpty);
+    });
+
+    test('(b) an OPEN molecule session parked at a gate (nothing running) '
+        'proceeds to the re-key', () async {
+      final state = _FakeStore([
+        _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+        _stepBead(
+          'tgdog-m1',
+          sessionId: 'tgdog-s1',
+          nodePath: 'tg-9/agent',
+          state: StepState.complete,
+        ),
+        _stepBead(
+          'tgdog-m2',
+          sessionId: 'tgdog-s1',
+          nodePath: 'tg-9/route',
+          state: StepState.gated,
+        ),
+      ]);
+      final work = _FakeStore([_workBead('tg-9')]);
+      final out = <String>[];
+      final errs = <String>[];
+
+      final code = await runRework(
+        beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
+        stateWorkspaceOverride: _ws('tgdog'),
+        stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
+        out: out.add,
+        err: errs.add,
+      );
+
+      expect(code, 0, reason: errs.join('\n'));
+      expect(out.join('\n'), contains('round 1'));
+      final updates = state.writes.where((c) => c.first == 'update').toList();
+      expect(updates, hasLength(1));
+      final metaIdx = updates.single.indexOf('--metadata');
+      final meta =
+          jsonDecode(updates.single[metaIdx + 1]) as Map<String, dynamic>;
+      expect(meta, {'work_bead': 'tg-9#r1'});
+      expect(work.writes.where((c) => c.first == 'update'), hasLength(1));
+    });
+
+    test('an OPEN molecule session with NO step beads yet (a crashed or '
+        'still-pouring mint) refuses LOUD — open, non-gated (zero writes)',
+        () async {
+      final state = _FakeStore([
+        _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+      ]);
+      final work = _FakeStore([_workBead('tg-9')]);
+      final errs = <String>[];
+
+      final code = await runRework(
+        beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
+        stateWorkspaceOverride: _ws('tgdog'),
+        stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
+        out: (_) {},
+        err: errs.add,
+      );
+
+      expect(code, isNonZero);
+      expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
+      expect(state.writes, isEmpty);
+      expect(work.writes, isEmpty);
+    });
+
+    test('NEGATIVE CONTROL: another session\'s RUNNING step never vetoes this '
+        'session\'s rework (the step-bead join is per-session)', () async {
+      final state = _FakeStore([
+        _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+        _stepBead(
+          'tgdog-m1',
+          sessionId: 'tgdog-s1',
+          nodePath: 'tg-9/route',
+          state: StepState.gated,
+        ),
+        // A NEIGHBOUR molecule session mid-flight on a different work bead —
+        // its running step belongs to tgdog-s2's cursor, never tgdog-s1's.
+        _moleculeSession('tgdog-s2', workBead: 'tg-8'),
+        _stepBead(
+          'tgdog-m9',
+          sessionId: 'tgdog-s2',
+          nodePath: 'tg-8/agent',
+          state: StepState.running,
+        ),
+      ]);
+      final work = _FakeStore([_workBead('tg-9')]);
+      final errs = <String>[];
+
+      final code = await runRework(
+        beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
+        stateWorkspaceOverride: _ws('tgdog'),
+        stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
+        out: (_) {},
+        err: errs.add,
+      );
+
+      expect(code, 0, reason: errs.join('\n'));
+      expect(state.writes.where((c) => c.first == 'update'), hasLength(1));
+    });
+
+    test('the ACTIVE incarnation decides (A52): a superseded gated step never '
+        'masks its RUNNING successor — refused (zero writes)', () async {
+      final state = _FakeStore(
+        [
+          _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+          _stepBead(
+            'tgdog-m1',
+            sessionId: 'tgdog-s1',
+            nodePath: 'tg-9/agent',
+            state: StepState.gated,
+          ),
+          _stepBead(
+            'tgdog-m2',
+            sessionId: 'tgdog-s1',
+            nodePath: 'tg-9/agent',
+            state: StepState.running,
+          ),
+        ],
+        dependencies: [
+          const BeadDependency(
+            issueId: 'tgdog-m2',
+            dependsOnId: 'tgdog-m1',
+            type: DependencyType.supersedes,
+          ),
+        ],
+      );
+      final work = _FakeStore([_workBead('tg-9')]);
+      final errs = <String>[];
+
+      final code = await runRework(
+        beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
+        stateWorkspaceOverride: _ws('tgdog'),
+        stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
+        out: (_) {},
+        err: errs.add,
+      );
+
+      expect(code, isNonZero);
+      expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
+      expect(state.writes, isEmpty);
+      expect(work.writes, isEmpty);
+    });
+
+    test('NEGATIVE CONTROL (A52 converse): a RETIRED running incarnation '
+        'never vetoes when its GATED successor is the active step', () async {
+      final state = _FakeStore(
+        [
+          _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+          _stepBead(
+            'tgdog-m1',
+            sessionId: 'tgdog-s1',
+            nodePath: 'tg-9/agent',
+            state: StepState.running,
+          ),
+          _stepBead(
+            'tgdog-m2',
+            sessionId: 'tgdog-s1',
+            nodePath: 'tg-9/agent',
+            state: StepState.gated,
+          ),
+        ],
+        dependencies: [
+          const BeadDependency(
+            issueId: 'tgdog-m2',
+            dependsOnId: 'tgdog-m1',
+            type: DependencyType.supersedes,
+          ),
+        ],
+      );
+      final work = _FakeStore([_workBead('tg-9')]);
+      final errs = <String>[];
+
+      final code = await runRework(
+        beadId: 'tg-9',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
+        stateWorkspaceOverride: _ws('tgdog'),
+        stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
+        out: (_) {},
+        err: errs.add,
+      );
+
+      expect(code, 0, reason: errs.join('\n'));
+      expect(state.writes.where((c) => c.first == 'update'), hasLength(1));
+    });
+  });
+
   group('grid rework — (d) --note lands on the WORK bead', () {
     test('appends the finding under a ROUND N header, into the WORK '
         'work store (a SEPARATE store from the state store)', () async {
@@ -536,6 +786,45 @@ Bead _session(
   },
 );
 
+/// Builds a MOLECULE-minted `type=session` bead (tg-eli phase 1): carries the
+/// explicit `grid.session.model=molecule` discriminator stamped once at mint
+/// (`SessionScope._mintMolecule`) and NO flat `grid.cursor.*` keys — its
+/// per-node state lives on its own `type=step` beads ([_stepBead]).
+Bead _moleculeSession(String id, {required String workBead, bool closed = false}) =>
+    Bead(
+      id: id,
+      title: 'grid session $workBead',
+      issueType: IssueType.session,
+      status: closed ? BeadStatus.closed : BeadStatus.open,
+      createdAt: DateTime.utc(2026, 7, 3, 12),
+      metadata: {
+        'rig': 'tgdog',
+        'work_bead': workBead,
+        SessionBeadKeys.model: kSessionModelMolecule,
+      },
+    );
+
+/// Builds a `type=step` bead owned by [sessionId] at [nodePath], carrying the
+/// fine state under the molecule schema's wire literals (`grid.step.*`,
+/// mirrored — grid_engine's `MoleculeStepKeys` is not exported from the
+/// package root). A null [state] mirrors a freshly-minted step bead: no fine
+/// state yet, read back as `pending`.
+Bead _stepBead(
+  String id, {
+  required String sessionId,
+  required String nodePath,
+  StepState? state,
+}) => Bead(
+  id: id,
+  title: 'step $nodePath',
+  issueType: IssueType.step,
+  metadata: {
+    'grid.step.session': sessionId,
+    'grid.step.path': nodePath,
+    if (state != null) 'grid.step.state': state.name,
+  },
+);
+
 Bead _workBead(
   String id, {
   String description = 'operator description',
@@ -553,13 +842,17 @@ Bead _workBead(
 );
 
 /// A fake [BdRunner] over a fixed set of staged beads (Fakes, not mocks): the
-/// `export` read returns the staged beads as JSONL; mutations return a canned
-/// envelope and are recorded so a test can assert a refusal performed ZERO
-/// writes.
+/// `export` read returns the staged beads as JSONL — each bead's staged
+/// [dependencies] riding INLINE on its own line, exactly where the upstream
+/// `Issue.Dependencies` field puts them and `exportAll`'s parse reads them —
+/// mutations return a canned envelope and are recorded so a test can assert a
+/// refusal performed ZERO writes.
 class _FakeStore implements BdRunner {
-  _FakeStore(this._beads);
+  _FakeStore(this._beads, {List<BeadDependency> dependencies = const []})
+    : _dependencies = dependencies;
 
   final List<Bead> _beads;
+  final List<BeadDependency> _dependencies;
   final List<List<String>> calls = <List<String>>[];
 
   /// Every recorded invocation that is NOT the `export` read — i.e. the writes.
@@ -571,7 +864,14 @@ class _FakeStore implements BdRunner {
     calls.add(List<String>.unmodifiable(args));
     final cmd = args.isNotEmpty ? args.first : '';
     if (cmd == 'export') {
-      final jsonl = _beads.map((b) => jsonEncode(b.toJson())).join('\n');
+      final jsonl = _beads.map((b) {
+        final json = b.toJson();
+        final edges = _dependencies.where((d) => d.issueId == b.id).toList();
+        if (edges.isNotEmpty) {
+          json['dependencies'] = [for (final e in edges) e.toJson()];
+        }
+        return jsonEncode(json);
+      }).join('\n');
       return Future<BdResult>.value(
         BdResult(exitCode: 0, stdout: jsonl, stderr: ''),
       );
@@ -588,7 +888,7 @@ class _FakeStore implements BdRunner {
 }
 
 class _FailingUpdateStore extends _FakeStore {
-  _FailingUpdateStore(List<Bead> beads) : super(beads);
+  _FailingUpdateStore(super.beads);
 
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {

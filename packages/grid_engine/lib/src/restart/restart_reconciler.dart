@@ -22,6 +22,15 @@
 ///  - **RESPAWN the rest** — a live session with no kill target, or a worktree
 ///    with no session record at all, is left in place and marked respawn-pending
 ///    for the tree to re-mount.
+///  - **SWEEP a molecule survivor's leased groups** — a MOLECULE session's
+///    process identity does NOT ride `session.cursor` (which is empty for it);
+///    it lives in vendor-owned `grid.lease.*` breadcrumbs on its step beads.
+///    The vendor-exposed sweep (`ProcessLeaseVendor.sweepOrphanedLeases` —
+///    Nico's 2026-07-19 ruling: this reconciler stays lease-schema-ignorant)
+///    kills each live group no re-mount will adopt through the SAME guarded
+///    terminate path and clears its breadcrumb; a completed step is untouched,
+///    and a running/pending step stays with the frontier (the job lease
+///    respawns fresh — respawn-or-skip, never adoption for jobs).
 ///  - **REAP a zombie `running` marker** — a node a PRIOR generation left at
 ///    `state=running` whose recorded pid is DEAD. Its process died and never got
 ///    to report, because the station died with it, so the reap RE-MOUNTS it
@@ -64,6 +73,9 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
+import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
+import '../molecule/process_lease_vendor.dart'
+    show LeaseSweepCandidate, ProcessLeaseVendor, SweptLeaseGroup;
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 
@@ -91,6 +103,12 @@ Future<bool> _neverAdopt(
   String nodePath,
   NodeCursor node,
 ) async => false;
+
+/// The no-sink default for the boot pass's molecule lease sweep — NOT a
+/// silent swallow: every swept group still rides [RestartReport.sweptLeases]
+/// (the same optional-but-never-silent posture as the writer-less zombie
+/// reap), and the live assembly always wires a real sink.
+void _reportOnlyOrphanSink(String message) {}
 
 /// The worktree-list seam: lists the per-bead worktrees under [root], each
 /// re-bound to its bead id (the dir name encodes the id). Returns `null` on a
@@ -233,9 +251,13 @@ class RestartEntry {
 /// entries bucketed by disposition, enough to assert in a test and to log a
 /// one-line restart summary.
 class RestartReport {
-  RestartReport(List<RestartEntry> entries, {List<ZombieReap> reaped = const []})
-    : entries = List.unmodifiable(entries),
+  RestartReport(
+    List<RestartEntry> entries, {
+    List<ZombieReap> reaped = const [],
+    List<SweptLeaseGroup> sweptLeases = const [],
+  }) : entries = List.unmodifiable(entries),
       reaped = List.unmodifiable(reaped),
+      sweptLeases = List.unmodifiable(sweptLeases),
       skipped = List.unmodifiable(
         entries.where((e) => e.disposition == RestartDisposition.skipped),
       ),
@@ -283,6 +305,13 @@ class RestartReport {
   /// (with its `failure`), so a caller can report it LOUD.
   final List<ZombieReap> reaped;
 
+  /// The MOLECULE lease groups this pass's vendor sweep acted on (or
+  /// deliberately preserved) — killed orphans, guard-refused residuals, and
+  /// adoptable daemons left running. Empty when no vendor was wired or no
+  /// molecule survivor carried a live breadcrumb. Every kill was already
+  /// reported LOUD by the sweep itself; this list is the assertable record.
+  final List<SweptLeaseGroup> sweptLeases;
+
   /// The total number of beads the tree must respawn on re-mount: everything
   /// except the skipped (done) beads AND the adopted (reattached) survivors.
   /// [refusedUnsafe] is included.
@@ -293,7 +322,7 @@ class RestartReport {
       'RestartReport(skipped: ${skipped.length}, adopted: ${adopted.length}, '
       'killed: ${killed.length}, refusedUnsafe: ${refusedUnsafe.length}, '
       'respawnPending: ${respawnPending.length}, reaped: ${reaped.length}, '
-      'respawnCount: $respawnCount)';
+      'sweptLeases: ${sweptLeases.length}, respawnCount: $respawnCount)';
 }
 
 /// One process group the orphan sweep walked: the node that recorded it, its
@@ -365,6 +394,8 @@ class RestartReconciler {
     required GraphSnapshot Function() stateSnapshot,
     StationBeadWriter? writer,
     AdoptProof? adoptProof,
+    ProcessLeaseVendor? leaseVendor,
+    void Function(String message)? onOrphan,
   }) : _listWorktrees = listWorktrees,
        _reapWorktree = reapWorktree,
        _workRoot = workRoot,
@@ -372,7 +403,9 @@ class RestartReconciler {
        _writer = writer,
        _freshnessBarrier = freshnessBarrier,
        _stateSnapshot = stateSnapshot,
-       _adoptProof = adoptProof ?? _neverAdopt;
+       _adoptProof = adoptProof ?? _neverAdopt,
+       _leaseVendor = leaseVendor,
+       _onOrphan = onOrphan ?? _reportOnlyOrphanSink;
 
   final ListBeadWorktrees _listWorktrees;
   final ReapWorktree _reapWorktree;
@@ -397,11 +430,36 @@ class RestartReconciler {
   /// (respawn-or-skip). No-adopt-on-faith.
   final AdoptProof _adoptProof;
 
+  /// The molecule model's process-lease vendor — the ONLY `grid.lease.*`
+  /// touchpoint this reconciler has (Nico's 2026-07-19 ruling: the vendor owns
+  /// the lease schema; this pass hands it candidate step-bead metadata and the
+  /// guarded kill seam, and never parses a lease key itself). OPTIONAL for the
+  /// same cross-repo-ctor reason as [_writer]: a composition without it (a
+  /// sibling repo's guardrail suites) simply has no molecule sweep — the flat
+  /// pass is unchanged.
+  final ProcessLeaseVendor? _leaseVendor;
+
+  /// The LOUD sink the molecule lease sweep reports every kill through
+  /// (`docs/OPERATIONS.md` §2.4 — an orphan is an invariant violation, never
+  /// reaped quietly). OPTIONAL but never silent: with no sink wired, the swept
+  /// groups still ride [RestartReport.sweptLeases] for the caller to report;
+  /// the live assembly (`buildStationWork`) always wires it.
+  final void Function(String message) _onOrphan;
+
   /// Whether the ONE bd chokepoint reached this pass — so a composer (and the
   /// assembly's own test) can assert the zombie reap is armed, rather than
   /// discovering at 3am that it silently never ran. A capability query on an
   /// off-tree machine, not an accessor over reactive state (D-H rule 2).
   bool get hasChokepoint => _writer != null;
+
+  /// Whether the MOLECULE lease sweep is armed (a vendor reached this pass) —
+  /// [hasChokepoint]'s twin for the molecule axis, same posture. Armed means
+  /// ARMED: the sweep's kill gate is bound to THIS reconciler's own
+  /// [ProcessGroupController] at call time (`processAlive` over the recorded
+  /// leader pid — the flat path's exact kill evidence), never to a
+  /// separately-wired liveness seam, so a wired vendor can never be silently
+  /// inert.
+  bool get hasLeaseSweep => _leaseVendor != null;
 
   /// A COMPLETED re-query of the read + state runtimes — awaited FIRST so no
   /// decision is made on stale state. Injected so it is fake-driveable.
@@ -420,7 +478,10 @@ class RestartReconciler {
   ///    keyed by `work_bead` (so SKIP fires for a foreign work bead).
   /// 4. For each worktree: SKIP-and-reap a terminal session; KILL-and-respawn a
   ///    live orphan with a usable kill target; else leave it respawn-pending.
-  /// 5. REAP every zombie `running` cursor node (a dead generation's corpse) on
+  /// 5. SWEEP the molecule survivors' leased groups through the vendor (the
+  ///    flat kill loop above saw nothing for them — a molecule session's
+  ///    cursor is empty; its process identity is the vendor's breadcrumb).
+  /// 6. REAP every zombie `running` cursor node (a dead generation's corpse) on
   ///    a worktree-backed session — LAST, so a group THIS pass terminated
   ///    already reads dead to the liveness probe.
   Future<RestartReport> reconcile() async {
@@ -446,11 +507,83 @@ class RestartReconciler {
       entries.add(await _reconcileWorktree(wt, session));
     }
 
-    // 5. REAP the ZOMBIE `running` markers — LAST, so a group THIS pass
+    // 5. SWEEP the molecule survivors' leased groups (tg-eli phase 1): a
+    //    molecule session's process identity lives in vendor-owned
+    //    `grid.lease.*` breadcrumbs on its step beads, NOT on session.cursor —
+    //    so the flat kill loop above saw nothing for it. The vendor owns every
+    //    lease-key read and every clearing write; this pass only projects the
+    //    candidates and binds the SAME guarded terminate path.
+    final sweptLeases = await _sweepMoleculeLeases(backed);
+
+    // 6. REAP the ZOMBIE `running` markers — LAST, so a group THIS pass
     //    terminated already reads DEAD to the liveness probe: an orphan we just
     //    killed IS a corpse, and its cursor must say so.
     final reaped = await _reapZombieRunners(backed);
-    return RestartReport(entries, reaped: reaped);
+    return RestartReport(entries, reaped: reaped, sweptLeases: sweptLeases);
+  }
+
+  /// **The MOLECULE crash-recovery pass** (tg-eli phase 1 — flat-path parity).
+  ///
+  /// Scope mirrors the zombie reap's, for the same bounded-boot reason: only
+  /// NON-terminal MOLECULE sessions that BACK a surviving worktree are swept
+  /// (a session with no worktree has nothing to re-mount into, and walking the
+  /// whole state store would make a large backlog an unbounded boot pass). A
+  /// TERMINAL molecule session's steps are deliberately NOT swept here — the
+  /// skip branch's [_sweepLiveGroups] covers only the flat cursor today; the
+  /// completed-molecule-session daemon sweep is a documented deferral.
+  ///
+  /// The candidates are projected from the SAME post-barrier state snapshot
+  /// the cursor projection reads (no new bd query, no subscription — A39):
+  /// every `type=step` bead stamped with an in-scope session's id, its
+  /// metadata handed to the vendor VERBATIM. This reconciler never parses a
+  /// lease key — the vendor decides completed-skip / dead-skip / adoptable /
+  /// orphan, kills through the bound [terminateGroup] (the guard is never
+  /// bypassed), clears its own breadcrumbs, and reports each kill LOUD.
+  Future<List<SweptLeaseGroup>> _sweepMoleculeLeases(
+    Iterable<SessionProjection> sessions,
+  ) async {
+    final vendor = _leaseVendor;
+    if (vendor == null) return const [];
+    final sessionIds = <String>{};
+    for (final session in sessions) {
+      final id = session.sessionId;
+      if (id == null || session.isTerminal || !session.isMolecule) continue;
+      sessionIds.add(id);
+    }
+    if (sessionIds.isEmpty) return const [];
+
+    final candidates = <LeaseSweepCandidate>[];
+    for (final bead in _stateSnapshot().beadsById.values) {
+      if (bead.issueType != IssueType.step) continue;
+      final owner = bead.metadata[MoleculeStepKeys.session];
+      if (owner is! String || !sessionIds.contains(owner)) continue;
+      candidates.add((
+        stepBeadId: bead.id,
+        // bd metadata is Map<String, dynamic> off the wire; the vendor's
+        // breadcrumb codec reads flat strings.
+        metadata: {
+          for (final entry in bead.metadata.entries)
+            if (entry.value != null) entry.key: '${entry.value}',
+        },
+      ));
+    }
+    if (candidates.isEmpty) return const [];
+
+    return vendor.sweepOrphanedLeases(
+      candidates: candidates,
+      // The KILL GATE rides this reconciler's OWN real controller — the SAME
+      // leader-pid evidence the zombie reap and terminateGroup use — so the
+      // sweep is armed wherever the reconciler is (flat-path parity). The
+      // vendor's adopt-liveness stays its own deliberate D4 all-or-nothing
+      // wire and never gates a kill.
+      alive: ({required int pgid, required int leaderPid}) =>
+          _groups.processAlive(leaderPid),
+      // The SAME guarded kill every other rung of this reconciler uses — the
+      // `pgid <= 1`/own-group guard runs inside terminateGroup, never here.
+      terminate: ({required int pgid, required int leaderPid}) =>
+          terminateGroup(controller: _groups, pgid: pgid, leaderPid: leaderPid),
+      onOrphan: _onOrphan,
+    );
   }
 
   /// **The TEARDOWN orphan sweep** — the twin of [reconcile]: the boot pass

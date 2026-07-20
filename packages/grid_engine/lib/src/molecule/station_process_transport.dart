@@ -198,7 +198,10 @@ Future<GateOutcome> _probeLeasedWorkSignal(
 /// (ADR-0002 Decision 1's named `grid_engine ──► grid_runtime` edge), and the
 /// station's adopt-liveness seam (absent ⇒ [neverLive] ⇒ never adopt —
 /// no-adopt-on-faith's offline posture, co-wired with the reconciler's
-/// `AdoptProof` at the live arm).
+/// `AdoptProof` at the live arm). The crash-restart lease sweep does NOT ride
+/// this seam: its kill gate is the caller-bound [LeaseGroupLiveness] the
+/// reconciler binds to its own real controller, so leaving adoption unarmed
+/// never blinds the sweep.
 StationProcessLeaseVendor defaultProcessLeaseVendor(StationServices services) =>
     StationProcessLeaseVendor(
       writer: services.writer,

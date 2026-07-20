@@ -3,6 +3,17 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+// `projectMoleculeCursor` is not yet on grid_engine's package root — the root
+// export rides the engine-side tg-eli lane and lands separately. Until it
+// does, read the codec at its committed home, narrowed to the one symbol, so
+// this verb compiles and lands against grid_engine@HEAD on its own — the same
+// posture as the mirrored `_kMoleculeStepSessionKey` wire literal below. Once
+// the root export lands, this import collapses into the one above (same
+// declaration either way, so the two routes can never conflict —
+// `unnecessary_import` is waived for exactly that interim overlap).
+// ignore: implementation_imports, unnecessary_import
+import 'package:grid_engine/src/molecule/molecule_codec.dart'
+    show projectMoleculeCursor;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart'
     show DirectoryProbe, GridStateStore, StoreRefusal, SubstationWorkStore;
@@ -30,7 +41,12 @@ import 'station_stores.dart';
 /// per-node cursor shows it PARKED AT A GATE with nothing running — the one
 /// case `SessionScope`'s v2 gate-resolve transition (grid_engine,
 /// `SessionScopeState`) is built to observe and re-arm reactively, with no
-/// runner restart (the round-1-GATED case tg-ucz found live).
+/// runner restart (the round-1-GATED case tg-ucz found live). The cursor is
+/// read BY MINT MODEL (tg-eli phase 1): a flat session's off its own
+/// `grid.cursor.*` keys (`projectCircuitCursor`); a molecule session's
+/// (`grid.session.model=molecule`) off its `type=step` beads in the same
+/// store snapshot (`projectMoleculeCursor`) — the refusal semantics are
+/// IDENTICAL either way.
 ///
 /// **Re-seated on the store-at-roots model (v3).** The session lives in the_grid's
 /// OWN **state store** at `<grid.root>/.grid/.beads/` (`--grid-root`; Q5a) — never
@@ -293,7 +309,30 @@ Future<int> runRework({
   final round = maxRound + 1;
 
   if (!session.isClosed) {
-    final cursor = projectCircuitCursor(session);
+    // The per-node cursor, by MINT MODEL (`SessionBeadKeys.model`, ABSENT ⇒
+    // flat — projectSession's own reading): a molecule session carries NO
+    // flat `grid.cursor.*` keys, so reading the flat projection here would
+    // see an EMPTY cursor and refuse EVERY open molecule session (tg-eli
+    // phase 1). Its state lives on its own `type=step` beads — already in
+    // the complete-graph snapshot read above, no second query.
+    final CircuitCursor cursor;
+    if (_stringMeta(session, SessionBeadKeys.model) == kSessionModelMolecule) {
+      // The supersedes edges (A52 rework rounds) resolve the ACTIVE
+      // incarnation per path; projectMoleculeCursor drops any edge whose
+      // endpoints are not both in the passed step set, so the full export
+      // edge list is safe to hand over unfiltered.
+      final steps = export.beads.where(
+        (b) =>
+            b.issueType == IssueType.step &&
+            _stringMeta(b, _kMoleculeStepSessionKey) == session.id,
+      );
+      cursor = projectMoleculeCursor(
+        steps,
+        dependencies: export.dependencies,
+      ).cursor;
+    } else {
+      cursor = projectCircuitCursor(session);
+    }
     final states = cursor.values.map((n) => n.state);
     final hasRunning = states.contains(StepState.running);
     final hasGated = states.contains(StepState.gated);
@@ -376,3 +415,10 @@ String? _stringMeta(Bead bead, String key) {
   if (value is String && value.isNotEmpty) return value;
   return null;
 }
+
+/// The step bead's owning-session JOIN key — mirrors `MoleculeStepKeys.session`
+/// (grid_engine, `src/molecule/molecule_schema.dart`), which is not exported
+/// from the package root. The wire literal is mirrored here, kept
+/// wire-compatible, the same way this file already reads the session bead's
+/// `'work_bead'` linkage by its wire string.
+const String _kMoleculeStepSessionKey = 'grid.step.session';

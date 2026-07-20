@@ -20,6 +20,7 @@ library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../molecule/molecule_codec.dart' show projectMoleculeCursor;
 import '../sdk/circuit.dart';
 import 'joined_snapshot.dart';
 
@@ -162,6 +163,15 @@ const kNotWedged = Flowing(sample: kNoWedgeSample);
 
 /// Counts the station's forward progress over [snapshot]'s LIVE sessions — pure,
 /// allocation-light, no I/O. [now] fences the cooling-down check.
+///
+/// A molecule session (`SessionProjection.isMolecule`) contributes through its
+/// own `type=step` beads, projected via [projectMoleculeCursor] over the
+/// per-session bucket the join already carries
+/// (`SessionProjection.moleculeBeads` — the SAME snapshot the caller holds,
+/// A39: no new read). The projection keeps only the ACTIVE incarnation per
+/// path (A52 supersedes chains), so a stale superseded step still stamped
+/// `running` can never mask a molecule stall. Flat sampling rides unchanged
+/// beside it (tg-eli phase 2 retires it).
 WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
   var live = 0;
   var running = 0;
@@ -170,10 +180,20 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
   for (final session in snapshot.sessionsByWorkBead.values) {
     if (session.isTerminal) continue;
     live++;
+    // The model split is the EXPLICIT discriminator, never inferred from the
+    // buckets (the drain guarantee, `DESIGN-tg-pm6.md` §12): a molecule pour
+    // that crashed before its first step bead landed still samples down the
+    // molecule arm (an empty cursor — a stall that can honestly ripen).
+    final nodes = session.isMolecule
+        ? projectMoleculeCursor(
+            session.moleculeBeads,
+            dependencies: session.moleculeDependencies,
+          ).cursor.values
+        : session.cursor.values;
     var isRunning = false;
     var isGated = false;
     var isCooling = false;
-    for (final node in session.cursor.values) {
+    for (final node in nodes) {
       switch (node.state) {
         case StepState.running:
           isRunning = true;

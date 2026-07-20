@@ -63,6 +63,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
+import '../sdk/circuit.dart';
 import '../sdk/lease.dart';
 import 'molecule_schema.dart';
 
@@ -128,6 +129,54 @@ abstract class ProcessLeaseVendor {
   /// HERE — `LeaseCapability.acquire`'s own `(TreeContext, StepArgs)`
   /// signature cannot carry them.
   LeaseCapability<ProcessHandle> leaseFor(ProcessLeaseRequest request);
+
+  /// **The crash-restart orphan sweep** (tg-eli phase 1; Nico's 2026-07-19
+  /// ruling: `grid.lease.*` has ONE owner, so the `RestartReconciler` gets
+  /// THIS vendor-exposed sweep and never parses a lease key itself).
+  ///
+  /// GIVEN the candidate step beads the caller already holds ([candidates] —
+  /// the reconciler projects them from its post-barrier state snapshot; this
+  /// method issues NO reads of its own), identifies each step whose breadcrumb
+  /// records a live process group that NOTHING will re-adopt, kills it through
+  /// the caller's guarded [terminate] seam (never a raw process kill), and
+  /// clears the breadcrumb (the vendor's own clearing write — release's exact
+  /// [kClearedLeaseKeys] payload).
+  ///
+  /// [alive] is the caller's KILL GATE — the engine pgid-alive probe, bound to
+  /// the SAME real `ProcessGroupController` the caller's other kills ride
+  /// (never the vendor's own adopt-liveness, which may deliberately stay at
+  /// its never-adopt default while adoption is unarmed). Because the caller
+  /// cannot reach the sweep without binding it, a wired sweep is ARMED by
+  /// construction — it can never be silently inert.
+  ///
+  /// The orphan predicate is no-adopt-on-faith's mirror image (ADR-0009
+  /// D4/D5):
+  ///  - a step whose fine state LATCHED (`complete`/`failed`/`gated`) is
+  ///    skipped untouched;
+  ///  - a breadcrumb that does not parse ([leaseBreadcrumbOf]) is skipped —
+  ///    nothing is leased;
+  ///  - a group the caller's [alive] probe cannot PROVE alive is never killed
+  ///    (negative evidence only ever WITHHOLDS a kill) and its stale
+  ///    breadcrumb is LEFT: it is inert (adoption gates on the vendor's own
+  ///    freshness proof, and the next acquire overwrites it), and leaving it
+  ///    avoids a per-step boot write-burst;
+  ///  - a live DAEMON whose adopt-freshness proof holds — the vendor's OWN
+  ///    proof, the same fence `proveFresh` runs — is left running for the
+  ///    re-mounting tree to adopt ([LeaseSweepDisposition.leftAdoptable]);
+  ///  - everything else alive — a job ALWAYS (jobs never adopt), a daemon
+  ///    whose proof fails (adoption unarmed ⇒ every daemon), a step with no
+  ///    provable daemon kind — is an ORPHAN: killed + cleared, reported LOUD
+  ///    through [onOrphan] (the down-path orphan-sweep discipline,
+  ///    `docs/OPERATIONS.md` §2.4).
+  ///
+  /// Every group the sweep acted on (or deliberately preserved) is returned;
+  /// a skipped/dead/unparsable candidate is not (nothing happened to it).
+  Future<List<SweptLeaseGroup>> sweepOrphanedLeases({
+    required Iterable<LeaseSweepCandidate> candidates,
+    required LeaseGroupLiveness alive,
+    required LeaseGroupTerminator terminate,
+    required void Function(String message) onOrphan,
+  });
 }
 
 /// The per-mount request a [ProcessLeaseVendor] vends against (tg-h4u): the
@@ -228,6 +277,110 @@ ProcessHandle? leaseBreadcrumbOf(Map<String, String> metadata) {
   return ProcessHandle(pgid: pgid, pid: pid, token: token);
 }
 
+/// One candidate step bead for [ProcessLeaseVendor.sweepOrphanedLeases]: the
+/// durable step-bead id (the lease ADDRESS) plus that bead's CURRENT metadata,
+/// both of which the CALLER already holds — the `RestartReconciler` projects
+/// them off its post-barrier state snapshot (the SAME read its cursor
+/// projection rides, A39), so the sweep itself issues no bd query and opens no
+/// subscription.
+typedef LeaseSweepCandidate = ({String stepBeadId, Map<String, String> metadata});
+
+/// The guarded group-terminate seam the sweep kills through — the caller binds
+/// it to the REAL `terminateGroup` over its own `ProcessGroupController`, so
+/// every kill inherits the load-bearing `pgid <= 1`/own-group safety guard
+/// (never bypassed, never a raw process kill).
+typedef LeaseGroupTerminator =
+    Future<GroupTerminateResult> Function({
+      required int pgid,
+      required int leaderPid,
+    });
+
+/// The caller-bound KILL GATE the sweep proves every group alive on before it
+/// terminates — bound to the SAME real `ProcessGroupController` the caller's
+/// [LeaseGroupTerminator] rides (`processAlive` over the recorded leader pid,
+/// the flat path's exact kill-gate evidence). DISTINCT from the vendor's own
+/// adopt-liveness ([StationProcessLeaseVendor.liveness], `proveFresh`'s
+/// fence): THIS seam answers only "is the group provably alive at all", so
+/// the sweep stays armed while adoption deliberately stays at its never-adopt
+/// default (the D4 all-or-nothing wire).
+typedef LeaseGroupLiveness =
+    bool Function({required int pgid, required int leaderPid});
+
+/// What [ProcessLeaseVendor.sweepOrphanedLeases] did to ONE live lease group.
+enum LeaseSweepDisposition {
+  /// A live ORPHAN — a group no re-mount will adopt — terminated through the
+  /// guarded seam, its breadcrumb cleared. Absorbs the `alreadyGone` outcome
+  /// (the group died between the probe and the signal: no signal was sent, but
+  /// the no-double-run guarantee holds all the same; the exact
+  /// [SweptLeaseGroup.terminateResult] is preserved).
+  killed,
+
+  /// The terminate guard refused (`pgid <= 1`/own-group) — NO signal was sent
+  /// and the breadcrumb was LEFT (it is the only record an operator has of a
+  /// group that may still be running). The documented recycled-pgid/own-group
+  /// residual; the guard is never bypassed.
+  refusedUnsafe,
+
+  /// A live DAEMON whose freshness proof held — left running, breadcrumb
+  /// intact, for the re-mounting tree's `startOrAdopt` to reattach (D4).
+  leftAdoptable,
+}
+
+/// One lease group the sweep acted on (or deliberately preserved) — enough for
+/// a caller/test to assert WHAT happened and WHY without scraping logs (the
+/// same posture as the reconciler's own `RestartEntry`).
+class SweptLeaseGroup {
+  /// Records the sweep's decision for [stepBeadId]'s leased [handle].
+  const SweptLeaseGroup({
+    required this.stepBeadId,
+    required this.handle,
+    required this.disposition,
+    this.terminateResult,
+    this.clearFailure,
+  });
+
+  /// The step bead whose breadcrumb recorded this group.
+  final String stepBeadId;
+
+  /// The parsed breadcrumb — the group's pgid/pid/token identity.
+  final ProcessHandle handle;
+
+  /// What the sweep did.
+  final LeaseSweepDisposition disposition;
+
+  /// The exact guarded-terminate outcome; null for
+  /// [LeaseSweepDisposition.leftAdoptable] (no kill was attempted).
+  final GroupTerminateResult? terminateResult;
+
+  /// Why the breadcrumb-clearing write was DROPPED (a transient bd blip), or
+  /// null when it landed / was deliberately left. The kill itself still
+  /// happened; the drop is reported LOUD by the sweep.
+  final String? clearFailure;
+
+  @override
+  String toString() =>
+      'SweptLeaseGroup($stepBeadId pgid ${handle.pgid}: ${disposition.name}'
+      '${terminateResult == null ? '' : ' (${terminateResult!.name})'}'
+      '${clearFailure == null ? '' : ', clear DROPPED: $clearFailure'})';
+}
+
+/// Whether a step bead's persisted fine state LATCHED (`complete`/`failed`/
+/// `gated`) — the sweep skips such a step entirely (its group is not the
+/// sweep's business; killing on a latched marker would be destruction with no
+/// respawn story). `ready` is NOT latched: it is a daemon's live positive
+/// terminal, whose group must flow through the adopt-or-orphan decision. An
+/// absent/unrecognised state reads pending-like (nothing has run yet).
+bool _isLatchedStepState(String? wire) {
+  StepState? state;
+  for (final s in StepState.values) {
+    if (s.name == wire) state = s;
+  }
+  return switch (state) {
+    StepState.complete || StepState.failed || StepState.gated => true,
+    StepState.pending || StepState.running || StepState.ready || null => false,
+  };
+}
+
 /// Mints a fresh [ProcessHandle] for the request's incarnation — the real
 /// spawn (a `RuntimeProvider.start` + wait for its `SessionStarted` pgid/pid;
 /// the freshness token rides the request's env overlay). The REAL
@@ -313,6 +466,140 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
         metadataOf: metadataOf,
         liveness: liveness,
       );
+
+  /// The real sweep. **Adopt-window safety:** the reconciler runs this BEFORE
+  /// the tree re-mounts (`StationWorkRuntime.start()` pins reconcile →
+  /// `runGrid`), so no `LeaseAllocation.startOrAdopt` is in flight while it
+  /// kills — and even unsequenced, the kill set is disjoint from the adopt set
+  /// BY CONSTRUCTION for this vendor: a job is never adoptable
+  /// (`LeaseAllocation.isAdoptable` is kind-gated) and a daemon is only ever
+  /// killed when the SAME proof that gates its [proveFresh] refuted it — a
+  /// daemon a re-mount would legitimately adopt is exactly a daemon this
+  /// sweep leaves.
+  ///
+  /// **A clear that cannot be proven is withheld, a write that fails is LOUD
+  /// but non-fatal:** the pass mirrors the reconciler's zombie-reap posture —
+  /// a dropped breadcrumb clear (a transient bd blip) is recorded on the
+  /// [SweptLeaseGroup.clearFailure] and reported through [onOrphan], and the
+  /// pass CONTINUES; it never turns a boot into a new outage.
+  @override
+  Future<List<SweptLeaseGroup>> sweepOrphanedLeases({
+    required Iterable<LeaseSweepCandidate> candidates,
+    required LeaseGroupLiveness alive,
+    required LeaseGroupTerminator terminate,
+    required void Function(String message) onOrphan,
+  }) async {
+    final swept = <SweptLeaseGroup>[];
+    for (final candidate in candidates) {
+      // A LATCHED step is untouched — complete/failed/gated is not this
+      // sweep's business (the frontier never re-mounts it as-is; killing on a
+      // latched marker would be destruction with no respawn story).
+      if (_isLatchedStepState(candidate.metadata[MoleculeStepKeys.state])) {
+        continue;
+      }
+
+      // The vendor-owned breadcrumb — the ONLY lease-key read on this path
+      // (the caller stays lease-schema-ignorant). No breadcrumb, or a
+      // cleared/partial one ⇒ nothing is leased; the frontier re-mounts and
+      // the job lease respawns fresh (respawn-or-skip, D5).
+      final handle = leaseBreadcrumbOf(candidate.metadata);
+      if (handle == null) continue;
+
+      // The CALLER's kill gate — the same real-controller evidence its other
+      // kills ride, NOT this vendor's adopt-liveness (which may deliberately
+      // stay never-adopt). A group that cannot be PROVEN alive is never
+      // killed (negative evidence only withholds a kill), and its stale
+      // breadcrumb is LEFT: it is inert (adoption gates on the freshness
+      // proof; the next acquire overwrites it), and leaving it avoids a
+      // per-step boot write-burst.
+      if (!alive(pgid: handle.pgid, leaderPid: handle.pid)) continue;
+
+      // A live daemon is preserved ONLY on this vendor's OWN adopt-freshness
+      // proof — the SAME fence [proveFresh] runs, so the preserve set and the
+      // adopt set can never drift (D4/D5). With adoption UNARMED ([liveness]
+      // at its [neverLive] default) the proof refutes every daemon, so a live
+      // daemon is an orphan nothing will re-adopt and falls through to the
+      // kill below exactly like a job — the flat path's never-adopt posture.
+      if (candidate.metadata[MoleculeStepKeys.kind] == StepKind.daemon.name &&
+          liveness(
+            AdoptFence(
+              pgid: handle.pgid,
+              pid: handle.pid,
+              token: handle.token,
+            ),
+          )) {
+        swept.add(
+          SweptLeaseGroup(
+            stepBeadId: candidate.stepBeadId,
+            handle: handle,
+            disposition: LeaseSweepDisposition.leftAdoptable,
+          ),
+        );
+        continue;
+      }
+
+      // ORPHAN: a live group nothing will adopt — a job always (jobs never
+      // adopt, D5), a daemon whose freshness proof failed (adoption unarmed ⇒
+      // all of them), or a step with no provable daemon kind
+      // (no-adopt-on-faith starts at the metadata read). Kill through the
+      // caller's guarded seam.
+      final result = await terminate(pgid: handle.pgid, leaderPid: handle.pid);
+      switch (result) {
+        case GroupTerminateResult.exitedOnTerm:
+        case GroupTerminateResult.killed:
+        case GroupTerminateResult.alreadyGone:
+          onOrphan(
+            'lease sweep: step "${candidate.stepBeadId}" left process group '
+            '${handle.pgid} (leader pid ${handle.pid}) ALIVE across the '
+            'restart — an orphan nothing re-adopts; terminated '
+            '(${result.name}) and cleared its lease breadcrumb',
+          );
+          String? clearFailure;
+          try {
+            await writer.update(
+              candidate.stepBeadId,
+              metadata: kClearedLeaseKeys,
+            );
+          } on Object catch (error) {
+            clearFailure = '$error';
+            onOrphan(
+              'lease sweep: the breadcrumb clear for step '
+              '"${candidate.stepBeadId}" was DROPPED ($error) — grid.lease.* '
+              'still records pgid ${handle.pgid} over the group this pass '
+              'just terminated',
+            );
+          }
+          swept.add(
+            SweptLeaseGroup(
+              stepBeadId: candidate.stepBeadId,
+              handle: handle,
+              disposition: LeaseSweepDisposition.killed,
+              terminateResult: result,
+              clearFailure: clearFailure,
+            ),
+          );
+        case GroupTerminateResult.refusedUnsafe:
+          // The guard is NEVER bypassed — and the breadcrumb is NOT cleared:
+          // it is the only record an operator has of a group that may still
+          // be running.
+          onOrphan(
+            'lease sweep: REFUSED to signal process group ${handle.pgid} for '
+            'step "${candidate.stepBeadId}" — the terminateGroup guard '
+            '(pgid <= 1, or the supervisor\'s own group). It may still be '
+            'running; terminate it by hand.',
+          );
+          swept.add(
+            SweptLeaseGroup(
+              stepBeadId: candidate.stepBeadId,
+              handle: handle,
+              disposition: LeaseSweepDisposition.refusedUnsafe,
+              terminateResult: result,
+            ),
+          );
+      }
+    }
+    return swept;
+  }
 }
 
 /// The [LeaseCapability<ProcessHandle>] [StationProcessLeaseVendor.leaseFor]
@@ -437,6 +724,22 @@ class SelfManagedProcessVendor implements ProcessLeaseVendor {
         spawn: spawn,
         dispatch: dispatch,
       );
+
+  /// The degraded sweep — a NO-OP by construction: this vendor persists no
+  /// breadcrumb, so there is no durable lease identity to interpret, no group
+  /// it could prove orphaned, and nothing to clear. (Any `grid.lease.*`
+  /// residue a PRIOR station-vendor incarnation left is not this vendor's to
+  /// interpret — its whole contract is "no durable identity", and killing on
+  /// another vendor's record would be adopt-on-faith's destructive twin.)
+  /// Candidates are accepted and ignored so a composer can swap vendors
+  /// without re-wiring the caller.
+  @override
+  Future<List<SweptLeaseGroup>> sweepOrphanedLeases({
+    required Iterable<LeaseSweepCandidate> candidates,
+    required LeaseGroupLiveness alive,
+    required LeaseGroupTerminator terminate,
+    required void Function(String message) onOrphan,
+  }) async => const <SweptLeaseGroup>[];
 }
 
 /// The self-managed lease: [adoptable] is left at [LeaseCapability]'s own

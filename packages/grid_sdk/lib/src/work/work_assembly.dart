@@ -420,6 +420,7 @@ Future<StationWorkRuntime> buildStationWork({
   final workRoot = rootsByName[substations.first.name]!;
 
   final groups = groupsOverride ?? const SystemProcessGroupController();
+  final orphanSink = onOrphan ?? (String m) => stdout.writeln(m);
 
   Future<void> freshnessBarrier() async {
     await Future.wait(<Future<void>>[
@@ -427,34 +428,6 @@ Future<StationWorkRuntime> buildStationWork({
       stateBundle.runtime.requery(),
     ]);
   }
-
-  final restart = RestartReconciler(
-    listWorktrees: git.listBeadWorktrees,
-    reapWorktree: git.reap,
-    workRoot: workRoot,
-    groups: groups,
-    // The ONE bd chokepoint — the zombie-running reap re-mounts a dead
-    // generation's corpse through it, on the_grid's OWN session bead, BEFORE the
-    // tree mounts. Optional on the ctor (a sibling repo's guardrails omit it),
-    // so `restart.hasChokepoint` is what proves it actually reached here.
-    writer: writer,
-    freshnessBarrier: freshnessBarrier,
-    stateSnapshot: () => stateSource.current ?? _emptyGraphSnapshot(),
-    // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
-    // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
-  );
-
-  final bridge = StationJoinBridge(work: work, state: stateSource);
-  // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
-  // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
-  // parallel escalation channel.
-  final driver = StationDriver(
-    bridge: bridge,
-    registry: registry,
-    transport: transport,
-    wedgeThreshold: wedgeThreshold,
-    wedgePollInterval: wedgePollInterval,
-  );
 
   final services = StationServices(
     provider: provider,
@@ -473,6 +446,52 @@ Future<StationWorkRuntime> buildStationWork({
     workSignal: stationWorkSignal(git),
   );
 
+  // ONE production vendor for BOTH consumers (tg-eli phase 1: reuse, never
+  // duplicate): the tree's molecule allocations (`StationWorkWiring`) and the
+  // restart reconciler's molecule lease sweep resolve the SAME vendor over the
+  // SAME services — so the breadcrumb a mount wrote is the breadcrumb the
+  // sweep interprets.
+  final leaseVendor = defaultProcessLeaseVendor(services);
+
+  final restart = RestartReconciler(
+    listWorktrees: git.listBeadWorktrees,
+    reapWorktree: git.reap,
+    workRoot: workRoot,
+    groups: groups,
+    // The ONE bd chokepoint — the zombie-running reap re-mounts a dead
+    // generation's corpse through it, on the_grid's OWN session bead, BEFORE the
+    // tree mounts. Optional on the ctor (a sibling repo's guardrails omit it),
+    // so `restart.hasChokepoint` is what proves it actually reached here.
+    writer: writer,
+    freshnessBarrier: freshnessBarrier,
+    stateSnapshot: () => stateSource.current ?? _emptyGraphSnapshot(),
+    // The MOLECULE lease sweep (tg-eli phase 1): the vendor is the only
+    // grid.lease.* touchpoint (the reconciler stays lease-schema-ignorant);
+    // `restart.hasLeaseSweep` proves it reached here. Its KILL GATE is NOT
+    // the vendor's adopt-liveness (which stays at the never-adopt default
+    // below): the reconciler binds it to its own real `groups` controller at
+    // call time, so a crashed molecule station's live orphan groups ARE
+    // reaped on reboot — flat-path parity. Until the D4 all-or-nothing adopt
+    // wire arms, a live daemon is killed like a job (nothing would re-adopt
+    // it).
+    leaseVendor: leaseVendor,
+    onOrphan: orphanSink,
+    // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
+    // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
+  );
+
+  final bridge = StationJoinBridge(work: work, state: stateSource);
+  // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
+  // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
+  // parallel escalation channel.
+  final driver = StationDriver(
+    bridge: bridge,
+    registry: registry,
+    transport: transport,
+    wedgeThreshold: wedgeThreshold,
+    wedgePollInterval: wedgePollInterval,
+  );
+
   return StationWorkRuntime._(
     wiring: StationWorkWiring(
       notifier: bridge.notifier,
@@ -483,7 +502,8 @@ Future<StationWorkRuntime> buildStationWork({
       // service) so the production work subtree resolves the SAME real vendor
       // StationKernel.start mounts. Without this the molecule allocation at the
       // readiness gate throws `No ProcessLeaseVendor` and the station wedges.
-      processLeaseVendor: defaultProcessLeaseVendor(services),
+      // The SAME instance the restart reconciler sweeps with (tg-eli phase 1).
+      processLeaseVendor: leaseVendor,
     ),
     git: git,
     stateSubstation: stateSubstation,
@@ -491,7 +511,7 @@ Future<StationWorkRuntime> buildStationWork({
     driver: driver,
     restart: restart,
     provider: provider,
-    onOrphan: onOrphan ?? (m) => stdout.writeln(m),
+    onOrphan: orphanSink,
     onRefusal: refusalSink,
     sourcesStart: () async {
       await Future.wait(bundles.values.map((b) => b.runtime.start()));
