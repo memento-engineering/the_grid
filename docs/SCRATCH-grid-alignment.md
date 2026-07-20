@@ -1,6 +1,9 @@
 # SCRATCH — the grid alignment: the office grid, the honesty pass, and the bus
 
-**Status: alignment surface (2026-07-03), drafted from the live realignment session.** Nico stopped
+**Status: alignment surface (2026-07-03), drafted from the live realignment session. PROMOTED
+(2026-07-19): the ruled engine contracts (D-A3/D-A4 claim-to-lease, D-B1..B5 bus shape,
+mesh/GridHub) graduated into ADR-0011's ratified amendment; the bus/asset opinion half routes
+to power_station's ADR line (pow-8ls).** Nico stopped
 the multi-root/federation pass mid-read ("the first true run has shown that we're missing the
 target") and the session realigned the architecture against what he is actually building. Most
 decisions below were **ruled in-session** (marked RULED, with his words); a small set remain

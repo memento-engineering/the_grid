@@ -1,7 +1,10 @@
 # ADR-0014 — The resident station (residency · control plane · arbitration)
 
 **Status:** **Proposed — drafted 2026-07-19 from the ratified SCRATCH-resident-station (the
-underlying decisions are Nico-ratified 2026-07-02; THIS TEXT awaits his ratification).**
+underlying decisions are Nico-ratified 2026-07-02). Ratification GATED (Nico, 2026-07-19):
+this text is not ratified until the flat cursor is removed from code and documentation
+(tg-eli) — its D-R4 frontier text and D-A1 store vocabulary must then describe the only
+remaining (molecule) model with no legacy caveats.**
 
 **Source of record:** [docs/SCRATCH-resident-station.md](../SCRATCH-resident-station.md) —
 RATIFIED (Nico, 2026-07-02), with amendments recorded in its §3/§6/§9. This document graduates

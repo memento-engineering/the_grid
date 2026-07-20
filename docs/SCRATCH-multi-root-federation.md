@@ -1,6 +1,8 @@
 # SCRATCH — one station, many roots + federated work sources
 
-**Status: SUPERSEDED-IN-PART (2026-07-03) — see `SCRATCH-grid-alignment.md`.** The realignment
+**Status: SUPERSEDED-IN-PART (2026-07-03) — see `SCRATCH-grid-alignment.md`. §3's D-M1..M7
+design FOLDED FORWARD (2026-07-19) into ADR-0011's ratified amendment, with verified build
+status (partially landed via the v3 SDK rail).** The realignment
 session ruled the remote half of §4b WRONG for the target model: remote substations are never
 snapshot members (D-Z7 is dead) — federation is by WORK ASSIGNMENT (claim-first-local →
 broadcast-unclaimed → capability-matched claim → lease), designed in the alignment surface. The

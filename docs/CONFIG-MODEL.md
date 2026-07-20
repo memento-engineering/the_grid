@@ -1,7 +1,7 @@
 # CONFIG-MODEL — code as config: the grid composition model & `runGrid`
 
-**Status of THIS document: Proposed (drafted 2026-07-19) — awaiting Nico's
-ratification.** The MODEL it restates is already ratified: the **v3
+**Status of THIS document: Ratified (Nico, 2026-07-19 — with one correction to
+the §1 thesis line applied in review).** The MODEL it restates was already ratified: the **v3
 station-config model was ratified by Nico 2026-07-06** in
 [`SCRATCH-station-config-model.md`](SCRATCH-station-config-model.md), from which
 this document **graduated 2026-07-19** as the durable home of §1–6, including

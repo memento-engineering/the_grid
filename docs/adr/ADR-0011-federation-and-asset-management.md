@@ -134,7 +134,7 @@ The first proof slice (settled scope): the **loopback thin slice** (two `grid` p
 
 ---
 
-## Proposed amendment (2026-07-19, public-readiness tg-8gv.6) — AWAITING RATIFICATION
+## Amendment (2026-07-19, public-readiness tg-8gv.6) — **RATIFIED (Nico, 2026-07-19)**
 
 **Status of THIS text: Proposed — awaiting Nico's ratification. Nothing above this line changes.**
 Provenance is mixed and stated per section: the §A engine contracts were **RULED by Nico
