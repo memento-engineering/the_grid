@@ -194,6 +194,14 @@ class SubprocessProvider implements RuntimeProvider {
   final Random? _random;
 
   final Map<String, _Session> _sessions = <String, _Session>{};
+
+  /// Each session's RETAINED terminal, latched by [_emitExit] BEFORE the event
+  /// is emitted — a terminal is STATE, not just an instant on the unbuffered
+  /// broadcast stream (tg-uad). See [RuntimeProvider.terminalOf] for the
+  /// release contract this map implements ([start] clears, [stop] releases,
+  /// [dispose] drops all).
+  final Map<String, RuntimeEvent> _terminals = <String, RuntimeEvent>{};
+
   final StreamController<RuntimeEvent> _events =
       StreamController<RuntimeEvent>.broadcast();
 
@@ -227,6 +235,10 @@ class SubprocessProvider implements RuntimeProvider {
     if (_sessions.containsKey(name)) {
       throw SessionAlreadyExists(name);
     }
+    // A NEW incarnation of [name]: clear the prior incarnation's retained
+    // terminal (the [terminalOf] release contract — the name is reborn, and a
+    // stale outcome must never shadow the new process).
+    _terminals.remove(name);
     // Reserve the name synchronously so a concurrent same-name start rejects.
     final session = _Session(
       name: name,
@@ -327,6 +339,10 @@ class SubprocessProvider implements RuntimeProvider {
 
   @override
   Future<void> stop(String name) async {
+    // The [terminalOf] release contract: stop RELEASES the retained terminal —
+    // both for a live session being torn down and for one already dead (the
+    // lease-release path stops the name after its terminal settled the step).
+    _terminals.remove(name);
     final session = _sessions.remove(name);
     if (session == null) return; // idempotent
     session.stopping = true;
@@ -416,6 +432,17 @@ class SubprocessProvider implements RuntimeProvider {
   @override
   DateTime? lastActivity(String name) => _sessions[name]?.lastActivity;
 
+  @override
+  RuntimeEvent? terminalOf(String name) => _terminals[name];
+
+  @override
+  ({int pid, int? pgid})? identityOf(String name) {
+    final session = _sessions[name];
+    final pid = session?.pid;
+    if (pid == null) return null;
+    return (pid: pid, pgid: session!.pgid);
+  }
+
   void _emit(RuntimeEvent event) {
     if (!_events.isClosed) _events.add(event);
   }
@@ -430,33 +457,49 @@ class SubprocessProvider implements RuntimeProvider {
     // agent that vanishes is normally an inferred success — and a hung agent we
     // just shot vanishes EXACTLY like a finished one, so without this branch the
     // watchdog would report the hang it caught as a clean completion.
+    final RuntimeEvent terminal;
     final killed = session.deadlineReason;
     if (killed != null) {
-      _emit(RuntimeEvent.died(name: session.name, reason: killed));
-      return;
-    }
-    final code = session.observedExitCode;
-    if (code != null) {
-      _emit(RuntimeEvent.exited(name: session.name, exitCode: code));
-    } else if (session.lifecycle == Lifecycle.oneTurn) {
-      // A run-once agent that disappears has COMPLETED its single turn. The
-      // detached spawn gives no readable exit code, so we cannot prove `0` —
-      // but a one-shot exit is success-by-intent (whether the WORK succeeded is
-      // judged by its commit, separately). Emit a clean exit so the actuator
-      // parks it asleep instead of treating success as a crash and
-      // crash-looping/quarantining it (the bug the first genesis arm exposed).
-      //
-      // ...and FLAG it: the 0 is inferred from the vanish, not read. A murdered
-      // agent vanishes identically, so the engine's completion fence proves an
-      // inferred exit against the workspace before it advances the circuit.
-      _emit(
-        RuntimeEvent.exited(name: session.name, exitCode: 0, inferred: true),
-      );
+      terminal = RuntimeEvent.died(name: session.name, reason: killed);
     } else {
-      // A longLived agent that vanishes really did die unexpectedly → crash.
-      _emit(RuntimeEvent.died(name: session.name, reason: 'process vanished'));
+      final code = session.observedExitCode;
+      if (code != null) {
+        terminal = RuntimeEvent.exited(name: session.name, exitCode: code);
+      } else if (session.lifecycle == Lifecycle.oneTurn) {
+        // A run-once agent that disappears has COMPLETED its single turn. The
+        // detached spawn gives no readable exit code, so we cannot prove `0` —
+        // but a one-shot exit is success-by-intent (whether the WORK succeeded
+        // is judged by its commit, separately). Emit a clean exit so the
+        // actuator parks it asleep instead of treating success as a crash and
+        // crash-looping/quarantining it (the bug the first genesis arm
+        // exposed).
+        //
+        // ...and FLAG it: the 0 is inferred from the vanish, not read. A
+        // murdered agent vanishes identically, so the engine's completion
+        // fence proves an inferred exit against the workspace before it
+        // advances the circuit.
+        terminal = RuntimeEvent.exited(
+          name: session.name,
+          exitCode: 0,
+          inferred: true,
+        );
+      } else {
+        // A longLived agent that vanishes really did die unexpectedly → crash.
+        terminal = RuntimeEvent.died(
+          name: session.name,
+          reason: 'process vanished',
+        );
+      }
     }
-    session.close();
+    // LATCH the terminal as retained STATE **before** emitting (tg-uad): the
+    // emission below may fire with zero listeners on the unbuffered broadcast
+    // stream (the leased path's acquire→dispatch window), and this emit also
+    // just disarmed the watchdog — the one backstop. Held first, a dropped
+    // emission remains queryable through [terminalOf] and a late consumer
+    // settles from state instead of latching at `running` forever.
+    _terminals[session.name] = terminal;
+    _emit(terminal);
+    if (killed == null) session.close();
   }
 
   /// Tears down the provider: cancels all supervision and closes the event
@@ -468,6 +511,9 @@ class SubprocessProvider implements RuntimeProvider {
       session.close();
     }
     _sessions.clear();
+    // Provider teardown releases every retained terminal (the [terminalOf]
+    // release contract).
+    _terminals.clear();
     await _events.close();
   }
 }

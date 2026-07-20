@@ -56,13 +56,39 @@ class FakeRuntimeProvider implements RuntimeProvider {
   Object? throwOnStart;
 
   /// The live session names — registered by a COMPLETED `start` (the spawn
-  /// LANDED), removed by `stop`. What `listRunning`/`isRunning`/`processAlive`
-  /// reflect, so a test can prove a spawn landing mid-teardown is visible to
-  /// `RestartReconciler.sweepOrphans`.
+  /// LANDED), removed by `stop` or by an emitted terminal. What
+  /// `listRunning`/`isRunning`/`processAlive` reflect, so a test can prove a
+  /// spawn landing mid-teardown is visible to `RestartReconciler.sweepOrphans`.
   final Set<String> _live = <String>{};
 
+  /// Each session's RETAINED terminal, mirroring the real provider's
+  /// latch-before-emit contract ([RuntimeProvider.terminalOf], tg-uad): [emit]
+  /// of an `Exited`/`Died` latches it, [start] of the same name clears it (new
+  /// incarnation), [stop] releases it, [close] drops all.
+  final Map<String, RuntimeEvent> _terminals = <String, RuntimeEvent>{};
+
+  /// The programmable OS identities [identityOf] reports for a LIVE session —
+  /// a test stages `identities[name] = (pid: …, pgid: …)` to exercise the
+  /// SessionAlreadyExists synchronous-resolution path (tg-090). Unstaged names
+  /// report null.
+  final Map<String, ({int pid, int? pgid})> identities =
+      <String, ({int pid, int? pgid})>{};
+
   /// Emits [event] to subscribers (after a microtask, like a real stream).
-  void emit(RuntimeEvent event) => _events.add(event);
+  /// A terminal (`Exited`/`Died`) is LATCHED as retained state BEFORE the
+  /// emission and deregisters the live session — exactly the real provider's
+  /// `_emitExit` shape, so a zero-listener emission stays queryable through
+  /// [terminalOf].
+  void emit(RuntimeEvent event) {
+    switch (event) {
+      case Exited() || Died():
+        _terminals[event.name] = event;
+        _live.remove(event.name);
+      case SessionStarted() || Respawned() || ActivityChanged():
+        break;
+    }
+    _events.add(event);
+  }
 
   @override
   Future<void> start(String name, RuntimeConfig config) async {
@@ -73,7 +99,10 @@ class FakeRuntimeProvider implements RuntimeProvider {
       throwOnStart = null;
       throw t;
     }
-    // The spawn LANDED — only now does the transport hold the session.
+    // The spawn LANDED — only now does the transport hold the session, and the
+    // new incarnation clears any stale prior terminal (the terminalOf release
+    // contract).
+    _terminals.remove(name);
     _live.add(name);
   }
 
@@ -81,6 +110,8 @@ class FakeRuntimeProvider implements RuntimeProvider {
   Future<void> stop(String name) async {
     stopped.add(name);
     _live.remove(name);
+    // stop RELEASES the retained terminal (the terminalOf release contract).
+    _terminals.remove(name);
   }
 
   @override
@@ -109,10 +140,21 @@ class FakeRuntimeProvider implements RuntimeProvider {
   DateTime? lastActivity(String name) => null;
 
   @override
+  RuntimeEvent? terminalOf(String name) => _terminals[name];
+
+  @override
+  ({int pid, int? pgid})? identityOf(String name) =>
+      _live.contains(name) ? identities[name] : null;
+
+  @override
   RuntimeCapabilities get capabilities => RuntimeCapabilities.subprocess;
 
-  /// Closes the broadcast event stream (call from an `addTearDown`).
-  Future<void> close() => _events.close();
+  /// Closes the broadcast event stream and drops all retained terminals (call
+  /// from an `addTearDown`).
+  Future<void> close() {
+    _terminals.clear();
+    return _events.close();
+  }
 }
 
 // ---------------------------------------------------------------------------

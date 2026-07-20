@@ -76,6 +76,10 @@ class _StubbornProvider implements RuntimeProvider {
   @override
   DateTime? lastActivity(String name) => null;
   @override
+  RuntimeEvent? terminalOf(String name) => null;
+  @override
+  ({int pid, int? pgid})? identityOf(String name) => (pid: 4321, pgid: 4321);
+  @override
   RuntimeCapabilities get capabilities => RuntimeCapabilities.subprocess;
 }
 

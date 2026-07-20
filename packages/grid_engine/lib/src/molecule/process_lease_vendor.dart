@@ -58,6 +58,8 @@
 /// arm, tg-6gi); the flat path is untouched.
 library;
 
+import 'dart:async';
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
@@ -67,6 +69,52 @@ import '../sdk/circuit.dart';
 import '../sdk/lease.dart';
 import 'molecule_schema.dart';
 
+/// A per-incarnation, BUFFERED tap on a transport's broadcast [RuntimeEvent]
+/// stream — the ONE subscription spanning acquire→dispatch (tg-uad D1,
+/// mirroring `ProcessAllocation`'s hold-one-subscription-for-the-whole-life
+/// shape).
+///
+/// `stationProcessSpawner` opens it BEFORE `transport.start` and hands it to
+/// `stationProcessDispatcher` through [ProcessHandle.events]. Because the
+/// inner controller BUFFERS, an event emitted while nobody has consumed
+/// [stream] yet — the old unobserved acquire→dispatch window an unbuffered
+/// broadcast stream dropped events in — is QUEUED, never lost. Closed by
+/// whoever finishes with it (the dispatcher when it settles; the lease
+/// release when dispatch never ran); [close] is idempotent.
+class ProcessEventTap {
+  /// Opens the tap: subscribes to [source] filtered to [name] immediately.
+  ProcessEventTap.open(Stream<RuntimeEvent> source, String name) {
+    _sub = source.where((e) => e.name == name).listen((e) {
+      if (!_controller.isClosed) _controller.add(e);
+    });
+  }
+
+  final StreamController<RuntimeEvent> _controller =
+      StreamController<RuntimeEvent>();
+  late final StreamSubscription<RuntimeEvent> _sub;
+  bool _closed = false;
+
+  /// The buffered, single-subscription view of the session's events from the
+  /// instant the tap was opened.
+  Stream<RuntimeEvent> get stream => _controller.stream;
+
+  /// Whether [close] has run — the incarnation's lease-lifetime signal (the
+  /// tap dies with the lease): the concurrent breadcrumb persist gates its
+  /// retries on this, so a retry can never be enqueued after release's
+  /// clearing write (release closes the tap BEFORE it clears).
+  bool get isClosed => _closed;
+
+  /// Cancels the upstream subscription and closes the buffer. Idempotent.
+  Future<void> close() {
+    if (_closed) return Future<void>.value();
+    _closed = true;
+    // Deliberately not awaited: a single-subscription controller that was
+    // never listened to parks its close()'s done future forever.
+    unawaited(_controller.close());
+    return _sub.cancel();
+  }
+}
+
 /// A leased process's identity — `pgid`/`pid`/`token` as the OPAQUE handle
 /// type `H` a [LeaseCapability<ProcessHandle>] acquires/adopts/releases
 /// (Decided item 5). Never written to a [NodeCursor] on the molecule path;
@@ -75,11 +123,13 @@ import 'molecule_schema.dart';
 class ProcessHandle {
   /// Creates the handle from a spawned process's [pgid]/[pid] plus the
   /// engine-minted freshness [token] (the SAME three-part identity
-  /// [AdoptFence] carries for the flat model's `ProcessAllocation`).
+  /// [AdoptFence] carries for the flat model's `ProcessAllocation`),
+  /// optionally carrying the incarnation's [events] tap.
   const ProcessHandle({
     required this.pgid,
     required this.pid,
     required this.token,
+    this.events,
   });
 
   /// The spawned process-group id (the respawn/liveness kill target).
@@ -92,6 +142,13 @@ class ProcessHandle {
   /// proven (the domain-specific half of no-adopt-on-faith; the pgid-alive
   /// half is [AllocationLiveness]).
   final String token;
+
+  /// The per-incarnation buffered event tap `stationProcessSpawner` opened for
+  /// this handle BEFORE the spawn (tg-uad), or null for a handle that has no
+  /// live incarnation to observe (a breadcrumb-parsed adopt survivor, a
+  /// test-minted literal). Live plumbing, NOT identity: excluded from
+  /// [operator ==]/[hashCode] and never encoded into the [leaseBreadcrumb].
+  final ProcessEventTap? events;
 
   @override
   bool operator ==(Object other) =>
@@ -154,7 +211,11 @@ abstract class ProcessLeaseVendor {
   ///  - a step whose fine state LATCHED (`complete`/`failed`/`gated`) is
   ///    skipped untouched;
   ///  - a breadcrumb that does not parse ([leaseBreadcrumbOf]) is skipped —
-  ///    nothing is leased;
+  ///    nothing is leased — EXCEPT that a step which already spawned (state
+  ///    `running`/`ready`) with its lease keys entirely absent (not the
+  ///    cleared sentinel) is reported LOUD through [onOrphan] before the
+  ///    skip: that shape means the acquire's concurrent breadcrumb write
+  ///    never landed, and a surviving group cannot be found or killed here;
   ///  - a group the caller's [alive] probe cannot PROVE alive is never killed
   ///    (negative evidence only ever WITHHOLDS a kill) and its stale
   ///    breadcrumb is LEFT: it is inert (adoption gates on the vendor's own
@@ -283,7 +344,10 @@ ProcessHandle? leaseBreadcrumbOf(Map<String, String> metadata) {
 /// them off its post-barrier state snapshot (the SAME read its cursor
 /// projection rides, A39), so the sweep itself issues no bd query and opens no
 /// subscription.
-typedef LeaseSweepCandidate = ({String stepBeadId, Map<String, String> metadata});
+typedef LeaseSweepCandidate = ({
+  String stepBeadId,
+  Map<String, String> metadata,
+});
 
 /// The guarded group-terminate seam the sweep kills through — the caller binds
 /// it to the REAL `terminateGroup` over its own `ProcessGroupController`, so
@@ -503,7 +567,33 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
       // cleared/partial one ⇒ nothing is leased; the frontier re-mounts and
       // the job lease respawns fresh (respawn-or-skip, D5).
       final handle = leaseBreadcrumbOf(candidate.metadata);
-      if (handle == null) continue;
+      if (handle == null) {
+        // NOT silently (tg-uad D3 repair round 1): a step that already
+        // SPAWNED (state running/ready) OWES a breadcrumb. Its lease keys
+        // being entirely ABSENT — not the cleared sentinel release writes —
+        // means the acquire's concurrent breadcrumb write never landed
+        // (dropped, or the station died inside the write window). The sweep
+        // has no pgid to key a kill from, so if that incarnation's group
+        // survived the crash it CANNOT be found or killed here — say so
+        // LOUD instead of skipping like nothing was ever leased.
+        final state = candidate.metadata[MoleculeStepKeys.state];
+        final spawned =
+            state == StepState.running.name || state == StepState.ready.name;
+        final keysAbsent =
+            !candidate.metadata.containsKey(LeaseKeys.pgid) &&
+            !candidate.metadata.containsKey(LeaseKeys.pid) &&
+            !candidate.metadata.containsKey(LeaseKeys.token);
+        if (spawned && keysAbsent) {
+          onOrphan(
+            'lease sweep: step "${candidate.stepBeadId}" is $state but '
+            'carries NO lease breadcrumb — its acquire\'s breadcrumb write '
+            'never landed (dropped, or the station died mid-write). If that '
+            'incarnation\'s process group survived the restart, this sweep '
+            'cannot find or kill it — inspect and terminate it by hand.',
+          );
+        }
+        continue;
+      }
 
       // The CALLER's kill gate — the same real-controller evidence its other
       // kills ride, NOT this vendor's adopt-liveness (which may deliberately
@@ -522,11 +612,7 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
       // kill below exactly like a job — the flat path's never-adopt posture.
       if (candidate.metadata[MoleculeStepKeys.kind] == StepKind.daemon.name &&
           liveness(
-            AdoptFence(
-              pgid: handle.pgid,
-              pid: handle.pid,
-              token: handle.token,
-            ),
+            AdoptFence(pgid: handle.pgid, pid: handle.pid, token: handle.token),
           )) {
         swept.add(
           SweptLeaseGroup(
@@ -602,6 +688,16 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
   }
 }
 
+/// The backoff for `_VendedProcessLease._persistBreadcrumb`'s retry loop:
+/// 25ms doubling per attempt, capped at 2s — fast enough that a transient bd
+/// blip costs only milliseconds of sweep/adoption blindness, slow enough not
+/// to hammer a chokepoint that is genuinely down.
+Duration _breadcrumbRetryDelay(int attempt) {
+  final shift = (attempt - 1).clamp(0, 7);
+  final ms = (25 << shift).clamp(25, 2000);
+  return Duration(milliseconds: ms);
+}
+
 /// The [LeaseCapability<ProcessHandle>] [StationProcessLeaseVendor.leaseFor]
 /// vends for ONE step bead. Reuses the lease family verbatim — only
 /// `adoptable`/`proveFresh`/`acquire`/`release` are overridden;
@@ -665,8 +761,61 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     StepArgs args,
   ) async {
     final handle = await spawn(request, context, args);
-    await writer.update(stepBeadId, metadata: leaseBreadcrumb(handle));
+    // OUT OF THE CRITICAL SECTION (tg-uad D3): the breadcrumb serves RESTART
+    // ADOPTION + the restart SWEEP, not the live path — persist it
+    // CONCURRENTLY with dispatch instead of awaiting it between spawn and
+    // dispatch, where its chokepoint queue latency under unrelated station
+    // write load WAS the unobserved-terminal window a fast-exiting lane died
+    // inside. Failing a LIVE dispatch over a persistence blip would be
+    // strictly worse — but a blip must not be silently forfeited either: a
+    // breadcrumb that never lands doesn't just forfeit adoption, it blinds
+    // `sweepOrphanedLeases` to this incarnation entirely (an absent
+    // breadcrumb reads as "nothing is leased"), so a crash while the process
+    // was still alive would leave a live orphan the sweep could never find
+    // or kill. [_persistBreadcrumb] therefore RETRIES the write (backoff)
+    // until it lands, for as long as the incarnation is live and its lease
+    // still held; and the sweep reports LOUD on the residual shape (a
+    // spawned step with no lease keys at all). Errors are contained inside
+    // the helper (an unhandled rejection here would be a zone error,
+    // tg-7ux). Ordering vs release stays safe: the chokepoint serializes per
+    // bead id, and every (re)attempt is gated tap-open-then-enqueue
+    // synchronously, while release closes the tap BEFORE it enqueues its
+    // clearing write — so no retry can ever land after the clear.
+    unawaited(_persistBreadcrumb(handle));
     return LeaseBound(handle);
+  }
+
+  /// The concurrent breadcrumb persist for [acquire] — retries a failed
+  /// write with [_breadcrumbRetryDelay] backoff until it lands, the
+  /// incarnation's lease ends ([ProcessEventTap.isClosed] — release owns the
+  /// record from there), or the incarnation itself is gone from the
+  /// transport (nothing would survive to a restart sweep). Never throws.
+  ///
+  /// A tap-less handle (a test-minted literal; the production spawner always
+  /// taps) has no lease-lifetime signal to gate an open-ended retry on, so
+  /// it gets the single attempt — the sweep's missing-breadcrumb report is
+  /// the backstop.
+  Future<void> _persistBreadcrumb(ProcessHandle handle) async {
+    final tap = handle.events;
+    final transport = request.allocation.transport;
+    final name = request.allocation.address.providerName;
+    for (var attempt = 1; ; attempt += 1) {
+      // Gate CHECK-THEN-ENQUEUE synchronously (no await between): a tap that
+      // is still open here proves release has not yet enqueued its clearing
+      // write (it closes the tap first), so this attempt serializes AHEAD of
+      // any clear at the per-bead chokepoint — a stale breadcrumb can never
+      // overwrite a cleared one.
+      if (tap != null && tap.isClosed) return;
+      try {
+        await writer.update(stepBeadId, metadata: leaseBreadcrumb(handle));
+        return;
+      } on Object {
+        // This attempt dropped — decide whether the retry is still owed.
+      }
+      if (tap == null) return;
+      if (!transport.isRunning(name)) return;
+      await Future<void>.delayed(_breadcrumbRetryDelay(attempt));
+    }
   }
 
   @override
@@ -687,6 +836,10 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
   /// same cleared state rather than erroring or double-writing anything new.
   @override
   Future<void> release(ProcessHandle handle) async {
+    // The per-incarnation event tap dies with the lease (idempotent — the
+    // dispatcher normally closed it already; this covers an acquired handle
+    // whose dispatch never ran, e.g. a dispose racing the acquire).
+    await handle.events?.close();
     try {
       await request.allocation.transport.stop(
         request.allocation.address.providerName,
@@ -773,6 +926,9 @@ class _SelfManagedProcessLease extends LeaseCapability<ProcessHandle> {
 
   @override
   Future<void> release(ProcessHandle handle) async {
+    // Mirrors _VendedProcessLease.release: the incarnation tap dies with the
+    // lease (idempotent).
+    await handle.events?.close();
     try {
       await request.allocation.transport.stop(
         request.allocation.address.providerName,

@@ -650,6 +650,16 @@ class DryRunProvider implements RuntimeProvider {
   @override
   DateTime? lastActivity(String name) => null;
 
+  // A dry-run session never spawns and never ends, so no terminal is ever
+  // retained ([RuntimeProvider.terminalOf]'s null case).
+  @override
+  RuntimeEvent? terminalOf(String name) => null;
+
+  // No OS process exists behind a would-be spawn — a duplicate dry-run start
+  // therefore fails acquire LOUD (tg-090) instead of waiting forever.
+  @override
+  ({int pid, int? pgid})? identityOf(String name) => null;
+
   @override
   RuntimeCapabilities get capabilities => RuntimeCapabilities.subprocess;
 }

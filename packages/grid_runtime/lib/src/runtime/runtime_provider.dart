@@ -65,6 +65,38 @@ abstract interface class RuntimeProvider {
   /// when unknown/unsupported. gc's `GetLastActivity`.
   DateTime? lastActivity(String name);
 
+  /// The RETAINED terminal of the named session — the exact
+  /// [RuntimeEvent.exited]/[RuntimeEvent.died] this provider emitted for it,
+  /// inferred flag and reason intact — or null while the session is live,
+  /// unknown, or released.
+  ///
+  /// A terminal is STATE, not just an instant on [events] (tg-uad): the
+  /// provider latches it BEFORE emitting, so a consumer that subscribed after
+  /// the emission (or whose emission fired with zero listeners on the
+  /// unbuffered broadcast stream) can still query the outcome. The live path
+  /// stays push ([events]); this held record is the state half of the standard
+  /// state-then-stream pattern — consult [terminalOf] first, then subscribe.
+  ///
+  /// RELEASE semantics (deliberate; part of this contract):
+  ///  - a new [start] of the same name CLEARS the prior incarnation's stale
+  ///    terminal — the name is reborn, and an old outcome must never shadow
+  ///    the new incarnation;
+  ///  - [stop] of the name RELEASES it (the teardown / lease-release path: a
+  ///    stopped session is silent by design AND holds no terminal);
+  ///  - provider teardown (dispose/close) releases all held terminals.
+  RuntimeEvent? terminalOf(String name);
+
+  /// The OS identity of the named LIVE session — its leader pid and (when
+  /// resolution succeeded at spawn) its pgid — or null when the session is
+  /// unknown, already terminal, or its spawn has not yet stamped a pid.
+  ///
+  /// The synchronous surface an acquire that lost the `SessionStarted` race
+  /// resolves a handle from (tg-090/D5): for a session that already existed,
+  /// `SessionStarted` fired before this incarnation subscribed and never
+  /// re-fires — never wait for it; query this (and [terminalOf], which covers
+  /// the already-dead case) instead.
+  ({int pid, int? pgid})? identityOf(String name);
+
   /// What this provider can reliably detect (gc's `Capabilities()`), so callers
   /// degrade explicitly.
   RuntimeCapabilities get capabilities;
