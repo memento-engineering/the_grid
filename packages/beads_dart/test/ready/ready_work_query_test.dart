@@ -5,6 +5,8 @@ import 'package:beads_dart/src/services/dolt_endpoint.dart';
 import 'package:beads_dart/src/services/dolt_query_service.dart';
 import 'package:test/test.dart';
 
+import '../support/schema_probe_rows.dart';
+
 /// A fake [DoltConnection] that records every SQL string and answers from a
 /// callback. Transaction-control statements (START/COMMIT/ROLLBACK) return an
 /// empty result; everything else is delegated to [answer], which the test wires
@@ -33,11 +35,15 @@ class _RecordingConnection implements DoltConnection {
         upper.startsWith('ROLLBACK')) {
       return const [];
     }
-    // Drift guard.
+    // Connect-time guard: the diagnostic migration version, then the shape
+    // probe the SQL read path is actually verified against.
     if (sql.contains('schema_migrations')) {
       return [
-        {'v': 50},
+        {'v': 53},
       ];
+    }
+    if (sql.contains('information_schema')) {
+      return kV53ProbeRows;
     }
     return answer(sql);
   }

@@ -38,7 +38,7 @@ The current pin (as of this writing):
 | Surface | Pin | Recorded in |
 |---|---|---|
 | **bd CLI** | `1.0.5` (commit `f9fe4ef2a`, `main@f9fe4ef2a6d3`) | `CLAUDE.md` → "Environment facts" → *Pinned upstream* |
-| **beads schema** | migration `0050` (`0050_dependencies_deterministic_id`) | `beads` checkout pinned at `f9fe4ef2a`; targeted version const in `DoltQueryService` |
+| **beads schema** | not pinned — feature-detected per store | `DoltSchemaShape` in `beads_dart` probes `information_schema` at connect; the required tables/columns are the pin, the migration version is diagnostic only |
 | **envelope** | `schema_version == 1` | `kBdSchemaVersion` in `lib/src/codecs/envelope.dart` |
 | **fixtures** | `fixtures/upstream/2026-06-11-bd-1.0.5/` | dated dir name carries date + bd version |
 

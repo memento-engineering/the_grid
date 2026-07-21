@@ -17,16 +17,22 @@
 ///
 /// ## Version-compat contract
 ///
-/// Pinned against **bd 1.0.5** (`f9fe4ef2a`). The wire contract is bd's
-/// enveloped `--json` output (`{schema_version, data}`); every decode path
-/// asserts `schema_version == 1` (see [BdSchemaDriftException] in
-/// `src/errors/bd_exception.dart`) and the SQL read path treats a drift as a
-/// hard signal to fall back to the bd CLI rather than trust a stale row
-/// shape. That assertion — fail loud on an unexpected `schema_version`,
-/// never silently coerce — is the documented guard against upstream bd
-/// releases drifting the wire format out from under this client. Re-pinning
-/// to a newer bd release goes through the grid-porting skill's re-capture +
-/// drift-diff procedure, never a silent bump of the assumed shape.
+/// Supports **bd >= 1.0.5** (verified against 1.0.5 / schema v50 and 1.1.0 /
+/// schema v53). Not a pin: the SQL read path probes the store's table/column
+/// shape at connect ([DoltSchemaShape]) and refuses only a store it cannot
+/// serve, naming the missing columns; the migration version is diagnostic
+/// only.
+///
+/// The wire contract is bd's enveloped `--json` output
+/// (`{schema_version, data}`); every decode path asserts `schema_version == 1`
+/// (see [BdSchemaDriftException] in `src/errors/bd_exception.dart`) and the SQL
+/// read path treats a drift as a hard signal to fall back to the bd CLI rather
+/// than trust a stale row shape. That assertion — fail loud on an unexpected
+/// `schema_version`, never silently coerce — is the documented guard against
+/// upstream bd releases drifting the wire format out from under this client.
+/// Widening the supported range — or re-capturing fixtures for a newer bd —
+/// goes through the grid-porting skill's re-capture + drift-diff procedure,
+/// never a silent bump of the assumed shape.
 library;
 
 // Models (value types — plain names per ADR-0001 Decision 2).
@@ -57,6 +63,7 @@ export 'src/services/beads_workspace.dart';
 export 'src/services/dolt_endpoint.dart';
 export 'src/services/dolt_query_service.dart';
 export 'src/services/dolt_row_mapper.dart';
+export 'src/services/dolt_schema_shape.dart';
 
 // Errors.
 export 'src/errors/bd_exception.dart';

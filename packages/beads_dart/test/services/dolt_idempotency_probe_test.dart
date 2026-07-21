@@ -3,7 +3,10 @@ library;
 
 import 'package:beads_dart/src/services/dolt_endpoint.dart';
 import 'package:beads_dart/src/services/dolt_query_service.dart';
+import 'package:beads_dart/src/services/dolt_schema_shape.dart';
 import 'package:test/test.dart';
+
+import '../support/schema_probe_rows.dart';
 
 /// A fake [DoltConnection] that records every SQL it sees and answers from a
 /// canned table. The probe runs inside `runReadTransaction`, so the control
@@ -50,6 +53,7 @@ void main() {
         final sql = DoltQueryService.idempotencyProbeSql(
           'tg-root',
           'converge:tg-root:iter:1',
+          shape: kV53Shape,
         );
         // The guard rejects anything that is not a read — a passing call proves
         // the probe is a SELECT.
@@ -69,6 +73,7 @@ void main() {
       final sql = DoltQueryService.idempotencyProbeSql(
         'tg-root',
         'converge:tg-root:iter:3',
+        shape: kV53Shape,
       );
       // child id parented under tg-root via a parent-child edge …
       expect(sql, contains("type = 'parent-child'"));
@@ -89,6 +94,7 @@ void main() {
       final sql = DoltQueryService.idempotencyProbeSql(
         "tg-root'or'1",
         "converge:x'y:iter:1",
+        shape: kV53Shape,
       );
       // Single quotes are doubled, so the text stays a literal — no break-out.
       expect(sql, contains("'tg-root''or''1'"));
@@ -101,11 +107,13 @@ void main() {
       final probeSql = DoltQueryService.idempotencyProbeSql(
         'tg-root',
         'converge:tg-root:iter:1',
+        shape: kV53Shape,
       );
       final conn = _RecordingConnection({
         driftSql: [
-          {'v': 50},
+          {'v': 53},
         ],
+        DoltSchemaShape.probeSql: kV53ProbeRows,
         probeSql: [
           {'id': 'tg-wisp-1', 'created_at': '2026-06-13 00:00:00'},
         ],
@@ -130,8 +138,9 @@ void main() {
     test('a MISS returns null (no child carries the key)', () async {
       final conn = _RecordingConnection({
         driftSql: [
-          {'v': 50},
+          {'v': 53},
         ],
+        DoltSchemaShape.probeSql: kV53ProbeRows,
         // no probe answer ⇒ empty result ⇒ miss.
       });
       final service = DoltQueryService(
