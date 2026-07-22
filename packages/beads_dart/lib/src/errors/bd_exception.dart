@@ -99,20 +99,40 @@ class BdParseException extends BdException {
   final String source;
 }
 
-/// The envelope's `schema_version` was not the pinned value — a hard signal
-/// of upstream drift. The SQL read path uses this to fall back to bd CLI.
+/// Upstream drift the client refuses to guess through.
+///
+/// Two shapes, one catch site: the default constructor is the envelope
+/// `schema_version` mismatch; [BdSchemaDriftException.sqlShape] is the Dolt SQL
+/// read path finding a store whose column shape it cannot serve. Both are the
+/// signal to fall back to the bd CLI (ADR-0001 Decision 4).
 class BdSchemaDriftException extends BdException {
   const BdSchemaDriftException({
     required this.found,
     required this.expected,
     this.source = '',
-  });
+  }) : missing = const [];
+
+  /// The SQL read path cannot run against this store: [missing] names each
+  /// required `table` / `table.column` the connect-time probe did not find, and
+  /// [found] carries the store's migration version for diagnostics only.
+  const BdSchemaDriftException.sqlShape({
+    required this.missing,
+    required this.found,
+    this.source = 'information_schema',
+  }) : expected = 0;
 
   final Object? found;
   final int expected;
   final String source;
 
+  /// The required tables/columns the store is missing (SQL-shape drift only;
+  /// empty for the envelope-version case).
+  final List<String> missing;
+
   @override
-  String get message =>
-      'bd envelope schema_version $found != expected $expected (upstream drift)';
+  String get message => missing.isEmpty
+      ? 'bd envelope schema_version $found != expected $expected (upstream drift)'
+      : 'Dolt SQL read path unsupported at migration $found: missing '
+            '${missing.join(', ')} (probed via $source) — falling back to the '
+            'bd CLI';
 }

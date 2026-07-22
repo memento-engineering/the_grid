@@ -29,13 +29,6 @@ class _FilterTables {
   );
 }
 
-/// `COALESCE(...)` over the split target columns (beads `DepTargetExpr`,
-/// `internal/storage/issueops/dependencies.go:37`) — the runtime way to read a
-/// dependency edge's target after the legacy generated column was dropped
-/// (migrations 0041/0043).
-const String _depTargetExpr =
-    'COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)';
-
 /// One row of a ready-work result: the bead id plus the columns the sort policy
 /// and the differential per-row comparison need. The ordered list of these
 /// **is** the differential primitive (port spec §10: compare on ordered id
@@ -61,7 +54,10 @@ class ReadyWorkRow {
 }
 
 /// The ready-work predicate ported from beads
-/// `internal/storage/issueops/ready_work.go` (bd 1.0.5, f9fe4ef2a), evaluated
+/// `internal/storage/issueops/ready_work.go` (ported from bd 1.0.5, f9fe4ef2a;
+/// re-verified against bd 1.1.0 / schema v53 on 2026-07-21 — the predicate is
+/// unchanged, and the dependency-target expression is now built from the
+/// store's probed [DoltSchemaShape] rather than assumed), evaluated
 /// over a [DoltQueryService]'s pooled, **SELECT-only** connection inside one
 /// read transaction.
 ///
@@ -280,9 +276,10 @@ class ReadyWorkQuery {
     // #13 MoleculeID direct-children (§3.4).
     if (filter.moleculeId != null && filter.moleculeId!.isNotEmpty) {
       final mol = filter.moleculeId!;
+      final depTarget = _dolt.shape.depTargetExprFor(tables.dependencies);
       clauses.add(
         '(id IN (SELECT issue_id FROM ${tables.dependencies} '
-        "WHERE type = 'parent-child' AND $_depTargetExpr = ${_q(mol)}) "
+        "WHERE type = 'parent-child' AND $depTarget = ${_q(mol)}) "
         'OR (id LIKE CONCAT(${_q(mol)}, \'.%\') AND id NOT IN '
         '(SELECT issue_id FROM ${tables.dependencies} '
         "WHERE type = 'parent-child')))",
@@ -449,12 +446,14 @@ class ReadyWorkQuery {
     String parentId,
   ) async {
     final root = _q(parentId);
-    const issuesEdge =
-        'SELECT issue_id, $_depTargetExpr FROM dependencies '
-        "WHERE type = 'parent-child'";
-    const wispEdge =
-        'SELECT issue_id, $_depTargetExpr FROM wisp_dependencies '
-        "WHERE type = 'parent-child'";
+    final issuesEdge =
+        'SELECT issue_id, ${_dolt.shape.depTargetExprFor('dependencies')} '
+        "FROM dependencies WHERE type = 'parent-child'";
+    final wispEdge = _dolt.shape.hasTable('wisp_dependencies')
+        ? 'SELECT issue_id, '
+              '${_dolt.shape.depTargetExprFor('wisp_dependencies')} '
+              "FROM wisp_dependencies WHERE type = 'parent-child'"
+        : null;
 
     String cte(String parentEdges) =>
         'WITH RECURSIVE parent_edges(issue_id, depends_on_id) AS ($parentEdges), '
@@ -469,8 +468,12 @@ class ReadyWorkQuery {
         'SELECT id, depth FROM descendants WHERE id <> $root';
 
     // maxDepth = 0 (unbounded): the depth cap legs are inert (0<=0 is true).
-    final withWisps = cte('$issuesEdge UNION ALL $wispEdge');
-    final rows = await _selectMaybeMissing(select, withWisps);
+    final rows = wispEdge == null
+        ? null
+        : await _selectMaybeMissing(
+            select,
+            cte('$issuesEdge UNION ALL $wispEdge'),
+          );
     final source = rows ?? await select(cte(issuesEdge));
     return [
       for (final row in source)

@@ -5,8 +5,11 @@ import 'package:beads_dart/src/errors/bd_exception.dart';
 import 'package:beads_dart/src/services/beads_workspace.dart';
 import 'package:beads_dart/src/services/dolt_endpoint.dart';
 import 'package:beads_dart/src/services/dolt_query_service.dart';
+import 'package:beads_dart/src/services/dolt_schema_shape.dart';
 import 'package:mysql_client/exception.dart';
 import 'package:test/test.dart';
+
+import '../support/schema_probe_rows.dart';
 
 /// A fake [DoltConnection] backed by a canned query→rows table, with a
 /// programmable "reaped" flip so the reconnect path can be exercised offline.
@@ -61,11 +64,12 @@ void main() {
       password: 'fake',
     );
 
-    Map<String, List<Map<String, Object?>>> answers({int schemaVersion = 50}) {
+    Map<String, List<Map<String, Object?>>> answers({int schemaVersion = 53}) {
       return {
         'SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations': [
           {'v': schemaVersion},
         ],
+        DoltSchemaShape.probeSql: kV53ProbeRows,
         'SELECT @@tg_working': [
           {'@@tg_working': 'hash-abc'},
         ],
@@ -95,14 +99,14 @@ void main() {
           },
         ],
         // labels ∪ wisp_labels arrive as one UNION ALL result set.
-        DoltQueryService.labelsSelect: [
+        DoltQueryService.labelsSelectFor(kV53Shape): [
           {'issue_id': 'tg-1', 'label': 'zeta'},
           {'issue_id': 'tg-1', 'label': 'alpha'},
           {'issue_id': 'tg-wisp-r1', 'label': 'converge'},
         ],
         // dependencies ∪ wisp_dependencies arrive as one UNION ALL result set:
         // the permanent edge plus the wisp root's parent-child edge.
-        DoltQueryService.dependenciesSelect: [
+        DoltQueryService.dependenciesSelectFor(kV53Shape): [
           {
             'issue_id': 'tg-1',
             'depends_on_id': 'tg-2',
@@ -212,32 +216,73 @@ void main() {
       },
     );
 
-    test('a newer schema version trips the drift guard at connect()', () async {
-      final fake = _FakeConnection(answers(schemaVersion: 51));
+    test(
+      'a far-newer migration version alone does NOT trip the guard',
+      () async {
+        // The regression this replaced a version pin to fix: every org store is
+        // v53 under bd 1.1.0, and the old pin (50) refused all of them.
+        for (final version in [50, 53, 999]) {
+          final svc = DoltQueryService(
+            endpoint,
+            connectionFactory: (_) async =>
+                _FakeConnection(answers(schemaVersion: version)),
+          );
+          addTearDown(svc.close);
+          await svc.connect();
+          expect(svc.shape.migrationVersion, version);
+          expect(svc.shape.isSupported, isTrue);
+        }
+      },
+    );
+
+    test('a store missing a required column is refused LOUDLY', () async {
+      final probeless = answers()
+        ..[DoltSchemaShape.probeSql] = [
+          for (final row in kV53ProbeRows)
+            if (!(row['t'] == 'issues' && row['c'] == 'is_blocked')) row,
+        ];
       final svc = DoltQueryService(
         endpoint,
-        connectionFactory: (_) async => fake,
+        connectionFactory: (_) async => _FakeConnection(probeless),
       );
       addTearDown(svc.close);
-      await expectLater(svc.connect(), throwsA(isA<BdSchemaDriftException>()));
+      await expectLater(
+        svc.connect(),
+        throwsA(
+          isA<BdSchemaDriftException>().having(
+            (e) => e.message,
+            'message',
+            contains('issues.is_blocked'),
+          ),
+        ),
+      );
     });
 
-    test('an equal-or-older schema version is accepted', () async {
+    test('the shape is unreadable before connect()', () {
       final svc = DoltQueryService(
         endpoint,
         connectionFactory: (_) async => _FakeConnection(answers()),
       );
       addTearDown(svc.close);
-      await svc.connect();
-      // 49 < 50 must not throw either.
-      final older = DoltQueryService(
-        endpoint,
-        connectionFactory: (_) async =>
-            _FakeConnection(answers(schemaVersion: 49)),
-      );
-      addTearDown(older.close);
-      await older.connect();
+      // No SQL may be emitted from an unverified shape.
+      expect(() => svc.shape, throwsStateError);
     });
+
+    test(
+      'the dependencies SELECT carries the probed target expression',
+      () async {
+        final svc = DoltQueryService(
+          endpoint,
+          connectionFactory: (_) async => _FakeConnection(answers()),
+        );
+        addTearDown(svc.close);
+        await svc.connect();
+        // ADR-0000 A44: a cross-store edge lives in depends_on_external, so the
+        // alias must COALESCE it in or the edge vanishes from every SQL read.
+        expect(svc.dependenciesSelect, contains('depends_on_external'));
+        expect(svc.dependenciesSelect, contains('AS depends_on_id'));
+      },
+    );
 
     test(
       'reconnects transparently when an idle socket is reaped mid-query',

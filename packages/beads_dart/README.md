@@ -53,10 +53,31 @@ against the `bd ready --json` oracle (ADR-0003 Decision 5).
 
 ## Version-compat contract
 
-Pinned against **bd 1.0.5** (`f9fe4ef2a`). Every decode path asserts the
+Supports **bd >= 1.0.5** — a RANGE, not a pin. Verified against bd 1.0.5
+(`f9fe4ef2a`, schema v50) and bd 1.1.0 (Homebrew, schema v53).
+
+Two independent guards back that claim. Every decode path asserts the bd
 envelope's `schema_version`; a mismatch fails loud rather than silently
-coercing, and the SQL read path treats drift as a signal to fall back to the
-bd CLI. The full contract is in the library doc (`lib/beads_dart.dart`).
+coercing. The pooled SQL read path probes the store's actual table/column
+SHAPE at connect (`DoltSchemaShape`, one `information_schema` SELECT) and
+builds its dependency-target expression from the columns that are really
+there — the migration version is recorded for diagnostics and never compared,
+so a newer 1.x store that still carries the read path's columns just works,
+and a store that genuinely drifted stands down to the bd CLI naming exactly
+what it lost. The bd CLI path (`BD_JSON_ENVELOPE=1`) is the version-stable
+fallback for anything the SQL path will not serve. The full contract is in the
+library doc (`lib/beads_dart.dart`).
+
+**Operator hazard — `bd doctor --fix` and cross-store edges.** bd 1.1's
+`bd doctor --fix` treats a raw cross-store bead-id dependency (the ADR-0000
+A44 mechanism — a foreign bead id stored in
+`dependencies.depends_on_external`, which the origin store's own `is_blocked`
+recompute never reads) as an ORPHAN and removes it. Never run
+`bd doctor --fix` against an org store without excluding cross-store edges.
+beads_dart does not inherit that interpretation: `depends_on_external` is a
+REQUIRED column in the shape probe and is always COALESCE'd into the
+`depends_on_id` alias, so a cross-store edge reads back as an ordinary
+`BeadDependency` instead of disappearing.
 
 ## Tests
 

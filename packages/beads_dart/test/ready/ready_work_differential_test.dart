@@ -9,6 +9,7 @@ import 'package:beads_dart/src/services/dolt_query_service.dart';
 import 'package:test/test.dart';
 
 import '../support/fake_bd_runner.dart';
+import '../support/schema_probe_rows.dart';
 
 /// A fake [DoltConnection] returning a fixed issue-pass result (no wisp family).
 class _FixedConnection implements DoltConnection {
@@ -29,7 +30,14 @@ class _FixedConnection implements DoltConnection {
     }
     if (sql.contains('schema_migrations')) {
       return [
-        {'v': 50},
+        {'v': 53},
+      ];
+    }
+    // The shape probe: the issues family only — this fake has no wisp family.
+    if (sql.contains('information_schema')) {
+      return [
+        for (final row in kV53ProbeRows)
+          if (!(row['t']! as String).startsWith('wisp')) row,
       ];
     }
     // No wisp tables.

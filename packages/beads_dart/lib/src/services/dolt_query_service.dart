@@ -9,22 +9,7 @@ import '../models/bead.dart';
 import '../models/bead_dependency.dart';
 import 'dolt_endpoint.dart';
 import 'dolt_row_mapper.dart';
-
-/// The beads schema migration version this read path is written against
-/// (`internal/storage/schema/migrations/0050_dependencies_deterministic_id`).
-///
-/// The targeted SELECTs assume the post-0041 dependencies layout (typed target
-/// columns surfaced via a `COALESCE(...) AS depends_on_id` alias), the
-/// `started_at`/`spec_id` issue columns added by 0027/0034, and the wisp tables
-/// (`wisps`/`wisp_labels`/`wisp_dependencies`, migrations 0020/0021 plus the
-/// ignored-track split of wisp_dependencies' target columns) that bd routes
-/// ephemeral/no-history/infra beads into (ephemeral_routing.go, migration
-/// 0035). A database **newer** than this (forward drift) may have dropped or
-/// renamed a column this code reads, so the connect-time guard rejects it and
-/// the caller falls back to the bd CLI (ADR-0001 Decision 4 schema-drift
-/// guard). Bump this constant whenever the targeted SELECTs are re-validated
-/// against a newer migration.
-const int kTargetSchemaVersion = 50;
+import 'dolt_schema_shape.dart';
 
 /// Internal seam for unit-testing the pooled service without a real socket: a
 /// minimal subset of `mysql_client`'s [MySQLConnection] surface. The production
@@ -60,9 +45,11 @@ typedef SelectRunner = Future<List<Map<String, Object?>>> Function(String sql);
 ///   label and dependency tables) composed into [Bead]s and [BeadDependency]s
 ///   (the ready set is **not** computed here; `bd ready` is authoritative in
 ///   M1);
-/// - a connect-time schema-drift guard that throws [BdSchemaDriftException] on a
-///   database newer than [kTargetSchemaVersion] so the caller falls back to the
-///   bd CLI.
+/// - a connect-time SHAPE probe ([DoltSchemaShape]) that verifies the tables and
+///   columns the targeted SELECTs read and throws [BdSchemaDriftException] when
+///   any is absent, so the caller falls back to the bd CLI. The migration
+///   version is read for diagnostics only and is never compared — beads_dart
+///   supports bd >= 1.0.5, not one pinned migration level.
 ///
 /// Writes are impossible by construction: there is no mutate method, and the
 /// single generic entry point ([_runSelect]) rejects any non-SELECT statement.
@@ -82,7 +69,18 @@ class DoltQueryService {
   final List<DoltConnection> _pool = [];
   int _rr = 0;
   bool _closed = false;
-  bool _driftChecked = false;
+  DoltSchemaShape? _shape;
+
+  /// The probed schema shape. Throws [StateError] before [connect] has run —
+  /// a caller reading the shape without connecting has a bug, and returning a
+  /// default would let unverified SQL reach the server.
+  DoltSchemaShape get shape {
+    final probed = _shape;
+    if (probed == null) {
+      throw StateError('DoltQueryService.shape read before connect()');
+    }
+    return probed;
+  }
 
   /// The working-set probe statement for this endpoint's database, e.g.
   /// `SELECT @@tg_working`. Database-scoped: any committed data change flips the
@@ -90,13 +88,13 @@ class DoltQueryService {
   /// the exact SQL.
   String get probeSql => 'SELECT @@${endpoint.database}_working';
 
-  /// Opens the pool (lazily filled on demand) and runs the schema-drift guard.
+  /// Opens the pool (lazily filled on demand) and runs the shape probe.
   /// Safe to call more than once.
   Future<void> connect() async {
     _closed = false;
-    // Touch one connection so the drift guard runs eagerly and credential /
+    // Touch one connection so the shape probe runs eagerly and credential /
     // reachability failures surface at connect() rather than first query.
-    await _ensureDriftChecked();
+    await _ensureShapeProbed();
   }
 
   /// Closes every pooled connection. The service can be [connect]ed again after.
@@ -105,6 +103,8 @@ class DoltQueryService {
     final conns = List<DoltConnection>.of(_pool);
     _pool.clear();
     _rr = 0;
+    // A reconnect re-probes: the store may have been migrated meanwhile.
+    _shape = null;
     for (final conn in conns) {
       try {
         await conn.close();
@@ -156,10 +156,14 @@ class DoltQueryService {
   /// would silently scramble a positional `SELECT *` UNION.
   Future<({List<Bead> beads, List<BeadDependency> dependencies})>
   snapshotParts() async {
-    await _ensureDriftChecked();
+    await _ensureShapeProbed();
 
     final issueRows = await _runSelect(issuesSelect);
-    final wispRows = await _runSelect(wispsSelect);
+    // The wisp family only exists from migrations 0020/0021/0035 onward; on an
+    // older store the read is skipped rather than hard-erroring.
+    final wispRows = shape.hasTable('wisps')
+        ? await _runSelect(wispsSelect)
+        : const <Map<String, Object?>>[];
     final labelRows = await _runSelect(labelsSelect);
     final depRows = await _runSelect(dependenciesSelect);
 
@@ -225,7 +229,7 @@ class DoltQueryService {
   Future<T> runReadTransaction<T>(
     Future<T> Function(SelectRunner select) body,
   ) async {
-    await _ensureDriftChecked();
+    await _ensureShapeProbed();
     if (_closed) {
       throw const BdParseException(
         'DoltQueryService is closed; call connect() first',
@@ -287,8 +291,8 @@ class DoltQueryService {
   /// **oldest** match wins exactly like gc's `SortCreatedAsc` list scan,
   /// convergence_store.go:254).
   Future<String?> findWispByIdempotencyKey(String parentId, String key) async {
-    await _ensureDriftChecked();
-    final sql = idempotencyProbeSql(parentId, key);
+    await _ensureShapeProbed();
+    final sql = idempotencyProbeSql(parentId, key, shape: shape);
     final rows = await runReadTransaction((select) => select(sql));
     if (rows.isEmpty) return null;
     final id = rows.first['id'] ?? rows.first.values.firstOrNull;
@@ -299,33 +303,37 @@ class DoltQueryService {
   /// tests asserting the exact statement (SELECT-only; literals escaped).
   ///
   /// Parent-child edges: child = `issue_id`, parent = the target
-  /// (`COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)`)
-  /// on a `type = 'parent-child'` edge (beads issueops/blocked.go:60-63). The
-  /// child's `metadata.idempotency_key` is read from the JSON column on
-  /// `issues` ∪ `wisps`. Ordered created-ascending then id so the oldest
-  /// match is deterministic (gc's `SortCreatedAsc`).
+  /// ([DoltSchemaShape.depTargetExprFor], the probed `COALESCE(...)` over the
+  /// split target columns) on a `type = 'parent-child'` edge (beads
+  /// issueops/blocked.go:60-63). The child's `metadata.idempotency_key` is read
+  /// from the JSON column on `issues` ∪ `wisps`. Ordered created-ascending then
+  /// id so the oldest match is deterministic (gc's `SortCreatedAsc`).
   @visibleForTesting
-  static String idempotencyProbeSql(String parentId, String key) {
-    const target =
-        'COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)';
+  static String idempotencyProbeSql(
+    String parentId,
+    String key, {
+    required DoltSchemaShape shape,
+  }) {
     final parentLit = sqlString(parentId);
     final keyLit = sqlString(key);
-    // child ids parented under parentId via a parent-child edge (both tables).
-    const childEdges =
-        'SELECT issue_id FROM dependencies '
-        "WHERE type = 'parent-child' AND $target = %PARENT% "
-        'UNION '
-        'SELECT issue_id FROM wisp_dependencies '
-        "WHERE type = 'parent-child' AND $target = %PARENT%";
-    final childEdgesResolved = childEdges.replaceAll('%PARENT%', parentLit);
+    // child ids parented under parentId via a parent-child edge (both tables,
+    // when the store carries the wisp family).
+    String edgeLeg(String table) =>
+        'SELECT issue_id FROM $table '
+        "WHERE type = 'parent-child' "
+        'AND ${shape.depTargetExprFor(table)} = $parentLit';
+    final childEdges = shape.hasTable('wisp_dependencies')
+        ? '${edgeLeg('dependencies')} UNION ${edgeLeg('wisp_dependencies')}'
+        : edgeLeg('dependencies');
     // children rows from issues ∪ wisps whose metadata.idempotency_key matches.
     const keyExpr =
         "JSON_UNQUOTE(JSON_EXTRACT(metadata, '\$.idempotency_key'))";
-    return 'SELECT id, created_at FROM ('
-        'SELECT id, created_at, metadata FROM issues WHERE id IN ($childEdgesResolved) '
-        'UNION ALL '
-        'SELECT id, created_at, metadata FROM wisps WHERE id IN ($childEdgesResolved)'
-        ') AS children '
+    String childRows(String table) =>
+        'SELECT id, created_at, metadata FROM $table WHERE id IN ($childEdges)';
+    final children = shape.hasTable('wisps')
+        ? '${childRows('issues')} UNION ALL ${childRows('wisps')}'
+        : childRows('issues');
+    return 'SELECT id, created_at FROM ($children) AS children '
         'WHERE $keyExpr = $keyLit '
         'ORDER BY created_at ASC, id ASC '
         'LIMIT 1';
@@ -360,57 +368,64 @@ class DoltQueryService {
   @visibleForTesting
   static const String wispsSelect = 'SELECT * FROM wisps';
 
-  /// The labels SELECT: `labels` ∪ `wisp_labels` — wisp labels live in their
-  /// own table (migration 0021), identical two-column shape, so a UNION ALL is
-  /// positionally safe. Exposed for tests that fake the connection layer.
+  /// The labels SELECT for [shape]: `labels`, UNION'd with `wisp_labels` when
+  /// that table is present (identical two-column shape, so the UNION ALL is
+  /// positionally safe). Exposed for tests that fake the connection layer.
   @visibleForTesting
-  static const String labelsSelect =
-      'SELECT issue_id, label FROM labels '
-      'UNION ALL '
-      'SELECT issue_id, label FROM wisp_labels';
+  static String labelsSelectFor(DoltSchemaShape shape) {
+    const issues = 'SELECT issue_id, label FROM labels';
+    return shape.hasTable('wisp_labels')
+        ? '$issues UNION ALL SELECT issue_id, label FROM wisp_labels'
+        : issues;
+  }
 
-  /// The dependencies SELECT: `dependencies` ∪ `wisp_dependencies` (a wisp's
-  /// outgoing edges live in `wisp_dependencies`; beads counts.go). Mirrors
-  /// beads' own dependency read (internal/storage/domain/db/dependency.go):
-  /// the natural target is
-  /// `COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)`
-  /// surfaced as a `depends_on_id` alias, robust to whether the legacy generated
-  /// `depends_on_id` column is present. Both tables carry the identical
-  /// explicit column list (migration 0021 + ignored-track split), so the UNION
-  /// ALL is positionally safe. Exposed for tests that fake the connection
-  /// layer.
+  /// The dependencies SELECT for [shape]: `dependencies`, UNION'd with
+  /// `wisp_dependencies` when that table is present (a wisp's outgoing edges
+  /// live there; beads counts.go). The natural target is the probed
+  /// [DoltSchemaShape.depTargetExprFor] expression surfaced as a
+  /// `depends_on_id` alias — the same read beads itself does
+  /// (`internal/storage/domain/db/dependency.go`), built from the columns the
+  /// store actually has instead of the ones bd 1.0.5 happened to ship. Exposed
+  /// for tests that fake the connection layer.
   @visibleForTesting
-  static const String dependenciesSelect =
-      'SELECT issue_id, '
-      'COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external) '
-      'AS depends_on_id, type, created_at, created_by, metadata, thread_id '
-      'FROM dependencies '
-      'UNION ALL '
-      'SELECT issue_id, '
-      'COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external) '
-      'AS depends_on_id, type, created_at, created_by, metadata, thread_id '
-      'FROM wisp_dependencies';
+  static String dependenciesSelectFor(DoltSchemaShape shape) {
+    String leg(String table) =>
+        'SELECT issue_id, ${shape.depTargetExprFor(table)} '
+        'AS depends_on_id, type, created_at, created_by, metadata, thread_id '
+        'FROM $table';
+    return shape.hasTable('wisp_dependencies')
+        ? '${leg('dependencies')} UNION ALL ${leg('wisp_dependencies')}'
+        : leg('dependencies');
+  }
+
+  /// The labels SELECT for this connection's probed shape.
+  String get labelsSelect => labelsSelectFor(shape);
+
+  /// The dependencies SELECT for this connection's probed shape.
+  String get dependenciesSelect => dependenciesSelectFor(shape);
 
   // -------------------------------------------------------------------------
-  // Drift guard.
+  // Shape probe — ADR-0001 Decision 4's drift guard, verifying the SHAPE the
+  // read path is about to touch instead of comparing a pinned migration
+  // number. beads_dart supports bd >= 1.0.5, not one migration level.
   // -------------------------------------------------------------------------
 
-  Future<void> _ensureDriftChecked() async {
-    if (_driftChecked) return;
+  Future<void> _ensureShapeProbed() async {
+    if (_shape != null) return;
     final version = await _readSchemaVersion();
-    if (version > kTargetSchemaVersion) {
-      throw BdSchemaDriftException(
-        found: version,
-        expected: kTargetSchemaVersion,
-        source: 'schema_migrations',
-      );
-    }
-    _driftChecked = true;
+    final rows = await _runSelect(DoltSchemaShape.probeSql);
+    final probed = DoltSchemaShape.fromColumnRows(
+      rows,
+      migrationVersion: version,
+    );
+    probed.assertSupported();
+    _shape = probed;
   }
 
   /// Reads `MAX(version)` from `schema_migrations` — the cursor table beads
   /// records applied migrations in (internal/storage/schema/schema.go). A fresh
-  /// or table-less database reports 0.
+  /// or table-less database reports 0. Recorded on the [DoltSchemaShape] for
+  /// diagnostics; never compared against a pin.
   Future<int> _readSchemaVersion() async {
     final rows = await _runSelect(
       'SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations',

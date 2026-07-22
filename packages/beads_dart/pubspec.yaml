@@ -2,7 +2,7 @@ name: beads_dart
 description: >-
   A pure-Dart beads client — bd CLI + Dolt SQL services, snapshot repository,
   structural diff, typed graph events. Framework-free: Streams for
-  observations, Futures for acts, no framework deps. Pinned against bd 1.0.5;
+  observations, Futures for acts, no framework deps. Supports bd >= 1.0.5;
   see the library doc for the version-compat contract.
 publish_to: none
 repository: https://github.com/memento-engineering/the_grid
