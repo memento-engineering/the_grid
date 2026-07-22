@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import 'block_guard.dart';
 import 'snapshot_source.dart';
 
 /// One federation member's freshness (tg-nsj, `docs/SCRATCH-multi-root-federation.md`
@@ -185,47 +186,30 @@ class FederatedSnapshotSource implements SnapshotSource {
   /// excluded when that target is open, or when the target is not found
   /// anywhere in the federation at all (fail-closed + LOUD — an unresolvable
   /// external dependency must never silently pass as satisfied).
+  /// The ENFORCEMENT is [applyBlockGuard]'s, shared with the join's link-bead
+  /// edge source; the FILTER below is this source's own — blocking edges only,
+  /// and CROSS-store only (a same-store edge is already accounted for by the
+  /// origin store's own `bd ready`).
   Set<String> _applyExternalDepGuard(
     Set<String> candidates,
     Map<String, Bead> beadsById,
     List<BeadDependency> dependencies,
-  ) {
-    if (candidates.isEmpty) return candidates;
-    final blockingByIssue = <String, List<BeadDependency>>{};
-    for (final dep in dependencies) {
-      if (!dep.type.affectsBlocking) continue;
-      (blockingByIssue[dep.issueId] ??= <BeadDependency>[]).add(dep);
-    }
-    if (blockingByIssue.isEmpty) return candidates;
-
-    final result = <String>{};
-    for (final id in candidates) {
-      final ownStore = BeadOwnershipPredicate.prefixOf(id);
-      var blocked = false;
-      for (final dep in blockingByIssue[id] ?? const <BeadDependency>[]) {
-        final targetStore = BeadOwnershipPredicate.prefixOf(dep.dependsOnId);
-        if (targetStore == ownStore) {
-          continue; // same-store — the origin store's own `bd ready` already accounts for it.
-        }
-        final target = beadsById[dep.dependsOnId];
-        if (target == null) {
-          _onUnresolvedExternalDep?.call(
-            'grid: $id carries a cross-store dependency on '
-            '"${dep.dependsOnId}", which is not observed by any federated '
-            'store — excluding $id from ready (fail-closed).',
-          );
-          blocked = true;
-          break;
-        }
-        if (!target.isClosed) {
-          blocked = true;
-          break;
-        }
-      }
-      if (!blocked) result.add(id);
-    }
-    return result;
-  }
+  ) => applyBlockGuard(
+    candidates: candidates,
+    beadsById: beadsById,
+    edges: <BlockEdge>[
+      for (final dep in dependencies)
+        if (dep.type.affectsBlocking &&
+            BeadOwnershipPredicate.prefixOf(dep.dependsOnId) !=
+                BeadOwnershipPredicate.prefixOf(dep.issueId))
+          BlockEdge(
+            from: dep.issueId,
+            to: dep.dependsOnId,
+            origin: 'a cross-store dependency',
+          ),
+    ],
+    onUnresolved: _onUnresolvedExternalDep,
+  );
 
   /// Cancels every member subscription and closes the union stream. Does
   /// **not** dispose the member [SnapshotSource]s themselves — the caller

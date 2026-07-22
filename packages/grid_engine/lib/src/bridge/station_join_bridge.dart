@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
 
+import '../domain/cross_link.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../molecule/molecule_schema.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
+import 'block_guard.dart';
 import 'snapshot_source.dart';
 
 /// The JOIN bridge — the **only** subscription into the snapshot pipelines
@@ -43,18 +45,27 @@ class StationJoinBridge {
   /// If [notifier] is supplied, the bridge drives it but does **not** own its
   /// lifecycle (it is left undisposed on [dispose]); otherwise the bridge
   /// creates one, seeded with the current join, and disposes it itself.
+  ///
+  /// [onUnresolvedCrossLink] is the LOUD sink an unenforceable cross-link is
+  /// reported through (see [_applyCrossLinks]).
   factory StationJoinBridge({
     required SnapshotSource work,
     required SnapshotSource state,
     JoinedSnapshotNotifier? notifier,
+    void Function(String message)? onUnresolvedCrossLink,
   }) {
-    final seed = _join(work.current, state.current);
+    final seed = _join(
+      work.current,
+      state.current,
+      onUnresolvedCrossLink: onUnresolvedCrossLink,
+    );
     return StationJoinBridge._(
       work: work,
       state: state,
       ownsNotifier: notifier == null,
       notifier: notifier ?? JoinedSnapshotNotifier(seed),
       latest: seed,
+      onUnresolvedCrossLink: onUnresolvedCrossLink,
     );
   }
 
@@ -64,14 +75,23 @@ class StationJoinBridge {
     required bool ownsNotifier,
     required this.notifier,
     required JoinedSnapshot latest,
+    required void Function(String message)? onUnresolvedCrossLink,
   }) : _work = work,
        _state = state,
        _ownsNotifier = ownsNotifier,
-       _latest = latest;
+       _latest = latest,
+       _onUnresolvedCrossLink = onUnresolvedCrossLink;
 
   final SnapshotSource _work;
   final SnapshotSource _state;
   final bool _ownsNotifier;
+
+  /// The LOUD sink an unenforceable cross-link is reported through — a
+  /// malformed link bead, or a `to` target no federated work member observes.
+  /// Emit-only; a null sink is the offline/no-op default and never changes what
+  /// the guard DOES (the block is applied either way).
+  final void Function(String message)? _onUnresolvedCrossLink;
+
   JoinedSnapshot _latest;
 
   /// The last joined value this bridge pushed — the PRODUCER's own record of
@@ -99,14 +119,32 @@ class StationJoinBridge {
     // (non-replaying, broadcast) event was missed — recover it from `.current`
     // so the notifier never carries a stale construction-time seed. A no-op in
     // the intended atomic construct-then-start composition.
-    _push(_join(_work.current, _state.current));
+    _push(
+      _join(
+        _work.current,
+        _state.current,
+        onUnresolvedCrossLink: _onUnresolvedCrossLink,
+      ),
+    );
     // Use the freshly-emitted snapshot for the source that fired and `.current`
     // for the other — one push per real emission, never two for one change.
     _workSub = _work.snapshots.listen((workSnapshot) {
-      _push(_join(workSnapshot, _state.current));
+      _push(
+        _join(
+          workSnapshot,
+          _state.current,
+          onUnresolvedCrossLink: _onUnresolvedCrossLink,
+        ),
+      );
     });
     _stateSub = _state.snapshots.listen((stateSnapshot) {
-      _push(_join(_work.current, stateSnapshot));
+      _push(
+        _join(
+          _work.current,
+          stateSnapshot,
+          onUnresolvedCrossLink: _onUnresolvedCrossLink,
+        ),
+      );
     });
   }
 
@@ -156,8 +194,19 @@ class StationJoinBridge {
   /// before the first work baseline (`work == null`) is intentionally collapsed
   /// to [JoinedSnapshot.empty] — sessions have nothing to mount against until a
   /// work graph exists, so they are held until the work baseline arrives.
-  static JoinedSnapshot _join(GraphSnapshot? work, GraphSnapshot? state) {
+  ///
+  /// Finally, the state store's OPEN `type=link` beads are folded into the work
+  /// frontier by [_applyCrossLinks] — the state-owned CROSS-REPO blocking
+  /// edges. This is where the link set enters the pipeline: the state axis
+  /// already reaches here, so the fold adds NO new subscription and the bridge
+  /// still pushes exactly once per real change.
+  static JoinedSnapshot _join(
+    GraphSnapshot? work,
+    GraphSnapshot? state, {
+    void Function(String message)? onUnresolvedCrossLink,
+  }) {
     if (work == null) return JoinedSnapshot.empty();
+    var graph = work;
     final sessions = <String, SessionProjection>{};
     if (state != null) {
       for (final bead in state.beadsById.values) {
@@ -168,8 +217,56 @@ class StationJoinBridge {
       }
       _attachOpenGates(state, sessions);
       _attachMoleculeBeads(state, sessions);
+      graph = _applyCrossLinks(work, state, onUnresolvedCrossLink);
     }
-    return JoinedSnapshot(graph: work, sessionsByWorkBead: sessions);
+    return JoinedSnapshot(graph: graph, sessionsByWorkBead: sessions);
+  }
+
+  /// Re-applies the state store's CROSS-REPO blocking edges over [work]'s ready
+  /// set and returns the frontier the tree sees.
+  ///
+  /// An OPEN `type=link` bead in [state] carries its edge in its own metadata
+  /// (`grid.link.from`/`to`/`type` — [CrossLinkKeys]), never as a dependency
+  /// row, so no store holds a dangling reference for `bd doctor --fix` to
+  /// classify orphaned and sever, and no work store is written to at all. This
+  /// is the same shape [_attachOpenGates] already uses one level down: an OPEN
+  /// state bead narrows what the tree sees; a CLOSED one retires the narrowing.
+  ///
+  /// The ENFORCEMENT is [applyBlockGuard]'s, shared with the federated union's
+  /// dependency-row edges. Unlike that source, this one applies its edges
+  /// whether or not the two ids share a store prefix: a link bead is an
+  /// operator-authored edge no store's `is_blocked` knows about, so there is no
+  /// origin `bd ready` to defer a same-store link to.
+  ///
+  /// Returns the [work] INSTANCE unchanged when nothing is excluded — the
+  /// common case (no links at all, or every blocker closed) costs one scan and
+  /// zero copies. A [GraphSnapshot] copies its maps on construction, so the
+  /// copy is paid only when a link genuinely blocks.
+  ///
+  /// Note what this does NOT do: it narrows the READY set, so it gates which
+  /// beads may newly mount. A bead already carrying a live session stays
+  /// mounted (`work_list.dart`'s stays-mounted rule) — authoring a link never
+  /// kills a running agent.
+  static GraphSnapshot _applyCrossLinks(
+    GraphSnapshot work,
+    GraphSnapshot state,
+    void Function(String message)? onUnresolved,
+  ) {
+    final links = projectCrossLinks(state, onMalformed: onUnresolved);
+    if (links.isEmpty) return work;
+    final guarded = applyBlockGuard(
+      candidates: work.readyIds,
+      beadsById: work.beadsById,
+      edges: crossLinkEdges(links),
+      onUnresolved: onUnresolved,
+    );
+    if (guarded.length == work.readyIds.length) return work;
+    return GraphSnapshot(
+      beadsById: work.beadsById,
+      dependencies: work.dependencies,
+      readyIds: guarded,
+      capturedAt: work.capturedAt,
+    );
   }
 
   /// sessionId → workBeadId, shared by [_attachOpenGates] and

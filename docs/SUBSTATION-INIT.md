@@ -103,6 +103,27 @@ Substations(
 initialization does not create a special node type, it just guarantees the store
 exists first.
 
+### Step 4 — Register the state store's custom types
+
+The grid state store mints bead types the work stores never see. Each must be in
+that store's `types.custom` before arming, or `bd create -t <type>` is rejected
+at the write and the feature is silently absent:
+
+| type | minted by | absent ⇒ |
+|---|---|---|
+| `session` | `SessionScope` (adopt-or-mint) | no work is ever driven |
+| `molecule` / `step` | the circuit's molecule pour | no per-node cursor |
+| `gate` | the human-gate arm | no re-arm signal |
+| `link` | the link-authoring verb | **every cross-repo block is silently absent** |
+
+`link` is the state store's own CROSS-REPO blocking edge (`grid.link.from` /
+`grid.link.to` / `grid.link.type` in the bead's own metadata — never a
+dependency row, so no store holds a dangling reference for `bd doctor --fix` to
+classify orphaned and sever, and no work store is written to). The engine
+refuses to assume the store is capable: `crossLinkTypeRefusal`
+(`grid_engine`'s `domain/cross_link.dart`) turns an unseeded store into a LOUD
+refusal naming the remedy, and the authoring verb calls it before it writes.
+
 ### The guards (LOUD, never silent)
 
 - **No clobber.** A root that already holds a `.beads/` store is refused — init is

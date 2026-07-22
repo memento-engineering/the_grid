@@ -341,13 +341,17 @@ Future<StationWorkRuntime> buildStationWork({
     'state=${stateBundle.readPath.name}',
   ].join(', ');
 
+  // ONE sink for BOTH cross-store edge sources — the union's dependency rows
+  // and the join's state-owned link beads report through the same LOUD channel.
+  final unresolvedSink =
+      onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
+
   final work = FederatedSnapshotSource(
     {
       for (final e in bundles.entries)
         e.key: _RuntimeSnapshotSource(e.value.runtime),
     },
-    onUnresolvedExternalDep:
-        onUnresolvedExternalDep ?? (m) => stdout.writeln(m),
+    onUnresolvedExternalDep: unresolvedSink,
   );
   final SnapshotSource stateSource = _RuntimeSnapshotSource(
     stateBundle.runtime,
@@ -480,7 +484,11 @@ Future<StationWorkRuntime> buildStationWork({
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
   );
 
-  final bridge = StationJoinBridge(work: work, state: stateSource);
+  final bridge = StationJoinBridge(
+    work: work,
+    state: stateSource,
+    onUnresolvedCrossLink: unresolvedSink,
+  );
   // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
   // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
   // parallel escalation channel.
