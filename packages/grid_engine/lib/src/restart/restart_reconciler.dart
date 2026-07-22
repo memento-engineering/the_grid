@@ -513,6 +513,9 @@ class RestartReconciler {
       if (owner is! String || !sessionIds.contains(owner)) continue;
       candidates.add((
         stepBeadId: bead.id,
+        // Every in-scope session here is NON-terminal — the frontier will
+        // drive it again, so a re-mount is coming.
+        willRemount: true,
         // bd metadata is Map<String, dynamic> off the wire; the vendor's
         // breadcrumb codec reads flat strings.
         metadata: {

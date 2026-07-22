@@ -344,9 +344,19 @@ ProcessHandle? leaseBreadcrumbOf(Map<String, String> metadata) {
 /// them off its post-barrier state snapshot (the SAME read its cursor
 /// projection rides, A39), so the sweep itself issues no bd query and opens no
 /// subscription.
+///
+/// [willRemount] is the CALLER's fact about the step's SESSION, never a lease
+/// fact the vendor could read off metadata: true when a tree re-mount for that
+/// session is still coming (a NON-terminal session the frontier will drive
+/// again), false when the session already reached its terminal and no
+/// `startOrAdopt` will ever run against what it left behind. It is REQUIRED,
+/// not defaulted: preserving a live daemon nothing will adopt is exactly the
+/// leak this field closes, so the caller STATES it rather than inheriting it
+/// silently.
 typedef LeaseSweepCandidate = ({
   String stepBeadId,
   Map<String, String> metadata,
+  bool willRemount,
 });
 
 /// The guarded group-terminate seam the sweep kills through — the caller binds

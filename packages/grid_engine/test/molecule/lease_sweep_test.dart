@@ -59,15 +59,19 @@ class _RecordingTerminator {
   }
 }
 
-/// A candidate step bead's (id, metadata) pair — the shape the reconciler
-/// projects and the vendor interprets. [kind]/[state] null ⇒ key absent.
+/// A candidate step bead's (id, metadata, willRemount) triple — the shape the
+/// reconciler projects and the vendor interprets. [kind]/[state] null ⇒ key
+/// absent. [willRemount] defaults to true (a live session: a re-mount is
+/// coming), which is what every pre-terminal-scope case in this suite models.
 LeaseSweepCandidate _candidate(
   String stepBeadId, {
   StepKind? kind = StepKind.job,
   StepState? state = StepState.running,
   ProcessHandle? lease,
+  bool willRemount = true,
 }) => (
   stepBeadId: stepBeadId,
+  willRemount: willRemount,
   metadata: {
     if (kind != null) MoleculeStepKeys.kind: kind.name,
     if (state != null) MoleculeStepKeys.state: state.name,
@@ -307,6 +311,7 @@ void main() {
           _candidate('tgdog-step-a'), // no lease keys at all
           (
             stepBeadId: 'tgdog-step-b', // the cleared sentinel
+            willRemount: true,
             metadata: {
               MoleculeStepKeys.kind: StepKind.job.name,
               MoleculeStepKeys.state: StepState.running.name,
