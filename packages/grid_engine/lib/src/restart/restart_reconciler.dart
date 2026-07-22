@@ -26,7 +26,10 @@
 ///    re-mount will adopt through the SAME guarded terminate path and clears
 ///    its breadcrumb; a completed step is untouched, and a running/pending
 ///    step stays with the frontier (the job lease respawns fresh —
-///    respawn-or-skip, never adoption for jobs).
+///    respawn-or-skip, never adoption for jobs). Scope is per SESSION, not per
+///    liveness: a TERMINAL session's leftovers are swept too, and because no
+///    re-mount is coming for it even a live daemon whose adopt proof holds is
+///    an orphan there.
 ///
 /// **The flat fence retired (tg-eli phase 2).** The old per-node
 /// `session.cursor` kill walk (+ its legacy scalar-pgid fallback), the flat
@@ -479,12 +482,20 @@ class RestartReconciler {
   /// **The MOLECULE crash-recovery pass** (tg-eli phase 1 — since phase 2 the
   /// ONE process-identity reconciliation).
   ///
-  /// Bounded-boot scope: only NON-terminal MOLECULE sessions that BACK a
-  /// surviving worktree are swept (a session with no worktree has nothing to
-  /// re-mount into, and walking the whole state store would make a large
-  /// backlog an unbounded boot pass). A TERMINAL molecule session's steps are
-  /// deliberately NOT swept here — the completed-molecule-session daemon
-  /// sweep is a documented deferral.
+  /// Bounded-boot scope: every MOLECULE session that BACKS a surviving
+  /// worktree is swept — TERMINAL ones included. A session with no surviving
+  /// worktree stays out of scope: there is nothing to re-mount into, and
+  /// walking the whole state store would make a large backlog an unbounded
+  /// boot pass.
+  ///
+  /// Terminal and non-terminal sessions differ in ONE fact, stated per
+  /// candidate: [LeaseSweepCandidate.willRemount]. A NON-terminal session will
+  /// be driven again, so a live daemon its adopt proof vouches for is
+  /// preserved for that re-mount. A TERMINAL session will never be driven
+  /// again — no `startOrAdopt` is coming — so every live group it left is an
+  /// orphan, daemon or job, and the vendor kills it through the same guarded
+  /// path. A latched step (`complete`/`failed`/`gated`) is untouched either
+  /// way: that skip lives in the vendor and this pass does not widen it.
   ///
   /// The candidates are projected from the SAME post-barrier state snapshot
   /// the session projection reads (no new bd query, no subscription — A39):
@@ -498,24 +509,26 @@ class RestartReconciler {
   ) async {
     final vendor = _leaseVendor;
     if (vendor == null) return const [];
-    final sessionIds = <String>{};
+    // Every MOLECULE session backing a surviving worktree, mapped to whether a
+    // tree re-mount is still coming for it.
+    final remountBySession = <String, bool>{};
     for (final session in sessions) {
       final id = session.sessionId;
-      if (id == null || session.isTerminal || !session.isMolecule) continue;
-      sessionIds.add(id);
+      if (id == null || !session.isMolecule) continue;
+      remountBySession[id] = !session.isTerminal;
     }
-    if (sessionIds.isEmpty) return const [];
+    if (remountBySession.isEmpty) return const [];
 
     final candidates = <LeaseSweepCandidate>[];
     for (final bead in _stateSnapshot().beadsById.values) {
       if (bead.issueType != IssueType.step) continue;
       final owner = bead.metadata[MoleculeStepKeys.session];
-      if (owner is! String || !sessionIds.contains(owner)) continue;
+      if (owner is! String) continue;
+      final willRemount = remountBySession[owner];
+      if (willRemount == null) continue;
       candidates.add((
         stepBeadId: bead.id,
-        // Every in-scope session here is NON-terminal — the frontier will
-        // drive it again, so a re-mount is coming.
-        willRemount: true,
+        willRemount: willRemount,
         // bd metadata is Map<String, dynamic> off the wire; the vendor's
         // breadcrumb codec reads flat strings.
         metadata: {
@@ -687,9 +700,10 @@ class RestartReconciler {
     // SKIP (done): the OWNED session reached a positive terminal — reap the
     // worktree; do not respawn. Fires even for a FOREIGN wt.beadId because
     // the outcome marker is on the_grid's own session bead (A40/A37). Any
-    // leased groups a terminal MOLECULE session left are a documented
-    // deferral (see [_sweepMoleculeLeases]); a HISTORICAL flat session's
-    // recorded groups are inert metadata this pass never parses.
+    // leased groups a terminal MOLECULE session left are swept in step 5
+    // (see [_sweepMoleculeLeases]) — the reap runs first and the kill is
+    // keyed by pgid, not by the directory just removed; a HISTORICAL flat
+    // session's recorded groups are inert metadata this pass never parses.
     if (session != null && session.isTerminal) {
       final outcome = await _reapWorktree(root: _workRoot, worktree: wt);
       return RestartEntry(
