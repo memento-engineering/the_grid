@@ -156,5 +156,105 @@ void main() {
         expect(stats.refreshCount, greaterThanOrEqualTo(2));
       });
     });
+
+    test(
+      'backstop coalescing — a pollTicker mid-refresh does not livelock start '
+      '(refresh outlasts three poll intervals)',
+      () {
+        fakeAsync((async) {
+          var refreshes = 0;
+          final signals = StreamController<DirtySignal>.broadcast();
+          // Refresh takes 16s; the "poll interval" is 5s — the store lenny's
+          // 25s-per-export embedded DB was: three ticks land mid-refresh.
+          final interactor = GraphSyncInteractor(
+            signals: signals.stream,
+            onRefresh: () async {
+              refreshes++;
+              await Future<void>.delayed(const Duration(seconds: 16));
+            },
+          );
+          interactor.start(); // baseline begins, in flight for 16s
+          async.flushMicrotasks();
+          expect(refreshes, 1);
+          expect(interactor.stats.refreshing, isTrue);
+
+          // Three backstop ticks fire while the baseline refresh is still
+          // running (t = 5s, 10s, 15s). Under the old code each re-dirties the
+          // pump and start() never returns.
+          for (var t = 0; t < 3; t++) {
+            async.elapse(const Duration(seconds: 5));
+            signals.add(const DirtySignal(DirtyOrigin.pollTicker));
+            async.flushMicrotasks();
+            expect(
+              interactor.stats.pendingFollowUp,
+              isFalse,
+              reason: 'a backstop tick queues no follow-up',
+            );
+          }
+
+          async.elapse(const Duration(seconds: 1)); // t = 16s, baseline done
+          async.flushMicrotasks();
+          expect(
+            refreshes,
+            1,
+            reason: 'start settled after exactly one refresh — no livelock',
+          );
+          expect(interactor.stats.refreshing, isFalse);
+          // Suppressed ticks are still observed for stats.
+          expect(interactor.stats.signalCounts[DirtyOrigin.pollTicker], 3);
+        });
+      },
+    );
+
+    test(
+      'a real signal mid-refresh still schedules exactly one follow-up even '
+      'alongside a suppressed backstop tick',
+      () {
+        fakeAsync((async) {
+          var refreshes = 0;
+          final signals = StreamController<DirtySignal>.broadcast();
+          final interactor = GraphSyncInteractor(
+            signals: signals.stream,
+            onRefresh: () async {
+              refreshes++;
+              await Future<void>.delayed(const Duration(seconds: 10));
+            },
+          );
+          interactor.start();
+          async.flushMicrotasks();
+          expect(refreshes, 1);
+          expect(interactor.stats.refreshing, isTrue);
+
+          // Mid-refresh: a backstop tick (suppressed) AND a real mutation
+          // (honored) land in the same window.
+          async.elapse(const Duration(seconds: 5));
+          signals.add(const DirtySignal(DirtyOrigin.pollTicker));
+          async.flushMicrotasks();
+          signals.add(const DirtySignal(DirtyOrigin.workspaceWatch));
+          async.flushMicrotasks();
+          expect(
+            interactor.stats.pendingFollowUp,
+            isTrue,
+            reason: 'the real mutation queues a follow-up',
+          );
+
+          async.elapse(const Duration(seconds: 5)); // baseline completes
+          async.flushMicrotasks();
+          expect(
+            refreshes,
+            2,
+            reason: 'exactly one follow-up runs for the real signal',
+          );
+          async.elapse(const Duration(seconds: 10)); // follow-up completes
+          async.flushMicrotasks();
+          expect(
+            refreshes,
+            2,
+            reason: 'no extra refresh — the backstop tick was coalesced away',
+          );
+          expect(interactor.stats.refreshing, isFalse);
+        });
+      },
+    );
   });
 }
