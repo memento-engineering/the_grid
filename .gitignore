@@ -15,9 +15,16 @@ packages/*/extension/devtools/build/
 .beads-credential-key
 .beads/proxieddb/
 
-# Gas City
-.beads/*
-!.beads/identity.toml
+# .beads/ exclusions are owned by bd's own .beads/.gitignore (kept current with
+# `bd doctor`). Do NOT blanket-ignore `.beads/*` with negations here: bd warns
+# that negation patterns override the fork protection in .git/info/exclude, and
+# the blanket hides files bd expects tracked (config.yaml carries sync.remote,
+# so a fresh clone can't bootstrap without it).
+#
+# Per-machine files bd's template doesn't cover yet:
+.beads/hooks.log
+.beads/routes.jsonl
+.beads/formulas/
 
 # the_grid live-arm worktrees (the tree engine cuts per-bead worktrees here when
 # THIS checkout is the substation root: .grid/worktrees/<substation>/<bead>).
