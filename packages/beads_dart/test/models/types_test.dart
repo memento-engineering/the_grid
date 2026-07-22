@@ -75,6 +75,20 @@ void main() {
         IssueType.step,
       ];
       expect(known.map((t) => t.wire).toSet(), customNames);
+      expect(
+        customNames,
+        isNot(contains(IssueType.link.wire)),
+        reason:
+            'link is a grid STATE-store type; a work store like tg never '
+            'registers it, so it must not appear in this fixture',
+      );
+    });
+
+    test('link is never core, infra, or fixture-implied', () {
+      expect(IssueType.link.wire, 'link');
+      expect(IssueType.link.isCore, isFalse);
+      expect(IssueType.link.isInfra, isFalse);
+      expect(IssueType.coreTypes, isNot(contains(IssueType.link)));
     });
   });
 
