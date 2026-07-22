@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -333,6 +334,23 @@ void main() {
       expect(() => workSrc.emit(graphOf([work('w2')], tick: 1)), returnsNormally);
       await pumpEventQueue();
       expect(pushes, hasLength(1), reason: 'no push after dispose');
+    });
+
+    test('the cross-link fold adds NO pipeline subscription: the bridge still '
+        'opens exactly two, one per axis (derailment-invariant 1)', () {
+      final src = File(
+        'lib/src/bridge/station_join_bridge.dart',
+      ).readAsStringSync();
+      expect(
+        '.snapshots.listen('.allMatches(src).length,
+        2,
+        reason:
+            'the bridge is the LONE subscription into the snapshot pipelines. '
+            'Sourcing the link set from a THIRD listen — or feeding it to '
+            'FederatedSnapshotSource, which would make the state stream carry '
+            'two listeners — would double-push the notifier for one operator '
+            'action and break the one-push-per-real-change contract.',
+      );
     });
   });
 }

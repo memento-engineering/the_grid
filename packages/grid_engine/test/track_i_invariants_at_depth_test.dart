@@ -435,6 +435,23 @@ void main() {
       expect(workBeads, hasLength(1));
       expect((workBeads.single.seed as WorkBead).bead.id, 'tg-epic');
     });
+
+    test('a `type=link` bead in the ready set mounts ZERO circuit nodes — a '
+        'cross-repo link is a fact ABOUT work, never work itself; a plain '
+        'owned bead is the live sanity control', () {
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_bead('tg-link', type: IssueType.link), _bead('tg-ok')],
+          ready: {'tg-link', 'tg-ok'},
+        ),
+      );
+      final m = _mount(joined: joined, config: _tg);
+      addTearDown(m.owner.dispose);
+
+      final workBeads = _all(m.root).where((b) => b.seed is WorkBead).toList();
+      expect(workBeads, hasLength(1));
+      expect((workBeads.single.seed as WorkBead).bead.id, 'tg-ok');
+    });
   });
 
   group('Invariant 4 / A37 AT DEPTH — read-only foreign source (a RUNNING host)',
