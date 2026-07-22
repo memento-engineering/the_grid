@@ -20,8 +20,13 @@
 //      documented contract);
 //  (d) a COMPLETED step is untouched — no kill, no respawn side effects;
 //  (e) SelfManagedProcessVendor's sweep no-ops through the same wiring;
-// plus the scope pins (terminal / worktree-less sessions out of scope, no
-// vendor wired ⇒ no sweep) and the structural lease-literal falsifier.
+//  (f) a TERMINAL session's live JOB group is swept (its worktree still
+//      reaped by the skip branch);
+//  (g) a TERMINAL session's live DAEMON is killed even with the adopt proof
+//      HOLDING (the (b) contrast: no re-mount is coming);
+//  (h) a LATCHED step under a TERMINAL session is still untouched;
+// plus the scope pins (worktree-less sessions out of scope, no vendor wired ⇒
+// no sweep) and the structural lease-literal falsifier.
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
@@ -522,9 +527,10 @@ void main() {
     });
 
     test(
-      'a TERMINAL molecule session is out of the sweep\'s scope (the '
-      'documented phase-1 deferral: its worktree goes to the skip branch; '
-      'its lingering daemon breadcrumbs are a later rung)',
+      '(f) a TERMINAL molecule session\'s live JOB group is SWEPT: the '
+      'worktree still goes to the skip branch, and the orphan is killed '
+      'through the REAL guarded terminateGroup, cleared through the '
+      'chokepoint, reported LOUD',
       () async {
         final h = _harness(
           stateBeads: [
@@ -541,9 +547,82 @@ void main() {
 
         final report = await h.reconciler.reconcile();
 
-        expect(report.skipped, hasLength(1), reason: 'the skip branch fired');
+        // The skip branch is UNCHANGED — the worktree is still reaped.
+        expect(report.skipped, hasLength(1));
+        expect(h.git.reaped, ['tg-w1']);
+
+        // And the lingering group no longer survives the restart.
+        expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
+        expect(report.sweptLeases, hasLength(1));
+        expect(
+          report.sweptLeases.single.disposition,
+          LeaseSweepDisposition.killed,
+        );
+        final updates = h.bd.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single[1], 'tgdog-step-1');
+        expect(h.bd.metadataOfUpdate(0), kClearedLeaseKeys);
+        expect(h.bd.neverShowOrSql, isTrue);
+        expect(h.loud.single, contains('tgdog-step-1'));
+      },
+    );
+
+    test(
+      '(g) a TERMINAL molecule session\'s live DAEMON is killed EVEN THOUGH '
+      'the vendor\'s adopt-freshness proof HOLDS: nothing will ever re-mount '
+      'to adopt it (the contrast with (b), whose session is live)',
+      () async {
+        final h = _harness(
+          stateBeads: [
+            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1', closed: true),
+            _stepBead(
+              id: 'tgdog-step-d',
+              sessionId: 'tgdog-m1',
+              kind: StepKind.daemon,
+              state: StepState.ready,
+              lease: _daemonLease,
+            ),
+          ],
+          alivePids: {5253},
+          // The ADOPT proof HOLDS for this pgid — under a live session (b)
+          // this exact shape is preserved.
+          alivePgids: {5252},
+        );
+
+        final report = await h.reconciler.reconcile();
+
+        expect(h.groups.signals.first, (5252, ProcessSignal.sigterm));
+        expect(report.sweptLeases, hasLength(1));
+        expect(
+          report.sweptLeases.single.disposition,
+          LeaseSweepDisposition.killed,
+        );
+        expect(h.loud.single, contains('tgdog-step-d'));
+      },
+    );
+
+    test(
+      '(h) the widened scope is per SESSION, never the latched-step skip — a '
+      'COMPLETE step under a TERMINAL session is still untouched',
+      () async {
+        final h = _harness(
+          stateBeads: [
+            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1', closed: true),
+            _stepBead(
+              id: 'tgdog-step-1',
+              sessionId: 'tgdog-m1',
+              state: StepState.complete,
+              lease: _jobLease,
+            ),
+          ],
+          alivePids: {4243},
+          alivePgids: {4242},
+        );
+
+        final report = await h.reconciler.reconcile();
+
         expect(report.sweptLeases, isEmpty);
-        // No clearing write — the only bd traffic would be the sweep's.
+        expect(h.groups.signals, isEmpty);
         expect(h.bd.callsFor('update'), isEmpty);
       },
     );
