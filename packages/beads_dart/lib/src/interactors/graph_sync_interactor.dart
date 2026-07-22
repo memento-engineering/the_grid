@@ -104,6 +104,14 @@ class GraphSyncInteractor {
   void _onSignal(DirtySignal signal) {
     if (_disposed) return;
     _signalCounts.update(signal.origin, (n) => n + 1, ifAbsent: () => 1);
+    // The poll ticker is a coarse backstop (a "maybe re-query" nudge on the
+    // CLI path), not a known change. A tick that lands while a refresh is
+    // already in flight is already satisfied by that refresh, so it must NOT
+    // re-dirty the pump: re-dirtying on it livelocks start() for any store
+    // whose refresh outlasts the poll interval (ADR-0001 Decision 5 — "never
+    // N"). Real signals (watch/probe/manual) keep single-flight semantics: a
+    // mutation mid-refresh still schedules exactly one follow-up.
+    if (signal.origin == DirtyOrigin.pollTicker && _refreshing) return;
     // Start timing the reaction at the leading edge of a fresh cycle.
     _cycle ??= Stopwatch()..start();
     _dirty = true;
