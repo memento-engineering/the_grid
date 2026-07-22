@@ -22,6 +22,9 @@ export 'src/bridge/snapshot_source.dart';
 // The federated work-source union (tg-nsj) — fans N LOCAL beads workspaces
 // into the ONE SnapshotSource the bridge's `work` axis observes.
 export 'src/bridge/federated_snapshot_source.dart';
+// The ONE cross-store block enforcement, shared by the union's dependency-row
+// edges and the join's state-owned link beads.
+export 'src/bridge/block_guard.dart';
 
 // The reentrant authoring SDK surface (ADR-0008 D2/D4 / M4-P1 Track A/E): the
 // value-types + the pure frontier predicate + the opaque Capability/Service
@@ -62,6 +65,11 @@ export 'src/molecule/molecule_schema.dart'
     show MoleculeCircuitKeys, MoleculeStepKeys;
 
 // Domain (value types).
+// The state-owned CROSS-REPO link bead: the metadata schema, the read
+// projection, and the arming refusal for an unseeded `link` type. Exported
+// because the authoring verbs mint and close these beads and must name the ONE
+// definition of the wire keys.
+export 'src/domain/cross_link.dart';
 export 'src/domain/joined_snapshot.dart';
 // The rework-round contract (tg-o90) — the ONE cap + retired-round key shape
 // shared by the `Rewind` arm (the engine) and `grid rework` (the operator verb).
