@@ -222,8 +222,11 @@ abstract class ProcessLeaseVendor {
   ///    freshness proof, and the next acquire overwrites it), and leaving it
   ///    avoids a per-step boot write-burst;
   ///  - a live DAEMON whose adopt-freshness proof holds — the vendor's OWN
-  ///    proof, the same fence `proveFresh` runs — is left running for the
-  ///    re-mounting tree to adopt ([LeaseSweepDisposition.leftAdoptable]);
+  ///    proof, the same fence `proveFresh` runs — AND whose candidate declares
+  ///    [LeaseSweepCandidate.willRemount] is left running for the re-mounting
+  ///    tree to adopt ([LeaseSweepDisposition.leftAdoptable]); under a
+  ///    TERMINAL session (`willRemount: false`) nothing will ever adopt it, so
+  ///    it is an orphan like any other;
   ///  - everything else alive — a job ALWAYS (jobs never adopt), a daemon
   ///    whose proof fails (adoption unarmed ⇒ every daemon), a step with no
   ///    provable daemon kind — is an ORPHAN: killed + cleared, reported LOUD
@@ -614,13 +617,19 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
       // per-step boot write-burst.
       if (!alive(pgid: handle.pgid, leaderPid: handle.pid)) continue;
 
-      // A live daemon is preserved ONLY on this vendor's OWN adopt-freshness
-      // proof — the SAME fence [proveFresh] runs, so the preserve set and the
-      // adopt set can never drift (D4/D5). With adoption UNARMED ([liveness]
-      // at its [neverLive] default) the proof refutes every daemon, so a live
-      // daemon is an orphan nothing will re-adopt and falls through to the
-      // kill below exactly like a job — the flat path's never-adopt posture.
-      if (candidate.metadata[MoleculeStepKeys.kind] == StepKind.daemon.name &&
+      // A live daemon is preserved on TWO conditions, both required. First,
+      // this vendor's OWN adopt-freshness proof — the SAME fence [proveFresh]
+      // runs, so the preserve set and the adopt set can never drift (D4/D5).
+      // Second, a re-mount must actually be COMING
+      // ([LeaseSweepCandidate.willRemount]): under a session that already
+      // reached its terminal there is no future `startOrAdopt` to hand the
+      // survivor to, so preserving it would leak the group across every
+      // subsequent boot — it falls through to the kill below exactly like a
+      // job. With adoption UNARMED ([liveness] at its [neverLive] default) the
+      // proof refutes every daemon anyway, so this second condition only bites
+      // once the D4 adopt wire arms.
+      if (candidate.willRemount &&
+          candidate.metadata[MoleculeStepKeys.kind] == StepKind.daemon.name &&
           liveness(
             AdoptFence(pgid: handle.pgid, pid: handle.pid, token: handle.token),
           )) {
