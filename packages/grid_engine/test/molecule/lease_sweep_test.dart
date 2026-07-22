@@ -59,15 +59,19 @@ class _RecordingTerminator {
   }
 }
 
-/// A candidate step bead's (id, metadata) pair — the shape the reconciler
-/// projects and the vendor interprets. [kind]/[state] null ⇒ key absent.
+/// A candidate step bead's (id, metadata, willRemount) triple — the shape the
+/// reconciler projects and the vendor interprets. [kind]/[state] null ⇒ key
+/// absent. [willRemount] defaults to true (a live session: a re-mount is
+/// coming), which is what every pre-terminal-scope case in this suite models.
 LeaseSweepCandidate _candidate(
   String stepBeadId, {
   StepKind? kind = StepKind.job,
   StepState? state = StepState.running,
   ProcessHandle? lease,
+  bool willRemount = true,
 }) => (
   stepBeadId: stepBeadId,
+  willRemount: willRemount,
   metadata: {
     if (kind != null) MoleculeStepKeys.kind: kind.name,
     if (state != null) MoleculeStepKeys.state: state.name,
@@ -204,6 +208,42 @@ void main() {
         expect(fakes.runner.metadataOfUpdate(0), kClearedLeaseKeys);
       },
     );
+
+    test(
+      'a live DAEMON whose freshness proof HOLDS is STILL killed when no '
+      're-mount is coming (willRemount: false — the TERMINAL-session shape): '
+      'the preserve gate exists to hand a survivor to a future startOrAdopt, '
+      'and here there is no future startOrAdopt',
+      () async {
+        final fakes = buildFakes();
+        final terminator = _RecordingTerminator();
+        final loud = <String>[];
+
+        final swept = await _vendor(fakes, liveness: (fence) => true)
+            .sweepOrphanedLeases(
+              candidates: [
+                _candidate(
+                  'tgdog-step-d',
+                  kind: StepKind.daemon,
+                  state: StepState.ready,
+                  lease: _live,
+                  willRemount: false,
+                ),
+              ],
+              alive: _alwaysAlive,
+              terminate: terminator.call,
+              onOrphan: loud.add,
+            );
+
+        expect(terminator.calls, hasLength(1));
+        expect(terminator.calls.single.pgid, _live.pgid);
+        expect(terminator.calls.single.leaderPid, _live.pid);
+        expect(fakes.runner.callsFor('update'), hasLength(1));
+        expect(loud.single, contains('tgdog-step-d'));
+        expect(swept, hasLength(1));
+        expect(swept.single.disposition, LeaseSweepDisposition.killed);
+      },
+    );
   });
 
   group('sweepOrphanedLeases — NEGATIVE CONTROLS (the kill must NOT fire)', () {
@@ -307,6 +347,7 @@ void main() {
           _candidate('tgdog-step-a'), // no lease keys at all
           (
             stepBeadId: 'tgdog-step-b', // the cleared sentinel
+            willRemount: true,
             metadata: {
               MoleculeStepKeys.kind: StepKind.job.name,
               MoleculeStepKeys.state: StepState.running.name,

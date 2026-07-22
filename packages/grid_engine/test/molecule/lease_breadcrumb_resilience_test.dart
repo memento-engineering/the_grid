@@ -210,6 +210,7 @@ void main() {
             // The dropped-write shape: spawned (running), NO lease keys.
             (
               stepBeadId: 'tgdog-step-dropped',
+              willRemount: true,
               metadata: {
                 MoleculeStepKeys.kind: StepKind.job.name,
                 MoleculeStepKeys.state: StepState.running.name,
@@ -219,6 +220,7 @@ void main() {
             // stays silent.
             (
               stepBeadId: 'tgdog-step-pending',
+              willRemount: true,
               metadata: {
                 MoleculeStepKeys.kind: StepKind.job.name,
                 MoleculeStepKeys.state: StepState.pending.name,
@@ -228,6 +230,7 @@ void main() {
             // an explicit record, not a dropped write — stays silent.
             (
               stepBeadId: 'tgdog-step-cleared',
+              willRemount: true,
               metadata: {
                 MoleculeStepKeys.kind: StepKind.job.name,
                 MoleculeStepKeys.state: StepState.running.name,
