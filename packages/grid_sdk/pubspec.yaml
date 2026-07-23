@@ -21,10 +21,15 @@ dependencies:
   # The store/controller layer the work assembly builds sources over (tg-yl8:
   # `buildStationWork` — BeadsWorkspace / GridRuntimeFactory / BdCliService).
   beads_dart:
-    # Intra-repo sibling: a PATH dep so this package resolves when consumed
-    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
-    # checkout. Workspace/dev resolution is unchanged.
-    path: ../beads_dart
+    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
+    # unifies git deps by REF STRING, so every route to a package —
+    # sibling or external consumer — must carry the SAME tag ref (a
+    # path dep would normalize to a SHA descriptor and conflict).
+    # Workspace/dev resolution is unchanged; tags move in lockstep.
+    git:
+      url: git@github.com:memento-engineering/the_grid.git
+      ref: beads_dart-v0.1.0
+      path: packages/beads_dart
   freezed_annotation: ^3.0.0
   # The element model the composition Seeds are authored on (re-exported: one
   # import authors a station). Floor = 0.1.5 (Nest + the non-binding effect
@@ -33,17 +38,27 @@ dependencies:
   # The private element layer this SDK surfaces (ADR-0002 / ADR-0008 D2).
   # Consumers compose `grid_sdk`; they never import `grid_engine` directly.
   grid_engine:
-    # Intra-repo sibling: a PATH dep so this package resolves when consumed
-    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
-    # checkout. Workspace/dev resolution is unchanged.
-    path: ../grid_engine
+    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
+    # unifies git deps by REF STRING, so every route to a package —
+    # sibling or external consumer — must carry the SAME tag ref (a
+    # path dep would normalize to a SHA descriptor and conflict).
+    # Workspace/dev resolution is unchanged; tags move in lockstep.
+    git:
+      url: git@github.com:memento-engineering/the_grid.git
+      ref: grid_engine-v0.1.0
+      path: packages/grid_engine
   # The transports the work assembly wires (tg-yl8): the bd write chokepoint,
   # the process/git services, and their dry-run inert counterparts.
   grid_runtime:
-    # Intra-repo sibling: a PATH dep so this package resolves when consumed
-    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
-    # checkout. Workspace/dev resolution is unchanged.
-    path: ../grid_runtime
+    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
+    # unifies git deps by REF STRING, so every route to a package —
+    # sibling or external consumer — must carry the SAME tag ref (a
+    # path dep would normalize to a SHA descriptor and conflict).
+    # Workspace/dev resolution is unchanged; tags move in lockstep.
+    git:
+      url: git@github.com:memento-engineering/the_grid.git
+      ref: grid_runtime-v0.1.0
+      path: packages/grid_runtime
   json_annotation: ^4.9.0
   meta: ^1.16.0
   path: ^1.9.0
