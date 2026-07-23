@@ -157,6 +157,61 @@ void main() {
   });
 
   group('allowed writes — bd-only, --actor grid-controller, merge, no show', () {
+    test('link writes use the chokepoint actor', () async {
+      runner.nextCreatedId = 'tgdog-link1';
+      final id = await writer().createLink(
+        substation: 'tgdog',
+        from: 'tg-work1',
+        to: 'pow-work2',
+        reason: 'waits for power',
+        actor: 'specify',
+      );
+
+      expect(id, 'tgdog-link1');
+      expect(
+        runner.callsFor('create').single,
+        containsAllInOrder(['--type', 'link']),
+      );
+      final metadata =
+          jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+      expect(metadata, {
+        'rig': 'tgdog',
+        'grid.link.from': 'tg-work1',
+        'grid.link.to': 'pow-work2',
+        'grid.link.type': 'blocks',
+        'grid.link.reason': 'waits for power',
+        'grid.link.actor': 'specify',
+      });
+      await writer().close('tgdog-link1', reason: 'dependency cleared');
+      expect(
+        runner.callsFor('close').single,
+        containsAllInOrder([
+          'close',
+          'tgdog-link1',
+          '--reason',
+          'dependency cleared',
+        ]),
+      );
+      expect(runner.everyMutationHasActor, isTrue);
+    });
+
+    test(
+      'createLink refuses an unowned state prefix before any call',
+      () async {
+        await expectLater(
+          writer().createLink(
+            substation: 'houston',
+            from: 'tg-work1',
+            to: 'pow-work2',
+            reason: 'waits',
+            actor: 'specify',
+          ),
+          throwsA(isA<OwnershipRefused>()),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
+
     test('createSession mints + stamps the owned rig FROM BIRTH', () async {
       final id = await writer().createSession(
         substation: 'tgdog',

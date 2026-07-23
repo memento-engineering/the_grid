@@ -31,3 +31,5 @@ export 'src/watch_command.dart';
 export 'src/gate_command.dart';
 export 'src/rework_command.dart';
 export 'src/demo_command.dart';
+export 'src/link_command.dart'
+    show LinkCommand, LinkEndpointStore, UnlinkCommand, runLink, runUnlink;
