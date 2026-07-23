@@ -204,6 +204,41 @@ class StationBeadWriter {
     return id;
   }
 
+  /// Mints an owned state-store cross-repository blocking-link receipt.
+  ///
+  /// Wire-key strings live here deliberately: `grid_runtime` must not depend
+  /// on `grid_engine` merely to stamp its cross-link schema.
+  Future<String> createLink({
+    required String substation,
+    required String from,
+    required String to,
+    required String reason,
+    required String actor,
+  }) async {
+    if (!_ownership.ownsTarget(
+      id: '$substation-pending',
+      metadata: {rigKey: substation},
+    )) {
+      _refuse('create', substation, substation);
+    }
+    final id = await _bd.create(
+      title: 'grid link $from blocked by $to',
+      type: IssueType.link,
+    );
+    await _bd.update(
+      id,
+      metadata: {
+        rigKey: substation,
+        'grid.link.from': from,
+        'grid.link.to': to,
+        'grid.link.type': 'blocks',
+        'grid.link.reason': reason,
+        'grid.link.actor': actor,
+      },
+    );
+    return id;
+  }
+
   /// Mints a the_grid-owned `type=gate` bead in [substation] (the OWN state store)
   /// that functionally blocks the session [sessionId] at [nodePath] (D-7).
   /// Fail-closed on ownership exactly like [createSession]; stamps `rig`
