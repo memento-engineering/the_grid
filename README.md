@@ -108,8 +108,8 @@ org. Docs here reference siblings by name:
 
 - [`power_station`](https://github.com/memento-engineering/power_station) — the
   Packaged-AI-Asset packs (the `code` circuit's committee, skills, and overlays).
-- `space_station` — the org's grid *instance*: composition + config over this repo's
-  CLI-SDK (public release to follow).
+- [`space_station`](https://github.com/memento-engineering/space_station) — the 
+  org's grid *instance*: composition + config over this repo's CLI-SDK.
 - [`lenny`](https://github.com/memento-engineering/lenny) — the debugging harness that
   attaches to a running station over the VM service.
 - **houston** is not a repo — it is the id prefix of the station's *state store* (the
