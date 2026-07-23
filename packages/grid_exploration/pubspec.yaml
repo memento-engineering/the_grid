@@ -1,4 +1,7 @@
 name: grid_exploration
+# Released as git tags per package (power_station ADR-0003 D1:
+# `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
+version: 0.1.0
 description: >-
   Exploration-protocol host for the_grid — registers lenny's ext.exploration.*
   wire protocol as Dart VM-service extensions over the controller runtime.
@@ -10,7 +13,11 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart: any
+  beads_dart:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../beads_dart
   meta: ^1.16.0
 
 dev_dependencies:

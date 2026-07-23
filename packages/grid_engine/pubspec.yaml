@@ -1,4 +1,7 @@
 name: grid_engine
+# Released as git tags per package (power_station ADR-0003 D1:
+# `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
+version: 0.1.0
 description: >-
   M4 tree engine — `genesis_tree` IS the engine (ADR-0007): `build(observed)`
   reconciles the running system (mount = spawn, unmount = kill, a cursor tick =
@@ -14,13 +17,21 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart: any
+  beads_dart:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../beads_dart
   freezed_annotation: ^3.0.0
   # The engine. Pinned (^0.1.5) — the composition layer is EXPERIMENTAL and
   # the_grid is its triggering 2nd consumer (ADR-0007 / A34 precedent). A
   # workspace-root dependency_overrides path dep supplies it during dev.
   genesis_tree: ^0.1.5
-  grid_runtime: any
+  grid_runtime:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../grid_runtime
   json_annotation: ^4.9.0
   meta: ^1.16.0
   path: ^1.9.0

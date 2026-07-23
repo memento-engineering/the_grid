@@ -25,7 +25,11 @@ dev_dependencies:
   # package at runtime) — this dependency exists solely so the test suite can
   # assert the hand-pinned strings against the real protocol constants. Ship
   # graph is unchanged.
-  grid_exploration: any
+  grid_exploration:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../grid_exploration
   lints: ^5.1.0
   test: any
 

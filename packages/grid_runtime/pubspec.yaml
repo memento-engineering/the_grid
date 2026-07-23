@@ -1,4 +1,7 @@
 name: grid_runtime
+# Released as git tags per package (power_station ADR-0003 D1:
+# `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
+version: 0.1.0
 description: >-
   M3 runtime providers — gives the_grid hands. Spawns and supervises a coding
   agent per ready bead (subprocess-first; tmux as the gc-compatible
@@ -14,7 +17,11 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart: any
+  beads_dart:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../beads_dart
   freezed_annotation: ^3.0.0
   json_annotation: ^4.9.0
   meta: ^1.16.0

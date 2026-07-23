@@ -1,4 +1,7 @@
 name: beads_dart
+# Released as git tags per package (power_station ADR-0003 D1:
+# `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
+version: 0.1.0
 description: >-
   A pure-Dart beads client — bd CLI + Dolt SQL services, snapshot repository,
   structural diff, typed graph events. Framework-free: Streams for

@@ -1,4 +1,7 @@
 name: grid_cli
+# Released as git tags per package (power_station ADR-0003 D1:
+# `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
+version: 0.1.0
 description: Management CLI for the_grid — `grid watch` and friends.
 publish_to: none
 repository: https://github.com/memento-engineering/the_grid
@@ -12,12 +15,32 @@ executables:
 
 dependencies:
   args: ^2.6.0
-  beads_dart: any
+  beads_dart:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../beads_dart
   genesis_tree: ^0.1.5
-  grid_engine: any
-  grid_exploration: any
-  grid_runtime: any
-  grid_sdk: any
+  grid_engine:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../grid_engine
+  grid_exploration:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../grid_exploration
+  grid_runtime:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../grid_runtime
+  grid_sdk:
+    # Intra-repo sibling: a PATH dep so this package resolves when consumed
+    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
+    # checkout. Workspace/dev resolution is unchanged.
+    path: ../grid_sdk
   meta: ^1.15.0
   path: ^1.9.0
   # The VM-service client `reload` drives: reloadSources + the
