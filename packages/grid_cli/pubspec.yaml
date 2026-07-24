@@ -1,7 +1,7 @@
 name: grid_cli
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.1.0
+version: 0.2.0
 description: Management CLI for the_grid — `grid watch` and friends.
 publish_to: none
 repository: https://github.com/memento-engineering/the_grid
