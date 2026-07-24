@@ -59,6 +59,7 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 
 import '../diagnostics/diagnosable.dart';
 import '../domain/session_bead.dart';
@@ -73,6 +74,7 @@ import '../molecule/live_frontier.dart'
     show derivedEscalation, effectiveCursor, invalidatedNodes;
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
+import '../restart/restart_reconciler.dart' show ReapWorktree;
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
@@ -93,6 +95,8 @@ class SessionScope extends StatefulSeed with Diagnosable {
     required this.bead,
     required this.circuit,
     this.existingSession,
+    this.reapWorktree,
+    this.workRoot,
     super.key,
   });
 
@@ -108,6 +112,14 @@ class SessionScope extends StatefulSeed with Diagnosable {
   /// [SessionProjection.cursor] threads the per-node cursor down to
   /// `CircuitScope` pull-free (A39).
   final SessionProjection? existingSession;
+
+  /// Existing domain-free three-gate seam; null with [workRoot] disables reap.
+  ///
+  /// The concrete VCS implementation remains outside `grid_engine`.
+  final ReapWorktree? reapWorktree;
+
+  /// Root checkout paired with [reapWorktree].
+  final RootCheckout? workRoot;
 
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
@@ -623,6 +635,42 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
       } on Object catch (error) {
         _flare('session.moleculeReapFailed', {
           'sessionId': id,
+          'reason': truncateReason('$error'),
+        });
+      }
+    }
+    final reapWorktree = seed.reapWorktree;
+    final workRoot = seed.workRoot;
+    final sourceControl = _services.sourceControl;
+    if (reapWorktree != null && workRoot != null && sourceControl != null) {
+      try {
+        final outcome = await reapWorktree(
+          root: workRoot,
+          worktree: BeadWorktree(
+            beadId: seed.bead.id,
+            path: sourceControl.workspaceFor(seed.bead.id),
+            branch: sourceControl.branchFor(seed.bead.id),
+          ),
+        );
+        if (outcome.removed) {
+          _flare('session.worktreeReaped', {
+            'sessionId': id,
+            'workBeadId': seed.bead.id,
+          });
+        } else {
+          _flare('session.worktreeReapHeld', {
+            'sessionId': id,
+            'workBeadId': seed.bead.id,
+            'uncommitted': outcome.uncommitted.name,
+            'unpushed': outcome.unpushed.name,
+            'stashes': outcome.stashed.name,
+            'reason': truncateReason(outcome.refusedReason ?? 'reap refused'),
+          });
+        }
+      } on Object catch (error) {
+        _flare('session.worktreeReapFailed', {
+          'sessionId': id,
+          'workBeadId': seed.bead.id,
           'reason': truncateReason('$error'),
         });
       }
