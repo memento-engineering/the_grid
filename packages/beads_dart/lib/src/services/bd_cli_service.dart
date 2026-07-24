@@ -69,12 +69,29 @@ class BdCliService {
   /// `Issue.Dependencies` field); those edges are gathered alongside the beads
   /// (bd's bulk loaders route wisp ids to `wisp_dependencies`/`wisp_labels`,
   /// so wisp edges and labels arrive inline too).
+  ///
+  /// **Proxied-server fallback:** bd's experimental proxied-server mode
+  /// refuses `bd export` outright ("export is not supported in proxied-server
+  /// mode"). When that exact refusal comes back, the snapshot is composed from
+  /// `bd list --all --json` instead — the same upstream issue records (issues
+  /// ∪ wisps, inline `dependencies`), delivered as one JSON array rather than
+  /// JSONL. Any other failure still throws.
   Future<({List<Bead> beads, List<BeadDependency> dependencies})>
   exportAll() async {
     final result = await _run(exportArgs());
+    if (result.exitCode != 0 &&
+        (result.stderr.contains(_kProxiedExportRefusal) ||
+            result.stdout.contains(_kProxiedExportRefusal))) {
+      final fallback = await _run(listAllArgs());
+      _throwIfFailed(listAllArgs(), fallback);
+      return _parseExportList(fallback.stdout);
+    }
     _throwIfFailed(exportArgs(), result);
     return _parseExportJsonl(result.stdout);
   }
+
+  static const _kProxiedExportRefusal =
+      'export is not supported in proxied-server mode';
 
   /// `bd query "<expr>" --json` — a filtered read returning matching [Bead]s.
   Future<List<Bead>> query(String expr) async {
@@ -317,6 +334,8 @@ class BdCliService {
 
   List<String> exportArgs() => const ['export', '--all'];
 
+  List<String> listAllArgs() => const ['list', '--all', '--json'];
+
   List<String> queryArgs(String expr) => ['query', expr, '--json'];
 
   List<String> depListArgs(List<String> ids) => [
@@ -541,24 +560,61 @@ class BdCliService {
       if (decoded is! Map<String, dynamic>) {
         throw BdParseException('export line was not a JSON object', trimmed);
       }
-      // Export interleaves record types (issue / memory / …); only issues are
-      // beads. Records without `_type` are treated as issues for forward-compat.
-      final recordType = decoded['_type'];
-      if (recordType is String && recordType != 'issue') continue;
+      _collectSnapshotRecord(decoded, beads, edges);
+    }
+    return (beads: beads, dependencies: edges.values.toList(growable: false));
+  }
 
-      beads.add(Bead.fromJson(decoded));
+  /// The proxied-mode fallback shape: `bd list --all --json` emits ONE JSON
+  /// array of the same issue records `bd export` emits as JSONL lines.
+  ({List<Bead> beads, List<BeadDependency> dependencies}) _parseExportList(
+    String json,
+  ) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(json);
+    } on FormatException catch (e) {
+      throw BdParseException(
+        'invalid JSON from bd list --all: ${e.message}',
+        json,
+      );
+    }
+    if (decoded is! List) {
+      throw BdParseException('bd list --all output was not a JSON array', json);
+    }
+    final beads = <Bead>[];
+    final edges = <String, BeadDependency>{};
+    for (final raw in decoded) {
+      if (raw is! Map<String, dynamic>) {
+        throw BdParseException('list row was not a JSON object', '$raw');
+      }
+      _collectSnapshotRecord(raw, beads, edges);
+    }
+    return (beads: beads, dependencies: edges.values.toList(growable: false));
+  }
 
-      final deps = decoded['dependencies'];
-      if (deps is List) {
-        for (final raw in deps) {
-          if (raw is Map<String, dynamic>) {
-            final edge = BeadDependency.fromJson(raw);
-            edges[edge.edgeKey] = edge;
-          }
+  /// Shared per-record collection for both snapshot shapes. Export interleaves
+  /// record types (issue / memory / …); only issues are beads. Records without
+  /// `_type` are treated as issues for forward-compat.
+  void _collectSnapshotRecord(
+    Map<String, dynamic> decoded,
+    List<Bead> beads,
+    Map<String, BeadDependency> edges,
+  ) {
+    final recordType = decoded['_type'];
+    if (recordType is String && recordType != 'issue') return;
+
+    beads.add(Bead.fromJson(decoded));
+
+    final deps = decoded['dependencies'];
+    if (deps is List) {
+      for (final raw in deps) {
+        if (raw is Map<String, dynamic>) {
+          final edge = BeadDependency.fromJson(raw);
+          edges[edge.edgeKey] = edge;
         }
       }
     }
-    return (beads: beads, dependencies: edges.values.toList(growable: false));
   }
 
   static Iterable<List<T>> _chunk<T>(List<T> items, int size) sync* {
