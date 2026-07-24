@@ -346,13 +346,10 @@ Future<StationWorkRuntime> buildStationWork({
   final unresolvedSink =
       onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
-  final work = FederatedSnapshotSource(
-    {
-      for (final e in bundles.entries)
-        e.key: _RuntimeSnapshotSource(e.value.runtime),
-    },
-    onUnresolvedExternalDep: unresolvedSink,
-  );
+  final work = FederatedSnapshotSource({
+    for (final e in bundles.entries)
+      e.key: _RuntimeSnapshotSource(e.value.runtime),
+  }, onUnresolvedExternalDep: unresolvedSink);
   final SnapshotSource stateSource = _RuntimeSnapshotSource(
     stateBundle.runtime,
   );
@@ -500,11 +497,20 @@ Future<StationWorkRuntime> buildStationWork({
     wedgePollInterval: wedgePollInterval,
   );
 
+  final liveResolver = switch (resolver) {
+    CircuitResolver(:final rootCircuitFor) => CircuitResolver(
+      rootCircuitFor,
+      reapWorktree: git.reap,
+      workRoot: workRoot,
+    ),
+    _ => resolver,
+  };
+
   return StationWorkRuntime._(
     wiring: StationWorkWiring(
       notifier: bridge.notifier,
       services: services,
-      resolver: resolver,
+      resolver: liveResolver,
       registry: registry,
       // tg-2mb: build the vendor OFF-tree (the DI rule — a branch never builds a
       // service) so the production work subtree resolves the SAME real vendor

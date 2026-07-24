@@ -10,9 +10,11 @@ library;
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_projection.dart';
 import '../kernel/session_resolver.dart';
+import '../restart/restart_reconciler.dart' show ReapWorktree;
 import '../sdk/circuit.dart';
 import 'session_scope.dart';
 
@@ -25,10 +27,23 @@ typedef RootCircuitFor = Circuit Function(Bead bead);
 /// bead (Track D).
 class CircuitResolver implements SessionResolver {
   /// Creates the resolver over the [rootCircuitFor] policy.
-  const CircuitResolver(this.rootCircuitFor);
+  ///
+  /// A null [reapWorktree]/[workRoot] pair disables positive-terminal
+  /// worktree reaping for offline and unit-test callers.
+  const CircuitResolver(
+    this.rootCircuitFor, {
+    this.reapWorktree,
+    this.workRoot,
+  });
 
   /// The bead→root-circuit policy.
   final RootCircuitFor rootCircuitFor;
+
+  /// Existing domain-free three-gate worktree reap seam.
+  final ReapWorktree? reapWorktree;
+
+  /// Root checkout paired with [reapWorktree].
+  final RootCheckout? workRoot;
 
   @override
   Seed sessionFor({required Bead bead, SessionProjection? session}) =>
@@ -36,6 +51,8 @@ class CircuitResolver implements SessionResolver {
         bead: bead,
         circuit: rootCircuitFor(bead),
         existingSession: session,
+        reapWorktree: reapWorktree,
+        workRoot: workRoot,
         key: ValueKey('${bead.id}:session'),
       );
 }
