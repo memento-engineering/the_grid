@@ -51,6 +51,75 @@ void main() {
       expect(runner.calls.single, ['export', '--all']);
     });
 
+    test('exportAll() falls back to `list --all --json` when proxied-server '
+        'mode refuses export, parsing the array shape', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand(
+          'export',
+          BdReply(
+            exitCode: 1,
+            stderr: 'Error: export is not supported in proxied-server mode',
+          ),
+        )
+        ..stubCommand(
+          'list',
+          BdReply(
+            stdout: jsonEncode([
+              {
+                'id': 'tg-1',
+                'title': 'a bead',
+                'status': 'open',
+                'issue_type': 'task',
+                'dependencies': [
+                  {
+                    'issue_id': 'tg-1',
+                    'depends_on_id': 'tg-2',
+                    'type': 'blocks',
+                  },
+                ],
+              },
+              {
+                'id': 'tg-2',
+                'title': 'another bead',
+                'status': 'open',
+                'issue_type': 'task',
+              },
+            ]),
+          ),
+        );
+      final service = BdCliService(runner);
+
+      final snapshot = await service.exportAll();
+
+      expect(snapshot.beads, hasLength(2));
+      expect(snapshot.beads.first.id, 'tg-1');
+      expect(snapshot.dependencies, hasLength(1));
+      expect(snapshot.dependencies.single.type, 'blocks');
+      expect(runner.calls, [
+        ['export', '--all'],
+        ['list', '--all', '--json'],
+      ]);
+    });
+
+    test('exportAll() still throws on non-proxied export failures '
+        '(no silent fallback)', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand(
+          'export',
+          BdReply(exitCode: 1, stderr: 'some other failure'),
+        );
+      final service = BdCliService(runner);
+
+      await expectLater(service.exportAll(), throwsA(isA<BdCommandFailed>()));
+      expect(
+        runner.calls,
+        [
+          ['export', '--all'],
+        ],
+        reason: 'the fallback must never fire for unrelated failures',
+      );
+    });
+
     test(
       'exportAll() gathers inline dependency edges and skips non-issues',
       () async {
