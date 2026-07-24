@@ -34,8 +34,10 @@ import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import '../diagnostics/diagnosable.dart';
 import '../domain/session_bead.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
@@ -52,7 +54,7 @@ import 'capability_registry.dart';
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
 /// keyed `ValueKey('$nodePath#$restartCount')` so a supervised restart re-keys.
-class CapabilityHost extends StatefulSeed {
+class CapabilityHost extends StatefulSeed with Diagnosable {
   /// Creates the carrier for [capability] at [mount].
   const CapabilityHost({
     required this.capability,
@@ -67,11 +69,25 @@ class CapabilityHost extends StatefulSeed {
   final StepMount mount;
 
   @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(StringProperty('nodePath', mount.nodePath));
+    builder.add(
+      ReferenceProperty(
+        'session',
+        mount.session.sessionId,
+        kind: ReferenceKind.session,
+      ),
+    );
+    builder.add(EnumProperty('stepState', mount.node.state));
+  }
+
+  @override
   State<CapabilityHost> createState() => CapabilityHostState();
 }
 
 /// The pinned [CapabilityHost] lifecycle — the thin driver (ADR-0009 D5).
-class CapabilityHostState extends State<CapabilityHost> {
+class CapabilityHostState extends State<CapabilityHost> with Diagnosable {
   StationServices? _ctx;
   ServiceBundle _services = const ServiceBundle();
   CapabilityRegistry? _registry;
@@ -86,6 +102,16 @@ class CapabilityHostState extends State<CapabilityHost> {
   /// read; the injected clock). The terminal write derives `durationMs` from it.
   /// Null only before the kick (never on a terminal path).
   DateTime? _startedAt;
+
+  @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    if (_allocation case final allocation?) {
+      builder.add(
+        ObjectProperty('allocation', [EnumProperty('state', allocation.state)]),
+      );
+    }
+  }
 
   String get _sessionId => seed.mount.session.sessionId;
   String get _nodePath => seed.mount.nodePath;

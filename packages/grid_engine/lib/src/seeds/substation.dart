@@ -1,5 +1,7 @@
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
 
+import '../diagnostics/diagnosable.dart';
 import '../domain/substation_config.dart';
 import 'work_list.dart';
 
@@ -11,7 +13,7 @@ import 'work_list.dart';
 /// `WorkList`, marks dirty). A config change reaches it via the
 /// `InheritedSeed<SubstationConfig>` dependency (`dependencyChanged`), the config
 /// axis, which is exactly when it *should* rebuild.
-class Substation extends StatefulSeed {
+class Substation extends StatefulSeed with Diagnosable {
   /// Creates a substation node, optionally [key]ed.
   const Substation({super.key});
 
@@ -19,7 +21,7 @@ class Substation extends StatefulSeed {
   State<Substation> createState() => _SubstationState();
 }
 
-class _SubstationState extends State<Substation> {
+class _SubstationState extends State<Substation> with Diagnosable {
   late SubstationConfig _config;
 
   @override
@@ -28,6 +30,18 @@ class _SubstationState extends State<Substation> {
     // dependent of the ambient InheritedSeed<SubstationConfig>, so a config change
     // re-runs didChangeDependencies and rebuilds — the config axis.
     _config = context.dependOnInheritedSeedOfExactType<SubstationConfig>()!;
+  }
+
+  @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(
+      ReferenceProperty(
+        'substation',
+        _config.substationId,
+        kind: ReferenceKind.substation,
+      ),
+    );
   }
 
   @override

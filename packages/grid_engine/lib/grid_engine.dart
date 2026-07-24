@@ -15,6 +15,9 @@
 /// by exactly one node, `WorkList` (derailment-invariant 1).
 library;
 
+export 'src/diagnostics/diagnosable.dart';
+export 'src/diagnostics/diagnostics_tree_walker.dart';
+
 // The join bridge (the only subscription into the snapshot pipelines, A39).
 export 'src/bridge/station_join_bridge.dart';
 export 'src/bridge/snapshot_source.dart';
@@ -49,7 +52,10 @@ export 'src/circuit/unclaimed_frontier.dart';
 // (the vendor StationKernel.start / StationWork mount ambient to the work
 // subtree, tg-h4u / tg-2mb).
 export 'src/molecule/process_lease_vendor.dart'
-    show ProcessLeaseVendor, requireProcessLeaseVendor, StationProcessLeaseVendor;
+    show
+        ProcessLeaseVendor,
+        requireProcessLeaseVendor,
+        StationProcessLeaseVendor;
 export 'src/molecule/station_process_transport.dart'
     show defaultProcessLeaseVendor;
 // The molecule read projection — consumed by OUT-OF-PACKAGE operator surfaces

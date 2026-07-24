@@ -1,6 +1,8 @@
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
 import 'package:state_notifier/state_notifier.dart';
 
+import '../diagnostics/diagnosable.dart';
 import '../domain/substation_config.dart';
 import '../notifiers/substation_config_notifier.dart';
 import '../sdk/capability.dart';
@@ -34,7 +36,7 @@ import 'substation.dart';
 /// lifetime (the kernel builds it once). genesis `State` has no
 /// did-update-config hook, so a swapped notifier instance would not re-bind;
 /// that does not occur in P0.
-class SubstationScope extends StatefulSeed {
+class SubstationScope extends StatefulSeed with Diagnosable {
   /// Creates a scope driven by [configNotifier], providing [services] to its
   /// subtree. Key it by substation id at the Station level so a substation add/remove
   /// mounts/unmounts exactly this scope.
@@ -56,7 +58,7 @@ class SubstationScope extends StatefulSeed {
   State<SubstationScope> createState() => _SubstationScopeState();
 }
 
-class _SubstationScopeState extends State<SubstationScope> {
+class _SubstationScopeState extends State<SubstationScope> with Diagnosable {
   RemoveListener? _remove;
   late SubstationConfig _config;
 
@@ -80,6 +82,18 @@ class _SubstationScopeState extends State<SubstationScope> {
   void dispose() {
     _remove?.call();
     _remove = null;
+  }
+
+  @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(
+      ReferenceProperty(
+        'substation',
+        _config.substationId,
+        kind: ReferenceKind.substation,
+      ),
+    );
   }
 
   @override

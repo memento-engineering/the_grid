@@ -1,4 +1,7 @@
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
+
+import '../diagnostics/diagnosable.dart';
 import 'package:beads_dart/beads_dart.dart';
 
 import '../domain/session_projection.dart';
@@ -15,7 +18,7 @@ import '../kernel/session_resolver.dart';
 /// advance arrives as a NEW WorkBead config (same bead-id key); the subtree root
 /// is re-keyed identically, so reconcile threads the new cursor down in place
 /// while THIS branch keeps its identity.
-class WorkBead extends StatelessSeed {
+class WorkBead extends StatelessSeed with Diagnosable {
   /// Creates a work node for [bead] with its linked [session]. Key it
   /// `ValueKey(bead.id)` at the `WorkList` level so reconcile keeps the branch
   /// across snapshot ticks.
@@ -29,8 +32,20 @@ class WorkBead extends StatelessSeed {
   final SessionProjection? session;
 
   @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(ReferenceProperty('bead', bead.id, kind: ReferenceKind.bead));
+    if (session?.sessionId case final sessionId?) {
+      builder.add(
+        ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
+      );
+    }
+  }
+
+  @override
   Seed build(TreeContext context) {
-    final resolver = context.dependOnInheritedSeedOfExactType<SessionResolver>();
+    final resolver = context
+        .dependOnInheritedSeedOfExactType<SessionResolver>();
     assert(
       resolver != null,
       'WorkBead requires an ambient SessionResolver (the kernel/extension '
