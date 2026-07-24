@@ -58,7 +58,9 @@ import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
 
+import '../diagnostics/diagnosable.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
@@ -83,7 +85,7 @@ import 'session_handle.dart';
 /// The adopt-or-mint session lifecycle owner for one work [bead]'s [circuit]
 /// (D-2). Key it `ValueKey('${bead.id}:session')` so it persists across cursor
 /// ticks while the work node keeps its branch identity.
-class SessionScope extends StatefulSeed {
+class SessionScope extends StatefulSeed with Diagnosable {
   /// Creates the scope for [bead] running [circuit], with the bead's linked
   /// [existingSession] (null until a session exists — then `SessionScope` mints
   /// one; non-null → it adopts).
@@ -108,13 +110,24 @@ class SessionScope extends StatefulSeed {
   final SessionProjection? existingSession;
 
   @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(ReferenceProperty('bead', bead.id, kind: ReferenceKind.bead));
+    if (existingSession?.sessionId case final sessionId?) {
+      builder.add(
+        ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
+      );
+    }
+  }
+
+  @override
   State<SessionScope> createState() => SessionScopeState();
 }
 
 /// The `{resolving | ready | failed}` lifecycle (D-2). The async-gap guards
 /// (`_cancelled` set first in `dispose`, `context.mounted` after every await,
 /// the captured `_ctx`) are the same discipline as `CapabilityHostState`.
-class SessionScopeState extends State<SessionScope> {
+class SessionScopeState extends State<SessionScope> with Diagnosable {
   /// The bounded `createSession` retry budget (tg-6nf) — a mint failure is
   /// RETRIED up to this many TOTAL attempts before the scope escalates LOUD
   /// (the circuit-breaker's bounded-retry discipline, D-5). Small on purpose:
@@ -153,6 +166,17 @@ class SessionScopeState extends State<SessionScope> {
   CapabilityRegistry? _registry;
 
   String? _sessionId;
+
+  @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    if (_sessionId case final sessionId?) {
+      builder.add(
+        ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
+      );
+    }
+  }
+
   bool _resolving = true;
   bool _failed = false;
   bool _cancelled = false;

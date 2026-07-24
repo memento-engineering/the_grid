@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/driveable_work.dart';
+import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
@@ -28,7 +30,7 @@ import 'work_bead.dart';
 ///
 /// `root.markNeedsRebuild()` is banned; a single over-broad observation would
 /// re-create the "config built 100×" bug ADR-0007 §6.1 exists to prevent.
-class WorkList extends StatefulSeed {
+class WorkList extends StatefulSeed with Diagnosable {
   /// Creates the work list under [substationConfig]. The list itself uses the
   /// value as data for ownership, drive-list, resident, and budget decisions;
   /// its build output re-provides the same value as `InheritedSeed` so
@@ -41,9 +43,21 @@ class WorkList extends StatefulSeed {
 
   @override
   State<WorkList> createState() => _WorkListState();
+
+  @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(
+      ReferenceProperty(
+        'substation',
+        substationConfig.substationId,
+        kind: ReferenceKind.substation,
+      ),
+    );
+  }
 }
 
-class _WorkListState extends State<WorkList> {
+class _WorkListState extends State<WorkList> with Diagnosable {
   RemoveListener? _remove;
   JoinedSnapshotNotifier? _notifier;
   late JoinedSnapshot _snapshot;
@@ -67,6 +81,12 @@ class _WorkListState extends State<WorkList> {
   /// LOUD but said ONCE per bead per station lifetime, never once per build (the
   /// same rising-edge discipline as the wedge monitor).
   final Set<String> _heldReported = <String>{};
+
+  @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(IntProperty('mountedWorkCount', _mountedIds.length));
+  }
 
   @override
   void didChangeDependencies() {

@@ -22,6 +22,7 @@ library;
 
 import 'package:genesis_tree/genesis_tree.dart';
 
+import '../diagnostics/diagnosable.dart';
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
@@ -30,7 +31,7 @@ import 'session_handle.dart';
 
 /// The pure inflater for one circuit instance rooted at [nodePath], under
 /// [cursor] (M4-P1 §4). Engine-private — an asset never subclasses it.
-class CircuitScope extends StatelessSeed {
+class CircuitScope extends StatelessSeed with Diagnosable {
   /// Inflates [circuit] at [nodePath] under [cursor]. The work `Bead` and the
   /// session `SiblingView` are AMBIENT (mounted by `WorkBead`/`SessionScope`,
   /// 2026-07-02) — an effect reads them with the non-binding lookup; the
@@ -54,8 +55,15 @@ class CircuitScope extends StatelessSeed {
   final String nodePath;
 
   @override
+  void debugFillProperties(DiagnosticsBuilder builder) {
+    super.debugFillProperties(builder);
+    builder.add(StringProperty('nodePath', nodePath));
+  }
+
+  @override
   Seed build(TreeContext context) {
-    final registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    final registry = context
+        .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
     assert(
       registry != null,
       'CircuitScope requires an ambient CapabilityRegistry (the kernel/extension '
