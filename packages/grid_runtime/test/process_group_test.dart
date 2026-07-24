@@ -49,6 +49,52 @@ class FakeProcessGroupController implements ProcessGroupController {
 }
 
 void main() {
+  group('establishStationProcessGroup', () {
+    test('establishes and verifies a new station-owned group', () async {
+      final groups = _ResolvingGroups(<int?>[700, 4242]);
+      var calls = 0;
+
+      final pgid = await establishStationProcessGroup(
+        stationPid: 4242,
+        controller: groups,
+        setSid: () {
+          calls++;
+          return 4242;
+        },
+      );
+
+      expect(pgid, 4242);
+      expect(calls, 1);
+      expect(groups.resolvedPids, <int>[4242, 4242]);
+    });
+
+    test('leaves an existing leader unchanged', () async {
+      final groups = _ResolvingGroups(<int?>[4242]);
+
+      final pgid = await establishStationProcessGroup(
+        stationPid: 4242,
+        controller: groups,
+        setSid: () => fail('setsid must not run for an existing leader'),
+      );
+
+      expect(pgid, 4242);
+      expect(groups.resolvedPids, <int>[4242]);
+    });
+
+    test('fails loud when setsid does not produce pid == pgid', () async {
+      final groups = _ResolvingGroups(<int?>[700, 701]);
+
+      expect(
+        establishStationProcessGroup(
+          stationPid: 4242,
+          controller: groups,
+          setSid: () => 4242,
+        ),
+        throwsA(isA<StateError>()),
+      );
+    });
+  });
+
   group('terminateGroup escalation', () {
     test('SIGTERM alone when the group exits within grace', () async {
       final ctl = FakeProcessGroupController(dieAfterTermSignals: 1);
@@ -127,6 +173,19 @@ void main() {
       expect(ctl.signals, isEmpty);
     });
   });
+}
+
+class _ResolvingGroups extends FakeProcessGroupController {
+  _ResolvingGroups(this._pgids);
+
+  final List<int?> _pgids;
+  final List<int> resolvedPids = <int>[];
+
+  @override
+  Future<int?> resolvePgid(int pid) async {
+    resolvedPids.add(pid);
+    return _pgids.removeAt(0);
+  }
 }
 
 class _DeadController extends FakeProcessGroupController {

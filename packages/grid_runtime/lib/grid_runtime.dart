@@ -42,24 +42,19 @@ export 'src/runtime_scaffold.dart';
 // Track 2 — the runtime seam + the subprocess provider.
 export 'src/runtime/env_allowlist.dart'
     show AgentEnvAllowlist, systemEnvironment;
-export 'src/runtime/incarnation_env.dart'
-    show IncarnationEnv, newInstanceToken;
+export 'src/runtime/incarnation_env.dart' show IncarnationEnv, newInstanceToken;
 export 'src/runtime/process_group.dart'
     show
         GroupTerminateResult,
         ProcessGroupController,
+        SetSidCall,
         SystemProcessGroupController,
+        establishStationProcessGroup,
         terminateGroup;
 export 'src/runtime/runtime_config.dart'
     show Lifecycle, RuntimeCapabilities, RuntimeConfig;
 export 'src/runtime/runtime_event.dart'
-    show
-        ActivityChanged,
-        Died,
-        Exited,
-        Respawned,
-        RuntimeEvent,
-        SessionStarted;
+    show ActivityChanged, Died, Exited, Respawned, RuntimeEvent, SessionStarted;
 export 'src/runtime/runtime_provider.dart'
     show RuntimeProvider, SessionAlreadyExists;
 export 'src/runtime/subprocess_provider.dart'
@@ -89,12 +84,7 @@ export 'src/git/station_git_service.dart'
         WorktreeLayout,
         isStrictlyUnderDir;
 export 'src/git/pr_opener.dart'
-    show
-        GhPrOpener,
-        PrOpenFailure,
-        PrOpener,
-        PullRequestRef,
-        PullRequestResult;
+    show GhPrOpener, PrOpenFailure, PrOpener, PullRequestRef, PullRequestResult;
 export 'src/git/stale_ancestor_guard.dart'
     show StaleAncestorRejection, validateAncestorWorktreesNotStale;
 

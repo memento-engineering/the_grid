@@ -29,12 +29,12 @@ void main() {
       final service = StationLockService(
         isPidAlive: (_) => fail('no collision — the probe must not run'),
         log: (_) {},
+        prepareProcessGroup: (stationPid) async => stationPid,
       );
 
       final handle = await service.acquire(
         stateWorkspaceDir: store.path,
         pid: 4242,
-        pgid: 4242,
         now: DateTime.utc(2026, 7, 2, 12),
       );
 
@@ -67,13 +67,13 @@ void main() {
           return true; // the holder is alive
         },
         log: (_) => fail('a live holder is never stolen'),
+        prepareProcessGroup: (stationPid) async => stationPid,
       );
 
       try {
         await service.acquire(
           stateWorkspaceDir: store.path,
           pid: 7777,
-          pgid: 7777,
           now: DateTime.utc(2026, 7, 2),
         );
         fail('acquire against a live holder must refuse');
@@ -106,19 +106,20 @@ void main() {
       final service = StationLockService(
         isPidAlive: (_) => false, // the holder crashed without releasing
         log: loud.add,
+        prepareProcessGroup: (stationPid) async => stationPid,
       );
 
       final handle = await service.acquire(
         stateWorkspaceDir: store.path,
         pid: 7777,
-        pgid: 7777,
         now: DateTime.utc(2026, 7, 2),
       );
 
       expect(
         loud.where(
-          (l) => l.contains('STEALING stale station.lock')
-              && l.contains('pid 4242 dead'),
+          (l) =>
+              l.contains('STEALING stale station.lock') &&
+              l.contains('pid 4242 dead'),
         ),
         hasLength(1),
         reason: 'the steal is LOUD and names the dead pid',
@@ -133,42 +134,47 @@ void main() {
       expect(_modeOf(handle.path), '600');
     });
 
-    test('a corrupt (torn-write) lock is stolen LOUD without probing', () async {
-      final store = _tempStore();
-      Directory('${store.path}/.grid').createSync(recursive: true);
-      File(StationLockService.lockPath(store.path))
-          .writeAsStringSync('{"pid": tor'); // a crash mid-acquire
-      final loud = <String>[];
-      final service = StationLockService(
-        isPidAlive: (_) => fail('no pid to probe in a torn lock'),
-        log: loud.add,
-      );
+    test(
+      'a corrupt (torn-write) lock is stolen LOUD without probing',
+      () async {
+        final store = _tempStore();
+        Directory('${store.path}/.grid').createSync(recursive: true);
+        File(
+          StationLockService.lockPath(store.path),
+        ).writeAsStringSync('{"pid": tor'); // a crash mid-acquire
+        final loud = <String>[];
+        final service = StationLockService(
+          isPidAlive: (_) => fail('no pid to probe in a torn lock'),
+          log: loud.add,
+          prepareProcessGroup: (stationPid) async => stationPid,
+        );
 
-      final handle = await service.acquire(
-        stateWorkspaceDir: store.path,
-        pid: 7777,
-        pgid: 7777,
-        now: DateTime.utc(2026, 7, 2),
-      );
+        final handle = await service.acquire(
+          stateWorkspaceDir: store.path,
+          pid: 7777,
+          now: DateTime.utc(2026, 7, 2),
+        );
 
-      expect(
-        loud.where((l) => l.contains('STEALING corrupt station.lock')),
-        hasLength(1),
-      );
-      expect(handle.record.pid, 7777);
-    });
+        expect(
+          loud.where((l) => l.contains('STEALING corrupt station.lock')),
+          hasLength(1),
+        );
+        expect(handle.record.pid, 7777);
+      },
+    );
 
     test('(c) release deletes the lock; a second release is a no-op', () async {
       final store = _tempStore();
-      final handle = await StationLockService(
-        isPidAlive: (_) => true,
-        log: (_) {},
-      ).acquire(
-        stateWorkspaceDir: store.path,
-        pid: 7777,
-        pgid: 7777,
-        now: DateTime.utc(2026, 7, 2),
-      );
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => true,
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 7, 2),
+          );
 
       await handle.release();
       expect(File(handle.path).existsSync(), isFalse);
@@ -178,30 +184,57 @@ void main() {
     test('updateControl (the RS-4 seam) writes controlUrl/token, preserves '
         'the identity fields, and keeps 0600', () async {
       final store = _tempStore();
-      final handle = await StationLockService(
-        isPidAlive: (_) => true,
-        log: (_) {},
-      ).acquire(
-        stateWorkspaceDir: store.path,
-        pid: 7777,
-        pgid: 7676,
-        now: DateTime.utc(2026, 7, 2, 12),
-      );
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => true,
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 7, 2, 12),
+          );
 
       await handle.updateControl(
         controlUrl: 'http://127.0.0.1:8137',
         token: 's3cret',
       );
 
-      final json = jsonDecode(File(handle.path).readAsStringSync())
-          as Map<String, Object?>;
+      final json =
+          jsonDecode(File(handle.path).readAsStringSync())
+              as Map<String, Object?>;
       expect(json['pid'], 7777);
-      expect(json['pgid'], 7676);
+      expect(json['pgid'], 7777);
       expect(json['startedAt'], '2026-07-02T12:00:00.000Z');
       expect(json['controlUrl'], 'http://127.0.0.1:8137');
       expect(json['token'], 's3cret');
       expect(_modeOf(handle.path), '600', reason: 'the token file stays 0600');
       expect(handle.record.token, 's3cret');
+    });
+
+    test('group preparation failure is loud and writes no lock', () async {
+      final store = _tempStore();
+      final loud = <String>[];
+      final service = StationLockService(
+        isPidAlive: (_) => true,
+        log: loud.add,
+        prepareProcessGroup: (_) async => 700,
+      );
+
+      await expectLater(
+        service.acquire(
+          stateWorkspaceDir: store.path,
+          pid: 4242,
+          now: DateTime.utc(2026, 7, 23),
+        ),
+        throwsA(isA<StationRefusal>()),
+      );
+
+      expect(loud.single, contains('non-owned pgid 700'));
+      expect(
+        File(StationLockService.lockPath(store.path)).existsSync(),
+        isFalse,
+      );
     });
   });
 
@@ -222,23 +255,26 @@ void main() {
       expect(back.token, 't');
     });
 
-    test('round-trips WITHOUT the control fields (absent keys, null fields)', () {
-      final record = StationLockRecord(
-        pid: 3,
-        pgid: 4,
-        startedAt: DateTime.utc(2026, 1, 1),
-      );
-      final json = record.toJson();
-      expect(json.containsKey('controlUrl'), isFalse);
-      expect(json.containsKey('token'), isFalse);
-      final back = StationLockRecord.fromJson(
-        jsonDecode(jsonEncode(json)) as Map<String, Object?>,
-      );
-      expect(back.pid, 3);
-      expect(back.pgid, 4);
-      expect(back.controlUrl, isNull);
-      expect(back.token, isNull);
-    });
+    test(
+      'round-trips WITHOUT the control fields (absent keys, null fields)',
+      () {
+        final record = StationLockRecord(
+          pid: 3,
+          pgid: 4,
+          startedAt: DateTime.utc(2026, 1, 1),
+        );
+        final json = record.toJson();
+        expect(json.containsKey('controlUrl'), isFalse);
+        expect(json.containsKey('token'), isFalse);
+        final back = StationLockRecord.fromJson(
+          jsonDecode(jsonEncode(json)) as Map<String, Object?>,
+        );
+        expect(back.pid, 3);
+        expect(back.pgid, 4);
+        expect(back.controlUrl, isNull);
+        expect(back.token, isNull);
+      },
+    );
 
     test('round-trips the dev-mode vmServiceUri; ABSENT means omitted', () {
       final dev = StationLockRecord(
@@ -258,10 +294,7 @@ void main() {
         startedAt: DateTime.utc(2026, 7, 12),
       );
       expect(aot.toJson().containsKey('vmServiceUri'), isFalse);
-      expect(
-        StationLockRecord.fromJson(aot.toJson()).vmServiceUri,
-        isNull,
-      );
+      expect(StationLockRecord.fromJson(aot.toJson()).vmServiceUri, isNull);
     });
 
     test('withControl PRESERVES an already-advertised vmServiceUri', () {
