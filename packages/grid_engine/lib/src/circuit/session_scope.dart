@@ -58,7 +58,7 @@ import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 
 import '../diagnostics/diagnosable.dart';
 import '../domain/session_bead.dart';

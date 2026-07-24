@@ -1,5 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:test/test.dart';
 
 void main() {
