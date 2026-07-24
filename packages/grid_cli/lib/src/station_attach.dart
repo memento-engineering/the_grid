@@ -21,6 +21,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:grid_runtime/grid_runtime.dart'
+    show ProcessGroupController, SystemProcessGroupController;
+
 import 'station_lock.dart';
 
 // ---------------------------------------------------------------------------
@@ -163,15 +166,21 @@ class StationAttach {
   StationAttach({
     PidProbe? isPidAlive,
     ProcessSignaller? signal,
+    ProcessGroupController? groups,
+    void Function(String)? log,
     HttpClientFactory? httpClientFactory,
     DateTime Function()? clock,
   }) : _isPidAlive = isPidAlive ?? defaultPidProbe,
        _signal = signal ?? Process.killPid,
+       _groups = groups ?? const SystemProcessGroupController(),
+       _log = log ?? stdout.writeln,
        _httpClientFactory = httpClientFactory ?? HttpClient.new,
        _clock = clock ?? DateTime.now;
 
   final PidProbe _isPidAlive;
   final ProcessSignaller _signal;
+  final ProcessGroupController _groups;
+  final void Function(String) _log;
   final HttpClientFactory _httpClientFactory;
   final DateTime Function() _clock;
 
@@ -249,7 +258,7 @@ class StationAttach {
     if (record == null) return const AlreadyDown();
     if (!_isPidAlive(record.pid)) return const AlreadyDown();
 
-    _signal(record.pid, ProcessSignal.sigterm);
+    await _signalStation(record);
 
     final lockFile = File(StationLockService.lockPath(stateWorkspaceDir));
     final deadline = _clock().add(grace);
@@ -259,6 +268,24 @@ class StationAttach {
       if (!_clock().isBefore(deadline)) return TimedOut(record.pid);
       await Future<void>.delayed(pollInterval);
     }
+  }
+
+  Future<void> _signalStation(StationLockRecord record) async {
+    final actualPgid = await _groups.resolvePgid(record.pid);
+    final safeOwnedGroup =
+        actualPgid == record.pgid &&
+        record.pgid > 1 &&
+        record.pgid != _groups.currentGroupId();
+    if (safeOwnedGroup) {
+      _groups.signalGroup(record.pgid, ProcessSignal.sigterm);
+      return;
+    }
+    _log(
+      'space down: station.lock group mismatch/unsafe — pid ${record.pid}, '
+      'recorded pgid ${record.pgid}, actual pgid $actualPgid; '
+      'falling back to PID-scoped SIGTERM',
+    );
+    _signal(record.pid, ProcessSignal.sigterm);
   }
 
   /// Reads + parses the lock at [stateWorkspaceDir], or null when there is

@@ -20,6 +20,9 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:grid_runtime/grid_runtime.dart'
+    show establishStationProcessGroup;
+
 /// A composition-time refusal (a live lock holder, a lost steal race) — the
 /// runner prints [message] and exits with [code]. The one arming gate the
 /// resident-station survivors still throw (the old `station_runner` assembly
@@ -42,6 +45,12 @@ class StationRefusal implements Exception {
 /// The injected pid-liveness seam: true iff [pid] is a running process.
 /// The real probe is [defaultPidProbe]; offline tests inject a fake.
 typedef PidProbe = bool Function(int pid);
+
+/// Establishes the station-owned process group and returns its verified pgid.
+typedef StationGroupPreparer = Future<int> Function(int stationPid);
+
+Future<int> _defaultStationGroupPreparer(int stationPid) =>
+    establishStationProcessGroup(stationPid: stationPid);
 
 /// The REAL pid-liveness probe: `kill -0` (signal nothing, just check) — exit
 /// 0 iff the pid exists and is signalable by this user. The station lock is a
@@ -144,12 +153,18 @@ class StationLockRecord {
 class StationLockService {
   /// Creates the service; [isPidAlive] defaults to the real [defaultPidProbe]
   /// and [log] to stdout.
-  StationLockService({PidProbe? isPidAlive, void Function(String)? log})
-    : _isPidAlive = isPidAlive ?? defaultPidProbe,
-      _log = log ?? stdout.writeln;
+  StationLockService({
+    PidProbe? isPidAlive,
+    void Function(String)? log,
+    StationGroupPreparer? prepareProcessGroup,
+  }) : _isPidAlive = isPidAlive ?? defaultPidProbe,
+       _log = log ?? stdout.writeln,
+       _prepareProcessGroup =
+           prepareProcessGroup ?? _defaultStationGroupPreparer;
 
   final PidProbe _isPidAlive;
   final void Function(String) _log;
+  final StationGroupPreparer _prepareProcessGroup;
 
   /// The lock path for a state store rooted at [stateWorkspaceDir].
   static String lockPath(String stateWorkspaceDir) =>
@@ -164,9 +179,26 @@ class StationLockService {
   Future<StationLockHandle> acquire({
     required String stateWorkspaceDir,
     required int pid,
-    required int pgid,
     required DateTime now,
   }) async {
+    final int pgid;
+    try {
+      pgid = await _prepareProcessGroup(pid);
+    } on Object catch (error) {
+      final message =
+          'grid run: refusing to write station.lock — could not establish '
+          'station pid $pid as its own process-group leader: $error';
+      _log(message);
+      throw StationRefusal(message, code: 1);
+    }
+    if (pgid != pid) {
+      final message =
+          'grid run: refusing to write station.lock — station pid $pid '
+          'resolved to non-owned pgid $pgid after group preparation';
+      _log(message);
+      throw StationRefusal(message, code: 1);
+    }
+
     final file = File(lockPath(stateWorkspaceDir));
     await file.parent.create(recursive: true);
     final record = StationLockRecord(pid: pid, pgid: pgid, startedAt: now);

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:grid_cli/src/station_attach.dart';
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_cli/src/station_lock.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 /// RS-5a (tg-3s8.5, D-C3/D-C4, `docs/SCRATCH-resident-station.md` §3):
@@ -194,6 +195,103 @@ void main() {
   });
 
   group('StationAttach.stop — SIGTERM-only, bounded, LOUD-by-type (b)', () {
+    test('matching member pid uses the recorded group', () async {
+      final store = _tempStore();
+      _mintLock(store, pid: 4242);
+      final lockFile = File(StationLockService.lockPath(store.path));
+      var alive = true;
+      late final _FakeGroups groups;
+      groups = _FakeGroups(
+        resolvedPgid: 4242,
+        ownGroupId: 9999,
+        onSignal: () {
+          alive = false;
+          lockFile.deleteSync();
+        },
+      );
+      final attach = StationAttach(
+        isPidAlive: (_) => alive,
+        groups: groups,
+        signal: (pid, signal) => fail('owned group must not use pid fallback'),
+        log: (_) => fail('owned group must not log fallback'),
+      );
+
+      final result = await attach.stop(
+        stateWorkspaceDir: store.path,
+        pollInterval: const Duration(milliseconds: 1),
+      );
+
+      expect(result, isA<Stopped>());
+      expect(groups.signals, <(int, ProcessSignal)>[
+        (4242, ProcessSignal.sigterm),
+      ]);
+    });
+
+    for (final scenario
+        in <({String name, int? actualPgid, int recordedPgid, int ownGroupId})>[
+          (
+            name: 'mismatched member',
+            actualPgid: 700,
+            recordedPgid: 4242,
+            ownGroupId: 9999,
+          ),
+          (
+            name: 'invalid group',
+            actualPgid: 1,
+            recordedPgid: 1,
+            ownGroupId: 9999,
+          ),
+          (
+            name: 'down command own group',
+            actualPgid: 4242,
+            recordedPgid: 4242,
+            ownGroupId: 4242,
+          ),
+        ]) {
+      test('${scenario.name} falls back loudly to pid only', () async {
+        final store = _tempStore();
+        _mintLock(store, pid: 4242, pgid: scenario.recordedPgid);
+        final lockFile = File(StationLockService.lockPath(store.path));
+        final groups = _FakeGroups(
+          resolvedPgid: scenario.actualPgid,
+          ownGroupId: scenario.ownGroupId,
+        );
+        final loud = <String>[];
+        final pidSignals = <(int, ProcessSignal)>[];
+        var alive = true;
+        final attach = StationAttach(
+          isPidAlive: (_) => alive,
+          groups: groups,
+          log: loud.add,
+          signal: (target, signal) {
+            pidSignals.add((target, signal));
+            alive = false;
+            lockFile.deleteSync();
+            return true;
+          },
+        );
+
+        final result = await attach.stop(
+          stateWorkspaceDir: store.path,
+          pollInterval: const Duration(milliseconds: 1),
+        );
+
+        expect(result, isA<Stopped>());
+        expect(groups.signals, isEmpty);
+        expect(pidSignals, <(int, ProcessSignal)>[
+          (4242, ProcessSignal.sigterm),
+        ]);
+        expect(
+          loud.single,
+          allOf(
+            contains('pid 4242'),
+            contains('recorded pgid ${scenario.recordedPgid}'),
+            contains('actual pgid ${scenario.actualPgid}'),
+          ),
+        );
+      });
+    }
+
     test('no lock file → AlreadyDown, no signal sent', () async {
       final store = _tempStore();
       final signalled = <(int, ProcessSignal)>[];
@@ -358,13 +456,14 @@ Directory _tempStore() {
 void _mintLock(
   Directory store, {
   required int pid,
+  int? pgid,
   String? controlUrl,
   String? token,
 }) {
   Directory('${store.path}/.grid').createSync(recursive: true);
   var record = StationLockRecord(
     pid: pid,
-    pgid: pid,
+    pgid: pgid ?? pid,
     startedAt: DateTime.utc(2026, 7, 2),
   );
   if (controlUrl != null && token != null) {
@@ -373,6 +472,35 @@ void _mintLock(
   File(
     StationLockService.lockPath(store.path),
   ).writeAsStringSync(jsonEncode(record.toJson()));
+}
+
+class _FakeGroups implements ProcessGroupController {
+  _FakeGroups({
+    required this.resolvedPgid,
+    required this.ownGroupId,
+    this.onSignal,
+  });
+
+  final int? resolvedPgid;
+  final int ownGroupId;
+  final void Function()? onSignal;
+  final List<(int, ProcessSignal)> signals = <(int, ProcessSignal)>[];
+
+  @override
+  int currentGroupId() => ownGroupId;
+
+  @override
+  bool processAlive(int pid) => true;
+
+  @override
+  Future<int?> resolvePgid(int pid) async => resolvedPgid;
+
+  @override
+  bool signalGroup(int pgid, ProcessSignal signal) {
+    signals.add((pgid, signal));
+    onSignal?.call();
+    return true;
+  }
 }
 
 StationStatus get _sampleStatus => StationStatus(

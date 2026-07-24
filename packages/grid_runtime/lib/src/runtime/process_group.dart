@@ -1,4 +1,42 @@
+import 'dart:ffi';
 import 'dart:io';
+
+typedef _SetSidNative = Int32 Function();
+typedef _SetSidDart = int Function();
+
+/// Injectable POSIX `setsid()` call used by [establishStationProcessGroup].
+typedef SetSidCall = int Function();
+
+int _systemSetSid() => DynamicLibrary.process()
+    .lookupFunction<_SetSidNative, _SetSidDart>('setsid')();
+
+/// Makes [stationPid] the leader of a new session and process group.
+///
+/// An already-leading process is left unchanged. Otherwise the result is
+/// verified through [ProcessGroupController.resolvePgid], keeping that seam as
+/// the single source of process-group identity.
+Future<int> establishStationProcessGroup({
+  required int stationPid,
+  ProcessGroupController controller = const SystemProcessGroupController(),
+  SetSidCall setSid = _systemSetSid,
+}) async {
+  final before = await controller.resolvePgid(stationPid);
+  if (before == stationPid) return stationPid;
+
+  final result = setSid();
+  if (result < 0) {
+    throw StateError('setsid() failed for station pid $stationPid');
+  }
+
+  final after = await controller.resolvePgid(stationPid);
+  if (after != stationPid) {
+    throw StateError(
+      'setsid() did not establish station pid $stationPid as group leader '
+      '(resolved pgid: $after)',
+    );
+  }
+  return stationPid;
+}
 
 /// The OS process-group SEAM — the single point where [SubprocessProvider]
 /// touches process signalling and pgid resolution. A reference type (carries
@@ -117,7 +155,12 @@ class SystemProcessGroupController implements ProcessGroupController {
   @override
   Future<int?> resolvePgid(int pid) async {
     // `ps -o pgid= -p <pid>` prints the bare pgid (header suppressed by `=`).
-    final result = await Process.run('ps', <String>['-o', 'pgid=', '-p', '$pid']);
+    final result = await Process.run('ps', <String>[
+      '-o',
+      'pgid=',
+      '-p',
+      '$pid',
+    ]);
     if (result.exitCode != 0) return null;
     final out = (result.stdout as String).trim();
     if (out.isEmpty) return null;
