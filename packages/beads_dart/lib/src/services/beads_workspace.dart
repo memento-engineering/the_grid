@@ -7,7 +7,7 @@ import 'package:yaml/yaml.dart';
 import 'dolt_endpoint.dart';
 
 /// How a workspace's beads store is reached.
-enum DoltMode { server, direct, unknown }
+enum DoltMode { server, proxiedServer, direct, unknown }
 
 /// Discovers and parses a beads workspace: locates `.beads/`, reads
 /// `metadata.json` (mode + database), `.env` (`GT_ROOT`), and — in server mode
@@ -63,6 +63,7 @@ class BeadsWorkspace {
     final modeString = (metadata?['dolt_mode'] as String?) ?? '';
     final mode = switch (modeString) {
       'server' => DoltMode.server,
+      'proxied-server' => DoltMode.proxiedServer,
       'direct' || 'embedded' => DoltMode.direct,
       _ => DoltMode.unknown,
     };
@@ -74,6 +75,8 @@ class BeadsWorkspace {
     DoltEndpoint? endpoint;
     if (mode == DoltMode.server && gtRoot != null && database != null) {
       endpoint = _resolveEndpoint(gtRoot, database, environment);
+    } else if (mode == DoltMode.proxiedServer && database != null) {
+      endpoint = _resolveProxiedEndpoint(root, database);
     }
 
     return BeadsWorkspace(
@@ -82,6 +85,47 @@ class BeadsWorkspace {
       database: database,
       gtRoot: gtRoot,
       endpoint: endpoint,
+    );
+  }
+
+  /// Resolves the endpoint of a proxied-server workspace (bd's experimental
+  /// `dolt_mode: proxied-server`): the bd-managed proxy writes a JSON pidfile
+  /// at `.beads/dolt/proxy.pid` (`{pid, port, upstream_id?}`) — clients
+  /// connect to the PROXY's loopback port, never the child dolt directly.
+  ///
+  /// Credentials: the Dart `mysql_client` cannot complete an EMPTY-password
+  /// handshake (bd's own Go client connects as `root`/`""`), so live SQL
+  /// rides a dedicated read-only `beads_dart` SQL user whose secret is
+  /// provisioned at `.beads/dolt/beads_dart.secret` (0600, operator-managed).
+  /// Missing pidfile or secret → null endpoint → the caller falls back to the
+  /// bd CLI read path.
+  static DoltEndpoint? _resolveProxiedEndpoint(String root, String database) {
+    final doltDir = p.join(root, '.beads', 'dolt');
+    final pidFile = File(p.join(doltDir, 'proxy.pid'));
+    if (!pidFile.existsSync()) return null;
+    int? port;
+    try {
+      final decoded = jsonDecode(pidFile.readAsStringSync());
+      if (decoded is Map<String, Object?>) {
+        final rawPort = decoded['port'];
+        if (rawPort is int) port = rawPort;
+      }
+    } on Object {
+      return null; // Malformed pidfile: CLI fallback.
+    }
+    if (port == null || port < 1 || port > 65535) return null;
+
+    final secretFile = File(p.join(doltDir, 'beads_dart.secret'));
+    if (!secretFile.existsSync()) return null;
+    final secret = secretFile.readAsStringSync().trim();
+    if (secret.isEmpty) return null;
+
+    return DoltEndpoint(
+      host: '127.0.0.1',
+      port: port,
+      database: database,
+      user: 'beads_dart',
+      password: secret,
     );
   }
 
