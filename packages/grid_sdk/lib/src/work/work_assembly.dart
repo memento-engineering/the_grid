@@ -6,6 +6,8 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:path/path.dart' as p;
 
+import '../command/command_operation.dart';
+import '../command/resident_command_handler.dart';
 import '../stores/stores.dart';
 import 'station_work.dart';
 
@@ -63,6 +65,7 @@ class SubstationWorkSpec {
 class StationWorkRuntime {
   StationWorkRuntime._({
     required this.wiring,
+    required this.commands,
     required this.git,
     required this.stateSubstation,
     required this.readPathName,
@@ -85,6 +88,9 @@ class StationWorkRuntime {
 
   /// The ambient VALUES the tree's [StationWork] provides.
   final StationWorkWiring wiring;
+
+  /// Operator commands executed by this resident station.
+  final GridCommandHandler commands;
 
   /// The worktree git service (dry-inert or live) — the runner threads it into
   /// its substations' `GitGridAssets` so the tree's source control and THIS
@@ -241,6 +247,7 @@ Future<StationWorkRuntime> buildStationWork({
   RuntimeProvider? providerOverride,
   StationGitService? gitOverride,
   BdCliService? stateBdOverride,
+  Map<String, BdCliService> workBdOverrides = const {},
   ProcessGroupController? groupsOverride,
   void Function(String message)? onRefusal,
   void Function(String message)? onOrphan,
@@ -253,6 +260,16 @@ Future<StationWorkRuntime> buildStationWork({
     throw ArgumentError(
       'buildStationWork: at least one substation is required — there is no '
       'default substation (v3 §0).',
+    );
+  }
+  final knownWorkStores = substations.map((spec) => spec.name).toSet();
+  final unknownOverrides = workBdOverrides.keys
+      .where((name) => !knownWorkStores.contains(name))
+      .toList(growable: false);
+  if (unknownOverrides.isNotEmpty) {
+    throw ArgumentError(
+      'buildStationWork: work bd overrides name unknown substations: '
+      '${unknownOverrides.join(', ')}.',
     );
   }
   // Disjointness across BOTH identity axes (review finding, tg-yl8):
@@ -376,6 +393,36 @@ Future<StationWorkRuntime> buildStationWork({
     bd: bd,
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
+  );
+  final workCommandStores = <String, ResidentWorkCommandStore>{};
+  for (final spec in substations) {
+    final workBd =
+        workBdOverrides[spec.name] ??
+        BdCliService(
+          dryRun
+              ? const NoOpBdRunner()
+              : ProcessBdRunner(
+                  workspaceRoot: workspacesByName[spec.name]!.root,
+                ),
+        );
+    final binding = ResidentWorkCommandStore(
+      source: _RuntimeSnapshotSource(bundles[spec.name]!.runtime),
+      refresh: bundles[spec.name]!.runtime.requery,
+      writer: StationBeadWriter(
+        bd: workBd,
+        ownership: BeadOwnershipPredicate({spec.name, spec.prefix}),
+        onRefusal: refusalSink,
+      ),
+    );
+    workCommandStores[spec.name] = binding;
+    workCommandStores[spec.prefix] = binding;
+  }
+  final commands = ResidentGridCommandHandler(
+    stateSource: stateSource,
+    refreshState: stateBundle.runtime.requery,
+    stateWriter: writer,
+    stateOwnership: BeadOwnershipPredicate(allowSet),
+    workStoresByIdentity: workCommandStores,
   );
 
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
@@ -519,6 +566,7 @@ Future<StationWorkRuntime> buildStationWork({
       // The SAME instance the restart reconciler sweeps with (tg-eli phase 1).
       processLeaseVendor: leaseVendor,
     ),
+    commands: commands,
     git: git,
     stateSubstation: stateSubstation,
     readPathName: readPathName,

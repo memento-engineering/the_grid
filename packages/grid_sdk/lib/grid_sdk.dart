@@ -98,6 +98,12 @@ export 'src/run/run_grid.dart';
 export 'src/stores/stores.dart';
 export 'src/stores/substation_init.dart';
 
+// ── Resident command extension ──────────────────────────────────────────────
+// The SDK supplies the typed extension seam and resident implementation; a
+// station composes it, while its control-surface adapter owns wire envelopes.
+export 'src/command/command_operation.dart';
+export 'src/command/resident_command_handler.dart';
+
 // ── The work binding (Track J0 — tg-yl8) ────────────────────────────────────
 // The runGrid→engine bridge: the engine's work subtree mounts INSIDE the
 // composition tree ("each child `Substation` establishes its `WorkList`",
