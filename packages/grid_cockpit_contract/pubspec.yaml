@@ -1,0 +1,19 @@
+name: grid_cockpit_contract
+description: Versioned diagnostics projection wire contract shared by reporters and cockpit consumers.
+publish_to: none
+repository: https://github.com/memento-engineering/the_grid
+resolution: workspace
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  freezed_annotation: ^3.0.0
+  json_annotation: ^4.9.0
+
+dev_dependencies:
+  build_runner: ^2.4.0
+  freezed: ^3.0.0
+  json_serializable: ^6.9.0
+  lints: ^5.1.0
+  test: ^1.25.0

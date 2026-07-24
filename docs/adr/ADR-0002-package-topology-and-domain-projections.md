@@ -50,6 +50,12 @@ Dependency direction gains: `grid_engine ──► grid_controller` (snapshot/ow
 - **Empty stub directories removed** (R13, 2026-07-05): `packages/{grid_controller,grid_reconciler,grid_federation}` husks deleted from disk (untracked `.iml` remnants only; the workspace pubspec had already dropped them).
 - The live workspace as of this stamp: `beads_dart · grid_cli · grid_exploration · grid_devtools · grid_runtime · grid_engine` (+ external consumers `space_station`, `power_station/packages/*_grid_assets`).
 
+**Amended 2026-07-23 (ADR-0012 Decision 2, ratified 2026-07-18):** add the diagnostics wire-contract package:
+
+| Package | Role | Milestone | Notes |
+|---|---|---|---|
+| **`grid_cockpit_contract`** | The versioned diagnostics projection wire contract: `TreeSnapshot`, `TreeNode`, and the sealed `DiagnosticsProperty` union. | P2 observability | Pure Dart; zero grid dependencies; shared by engine-side projectors/reporters and Flutter/headless consumers. |
+
 ## Decision 2 — Reactive domain projections, grounded in Gas City's primitive model
 
 *(Rewritten 2026-06-11 to ground projections in the documented concept model — [docs.gascityhall.com/concepts/primitives](https://docs.gascityhall.com/concepts/primitives) — rather than generic bead filtering.)*
