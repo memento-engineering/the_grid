@@ -565,8 +565,10 @@ class BdCliService {
     return (beads: beads, dependencies: edges.values.toList(growable: false));
   }
 
-  /// The proxied-mode fallback shape: `bd list --all --json` emits ONE JSON
-  /// array of the same issue records `bd export` emits as JSONL lines.
+  /// The proxied-mode fallback shape: `bd list --all --json` emits the same
+  /// issue records `bd export` emits as JSONL lines — as a bare JSON array on
+  /// a TTY, or wrapped in the `{"data": [...]}` envelope when bd runs
+  /// non-interactively (the [ProcessBdRunner] path). Both are accepted.
   ({List<Bead> beads, List<BeadDependency> dependencies}) _parseExportList(
     String json,
   ) {
@@ -579,12 +581,21 @@ class BdCliService {
         json,
       );
     }
-    if (decoded is! List) {
-      throw BdParseException('bd list --all output was not a JSON array', json);
+    final List<dynamic> rows;
+    if (decoded is List) {
+      rows = decoded;
+    } else if (decoded is Map<String, dynamic> && decoded['data'] is List) {
+      rows = decoded['data'] as List;
+    } else {
+      throw BdParseException(
+        'bd list --all output was neither a JSON array nor a {"data": [...]} '
+        'envelope',
+        json,
+      );
     }
     final beads = <Bead>[];
     final edges = <String, BeadDependency>{};
-    for (final raw in decoded) {
+    for (final raw in rows) {
       if (raw is! Map<String, dynamic>) {
         throw BdParseException('list row was not a JSON object', '$raw');
       }
