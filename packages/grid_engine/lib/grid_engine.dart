@@ -17,6 +17,7 @@ library;
 
 export 'src/diagnostics/diagnosable.dart';
 export 'src/diagnostics/diagnostics_tree_walker.dart';
+export 'src/diagnostics/tree_projector.dart';
 
 // The join bridge (the only subscription into the snapshot pipelines, A39).
 export 'src/bridge/station_join_bridge.dart';

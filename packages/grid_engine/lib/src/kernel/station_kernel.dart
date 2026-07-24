@@ -7,6 +7,7 @@ import '../kernel/station_services.dart';
 import '../circuit/capability_registry.dart';
 import '../circuit/circuit_resolver.dart';
 import '../circuit/unclaimed_frontier.dart';
+import '../diagnostics/tree_projector.dart';
 import '../molecule/process_lease_vendor.dart';
 import '../molecule/station_process_transport.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
@@ -70,6 +71,7 @@ class StationKernel {
     required List<SubstationScope> substations,
     CapabilityRegistry? registry,
     ProcessLeaseVendor? processLeaseVendor,
+    TreeProjector? treeProjector,
     Seed Function(Seed root)? wrapRoot,
     DateTime Function()? clock,
     Timer Function(Duration, void Function())? scheduleTimer,
@@ -81,6 +83,7 @@ class StationKernel {
        _substations = substations,
        _registry = registry,
        _processLeaseVendor = processLeaseVendor,
+       _treeProjector = treeProjector,
        _wrapRoot = wrapRoot,
        _driver = StationDriver(
          bridge: bridge,
@@ -112,6 +115,10 @@ class StationKernel {
   /// explicit vendor overrides it.
   final ProcessLeaseVendor? _processLeaseVendor;
 
+  /// Optional post-flush diagnostics projection seam; null has no projection
+  /// cost.
+  final TreeProjector? _treeProjector;
+
   /// The composer's provider hook (ADR-0008 D-A, 2026-07-02): applied OUTERMOST
   /// around the kernel's own ambient stack, so an asset's `main()` mounts its
   /// station-default config values (`InheritedSeed<AgentConfig>`-style) as
@@ -126,6 +133,7 @@ class StationKernel {
   final StationDriver _driver;
 
   final TreeOwner _owner = TreeOwner();
+  Branch? _root;
   bool _started = false;
   bool _disposed = false;
   bool _flushScheduled = false;
@@ -172,7 +180,7 @@ class StationKernel {
     );
     final wrap = _wrapRoot;
     if (wrap != null) root = wrap(root);
-    _owner.mountRoot(root);
+    _root = _owner.mountRoot(root);
   }
 
   void _scheduleFlush() {
@@ -182,6 +190,7 @@ class StationKernel {
       _flushScheduled = false;
       if (_disposed) return;
       _owner.flush();
+      _treeProjector?.afterFlush(_root!);
       // Re-scan after each flush (the driver's cooldown + unclaimed-frontier
       // scans): a failure cursor written this tick may carry a new cooldown to
       // arm, and whatever this flush left unfulfillable is what a composed
@@ -197,6 +206,7 @@ class StationKernel {
     if (_disposed) return;
     _disposed = true;
     _owner.dispose();
+    _treeProjector?.dispose();
     _driver.dispose();
   }
 }
