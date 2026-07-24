@@ -4,7 +4,7 @@ import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';

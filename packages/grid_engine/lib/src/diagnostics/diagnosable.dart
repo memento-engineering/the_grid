@@ -1,4 +1,5 @@
-import 'package:grid_cockpit_contract/grid_cockpit_contract.dart' as contract;
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    as contract;
 
 /// Collects typed diagnostic properties in insertion order.
 final class DiagnosticsBuilder {

@@ -1,7 +1,7 @@
 // ignore_for_file: invalid_use_of_protected_member
 
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_cockpit_contract/grid_cockpit_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 
 import 'diagnosable.dart';
 

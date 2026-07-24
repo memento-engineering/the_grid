@@ -34,11 +34,11 @@ dependencies:
   # the_grid is its triggering 2nd consumer (ADR-0007 / A34 precedent). A
   # workspace-root dependency_overrides path dep supplies it during dev.
   genesis_tree: ^0.1.5
-  grid_cockpit_contract:
+  grid_diagnostics_contract:
     git:
       url: git@github.com:memento-engineering/the_grid.git
-      tag_pattern: grid_cockpit_contract-v{{version}}
-      path: packages/grid_cockpit_contract
+      tag_pattern: grid_diagnostics_contract-v{{version}}
+      path: packages/grid_diagnostics_contract
     version: ^0.1.0
   grid_runtime:
     # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub

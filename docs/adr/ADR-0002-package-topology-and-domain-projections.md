@@ -54,7 +54,7 @@ Dependency direction gains: `grid_engine ──► grid_controller` (snapshot/ow
 
 | Package | Role | Milestone | Notes |
 |---|---|---|---|
-| **`grid_cockpit_contract`** | The versioned diagnostics projection wire contract: `TreeSnapshot`, `TreeNode`, and the sealed `DiagnosticsProperty` union. | P2 observability | Pure Dart; zero grid dependencies; shared by engine-side projectors/reporters and Flutter/headless consumers. |
+| **`grid_diagnostics_contract`** | The versioned diagnostics projection wire contract: `TreeSnapshot`, `TreeNode`, and the sealed `DiagnosticsProperty` union. | P2 observability | Pure Dart; zero grid dependencies; shared by engine-side projectors/reporters and Flutter/headless consumers. |
 
 ## Decision 2 — Reactive domain projections, grounded in Gas City's primitive model
 
