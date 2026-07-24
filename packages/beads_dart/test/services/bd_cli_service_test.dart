@@ -101,6 +101,46 @@ void main() {
       ]);
     });
 
+    test('exportAll() fallback accepts the non-interactive {"data": [...]} '
+        'envelope bd emits under ProcessBdRunner', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand(
+          'export',
+          BdReply(
+            exitCode: 1,
+            stderr: 'Error: export is not supported in proxied-server mode',
+          ),
+        )
+        ..stubCommand(
+          'list',
+          BdReply(
+            stdout: jsonEncode({
+              'data': [
+                {
+                  'id': 'tg-1',
+                  'title': 'a bead',
+                  'status': 'open',
+                  'issue_type': 'task',
+                  'dependencies': [
+                    {
+                      'issue_id': 'tg-1',
+                      'depends_on_id': 'tg-2',
+                      'type': 'blocks',
+                    },
+                  ],
+                },
+              ],
+            }),
+          ),
+        );
+      final service = BdCliService(runner);
+
+      final snapshot = await service.exportAll();
+
+      expect(snapshot.beads.single.id, 'tg-1');
+      expect(snapshot.dependencies.single.type, 'blocks');
+    });
+
     test('exportAll() still throws on non-proxied export failures '
         '(no silent fallback)', () async {
       final runner = FakeBdRunner()
