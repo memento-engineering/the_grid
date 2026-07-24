@@ -17,9 +17,13 @@ void main() {
       expect(source, isNotEmpty);
       expect(
         source,
-        allOf(contains("'/healthz'"), contains("'/status'")),
+        allOf(
+          contains("'/healthz'"),
+          contains("'/status'"),
+          contains("'/hooks'"),
+        ),
         reason:
-            'the GET-only route table must name both routes — proves '
+            'the GET-only control surface must name every route — proves '
             'the scan reads real bytes, not an empty/moved file '
             '(vacuousness control)',
       );
@@ -57,11 +61,11 @@ void main() {
     });
 
     test('gate 4: no mutation endpoint exists — the ONLY routed paths are '
-        '/healthz and /status', () {
+        '/healthz, /status, and /hooks', () {
       final routePaths = RegExp(
         r"'(/[a-zA-Z0-9_-]*)'",
       ).allMatches(source).map((m) => m.group(1)!).toSet();
-      expect(routePaths, {'/healthz', '/status'});
+      expect(routePaths, {'/healthz', '/status', '/hooks'});
     });
   });
 }

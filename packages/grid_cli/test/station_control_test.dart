@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_cli/src/station_control.dart';
+import 'package:grid_cli/src/hooks_resolver.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 /// RS-4 (D-C2, `docs/SCRATCH-resident-station.md` §3): `StationControl` — the
@@ -200,8 +202,190 @@ void main() {
       await _get(control.url, '/healthz', token: 't');
       expect(calls, 2);
     });
+
+    test('authenticated GET /hooks resolves encoded query parameters and '
+        'returns exact JSON', () async {
+      final resolver = _FakeHooksResolver();
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+        hooksResolver: resolver,
+      );
+      addTearDown(control.dispose);
+      final uri = Uri(
+        path: '/hooks',
+        queryParameters: {
+          'event': 'pre commit/+',
+          'worktree': '/tmp/a worktree',
+        },
+      );
+
+      final response = await _get(control.url, uri.toString(), token: 't');
+
+      expect(resolver.calls, [
+        (event: 'pre commit/+', worktree: '/tmp/a worktree'),
+      ]);
+      expect(response.statusCode, HttpStatus.ok);
+      expect(jsonDecode(response.body), {
+        'event': 'pre commit/+',
+        'worktree': '/tmp/a worktree',
+        'substation': 'alpha',
+        'contributions': [
+          {
+            'id': 'format',
+            'source': 'dart',
+            'run': 'dart format',
+            'select': '*.dart',
+            'mode': 'fix',
+            'timeout_ms': 1000,
+          },
+        ],
+      });
+    });
+
+    test('hooks bearer and method refusals do not invoke resolver', () async {
+      final resolver = _FakeHooksResolver();
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+        hooksResolver: resolver,
+      );
+      addTearDown(control.dispose);
+
+      expect(
+        (await _get(control.url, '/hooks?event=x&worktree=/tmp/w')).statusCode,
+        HttpStatus.unauthorized,
+      );
+      expect(
+        (await _post(
+          control.url,
+          '/hooks?event=x&worktree=/tmp/w',
+          token: 't',
+        )).statusCode,
+        HttpStatus.methodNotAllowed,
+      );
+      expect(resolver.calls, isEmpty);
+    });
+
+    test('missing hook query values return 400', () async {
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+      );
+      addTearDown(control.dispose);
+
+      expect(
+        (await _get(
+          control.url,
+          '/hooks?worktree=/tmp/w',
+          token: 't',
+        )).statusCode,
+        HttpStatus.badRequest,
+      );
+      expect(
+        (await _get(
+          control.url,
+          '/hooks?event=pre-commit',
+          token: 't',
+        )).statusCode,
+        HttpStatus.badRequest,
+      );
+    });
+
+    test('outside hook worktree returns 404', () async {
+      final fixture = await Directory.systemTemp.createTemp('hooks-http-');
+      addTearDown(() => fixture.delete(recursive: true));
+      final root = await Directory(p.join(fixture.path, 'root')).create();
+      final outside = await Directory(p.join(fixture.path, 'outside')).create();
+      final control = await _controlWith(
+        HooksResolver(
+          substations: [HookSubstation(substation: 'alpha', root: root.path)],
+        ),
+      );
+      addTearDown(control.dispose);
+
+      final response = await _hooksGet(control, outside.path);
+      expect(response.statusCode, HttpStatus.notFound);
+    });
+
+    test('malformed hook YAML returns 500', () async {
+      final fixture = await Directory.systemTemp.createTemp('hooks-http-');
+      addTearDown(() => fixture.delete(recursive: true));
+      final root = await Directory(p.join(fixture.path, 'root')).create();
+      final worktree = await Directory(p.join(root.path, 'work')).create();
+      final manifest = await File(
+        p.join(fixture.path, 'asset.yaml'),
+      ).writeAsString('hooks: not-a-list\n');
+      final control = await _controlWith(
+        HooksResolver(
+          substations: [
+            HookSubstation(
+              substation: 'alpha',
+              root: root.path,
+              manifests: [HookManifest(source: 'asset', path: manifest.path)],
+            ),
+          ],
+        ),
+      );
+      addTearDown(control.dispose);
+
+      final response = await _hooksGet(control, worktree.path);
+      expect(response.statusCode, HttpStatus.internalServerError);
+    });
+
+    test('owning substation with no matching hook returns 200 and an empty '
+        'list', () async {
+      final fixture = await Directory.systemTemp.createTemp('hooks-http-');
+      addTearDown(() => fixture.delete(recursive: true));
+      final root = await Directory(p.join(fixture.path, 'root')).create();
+      final worktree = await Directory(p.join(root.path, 'work')).create();
+      final manifest = await File(
+        p.join(fixture.path, 'asset.yaml'),
+      ).writeAsString('hooks: []\n');
+      final control = await _controlWith(
+        HooksResolver(
+          substations: [
+            HookSubstation(
+              substation: 'alpha',
+              root: root.path,
+              manifests: [HookManifest(source: 'asset', path: manifest.path)],
+            ),
+          ],
+        ),
+      );
+      addTearDown(control.dispose);
+
+      final response = await _hooksGet(control, worktree.path);
+      expect(response.statusCode, HttpStatus.ok);
+      expect(jsonDecode(response.body), {
+        'event': 'pre-commit',
+        'worktree': worktree.path,
+        'substation': 'alpha',
+        'contributions': <Object?>[],
+      });
+    });
   });
 }
+
+Future<StationControl> _controlWith(HooksResolver resolver) =>
+    StationControl.start(
+      port: 0,
+      token: 't',
+      view: _sampleStatus,
+      hooksResolver: resolver,
+    );
+
+Future<_Response> _hooksGet(StationControl control, String worktree) => _get(
+  control.url,
+  Uri(
+    path: '/hooks',
+    queryParameters: {'event': 'pre-commit', 'worktree': worktree},
+  ).toString(),
+  token: 't',
+);
 
 StationStatus _sampleStatus() => StationStatus(
   substation: 'tgdog',
@@ -262,4 +446,31 @@ class _Response {
   final int statusCode;
   final String body;
   final Map<String, String> headers;
+}
+
+class _FakeHooksResolver extends HooksResolver {
+  final List<({String event, String worktree})> calls = [];
+
+  @override
+  Future<HooksResponse> resolve({
+    required String event,
+    required String worktree,
+  }) async {
+    calls.add((event: event, worktree: worktree));
+    return HooksResponse(
+      event: event,
+      worktree: worktree,
+      substation: 'alpha',
+      contributions: const [
+        HookContribution(
+          id: 'format',
+          source: 'dart',
+          run: 'dart format',
+          select: '*.dart',
+          mode: HookMode.fix,
+          timeoutMs: 1000,
+        ),
+      ],
+    );
+  }
 }

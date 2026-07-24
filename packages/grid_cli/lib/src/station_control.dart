@@ -9,8 +9,8 @@
 /// The token is minted per boot (secure random) and lives ONLY in the 0600
 /// `station.lock` (RS-2's `controlUrl`/`token` fields) — never argv, never
 /// env (the ADR-0006 precedent). **NO mutation endpoints, by construction**:
-/// the route table below (GET-only, two entries) is the entire surface — this
-/// file holds no bd writer and calls no re-query.
+/// the routes below are GET-only — this file holds no bd writer and calls no
+/// re-query. `/hooks` resolves declarations but never executes them.
 ///
 /// D-C5: this is a floor — it gets re-homed onto the unified-surfaces
 /// substrate later (perception / control plane / MCP / CLI+RPC / MQTT, one
@@ -25,6 +25,8 @@ import 'dart:math';
 // The wedge signal is the STATION's own derivation — this surface only reports
 // it. Named through the SDK, never the private engine (ADR-0008 D2).
 import 'package:grid_sdk/grid_sdk.dart' show WedgeState, kNotWedged;
+
+import 'hooks_resolver.dart';
 
 /// One owned substation's slice of the station status (tg-7gm) — the
 /// per-substation breakdown of [StationStatus.ready]/[StationStatus.mounted],
@@ -171,14 +173,19 @@ String mintControlToken() {
 }
 
 /// The read-only, loopback-only HTTP control surface (D-C2). GET-only,
-/// exact-match route table: `/healthz` (liveness) and `/status` (the
-/// [StationStatus] snapshot). EVERY route requires
+/// exact-match routes: `/healthz` (liveness), `/status` (the [StationStatus]
+/// snapshot), and `/hooks` (contribution resolution only; it never executes
+/// contributions). EVERY route requires
 /// `Authorization: Bearer <token>` — checked BEFORE routing, so an
 /// unauthenticated caller learns nothing (not even which paths exist). No
-/// mutation endpoint exists, by construction: [_routes] IS the whole surface.
+/// mutation endpoint exists.
 class StationControl {
-  StationControl._(this._server, this._token, StationStatus Function() view)
-    : _routes = <String, Map<String, Object?> Function()>{
+  StationControl._(
+    this._server,
+    this._token,
+    StationStatus Function() view,
+    this._hooksResolver,
+  ) : _routes = <String, Map<String, Object?> Function()>{
         '/healthz': () => const <String, Object?>{'ok': true},
         '/status': () => view().toJson(),
       };
@@ -186,6 +193,7 @@ class StationControl {
   final HttpServer _server;
   final String _token;
   final Map<String, Map<String, Object?> Function()> _routes;
+  final HooksResolver _hooksResolver;
 
   /// The bound loopback URL, e.g. `http://127.0.0.1:54321`.
   String get url => 'http://${_server.address.address}:${_server.port}';
@@ -194,13 +202,15 @@ class StationControl {
   /// [token] is minted by the caller ([mintControlToken]) so the mint stays
   /// visibly tied to the lock file that carries it; [view] is a
   /// value-snapshot getter with NO subscriptions (called fresh per request).
+  /// [hooksResolver] performs read-only hook declaration resolution.
   static Future<StationControl> start({
     required int port,
     required String token,
     required StationStatus Function() view,
+    HooksResolver hooksResolver = const HooksResolver(),
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
-    final control = StationControl._(server, token, view);
+    final control = StationControl._(server, token, view, hooksResolver);
     server.listen(control._handle);
     return control;
   }
@@ -213,8 +223,9 @@ class StationControl {
       });
       return;
     }
+    final isHooks = request.uri.path == '/hooks';
     final route = _routes[request.uri.path];
-    if (route == null) {
+    if (!isHooks && route == null) {
       await _respond(request, HttpStatus.notFound, <String, Object?>{
         'error': 'not found: ${request.uri.path}',
       });
@@ -226,7 +237,25 @@ class StationControl {
       });
       return;
     }
-    await _respond(request, HttpStatus.ok, route());
+    if (isHooks) {
+      await _handleHooks(request);
+      return;
+    }
+    await _respond(request, HttpStatus.ok, route!());
+  }
+
+  Future<void> _handleHooks(HttpRequest request) async {
+    try {
+      final response = await _hooksResolver.resolve(
+        event: request.uri.queryParameters['event'] ?? '',
+        worktree: request.uri.queryParameters['worktree'] ?? '',
+      );
+      await _respond(request, HttpStatus.ok, response.toJson());
+    } on HooksResolutionException catch (error) {
+      await _respond(request, error.statusCode, <String, Object?>{
+        'error': error.message,
+      });
+    }
   }
 
   Future<void> _respond(
