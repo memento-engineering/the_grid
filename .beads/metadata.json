@@ -2,6 +2,6 @@
   "backend": "dolt",
   "database": "dolt",
   "dolt_database": "tg",
-  "dolt_mode": "server",
+  "dolt_mode": "proxied-server",
   "project_id": "e2f7deb7-8ba8-44e7-b751-18789d46b69b"
 }
