@@ -90,17 +90,40 @@ class BeadsWorkspace {
 
   /// Resolves the endpoint of a proxied-server workspace (bd's experimental
   /// `dolt_mode: proxied-server`): the bd-managed proxy writes a JSON pidfile
-  /// at `.beads/dolt/proxy.pid` (`{pid, port, upstream_id?}`) — clients
+  /// at `<proxy root>/proxy.pid` (`{pid, port, upstream_id?}`) — clients
   /// connect to the PROXY's loopback port, never the child dolt directly.
+  ///
+  /// The proxy ROOT comes from the sidecar
+  /// `.beads/proxied_server_client_info.json` (`root_path`, resolved against
+  /// `.beads/` when relative — bd's own resolution rule), falling back to
+  /// `.beads/dolt` (the layout `bd init --proxied-server` creates) when the
+  /// sidecar is absent or carries no root.
   ///
   /// Credentials: the Dart `mysql_client` cannot complete an EMPTY-password
   /// handshake (bd's own Go client connects as `root`/`""`), so live SQL
   /// rides a dedicated read-only `beads_dart` SQL user whose secret is
-  /// provisioned at `.beads/dolt/beads_dart.secret` (0600, operator-managed).
+  /// provisioned at `<proxy root>/beads_dart.secret` (0600, operator-managed).
   /// Missing pidfile or secret → null endpoint → the caller falls back to the
   /// bd CLI read path.
   static DoltEndpoint? _resolveProxiedEndpoint(String root, String database) {
-    final doltDir = p.join(root, '.beads', 'dolt');
+    final beadsDir = p.join(root, '.beads');
+    var doltDir = p.join(beadsDir, 'dolt');
+    final sidecar = File(p.join(beadsDir, 'proxied_server_client_info.json'));
+    if (sidecar.existsSync()) {
+      try {
+        final decoded = jsonDecode(sidecar.readAsStringSync());
+        if (decoded is Map<String, Object?>) {
+          final rootPath = decoded['root_path'];
+          if (rootPath is String && rootPath.isNotEmpty) {
+            doltDir = p.isAbsolute(rootPath)
+                ? rootPath
+                : p.join(beadsDir, rootPath);
+          }
+        }
+      } on Object {
+        // Malformed sidecar: keep the default root.
+      }
+    }
     final pidFile = File(p.join(doltDir, 'proxy.pid'));
     if (!pidFile.existsSync()) return null;
     int? port;
