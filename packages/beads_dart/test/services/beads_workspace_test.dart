@@ -76,6 +76,54 @@ listener:
       expect(ws.endpoint!.hasCredential, isTrue);
     });
 
+    test('proxied-server mode honors the sidecar root_path (relative, '
+        'resolved against .beads/ — the bd rule)', () {
+      final beadsDir = Directory(p.join(tmp.path, '.beads'))..createSync();
+      final proxyRoot = Directory(p.join(beadsDir.path, 'proxieddb'))
+        ..createSync();
+      File(p.join(beadsDir.path, 'metadata.json')).writeAsStringSync(
+        '{"dolt_mode":"proxied-server","dolt_database":"tg"}',
+      );
+      File(
+        p.join(beadsDir.path, 'proxied_server_client_info.json'),
+      ).writeAsStringSync('{"root_path": "proxieddb", "idle_timeout": -1}');
+      File(
+        p.join(proxyRoot.path, 'proxy.pid'),
+      ).writeAsStringSync('{"pid":9,"port":50001}');
+      File(
+        p.join(proxyRoot.path, 'beads_dart.secret'),
+      ).writeAsStringSync('tgsecret');
+
+      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
+      expect(ws!.mode, DoltMode.proxiedServer);
+      expect(ws.endpoint, isNotNull);
+      expect(ws.endpoint!.port, 50001);
+      expect(ws.endpoint!.password, 'tgsecret');
+    });
+
+    test('proxied-server mode honors an ABSOLUTE sidecar root_path '
+        '(the worktree shape: sidecar points at the substation root)', () {
+      final mainRoot = Directory(p.join(tmp.path, 'mainproxy'))..createSync();
+      final beadsDir = Directory(p.join(tmp.path, '.beads'))..createSync();
+      File(p.join(beadsDir.path, 'metadata.json')).writeAsStringSync(
+        '{"dolt_mode":"proxied-server","dolt_database":"tg"}',
+      );
+      File(
+        p.join(beadsDir.path, 'proxied_server_client_info.json'),
+      ).writeAsStringSync('{"root_path": "${mainRoot.path}"}');
+      File(
+        p.join(mainRoot.path, 'proxy.pid'),
+      ).writeAsStringSync('{"pid":9,"port":50002}');
+      File(
+        p.join(mainRoot.path, 'beads_dart.secret'),
+      ).writeAsStringSync('wsecret');
+
+      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
+      expect(ws!.endpoint, isNotNull);
+      expect(ws.endpoint!.port, 50002);
+      expect(ws.endpoint!.password, 'wsecret');
+    });
+
     test('proxied-server mode without the secret yields a null endpoint '
         '(CLI fallback; live SQL never rides an empty password)', () {
       final doltDir = Directory(p.join(tmp.path, '.beads', 'dolt'))
