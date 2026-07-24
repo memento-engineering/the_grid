@@ -81,6 +81,7 @@ dependencies:
   # The VM-service client `reload` drives: reloadSources + the
   # ext.exploration.grid.reload invoke.
   vm_service: ^14.2.0
+  yaml: ^3.1.2
 
 dev_dependencies:
   lints: ^5.1.0
