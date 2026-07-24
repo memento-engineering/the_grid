@@ -65,8 +65,16 @@ class GridRuntimeFactory {
     SnapshotReader reader = cliReader;
 
     final endpoint = workspace.endpoint;
+    // Proxied-server mode (bd experimental) is server-shaped for reads: the
+    // bd-managed proxy fronts a loopback MySQL endpoint. NOTE: its CLI
+    // fallback is degraded — `bd export` is unsupported in proxied mode — so
+    // the SQL path is the primary and a failed connect falls back to a
+    // polling CLI reader that will surface bd's own error loudly.
+    final serverShaped =
+        workspace.mode == DoltMode.server ||
+        workspace.mode == DoltMode.proxiedServer;
     if (preferSql &&
-        workspace.mode == DoltMode.server &&
+        serverShaped &&
         endpoint != null &&
         endpoint.hasCredential) {
       final candidate = DoltQueryService(endpoint);
