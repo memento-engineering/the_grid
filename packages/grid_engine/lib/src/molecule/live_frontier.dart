@@ -144,10 +144,52 @@ Map<String, int> _generationsByPath(
     nodePath,
     circuitById: circuitById,
   )) {
-    if (!_stampInvalidates(projected, results, edge.sourcePath)) continue;
-    final generation = supersedesDepthByPath[edge.targetPath] ?? 0;
+    // Pass 1 — the stamp-driven demotion: a currently-invalidating
+    // `validates` stamp demotes the target's whole closure at the target's
+    // supersedes depth.
+    if (_stampInvalidates(projected, results, edge.sourcePath)) {
+      final generation = supersedesDepthByPath[edge.targetPath] ?? 0;
+      for (final path in edge.closure) {
+        if (generation > (generations[path] ?? -1)) {
+          generations[path] = generation;
+        }
+      }
+    }
+    // Pass 2 — GENERATION-ATOMIC WAVES (tg-ev2w): read-time generation-aware
+    // dependency evaluation. A re-key wave mints successor beads for the
+    // closure ONE BY ONE, and the instant the SOURCE is re-keyed its stamp
+    // stops invalidating (the fixed-point guard above) — pass 1 evaporates
+    // MID-WAVE, and any closure member not yet re-keyed pops back to a
+    // POSITIVE TERMINAL recorded by its PREDECESSOR incarnation. That stale
+    // terminal must never satisfy a successor-generation sibling's dep (the
+    // tg-60t interleave: an early lane spawning off it grades a stale spec).
+    //
+    // The durable signal is graph structure, never the transient stamp
+    // (A52): supersedes-depth SKEW inside one closure. A member whose depth
+    // trails the closure's max yet still projects a positive terminal is a
+    // predecessor incarnation awaiting its re-key — hold it demoted at the
+    // closure generation until its successor mints and re-runs. This also
+    // makes a died-mid-wave re-key RESUMABLE: the member re-enters the
+    // invalidated set on every snapshot, so the successor-mint machinery
+    // completes the wave after a bounce instead of stranding it. Members AT
+    // the max pass through untouched — a same-generation terminal satisfies
+    // same-generation deps (the bounce-resume half: demoted-pending lanes
+    // whose deps ARE satisfied in the current generation spawn normally).
+    // Never-run members (not positive terminal) need no demotion: pending
+    // already refuses to satisfy a dep. Fail-safe: a false positive costs
+    // one redundant re-run; the miss it prevents grades stale work.
+    var generationMax = 0;
     for (final path in edge.closure) {
-      generations[path] = generation;
+      final depth = supersedesDepthByPath[path] ?? 0;
+      if (depth > generationMax) generationMax = depth;
+    }
+    if (generationMax == 0) continue;
+    for (final path in edge.closure) {
+      if ((supersedesDepthByPath[path] ?? 0) >= generationMax) continue;
+      if (!cursorNodeAt(projected, path).isPositiveTerminal) continue;
+      if (generationMax > (generations[path] ?? -1)) {
+        generations[path] = generationMax;
+      }
     }
   }
   return generations;

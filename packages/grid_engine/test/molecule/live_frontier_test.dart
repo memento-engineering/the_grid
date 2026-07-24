@@ -172,6 +172,146 @@ void main() {
     });
   });
 
+  group('generation-atomic waves (tg-ev2w) — a predecessor-generation '
+      'terminal never satisfies a successor-generation dep', () {
+    // The tg-60t interleave, mid-wave: the wave re-keyed the SOURCE
+    // (critic-correctness) and the sibling critics to depth 1, so the F stamp
+    // no longer invalidates (the fixed-point guard) — but the TARGET (build)
+    // has not been re-keyed yet and still projects its PREDECESSOR
+    // incarnation's positive terminal. Pre-fix, that stale terminal satisfied
+    // the re-keyed critics' deps and they spawned against the OLD build.
+    final midWaveProjected = <String, NodeCursor>{
+      // build: NOT yet re-keyed — stale generation-0 positive terminal.
+      'tg-1/build': const NodeCursor(state: StepState.complete),
+      // critics: re-keyed to generation 1, successor beads pending.
+      'tg-1/critic-correctness': const NodeCursor(state: StepState.pending),
+      'tg-1/critic-security': const NodeCursor(state: StepState.pending),
+      'tg-1/critic-style': const NodeCursor(state: StepState.pending),
+    };
+    const midWaveDepths = <String, int>{
+      'tg-1/critic-correctness': 1,
+      'tg-1/critic-security': 1,
+      'tg-1/critic-style': 1,
+    };
+    // The evaporated stamp: the source's PRIOR incarnation graded F, but its
+    // successor bead is pending — _stampInvalidates correctly refuses it.
+    final midWaveResults = _committeeResults(['critic-correctness']);
+
+    test('mid-wave: a successor-generation lane is NOT runnable off a '
+        'predecessor-generation dep terminal (the tg-60t early-spawn)', () {
+      final frontier = liveFrontier(
+        _committee,
+        midWaveProjected,
+        midWaveResults,
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: midWaveDepths,
+        now: _clock(),
+      );
+      // The stale build terminal is DEMOTED by generation skew, so the
+      // generation-1 critics' deps are unsatisfied — only build (its deps
+      // are empty) is runnable: the wave completes instead of interleaving.
+      expect(frontier.map((s) => s.stepId), ['build']);
+    });
+
+    test('mid-wave: the trailing member re-enters invalidatedNodes even '
+        'though the stamp evaporated — the successor-mint machinery can '
+        'resume a died-mid-wave re-key after a bounce', () {
+      expect(
+        invalidatedNodes(
+          _committee,
+          midWaveProjected,
+          midWaveResults,
+          'tg-1',
+          circuitById: _none,
+          supersedesDepthByPath: midWaveDepths,
+        ),
+        contains('tg-1/build'),
+      );
+    });
+
+    test('mid-wave: effectiveCursor demotes ONLY the stale terminal — '
+        'same-generation members pass through untouched', () {
+      final effective = effectiveCursor(
+        _committee,
+        midWaveProjected,
+        midWaveResults,
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: midWaveDepths,
+      );
+      expect(effective['tg-1/build']!.state, StepState.pending);
+      expect(effective['tg-1/build']!.rewindCount, 1);
+      expect(effective['tg-1/critic-security']!.state, StepState.pending);
+      expect(effective['tg-1/critic-security']!.rewindCount, 0);
+    });
+
+    test('bounce-resume: once the dep re-runs IN the current generation, the '
+        'demoted-pending lanes whose deps are satisfied DO spawn (the '
+        'pow-dhq stall half)', () {
+      final resumedProjected = <String, NodeCursor>{
+        // build: re-keyed AND re-run — a fresh generation-1 terminal.
+        'tg-1/build': const NodeCursor(state: StepState.complete),
+        'tg-1/critic-correctness': const NodeCursor(state: StepState.pending),
+        'tg-1/critic-security': const NodeCursor(state: StepState.pending),
+        'tg-1/critic-style': const NodeCursor(state: StepState.pending),
+      };
+      const resumedDepths = <String, int>{
+        'tg-1/build': 1,
+        'tg-1/critic-correctness': 1,
+        'tg-1/critic-security': 1,
+        'tg-1/critic-style': 1,
+      };
+      final frontier = liveFrontier(
+        _committee,
+        resumedProjected,
+        // The prior incarnation's F grade lingers in results — the pending
+        // successor source must not re-invalidate on it (unchanged guard).
+        midWaveResults,
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: resumedDepths,
+        now: _clock(),
+      );
+      expect(frontier.map((s) => s.stepId), [
+        'critic-correctness',
+        'critic-security',
+        'critic-style',
+      ]);
+    });
+
+    test('at rest after a COMPLETED wave (uniform depths, fresh terminals, '
+        'no stamp) nothing is demoted — no false re-runs', () {
+      const restDepths = <String, int>{
+        'tg-1/build': 1,
+        'tg-1/critic-correctness': 1,
+        'tg-1/critic-security': 1,
+        'tg-1/critic-style': 1,
+      };
+      expect(
+        invalidatedNodes(
+          _committee,
+          _committeeProjected,
+          const {},
+          'tg-1',
+          circuitById: _none,
+          supersedesDepthByPath: restDepths,
+        ),
+        isEmpty,
+      );
+      final frontier = liveFrontier(
+        _committee,
+        _committeeProjected,
+        const {},
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: restDepths,
+        now: _clock(),
+      );
+      expect(frontier.map((s) => s.stepId), ['land']);
+    });
+  });
+
   group('invalidatedNodes — the validates-source stamp + its target\'s '
       'transitive-dependent closure (mirrors rewindNodePaths exactly)', () {
     test('one invalidating critic demotes build + EVERY transitive dependent '
