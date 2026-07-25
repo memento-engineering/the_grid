@@ -9,6 +9,7 @@ import 'package:state_notifier/state_notifier.dart';
 import '../domain/driveable_work.dart';
 import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
@@ -81,6 +82,22 @@ class _WorkListState extends State<WorkList> with Diagnosable {
   /// LOUD but said ONCE per bead per station lifetime, never once per build (the
   /// same rising-edge discipline as the wedge monitor).
   final Set<String> _heldReported = <String>{};
+
+  static SessionProjection? _latestRetiredSession(
+    String beadId,
+    Iterable<SessionProjection> sessions,
+  ) {
+    SessionProjection? latest;
+    var latestRound = 0;
+    for (final session in sessions) {
+      final round = reworkRoundOf(beadId, session.workBeadId);
+      if (round != null && round > latestRound) {
+        latest = session;
+        latestRound = round;
+      }
+    }
+    return latest;
+  }
 
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
@@ -184,6 +201,10 @@ class _WorkListState extends State<WorkList> with Diagnosable {
       if (driveList.isNotEmpty && !driveList.contains(bead.id)) continue;
 
       final session = _snapshot.sessionsByWorkBead[bead.id];
+      final retiredSession = session == null
+          ? _latestRetiredSession(bead.id, _snapshot.sessionsByWorkBead.values)
+          : null;
+      final scopeSession = session ?? retiredSession;
       final disposition = sessionDispositionOf(session);
 
       // Positive-terminal-only unmount, DISPOSITIONED (I-10, tg-4rw): the work
@@ -240,10 +261,10 @@ class _WorkListState extends State<WorkList> with Diagnosable {
       if (staysMounted) {
         _mountedIds.add(bead.id);
         mounted.add(
-          WorkBead(bead: bead, session: session, key: ValueKey(bead.id)),
+          WorkBead(bead: bead, session: scopeSession, key: ValueKey(bead.id)),
         );
       } else {
-        pending.add((bead: bead, session: session));
+        pending.add((bead: bead, session: scopeSession));
       }
     }
 

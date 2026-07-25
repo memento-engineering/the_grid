@@ -85,6 +85,18 @@ Bead _round1Session(String id, {required String workBead}) => Bead(
   },
 );
 
+Bead _closedRound1Session(String id, {required String workBead}) => Bead(
+  id: id,
+  issueType: IssueType.session,
+  status: BeadStatus.closed,
+  metadata: {
+    'rig': stateSubstation,
+    SessionBeadKeys.workBead: workBead,
+    SessionBeadKeys.model: kSessionModelMolecule,
+    SessionBeadKeys.outcome: kSessionOutcomeComplete,
+  },
+);
+
 /// Round 1's per-node `type=step` beads, owned by [sessionId]: `agent`/
 /// `verify` complete, `route` GATED (a committee park) — the stale gate
 /// cursor `grid rework` leaves standing across the re-key (it re-keys the
@@ -233,23 +245,70 @@ void main() {
 
       // The retired round-1 session is closed (D-2 fold).
       final closes = f.runner.callsFor('close');
-      expect(closes.where((c) => c[1] == 'tgdog-round1'), hasLength(1));
-      expect(closes.first.join(' '), contains('reworked'));
+      expect(closes.where((call) => call[1] == 'tgdog-round1'), hasLength(1));
+      expect(
+        closes.singleWhere((call) => call[1] == 'tgdog-round1').join(' '),
+        contains('reworked'),
+      );
 
       // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
       // tg-eli phase 2), a NEW id — never a reuse of tgdog-round1.
       final creates = f.runner.callsFor('create');
-      expect(
-        creates.where((c) => c.length <= 1 || c[1] != '--graph'),
-        hasLength(1),
-      );
-      expect(
-        creates.where((c) => c.length > 1 && c[1] == '--graph'),
-        hasLength(1),
-      );
+      expect(creates.where((call) => !call.contains('--graph')), hasLength(1));
+      expect(creates.where((call) => call.contains('--graph')), hasLength(1));
 
       // The fresh round's leaf mounts under the NEW session id, from a
       // virgin cursor (never the stale `route: gated` carried over).
+      expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));
+    });
+
+    test('a CLOSED round re-keyed by `grid rework` remounts through the same '
+        'owner and mints round N+1 without a restart', () async {
+      final f = buildFakes(createdId: 'tgdog-round2');
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+
+      final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+      final stateSrc = FakeSnapshotSource(
+        _state([_closedRound1Session('tgdog-round1', workBead: 'tg-1')]),
+      );
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
+      addTearDown(bridge.dispose);
+
+      final m = _mountFull(
+        joined: bridge.notifier,
+        ctx: f.ctx,
+        registry: reg,
+        rootCircuit: (_) => _code,
+      );
+      addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
+      await _pump();
+
+      expect(f.runner.callsFor('create'), isEmpty);
+
+      stateSrc.push(
+        _state([
+          _closedRound1Session('tgdog-round1', workBead: 'tg-1#r1'),
+        ], tick: 1),
+      );
+      await _pumpUntil(
+        m.owner,
+        () =>
+            reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
+            f.runner.callsFor('create').length >= 2,
+      );
+
+      final closes = f.runner.callsFor('close');
+      expect(closes.where((call) => call[1] == 'tgdog-round1'), hasLength(1));
+      expect(
+        closes.singleWhere((call) => call[1] == 'tgdog-round1').join(' '),
+        contains('reworked'),
+      );
+
+      final creates = f.runner.callsFor('create');
+      expect(creates.where((call) => !call.contains('--graph')), hasLength(1));
+      expect(creates.where((call) => call.contains('--graph')), hasLength(1));
       expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));
     });
   });

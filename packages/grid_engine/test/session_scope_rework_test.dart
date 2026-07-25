@@ -109,8 +109,8 @@ const _tgConfig = SubstationConfig(
 
 void main() {
   group('SessionScope rework re-arm (tg-x1j v2) — the gated case re-mints', () {
-    test('a GATED round whose session vanishes from the join closes the '
-        'retired round and mints round N+1, in place (no restart)', () async {
+    test('a GATED round with durable #rN row closes the retired round and '
+        'mints round N+1, in place (no restart)', () async {
       final f = buildFakes(createdId: 'tgdog-round2');
       final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
@@ -137,12 +137,22 @@ void main() {
       // Adopted synchronously — round 1's gated session, no mint.
       expect(f.runner.callsFor('create'), isEmpty);
 
-      // `grid rework` re-keys round 1's `work_bead` off `tg-1` — the join no
-      // longer resolves a session for this bead (exactly what
-      // StationJoinBridge._join produces from that write), but the bead stays
-      // in `ready` so WorkList keeps the branch MOUNTED (A40: never a
-      // ready-set exit).
-      joined.push(_joined(beads: [_task('tg-1')], ready: {'tg-1'}));
+      // `grid rework` re-keys round 1's `work_bead` off `tg-1`. The durable
+      // `#rN` row authorizes re-mint while the ready bead keeps the branch
+      // mounted (A40: never a ready-set exit).
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1#r1': const SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+              cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+            ),
+          },
+        ),
+      );
       m.owner.flush();
       await _pumpUntil(
         m.owner,
@@ -172,9 +182,8 @@ void main() {
       expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));
     });
 
-    test('a RUNNING (never-gated) round whose session vanishes DECLINES — '
-        'marks the retired session LOUD and never re-mints (the guard '
-        'principle)', () async {
+    test('a RUNNING round with non-#rN disappearance declines LOUD and never '
+        're-mints', () async {
       final f = buildFakes();
       final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
