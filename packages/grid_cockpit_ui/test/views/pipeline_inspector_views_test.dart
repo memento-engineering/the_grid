@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
@@ -5,7 +7,38 @@ import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 
 import '../fixtures.dart';
 
+final class EmptyTreeSource implements TreeSource {
+  final controller = StreamController<TreeSnapshot>.broadcast(sync: true);
+
+  @override
+  TreeSnapshot? get latest => null;
+
+  @override
+  Stream<TreeSnapshot> get snapshots => controller.stream;
+
+  @override
+  Future<void> dispose() => controller.close();
+}
+
 void main() {
+  testWidgets('inspector renders empty state before the first live snapshot', (
+    tester,
+  ) async {
+    final source = EmptyTreeSource();
+    final viewModel = InspectorViewModel(source, nodeId: 'selected');
+
+    await tester.pumpWidget(
+      MaterialApp(home: DiagnosticsInspectorView(viewModel: viewModel)),
+    );
+
+    expect(find.text('No diagnostics selected'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    viewModel.dispose();
+    await source.dispose();
+  });
+
   testWidgets('pipeline renders nesting, state, duration, and selection', (
     tester,
   ) async {
