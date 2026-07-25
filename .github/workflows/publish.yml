@@ -1,0 +1,34 @@
+name: Publish to pub.dev
+
+# Per-package release tags: `<package>-v<version>` (power_station ADR-0003 D1
+# naming, now pointed at pub.dev). Pushing e.g. `grid_engine-v0.1.1` publishes
+# packages/grid_engine via pub.dev's GitHub-Actions trusted publishing (OIDC —
+# no long-lived credential in CI). Each package must have automated publishing
+# enabled once on its pub.dev admin page (repository memento-engineering/the_grid,
+# tag pattern `<package>-v{{version}}`).
+
+on:
+  push:
+    tags:
+      - '*-v[0-9]+.[0-9]+.[0-9]+'
+      - '*-v[0-9]+.[0-9]+.[0-9]+-*'
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.parse.outputs.package }}
+    steps:
+      - id: parse
+        run: |
+          pkg="${GITHUB_REF_NAME%-v*}"
+          echo "package=$pkg" >> "$GITHUB_OUTPUT"
+          echo "Publishing package: $pkg (tag $GITHUB_REF_NAME)"
+
+  publish:
+    needs: parse
+    permissions:
+      id-token: write # pub.dev OIDC trusted publishing
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      working-directory: packages/${{ needs.parse.outputs.package }}

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  dart:
+    name: analyze + test (Dart packages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Resolve workspace
+        run: dart pub get
+      - name: Format (workspace-wide)
+        run: dart format --output=none --set-exit-if-changed packages
+      - name: Analyze (workspace-wide)
+        run: dart analyze
+      - name: Test pure-Dart packages
+        # beads_dart is EXCLUDED: its suite shells out to the bd/dolt binaries
+        # and carries a documented bd-HEAD ready-sort divergence (tg-nx0o).
+        # Hermeticizing it for CI is tracked as a follow-up bead.
+        run: |
+          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_sdk grid_cli; do
+            echo "::group::$pkg"
+            (cd packages/$pkg && dart test)
+            echo "::endgroup::"
+          done
+
+  flutter:
+    name: analyze + test (Flutter packages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Resolve workspace
+        run: flutter pub get
+      - name: Test Flutter packages
+        run: |
+          for pkg in grid_cockpit_ui grid_devtools; do
+            echo "::group::$pkg"
+            (cd packages/$pkg && flutter analyze && flutter test)
+            echo "::endgroup::"
+          done

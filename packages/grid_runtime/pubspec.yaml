@@ -3,13 +3,8 @@ name: grid_runtime
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
 version: 0.1.0
 description: >-
-  M3 runtime providers — gives the_grid hands. Spawns and supervises a coding
-  agent per ready bead (subprocess-first; tmux as the gc-compatible
-  alternative), isolates each bead's work in a git worktree, and tracks each
-  session's lifecycle as a bead through the single bd write chokepoint
-  (bd-only, `--actor grid-controller`, never SQL). Ports gc's runtime.Provider
-  contract (ADR-0004) and consumes beads_dart's ready-set seam.
-publish_to: none
+  Runtime providers for the_grid — spawns and supervises a coding agent per
+  ready bead, isolating each bead's work in a git worktree.
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
@@ -17,18 +12,7 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart:
-    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
-    # unifies git deps by REF STRING, so every route to a package —
-    # sibling or external consumer — must carry the SAME {url, tag_pattern, path}
-    # descriptor (a path dep or a bare ref pin normalizes differently and
-    # conflicts); the version CONSTRAINT then solves over the release tags.
-    # Workspace/dev resolution is unchanged; tags move in lockstep.
-    git:
-      url: git@github.com:memento-engineering/the_grid.git
-      tag_pattern: beads_dart-v{{version}}
-      path: packages/beads_dart
-    version: ^0.1.0
+  beads_dart: ^0.1.0
   freezed_annotation: ^3.0.0
   json_annotation: ^4.9.0
   meta: ^1.16.0

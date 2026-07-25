@@ -1,6 +1,6 @@
 name: grid_cockpit_ui
+version: 0.1.0
 description: Transport-neutral Flutter projections and primitives for grid diagnostics.
-publish_to: none
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
@@ -12,8 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
   freezed_annotation: ^3.0.0
-  grid_diagnostics_contract:
-    path: ../grid_diagnostics_contract
+  grid_diagnostics_contract: ^0.1.0
   state_notifier: ^1.0.0
 
 dev_dependencies:
