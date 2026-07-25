@@ -166,6 +166,7 @@ CostRollupState costRollupOf(TreeSnapshot snapshot) {
   int? inputTokens;
   int? outputTokens;
   double? costUsd;
+  final grades = <String>[];
   for (final node in _nodesDepthFirst(snapshot.root)) {
     for (final property in _propertiesDepthFirst(node.properties)) {
       if (property.name == 'inputTokens') {
@@ -177,6 +178,9 @@ CostRollupState costRollupOf(TreeSnapshot snapshot) {
       } else if (property.name == 'costUsd') {
         final value = _numericValue(property);
         if (value != null) costUsd = (costUsd ?? 0) + value;
+      } else if (property.name == 'grade') {
+        final value = _textValue(property);
+        if (value != null) grades.add(value);
       }
     }
   }
@@ -184,7 +188,12 @@ CostRollupState costRollupOf(TreeSnapshot snapshot) {
     inputTokens: inputTokens,
     outputTokens: outputTokens,
     costUsd: costUsd,
-    hasData: inputTokens != null || outputTokens != null || costUsd != null,
+    grades: List.unmodifiable(grades),
+    hasData:
+        inputTokens != null ||
+        outputTokens != null ||
+        costUsd != null ||
+        grades.isNotEmpty,
   );
 }
 

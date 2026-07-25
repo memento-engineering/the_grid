@@ -141,7 +141,7 @@ abstract class InspectorState with _$InspectorState {
   }) = _InspectorState;
 }
 
-/// Aggregated token and cost data.
+/// Aggregated token, cost, and grade data.
 @freezed
 abstract class CostRollupState with _$CostRollupState {
   /// Creates cost rollup state.
@@ -149,6 +149,7 @@ abstract class CostRollupState with _$CostRollupState {
     int? inputTokens,
     int? outputTokens,
     double? costUsd,
+    @Default(<String>[]) List<String> grades,
     required bool hasData,
   }) = _CostRollupState;
 }

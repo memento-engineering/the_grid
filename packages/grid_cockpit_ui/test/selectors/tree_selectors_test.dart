@@ -197,4 +197,33 @@ void main() {
       ),
     );
   });
+
+  test('rolls up repeated step grades', () {
+    final result = costRollupOf(
+      snapshot(
+        version: 3,
+        children: [
+          node(
+            id: 'step',
+            seedType: 'CircuitStep',
+            properties: [
+              intProperty('inputTokens', 10),
+              intProperty('outputTokens', 4),
+              stringProperty('grade', 'A'),
+              stringProperty('grade', 'B'),
+            ],
+          ),
+        ],
+      ),
+    );
+    expect(
+      result,
+      const CostRollupState(
+        inputTokens: 10,
+        outputTokens: 4,
+        grades: ['A', 'B'],
+        hasData: true,
+      ),
+    );
+  });
 }
