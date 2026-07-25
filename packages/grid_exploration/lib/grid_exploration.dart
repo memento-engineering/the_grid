@@ -7,6 +7,7 @@
 /// against lenny source. See ADR-0001 Decision 6.
 library;
 
+export 'src/dev_mode.dart';
 export 'src/grid_controller_plugin.dart';
 export 'src/grid_exploration_host.dart';
 export 'src/grid_exploration_protocol.dart';
