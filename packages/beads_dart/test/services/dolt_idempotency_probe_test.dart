@@ -79,7 +79,13 @@ void main() {
       expect(sql, contains("type = 'parent-child'"));
       expect(sql, contains("'tg-root'"));
       // … matched on metadata.idempotency_key (JSON column on issues ∪ wisps).
-      expect(sql, contains("JSON_EXTRACT(metadata, '\$.idempotency_key')"));
+      // CAST before extraction — Dolt's own JSON decode of an out-of-line
+      // (>2KB) stored value can error server-side where the CHAR round-trip
+      // is fine (the tg-wvox follow-on dropout class).
+      expect(
+        sql,
+        contains("JSON_EXTRACT(CAST(metadata AS CHAR), '\$.idempotency_key')"),
+      );
       expect(sql, contains("'converge:tg-root:iter:3'"));
       expect(sql, contains('FROM issues'));
       expect(sql, contains('FROM wisps'));
