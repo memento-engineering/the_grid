@@ -6,6 +6,8 @@
 // ADR-0008 D4 / M4-P1 §4, Track D. Zero I/O — fake registry + fake leaves.
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
@@ -69,24 +71,64 @@ const _burn = Circuit(
 NodeCursor _done() => const NodeCursor(state: StepState.complete);
 NodeCursor _ready() => const NodeCursor(state: StepState.ready);
 
+const _beadIds = <String, String>{
+  'root/agent': 'step-agent-v1',
+  'root/verify': 'step-verify-v1',
+  'root/land': 'step-land-v1',
+  'root/harnessPeripheral': 'step-peripheral-v1',
+  'root/harnessPeripheral/build': 'step-peripheral-build-v1',
+  'root/harnessPeripheral/install': 'step-peripheral-install-v1',
+  'root/harnessPeripheral/launch': 'step-peripheral-launch-v1',
+  'root/harnessPeripheral/waitWS': 'step-peripheral-wait-v1',
+  'root/harnessCentral': 'step-central-v1',
+  'root/harnessCentral/build': 'step-central-build-v1',
+  'root/harnessCentral/install': 'step-central-install-v1',
+  'root/harnessCentral/launch': 'step-central-launch-v1',
+  'root/harnessCentral/waitWS': 'step-central-wait-v1',
+  'root/coordinator': 'step-coordinator-v1',
+  'root/report': 'step-report-v1',
+};
+
 // --- a tiny harness that drives a cursor into a CircuitScope in isolation -----
 
 class _CursorHost extends StatefulSeed {
-  const _CursorHost(this.circuit, this.initial);
+  const _CursorHost(this.circuit, this.initial, {this.beadIds = _beadIds});
   final Circuit circuit;
   final CircuitCursor initial;
+  final Map<String, String> beadIds;
   @override
   State<_CursorHost> createState() => _CursorHostState();
 }
 
 class _CursorHostState extends State<_CursorHost> {
   late CircuitCursor _cursor;
+  late Map<String, String> _incarnations;
+
   @override
-  void initState() => _cursor = seed.initial;
-  void advance(CircuitCursor cursor) => setState(() => _cursor = cursor);
+  void initState() {
+    _cursor = seed.initial;
+    _incarnations = seed.beadIds;
+  }
+
+  void advance(CircuitCursor cursor, {Map<String, String>? beadIds}) =>
+      setState(() {
+        _cursor = cursor;
+        if (beadIds != null) _incarnations = beadIds;
+      });
+
   @override
-  Seed build(TreeContext context) =>
-      CircuitScope(circuit: seed.circuit, cursor: _cursor, nodePath: 'root');
+  Seed build(TreeContext context) => InheritedSeed<InheritedCircuit>(
+    value: InheritedCircuit(
+      root: BeadPathKey(const ['work', 'session', 'circuit']),
+      beadIdByNodePath: _incarnations,
+      cursor: _cursor,
+    ),
+    child: CircuitScope(
+      circuit: seed.circuit,
+      cursor: _cursor,
+      nodePath: 'root',
+    ),
+  );
 }
 
 List<Branch> _all(Branch root) {
@@ -112,10 +154,13 @@ _CursorHostState _cursorState(Branch root) {
 
 /// Mounts [host] under a fixed-at-mount registry + a fixed SessionHandle;
 /// returns the owner, the root branch, and the recording registry.
-({TreeOwner owner, Branch root, RecordingCapabilityRegistry reg}) _mount(
-  _CursorHost host, {
-  Map<String, Circuit> circuits = const {},
-}) {
+({
+  TreeOwner owner,
+  Branch root,
+  RecordingCapabilityRegistry reg,
+  _CursorHostState state,
+})
+_mount(_CursorHost host, {Map<String, Circuit> circuits = const {}}) {
   final reg = RecordingCapabilityRegistry(circuits: circuits);
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -127,14 +172,40 @@ _CursorHostState _cursorState(Branch root) {
       ),
     ),
   );
-  return (owner: owner, root: root, reg: reg);
+  return (owner: owner, root: root, reg: reg, state: _cursorState(root));
+}
+
+List<Branch> _stepBranches(Branch root) => _all(root).where((branch) {
+  final key = branch.seed.key;
+  return key is ValueKey<String> && _beadIds.containsKey(key.value);
+}).toList();
+
+Branch _stepBranch(Branch root, String path) => _stepBranches(
+  root,
+).singleWhere((branch) => branch.seed.key == ValueKey(path));
+
+class _BareCircuitHost extends StatelessSeed {
+  const _BareCircuitHost();
+
+  @override
+  Seed build(TreeContext context) =>
+      const CircuitScope(circuit: _code, cursor: {}, nodePath: 'root');
 }
 
 void main() {
   group('Track D — linear inflation (1-wide; §6 parity at depth)', () {
-    test('empty cursor mounts only the dep-free first step', () {
+    test('empty cursor mounts every step and only the first effect', () {
       final m = _mount(const _CursorHost(_code, {}));
       addTearDown(m.owner.dispose);
+      expect(_stepBranches(m.root), hasLength(3));
+      expect(
+        _stepBranches(m.root).map((branch) => branch.seed.key),
+        unorderedEquals([
+          const ValueKey('root/agent'),
+          const ValueKey('root/verify'),
+          const ValueKey('root/land'),
+        ]),
+      );
       expect(m.reg.events, ['START agent(sess/root/agent)']);
     });
 
@@ -149,10 +220,12 @@ void main() {
         m.root,
         (s) => s is CircuitScope,
       ).branchId;
+      final agentStepId = _stepBranch(m.root, 'root/agent').branchId;
+      final verifyStepId = _stepBranch(m.root, 'root/verify').branchId;
       m.reg.events.clear();
 
       // Advance the cursor: agent complete → verify enters, agent retires.
-      _cursorState(m.root).advance({'root/agent': _done()});
+      m.state.advance({'root/agent': _done()});
       m.owner.flush();
 
       // Genesis multichild reconcile mounts the new child then unmounts the
@@ -171,13 +244,16 @@ void main() {
         scopeIdBefore,
         reason: 'the inflater branch persists across a cursor advance',
       );
+      expect(_stepBranch(m.root, 'root/agent').branchId, agentStepId);
+      expect(_stepBranch(m.root, 'root/verify').branchId, verifyStepId);
+      expect(_stepBranches(m.root), hasLength(3));
     });
 
     test('full linear progression agent → verify → land', () {
       final host = _CursorHost(_code, const {});
       final m = _mount(host);
       addTearDown(m.owner.dispose);
-      final st = _cursorState(m.root);
+      final st = m.state;
 
       m.reg.events.clear();
       st.advance({'root/agent': _done()});
@@ -199,44 +275,6 @@ void main() {
           'STOP verify(sess/root/verify)',
           'START land(sess/root/land)',
         ]),
-      );
-    });
-
-    test('a restartCount bump RE-KEYS the same step (old incarnation unmounts, '
-        'new mounts) — the supervised-restart mechanism', () {
-      final host = _CursorHost(_code, const {});
-      final m = _mount(host);
-      addTearDown(m.owner.dispose);
-      expect(m.reg.events, ['START agent(sess/root/agent)']);
-      final hostIdBefore = _whereSeed(
-        m.root,
-        (s) => s is FakeCapabilityHost,
-      ).branchId;
-      m.reg.events.clear();
-
-      // The agent FAILED; supervision bumps restartCount to 1 (within budget) →
-      // the incarnation in the key changes ('root/agent#0' → '#1').
-      _cursorState(m.root).advance({
-        'root/agent': const NodeCursor(
-          state: StepState.failed,
-          restartCount: 1,
-        ),
-      });
-      m.owner.flush();
-
-      // The old incarnation unmounted and a new one mounted (re-key, NOT an
-      // in-place update). A mutation dropping '#${restartCount}' from the key
-      // would update-in-place → no STOP/START, same branchId → this fails.
-      expect(
-        m.reg.events,
-        unorderedEquals([
-          'STOP agent(sess/root/agent)',
-          'START agent(sess/root/agent)',
-        ]),
-      );
-      expect(
-        _whereSeed(m.root, (s) => s is FakeCapabilityHost).branchId,
-        isNot(hostIdBefore),
       );
     });
   });
@@ -282,6 +320,14 @@ void main() {
         // The peripheral sub-circuit inflates its own frontier {build}; central is
         // withheld (its dep's terminal descendant is pending); coordinator too.
         expect(m.reg.events, ['START b(sess/root/harnessPeripheral/build)']);
+        expect(_stepBranches(m.root), hasLength(8));
+        expect(
+          _stepBranches(m.root).where(
+            (branch) =>
+                branch.seed.key == const ValueKey('root/harnessCentral/build'),
+          ),
+          isEmpty,
+        );
         // The nested CircuitScope for the peripheral exists.
         expect(
           _all(m.root).where((b) => b.seed is CircuitScope).length,
@@ -294,7 +340,8 @@ void main() {
       final host = _CursorHost(_burn, const {});
       final m = _mount(host, circuits: {'deploy': _deploy});
       addTearDown(m.owner.dispose);
-      final st = _cursorState(m.root);
+      final st = m.state;
+      final centralStepId = _stepBranch(m.root, 'root/harnessCentral').branchId;
 
       m.reg.events.clear();
       // Jump the peripheral deploy to a consistent fully-done cursor (build +
@@ -323,13 +370,18 @@ void main() {
         isFalse,
         reason: 'the await-all barrier withholds the coordinator',
       );
+      expect(
+        _stepBranch(m.root, 'root/harnessCentral').branchId,
+        centralStepId,
+      );
+      expect(_stepBranches(m.root), hasLength(12));
     });
 
     test('BOTH harness terminals → the coordinator mounts (barrier opens)', () {
       final host = _CursorHost(_burn, const {});
       final m = _mount(host, circuits: {'deploy': _deploy});
       addTearDown(m.owner.dispose);
-      final st = _cursorState(m.root);
+      final st = m.state;
 
       m.reg.events.clear();
       st.advance({
@@ -344,6 +396,177 @@ void main() {
         m.reg.events.contains('START coord(sess/root/coordinator)'),
         isTrue,
         reason: 'both barrier deps reached a positive terminal',
+      );
+    });
+  });
+
+  group('Track D — effect incarnation axes', () {
+    test('restartCount replaces only the effect beneath the stable step', () {
+      final m = _mount(const _CursorHost(_code, {}));
+      addTearDown(m.owner.dispose);
+      final stepId = _stepBranch(m.root, 'root/agent').branchId;
+      final effectId = _whereSeed(
+        m.root,
+        (seed) => seed is FakeCapabilityHost,
+      ).branchId;
+      m.reg.events.clear();
+
+      m.state.advance({
+        'root/agent': const NodeCursor(
+          state: StepState.failed,
+          restartCount: 1,
+        ),
+      });
+      m.owner.flush();
+
+      expect(
+        m.reg.events,
+        unorderedEquals([
+          'STOP agent(sess/root/agent)',
+          'START agent(sess/root/agent)',
+        ]),
+      );
+      expect(_stepBranch(m.root, 'root/agent').branchId, stepId);
+      expect(
+        _whereSeed(m.root, (seed) => seed is FakeCapabilityHost).branchId,
+        isNot(effectId),
+      );
+    });
+
+    test('rewindCount alone preserves the step and effect branches', () {
+      final m = _mount(const _CursorHost(_code, {}));
+      addTearDown(m.owner.dispose);
+      final stepId = _stepBranch(m.root, 'root/agent').branchId;
+      final effectId = _whereSeed(
+        m.root,
+        (seed) => seed is FakeCapabilityHost,
+      ).branchId;
+      m.reg.events.clear();
+
+      m.state.advance({'root/agent': const NodeCursor(rewindCount: 7)});
+      m.owner.flush();
+
+      expect(m.reg.events, isEmpty);
+      expect(_stepBranch(m.root, 'root/agent').branchId, stepId);
+      expect(
+        _whereSeed(m.root, (seed) => seed is FakeCapabilityHost).branchId,
+        effectId,
+      );
+    });
+
+    test(
+      'successor bead id replaces only the effect beneath the stable step',
+      () {
+        final m = _mount(const _CursorHost(_code, {}));
+        addTearDown(m.owner.dispose);
+        final stepId = _stepBranch(m.root, 'root/agent').branchId;
+        final effectId = _whereSeed(
+          m.root,
+          (seed) => seed is FakeCapabilityHost,
+        ).branchId;
+        m.reg.events.clear();
+
+        m.state.advance(
+          const {'root/agent': NodeCursor(rewindCount: 1)},
+          beadIds: {..._beadIds, 'root/agent': 'step-agent-v2'},
+        );
+        m.owner.flush();
+
+        expect(
+          m.reg.events,
+          unorderedEquals([
+            'STOP agent(sess/root/agent)',
+            'START agent(sess/root/agent)',
+          ]),
+        );
+        expect(_stepBranch(m.root, 'root/agent').branchId, stepId);
+        expect(
+          _whereSeed(m.root, (seed) => seed is FakeCapabilityHost).branchId,
+          isNot(effectId),
+        );
+      },
+    );
+  });
+
+  group('Track D — incarnation guards and flat adoption', () {
+    test('CircuitScope without InheritedCircuit keeps flat adoption live', () {
+      final reg = RecordingCapabilityRegistry();
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      final root = owner.mountRoot(
+        InheritedSeed<CapabilityRegistry>(
+          value: reg,
+          child: const InheritedSeed<SessionHandle>(
+            value: SessionHandle('sess'),
+            child: _BareCircuitHost(),
+          ),
+        ),
+      );
+
+      expect(_stepBranches(root), hasLength(3));
+      expect(reg.events, ['START agent(sess/root/agent)']);
+    });
+
+    test('missing declared node path throws StateError', () {
+      expect(
+        () => _mount(
+          _CursorHost(
+            _code,
+            const {},
+            beadIds: const {
+              'root/verify': 'step-verify-v1',
+              'root/land': 'step-land-v1',
+            },
+          ),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('no step-bead id for "root/agent"'),
+          ),
+        ),
+      );
+    });
+
+    test('empty bead id throws StateError', () {
+      expect(
+        () => _mount(
+          _CursorHost(
+            _code,
+            const {},
+            beadIds: {..._beadIds, 'root/agent': ''},
+          ),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('empty step-bead id for "root/agent"'),
+          ),
+        ),
+      );
+    });
+
+    test('one bead id assigned to two paths throws StateError', () {
+      expect(
+        () => _mount(
+          _CursorHost(
+            _code,
+            const {},
+            beadIds: {..._beadIds, 'root/verify': 'step-agent-v1'},
+          ),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              contains('step-bead id "step-agent-v1" is assigned to both'),
+              contains('"root/agent" and "root/verify"'),
+            ),
+          ),
+        ),
       );
     });
   });
