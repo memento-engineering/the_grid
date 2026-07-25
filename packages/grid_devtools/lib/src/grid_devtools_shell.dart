@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
 
-import 'events/events_panel.dart';
 import 'handshake_state.dart';
+import 'projection/projection_tabs.dart';
 import 'protocol/grid_exploration_client.dart';
+import 'replay/replay_fixture.dart';
+import 'replay/snapshot_json_loader.dart';
 
 /// The visible content of the grid DevTools extension: a handshake header
-/// (advertised plugins + tools) over an [EventsPanel].
+/// (advertised plugins + tools) over [ProjectionTabs].
 ///
 /// Split out from the `DevToolsExtension`-wrapping entrypoint (`main.dart`)
 /// so widget tests can pump it with a fake [GridExplorationClient] and never
@@ -16,15 +19,27 @@ import 'protocol/grid_exploration_client.dart';
 /// [HandshakeState]; [retrigger], when supplied, re-runs the probe on every
 /// fire (production wires reconnect listenables).
 class GridDevToolsShell extends StatefulWidget {
-  const GridDevToolsShell({super.key, required this.client, this.retrigger});
+  const GridDevToolsShell({
+    super.key,
+    required this.client,
+    this.retrigger,
+    this.treeSource,
+    this.snapshotJsonPicker = pickSnapshotJson,
+  });
 
-  /// The exploration-protocol seam — the shell's only dependency.
+  /// The exploration-protocol seam used by the handshake and Events tab.
   final GridExplorationClient client;
 
   /// Optional listenable that re-runs the handshake probe when it fires
   /// (e.g. `serviceManager.connectedState` on reconnect). Tests can leave
   /// it null and call the probe via a remount.
   final Listenable? retrigger;
+
+  /// Optional projection source; the shell owns a bundled replay when absent.
+  final TreeSource? treeSource;
+
+  /// File-selection boundary forwarded to the projection surface.
+  final SnapshotJsonPicker snapshotJsonPicker;
 
   @override
   State<GridDevToolsShell> createState() => _GridDevToolsShellState();
@@ -33,6 +48,9 @@ class GridDevToolsShell extends StatefulWidget {
 class _GridDevToolsShellState extends State<GridDevToolsShell> {
   final ValueNotifier<HandshakeState> _handshake =
       ValueNotifier<HandshakeState>(const HandshakeLoading());
+  late final TreeSource? _defaultSource = widget.treeSource == null
+      ? bundledReplayTreeSource()
+      : null;
 
   /// Drops stale probe results — only the latest probe may publish.
   int _probeGen = 0;
@@ -62,6 +80,11 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
   void dispose() {
     widget.retrigger?.removeListener(_onRetrigger);
     _handshake.dispose();
+    final defaultSource = _defaultSource;
+    if (defaultSource != null) {
+      // ignore: discarded_futures
+      defaultSource.dispose();
+    }
     super.dispose();
   }
 
@@ -97,7 +120,13 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
             builder: (context, state, _) => _HandshakeHeader(state: state),
           ),
           const Divider(height: 1),
-          Expanded(child: EventsPanel(client: widget.client)),
+          Expanded(
+            child: ProjectionTabs(
+              client: widget.client,
+              source: widget.treeSource ?? _defaultSource!,
+              snapshotJsonPicker: widget.snapshotJsonPicker,
+            ),
+          ),
         ],
       ),
     );

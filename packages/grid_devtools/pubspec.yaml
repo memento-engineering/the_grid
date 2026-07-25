@@ -5,6 +5,7 @@ description: >-
   only (ADR-0002 Decision 3) — no direct beads_dart dependency.
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
+publish_to: none
 
 environment:
   flutter: ">=3.41.0"
@@ -13,8 +14,13 @@ environment:
 dependencies:
   devtools_extensions: ^0.4.0
   dtd: ^4.0.0
+  file_selector: ^1.0.3
   flutter:
     sdk: flutter
+  grid_cockpit_ui:
+    path: ../grid_cockpit_ui
+  grid_diagnostics_contract:
+    path: ../grid_diagnostics_contract
   vm_service: ^14.2.0
 
 dev_dependencies:

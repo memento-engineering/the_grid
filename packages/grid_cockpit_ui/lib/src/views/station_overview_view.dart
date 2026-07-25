@@ -7,10 +7,17 @@ import 'notifier_view.dart';
 /// Snapshot-driven station health summary.
 final class StationOverviewView extends StatelessWidget {
   /// Creates an overview bound to [viewModel].
-  const StationOverviewView({required this.viewModel, super.key});
+  const StationOverviewView({
+    required this.viewModel,
+    this.onSelectSubstation,
+    super.key,
+  });
 
   /// The snapshot projection observed by this view.
   final OverviewViewModel viewModel;
+
+  /// Called with the selected substation diagnostics node id.
+  final ValueChanged<String>? onSelectSubstation;
 
   @override
   Widget build(BuildContext context) => NotifierView<OverviewState>(
@@ -32,6 +39,9 @@ final class StationOverviewView extends StatelessWidget {
           for (final substation in state.substations)
             ListTile(
               key: ValueKey(substation.nodeId),
+              onTap: onSelectSubstation == null
+                  ? null
+                  : () => onSelectSubstation!(substation.nodeId),
               title: Text(substation.substationId),
               subtitle: Text('${substation.mountedWorkCount} mounted work'),
             ),
