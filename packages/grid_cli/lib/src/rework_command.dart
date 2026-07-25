@@ -26,18 +26,17 @@ import 'station_stores.dart';
 ///
 /// **The OPEN-session refusal.** A session that is still OPEN is a live round
 /// — rekeying it out from under an ACTIVELY RUNNING step would silently
-/// abandon a live process. This command refuses LOUD unless the open session's
-/// per-node cursor shows it PARKED AT A GATE with nothing running — the one
-/// case `SessionScope`'s v2 gate-resolve transition (grid_engine,
-/// `SessionScopeState`) is built to observe and re-arm reactively, with no
-/// runner restart (the round-1-GATED case tg-ucz found live). The cursor is
+/// abandon a live process. An exported OPEN `type=gate` bead whose non-empty
+/// `blocks` metadata equals the session id is the authoritative park record.
+/// Otherwise, this command refuses LOUD unless the open session's active
+/// projected cursor is GATED with nothing running. The compatibility cursor is
 /// a MOLECULE session's (`grid.session.model=molecule`) `type=step` beads in
 /// the same store snapshot (`projectMoleculeCursor`). A HISTORICAL FLAT
 /// session's `grid.cursor.*` keys no longer project (tg-eli phase 2 retired
 /// the flat model): an OPEN flat session reads an EMPTY cursor and takes the
-/// refusal path — moot by construction, since the engine can no longer drive
-/// it anyway (a CLOSED flat session still reworks fine; round N+1 mints
-/// molecule).
+/// refusal path unless a matching OPEN gate is exported — moot by construction
+/// for gate-less flat sessions, since the engine can no longer drive them
+/// anyway (a CLOSED flat session still reworks fine; round N+1 mints molecule).
 ///
 /// **Re-seated on the store-at-roots model (v3).** The session lives in the_grid's
 /// OWN **state store** at `<grid.root>/.grid/.beads/` (`--grid-root`; Q5a) — never
@@ -182,13 +181,15 @@ class ReworkCommand extends Command<int> {
 ///
 /// **Fail-closed (non-zero exit, ZERO writes)** unless exactly one session is
 /// found for [beadId] and it is either CLOSED, or OPEN-and-parked-at-a-gate
-/// with nothing running; the round cap is not yet reached; and [noteStore] is
-/// provided and openable. The WORK store is required even when [note] is absent
-/// because every rework clears stale spec fields before session retirement.
-/// `--note` only adds a second work-bead write after the state re-key succeeds.
-/// Seams ([stateWorkspaceOverride]/[workspaceOverride]/[bdOverride]/
-/// [stateBdOverride]/[dirExists]/[now]) are injectable so an offline test drives
-/// it with fake stores.
+/// by an exported OPEN gate whose `blocks` metadata equals the session id, or
+/// by an active projected cursor that is gated with nothing running; the round
+/// cap is not yet reached; and [noteStore] is provided and openable. The WORK
+/// store is required even when [note] is absent because every rework clears
+/// stale spec fields before session retirement. `--note` only adds a second
+/// work-bead write after the state re-key succeeds. Seams
+/// ([stateWorkspaceOverride]/[workspaceOverride]/[bdOverride]/
+/// [stateBdOverride]/[dirExists]/[now]) are injectable so an offline test
+/// drives it with fake stores.
 Future<int> runRework({
   required String beadId,
   required GridStateStore stateStore,
@@ -300,20 +301,22 @@ Future<int> runRework({
   final round = maxRound + 1;
 
   if (!session.isClosed) {
-    // The per-node cursor: a MOLECULE session's state lives on its own
-    // `type=step` beads — already in the complete-graph snapshot read above,
-    // no second query. A HISTORICAL FLAT session (`SessionBeadKeys.model`
-    // absent — the flat model retired, tg-eli phase 2) has NO projectable
-    // cursor: it reads EMPTY below, so an OPEN flat session always takes the
-    // not-parked-at-a-gate refusal — moot by construction (the engine can no
-    // longer drive it; a CLOSED flat session still reworks, and round N+1
-    // mints molecule).
+    // A gate bead is the state store's authoritative park record (D-7). It is
+    // present in the complete-graph export immediately, before a resident's
+    // derived step cursor necessarily observes the gate and reaches `gated`.
+    final hasOpenBlockingGate = export.beads.any(
+      (b) =>
+          b.issueType == IssueType.gate &&
+          !b.isClosed &&
+          _stringMeta(b, 'blocks') == session.id,
+    );
+
+    // Preserve cursor projection as compatibility evidence for snapshots in
+    // which the gated step is present. A matching OPEN gate is authoritative
+    // over a lagging cursor, including a stale `running` state: D-7 says that
+    // the open gate parks the session.
     final CircuitCursor cursor;
     if (_stringMeta(session, SessionBeadKeys.model) == kSessionModelMolecule) {
-      // The supersedes edges (A52 rework rounds) resolve the ACTIVE
-      // incarnation per path; projectMoleculeCursor drops any edge whose
-      // endpoints are not both in the passed step set, so the full export
-      // edge list is safe to hand over unfiltered.
       final steps = export.beads.where(
         (b) =>
             b.issueType == IssueType.step &&
@@ -329,17 +332,14 @@ Future<int> runRework({
     final states = cursor.values.map((n) => n.state);
     final hasRunning = states.contains(StepState.running);
     final hasGated = states.contains(StepState.gated);
-    if (hasRunning || !hasGated) {
+    if (!hasOpenBlockingGate && (hasRunning || !hasGated)) {
       writeErr(
         'grid rework: session "${session.id}" for "$beadId" is OPEN and not '
         'parked at a gate — a live round may be running; refused (fail-closed '
-        '— wait for it to gate or terminate, or restart the runner).',
+        '— wait for an open gate or termination).',
       );
       return 64;
     }
-    // OPEN and gated, nothing running: safe to retire — SessionScope's v2
-    // gate-resolve transition observes this re-key and re-arms in place (no
-    // runner restart needed).
   }
 
   final workOwnership = BeadOwnershipPredicate({
