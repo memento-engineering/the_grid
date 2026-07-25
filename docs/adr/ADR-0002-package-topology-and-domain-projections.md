@@ -99,6 +99,8 @@ Consequences:
 
 `grid_devtools` never links `grid_controller` for live data — it attaches to the process VM service and consumes the same `ext.exploration.*` surface as lenny's tooling (handshake → observation → tools). This keeps one protocol (ADR-0001 Decision 6) and makes the panels work against any future grid process (reconciler daemon, runtime supervisor) for free.
 
+**Amended 2026-07-25 (Nico ruling, `tg-0ds.5`):** the “exploration protocol only” clause gains one live-data exception: `grid_devtools` may consume `grid_diagnostics_contract` `TreeSnapshot`s from the bearer-authenticated unified `StationControl` HTTP/WS door. It still never links `grid_controller` for live data; debugger operations remain on `ext.exploration.*`.
+
 ---
 
 ## Alternatives considered

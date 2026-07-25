@@ -18,6 +18,7 @@ dependencies:
   args: ^2.6.0
   beads_dart: ^0.1.0
   genesis_tree: ^0.1.5
+  grid_diagnostics_contract: ^0.1.0
   grid_engine: ^0.1.0
   grid_exploration: ^0.1.0
   grid_runtime: ^0.1.0

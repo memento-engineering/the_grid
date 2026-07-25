@@ -1,8 +1,8 @@
-/// RS-4 — `StationControl`: the loopback control surface (D-C2).
+/// RS-4 — `StationControl`: the authenticated HTTP/WS station surface (D-C2).
 ///
-/// A DEDICATED, loopback-only HTTP surface owned by the runner shell —
-/// explicitly NOT the exploration/perception host (D-C1: perception is the
-/// debugging surface; `GridExplorationHost` stays untouched). Every route
+/// One surface owned by the runner shell, bound to loopback by default with an
+/// explicit LAN-address composition option. It is NOT the exploration/debug
+/// host (D-C1: `GridExplorationHost` stays a separate JIT-only channel). Every route
 /// (`/healthz` included — one posture, no unauthenticated liveness probe)
 /// requires `Authorization: Bearer <token>`, checked BEFORE routing.
 /// The token is minted per boot (secure random) and lives ONLY in the 0600
@@ -12,8 +12,8 @@
 /// ADR-0014 D-C4 (Nico-ratified 2026-07-24):
 /// the control plane cannot be a WORK trigger (`bd` stays the only work intake).
 /// operator one-shots ARE control-plane requests.
-/// `/healthz`, `/status`, and `/hooks` remain
-/// read-only; fenced `POST /command` is the sole scoped mutation. This file
+/// `/healthz`, `/status`, `/hooks`, and the diagnostics WebSocket `/stream`
+/// remain read-only; fenced `POST /command` is the sole scoped mutation. This file
 /// holds no bd writer and calls no re-query. `/hooks` resolves declarations
 /// but never executes them.
 ///
@@ -27,6 +27,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:grid_engine/grid_engine.dart' show TreeProjector;
 // The wedge signal is the STATION's own derivation — this surface only reports
 // it. Named through the SDK, never the private engine (ADR-0008 D2).
 import 'package:grid_sdk/grid_sdk.dart'
@@ -42,6 +44,7 @@ import 'package:grid_sdk/grid_sdk.dart'
 import 'hooks_resolver.dart';
 
 const _commandPath = '/command';
+const _streamPath = '/stream';
 const _fenceHeader = 'X-Grid-Fence';
 const _idempotencyHeader = 'Idempotency-Key';
 
@@ -201,9 +204,12 @@ String mintControlToken() {
   return base64Url.encode(bytes);
 }
 
-/// The loopback-only HTTP control surface (D-C2). Read-only exact-match routes
+/// One authenticated HTTP/WS station surface (D-C2), loopback by default with
+/// explicit LAN binding. Read-only exact-match routes
 /// are `/healthz` (liveness), `/status` (the [StationStatus] snapshot), and
-/// `/hooks` (contribution resolution only; it never executes contributions).
+/// `/hooks` (contribution resolution only; it never executes contributions);
+/// `/stream` is the read-only diagnostics WebSocket. The VM exploration/debug
+/// surface remains separate.
 /// ADR-0014 D-C4 (Nico-ratified 2026-07-24):
 /// the control plane cannot be a WORK trigger (`bd` stays the only work intake).
 /// operator one-shots ARE control-plane requests.
@@ -218,6 +224,7 @@ class StationControl {
     StationStatus Function() view,
     this._hooksResolver,
     this._commandHandler,
+    this._treeProjector,
   ) : _routes = <String, Map<String, Object?> Function()>{
         '/healthz': () => const <String, Object?>{'ok': true},
         '/status': () => view().toJson(),
@@ -228,31 +235,43 @@ class StationControl {
   final Map<String, Map<String, Object?> Function()> _routes;
   final HooksResolver _hooksResolver;
   final GridCommandHandler _commandHandler;
+  final TreeProjector? _treeProjector;
+  final Set<WebSocket> _webSockets = <WebSocket>{};
+  final Map<WebSocket, StreamSubscription<TreeSnapshot>>
+  _snapshotSubscriptions = <WebSocket, StreamSubscription<TreeSnapshot>>{};
   final Map<String, _IdempotentCommand> _commands = {};
   int _highestFence = -1;
 
-  /// The bound loopback URL, e.g. `http://127.0.0.1:54321`.
+  /// The bound URL, e.g. `http://127.0.0.1:54321`.
   String get url => 'http://${_server.address.address}:${_server.port}';
 
-  /// Binds a fresh [StationControl] to `127.0.0.1:[port]` (`0` = ephemeral).
+  /// Binds a fresh [StationControl] to [address], defaulting to loopback
+  /// (`0` = an ephemeral port).
   /// [token] is minted by the caller ([mintControlToken]) so the mint stays
   /// visibly tied to the lock file that carries it; [view] is a
   /// value-snapshot getter with NO subscriptions (called fresh per request).
   /// [hooksResolver] performs read-only hook declaration resolution.
+  /// [treeProjector] enables `/stream`; this control does not dispose it.
   static Future<StationControl> start({
     required int port,
     required String token,
     required StationStatus Function() view,
     required GridCommandHandler commandHandler,
     HooksResolver hooksResolver = const HooksResolver(),
+    InternetAddress? address,
+    TreeProjector? treeProjector,
   }) async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+    final server = await HttpServer.bind(
+      address ?? InternetAddress.loopbackIPv4,
+      port,
+    );
     final control = StationControl._(
       server,
       token,
       view,
       hooksResolver,
       commandHandler,
+      treeProjector,
     );
     server.listen(control._handle);
     return control;
@@ -264,6 +283,10 @@ class StationControl {
       await _respond(request, HttpStatus.unauthorized, <String, Object?>{
         'error': 'unauthorized',
       });
+      return;
+    }
+    if (request.uri.path == _streamPath) {
+      await _handleStream(request);
       return;
     }
     if (request.uri.path == _commandPath && request.method == 'POST') {
@@ -297,6 +320,40 @@ class StationControl {
       return;
     }
     await _respond(request, HttpStatus.ok, route!());
+  }
+
+  Future<void> _handleStream(HttpRequest request) async {
+    final projector = _treeProjector;
+    if (projector == null) {
+      await _respond(request, HttpStatus.serviceUnavailable, const {
+        'error': 'diagnostics unavailable',
+      });
+      return;
+    }
+    if (request.method != 'GET' ||
+        !WebSocketTransformer.isUpgradeRequest(request)) {
+      await _respond(request, HttpStatus.upgradeRequired, const {
+        'error': 'websocket upgrade required',
+      });
+      return;
+    }
+    final socket = await WebSocketTransformer.upgrade(request);
+    _webSockets.add(socket);
+    final latest = projector.latest;
+    final subscription = projector.snapshots.listen(
+      (snapshot) => socket.add(jsonEncode(snapshot.toJson())),
+      onError: socket.addError,
+    );
+    _snapshotSubscriptions[socket] = subscription;
+    if (latest != null) {
+      socket.add(jsonEncode(latest.toJson()));
+    }
+    unawaited(
+      socket.done.whenComplete(() async {
+        _webSockets.remove(socket);
+        await _snapshotSubscriptions.remove(socket)?.cancel();
+      }),
+    );
   }
 
   Future<void> _handleCommand(HttpRequest request) async {
@@ -488,5 +545,15 @@ class StationControl {
   /// practice (the graceful path and the start-throw unwind never both run),
   /// but never throws on a second call — `HttpServer.close` is itself
   /// idempotent.
-  Future<void> dispose() => _server.close(force: true);
+  Future<void> dispose() async {
+    final subscriptions = _snapshotSubscriptions.values.toList();
+    final sockets = _webSockets.toList();
+    _snapshotSubscriptions.clear();
+    _webSockets.clear();
+    await Future.wait(
+      subscriptions.map((subscription) => subscription.cancel()),
+    );
+    await Future.wait(sockets.map((socket) => socket.close()));
+    await _server.close(force: true);
+  }
 }
