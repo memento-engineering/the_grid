@@ -3,8 +3,8 @@ import 'dart:isolate';
 
 import 'package:test/test.dart';
 
-/// RS-4 (ADR-0014 D-C2/D-C4): `StationControl` has read-only GET routes and
-/// one fenced, scoped mutation route, never a bd writer or re-query trigger.
+/// RS-4 (ADR-0014 D-C2/D-C4): `StationControl` has read-only HTTP/WS routes
+/// and one fenced, scoped mutation route, never a bd writer or re-query trigger.
 /// Source gates over
 /// `lib/src/station_control.dart`, with a positive control so a path/glob
 /// regression cannot make the negative gates pass vacuously (mirrors
@@ -21,6 +21,7 @@ void main() {
           contains("'/healthz'"),
           contains("'/status'"),
           contains("'/hooks'"),
+          contains("'/stream'"),
         ),
         reason:
             'the scoped control surface must name every route — proves '
@@ -61,7 +62,13 @@ void main() {
       final routePaths = RegExp(
         r"'(/[a-zA-Z0-9_-]*)'",
       ).allMatches(source).map((m) => m.group(1)!).toSet();
-      expect(routePaths, {'/healthz', '/status', '/hooks', '/command'});
+      expect(routePaths, {
+        '/healthz',
+        '/status',
+        '/hooks',
+        '/stream',
+        '/command',
+      });
     });
 
     test(
