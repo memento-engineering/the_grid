@@ -242,8 +242,7 @@ Future<void> _pushMoleculeState(_Rig rig, String workBeadId) async {
         rig.fakes.runner
             .callsFor('update')
             .where(
-              (c) =>
-                  c.length > 1 && c[1] == 'tgdog-step-$workBeadId-agent',
+              (c) => c.length > 1 && c[1] == 'tgdog-step-$workBeadId-agent',
             )
             .length >=
         2,

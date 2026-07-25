@@ -51,9 +51,7 @@ abstract class StationScope with _$StationScope {
   static StationScope of(TreeContext context) {
     final scope = maybeOf(context);
     if (scope == null) {
-      throw StateError(
-        'StationScope.of: no Station encloses this context.',
-      );
+      throw StateError('StationScope.of: no Station encloses this context.');
     }
     return scope;
   }

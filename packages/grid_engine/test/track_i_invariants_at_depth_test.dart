@@ -10,7 +10,8 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/src/molecule/molecule_codec.dart' show stepBeadMetadata;
+import 'package:grid_engine/src/molecule/molecule_codec.dart'
+    show stepBeadMetadata;
 import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
 import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -65,8 +66,16 @@ const _deploy = Circuit(
   terminalStepId: 'waitWS',
   steps: [
     CapabilityStep(stepId: 'build', capabilityId: 'build'),
-    CapabilityStep(stepId: 'install', capabilityId: 'install', dependsOn: {'build'}),
-    CapabilityStep(stepId: 'waitWS', capabilityId: 'waitWS', dependsOn: {'install'}),
+    CapabilityStep(
+      stepId: 'install',
+      capabilityId: 'install',
+      dependsOn: {'build'},
+    ),
+    CapabilityStep(
+      stepId: 'waitWS',
+      capabilityId: 'waitWS',
+      dependsOn: {'install'},
+    ),
   ],
 );
 const _burn = Circuit(
@@ -74,7 +83,11 @@ const _burn = Circuit(
   terminalStepId: 'report',
   steps: [
     SubCircuitStep(stepId: 'harness', circuitId: 'deploy'),
-    CapabilityStep(stepId: 'report', capabilityId: 'report', dependsOn: {'harness'}),
+    CapabilityStep(
+      stepId: 'report',
+      capabilityId: 'report',
+      dependsOn: {'harness'},
+    ),
   ],
 );
 
@@ -110,7 +123,8 @@ SessionProjection _session(
 /// The synthetic step-bead id [nodePath] mints in this suite's fixtures.
 /// Prefixed `tgdog-` (the fakes' own [stateSubstation]) so the chokepoint's
 /// ownership check (`OwnershipRefused` fail-closed) accepts it.
-String _stepBeadId(String nodePath) => 'tgdog-step-${nodePath.replaceAll('/', '-')}';
+String _stepBeadId(String nodePath) =>
+    'tgdog-step-${nodePath.replaceAll('/', '-')}';
 
 /// Walks [circuit] (recursing into a [SubCircuitStep] via [circuitsById]) and
 /// emits one `type=step` bead per `CapabilityStep` leaf at its engine
@@ -131,26 +145,30 @@ List<Bead> _stepBeads(
     final stepNodePath = '$nodePath/${step.stepId}';
     switch (step) {
       case CapabilityStep():
-        beads.add(Bead(
-          id: _stepBeadId(stepNodePath),
-          issueType: IssueType.step,
-          status: BeadStatus.open,
-          metadata: {
-            MoleculeStepKeys.path: stepNodePath,
-            MoleculeStepKeys.session: sessionId,
-            ...stepBeadMetadata(cursor[stepNodePath] ?? const NodeCursor()),
-          },
-        ));
+        beads.add(
+          Bead(
+            id: _stepBeadId(stepNodePath),
+            issueType: IssueType.step,
+            status: BeadStatus.open,
+            metadata: {
+              MoleculeStepKeys.path: stepNodePath,
+              MoleculeStepKeys.session: sessionId,
+              ...stepBeadMetadata(cursor[stepNodePath] ?? const NodeCursor()),
+            },
+          ),
+        );
       case SubCircuitStep(:final circuitId):
         final nested = circuitsById[circuitId];
         if (nested != null) {
-          beads.addAll(_stepBeads(
-            nested,
-            stepNodePath,
-            sessionId: sessionId,
-            circuitsById: circuitsById,
-            cursor: cursor,
-          ));
+          beads.addAll(
+            _stepBeads(
+              nested,
+              stepNodePath,
+              sessionId: sessionId,
+              circuitsById: circuitsById,
+              cursor: cursor,
+            ),
+          );
         }
     }
   }
@@ -183,7 +201,7 @@ SessionProjection _moleculeSession(
 );
 
 ({TreeOwner owner, Branch root, Fakes fakes, RecordingCapabilityRegistry reg})
-    _mount({
+_mount({
   required JoinedSnapshotNotifier joined,
   required SubstationConfig config,
 }) {
@@ -284,9 +302,13 @@ void main() {
           beads: [_bead('tg-b')],
           ready: {'tg-b'},
           sessions: {
-            'tg-b': _session('tg-b', 'tgdog-s', cursor: const {
-              'tg-b/harness/build': NodeCursor(state: StepState.complete),
-            }),
+            'tg-b': _session(
+              'tg-b',
+              'tgdog-s',
+              cursor: const {
+                'tg-b/harness/build': NodeCursor(state: StepState.complete),
+              },
+            ),
           },
         ),
       );
@@ -294,16 +316,22 @@ void main() {
       addTearDown(m.owner.dispose);
 
       // Advance a DEEP node (install, two levels down) via the join.
-      joined.push(_joined(
-        beads: [_bead('tg-b')],
-        ready: {'tg-b'},
-        sessions: {
-          'tg-b': _session('tg-b', 'tgdog-s', cursor: {
-            'tg-b/harness/build': _done(),
-            'tg-b/harness/install': _done(),
-          }),
-        },
-      ));
+      joined.push(
+        _joined(
+          beads: [_bead('tg-b')],
+          ready: {'tg-b'},
+          sessions: {
+            'tg-b': _session(
+              'tg-b',
+              'tgdog-s',
+              cursor: {
+                'tg-b/harness/build': _done(),
+                'tg-b/harness/install': _done(),
+              },
+            ),
+          },
+        ),
+      );
       final flushed = m.owner.flush();
 
       // Only WorkList drained — every CircuitScope (the outer burn + the nested
@@ -345,19 +373,27 @@ void main() {
       await _pump();
 
       // The deep build host spawned under the OWN session name.
-      expect(m.fakes.provider.started.map((s) => s.name),
-          contains('tgdog-s/tg-b/harness/build'));
+      expect(
+        m.fakes.provider.started.map((s) => s.name),
+        contains('tgdog-s/tg-b/harness/build'),
+      );
 
       // The vendor's spawn (tg-h4u) waits on the SessionStarted handshake
       // before it resolves the lease — mirrors `track_a_flare_test.dart`'s
       // `_startThenIsolate`.
       m.fakes.provider.emit(
-        const SessionStarted(name: 'tgdog-s/tg-b/harness/build', pid: 100, pgid: 200),
+        const SessionStarted(
+          name: 'tgdog-s/tg-b/harness/build',
+          pid: 100,
+          pgid: 200,
+        ),
       );
       await _pump();
 
       // It completes → the host writes the node cursor THROUGH the chokepoint.
-      m.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-b/harness/build', exitCode: 0));
+      m.fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-b/harness/build', exitCode: 0),
+      );
       await _pump();
 
       // The write landed on the build step's OWN bead (the molecule model,
@@ -384,7 +420,10 @@ void main() {
         'plain owned bead mounts a full one', () {
       final joined = JoinedSnapshotNotifier(
         _joined(
-          beads: [_bead('tg-conv', type: IssueType.convergence), _bead('tg-ok')],
+          beads: [
+            _bead('tg-conv', type: IssueType.convergence),
+            _bead('tg-ok'),
+          ],
           ready: {'tg-conv', 'tg-ok'},
         ),
       );
@@ -399,34 +438,41 @@ void main() {
       expect((workBeads.single.seed as WorkBead).bead.id, 'tg-ok');
     });
 
-    test('resident mode (RS-3/D-R4, the filing CATCH): convergence AND an '
-        'organizational core type (epic) both mount ZERO circuit nodes under '
-        'an all-ready resident config, at depth — a plain owned task is the '
-        'live sanity control proving the mount pipeline itself still works',
-        () {
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [
-            _bead('tg-conv', type: IssueType.convergence),
-            _bead('tg-epic', type: IssueType.epic),
-            _bead('tg-ok'),
-          ],
-          ready: {'tg-conv', 'tg-epic', 'tg-ok'},
-        ),
-      );
-      final m = _mount(joined: joined, config: _tg.copyWith(resident: true));
-      addTearDown(m.owner.dispose);
+    test(
+      'resident mode (RS-3/D-R4, the filing CATCH): convergence AND an '
+      'organizational core type (epic) both mount ZERO circuit nodes under '
+      'an all-ready resident config, at depth — a plain owned task is the '
+      'live sanity control proving the mount pipeline itself still works',
+      () {
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [
+              _bead('tg-conv', type: IssueType.convergence),
+              _bead('tg-epic', type: IssueType.epic),
+              _bead('tg-ok'),
+            ],
+            ready: {'tg-conv', 'tg-epic', 'tg-ok'},
+          ),
+        );
+        final m = _mount(joined: joined, config: _tg.copyWith(resident: true));
+        addTearDown(m.owner.dispose);
 
-      final workBeads = _all(m.root).where((b) => b.seed is WorkBead).toList();
-      expect(workBeads, hasLength(1));
-      expect((workBeads.single.seed as WorkBead).bead.id, 'tg-ok');
-    });
+        final workBeads = _all(
+          m.root,
+        ).where((b) => b.seed is WorkBead).toList();
+        expect(workBeads, hasLength(1));
+        expect((workBeads.single.seed as WorkBead).bead.id, 'tg-ok');
+      },
+    );
 
     test('resident mode sanity control: the SAME epic bead mounts under the '
         'LEGACY (non-resident) config — the exclusion above is '
         'resident-specific, not a pre-existing A41 gate (epic IS core)', () {
       final joined = JoinedSnapshotNotifier(
-        _joined(beads: [_bead('tg-epic', type: IssueType.epic)], ready: {'tg-epic'}),
+        _joined(
+          beads: [_bead('tg-epic', type: IssueType.epic)],
+          ready: {'tg-epic'},
+        ),
       );
       final m = _mount(joined: joined, config: _tg);
       addTearDown(m.owner.dispose);
@@ -441,7 +487,10 @@ void main() {
         'owned bead is the live sanity control', () {
       final joined = JoinedSnapshotNotifier(
         _joined(
-          beads: [_bead('tg-link', type: IssueType.link), _bead('tg-ok')],
+          beads: [
+            _bead('tg-link', type: IssueType.link),
+            _bead('tg-ok'),
+          ],
           ready: {'tg-link', 'tg-ok'},
         ),
       );
@@ -454,75 +503,80 @@ void main() {
     });
   });
 
-  group('Invariant 4 / A37 AT DEPTH — read-only foreign source (a RUNNING host)',
-      () {
-    test('a FOREIGN work bead`s deep host writes its cursor to the OWN session, '
-        'NEVER the foreign work bead', () async {
-      // The_grid dispatches a foreign work source (config owns `genesis`); the
-      // session lives in the OWNED state store (`tgdog`, the writer`s allow-set).
-      const foreignConfig =
-          SubstationConfig(substationId: 'genesis', ownedSubstations: {'genesis'});
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [_bead('genesis-x')],
-          ready: {'genesis-x'},
-          // Empty cursor → the deep build host actually RUNS + writes.
-          sessions: {
-            'genesis-x': _moleculeSession(
-              'genesis-x',
-              'tgdog-s',
-              circuit: _burn,
-              circuitsById: const {'deploy': _deploy},
-            ),
-          },
-        ),
-      );
-      final m = _mountReal(joined: joined, config: foreignConfig);
-      addTearDown(() {
-        m.owner.dispose();
-        unawaited(m.fakes.provider.close());
+  group(
+    'Invariant 4 / A37 AT DEPTH — read-only foreign source (a RUNNING host)',
+    () {
+      test('a FOREIGN work bead`s deep host writes its cursor to the OWN session, '
+          'NEVER the foreign work bead', () async {
+        // The_grid dispatches a foreign work source (config owns `genesis`); the
+        // session lives in the OWNED state store (`tgdog`, the writer`s allow-set).
+        const foreignConfig = SubstationConfig(
+          substationId: 'genesis',
+          ownedSubstations: {'genesis'},
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_bead('genesis-x')],
+            ready: {'genesis-x'},
+            // Empty cursor → the deep build host actually RUNS + writes.
+            sessions: {
+              'genesis-x': _moleculeSession(
+                'genesis-x',
+                'tgdog-s',
+                circuit: _burn,
+                circuitsById: const {'deploy': _deploy},
+              ),
+            },
+          ),
+        );
+        final m = _mountReal(joined: joined, config: foreignConfig);
+        addTearDown(() {
+          m.owner.dispose();
+          unawaited(m.fakes.provider.close());
+        });
+        await _pump();
+
+        // The foreign work bead mounted (config owns `genesis`); its deep build
+        // host spawned + completes.
+        expect(_all(m.root).where((b) => b.seed is WorkBead), hasLength(1));
+        expect(
+          m.fakes.provider.started.map((s) => s.name),
+          contains('tgdog-s/genesis-x/harness/build'),
+        );
+        // The vendor's spawn (tg-h4u) waits on the SessionStarted handshake
+        // before it resolves the lease.
+        m.fakes.provider.emit(
+          const SessionStarted(
+            name: 'tgdog-s/genesis-x/harness/build',
+            pid: 100,
+            pgid: 200,
+          ),
+        );
+        await _pump();
+        m.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/genesis-x/harness/build', exitCode: 0),
+        );
+        await _pump();
+
+        // The write targeted the build step's OWN bead in the OWNED state store
+        // — and NOT ONE bd call touches the foreign work bead `genesis-x` (A37,
+        // at depth, with a running host).
+        final buildBead = _stepBeadId('genesis-x/harness/build');
+        final writes = m.fakes.runner
+            .callsFor('update')
+            .where((c) => c[1] == buildBead)
+            .toList();
+        expect(writes, isNotEmpty);
+        expect(
+          writes.any(
+            (c) => c.join(' ').contains('"grid.step.state":"complete"'),
+          ),
+          isTrue,
+        );
+        for (final call in m.fakes.runner.calls) {
+          if (call.length > 1) expect(call[1], isNot('genesis-x'));
+        }
       });
-      await _pump();
-
-      // The foreign work bead mounted (config owns `genesis`); its deep build
-      // host spawned + completes.
-      expect(
-        _all(m.root).where((b) => b.seed is WorkBead),
-        hasLength(1),
-      );
-      expect(m.fakes.provider.started.map((s) => s.name),
-          contains('tgdog-s/genesis-x/harness/build'));
-      // The vendor's spawn (tg-h4u) waits on the SessionStarted handshake
-      // before it resolves the lease.
-      m.fakes.provider.emit(
-        const SessionStarted(
-          name: 'tgdog-s/genesis-x/harness/build',
-          pid: 100,
-          pgid: 200,
-        ),
-      );
-      await _pump();
-      m.fakes.provider.emit(
-        const Exited(name: 'tgdog-s/genesis-x/harness/build', exitCode: 0),
-      );
-      await _pump();
-
-      // The write targeted the build step's OWN bead in the OWNED state store
-      // — and NOT ONE bd call touches the foreign work bead `genesis-x` (A37,
-      // at depth, with a running host).
-      final buildBead = _stepBeadId('genesis-x/harness/build');
-      final writes = m.fakes.runner
-          .callsFor('update')
-          .where((c) => c[1] == buildBead)
-          .toList();
-      expect(writes, isNotEmpty);
-      expect(
-        writes.any((c) => c.join(' ').contains('"grid.step.state":"complete"')),
-        isTrue,
-      );
-      for (final call in m.fakes.runner.calls) {
-        if (call.length > 1) expect(call[1], isNot('genesis-x'));
-      }
-    });
-  });
+    },
+  );
 }

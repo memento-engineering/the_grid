@@ -90,57 +90,71 @@ void main() {
         steps: [CapabilityStep(stepId: 'a', capabilityId: 'a')],
       );
       expect(
-        _unclaimed(noReqs, const {}, 'n', stationFacts: const CapabilityFacts()),
+        _unclaimed(
+          noReqs,
+          const {},
+          'n',
+          stationFacts: const CapabilityFacts(),
+        ),
         isEmpty,
       );
     });
 
-    test('an EMPTY declared requirement matches vacuously — never unclaimed',
-        () {
-      const emptyReq = Circuit(
-        id: 'x',
-        terminalStepId: 'a',
-        steps: [
-          CapabilityStep(
-            stepId: 'a',
-            capabilityId: 'a',
-            requires: CapabilityFacts(),
-          ),
-        ],
-      );
-      expect(
-        _unclaimed(emptyReq, const {}, 'n', stationFacts: const CapabilityFacts()),
-        isEmpty,
-      );
-    });
-
-    test('a mismatched requirement on a step that is NOT YET ELIGIBLE never '
-        'surfaces — unclaimedSteps is scoped to the frontier, not every step',
-        () {
-      // Give the (currently ineligible) coordinator a mismatched requirement
-      // too, to prove it is excluded for INELIGIBILITY, not by chance.
-      const withCoordinatorReq = Circuit(
-        id: 'burn',
-        terminalStepId: 'coordinator',
-        steps: [
-          CapabilityStep(stepId: 'host', capabilityId: 'burn-host'),
-          CapabilityStep(stepId: 'follower', capabilityId: 'burn-follower'),
-          CapabilityStep(
-            stepId: 'coordinator',
-            capabilityId: 'coord',
-            dependsOn: {'host', 'follower'},
-            requires: CapabilityFacts(
-              sets: {
-                kSystemOs: {'windows'},
-              },
+    test(
+      'an EMPTY declared requirement matches vacuously — never unclaimed',
+      () {
+        const emptyReq = Circuit(
+          id: 'x',
+          terminalStepId: 'a',
+          steps: [
+            CapabilityStep(
+              stepId: 'a',
+              capabilityId: 'a',
+              requires: CapabilityFacts(),
             ),
+          ],
+        );
+        expect(
+          _unclaimed(
+            emptyReq,
+            const {},
+            'n',
+            stationFacts: const CapabilityFacts(),
           ),
-        ],
-      );
-      // Neither host nor follower are complete yet, so coordinator is withheld
-      // by the barrier — its mismatched requirement never reaches the set.
-      expect(_unclaimed(withCoordinatorReq, const {}, 'n'), isEmpty);
-    });
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'a mismatched requirement on a step that is NOT YET ELIGIBLE never '
+      'surfaces — unclaimedSteps is scoped to the frontier, not every step',
+      () {
+        // Give the (currently ineligible) coordinator a mismatched requirement
+        // too, to prove it is excluded for INELIGIBILITY, not by chance.
+        const withCoordinatorReq = Circuit(
+          id: 'burn',
+          terminalStepId: 'coordinator',
+          steps: [
+            CapabilityStep(stepId: 'host', capabilityId: 'burn-host'),
+            CapabilityStep(stepId: 'follower', capabilityId: 'burn-follower'),
+            CapabilityStep(
+              stepId: 'coordinator',
+              capabilityId: 'coord',
+              dependsOn: {'host', 'follower'},
+              requires: CapabilityFacts(
+                sets: {
+                  kSystemOs: {'windows'},
+                },
+              ),
+            ),
+          ],
+        );
+        // Neither host nor follower are complete yet, so coordinator is withheld
+        // by the barrier — its mismatched requirement never reaches the set.
+        expect(_unclaimed(withCoordinatorReq, const {}, 'n'), isEmpty);
+      },
+    );
 
     test('a satisfied requirement on an eligible step resolves LOCALLY — '
         'never reported as unclaimed', () {

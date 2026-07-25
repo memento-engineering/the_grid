@@ -20,61 +20,92 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('StationBeadWriter molecule-key literals match MoleculeCircuitKeys/MoleculeStepKeys', () {
-    test('grid.circuit.* pair (session, crumb)', () {
-      expect(StationBeadWriter.moleculeSessionKey, MoleculeCircuitKeys.session);
-      expect(StationBeadWriter.moleculeCrumbKey, MoleculeCircuitKeys.crumb);
-    });
-
-    test('grid.step.* pair (session, crumb, path, state, startedAt, finishedAt, durationMs, failureReason)', () {
-      expect(StationBeadWriter.stepSessionKey, MoleculeStepKeys.session);
-      expect(StationBeadWriter.stepCrumbKey, MoleculeStepKeys.crumb);
-      expect(StationBeadWriter.stepPathKey, MoleculeStepKeys.path);
-      expect(StationBeadWriter.stepStateKey, MoleculeStepKeys.state);
-      expect(StationBeadWriter.stepStartedAtKey, MoleculeStepKeys.startedAt);
-      expect(StationBeadWriter.stepFinishedAtKey, MoleculeStepKeys.finishedAt);
-      expect(StationBeadWriter.stepDurationMsKey, MoleculeStepKeys.durationMs);
-      expect(StationBeadWriter.stepFailureReasonKey, MoleculeStepKeys.failureReason);
-    });
-
-    test('grid.circuit.* and grid.step.* namespaces stay distinct by design', () {
-      expect(StationBeadWriter.moleculeSessionKey, isNot(StationBeadWriter.stepSessionKey));
-      expect(StationBeadWriter.moleculeCrumbKey, isNot(StationBeadWriter.stepCrumbKey));
-    });
-
-    test('LeaseKeys namespace does not overlap any StationBeadWriter key', () {
-      final writerKeys = <String>{
-        StationBeadWriter.startedAtKey,
-        StationBeadWriter.closedAtKey,
-        StationBeadWriter.rigKey,
-        StationBeadWriter.gateRegateCountKey,
-        StationBeadWriter.gateRegatedAtKey,
-        StationBeadWriter.moleculeSessionKey,
-        StationBeadWriter.moleculeCrumbKey,
-        StationBeadWriter.stepSessionKey,
-        StationBeadWriter.stepCrumbKey,
-        StationBeadWriter.stepPathKey,
-        StationBeadWriter.stepStateKey,
-        StationBeadWriter.stepStartedAtKey,
-        StationBeadWriter.stepFinishedAtKey,
-        StationBeadWriter.stepDurationMsKey,
-        StationBeadWriter.stepFailureReasonKey,
-      };
-
-      final leaseKeys = <String>{
-        LeaseKeys.pgid,
-        LeaseKeys.pid,
-        LeaseKeys.token,
-      };
-
-      expect(writerKeys.intersection(leaseKeys), isEmpty);
-      for (final key in writerKeys) {
+  group(
+    'StationBeadWriter molecule-key literals match MoleculeCircuitKeys/MoleculeStepKeys',
+    () {
+      test('grid.circuit.* pair (session, crumb)', () {
         expect(
-          key.startsWith(LeaseKeys.prefix),
-          isFalse,
-          reason: '$key must not fall under the vendor-owned ${LeaseKeys.prefix} namespace',
+          StationBeadWriter.moleculeSessionKey,
+          MoleculeCircuitKeys.session,
         );
-      }
-    });
-  });
+        expect(StationBeadWriter.moleculeCrumbKey, MoleculeCircuitKeys.crumb);
+      });
+
+      test(
+        'grid.step.* pair (session, crumb, path, state, startedAt, finishedAt, durationMs, failureReason)',
+        () {
+          expect(StationBeadWriter.stepSessionKey, MoleculeStepKeys.session);
+          expect(StationBeadWriter.stepCrumbKey, MoleculeStepKeys.crumb);
+          expect(StationBeadWriter.stepPathKey, MoleculeStepKeys.path);
+          expect(StationBeadWriter.stepStateKey, MoleculeStepKeys.state);
+          expect(
+            StationBeadWriter.stepStartedAtKey,
+            MoleculeStepKeys.startedAt,
+          );
+          expect(
+            StationBeadWriter.stepFinishedAtKey,
+            MoleculeStepKeys.finishedAt,
+          );
+          expect(
+            StationBeadWriter.stepDurationMsKey,
+            MoleculeStepKeys.durationMs,
+          );
+          expect(
+            StationBeadWriter.stepFailureReasonKey,
+            MoleculeStepKeys.failureReason,
+          );
+        },
+      );
+
+      test(
+        'grid.circuit.* and grid.step.* namespaces stay distinct by design',
+        () {
+          expect(
+            StationBeadWriter.moleculeSessionKey,
+            isNot(StationBeadWriter.stepSessionKey),
+          );
+          expect(
+            StationBeadWriter.moleculeCrumbKey,
+            isNot(StationBeadWriter.stepCrumbKey),
+          );
+        },
+      );
+
+      test('LeaseKeys namespace does not overlap any StationBeadWriter key', () {
+        final writerKeys = <String>{
+          StationBeadWriter.startedAtKey,
+          StationBeadWriter.closedAtKey,
+          StationBeadWriter.rigKey,
+          StationBeadWriter.gateRegateCountKey,
+          StationBeadWriter.gateRegatedAtKey,
+          StationBeadWriter.moleculeSessionKey,
+          StationBeadWriter.moleculeCrumbKey,
+          StationBeadWriter.stepSessionKey,
+          StationBeadWriter.stepCrumbKey,
+          StationBeadWriter.stepPathKey,
+          StationBeadWriter.stepStateKey,
+          StationBeadWriter.stepStartedAtKey,
+          StationBeadWriter.stepFinishedAtKey,
+          StationBeadWriter.stepDurationMsKey,
+          StationBeadWriter.stepFailureReasonKey,
+        };
+
+        final leaseKeys = <String>{
+          LeaseKeys.pgid,
+          LeaseKeys.pid,
+          LeaseKeys.token,
+        };
+
+        expect(writerKeys.intersection(leaseKeys), isEmpty);
+        for (final key in writerKeys) {
+          expect(
+            key.startsWith(LeaseKeys.prefix),
+            isFalse,
+            reason:
+                '$key must not fall under the vendor-owned ${LeaseKeys.prefix} namespace',
+          );
+        }
+      });
+    },
+  );
 }

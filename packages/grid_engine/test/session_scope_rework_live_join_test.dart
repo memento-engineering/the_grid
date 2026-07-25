@@ -59,12 +59,13 @@ GraphSnapshot _work(List<Bead> beads, Set<String> ready, {int tick = 0}) =>
       capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
     );
 
-GraphSnapshot _state(List<Bead> beads, {int tick = 0}) => GraphSnapshot.fromParts(
-  beads: beads,
-  dependencies: const [],
-  readyIds: const [],
-  capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
-);
+GraphSnapshot _state(List<Bead> beads, {int tick = 0}) =>
+    GraphSnapshot.fromParts(
+      beads: beads,
+      dependencies: const [],
+      readyIds: const [],
+      capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
+    );
 
 /// A the_grid MOLECULE session bead exactly as `grid rework`'s CLI-observed
 /// shape: linked to [workBead] — or, after the CLI's re-key, linked to
@@ -180,79 +181,76 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
 
 void main() {
   group('SessionScope rework re-arm through the REAL StationJoinBridge', () {
-    test(
-      'a GATED round re-keyed by `grid rework` (leaving its gate bead OPEN, '
-      'exactly as the CLI does) still closes the retired round and mints '
-      'round N+1 — proving the join itself is not where the live deviation '
-      'comes from',
-      () async {
-        final f = buildFakes(createdId: 'tgdog-round2');
-        final reg = RecordingCapabilityRegistry(circuits: const {});
+    test('a GATED round re-keyed by `grid rework` (leaving its gate bead OPEN, '
+        'exactly as the CLI does) still closes the retired round and mints '
+        'round N+1 — proving the join itself is not where the live deviation '
+        'comes from', () async {
+      final f = buildFakes(createdId: 'tgdog-round2');
+      final reg = RecordingCapabilityRegistry(circuits: const {});
 
-        final workSrc = FakeSnapshotSource(
-          _work([bead('tg-1')], {'tg-1'}),
-        );
-        final stateSrc = FakeSnapshotSource(
-          _state([
-            _round1Session('tgdog-round1', workBead: 'tg-1'),
-            ..._round1Steps('tgdog-round1'),
-            _openGate('gate-1', sessionId: 'tgdog-round1'),
-          ]),
-        );
-        final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
-          ..start();
-        addTearDown(bridge.dispose);
+      final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+      final stateSrc = FakeSnapshotSource(
+        _state([
+          _round1Session('tgdog-round1', workBead: 'tg-1'),
+          ..._round1Steps('tgdog-round1'),
+          _openGate('gate-1', sessionId: 'tgdog-round1'),
+        ]),
+      );
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
+      addTearDown(bridge.dispose);
 
-        final m = _mountFull(
-          joined: bridge.notifier,
-          ctx: f.ctx,
-          registry: reg,
-          rootCircuit: (_) => _code,
-        );
-        addTearDown(m.owner.dispose);
-        await _pump();
-        m.owner.flush();
-        await _pump();
+      final m = _mountFull(
+        joined: bridge.notifier,
+        ctx: f.ctx,
+        registry: reg,
+        rootCircuit: (_) => _code,
+      );
+      addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
+      await _pump();
 
-        // Adopted synchronously — round 1's gated session, no mint.
-        expect(f.runner.callsFor('create'), isEmpty);
+      // Adopted synchronously — round 1's gated session, no mint.
+      expect(f.runner.callsFor('create'), isEmpty);
 
-        // `grid rework tg-1`: re-keys ONLY `work_bead` on the SAME session
-        // bead (bd `--metadata` merge — every other key, incl. the stale
-        // `route` cursor, survives byte-identical) and leaves the gate bead
-        // it never touches OPEN, exactly like `ReworkCommand.runRework`.
-        stateSrc.push(
-          _state([
-            _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
-            ..._round1Steps('tgdog-round1'),
-            _openGate('gate-1', sessionId: 'tgdog-round1'),
-          ], tick: 1),
-        );
-        await _pumpUntil(
-          m.owner,
-          () =>
-              reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-              f.runner.callsFor('create').length >= 2,
-        );
+      // `grid rework tg-1`: re-keys ONLY `work_bead` on the SAME session
+      // bead (bd `--metadata` merge — every other key, incl. the stale
+      // `route` cursor, survives byte-identical) and leaves the gate bead
+      // it never touches OPEN, exactly like `ReworkCommand.runRework`.
+      stateSrc.push(
+        _state([
+          _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
+          ..._round1Steps('tgdog-round1'),
+          _openGate('gate-1', sessionId: 'tgdog-round1'),
+        ], tick: 1),
+      );
+      await _pumpUntil(
+        m.owner,
+        () =>
+            reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
+            f.runner.callsFor('create').length >= 2,
+      );
 
-        // The retired round-1 session is closed (D-2 fold).
-        final closes = f.runner.callsFor('close');
-        expect(closes.where((c) => c[1] == 'tgdog-round1'), hasLength(1));
-        expect(closes.first.join(' '), contains('reworked'));
+      // The retired round-1 session is closed (D-2 fold).
+      final closes = f.runner.callsFor('close');
+      expect(closes.where((c) => c[1] == 'tgdog-round1'), hasLength(1));
+      expect(closes.first.join(' '), contains('reworked'));
 
-        // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
-        // tg-eli phase 2), a NEW id — never a reuse of tgdog-round1.
-        final creates = f.runner.callsFor('create');
-        expect(creates.where((c) => c.length <= 1 || c[1] != '--graph'), hasLength(1));
-        expect(
-          creates.where((c) => c.length > 1 && c[1] == '--graph'),
-          hasLength(1),
-        );
+      // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
+      // tg-eli phase 2), a NEW id — never a reuse of tgdog-round1.
+      final creates = f.runner.callsFor('create');
+      expect(
+        creates.where((c) => c.length <= 1 || c[1] != '--graph'),
+        hasLength(1),
+      );
+      expect(
+        creates.where((c) => c.length > 1 && c[1] == '--graph'),
+        hasLength(1),
+      );
 
-        // The fresh round's leaf mounts under the NEW session id, from a
-        // virgin cursor (never the stale `route: gated` carried over).
-        expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));
-      },
-    );
+      // The fresh round's leaf mounts under the NEW session id, from a
+      // virgin cursor (never the stale `route: gated` carried over).
+      expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));
+    });
   });
 }

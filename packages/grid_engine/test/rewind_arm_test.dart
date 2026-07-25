@@ -127,68 +127,59 @@ final _moleculeCircuit = InheritedCircuit(
 }
 
 void main() {
-  group(
-    'tg-o90 — AllocationRewound is DEAD CODE on the molecule engine: EVERY '
-    'variant of the report routes to the SAME supervised failure on the '
-    "step's OWN bead",
-    () {
-      for (final scenario in [
-        (
-          name: 'a real sibling name',
-          verdict: const Rewind({'specify'}, 'RESPEC: acceptance not '
-              'falsifiable'),
+  group('tg-o90 — AllocationRewound is DEAD CODE on the molecule engine: EVERY '
+      'variant of the report routes to the SAME supervised failure on the '
+      "step's OWN bead", () {
+    for (final scenario in [
+      (
+        name: 'a real sibling name',
+        verdict: const Rewind(
+          {'specify'},
+          'RESPEC: acceptance not '
+          'falsifiable',
         ),
-        (
-          name: 'an UNKNOWN step id',
-          verdict: const Rewind({'nope'}, 'typo'),
-        ),
-        (name: 'an EMPTY stepIds set', verdict: const Rewind({}, 'oops')),
-      ]) {
-        test(
-          '${scenario.name}: state=failed on the step bead, restartCount '
+      ),
+      (name: 'an UNKNOWN step id', verdict: const Rewind({'nope'}, 'typo')),
+      (name: 'an EMPTY stepIds set', verdict: const Rewind({}, 'oops')),
+    ]) {
+      test('${scenario.name}: state=failed on the step bead, restartCount '
           'bumped, no gate bead, no grid.cursor.* key anywhere — the payload '
-          'never changes the outcome',
-          () async {
-            final h = _bareRoute(FixedRouteCapability(scenario.verdict));
-            addTearDown(() {
-              h.owner.dispose();
-              unawaited(h.fakes.provider.close());
-            });
-            await _pump();
+          'never changes the outcome', () async {
+        final h = _bareRoute(FixedRouteCapability(scenario.verdict));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
 
-            final updates = h.fakes.runner.callsFor('update');
-            expect(updates, hasLength(1));
-            expect(
-              updates.single[1],
-              _stepBeadId,
-              reason: 'the write targets the STEP bead, never the session bead',
-            );
-            final meta = h.fakes.runner.metadataOfUpdate(0);
-            expect(meta[MoleculeStepKeys.state], 'failed');
-            expect(meta[MoleculeStepKeys.restartCount], '1');
-            expect(
-              meta[MoleculeStepKeys.failureReason],
-              contains('backward motion is derived'),
-            );
-            expect(
-              meta.keys,
-              isNot(contains('grid.step.rewindCount')),
-              reason: 'the molecule schema never persists rewindCount (item 7)',
-            );
-            expect(
-              meta.keys.where((k) => k.startsWith('grid.cursor.')),
-              isEmpty,
-            );
-            expect(
-              h.fakes.runner.callsFor('create'),
-              isEmpty,
-              reason: 'no gate bead — a refusal is a FAILURE, never a park',
-            );
-          },
+        final updates = h.fakes.runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(
+          updates.single[1],
+          _stepBeadId,
+          reason: 'the write targets the STEP bead, never the session bead',
         );
-      }
-    },
-  );
+        final meta = h.fakes.runner.metadataOfUpdate(0);
+        expect(meta[MoleculeStepKeys.state], 'failed');
+        expect(meta[MoleculeStepKeys.restartCount], '1');
+        expect(
+          meta[MoleculeStepKeys.failureReason],
+          contains('backward motion is derived'),
+        );
+        expect(
+          meta.keys,
+          isNot(contains('grid.step.rewindCount')),
+          reason: 'the molecule schema never persists rewindCount (item 7)',
+        );
+        expect(meta.keys.where((k) => k.startsWith('grid.cursor.')), isEmpty);
+        expect(
+          h.fakes.runner.callsFor('create'),
+          isEmpty,
+          reason: 'no gate bead — a refusal is a FAILURE, never a park',
+        );
+      });
+    }
+  });
 
   group('tg-o90 — the FENCE: an Escalate from the SAME circuit still parks '
       'exactly as before, untouched by the rewind removal', () {
@@ -210,7 +201,10 @@ void main() {
       final updates = h.fakes.runner.callsFor('update');
       expect(updates, hasLength(2));
       expect(updates.first[1], _stepBeadId);
-      expect(h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state], 'gated');
+      expect(
+        h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+        'gated',
+      );
 
       final creates = h.fakes.runner.callsFor('create');
       expect(creates, hasLength(1));
@@ -229,29 +223,34 @@ void main() {
 
   group('tg-o90 — the allocation layer maps a Rewind to a DISTINCT report '
       '(SDK-level; unaffected by the Host-side molecule refusal)', () {
-    test('RouteAllocation reports AllocationRewound (never Escalated/Failed)',
-        () async {
-      final reports = <AllocationReport>[];
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final alloc = RouteAllocation(
-        const FixedRouteCapability(Rewind({'specify'}, 'respec')),
-        AllocationContext(
-          treeContext: FakeTreeContext(),
-          args: stepArgs('tg-1/spec_review/route'),
-          transport: provider,
-          address: const AllocationAddress('tgdog-s', 'tg-1/spec_review/route'),
-          env: const {},
-          sink: reports.add,
-        ),
-      );
-      await alloc.startOrAdopt();
+    test(
+      'RouteAllocation reports AllocationRewound (never Escalated/Failed)',
+      () async {
+        final reports = <AllocationReport>[];
+        final provider = FakeRuntimeProvider();
+        addTearDown(provider.close);
+        final alloc = RouteAllocation(
+          const FixedRouteCapability(Rewind({'specify'}, 'respec')),
+          AllocationContext(
+            treeContext: FakeTreeContext(),
+            args: stepArgs('tg-1/spec_review/route'),
+            transport: provider,
+            address: const AllocationAddress(
+              'tgdog-s',
+              'tg-1/spec_review/route',
+            ),
+            env: const {},
+            sink: reports.add,
+          ),
+        );
+        await alloc.startOrAdopt();
 
-      expect(reports, hasLength(1));
-      final report = reports.single;
-      expect(report, isA<AllocationRewound>());
-      expect((report as AllocationRewound).stepIds, {'specify'});
-      expect(report.reason, 'respec');
-    });
+        expect(reports, hasLength(1));
+        final report = reports.single;
+        expect(report, isA<AllocationRewound>());
+        expect((report as AllocationRewound).stepIds, {'specify'});
+        expect(report.reason, 'respec');
+      },
+    );
   });
 }

@@ -89,10 +89,13 @@ List<String> _frontier(
   Circuit circuit,
   CircuitCursor cursor,
   String nodePath,
-) =>
-    eligibleSteps(circuit, cursor, nodePath, circuitById: _byId, now: _now)
-        .map((s) => s.stepId)
-        .toList();
+) => eligibleSteps(
+  circuit,
+  cursor,
+  nodePath,
+  circuitById: _byId,
+  now: _now,
+).map((s) => s.stepId).toList();
 
 /// The eligible step ids of [circuit] under [cursor] at [nodePath] AT [now] —
 /// the cooldown-sensitive variant (the supervised-restart gate is a clock gate).
@@ -101,21 +104,23 @@ List<String> _frontierAt(
   CircuitCursor cursor,
   String nodePath,
   DateTime now,
-) =>
-    eligibleSteps(circuit, cursor, nodePath, circuitById: _byId, now: now)
-        .map((s) => s.stepId)
-        .toList();
+) => eligibleSteps(
+  circuit,
+  cursor,
+  nodePath,
+  circuitById: _byId,
+  now: now,
+).map((s) => s.stepId).toList();
 
 NodeCursor _c(
   StepState state, {
   int restartCount = 0,
   DateTime? cooldownUntil,
-}) =>
-    NodeCursor(
-      state: state,
-      restartCount: restartCount,
-      cooldownUntil: cooldownUntil,
-    );
+}) => NodeCursor(
+  state: state,
+  restartCount: restartCount,
+  cooldownUntil: cooldownUntil,
+);
 
 void main() {
   group('Track A — linear frontier (1-wide at every cursor; §6 parity)', () {
@@ -124,22 +129,17 @@ void main() {
     });
 
     test('agent complete → verify (agent retired, land withheld)', () {
-      expect(
-        _frontier(code, {'tg-1/agent': _c(StepState.complete)}, 'tg-1'),
-        ['verify'],
-      );
+      expect(_frontier(code, {'tg-1/agent': _c(StepState.complete)}, 'tg-1'), [
+        'verify',
+      ]);
     });
 
     test('agent+verify complete → land', () {
       expect(
-        _frontier(
-          code,
-          {
-            'tg-1/agent': _c(StepState.complete),
-            'tg-1/verify': _c(StepState.complete),
-          },
-          'tg-1',
-        ),
+        _frontier(code, {
+          'tg-1/agent': _c(StepState.complete),
+          'tg-1/verify': _c(StepState.complete),
+        }, 'tg-1'),
         ['land'],
       );
     });
@@ -159,10 +159,9 @@ void main() {
     });
 
     test('a running step stays in the frontier (not unmounted)', () {
-      expect(
-        _frontier(code, {'tg-1/agent': _c(StepState.running)}, 'tg-1'),
-        ['agent'],
-      );
+      expect(_frontier(code, {'tg-1/agent': _c(StepState.running)}, 'tg-1'), [
+        'agent',
+      ]);
     });
   });
 
@@ -175,14 +174,12 @@ void main() {
       'peripheral terminal-descendant complete → central enters; coordinator '
       'still withheld (only one barrier dep met)',
       () {
-        final cursor = {
-          'b/harnessPeripheral/waitWS': _c(StepState.complete),
-        };
+        final cursor = {'b/harnessPeripheral/waitWS': _c(StepState.complete)};
         // The sub-circuit step itself stays mounted (daemons live under it).
-        expect(
-          _frontier(burn, cursor, 'b'),
-          ['harnessPeripheral', 'harnessCentral'],
-        );
+        expect(_frontier(burn, cursor, 'b'), [
+          'harnessPeripheral',
+          'harnessCentral',
+        ]);
       },
     );
 
@@ -191,10 +188,11 @@ void main() {
         'b/harnessPeripheral/waitWS': _c(StepState.complete),
         'b/harnessCentral/waitWS': _c(StepState.complete),
       };
-      expect(
-        _frontier(burn, cursor, 'b'),
-        ['harnessPeripheral', 'harnessCentral', 'coordinator'],
-      );
+      expect(_frontier(burn, cursor, 'b'), [
+        'harnessPeripheral',
+        'harnessCentral',
+        'coordinator',
+      ]);
     });
 
     test('coordinator complete → report enters', () {
@@ -203,72 +201,72 @@ void main() {
         'b/harnessCentral/waitWS': _c(StepState.complete),
         'b/coordinator': _c(StepState.complete),
       };
-      expect(
-        _frontier(burn, cursor, 'b'),
-        ['harnessPeripheral', 'harnessCentral', 'report'],
-      );
+      expect(_frontier(burn, cursor, 'b'), [
+        'harnessPeripheral',
+        'harnessCentral',
+        'report',
+      ]);
     });
   });
 
-  group('Track A — daemon semantics (ready satisfies + stays; death re-closes)',
-      () {
-    test('a daemon at ready stays mounted AND satisfies its dependent', () {
-      final cursor = {
-        'd/build': _c(StepState.complete),
-        'd/install': _c(StepState.complete),
-        'd/launch': _c(StepState.ready),
-      };
-      // build/install retired (complete jobs); launch (daemon, ready) stays;
-      // waitWS enters (its dep launch is a positive terminal).
-      expect(_frontier(deploy, cursor, 'd'), ['launch', 'waitWS']);
-    });
+  group(
+    'Track A — daemon semantics (ready satisfies + stays; death re-closes)',
+    () {
+      test('a daemon at ready stays mounted AND satisfies its dependent', () {
+        final cursor = {
+          'd/build': _c(StepState.complete),
+          'd/install': _c(StepState.complete),
+          'd/launch': _c(StepState.ready),
+        };
+        // build/install retired (complete jobs); launch (daemon, ready) stays;
+        // waitWS enters (its dep launch is a positive terminal).
+        expect(_frontier(deploy, cursor, 'd'), ['launch', 'waitWS']);
+      });
 
-    test('a daemon death (failed) re-closes the barrier (OQ-5)', () {
-      final cursor = {
-        'd/build': _c(StepState.complete),
-        'd/install': _c(StepState.complete),
-        'd/launch': _c(StepState.failed), // was ready; the process died
-      };
-      // launch routes to supervision (re-key within budget); waitWS withheld
-      // again because launch is no longer a positive terminal.
-      expect(_frontier(deploy, cursor, 'd'), ['launch']);
-    });
-  });
+      test('a daemon death (failed) re-closes the barrier (OQ-5)', () {
+        final cursor = {
+          'd/build': _c(StepState.complete),
+          'd/install': _c(StepState.complete),
+          'd/launch': _c(StepState.failed), // was ready; the process died
+        };
+        // launch routes to supervision (re-key within budget); waitWS withheld
+        // again because launch is no longer a positive terminal.
+        expect(_frontier(deploy, cursor, 'd'), ['launch']);
+      });
+    },
+  );
 
   group('Track A — positive-terminal-only + supervision', () {
-    test(
-      'a REAPED zombie is eligible IMMEDIATELY — the bounce re-runs the step '
-      'with NO cooldown wait and NO restart budget spent, even when a STALE '
-      'cooldownUntil from an earlier real failure is still on the node',
-      () {
-        final t = DateTime(2026, 7, 12, 12);
-        // What RestartReconciler._reapZombieRunners leaves behind: state=pending,
-        // and — untouched — the node's prior restartCount AND a now-stale
-        // cooldownUntil from an earlier genuine failure.
-        final reaped = {
-          'tg-1/agent': _c(
-            StepState.pending,
-            restartCount: 2,
-            cooldownUntil: t.add(const Duration(hours: 1)),
-          ),
-        };
+    test('a REAPED zombie is eligible IMMEDIATELY — the bounce re-runs the step '
+        'with NO cooldown wait and NO restart budget spent, even when a STALE '
+        'cooldownUntil from an earlier real failure is still on the node', () {
+      final t = DateTime(2026, 7, 12, 12);
+      // What RestartReconciler._reapZombieRunners leaves behind: state=pending,
+      // and — untouched — the node's prior restartCount AND a now-stale
+      // cooldownUntil from an earlier genuine failure.
+      final reaped = {
+        'tg-1/agent': _c(
+          StepState.pending,
+          restartCount: 2,
+          cooldownUntil: t.add(const Duration(hours: 1)),
+        ),
+      };
 
-        // Eligible RIGHT NOW: the frontier's cooldown gate applies ONLY to a
-        // `failed` node, so a stale deadline cannot withhold a pending one.
-        expect(_frontierAt(code, reaped, 'tg-1', t), ['agent']);
+      // Eligible RIGHT NOW: the frontier's cooldown gate applies ONLY to a
+      // `failed` node, so a stale deadline cannot withhold a pending one.
+      expect(_frontierAt(code, reaped, 'tg-1', t), ['agent']);
 
-        // Within budget and NOT broken — SessionScope can never escalate + close
-        // it.
-        expect(
-          isStepBroken(code, code.stepById('agent')!, reaped, 'tg-1'),
-          isFalse,
-        );
+      // Within budget and NOT broken — SessionScope can never escalate + close
+      // it.
+      expect(
+        isStepBroken(code, code.stepById('agent')!, reaped, 'tg-1'),
+        isFalse,
+      );
 
-        // Its dependents stay withheld until it genuinely completes: the reap
-        // restores forward progress, it never fakes it.
-        expect(_frontierAt(code, reaped, 'tg-1', t), isNot(contains('verify')));
-      },
-    );
+      // Its dependents stay withheld until it genuinely completes: the reap
+      // restores forward progress, it never fakes it.
+      expect(_frontierAt(code, reaped, 'tg-1', t), isNot(contains('verify')));
+    });
 
     test('a failed dep never satisfies (the half-up-rig guard)', () {
       final cursor = {'d/build': _c(StepState.failed)};
@@ -276,30 +274,34 @@ void main() {
       expect(_frontier(deploy, cursor, 'd'), ['build']);
     });
 
-    test('a circuit-broken step (failed AND exhausted) is withheld + escalates',
-        () {
-      final cursor = {
-        'd/build': _c(StepState.failed, restartCount: 3), // == maxRestarts(3)
-      };
-      expect(_frontier(deploy, cursor, 'd'), isEmpty);
-      expect(isStepBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
-      expect(isCircuitBroken(deploy, cursor, 'd'), isTrue);
-      expect(
-        isCircuitComplete(deploy, cursor, 'd', circuitById: _byId),
-        isFalse,
-        reason: 'empty-because-broken is NOT empty-because-complete (D-5)',
-      );
-    });
+    test(
+      'a circuit-broken step (failed AND exhausted) is withheld + escalates',
+      () {
+        final cursor = {
+          'd/build': _c(StepState.failed, restartCount: 3), // == maxRestarts(3)
+        };
+        expect(_frontier(deploy, cursor, 'd'), isEmpty);
+        expect(isStepBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
+        expect(isCircuitBroken(deploy, cursor, 'd'), isTrue);
+        expect(
+          isCircuitComplete(deploy, cursor, 'd', circuitById: _byId),
+          isFalse,
+          reason: 'empty-because-broken is NOT empty-because-complete (D-5)',
+        );
+      },
+    );
 
-    test('restartCount BEYOND maxRestarts is still circuit-broken (>=, not ==)',
-        () {
-      final cursor = {
-        'd/build': _c(StepState.failed, restartCount: 4), // > maxRestarts(3)
-      };
-      expect(_frontier(deploy, cursor, 'd'), isEmpty);
-      expect(isStepBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
-      expect(isCircuitBroken(deploy, cursor, 'd'), isTrue);
-    });
+    test(
+      'restartCount BEYOND maxRestarts is still circuit-broken (>=, not ==)',
+      () {
+        final cursor = {
+          'd/build': _c(StepState.failed, restartCount: 4), // > maxRestarts(3)
+        };
+        expect(_frontier(deploy, cursor, 'd'), isEmpty);
+        expect(isStepBroken(deploy, deploy.steps.first, cursor, 'd'), isTrue);
+        expect(isCircuitBroken(deploy, cursor, 'd'), isTrue);
+      },
+    );
 
     test('a failed step within budget but still cooling is withheld', () {
       final cursor = {
@@ -338,7 +340,10 @@ void main() {
         // The peripheral deploy's build failed AND exhausted (>= maxRestarts 3).
         'b/harnessPeripheral/build': _c(StepState.failed, restartCount: 3),
       };
-      expect(isCircuitBrokenDeep(burn, cursor, 'b', circuitById: _byId), isTrue);
+      expect(
+        isCircuitBrokenDeep(burn, cursor, 'b', circuitById: _byId),
+        isTrue,
+      );
       // The shallow check (burn's OWN steps) sees no broken step — they are
       // sub-circuits + withheld leaves.
       expect(isCircuitBroken(burn, cursor, 'b'), isFalse);
@@ -364,24 +369,26 @@ void main() {
       steps: [SubCircuitStep(stepId: 'wrap', circuitId: 'deploy')],
     );
 
-    test('not complete while the sub-circuit terminal descendant is pending',
-        () {
-      expect(
-        isCircuitComplete(outer, const {}, 'n', circuitById: _byId),
-        isFalse,
-      );
-    });
+    test(
+      'not complete while the sub-circuit terminal descendant is pending',
+      () {
+        expect(
+          isCircuitComplete(outer, const {}, 'n', circuitById: _byId),
+          isFalse,
+        );
+      },
+    );
 
-    test('complete once the descendant terminal (waitWS) is a positive terminal',
-        () {
-      final cursor = {
-        'n/wrap/waitWS': _c(StepState.complete),
-      };
-      expect(
-        isCircuitComplete(outer, cursor, 'n', circuitById: _byId),
-        isTrue,
-      );
-    });
+    test(
+      'complete once the descendant terminal (waitWS) is a positive terminal',
+      () {
+        final cursor = {'n/wrap/waitWS': _c(StepState.complete)};
+        expect(
+          isCircuitComplete(outer, cursor, 'n', circuitById: _byId),
+          isTrue,
+        );
+      },
+    );
   });
 
   group('Track A — fail-closed dep resolution', () {
@@ -413,10 +420,7 @@ void main() {
 
   group('Track A — Backoff.delayFor', () {
     test('attempt ≤1 yields min; growth doubles and clamps to max', () {
-      const b = Backoff(
-        min: Duration(seconds: 1),
-        max: Duration(seconds: 8),
-      );
+      const b = Backoff(min: Duration(seconds: 1), max: Duration(seconds: 8));
       expect(b.delayFor(0), const Duration(seconds: 1));
       expect(b.delayFor(1), const Duration(seconds: 1));
       expect(b.delayFor(2), const Duration(seconds: 2));

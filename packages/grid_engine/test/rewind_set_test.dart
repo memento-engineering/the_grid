@@ -69,17 +69,23 @@ void main() {
   });
 
   group('tg-o90 — subtreeNodePaths', () {
-    test('a leaf is its own path; a sub-circuit expands to its WHOLE subtree',
-        () {
-      expect(
-        subtreeNodePaths('tg-1', _spec.stepById('specify')!, circuitById: _byId),
-        {'tg-1/specify'},
-      );
-      expect(
-        subtreeNodePaths('tg-1', _spec.stepById('rig')!, circuitById: _byId),
-        {'tg-1/rig', 'tg-1/rig/build', 'tg-1/rig/launch'},
-      );
-    });
+    test(
+      'a leaf is its own path; a sub-circuit expands to its WHOLE subtree',
+      () {
+        expect(
+          subtreeNodePaths(
+            'tg-1',
+            _spec.stepById('specify')!,
+            circuitById: _byId,
+          ),
+          {'tg-1/specify'},
+        );
+        expect(
+          subtreeNodePaths('tg-1', _spec.stepById('rig')!, circuitById: _byId),
+          {'tg-1/rig', 'tg-1/rig/build', 'tg-1/rig/launch'},
+        );
+      },
+    );
 
     test('the SAME circuitId under two sibling sub-circuits BOTH expand (never '
         'a global visited-set)', () {
@@ -132,52 +138,59 @@ void main() {
   });
 
   group('tg-o90 — rewindNodePaths', () {
-    test('names targets + transitive dependents + SELF, expanding sub-circuits',
-        () {
-      expect(
-        rewindNodePaths(
-          _spec,
-          'tg-1',
-          {'specify'},
-          selfStepId: 'route',
-          circuitById: _byId,
-        ),
-        {
-          'tg-1/specify',
-          'tg-1/critic',
-          'tg-1/rig',
-          'tg-1/rig/build',
-          'tg-1/rig/launch',
-          'tg-1/route',
-        },
-      );
-    });
+    test(
+      'names targets + transitive dependents + SELF, expanding sub-circuits',
+      () {
+        expect(
+          rewindNodePaths(
+            _spec,
+            'tg-1',
+            {'specify'},
+            selfStepId: 'route',
+            circuitById: _byId,
+          ),
+          {
+            'tg-1/specify',
+            'tg-1/critic',
+            'tg-1/rig',
+            'tg-1/rig/build',
+            'tg-1/rig/launch',
+            'tg-1/route',
+          },
+        );
+      },
+    );
 
-    test('a NARROW rewind resets only that branch — SELF is always in the set',
-        () {
-      expect(
-        rewindNodePaths(
-          _spec,
-          'tg-1',
-          {'critic'},
-          selfStepId: 'route',
-          circuitById: _byId,
-        ),
-        {'tg-1/critic', 'tg-1/route'},
-      );
-    });
+    test(
+      'a NARROW rewind resets only that branch — SELF is always in the set',
+      () {
+        expect(
+          rewindNodePaths(
+            _spec,
+            'tg-1',
+            {'critic'},
+            selfStepId: 'route',
+            circuitById: _byId,
+          ),
+          {'tg-1/critic', 'tg-1/route'},
+        );
+      },
+    );
 
-    test('a dangling target id is SKIPPED here (the host fails LOUD first)', () {
-      expect(
-        rewindNodePaths(
-          _spec,
-          'tg-1',
-          {'nope'},
-          selfStepId: 'route',
-          circuitById: _byId,
-        ),
-        {'tg-1/route'},
-      );
-    });
+    test(
+      'a dangling target id is SKIPPED here (the host fails LOUD first)',
+      () {
+        expect(
+          rewindNodePaths(
+            _spec,
+            'tg-1',
+            {'nope'},
+            selfStepId: 'route',
+            circuitById: _byId,
+          ),
+          {'tg-1/route'},
+        );
+      },
+    );
   });
 }

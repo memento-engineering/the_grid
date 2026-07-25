@@ -121,33 +121,36 @@ void main() {
   test('--vm-service-uri overrides a lock that advertises none', () async {
     writeLock();
     final session = _FakeSession();
-    final result = await StationReload(
-      connect: (_) async => session,
-      isPidAlive: (_) => true,
-    ).reload(
-      gridHome: home.path,
-      vmServiceUri: Uri.parse('http://127.0.0.1:9999/tok=/'),
-    );
+    final result =
+        await StationReload(
+          connect: (_) async => session,
+          isPidAlive: (_) => true,
+        ).reload(
+          gridHome: home.path,
+          vmServiceUri: Uri.parse('http://127.0.0.1:9999/tok=/'),
+        );
 
     expect(result, isA<Reloaded>());
     expect(session.calls, contains('invokeReload:reload'));
   });
 
-  test('a station with no reload tool REFUSES loudly (the invoke throws)',
-      () async {
-    writeLock(vmServiceUri: 'http://127.0.0.1:1234/tok=/');
-    final result = await StationReload(
-      connect: (_) async => _ThrowingSession(),
-      isPidAlive: (_) => true,
-    ).reload(gridHome: home.path);
+  test(
+    'a station with no reload tool REFUSES loudly (the invoke throws)',
+    () async {
+      writeLock(vmServiceUri: 'http://127.0.0.1:1234/tok=/');
+      final result = await StationReload(
+        connect: (_) async => _ThrowingSession(),
+        isPidAlive: (_) => true,
+      ).reload(gridHome: home.path);
 
-    expect(result, isA<ReloadRefused>());
-    expect(
-      (result as ReloadRefused).reason,
-      contains('method not found'),
-      reason: "the VM's own message reaches the operator",
-    );
-  });
+      expect(result, isA<ReloadRefused>());
+      expect(
+        (result as ReloadRefused).reason,
+        contains('method not found'),
+        reason: "the VM's own message reaches the operator",
+      );
+    },
+  );
 }
 
 /// A station that never composed a `ReassembleTool`: the extension is not

@@ -32,18 +32,20 @@ void main() {
       expect(p.token, 'deadbeef');
     });
 
-    test('a freshly minted session (no cursor keys) projects an empty cursor',
-        () {
-      final session = Bead(
-        id: 'tgdog-1',
-        issueType: IssueType.session,
-        metadata: const {'work_bead': 'genesis-q8h'},
-      );
-      final p = projectSession(session);
-      expect(p.cursor, isEmpty);
-      expect(p.pgid, isNull);
-      expect(p.token, isNull);
-    });
+    test(
+      'a freshly minted session (no cursor keys) projects an empty cursor',
+      () {
+        final session = Bead(
+          id: 'tgdog-1',
+          issueType: IssueType.session,
+          metadata: const {'work_bead': 'genesis-q8h'},
+        );
+        final p = projectSession(session);
+        expect(p.cursor, isEmpty);
+        expect(p.pgid, isNull);
+        expect(p.token, isNull);
+      },
+    );
 
     test('a closed session bead is terminal (the unmount signal); a legacy '
         'grid.cursor.* key is inert', () {
@@ -63,13 +65,16 @@ void main() {
   });
 
   group('write payloads (the write half of the contract)', () {
-    test('startedIdentityMetadata stringifies the scalar pgid/pid/token fence',
-        () {
-      expect(
-        startedIdentityMetadata(pgid: 7, pid: 8, token: 'cafe'),
-        {'pgid': '7', 'pid': '8', 'token': 'cafe'},
-      );
-    });
+    test(
+      'startedIdentityMetadata stringifies the scalar pgid/pid/token fence',
+      () {
+        expect(startedIdentityMetadata(pgid: 7, pid: 8, token: 'cafe'), {
+          'pgid': '7',
+          'pid': '8',
+          'token': 'cafe',
+        });
+      },
+    );
 
     test('nodeResultMetadata namespaces the payload under grid.result.; a '
         'null/empty payload writes nothing', () {
@@ -115,7 +120,9 @@ void main() {
         'grid.result.* key has nothing left to collide with)', () {
       final merged = <String, dynamic>{
         'work_bead': 'genesis-7r9',
-        ...nodeResultMetadata('genesis-7r9/land', {'pr_url': 'https://x/pull/9'}),
+        ...nodeResultMetadata('genesis-7r9/land', {
+          'pr_url': 'https://x/pull/9',
+        }),
       };
       final session = Bead(
         id: 'tgdog-9',
@@ -124,10 +131,7 @@ void main() {
       );
       final p = projectSession(session);
       expect(p.cursor, isEmpty);
-      expect(
-        p.results['genesis-7r9/land']!['pr_url'],
-        'https://x/pull/9',
-      );
+      expect(p.results['genesis-7r9/land']!['pr_url'], 'https://x/pull/9');
     });
 
     test('a legacy grid.cursor.* key on a historical bead is INERT — ignored, '

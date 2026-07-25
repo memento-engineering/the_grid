@@ -23,7 +23,11 @@ class _FakeSession implements StationVmSession {
   Future<void> close() async {}
 }
 
-Future<int?> _run(Directory home, StationReload client, {bool restart = false}) {
+Future<int?> _run(
+  Directory home,
+  StationReload client, {
+  bool restart = false,
+}) {
   final runner = CommandRunner<int>('space', 'test runner')
     ..addCommand(ReloadCommand(client: client));
   return runner.run([
@@ -66,32 +70,36 @@ void main() {
     expect(code, 0);
   });
 
-  test('--restart also exits 0 (the restart mode reaches the station)',
-      () async {
-    writeLock(vmServiceUri: 'http://127.0.0.1:1234/tok=/');
-    final code = await _run(
-      home,
-      StationReload(
-        connect: (_) async => _FakeSession(),
-        isPidAlive: (_) => true,
-      ),
-      restart: true,
-    );
-    expect(code, 0);
-  });
+  test(
+    '--restart also exits 0 (the restart mode reaches the station)',
+    () async {
+      writeLock(vmServiceUri: 'http://127.0.0.1:1234/tok=/');
+      final code = await _run(
+        home,
+        StationReload(
+          connect: (_) async => _FakeSession(),
+          isPidAlive: (_) => true,
+        ),
+        restart: true,
+      );
+      expect(code, 0);
+    },
+  );
 
-  test('a live station in NO dev mode exits 1 (never a silent success)',
-      () async {
-    writeLock(); // a live station advertising no VM service
-    final code = await _run(
-      home,
-      StationReload(
-        connect: (_) async => throw StateError('must not connect'),
-        isPidAlive: (_) => true,
-      ),
-    );
-    expect(code, 1);
-  });
+  test(
+    'a live station in NO dev mode exits 1 (never a silent success)',
+    () async {
+      writeLock(); // a live station advertising no VM service
+      final code = await _run(
+        home,
+        StationReload(
+          connect: (_) async => throw StateError('must not connect'),
+          isPidAlive: (_) => true,
+        ),
+      );
+      expect(code, 1);
+    },
+  );
 
   test('no station at all exits 1', () async {
     final code = await _run(

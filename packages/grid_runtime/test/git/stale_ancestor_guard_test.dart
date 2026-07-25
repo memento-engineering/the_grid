@@ -69,13 +69,18 @@ void main() {
     expect(validateAncestorWorktreesNotStale(target), isNull);
   });
 
-  test('safe (fail OPEN): a .git file with no gitdir: prefix stops the walk', () {
-    final repo = Directory(p.join(tmp.path, 'repo'))..createSync();
-    File(p.join(repo.path, '.git')).writeAsStringSync('garbage not a pointer');
-    final target = p.join(repo.path, 'sub', 'worktree');
-    // Unparseable .git file → fail open, stop walking, do not reject.
-    expect(validateAncestorWorktreesNotStale(target), isNull);
-  });
+  test(
+    'safe (fail OPEN): a .git file with no gitdir: prefix stops the walk',
+    () {
+      final repo = Directory(p.join(tmp.path, 'repo'))..createSync();
+      File(
+        p.join(repo.path, '.git'),
+      ).writeAsStringSync('garbage not a pointer');
+      final target = p.join(repo.path, 'sub', 'worktree');
+      // Unparseable .git file → fail open, stop walking, do not reject.
+      expect(validateAncestorWorktreesNotStale(target), isNull);
+    },
+  );
 
   test('relative gitdir target resolves against the .git file dir', () {
     final repo = Directory(p.join(tmp.path, 'repo'))..createSync();

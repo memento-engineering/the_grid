@@ -76,10 +76,7 @@ const Set<String> kSetFactKeys = {
 @immutable
 class CapabilityFacts {
   /// Creates a fact bag from [scalars] (override facts) + [sets] (union facts).
-  const CapabilityFacts({
-    this.scalars = const {},
-    this.sets = const {},
-  });
+  const CapabilityFacts({this.scalars = const {}, this.sets = const {}});
 
   /// The scalar (override) facts — a single value per key.
   final Map<String, String> scalars;
@@ -102,7 +99,10 @@ class CapabilityFacts {
   ///
   /// This is the cascade MATH; stacking ancestors in tree order is the future
   /// `InheritedSeed` node's job (a later track), not this file's.
-  static CapabilityFacts compose(CapabilityFacts parent, CapabilityFacts child) {
+  static CapabilityFacts compose(
+    CapabilityFacts parent,
+    CapabilityFacts child,
+  ) {
     final scalars = {...parent.scalars, ...child.scalars}; // child overrides
     final sets = <String, Set<String>>{};
     for (final e in parent.sets.entries) {
@@ -220,10 +220,7 @@ class CapabilityFacts {
     return true;
   }
 
-  static bool _setsEq(
-    Map<String, Set<String>> a,
-    Map<String, Set<String>> b,
-  ) {
+  static bool _setsEq(Map<String, Set<String>> a, Map<String, Set<String>> b) {
     if (a.length != b.length) return false;
     for (final e in a.entries) {
       final other = b[e.key];

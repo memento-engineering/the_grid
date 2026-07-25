@@ -115,14 +115,21 @@ class _FailCreateRunner implements BdRunner {
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
 
   @override
-  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) async {
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
     calls.add(List<String>.unmodifiable(args));
     final sub = args.isNotEmpty ? args.first : '';
-    final isGraphApply = sub == 'create' && args.length > 1 && args[1] == '--graph';
+    final isGraphApply =
+        sub == 'create' && args.length > 1 && args[1] == '--graph';
     if (sub == 'create') {
       _creates++;
       if (_creates <= failCreates) {
-        throw StateError('fake bd create rejected #$_creates (no types.custom)');
+        throw StateError(
+          'fake bd create rejected #$_creates (no types.custom)',
+        );
       }
     }
     if (isGraphApply) {
@@ -259,7 +266,9 @@ void main() {
         );
         // The chokepoint stayed pristine (never `bd show`, never SQL).
         expect(
-          runner.calls.every((c) => c.isEmpty || (c.first != 'show' && c.first != 'sql')),
+          runner.calls.every(
+            (c) => c.isEmpty || (c.first != 'show' && c.first != 'sql'),
+          ),
           isTrue,
         );
       },

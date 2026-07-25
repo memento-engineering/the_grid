@@ -18,50 +18,44 @@ void main() {
   final t0 = DateTime.utc(2026, 7, 19, 10);
 
   group('sampleWedge — molecule sessions contribute their step state', () {
-    test(
-      'a RUNNING molecule step is an active stage → NOT stalled (this exact '
-      'grid read as a false wedge while the sampler was flat-blind)',
-      () {
-        final sample = sampleWedge(
-          _join({
-            'tg-m1': _molecule([
-              _step('tgdog-s1', 'tg-m1/build', state: StepState.running),
-            ]),
-          }),
-          now: t0,
-        );
-        expect(sample.live, 1);
-        expect(sample.running, 1);
-        expect(sample.gated, 0);
-        expect(sample.isStalled, isFalse);
-      },
-    );
+    test('a RUNNING molecule step is an active stage → NOT stalled (this exact '
+        'grid read as a false wedge while the sampler was flat-blind)', () {
+      final sample = sampleWedge(
+        _join({
+          'tg-m1': _molecule([
+            _step('tgdog-s1', 'tg-m1/build', state: StepState.running),
+          ]),
+        }),
+        now: t0,
+      );
+      expect(sample.live, 1);
+      expect(sample.running, 1);
+      expect(sample.gated, 0);
+      expect(sample.isStalled, isFalse);
+    });
 
-    test(
-      'a molecule session parked at a gate counts as gated → the wedge CAN '
-      'fire on a molecule-only stall',
-      () {
-        final sample = sampleWedge(
-          _join({
-            'tg-m1': _molecule([
-              _step(
-                'tgdog-s1',
-                'tg-m1/build',
-                state: StepState.complete,
-                closed: true,
-              ),
-              _step('tgdog-s2', 'tg-m1/spec_review', state: StepState.gated),
-            ]),
-          }),
-          now: t0,
-        );
-        expect(sample.live, 1);
-        expect(sample.running, 0);
-        expect(sample.gated, 1);
-        expect(sample.isStalled, isTrue);
-        expect(sample.reason, contains('parked at a gate'));
-      },
-    );
+    test('a molecule session parked at a gate counts as gated → the wedge CAN '
+        'fire on a molecule-only stall', () {
+      final sample = sampleWedge(
+        _join({
+          'tg-m1': _molecule([
+            _step(
+              'tgdog-s1',
+              'tg-m1/build',
+              state: StepState.complete,
+              closed: true,
+            ),
+            _step('tgdog-s2', 'tg-m1/spec_review', state: StepState.gated),
+          ]),
+        }),
+        now: t0,
+      );
+      expect(sample.live, 1);
+      expect(sample.running, 0);
+      expect(sample.gated, 1);
+      expect(sample.isStalled, isTrue);
+      expect(sample.reason, contains('parked at a gate'));
+    });
 
     test(
       'a failed molecule step with a FUTURE cooldown is forward progress (a '
@@ -89,34 +83,31 @@ void main() {
       },
     );
 
-    test(
-      'a stale SUPERSEDED incarnation still stamped `running` is NOT an '
-      'active stage — only the ACTIVE successor counts (A52: the prior '
-      "round's corpse cannot mask the stall)",
-      () {
-        final sample = sampleWedge(
-          _join({
-            'tg-m1': _molecule(
-              [
-                _step('tgdog-s1', 'tg-m1/build', state: StepState.running),
-                _step('tgdog-s2', 'tg-m1/build', state: StepState.gated),
-              ],
-              dependencies: const [
-                BeadDependency(
-                  issueId: 'tgdog-s2',
-                  dependsOnId: 'tgdog-s1',
-                  type: DependencyType.supersedes,
-                ),
-              ],
-            ),
-          }),
-          now: t0,
-        );
-        expect(sample.running, 0);
-        expect(sample.gated, 1);
-        expect(sample.isStalled, isTrue);
-      },
-    );
+    test('a stale SUPERSEDED incarnation still stamped `running` is NOT an '
+        'active stage — only the ACTIVE successor counts (A52: the prior '
+        "round's corpse cannot mask the stall)", () {
+      final sample = sampleWedge(
+        _join({
+          'tg-m1': _molecule(
+            [
+              _step('tgdog-s1', 'tg-m1/build', state: StepState.running),
+              _step('tgdog-s2', 'tg-m1/build', state: StepState.gated),
+            ],
+            dependencies: const [
+              BeadDependency(
+                issueId: 'tgdog-s2',
+                dependsOnId: 'tgdog-s1',
+                type: DependencyType.supersedes,
+              ),
+            ],
+          ),
+        }),
+        now: t0,
+      );
+      expect(sample.running, 0);
+      expect(sample.gated, 1);
+      expect(sample.isStalled, isTrue);
+    });
 
     test(
       'the model split is the EXPLICIT discriminator, never inferred from '
@@ -147,74 +138,65 @@ void main() {
       },
     );
 
-    test(
-      '…and the discriminator cuts BOTH ways: a NON-molecule (legacy flat) '
-      'session contributes NO nodes even with step-bead NOISE in its '
-      'molecule bucket — the bucket cannot manufacture progress',
-      () {
-        // The mirror tripwire: `moleculeBeads` is non-empty on a FLAT session
-        // (illegal — the join buckets steps only under a molecule session). A
-        // bucket-inferring implementation would read the noisy step's
-        // `running` and mask the stall. Post tg-eli phase 2 a legacy flat
-        // session samples NOTHING (its cursor no longer projects and the
-        // bucket must stay unread): live, node-less, honestly stalled.
-        final sample = sampleWedge(
-          _join({
-            'tg-1': SessionProjection(
-              workBeadId: 'tg-1',
-              sessionId: 'tgdog-x',
-              moleculeBeads: [
-                _step('tgdog-s9', 'tg-1/build', state: StepState.running),
-              ],
-            ),
-          }),
-          now: t0,
-        );
-        expect(sample.live, 1);
-        expect(sample.running, 0);
-        expect(sample.gated, 0);
-        expect(sample.isStalled, isTrue);
-      },
-    );
+    test('…and the discriminator cuts BOTH ways: a NON-molecule (legacy flat) '
+        'session contributes NO nodes even with step-bead NOISE in its '
+        'molecule bucket — the bucket cannot manufacture progress', () {
+      // The mirror tripwire: `moleculeBeads` is non-empty on a FLAT session
+      // (illegal — the join buckets steps only under a molecule session). A
+      // bucket-inferring implementation would read the noisy step's
+      // `running` and mask the stall. Post tg-eli phase 2 a legacy flat
+      // session samples NOTHING (its cursor no longer projects and the
+      // bucket must stay unread): live, node-less, honestly stalled.
+      final sample = sampleWedge(
+        _join({
+          'tg-1': SessionProjection(
+            workBeadId: 'tg-1',
+            sessionId: 'tgdog-x',
+            moleculeBeads: [
+              _step('tgdog-s9', 'tg-1/build', state: StepState.running),
+            ],
+          ),
+        }),
+        now: t0,
+      );
+      expect(sample.live, 1);
+      expect(sample.running, 0);
+      expect(sample.gated, 0);
+      expect(sample.isStalled, isTrue);
+    });
   });
 
   group('NEGATIVE CONTROL — terminal molecule state never trips the alarm', () {
-    test(
-      'all-terminal molecule steps (complete + a positive-terminal ready '
-      'daemon) contribute NO running, NO gated, NO cooling',
-      () {
-        final sample = sampleWedge(_join({'tg-m1': _allTerminal()}), now: t0);
-        expect(sample.live, 1);
-        expect(sample.running, 0);
-        expect(sample.gated, 0);
-        expect(sample.cooling, 0);
-        // Parity with the flat model's ready-daemon semantic: a live session
-        // whose every step is a positive terminal is genuinely not advancing.
-        // In practice the window is momentary — the terminal step's completion
-        // closes the session bead within a flush, far under the threshold.
-        expect(sample.isStalled, isTrue);
-      },
-    );
+    test('all-terminal molecule steps (complete + a positive-terminal ready '
+        'daemon) contribute NO running, NO gated, NO cooling', () {
+      final sample = sampleWedge(_join({'tg-m1': _allTerminal()}), now: t0);
+      expect(sample.live, 1);
+      expect(sample.running, 0);
+      expect(sample.gated, 0);
+      expect(sample.cooling, 0);
+      // Parity with the flat model's ready-daemon semantic: a live session
+      // whose every step is a positive terminal is genuinely not advancing.
+      // In practice the window is momentary — the terminal step's completion
+      // closes the session bead within a flush, far under the threshold.
+      expect(sample.isStalled, isTrue);
+    });
 
-    test(
-      'an all-terminal molecule beside flowing work never wedges the grid '
-      '(no phantom running to mask, no phantom gate to alarm)',
-      () {
-        final sample = sampleWedge(
-          _join({
-            'tg-m1': _allTerminal(),
-            'tg-m2': _molecule([
-              _step('tgdog-s7', 'tg-m2/build', state: StepState.running),
-            ]),
-          }),
-          now: t0,
-        );
-        expect(sample.live, 2);
-        expect(sample.running, 1);
-        expect(sample.gated, 0);
-        expect(sample.isStalled, isFalse);
-      },
-    );
+    test('an all-terminal molecule beside flowing work never wedges the grid '
+        '(no phantom running to mask, no phantom gate to alarm)', () {
+      final sample = sampleWedge(
+        _join({
+          'tg-m1': _allTerminal(),
+          'tg-m2': _molecule([
+            _step('tgdog-s7', 'tg-m2/build', state: StepState.running),
+          ]),
+        }),
+        now: t0,
+      );
+      expect(sample.live, 2);
+      expect(sample.running, 1);
+      expect(sample.gated, 0);
+      expect(sample.isStalled, isFalse);
+    });
 
     test(
       'a TERMINAL molecule session never counts at all → no false wedge from '
@@ -231,53 +213,47 @@ void main() {
     );
   });
 
-  group(
-    'sampleWedge — a legacy flat session SUMS as live-but-node-less '
-    '(tg-eli phase 2: the flat sampling half retired)',
-    () {
-      test('molecule counts still add; the legacy session adds live only', () {
-        final sample = sampleWedge(
-          _join({
-            'tg-1': _legacyFlat(),
-            'tg-m1': _molecule([
-              _step('tgdog-s1', 'tg-m1/build', state: StepState.running),
-            ]),
-            'tg-m2': _molecule([
-              _step('tgdog-s2', 'tg-m2/spec_review', state: StepState.gated),
-            ]),
-          }),
-          now: t0,
-        );
-        expect(sample.live, 3);
-        expect(sample.running, 1);
-        expect(sample.gated, 1);
-        expect(sample.isStalled, isFalse);
-      });
-
-      test(
-        '…and when every molecule session is parked, the legacy session '
-        'cannot mask the total stall (it contributes no running node)',
-        () {
-          final sample = sampleWedge(
-            _join({
-              'tg-1': _legacyFlat(),
-              'tg-m1': _molecule([
-                _step('tgdog-s1', 'tg-m1/spec_review', state: StepState.gated),
-              ]),
-              'tg-m2': _molecule([
-                _step('tgdog-s2', 'tg-m2/spec_review', state: StepState.gated),
-              ]),
-            }),
-            now: t0,
-          );
-          expect(sample.live, 3);
-          expect(sample.running, 0);
-          expect(sample.gated, 2);
-          expect(sample.isStalled, isTrue);
-        },
+  group('sampleWedge — a legacy flat session SUMS as live-but-node-less '
+      '(tg-eli phase 2: the flat sampling half retired)', () {
+    test('molecule counts still add; the legacy session adds live only', () {
+      final sample = sampleWedge(
+        _join({
+          'tg-1': _legacyFlat(),
+          'tg-m1': _molecule([
+            _step('tgdog-s1', 'tg-m1/build', state: StepState.running),
+          ]),
+          'tg-m2': _molecule([
+            _step('tgdog-s2', 'tg-m2/spec_review', state: StepState.gated),
+          ]),
+        }),
+        now: t0,
       );
-    },
-  );
+      expect(sample.live, 3);
+      expect(sample.running, 1);
+      expect(sample.gated, 1);
+      expect(sample.isStalled, isFalse);
+    });
+
+    test('…and when every molecule session is parked, the legacy session '
+        'cannot mask the total stall (it contributes no running node)', () {
+      final sample = sampleWedge(
+        _join({
+          'tg-1': _legacyFlat(),
+          'tg-m1': _molecule([
+            _step('tgdog-s1', 'tg-m1/spec_review', state: StepState.gated),
+          ]),
+          'tg-m2': _molecule([
+            _step('tgdog-s2', 'tg-m2/spec_review', state: StepState.gated),
+          ]),
+        }),
+        now: t0,
+      );
+      expect(sample.live, 3);
+      expect(sample.running, 0);
+      expect(sample.gated, 2);
+      expect(sample.isStalled, isTrue);
+    });
+  });
 
   group('WedgeMonitor — the latch sees molecule stalls end-to-end', () {
     test(
@@ -381,10 +357,8 @@ SessionProjection _allTerminal({bool terminal = false}) => _molecule([
 
 /// A HISTORICAL flat session (isMolecule false, no molecule beads) — post
 /// tg-eli phase 2 its cursor never projects, so it samples live-but-node-less.
-SessionProjection _legacyFlat() => const SessionProjection(
-  workBeadId: 'tg-x',
-  sessionId: 'tgdog-x',
-);
+SessionProjection _legacyFlat() =>
+    const SessionProjection(workBeadId: 'tg-x', sessionId: 'tgdog-x');
 
 /// A hand-driven clock (Fakes, not mocks) — mirrors wedge_test.dart.
 class _FakeClock {

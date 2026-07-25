@@ -683,29 +683,31 @@ void main() {
       expect(h.fakes.provider.stopped, isEmpty);
     });
 
-    test('run → Ok(payload) records the result alongside complete — the land '
-        "step's pr_url lands on the STEP bead (R1 — ResultKeys reused "
-        'VERBATIM; only the host bead moved from session to step), '
-        'namespaced disjoint from the cursor so it never misreads as state',
-        () async {
-      final log = <String>[];
-      const pr = 'https://github.com/acme/widget/pull/7';
-      final h = _host(_ServiceCap(const Ok({'pr_url': pr}), log));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
-      expect(log, contains('run(tg-1)'));
-      // ONE merged write: the terminal cursor state PLUS the namespaced result
-      // PLUS the capture-only timing (FT-1) — all in a single chokepoint write.
-      expect(h.fakes.runner.metadataOfUpdate(0), {
-        MoleculeStepKeys.state: 'complete',
-        MoleculeStepKeys.restartCount: '0',
-        'grid.result.tg-1/agent.pr_url': pr,
-        ..._timing(),
-      });
-    });
+    test(
+      'run → Ok(payload) records the result alongside complete — the land '
+      "step's pr_url lands on the STEP bead (R1 — ResultKeys reused "
+      'VERBATIM; only the host bead moved from session to step), '
+      'namespaced disjoint from the cursor so it never misreads as state',
+      () async {
+        final log = <String>[];
+        const pr = 'https://github.com/acme/widget/pull/7';
+        final h = _host(_ServiceCap(const Ok({'pr_url': pr}), log));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+        expect(log, contains('run(tg-1)'));
+        // ONE merged write: the terminal cursor state PLUS the namespaced result
+        // PLUS the capture-only timing (FT-1) — all in a single chokepoint write.
+        expect(h.fakes.runner.metadataOfUpdate(0), {
+          MoleculeStepKeys.state: 'complete',
+          MoleculeStepKeys.restartCount: '0',
+          'grid.result.tg-1/agent.pr_url': pr,
+          ..._timing(),
+        });
+      },
+    );
 
     test('run → Failed writes the supervised failure (failed + restartCount + '
         'cooldown)', () async {
@@ -742,49 +744,50 @@ void main() {
       'subscription open for the life of the mount); flagged, not fixed here '
       '(out of this lane\'s scope — engine behavior, not a test fix)',
       () async {
-      final log = <String>[];
-      // A daemon-style capability: SessionStarted → ready (up), Died → failed.
-      final h = _host(
-        _DaemonCap(log),
-        mount: StepMount(
-          step: const CapabilityStep(
-            stepId: 'agent',
-            capabilityId: 'agent',
-            kind: StepKind.daemon,
+        final log = <String>[];
+        // A daemon-style capability: SessionStarted → ready (up), Died → failed.
+        final h = _host(
+          _DaemonCap(log),
+          mount: StepMount(
+            step: const CapabilityStep(
+              stepId: 'agent',
+              capabilityId: 'agent',
+              kind: StepKind.daemon,
+            ),
+            nodePath: 'tg-1/agent',
+            circuit: _circuit,
+            circuitPath: 'tg-1',
+            session: const SessionHandle('tgdog-s'),
+            node: const NodeCursor(),
+            key: const ValueKey('tg-1/agent#0.0'),
           ),
-          nodePath: 'tg-1/agent',
-          circuit: _circuit,
-          circuitPath: 'tg-1',
-          session: const SessionHandle('tgdog-s'),
-          node: const NodeCursor(),
-          key: const ValueKey('tg-1/agent#0.0'),
-        ),
-      );
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
 
-      // The daemon signals up → ready (positive terminal; stays mounted).
-      h.fakes.provider.emit(
-        const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true),
-      );
-      await _pump();
-      // A daemon `ready` is a positive terminal too → it carries timing (FT-1).
-      expect(h.fakes.runner.metadataOfUpdate(0), {
-        MoleculeStepKeys.state: 'ready',
-        MoleculeStepKeys.restartCount: '0',
-        ..._timing(),
-      });
+        // The daemon signals up → ready (positive terminal; stays mounted).
+        h.fakes.provider.emit(
+          const ActivityChanged(name: 'tgdog-s/tg-1/agent', active: true),
+        );
+        await _pump();
+        // A daemon `ready` is a positive terminal too → it carries timing (FT-1).
+        expect(h.fakes.runner.metadataOfUpdate(0), {
+          MoleculeStepKeys.state: 'ready',
+          MoleculeStepKeys.restartCount: '0',
+          ..._timing(),
+        });
 
-      // The later death is a no-op on the chokepoint today (see the group
-      // doc): NOT because a latch swallowed it (the honest OQ-5 guarantee —
-      // `ready` never latches), but because nothing is listening any more.
-      h.fakes.provider.emit(const Died(name: 'tgdog-s/tg-1/agent'));
-      await _pump();
-      expect(h.fakes.runner.callsFor('update'), hasLength(1));
-    });
+        // The later death is a no-op on the chokepoint today (see the group
+        // doc): NOT because a latch swallowed it (the honest OQ-5 guarantee —
+        // `ready` never latches), but because nothing is listening any more.
+        h.fakes.provider.emit(const Died(name: 'tgdog-s/tg-1/agent'));
+        await _pump();
+        expect(h.fakes.runner.callsFor('update'), hasLength(1));
+      },
+    );
   });
 
   group('Track E — the write fence (the SDK leaks no engine WRITE surface)', () {

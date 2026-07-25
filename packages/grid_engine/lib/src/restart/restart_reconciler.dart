@@ -230,27 +230,27 @@ class RestartReport {
     List<ZombieReap> reaped = const [],
     List<SweptLeaseGroup> sweptLeases = const [],
   }) : entries = List.unmodifiable(entries),
-      reaped = List.unmodifiable(reaped),
-      sweptLeases = List.unmodifiable(sweptLeases),
-      skipped = List.unmodifiable(
-        entries.where((e) => e.disposition == RestartDisposition.skipped),
-      ),
-      adopted = List.unmodifiable(
-        entries.where((e) => e.disposition == RestartDisposition.adopted),
-      ),
-      killed = List.unmodifiable(
-        entries.where((e) => e.disposition == RestartDisposition.killed),
-      ),
-      refusedUnsafe = List.unmodifiable(
-        entries.where(
-          (e) => e.disposition == RestartDisposition.refusedUnsafe,
-        ),
-      ),
-      respawnPending = List.unmodifiable(
-        entries.where(
-          (e) => e.disposition == RestartDisposition.respawnPending,
-        ),
-      );
+       reaped = List.unmodifiable(reaped),
+       sweptLeases = List.unmodifiable(sweptLeases),
+       skipped = List.unmodifiable(
+         entries.where((e) => e.disposition == RestartDisposition.skipped),
+       ),
+       adopted = List.unmodifiable(
+         entries.where((e) => e.disposition == RestartDisposition.adopted),
+       ),
+       killed = List.unmodifiable(
+         entries.where((e) => e.disposition == RestartDisposition.killed),
+       ),
+       refusedUnsafe = List.unmodifiable(
+         entries.where(
+           (e) => e.disposition == RestartDisposition.refusedUnsafe,
+         ),
+       ),
+       respawnPending = List.unmodifiable(
+         entries.where(
+           (e) => e.disposition == RestartDisposition.respawnPending,
+         ),
+       );
 
   /// Every reconciled worktree, in worktree-list order.
   final List<RestartEntry> entries;

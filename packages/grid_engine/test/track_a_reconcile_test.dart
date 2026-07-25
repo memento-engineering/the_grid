@@ -34,19 +34,16 @@ class _FakeSessionResolver implements SessionResolver {
   final _Recorder recorder;
 
   @override
-  Seed sessionFor({required Bead bead, SessionProjection? session}) => _FakeEffect(
-    recorder: recorder,
-    beadId: bead.id,
-    key: ValueKey('${bead.id}:work'),
-  );
+  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
+      _FakeEffect(
+        recorder: recorder,
+        beadId: bead.id,
+        key: ValueKey('${bead.id}:work'),
+      );
 }
 
 class _FakeEffect extends StatefulSeed {
-  const _FakeEffect({
-    required this.recorder,
-    required this.beadId,
-    super.key,
-  });
+  const _FakeEffect({required this.recorder, required this.beadId, super.key});
   final _Recorder recorder;
   final String beadId;
 
@@ -100,7 +97,10 @@ Seed _root({
   child: InheritedSeed<SessionResolver>(
     value: resolver,
     child: Station([
-      SubstationScope(configNotifier: substationConfig, key: const ValueKey('scope.tg')),
+      SubstationScope(
+        configNotifier: substationConfig,
+        key: const ValueKey('scope.tg'),
+      ),
     ]),
   ),
 );
@@ -228,12 +228,18 @@ void main() {
         expect(_effectChild(_workBead(root, 'tg-1')!).branchId, child1IdBefore);
 
         // Guardrail: config ancestors + the sibling are ABSENT from the drain.
-        expect(flushed, isNot(contains(_branchWhere(root, (s) => s is Station))));
+        expect(
+          flushed,
+          isNot(contains(_branchWhere(root, (s) => s is Station))),
+        );
         expect(
           flushed,
           isNot(contains(_branchWhere(root, (s) => s is SubstationScope))),
         );
-        expect(flushed, isNot(contains(_branchWhere(root, (s) => s is Substation))));
+        expect(
+          flushed,
+          isNot(contains(_branchWhere(root, (s) => s is Substation))),
+        );
         expect(flushed, isNot(contains(_workBead(root, 'tg-2'))));
       },
     );
@@ -260,13 +266,21 @@ void main() {
       recorder.events.clear();
 
       // Tick the CONFIG axis (a different owned set value).
-      substationConfig.push(const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg', 'other'}));
+      substationConfig.push(
+        const SubstationConfig(
+          substationId: 'tg',
+          ownedSubstations: {'tg', 'other'},
+        ),
+      );
       final flushed = owner.flush();
 
       // The config observer (SubstationScope) rebuilt; Substation is force-rebuilt by the
       // cascade and excluded. A config tick is real (proving the work-tick
       // guardrail's absence is meaningful, not because config is inert)...
-      expect(flushed, equals([_branchWhere(root, (s) => s is SubstationScope)]));
+      expect(
+        flushed,
+        equals([_branchWhere(root, (s) => s is SubstationScope)]),
+      );
       // ...yet it touches NO work subtree.
       expect(recorder.events, isEmpty);
     });
@@ -309,7 +323,8 @@ void main() {
       expect(
         recorder.events,
         isEmpty,
-        reason: 'a ready-set exit with a live session is not a positive terminal',
+        reason:
+            'a ready-set exit with a live session is not a positive terminal',
       );
       expect(_workBead(root, 'tg-1'), isNotNull);
 
@@ -466,62 +481,64 @@ void main() {
       expect(recorder.events.length, core.length);
     });
 
-    test('resident config (RS-3/D-R4): narrows the allow-list further to the '
-        'DRIVEABLE-WORK boundary — organizational core types (epic/decision/'
-        'spike/story/milestone) never mount even when ready + owned + core',
-        () {
-      final recorder = _Recorder();
-      final organizational = <String, IssueType>{
-        'tg-epic': IssueType.epic,
-        'tg-decision': IssueType.decision,
-        'tg-spike': IssueType.spike,
-        'tg-story': IssueType.story,
-        'tg-milestone': IssueType.milestone,
-      };
-      final driveable = <String, IssueType>{
-        'tg-task': IssueType.task,
-        'tg-bug': IssueType.bug,
-        'tg-feat': IssueType.feature,
-        'tg-chore': IssueType.chore,
-      };
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [
-            for (final e in organizational.entries)
-              _bead(e.key, type: e.value),
-            for (final e in driveable.entries) _bead(e.key, type: e.value),
-          ],
-          ready: {...organizational.keys, ...driveable.keys},
-        ),
-      );
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            _tgConfig().copyWith(resident: true),
+    test(
+      'resident config (RS-3/D-R4): narrows the allow-list further to the '
+      'DRIVEABLE-WORK boundary — organizational core types (epic/decision/'
+      'spike/story/milestone) never mount even when ready + owned + core',
+      () {
+        final recorder = _Recorder();
+        final organizational = <String, IssueType>{
+          'tg-epic': IssueType.epic,
+          'tg-decision': IssueType.decision,
+          'tg-spike': IssueType.spike,
+          'tg-story': IssueType.story,
+          'tg-milestone': IssueType.milestone,
+        };
+        final driveable = <String, IssueType>{
+          'tg-task': IssueType.task,
+          'tg-bug': IssueType.bug,
+          'tg-feat': IssueType.feature,
+          'tg-chore': IssueType.chore,
+        };
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [
+              for (final e in organizational.entries)
+                _bead(e.key, type: e.value),
+              for (final e in driveable.entries) _bead(e.key, type: e.value),
+            ],
+            ready: {...organizational.keys, ...driveable.keys},
           ),
-        ),
-      );
+        );
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        final root = owner.mountRoot(
+          _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              _tgConfig().copyWith(resident: true),
+            ),
+          ),
+        );
 
-      for (final id in driveable.keys) {
-        expect(
-          _workBead(root, id),
-          isNotNull,
-          reason: '$id should mount under resident',
-        );
-      }
-      for (final id in organizational.keys) {
-        expect(
-          _workBead(root, id),
-          isNull,
-          reason: '$id must NOT mount under resident',
-        );
-      }
-      expect(recorder.events.length, driveable.length);
-    });
+        for (final id in driveable.keys) {
+          expect(
+            _workBead(root, id),
+            isNotNull,
+            reason: '$id should mount under resident',
+          );
+        }
+        for (final id in organizational.keys) {
+          expect(
+            _workBead(root, id),
+            isNull,
+            reason: '$id must NOT mount under resident',
+          );
+        }
+        expect(recorder.events.length, driveable.length);
+      },
+    );
 
     test('resident sanity control: the SAME organizational beads mount under '
         'the LEGACY (non-resident) config — proving the exclusion above is '
@@ -537,8 +554,7 @@ void main() {
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [
-            for (final e in organizational.entries)
-              _bead(e.key, type: e.value),
+            for (final e in organizational.entries) _bead(e.key, type: e.value),
           ],
           ready: organizational.keys.toSet(),
         ),
@@ -617,7 +633,10 @@ void main() {
           beads: [
             _bead('tg-1'), // owned + core + blessed → mounts
             _bead('gc-9'), // blessed but UNOWNED → no
-            _bead('tg-conv', type: IssueType.convergence), // blessed but non-core → no
+            _bead(
+              'tg-conv',
+              type: IssueType.convergence,
+            ), // blessed but non-core → no
           ],
           ready: {'tg-1', 'gc-9', 'tg-conv'},
         ),

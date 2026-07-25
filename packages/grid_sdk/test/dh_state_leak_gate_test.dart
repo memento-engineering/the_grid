@@ -51,8 +51,7 @@ String _code(String source) => source
     .join('\n');
 
 void main() {
-  group('D-H fence: no public sync accessor over StateNotifier state (grid_sdk)',
-      () {
+  group('D-H fence: no public sync accessor over StateNotifier state (grid_sdk)', () {
     test('positive control: the scan sees real source AND the sanctioned '
         'subscribing observation', () {
       final sources = _libSources().toList();
@@ -68,7 +67,8 @@ void main() {
       expect(
         all,
         contains('dependOnInheritedSeedOfExactType<GridConfiguration>'),
-        reason: 'the sanctioned subscribing observation '
+        reason:
+            'the sanctioned subscribing observation '
             '(GridConfiguration.of) must appear in the scanned source '
             '— vacuousness control',
       );
@@ -84,28 +84,32 @@ void main() {
         expect(
           _code(f.readAsStringSync()),
           isNot(contains('InheritedSeed<GridDelegate>')),
-          reason: '${f.path}: the delegate/notifier must not be provided as an '
+          reason:
+              '${f.path}: the delegate/notifier must not be provided as an '
               'ambient InheritedSeed — its `.state` would be snapshottable (D-H)',
         );
       }
     });
 
-    test('gate: the delegate type is never looked up from the tree (either verb)',
-        () {
-      // Neither the effect verb (getInheritedSeedOfExactType<GridDelegate>) nor
-      // the subscribing verb (dependOnInheritedSeedOfExactType<GridDelegate>)
-      // may fetch the delegate — both share this substring. A consumer that
-      // reaches the notifier reads `.state` off it synchronously; configuration
-      // is observed via GridConfiguration.of, the delegate is never exposed.
-      for (final f in _libSources()) {
-        expect(
-          _code(f.readAsStringSync()),
-          isNot(contains('InheritedSeedOfExactType<GridDelegate>')),
-          reason: '${f.path}: the delegate is never an ambient tree lookup '
-              '(D-H) — observe the configuration value, not the notifier',
-        );
-      }
-    });
+    test(
+      'gate: the delegate type is never looked up from the tree (either verb)',
+      () {
+        // Neither the effect verb (getInheritedSeedOfExactType<GridDelegate>) nor
+        // the subscribing verb (dependOnInheritedSeedOfExactType<GridDelegate>)
+        // may fetch the delegate — both share this substring. A consumer that
+        // reaches the notifier reads `.state` off it synchronously; configuration
+        // is observed via GridConfiguration.of, the delegate is never exposed.
+        for (final f in _libSources()) {
+          expect(
+            _code(f.readAsStringSync()),
+            isNot(contains('InheritedSeedOfExactType<GridDelegate>')),
+            reason:
+                '${f.path}: the delegate is never an ambient tree lookup '
+                '(D-H) — observe the configuration value, not the notifier',
+          );
+        }
+      },
+    );
 
     test('gate: the notifier raw state is never re-surfaced synchronously', () {
       // No re-exposed public `state` getter, no `debugState` peek, and no
@@ -122,7 +126,8 @@ void main() {
           expect(
             re.hasMatch(code),
             isFalse,
-            reason: '${f.path}: matches /${re.pattern}/ — a StateNotifier\'s '
+            reason:
+                '${f.path}: matches /${re.pattern}/ — a StateNotifier\'s '
                 'state must not be re-surfaced synchronously (D-H)',
           );
         }
@@ -151,7 +156,8 @@ void main() {
       expect(
         returned,
         containsAll(<String>['of', 'maybeOf']),
-        reason: 'the subscribing GridConfiguration.of/maybeOf must be found '
+        reason:
+            'the subscribing GridConfiguration.of/maybeOf must be found '
             '(the scan really parses declarations) — vacuousness control',
       );
       // …and they are the ONLY declarations returning the configuration value.
@@ -159,7 +165,8 @@ void main() {
       expect(
         extra,
         isEmpty,
-        reason: 'only GridConfiguration.of/maybeOf (the build-observation reads) '
+        reason:
+            'only GridConfiguration.of/maybeOf (the build-observation reads) '
             'may return the configuration; any other getter/method returning it '
             'is a public sync accessor over notifier state (D-H): $extra',
       );

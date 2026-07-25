@@ -102,7 +102,9 @@ Directory _libSrc() {
     for (final rel in candidates) {
       final probe = Directory(p.join(dir.path, rel));
       if (probe.existsSync() &&
-          File(p.join(probe.path, 'kernel', 'station_kernel.dart')).existsSync()) {
+          File(
+            p.join(probe.path, 'kernel', 'station_kernel.dart'),
+          ).existsSync()) {
         return probe;
       }
     }
@@ -110,7 +112,9 @@ Directory _libSrc() {
     if (parent.path == dir.path) break;
     dir = parent;
   }
-  fail('could not locate packages/grid_engine/lib/src from ${Directory.current.path}');
+  fail(
+    'could not locate packages/grid_engine/lib/src from ${Directory.current.path}',
+  );
 }
 
 void main() {
@@ -123,32 +127,34 @@ void main() {
         .where((f) => f.path.endsWith('.dart'))
         .toList();
 
-    test('the kernel, effect core, and core seeds reference NO opinion literal',
-        () {
-      expect(
-        engineFiles,
-        isNotEmpty,
-        reason: 'sanity: the engine files were found',
-      );
-      final offences = <String>[];
-      for (final file in engineFiles) {
-        final source = file.readAsStringSync();
-        for (final literal in _opinionLiterals) {
-          if (source.contains(literal)) {
-            offences.add(
-              '${p.relative(file.path, from: libSrc.path)} references "$literal"',
-            );
+    test(
+      'the kernel, effect core, and core seeds reference NO opinion literal',
+      () {
+        expect(
+          engineFiles,
+          isNotEmpty,
+          reason: 'sanity: the engine files were found',
+        );
+        final offences = <String>[];
+        for (final file in engineFiles) {
+          final source = file.readAsStringSync();
+          for (final literal in _opinionLiterals) {
+            if (source.contains(literal)) {
+              offences.add(
+                '${p.relative(file.path, from: libSrc.path)} references "$literal"',
+              );
+            }
           }
         }
-      }
-      expect(
-        offences,
-        isEmpty,
-        reason:
-            'opinion literals must live ONLY in grid_assets — the engine holds '
-            'no landing/VCS/provider opinion:\n  ${offences.join('\n  ')}',
-      );
-    });
+        expect(
+          offences,
+          isEmpty,
+          reason:
+              'opinion literals must live ONLY in grid_assets — the engine holds '
+              'no landing/VCS/provider opinion:\n  ${offences.join('\n  ')}',
+        );
+      },
+    );
 
     test('tg-6gn — the ONE ROUTER: no other lib/src file effects a route '
         'verdict', () {
@@ -189,28 +195,31 @@ void main() {
       }
     });
 
-    test('tg-o90 — the superseded gate-reason-STRING workaround stays dead', () {
-      final offences = <String>[];
-      for (final file in engineFiles) {
-        final source = file.readAsStringSync();
-        for (final literal in _supersededWorkaroundLiterals) {
-          if (source.contains(literal)) {
-            offences.add(
-              '${p.relative(file.path, from: libSrc.path)} names "$literal"',
-            );
+    test(
+      'tg-o90 — the superseded gate-reason-STRING workaround stays dead',
+      () {
+        final offences = <String>[];
+        for (final file in engineFiles) {
+          final source = file.readAsStringSync();
+          for (final literal in _supersededWorkaroundLiterals) {
+            if (source.contains(literal)) {
+              offences.add(
+                '${p.relative(file.path, from: libSrc.path)} names "$literal"',
+              );
+            }
           }
         }
-      }
-      expect(
-        offences,
-        isEmpty,
-        reason:
-            'routing is the first-class `Rewind` verdict (tg-o90) — the '
-            'engine never parses a gate REASON, and SessionScope never '
-            'auto-resolves a gate bead. The tg-b3k workaround must not come '
-            'back:\n  ${offences.join('\n  ')}',
-      );
-    });
+        expect(
+          offences,
+          isEmpty,
+          reason:
+              'routing is the first-class `Rewind` verdict (tg-o90) — the '
+              'engine never parses a gate REASON, and SessionScope never '
+              'auto-resolves a gate bead. The tg-b3k workaround must not come '
+              'back:\n  ${offences.join('\n  ')}',
+        );
+      },
+    );
 
     test('tg-o90 — SessionScope never CLOSES a gate bead (a gate is a HUMAN\'s; '
         'its only gate write is the D-7 gated→pending re-arm)', () {

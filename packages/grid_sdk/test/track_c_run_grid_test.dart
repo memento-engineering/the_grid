@@ -208,9 +208,7 @@ void main() {
       final probed = <GridConfiguration>[];
       final delegate = RecordingDelegate(
         rootPath: '/home/space',
-        assetsBuilder: () => [
-          ConfigProbe(probed.add),
-        ],
+        assetsBuilder: () => [ConfigProbe(probed.add)],
         initial: const GridConfiguration(settings: {'v': 1}),
       );
 
@@ -218,7 +216,10 @@ void main() {
       addTearDown(handle.teardown);
 
       // The master build ran with the initial configuration.
-      expect(delegate.builtWith.single, const GridConfiguration(settings: {'v': 1}));
+      expect(
+        delegate.builtWith.single,
+        const GridConfiguration(settings: {'v': 1}),
+      );
       // The probe (inside the built tree) saw the ambient configuration —
       // configuration provision is real and load-bearing. It reads the VALUE,
       // never a handle on the notifier.
@@ -237,11 +238,7 @@ void main() {
             assets: [
               Substations(
                 substations: [
-                  Substation(
-                    'tg',
-                    '/work/tg',
-                    assets: [ScopeProbe(seen)],
-                  ),
+                  Substation('tg', '/work/tg', assets: [ScopeProbe(seen)]),
                 ],
               ),
             ],
@@ -282,22 +279,24 @@ void main() {
   });
 
   group('the lifecycle rails', () {
-    test('order: didLaunch (pre-tree) → build (mount) → initGrid → onReady',
-        () async {
-      final delegate = RecordingDelegate();
-      final handle = runGrid(delegate);
-      addTearDown(handle.teardown);
+    test(
+      'order: didLaunch (pre-tree) → build (mount) → initGrid → onReady',
+      () async {
+        final delegate = RecordingDelegate();
+        final handle = runGrid(delegate);
+        addTearDown(handle.teardown);
 
-      // Synchronously after runGrid: pre-tree rail, then mount, then the async
-      // kickoff STARTED (initGrid ran up to its await) — but onReady has not
-      // fired (it is unawaited, scheduled).
-      expect(delegate.events, ['didLaunch', 'build', 'initGrid']);
+        // Synchronously after runGrid: pre-tree rail, then mount, then the async
+        // kickoff STARTED (initGrid ran up to its await) — but onReady has not
+        // fired (it is unawaited, scheduled).
+        expect(delegate.events, ['didLaunch', 'build', 'initGrid']);
 
-      await pump();
-      // onReady fires once the (default, immediately-completing) initGrid
-      // resolves.
-      expect(delegate.events, ['didLaunch', 'build', 'initGrid', 'onReady']);
-    });
+        await pump();
+        // onReady fires once the (default, immediately-completing) initGrid
+        // resolves.
+        expect(delegate.events, ['didLaunch', 'build', 'initGrid', 'onReady']);
+      },
+    );
 
     test('initGrid is UNAWAITED: runGrid returns before it completes; onReady '
         'waits for it', () async {
@@ -406,10 +405,7 @@ void main() {
       // Idempotent — a second teardown is a no-op (onTeardown runs once).
       await handle.teardown();
       expect(disposed, 1);
-      expect(
-        delegate.events.where((e) => e == 'onTeardown').length,
-        1,
-      );
+      expect(delegate.events.where((e) => e == 'onTeardown').length, 1);
     });
 
     test('onTeardown failure is loud but teardown still completes', () async {
@@ -431,45 +427,47 @@ void main() {
   });
 
   group('teardown — the orphan sweep', () {
-    test('the sweep runs AFTER the tree unmounted, and teardown awaits it',
-        () async {
-      final order = <String>[];
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      // A session the transport still holds when the tree comes down — the
-      // agent that spawned into the teardown window.
-      await provider.start(
-        'st-1/tg-gpg/agent',
-        const RuntimeConfig(workDir: '/tmp', command: 'sh'),
-      );
+    test(
+      'the sweep runs AFTER the tree unmounted, and teardown awaits it',
+      () async {
+        final order = <String>[];
+        final provider = FakeRuntimeProvider();
+        addTearDown(provider.close);
+        // A session the transport still holds when the tree comes down — the
+        // agent that spawned into the teardown window.
+        await provider.start(
+          'st-1/tg-gpg/agent',
+          const RuntimeConfig(workDir: '/tmp', command: 'sh'),
+        );
 
-      final delegate = RecordingDelegate(
-        assetsBuilder: () => [DisposeProbe(() => order.add('unmount'))],
-      );
-      final handle = runGrid(
-        delegate,
-        orphanSweep: () => _sweeper().sweepOrphans(
-          transport: provider,
-          sessionPrefix: 'st-',
-          onOrphan: (_) => order.add('sweep'),
-          pollInterval: const Duration(milliseconds: 5),
-        ),
-      );
-      await pump();
+        final delegate = RecordingDelegate(
+          assetsBuilder: () => [DisposeProbe(() => order.add('unmount'))],
+        );
+        final handle = runGrid(
+          delegate,
+          orphanSweep: () => _sweeper().sweepOrphans(
+            transport: provider,
+            sessionPrefix: 'st-',
+            onOrphan: (_) => order.add('sweep'),
+            pollInterval: const Duration(milliseconds: 5),
+          ),
+        );
+        await pump();
 
-      await handle.teardown();
+        await handle.teardown();
 
-      // The rail order: the tree unmounted BEFORE the sweep reconciled — the
-      // stragglers only exist once the kills are in flight.
-      expect(order.first, 'unmount');
-      expect(order, contains('sweep'));
-      expect(provider.stopped, contains('st-1/tg-gpg/agent'));
-      expect(
-        provider.listRunning('st-'),
-        isEmpty,
-        reason: 'zero-expected after teardown — no agent survives `down`',
-      );
-    });
+        // The rail order: the tree unmounted BEFORE the sweep reconciled — the
+        // stragglers only exist once the kills are in flight.
+        expect(order.first, 'unmount');
+        expect(order, contains('sweep'));
+        expect(provider.stopped, contains('st-1/tg-gpg/agent'));
+        expect(
+          provider.listRunning('st-'),
+          isEmpty,
+          reason: 'zero-expected after teardown — no agent survives `down`',
+        );
+      },
+    );
 
     test('teardown is idempotent — the sweep runs exactly once', () async {
       final provider = FakeRuntimeProvider();
@@ -516,60 +514,71 @@ void main() {
       expect(handle.isTornDown, isTrue);
     });
 
-    test('a station with no sweep wired tears down unchanged (the null default)',
-        () async {
-      var disposed = 0;
-      final handle = runGrid(
-        RecordingDelegate(
-          assetsBuilder: () => [DisposeProbe(() => disposed++)],
-        ),
-      );
-      await pump();
+    test(
+      'a station with no sweep wired tears down unchanged (the null default)',
+      () async {
+        var disposed = 0;
+        final handle = runGrid(
+          RecordingDelegate(
+            assetsBuilder: () => [DisposeProbe(() => disposed++)],
+          ),
+        );
+        await pump();
 
-      await handle.teardown();
+        await handle.teardown();
 
-      expect(disposed, 1);
-      expect(handle.isTornDown, isTrue);
-    });
+        expect(disposed, 1);
+        expect(handle.isTornDown, isTrue);
+      },
+    );
   });
 
   group('a watched value re-composes (v3 §1)', () {
-    test('emitting a new configuration re-runs the master build with it', () async {
-      final probed = <GridConfiguration>[];
-      final delegate = RecordingDelegate(
-        assetsBuilder: () => [ConfigProbe(probed.add)],
-        initial: const GridConfiguration(settings: {'v': 1}),
-      );
-      final handle = runGrid(delegate);
-      addTearDown(handle.teardown);
-      await pump();
+    test(
+      'emitting a new configuration re-runs the master build with it',
+      () async {
+        final probed = <GridConfiguration>[];
+        final delegate = RecordingDelegate(
+          assetsBuilder: () => [ConfigProbe(probed.add)],
+          initial: const GridConfiguration(settings: {'v': 1}),
+        );
+        final handle = runGrid(delegate);
+        addTearDown(handle.teardown);
+        await pump();
 
-      expect(delegate.builtWith, [const GridConfiguration(settings: {'v': 1})]);
-      expect(probed, [const GridConfiguration(settings: {'v': 1})]);
+        expect(delegate.builtWith, [
+          const GridConfiguration(settings: {'v': 1}),
+        ]);
+        expect(probed, [
+          const GridConfiguration(settings: {'v': 1}),
+        ]);
 
-      delegate.emit(const GridConfiguration(settings: {'v': 2}));
-      await pump();
+        delegate.emit(const GridConfiguration(settings: {'v': 2}));
+        await pump();
 
-      // build re-ran with the new configuration; the ambient reader saw it too.
-      expect(delegate.builtWith, [
-        const GridConfiguration(settings: {'v': 1}),
-        const GridConfiguration(settings: {'v': 2}),
-      ]);
-      expect(probed.last, const GridConfiguration(settings: {'v': 2}));
-    });
+        // build re-ran with the new configuration; the ambient reader saw it too.
+        expect(delegate.builtWith, [
+          const GridConfiguration(settings: {'v': 1}),
+          const GridConfiguration(settings: {'v': 2}),
+        ]);
+        expect(probed.last, const GridConfiguration(settings: {'v': 2}));
+      },
+    );
   });
 
-  group('ambient lookups are loud outside a running grid (the guard principle)',
-      () {
-    test('GridConfiguration.of throws / maybeOf is null when unmounted', () {
-      mount(
-        _OfProbe((ctx) {
-          expect(() => GridConfiguration.of(ctx), throwsStateError);
-          expect(GridConfiguration.maybeOf(ctx), isNull);
-        }),
-      );
-    });
-  });
+  group(
+    'ambient lookups are loud outside a running grid (the guard principle)',
+    () {
+      test('GridConfiguration.of throws / maybeOf is null when unmounted', () {
+        mount(
+          _OfProbe((ctx) {
+            expect(() => GridConfiguration.of(ctx), throwsStateError);
+            expect(GridConfiguration.maybeOf(ctx), isNull);
+          }),
+        );
+      });
+    },
+  );
 
   group('the delegate is not ambient (ADR-0008 D-H)', () {
     test('a running grid provides the configuration VALUE, never the delegate '
@@ -591,10 +600,16 @@ void main() {
       final handle = runGrid(delegate);
       addTearDown(handle.teardown);
 
-      expect(seenDelegate, isNull,
-          reason: 'the delegate/notifier must not ride the tree (D-H)');
-      expect(seenConfig, const GridConfiguration(settings: {'v': 9}),
-          reason: 'only the observed configuration value is ambient');
+      expect(
+        seenDelegate,
+        isNull,
+        reason: 'the delegate/notifier must not ride the tree (D-H)',
+      );
+      expect(
+        seenConfig,
+        const GridConfiguration(settings: {'v': 9}),
+        reason: 'only the observed configuration value is ambient',
+      );
     });
   });
 }

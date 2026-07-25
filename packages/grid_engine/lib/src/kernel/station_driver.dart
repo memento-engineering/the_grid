@@ -136,7 +136,10 @@ class StationDriver {
     _cooldownTimer?.cancel();
     _cooldownTimer = null;
     if (earliest != null) {
-      _cooldownTimer = _scheduleTimer(earliest.difference(now), _repokeCooldown);
+      _cooldownTimer = _scheduleTimer(
+        earliest.difference(now),
+        _repokeCooldown,
+      );
     }
   }
 

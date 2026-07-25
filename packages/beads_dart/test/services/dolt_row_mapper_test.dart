@@ -33,10 +33,7 @@ void main() {
     });
 
     test('no metadata_text key at all falls back to the raw column', () {
-      final row = <String, Object?>{
-        'id': 'tg-y',
-        'metadata': '{"k":"w"}',
-      };
+      final row = <String, Object?>{'id': 'tg-y', 'metadata': '{"k":"w"}'};
       expect(beadFromRow(row).metadata, {'k': 'w'});
     });
   });

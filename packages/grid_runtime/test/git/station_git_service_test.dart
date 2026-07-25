@@ -58,7 +58,12 @@ void main() {
   /// clones it into a root checkout. Returns (barePath, rootPath).
   Future<({String bare, String root})> seedOriginAndClone() async {
     final bare = p.join(tmp.path, 'origin.git');
-    await git(tmp.path, <String>['init', '--bare', '--initial-branch=main', bare]);
+    await git(tmp.path, <String>[
+      'init',
+      '--bare',
+      '--initial-branch=main',
+      bare,
+    ]);
 
     // A seed working repo to push an initial commit + main into the bare origin.
     final seed = Directory(p.join(tmp.path, 'seed'))..createSync();
@@ -80,18 +85,21 @@ void main() {
   StationGitService serviceWith(PrOpener opener) =>
       StationGitService(runner: runner, prOpener: opener);
 
-  test('Layer 1: register probes the default branch from origin/HEAD', () async {
-    final seeded = await seedOriginAndClone();
-    final svc = serviceWith(_FakePrOpener());
+  test(
+    'Layer 1: register probes the default branch from origin/HEAD',
+    () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
 
-    final root = await svc.registerRootCheckout(
-      path: seeded.root,
-      substation: 'tgdog',
-    );
-    expect(root.defaultBranch, 'main');
-    expect(root.substation, 'tgdog');
-    expect(p.normalize(root.path), p.normalize(seeded.root));
-  });
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      expect(root.defaultBranch, 'main');
+      expect(root.substation, 'tgdog');
+      expect(p.normalize(root.path), p.normalize(seeded.root));
+    },
+  );
 
   test('an assigned head OVERRIDES the origin/HEAD probe; worktrees cut off the '
       'assigned branch, not main (the_grid-as-substation)', () async {
@@ -120,20 +128,24 @@ void main() {
     expect(
       File(p.join(wt.path, 'feature.txt')).existsSync(),
       isTrue,
-      reason: 'the worktree was branched off the ASSIGNED head (feature), not main',
+      reason:
+          'the worktree was branched off the ASSIGNED head (feature), not main',
     );
   });
 
-  test('an empty/whitespace head falls back to the origin/HEAD probe', () async {
-    final seeded = await seedOriginAndClone();
-    final svc = serviceWith(_FakePrOpener());
-    final root = await svc.registerRootCheckout(
-      path: seeded.root,
-      substation: 'tgdog',
-      head: '   ',
-    );
-    expect(root.defaultBranch, 'main', reason: 'blank head → probe, not ""');
-  });
+  test(
+    'an empty/whitespace head falls back to the origin/HEAD probe',
+    () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+        head: '   ',
+      );
+      expect(root.defaultBranch, 'main', reason: 'blank head → probe, not ""');
+    },
+  );
 
   test('register refuses a non-repo path (fail closed)', () async {
     final notARepo = Directory(p.join(tmp.path, 'plain'))..createSync();
@@ -144,80 +156,90 @@ void main() {
     );
   });
 
-  test('Layer 2: provision adds a worktree on grid/<beadId> off the default',
-      () async {
-    final seeded = await seedOriginAndClone();
-    final svc = serviceWith(_FakePrOpener());
-    final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
+  test(
+    'Layer 2: provision adds a worktree on grid/<beadId> off the default',
+    () async {
+      final seeded = await seedOriginAndClone();
+      final svc = serviceWith(_FakePrOpener());
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
 
-    final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-1');
-    expect(
-      p.normalize(wt.path),
-      p.normalize(WorktreeLayout.worktreePath(root.path, 'tgdog', 'lenny-1')),
-    );
-    expect(wt.branch, 'grid/lenny-1');
-    expect(Directory(wt.path).existsSync(), isTrue);
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-1');
+      expect(
+        p.normalize(wt.path),
+        p.normalize(WorktreeLayout.worktreePath(root.path, 'tgdog', 'lenny-1')),
+      );
+      expect(wt.branch, 'grid/lenny-1');
+      expect(Directory(wt.path).existsSync(), isTrue);
 
-    // The worktree is on the right branch off main.
-    final branch = await runner.run(
-      workingDirectory: wt.path,
-      args: const <String>['rev-parse', '--abbrev-ref', 'HEAD'],
-    );
-    expect(branch.output.trim(), 'grid/lenny-1');
+      // The worktree is on the right branch off main.
+      final branch = await runner.run(
+        workingDirectory: wt.path,
+        args: const <String>['rev-parse', '--abbrev-ref', 'HEAD'],
+      );
+      expect(branch.output.trim(), 'grid/lenny-1');
 
-    // listBeadWorktrees re-binds the dir name → bead id (restart reconcile).
-    final list = await svc.listBeadWorktrees(root);
-    expect(list, isNotNull);
-    expect(
-      list!.map((w) => w.beadId),
-      contains('lenny-1'),
-    );
-  });
+      // listBeadWorktrees re-binds the dir name → bead id (restart reconcile).
+      final list = await svc.listBeadWorktrees(root);
+      expect(list, isNotNull);
+      expect(list!.map((w) => w.beadId), contains('lenny-1'));
+    },
+  );
 
-  test('land: commit -> push -> open PR via the fake opener, then reap is clean',
-      () async {
-    final seeded = await seedOriginAndClone();
-    final fakePr = _FakePrOpener();
-    final svc = serviceWith(fakePr);
-    final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
-    final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-2');
+  test(
+    'land: commit -> push -> open PR via the fake opener, then reap is clean',
+    () async {
+      final seeded = await seedOriginAndClone();
+      final fakePr = _FakePrOpener();
+      final svc = serviceWith(fakePr);
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-2');
 
-    // The agent "did work".
-    File(p.join(wt.path, 'agent_output.txt')).writeAsStringSync('done\n');
+      // The agent "did work".
+      File(p.join(wt.path, 'agent_output.txt')).writeAsStringSync('done\n');
 
-    final landed = await svc.land(
-      root: root,
-      worktree: wt,
-      commitMessage: 'grid: lenny-2 work',
-      prTitle: 'grid/lenny-2',
-      prBody: 'body',
-    );
-    expect(landed.isLanded, isTrue, reason: landed.failureReason ?? '');
-    expect(landed.pr!.url, contains('lenny-2'));
+      final landed = await svc.land(
+        root: root,
+        worktree: wt,
+        commitMessage: 'grid: lenny-2 work',
+        prTitle: 'grid/lenny-2',
+        prBody: 'body',
+      );
+      expect(landed.isLanded, isTrue, reason: landed.failureReason ?? '');
+      expect(landed.pr!.url, contains('lenny-2'));
 
-    // The FAKE PR-opener was called with the right branch + base.
-    expect(fakePr.lastBranch, 'grid/lenny-2');
-    expect(fakePr.lastBaseBranch, 'main');
-    expect(fakePr.calls, 1);
+      // The FAKE PR-opener was called with the right branch + base.
+      expect(fakePr.lastBranch, 'grid/lenny-2');
+      expect(fakePr.lastBaseBranch, 'main');
+      expect(fakePr.calls, 1);
 
-    // After push, the branch really exists on the bare origin.
-    final lsRemote = await runner.run(
-      workingDirectory: wt.path,
-      args: const <String>['ls-remote', '--heads', 'origin', 'grid/lenny-2'],
-    );
-    expect(lsRemote.output.trim(), isNotEmpty);
+      // After push, the branch really exists on the bare origin.
+      final lsRemote = await runner.run(
+        workingDirectory: wt.path,
+        args: const <String>['ls-remote', '--heads', 'origin', 'grid/lenny-2'],
+      );
+      expect(lsRemote.output.trim(), isNotEmpty);
 
-    // And now the three-gate reaper finds it clean → removes it.
-    final reap = await svc.reap(root: root, worktree: wt);
-    expect(reap.removed, isTrue, reason: reap.refusedReason ?? '');
-    expect(Directory(wt.path).existsSync(), isFalse);
-  });
+      // And now the three-gate reaper finds it clean → removes it.
+      final reap = await svc.reap(root: root, worktree: wt);
+      expect(reap.removed, isTrue, reason: reap.refusedReason ?? '');
+      expect(Directory(wt.path).existsSync(), isFalse);
+    },
+  );
 
   group('the three-gate reaper REFUSES unsafe worktrees (fail closed)', () {
     test('(a) uncommitted work blocks removal', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
       final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-u');
 
       // Uncommitted (untracked) work present.
@@ -234,7 +256,10 @@ void main() {
     test('(b) unpushed commits block removal', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
       final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-p');
 
       // A committed-but-unpushed change (clean tree, but commits not on remote).
@@ -253,7 +278,10 @@ void main() {
     test('(c) a stash blocks removal', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
       final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-s');
 
       // Create a tracked file, commit, then stash a modification so the tree is
@@ -279,7 +307,10 @@ void main() {
     test('scope gate: a path outside the worktrees root is refused', () async {
       final seeded = await seedOriginAndClone();
       final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
 
       final outside = BeadWorktree(
         beadId: 'evil',
@@ -292,108 +323,128 @@ void main() {
     });
   });
 
-  test(
-    'reap deletes the branch too (tg-e0p): symmetric cleanup so a done bead '
-    'never wedges a future re-mint',
-    () async {
-      final seeded = await seedOriginAndClone();
-      final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
-      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-sym');
-
-      // Push so the unpushed gate is clear, then reap.
-      await git(wt.path, const <String>['push', '-u', 'origin', 'grid/lenny-sym']);
-      final reap = await svc.reap(root: root, worktree: wt);
-      expect(reap.removed, isTrue, reason: reap.refusedReason ?? '');
-
-      final branchGone = await runner.run(
-        workingDirectory: seeded.root,
-        args: <String>['show-ref', '--verify', '--quiet', 'refs/heads/${wt.branch}'],
-      );
-      expect(
-        branchGone.ok,
-        isFalse,
-        reason: 'the local branch must be deleted alongside the worktree',
-      );
-    },
-  );
-
-  test(
-    'provisionWorktree ADOPTS a branch that outlived its worktree — '
-    'self-heals the wedge (tg-e0p, tg-rm5/tg-457)',
-    () async {
-      final seeded = await seedOriginAndClone();
-      final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(path: seeded.root, substation: 'tgdog');
-
-      // First mint: succeeds, creates the branch + worktree.
-      final wt = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
-      expect(Directory(wt.path).existsSync(), isTrue);
-
-      // Simulate the wedge exactly as observed: the worktree vanishes WITHOUT
-      // the branch being deleted (an out-of-band removal, or any cleanup path
-      // that predates the symmetric reap fix above) — the branch survives
-      // with no worktree checked out against it.
-      await git(seeded.root, <String>['worktree', 'remove', wt.path]);
-      final stillThere = await runner.run(
-        workingDirectory: seeded.root,
-        args: <String>['show-ref', '--verify', '--quiet', 'refs/heads/${wt.branch}'],
-      );
-      expect(
-        stillThere.ok,
-        isTrue,
-        reason: 'the branch must survive the raw removal (the wedge setup)',
-      );
-
-      // Re-provisioning the SAME bead must ADOPT the surviving branch rather
-      // than fail forever on "already exists" — the exact operator-observed
-      // failure: every re-mint hit branch-exists with no self-healing path,
-      // costing 3 re-keys + 2 manual git bridges on one bead.
-      final wt2 = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
-      expect(wt2.branch, wt.branch);
-      expect(Directory(wt2.path).existsSync(), isTrue);
-      final onBranch = await runner.run(
-        workingDirectory: wt2.path,
-        args: const <String>['rev-parse', '--abbrev-ref', 'HEAD'],
-      );
-      expect(onBranch.output.trim(), wt.branch);
-    },
-  );
-
-  test('land records a failure (does not throw) when push has no remote',
-      () async {
-    // A standalone repo with NO origin — push fails; land returns a recorded
-    // failure rather than throwing, and the worktree is left for retry.
-    final standalone = Directory(p.join(tmp.path, 'noremote'))..createSync();
-    await git(standalone.path, const <String>['init', '--initial-branch=main']);
-    File(p.join(standalone.path, 'f')).writeAsStringSync('x');
-    await git(standalone.path, const <String>['add', '-A']);
-    await git(standalone.path, const <String>['commit', '-m', 'c']);
-
+  test('reap deletes the branch too (tg-e0p): symmetric cleanup so a done bead '
+      'never wedges a future re-mint', () async {
+    final seeded = await seedOriginAndClone();
     final svc = serviceWith(_FakePrOpener());
-    final wt = BeadWorktree(
-      beadId: 'lenny-nr',
-      path: standalone.path,
-      branch: 'main',
-    );
-    final root = RootCheckout(
-      path: standalone.path,
-      defaultBranch: 'main',
+    final root = await svc.registerRootCheckout(
+      path: seeded.root,
       substation: 'tgdog',
     );
-    File(p.join(standalone.path, 'more')).writeAsStringSync('y');
+    final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-sym');
 
-    final res = await svc.land(
-      root: root,
-      worktree: wt,
-      commitMessage: 'm',
-      prTitle: 't',
+    // Push so the unpushed gate is clear, then reap.
+    await git(wt.path, const <String>[
+      'push',
+      '-u',
+      'origin',
+      'grid/lenny-sym',
+    ]);
+    final reap = await svc.reap(root: root, worktree: wt);
+    expect(reap.removed, isTrue, reason: reap.refusedReason ?? '');
+
+    final branchGone = await runner.run(
+      workingDirectory: seeded.root,
+      args: <String>[
+        'show-ref',
+        '--verify',
+        '--quiet',
+        'refs/heads/${wt.branch}',
+      ],
     );
-    expect(res.isLanded, isFalse);
-    expect(res.committed, isTrue);
-    expect(res.pushed, isFalse);
-    expect(res.failureReason, contains('push failed'));
+    expect(
+      branchGone.ok,
+      isFalse,
+      reason: 'the local branch must be deleted alongside the worktree',
+    );
   });
+
+  test('provisionWorktree ADOPTS a branch that outlived its worktree — '
+      'self-heals the wedge (tg-e0p, tg-rm5/tg-457)', () async {
+    final seeded = await seedOriginAndClone();
+    final svc = serviceWith(_FakePrOpener());
+    final root = await svc.registerRootCheckout(
+      path: seeded.root,
+      substation: 'tgdog',
+    );
+
+    // First mint: succeeds, creates the branch + worktree.
+    final wt = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
+    expect(Directory(wt.path).existsSync(), isTrue);
+
+    // Simulate the wedge exactly as observed: the worktree vanishes WITHOUT
+    // the branch being deleted (an out-of-band removal, or any cleanup path
+    // that predates the symmetric reap fix above) — the branch survives
+    // with no worktree checked out against it.
+    await git(seeded.root, <String>['worktree', 'remove', wt.path]);
+    final stillThere = await runner.run(
+      workingDirectory: seeded.root,
+      args: <String>[
+        'show-ref',
+        '--verify',
+        '--quiet',
+        'refs/heads/${wt.branch}',
+      ],
+    );
+    expect(
+      stillThere.ok,
+      isTrue,
+      reason: 'the branch must survive the raw removal (the wedge setup)',
+    );
+
+    // Re-provisioning the SAME bead must ADOPT the surviving branch rather
+    // than fail forever on "already exists" — the exact operator-observed
+    // failure: every re-mint hit branch-exists with no self-healing path,
+    // costing 3 re-keys + 2 manual git bridges on one bead.
+    final wt2 = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
+    expect(wt2.branch, wt.branch);
+    expect(Directory(wt2.path).existsSync(), isTrue);
+    final onBranch = await runner.run(
+      workingDirectory: wt2.path,
+      args: const <String>['rev-parse', '--abbrev-ref', 'HEAD'],
+    );
+    expect(onBranch.output.trim(), wt.branch);
+  });
+
+  test(
+    'land records a failure (does not throw) when push has no remote',
+    () async {
+      // A standalone repo with NO origin — push fails; land returns a recorded
+      // failure rather than throwing, and the worktree is left for retry.
+      final standalone = Directory(p.join(tmp.path, 'noremote'))..createSync();
+      await git(standalone.path, const <String>[
+        'init',
+        '--initial-branch=main',
+      ]);
+      File(p.join(standalone.path, 'f')).writeAsStringSync('x');
+      await git(standalone.path, const <String>['add', '-A']);
+      await git(standalone.path, const <String>['commit', '-m', 'c']);
+
+      final svc = serviceWith(_FakePrOpener());
+      final wt = BeadWorktree(
+        beadId: 'lenny-nr',
+        path: standalone.path,
+        branch: 'main',
+      );
+      final root = RootCheckout(
+        path: standalone.path,
+        defaultBranch: 'main',
+        substation: 'tgdog',
+      );
+      File(p.join(standalone.path, 'more')).writeAsStringSync('y');
+
+      final res = await svc.land(
+        root: root,
+        worktree: wt,
+        commitMessage: 'm',
+        prTitle: 't',
+      );
+      expect(res.isLanded, isFalse);
+      expect(res.committed, isTrue);
+      expect(res.pushed, isFalse);
+      expect(res.failureReason, contains('push failed'));
+    },
+  );
 
   group('the WORK SIGNAL of the completion fence', () {
     test('THE WEDGE: a NON-.grid-ignoring substation with grid residue + '
@@ -435,48 +486,57 @@ void main() {
       expect(await svc.hasUncommittedWork(wt.path), GateOutcome.present);
     });
 
-    test('THE BUG: residue never MASKS a real interrupted agent (an uncommitted '
-        'TRACKED edit ⇒ present, exclusion or not)', () async {
-      final seeded = await seedOriginAndClone();
-      final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(
-        path: seeded.root,
-        substation: 'tgdog',
-      );
-      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w4');
+    test(
+      'THE BUG: residue never MASKS a real interrupted agent (an uncommitted '
+      'TRACKED edit ⇒ present, exclusion or not)',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final svc = serviceWith(_FakePrOpener());
+        final root = await svc.registerRootCheckout(
+          path: seeded.root,
+          substation: 'tgdog',
+        );
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w4');
 
-      File(p.join(wt.path, 'work.dart')).writeAsStringSync('void main() {}\n');
-      await git(wt.path, const <String>['add', '-A']);
-      await git(wt.path, const <String>['commit', '-m', 'base']);
-      // The murder: a tracked file left mid-edit.
-      File(p.join(wt.path, 'work.dart')).writeAsStringSync('void main() { // hal\n');
-      final residue = File(p.join(wt.path, '.grid/critique/pinned.diff'))
-        ..parent.createSync(recursive: true);
-      residue.writeAsStringSync('residue\n');
+        File(
+          p.join(wt.path, 'work.dart'),
+        ).writeAsStringSync('void main() {}\n');
+        await git(wt.path, const <String>['add', '-A']);
+        await git(wt.path, const <String>['commit', '-m', 'base']);
+        // The murder: a tracked file left mid-edit.
+        File(
+          p.join(wt.path, 'work.dart'),
+        ).writeAsStringSync('void main() { // hal\n');
+        final residue = File(p.join(wt.path, '.grid/critique/pinned.diff'))
+          ..parent.createSync(recursive: true);
+        residue.writeAsStringSync('residue\n');
 
-      expect(
-        await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
-        GateOutcome.present,
-      );
-    });
+        expect(
+          await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
+          GateOutcome.present,
+        );
+      },
+    );
 
-    test('an UNTRACKED source file (not under the grid dir) is still work',
-        () async {
-      final seeded = await seedOriginAndClone();
-      final svc = serviceWith(_FakePrOpener());
-      final root = await svc.registerRootCheckout(
-        path: seeded.root,
-        substation: 'tgdog',
-      );
-      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w5');
+    test(
+      'an UNTRACKED source file (not under the grid dir) is still work',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final svc = serviceWith(_FakePrOpener());
+        final root = await svc.registerRootCheckout(
+          path: seeded.root,
+          substation: 'tgdog',
+        );
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-w5');
 
-      File(p.join(wt.path, 'mid-edit.dart')).writeAsStringSync('wip\n');
+        File(p.join(wt.path, 'mid-edit.dart')).writeAsStringSync('wip\n');
 
-      expect(
-        await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
-        GateOutcome.present,
-      );
-    });
+        expect(
+          await svc.hasUncommittedWork(wt.path, excluding: const {'.grid'}),
+          GateOutcome.present,
+        );
+      },
+    );
 
     test('a CLEAN worktree is clear', () async {
       final seeded = await seedOriginAndClone();

@@ -316,19 +316,74 @@ void main() {
       expect(transport.flares, isEmpty);
     });
 
-    test('nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
-        'fallback binds — no substation override, no ambient StationServices', () {
+    test(
+      'nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
+      'fallback binds — no substation override, no ambient StationServices',
+      () {
+        final recorder = _Recorder();
+        final transport = _RecordingTransport();
+        // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
+        final beadIds = List.generate(
+          kDefaultMaxConcurrentWork + 2,
+          (i) => 'tg-${i + 1}',
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(beads: beadIds.map(_bead).toList(), ready: beadIds.toSet()),
+        );
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        owner.mountRoot(
+          _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            // No `maxConcurrentWork` override — falls all the way through to
+            // the compile-time default.
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+            // No ambient `StationServices` at all — the offline-test default
+            // this file's other cases wire deliberately, exercised here as the
+            // genuinely-nothing-configured case.
+          ),
+        );
+
+        expect(
+          recorder.events,
+          List.generate(
+            kDefaultMaxConcurrentWork,
+            (i) => 'START work(tg-${i + 1})',
+          ),
+        );
+        expect(transport.flares, hasLength(1));
+        expect(transport.flares.single.name, 'work.throttled');
+        expect(transport.flares.single.data, {
+          'count': '2',
+          'beadIds':
+              'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
+        });
+      },
+    );
+
+    test('a rework re-key (tg-zat): a bead whose session becomes momentarily '
+        'unkeyed (its retired session still counts, live, under a DIFFERENT '
+        'key) is NOT evicted for budget reasons even though `liveSession` '
+        'reads false this build — A40 covers the branch, not just the key', () {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
-      // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
-      final beadIds = List.generate(
-        kDefaultMaxConcurrentWork + 2,
-        (i) => 'tg-${i + 1}',
-      );
       final joined = JoinedSnapshotNotifier(
         _joined(
-          beads: beadIds.map(_bead).toList(),
-          ready: beadIds.toSet(),
+          beads: [_bead('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1': const SessionProjection(
+              workBeadId: 'tg-1',
+              isTerminal: false,
+            ),
+          },
         ),
       );
       final owner = TreeOwner();
@@ -337,109 +392,55 @@ void main() {
         _root(
           joined: joined,
           resolver: _FakeSessionResolver(recorder),
-          // No `maxConcurrentWork` override — falls all the way through to
-          // the compile-time default.
           substationConfig: SubstationConfigNotifier(
-            const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
+            const SubstationConfig(
+              substationId: 'tg',
+              ownedSubstations: {'tg'},
+            ),
           ),
           services: ServiceBundle(transport: transport),
-          // No ambient `StationServices` at all — the offline-test default
-          // this file's other cases wire deliberately, exercised here as the
-          // genuinely-nothing-configured case.
+          stationServices: StationServices(
+            provider: FakeRuntimeProvider(),
+            writer: StationBeadWriter(
+              bd: BdCliService(RecordingBdRunner()),
+              ownership: BeadOwnershipPredicate(const {'tg'}),
+            ),
+            stateSubstation: 'tg',
+            // A tight station-wide ceiling: the retired session (still open,
+            // now keyed 'tg-1#r1') fills the ONLY slot on its own.
+            maxConcurrentWork: 1,
+          ),
         ),
       );
+      expect(recorder.events, ['START work(tg-1)']);
+      recorder.events.clear();
 
-      expect(
-        recorder.events,
-        List.generate(
-          kDefaultMaxConcurrentWork,
-          (i) => 'START work(tg-${i + 1})',
+      // `grid rework` re-keys the session's `work_bead` off 'tg-1' (D-2's
+      // close-then-mint has not run yet) — `sessionsByWorkBead['tg-1']`
+      // reads null, but the retired session is STILL non-terminal, still
+      // present in the joined map under its round-suffixed key, and STILL
+      // consumes the station-wide budget.
+      joined.push(
+        _joined(
+          beads: [_bead('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1#r1': const SessionProjection(
+              workBeadId: 'tg-1#r1',
+              isTerminal: false,
+            ),
+          },
         ),
       );
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.name, 'work.throttled');
-      expect(transport.flares.single.data, {
-        'count': '2',
-        'beadIds': 'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
-      });
+      owner.flush();
+
+      // Pre-fix, `liveSession` alone reclassified 'tg-1' as a budget-gated
+      // `pending` candidate; with the ONE slot already "spent" by its own
+      // orphaned retired session, it was evicted (a STOP with no matching
+      // START) — killing the very branch that would close the retired
+      // session and mint the fresh round. Fixed: the branch stays mounted.
+      expect(recorder.events, isEmpty);
     });
-
-    test(
-      'a rework re-key (tg-zat): a bead whose session becomes momentarily '
-      'unkeyed (its retired session still counts, live, under a DIFFERENT '
-      'key) is NOT evicted for budget reasons even though `liveSession` '
-      'reads false this build — A40 covers the branch, not just the key',
-      () {
-        final recorder = _Recorder();
-        final transport = _RecordingTransport();
-        final joined = JoinedSnapshotNotifier(
-          _joined(
-            beads: [_bead('tg-1')],
-            ready: {'tg-1'},
-            sessions: {
-              'tg-1': const SessionProjection(
-                workBeadId: 'tg-1',
-                isTerminal: false,
-              ),
-            },
-          ),
-        );
-        final owner = TreeOwner();
-        addTearDown(owner.dispose);
-        owner.mountRoot(
-          _root(
-            joined: joined,
-            resolver: _FakeSessionResolver(recorder),
-            substationConfig: SubstationConfigNotifier(
-              const SubstationConfig(
-                substationId: 'tg',
-                ownedSubstations: {'tg'},
-              ),
-            ),
-            services: ServiceBundle(transport: transport),
-            stationServices: StationServices(
-              provider: FakeRuntimeProvider(),
-              writer: StationBeadWriter(
-                bd: BdCliService(RecordingBdRunner()),
-                ownership: BeadOwnershipPredicate(const {'tg'}),
-              ),
-              stateSubstation: 'tg',
-              // A tight station-wide ceiling: the retired session (still open,
-              // now keyed 'tg-1#r1') fills the ONLY slot on its own.
-              maxConcurrentWork: 1,
-            ),
-          ),
-        );
-        expect(recorder.events, ['START work(tg-1)']);
-        recorder.events.clear();
-
-        // `grid rework` re-keys the session's `work_bead` off 'tg-1' (D-2's
-        // close-then-mint has not run yet) — `sessionsByWorkBead['tg-1']`
-        // reads null, but the retired session is STILL non-terminal, still
-        // present in the joined map under its round-suffixed key, and STILL
-        // consumes the station-wide budget.
-        joined.push(
-          _joined(
-            beads: [_bead('tg-1')],
-            ready: {'tg-1'},
-            sessions: {
-              'tg-1#r1': const SessionProjection(
-                workBeadId: 'tg-1#r1',
-                isTerminal: false,
-              ),
-            },
-          ),
-        );
-        owner.flush();
-
-        // Pre-fix, `liveSession` alone reclassified 'tg-1' as a budget-gated
-        // `pending` candidate; with the ONE slot already "spent" by its own
-        // orphaned retired session, it was evicted (a STOP with no matching
-        // START) — killing the very branch that would close the retired
-        // session and mint the fresh round. Fixed: the branch stays mounted.
-        expect(recorder.events, isEmpty);
-      },
-    );
 
     test('the station-wide cap is a TOTAL across substations — a busy '
         'substation starves a quiet sibling of slots even though the '
@@ -483,16 +484,10 @@ void main() {
           joined: joined,
           resolver: _FakeSessionResolver(recorder),
           substationA: SubstationConfigNotifier(
-            const SubstationConfig(
-              substationId: 'a',
-              ownedSubstations: {'a'},
-            ),
+            const SubstationConfig(substationId: 'a', ownedSubstations: {'a'}),
           ),
           substationB: SubstationConfigNotifier(
-            const SubstationConfig(
-              substationId: 'b',
-              ownedSubstations: {'b'},
-            ),
+            const SubstationConfig(substationId: 'b', ownedSubstations: {'b'}),
           ),
           servicesA: ServiceBundle(transport: transportA),
           servicesB: ServiceBundle(transport: transportB),

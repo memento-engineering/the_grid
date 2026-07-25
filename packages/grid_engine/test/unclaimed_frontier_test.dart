@@ -143,41 +143,40 @@ void main() {
         stationFacts: _macos,
       );
       expect(unclaimed, hasLength(2));
-      expect(
-        unclaimed.map((u) => u.sessionId).toSet(),
-        {'tgdog-s1', 'tgdog-s2'},
-      );
-      expect(
-        unclaimed.map((u) => u.workBeadId).toSet(),
-        {'tg-1', 'tg-2'},
-      );
+      expect(unclaimed.map((u) => u.sessionId).toSet(), {
+        'tgdog-s1',
+        'tgdog-s2',
+      });
+      expect(unclaimed.map((u) => u.workBeadId).toSet(), {'tg-1', 'tg-2'});
     });
 
-    test('a station profile satisfying EVERY requirement → nothing unclaimed',
-        () {
-      final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
-      final snapshot = JoinedSnapshot(
-        graph: _graph([_task('tg-burn')]),
-        sessionsByWorkBead: const {
-          'tg-burn': SessionProjection(
-            workBeadId: 'tg-burn',
-            sessionId: 'tgdog-s1',
-          ),
-        },
-      );
-      const both = CapabilityFacts(
-        sets: {
-          kSystemOs: {'macos', 'linux'},
-          kRadio: {'ble'},
-        },
-      );
-      final unclaimed = stationUnclaimedFrontier(
-        snapshot,
-        rootCircuitFor: (_) => _burn,
-        registry: registry,
-        stationFacts: both,
-      );
-      expect(unclaimed, isEmpty);
-    });
+    test(
+      'a station profile satisfying EVERY requirement → nothing unclaimed',
+      () {
+        final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
+        final snapshot = JoinedSnapshot(
+          graph: _graph([_task('tg-burn')]),
+          sessionsByWorkBead: const {
+            'tg-burn': SessionProjection(
+              workBeadId: 'tg-burn',
+              sessionId: 'tgdog-s1',
+            ),
+          },
+        );
+        const both = CapabilityFacts(
+          sets: {
+            kSystemOs: {'macos', 'linux'},
+            kRadio: {'ble'},
+          },
+        );
+        final unclaimed = stationUnclaimedFrontier(
+          snapshot,
+          rootCircuitFor: (_) => _burn,
+          registry: registry,
+          stationFacts: both,
+        );
+        expect(unclaimed, isEmpty);
+      },
+    );
   });
 }

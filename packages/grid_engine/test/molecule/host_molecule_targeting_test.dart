@@ -471,65 +471,59 @@ void main() {
     });
   });
 
-  group(
-    'legacy flat sessions — an ABSENT InheritedCircuit refuses LOUD '
-    '(tg-eli phase 2: the molecule model is the only circuit engine)',
-    () {
-      test(
-        'a ProcessCapability host with NO InheritedCircuit never spawns and '
-        'never writes — it flares step.allocationFailed at mount and its '
-        'supervised-failure persist is itself contained '
-        '(step.persistFailed): a historical flat session cannot be driven',
-        () async {
-          final log = <String>[];
-          final h = _host(_RecordingProcessCap(log)); // no InheritedCircuit
-          addTearDown(() {
-            h.owner.dispose();
-            unawaited(h.fakes.provider.close());
-          });
-          await _pump();
+  group('legacy flat sessions — an ABSENT InheritedCircuit refuses LOUD '
+      '(tg-eli phase 2: the molecule model is the only circuit engine)', () {
+    test(
+      'a ProcessCapability host with NO InheritedCircuit never spawns and '
+      'never writes — it flares step.allocationFailed at mount and its '
+      'supervised-failure persist is itself contained '
+      '(step.persistFailed): a historical flat session cannot be driven',
+      () async {
+        final log = <String>[];
+        final h = _host(_RecordingProcessCap(log)); // no InheritedCircuit
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
 
-          expect(log, isEmpty, reason: 'the capability was never spawned');
-          expect(h.fakes.provider.started, isEmpty);
-          expect(
-            h.fakes.runner.calls,
-            isEmpty,
-            reason:
-                'no write target exists — the retired flat session-bead '
-                'write must never come back',
-          );
-          expect(
-            h.transport.flares.map((f) => f.name),
-            containsAll(['step.allocationFailed', 'step.persistFailed']),
-          );
-          final flare = h.transport.flares.firstWhere(
-            (f) => f.name == 'step.allocationFailed',
-          );
-          expect(flare.data['error'], contains('InheritedCircuit'));
-        },
-      );
+        expect(log, isEmpty, reason: 'the capability was never spawned');
+        expect(h.fakes.provider.started, isEmpty);
+        expect(
+          h.fakes.runner.calls,
+          isEmpty,
+          reason:
+              'no write target exists — the retired flat session-bead '
+              'write must never come back',
+        );
+        expect(
+          h.transport.flares.map((f) => f.name),
+          containsAll(['step.allocationFailed', 'step.persistFailed']),
+        );
+        final flare = h.transport.flares.firstWhere(
+          (f) => f.name == 'step.allocationFailed',
+        );
+        expect(flare.data['error'], contains('InheritedCircuit'));
+      },
+    );
 
-      test(
-        'the refusal covers EVERY capability kind: a ServiceCapability host '
+    test('the refusal covers EVERY capability kind: a ServiceCapability host '
         'with NO InheritedCircuit is refused at MOUNT too — its effect never '
-        'runs and no write ever lands on the session bead',
-        () async {
-          final h = _host(_ServiceCap(const Ok()));
-          addTearDown(() {
-            h.owner.dispose();
-            unawaited(h.fakes.provider.close());
-          });
-          await _pump();
+        'runs and no write ever lands on the session bead', () async {
+      final h = _host(_ServiceCap(const Ok()));
+      addTearDown(() {
+        h.owner.dispose();
+        unawaited(h.fakes.provider.close());
+      });
+      await _pump();
 
-          expect(h.fakes.runner.calls, isEmpty);
-          expect(
-            h.transport.flares.map((f) => f.name),
-            containsAll(['step.allocationFailed', 'step.persistFailed']),
-          );
-        },
+      expect(h.fakes.runner.calls, isEmpty);
+      expect(
+        h.transport.flares.map((f) => f.name),
+        containsAll(['step.allocationFailed', 'step.persistFailed']),
       );
-    },
-  );
+    });
+  });
 
   group('LOUD-or-GONE — a process-backed molecule capability needs a mounted '
       'ProcessLeaseVendor (item 5)', () {
@@ -613,6 +607,5 @@ void main() {
         );
       },
     );
-
   });
 }

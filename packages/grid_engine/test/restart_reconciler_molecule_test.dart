@@ -196,12 +196,13 @@ class _FakeProcessCap extends ProcessCapability {
   const _FakeProcessCap();
 
   @override
-  RuntimeConfig spawn(TreeContext context, StepArgs args) => const RuntimeConfig(
-    workDir: '/w/tg-w1',
-    command: 'sh',
-    args: ['-c', 'echo hi'],
-    lifecycle: Lifecycle.oneTurn,
-  );
+  RuntimeConfig spawn(TreeContext context, StepArgs args) =>
+      const RuntimeConfig(
+        workDir: '/w/tg-w1',
+        command: 'sh',
+        args: ['-c', 'echo hi'],
+        lifecycle: Lifecycle.oneTurn,
+      );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => StepSignal.none;
@@ -278,86 +279,80 @@ const _daemonLease = ProcessHandle(pgid: 5252, pid: 5253, token: 'tok-daemon');
 
 void main() {
   group('RestartReconciler — molecule crash recovery (tg-eli phase 1)', () {
-    test(
-      '(a) an orphaned live JOB group: killed through the REAL guarded '
-      'terminateGroup, breadcrumb cleared through the chokepoint, reported '
-      'LOUD — and the worktree stays respawn-pending for the frontier '
-      '(respawn-or-skip, never adoption for a job)',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
-            _stepBead(
-              id: 'tgdog-step-1',
-              sessionId: 'tgdog-m1',
-              lease: _jobLease,
-            ),
-          ],
-          alivePids: {4243},
-          alivePgids: {4242},
-        );
+    test('(a) an orphaned live JOB group: killed through the REAL guarded '
+        'terminateGroup, breadcrumb cleared through the chokepoint, reported '
+        'LOUD — and the worktree stays respawn-pending for the frontier '
+        '(respawn-or-skip, never adoption for a job)', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+          _stepBead(
+            id: 'tgdog-step-1',
+            sessionId: 'tgdog-m1',
+            lease: _jobLease,
+          ),
+        ],
+        alivePids: {4243},
+        alivePgids: {4242},
+      );
 
-        final report = await h.reconciler.reconcile();
+      final report = await h.reconciler.reconcile();
 
-        // The kill went through the REAL guarded path: SIGTERM to the group.
-        expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
+      // The kill went through the REAL guarded path: SIGTERM to the group.
+      expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
 
-        // The vendor's own clearing write, on the step bead, nothing else.
-        final updates = h.bd.callsFor('update');
-        expect(updates, hasLength(1));
-        expect(updates.single[1], 'tgdog-step-1');
-        expect(h.bd.metadataOfUpdate(0), kClearedLeaseKeys);
-        expect(h.bd.neverShowOrSql, isTrue);
+      // The vendor's own clearing write, on the step bead, nothing else.
+      final updates = h.bd.callsFor('update');
+      expect(updates, hasLength(1));
+      expect(updates.single[1], 'tgdog-step-1');
+      expect(h.bd.metadataOfUpdate(0), kClearedLeaseKeys);
+      expect(h.bd.neverShowOrSql, isTrue);
 
-        // LOUD, and on the report.
-        expect(h.loud.single, contains('tgdog-step-1'));
-        expect(report.sweptLeases, hasLength(1));
-        expect(
-          report.sweptLeases.single.disposition,
-          LeaseSweepDisposition.killed,
-        );
+      // LOUD, and on the report.
+      expect(h.loud.single, contains('tgdog-step-1'));
+      expect(report.sweptLeases, hasLength(1));
+      expect(
+        report.sweptLeases.single.disposition,
+        LeaseSweepDisposition.killed,
+      );
 
-        // The flat pass saw nothing for the molecule session (empty cursor ⇒
-        // no kill target): the worktree is respawn-pending, never reaped —
-        // the frontier re-mounts and the job lease respawns FRESH.
-        expect(report.respawnPending.map((e) => e.beadId), ['tg-w1']);
-        expect(h.git.reaped, isEmpty);
-        expect(report.reaped, isEmpty, reason: 'no flat zombies here');
-      },
-    );
+      // The flat pass saw nothing for the molecule session (empty cursor ⇒
+      // no kill target): the worktree is respawn-pending, never reaped —
+      // the frontier re-mounts and the job lease respawns FRESH.
+      expect(report.respawnPending.map((e) => e.beadId), ['tg-w1']);
+      expect(h.git.reaped, isEmpty);
+      expect(report.reaped, isEmpty, reason: 'no flat zombies here');
+    });
 
-    test(
-      '(a2) ARMED BY CONSTRUCTION — the sweep\'s kill gate rides the '
-      'reconciler\'s OWN controller, never the vendor\'s adopt-liveness: with '
-      'adoption UNARMED (the adopt proof refutes everything — the live '
-      'assembly\'s production posture) a live orphaned JOB group is STILL '
-      'killed on reboot',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
-            _stepBead(
-              id: 'tgdog-step-1',
-              sessionId: 'tgdog-m1',
-              lease: _jobLease,
-            ),
-          ],
-          alivePids: {4243},
-          alivePgids: const {}, // adopt-liveness proves NOTHING — neverLive.
-        );
+    test('(a2) ARMED BY CONSTRUCTION — the sweep\'s kill gate rides the '
+        'reconciler\'s OWN controller, never the vendor\'s adopt-liveness: with '
+        'adoption UNARMED (the adopt proof refutes everything — the live '
+        'assembly\'s production posture) a live orphaned JOB group is STILL '
+        'killed on reboot', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+          _stepBead(
+            id: 'tgdog-step-1',
+            sessionId: 'tgdog-m1',
+            lease: _jobLease,
+          ),
+        ],
+        alivePids: {4243},
+        alivePgids: const {}, // adopt-liveness proves NOTHING — neverLive.
+      );
 
-        final report = await h.reconciler.reconcile();
+      final report = await h.reconciler.reconcile();
 
-        expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
-        expect(h.bd.metadataOfUpdate(0), kClearedLeaseKeys);
-        expect(report.sweptLeases, hasLength(1));
-        expect(
-          report.sweptLeases.single.disposition,
-          LeaseSweepDisposition.killed,
-        );
-        expect(h.loud, isNotEmpty);
-      },
-    );
+      expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
+      expect(h.bd.metadataOfUpdate(0), kClearedLeaseKeys);
+      expect(report.sweptLeases, hasLength(1));
+      expect(
+        report.sweptLeases.single.disposition,
+        LeaseSweepDisposition.killed,
+      );
+      expect(h.loud, isNotEmpty);
+    });
 
     test(
       '(b) NEGATIVE CONTROL — a live DAEMON whose proveFresh holds is NOT '
@@ -403,92 +398,83 @@ void main() {
       },
     );
 
-    test(
-      '(c) NEGATIVE CONTROL — a DEAD group (the controller cannot prove the '
-      'leader alive): no kill is even attempted, and the stale breadcrumb is '
-      'LEFT per the documented contract (it is inert; the fresh respawn '
-      'overwrites it)',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
-            _stepBead(
-              id: 'tgdog-step-1',
-              sessionId: 'tgdog-m1',
-              lease: _jobLease,
-            ),
-          ],
-          alivePids: const {},
-          alivePgids: const {},
-        );
-
-        final report = await h.reconciler.reconcile();
-
-        expect(h.groups.signals, isEmpty);
-        expect(h.bd.callsFor('update'), isEmpty);
-        expect(h.loud, isEmpty);
-        expect(report.sweptLeases, isEmpty);
-        // The step stays with the frontier: respawn-pending, fresh respawn.
-        expect(report.respawnPending, hasLength(1));
-      },
-    );
-
-    test(
-      '(d) a COMPLETED step (grid.step.state=complete) is untouched — no '
-      'kill, no clearing write, no respawn side effects, even with a live '
-      'breadcrumb still on it',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
-            _stepBead(
-              id: 'tgdog-step-1',
-              sessionId: 'tgdog-m1',
-              state: StepState.complete,
-              lease: _jobLease,
-            ),
-          ],
-          alivePids: {4243},
-          alivePgids: {4242},
-        );
-
-        final report = await h.reconciler.reconcile();
-
-        expect(h.groups.signals, isEmpty);
-        expect(h.bd.callsFor('update'), isEmpty);
-        expect(report.sweptLeases, isEmpty);
-        expect(h.loud, isEmpty);
-      },
-    );
-
-    test(
-      '(e) SelfManagedProcessVendor wired as the sweep vendor no-ops: the '
-      'same candidates, no kill, no write, an empty sweep',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
-            _stepBead(
-              id: 'tgdog-step-1',
-              sessionId: 'tgdog-m1',
-              lease: _jobLease,
-            ),
-          ],
-          alivePids: {4243},
-          alivePgids: {4242},
-          vendorOverride: const SelfManagedProcessVendor(
-            spawn: _neverSpawn,
-            dispatch: _neverDispatch,
+    test('(c) NEGATIVE CONTROL — a DEAD group (the controller cannot prove the '
+        'leader alive): no kill is even attempted, and the stale breadcrumb is '
+        'LEFT per the documented contract (it is inert; the fresh respawn '
+        'overwrites it)', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+          _stepBead(
+            id: 'tgdog-step-1',
+            sessionId: 'tgdog-m1',
+            lease: _jobLease,
           ),
-        );
+        ],
+        alivePids: const {},
+        alivePgids: const {},
+      );
 
-        final report = await h.reconciler.reconcile();
+      final report = await h.reconciler.reconcile();
 
-        expect(h.groups.signals, isEmpty);
-        expect(h.bd.callsFor('update'), isEmpty);
-        expect(report.sweptLeases, isEmpty);
-      },
-    );
+      expect(h.groups.signals, isEmpty);
+      expect(h.bd.callsFor('update'), isEmpty);
+      expect(h.loud, isEmpty);
+      expect(report.sweptLeases, isEmpty);
+      // The step stays with the frontier: respawn-pending, fresh respawn.
+      expect(report.respawnPending, hasLength(1));
+    });
+
+    test('(d) a COMPLETED step (grid.step.state=complete) is untouched — no '
+        'kill, no clearing write, no respawn side effects, even with a live '
+        'breadcrumb still on it', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+          _stepBead(
+            id: 'tgdog-step-1',
+            sessionId: 'tgdog-m1',
+            state: StepState.complete,
+            lease: _jobLease,
+          ),
+        ],
+        alivePids: {4243},
+        alivePgids: {4242},
+      );
+
+      final report = await h.reconciler.reconcile();
+
+      expect(h.groups.signals, isEmpty);
+      expect(h.bd.callsFor('update'), isEmpty);
+      expect(report.sweptLeases, isEmpty);
+      expect(h.loud, isEmpty);
+    });
+
+    test('(e) SelfManagedProcessVendor wired as the sweep vendor no-ops: the '
+        'same candidates, no kill, no write, an empty sweep', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+          _stepBead(
+            id: 'tgdog-step-1',
+            sessionId: 'tgdog-m1',
+            lease: _jobLease,
+          ),
+        ],
+        alivePids: {4243},
+        alivePgids: {4242},
+        vendorOverride: const SelfManagedProcessVendor(
+          spawn: _neverSpawn,
+          dispatch: _neverDispatch,
+        ),
+      );
+
+      final report = await h.reconciler.reconcile();
+
+      expect(h.groups.signals, isEmpty);
+      expect(h.bd.callsFor('update'), isEmpty);
+      expect(report.sweptLeases, isEmpty);
+    });
   });
 
   group('molecule sweep — scope and arming', () {
@@ -526,80 +512,74 @@ void main() {
       expect(h.reconciler.hasLeaseSweep, isTrue);
     });
 
-    test(
-      '(f) a TERMINAL molecule session\'s live JOB group is SWEPT: the '
-      'worktree still goes to the skip branch, and the orphan is killed '
-      'through the REAL guarded terminateGroup, cleared through the '
-      'chokepoint, reported LOUD',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1', closed: true),
-            _stepBead(
-              id: 'tgdog-step-1',
-              sessionId: 'tgdog-m1',
-              lease: _jobLease,
-            ),
-          ],
-          alivePids: {4243},
-          alivePgids: {4242},
-        );
+    test('(f) a TERMINAL molecule session\'s live JOB group is SWEPT: the '
+        'worktree still goes to the skip branch, and the orphan is killed '
+        'through the REAL guarded terminateGroup, cleared through the '
+        'chokepoint, reported LOUD', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1', closed: true),
+          _stepBead(
+            id: 'tgdog-step-1',
+            sessionId: 'tgdog-m1',
+            lease: _jobLease,
+          ),
+        ],
+        alivePids: {4243},
+        alivePgids: {4242},
+      );
 
-        final report = await h.reconciler.reconcile();
+      final report = await h.reconciler.reconcile();
 
-        // The skip branch is UNCHANGED — the worktree is still reaped.
-        expect(report.skipped, hasLength(1));
-        expect(h.git.reaped, ['tg-w1']);
+      // The skip branch is UNCHANGED — the worktree is still reaped.
+      expect(report.skipped, hasLength(1));
+      expect(h.git.reaped, ['tg-w1']);
 
-        // And the lingering group no longer survives the restart.
-        expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
-        expect(report.sweptLeases, hasLength(1));
-        expect(
-          report.sweptLeases.single.disposition,
-          LeaseSweepDisposition.killed,
-        );
-        final updates = h.bd.callsFor('update');
-        expect(updates, hasLength(1));
-        expect(updates.single[1], 'tgdog-step-1');
-        expect(h.bd.metadataOfUpdate(0), kClearedLeaseKeys);
-        expect(h.bd.neverShowOrSql, isTrue);
-        expect(h.loud.single, contains('tgdog-step-1'));
-      },
-    );
+      // And the lingering group no longer survives the restart.
+      expect(h.groups.signals.first, (4242, ProcessSignal.sigterm));
+      expect(report.sweptLeases, hasLength(1));
+      expect(
+        report.sweptLeases.single.disposition,
+        LeaseSweepDisposition.killed,
+      );
+      final updates = h.bd.callsFor('update');
+      expect(updates, hasLength(1));
+      expect(updates.single[1], 'tgdog-step-1');
+      expect(h.bd.metadataOfUpdate(0), kClearedLeaseKeys);
+      expect(h.bd.neverShowOrSql, isTrue);
+      expect(h.loud.single, contains('tgdog-step-1'));
+    });
 
-    test(
-      '(g) a TERMINAL molecule session\'s live DAEMON is killed EVEN THOUGH '
-      'the vendor\'s adopt-freshness proof HOLDS: nothing will ever re-mount '
-      'to adopt it (the contrast with (b), whose session is live)',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1', closed: true),
-            _stepBead(
-              id: 'tgdog-step-d',
-              sessionId: 'tgdog-m1',
-              kind: StepKind.daemon,
-              state: StepState.ready,
-              lease: _daemonLease,
-            ),
-          ],
-          alivePids: {5253},
-          // The ADOPT proof HOLDS for this pgid — under a live session (b)
-          // this exact shape is preserved.
-          alivePgids: {5252},
-        );
+    test('(g) a TERMINAL molecule session\'s live DAEMON is killed EVEN THOUGH '
+        'the vendor\'s adopt-freshness proof HOLDS: nothing will ever re-mount '
+        'to adopt it (the contrast with (b), whose session is live)', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1', closed: true),
+          _stepBead(
+            id: 'tgdog-step-d',
+            sessionId: 'tgdog-m1',
+            kind: StepKind.daemon,
+            state: StepState.ready,
+            lease: _daemonLease,
+          ),
+        ],
+        alivePids: {5253},
+        // The ADOPT proof HOLDS for this pgid — under a live session (b)
+        // this exact shape is preserved.
+        alivePgids: {5252},
+      );
 
-        final report = await h.reconciler.reconcile();
+      final report = await h.reconciler.reconcile();
 
-        expect(h.groups.signals.first, (5252, ProcessSignal.sigterm));
-        expect(report.sweptLeases, hasLength(1));
-        expect(
-          report.sweptLeases.single.disposition,
-          LeaseSweepDisposition.killed,
-        );
-        expect(h.loud.single, contains('tgdog-step-d'));
-      },
-    );
+      expect(h.groups.signals.first, (5252, ProcessSignal.sigterm));
+      expect(report.sweptLeases, hasLength(1));
+      expect(
+        report.sweptLeases.single.disposition,
+        LeaseSweepDisposition.killed,
+      );
+      expect(h.loud.single, contains('tgdog-step-d'));
+    });
 
     test(
       '(h) the widened scope is per SESSION, never the latched-step skip — a '
@@ -627,53 +607,47 @@ void main() {
       },
     );
 
-    test(
-      'a molecule session with NO surviving worktree is out of scope — the '
-      'same bounded-boot rationale as the zombie reap',
-      () async {
-        final h = _harness(
-          stateBeads: [
-            _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
-            _stepBead(
-              id: 'tgdog-step-1',
-              sessionId: 'tgdog-m1',
-              lease: _jobLease,
-            ),
-          ],
-          alivePids: {4243},
-          alivePgids: {4242},
-          worktrees: const [],
-        );
+    test('a molecule session with NO surviving worktree is out of scope — the '
+        'same bounded-boot rationale as the zombie reap', () async {
+      final h = _harness(
+        stateBeads: [
+          _moleculeSession(id: 'tgdog-m1', workBead: 'tg-w1'),
+          _stepBead(
+            id: 'tgdog-step-1',
+            sessionId: 'tgdog-m1',
+            lease: _jobLease,
+          ),
+        ],
+        alivePids: {4243},
+        alivePgids: {4242},
+        worktrees: const [],
+      );
 
-        final report = await h.reconciler.reconcile();
+      final report = await h.reconciler.reconcile();
 
-        expect(report.sweptLeases, isEmpty);
-        expect(h.groups.signals, isEmpty);
-        expect(h.bd.callsFor('update'), isEmpty);
-      },
-    );
+      expect(report.sweptLeases, isEmpty);
+      expect(h.groups.signals, isEmpty);
+      expect(h.bd.callsFor('update'), isEmpty);
+    });
   });
 
   group('STRUCTURAL — the reconciler is lease-schema-ignorant', () {
-    test(
-      'restart_reconciler.dart never touches a grid.lease literal or the '
-      'lease helpers — the vendor sweep API is its ONLY touchpoint (Nico\'s '
-      '2026-07-19 ruling)',
-      () {
-        // Runs from the package root (dart test's cwd contract).
-        final file = File('lib/src/restart/restart_reconciler.dart');
-        expect(file.existsSync(), isTrue);
-        // Strip comment lines so a doc reference never trips the scan — only
-        // CODE counts (the process_lease_vendor_test falsifier's discipline).
-        final code = file
-            .readAsLinesSync()
-            .where((l) => !l.trimLeft().startsWith('//'))
-            .join('\n');
-        expect(code, isNot(contains('grid.lease')));
-        expect(code, isNot(contains('LeaseKeys')));
-        expect(code, isNot(contains('leaseBreadcrumb')));
-        expect(code, isNot(contains('kClearedLeaseKeys')));
-      },
-    );
+    test('restart_reconciler.dart never touches a grid.lease literal or the '
+        'lease helpers — the vendor sweep API is its ONLY touchpoint (Nico\'s '
+        '2026-07-19 ruling)', () {
+      // Runs from the package root (dart test's cwd contract).
+      final file = File('lib/src/restart/restart_reconciler.dart');
+      expect(file.existsSync(), isTrue);
+      // Strip comment lines so a doc reference never trips the scan — only
+      // CODE counts (the process_lease_vendor_test falsifier's discipline).
+      final code = file
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(code, isNot(contains('grid.lease')));
+      expect(code, isNot(contains('LeaseKeys')));
+      expect(code, isNot(contains('leaseBreadcrumb')));
+      expect(code, isNot(contains('kClearedLeaseKeys')));
+    });
   });
 }

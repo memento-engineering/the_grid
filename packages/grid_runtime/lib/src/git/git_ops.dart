@@ -110,10 +110,11 @@ class GitOps {
   /// The current branch name, or 'HEAD' when detached. gc's `CurrentBranch`
   /// (`git.go:42-53`).
   Future<String?> currentBranch(String workDir) async {
-    final r = await _run(
-      workDir,
-      const <String>['rev-parse', '--abbrev-ref', 'HEAD'],
-    );
+    final r = await _run(workDir, const <String>[
+      'rev-parse',
+      '--abbrev-ref',
+      'HEAD',
+    ]);
     if (!r.ok) return null;
     return r.output.trim();
   }
@@ -128,10 +129,10 @@ class GitOps {
   /// Used at Layer-1 root-checkout registration to record the repo's actual
   /// mainline rather than a hardcoded `main` (ADR-0006 Decision 3).
   Future<String> probeDefaultBranch(String workDir) async {
-    final symref = await _run(
-      workDir,
-      const <String>['symbolic-ref', 'refs/remotes/origin/HEAD'],
-    );
+    final symref = await _run(workDir, const <String>[
+      'symbolic-ref',
+      'refs/remotes/origin/HEAD',
+    ]);
     if (symref.ok) {
       final ref = symref.output.trim();
       const prefix = 'refs/remotes/origin/';
@@ -197,10 +198,13 @@ class GitOps {
   /// tracking branch — completed work that a removal would lose. gc's
   /// `HasUnpushedCommitsResult` (`git.go:156-162`): fail-closed on probe error.
   Future<GateOutcome> hasUnpushedCommits(String workDir) async {
-    final r = await _run(
-      workDir,
-      const <String>['log', 'HEAD', '--oneline', '--not', '--remotes'],
-    );
+    final r = await _run(workDir, const <String>[
+      'log',
+      'HEAD',
+      '--oneline',
+      '--not',
+      '--remotes',
+    ]);
     if (!r.ok) return GateOutcome.probeError;
     return r.output.trim().isEmpty ? GateOutcome.clear : GateOutcome.present;
   }
@@ -216,10 +220,11 @@ class GitOps {
   /// Lists worktrees in porcelain format. gc's `WorktreeList`
   /// (`git.go:123-129`). Returns null on probe error (caller fails closed).
   Future<List<GitWorktree>?> worktreeList(String rootRepo) async {
-    final r = await _run(
-      rootRepo,
-      const <String>['worktree', 'list', '--porcelain'],
-    );
+    final r = await _run(rootRepo, const <String>[
+      'worktree',
+      'list',
+      '--porcelain',
+    ]);
     if (!r.ok) return null;
     return parseWorktreeList(r.output);
   }
@@ -251,10 +256,12 @@ class GitOps {
   /// whether to mint fresh or adopt what is already there. No gc analog (a
   /// single-root system, no adopt path).
   Future<bool> branchExists(String rootRepo, String branch) async {
-    final r = await _run(
-      rootRepo,
-      <String>['show-ref', '--verify', '--quiet', 'refs/heads/$branch'],
-    );
+    final r = await _run(rootRepo, <String>[
+      'show-ref',
+      '--verify',
+      '--quiet',
+      'refs/heads/$branch',
+    ]);
     return r.ok;
   }
 

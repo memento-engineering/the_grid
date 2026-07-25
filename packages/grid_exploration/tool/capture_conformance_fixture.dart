@@ -47,13 +47,16 @@ Future<void> main(List<String> args) async {
   final host = GridExplorationHost(runtime);
 
   const enc = JsonEncoder.withIndent('  ');
-  File('${dir.path}/handshake.json')
-      .writeAsStringSync('${enc.convert(host.handshakeJson())}\n');
-  File('${dir.path}/observation.json')
-      .writeAsStringSync('${enc.convert(host.observationJson())}\n');
+  File(
+    '${dir.path}/handshake.json',
+  ).writeAsStringSync('${enc.convert(host.handshakeJson())}\n');
+  File(
+    '${dir.path}/observation.json',
+  ).writeAsStringSync('${enc.convert(host.observationJson())}\n');
   final ready = await host.dispatchTool('ready', const {});
-  File('${dir.path}/grid-ready.json')
-      .writeAsStringSync('${enc.convert(ready)}\n');
+  File(
+    '${dir.path}/grid-ready.json',
+  ).writeAsStringSync('${enc.convert(ready)}\n');
 
   await runtime.dispose();
   print('captured handshake/observation/grid-ready to ${dir.path}');

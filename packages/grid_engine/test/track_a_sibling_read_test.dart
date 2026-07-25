@@ -37,9 +37,7 @@ void main() {
     test('cursorOf/resultOf surface a complete sibling with its grade; an '
         'unknown path defaults to pending + empty', () {
       const view = SiblingView(
-        cursor: {
-          'b/critic1': NodeCursor(state: StepState.complete),
-        },
+        cursor: {'b/critic1': NodeCursor(state: StepState.complete)},
         results: {
           'b/critic1': {'grade': 'A'},
         },
@@ -52,28 +50,33 @@ void main() {
       expect(view.resultOf('b/missing'), isEmpty);
     });
 
-    test('a ServiceCapability reads the AMBIENT SiblingView (mounted by '
-        'SessionScope) with the effect verb — its siblings + its nodePath', () async {
-      // The ambient value SessionScope mounts: this session's cursor + results.
-      final context = FakeTreeContext(
-        values: {
-          SiblingView: const SiblingView(
-            cursor: {
-              'tg-1/review/critic1': NodeCursor(state: StepState.complete),
-            },
-            results: {
-              'tg-1/review/critic1': {'grade': 'A'},
-            },
-          ),
-        },
-      );
-      final outcome =
-          await const _RouteCap().run(context, stepArgs('tg-1/review/route'));
-      final payload = (outcome as Ok).payload!;
-      expect(payload['nodePath'], 'tg-1/review/route');
-      expect(payload['critic1.state'], 'complete');
-      expect(payload['critic1.grade'], 'A');
-    });
+    test(
+      'a ServiceCapability reads the AMBIENT SiblingView (mounted by '
+      'SessionScope) with the effect verb — its siblings + its nodePath',
+      () async {
+        // The ambient value SessionScope mounts: this session's cursor + results.
+        final context = FakeTreeContext(
+          values: {
+            SiblingView: const SiblingView(
+              cursor: {
+                'tg-1/review/critic1': NodeCursor(state: StepState.complete),
+              },
+              results: {
+                'tg-1/review/critic1': {'grade': 'A'},
+              },
+            ),
+          },
+        );
+        final outcome = await const _RouteCap().run(
+          context,
+          stepArgs('tg-1/review/route'),
+        );
+        final payload = (outcome as Ok).payload!;
+        expect(payload['nodePath'], 'tg-1/review/route');
+        expect(payload['critic1.state'], 'complete');
+        expect(payload['critic1.grade'], 'A');
+      },
+    );
 
     test('projectCircuitResults parses grid.result.* into per-node maps; a '
         'malformed key is skipped', () {

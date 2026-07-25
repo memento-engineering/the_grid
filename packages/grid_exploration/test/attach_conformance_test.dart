@@ -101,7 +101,9 @@ void main() {
       final info = await developer.Service.getInfo();
       final serverUri = info.serverUri;
       if (serverUri == null) {
-        markTestSkipped('VM service not enabled — run with --enable-vm-service');
+        markTestSkipped(
+          'VM service not enabled — run with --enable-vm-service',
+        );
         return;
       }
 
@@ -131,13 +133,7 @@ void main() {
       expect(handshake.json!['protocolVersion'], '1');
       final manifest = readManifest(handshake.json!.cast<String, Object?>());
       final grid = manifest.singleWhere((e) => e.namespace == 'grid');
-      expect(grid.tools, [
-        'requery',
-        'snapshot',
-        'ready',
-        'events',
-        'stats',
-      ]);
+      expect(grid.tools, ['requery', 'snapshot', 'ready', 'events', 'stats']);
 
       // (b) pullObservation yields `extensions['grid'].data` with the grid
       //     state fields a leonard prompt renders.

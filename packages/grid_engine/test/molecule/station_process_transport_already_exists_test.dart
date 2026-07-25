@@ -50,66 +50,59 @@ ProcessLeaseRequest _request(
 );
 
 void main() {
-  test(
-    'an already-LIVE session resolves the handle from the synchronous '
-    'surface (identityOf) instead of hanging',
-    () async {
-      final transport = FakeRuntimeProvider();
-      addTearDown(transport.close);
-      // The pre-existing incarnation: live before this acquire subscribes,
-      // so no SessionStarted will ever reach it.
-      await transport.start(_name, _config);
-      transport.identities[_name] = (pid: 77, pgid: 88);
-      transport.throwOnStart = SessionAlreadyExists(_name);
+  test('an already-LIVE session resolves the handle from the synchronous '
+      'surface (identityOf) instead of hanging', () async {
+    final transport = FakeRuntimeProvider();
+    addTearDown(transport.close);
+    // The pre-existing incarnation: live before this acquire subscribes,
+    // so no SessionStarted will ever reach it.
+    await transport.start(_name, _config);
+    transport.identities[_name] = (pid: 77, pgid: 88);
+    transport.throwOnStart = SessionAlreadyExists(_name);
 
-      final reports = <AllocationReport>[];
-      final handle =
-          await stationProcessSpawner(
-            _request(transport, reports.add),
-            FakeTreeContext(),
-            stepArgs('tg-1/lease'),
-          ).timeout(const Duration(seconds: 2));
+    final reports = <AllocationReport>[];
+    final handle = await stationProcessSpawner(
+      _request(transport, reports.add),
+      FakeTreeContext(),
+      stepArgs('tg-1/lease'),
+    ).timeout(const Duration(seconds: 2));
 
-      expect(handle.pid, 77);
-      expect(handle.pgid, 88);
-      expect(handle.token, 'tok-exists');
-      expect(
-        reports.whereType<AllocationStarted>().single.pid,
-        77,
-        reason: 'the host still persists state=running',
-      );
-      await handle.events?.close();
-    },
-  );
+    expect(handle.pid, 77);
+    expect(handle.pgid, 88);
+    expect(handle.token, 'tok-exists');
+    expect(
+      reports.whereType<AllocationStarted>().single.pid,
+      77,
+      reason: 'the host still persists state=running',
+    );
+    await handle.events?.close();
+  });
 
-  test(
-    'an already-DEAD session fails the acquire LOUD from the retained '
-    'terminal — a supervised failure, never an unbounded wait',
-    () async {
-      final transport = FakeRuntimeProvider();
-      addTearDown(transport.close);
-      await transport.start(_name, _config);
-      // The prior incarnation ended before this acquire ran; its terminal is
-      // retained state on the transport.
-      transport.emit(const Exited(name: _name, exitCode: 0, inferred: true));
-      transport.throwOnStart = SessionAlreadyExists(_name);
+  test('an already-DEAD session fails the acquire LOUD from the retained '
+      'terminal — a supervised failure, never an unbounded wait', () async {
+    final transport = FakeRuntimeProvider();
+    addTearDown(transport.close);
+    await transport.start(_name, _config);
+    // The prior incarnation ended before this acquire ran; its terminal is
+    // retained state on the transport.
+    transport.emit(const Exited(name: _name, exitCode: 0, inferred: true));
+    transport.throwOnStart = SessionAlreadyExists(_name);
 
-      await expectLater(
-        stationProcessSpawner(
-          _request(transport, (_) {}),
-          FakeTreeContext(),
-          stepArgs('tg-1/lease'),
-        ).timeout(const Duration(seconds: 2)),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('already ended'),
-          ),
+    await expectLater(
+      stationProcessSpawner(
+        _request(transport, (_) {}),
+        FakeTreeContext(),
+        stepArgs('tg-1/lease'),
+      ).timeout(const Duration(seconds: 2)),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('already ended'),
         ),
-      );
-    },
-  );
+      ),
+    );
+  });
 
   test(
     'neither a live identity nor a retained terminal: acquire still fails '

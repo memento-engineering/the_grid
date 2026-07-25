@@ -17,7 +17,11 @@ const _code = Circuit(
   terminalStepId: 'land',
   steps: [
     CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-    CapabilityStep(stepId: 'verify', capabilityId: 'verify', dependsOn: {'agent'}),
+    CapabilityStep(
+      stepId: 'verify',
+      capabilityId: 'verify',
+      dependsOn: {'agent'},
+    ),
     CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'verify'}),
   ],
 );
@@ -54,7 +58,11 @@ const _burn = Circuit(
       capabilityId: 'coord',
       dependsOn: {'harnessPeripheral', 'harnessCentral'},
     ),
-    CapabilityStep(stepId: 'report', capabilityId: 'report', dependsOn: {'coordinator'}),
+    CapabilityStep(
+      stepId: 'report',
+      capabilityId: 'report',
+      dependsOn: {'coordinator'},
+    ),
   ],
 );
 
@@ -78,11 +86,7 @@ class _CursorHostState extends State<_CursorHost> {
   void advance(CircuitCursor cursor) => setState(() => _cursor = cursor);
   @override
   Seed build(TreeContext context) =>
-      CircuitScope(
-        circuit: seed.circuit,
-        cursor: _cursor,
-        nodePath: 'root',
-      );
+      CircuitScope(circuit: seed.circuit, cursor: _cursor, nodePath: 'root');
 }
 
 List<Branch> _all(Branch root) {
@@ -141,8 +145,10 @@ void main() {
       addTearDown(m.owner.dispose);
       expect(m.reg.events, ['START agent(sess/root/agent)']);
 
-      final scopeIdBefore =
-          _whereSeed(m.root, (s) => s is CircuitScope).branchId;
+      final scopeIdBefore = _whereSeed(
+        m.root,
+        (s) => s is CircuitScope,
+      ).branchId;
       m.reg.events.clear();
 
       // Advance the cursor: agent complete → verify enters, agent retires.
@@ -202,14 +208,19 @@ void main() {
       final m = _mount(host);
       addTearDown(m.owner.dispose);
       expect(m.reg.events, ['START agent(sess/root/agent)']);
-      final hostIdBefore =
-          _whereSeed(m.root, (s) => s is FakeCapabilityHost).branchId;
+      final hostIdBefore = _whereSeed(
+        m.root,
+        (s) => s is FakeCapabilityHost,
+      ).branchId;
       m.reg.events.clear();
 
       // The agent FAILED; supervision bumps restartCount to 1 (within budget) →
       // the incarnation in the key changes ('root/agent#0' → '#1').
       _cursorState(m.root).advance({
-        'root/agent': const NodeCursor(state: StepState.failed, restartCount: 1),
+        'root/agent': const NodeCursor(
+          state: StepState.failed,
+          restartCount: 1,
+        ),
       });
       m.owner.flush();
 
@@ -259,24 +270,25 @@ void main() {
     });
   });
 
-  group('Track D — fan-out + ordering + the await-all barrier (§9 at depth)',
+  group('Track D — fan-out + ordering + the await-all barrier (§9 at depth)', () {
+    test(
+      'empty cursor mounts only the peripheral deploy (central ordered after)',
       () {
-    test('empty cursor mounts only the peripheral deploy (central ordered after)',
-        () {
-      final m = _mount(
-        const _CursorHost(_burn, {}),
-        circuits: {'deploy': _deploy},
-      );
-      addTearDown(m.owner.dispose);
-      // The peripheral sub-circuit inflates its own frontier {build}; central is
-      // withheld (its dep's terminal descendant is pending); coordinator too.
-      expect(m.reg.events, ['START b(sess/root/harnessPeripheral/build)']);
-      // The nested CircuitScope for the peripheral exists.
-      expect(
-        _all(m.root).where((b) => b.seed is CircuitScope).length,
-        2, // the outer burn scope + the peripheral deploy scope
-      );
-    });
+        final m = _mount(
+          const _CursorHost(_burn, {}),
+          circuits: {'deploy': _deploy},
+        );
+        addTearDown(m.owner.dispose);
+        // The peripheral sub-circuit inflates its own frontier {build}; central is
+        // withheld (its dep's terminal descendant is pending); coordinator too.
+        expect(m.reg.events, ['START b(sess/root/harnessPeripheral/build)']);
+        // The nested CircuitScope for the peripheral exists.
+        expect(
+          _all(m.root).where((b) => b.seed is CircuitScope).length,
+          2, // the outer burn scope + the peripheral deploy scope
+        );
+      },
+    );
 
     test('peripheral terminal → central enters; coordinator still withheld', () {
       final host = _CursorHost(_burn, const {});

@@ -41,65 +41,69 @@ class _FakeReader implements SnapshotReader {
 }
 
 void main() {
-  test('the reload extension re-composes the REAL tree over a REAL VM service',
-      () async {
-    final info = await developer.Service.getInfo();
-    final serverUri = info.serverUri;
-    if (serverUri == null) {
-      markTestSkipped('VM service not enabled — run with --enable-vm-service');
-      return;
-    }
+  test(
+    'the reload extension re-composes the REAL tree over a REAL VM service',
+    () async {
+      final info = await developer.Service.getInfo();
+      final serverUri = info.serverUri;
+      if (serverUri == null) {
+        markTestSkipped(
+          'VM service not enabled — run with --enable-vm-service',
+        );
+        return;
+      }
 
-    final builds = <int>[];
-    final grid = runGrid(
-      _ProbeDelegate(builds),
-      delegateFactory: () => _ProbeDelegate(builds),
-    );
-    addTearDown(grid.teardown);
-    expect(builds, hasLength(1)); // the launch build
+      final builds = <int>[];
+      final grid = runGrid(
+        _ProbeDelegate(builds),
+        delegateFactory: () => _ProbeDelegate(builds),
+      );
+      addTearDown(grid.teardown);
+      expect(builds, hasLength(1)); // the launch build
 
-    final runtime = GridControllerRuntime(
-      reader: _FakeReader(),
-      dirtySources: const [],
-    );
-    await runtime.start();
-    final host = GridExplorationHost(
-      runtime,
-      reassemble: ReassembleTool(
-        hotReload: () async => (await grid.hotReload()).toJson(),
-        hotRestart: () async => (await grid.hotRestart()).toJson(),
-      ),
-    );
-    host.register();
-    addTearDown(() async {
-      await host.dispose();
-      await runtime.dispose();
-    });
+      final runtime = GridControllerRuntime(
+        reader: _FakeReader(),
+        dirtySources: const [],
+      );
+      await runtime.start();
+      final host = GridExplorationHost(
+        runtime,
+        reassemble: ReassembleTool(
+          hotReload: () async => (await grid.hotReload()).toJson(),
+          hotRestart: () async => (await grid.hotRestart()).toJson(),
+        ),
+      );
+      host.register();
+      addTearDown(() async {
+        await host.dispose();
+        await runtime.dispose();
+      });
 
-    final ws = convertToWebSocketUrl(serviceProtocolUrl: serverUri);
-    final vm = await vmServiceConnectUri(ws.toString());
-    addTearDown(vm.dispose);
-    final isolateId = developer.Service.getIsolateId(iso.Isolate.current)!;
+      final ws = convertToWebSocketUrl(serviceProtocolUrl: serverUri);
+      final vm = await vmServiceConnectUri(ws.toString());
+      addTearDown(vm.dispose);
+      final isolateId = developer.Service.getIsolateId(iso.Isolate.current)!;
 
-    // The handshake DISCOVERS it (a registered tool is a discoverable tool).
-    final handshake = await vm.callServiceExtension(
-      'ext.exploration.core.handshake',
-      isolateId: isolateId,
-    );
-    final extensions = handshake.json![kExtensionsKey]! as List;
-    expect((extensions.single as Map)['tools'], contains('reload'));
+      // The handshake DISCOVERS it (a registered tool is a discoverable tool).
+      final handshake = await vm.callServiceExtension(
+        'ext.exploration.core.handshake',
+        isolateId: isolateId,
+      );
+      final extensions = handshake.json![kExtensionsKey]! as List;
+      expect((extensions.single as Map)['tools'], contains('reload'));
 
-    final response = await vm.callServiceExtension(
-      gridExtension(ReassembleTool.toolName),
-      isolateId: isolateId,
-      args: <String, String>{'mode': 'reload'},
-    );
+      final response = await vm.callServiceExtension(
+        gridExtension(ReassembleTool.toolName),
+        isolateId: isolateId,
+        args: <String, String>{'mode': 'reload'},
+      );
 
-    expect(response.json!['ok'], isTrue);
-    final value = response.json!['value']! as Map<String, Object?>;
-    expect(value['mode'], 'reload');
-    expect(value['generation'], 1);
-    // The station's master build RE-RAN, over the wire.
-    expect(builds, hasLength(2));
-  });
+      expect(response.json!['ok'], isTrue);
+      final value = response.json!['value']! as Map<String, Object?>;
+      expect(value['mode'], 'reload');
+      expect(value['generation'], 1);
+      // The station's master build RE-RAN, over the wire.
+      expect(builds, hasLength(2));
+    },
+  );
 }

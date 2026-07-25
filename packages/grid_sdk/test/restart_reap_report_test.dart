@@ -17,9 +17,9 @@ class _NullResolver implements SessionResolver {
 
 void _seedStore(String dir, {required String database}) {
   Directory('$dir/.beads').createSync(recursive: true);
-  File('$dir/.beads/metadata.json').writeAsStringSync(
-    '{"dolt_mode":"embedded","dolt_database":"$database"}',
-  );
+  File(
+    '$dir/.beads/metadata.json',
+  ).writeAsStringSync('{"dolt_mode":"embedded","dolt_database":"$database"}');
 }
 
 void main() {

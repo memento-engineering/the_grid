@@ -109,7 +109,8 @@ abstract class LeaseCapability<H> extends Capability {
       null;
 
   @override
-  Allocation createAllocation(AllocationContext ctx) => LeaseAllocation<H>(this, ctx);
+  Allocation createAllocation(AllocationContext ctx) =>
+      LeaseAllocation<H>(this, ctx);
 }
 
 /// The carrier for a HELD lease (ADR-0009 D6). Holds the bound handle as an

@@ -163,7 +163,8 @@ GraphSnapshot _stateSnapshotOf(List<Bead> beads) => GraphSnapshot.fromParts(
 
 BeadWorktree _wt(String beadId) => BeadWorktree(
   beadId: beadId,
-  path: '/workspace/example-substation/'
+  path:
+      '/workspace/example-substation/'
       '.grid/worktrees/tgdog/$beadId',
   branch: 'grid/$beadId',
 );
@@ -193,40 +194,37 @@ RestartReconciler _reconciler({
 
 void main() {
   group('RestartReconciler — respawn-or-skip (the surviving contract)', () {
-    test(
-      'a FOREIGN work bead with a TERMINAL owned session ⇒ SKIPPED '
-      '(reaped, never signalled, marked skipped)',
-      () async {
-        final log = <String>[];
-        // The work bead id is FOREIGN (genesis-*) — the_grid could never stamp
-        // it. The done evidence is on the OWNED tgdog session, which is
-        // terminal.
-        final git = FakeGit(worktrees: [_wt('genesis-aaa')], log: log);
-        final groups = FakeProcessGroupController(ownGroupId: 999, log: log);
-        final state = _stateSnapshotOf([
-          _session(id: 'tgdog-1', workBead: 'genesis-aaa', closed: true),
-        ]);
+    test('a FOREIGN work bead with a TERMINAL owned session ⇒ SKIPPED '
+        '(reaped, never signalled, marked skipped)', () async {
+      final log = <String>[];
+      // The work bead id is FOREIGN (genesis-*) — the_grid could never stamp
+      // it. The done evidence is on the OWNED tgdog session, which is
+      // terminal.
+      final git = FakeGit(worktrees: [_wt('genesis-aaa')], log: log);
+      final groups = FakeProcessGroupController(ownGroupId: 999, log: log);
+      final state = _stateSnapshotOf([
+        _session(id: 'tgdog-1', workBead: 'genesis-aaa', closed: true),
+      ]);
 
-        final report = await _reconciler(
-          git: git,
-          groups: groups,
-          state: state,
-        ).reconcile();
+      final report = await _reconciler(
+        git: git,
+        groups: groups,
+        state: state,
+      ).reconcile();
 
-        expect(report.skipped, hasLength(1));
-        final entry = report.skipped.single;
-        expect(entry.beadId, 'genesis-aaa');
-        expect(entry.disposition, RestartDisposition.skipped);
-        expect(entry.sessionId, 'tgdog-1');
-        expect(entry.reapOutcome!.removed, isTrue);
+      expect(report.skipped, hasLength(1));
+      final entry = report.skipped.single;
+      expect(entry.beadId, 'genesis-aaa');
+      expect(entry.disposition, RestartDisposition.skipped);
+      expect(entry.sessionId, 'tgdog-1');
+      expect(entry.reapOutcome!.removed, isTrue);
 
-        // git.reap WAS called for the foreign bead; nothing was signalled.
-        expect(git.reaped, ['genesis-aaa']);
-        expect(groups.signals, isEmpty);
-        expect(report.respawnPending, isEmpty);
-        expect(report.respawnCount, 0);
-      },
-    );
+      // git.reap WAS called for the foreign bead; nothing was signalled.
+      expect(git.reaped, ['genesis-aaa']);
+      expect(groups.signals, isEmpty);
+      expect(report.respawnPending, isEmpty);
+      expect(report.respawnCount, 0);
+    });
 
     test(
       'a LIVE (non-terminal) session ⇒ respawn-pending, carrying its session '
@@ -360,60 +358,52 @@ void main() {
       },
     );
 
-    test(
-      'a full restart with every case at once reconciles each correctly '
-      '(skip / live-respawn / fresh-respawn)',
-      () async {
-        final log = <String>[];
-        final git = FakeGit(
-          worktrees: [
-            _wt('genesis-done'), // A: foreign + terminal ⇒ skipped
-            _wt('tgdog-live'), // B: live ⇒ respawn-pending
-            _wt('genesis-fresh'), // C: no session ⇒ respawn-pending
-          ],
-          log: log,
-        );
-        final groups = FakeProcessGroupController(
-          ownGroupId: 999,
-          log: log,
-          alivePids: {2001},
-        );
-        final state = _stateSnapshotOf([
-          _session(id: 'tgdog-a', workBead: 'genesis-done', closed: true),
-          _session(
-            id: 'tgdog-b',
-            workBead: 'tgdog-live',
-            pgid: 2000,
-            pid: 2001,
-          ),
-        ]);
+    test('a full restart with every case at once reconciles each correctly '
+        '(skip / live-respawn / fresh-respawn)', () async {
+      final log = <String>[];
+      final git = FakeGit(
+        worktrees: [
+          _wt('genesis-done'), // A: foreign + terminal ⇒ skipped
+          _wt('tgdog-live'), // B: live ⇒ respawn-pending
+          _wt('genesis-fresh'), // C: no session ⇒ respawn-pending
+        ],
+        log: log,
+      );
+      final groups = FakeProcessGroupController(
+        ownGroupId: 999,
+        log: log,
+        alivePids: {2001},
+      );
+      final state = _stateSnapshotOf([
+        _session(id: 'tgdog-a', workBead: 'genesis-done', closed: true),
+        _session(id: 'tgdog-b', workBead: 'tgdog-live', pgid: 2000, pid: 2001),
+      ]);
 
-        final report = await _reconciler(
-          git: git,
-          groups: groups,
-          state: state,
-        ).reconcile();
+      final report = await _reconciler(
+        git: git,
+        groups: groups,
+        state: state,
+      ).reconcile();
 
-        expect(report.skipped.map((e) => e.beadId), ['genesis-done']);
-        expect(
-          report.respawnPending.map((e) => e.beadId),
-          unorderedEquals(['tgdog-live', 'genesis-fresh']),
-        );
+      expect(report.skipped.map((e) => e.beadId), ['genesis-done']);
+      expect(
+        report.respawnPending.map((e) => e.beadId),
+        unorderedEquals(['tgdog-live', 'genesis-fresh']),
+      );
 
-        // Only the done bead is reaped; nothing is ever signalled.
-        expect(git.reaped, ['genesis-done']);
-        expect(groups.signals, isEmpty);
+      // Only the done bead is reaped; nothing is ever signalled.
+      expect(git.reaped, ['genesis-done']);
+      expect(groups.signals, isEmpty);
 
-        // respawnCount = everything except the skipped done bead.
-        expect(report.respawnCount, 2);
+      // respawnCount = everything except the skipped done bead.
+      expect(report.respawnCount, 2);
 
-        // The retired flat buckets stay structurally empty.
-        expect(report.killed, isEmpty);
-        expect(report.adopted, isEmpty);
-        expect(report.refusedUnsafe, isEmpty);
-        expect(report.reaped, isEmpty);
-      },
-    );
+      // The retired flat buckets stay structurally empty.
+      expect(report.killed, isEmpty);
+      expect(report.adopted, isEmpty);
+      expect(report.refusedUnsafe, isEmpty);
+      expect(report.reaped, isEmpty);
+    });
   });
 
   group(
@@ -508,28 +498,25 @@ void main() {
         },
       );
 
-      test(
-        'projectSession leaves the cursor EMPTY for a cursor-bearing legacy '
-        'bead — the flat keys are never parsed (the surviving-read-site '
-        'proof for every cursor consumer)',
-        () {
-          final projection = projectSession(
-            _session(
-              id: 'tgdog-legacy',
-              workBead: 'pow-77g',
-              pgid: 4242,
-              pid: 4243,
-              metadata: _legacyFlatCursor('pow-77g/agent'),
-            ),
-          );
-          expect(projection.cursor, isEmpty);
-          expect(projection.isMolecule, isFalse);
-          // The legacy SCALAR identity still projects (the projection fields
-          // survive) — carried, not acted on, by this pass.
-          expect(projection.pgid, 4242);
-          expect(projection.pid, 4243);
-        },
-      );
+      test('projectSession leaves the cursor EMPTY for a cursor-bearing legacy '
+          'bead — the flat keys are never parsed (the surviving-read-site '
+          'proof for every cursor consumer)', () {
+        final projection = projectSession(
+          _session(
+            id: 'tgdog-legacy',
+            workBead: 'pow-77g',
+            pgid: 4242,
+            pid: 4243,
+            metadata: _legacyFlatCursor('pow-77g/agent'),
+          ),
+        );
+        expect(projection.cursor, isEmpty);
+        expect(projection.isMolecule, isFalse);
+        // The legacy SCALAR identity still projects (the projection fields
+        // survive) — carried, not acted on, by this pass.
+        expect(projection.pgid, 4242);
+        expect(projection.pid, 4243);
+      });
     },
   );
 }

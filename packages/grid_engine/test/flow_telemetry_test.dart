@@ -24,7 +24,8 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
-import 'package:grid_engine/src/molecule/molecule_codec.dart' show stepBeadMetadata;
+import 'package:grid_engine/src/molecule/molecule_codec.dart'
+    show stepBeadMetadata;
 import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
 import 'package:grid_engine/src/molecule/station_process_transport.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -75,18 +76,20 @@ const _circuit = Circuit(
   steps: [CapabilityStep(stepId: 'agent', capabilityId: 'agent')],
 );
 
-StepMount _mount({String nodePath = 'tg-1/agent', NodeCursor node = const NodeCursor()}) =>
-    StepMount(
-      step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-      nodePath: nodePath,
-      circuit: _circuit,
-      circuitPath: nodePath.contains('/')
-          ? nodePath.substring(0, nodePath.lastIndexOf('/'))
-          : '',
-      session: const SessionHandle('tgdog-s'),
-      node: node,
-      key: ValueKey('$nodePath#${node.restartCount}.${node.rewindCount}'),
-    );
+StepMount _mount({
+  String nodePath = 'tg-1/agent',
+  NodeCursor node = const NodeCursor(),
+}) => StepMount(
+  step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
+  nodePath: nodePath,
+  circuit: _circuit,
+  circuitPath: nodePath.contains('/')
+      ? nodePath.substring(0, nodePath.lastIndexOf('/'))
+      : '',
+  session: const SessionHandle('tgdog-s'),
+  node: node,
+  key: ValueKey('$nodePath#${node.restartCount}.${node.rewindCount}'),
+);
 
 /// The step bead id [InheritedCircuit.beadIdByNodePath] resolves `tg-1/agent`
 /// to across this suite — every host write targets THIS bead (R5b).
@@ -188,20 +191,22 @@ void main() {
       final meta = stepBeadMetadata(
         NodeCursor(state: StepState.running, startedAt: local),
       );
-      expect(
-        meta[MoleculeStepKeys.startedAt],
-        local.toUtc().toIso8601String(),
-      );
+      expect(meta[MoleculeStepKeys.startedAt], local.toUtc().toIso8601String());
       expect(meta[MoleculeStepKeys.startedAt], endsWith('Z'));
     });
 
     test('every null telemetry field is OMITTED — the fail-safe posture (only '
         'the always-present state/restartCount survive an empty NodeCursor)', () {
-      final empty = stepBeadMetadata(const NodeCursor(state: StepState.pending));
-      expect(empty.keys, unorderedEquals([
-        MoleculeStepKeys.state,
-        MoleculeStepKeys.restartCount,
-      ]));
+      final empty = stepBeadMetadata(
+        const NodeCursor(state: StepState.pending),
+      );
+      expect(
+        empty.keys,
+        unorderedEquals([
+          MoleculeStepKeys.state,
+          MoleculeStepKeys.restartCount,
+        ]),
+      );
       // A start with no finish yet: only startedAt joins the always-present pair.
       final partial = stepBeadMetadata(
         NodeCursor(state: StepState.pending, startedAt: DateTime.utc(2026)),
@@ -209,11 +214,13 @@ void main() {
       expect(partial.keys, containsAll([MoleculeStepKeys.startedAt]));
       expect(
         partial.keys,
-        isNot(anyOf(
-          contains(MoleculeStepKeys.finishedAt),
-          contains(MoleculeStepKeys.durationMs),
-          contains(MoleculeStepKeys.failureReason),
-        )),
+        isNot(
+          anyOf(
+            contains(MoleculeStepKeys.finishedAt),
+            contains(MoleculeStepKeys.durationMs),
+            contains(MoleculeStepKeys.failureReason),
+          ),
+        ),
       );
     });
 
@@ -270,31 +277,31 @@ void main() {
     });
   });
 
-  group('FT-1 codec — projectSession surfaces the session lifecycle stamps', () {
-    test('started_at / closed_at project as typed DateTime?', () {
-      final session = projectSession(
-        _sessionBead(
-          const {
+  group(
+    'FT-1 codec — projectSession surfaces the session lifecycle stamps',
+    () {
+      test('started_at / closed_at project as typed DateTime?', () {
+        final session = projectSession(
+          _sessionBead(const {
             'rig': 'tgdog',
             'work_bead': 'tg-1',
             'started_at': '2026-06-01T10:00:00.000Z',
             'closed_at': '2026-06-01T10:05:00.000Z',
-          },
-          closed: true,
-        ),
-      );
-      expect(session.startedAt, DateTime.utc(2026, 6, 1, 10));
-      expect(session.closedAt, DateTime.utc(2026, 6, 1, 10, 5));
-    });
+          }, closed: true),
+        );
+        expect(session.startedAt, DateTime.utc(2026, 6, 1, 10));
+        expect(session.closedAt, DateTime.utc(2026, 6, 1, 10, 5));
+      });
 
-    test('an open/legacy session has null stamps', () {
-      final session = projectSession(
-        _sessionBead(const {'rig': 'tgdog', 'work_bead': 'tg-1'}),
-      );
-      expect(session.startedAt, isNull);
-      expect(session.closedAt, isNull);
-    });
-  });
+      test('an open/legacy session has null stamps', () {
+        final session = projectSession(
+          _sessionBead(const {'rig': 'tgdog', 'work_bead': 'tg-1'}),
+        );
+        expect(session.startedAt, isNull);
+        expect(session.closedAt, isNull);
+      });
+    },
+  );
 
   group('FT-1 host — timing under an ADVANCING clock (one merged write)', () {
     test('a clean complete stamps startedAt < finishedAt + a consistent '
@@ -313,7 +320,9 @@ void main() {
       await _pump();
       h.fakes.runner.calls.clear();
 
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
+      h.fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+      );
       await _pump();
 
       // EXACTLY ONE write for the terminal transition (the merge discipline).
@@ -323,9 +332,17 @@ void main() {
       final meta = h.fakes.runner.metadataOfUpdate(0);
       expect(meta[MoleculeStepKeys.state], 'complete');
 
-      final started = DateTime.parse(meta[MoleculeStepKeys.startedAt] as String);
-      final finished = DateTime.parse(meta[MoleculeStepKeys.finishedAt] as String);
-      expect(started.isBefore(finished), isTrue, reason: 'startedAt < finishedAt');
+      final started = DateTime.parse(
+        meta[MoleculeStepKeys.startedAt] as String,
+      );
+      final finished = DateTime.parse(
+        meta[MoleculeStepKeys.finishedAt] as String,
+      );
+      expect(
+        started.isBefore(finished),
+        isTrue,
+        reason: 'startedAt < finishedAt',
+      );
       final duration = int.parse(meta[MoleculeStepKeys.durationMs] as String);
       // durationMs is EXACTLY finishedAt - startedAt (consistency).
       expect(duration, finished.difference(started).inMilliseconds);
@@ -345,14 +362,18 @@ void main() {
         const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
       );
       await _pump();
-      final runningStart =
-          h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.startedAt];
+      final runningStart = h.fakes.runner.metadataOfUpdate(
+        0,
+      )[MoleculeStepKeys.startedAt];
       expect(runningStart, isNotNull);
 
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
+      h.fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+      );
       await _pump();
-      final terminalStart =
-          h.fakes.runner.metadataOfUpdate(1)[MoleculeStepKeys.startedAt];
+      final terminalStart = h.fakes.runner.metadataOfUpdate(
+        1,
+      )[MoleculeStepKeys.startedAt];
       // The kick instant is captured ONCE and re-used — not re-read at the
       // terminal (a mutation re-reading the clock for startedAt would drift).
       expect(terminalStart, runningStart);
@@ -391,21 +412,24 @@ void main() {
       expect(node.finishedAt, isNotNull);
     });
 
-    test('an oversized failure reason is truncated to 500 chars on the wire',
-        () async {
-      final h = _host(
-        _ServiceCap(Failed('E' * 900)),
-        nowFn: advancingClock(),
-      );
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
-      final reason = h.fakes.runner
-          .metadataOfUpdate(0)[MoleculeStepKeys.failureReason] as String;
-      expect(reason, hasLength(500));
-    });
+    test(
+      'an oversized failure reason is truncated to 500 chars on the wire',
+      () async {
+        final h = _host(
+          _ServiceCap(Failed('E' * 900)),
+          nowFn: advancingClock(),
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+        final reason =
+            h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.failureReason]
+                as String;
+        expect(reason, hasLength(500));
+      },
+    );
 
     test('a bare failure (empty AllocationFailed.reason) omits failureReason '
         'but still advances the cursor (fail-safe)', () async {

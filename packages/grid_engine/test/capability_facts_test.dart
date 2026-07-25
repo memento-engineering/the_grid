@@ -285,36 +285,40 @@ void main() {
       expect(c.toJson(null), isNull);
     });
 
-    test('a populated CapabilityFacts round-trips via toProfile/fromProfile',
-        () {
-      const c = CapabilityFactsConverter();
-      const facts = CapabilityFacts(
-        sets: {
-          kSystemOs: {'linux'},
-          kRadio: {'ble'},
-        },
-      );
-      final json = c.toJson(facts);
-      expect(json, isNotNull);
-      expect(c.fromJson(json), facts);
-    });
+    test(
+      'a populated CapabilityFacts round-trips via toProfile/fromProfile',
+      () {
+        const c = CapabilityFactsConverter();
+        const facts = CapabilityFacts(
+          sets: {
+            kSystemOs: {'linux'},
+            kRadio: {'ble'},
+          },
+        );
+        final json = c.toJson(facts);
+        expect(json, isNotNull);
+        expect(c.fromJson(json), facts);
+      },
+    );
   });
 
   group('ToolchainProbe (injected query — offline, deterministic)', () {
-    test('emits system-os from the host + host-default dart/flutter targets',
-        () async {
-      final probe = ToolchainProbe(
-        os: 'linux',
-        query: _fakeTools({
-          'dart': 'Dart SDK version: 3.11.0 (stable) on "linux_x64"',
-          'flutter': 'Flutter 3.24.0 • channel stable',
-        }),
-      );
-      final f = await probe.probe();
-      expect(f.setOf(kSystemOs), {'linux'});
-      expect(f.setOf(kDartTarget), {'linux'}); // parsed from the version tag
-      expect(f.setOf(kFlutterTarget), {'linux'});
-    });
+    test(
+      'emits system-os from the host + host-default dart/flutter targets',
+      () async {
+        final probe = ToolchainProbe(
+          os: 'linux',
+          query: _fakeTools({
+            'dart': 'Dart SDK version: 3.11.0 (stable) on "linux_x64"',
+            'flutter': 'Flutter 3.24.0 • channel stable',
+          }),
+        );
+        final f = await probe.probe();
+        expect(f.setOf(kSystemOs), {'linux'});
+        expect(f.setOf(kDartTarget), {'linux'}); // parsed from the version tag
+        expect(f.setOf(kFlutterTarget), {'linux'});
+      },
+    );
 
     test('an absent toolchain emits NO target fact (fail-closed)', () async {
       final probe = ToolchainProbe(
@@ -341,15 +345,17 @@ void main() {
       );
     });
 
-    test('dart-target falls back to the host OS when the tag is unparseable',
-        () async {
-      final probe = ToolchainProbe(
-        os: 'linux',
-        query: _fakeTools({'dart': 'some unparseable version banner'}),
-      );
-      final f = await probe.probe();
-      expect(f.setOf(kDartTarget), {'linux'});
-    });
+    test(
+      'dart-target falls back to the host OS when the tag is unparseable',
+      () async {
+        final probe = ToolchainProbe(
+          os: 'linux',
+          query: _fakeTools({'dart': 'some unparseable version banner'}),
+        );
+        final f = await probe.probe();
+        expect(f.setOf(kDartTarget), {'linux'});
+      },
+    );
   });
 
   group('parseToolchainOs', () {

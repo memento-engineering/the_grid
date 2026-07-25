@@ -131,32 +131,26 @@ void main() {
         expect(swept, hasLength(1));
         expect(swept.single.disposition, LeaseSweepDisposition.killed);
         expect(swept.single.handle, _live);
-        expect(
-          swept.single.terminateResult,
-          GroupTerminateResult.exitedOnTerm,
-        );
+        expect(swept.single.terminateResult, GroupTerminateResult.exitedOnTerm);
         expect(swept.single.clearFailure, isNull);
       },
     );
 
-    test(
-      'a step with NO provable daemon kind (key absent) is an orphan too — '
-      'no-adopt-on-faith starts at the metadata read',
-      () async {
-        final fakes = buildFakes();
-        final terminator = _RecordingTerminator();
+    test('a step with NO provable daemon kind (key absent) is an orphan too — '
+        'no-adopt-on-faith starts at the metadata read', () async {
+      final fakes = buildFakes();
+      final terminator = _RecordingTerminator();
 
-        final swept = await _vendor(fakes).sweepOrphanedLeases(
-          candidates: [_candidate('tgdog-step-1', kind: null, lease: _live)],
-          alive: _alwaysAlive,
-          terminate: terminator.call,
-          onOrphan: (_) {},
-        );
+      final swept = await _vendor(fakes).sweepOrphanedLeases(
+        candidates: [_candidate('tgdog-step-1', kind: null, lease: _live)],
+        alive: _alwaysAlive,
+        terminate: terminator.call,
+        onOrphan: (_) {},
+      );
 
-        expect(terminator.calls, hasLength(1));
-        expect(swept.single.disposition, LeaseSweepDisposition.killed);
-      },
-    );
+      expect(terminator.calls, hasLength(1));
+      expect(swept.single.disposition, LeaseSweepDisposition.killed);
+    });
 
     test(
       'a live DAEMON is killed too while adoption is UNARMED (the adopt proof '
@@ -186,64 +180,58 @@ void main() {
       },
     );
 
-    test(
-      'an alreadyGone terminate outcome still lands in the killed bucket '
-      '(no-double-run holds) with its breadcrumb cleared and the exact '
-      'result preserved',
-      () async {
-        final fakes = buildFakes();
-        final terminator = _RecordingTerminator(
-          results: {4242: GroupTerminateResult.alreadyGone},
-        );
+    test('an alreadyGone terminate outcome still lands in the killed bucket '
+        '(no-double-run holds) with its breadcrumb cleared and the exact '
+        'result preserved', () async {
+      final fakes = buildFakes();
+      final terminator = _RecordingTerminator(
+        results: {4242: GroupTerminateResult.alreadyGone},
+      );
 
-        final swept = await _vendor(fakes).sweepOrphanedLeases(
-          candidates: [_candidate('tgdog-step-1', lease: _live)],
-          alive: _alwaysAlive,
-          terminate: terminator.call,
-          onOrphan: (_) {},
-        );
+      final swept = await _vendor(fakes).sweepOrphanedLeases(
+        candidates: [_candidate('tgdog-step-1', lease: _live)],
+        alive: _alwaysAlive,
+        terminate: terminator.call,
+        onOrphan: (_) {},
+      );
 
-        expect(swept.single.disposition, LeaseSweepDisposition.killed);
-        expect(swept.single.terminateResult, GroupTerminateResult.alreadyGone);
-        expect(fakes.runner.metadataOfUpdate(0), kClearedLeaseKeys);
-      },
-    );
+      expect(swept.single.disposition, LeaseSweepDisposition.killed);
+      expect(swept.single.terminateResult, GroupTerminateResult.alreadyGone);
+      expect(fakes.runner.metadataOfUpdate(0), kClearedLeaseKeys);
+    });
 
-    test(
-      'a live DAEMON whose freshness proof HOLDS is STILL killed when no '
-      're-mount is coming (willRemount: false — the TERMINAL-session shape): '
-      'the preserve gate exists to hand a survivor to a future startOrAdopt, '
-      'and here there is no future startOrAdopt',
-      () async {
-        final fakes = buildFakes();
-        final terminator = _RecordingTerminator();
-        final loud = <String>[];
+    test('a live DAEMON whose freshness proof HOLDS is STILL killed when no '
+        're-mount is coming (willRemount: false — the TERMINAL-session shape): '
+        'the preserve gate exists to hand a survivor to a future startOrAdopt, '
+        'and here there is no future startOrAdopt', () async {
+      final fakes = buildFakes();
+      final terminator = _RecordingTerminator();
+      final loud = <String>[];
 
-        final swept = await _vendor(fakes, liveness: (fence) => true)
-            .sweepOrphanedLeases(
-              candidates: [
-                _candidate(
-                  'tgdog-step-d',
-                  kind: StepKind.daemon,
-                  state: StepState.ready,
-                  lease: _live,
-                  willRemount: false,
-                ),
-              ],
-              alive: _alwaysAlive,
-              terminate: terminator.call,
-              onOrphan: loud.add,
-            );
+      final swept = await _vendor(fakes, liveness: (fence) => true)
+          .sweepOrphanedLeases(
+            candidates: [
+              _candidate(
+                'tgdog-step-d',
+                kind: StepKind.daemon,
+                state: StepState.ready,
+                lease: _live,
+                willRemount: false,
+              ),
+            ],
+            alive: _alwaysAlive,
+            terminate: terminator.call,
+            onOrphan: loud.add,
+          );
 
-        expect(terminator.calls, hasLength(1));
-        expect(terminator.calls.single.pgid, _live.pgid);
-        expect(terminator.calls.single.leaderPid, _live.pid);
-        expect(fakes.runner.callsFor('update'), hasLength(1));
-        expect(loud.single, contains('tgdog-step-d'));
-        expect(swept, hasLength(1));
-        expect(swept.single.disposition, LeaseSweepDisposition.killed);
-      },
-    );
+      expect(terminator.calls, hasLength(1));
+      expect(terminator.calls.single.pgid, _live.pgid);
+      expect(terminator.calls.single.leaderPid, _live.pid);
+      expect(fakes.runner.callsFor('update'), hasLength(1));
+      expect(loud.single, contains('tgdog-step-d'));
+      expect(swept, hasLength(1));
+      expect(swept.single.disposition, LeaseSweepDisposition.killed);
+    });
   });
 
   group('sweepOrphanedLeases — NEGATIVE CONTROLS (the kill must NOT fire)', () {
@@ -280,162 +268,160 @@ void main() {
       },
     );
 
-    test(
-      'a group the caller\'s probe cannot PROVE alive is never killed — '
-      'negative evidence only withholds, even when the ADOPT proof would '
-      'hold (that seam never gates a kill); the stale breadcrumb is LEFT '
-      '(it is inert: adoption gates on the freshness proof and the next '
-      'acquire overwrites it)',
-      () async {
-        final fakes = buildFakes();
-        final terminator = _RecordingTerminator();
-        final loud = <String>[];
-
-        final swept = await _vendor(fakes, liveness: (fence) => true)
-            .sweepOrphanedLeases(
-              candidates: [_candidate('tgdog-step-1', lease: _live)],
-              alive: _neverAlive,
-              terminate: terminator.call,
-              onOrphan: loud.add,
-            );
-
-        expect(terminator.calls, isEmpty, reason: 'no kill without proof');
-        expect(
-          fakes.runner.callsFor('update'),
-          isEmpty,
-          reason: 'the documented contract: a dead group\'s breadcrumb is LEFT',
-        );
-        expect(loud, isEmpty);
-        expect(swept, isEmpty, reason: 'nothing happened — nothing reported');
-      },
-    );
-
-    test(
-      'a LATCHED step (complete/failed/gated) is untouched even with a live '
-      'breadcrumb — its group is not this sweep\'s business',
-      () async {
-        for (final state in [
-          StepState.complete,
-          StepState.failed,
-          StepState.gated,
-        ]) {
-          final fakes = buildFakes();
-          final terminator = _RecordingTerminator();
-
-          final swept = await _vendor(fakes).sweepOrphanedLeases(
-            candidates: [
-              _candidate('tgdog-step-1', state: state, lease: _live),
-            ],
-            alive: _alwaysAlive,
-            terminate: terminator.call,
-            onOrphan: (_) {},
-          );
-
-          expect(terminator.calls, isEmpty, reason: '$state must skip');
-          expect(fakes.runner.callsFor('update'), isEmpty, reason: '$state');
-          expect(swept, isEmpty, reason: '$state');
-        }
-      },
-    );
-
-    test('no breadcrumb / a cleared breadcrumb parses to nothing — skipped', () async {
+    test('a group the caller\'s probe cannot PROVE alive is never killed — '
+        'negative evidence only withholds, even when the ADOPT proof would '
+        'hold (that seam never gates a kill); the stale breadcrumb is LEFT '
+        '(it is inert: adoption gates on the freshness proof and the next '
+        'acquire overwrites it)', () async {
       final fakes = buildFakes();
       final terminator = _RecordingTerminator();
+      final loud = <String>[];
 
-      final swept = await _vendor(fakes).sweepOrphanedLeases(
-        candidates: [
-          _candidate('tgdog-step-a'), // no lease keys at all
-          (
-            stepBeadId: 'tgdog-step-b', // the cleared sentinel
-            willRemount: true,
-            metadata: {
-              MoleculeStepKeys.kind: StepKind.job.name,
-              MoleculeStepKeys.state: StepState.running.name,
-              ...kClearedLeaseKeys,
-            },
-          ),
-        ],
-        alive: _alwaysAlive,
-        terminate: terminator.call,
-        onOrphan: (_) {},
+      final swept = await _vendor(fakes, liveness: (fence) => true)
+          .sweepOrphanedLeases(
+            candidates: [_candidate('tgdog-step-1', lease: _live)],
+            alive: _neverAlive,
+            terminate: terminator.call,
+            onOrphan: loud.add,
+          );
+
+      expect(terminator.calls, isEmpty, reason: 'no kill without proof');
+      expect(
+        fakes.runner.callsFor('update'),
+        isEmpty,
+        reason: 'the documented contract: a dead group\'s breadcrumb is LEFT',
       );
-
-      expect(terminator.calls, isEmpty);
-      expect(fakes.runner.callsFor('update'), isEmpty);
-      expect(swept, isEmpty);
+      expect(loud, isEmpty);
+      expect(swept, isEmpty, reason: 'nothing happened — nothing reported');
     });
-  });
 
-  group('sweepOrphanedLeases — the guarded-refusal and dropped-clear rungs', () {
-    test(
-      'a guard-refused terminate sends NO signal, leaves the breadcrumb (the '
-      'operator\'s only record), and reports the refusal LOUD',
-      () async {
+    test('a LATCHED step (complete/failed/gated) is untouched even with a live '
+        'breadcrumb — its group is not this sweep\'s business', () async {
+      for (final state in [
+        StepState.complete,
+        StepState.failed,
+        StepState.gated,
+      ]) {
         final fakes = buildFakes();
-        final terminator = _RecordingTerminator(
-          results: {4242: GroupTerminateResult.refusedUnsafe},
-        );
-        final loud = <String>[];
+        final terminator = _RecordingTerminator();
 
         final swept = await _vendor(fakes).sweepOrphanedLeases(
-          candidates: [_candidate('tgdog-step-1', lease: _live)],
+          candidates: [_candidate('tgdog-step-1', state: state, lease: _live)],
           alive: _alwaysAlive,
           terminate: terminator.call,
-          onOrphan: loud.add,
+          onOrphan: (_) {},
         );
 
-        expect(swept.single.disposition, LeaseSweepDisposition.refusedUnsafe);
-        expect(
-          fakes.runner.callsFor('update'),
-          isEmpty,
-          reason: 'a refused kill never clears the breadcrumb',
-        );
-        expect(loud.single, contains('REFUSED'));
-      },
-    );
+        expect(terminator.calls, isEmpty, reason: '$state must skip');
+        expect(fakes.runner.callsFor('update'), isEmpty, reason: '$state');
+        expect(swept, isEmpty, reason: '$state');
+      }
+    });
 
     test(
-      'a DROPPED breadcrumb clear (a bd blip) is recorded on the entry, '
-      'reported LOUD, and the pass CONTINUES to the next candidate',
+      'no breadcrumb / a cleared breadcrumb parses to nothing — skipped',
       () async {
-        final writer = StationBeadWriter(
-          bd: BdCliService(_ThrowingBdRunner()),
-          ownership: BeadOwnershipPredicate(const {stateSubstation}),
-        );
-        final vendor = StationProcessLeaseVendor(
-          writer: writer,
-          spawn: _neverSpawn,
-          dispatch: _neverDispatch,
-          metadataOf: (stepBeadId) async => null,
-        );
+        final fakes = buildFakes();
         final terminator = _RecordingTerminator();
-        final loud = <String>[];
 
-        final swept = await vendor.sweepOrphanedLeases(
+        final swept = await _vendor(fakes).sweepOrphanedLeases(
           candidates: [
-            _candidate('tgdog-step-1', lease: _live),
-            _candidate(
-              'tgdog-step-2',
-              lease: const ProcessHandle(pgid: 5252, pid: 5253, token: 't2'),
+            _candidate('tgdog-step-a'), // no lease keys at all
+            (
+              stepBeadId: 'tgdog-step-b', // the cleared sentinel
+              willRemount: true,
+              metadata: {
+                MoleculeStepKeys.kind: StepKind.job.name,
+                MoleculeStepKeys.state: StepState.running.name,
+                ...kClearedLeaseKeys,
+              },
             ),
           ],
           alive: _alwaysAlive,
           terminate: terminator.call,
-          onOrphan: loud.add,
+          onOrphan: (_) {},
         );
 
-        // BOTH orphans were still killed — the drop never aborts the pass.
-        expect(terminator.calls, hasLength(2));
-        expect(swept, hasLength(2));
-        for (final entry in swept) {
-          expect(entry.disposition, LeaseSweepDisposition.killed);
-          expect(entry.clearFailure, contains('bd unavailable'));
-        }
-        // Each kill logged its kill line AND its dropped-clear line.
-        expect(loud.where((m) => m.contains('DROPPED')), hasLength(2));
+        expect(terminator.calls, isEmpty);
+        expect(fakes.runner.callsFor('update'), isEmpty);
+        expect(swept, isEmpty);
       },
     );
   });
+
+  group(
+    'sweepOrphanedLeases — the guarded-refusal and dropped-clear rungs',
+    () {
+      test(
+        'a guard-refused terminate sends NO signal, leaves the breadcrumb (the '
+        'operator\'s only record), and reports the refusal LOUD',
+        () async {
+          final fakes = buildFakes();
+          final terminator = _RecordingTerminator(
+            results: {4242: GroupTerminateResult.refusedUnsafe},
+          );
+          final loud = <String>[];
+
+          final swept = await _vendor(fakes).sweepOrphanedLeases(
+            candidates: [_candidate('tgdog-step-1', lease: _live)],
+            alive: _alwaysAlive,
+            terminate: terminator.call,
+            onOrphan: loud.add,
+          );
+
+          expect(swept.single.disposition, LeaseSweepDisposition.refusedUnsafe);
+          expect(
+            fakes.runner.callsFor('update'),
+            isEmpty,
+            reason: 'a refused kill never clears the breadcrumb',
+          );
+          expect(loud.single, contains('REFUSED'));
+        },
+      );
+
+      test(
+        'a DROPPED breadcrumb clear (a bd blip) is recorded on the entry, '
+        'reported LOUD, and the pass CONTINUES to the next candidate',
+        () async {
+          final writer = StationBeadWriter(
+            bd: BdCliService(_ThrowingBdRunner()),
+            ownership: BeadOwnershipPredicate(const {stateSubstation}),
+          );
+          final vendor = StationProcessLeaseVendor(
+            writer: writer,
+            spawn: _neverSpawn,
+            dispatch: _neverDispatch,
+            metadataOf: (stepBeadId) async => null,
+          );
+          final terminator = _RecordingTerminator();
+          final loud = <String>[];
+
+          final swept = await vendor.sweepOrphanedLeases(
+            candidates: [
+              _candidate('tgdog-step-1', lease: _live),
+              _candidate(
+                'tgdog-step-2',
+                lease: const ProcessHandle(pgid: 5252, pid: 5253, token: 't2'),
+              ),
+            ],
+            alive: _alwaysAlive,
+            terminate: terminator.call,
+            onOrphan: loud.add,
+          );
+
+          // BOTH orphans were still killed — the drop never aborts the pass.
+          expect(terminator.calls, hasLength(2));
+          expect(swept, hasLength(2));
+          for (final entry in swept) {
+            expect(entry.disposition, LeaseSweepDisposition.killed);
+            expect(entry.clearFailure, contains('bd unavailable'));
+          }
+          // Each kill logged its kill line AND its dropped-clear line.
+          expect(loud.where((m) => m.contains('DROPPED')), hasLength(2));
+        },
+      );
+    },
+  );
 
   group('SelfManagedProcessVendor — the degraded sweep is a strict no-op', () {
     test(
