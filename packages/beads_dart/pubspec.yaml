@@ -3,11 +3,8 @@ name: beads_dart
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
 version: 0.1.0
 description: >-
-  A pure-Dart beads client — bd CLI + Dolt SQL services, snapshot repository,
-  structural diff, typed graph events. Framework-free: Streams for
-  observations, Futures for acts, no framework deps. Supports bd >= 1.0.5;
-  see the library doc for the version-compat contract.
-publish_to: none
+  A pure-Dart, framework-free beads client — bd CLI + Dolt SQL services,
+  snapshot repository, structural diff, typed graph events.
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 

@@ -2,8 +2,9 @@ name: grid_cli
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
 version: 0.2.0
-description: Management CLI for the_grid — `grid watch` and friends.
-publish_to: none
+description: >-
+  Management CLI for the_grid — `grid watch` and companion commands for
+  operating a grid station.
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
 
@@ -15,67 +16,12 @@ executables:
 
 dependencies:
   args: ^2.6.0
-  beads_dart:
-    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
-    # unifies git deps by REF STRING, so every route to a package —
-    # sibling or external consumer — must carry the SAME {url, tag_pattern, path}
-    # descriptor (a path dep or a bare ref pin normalizes differently and
-    # conflicts); the version CONSTRAINT then solves over the release tags.
-    # Workspace/dev resolution is unchanged; tags move in lockstep.
-    git:
-      url: git@github.com:memento-engineering/the_grid.git
-      tag_pattern: beads_dart-v{{version}}
-      path: packages/beads_dart
-    version: ^0.1.0
+  beads_dart: ^0.1.0
   genesis_tree: ^0.1.5
-  grid_engine:
-    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
-    # unifies git deps by REF STRING, so every route to a package —
-    # sibling or external consumer — must carry the SAME {url, tag_pattern, path}
-    # descriptor (a path dep or a bare ref pin normalizes differently and
-    # conflicts); the version CONSTRAINT then solves over the release tags.
-    # Workspace/dev resolution is unchanged; tags move in lockstep.
-    git:
-      url: git@github.com:memento-engineering/the_grid.git
-      tag_pattern: grid_engine-v{{version}}
-      path: packages/grid_engine
-    version: ^0.1.0
-  grid_exploration:
-    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
-    # unifies git deps by REF STRING, so every route to a package —
-    # sibling or external consumer — must carry the SAME {url, tag_pattern, path}
-    # descriptor (a path dep or a bare ref pin normalizes differently and
-    # conflicts); the version CONSTRAINT then solves over the release tags.
-    # Workspace/dev resolution is unchanged; tags move in lockstep.
-    git:
-      url: git@github.com:memento-engineering/the_grid.git
-      tag_pattern: grid_exploration-v{{version}}
-      path: packages/grid_exploration
-    version: ^0.1.0
-  grid_runtime:
-    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
-    # unifies git deps by REF STRING, so every route to a package —
-    # sibling or external consumer — must carry the SAME {url, tag_pattern, path}
-    # descriptor (a path dep or a bare ref pin normalizes differently and
-    # conflicts); the version CONSTRAINT then solves over the release tags.
-    # Workspace/dev resolution is unchanged; tags move in lockstep.
-    git:
-      url: git@github.com:memento-engineering/the_grid.git
-      tag_pattern: grid_runtime-v{{version}}
-      path: packages/grid_runtime
-    version: ^0.1.0
-  grid_sdk:
-    # Intra-repo sibling as a git SELF-REF tag pin (ADR-0003 D1): pub
-    # unifies git deps by REF STRING, so every route to a package —
-    # sibling or external consumer — must carry the SAME {url, tag_pattern, path}
-    # descriptor (a path dep or a bare ref pin normalizes differently and
-    # conflicts); the version CONSTRAINT then solves over the release tags.
-    # Workspace/dev resolution is unchanged; tags move in lockstep.
-    git:
-      url: git@github.com:memento-engineering/the_grid.git
-      tag_pattern: grid_sdk-v{{version}}
-      path: packages/grid_sdk
-    version: ^0.1.0
+  grid_engine: ^0.1.0
+  grid_exploration: ^0.1.0
+  grid_runtime: ^0.1.0
+  grid_sdk: ^0.1.0
   meta: ^1.15.0
   path: ^1.9.0
   # The VM-service client `reload` drives: reloadSources + the
