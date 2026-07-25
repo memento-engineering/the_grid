@@ -1,16 +1,21 @@
-/// RS-4 — `StationControl`: the read-only loopback control surface (D-C2,
-/// `docs/SCRATCH-resident-station.md` §3, RATIFIED Nico 2026-07-02).
+/// RS-4 — `StationControl`: the loopback control surface (D-C2).
 ///
-/// A DEDICATED, READ-ONLY, loopback-only HTTP surface owned by the runner
-/// shell — explicitly NOT the exploration/perception host (D-C1: perception
-/// is the debugging surface; `GridExplorationHost` stays untouched). Every
-/// route (`/healthz` included — one posture, no unauthenticated liveness
-/// probe) requires `Authorization: Bearer <token>`, checked BEFORE routing.
+/// A DEDICATED, loopback-only HTTP surface owned by the runner shell —
+/// explicitly NOT the exploration/perception host (D-C1: perception is the
+/// debugging surface; `GridExplorationHost` stays untouched). Every route
+/// (`/healthz` included — one posture, no unauthenticated liveness probe)
+/// requires `Authorization: Bearer <token>`, checked BEFORE routing.
 /// The token is minted per boot (secure random) and lives ONLY in the 0600
 /// `station.lock` (RS-2's `controlUrl`/`token` fields) — never argv, never
-/// env (the ADR-0006 precedent). **NO mutation endpoints, by construction**:
-/// the routes below are GET-only — this file holds no bd writer and calls no
-/// re-query. `/hooks` resolves declarations but never executes them.
+/// env (the ADR-0006 precedent).
+///
+/// ADR-0014 D-C4 (Nico-ratified 2026-07-24):
+/// the control plane cannot be a WORK trigger (`bd` stays the only work intake).
+/// operator one-shots ARE control-plane requests.
+/// `/healthz`, `/status`, and `/hooks` remain
+/// read-only; fenced `POST /command` is the sole scoped mutation. This file
+/// holds no bd writer and calls no re-query. `/hooks` resolves declarations
+/// but never executes them.
 ///
 /// D-C5: this is a floor — it gets re-homed onto the unified-surfaces
 /// substrate later (perception / control plane / MCP / CLI+RPC / MQTT, one
@@ -24,9 +29,33 @@ import 'dart:math';
 
 // The wedge signal is the STATION's own derivation — this surface only reports
 // it. Named through the SDK, never the private engine (ADR-0008 D2).
-import 'package:grid_sdk/grid_sdk.dart' show WedgeState, kNotWedged;
+import 'package:grid_sdk/grid_sdk.dart'
+    show
+        GridCommandCompleted,
+        GridCommandHandler,
+        GridCommandRefused,
+        GridCommandRequest,
+        GridCommandResult,
+        WedgeState,
+        kNotWedged;
 
 import 'hooks_resolver.dart';
+
+const _commandPath = '/command';
+const _fenceHeader = 'X-Grid-Fence';
+const _idempotencyHeader = 'Idempotency-Key';
+
+final class _CommandResponse {
+  const _CommandResponse(this.statusCode, this.body);
+  final int statusCode;
+  final Map<String, Object?> body;
+}
+
+final class _IdempotentCommand {
+  const _IdempotentCommand(this.fingerprint, this.response);
+  final String fingerprint;
+  final Future<_CommandResponse> response;
+}
 
 /// One owned substation's slice of the station status (tg-7gm) — the
 /// per-substation breakdown of [StationStatus.ready]/[StationStatus.mounted],
@@ -172,19 +201,23 @@ String mintControlToken() {
   return base64Url.encode(bytes);
 }
 
-/// The read-only, loopback-only HTTP control surface (D-C2). GET-only,
-/// exact-match routes: `/healthz` (liveness), `/status` (the [StationStatus]
-/// snapshot), and `/hooks` (contribution resolution only; it never executes
-/// contributions). EVERY route requires
+/// The loopback-only HTTP control surface (D-C2). Read-only exact-match routes
+/// are `/healthz` (liveness), `/status` (the [StationStatus] snapshot), and
+/// `/hooks` (contribution resolution only; it never executes contributions).
+/// ADR-0014 D-C4 (Nico-ratified 2026-07-24):
+/// the control plane cannot be a WORK trigger (`bd` stays the only work intake).
+/// operator one-shots ARE control-plane requests.
+/// Fenced `POST /command` is the sole scoped mutation.
+/// EVERY route requires
 /// `Authorization: Bearer <token>` — checked BEFORE routing, so an
-/// unauthenticated caller learns nothing (not even which paths exist). No
-/// mutation endpoint exists.
+/// unauthenticated caller learns nothing (not even which paths exist).
 class StationControl {
   StationControl._(
     this._server,
     this._token,
     StationStatus Function() view,
     this._hooksResolver,
+    this._commandHandler,
   ) : _routes = <String, Map<String, Object?> Function()>{
         '/healthz': () => const <String, Object?>{'ok': true},
         '/status': () => view().toJson(),
@@ -194,6 +227,9 @@ class StationControl {
   final String _token;
   final Map<String, Map<String, Object?> Function()> _routes;
   final HooksResolver _hooksResolver;
+  final GridCommandHandler _commandHandler;
+  final Map<String, _IdempotentCommand> _commands = {};
+  int _highestFence = -1;
 
   /// The bound loopback URL, e.g. `http://127.0.0.1:54321`.
   String get url => 'http://${_server.address.address}:${_server.port}';
@@ -207,10 +243,17 @@ class StationControl {
     required int port,
     required String token,
     required StationStatus Function() view,
+    required GridCommandHandler commandHandler,
     HooksResolver hooksResolver = const HooksResolver(),
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
-    final control = StationControl._(server, token, view, hooksResolver);
+    final control = StationControl._(
+      server,
+      token,
+      view,
+      hooksResolver,
+      commandHandler,
+    );
     server.listen(control._handle);
     return control;
   }
@@ -223,9 +266,21 @@ class StationControl {
       });
       return;
     }
+    if (request.uri.path == _commandPath && request.method == 'POST') {
+      await _handleCommand(request);
+      return;
+    }
+    if (request.uri.path == _commandPath) {
+      await _respond(request, HttpStatus.methodNotAllowed, <String, Object?>{
+        'error': 'method not allowed: ${request.method}',
+      });
+      return;
+    }
     final isHooks = request.uri.path == '/hooks';
     final route = _routes[request.uri.path];
-    if (!isHooks && route == null) {
+    final isKnownPath =
+        request.uri.path == _commandPath || isHooks || route != null;
+    if (!isKnownPath) {
       await _respond(request, HttpStatus.notFound, <String, Object?>{
         'error': 'not found: ${request.uri.path}',
       });
@@ -242,6 +297,165 @@ class StationControl {
       return;
     }
     await _respond(request, HttpStatus.ok, route!());
+  }
+
+  Future<void> _handleCommand(HttpRequest request) async {
+    final fenceText = request.headers.value(_fenceHeader);
+    final fence = fenceText == null ? null : int.tryParse(fenceText);
+    if (fence == null || fence < 0) {
+      await _respond(request, HttpStatus.badRequest, const {
+        'error': 'invalid or missing X-Grid-Fence',
+      });
+      return;
+    }
+    final key = request.headers.value(_idempotencyHeader)?.trim();
+    if (key == null || key.isEmpty) {
+      await _respond(request, HttpStatus.badRequest, const {
+        'error': 'missing Idempotency-Key',
+      });
+      return;
+    }
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(await utf8.decoder.bind(request).join());
+    } on FormatException {
+      await _respond(request, HttpStatus.badRequest, const {
+        'id': null,
+        'error': {'code': 'invalid_request', 'message': 'Malformed JSON.'},
+      });
+      return;
+    }
+    final parsed = _decodeCommand(decoded);
+    if (parsed case _CommandResponse()) {
+      await _respond(request, parsed.statusCode, parsed.body);
+      return;
+    }
+    final (id, command, fingerprint) =
+        parsed as (Object, GridCommandRequest, String);
+    final existing = _commands[key];
+    if (existing != null && existing.fingerprint != fingerprint) {
+      await _respond(request, HttpStatus.badRequest, {
+        'id': id,
+        'error': {
+          'code': 'idempotency_key_reused',
+          'message': 'Idempotency-Key was already used for another command.',
+        },
+      });
+      return;
+    }
+    if (existing != null) {
+      final response = await existing.response;
+      await _respond(request, response.statusCode, response.body);
+      return;
+    }
+    if (fence < _highestFence) {
+      await _respond(request, HttpStatus.badRequest, const {
+        'error': 'stale X-Grid-Fence',
+      });
+      return;
+    }
+    _highestFence = fence;
+    final entry = _commands.putIfAbsent(
+      key,
+      () => _IdempotentCommand(
+        fingerprint,
+        _dispatchCommand(id: id, command: command),
+      ),
+    );
+    final response = await entry.response;
+    await _respond(request, response.statusCode, response.body);
+  }
+
+  Object _decodeCommand(Object? decoded) {
+    if (decoded is! Map<String, Object?>) {
+      return const _CommandResponse(HttpStatus.badRequest, {
+        'id': null,
+        'error': {
+          'code': 'invalid_request',
+          'message': 'Command body must be a JSON object.',
+        },
+      });
+    }
+    final id = decoded['id'];
+    final method = decoded['method'];
+    final params = decoded['params'];
+    if (id == null || method is! String || params is! Map<String, Object?>) {
+      return _CommandResponse(HttpStatus.badRequest, {
+        'id': id,
+        'error': {
+          'code': 'invalid_request',
+          'message': 'Command requires id, method, and object params.',
+        },
+      });
+    }
+    GridCommandRequest? command;
+    if (method == 'grid/rework') {
+      final beadId = params['beadId'];
+      final note = params['note'];
+      if (beadId is String &&
+          beadId.isNotEmpty &&
+          (note == null || note is String)) {
+        command = GridCommandRequest.rework(
+          beadId: beadId,
+          note: note as String?,
+        );
+      }
+    } else if (method == 'grid/gate/resolve') {
+      final gateId = params['gateId'];
+      final grades = params['grades'] ?? const <String, Object?>{};
+      final rationale = params['rationale'];
+      if (gateId is String &&
+          gateId.isNotEmpty &&
+          grades is Map<String, Object?> &&
+          grades.values.every((value) => value is String) &&
+          (rationale == null || rationale is String)) {
+        command = GridCommandRequest.resolveGate(
+          gateId: gateId,
+          grades: grades.cast<String, String>(),
+          rationale: rationale as String?,
+        );
+      }
+    }
+    if (command == null) {
+      return _CommandResponse(HttpStatus.badRequest, {
+        'id': id,
+        'error': {
+          'code': 'invalid_request',
+          'message': 'Unknown method or invalid command params.',
+        },
+      });
+    }
+    return (id, command, jsonEncode(decoded));
+  }
+
+  Future<_CommandResponse> _dispatchCommand({
+    required Object id,
+    required GridCommandRequest command,
+  }) async {
+    try {
+      final GridCommandResult result = await _commandHandler(command);
+      return switch (result) {
+        GridCommandCompleted(:final value) => _CommandResponse(HttpStatus.ok, {
+          'id': id,
+          'result': value,
+        }),
+        GridCommandRefused(:final code, :final message) => _CommandResponse(
+          HttpStatus.ok,
+          {
+            'id': id,
+            'error': {'code': code, 'message': message},
+          },
+        ),
+      };
+    } on Object {
+      return _CommandResponse(HttpStatus.internalServerError, {
+        'id': id,
+        'error': {
+          'code': 'internal_error',
+          'message': 'Command handler failed.',
+        },
+      });
+    }
   }
 
   Future<void> _handleHooks(HttpRequest request) async {

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
 /// tg-jwh — the wedge signal on the RS-4 status surface: the station derives it
@@ -49,6 +50,7 @@ void main() {
       port: 0,
       token: 't',
       view: view ?? status,
+      commandHandler: _UnusedCommandHandler(),
     );
     addTearDown(control.dispose);
     return control;
@@ -185,4 +187,10 @@ void main() {
     expect(wedge['wedged'], isFalse);
     expect(wedge['live'], 0);
   });
+}
+
+final class _UnusedCommandHandler implements GridCommandHandler {
+  @override
+  Future<GridCommandResult> call(GridCommandRequest request) async =>
+      const GridCommandResult.refused(code: 'unused', message: 'unused');
 }

@@ -3,9 +3,9 @@ import 'dart:isolate';
 
 import 'package:test/test.dart';
 
-/// RS-4 (D-C2, `docs/SCRATCH-resident-station.md` §3): `StationControl` is
-/// READ-ONLY BY CONSTRUCTION — a GET-only, exact-match route table, never a
-/// bd writer, never a re-query trigger. Source gates over
+/// RS-4 (ADR-0014 D-C2/D-C4): `StationControl` has read-only GET routes and
+/// one fenced, scoped mutation route, never a bd writer or re-query trigger.
+/// Source gates over
 /// `lib/src/station_control.dart`, with a positive control so a path/glob
 /// regression cannot make the negative gates pass vacuously (mirrors
 /// `grid_engine/test/effect_layer_gates_test.dart`).
@@ -23,22 +23,19 @@ void main() {
           contains("'/hooks'"),
         ),
         reason:
-            'the GET-only control surface must name every route — proves '
+            'the scoped control surface must name every route — proves '
             'the scan reads real bytes, not an empty/moved file '
             '(vacuousness control)',
       );
     });
 
-    test('gate 1: no mutation HTTP verb is ever matched against (GET-only, '
-        'by construction)', () {
-      for (final verb in ['POST', 'PUT', 'DELETE', 'PATCH']) {
-        expect(
-          source,
-          isNot(contains("'$verb'")),
-          reason:
-              'StationControl never tests for $verb — there is no route '
-              'a mutation method could reach',
-        );
+    test('gate 1: POST is matched only for the fenced /command route', () {
+      // ignore: prefer_single_quotes
+      expect(source, contains("request.method == 'POST'"));
+      // ignore: prefer_single_quotes
+      expect(source, contains("request.uri.path == _commandPath"));
+      for (final verb in ['PUT', 'DELETE', 'PATCH']) {
+        expect(source, isNot(contains("'$verb'")));
       }
     });
 
@@ -60,13 +57,24 @@ void main() {
       expect(source, isNot(contains('requery()')));
     });
 
-    test('gate 4: no mutation endpoint exists — the ONLY routed paths are '
-        '/healthz, /status, and /hooks', () {
+    test('gate 4: the only routed paths include the scoped command door', () {
       final routePaths = RegExp(
         r"'(/[a-zA-Z0-9_-]*)'",
       ).allMatches(source).map((m) => m.group(1)!).toSet();
-      expect(routePaths, {'/healthz', '/status', '/hooks'});
+      expect(routePaths, {'/healthz', '/status', '/hooks', '/command'});
     });
+
+    test(
+      'gate 5: fenced command authority carries the ratified D-C4 stamp',
+      () {
+        expect(source, contains('the control plane cannot be a WORK trigger'));
+        expect(
+          source,
+          contains('operator one-shots ARE control-plane requests'),
+        );
+        expect(source, contains('Nico-ratified 2026-07-24'));
+      },
+    );
   });
 }
 

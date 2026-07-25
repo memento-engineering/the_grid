@@ -5,6 +5,7 @@ import 'package:grid_cli/src/station_attach.dart';
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_cli/src/station_lock.dart';
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
 /// RS-5a (tg-3s8.5, D-C3/D-C4, `docs/SCRATCH-resident-station.md` §3):
@@ -96,6 +97,7 @@ void main() {
         port: 0,
         token: 'right-token',
         view: () => _sampleStatus,
+        commandHandler: _UnusedCommandHandler(),
       );
       addTearDown(control.dispose);
       _mintLock(
@@ -125,6 +127,7 @@ void main() {
         port: 0,
         token: 'right-token',
         view: () => _sampleStatus,
+        commandHandler: _UnusedCommandHandler(),
       );
       addTearDown(control.dispose);
       _mintLock(
@@ -148,6 +151,7 @@ void main() {
         port: 0,
         token: 't',
         view: () => _sampleStatus,
+        commandHandler: _UnusedCommandHandler(),
       );
       final deadUrl = control.url;
       await control.dispose(); // the port is now refusing connections
@@ -441,6 +445,12 @@ void main() {
       },
     );
   });
+}
+
+final class _UnusedCommandHandler implements GridCommandHandler {
+  @override
+  Future<GridCommandResult> call(GridCommandRequest request) async =>
+      const GridCommandResult.refused(code: 'unused', message: 'unused');
 }
 
 /// A temp state-store root (no `.grid/` yet — `_mintLock` creates it).
