@@ -809,6 +809,127 @@ void main() {
     );
   });
 
+  group('grid rework — attributed beyond-cap override', () {
+    test(
+      'at the cap, an attributed reason re-keys round 4 and records it',
+      () async {
+        final state = _FakeStore([
+          _session('tgdog-r1', workBead: 'tg-9#r1', closed: true),
+          _session('tgdog-r2', workBead: 'tg-9#r2', closed: true),
+          _session('tgdog-r3', workBead: 'tg-9#r3', closed: true),
+          _session('tgdog-cur', workBead: 'tg-9', closed: true),
+        ]);
+        final work = _FakeStore([_workBead('tg-9')]);
+        final code = await runRework(
+          beadId: 'tg-9',
+          beyondCap: true,
+          actor: ' operator ',
+          note: 'engine defect consumed the budget',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
+          now: () => DateTime.utc(2026, 7, 24, 12, 30),
+          out: (_) {},
+          err: fail,
+        );
+
+        expect(code, 0);
+        final stateUpdate = state.writes.singleWhere(
+          (c) => c.first == 'update',
+        );
+        final metadataIndex = stateUpdate.indexOf('--metadata');
+        expect(jsonDecode(stateUpdate[metadataIndex + 1]), {
+          'work_bead': 'tg-9#r4',
+        });
+        final noteUpdate = work.writes.last;
+        final noteIndex = noteUpdate.indexOf('--append-notes');
+        expect(
+          noteUpdate[noteIndex + 1],
+          startsWith(
+            '--- grid rework ROUND 4 (2026-07-24T12:30:00.000Z) '
+            '— BEYOND-CAP by operator ---\nengine defect consumed the budget',
+          ),
+        );
+      },
+    );
+
+    for (final testCase in [
+      (
+        name: 'missing actor',
+        actor: null,
+        note: 'engine defect consumed the budget',
+        expectedMissingFlag: '--actor is required',
+      ),
+      (
+        name: 'missing note',
+        actor: 'operator',
+        note: null,
+        expectedMissingFlag: '--note is required',
+      ),
+    ]) {
+      test('${testCase.name} refuses before writes', () async {
+        final state = _FakeStore([]);
+        final work = _FakeStore([_workBead('tg-9')]);
+        final errs = <String>[];
+        final code = await runRework(
+          beadId: 'tg-9',
+          beyondCap: true,
+          actor: testCase.actor,
+          note: testCase.note,
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
+          out: (_) {},
+          err: errs.add,
+        );
+
+        expect(code, 64);
+        expect(errs.join('\n'), contains(testCase.expectedMissingFlag));
+        expect(state.writes, isEmpty, reason: 'fail-closed: zero state writes');
+        expect(work.writes, isEmpty, reason: 'fail-closed: zero work writes');
+      });
+    }
+
+    test('below the cap, beyond-cap refuses before writes', () async {
+      final state = _FakeStore([
+        _session('tgdog-cur', workBead: 'tg-9', closed: true),
+      ]);
+      final work = _FakeStore([_workBead('tg-9')]);
+      final errs = <String>[];
+      final code = await runRework(
+        beadId: 'tg-9',
+        beyondCap: true,
+        actor: 'operator',
+        note: 'engine defect consumed the budget',
+        stateStore: _stateStore(),
+        stateStorePrefix: 'tgdog',
+        stateWorkspaceOverride: _ws('tgdog'),
+        stateBdOverride: BdCliService(state),
+        noteStore: SubstationWorkStore.forRoot('/work/tg'),
+        workspaceOverride: _ws('tg'),
+        bdOverride: BdCliService(work),
+        out: (_) {},
+        err: errs.add,
+      );
+
+      expect(code, 64);
+      expect(
+        errs.join('\n'),
+        contains('--beyond-cap is only valid at or beyond the rework cap'),
+      );
+      expect(state.writes, isEmpty, reason: 'fail-closed: zero state writes');
+      expect(work.writes, isEmpty, reason: 'fail-closed: zero work writes');
+    });
+  });
+
   group('CLI wiring — the store axis is the grid root (fossils dead)', () {
     // The missing-flag refusals write to stderr inside the Command and return
     // the fail-closed code (64) — the observable CLI contract. (The messages
@@ -834,6 +955,26 @@ void main() {
       ]);
       expect(code, 64);
     });
+
+    test(
+      '--beyond-cap and --actor parse before missing-note refusal',
+      () async {
+        final code = await _run([
+          'rework',
+          'tg-9',
+          '--grid-root',
+          '/home/grid',
+          '--prefix',
+          'tgdog',
+          '--note-root',
+          '/work/tg',
+          '--beyond-cap',
+          '--actor',
+          'operator',
+        ]);
+        expect(code, 64);
+      },
+    );
 
     test(
       'the retired --state-workspace / --workspace flags are GONE',
