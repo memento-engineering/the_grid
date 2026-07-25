@@ -29,5 +29,9 @@ export 'src/protocol/grid_exploration_client.dart'
         kGridEventStreamId,
         kHandshakeExtension;
 export 'src/protocol/vm_service_grid_client.dart' show VmServiceGridClient;
+export 'src/projection/projection_tabs.dart' show ProjectionTabs;
+export 'src/replay/replay_fixture.dart' show bundledReplayTreeSource;
+export 'src/replay/snapshot_json_loader.dart'
+    show SnapshotJsonPicker, decodeSnapshotRecording, pickSnapshotJson;
 
 const String packageName = 'grid_devtools';

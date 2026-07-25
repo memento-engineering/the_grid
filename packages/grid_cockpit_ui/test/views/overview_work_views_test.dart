@@ -32,6 +32,7 @@ void main() {
       final source = ReplayTreeSource([first, snapshot(version: 2), first]);
       final overview = OverviewViewModel(source);
       final work = WorkListViewModel(source);
+      final selected = <String>[];
 
       await tester.pumpWidget(
         MaterialApp(
@@ -39,7 +40,10 @@ void main() {
             body: SingleChildScrollView(
               child: Column(
                 children: [
-                  StationOverviewView(viewModel: overview),
+                  StationOverviewView(
+                    viewModel: overview,
+                    onSelectSubstation: selected.add,
+                  ),
                   WorkListView(viewModel: work),
                 ],
               ),
@@ -55,6 +59,9 @@ void main() {
       expect(find.text('bead-1'), findsOneWidget);
       expect(find.text('session-1'), findsOneWidget);
       expect(find.text('running'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('station')));
+      expect(selected, ['station']);
 
       source.advance();
       await tester.pump();

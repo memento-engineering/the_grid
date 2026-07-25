@@ -85,6 +85,9 @@ void main() {
         find.byKey(const Key('handshake.tool.grid.events')),
         findsOneWidget,
       );
+      expect(find.text('Station'), findsOneWidget);
+      expect(find.text('Inspector'), findsOneWidget);
+      expect(find.text('Events'), findsOneWidget);
       expect(client.handshakeCalls, 1);
     });
 
@@ -101,6 +104,9 @@ void main() {
 
       expect(find.byKey(const Key('handshake.bindingMissing')), findsOneWidget);
       expect(find.byKey(const Key('handshake.loaded')), findsNothing);
+      expect(find.text('Station'), findsOneWidget);
+      expect(find.text('Inspector'), findsOneWidget);
+      expect(find.text('Events'), findsOneWidget);
     });
 
     testWidgets('surfaces an arbitrary handshake failure', (tester) async {
@@ -113,6 +119,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('handshake.failed')), findsOneWidget);
+      expect(find.text('Station'), findsOneWidget);
+      expect(find.text('Inspector'), findsOneWidget);
+      expect(find.text('Events'), findsOneWidget);
     });
   });
 }
