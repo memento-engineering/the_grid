@@ -98,7 +98,7 @@ seam, no host changes in this pass. **ADR-0012's reserved scope** (observability
 exploration transport under perception + consent) is **untouched** — it remains the future
 debug/observability story, not the control plane. This is ADR-0012's boundary.
 
-**D-C2 — `StationControl`: a dedicated, read-only HTTP surface, loopback by default.** Owned
+**D-C2 — `StationControl`: a dedicated HTTP surface, loopback by default.** Owned
 by the runner shell (grid_cli), started under `up`, disposed on the graceful path. `GET
 /healthz` — cheap liveness; `GET /status` — identity (station, substation, state store, work
 root, dry/live), process (pid, uptime, version), and counts (ready, mounted, live sessions,
@@ -108,8 +108,12 @@ posture, consistent with the LAN cockpit in ADR-0012 D1), never a silent default
 token — minted per boot, living only in the 0600 lock file (never argv — the ADR-0006
 precedent), endpoint advertised via the lock (D-A1) — is required on **every** endpoint
 including `/healthz` (the landed tightening, adopted here: no unauthenticated probe is exactly
-what makes a LAN bind sane). **No mutation endpoints, by construction** — the control plane
-cannot be a trigger.
+what makes a LAN bind sane).
+
+The control plane gains one **SCOPED MUTATION** half: `POST /command`, authenticated by the
+per-boot bearer and requiring both `X-Grid-Fence` and an idempotency key. Commands are executed
+**INSIDE the resident reconcile loop**; this is not a second runner process. The endpoint is for
+operator one-shots, not work intake; D-C4 is the governing fence.
 
 **D-C3 — lifecycle rides OS signals, not HTTP.** `space down` — read the lock → SIGTERM the pid
 (graceful via D-R2) → wait for exit + lock release → report. `space status` — read the lock →
@@ -118,9 +122,11 @@ view, clearly labeled `(station: down)`.
 
 **D-C4 — work intake needs NO control plane.** The store **is** the intake: operator bd writes
 (prep/bless/close) wake the resident station through the existing dirty signals within ~1 s.
-Net posture: **bd is the only mutation surface, signals are the only lifecycle surface, HTTP is
-read-only observation.** One trigger surface in the whole system: a bead going ready in the
-owned store.
+Net posture: **the control plane cannot be a WORK trigger — bd remains the only WORK intake
+(a bead going ready is still the only work trigger); but operator ONE-SHOTS (rework, gate/resolve;
+later attach/detach) ARE control-plane requests serviced by the resident loop, NOT a second
+runner process.** These fenced, idempotent one-shots are control/recovery operations, not WORK
+intake. Lifecycle remains exclusively on OS signals under D-C3.
 
 **D-C5 — the unified-surfaces future (Nico, 2026-07-02 — documented want, deliberately NOT
 solved now).** Nothing stops the grid from having its **own artifact tree** that provides this
@@ -154,7 +160,9 @@ containers for multiples. **The ceiling (later, separate passes):** the ADR-0008
 leasing-is-core for substation attention-scheduling — this ADR deliberately builds neither; the
 lock is the only arbitration a single-machine dogfood needs.
 
-## Supersessions (APPLIED at ratification, 2026-07-19)
+## Supersessions and amendments
+
+**APPLIED at ratification, 2026-07-19.**
 
 Carried from the SCRATCH's §5 ledger; the forward stamps below were applied to their targets
 on ratification day — never silent.
@@ -172,13 +180,36 @@ on ratification day — never silent.
   forward stamps on ADR-0008's Formula vocabulary at ratification. (`Order` → `Demand Response`
   was debated and **NOT decided** — `Order` stays.)
 
+### Amendment — fenced command channel (Nico-ratified, 2026-07-24)
+
+- **Ratified source — tg-wisp-1jt, `GATE CLEARED` note (Nico, 2026-07-24):** “the ADR-0014
+  D-C4 amendment is APPROVED — ‘the control plane cannot be a WORK trigger (bd stays the only
+  work intake); operator one-shots ARE control-plane requests.’” That note directs the build to
+  cite the amendment as ratified and not mint a pending ADR-0000 amendment.
+- **Delegated authorship — tg-wisp-1jt operator-ruling comment (Nico, 2026-07-24, recorded
+  04:29):** the earlier “Authoring the ADR-0014 doc edit itself is Nico’s” line is superseded;
+  Nico explicitly delegates this D-C4 document amendment to tg-wisp-sgd. The amendment content
+  remains exactly the approved text and the register rule is satisfied by the delegation.
+- **tg-r4p / tg-nxh:** this amendment satisfies the ratified single-resident-process decision
+  tg-r4p and closes the tg-nxh eviction path: operator one-shots are requests executed inside
+  the resident reconcile loop, never a second `bin/space.dart` runner contending the lock.
+- **tg-wisp-1jt:** the unified-surface epic and its children implement the fenced `POST /command`
+  route and resident-loop operation seam; this ADR bead is documentation only.
+- **ADR-0012 Decision 2 / tg-0ds:** the retired `docs/SCRATCH-cockpit.md` §5
+  `SessionView`/`NodeView`/`CircuitTopology` wire model is superseded by tg-0ds’s
+  `grid_diagnostics_contract` tree projection. That read-side convergence is distinct from this
+  command mutation half and lands on the same unified surface rather than creating a server.
+- **ADR-0000 A50 forward supersession:** A50’s `reload` distinction remains a debugger operation
+  on the exploration wire, but its statements that bd is the only mutation surface and
+  `station_control.dart` is GET-only are superseded by this Nico-ratified amendment. No new
+  ADR-0000 amendment is created.
+
 ## Non-goals (this pass)
 
 Federation/bus (parked, `m6-federation`); the D8 governor + permits; leasing/scheduling;
 zero-downtime graceful restart (detach-all/reattach-all); the AOT exploration transport +
-`genesis_consent` (ADR-0012, reserved); any exploration-host or leonard change; control-plane
-mutation endpoints (never — D-C4); Windows/systemd; multi-station-per-machine; any engine-core
-change.
+`genesis_consent` (ADR-0012, reserved); any exploration-host or leonard change; Windows/systemd;
+multi-station-per-machine; any engine-core change.
 
 ## Build state (2026-07-19)
 
@@ -207,7 +238,7 @@ Commands, never a binding:
   `AttachResult`/`StopResult` (D-C3's client; RS-5a).
 - `packages/grid_cli/lib/src/station_reload.dart` + `reload_command.dart` — `StationReload` /
   `ReloadCommand`: the explicit JIT dev-mode hot-reload seat. Postdates the ladder; rides the
-  same lock contract; never touches the GET-only HTTP surface and never signals the process —
+  same lock contract; never uses the control-plane command route and never signals the process —
   consistent with D-R2/D-C3 (it is a VM-service dev tool, not a lifecycle or SIGHUP semantics).
 
 One drift note for ratification: the transitional `run` assembly (`station_runner.dart`)
@@ -221,7 +252,8 @@ home being the root that holds the state store; see D-A1's store vocabulary.)*
 
 - One trigger surface system-wide (a bead going ready in the owned store), one supervisor per
   state store, one conductor (ADR-0008 D1, executed). The shell is now supervisable: signals
-  are the whole lifecycle, the lock is the whole arbitration, HTTP is observation only.
+  are the whole lifecycle, the lock is the whole arbitration, HTTP is observation plus fenced
+  operator one-shots; it is never WORK intake.
 - The control plane and the debugging surface stay categorically distinct (D-C1) — ADR-0012's
   reserved scope survives residency untouched, and D-C5 records where both eventually re-home.
 - The engine is untouched by construction: every fail-closed gate ADR-0006 ratified still holds
