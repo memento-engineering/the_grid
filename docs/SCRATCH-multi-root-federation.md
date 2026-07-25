@@ -103,8 +103,8 @@ one state store (`tgdog`), one lock.
 | store | prefix/db | mode | expected read path | notes |
 |---|---|---|---|---|
 | the_grid | `tg` | server (city 34947) | SQL when creds resolve; observed CLI at first live boot | gc coexists on this server |
-| butane_flutter | `butane_flutter` | server (SAME city server) | SQL when creds resolve, else CLI | a gc rig; **reads only**; its 11 open beads deferred 2026-07-03 pending grooming |
-| .dashboard | `dash` | embedded | CLI + polling | standalone; its 8 open beads deferred 2026-07-03 pending grooming |
+| butane_flutter | `butane_flutter` | server (SAME city server) | SQL when creds resolve, else CLI | a gc rig; **reads only**; its 11 open beads deferred 2026-07-03 pending refinement |
+| .dashboard | `dash` | embedded | CLI + polling | standalone; its 8 open beads deferred 2026-07-03 pending refinement |
 
 ## 3. Proposed decisions — multi-root (tg-7gm)
 
@@ -222,7 +222,7 @@ zero-conf can drop behind without reshaping anything.
 - **D-Z6 — Discovered ≠ blessed: the trust gate.** Entry from DISCOVERED (a zero-conf answer) to
   OBSERVED (a mounted member) passes a Trust decision — allow-list now (LAN trust, the same
   posture as `Peer.token`), reputation/ledger impls later (ADR-0008's `Trust` seam). Exactly the
-  store-hygiene shape: ready=in needed grooming; discovered=in needs a gate. The gate is LOUD both
+  store-hygiene shape: ready=in needed refinement; discovered=in needs a gate. The gate is LOUD both
   ways (admitted / refused, with the claimed identity named) per the guard principle.
 - **D-Z7 — A remote member is just another `SnapshotSource` impl.** The union consumes the same
   contract (change-gated, broadcast, non-replay, `current`, one push per real change) whether the
@@ -254,7 +254,7 @@ zero-conf can drop behind without reshaping anything.
   `nicholasspencer/.dashboard` and `nicholasspencer/butane_flutter` (gh auth already spans them?).
   OK, or commit-only (no `--land`) for foreign substations at first?
 - **OQ-5 — The circuit for foreign work.** Same `code` circuit + committee rubrics for dash/butane
-  beads? Grooming must stamp a worktree-relative `validation_plan` on every blessed bead (the I-3
+  beads? Refinement must stamp a worktree-relative `validation_plan` on every blessed bead (the I-3
   lesson; OP-1 preflight will enforce once landed).
 - **OQ-6 — Scope of the first build.** tg-7gm alone already unlocks all-of-memento (4 repos, one
   store). tg-nsj adds the two foreign stores. Build strictly in that order (proposed), or demand

@@ -178,7 +178,7 @@ rulings when that pass resumes.
 1. **AL-1 — `beads_dart`** extraction + Riverpod purge (offline, the honesty pass; publication
    gate = OQ-A1).
 2. **AL-2 — tg-7gm** multi-root (unlocks all-of-memento under one station).
-3. **AL-3 — tg-nsj** local multi-store (dash + butane_flutter, post-grooming).
+3. **AL-3 — tg-nsj** local multi-store (dash + butane_flutter, post-refinement).
 4. **AL-4 — RS-8** retire `run` + `dispatch_interactor` + `grid_reconciler` (D-A8 salvage pass).
 5. **AL-5 — federation split** (D-A9 moves; no behavior change).
 6. **AL-6 — the bus**: broker vet → in-process broker + the ACP-shaped claim protocol in
