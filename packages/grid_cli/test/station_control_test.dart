@@ -1,13 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_cli/src/hooks_resolver.dart';
+import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 /// RS-4 (D-C2, `docs/SCRATCH-resident-station.md` §3): `StationControl` — the
-/// read-only, loopback-only HTTP control surface. Real HTTP round-trips over
+/// loopback-only HTTP control surface. Real HTTP round-trips over
 /// an ephemeral port; NO live stores, NO real `claude`/`git`/`bd`. What this
 /// file locks (the acceptance criteria):
 ///
@@ -27,6 +29,7 @@ void main() {
         port: 0,
         token: 't',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -39,6 +42,7 @@ void main() {
         port: 0,
         token: 'secret-token',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -68,6 +72,7 @@ void main() {
           liveSessions: 1,
           lastSyncAt: null,
         ),
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -108,6 +113,7 @@ void main() {
         port: 0,
         token: 'secret-token',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -120,6 +126,7 @@ void main() {
         port: 0,
         token: 'secret-token',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -132,6 +139,7 @@ void main() {
         port: 0,
         token: 'secret-token',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -148,6 +156,7 @@ void main() {
         port: 0,
         token: 'secret-token',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -159,12 +168,342 @@ void main() {
       expect(response.statusCode, HttpStatus.methodNotAllowed);
     });
 
+    test('GET /command and POST /status are method refusals', () async {
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
+      );
+      addTearDown(control.dispose);
+
+      expect(
+        (await _get(control.url, '/command', token: 't')).statusCode,
+        HttpStatus.methodNotAllowed,
+      );
+      expect(
+        (await _post(control.url, '/status', token: 't')).statusCode,
+        HttpStatus.methodNotAllowed,
+      );
+    });
+
+    test(
+      'POST /command decodes both methods and maps completed and refused',
+      () async {
+        final handler = _FakeCommandHandler();
+        final control = await StationControl.start(
+          port: 0,
+          token: 't',
+          view: _sampleStatus,
+          commandHandler: handler,
+        );
+        addTearDown(control.dispose);
+        final rework = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '7',
+          idempotencyKey: 'rework-1',
+          body: {
+            'id': 1,
+            'method': 'grid/rework',
+            'params': {'beadId': 'tg-1', 'note': 'retry'},
+          },
+        );
+        expect(rework.statusCode, 200);
+        expect(jsonDecode(rework.body), {
+          'id': 1,
+          'result': {'ok': true},
+        });
+        expect(
+          handler.calls.single,
+          const GridCommandRequest.rework(beadId: 'tg-1', note: 'retry'),
+        );
+
+        final refused = _FakeCommandHandler(
+          result: const GridCommandResult.refused(
+            code: 'gate_closed',
+            message: 'closed',
+          ),
+        );
+        final second = await StationControl.start(
+          port: 0,
+          token: 't',
+          view: _sampleStatus,
+          commandHandler: refused,
+        );
+        addTearDown(second.dispose);
+        final resolve = await _post(
+          second.url,
+          '/command',
+          token: 't',
+          fence: '8',
+          idempotencyKey: 'gate-1',
+          body: {
+            'id': 'b',
+            'method': 'grid/gate/resolve',
+            'params': {
+              'gateId': 'tg-gate',
+              'grades': {'critic': 'A'},
+              'rationale': 'checked',
+            },
+          },
+        );
+        expect(jsonDecode(resolve.body), {
+          'id': 'b',
+          'error': {'code': 'gate_closed', 'message': 'closed'},
+        });
+        expect(
+          refused.calls.single,
+          const GridCommandRequest.resolveGate(
+            gateId: 'tg-gate',
+            grades: {'critic': 'A'},
+            rationale: 'checked',
+          ),
+        );
+      },
+    );
+
+    test('bearer fence and idempotency guards precede dispatch', () async {
+      final handler = _FakeCommandHandler();
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+        commandHandler: handler,
+      );
+      addTearDown(control.dispose);
+      const body = {
+        'id': 1,
+        'method': 'grid/rework',
+        'params': {'beadId': 'tg-1'},
+      };
+      expect(
+        (await _post(control.url, '/command', body: body)).statusCode,
+        401,
+      );
+      expect(
+        (await _post(
+          control.url,
+          '/command',
+          token: 't',
+          idempotencyKey: 'a',
+          body: body,
+        )).statusCode,
+        400,
+      );
+      expect(
+        (await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: 'bad',
+          idempotencyKey: 'a',
+          body: body,
+        )).statusCode,
+        400,
+      );
+      expect(
+        (await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '1',
+          body: body,
+        )).statusCode,
+        400,
+      );
+      await _post(
+        control.url,
+        '/command',
+        token: 't',
+        fence: '2',
+        idempotencyKey: 'first',
+        body: body,
+      );
+      expect(
+        (await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '1',
+          idempotencyKey: 'stale',
+          body: body,
+        )).statusCode,
+        400,
+      );
+      expect(handler.calls, hasLength(1));
+    });
+
+    test(
+      'sequential and simultaneous duplicate commands dispatch once',
+      () async {
+        final block = Completer<void>();
+        final handler = _FakeCommandHandler(block: block);
+        final control = await StationControl.start(
+          port: 0,
+          token: 't',
+          view: _sampleStatus,
+          commandHandler: handler,
+        );
+        addTearDown(control.dispose);
+        const body = {
+          'id': 1,
+          'method': 'grid/rework',
+          'params': {'beadId': 'tg-1'},
+        };
+        final first = _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '4',
+          idempotencyKey: 'same',
+          body: body,
+        );
+        final concurrent = _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '4',
+          idempotencyKey: 'same',
+          body: body,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(handler.calls, hasLength(1));
+        block.complete();
+        expect(
+          (await Future.wait([
+            first,
+            concurrent,
+          ])).map((response) => response.body).toSet(),
+          hasLength(1),
+        );
+        await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '4',
+          idempotencyKey: 'same',
+          body: body,
+        );
+        expect(handler.calls, hasLength(1));
+        final changed = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '4',
+          idempotencyKey: 'same',
+          body: {
+            'id': 2,
+            'method': 'grid/rework',
+            'params': {'beadId': 'tg-2'},
+          },
+        );
+        expect(changed.statusCode, 400);
+        expect(handler.calls, hasLength(1));
+      },
+    );
+
+    test('invalid command envelopes return 400 without dispatch', () async {
+      final cases = <Object?>[
+        null,
+        <Object?>[],
+        {'method': 'grid/rework', 'params': <String, Object?>{}},
+        {'id': 1, 'method': 2, 'params': <String, Object?>{}},
+        {'id': 1, 'method': 'grid/rework', 'params': 'bad'},
+        {'id': 1, 'method': 'unknown', 'params': <String, Object?>{}},
+        {
+          'id': 1,
+          'method': 'grid/rework',
+          'params': {'beadId': 2, 'note': true},
+        },
+        {
+          'id': 1,
+          'method': 'grid/gate/resolve',
+          'params': {
+            'gateId': 'gate',
+            'grades': {'critic': 1},
+          },
+        },
+      ];
+      final handler = _FakeCommandHandler();
+      final control = await StationControl.start(
+        port: 0,
+        token: 't',
+        view: _sampleStatus,
+        commandHandler: handler,
+      );
+      addTearDown(control.dispose);
+
+      final malformed = await _postRaw(
+        control.url,
+        '/command',
+        token: 't',
+        fence: '1',
+        idempotencyKey: 'malformed',
+        body: '{',
+      );
+      expect(malformed.statusCode, HttpStatus.badRequest);
+      for (var index = 0; index < cases.length; index++) {
+        final response = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '1',
+          idempotencyKey: 'invalid-$index',
+          body: cases[index],
+        );
+        expect(response.statusCode, HttpStatus.badRequest);
+      }
+      expect(handler.calls, isEmpty);
+    });
+
+    test(
+      'handler failure is cached and returned as an error envelope',
+      () async {
+        final handler = _FakeCommandHandler(throwOnCall: true);
+        final control = await StationControl.start(
+          port: 0,
+          token: 't',
+          view: _sampleStatus,
+          commandHandler: handler,
+        );
+        addTearDown(control.dispose);
+        const body = {
+          'id': 1,
+          'method': 'grid/rework',
+          'params': {'beadId': 'tg-1'},
+        };
+
+        for (var attempt = 0; attempt < 2; attempt++) {
+          final response = await _post(
+            control.url,
+            '/command',
+            token: 't',
+            fence: '3',
+            idempotencyKey: 'failure',
+            body: body,
+          );
+          expect(response.statusCode, HttpStatus.internalServerError);
+          expect(jsonDecode(response.body), {
+            'id': 1,
+            'error': {
+              'code': 'internal_error',
+              'message': 'Command handler failed.',
+            },
+          });
+        }
+        expect(handler.calls, hasLength(1));
+      },
+    );
+
     test('dispose releases the bound port — a fresh bind on the SAME port '
         'succeeds afterward', () async {
       final control = await StationControl.start(
         port: 0,
         token: 't',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       final boundPort = Uri.parse(control.url).port;
 
@@ -174,6 +513,7 @@ void main() {
         port: boundPort,
         token: 't',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(rebind.dispose);
       expect(Uri.parse(rebind.url).port, boundPort);
@@ -189,6 +529,7 @@ void main() {
           calls++;
           return _sampleStatus();
         },
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -211,6 +552,7 @@ void main() {
         token: 't',
         view: _sampleStatus,
         hooksResolver: resolver,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
       final uri = Uri(
@@ -251,6 +593,7 @@ void main() {
         token: 't',
         view: _sampleStatus,
         hooksResolver: resolver,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -274,6 +617,7 @@ void main() {
         port: 0,
         token: 't',
         view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
       );
       addTearDown(control.dispose);
 
@@ -376,6 +720,7 @@ Future<StationControl> _controlWith(HooksResolver resolver) =>
       token: 't',
       view: _sampleStatus,
       hooksResolver: resolver,
+      commandHandler: _FakeCommandHandler(),
     );
 
 Future<_Response> _hooksGet(StationControl control, String worktree) => _get(
@@ -409,10 +754,10 @@ Future<_Response> _get(String base, String path, {String? token}) async {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
     }
     final response = await request.close();
-    final body = await response.transform(const Utf8Decoder()).join();
+    final responseBody = await response.transform(const Utf8Decoder()).join();
     return _Response(
       response.statusCode,
-      body,
+      responseBody,
       response.headers.value(HttpHeaders.contentTypeHeader),
     );
   } finally {
@@ -420,22 +765,74 @@ Future<_Response> _get(String base, String path, {String? token}) async {
   }
 }
 
-Future<_Response> _post(String base, String path, {String? token}) async {
+Future<_Response> _post(
+  String base,
+  String path, {
+  String? token,
+  Object? body,
+  String? fence,
+  String? idempotencyKey,
+}) => _postRaw(
+  base,
+  path,
+  token: token,
+  fence: fence,
+  idempotencyKey: idempotencyKey,
+  body: body == null ? null : jsonEncode(body),
+);
+
+Future<_Response> _postRaw(
+  String base,
+  String path, {
+  String? token,
+  String? body,
+  String? fence,
+  String? idempotencyKey,
+}) async {
   final client = HttpClient();
   try {
     final request = await client.postUrl(Uri.parse('$base$path'));
     if (token != null) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
     }
+    if (fence != null) request.headers.set('X-Grid-Fence', fence);
+    if (idempotencyKey != null) {
+      request.headers.set('Idempotency-Key', idempotencyKey);
+    }
+    if (body != null) request.write(body);
     final response = await request.close();
-    final body = await response.transform(const Utf8Decoder()).join();
+    final responseBody = await response.transform(const Utf8Decoder()).join();
     return _Response(
       response.statusCode,
-      body,
+      responseBody,
       response.headers.value(HttpHeaders.contentTypeHeader),
     );
   } finally {
     client.close(force: true);
+  }
+}
+
+final class _FakeCommandHandler implements GridCommandHandler {
+  _FakeCommandHandler({
+    this.result = const GridCommandResult.completed(
+      message: 'completed',
+      value: {'ok': true},
+    ),
+    this.block,
+    this.throwOnCall = false,
+  });
+
+  final GridCommandResult result;
+  final Completer<void>? block;
+  final bool throwOnCall;
+  final List<GridCommandRequest> calls = [];
+
+  @override
+  Future<GridCommandResult> call(GridCommandRequest request) async {
+    calls.add(request);
+    await block?.future;
+    if (throwOnCall) throw StateError('fake failure');
+    return result;
   }
 }
 
