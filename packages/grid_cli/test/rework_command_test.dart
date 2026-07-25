@@ -459,6 +459,125 @@ void main() {
         expect(work.writes, isEmpty);
       },
     );
+    group('immediate gate-bead park detection', () {
+      test('a freshly flared OPEN gate immediately permits rework without a '
+          'runner restart', () async {
+        final state = _FakeStore([
+          _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+          _stepBead(
+            'tgdog-m1',
+            sessionId: 'tgdog-s1',
+            nodePath: 'tg-9/route',
+            state: StepState.running,
+          ),
+          _gateBead('tgdog-g1', blocks: 'tgdog-s1', nodePath: 'tg-9/route'),
+        ]);
+        final work = _FakeStore([_workBead('tg-9')]);
+        final errs = <String>[];
+
+        final code = await runRework(
+          beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
+          out: (_) {},
+          err: errs.add,
+        );
+
+        expect(code, 0, reason: errs.join('\n'));
+        final updates = state.writes.where((c) => c.first == 'update').toList();
+        expect(updates, hasLength(1));
+        final metaIndex = updates.single.indexOf('--metadata');
+        expect(jsonDecode(updates.single[metaIndex + 1]), {
+          'work_bead': 'tg-9#r1',
+        });
+        expect(work.writes.where((c) => c.first == 'update'), hasLength(1));
+      });
+
+      test(
+        'closed or differently-linked gates do not park the session',
+        () async {
+          final gates = [
+            _gateBead(
+              'tgdog-closed',
+              blocks: 'tgdog-s1',
+              nodePath: 'tg-9/route',
+              closed: true,
+            ),
+            _gateBead(
+              'tgdog-other',
+              blocks: 'tgdog-s2',
+              nodePath: 'tg-9/route',
+            ),
+          ];
+
+          for (final gate in gates) {
+            final state = _FakeStore([
+              _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+              gate,
+            ]);
+            final work = _FakeStore([_workBead('tg-9')]);
+            final errs = <String>[];
+
+            final code = await runRework(
+              beadId: 'tg-9',
+              stateStore: _stateStore(),
+              stateStorePrefix: 'tgdog',
+              stateWorkspaceOverride: _ws('tgdog'),
+              stateBdOverride: BdCliService(state),
+              noteStore: SubstationWorkStore.forRoot('/work/tg'),
+              workspaceOverride: _ws('tg'),
+              bdOverride: BdCliService(work),
+              out: (_) {},
+              err: errs.add,
+            );
+
+            expect(code, 64, reason: gate.id);
+            expect(
+              errs.join('\n'),
+              contains('OPEN and not parked at a gate'),
+              reason: gate.id,
+            );
+            expect(state.writes, isEmpty, reason: gate.id);
+            expect(work.writes, isEmpty, reason: gate.id);
+          }
+        },
+      );
+    });
+
+    test(
+      'an OPEN molecule session with NO step beads yet (a crashed or '
+      'still-pouring mint) refuses LOUD — open, non-gated (zero writes)',
+      () async {
+        final state = _FakeStore([
+          _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+        ]);
+        final work = _FakeStore([_workBead('tg-9')]);
+        final errs = <String>[];
+
+        final code = await runRework(
+          beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
+          out: (_) {},
+          err: errs.add,
+        );
+
+        expect(code, isNonZero);
+        expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
+        expect(state.writes, isEmpty);
+        expect(work.writes, isEmpty);
+      },
+    );
 
     test('NEGATIVE CONTROL: another session\'s RUNNING step never vetoes this '
         'session\'s rework (the step-bead join is per-session)', () async {
@@ -828,6 +947,20 @@ Bead _stepBead(
     'grid.step.path': nodePath,
     if (state != null) 'grid.step.state': state.name,
   },
+);
+
+Bead _gateBead(
+  String id, {
+  required String blocks,
+  required String nodePath,
+  bool closed = false,
+}) => Bead(
+  id: id,
+  title: 'grid gate $blocks@$nodePath',
+  issueType: IssueType.gate,
+  status: closed ? BeadStatus.closed : BeadStatus.open,
+  createdAt: DateTime.utc(2026, 7, 23, 19, 8),
+  metadata: {'blocks': blocks, 'node': nodePath},
 );
 
 Bead _workBead(
