@@ -36,6 +36,12 @@ sealed class GridCommandResult with _$GridCommandResult {
 }
 
 /// A composable extension implemented by a running station.
+///
+/// Calls are requests serviced inside the resident event/reconcile loop. They
+/// never acquire the station lock, start a process, or create work. This is the
+/// scoped command-channel amendment to ADR-0014 D-C4 ratified by Nico in epic
+/// `tg-wisp-1jt`'s GATE CLEARED note (2026-07-24); `bd` remains the only
+/// work-intake surface. The matching ADR text is delegated to `tg-wisp-sgd`.
 abstract interface class GridCommandHandler {
   /// Executes [request] in this resident station's event/reconcile loop.
   Future<GridCommandResult> call(GridCommandRequest request);
