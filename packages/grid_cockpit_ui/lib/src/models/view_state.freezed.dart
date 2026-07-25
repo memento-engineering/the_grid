@@ -2981,7 +2981,7 @@ as List<PropertyRowModel>,
 /// @nodoc
 mixin _$CostRollupState {
 
- int? get inputTokens; int? get outputTokens; double? get costUsd; bool get hasData;
+ int? get inputTokens; int? get outputTokens; double? get costUsd; List<String> get grades; bool get hasData;
 /// Create a copy of CostRollupState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -2992,16 +2992,16 @@ $CostRollupStateCopyWith<CostRollupState> get copyWith => _$CostRollupStateCopyW
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is CostRollupState&&(identical(other.inputTokens, inputTokens) || other.inputTokens == inputTokens)&&(identical(other.outputTokens, outputTokens) || other.outputTokens == outputTokens)&&(identical(other.costUsd, costUsd) || other.costUsd == costUsd)&&(identical(other.hasData, hasData) || other.hasData == hasData));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is CostRollupState&&(identical(other.inputTokens, inputTokens) || other.inputTokens == inputTokens)&&(identical(other.outputTokens, outputTokens) || other.outputTokens == outputTokens)&&(identical(other.costUsd, costUsd) || other.costUsd == costUsd)&&const DeepCollectionEquality().equals(other.grades, grades)&&(identical(other.hasData, hasData) || other.hasData == hasData));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,inputTokens,outputTokens,costUsd,hasData);
+int get hashCode => Object.hash(runtimeType,inputTokens,outputTokens,costUsd,const DeepCollectionEquality().hash(grades),hasData);
 
 @override
 String toString() {
-  return 'CostRollupState(inputTokens: $inputTokens, outputTokens: $outputTokens, costUsd: $costUsd, hasData: $hasData)';
+  return 'CostRollupState(inputTokens: $inputTokens, outputTokens: $outputTokens, costUsd: $costUsd, grades: $grades, hasData: $hasData)';
 }
 
 
@@ -3012,7 +3012,7 @@ abstract mixin class $CostRollupStateCopyWith<$Res>  {
   factory $CostRollupStateCopyWith(CostRollupState value, $Res Function(CostRollupState) _then) = _$CostRollupStateCopyWithImpl;
 @useResult
 $Res call({
- int? inputTokens, int? outputTokens, double? costUsd, bool hasData
+ int? inputTokens, int? outputTokens, double? costUsd, List<String> grades, bool hasData
 });
 
 
@@ -3029,12 +3029,13 @@ class _$CostRollupStateCopyWithImpl<$Res>
 
 /// Create a copy of CostRollupState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? inputTokens = freezed,Object? outputTokens = freezed,Object? costUsd = freezed,Object? hasData = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? inputTokens = freezed,Object? outputTokens = freezed,Object? costUsd = freezed,Object? grades = null,Object? hasData = null,}) {
   return _then(_self.copyWith(
 inputTokens: freezed == inputTokens ? _self.inputTokens : inputTokens // ignore: cast_nullable_to_non_nullable
 as int?,outputTokens: freezed == outputTokens ? _self.outputTokens : outputTokens // ignore: cast_nullable_to_non_nullable
 as int?,costUsd: freezed == costUsd ? _self.costUsd : costUsd // ignore: cast_nullable_to_non_nullable
-as double?,hasData: null == hasData ? _self.hasData : hasData // ignore: cast_nullable_to_non_nullable
+as double?,grades: null == grades ? _self.grades : grades // ignore: cast_nullable_to_non_nullable
+as List<String>,hasData: null == hasData ? _self.hasData : hasData // ignore: cast_nullable_to_non_nullable
 as bool,
   ));
 }
@@ -3120,10 +3121,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int? inputTokens,  int? outputTokens,  double? costUsd,  bool hasData)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int? inputTokens,  int? outputTokens,  double? costUsd,  List<String> grades,  bool hasData)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _CostRollupState() when $default != null:
-return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.hasData);case _:
+return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.grades,_that.hasData);case _:
   return orElse();
 
 }
@@ -3141,10 +3142,10 @@ return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.hasData
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int? inputTokens,  int? outputTokens,  double? costUsd,  bool hasData)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int? inputTokens,  int? outputTokens,  double? costUsd,  List<String> grades,  bool hasData)  $default,) {final _that = this;
 switch (_that) {
 case _CostRollupState():
-return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.hasData);case _:
+return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.grades,_that.hasData);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -3161,10 +3162,10 @@ return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.hasData
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int? inputTokens,  int? outputTokens,  double? costUsd,  bool hasData)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int? inputTokens,  int? outputTokens,  double? costUsd,  List<String> grades,  bool hasData)?  $default,) {final _that = this;
 switch (_that) {
 case _CostRollupState() when $default != null:
-return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.hasData);case _:
+return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.grades,_that.hasData);case _:
   return null;
 
 }
@@ -3176,12 +3177,19 @@ return $default(_that.inputTokens,_that.outputTokens,_that.costUsd,_that.hasData
 
 
 class _CostRollupState implements CostRollupState {
-  const _CostRollupState({this.inputTokens, this.outputTokens, this.costUsd, required this.hasData});
+  const _CostRollupState({this.inputTokens, this.outputTokens, this.costUsd, final  List<String> grades = const <String>[], required this.hasData}): _grades = grades;
   
 
 @override final  int? inputTokens;
 @override final  int? outputTokens;
 @override final  double? costUsd;
+ final  List<String> _grades;
+@override@JsonKey() List<String> get grades {
+  if (_grades is EqualUnmodifiableListView) return _grades;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_grades);
+}
+
 @override final  bool hasData;
 
 /// Create a copy of CostRollupState
@@ -3194,16 +3202,16 @@ _$CostRollupStateCopyWith<_CostRollupState> get copyWith => __$CostRollupStateCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _CostRollupState&&(identical(other.inputTokens, inputTokens) || other.inputTokens == inputTokens)&&(identical(other.outputTokens, outputTokens) || other.outputTokens == outputTokens)&&(identical(other.costUsd, costUsd) || other.costUsd == costUsd)&&(identical(other.hasData, hasData) || other.hasData == hasData));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _CostRollupState&&(identical(other.inputTokens, inputTokens) || other.inputTokens == inputTokens)&&(identical(other.outputTokens, outputTokens) || other.outputTokens == outputTokens)&&(identical(other.costUsd, costUsd) || other.costUsd == costUsd)&&const DeepCollectionEquality().equals(other._grades, _grades)&&(identical(other.hasData, hasData) || other.hasData == hasData));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,inputTokens,outputTokens,costUsd,hasData);
+int get hashCode => Object.hash(runtimeType,inputTokens,outputTokens,costUsd,const DeepCollectionEquality().hash(_grades),hasData);
 
 @override
 String toString() {
-  return 'CostRollupState(inputTokens: $inputTokens, outputTokens: $outputTokens, costUsd: $costUsd, hasData: $hasData)';
+  return 'CostRollupState(inputTokens: $inputTokens, outputTokens: $outputTokens, costUsd: $costUsd, grades: $grades, hasData: $hasData)';
 }
 
 
@@ -3214,7 +3222,7 @@ abstract mixin class _$CostRollupStateCopyWith<$Res> implements $CostRollupState
   factory _$CostRollupStateCopyWith(_CostRollupState value, $Res Function(_CostRollupState) _then) = __$CostRollupStateCopyWithImpl;
 @override @useResult
 $Res call({
- int? inputTokens, int? outputTokens, double? costUsd, bool hasData
+ int? inputTokens, int? outputTokens, double? costUsd, List<String> grades, bool hasData
 });
 
 
@@ -3231,12 +3239,13 @@ class __$CostRollupStateCopyWithImpl<$Res>
 
 /// Create a copy of CostRollupState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? inputTokens = freezed,Object? outputTokens = freezed,Object? costUsd = freezed,Object? hasData = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? inputTokens = freezed,Object? outputTokens = freezed,Object? costUsd = freezed,Object? grades = null,Object? hasData = null,}) {
   return _then(_CostRollupState(
 inputTokens: freezed == inputTokens ? _self.inputTokens : inputTokens // ignore: cast_nullable_to_non_nullable
 as int?,outputTokens: freezed == outputTokens ? _self.outputTokens : outputTokens // ignore: cast_nullable_to_non_nullable
 as int?,costUsd: freezed == costUsd ? _self.costUsd : costUsd // ignore: cast_nullable_to_non_nullable
-as double?,hasData: null == hasData ? _self.hasData : hasData // ignore: cast_nullable_to_non_nullable
+as double?,grades: null == grades ? _self._grades : grades // ignore: cast_nullable_to_non_nullable
+as List<String>,hasData: null == hasData ? _self.hasData : hasData // ignore: cast_nullable_to_non_nullable
 as bool,
   ));
 }

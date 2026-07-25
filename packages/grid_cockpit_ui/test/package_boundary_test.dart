@@ -58,4 +58,17 @@ void main() {
     }
     expect(violations, isEmpty);
   });
+
+  test('public barrel exports the five cockpit views', () {
+    final library = File('lib/grid_cockpit_ui.dart').readAsStringSync();
+    expect(library, contains("export 'src/views/circuit_pipeline_view.dart';"));
+    expect(library, contains("export 'src/views/cost_tile.dart';"));
+    expect(
+      library,
+      contains("export 'src/views/diagnostics_inspector_view.dart';"),
+    );
+    expect(library, contains("export 'src/views/station_overview_view.dart';"));
+    expect(library, contains("export 'src/views/work_list_view.dart';"));
+    expect(library, isNot(contains("export 'src/views/notifier_view.dart';")));
+  });
 }
