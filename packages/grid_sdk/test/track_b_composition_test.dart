@@ -109,16 +109,11 @@ void main() {
     });
 
     test('Substation refuses an empty name and an empty root', () {
-      expect(
-        () => mount(Substation('', '/w')),
-        throwsA(isA<ArgumentError>()),
-      );
+      expect(() => mount(Substation('', '/w')), throwsA(isA<ArgumentError>()));
       // Empty even UNDER a grid root: an empty root must never silently
       // resolve to the grid home itself.
       expect(
-        () => mount(
-          RawAssetGrid(root: '/g', assets: [Substation('tg', '')]),
-        ),
+        () => mount(RawAssetGrid(root: '/g', assets: [Substation('tg', '')])),
         throwsA(isA<ArgumentError>()),
       );
     });
@@ -137,8 +132,7 @@ void main() {
       );
     });
 
-    test('Station with no root and no enclosing RawAssetGrid refuses LOUD',
-        () {
+    test('Station with no root and no enclosing RawAssetGrid refuses LOUD', () {
       expect(
         () => mount(const Station(name: 'orphan')),
         throwsA(
@@ -210,42 +204,49 @@ void main() {
         RawAssetGrid(
           root: '/grid/home',
           assets: [
-            Station(name: 'mbp', root: '/station/own', assets: [
-              ScopeProbe(seen),
-            ]),
+            Station(
+              name: 'mbp',
+              root: '/station/own',
+              assets: [ScopeProbe(seen)],
+            ),
           ],
         ),
       );
       expect(seen.single.station!.root, '/station/own');
     });
 
-    test('Substation provides its scope to its assets; ONE root, no default',
-        () {
-      final seen =
-          <({GridRoot? grid, StationScope? station, SubstationScope? sub})>[];
-      mount(
-        RawAssetGrid(
-          root: '/g',
-          assets: [
-            Station(name: 's', assets: [
-              Substations(substations: [
-                Substation('tg', '/work/tg', assets: [
-                  ScopeProbe(seen),
-                ]),
-              ]),
-            ]),
-          ],
-        ),
-      );
-      expect(
-        seen.single.sub,
-        const SubstationScope(name: 'tg', root: '/work/tg', prefix: 'tg'),
-      );
-      // The full ancestry is readable from the leaf: the asset serves the
-      // project, inside the machine, inside the deployment.
-      expect(seen.single.grid!.path, '/g');
-      expect(seen.single.station!.name, 's');
-    });
+    test(
+      'Substation provides its scope to its assets; ONE root, no default',
+      () {
+        final seen =
+            <({GridRoot? grid, StationScope? station, SubstationScope? sub})>[];
+        mount(
+          RawAssetGrid(
+            root: '/g',
+            assets: [
+              Station(
+                name: 's',
+                assets: [
+                  Substations(
+                    substations: [
+                      Substation('tg', '/work/tg', assets: [ScopeProbe(seen)]),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        expect(
+          seen.single.sub,
+          const SubstationScope(name: 'tg', root: '/work/tg', prefix: 'tg'),
+        );
+        // The full ancestry is readable from the leaf: the asset serves the
+        // project, inside the machine, inside the deployment.
+        expect(seen.single.grid!.path, '/g');
+        expect(seen.single.station!.name, 's');
+      },
+    );
   });
 
   group('relative root resolution against the grid home (tg-32r)', () {
@@ -257,13 +258,20 @@ void main() {
         RawAssetGrid(
           root: '/abs/space_station',
           assets: [
-            Station(name: 's', assets: [
-              Substations(substations: [
-                Substation('genesis', '../genesis', assets: [
-                  ScopeProbe(seen),
-                ]),
-              ]),
-            ]),
+            Station(
+              name: 's',
+              assets: [
+                Substations(
+                  substations: [
+                    Substation(
+                      'genesis',
+                      '../genesis',
+                      assets: [ScopeProbe(seen)],
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ],
         ),
       );

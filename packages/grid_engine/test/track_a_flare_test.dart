@@ -140,23 +140,30 @@ Future<void> _startThenIsolate(Fakes fakes, String name) async {
 
 void main() {
   group('Track A4 — the host emits a flare on a terminal transition', () {
-    test('a clean complete emits step.complete with {sessionId,nodePath}', () async {
-      final transport = _RecordingTransport();
-      final h = _host(ServiceBundle(transport: transport));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
+    test(
+      'a clean complete emits step.complete with {sessionId,nodePath}',
+      () async {
+        final transport = _RecordingTransport();
+        final h = _host(ServiceBundle(transport: transport));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
 
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
-      await _pump();
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+        );
+        await _pump();
 
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.name, 'step.complete');
-      expect(transport.flares.single.data,
-          {'sessionId': 'tgdog-s', 'nodePath': 'tg-1/agent'});
-    });
+        expect(transport.flares, hasLength(1));
+        expect(transport.flares.single.name, 'step.complete');
+        expect(transport.flares.single.data, {
+          'sessionId': 'tgdog-s',
+          'nodePath': 'tg-1/agent',
+        });
+      },
+    );
 
     test('a THROWING transport does NOT break the flush — the cursor still '
         'advanced (non-blocking proof)', () async {
@@ -167,7 +174,9 @@ void main() {
       });
       await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
 
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
+      h.fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+      );
       await _pump();
 
       // The flare threw, but the terminal cursor write STILL landed (the flush
@@ -175,8 +184,10 @@ void main() {
       // the recording case above.
       final updates = h.fakes.runner.callsFor('update');
       expect(updates.single[1], _stepBeadId);
-      expect(h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
-          'complete');
+      expect(
+        h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+        'complete',
+      );
     });
 
     test('no transport (null) — no flare, no error', () async {
@@ -186,12 +197,16 @@ void main() {
         unawaited(h.fakes.provider.close());
       });
       await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0));
+      h.fakes.provider.emit(
+        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+      );
       await _pump();
       final updates = h.fakes.runner.callsFor('update');
       expect(updates.single[1], _stepBeadId);
-      expect(h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
-          'complete');
+      expect(
+        h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+        'complete',
+      );
     });
   });
 }

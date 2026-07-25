@@ -44,7 +44,10 @@ const _burn = Circuit(
   ],
 );
 
-const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
+const _tgConfig = SubstationConfig(
+  substationId: 'tg',
+  ownedSubstations: {'tg'},
+);
 
 /// The G3 harness's Idle resolver — this suite exercises the unclaimed-
 /// frontier scan, not the mounted tree, so no real effect ever needs to spawn.
@@ -69,71 +72,83 @@ GraphSnapshot _emptyGraph() => GraphSnapshot.fromParts(
 );
 
 void main() {
-  test('the baseline scan at start() reports EMPTY (no work yet); pushing a '
-      'live session surfaces its unclaimed requirement on the NEXT flush',
-      () async {
-    final work = FakeSnapshotSource(_emptyGraph());
-    final state = FakeSnapshotSource(_emptyGraph());
-    addTearDown(work.close);
-    addTearDown(state.close);
-    final bridge = StationJoinBridge(work: work, state: state);
-    final f = buildFakes();
-    final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
+  test(
+    'the baseline scan at start() reports EMPTY (no work yet); pushing a '
+    'live session surfaces its unclaimed requirement on the NEXT flush',
+    () async {
+      final work = FakeSnapshotSource(_emptyGraph());
+      final state = FakeSnapshotSource(_emptyGraph());
+      addTearDown(work.close);
+      addTearDown(state.close);
+      final bridge = StationJoinBridge(work: work, state: state);
+      final f = buildFakes();
+      final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
 
-    final captured = <List<UnclaimedRequirement>>[];
-    final kernel = StationKernel(
-      bridge: bridge,
-      stationServices: f.ctx,
-      resolver: const _IdleResolver(),
-      substations: [
-        SubstationScope(
-          configNotifier: SubstationConfigNotifier(_tgConfig),
-          key: const ValueKey('scope.tg'),
+      final captured = <List<UnclaimedRequirement>>[];
+      final kernel = StationKernel(
+        bridge: bridge,
+        stationServices: f.ctx,
+        resolver: const _IdleResolver(),
+        substations: [
+          SubstationScope(
+            configNotifier: SubstationConfigNotifier(_tgConfig),
+            key: const ValueKey('scope.tg'),
+          ),
+        ],
+        registry: registry,
+        rootCircuitFor: (_) => _burn,
+        stationFacts: _macos,
+        onUnclaimedFrontier: captured.add,
+      );
+      addTearDown(kernel.dispose);
+      kernel.start();
+
+      // The baseline scan (no work pushed yet) reports nothing unclaimed.
+      expect(captured, hasLength(1));
+      expect(captured.single, isEmpty);
+
+      // A work bead + its (fresh, cursor-empty) owned session land together.
+      work.push(
+        GraphSnapshot.fromParts(
+          beads: [
+            Bead(
+              id: 'tg-burn',
+              issueType: IssueType.task,
+              status: BeadStatus.open,
+            ),
+          ],
+          dependencies: const [],
+          readyIds: const {'tg-burn'},
+          capturedAt: DateTime(2026),
         ),
-      ],
-      registry: registry,
-      rootCircuitFor: (_) => _burn,
-      stationFacts: _macos,
-      onUnclaimedFrontier: captured.add,
-    );
-    addTearDown(kernel.dispose);
-    kernel.start();
-
-    // The baseline scan (no work pushed yet) reports nothing unclaimed.
-    expect(captured, hasLength(1));
-    expect(captured.single, isEmpty);
-
-    // A work bead + its (fresh, cursor-empty) owned session land together.
-    work.push(GraphSnapshot.fromParts(
-      beads: [Bead(id: 'tg-burn', issueType: IssueType.task, status: BeadStatus.open)],
-      dependencies: const [],
-      readyIds: const {'tg-burn'},
-      capturedAt: DateTime(2026),
-    ));
-    await _pump();
-    state.push(GraphSnapshot.fromParts(
-      beads: [
-        Bead(
-          id: 'tgdog-s1',
-          issueType: IssueType.session,
-          status: BeadStatus.open,
-          metadata: const {'rig': 'tgdog', 'work_bead': 'tg-burn'},
+      );
+      await _pump();
+      state.push(
+        GraphSnapshot.fromParts(
+          beads: [
+            Bead(
+              id: 'tgdog-s1',
+              issueType: IssueType.session,
+              status: BeadStatus.open,
+              metadata: const {'rig': 'tgdog', 'work_bead': 'tg-burn'},
+            ),
+          ],
+          dependencies: const [],
+          readyIds: const {},
+          capturedAt: DateTime(2026),
         ),
-      ],
-      dependencies: const [],
-      readyIds: const {},
-      capturedAt: DateTime(2026),
-    ));
-    await _pump();
+      );
+      await _pump();
 
-    // The LAST scan (after the flush the state push triggered) sees the
-    // linux-requiring follower as unclaimed; the macOS-requiring host is not.
-    final last = captured.last;
-    expect(last, hasLength(1));
-    expect(last.single.sessionId, 'tgdog-s1');
-    expect(last.single.workBeadId, 'tg-burn');
-    expect(last.single.step.stepId, 'follower');
-  });
+      // The LAST scan (after the flush the state push triggered) sees the
+      // linux-requiring follower as unclaimed; the macOS-requiring host is not.
+      final last = captured.last;
+      expect(last, hasLength(1));
+      expect(last.single.sessionId, 'tgdog-s1');
+      expect(last.single.workBeadId, 'tg-burn');
+      expect(last.single.step.stepId, 'follower');
+    },
+  );
 
   test('no rootCircuitFor / no onUnclaimedFrontier wired → the scan is a '
       'true no-op (no crash, nothing computed) — the zero-cost default for a '

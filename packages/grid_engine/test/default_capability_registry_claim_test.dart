@@ -25,11 +25,7 @@ StepMount _mount(CapabilityStep step) => StepMount(
   // The graph the step is a member of (`StepMount.circuit`, tg-o90) — built from
   // the step under test, so the mount stays honest whatever requirement it
   // declares.
-  circuit: Circuit(
-    id: 'burn',
-    terminalStepId: step.stepId,
-    steps: [step],
-  ),
+  circuit: Circuit(id: 'burn', terminalStepId: step.stepId, steps: [step]),
   circuitPath: 'tg-burn',
   session: const SessionHandle('tgdog-s'),
   node: const NodeCursor(),
@@ -61,9 +57,16 @@ void main() {
         stationFacts: _macos,
         claimCapabilityFor: (_) => claim,
       );
-      final host = registry.host(
-        _mount(const CapabilityStep(stepId: 'follower', capabilityId: 'burn-follower')),
-      ) as CapabilityHost;
+      final host =
+          registry.host(
+                _mount(
+                  const CapabilityStep(
+                    stepId: 'follower',
+                    capabilityId: 'burn-follower',
+                  ),
+                ),
+              )
+              as CapabilityHost;
       expect(host.capability, same(local));
     });
 
@@ -76,15 +79,17 @@ void main() {
         stationFacts: _macos,
         claimCapabilityFor: (_) => claim,
       );
-      final host = registry.host(
-        _mount(
-          const CapabilityStep(
-            stepId: 'follower',
-            capabilityId: 'burn-host',
-            requires: _macos,
-          ),
-        ),
-      ) as CapabilityHost;
+      final host =
+          registry.host(
+                _mount(
+                  const CapabilityStep(
+                    stepId: 'follower',
+                    capabilityId: 'burn-host',
+                    requires: _macos,
+                  ),
+                ),
+              )
+              as CapabilityHost;
       expect(host.capability, same(local));
     });
 
@@ -101,15 +106,17 @@ void main() {
           return claim;
         },
       );
-      final host = registry.host(
-        _mount(
-          const CapabilityStep(
-            stepId: 'follower',
-            capabilityId: 'burn-follower',
-            requires: _linuxRequirement,
-          ),
-        ),
-      ) as CapabilityHost;
+      final host =
+          registry.host(
+                _mount(
+                  const CapabilityStep(
+                    stepId: 'follower',
+                    capabilityId: 'burn-follower',
+                    requires: _linuxRequirement,
+                  ),
+                ),
+              )
+              as CapabilityHost;
       expect(host.capability, same(claim));
       expect(host.capability, isNot(same(local)));
     });
@@ -126,15 +133,17 @@ void main() {
           return const _NamedCapability('claim');
         },
       );
-      final host = registry.host(
-        _mount(
-          const CapabilityStep(
-            stepId: 'follower',
-            capabilityId: 'agent',
-            requires: CapabilityFacts(),
-          ),
-        ),
-      ) as CapabilityHost;
+      final host =
+          registry.host(
+                _mount(
+                  const CapabilityStep(
+                    stepId: 'follower',
+                    capabilityId: 'agent',
+                    requires: CapabilityFacts(),
+                  ),
+                ),
+              )
+              as CapabilityHost;
       expect(host.capability, same(local));
       expect(claimConsulted, isFalse);
     });
@@ -146,15 +155,17 @@ void main() {
         capabilities: const {'burn-follower': _NamedCapability('local')},
         claimCapabilityFor: (_) => claim,
       );
-      final host = registry.host(
-        _mount(
-          const CapabilityStep(
-            stepId: 'follower',
-            capabilityId: 'burn-follower',
-            requires: _linuxRequirement,
-          ),
-        ),
-      ) as CapabilityHost;
+      final host =
+          registry.host(
+                _mount(
+                  const CapabilityStep(
+                    stepId: 'follower',
+                    capabilityId: 'burn-follower',
+                    requires: _linuxRequirement,
+                  ),
+                ),
+              )
+              as CapabilityHost;
       expect(host.capability, same(claim));
     });
   });

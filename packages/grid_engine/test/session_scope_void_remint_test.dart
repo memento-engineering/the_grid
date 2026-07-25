@@ -20,7 +20,11 @@ const _code = Circuit(
   terminalStepId: 'land',
   steps: [
     CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-    CapabilityStep(stepId: 'verify', capabilityId: 'verify', dependsOn: {'agent'}),
+    CapabilityStep(
+      stepId: 'verify',
+      capabilityId: 'verify',
+      dependsOn: {'agent'},
+    ),
     CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'verify'}),
   ],
 );
@@ -64,15 +68,16 @@ Future<void> _pumpUntil(
 Bead _task(String id) =>
     Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
 
-JoinedSnapshot _joined(Map<String, SessionProjection> sessions) => JoinedSnapshot(
-  graph: GraphSnapshot.fromParts(
-    beads: [_task('tg-1')],
-    dependencies: const [],
-    readyIds: const {'tg-1'},
-    capturedAt: DateTime(2026),
-  ),
-  sessionsByWorkBead: sessions,
-);
+JoinedSnapshot _joined(Map<String, SessionProjection> sessions) =>
+    JoinedSnapshot(
+      graph: GraphSnapshot.fromParts(
+        beads: [_task('tg-1')],
+        dependencies: const [],
+        readyIds: const {'tg-1'},
+        capturedAt: DateTime(2026),
+      ),
+      sessionsByWorkBead: sessions,
+    );
 
 /// The DEAD KEY: closed, `agent` complete, `verify` still `running` with a
 /// process fence on record — the I-10 shape (an operator-closed orphan).
@@ -233,10 +238,18 @@ void main() {
       joined.push(_joined(const {'tg-1': _deadKey}));
       m.owner.flush();
       await _pump();
-      expect(f.runner.callsFor('create'), hasLength(2), reason: 'no second mint');
+      expect(
+        f.runner.callsFor('create'),
+        hasLength(2),
+        reason: 'no second mint',
+      );
       expect(_updatesFor(f.runner, 'tgdog-dead'), hasLength(1), reason: 'once');
       expect(transport.named('session.voided'), hasLength(1));
-      expect(reg.events, isEmpty, reason: 'the agent leaf stays mounted in place');
+      expect(
+        reg.events,
+        isEmpty,
+        reason: 'the agent leaf stays mounted in place',
+      );
 
       // The join catches up: the dead key is gone (re-keyed) and the fresh
       // session projects its own cursor — `agent` done, so `verify` inflates.
@@ -258,29 +271,39 @@ void main() {
       expect(f.runner.callsFor('create'), hasLength(2));
     });
 
-    test('FAIL-CLOSED: a stale fence that still probes ALIVE refuses the mint — '
-        'no create, no retire, one LOUD session.voidRefused', () async {
-      final f = buildFakes();
-      final transport = _RecordingTransport();
-      final reg = RecordingCapabilityRegistry(circuits: const {});
-      final m = _mount(
-        joined: JoinedSnapshotNotifier(_joined(const {'tg-1': _deadKey})),
-        ctx: _withLiveness(f.ctx, (fence) => true), // the orphan is STILL alive
-        registry: reg,
-        transport: transport,
-      );
-      addTearDown(m.owner.dispose);
-      await _pump();
-      m.owner.flush();
+    test(
+      'FAIL-CLOSED: a stale fence that still probes ALIVE refuses the mint — '
+      'no create, no retire, one LOUD session.voidRefused',
+      () async {
+        final f = buildFakes();
+        final transport = _RecordingTransport();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final m = _mount(
+          joined: JoinedSnapshotNotifier(_joined(const {'tg-1': _deadKey})),
+          ctx: _withLiveness(
+            f.ctx,
+            (fence) => true,
+          ), // the orphan is STILL alive
+          registry: reg,
+          transport: transport,
+        );
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
 
-      expect(f.runner.callsFor('create'), isEmpty);
-      expect(f.runner.callsFor('update'), isEmpty);
-      expect(reg.events, isEmpty, reason: 'nothing spawns over a live orphan');
-      final refused = transport.named('session.voidRefused');
-      expect(refused, hasLength(1));
-      expect(refused.single.data['pgids'], '4242');
-      expect(refused.single.data['deadSessionId'], 'tgdog-dead');
-    });
+        expect(f.runner.callsFor('create'), isEmpty);
+        expect(f.runner.callsFor('update'), isEmpty);
+        expect(
+          reg.events,
+          isEmpty,
+          reason: 'nothing spawns over a live orphan',
+        );
+        final refused = transport.named('session.voidRefused');
+        expect(refused, hasLength(1));
+        expect(refused.single.data['pgids'], '4242');
+        expect(refused.single.data['deadSessionId'], 'tgdog-dead');
+      },
+    );
 
     test('CONTROL — a DONE session (the grid.outcome marker) still blocks: no '
         'mount, no mint, no retire (landed work is never re-driven)', () async {
@@ -356,7 +379,10 @@ void main() {
             isTerminal: true,
             humanHeld: true,
             cursor: {
-              'tg-1/agent': NodeCursor(state: StepState.failed, restartCount: 3),
+              'tg-1/agent': NodeCursor(
+                state: StepState.failed,
+                restartCount: 3,
+              ),
             },
           ),
         }),
@@ -465,7 +491,11 @@ void main() {
             c.length > 1 &&
             c[1] == 'tgdog-s',
       );
-      expect(markIndex, greaterThanOrEqualTo(0), reason: 'the marker is stamped');
+      expect(
+        markIndex,
+        greaterThanOrEqualTo(0),
+        reason: 'the marker is stamped',
+      );
       expect(closeIndex, greaterThan(markIndex), reason: 'marker BEFORE close');
       expect(transport.named('session.outcomeUnmarked'), isEmpty);
     });

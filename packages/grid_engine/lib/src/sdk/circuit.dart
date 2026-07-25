@@ -109,7 +109,8 @@ abstract class Backoff with _$Backoff {
     max: Duration(seconds: 60),
   );
 
-  factory Backoff.fromJson(Map<String, dynamic> json) => _$BackoffFromJson(json);
+  factory Backoff.fromJson(Map<String, dynamic> json) =>
+      _$BackoffFromJson(json);
 
   /// The cooldown before restart attempt [attempt] (1-based), `min * factor^(n-1)`
   /// clamped to [max]. A non-positive [attempt] yields [min].

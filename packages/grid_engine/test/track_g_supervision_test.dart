@@ -18,12 +18,19 @@ const _code = Circuit(
   terminalStepId: 'land',
   steps: [
     CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
-    CapabilityStep(stepId: 'verify', capabilityId: 'verify', dependsOn: {'agent'}),
+    CapabilityStep(
+      stepId: 'verify',
+      capabilityId: 'verify',
+      dependsOn: {'agent'},
+    ),
     CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'verify'}),
   ],
 );
 
-const _tgConfig = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
+const _tgConfig = SubstationConfig(
+  substationId: 'tg',
+  ownedSubstations: {'tg'},
+);
 
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
@@ -226,8 +233,9 @@ void main() {
       // update — a mutation dropping the reason, or naming the wrong node, fails
       // here).
       final updates = f.runner.callsFor('update');
-      final escIndex =
-          updates.indexWhere((c) => c.join(' ').contains('grid.escalation'));
+      final escIndex = updates.indexWhere(
+        (c) => c.join(' ').contains('grid.escalation'),
+      );
       expect(escIndex, isNonNegative);
       final meta = f.runner.metadataOfUpdate(escIndex);
       expect(meta['grid.escalation'], 'breaker-exhausted');
@@ -296,16 +304,19 @@ void main() {
             'work_bead': 'tg-1',
             'grid.cursor.tg-1/agent.state': 'failed',
             'grid.cursor.tg-1/agent.restartCount': '1',
-            'grid.cursor.tg-1/agent.cooldownUntil':
-                now.add(const Duration(seconds: 30)).toIso8601String(),
+            'grid.cursor.tg-1/agent.cooldownUntil': now
+                .add(const Duration(seconds: 30))
+                .toIso8601String(),
           },
         );
-        state.push(GraphSnapshot.fromParts(
-          beads: [sessionBead],
-          dependencies: const [],
-          readyIds: const [],
-          capturedAt: DateTime(2026),
-        ));
+        state.push(
+          GraphSnapshot.fromParts(
+            beads: [sessionBead],
+            dependencies: const [],
+            readyIds: const [],
+            capturedAt: DateTime(2026),
+          ),
+        );
         await _pump();
 
         // No Timer is armed: the projected cursor is empty, so the scan sees
@@ -346,23 +357,25 @@ void main() {
       // no visible cooldown would still arm WedgeMonitor's own unrelated
       // stall-poll (an empty projected cursor reads as "0 running, 0
       // cooling"), which is not what this test is about.
-      state.push(GraphSnapshot.fromParts(
-        beads: [
-          Bead(
-            id: 'tgdog-s',
-            issueType: IssueType.session,
-            status: BeadStatus.closed,
-            metadata: const <String, dynamic>{
-              'rig': 'tgdog',
-              'work_bead': 'tg-1',
-              'grid.cursor.tg-1/agent.state': 'running',
-            },
-          ),
-        ],
-        dependencies: const [],
-        readyIds: const [],
-        capturedAt: DateTime(2026),
-      ));
+      state.push(
+        GraphSnapshot.fromParts(
+          beads: [
+            Bead(
+              id: 'tgdog-s',
+              issueType: IssueType.session,
+              status: BeadStatus.closed,
+              metadata: const <String, dynamic>{
+                'rig': 'tgdog',
+                'work_bead': 'tg-1',
+                'grid.cursor.tg-1/agent.state': 'running',
+              },
+            ),
+          ],
+          dependencies: const [],
+          readyIds: const [],
+          capturedAt: DateTime(2026),
+        ),
+      );
       await _pump();
 
       expect(timers, isEmpty);

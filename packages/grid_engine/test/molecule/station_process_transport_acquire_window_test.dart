@@ -38,12 +38,13 @@ class _JobCap extends ProcessCapability {
   const _JobCap();
 
   @override
-  RuntimeConfig spawn(TreeContext context, StepArgs args) => const RuntimeConfig(
-    workDir: '/tmp/tg-1',
-    command: 'sh',
-    args: ['-c', 'true'],
-    lifecycle: Lifecycle.oneTurn,
-  );
+  RuntimeConfig spawn(TreeContext context, StepArgs args) =>
+      const RuntimeConfig(
+        workDir: '/tmp/tg-1',
+        command: 'sh',
+        args: ['-c', 'true'],
+        lifecycle: Lifecycle.oneTurn,
+      );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
@@ -92,7 +93,11 @@ class _GatedUpdateBdRunner implements BdRunner {
   void releaseUpdates() => _gate.complete();
 
   @override
-  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) async {
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
     final sub = args.isNotEmpty ? args.first : '';
     if (sub == 'update') {
       updates += 1;
@@ -108,50 +113,45 @@ class _GatedUpdateBdRunner implements BdRunner {
 }
 
 void main() {
-  test(
-    't1 (transport tier): an inferred exit emitted AFTER SessionStarted but '
-    'BEFORE the dispatcher subscribes still completes the step',
-    () async {
-      final transport = FakeRuntimeProvider();
-      addTearDown(transport.close);
-      final reports = <AllocationReport>[];
-      final args = stepArgs('tg-1/lease');
-      final request = _request(
-        transport: transport,
-        sink: reports.add,
-        args: args,
-      );
-      final tree = FakeTreeContext();
+  test('t1 (transport tier): an inferred exit emitted AFTER SessionStarted but '
+      'BEFORE the dispatcher subscribes still completes the step', () async {
+    final transport = FakeRuntimeProvider();
+    addTearDown(transport.close);
+    final reports = <AllocationReport>[];
+    final args = stepArgs('tg-1/lease');
+    final request = _request(
+      transport: transport,
+      sink: reports.add,
+      args: args,
+    );
+    final tree = FakeTreeContext();
 
-      // ACQUIRE: the spawner resolves its handle on SessionStarted.
-      final spawning = stationProcessSpawner(request, tree, args);
-      await pumpEventQueue();
-      expect(transport.started, hasLength(1));
-      transport.emit(const SessionStarted(name: _name, pid: 7, pgid: 7));
-      final handle = await spawning;
-      expect(reports.whereType<AllocationStarted>(), hasLength(1));
+    // ACQUIRE: the spawner resolves its handle on SessionStarted.
+    final spawning = stationProcessSpawner(request, tree, args);
+    await pumpEventQueue();
+    expect(transport.started, hasLength(1));
+    transport.emit(const SessionStarted(name: _name, pid: 7, pgid: 7));
+    final handle = await spawning;
+    expect(reports.whereType<AllocationStarted>(), hasLength(1));
 
-      // THE WINDOW: a slow step-metadata write parks dispatch while the warm
-      // lane exits — the terminal fires before stationProcessDispatcher has
-      // subscribed. Pre-fix this emission reached ZERO listeners on the
-      // unbuffered broadcast stream and the step latched at running forever.
-      transport.emit(
-        const Exited(name: _name, exitCode: 0, inferred: true),
-      );
-      await pumpEventQueue();
+    // THE WINDOW: a slow step-metadata write parks dispatch while the warm
+    // lane exits — the terminal fires before stationProcessDispatcher has
+    // subscribed. Pre-fix this emission reached ZERO listeners on the
+    // unbuffered broadcast stream and the step latched at running forever.
+    transport.emit(const Exited(name: _name, exitCode: 0, inferred: true));
+    await pumpEventQueue();
 
-      // DISPATCH (late): must still settle — bounded, never an infinite wait.
-      final outcome = await stationProcessDispatcher(
-        handle,
-        request,
-        tree,
-        args,
-      ).timeout(const Duration(seconds: 2));
+    // DISPATCH (late): must still settle — bounded, never an infinite wait.
+    final outcome = await stationProcessDispatcher(
+      handle,
+      request,
+      tree,
+      args,
+    ).timeout(const Duration(seconds: 2));
 
-      expect(outcome, isA<Ok>());
-      expect((outcome as Ok).payload, const {'rc': '0'});
-    },
-  );
+    expect(outcome, isA<Ok>());
+    expect((outcome as Ok).payload, const {'rc': '0'});
+  });
 
   test(
     't2 (composition tier): a lane that exits ~immediately after spawn while '
@@ -200,9 +200,7 @@ void main() {
       // breadcrumb write, the spawner's subscription was already inert, and
       // the dispatcher had not subscribed — the terminal was dropped and the
       // step never settled.
-      transport.emit(
-        const Exited(name: _name, exitCode: 0, inferred: true),
-      );
+      transport.emit(const Exited(name: _name, exitCode: 0, inferred: true));
       await pumpEventQueue();
 
       // Only NOW does the writer queue drain.

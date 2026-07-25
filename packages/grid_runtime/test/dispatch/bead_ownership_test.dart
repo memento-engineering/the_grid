@@ -36,13 +36,15 @@ void main() {
   group('the metadata.rig marker axis (belt-and-suspenders, A35 optional)', () {
     final predicate = BeadOwnershipPredicate({'tgdog'});
 
-    test('an owned metadata.rig marker is owned even without an owned prefix',
-        () {
-      expect(
-        predicate.owns(workBead('nodash', metadata: {'rig': 'tgdog'})),
-        isTrue,
-      );
-    });
+    test(
+      'an owned metadata.rig marker is owned even without an owned prefix',
+      () {
+        expect(
+          predicate.owns(workBead('nodash', metadata: {'rig': 'tgdog'})),
+          isTrue,
+        );
+      },
+    );
 
     test('a non-owned metadata.rig marker is NOT owned', () {
       expect(
@@ -52,7 +54,9 @@ void main() {
     });
 
     test('requireSubstationMarker demands BOTH the prefix AND the marker', () {
-      final strict = BeadOwnershipPredicate({'tgdog'}, requireSubstationMarker: true);
+      final strict = BeadOwnershipPredicate({
+        'tgdog',
+      }, requireSubstationMarker: true);
       // Prefix owned but no marker → not owned under the strict posture.
       expect(strict.owns(workBead('tgdog-1')), isFalse);
       // Both owned → owned.
@@ -64,23 +68,20 @@ void main() {
   });
 
   group('the shared allow-set is ONE Set<String>, not a copy', () {
-    test(
-      'BeadOwnershipPredicate exposes the IDENTICAL allow-set it was built '
-      'from, so the write chokepoint can share the same instance (A32)',
-      () {
-        // ONE source of truth — the seed the dogfood uses.
-        final allowSet = {'tgdog'};
-        final dispatchGate = BeadOwnershipPredicate(allowSet);
+    test('BeadOwnershipPredicate exposes the IDENTICAL allow-set it was built '
+        'from, so the write chokepoint can share the same instance (A32)', () {
+      // ONE source of truth — the seed the dogfood uses.
+      final allowSet = {'tgdog'};
+      final dispatchGate = BeadOwnershipPredicate(allowSet);
 
-        // The dispatch gate accepts the_grid's owned rig and rejects gc's.
-        expect(dispatchGate.owns(workBead('tgdog-1')), isTrue);
-        expect(dispatchGate.owns(workBead('gascity-1')), isFalse);
-        // The dispatch gate exposes the allow-set so the write chokepoint can be
-        // built from the IDENTICAL instance (the shared artifact is the set).
-        expect(dispatchGate.substations, contains('tgdog'));
-        expect(dispatchGate.substations, hasLength(1));
-      },
-    );
+      // The dispatch gate accepts the_grid's owned rig and rejects gc's.
+      expect(dispatchGate.owns(workBead('tgdog-1')), isTrue);
+      expect(dispatchGate.owns(workBead('gascity-1')), isFalse);
+      // The dispatch gate exposes the allow-set so the write chokepoint can be
+      // built from the IDENTICAL instance (the shared artifact is the set).
+      expect(dispatchGate.substations, contains('tgdog'));
+      expect(dispatchGate.substations, hasLength(1));
+    });
   });
 
   group('substationOf / prefixOf helpers', () {
@@ -92,7 +93,10 @@ void main() {
     test('substationOf prefers the prefix, falls back to the marker', () {
       final p = BeadOwnershipPredicate({'tgdog'});
       expect(p.substationOf(workBead('tgdog-1')), 'tgdog');
-      expect(p.substationOf(workBead('nodash', metadata: {'rig': 'tgdog'})), 'tgdog');
+      expect(
+        p.substationOf(workBead('nodash', metadata: {'rig': 'tgdog'})),
+        'tgdog',
+      );
     });
   });
 }

@@ -161,7 +161,8 @@ void main() {
         expect(reg.events, isEmpty);
         await _pumpUntil(
           m.owner,
-          () => reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+          () =>
+              reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
         );
 
         // Exactly ONE createSession (minted above the fan-out) plus its
@@ -195,7 +196,8 @@ void main() {
         addTearDown(m.owner.dispose);
         await _pumpUntil(
           m.owner,
-          () => reg.events.length >= 2 && f.runner.callsFor('create').length >= 2,
+          () =>
+              reg.events.length >= 2 && f.runner.callsFor('create').length >= 2,
         );
 
         // ONE mint (+ its molecule pour, tg-eli phase 2), both dep-free leaves

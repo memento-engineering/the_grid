@@ -60,7 +60,8 @@ abstract interface class StationVmSession {
 }
 
 /// The injected connect seam; the real impl is [VmServiceSession.connect].
-typedef VmSessionConnector = Future<StationVmSession> Function(Uri vmServiceUri);
+typedef VmSessionConnector =
+    Future<StationVmSession> Function(Uri vmServiceUri);
 
 /// The REAL session over `package:vm_service`.
 class VmServiceSession implements StationVmSession {

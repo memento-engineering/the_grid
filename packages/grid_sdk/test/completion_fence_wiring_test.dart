@@ -35,12 +35,13 @@ class _AgentCap extends ProcessCapability {
       CompletionContract.committedWorkspace;
 
   @override
-  RuntimeConfig spawn(TreeContext context, StepArgs args) => const RuntimeConfig(
-    workDir: '/unused',
-    command: 'sh',
-    args: ['-c', 'x'],
-    lifecycle: Lifecycle.oneTurn,
-  );
+  RuntimeConfig spawn(TreeContext context, StepArgs args) =>
+      const RuntimeConfig(
+        workDir: '/unused',
+        command: 'sh',
+        args: ['-c', 'x'],
+        lifecycle: Lifecycle.oneTurn,
+      );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
@@ -55,12 +56,13 @@ class _CriticCap extends ProcessCapability {
   const _CriticCap();
 
   @override
-  RuntimeConfig spawn(TreeContext context, StepArgs args) => const RuntimeConfig(
-    workDir: '/unused',
-    command: 'sh',
-    args: ['-c', 'grade'],
-    lifecycle: Lifecycle.oneTurn,
-  );
+  RuntimeConfig spawn(TreeContext context, StepArgs args) =>
+      const RuntimeConfig(
+        workDir: '/unused',
+        command: 'sh',
+        args: ['-c', 'grade'],
+        lifecycle: Lifecycle.oneTurn,
+      );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
@@ -88,7 +90,6 @@ class _RepoSourceControl implements SourceControl {
     required String beadId,
     required String workspaceDir,
   }) async {}
-
 }
 
 /// A [PrOpener] the fence never reaches (no land step here) — the real
@@ -216,35 +217,40 @@ void main() {
       expect(reports.whereType<AllocationCompleted>(), hasLength(1));
     });
 
-    test('THE BUG: a coding agent MURDERED mid-edit (uncommitted TRACKED change) '
-        'FAILS as interrupted', () async {
-      final reports = <AllocationReport>[];
-      write('lib/work.dart', 'void main() { // killed mid-\n');
+    test(
+      'THE BUG: a coding agent MURDERED mid-edit (uncommitted TRACKED change) '
+      'FAILS as interrupted',
+      () async {
+        final reports = <AllocationReport>[];
+        write('lib/work.dart', 'void main() { // killed mid-\n');
 
-      drive(const _AgentCap(), reports).deliverEventForTest(
-        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0, inferred: true),
-      );
-      await settle(reports);
+        drive(const _AgentCap(), reports).deliverEventForTest(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0, inferred: true),
+        );
+        await settle(reports);
 
-      expect(reports.whereType<AllocationCompleted>(), isEmpty);
-      expect(
-        reports.whereType<AllocationFailed>().single.reason,
-        contains('interrupted'),
-      );
-    });
+        expect(reports.whereType<AllocationCompleted>(), isEmpty);
+        expect(
+          reports.whereType<AllocationFailed>().single.reason,
+          contains('interrupted'),
+        );
+      },
+    );
 
-    test('a CRITIC is never fenced — it completes over a genuinely DIRTY tree',
-        () async {
-      final reports = <AllocationReport>[];
-      write('lib/work.dart', 'void main() { // dirty\n');
+    test(
+      'a CRITIC is never fenced — it completes over a genuinely DIRTY tree',
+      () async {
+        final reports = <AllocationReport>[];
+        write('lib/work.dart', 'void main() { // dirty\n');
 
-      drive(const _CriticCap(), reports).deliverEventForTest(
-        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0, inferred: true),
-      );
-      await settle(reports);
+        drive(const _CriticCap(), reports).deliverEventForTest(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0, inferred: true),
+        );
+        await settle(reports);
 
-      expect(reports.whereType<AllocationFailed>(), isEmpty);
-      expect(reports.whereType<AllocationCompleted>(), hasLength(1));
-    });
+        expect(reports.whereType<AllocationFailed>(), isEmpty);
+        expect(reports.whereType<AllocationCompleted>(), hasLength(1));
+      },
+    );
   });
 }

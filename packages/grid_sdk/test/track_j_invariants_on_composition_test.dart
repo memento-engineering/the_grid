@@ -344,40 +344,44 @@ void main() {
       expect(rig.fakes.provider.stopped, isNotEmpty);
     });
 
-    test('tg-2mb: StationWork mounts the ProcessLeaseVendor AMBIENT to the '
-        'work subtree — a molecule allocation resolves the vendor '
-        '`requireProcessLeaseVendor` needs (the seed StationKernel.start '
-        'mounts, restored on the production runGrid seat). Without it the '
-        'readiness gate throws `No ProcessLeaseVendor` and the station wedges '
-        'to zero; positive control: the probe capability actually spawns.',
-        () async {
-      final seen = <engine.ProcessLeaseVendor>[];
-      final rig = _arm(
-        registryOverride: engine.DefaultCapabilityRegistry(
-          capabilities: {'agent': _VendorProbeCap(seen)},
-          clock: () => DateTime(2026),
-        ),
-      );
-      addTearDown(rig.grid.teardown);
-      rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
-      await _pump();
-      // Drive to the spawn point: the probe cap resolves the vendor at the work
-      // node (mount = spawn). With the seed missing, spawn throws and the
-      // provider never starts — this push would time out and `seen` stay empty.
-      await _pushMoleculeState(rig, 'pow-1');
-      expect(
-        seen,
-        isNotEmpty,
-        reason: 'positive control — the probe capability spawned, which means '
-            'requireProcessLeaseVendor resolved at the work node',
-      );
-      expect(
-        seen.first,
-        isA<engine.StationProcessLeaseVendor>(),
-        reason: 'the ambient vendor is the real production vendor '
-            '(defaultProcessLeaseVendor), not a stub or a foreign instance',
-      );
-    });
+    test(
+      'tg-2mb: StationWork mounts the ProcessLeaseVendor AMBIENT to the '
+      'work subtree — a molecule allocation resolves the vendor '
+      '`requireProcessLeaseVendor` needs (the seed StationKernel.start '
+      'mounts, restored on the production runGrid seat). Without it the '
+      'readiness gate throws `No ProcessLeaseVendor` and the station wedges '
+      'to zero; positive control: the probe capability actually spawns.',
+      () async {
+        final seen = <engine.ProcessLeaseVendor>[];
+        final rig = _arm(
+          registryOverride: engine.DefaultCapabilityRegistry(
+            capabilities: {'agent': _VendorProbeCap(seen)},
+            clock: () => DateTime(2026),
+          ),
+        );
+        addTearDown(rig.grid.teardown);
+        rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
+        await _pump();
+        // Drive to the spawn point: the probe cap resolves the vendor at the work
+        // node (mount = spawn). With the seed missing, spawn throws and the
+        // provider never starts — this push would time out and `seen` stay empty.
+        await _pushMoleculeState(rig, 'pow-1');
+        expect(
+          seen,
+          isNotEmpty,
+          reason:
+              'positive control — the probe capability spawned, which means '
+              'requireProcessLeaseVendor resolved at the work node',
+        );
+        expect(
+          seen.first,
+          isA<engine.StationProcessLeaseVendor>(),
+          reason:
+              'the ambient vendor is the real production vendor '
+              '(defaultProcessLeaseVendor), not a stub or a foreign instance',
+        );
+      },
+    );
 
     test(
       'invariant 1 (flush isolation): a work tick rebuilds NOTHING above the '

@@ -84,11 +84,7 @@ class GhPrOpener implements PrOpener {
   /// [SystemGitRunner] is not reused for `gh`; the dogfood wiring supplies a
   /// `gh`-specific runner. Left abstract here so this file stays free of a real
   /// `gh` dependency for the offline graph.
-  final Future<GitRunResult> Function(
-    String workDir,
-    List<String> args,
-  )
-  _gh;
+  final Future<GitRunResult> Function(String workDir, List<String> args) _gh;
 
   @override
   Future<PullRequestResult> open({

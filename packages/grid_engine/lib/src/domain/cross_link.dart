@@ -39,11 +39,7 @@ const kCrossLinkBlocks = 'blocks';
 /// One projected cross-repo blocking edge, read off an OPEN link bead.
 class CrossLink {
   /// Creates the projection of link bead [beadId].
-  const CrossLink({
-    required this.beadId,
-    required this.from,
-    required this.to,
-  });
+  const CrossLink({required this.beadId, required this.from, required this.to});
 
   /// The link bead's own id — the receipt an operator closes to retire the
   /// edge, and the id the LOUD messages name.

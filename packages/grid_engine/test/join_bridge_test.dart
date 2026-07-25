@@ -32,15 +32,17 @@ class FakeSnapshotSource implements SnapshotSource {
 }
 
 /// Builds a work-graph snapshot from [beads] (every bead ready, for brevity).
-GraphSnapshot graphOf(List<Bead> beads, {int tick = 0}) => GraphSnapshot.fromParts(
-  beads: beads,
-  dependencies: const [],
-  readyIds: beads.map((b) => b.id),
-  capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
-);
+GraphSnapshot graphOf(List<Bead> beads, {int tick = 0}) =>
+    GraphSnapshot.fromParts(
+      beads: beads,
+      dependencies: const [],
+      readyIds: beads.map((b) => b.id),
+      capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
+    );
 
 /// A work bead.
-Bead work(String id) => Bead(id: id, issueType: IssueType.feature, status: BeadStatus.open);
+Bead work(String id) =>
+    Bead(id: id, issueType: IssueType.feature, status: BeadStatus.open);
 
 /// A the_grid session bead linked to [workBeadId] (the molecule model,
 /// tg-eli phase 2 — the flat `grid.cursor.*` model retired). Per-node state
@@ -138,58 +140,80 @@ void main() {
       expect(_read(bridge.notifier).sessionsByWorkBead, isEmpty);
     });
 
-    test('one work change → exactly ONE push, new graph + unchanged sessions', () async {
-      stateSrc = FakeSnapshotSource(
-        graphOf([
-          session('s1', workBeadId: 'w1'),
-          stepBead('s1', workBeadId: 'w1', step: 'agent'),
-        ]),
-      );
-      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
-      addTearDown(bridge.dispose);
+    test(
+      'one work change → exactly ONE push, new graph + unchanged sessions',
+      () async {
+        stateSrc = FakeSnapshotSource(
+          graphOf([
+            session('s1', workBeadId: 'w1'),
+            stepBead('s1', workBeadId: 'w1', step: 'agent'),
+          ]),
+        );
+        final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
+          ..start();
+        addTearDown(bridge.dispose);
 
-      final pushes = <JoinedSnapshot>[];
-      bridge.notifier.addListener(pushes.add); // fireImmediately defaults true.
-      expect(pushes, hasLength(1), reason: 'baseline only, before any emission');
+        final pushes = <JoinedSnapshot>[];
+        bridge.notifier.addListener(
+          pushes.add,
+        ); // fireImmediately defaults true.
+        expect(
+          pushes,
+          hasLength(1),
+          reason: 'baseline only, before any emission',
+        );
 
-      workSrc.emit(graphOf([work('w1'), work('w2')], tick: 1));
-      await pumpEventQueue(); // a stream event is delivered in a microtask.
+        workSrc.emit(graphOf([work('w1'), work('w2')], tick: 1));
+        await pumpEventQueue(); // a stream event is delivered in a microtask.
 
-      expect(pushes, hasLength(2), reason: 'exactly one push for one work change');
-      final joined = pushes.last;
-      expect(joined.graph.beadsById.keys, containsAll(<String>['w1', 'w2']));
-      // Sessions came from the OTHER source's `.current` — unchanged.
-      expect(_stateOf(joined, 'w1', 'w1/agent'), StepState.complete);
-    });
+        expect(
+          pushes,
+          hasLength(2),
+          reason: 'exactly one push for one work change',
+        );
+        final joined = pushes.last;
+        expect(joined.graph.beadsById.keys, containsAll(<String>['w1', 'w2']));
+        // Sessions came from the OTHER source's `.current` — unchanged.
+        expect(_stateOf(joined, 'w1', 'w1/agent'), StepState.complete);
+      },
+    );
 
-    test('one cursor change → exactly ONE push, pairs work bead to its session', () async {
-      workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      stateSrc = FakeSnapshotSource(
-        graphOf([session('s1', workBeadId: 'w1')]), // empty cursor
-      );
-      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
-      addTearDown(bridge.dispose);
+    test(
+      'one cursor change → exactly ONE push, pairs work bead to its session',
+      () async {
+        workSrc = FakeSnapshotSource(graphOf([work('w1')]));
+        stateSrc = FakeSnapshotSource(
+          graphOf([session('s1', workBeadId: 'w1')]), // empty cursor
+        );
+        final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
+          ..start();
+        addTearDown(bridge.dispose);
 
-      final pushes = <JoinedSnapshot>[];
-      bridge.notifier.addListener(pushes.add);
-      expect(pushes, hasLength(1));
-      expect(pushes.last.sessionsByWorkBead['w1']?.moleculeBeads, isEmpty);
+        final pushes = <JoinedSnapshot>[];
+        bridge.notifier.addListener(pushes.add);
+        expect(pushes, hasLength(1));
+        expect(pushes.last.sessionsByWorkBead['w1']?.moleculeBeads, isEmpty);
 
-      // The cursor advances when the session's own step bead lands.
-      stateSrc.emit(
-        graphOf([
-          session('s1', workBeadId: 'w1'),
-          stepBead('s1', workBeadId: 'w1', step: 'agent'),
-        ], tick: 1),
-      );
-      await pumpEventQueue();
+        // The cursor advances when the session's own step bead lands.
+        stateSrc.emit(
+          graphOf([
+            session('s1', workBeadId: 'w1'),
+            stepBead('s1', workBeadId: 'w1', step: 'agent'),
+          ], tick: 1),
+        );
+        await pumpEventQueue();
 
-      expect(pushes, hasLength(2), reason: 'exactly one push for one cursor change');
-      // The JOIN pairs the work bead with its advanced session cursor.
-      expect(_stateOf(pushes.last, 'w1', 'w1/agent'), StepState.complete);
-      // Graph stayed the work source's `.current`.
-      expect(pushes.last.graph.beadsById.keys, contains('w1'));
-    });
+        expect(
+          pushes,
+          hasLength(2),
+          reason: 'exactly one push for one cursor change',
+        );
+        // The JOIN pairs the work bead with its advanced session cursor.
+        expect(_stateOf(pushes.last, 'w1', 'w1/agent'), StepState.complete);
+        // Graph stayed the work source's `.current`.
+        expect(pushes.last.graph.beadsById.keys, contains('w1'));
+      },
+    );
 
     test('a no-op (neither source emits) → no push beyond the baseline', () {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
@@ -198,7 +222,11 @@ void main() {
 
       final pushes = <JoinedSnapshot>[];
       bridge.notifier.addListener(pushes.add);
-      expect(pushes, hasLength(1), reason: 'baseline seed only — nothing emitted');
+      expect(
+        pushes,
+        hasLength(1),
+        reason: 'baseline seed only — nothing emitted',
+      );
     });
 
     test('a session bead with no work_bead linkage is skipped (no crash)', () {
@@ -210,7 +238,9 @@ void main() {
         status: BeadStatus.open,
         metadata: const {'rig': 'tgdog'},
       );
-      stateSrc = FakeSnapshotSource(graphOf([orphan, session('s1', workBeadId: 'w1')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([orphan, session('s1', workBeadId: 'w1')]),
+      );
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
       addTearDown(bridge.dispose);
 
@@ -240,83 +270,118 @@ void main() {
       addTearDown(bridge.dispose);
 
       // Only the real session contributes the cursor.
-      expect(_stateOf(_read(bridge.notifier), 'w1', 'w1/agent'), StepState.complete);
+      expect(
+        _stateOf(_read(bridge.notifier), 'w1', 'w1/agent'),
+        StepState.complete,
+      );
       expect(_read(bridge.notifier).sessionsByWorkBead, hasLength(1));
     });
 
-    test('terminal retention: a CLOSED session still appears (so WorkList unmounts)', () async {
-      workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      stateSrc = FakeSnapshotSource(graphOf([session('s1', workBeadId: 'w1')]));
-      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
-      addTearDown(bridge.dispose);
+    test(
+      'terminal retention: a CLOSED session still appears (so WorkList unmounts)',
+      () async {
+        workSrc = FakeSnapshotSource(graphOf([work('w1')]));
+        stateSrc = FakeSnapshotSource(
+          graphOf([session('s1', workBeadId: 'w1')]),
+        );
+        final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
+          ..start();
+        addTearDown(bridge.dispose);
 
-      final pushes = <JoinedSnapshot>[];
-      bridge.notifier.addListener(pushes.add);
+        final pushes = <JoinedSnapshot>[];
+        bridge.notifier.addListener(pushes.add);
 
-      // The session closes — the positive terminal signal.
-      stateSrc.emit(
-        graphOf([session('s1', workBeadId: 'w1', closed: true)], tick: 1),
-      );
-      await pumpEventQueue();
+        // The session closes — the positive terminal signal.
+        stateSrc.emit(
+          graphOf([session('s1', workBeadId: 'w1', closed: true)], tick: 1),
+        );
+        await pumpEventQueue();
 
-      final terminal = pushes.last.sessionsByWorkBead['w1'];
-      expect(terminal, isNotNull, reason: 'a terminal session must NOT be dropped from the join');
-      expect(terminal!.isTerminal, isTrue);
-    });
+        final terminal = pushes.last.sessionsByWorkBead['w1'];
+        expect(
+          terminal,
+          isNotNull,
+          reason: 'a terminal session must NOT be dropped from the join',
+        );
+        expect(terminal!.isTerminal, isTrue);
+      },
+    );
 
-    test('start() re-seeds: a baseline landing in the construct→start gap is recovered', () async {
-      // No `.current` at construction — the seed is JoinedSnapshot.empty.
-      final bridge = StationJoinBridge(work: workSrc, state: stateSrc);
-      addTearDown(bridge.dispose);
-      expect(_read(bridge.notifier).graph.isEmpty, isTrue);
+    test(
+      'start() re-seeds: a baseline landing in the construct→start gap is recovered',
+      () async {
+        // No `.current` at construction — the seed is JoinedSnapshot.empty.
+        final bridge = StationJoinBridge(work: workSrc, state: stateSrc);
+        addTearDown(bridge.dispose);
+        expect(_read(bridge.notifier).graph.isEmpty, isTrue);
 
-      // A first baseline lands in the gap BEFORE start() subscribes. The
-      // broadcast stream does not replay, so the event itself is lost — but
-      // the source's `.current` carries it, and start()'s re-seed recovers it.
-      workSrc.emit(graphOf([work('w1')]));
-      await pumpEventQueue();
-      expect(_read(bridge.notifier).graph.isEmpty, isTrue, reason: 'gap event not yet recovered');
+        // A first baseline lands in the gap BEFORE start() subscribes. The
+        // broadcast stream does not replay, so the event itself is lost — but
+        // the source's `.current` carries it, and start()'s re-seed recovers it.
+        workSrc.emit(graphOf([work('w1')]));
+        await pumpEventQueue();
+        expect(
+          _read(bridge.notifier).graph.isEmpty,
+          isTrue,
+          reason: 'gap event not yet recovered',
+        );
 
-      bridge.start();
-      expect(
-        _read(bridge.notifier).graph.beadsById.keys,
-        contains('w1'),
-        reason: 'start() re-seeds from the sources\' `.current`, recovering the missed baseline',
-      );
-    });
+        bridge.start();
+        expect(
+          _read(bridge.notifier).graph.beadsById.keys,
+          contains('w1'),
+          reason:
+              'start() re-seeds from the sources\' `.current`, recovering the missed baseline',
+        );
+      },
+    );
 
-    test('start() is idempotent — no double subscription, one push per change', () async {
-      workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
-        ..start()
-        ..start();
-      addTearDown(bridge.dispose);
+    test(
+      'start() is idempotent — no double subscription, one push per change',
+      () async {
+        workSrc = FakeSnapshotSource(graphOf([work('w1')]));
+        final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
+          ..start()
+          ..start();
+        addTearDown(bridge.dispose);
 
-      final pushes = <JoinedSnapshot>[];
-      bridge.notifier.addListener(pushes.add);
-      expect(pushes, hasLength(1));
+        final pushes = <JoinedSnapshot>[];
+        bridge.notifier.addListener(pushes.add);
+        expect(pushes, hasLength(1));
 
-      workSrc.emit(graphOf([work('w1'), work('w2')], tick: 1));
-      await pumpEventQueue();
-      expect(pushes, hasLength(2), reason: 'a single subscription — one push, not two');
-    });
+        workSrc.emit(graphOf([work('w1'), work('w2')], tick: 1));
+        await pumpEventQueue();
+        expect(
+          pushes,
+          hasLength(2),
+          reason: 'a single subscription — one push, not two',
+        );
+      },
+    );
 
-    test('an injected notifier is driven but not disposed by the bridge', () async {
-      workSrc = FakeSnapshotSource(graphOf([work('w1')]));
-      final external = JoinedSnapshotNotifier(JoinedSnapshot.empty());
-      final bridge = StationJoinBridge(work: workSrc, state: stateSrc, notifier: external)..start();
+    test(
+      'an injected notifier is driven but not disposed by the bridge',
+      () async {
+        workSrc = FakeSnapshotSource(graphOf([work('w1')]));
+        final external = JoinedSnapshotNotifier(JoinedSnapshot.empty());
+        final bridge = StationJoinBridge(
+          work: workSrc,
+          state: stateSrc,
+          notifier: external,
+        )..start();
 
-      final pushes = <JoinedSnapshot>[];
-      external.addListener(pushes.add);
-      workSrc.emit(graphOf([work('w1'), work('w2')], tick: 1));
-      await pumpEventQueue();
-      expect(pushes, hasLength(2));
+        final pushes = <JoinedSnapshot>[];
+        external.addListener(pushes.add);
+        workSrc.emit(graphOf([work('w1'), work('w2')], tick: 1));
+        await pumpEventQueue();
+        expect(pushes, hasLength(2));
 
-      bridge.dispose();
-      // Still usable after dispose — the bridge did not own it.
-      expect(() => external.push(JoinedSnapshot.empty()), returnsNormally);
-      external.dispose();
-    });
+        bridge.dispose();
+        // Still usable after dispose — the bridge did not own it.
+        expect(() => external.push(JoinedSnapshot.empty()), returnsNormally);
+        external.dispose();
+      },
+    );
 
     test('dispose() stops pushes and is idempotent', () async {
       workSrc = FakeSnapshotSource(graphOf([work('w1')]));
@@ -331,7 +396,10 @@ void main() {
         ..dispose(); // idempotent.
 
       // After dispose, an emission must not reach the (disposed) notifier.
-      expect(() => workSrc.emit(graphOf([work('w2')], tick: 1)), returnsNormally);
+      expect(
+        () => workSrc.emit(graphOf([work('w2')], tick: 1)),
+        returnsNormally,
+      );
       await pumpEventQueue();
       expect(pushes, hasLength(1), reason: 'no push after dispose');
     });

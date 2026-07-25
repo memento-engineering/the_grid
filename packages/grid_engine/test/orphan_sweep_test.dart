@@ -109,20 +109,23 @@ GraphSnapshot _state(List<Bead> beads) => GraphSnapshot.fromParts(
 /// A HISTORICAL flat session bead still carrying the retired per-node
 /// `grid.cursor.*` process fence (raw wire literals — the flat codec is
 /// deleted). The sweep must treat it as INERT.
-Bead _legacySession({required String id, required int pgid, required int pid}) =>
-    Bead(
-      id: id,
-      issueType: IssueType.session,
-      status: BeadStatus.open,
-      metadata: <String, dynamic>{
-        'rig': 'tgstate',
-        'work_bead': 'tg-gpg',
-        'grid.cursor.tg-gpg/agent.state': 'running',
-        'grid.cursor.tg-gpg/agent.pgid': '$pgid',
-        'grid.cursor.tg-gpg/agent.pid': '$pid',
-        'grid.cursor.tg-gpg/agent.token': 'tok',
-      },
-    );
+Bead _legacySession({
+  required String id,
+  required int pgid,
+  required int pid,
+}) => Bead(
+  id: id,
+  issueType: IssueType.session,
+  status: BeadStatus.open,
+  metadata: <String, dynamic>{
+    'rig': 'tgstate',
+    'work_bead': 'tg-gpg',
+    'grid.cursor.tg-gpg/agent.state': 'running',
+    'grid.cursor.tg-gpg/agent.pgid': '$pgid',
+    'grid.cursor.tg-gpg/agent.pid': '$pid',
+    'grid.cursor.tg-gpg/agent.token': 'tok',
+  },
+);
 
 RestartReconciler _reconciler({
   required ProcessGroupController groups,
@@ -179,35 +182,32 @@ void main() {
       expect(log.join('\n'), contains('SURVIVED the unmount'));
     });
 
-    test(
-      'EXISTING-STORE SAFETY: a legacy flat session bead with a live-pid '
-      'grid.cursor.* fence is INERT — no crash, no signal, no '
-      'terminatedGroups (the fence half retired, tg-eli phase 2)',
-      () async {
-        final provider = FakeRuntimeProvider();
-        addTearDown(provider.close);
-        final groups = _FakeGroups(alivePids: {77});
-        final log = <String>[];
+    test('EXISTING-STORE SAFETY: a legacy flat session bead with a live-pid '
+        'grid.cursor.* fence is INERT — no crash, no signal, no '
+        'terminatedGroups (the fence half retired, tg-eli phase 2)', () async {
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final groups = _FakeGroups(alivePids: {77});
+      final log = <String>[];
 
-        final report =
-            await _reconciler(
-              groups: groups,
-              state: _state([
-                _legacySession(id: _sessionId, pgid: 4242, pid: 77),
-              ]),
-            ).sweepOrphans(
-              transport: provider,
-              sessionPrefix: _prefix,
-              onOrphan: log.add,
-              pollInterval: const Duration(milliseconds: 5),
-            );
+      final report =
+          await _reconciler(
+            groups: groups,
+            state: _state([
+              _legacySession(id: _sessionId, pgid: 4242, pid: 77),
+            ]),
+          ).sweepOrphans(
+            transport: provider,
+            sessionPrefix: _prefix,
+            onOrphan: log.add,
+            pollInterval: const Duration(milliseconds: 5),
+          );
 
-        expect(groups.signals, isEmpty);
-        expect(report.terminatedGroups, isEmpty);
-        expect(report.isClean, isTrue);
-        expect(log, isEmpty);
-      },
-    );
+      expect(groups.signals, isEmpty);
+      expect(report.terminatedGroups, isEmpty);
+      expect(report.isClean, isTrue);
+      expect(log, isEmpty);
+    });
 
     test('a clean teardown reaps nothing and logs NOTHING', () async {
       final provider = FakeRuntimeProvider();

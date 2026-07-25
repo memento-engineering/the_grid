@@ -92,28 +92,33 @@ LeaseAllocation<String> _alloc(
   required AllocationSink sink,
   CancelToken? cancel,
   StepKind kind = StepKind.daemon,
-}) => cap.createAllocation(
-  AllocationContext(
-    treeContext: FakeTreeContext(),
-    args: stepArgs('tg-1/lease', cancel: cancel),
-    transport: FakeRuntimeProvider(),
-    address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
-    env: const {},
-    sink: sink,
-    kind: kind,
-  ),
-) as LeaseAllocation<String>;
+}) =>
+    cap.createAllocation(
+          AllocationContext(
+            treeContext: FakeTreeContext(),
+            args: stepArgs('tg-1/lease', cancel: cancel),
+            transport: FakeRuntimeProvider(),
+            address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
+            env: const {},
+            sink: sink,
+            kind: kind,
+          ),
+        )
+        as LeaseAllocation<String>;
 
 void main() {
   group('LeaseAllocation — kind drives adoptability/detachability (D6)', () {
-    test('a daemon lease is adoptable + detachable; a job lease is neither', () {
-      final daemon = _alloc(_FakeLeaseCap(), sink: (_) {});
-      final job = _alloc(_FakeLeaseCap(), sink: (_) {}, kind: StepKind.job);
-      expect(daemon.isAdoptable, isTrue);
-      expect(daemon.isDetachable, isTrue);
-      expect(job.isAdoptable, isFalse);
-      expect(job.isDetachable, isFalse);
-    });
+    test(
+      'a daemon lease is adoptable + detachable; a job lease is neither',
+      () {
+        final daemon = _alloc(_FakeLeaseCap(), sink: (_) {});
+        final job = _alloc(_FakeLeaseCap(), sink: (_) {}, kind: StepKind.job);
+        expect(daemon.isAdoptable, isTrue);
+        expect(daemon.isDetachable, isTrue);
+        expect(job.isAdoptable, isFalse);
+        expect(job.isDetachable, isFalse);
+      },
+    );
   });
 
   group('LeaseAllocation — daemon: acquire → dispatch → READY (the reap fix)', () {
@@ -132,29 +137,33 @@ void main() {
       expect(cap.log, ['adoptable', 'acquire', 'dispatch:lease-0']);
     });
 
-    test('dispose RELEASES the held handle (dispose == release, the floor)',
-        () async {
-      final cap = _FakeLeaseCap();
-      final alloc = _alloc(cap, sink: (_) {});
-      await alloc.startOrAdopt();
-      await alloc.dispose();
-      expect(cap.released, ['lease-0']);
-      expect(alloc.state, AllocationState.gone);
-    });
+    test(
+      'dispose RELEASES the held handle (dispose == release, the floor)',
+      () async {
+        final cap = _FakeLeaseCap();
+        final alloc = _alloc(cap, sink: (_) {});
+        await alloc.startOrAdopt();
+        await alloc.dispose();
+        expect(cap.released, ['lease-0']);
+        expect(alloc.state, AllocationState.gone);
+      },
+    );
   });
 
   group('LeaseAllocation — job: acquire → dispatch → COMPLETE (latches)', () {
-    test('a job lease reports AllocationCompleted (not ready); dispose releases',
-        () async {
-      final reports = <AllocationReport>[];
-      final cap = _FakeLeaseCap(outcome: const Ok({'exitCode': '0'}));
-      final alloc = _alloc(cap, sink: reports.add, kind: StepKind.job);
-      await alloc.startOrAdopt();
-      expect(reports.whereType<AllocationCompleted>(), hasLength(1));
-      expect(reports.whereType<AllocationReady>(), isEmpty);
-      await alloc.dispose();
-      expect(cap.released, ['lease-0']);
-    });
+    test(
+      'a job lease reports AllocationCompleted (not ready); dispose releases',
+      () async {
+        final reports = <AllocationReport>[];
+        final cap = _FakeLeaseCap(outcome: const Ok({'exitCode': '0'}));
+        final alloc = _alloc(cap, sink: reports.add, kind: StepKind.job);
+        await alloc.startOrAdopt();
+        expect(reports.whereType<AllocationCompleted>(), hasLength(1));
+        expect(reports.whereType<AllocationReady>(), isEmpty);
+        await alloc.dispose();
+        expect(cap.released, ['lease-0']);
+      },
+    );
 
     test('a double dispose releases ONCE (idempotent)', () async {
       final cap = _FakeLeaseCap();
@@ -167,119 +176,146 @@ void main() {
   });
 
   group('LeaseAllocation — dispatch outcomes route to reports', () {
-    test('Failed dispatch → AllocationFailed (still releases on dispose)',
-        () async {
-      final reports = <AllocationReport>[];
-      final cap = _FakeLeaseCap(outcome: const Failed('boom'));
-      final alloc = _alloc(cap, sink: reports.add);
-      await alloc.startOrAdopt();
-      expect((reports.single as AllocationFailed).reason, 'boom');
-      await alloc.dispose();
-      expect(cap.releasedAny(), isTrue);
-    });
+    test(
+      'Failed dispatch → AllocationFailed (still releases on dispose)',
+      () async {
+        final reports = <AllocationReport>[];
+        final cap = _FakeLeaseCap(outcome: const Failed('boom'));
+        final alloc = _alloc(cap, sink: reports.add);
+        await alloc.startOrAdopt();
+        expect((reports.single as AllocationFailed).reason, 'boom');
+        await alloc.dispose();
+        expect(cap.releasedAny(), isTrue);
+      },
+    );
   });
 
   group('LeaseAllocation — acquire fail-closed', () {
-    test('LeaseUnavailable → AllocationFailed; nothing bound; dispose no-release',
-        () async {
-      final reports = <AllocationReport>[];
-      final cap = _FakeLeaseCap(unavailable: 'no peer satisfies X');
-      final alloc = _alloc(cap, sink: reports.add);
-      await alloc.startOrAdopt();
-      expect((reports.single as AllocationFailed).reason, 'no peer satisfies X');
-      expect(cap.log, isNot(contains('dispatch')));
-      expect(alloc.handle, isNull);
-      await alloc.dispose();
-      expect(cap.releasedAny(), isFalse);
-    });
+    test(
+      'LeaseUnavailable → AllocationFailed; nothing bound; dispose no-release',
+      () async {
+        final reports = <AllocationReport>[];
+        final cap = _FakeLeaseCap(unavailable: 'no peer satisfies X');
+        final alloc = _alloc(cap, sink: reports.add);
+        await alloc.startOrAdopt();
+        expect(
+          (reports.single as AllocationFailed).reason,
+          'no peer satisfies X',
+        );
+        expect(cap.log, isNot(contains('dispatch')));
+        expect(alloc.handle, isNull);
+        await alloc.dispose();
+        expect(cap.releasedAny(), isFalse);
+      },
+    );
   });
 
   group('LeaseAllocation — a dispose racing the acquire releases the slot', () {
-    test('cancel before startOrAdopt (job) → binds then RELEASES + skips dispatch '
-        '+ no report', () async {
-      final reports = <AllocationReport>[];
-      final cap = _FakeLeaseCap();
-      final alloc = _alloc(
-        cap,
-        sink: reports.add,
-        cancel: CancelToken()..cancel(),
-        kind: StepKind.job,
-      );
-      await alloc.startOrAdopt();
-      expect(cap.log, isNot(contains('dispatch')));
-      expect(cap.releasedAny(), isTrue);
-      expect(reports, isEmpty);
-      expect(alloc.state, AllocationState.gone);
-    });
+    test(
+      'cancel before startOrAdopt (job) → binds then RELEASES + skips dispatch '
+      '+ no report',
+      () async {
+        final reports = <AllocationReport>[];
+        final cap = _FakeLeaseCap();
+        final alloc = _alloc(
+          cap,
+          sink: reports.add,
+          cancel: CancelToken()..cancel(),
+          kind: StepKind.job,
+        );
+        await alloc.startOrAdopt();
+        expect(cap.log, isNot(contains('dispatch')));
+        expect(cap.releasedAny(), isTrue);
+        expect(reports, isEmpty);
+        expect(alloc.state, AllocationState.gone);
+      },
+    );
   });
 
   group('LeaseAllocation — daemon adopt-or-reacquire (no-adopt-on-faith)', () {
-    test('a prior handle PROVEN fresh is ADOPTED — reattached, ready, NO acquire/'
-        'dispatch; dispose releases it', () async {
-      final reports = <AllocationReport>[];
-      final cap = _FakeLeaseCap(prior: LeaseBound('prior-0'), fresh: true);
-      final alloc = _alloc(cap, sink: reports.add);
-      await alloc.startOrAdopt();
-      expect(alloc.adopted, isTrue);
-      expect(cap.log, isNot(contains('acquire')));
-      expect(cap.log, isNot(contains('dispatch')));
-      expect(cap.log, contains('proveFresh:prior-0'));
-      expect(reports.whereType<AllocationReady>(), hasLength(1));
-      expect(alloc.handle, 'prior-0');
-      await alloc.dispose();
-      expect(cap.released, ['prior-0']);
-    });
+    test(
+      'a prior handle PROVEN fresh is ADOPTED — reattached, ready, NO acquire/'
+      'dispatch; dispose releases it',
+      () async {
+        final reports = <AllocationReport>[];
+        final cap = _FakeLeaseCap(prior: LeaseBound('prior-0'), fresh: true);
+        final alloc = _alloc(cap, sink: reports.add);
+        await alloc.startOrAdopt();
+        expect(alloc.adopted, isTrue);
+        expect(cap.log, isNot(contains('acquire')));
+        expect(cap.log, isNot(contains('dispatch')));
+        expect(cap.log, contains('proveFresh:prior-0'));
+        expect(reports.whereType<AllocationReady>(), hasLength(1));
+        expect(alloc.handle, 'prior-0');
+        await alloc.dispose();
+        expect(cap.released, ['prior-0']);
+      },
+    );
 
-    test('a prior handle that FAILS the proof → acquire FRESH (never adopt blind)',
-        () async {
-      final cap = _FakeLeaseCap(prior: LeaseBound('stale-0'), fresh: false);
-      final alloc = _alloc(cap, sink: (_) {});
-      await alloc.startOrAdopt();
-      expect(alloc.adopted, isFalse);
-      expect(cap.log, contains('acquire'));
-      expect(cap.log, contains('dispatch:lease-0'));
-      expect(alloc.handle, 'lease-0');
-    });
+    test(
+      'a prior handle that FAILS the proof → acquire FRESH (never adopt blind)',
+      () async {
+        final cap = _FakeLeaseCap(prior: LeaseBound('stale-0'), fresh: false);
+        final alloc = _alloc(cap, sink: (_) {});
+        await alloc.startOrAdopt();
+        expect(alloc.adopted, isFalse);
+        expect(cap.log, contains('acquire'));
+        expect(cap.log, contains('dispatch:lease-0'));
+        expect(alloc.handle, 'lease-0');
+      },
+    );
 
-    test('a dispose racing the adopt PROOF releases the prior handle (invariant 4)',
-        () async {
-      final cancel = CancelToken();
-      final cap = _FakeLeaseCap(
-        prior: LeaseBound('prior-0'),
-        fresh: true,
-        onProveFresh: cancel.cancel, // dispose lands inside proveFresh's await
-      );
-      final alloc = _alloc(cap, sink: (_) {}, cancel: cancel);
-      await alloc.startOrAdopt();
-      expect(alloc.adopted, isFalse);
-      expect(cap.log, contains('proveFresh:prior-0'));
-      expect(cap.released, contains('prior-0'),
-          reason: 'the proven prior handle is released, not orphaned');
-      await alloc.dispose();
-      expect(cap.released, ['prior-0'], reason: 'no double release');
-    });
+    test(
+      'a dispose racing the adopt PROOF releases the prior handle (invariant 4)',
+      () async {
+        final cancel = CancelToken();
+        final cap = _FakeLeaseCap(
+          prior: LeaseBound('prior-0'),
+          fresh: true,
+          onProveFresh:
+              cancel.cancel, // dispose lands inside proveFresh's await
+        );
+        final alloc = _alloc(cap, sink: (_) {}, cancel: cancel);
+        await alloc.startOrAdopt();
+        expect(alloc.adopted, isFalse);
+        expect(cap.log, contains('proveFresh:prior-0'));
+        expect(
+          cap.released,
+          contains('prior-0'),
+          reason: 'the proven prior handle is released, not orphaned',
+        );
+        await alloc.dispose();
+        expect(cap.released, ['prior-0'], reason: 'no double release');
+      },
+    );
 
-    test('a JOB never adopts even with a fresh prior (respawn-or-skip)', () async {
-      final cap = _FakeLeaseCap(prior: LeaseBound('prior-0'), fresh: true);
-      final alloc = _alloc(cap, sink: (_) {}, kind: StepKind.job);
-      await alloc.startOrAdopt();
-      expect(alloc.adopted, isFalse);
-      expect(cap.log, isNot(contains('adoptable')));
-      expect(cap.log, contains('acquire'));
-    });
+    test(
+      'a JOB never adopts even with a fresh prior (respawn-or-skip)',
+      () async {
+        final cap = _FakeLeaseCap(prior: LeaseBound('prior-0'), fresh: true);
+        final alloc = _alloc(cap, sink: (_) {}, kind: StepKind.job);
+        await alloc.startOrAdopt();
+        expect(alloc.adopted, isFalse);
+        expect(cap.log, isNot(contains('adoptable')));
+        expect(cap.log, contains('acquire'));
+      },
+    );
   });
 
   group('LeaseAllocation — detach vs dispose (distinct verbs, D4)', () {
-    test('detach LEAVES the daemon lease HELD (never releases); a later dispose '
-        'still releases', () async {
-      final cap = _FakeLeaseCap();
-      final alloc = _alloc(cap, sink: (_) {});
-      await alloc.startOrAdopt();
-      await alloc.detach();
-      expect(cap.releasedAny(), isFalse);
-      await alloc.dispose();
-      expect(cap.released, ['lease-0']);
-    });
+    test(
+      'detach LEAVES the daemon lease HELD (never releases); a later dispose '
+      'still releases',
+      () async {
+        final cap = _FakeLeaseCap();
+        final alloc = _alloc(cap, sink: (_) {});
+        await alloc.startOrAdopt();
+        await alloc.detach();
+        expect(cap.releasedAny(), isFalse);
+        await alloc.dispose();
+        expect(cap.released, ['lease-0']);
+      },
+    );
 
     test('detach on a JOB lease throws (never leave a grant held)', () async {
       final cap = _FakeLeaseCap();

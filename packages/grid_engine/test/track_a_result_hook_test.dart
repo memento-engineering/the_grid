@@ -64,8 +64,10 @@ class _GradingCritic extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async =>
-      grade == null ? null : {'grade': grade!};
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async => grade == null ? null : {'grade': grade!};
 }
 
 Future<void> _pump() async {
@@ -129,50 +131,64 @@ Future<void> _startThenIsolate(Fakes fakes, String name) async {
 }
 
 void main() {
-  group('Track A1 — ProcessCapability.result() merges into the complete write', () {
-    test('a clean Exited(0) carries state=complete AND grid.result.<path>.grade '
-        'in ONE update', () async {
-      final h = _host(const _GradingCritic('B'));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
+  group(
+    'Track A1 — ProcessCapability.result() merges into the complete write',
+    () {
+      test('a clean Exited(0) carries state=complete AND grid.result.<path>.grade '
+          'in ONE update', () async {
+        final h = _host(const _GradingCritic('B'));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/critic');
+
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/critic', exitCode: 0),
+        );
+        await _pump();
+
+        // EXACTLY one chokepoint update — targeting the step's OWN bead (R5b) —
+        // carrying both the cursor advance and the namespaced grade — disjoint
+        // keys merge in one write (A1/invariant 2).
+        final updates = h.fakes.runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single[1], _stepBeadId);
+        expect(
+          h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+          'complete',
+        );
+        expect(
+          h.fakes.runner.metadataOfUpdate(0)['grid.result.tg-1/critic.grade'],
+          'B',
+        );
       });
-      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/critic');
 
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/critic', exitCode: 0));
-      await _pump();
+      test(
+        'a null-result process writes state only (positive control: no grade '
+        'key leaks)',
+        () async {
+          final h = _host(const _GradingCritic(null));
+          addTearDown(() {
+            h.owner.dispose();
+            unawaited(h.fakes.provider.close());
+          });
+          await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/critic');
 
-      // EXACTLY one chokepoint update — targeting the step's OWN bead (R5b) —
-      // carrying both the cursor advance and the namespaced grade — disjoint
-      // keys merge in one write (A1/invariant 2).
-      final updates = h.fakes.runner.callsFor('update');
-      expect(updates, hasLength(1));
-      expect(updates.single[1], _stepBeadId);
-      expect(h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
-          'complete');
-      expect(h.fakes.runner.metadataOfUpdate(0)['grid.result.tg-1/critic.grade'],
-          'B');
-    });
+          h.fakes.provider.emit(
+            const Exited(name: 'tgdog-s/tg-1/critic', exitCode: 0),
+          );
+          await _pump();
 
-    test('a null-result process writes state only (positive control: no grade '
-        'key leaks)', () async {
-      final h = _host(const _GradingCritic(null));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/critic');
-
-      h.fakes.provider.emit(const Exited(name: 'tgdog-s/tg-1/critic', exitCode: 0));
-      await _pump();
-
-      final meta = h.fakes.runner.metadataOfUpdate(0);
-      expect(meta[MoleculeStepKeys.state], 'complete');
-      expect(
-        meta.keys.where((k) => k.startsWith('grid.result.')),
-        isEmpty,
-        reason: 'a null result() writes no grade key',
+          final meta = h.fakes.runner.metadataOfUpdate(0);
+          expect(meta[MoleculeStepKeys.state], 'complete');
+          expect(
+            meta.keys.where((k) => k.startsWith('grid.result.')),
+            isEmpty,
+            reason: 'a null result() writes no grade key',
+          );
+        },
       );
-    });
-  });
+    },
+  );
 }

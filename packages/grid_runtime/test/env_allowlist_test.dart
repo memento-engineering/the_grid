@@ -44,24 +44,26 @@ void main() {
       expect(child['CLAUDE_CODE_OAUTH_TOKEN'], 'fake-oauth');
     });
 
-    test('forwards provider-credential prefixes (ANTHROPIC_) and exact AWS keys',
-        () {
-      final parent = <String, String>{
-        'ANTHROPIC_API_KEY': 'sk-ant-xxx',
-        'OPENAI_API_KEY': 'sk-oai-yyy',
-        'AWS_ACCESS_KEY_ID': 'AKIA',
-        'AWS_SECRET_ACCESS_KEY': 'secret',
-        'RANDOM_PREFIX_KEY': 'leak-me-not',
-      };
+    test(
+      'forwards provider-credential prefixes (ANTHROPIC_) and exact AWS keys',
+      () {
+        final parent = <String, String>{
+          'ANTHROPIC_API_KEY': 'sk-ant-xxx',
+          'OPENAI_API_KEY': 'sk-oai-yyy',
+          'AWS_ACCESS_KEY_ID': 'AKIA',
+          'AWS_SECRET_ACCESS_KEY': 'secret',
+          'RANDOM_PREFIX_KEY': 'leak-me-not',
+        };
 
-      final child = allowlist.build(parent);
+        final child = allowlist.build(parent);
 
-      expect(child['ANTHROPIC_API_KEY'], 'sk-ant-xxx');
-      expect(child['OPENAI_API_KEY'], 'sk-oai-yyy');
-      expect(child['AWS_ACCESS_KEY_ID'], 'AKIA');
-      expect(child['AWS_SECRET_ACCESS_KEY'], 'secret');
-      expect(child.containsKey('RANDOM_PREFIX_KEY'), isFalse);
-    });
+        expect(child['ANTHROPIC_API_KEY'], 'sk-ant-xxx');
+        expect(child['OPENAI_API_KEY'], 'sk-oai-yyy');
+        expect(child['AWS_ACCESS_KEY_ID'], 'AKIA');
+        expect(child['AWS_SECRET_ACCESS_KEY'], 'secret');
+        expect(child.containsKey('RANDOM_PREFIX_KEY'), isFalse);
+      },
+    );
 
     test('drops empty-valued allowlisted vars (the gc `if v != ""` guard)', () {
       final parent = <String, String>{

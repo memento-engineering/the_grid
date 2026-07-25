@@ -119,12 +119,8 @@ class LandResult {
     required this.failureReason,
   });
 
-  factory LandResult.landed({required PullRequestRef pr}) => LandResult._(
-    committed: true,
-    pushed: true,
-    pr: pr,
-    failureReason: null,
-  );
+  factory LandResult.landed({required PullRequestRef pr}) =>
+      LandResult._(committed: true, pushed: true, pr: pr, failureReason: null);
 
   factory LandResult.failed({
     required bool committed,
@@ -162,8 +158,11 @@ class WorktreeLayout {
       p.join(worktreesRoot(rootPath), substation);
 
   /// The per-bead worktree path: `<root>/.grid/worktrees/<substation>/<beadId>`.
-  static String worktreePath(String rootPath, String substation, String beadId) =>
-      p.join(substationDir(rootPath, substation), beadId);
+  static String worktreePath(
+    String rootPath,
+    String substation,
+    String beadId,
+  ) => p.join(substationDir(rootPath, substation), beadId);
 
   /// The per-bead branch: `grid/<beadId>`.
   static String branchFor(String beadId) => 'grid/$beadId';
@@ -232,11 +231,9 @@ String _canonical(String path) {
 /// open PR via the injectable [PrOpener] → return the [PullRequestRef] for the
 /// caller to record on the lifecycle bead. NEVER auto-merges.
 class StationGitService {
-  StationGitService({
-    required GitRunner runner,
-    required PrOpener prOpener,
-  }) : _ops = GitOps(runner),
-       _prOpener = prOpener;
+  StationGitService({required GitRunner runner, required PrOpener prOpener})
+    : _ops = GitOps(runner),
+      _prOpener = prOpener;
 
   final GitOps _ops;
   final PrOpener _prOpener;
@@ -314,7 +311,11 @@ class StationGitService {
     required String beadId,
   }) async {
     final branch = WorktreeLayout.branchFor(beadId);
-    final path = WorktreeLayout.worktreePath(root.path, root.substation, beadId);
+    final path = WorktreeLayout.worktreePath(
+      root.path,
+      root.substation,
+      beadId,
+    );
 
     // Stale-ancestor guard BEFORE any `git worktree add` (gascity#1556).
     final rejection = validateAncestorWorktreesNotStale(path);
@@ -324,7 +325,9 @@ class StationGitService {
 
     // Ensure the substation dir exists so `git worktree add` lands the target under
     // it. (git creates the leaf; the parent dirs must exist.)
-    final substationDir = Directory(WorktreeLayout.substationDir(root.path, root.substation));
+    final substationDir = Directory(
+      WorktreeLayout.substationDir(root.path, root.substation),
+    );
     if (!substationDir.existsSync()) {
       substationDir.createSync(recursive: true);
     }

@@ -151,9 +151,15 @@ void main() {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
       final cap = _DaemonCap(fresh: true);
-      final alloc = cap.createAllocation(
-        _ctx(transport: provider, sink: reports.add, cancel: CancelToken()),
-      ) as ProcessAllocation;
+      final alloc =
+          cap.createAllocation(
+                _ctx(
+                  transport: provider,
+                  sink: reports.add,
+                  cancel: CancelToken(),
+                ),
+              )
+              as ProcessAllocation;
       await alloc.startOrAdopt();
       await _pump();
 
@@ -164,104 +170,154 @@ void main() {
       expect(alloc.state, AllocationState.ready);
     });
 
-    test('the ENGINE liveness half failing → spawn fresh (no-adopt-on-faith)',
-        () async {
-      final provider = FakeRuntimeProvider();
-      final cap = _DaemonCap(fresh: true); // endpoint proof would pass...
-      final alloc = cap.createAllocation(
-        _ctx(
-          transport: provider,
-          sink: (_) {},
-          cancel: CancelToken(),
-          live: false, // ...but the pgid is not live → must respawn.
-        ),
-      ) as ProcessAllocation;
-      await alloc.startOrAdopt();
-      await _pump();
-      expect(alloc.adopted, isFalse);
-      expect(provider.started, hasLength(1), reason: 'respawned fresh');
-    });
+    test(
+      'the ENGINE liveness half failing → spawn fresh (no-adopt-on-faith)',
+      () async {
+        final provider = FakeRuntimeProvider();
+        final cap = _DaemonCap(fresh: true); // endpoint proof would pass...
+        final alloc =
+            cap.createAllocation(
+                  _ctx(
+                    transport: provider,
+                    sink: (_) {},
+                    cancel: CancelToken(),
+                    live: false, // ...but the pgid is not live → must respawn.
+                  ),
+                )
+                as ProcessAllocation;
+        await alloc.startOrAdopt();
+        await _pump();
+        expect(alloc.adopted, isFalse);
+        expect(provider.started, hasLength(1), reason: 'respawned fresh');
+      },
+    );
 
     test('the CAPABILITY endpoint/token proof failing → spawn fresh', () async {
       final provider = FakeRuntimeProvider();
       final cap = _DaemonCap(fresh: false); // endpoint proof fails
-      final alloc = cap.createAllocation(
-        _ctx(transport: provider, sink: (_) {}, cancel: CancelToken(), live: true),
-      ) as ProcessAllocation;
+      final alloc =
+          cap.createAllocation(
+                _ctx(
+                  transport: provider,
+                  sink: (_) {},
+                  cancel: CancelToken(),
+                  live: true,
+                ),
+              )
+              as ProcessAllocation;
       await alloc.startOrAdopt();
       await _pump();
       expect(alloc.adopted, isFalse);
       expect(provider.started, hasLength(1), reason: 'respawned fresh');
     });
 
-    test('no prior identity (fresh node) → spawn fresh, no proof attempted',
-        () async {
-      final provider = FakeRuntimeProvider();
-      final cap = _DaemonCap(fresh: true);
-      final alloc = cap.createAllocation(
-        _ctx(
-          transport: provider,
-          sink: (_) {},
-          cancel: CancelToken(),
-          fence: const AdoptFence(), // nothing to adopt
-        ),
-      ) as ProcessAllocation;
-      await alloc.startOrAdopt();
-      await _pump();
-      expect(alloc.adopted, isFalse);
-      expect(provider.started, hasLength(1));
-      expect(cap.log, isNot(contains('proveFreshness')));
-    });
+    test(
+      'no prior identity (fresh node) → spawn fresh, no proof attempted',
+      () async {
+        final provider = FakeRuntimeProvider();
+        final cap = _DaemonCap(fresh: true);
+        final alloc =
+            cap.createAllocation(
+                  _ctx(
+                    transport: provider,
+                    sink: (_) {},
+                    cancel: CancelToken(),
+                    fence: const AdoptFence(), // nothing to adopt
+                  ),
+                )
+                as ProcessAllocation;
+        await alloc.startOrAdopt();
+        await _pump();
+        expect(alloc.adopted, isFalse);
+        expect(provider.started, hasLength(1));
+        expect(cap.log, isNot(contains('proveFreshness')));
+      },
+    );
 
-    test('a JOB never adopts even when everything would prove fresh (respawn-or-'
-        'skip is the one-shot contract)', () async {
-      final provider = FakeRuntimeProvider();
-      final cap = _JobCap();
-      final alloc = cap.createAllocation(
-        _ctx(
-          transport: provider,
-          sink: (_) {},
-          cancel: CancelToken(),
-          kind: StepKind.job,
-          live: true,
-        ),
-      ) as ProcessAllocation;
-      await alloc.startOrAdopt();
-      await _pump();
-      expect(alloc.adopted, isFalse);
-      expect(provider.started, hasLength(1));
-      expect(cap.log, isNot(contains('proveFreshness')),
-          reason: 'a job short-circuits before the proof (isAdoptable=false)');
-    });
+    test(
+      'a JOB never adopts even when everything would prove fresh (respawn-or-'
+      'skip is the one-shot contract)',
+      () async {
+        final provider = FakeRuntimeProvider();
+        final cap = _JobCap();
+        final alloc =
+            cap.createAllocation(
+                  _ctx(
+                    transport: provider,
+                    sink: (_) {},
+                    cancel: CancelToken(),
+                    kind: StepKind.job,
+                    live: true,
+                  ),
+                )
+                as ProcessAllocation;
+        await alloc.startOrAdopt();
+        await _pump();
+        expect(alloc.adopted, isFalse);
+        expect(provider.started, hasLength(1));
+        expect(
+          cap.log,
+          isNot(contains('proveFreshness')),
+          reason: 'a job short-circuits before the proof (isAdoptable=false)',
+        );
+      },
+    );
   });
 
   group('Track C — detach vs dispose (distinct verbs, D4)', () {
-    test('detach LEAVES the spawned group running (never stops it, no teardown)',
-        () async {
-      final provider = FakeRuntimeProvider();
-      final cap = _DaemonCap();
-      final alloc = cap.createAllocation(
-        _ctx(transport: provider, sink: (_) {}, cancel: CancelToken(), live: false),
-      ) as ProcessAllocation;
-      await alloc.startOrAdopt(); // spawns (not fresh)
-      await _pump();
-      expect(provider.started, hasLength(1));
-      expect(provider.eventListenerCount, 1);
+    test(
+      'detach LEAVES the spawned group running (never stops it, no teardown)',
+      () async {
+        final provider = FakeRuntimeProvider();
+        final cap = _DaemonCap();
+        final alloc =
+            cap.createAllocation(
+                  _ctx(
+                    transport: provider,
+                    sink: (_) {},
+                    cancel: CancelToken(),
+                    live: false,
+                  ),
+                )
+                as ProcessAllocation;
+        await alloc.startOrAdopt(); // spawns (not fresh)
+        await _pump();
+        expect(provider.started, hasLength(1));
+        expect(provider.eventListenerCount, 1);
 
-      await alloc.detach();
-      await _pump();
-      expect(provider.stopped, isEmpty, reason: 'detach never stops the group');
-      expect(cap.log, isNot(contains('teardown')),
-          reason: 'detach does not tear down side-processes');
-      expect(provider.eventListenerCount, 0, reason: 'stops observing though');
-    });
+        await alloc.detach();
+        await _pump();
+        expect(
+          provider.stopped,
+          isEmpty,
+          reason: 'detach never stops the group',
+        );
+        expect(
+          cap.log,
+          isNot(contains('teardown')),
+          reason: 'detach does not tear down side-processes',
+        );
+        expect(
+          provider.eventListenerCount,
+          0,
+          reason: 'stops observing though',
+        );
+      },
+    );
 
     test('dispose KILLS the spawned group + tears down (the floor)', () async {
       final provider = FakeRuntimeProvider();
       final cap = _DaemonCap();
-      final alloc = cap.createAllocation(
-        _ctx(transport: provider, sink: (_) {}, cancel: CancelToken(), live: false),
-      ) as ProcessAllocation;
+      final alloc =
+          cap.createAllocation(
+                _ctx(
+                  transport: provider,
+                  sink: (_) {},
+                  cancel: CancelToken(),
+                  live: false,
+                ),
+              )
+              as ProcessAllocation;
       await alloc.startOrAdopt();
       await _pump();
       await alloc.dispose();
@@ -272,15 +328,26 @@ void main() {
     test('dispose KILLS an ADOPTED survivor too (adopt then kill)', () async {
       final provider = FakeRuntimeProvider();
       final cap = _DaemonCap(fresh: true);
-      final alloc = cap.createAllocation(
-        _ctx(transport: provider, sink: (_) {}, cancel: CancelToken(), live: true),
-      ) as ProcessAllocation;
+      final alloc =
+          cap.createAllocation(
+                _ctx(
+                  transport: provider,
+                  sink: (_) {},
+                  cancel: CancelToken(),
+                  live: true,
+                ),
+              )
+              as ProcessAllocation;
       await alloc.startOrAdopt(); // adopts
       await _pump();
       expect(alloc.adopted, isTrue);
       await alloc.dispose();
-      expect(provider.stopped, ['tgdog-s/tg-1/harness'],
-          reason: 'dispose kills the adopted group (via the stop-if-managing gate)');
+      expect(
+        provider.stopped,
+        ['tgdog-s/tg-1/harness'],
+        reason:
+            'dispose kills the adopted group (via the stop-if-managing gate)',
+      );
     });
   });
 }

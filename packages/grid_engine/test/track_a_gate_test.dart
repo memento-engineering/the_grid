@@ -91,71 +91,77 @@ Bead _stepBead(
 
 void main() {
   group('Track A3 — host: a route Escalate writes gated + mints a gate', () {
-    test('writes state=gated AND mints a type=gate bead via the chokepoint, and '
-        'does NOT write complete', () async {
-      final fakes = buildFakes();
-      final owner = TreeOwner();
-      addTearDown(() {
-        owner.dispose();
-        unawaited(fakes.provider.close());
-      });
-      owner.mountRoot(
-        InheritedSeed<StationServices>(
-          value: fakes.ctx,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-            child: InheritedSeed<ServiceBundle>(
-              value: const ServiceBundle(),
-              child: InheritedSeed<InheritedCircuit>(
-                value: _moleculeCircuit(),
-                child: CapabilityHost(
-                  capability: const FixedRouteCapability(Escalate('x')),
-                  mount: const StepMount(
-                    step: CapabilityStep(stepId: 'route', capabilityId: 'route'),
-                    nodePath: 'tg-1/route',
-                    circuit: _gateCircuit,
-                    circuitPath: 'tg-1',
-                    session: SessionHandle('tgdog-s'),
-                    node: NodeCursor(),
-                    key: ValueKey('tg-1/route#0.0'),
+    test(
+      'writes state=gated AND mints a type=gate bead via the chokepoint, and '
+      'does NOT write complete',
+      () async {
+        final fakes = buildFakes();
+        final owner = TreeOwner();
+        addTearDown(() {
+          owner.dispose();
+          unawaited(fakes.provider.close());
+        });
+        owner.mountRoot(
+          InheritedSeed<StationServices>(
+            value: fakes.ctx,
+            child: InheritedSeed<CapabilityRegistry>(
+              value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+              child: InheritedSeed<ServiceBundle>(
+                value: const ServiceBundle(),
+                child: InheritedSeed<InheritedCircuit>(
+                  value: _moleculeCircuit(),
+                  child: CapabilityHost(
+                    capability: const FixedRouteCapability(Escalate('x')),
+                    mount: const StepMount(
+                      step: CapabilityStep(
+                        stepId: 'route',
+                        capabilityId: 'route',
+                      ),
+                      nodePath: 'tg-1/route',
+                      circuit: _gateCircuit,
+                      circuitPath: 'tg-1',
+                      session: SessionHandle('tgdog-s'),
+                      node: NodeCursor(),
+                      key: ValueKey('tg-1/route#0.0'),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      );
-      await _pump();
+        );
+        await _pump();
 
-      // 1) the parked cursor write — targets the step's OWN bead (R5b), never
-      // the session bead. A gate is a terminal transition too → it carries
-      // capture-only timing (FT-1).
-      final updates = fakes.runner.callsFor('update');
-      expect(updates.first[1], _stepBeadId);
-      final meta = fakes.runner.metadataOfUpdate(0);
-      expect(meta[MoleculeStepKeys.state], 'gated');
-      expect(meta[MoleculeStepKeys.startedAt], isNotEmpty);
-      expect(meta[MoleculeStepKeys.finishedAt], isNotEmpty);
-      expect(meta[MoleculeStepKeys.durationMs], isNotNull);
-      expect(meta.keys.where((k) => k.startsWith('grid.cursor.')), isEmpty);
+        // 1) the parked cursor write — targets the step's OWN bead (R5b), never
+        // the session bead. A gate is a terminal transition too → it carries
+        // capture-only timing (FT-1).
+        final updates = fakes.runner.callsFor('update');
+        expect(updates.first[1], _stepBeadId);
+        final meta = fakes.runner.metadataOfUpdate(0);
+        expect(meta[MoleculeStepKeys.state], 'gated');
+        expect(meta[MoleculeStepKeys.startedAt], isNotEmpty);
+        expect(meta[MoleculeStepKeys.finishedAt], isNotEmpty);
+        expect(meta[MoleculeStepKeys.durationMs], isNotNull);
+        expect(meta.keys.where((k) => k.startsWith('grid.cursor.')), isEmpty);
 
-      // 2) a real type=gate bead was minted (create -t gate) + stamped.
-      final creates = fakes.runner.callsFor('create');
-      expect(creates, hasLength(1));
-      expect(creates.single, containsAllInOrder(['--type', 'gate']));
-      // The stamp carries the block linkage the join re-arms off.
-      final stamp = fakes.runner.metadataOfUpdate(updates.length - 1);
-      expect(stamp['blocks'], 'tgdog-s');
-      expect(stamp['node'], 'tg-1/route');
-      expect(stamp['reason'], 'x');
-      expect(stamp['rig'], stateSubstation);
+        // 2) a real type=gate bead was minted (create -t gate) + stamped.
+        final creates = fakes.runner.callsFor('create');
+        expect(creates, hasLength(1));
+        expect(creates.single, containsAllInOrder(['--type', 'gate']));
+        // The stamp carries the block linkage the join re-arms off.
+        final stamp = fakes.runner.metadataOfUpdate(updates.length - 1);
+        expect(stamp['blocks'], 'tgdog-s');
+        expect(stamp['node'], 'tg-1/route');
+        expect(stamp['reason'], 'x');
+        expect(stamp['rig'], stateSubstation);
 
-      // No `complete` was ever written (the park is not a positive terminal).
-      for (final u in updates) {
-        final i = u.indexOf('--metadata');
-        expect(i < 0 || !u[i + 1].contains('"complete"'), isTrue);
-      }
-    });
+        // No `complete` was ever written (the park is not a positive terminal).
+        for (final u in updates) {
+          final i = u.indexOf('--metadata');
+          expect(i < 0 || !u[i + 1].contains('"complete"'), isTrue);
+        }
+      },
+    );
   });
 
   group('Track A3 — frontier: a gated node parks itself AND its dependent', () {
@@ -190,22 +196,30 @@ void main() {
       final sessionRow = sessionBead(id: 'tgdog-s', workBeadId: 'tg-1');
 
       // OPEN gate → the node is parked.
-      final openState = FakeSnapshotSource(_graph([
-        sessionRow,
-        _gate(id: 'tgdog-g1', blocks: 'tgdog-s', node: 'tg-1/route'),
-      ]));
+      final openState = FakeSnapshotSource(
+        _graph([
+          sessionRow,
+          _gate(id: 'tgdog-g1', blocks: 'tgdog-s', node: 'tg-1/route'),
+        ]),
+      );
       final openBridge = StationJoinBridge(work: work, state: openState);
       addTearDown(openBridge.dispose);
-      expect(
-        openBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
-        {'tg-1/route'},
-      );
+      expect(openBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes, {
+        'tg-1/route',
+      });
 
       // CLOSED gate (resolved) → no open gate node (the re-arm signal).
-      final closedState = FakeSnapshotSource(_graph([
-        sessionRow,
-        _gate(id: 'tgdog-g1', blocks: 'tgdog-s', node: 'tg-1/route', closed: true),
-      ]));
+      final closedState = FakeSnapshotSource(
+        _graph([
+          sessionRow,
+          _gate(
+            id: 'tgdog-g1',
+            blocks: 'tgdog-s',
+            node: 'tg-1/route',
+            closed: true,
+          ),
+        ]),
+      );
       final closedBridge = StationJoinBridge(work: work, state: closedState);
       addTearDown(closedBridge.dispose);
       expect(
@@ -214,10 +228,12 @@ void main() {
       );
 
       // Positive control: a gate blocking an UNKNOWN session is ignored.
-      final strayState = FakeSnapshotSource(_graph([
-        sessionRow,
-        _gate(id: 'tgdog-g2', blocks: 'tgdog-other', node: 'tg-1/route'),
-      ]));
+      final strayState = FakeSnapshotSource(
+        _graph([
+          sessionRow,
+          _gate(id: 'tgdog-g2', blocks: 'tgdog-other', node: 'tg-1/route'),
+        ]),
+      );
       final strayBridge = StationJoinBridge(work: work, state: strayState);
       addTearDown(strayBridge.dispose);
       expect(
@@ -227,86 +243,100 @@ void main() {
     });
   });
 
-  group('Track A3 — re-arm: a resolved gate flips the parked node to pending', () {
-    test('a gated cursor node NOT in openGateNodes schedules a pending re-arm; '
-        'a still-open gate schedules nothing', () async {
-      // CLOSED gate (node absent from openGateNodes) → re-arm fires.
-      final closed = buildFakes();
-      final closedOwner = TreeOwner();
-      addTearDown(() {
-        closedOwner.dispose();
-        unawaited(closed.provider.close());
-      });
-      closedOwner.mountRoot(
-        InheritedSeed<StationServices>(
-          value: closed.ctx,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-            child: SessionScope(
-              bead: _bead,
-              circuit: _gateCircuit,
-              existingSession: SessionProjection(
-                workBeadId: 'tg-1',
-                sessionId: 'tgdog-s',
-                isMolecule: true,
-                moleculeBeads: [
-                  _stepBead(
-                    _stepBeadId,
+  group(
+    'Track A3 — re-arm: a resolved gate flips the parked node to pending',
+    () {
+      test(
+        'a gated cursor node NOT in openGateNodes schedules a pending re-arm; '
+        'a still-open gate schedules nothing',
+        () async {
+          // CLOSED gate (node absent from openGateNodes) → re-arm fires.
+          final closed = buildFakes();
+          final closedOwner = TreeOwner();
+          addTearDown(() {
+            closedOwner.dispose();
+            unawaited(closed.provider.close());
+          });
+          closedOwner.mountRoot(
+            InheritedSeed<StationServices>(
+              value: closed.ctx,
+              child: InheritedSeed<CapabilityRegistry>(
+                value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                child: SessionScope(
+                  bead: _bead,
+                  circuit: _gateCircuit,
+                  existingSession: SessionProjection(
+                    workBeadId: 'tg-1',
                     sessionId: 'tgdog-s',
-                    path: 'tg-1/route',
-                    state: StepState.gated,
+                    isMolecule: true,
+                    moleculeBeads: [
+                      _stepBead(
+                        _stepBeadId,
+                        sessionId: 'tgdog-s',
+                        path: 'tg-1/route',
+                        state: StepState.gated,
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      );
-      await _pump();
-      final rearm = closed.runner.callsFor('update');
-      expect(rearm, hasLength(1));
-      expect(rearm.single[1], _stepBeadId);
-      expect(closed.runner.metadataOfUpdate(0),
-          {MoleculeStepKeys.state: 'pending'});
+          );
+          await _pump();
+          final rearm = closed.runner.callsFor('update');
+          expect(rearm, hasLength(1));
+          expect(rearm.single[1], _stepBeadId);
+          expect(closed.runner.metadataOfUpdate(0), {
+            MoleculeStepKeys.state: 'pending',
+          });
 
-      // STILL-OPEN gate (node present in openGateNodes) → NO re-arm.
-      final open = buildFakes();
-      final openOwner = TreeOwner();
-      addTearDown(() {
-        openOwner.dispose();
-        unawaited(open.provider.close());
-      });
-      openOwner.mountRoot(
-        InheritedSeed<StationServices>(
-          value: open.ctx,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-            child: SessionScope(
-              bead: _bead,
-              circuit: _gateCircuit,
-              existingSession: SessionProjection(
-                workBeadId: 'tg-1',
-                sessionId: 'tgdog-s',
-                isMolecule: true,
-                moleculeBeads: [
-                  _stepBead(
-                    _stepBeadId,
+          // STILL-OPEN gate (node present in openGateNodes) → NO re-arm.
+          final open = buildFakes();
+          final openOwner = TreeOwner();
+          addTearDown(() {
+            openOwner.dispose();
+            unawaited(open.provider.close());
+          });
+          openOwner.mountRoot(
+            InheritedSeed<StationServices>(
+              value: open.ctx,
+              child: InheritedSeed<CapabilityRegistry>(
+                value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                child: SessionScope(
+                  bead: _bead,
+                  circuit: _gateCircuit,
+                  existingSession: SessionProjection(
+                    workBeadId: 'tg-1',
                     sessionId: 'tgdog-s',
-                    path: 'tg-1/route',
-                    state: StepState.gated,
+                    isMolecule: true,
+                    moleculeBeads: [
+                      _stepBead(
+                        _stepBeadId,
+                        sessionId: 'tgdog-s',
+                        path: 'tg-1/route',
+                        state: StepState.gated,
+                      ),
+                    ],
+                    openGateNodes: {'tg-1/route'},
                   ),
-                ],
-                openGateNodes: {'tg-1/route'},
+                ),
               ),
             ),
-          ),
-        ),
+          );
+          await _pump();
+          expect(
+            open.runner.callsFor('update'),
+            isEmpty,
+            reason: 'a still-open gate must not re-arm',
+          );
+        },
       );
-      await _pump();
-      expect(open.runner.callsFor('update'), isEmpty,
-          reason: 'a still-open gate must not re-arm');
-    });
-  });
+    },
+  );
 }
 
-const _bead = Bead(id: 'tg-1', issueType: IssueType.task, status: BeadStatus.open);
+const _bead = Bead(
+  id: 'tg-1',
+  issueType: IssueType.task,
+  status: BeadStatus.open,
+);

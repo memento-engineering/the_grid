@@ -159,7 +159,10 @@ void main() {
       // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
       // tg-eli phase 2), a NEW id.
       final creates = f.runner.callsFor('create');
-      expect(creates.where((c) => c.length <= 1 || c[1] != '--graph'), hasLength(1));
+      expect(
+        creates.where((c) => c.length <= 1 || c[1] != '--graph'),
+        hasLength(1),
+      );
       expect(
         creates.where((c) => c.length > 1 && c[1] == '--graph'),
         hasLength(1),
@@ -242,7 +245,10 @@ void main() {
       // A fresh mint is a createSession call PLUS its molecule pour (tg-eli
       // phase 2: every fresh mint pours a molecule graph).
       final creates = f.runner.callsFor('create');
-      expect(creates.where((c) => c.length <= 1 || c[1] != '--graph'), hasLength(1));
+      expect(
+        creates.where((c) => c.length <= 1 || c[1] != '--graph'),
+        hasLength(1),
+      );
       expect(
         creates.where((c) => c.length > 1 && c[1] == '--graph'),
         hasLength(1),

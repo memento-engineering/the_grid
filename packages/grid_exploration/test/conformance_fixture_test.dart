@@ -73,13 +73,16 @@ void main() {
   final dir = _fixtureDir();
 
   group('pinned extensions-shape conformance fixture', () {
-    test('fixtures are present (re-capture via the tool, do not hand-edit)', () {
-      expect(
-        dir.existsSync(),
-        isTrue,
-        reason: 'missing ${dir.path} — run capture_conformance_fixture.dart',
-      );
-    });
+    test(
+      'fixtures are present (re-capture via the tool, do not hand-edit)',
+      () {
+        expect(
+          dir.existsSync(),
+          isTrue,
+          reason: 'missing ${dir.path} — run capture_conformance_fixture.dart',
+        );
+      },
+    );
 
     test('handshake decodes leonard-faithfully (extensions only)', () {
       final handshake = _readJson(dir, 'handshake.json');

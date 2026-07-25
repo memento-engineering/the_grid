@@ -79,14 +79,11 @@ bool depsSatisfied(
 /// Whether [step] is a completed [StepKind.job] — pruned from the frontier
 /// (M4-P1 §4 step 2). A daemon never completes; a sub-circuit is never retired
 /// (it stays mounted to keep its daemons alive until the parent tears down).
-bool isRetired(
-  CircuitStep step,
-  CircuitCursor cursor,
-  String nodePath,
-) =>
+bool isRetired(CircuitStep step, CircuitCursor cursor, String nodePath) =>
     step is CapabilityStep &&
     step.kind == StepKind.job &&
-    cursorStateAt(cursor, stepPath(nodePath, step.stepId)) == StepState.complete;
+    cursorStateAt(cursor, stepPath(nodePath, step.stepId)) ==
+        StepState.complete;
 
 /// Whether [step] failed AND exhausted its restart budget (the D-5 escalation
 /// term) — withheld from the frontier; its emptiness is "broken", never "done".
@@ -97,7 +94,8 @@ bool isStepBroken(
   String nodePath,
 ) {
   final node = cursorNodeAt(cursor, stepPath(nodePath, step.stepId));
-  return node.state == StepState.failed && node.restartCount >= circuit.maxRestarts;
+  return node.state == StepState.failed &&
+      node.restartCount >= circuit.maxRestarts;
 }
 
 /// Whether [step]'s cursor state permits it to be mounted right now (given its
@@ -117,8 +115,9 @@ bool _runnableState(
     StepState.running => true,
     StepState.ready => step is CapabilityStep && step.kind == StepKind.daemon,
     StepState.complete => false,
-    StepState.failed => node.restartCount < circuit.maxRestarts &&
-        (node.cooldownUntil == null || !now.isBefore(node.cooldownUntil!)),
+    StepState.failed =>
+      node.restartCount < circuit.maxRestarts &&
+          (node.cooldownUntil == null || !now.isBefore(node.cooldownUntil!)),
     // Parked at a human gate — never runnable until the gate resolves (the
     // re-arm flips it back to pending; D-7).
     StepState.gated => false,
@@ -137,16 +136,20 @@ List<CircuitStep> eligibleSteps(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
   required DateTime now,
-}) =>
-    [
-      for (final step in circuit.steps)
-        if (depsSatisfied(circuit, step, cursor, nodePath,
-                circuitById: circuitById) &&
-            !isRetired(step, cursor, nodePath) &&
-            !isStepBroken(circuit, step, cursor, nodePath) &&
-            _runnableState(circuit, step, cursor, nodePath, now))
+}) => [
+  for (final step in circuit.steps)
+    if (depsSatisfied(
+          circuit,
           step,
-    ];
+          cursor,
+          nodePath,
+          circuitById: circuitById,
+        ) &&
+        !isRetired(step, cursor, nodePath) &&
+        !isStepBroken(circuit, step, cursor, nodePath) &&
+        _runnableState(circuit, step, cursor, nodePath, now))
+      step,
+];
 
 /// Whether [circuit]'s terminal step reached a POSITIVE TERMINAL — the circuit
 /// is "done" (D-2: the session close fires; D-5: distinguishes
@@ -164,8 +167,12 @@ bool isCircuitComplete(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
 }) {
-  final path =
-      depTerminalPath(circuit, nodePath, circuit.terminalStepId, circuitById);
+  final path = depTerminalPath(
+    circuit,
+    nodePath,
+    circuit.terminalStepId,
+    circuitById,
+  );
   if (path == null) return false;
   return cursorNodeAt(cursor, path).isPositiveTerminal;
 }
@@ -173,11 +180,7 @@ bool isCircuitComplete(
 /// Whether any step in [circuit] is circuit-broken (D-5) — an empty frontier
 /// that is "broken" (escalate + tear down), never "done". Shallow (this level
 /// only); [isCircuitBrokenDeep] descends into sub-circuits.
-bool isCircuitBroken(
-  Circuit circuit,
-  CircuitCursor cursor,
-  String nodePath,
-) =>
+bool isCircuitBroken(Circuit circuit, CircuitCursor cursor, String nodePath) =>
     circuit.steps.any((s) => isStepBroken(circuit, s, cursor, nodePath));
 
 /// Whether [circuit] is broken ANYWHERE in its subtree (D-5) — a step at this
@@ -193,7 +196,8 @@ bool isCircuitBrokenDeep(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
 }) =>
-    firstBrokenNode(circuit, cursor, nodePath, circuitById: circuitById) != null;
+    firstBrokenNode(circuit, cursor, nodePath, circuitById: circuitById) !=
+    null;
 
 /// The FIRST circuit-broken node in [circuit]'s subtree — its full `nodePath`
 /// plus its [NodeCursor] — mirroring [isCircuitBrokenDeep]'s traversal

@@ -40,7 +40,11 @@ void main() {
   group('effect-layer gates (capability-land, ADR-0008 D3 2026-07-02)', () {
     test('positive control: the scan sees real SDK source', () {
       final sources = _sdkSources().toList();
-      expect(sources, isNotEmpty, reason: 'lib/src/sdk must exist and be scanned');
+      expect(
+        sources,
+        isNotEmpty,
+        reason: 'lib/src/sdk must exist and be scanned',
+      );
       final all = sources.map((f) => f.readAsStringSync()).join('\n');
       // The effect verb IS used by the SDK (allocation.dart's ambient reads) —
       // proves the scan reads real bytes, so the negative gates below cannot
@@ -48,29 +52,34 @@ void main() {
       expect(
         all,
         contains('getInheritedSeedOfExactType'),
-        reason: 'the effect verb must appear in the scanned SDK source '
+        reason:
+            'the effect verb must appear in the scanned SDK source '
             '(vacuousness control)',
       );
     });
 
-    test('gate 1: no dependency registration (dependOn*) in the effect layer',
-        () {
-      for (final f in _sdkSources()) {
-        expect(
-          f.readAsStringSync(),
-          isNot(contains('dependOnInheritedSeedOfExactType')),
-          reason: '${f.path}: the effect layer must use the non-binding '
-              'effect verb, never a build-phase dependency registration',
-        );
-      }
-    });
+    test(
+      'gate 1: no dependency registration (dependOn*) in the effect layer',
+      () {
+        for (final f in _sdkSources()) {
+          expect(
+            f.readAsStringSync(),
+            isNot(contains('dependOnInheritedSeedOfExactType')),
+            reason:
+                '${f.path}: the effect layer must use the non-binding '
+                'effect verb, never a build-phase dependency registration',
+          );
+        }
+      },
+    );
 
     test('gate 2: no subscriptions (addListener) in the effect layer', () {
       for (final f in _sdkSources()) {
         expect(
           f.readAsStringSync(),
           isNot(contains('.addListener(')),
-          reason: '${f.path}: the effect layer never subscribes — one pipeline '
+          reason:
+              '${f.path}: the effect layer never subscribes — one pipeline '
               'subscription lives at the work boundary (invariant 1)',
         );
       }
@@ -81,7 +90,8 @@ void main() {
         expect(
           f.readAsStringSync(),
           isNot(contains('StationBeadWriter')),
-          reason: '${f.path}: the chokepoint belongs to the Host, off-build '
+          reason:
+              '${f.path}: the chokepoint belongs to the Host, off-build '
               '(invariant 2)',
         );
       }
@@ -92,7 +102,8 @@ void main() {
         expect(
           f.readAsStringSync(),
           isNot(contains('markNeedsRebuild')),
-          reason: '${f.path}: an effect never dirties the tree — only the '
+          reason:
+              '${f.path}: an effect never dirties the tree — only the '
               'observing node marks dirty (ADR-0007 §6.1)',
         );
       }
@@ -106,7 +117,8 @@ void main() {
         expect(
           f.readAsStringSync().toLowerCase(),
           isNot(contains('sandbox')),
-          reason: '${f.path}: the sandbox framing was retired (ADR-0009 / '
+          reason:
+              '${f.path}: the sandbox framing was retired (ADR-0009 / '
               'ADR-0008 D3 2026-07-02) — describe layering + gates instead',
         );
       }

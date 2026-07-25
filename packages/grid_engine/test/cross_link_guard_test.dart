@@ -29,13 +29,16 @@ class FakeSource implements SnapshotSource {
   Future<void> close() => _controller.close();
 }
 
-GraphSnapshot graphOf(List<Bead> beads, {Set<String>? readyIds, int tick = 0}) =>
-    GraphSnapshot.fromParts(
-      beads: beads,
-      dependencies: const [],
-      readyIds: readyIds ?? beads.map((b) => b.id).toSet(),
-      capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
-    );
+GraphSnapshot graphOf(
+  List<Bead> beads, {
+  Set<String>? readyIds,
+  int tick = 0,
+}) => GraphSnapshot.fromParts(
+  beads: beads,
+  dependencies: const [],
+  readyIds: readyIds ?? beads.map((b) => b.id).toSet(),
+  capturedAt: DateTime.fromMillisecondsSinceEpoch(tick),
+);
 
 Bead work(String id, {bool closed = false}) => Bead(
   id: id,
@@ -99,7 +102,9 @@ void main() {
   group('the state-store link edge source', () {
     test('an OPEN link blocks its `from` bead in the joined frontier while the '
         '`to` target is open', () {
-      workSrc = FakeSource(graphOf([work('tg-1'), work('tg-2'), work('pow-9')]));
+      workSrc = FakeSource(
+        graphOf([work('tg-1'), work('tg-2'), work('pow-9')]),
+      );
       stateSrc = FakeSource(
         graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
       );
@@ -115,49 +120,53 @@ void main() {
       );
     });
 
-    test('CLOSING the link bead retires the edge and re-admits the bead',
-        () async {
-      workSrc = FakeSource(graphOf([work('tg-1'), work('pow-9')]));
-      stateSrc = FakeSource(
-        graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
-      );
-      final bridge = bridgeOf();
-      addTearDown(bridge.dispose);
-      expect(read(bridge.notifier).graph.readyIds, isNot(contains('tg-1')));
+    test(
+      'CLOSING the link bead retires the edge and re-admits the bead',
+      () async {
+        workSrc = FakeSource(graphOf([work('tg-1'), work('pow-9')]));
+        stateSrc = FakeSource(
+          graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
+        );
+        final bridge = bridgeOf();
+        addTearDown(bridge.dispose);
+        expect(read(bridge.notifier).graph.readyIds, isNot(contains('tg-1')));
 
-      stateSrc.emit(
-        graphOf(
-          [linkBead('houston-l1', from: 'tg-1', closed: true)],
-          readyIds: const {},
-          tick: 1,
-        ),
-      );
-      await Future<void>.delayed(Duration.zero);
+        stateSrc.emit(
+          graphOf(
+            [linkBead('houston-l1', from: 'tg-1', closed: true)],
+            readyIds: const {},
+            tick: 1,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
 
-      expect(read(bridge.notifier).graph.readyIds, contains('tg-1'));
-    });
+        expect(read(bridge.notifier).graph.readyIds, contains('tg-1'));
+      },
+    );
 
-    test('CLOSING the `to` target re-admits the bead while the link stays open',
-        () async {
-      workSrc = FakeSource(graphOf([work('tg-1'), work('pow-9')]));
-      stateSrc = FakeSource(
-        graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
-      );
-      final bridge = bridgeOf();
-      addTearDown(bridge.dispose);
-      expect(read(bridge.notifier).graph.readyIds, isNot(contains('tg-1')));
+    test(
+      'CLOSING the `to` target re-admits the bead while the link stays open',
+      () async {
+        workSrc = FakeSource(graphOf([work('tg-1'), work('pow-9')]));
+        stateSrc = FakeSource(
+          graphOf([linkBead('houston-l1', from: 'tg-1')], readyIds: const {}),
+        );
+        final bridge = bridgeOf();
+        addTearDown(bridge.dispose);
+        expect(read(bridge.notifier).graph.readyIds, isNot(contains('tg-1')));
 
-      workSrc.emit(
-        graphOf(
-          [work('tg-1'), work('pow-9', closed: true)],
-          readyIds: {'tg-1', 'pow-9'},
-          tick: 1,
-        ),
-      );
-      await Future<void>.delayed(Duration.zero);
+        workSrc.emit(
+          graphOf(
+            [work('tg-1'), work('pow-9', closed: true)],
+            readyIds: {'tg-1', 'pow-9'},
+            tick: 1,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
 
-      expect(read(bridge.notifier).graph.readyIds, contains('tg-1'));
-    });
+        expect(read(bridge.notifier).graph.readyIds, contains('tg-1'));
+      },
+    );
 
     test('a `to` target NO federated member observes blocks fail-closed and is '
         'LOUD about both ids', () {
@@ -179,7 +188,9 @@ void main() {
 
     test('a MALFORMED link (no `to`, or an unknown `type`) blocks fail-closed '
         'and names the link bead id', () {
-      workSrc = FakeSource(graphOf([work('tg-1'), work('tg-2'), work('pow-9')]));
+      workSrc = FakeSource(
+        graphOf([work('tg-1'), work('tg-2'), work('pow-9')]),
+      );
       stateSrc = FakeSource(
         graphOf([
           linkBead('houston-noto', from: 'tg-1', to: null),
@@ -219,27 +230,30 @@ void main() {
       expect(loud.any((m) => m.contains('houston-bad')), isTrue);
     });
 
-    test('a link enforces even when both ids share a store prefix — no store\'s '
-        '`is_blocked` knows about an operator-authored edge', () {
-      workSrc = FakeSource(graphOf([work('tg-1'), work('tg-9')]));
-      stateSrc = FakeSource(
-        graphOf([
-          linkBead('houston-l1', from: 'tg-1', to: 'tg-9'),
-        ], readyIds: const {}),
-      );
-      final bridge = bridgeOf();
-      addTearDown(bridge.dispose);
+    test(
+      'a link enforces even when both ids share a store prefix — no store\'s '
+      '`is_blocked` knows about an operator-authored edge',
+      () {
+        workSrc = FakeSource(graphOf([work('tg-1'), work('tg-9')]));
+        stateSrc = FakeSource(
+          graphOf([
+            linkBead('houston-l1', from: 'tg-1', to: 'tg-9'),
+          ], readyIds: const {}),
+        );
+        final bridge = bridgeOf();
+        addTearDown(bridge.dispose);
 
-      expect(read(bridge.notifier).graph.readyIds, isNot(contains('tg-1')));
-    });
+        expect(read(bridge.notifier).graph.readyIds, isNot(contains('tg-1')));
+      },
+    );
 
     test('with nothing excluded the join returns the work snapshot INSTANCE — '
         'no per-join copy', () {
       // pow-9 is CLOSED, so the (well-formed, open) link excludes nothing.
-      final snapshot = graphOf([
-        work('tg-1'),
-        work('pow-9', closed: true),
-      ], readyIds: {'tg-1'});
+      final snapshot = graphOf(
+        [work('tg-1'), work('pow-9', closed: true)],
+        readyIds: {'tg-1'},
+      );
       workSrc = FakeSource(snapshot);
       stateSrc = FakeSource(
         graphOf([
@@ -287,15 +301,18 @@ void main() {
       );
     });
 
-    test('a store WITHOUT it is refused, naming the store and types.custom', () {
-      final refusal = crossLinkTypeRefusal(const <String, dynamic>{
-        'custom_types': ['session'],
-      }, store: 'houston');
-      expect(refusal, isNotNull);
-      expect(refusal!, contains('houston'));
-      expect(refusal, contains('types.custom'));
-      expect(refusal, contains('link'));
-    });
+    test(
+      'a store WITHOUT it is refused, naming the store and types.custom',
+      () {
+        final refusal = crossLinkTypeRefusal(const <String, dynamic>{
+          'custom_types': ['session'],
+        }, store: 'houston');
+        expect(refusal, isNotNull);
+        expect(refusal!, contains('houston'));
+        expect(refusal, contains('types.custom'));
+        expect(refusal, contains('link'));
+      },
+    );
   });
 
   group('the fold is READ-ONLY (zero writes to any store)', () {

@@ -430,33 +430,35 @@ void main() {
       expect(work.writes.where((c) => c.first == 'update'), hasLength(1));
     });
 
-    test('an OPEN molecule session with NO step beads yet (a crashed or '
-        'still-pouring mint) refuses LOUD — open, non-gated (zero writes)',
-        () async {
-      final state = _FakeStore([
-        _moleculeSession('tgdog-s1', workBead: 'tg-9'),
-      ]);
-      final work = _FakeStore([_workBead('tg-9')]);
-      final errs = <String>[];
+    test(
+      'an OPEN molecule session with NO step beads yet (a crashed or '
+      'still-pouring mint) refuses LOUD — open, non-gated (zero writes)',
+      () async {
+        final state = _FakeStore([
+          _moleculeSession('tgdog-s1', workBead: 'tg-9'),
+        ]);
+        final work = _FakeStore([_workBead('tg-9')]);
+        final errs = <String>[];
 
-      final code = await runRework(
-        beadId: 'tg-9',
-        stateStore: _stateStore(),
-        stateStorePrefix: 'tgdog',
-        stateWorkspaceOverride: _ws('tgdog'),
-        stateBdOverride: BdCliService(state),
-        noteStore: SubstationWorkStore.forRoot('/work/tg'),
-        workspaceOverride: _ws('tg'),
-        bdOverride: BdCliService(work),
-        out: (_) {},
-        err: errs.add,
-      );
+        final code = await runRework(
+          beadId: 'tg-9',
+          stateStore: _stateStore(),
+          stateStorePrefix: 'tgdog',
+          stateWorkspaceOverride: _ws('tgdog'),
+          stateBdOverride: BdCliService(state),
+          noteStore: SubstationWorkStore.forRoot('/work/tg'),
+          workspaceOverride: _ws('tg'),
+          bdOverride: BdCliService(work),
+          out: (_) {},
+          err: errs.add,
+        );
 
-      expect(code, isNonZero);
-      expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
-      expect(state.writes, isEmpty);
-      expect(work.writes, isEmpty);
-    });
+        expect(code, isNonZero);
+        expect(errs.join('\n'), contains('OPEN and not parked at a gate'));
+        expect(state.writes, isEmpty);
+        expect(work.writes, isEmpty);
+      },
+    );
 
     test('NEGATIVE CONTROL: another session\'s RUNNING step never vetoes this '
         'session\'s rework (the step-bead join is per-session)', () async {
@@ -790,19 +792,22 @@ Bead _session(
 /// explicit `grid.session.model=molecule` discriminator stamped once at mint
 /// (`SessionScope._mintMolecule`) and NO flat `grid.cursor.*` keys — its
 /// per-node state lives on its own `type=step` beads ([_stepBead]).
-Bead _moleculeSession(String id, {required String workBead, bool closed = false}) =>
-    Bead(
-      id: id,
-      title: 'grid session $workBead',
-      issueType: IssueType.session,
-      status: closed ? BeadStatus.closed : BeadStatus.open,
-      createdAt: DateTime.utc(2026, 7, 3, 12),
-      metadata: {
-        'rig': 'tgdog',
-        'work_bead': workBead,
-        SessionBeadKeys.model: kSessionModelMolecule,
-      },
-    );
+Bead _moleculeSession(
+  String id, {
+  required String workBead,
+  bool closed = false,
+}) => Bead(
+  id: id,
+  title: 'grid session $workBead',
+  issueType: IssueType.session,
+  status: closed ? BeadStatus.closed : BeadStatus.open,
+  createdAt: DateTime.utc(2026, 7, 3, 12),
+  metadata: {
+    'rig': 'tgdog',
+    'work_bead': workBead,
+    SessionBeadKeys.model: kSessionModelMolecule,
+  },
+);
 
 /// Builds a `type=step` bead owned by [sessionId] at [nodePath], carrying the
 /// fine state under the molecule schema's wire literals (`grid.step.*` —
@@ -864,14 +869,18 @@ class _FakeStore implements BdRunner {
     calls.add(List<String>.unmodifiable(args));
     final cmd = args.isNotEmpty ? args.first : '';
     if (cmd == 'export') {
-      final jsonl = _beads.map((b) {
-        final json = b.toJson();
-        final edges = _dependencies.where((d) => d.issueId == b.id).toList();
-        if (edges.isNotEmpty) {
-          json['dependencies'] = [for (final e in edges) e.toJson()];
-        }
-        return jsonEncode(json);
-      }).join('\n');
+      final jsonl = _beads
+          .map((b) {
+            final json = b.toJson();
+            final edges = _dependencies
+                .where((d) => d.issueId == b.id)
+                .toList();
+            if (edges.isNotEmpty) {
+              json['dependencies'] = [for (final e in edges) e.toJson()];
+            }
+            return jsonEncode(json);
+          })
+          .join('\n');
       return Future<BdResult>.value(
         BdResult(exitCode: 0, stdout: jsonl, stderr: ''),
       );

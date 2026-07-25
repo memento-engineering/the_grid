@@ -47,7 +47,10 @@ class _AgentCap extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async {
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async {
     log.add('result');
     return {'grade': 'A'};
   }
@@ -59,12 +62,13 @@ class _AgentCap extends ProcessCapability {
 /// dirtiness — that is the wedge.
 class _CriticCap extends ProcessCapability {
   @override
-  RuntimeConfig spawn(TreeContext context, StepArgs args) => const RuntimeConfig(
-    workDir: '/w/tg-1',
-    command: 'sh',
-    args: ['-c', 'grade the diff'],
-    lifecycle: Lifecycle.oneTurn,
-  );
+  RuntimeConfig spawn(TreeContext context, StepArgs args) =>
+      const RuntimeConfig(
+        workDir: '/w/tg-1',
+        command: 'sh',
+        args: ['-c', 'grade the diff'],
+        lifecycle: Lifecycle.oneTurn,
+      );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
@@ -77,12 +81,13 @@ class _CriticCap extends ProcessCapability {
 /// A daemon: `Exited` is a DEATH, never a completion — the signal-scoping control.
 class _DaemonCap extends ProcessCapability {
   @override
-  RuntimeConfig spawn(TreeContext context, StepArgs args) => const RuntimeConfig(
-    workDir: '/w/tg-1',
-    command: 'sh',
-    args: ['-c', 'sleep 999'],
-    lifecycle: Lifecycle.oneTurn,
-  );
+  RuntimeConfig spawn(TreeContext context, StepArgs args) =>
+      const RuntimeConfig(
+        workDir: '/w/tg-1',
+        command: 'sh',
+        args: ['-c', 'sleep 999'],
+        lifecycle: Lifecycle.oneTurn,
+      );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
@@ -199,7 +204,9 @@ void main() {
       alloc.deliverEventForTest(_inferredExit);
       await _pump();
 
-      expect(probe.calls, ['/w/tg-1'], reason: 'the fenced workspace is probed');
+      expect(probe.calls, [
+        '/w/tg-1',
+      ], reason: 'the fenced workspace is probed');
       expect(reports.whereType<AllocationCompleted>(), isEmpty);
       final failed = reports.whereType<AllocationFailed>().toList();
       expect(failed, hasLength(1));
@@ -308,7 +315,8 @@ void main() {
       expect(
         reports.whereType<AllocationFailed>().single.reason,
         contains('probe error'),
-        reason: 'a hung probe is an UNREADABLE workspace — fail closed, respawn',
+        reason:
+            'a hung probe is an UNREADABLE workspace — fail closed, respawn',
       );
     });
 
@@ -327,27 +335,33 @@ void main() {
       );
     });
 
-    test('THE LATCH: a RE-FIRED inferred exit probes ONCE and reports ONCE',
-        () async {
-      final reports = <AllocationReport>[];
-      final probe = _Probe(GateOutcome.clear);
-      final alloc =
-          _AgentCap([]).createAllocation(
-                _ctx(
-                  sink: reports.add,
-                  cancel: CancelToken(),
-                  workSignal: probe.call,
-                ),
-              )
-              as ProcessAllocation;
+    test(
+      'THE LATCH: a RE-FIRED inferred exit probes ONCE and reports ONCE',
+      () async {
+        final reports = <AllocationReport>[];
+        final probe = _Probe(GateOutcome.clear);
+        final alloc =
+            _AgentCap([]).createAllocation(
+                  _ctx(
+                    sink: reports.add,
+                    cancel: CancelToken(),
+                    workSignal: probe.call,
+                  ),
+                )
+                as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
-      alloc.deliverEventForTest(_inferredExit); // the stream re-fires
-      await _pump();
+        alloc.deliverEventForTest(_inferredExit);
+        alloc.deliverEventForTest(_inferredExit); // the stream re-fires
+        await _pump();
 
-      expect(probe.calls, hasLength(1), reason: 'the terminal latched at entry');
-      expect(reports, hasLength(1));
-    });
+        expect(
+          probe.calls,
+          hasLength(1),
+          reason: 'the terminal latched at entry',
+        );
+        expect(reports, hasLength(1));
+      },
+    );
   });
 
   group('THE WEDGE — the fence is PER-CAPABILITY, not per-one-shot', () {
@@ -371,7 +385,8 @@ void main() {
       expect(
         probe.calls,
         isEmpty,
-        reason: 'a critic writes an uncommitted verdict and vanishes — by design',
+        reason:
+            'a critic writes an uncommitted verdict and vanishes — by design',
       );
       expect(reports.whereType<AllocationFailed>(), isEmpty);
       expect(reports.whereType<AllocationCompleted>(), hasLength(1));
@@ -439,9 +454,9 @@ void main() {
         'behaves exactly as today', () async {
       final reports = <AllocationReport>[];
       final alloc =
-          _AgentCap([]).createAllocation(
-                _ctx(sink: reports.add, cancel: CancelToken()),
-              )
+          _AgentCap(
+                [],
+              ).createAllocation(_ctx(sink: reports.add, cancel: CancelToken()))
               as ProcessAllocation;
 
       alloc.deliverEventForTest(_inferredExit);
@@ -473,27 +488,30 @@ void main() {
       expect(reports.whereType<AllocationCompleted>(), hasLength(1));
     });
 
-    test('a non-completion signal (a daemon reading Exited as a DEATH) is never '
-        'fenced', () async {
-      final reports = <AllocationReport>[];
-      final probe = _Probe(GateOutcome.present);
-      final alloc =
-          _DaemonCap().createAllocation(
-                _ctx(
-                  sink: reports.add,
-                  cancel: CancelToken(),
-                  workSignal: probe.call,
-                  kind: StepKind.daemon,
-                ),
-              )
-              as ProcessAllocation;
+    test(
+      'a non-completion signal (a daemon reading Exited as a DEATH) is never '
+      'fenced',
+      () async {
+        final reports = <AllocationReport>[];
+        final probe = _Probe(GateOutcome.present);
+        final alloc =
+            _DaemonCap().createAllocation(
+                  _ctx(
+                    sink: reports.add,
+                    cancel: CancelToken(),
+                    workSignal: probe.call,
+                    kind: StepKind.daemon,
+                  ),
+                )
+                as ProcessAllocation;
 
-      alloc.deliverEventForTest(_inferredExit);
-      await _pump();
+        alloc.deliverEventForTest(_inferredExit);
+        await _pump();
 
-      expect(probe.calls, isEmpty);
-      expect(reports.whereType<AllocationFailed>(), hasLength(1));
-    });
+        expect(probe.calls, isEmpty);
+        expect(reports.whereType<AllocationFailed>(), hasLength(1));
+      },
+    );
   });
 
   group('the three CANCEL guards — a disposed node never reports', () {
@@ -564,7 +582,11 @@ void main() {
           capabilityId: 'verify',
           dependsOn: {'agent'},
         ),
-        CapabilityStep(stepId: 'land', capabilityId: 'land', dependsOn: {'verify'}),
+        CapabilityStep(
+          stepId: 'land',
+          capabilityId: 'land',
+          dependsOn: {'verify'},
+        ),
       ],
     );
     final clock = DateTime(2026);
@@ -641,69 +663,71 @@ void main() {
       return (owner: owner, fakes: fakes);
     }
 
-    test('an INTERRUPTED vanish writes the SUPERVISED failure through the ONE '
-        'chokepoint — never state=complete — and review does NOT advance',
-        () async {
-      final h = host(_Probe(GateOutcome.present).call);
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
-      // The lease vendor's real spawner resolves the ProcessHandle off the
-      // spawn's own SessionStarted (station_process_transport.dart) BEFORE the
-      // dispatcher starts listening for a terminal — bind it first, mirroring
-      // `flow_telemetry_test.dart`'s host harness.
-      h.fakes.provider.emit(
-        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
-      );
-      await _pump();
-      // The `running` write already landed above; clear so index 0 below is
-      // unambiguously the TERMINAL write.
-      h.fakes.runner.calls.clear();
+    test(
+      'an INTERRUPTED vanish writes the SUPERVISED failure through the ONE '
+      'chokepoint — never state=complete — and review does NOT advance',
+      () async {
+        final h = host(_Probe(GateOutcome.present).call);
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+        // The lease vendor's real spawner resolves the ProcessHandle off the
+        // spawn's own SessionStarted (station_process_transport.dart) BEFORE the
+        // dispatcher starts listening for a terminal — bind it first, mirroring
+        // `flow_telemetry_test.dart`'s host harness.
+        h.fakes.provider.emit(
+          const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
+        );
+        await _pump();
+        // The `running` write already landed above; clear so index 0 below is
+        // unambiguously the TERMINAL write.
+        h.fakes.runner.calls.clear();
 
-      h.fakes.provider.emit(_inferredExit);
-      await _pump();
+        h.fakes.provider.emit(_inferredExit);
+        await _pump();
 
-      expect(
-        h.fakes.runner.callsFor('update').first[1],
-        stepBeadId,
-        reason: 'the write targets the STEP bead, never the session bead',
-      );
-      final meta = h.fakes.runner.metadataOfUpdate(0);
-      expect(meta[MoleculeStepKeys.state], 'failed');
-      expect(meta[MoleculeStepKeys.restartCount], '1');
-      // Within budget → a backoff cooldown → the node RE-KEYS and RESPAWNS.
-      // (The molecule codec normalizes cooldownUntil to UTC on the wire — a
-      // pre-existing, intentional divergence from the retired flat codec.)
-      expect(
-        meta[MoleculeStepKeys.cooldownUntil],
-        clock.add(const Duration(seconds: 1)).toUtc().toIso8601String(),
-      );
-      expect(
-        meta[MoleculeStepKeys.failureReason],
-        contains('interrupted'),
-      );
-      // The whole point: the cursor NEVER says complete.
-      expect(
-        h.fakes.runner.callsFor('update').join(' '),
-        isNot(contains('complete')),
-      );
-      // ...so the dependent `verify` step is still withheld by the frontier — the
-      // circuit did not advance to review over a broken tree.
-      expect(
-        depsSatisfied(
-          circuit,
-          circuit.stepById('verify')!,
-          const {
-            'tg-1/agent': NodeCursor(state: StepState.failed, restartCount: 1),
-          },
-          'tg-1',
-          circuitById: (_) => null,
-        ),
-        isFalse,
-      );
-    });
+        expect(
+          h.fakes.runner.callsFor('update').first[1],
+          stepBeadId,
+          reason: 'the write targets the STEP bead, never the session bead',
+        );
+        final meta = h.fakes.runner.metadataOfUpdate(0);
+        expect(meta[MoleculeStepKeys.state], 'failed');
+        expect(meta[MoleculeStepKeys.restartCount], '1');
+        // Within budget → a backoff cooldown → the node RE-KEYS and RESPAWNS.
+        // (The molecule codec normalizes cooldownUntil to UTC on the wire — a
+        // pre-existing, intentional divergence from the retired flat codec.)
+        expect(
+          meta[MoleculeStepKeys.cooldownUntil],
+          clock.add(const Duration(seconds: 1)).toUtc().toIso8601String(),
+        );
+        expect(meta[MoleculeStepKeys.failureReason], contains('interrupted'));
+        // The whole point: the cursor NEVER says complete.
+        expect(
+          h.fakes.runner.callsFor('update').join(' '),
+          isNot(contains('complete')),
+        );
+        // ...so the dependent `verify` step is still withheld by the frontier — the
+        // circuit did not advance to review over a broken tree.
+        expect(
+          depsSatisfied(
+            circuit,
+            circuit.stepById('verify')!,
+            const {
+              'tg-1/agent': NodeCursor(
+                state: StepState.failed,
+                restartCount: 1,
+              ),
+            },
+            'tg-1',
+            circuitById: (_) => null,
+          ),
+          isFalse,
+        );
+      },
+    );
 
     test('CONTROL at depth: a CLEAN vanish writes state=complete (review '
         'advances exactly as before)', () async {
@@ -738,31 +762,33 @@ void main() {
       );
     });
 
-    test('FAIL-SAFE at depth: with NO SourceControl the fence disarms — a DIRTY '
-        'probe still writes state=complete (a bare composition never wedges)',
-        () async {
-      final h = host(
-        _Probe(GateOutcome.present).call,
-        withSourceControl: false,
-      );
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _pump();
-      h.fakes.provider.emit(
-        const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
-      );
-      await _pump();
-      h.fakes.runner.calls.clear();
+    test(
+      'FAIL-SAFE at depth: with NO SourceControl the fence disarms — a DIRTY '
+      'probe still writes state=complete (a bare composition never wedges)',
+      () async {
+        final h = host(
+          _Probe(GateOutcome.present).call,
+          withSourceControl: false,
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+        h.fakes.provider.emit(
+          const SessionStarted(name: 'tgdog-s/tg-1/agent', pid: 1, pgid: 2),
+        );
+        await _pump();
+        h.fakes.runner.calls.clear();
 
-      h.fakes.provider.emit(_inferredExit);
-      await _pump();
+        h.fakes.provider.emit(_inferredExit);
+        await _pump();
 
-      expect(
-        h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
-        'complete',
-      );
-    });
+        expect(
+          h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+          'complete',
+        );
+      },
+    );
   });
 }

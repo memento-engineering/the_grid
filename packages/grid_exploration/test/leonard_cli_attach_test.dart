@@ -41,7 +41,10 @@ _LeonardInvocation? _discoverLeonardCli() {
     final f = File(override);
     if (f.existsSync()) {
       return override.endsWith('.dart')
-          ? (executable: _dartExecutable(), prefixArgs: <String>['run', override])
+          ? (
+              executable: _dartExecutable(),
+              prefixArgs: <String>['run', override],
+            )
           : (executable: override, prefixArgs: const <String>[]);
     }
     // Treat as a bare command name resolvable via PATH.
@@ -110,27 +113,31 @@ void main() {
 
     final wsUri = await _readVmUri(target).timeout(
       const Duration(seconds: 30),
-      onTimeout: () => throw StateError('attach_target never printed GRID_VM_URI'),
+      onTimeout: () =>
+          throw StateError('attach_target never printed GRID_VM_URI'),
     );
 
     // Point stock leonard at it. `--goal` keeps the run bounded; we only
     // assert the attach + handshake + observation succeed, which leonard does
     // before/while pursuing the goal. `--output` keeps leonard's trajectory in
     // a temp dir so an armed run never pollutes the package tree.
-    final outDir = await Directory.systemTemp.createTemp('grid_leonard_attach_');
+    final outDir = await Directory.systemTemp.createTemp(
+      'grid_leonard_attach_',
+    );
     addTearDown(() async {
       if (outDir.existsSync()) await outDir.delete(recursive: true);
     });
-    final result = await Process.run(
-      leonard.executable,
-      <String>[
-        ...leonard.prefixArgs,
-        '--vm-uri', wsUri,
-        '--extensions', 'grid',
-        '--goal', 'read the grid ready set and stop',
-        '--output', '${outDir.path}/trajectory.jsonl',
-      ],
-    ).timeout(const Duration(minutes: 3));
+    final result = await Process.run(leonard.executable, <String>[
+      ...leonard.prefixArgs,
+      '--vm-uri',
+      wsUri,
+      '--extensions',
+      'grid',
+      '--goal',
+      'read the grid ready set and stop',
+      '--output',
+      '${outDir.path}/trajectory.jsonl',
+    ]).timeout(const Duration(minutes: 3));
 
     final combined = '${result.stdout}\n${result.stderr}';
 

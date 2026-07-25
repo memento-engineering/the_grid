@@ -30,60 +30,22 @@ class _ThrowingResultCap extends ProcessCapability {
   };
 
   @override
-  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async {
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async {
     throw StateError('the result file is unreadable');
   }
 }
 
 void main() {
-  test(
-    'a throwing result() reports AllocationFailed (supervision), '
-    'never completes and never leaks an unhandled error',
-    () async {
-      final provider = FakeRuntimeProvider();
-      addTearDown(provider.close);
-      final reports = <AllocationReport>[];
-      final alloc = ProcessAllocation(
-        const _ThrowingResultCap(),
-        AllocationContext(
-          treeContext: FakeTreeContext(),
-          args: stepArgs('tg-1/agent'),
-          transport: provider,
-          address: const AllocationAddress('sess-1', 'tg-1/agent'),
-          env: const {},
-          sink: reports.add,
-        ),
-      );
-
-      // The whole test body runs in a guarded zone: an unhandled async error
-      // from the completion path would fail the test loudly (the OLD bug).
-      await alloc.startOrAdopt();
-      alloc.deliverEventForTest(const Exited(name: 'sess-1/tg-1/agent', exitCode: 0));
-      // Drain the unawaited _reportComplete.
-      await Future<void>.delayed(Duration.zero);
-
-      expect(reports, hasLength(1));
-      expect(
-        reports.single,
-        isA<AllocationFailed>().having(
-          (f) => f.reason,
-          'reason',
-          contains('result threw'),
-        ),
-        reason: 'the real completion with an unreadable result must rout to '
-            'supervision, not complete blind nor hang the node',
-      );
-      await alloc.dispose();
-    },
-  );
-
-  test('a clean result() still completes (the guard is not over-broad)',
-      () async {
+  test('a throwing result() reports AllocationFailed (supervision), '
+      'never completes and never leaks an unhandled error', () async {
     final provider = FakeRuntimeProvider();
     addTearDown(provider.close);
     final reports = <AllocationReport>[];
     final alloc = ProcessAllocation(
-      const _OkResultCap(),
+      const _ThrowingResultCap(),
       AllocationContext(
         treeContext: FakeTreeContext(),
         args: stepArgs('tg-1/agent'),
@@ -93,16 +55,58 @@ void main() {
         sink: reports.add,
       ),
     );
+
+    // The whole test body runs in a guarded zone: an unhandled async error
+    // from the completion path would fail the test loudly (the OLD bug).
     await alloc.startOrAdopt();
-    alloc.deliverEventForTest(const Exited(name: 'sess-1/tg-1/agent', exitCode: 0));
+    alloc.deliverEventForTest(
+      const Exited(name: 'sess-1/tg-1/agent', exitCode: 0),
+    );
+    // Drain the unawaited _reportComplete.
     await Future<void>.delayed(Duration.zero);
-    expect(reports.single, isA<AllocationCompleted>());
+
+    expect(reports, hasLength(1));
     expect(
-      (reports.single as AllocationCompleted).payload,
-      {'grade': 'A'},
+      reports.single,
+      isA<AllocationFailed>().having(
+        (f) => f.reason,
+        'reason',
+        contains('result threw'),
+      ),
+      reason:
+          'the real completion with an unreadable result must rout to '
+          'supervision, not complete blind nor hang the node',
     );
     await alloc.dispose();
   });
+
+  test(
+    'a clean result() still completes (the guard is not over-broad)',
+    () async {
+      final provider = FakeRuntimeProvider();
+      addTearDown(provider.close);
+      final reports = <AllocationReport>[];
+      final alloc = ProcessAllocation(
+        const _OkResultCap(),
+        AllocationContext(
+          treeContext: FakeTreeContext(),
+          args: stepArgs('tg-1/agent'),
+          transport: provider,
+          address: const AllocationAddress('sess-1', 'tg-1/agent'),
+          env: const {},
+          sink: reports.add,
+        ),
+      );
+      await alloc.startOrAdopt();
+      alloc.deliverEventForTest(
+        const Exited(name: 'sess-1/tg-1/agent', exitCode: 0),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(reports.single, isA<AllocationCompleted>());
+      expect((reports.single as AllocationCompleted).payload, {'grade': 'A'});
+      await alloc.dispose();
+    },
+  );
 }
 
 class _OkResultCap extends ProcessCapability {
@@ -117,6 +121,8 @@ class _OkResultCap extends ProcessCapability {
       _ThrowingResultCap.jobSignal(event);
 
   @override
-  Future<Map<String, String>?> result(TreeContext context, StepArgs args) async =>
-      {'grade': 'A'};
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async => {'grade': 'A'};
 }

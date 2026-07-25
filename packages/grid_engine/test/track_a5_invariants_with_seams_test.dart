@@ -9,7 +9,8 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/src/molecule/molecule_codec.dart' show stepBeadMetadata;
+import 'package:grid_engine/src/molecule/molecule_codec.dart'
+    show stepBeadMetadata;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
@@ -193,10 +194,8 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
 /// Mounts the committee-wired `code` tree with REAL CapabilityHosts (so the
 /// route genuinely runs its sibling-read + gate + flare) — for invariants 2/4
 /// and the no-spurious-land-mount gate.
-({TreeOwner owner, Branch root, Fakes fakes, _RecordingTransport flares}) _mountReal(
-  JoinedSnapshotNotifier joined, {
-  SubstationConfig config = _tg,
-}) {
+({TreeOwner owner, Branch root, Fakes fakes, _RecordingTransport flares})
+_mountReal(JoinedSnapshotNotifier joined, {SubstationConfig config = _tg}) {
   final fakes = buildFakes();
   final flares = _RecordingTransport();
   final registry = DefaultCapabilityRegistry(
@@ -245,7 +244,8 @@ Branch _whereSeed(Branch root, bool Function(Seed) test) =>
 
 /// The mounted CapabilityHosts whose nodePath ends with `/$stepId`.
 Iterable<Branch> _hostsFor(Branch root, String stepId) => _all(root).where(
-  (b) => b.seed is CapabilityHost &&
+  (b) =>
+      b.seed is CapabilityHost &&
       (b.seed as CapabilityHost).mount.nodePath.endsWith('/$stepId'),
 );
 
@@ -253,7 +253,8 @@ Iterable<Branch> _hostsFor(Branch root, String stepId) => _all(root).where(
 /// Prefixed `tgdog-` (the fakes' own [stateSubstation]) so the chokepoint's
 /// ownership check (`OwnershipRefused` fail-closed) accepts it — a bare
 /// `'step-$nodePath'` id has NO owned substation prefix and is refused.
-String _stepBeadId(String nodePath) => 'tgdog-step-${nodePath.replaceAll('/', '-')}';
+String _stepBeadId(String nodePath) =>
+    'tgdog-step-${nodePath.replaceAll('/', '-')}';
 
 /// Walks [circuit] (recursing into a [SubCircuitStep] via [circuitsById]) and
 /// emits one `type=step` bead per `CapabilityStep` leaf at its engine
@@ -279,28 +280,32 @@ List<Bead> _stepBeads(
     final stepNodePath = '$nodePath/${step.stepId}';
     switch (step) {
       case CapabilityStep():
-        beads.add(Bead(
-          id: _stepBeadId(stepNodePath),
-          issueType: IssueType.step,
-          status: BeadStatus.open,
-          metadata: {
-            MoleculeStepKeys.path: stepNodePath,
-            MoleculeStepKeys.session: sessionId,
-            ...stepBeadMetadata(cursor[stepNodePath] ?? const NodeCursor()),
-            ...nodeResultMetadata(stepNodePath, results[stepNodePath]),
-          },
-        ));
+        beads.add(
+          Bead(
+            id: _stepBeadId(stepNodePath),
+            issueType: IssueType.step,
+            status: BeadStatus.open,
+            metadata: {
+              MoleculeStepKeys.path: stepNodePath,
+              MoleculeStepKeys.session: sessionId,
+              ...stepBeadMetadata(cursor[stepNodePath] ?? const NodeCursor()),
+              ...nodeResultMetadata(stepNodePath, results[stepNodePath]),
+            },
+          ),
+        );
       case SubCircuitStep(:final circuitId):
         final nested = circuitsById[circuitId];
         if (nested != null) {
-          beads.addAll(_stepBeads(
-            nested,
-            stepNodePath,
-            sessionId: sessionId,
-            circuitsById: circuitsById,
-            cursor: cursor,
-            results: results,
-          ));
+          beads.addAll(
+            _stepBeads(
+              nested,
+              stepNodePath,
+              sessionId: sessionId,
+              circuitsById: circuitsById,
+              cursor: cursor,
+              results: results,
+            ),
+          );
         }
     }
   }
@@ -351,43 +356,55 @@ SessionProjection _routeReady(Map<String, String> grades) => _moleculeSession(
 
 void main() {
   group('A5 invariant 1 AT DEPTH (with the ambient sibling seam present)', () {
-    test('a deep committee cursor tick → flush() == [WorkList]; no CircuitScope '
-        'is in the drain (the ambient results/cursor seam added no subscription)',
-        () {
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [_bead('tg-b')],
-          ready: {'tg-b'},
-          sessions: {
-            'tg-b': _session('tg-b', cursor: const {
-              'tg-b/agent': NodeCursor(state: StepState.complete),
-            }),
-          },
-        ),
-      );
-      final m = _mountFake(joined);
+    test(
+      'a deep committee cursor tick → flush() == [WorkList]; no CircuitScope '
+      'is in the drain (the ambient results/cursor seam added no subscription)',
+      () {
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_bead('tg-b')],
+            ready: {'tg-b'},
+            sessions: {
+              'tg-b': _session(
+                'tg-b',
+                cursor: const {
+                  'tg-b/agent': NodeCursor(state: StepState.complete),
+                },
+              ),
+            },
+          ),
+        );
+        final m = _mountFake(joined);
 
-      // Advance a DEEP node (a critic, two levels down) via the join.
-      joined.push(_joined(
-        beads: [_bead('tg-b')],
-        ready: {'tg-b'},
-        sessions: {
-          'tg-b': _session('tg-b', cursor: const {
-            'tg-b/agent': NodeCursor(state: StepState.complete),
-            'tg-b/review/critic1': NodeCursor(state: StepState.complete),
-          }),
-        },
-      ));
-      final flushed = m.owner.flush();
+        // Advance a DEEP node (a critic, two levels down) via the join.
+        joined.push(
+          _joined(
+            beads: [_bead('tg-b')],
+            ready: {'tg-b'},
+            sessions: {
+              'tg-b': _session(
+                'tg-b',
+                cursor: const {
+                  'tg-b/agent': NodeCursor(state: StepState.complete),
+                  'tg-b/review/critic1': NodeCursor(state: StepState.complete),
+                },
+              ),
+            },
+          ),
+        );
+        final flushed = m.owner.flush();
 
-      expect(flushed, equals([_whereSeed(m.root, (s) => s is WorkList)]));
-      final scopes = _all(m.root).where((b) => b.seed is CircuitScope).toList();
-      // Positive control: the committee tree really is deep (outer + nested).
-      expect(scopes.length, greaterThanOrEqualTo(2));
-      for (final scope in scopes) {
-        expect(flushed, isNot(contains(scope)));
-      }
-    });
+        expect(flushed, equals([_whereSeed(m.root, (s) => s is WorkList)]));
+        final scopes = _all(
+          m.root,
+        ).where((b) => b.seed is CircuitScope).toList();
+        // Positive control: the committee tree really is deep (outer + nested).
+        expect(scopes.length, greaterThanOrEqualTo(2));
+        for (final scope in scopes) {
+          expect(flushed, isNot(contains(scope)));
+        }
+      },
+    );
   });
 
   group('A5 invariant 2 AT DEPTH — the gate mint + park write go via the '
@@ -398,7 +415,9 @@ void main() {
         _joined(
           beads: [_bead('tg-b')],
           ready: {'tg-b'},
-          sessions: {'tg-b': _routeReady(const {'critic1': 'F'})},
+          sessions: {
+            'tg-b': _routeReady(const {'critic1': 'F'}),
+          },
         ),
       );
       final m = _mountReal(joined);
@@ -409,8 +428,10 @@ void main() {
       await _pump();
 
       // The route gated → a real type=gate bead was minted via the chokepoint.
-      expect(m.fakes.runner.callsFor('create').single,
-          containsAllInOrder(['--type', 'gate']));
+      expect(
+        m.fakes.runner.callsFor('create').single,
+        containsAllInOrder(['--type', 'gate']),
+      );
 
       // The parked-state write landed on the route's OWN step bead (the
       // molecule model, tg-eli phase 2: never the session bead) — and NOT ONE
@@ -433,7 +454,9 @@ void main() {
       // no write on land's own step bead.
       expect(_hostsFor(m.root, 'land'), isEmpty);
       expect(
-        m.fakes.runner.calls.any((c) => c.length > 1 && c[1] == _stepBeadId('tg-b/land')),
+        m.fakes.runner.calls.any(
+          (c) => c.length > 1 && c[1] == _stepBeadId('tg-b/land'),
+        ),
         isFalse,
       );
     });
@@ -444,7 +467,9 @@ void main() {
         _joined(
           beads: [_bead('tg-b')],
           ready: {'tg-b'},
-          sessions: {'tg-b': _routeReady(const {'critic1': 'A', 'critic2': 'A'})},
+          sessions: {
+            'tg-b': _routeReady(const {'critic1': 'A', 'critic2': 'A'}),
+          },
         ),
       );
       final m = _mountReal(joined);
@@ -465,41 +490,53 @@ void main() {
     });
   });
 
-  group('A5 — the gate park withholds land; a complete route lets it mount', () {
-    test('positive control: with the route ALREADY complete in the cursor, the '
+  group(
+    'A5 — the gate park withholds land; a complete route lets it mount',
+    () {
+      test(
+        'positive control: with the route ALREADY complete in the cursor, the '
         'land host mounts (proving the park, not a missing capability, blocked '
-        'it)', () async {
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [_bead('tg-b')],
-          ready: {'tg-b'},
-          sessions: {
-            'tg-b': _moleculeSession(
-              'tg-b',
-              circuit: _code,
-              circuitsById: const {'review': _review},
-              cursor: const {
-                'tg-b/agent': NodeCursor(state: StepState.complete),
-                'tg-b/review/critic1': NodeCursor(state: StepState.complete),
-                'tg-b/review/critic2': NodeCursor(state: StepState.complete),
-                'tg-b/review/route': NodeCursor(state: StepState.complete),
+        'it)',
+        () async {
+          final joined = JoinedSnapshotNotifier(
+            _joined(
+              beads: [_bead('tg-b')],
+              ready: {'tg-b'},
+              sessions: {
+                'tg-b': _moleculeSession(
+                  'tg-b',
+                  circuit: _code,
+                  circuitsById: const {'review': _review},
+                  cursor: const {
+                    'tg-b/agent': NodeCursor(state: StepState.complete),
+                    'tg-b/review/critic1': NodeCursor(
+                      state: StepState.complete,
+                    ),
+                    'tg-b/review/critic2': NodeCursor(
+                      state: StepState.complete,
+                    ),
+                    'tg-b/review/route': NodeCursor(state: StepState.complete),
+                  },
+                ),
               },
             ),
-          },
-        ),
-      );
-      final m = _mountReal(joined);
-      addTearDown(() {
-        m.owner.dispose();
-        unawaited(m.fakes.provider.close());
-      });
-      await _pump();
+          );
+          final m = _mountReal(joined);
+          addTearDown(() {
+            m.owner.dispose();
+            unawaited(m.fakes.provider.close());
+          });
+          await _pump();
 
-      expect(_hostsFor(m.root, 'land'), isNotEmpty);
-      expect(
-        m.fakes.runner.calls.any((c) => c.length > 1 && c[1] == _stepBeadId('tg-b/land')),
-        isTrue,
+          expect(_hostsFor(m.root, 'land'), isNotEmpty);
+          expect(
+            m.fakes.runner.calls.any(
+              (c) => c.length > 1 && c[1] == _stepBeadId('tg-b/land'),
+            ),
+            isTrue,
+          );
+        },
       );
-    });
-  });
+    },
+  );
 }
