@@ -65,7 +65,7 @@ import '../diagnostics/diagnosable.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
-import '../domain/rework.dart' show kMaxReworkRounds;
+import '../domain/rework.dart' show kMaxReworkRounds, reworkRoundOf;
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../molecule/bead_path_key.dart';
@@ -198,7 +198,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
   /// True once THIS scope's session is known to be molecule-mode — set on
   /// ADOPT (`initState`'s `LiveSession()` arm reads
   /// `seed.existingSession!.isMolecule`) or on a successful [_mint] (every
-  /// fresh mint is molecule); reset by [_reworkAndRemint] so round N+1
+  /// fresh mint is molecule); reset by [_scheduleRetiredRework] so round N+1
   /// re-derives it fresh. False only for an ADOPTED historical flat session,
   /// which the engine no longer drives. Read by [_completeAndClose]
   /// (captured-field async use, D-H rule 1) to decide whether the
@@ -208,7 +208,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
 
   /// The session id already minted for an IN-PROGRESS molecule mint (tg-6nf)
   /// — set the instant `createSession` returns and cleared only when the
-  /// WHOLE mint settles ([_reworkAndRemint]'s reset for round N+1). A retry
+  /// WHOLE mint settles ([_scheduleRetiredRework]'s reset for round N+1). A retry
   /// that re-enters [_mint] after `createMolecule` throws must NEVER re-call
   /// `createSession` — that would strand the first session bead un-poured
   /// and mint a SECOND, exactly the "crashed pour" ambiguity
@@ -218,7 +218,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
 
   /// How many `createSession` attempts this scope has made (tg-6nf) — bounded
   /// by [_maxMintAttempts]; reaching the cap is the escalation trigger. Reset
-  /// to 0 by [_reworkAndRemint] so round N+1 gets its own fresh budget.
+  /// to 0 by [_scheduleRetiredRework] so round N+1 gets its own fresh budget.
   int _mintAttempts = 0;
 
   /// The VOIDED session this scope must RETIRE before it mints (I-10) — set in
@@ -248,26 +248,14 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
   final Set<String> _rearming = {};
   final Set<String> _mintingSuccessorForPath = {};
 
-  /// Whether the CURRENTLY adopted session was last observed with a node
-  /// parked `gated` (tg-x1j v2) — refreshed every `build()` where
-  /// `seed.existingSession` matches [_sessionId]; read once it stops matching
-  /// (the rework orphan signal, see [build]) to decide whether re-minting is
-  /// safe.
-  bool _lastKnownGated = false;
-
-  /// Whether `seed.existingSession` has EVER matched [_sessionId] (tg-x1j v2)
-  /// — true once the join has genuinely reflected this scope's session at
-  /// least one build. Guards the orphan-check in [build]: a FRESH MINT'S
-  /// `existingSession` also reads null/mismatched until the join catches up
-  /// (offline tests may never push that catch-up snapshot at all), and that
-  /// must never be confused with an already-observed session vanishing.
+  /// Whether `seed.existingSession` has EVER matched [_sessionId] — retained
+  /// only as a fresh-mint join-lag guard. It never authorizes a re-mint:
+  /// durable `#rN` graph state does that.
   bool _joinedOnce = false;
 
-  /// Latches the ONE-TIME rework transition (tg-x1j v2): `grid rework`
-  /// re-keyed the adopted session's `work_bead` off this bead.id while it was
-  /// still OPEN — scheduled off `build` (never a write IN `build`), so a
-  /// repeated build tick during the async gap never re-schedules.
-  bool _reworkScheduled = false;
+  /// The retired round awaiting cleanup before the fresh mint. This is a
+  /// transient effect payload, never an eligibility cursor.
+  String? _retiredReworkSessionId;
 
   @override
   void didChangeDependencies() {
@@ -291,6 +279,13 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
 
   @override
   void initState() {
+    final existing = seed.existingSession;
+    if (existing != null &&
+        reworkRoundOf(seed.bead.id, existing.workBeadId) != null) {
+      _retiredReworkSessionId = existing.sessionId;
+      unawaited(_mint());
+      return;
+    }
     // Adopt-or-mint DISPOSITIONS the joined session (I-10, tg-4rw): a CLOSED
     // session is `done`, `held`, or a `voided` DEAD KEY — never "unadoptable but
     // blocking", which is what wedged tg-1di for 62 minutes with no session and
@@ -371,6 +366,16 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     // didChangeDependencies within one performRebuild).
     await null;
     if (_cancelled || !context.mounted) return;
+    final retiredId = _retiredReworkSessionId;
+    if (retiredId != null) {
+      _retiredReworkSessionId = null;
+      try {
+        await _ctx!.writer.close(retiredId, reason: 'reworked');
+      } on Object {
+        // Cleanup is not a precondition for the fresh round.
+      }
+      if (_cancelled || !context.mounted) return;
+    }
     _mintAttempts++;
     try {
       // I-10: RETIRE a dead key before minting over it. Re-keying the voided
@@ -849,55 +854,28 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     }
   }
 
-  /// Schedules the rework re-mint (tg-x1j v2): the just-retired [retiredId]
-  /// round is closed (D-2 fold: "on resolve, close the retired round session"
-  /// — today the operator hand-closes it every round), then this scope resets
-  /// to its pre-`initState` shape and mints round N+1 through the SAME
-  /// [_mint] path a fresh work-bead mount would use. Latched via
-  /// [_reworkScheduled], scheduled off `build`.
-  void _scheduleRework(String retiredId) {
-    if (_reworkScheduled) return;
-    _reworkScheduled = true;
-    scheduleMicrotask(() => unawaited(_reworkAndRemint(retiredId)));
-  }
-
-  Future<void> _reworkAndRemint(String retiredId) async {
-    final ctx = _ctx;
-    if (ctx == null) return;
-    try {
-      await ctx.writer.close(retiredId, reason: 'reworked');
-    } on Object {
-      // The close is a cleanup fold, not a precondition for the fresh mint
-      // below — a failure here just leaves the retired session open for a
-      // human to close by hand; it must never block round N+1.
-    }
-    if (_cancelled || !context.mounted) return;
-    setState(() {
-      _sessionId = null;
-      _resolving = true;
-      _reworkScheduled = false;
-      _terminalScheduled = false;
-      _rearming.clear();
-      _mintingSuccessorForPath.clear();
-      _lastKnownGated = false;
-      _joinedOnce = false;
-      _mintAttempts = 0; // round N+1 gets its own fresh mint budget (tg-6nf).
-      // Round N+1 re-derives this on its own mint — never inherits the
-      // retired round's flag.
-      _isMolecule = false;
-      _moleculeSessionId = null;
-    });
-    unawaited(_mint());
+  void _scheduleRetiredRework(SessionProjection retired) {
+    if (_resolving || _failed || retired.sessionId != _sessionId) return;
+    _retiredReworkSessionId = retired.sessionId;
+    _sessionId = null;
+    _resolving = true;
+    _terminalScheduled = false;
+    _rearming.clear();
+    _mintingSuccessorForPath.clear();
+    _mintAttempts = 0;
+    _isMolecule = false;
+    _moleculeSessionId = null;
+    scheduleMicrotask(() => unawaited(_mint()));
   }
 
   /// Schedules a LOUD rework decline (tg-x1j v2, the guard principle): the
   /// adopted session vanished from the join but this scope never observed it
   /// parked at a gate — re-minting could silently abandon a live round, so it
   /// marks the (still-reachable-by-id) session and goes permanently inert
-  /// (mirroring [_mint]'s `_failed` path). Latched via [_reworkScheduled].
+  /// (mirroring [_mint]'s `_failed` path).
   void _scheduleReworkDecline(String retiredId) {
-    if (_reworkScheduled) return;
-    _reworkScheduled = true;
+    if (_resolving || _failed || retiredId != _sessionId) return;
+    _resolving = true;
     scheduleMicrotask(() => unawaited(_declineRework(retiredId)));
   }
 
@@ -917,6 +895,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     if (_cancelled || !context.mounted) return;
     setState(() {
       _failed = true;
+      _resolving = false;
     });
   }
 
@@ -944,38 +923,34 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
 
   @override
   Seed build(TreeContext context) {
-    final matchesJoin = seed.existingSession?.sessionId == _sessionId;
+    final existing = seed.existingSession;
+    final retiredRound = existing == null
+        ? null
+        : reworkRoundOf(seed.bead.id, existing.workBeadId);
+    if (retiredRound != null &&
+        !_resolving &&
+        !_failed &&
+        existing!.sessionId == _sessionId) {
+      _scheduleRetiredRework(existing);
+      return const Idle();
+    }
+    final matchesJoin = existing?.sessionId == _sessionId;
 
-    // tg-x1j v2: the adopted session vanished from the join while this scope
-    // stayed MOUNTED — the only way that happens (once the join has ALREADY
-    // reflected this session at least once, [_joinedOnce]) is `grid rework`
-    // re-keying its `work_bead` off this bead.id while the session was still
-    // OPEN (a gated round; A40 keeps a GATED work bead mounted rather than
-    // unmounting it, so the usual close→unmount→remount→mint path never
-    // fires for it). [_joinedOnce] is the guard that keeps this from firing
-    // on a FRESH MINT, whose `existingSession` also reads unmatched until the
-    // join catches up. Detected BEFORE the stale-id/empty-cursor read below
-    // would otherwise silently keep serving the OLD id over an EMPTY cursor
-    // (a corrupted handle, not a parked one) — the session handle stays
-    // stable up to exactly this point, never past it.
+    // A genuinely missing, non-`#rN` row after a prior join is malformed
+    // disappearance, not operator rework. Refuse it LOUD. [_joinedOnce] keeps
+    // fresh-mint join lag out of this arm; the durable retired-row branch above
+    // is the only path that authorizes a re-mint.
     if (!_resolving &&
         !_failed &&
         _sessionId != null &&
         _joinedOnce &&
         !matchesJoin &&
-        !_reworkScheduled) {
-      if (_lastKnownGated) {
-        _scheduleRework(_sessionId!);
-      } else {
-        // The guard principle: a scope that declines to mint says WHY once,
-        // LOUD — this scope never observed the retired session parked at a
-        // gate, so re-minting here could silently abandon a live round.
-        _scheduleReworkDecline(_sessionId!);
-      }
+        retiredRound == null) {
+      _scheduleReworkDecline(_sessionId!);
     }
 
     if (!_failed && matchesJoin) {
-      final disposition = sessionDispositionOf(seed.existingSession);
+      final disposition = sessionDispositionOf(existing);
       if (_isBlockingDisposition(disposition)) {
         _rearming.clear();
         _declineMount(disposition);
@@ -983,7 +958,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
       }
     }
 
-    if (_resolving || _failed || _sessionId == null || _reworkScheduled) {
+    if (_resolving || _failed || _sessionId == null) {
       return const Idle();
     }
     final id = _sessionId!;
@@ -1087,12 +1062,10 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
       cursor = joined?.cursor ?? const <String, NodeCursor>{};
       results = joined?.results ?? const <String, Map<String, String>>{};
     }
-    // The join reflects this session THIS build — latch it (fresh-mint guard,
-    // above) and remember whether it's CURRENTLY parked at a gate (the signal
-    // the orphan-check above reads once it stops matching).
+    // The join reflects this session THIS build — latch it for the fresh-mint
+    // join-lag guard above.
     if (matchesJoin) {
       _joinedOnce = true;
-      _lastKnownGated = cursor.values.any((n) => n.state == StepState.gated);
     }
 
     // D-7: re-arm any node parked at a gate whose gate bead has CLOSED (its
