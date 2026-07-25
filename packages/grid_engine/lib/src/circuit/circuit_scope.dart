@@ -5,7 +5,8 @@
 /// `SessionResolver`, with ZERO pipeline subscription (invariant 1). Its `build`
 /// reads only the INJECTED cursor (threaded down from `WorkList`'s reconcile
 /// cascade, A39 — never a re-query), computes the eligible frontier with the
-/// pure predicate, and maps each eligible step to a keyed child Seed:
+/// pure predicate, and maps every declared step to a stable, path-keyed node.
+/// Only an eligible step has an effect child:
 ///
 /// - a [CapabilityStep] → an engine leaf via `CapabilityRegistry.host`
 ///   (a `CapabilityHost` — Track E; a fake in Track D tests);
@@ -23,6 +24,7 @@ library;
 import 'package:genesis_tree/genesis_tree.dart';
 
 import '../diagnostics/diagnosable.dart';
+import '../molecule/inherited_circuit.dart';
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
@@ -64,79 +66,134 @@ class CircuitScope extends StatelessSeed with Diagnosable {
   Seed build(TreeContext context) {
     final registry = context
         .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
-    assert(
-      registry != null,
-      'CircuitScope requires an ambient CapabilityRegistry (the kernel/extension '
-      'provides one; tests inject a fake)',
-    );
+    if (registry == null) {
+      throw StateError(
+        'CircuitScope requires an ambient CapabilityRegistry '
+        '(the kernel/extension provides one; tests inject a fake)',
+      );
+    }
     final session = context.dependOnInheritedSeedOfExactType<SessionHandle>();
-    assert(
-      session != null,
-      'CircuitScope requires an ambient SessionHandle (SessionScope provides it '
-      'once the session resolves)',
-    );
-    final reg = registry!;
-    final eligible = eligibleSteps(
+    if (session == null) {
+      throw StateError(
+        'CircuitScope requires an ambient SessionHandle '
+        '(SessionScope provides it once the session resolves)',
+      );
+    }
+    final inheritedCircuit = context
+        .dependOnInheritedSeedOfExactType<InheritedCircuit>();
+
+    final beadIds = <String, String>{};
+    if (inheritedCircuit != null) {
+      final pathsByBeadId = <String, String>{};
+      for (final step in circuit.steps) {
+        final path = stepPath(nodePath, step.stepId);
+        final beadId = inheritedCircuit.beadIdByNodePath[path];
+        // A passive step can precede its durable bead in adopted historical
+        // projections. Its id becomes mandatory when it reaches the frontier.
+        if (beadId == null) continue;
+        if (beadId.isEmpty) {
+          throw StateError(
+            'CircuitScope has an empty step-bead id for "$path"',
+          );
+        }
+        final priorPath = pathsByBeadId[beadId];
+        if (priorPath != null && priorPath != path) {
+          throw StateError(
+            'CircuitScope step-bead id "$beadId" is assigned to both '
+            '"$priorPath" and "$path"',
+          );
+        }
+        beadIds[path] = beadId;
+        pathsByBeadId[beadId] = path;
+      }
+    }
+
+    final eligiblePaths = eligibleSteps(
       circuit,
       cursor,
       nodePath,
-      circuitById: reg.circuit,
-      now: reg.now(),
-    );
-    final children = <Seed>[];
-    for (final step in eligible) {
+      circuitById: registry.circuit,
+      now: registry.now(),
+    ).map((step) => stepPath(nodePath, step.stepId)).toSet();
+
+    final activeChildren = <Seed>[];
+    final passiveChildren = <Seed>[];
+    for (final step in circuit.steps) {
       final path = stepPath(nodePath, step.stepId);
       final node = cursorNodeAt(cursor, path);
-      switch (step) {
-        case CapabilityStep():
-          children.add(
-            reg.host(
+      Seed? effect;
+      if (eligiblePaths.contains(path)) {
+        switch (step) {
+          case CapabilityStep():
+            final beadId = beadIds[path];
+            // An adopted cursor can briefly lead its successor-bead join. In
+            // that ruled compatibility case CapabilityHost remains the loud
+            // point of consumption; a fresh projection must be complete.
+            if (inheritedCircuit != null &&
+                inheritedCircuit.cursor.isEmpty &&
+                beadId == null) {
+              throw StateError(
+                'CircuitScope has no step-bead id for "$path" '
+                '(InheritedCircuit.beadIdByNodePath is missing it)',
+              );
+            }
+            effect = registry.host(
               StepMount(
                 step: step,
                 nodePath: path,
-                // The graph this step is a member of (a VALUE — the Rewind arm
-                // resolves its named siblings + their dependents against it).
                 circuit: circuit,
                 circuitPath: nodePath,
-                session: session!,
+                session: session,
                 node: node,
-                // The incarnation key: a supervised restart bumps restartCount
-                // (D-5) and a routing REWIND bumps rewindCount (tg-o90) → a new
-                // key → keyed reconcile swaps the leaf. A rewound node that is
-                // still MOUNTED (a daemon) is therefore torn down and re-run,
-                // never left alive under a stale incarnation.
-                key: ValueKey('$path#${node.restartCount}.${node.rewindCount}'),
+                key: ValueKey(
+                  beadId == null
+                      ? '$path#${node.restartCount}'
+                      : '$beadId#${node.restartCount}',
+                ),
                 backoff: circuit.backoff,
                 maxRestarts: circuit.maxRestarts,
               ),
-            ),
-          );
-        case SubCircuitStep(:final circuitId):
-          final sub = reg.circuit(circuitId);
-          // An unresolvable sub-circuit is skipped (the predicate already
-          // fail-closes any dep ON it; nothing to inflate).
-          if (sub == null) continue;
-          children.add(
-            CircuitScope(
-              circuit: sub,
-              cursor: cursor,
-              nodePath: path,
-              key: ValueKey('$path/scope'),
-            ),
-          );
+            );
+          case SubCircuitStep(:final circuitId):
+            final sub = registry.circuit(circuitId);
+            if (sub != null) {
+              effect = CircuitScope(
+                circuit: sub,
+                cursor: cursor,
+                nodePath: path,
+                key: ValueKey('$path/scope'),
+              );
+            }
+        }
       }
+      final child = _CircuitStep(
+        nodePath: path,
+        effect: effect,
+        key: ValueKey(path),
+      );
+      (effect == null ? passiveChildren : activeChildren).add(child);
     }
-    return _CircuitChildren(children);
+    return _CircuitChildren([...activeChildren, ...passiveChildren]);
   }
 }
 
-/// The keyed-reconcile container `CircuitScope` builds — the ONE generic
-/// container kind for a circuit's frontier (the depth-analogue of `_WorkBeads`).
+/// A stable path-keyed node for one declared circuit step.
 ///
-/// Each child is keyed (incarnation-keyed for a leaf, path-keyed for a nested
-/// scope), so reconcile preserves a still-eligible step's branch (and its
-/// running process) across cursor ticks; a step entering the frontier mounts
-/// (spawn), one leaving (job complete / supervised re-key) unmounts (kill).
+/// The node persists across frontier changes; only [effect] is
+/// frontier/incarnation keyed.
+class _CircuitStep extends MultiChildSeed {
+  _CircuitStep({required this.nodePath, required Seed? effect, super.key})
+    : effect = effect,
+      super(children: [if (effect != null) effect]);
+
+  final String nodePath;
+  final Seed? effect;
+}
+
+/// The keyed-reconcile container holding every declared circuit step.
+///
+/// Each `_CircuitStep` is path-keyed and persistent. Only its effect child is
+/// mounted on the frontier and keyed to its current incarnation.
 class _CircuitChildren extends MultiChildSeed {
   _CircuitChildren(List<Seed> children) : super(children: children);
 }
