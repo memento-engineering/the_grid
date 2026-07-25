@@ -70,7 +70,7 @@ Bead beadFromRow(
     deferUntil: _dateTime(row['defer_until']),
     externalRef: _strOrNull(row['external_ref']),
     sourceSystem: _str(row['source_system']),
-    metadata: _metadata(row['metadata']),
+    metadata: _metadata(preferredMetadata(row)),
     labels: sortedLabels,
     ephemeral: _bool(row['ephemeral']),
     dependencyCount: dependencyCount,
@@ -95,7 +95,7 @@ BeadDependency dependencyFromRow(Map<String, Object?> row) {
     createdAt: _dateTime(row['created_at']),
     createdBy: _str(row['created_by']),
     // BeadDependency keeps metadata as the raw JSON string (Track A choice).
-    metadata: _metadataString(row['metadata']),
+    metadata: _metadataString(preferredMetadata(row)),
     threadId: _str(row['thread_id']),
   );
 }
@@ -198,6 +198,21 @@ DateTime? _dateTime(Object? value) {
     default:
       return null;
   }
+}
+
+/// The metadata VALUE a row's mapper should decode: the `metadata_text`
+/// CHAR-cast duplicate when the SELECT carried one AND it is non-empty,
+/// otherwise the raw JSON `metadata` column.
+///
+/// The cast column is load-bearing (the >2KB dropout — see
+/// [DoltQueryService.issuesSelect]): Dolt serves large (out-of-line) JSON
+/// values as an EMPTY string on the raw column in multi-row scans, while the
+/// CHAR cast arrives intact. Preferring a NON-EMPTY `metadata_text` keeps the
+/// raw column as a fallback for selects that never aliased the cast.
+Object? preferredMetadata(Map<String, Object?> row) {
+  final text = row['metadata_text'];
+  if (text is String && text.trim().isNotEmpty) return text;
+  return row['metadata'];
 }
 
 /// A `JSON` column for [Bead.metadata]: a decoded `Map` passes through; a JSON

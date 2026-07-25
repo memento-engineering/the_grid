@@ -6,6 +6,41 @@ import 'package:beads_dart/src/services/dolt_row_mapper.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('preferredMetadata — the >2KB out-of-line JSON dropout (tg-wvox '
+      'follow-on)', () {
+    test('a NON-EMPTY metadata_text wins over the raw JSON column: in a '
+        'multi-row scan Dolt serves large (out-of-line) JSON as an EMPTY raw '
+        'column while the CHAR cast arrives intact', () {
+      final row = <String, Object?>{
+        'id': 'tranquility-step',
+        'metadata': '', // what mysql_client sees for a >2KB row's raw column
+        'metadata_text':
+            '{"grid.step.state":"complete","grid.step.session":"tranquility-s1"}',
+      };
+      final bead = beadFromRow(row);
+      expect(bead.metadata['grid.step.state'], 'complete');
+      expect(bead.metadata['grid.step.session'], 'tranquility-s1');
+    });
+
+    test('an EMPTY metadata_text falls back to the raw column — selects that '
+        'never aliased the cast keep working', () {
+      final row = <String, Object?>{
+        'id': 'tg-x',
+        'metadata': '{"k":"v"}',
+        'metadata_text': '',
+      };
+      expect(beadFromRow(row).metadata, {'k': 'v'});
+    });
+
+    test('no metadata_text key at all falls back to the raw column', () {
+      final row = <String, Object?>{
+        'id': 'tg-y',
+        'metadata': '{"k":"w"}',
+      };
+      expect(beadFromRow(row).metadata, {'k': 'w'});
+    });
+  });
+
   group('beadFromRow', () {
     test('maps a fully-populated row (typedAssoc shape: DateTime + Map)', () {
       final created = DateTime.utc(2026, 6, 11, 6, 1);

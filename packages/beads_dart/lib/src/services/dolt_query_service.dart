@@ -326,8 +326,12 @@ class DoltQueryService {
         ? '${edgeLeg('dependencies')} UNION ${edgeLeg('wisp_dependencies')}'
         : edgeLeg('dependencies');
     // children rows from issues ∪ wisps whose metadata.idempotency_key matches.
+    // CAST before extraction: Dolt's own JSON decode of an out-of-line
+    // (>2KB) stored value can error server-side ("Invalid JSON text") where
+    // the CHAR round-trip is fine — same dropout class as the scan columns.
     const keyExpr =
-        "JSON_UNQUOTE(JSON_EXTRACT(metadata, '\$.idempotency_key'))";
+        'JSON_UNQUOTE(JSON_EXTRACT(CAST(metadata AS CHAR), '
+        "'\$.idempotency_key'))";
     String childRows(String table) =>
         'SELECT id, created_at, metadata FROM $table WHERE id IN ($childEdges)';
     final children = shape.hasTable('wisps')
@@ -355,8 +359,19 @@ class DoltQueryService {
   // -------------------------------------------------------------------------
 
   /// The issues SELECT. Exposed for tests that fake the connection layer.
+  ///
+  /// `metadata_text` is the LOAD-BEARING duplicate of the JSON `metadata`
+  /// column (tg-wvox follow-on, the >2KB dropout): Dolt stores large JSON
+  /// values out-of-line (adaptive encoding), and in a MULTI-ROW scan the raw
+  /// JSON column arrives at `mysql_client` as an EMPTY string for exactly
+  /// those rows (~2KB+), while a `CAST(... AS CHAR)` arrives intact. A step
+  /// bead's completion stamp (results + rationale) reliably crosses 2KB, so
+  /// without the cast every lane completion is INVISIBLE to the SQL read
+  /// path and the frontier never advances mid-flight. The mapper prefers
+  /// `metadata_text` whenever it is non-empty (`preferredMetadata`).
   @visibleForTesting
-  static const String issuesSelect = 'SELECT * FROM issues';
+  static const String issuesSelect =
+      'SELECT *, CAST(metadata AS CHAR) AS metadata_text FROM issues';
 
   /// The wisps SELECT — the ephemeral/no-history/infra half of the bead set
   /// (beads routes those to the `wisps` table; ephemeral_routing.go, migration
@@ -366,7 +381,8 @@ class DoltQueryService {
   /// beads live there with `ephemeral = 0` (GH#3649), so it is NOT assumed
   /// true. Exposed for tests that fake the connection layer.
   @visibleForTesting
-  static const String wispsSelect = 'SELECT * FROM wisps';
+  static const String wispsSelect =
+      'SELECT *, CAST(metadata AS CHAR) AS metadata_text FROM wisps';
 
   /// The labels SELECT for [shape]: `labels`, UNION'd with `wisp_labels` when
   /// that table is present (identical two-column shape, so the UNION ALL is
@@ -391,7 +407,8 @@ class DoltQueryService {
   static String dependenciesSelectFor(DoltSchemaShape shape) {
     String leg(String table) =>
         'SELECT issue_id, ${shape.depTargetExprFor(table)} '
-        'AS depends_on_id, type, created_at, created_by, metadata, thread_id '
+        'AS depends_on_id, type, created_at, created_by, metadata, '
+        'CAST(metadata AS CHAR) AS metadata_text, thread_id '
         'FROM $table';
     return shape.hasTable('wisp_dependencies')
         ? '${leg('dependencies')} UNION ALL ${leg('wisp_dependencies')}'
