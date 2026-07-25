@@ -56,6 +56,17 @@ class ReworkCommand extends Command<int> {
             'a ROUND N header. Requires --note-root (the WORK bead\'s '
             'substation root).',
       )
+      ..addFlag(
+        'beyond-cap',
+        negatable: false,
+        help:
+            'Authorize one rework round after the normal cap. Requires both '
+            '--actor and --note, and refuses below the cap.',
+      )
+      ..addOption(
+        'actor',
+        help: 'The operator authorizing --beyond-cap; required with that flag.',
+      )
       ..addOption(
         'note-root',
         help:
@@ -89,12 +100,14 @@ class ReworkCommand extends Command<int> {
       'or open-but-GATED) session through the StationBeadWriter chokepoint, '
       'optionally append an operator finding to the work bead\'s notes, and '
       'report the round number. Refuses LOUD (zero writes) on a live '
-      '(open, non-gated) session or beyond the ~3-round cap.';
+      '(open, non-gated) session or beyond the ~3-round cap unless an '
+      'attributed --beyond-cap ruling authorizes one round.';
 
   @override
   String get invocation =>
       'grid rework <bead-id> --grid-root <dir> --prefix <name> '
-      '--note-root <dir> [--note <finding>]';
+      '--note-root <dir> [--note <finding>] '
+      '[--beyond-cap --actor <operator>]';
 
   @override
   Future<int> run() async {
@@ -160,6 +173,8 @@ class ReworkCommand extends Command<int> {
     return runRework(
       beadId: rest.single,
       note: args.option('note'),
+      beyondCap: args.flag('beyond-cap'),
+      actor: args.option('actor'),
       stateStore: stateStore,
       stateStorePrefix: prefix,
       noteStore: noteStore,
@@ -195,6 +210,8 @@ Future<int> runRework({
   required GridStateStore stateStore,
   required String stateStorePrefix,
   String? note,
+  bool beyondCap = false,
+  String? actor,
   SubstationWorkStore? noteStore,
   void Function(String)? out,
   void Function(String)? err,
@@ -208,6 +225,23 @@ Future<int> runRework({
   final void Function(String) write = out ?? (m) => stdout.writeln(m);
   final void Function(String) writeErr = err ?? (m) => stderr.writeln(m);
   final DateTime Function() clock = now ?? DateTime.now;
+  final normalizedActor = actor?.trim();
+  final wantsNote = note != null && note.trim().isNotEmpty;
+
+  if (beyondCap && (normalizedActor == null || normalizedActor.isEmpty)) {
+    writeErr(
+      'grid rework: --actor is required with --beyond-cap '
+      '(the human ruling must be attributed).',
+    );
+    return 64;
+  }
+  if (beyondCap && !wantsNote) {
+    writeErr(
+      'grid rework: --note is required with --beyond-cap '
+      '(the human ruling must carry a reason).',
+    );
+    return 64;
+  }
 
   final BeadsWorkspace stateWorkspace;
   if (stateWorkspaceOverride != null) {
@@ -224,7 +258,6 @@ Future<int> runRework({
       stateBdOverride ??
       BdCliService(ProcessBdRunner(workspaceRoot: stateWorkspace.root));
 
-  final wantsNote = note != null && note.isNotEmpty;
   final BeadsWorkspace workWorkspace;
   if (workspaceOverride != null) {
     workWorkspace = workspaceOverride;
@@ -290,7 +323,14 @@ Future<int> runRework({
     final n = int.parse(match.group(1)!);
     if (n > maxRound) maxRound = n;
   }
-  if (maxRound >= kMaxReworkRounds) {
+  if (beyondCap && maxRound < kMaxReworkRounds) {
+    writeErr(
+      'grid rework: --beyond-cap is only valid at or beyond the rework cap '
+      '($kMaxReworkRounds); "$beadId" has $maxRound rounds — refused.',
+    );
+    return 64;
+  }
+  if (maxRound >= kMaxReworkRounds && !beyondCap) {
     writeErr(
       'grid rework: "$beadId" already has $maxRound rework rounds (cap '
       '$kMaxReworkRounds) — refused (fail-closed; a human decides beyond the '
@@ -379,9 +419,11 @@ Future<int> runRework({
   }
 
   if (wantsNote) {
-    final header =
-        '--- grid rework ROUND $round '
-        '(${clock().toUtc().toIso8601String()}) ---';
+    final timestamp = clock().toUtc().toIso8601String();
+    final header = beyondCap
+        ? '--- grid rework ROUND $round ($timestamp) '
+              '— BEYOND-CAP by $normalizedActor ---'
+        : '--- grid rework ROUND $round ($timestamp) ---';
     try {
       await workWriter.update(
         beadId,
