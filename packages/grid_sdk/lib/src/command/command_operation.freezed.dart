@@ -1,0 +1,651 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+// coverage:ignore-file
+// ignore_for_file: type=lint
+// ignore_for_file: unused_element, deprecated_member_use, deprecated_member_use_from_same_package, use_function_type_syntax_for_parameters, unnecessary_const, avoid_init_to_null, invalid_override_different_default_values_named, prefer_expression_function_bodies, annotate_overrides, invalid_annotation_target, unnecessary_question_mark
+
+part of 'command_operation.dart';
+
+// **************************************************************************
+// FreezedGenerator
+// **************************************************************************
+
+// dart format off
+T _$identity<T>(T value) => value;
+/// @nodoc
+mixin _$GridCommandRequest {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridCommandRequest);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'GridCommandRequest()';
+}
+
+
+}
+
+/// @nodoc
+class $GridCommandRequestCopyWith<$Res>  {
+$GridCommandRequestCopyWith(GridCommandRequest _, $Res Function(GridCommandRequest) __);
+}
+
+
+/// Adds pattern-matching-related methods to [GridCommandRequest].
+extension GridCommandRequestPatterns on GridCommandRequest {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateResolve value)?  resolveGate,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case GridRework() when rework != null:
+return rework(_that);case GridGateResolve() when resolveGate != null:
+return resolveGate(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateResolve value)  resolveGate,}){
+final _that = this;
+switch (_that) {
+case GridRework():
+return rework(_that);case GridGateResolve():
+return resolveGate(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateResolve value)?  resolveGate,}){
+final _that = this;
+switch (_that) {
+case GridRework() when rework != null:
+return rework(_that);case GridGateResolve() when resolveGate != null:
+return resolveGate(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note)?  rework,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case GridRework() when rework != null:
+return rework(_that.beadId,_that.note);case GridGateResolve() when resolveGate != null:
+return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note)  rework,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,}) {final _that = this;
+switch (_that) {
+case GridRework():
+return rework(_that.beadId,_that.note);case GridGateResolve():
+return resolveGate(_that.gateId,_that.grades,_that.rationale);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note)?  rework,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,}) {final _that = this;
+switch (_that) {
+case GridRework() when rework != null:
+return rework(_that.beadId,_that.note);case GridGateResolve() when resolveGate != null:
+return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class GridRework implements GridCommandRequest {
+  const GridRework({required this.beadId, this.note});
+  
+
+ final  String beadId;
+ final  String? note;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridReworkCopyWith<GridRework> get copyWith => _$GridReworkCopyWithImpl<GridRework>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridRework&&(identical(other.beadId, beadId) || other.beadId == beadId)&&(identical(other.note, note) || other.note == note));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,beadId,note);
+
+@override
+String toString() {
+  return 'GridCommandRequest.rework(beadId: $beadId, note: $note)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridReworkCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridReworkCopyWith(GridRework value, $Res Function(GridRework) _then) = _$GridReworkCopyWithImpl;
+@useResult
+$Res call({
+ String beadId, String? note
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridReworkCopyWithImpl<$Res>
+    implements $GridReworkCopyWith<$Res> {
+  _$GridReworkCopyWithImpl(this._self, this._then);
+
+  final GridRework _self;
+  final $Res Function(GridRework) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? beadId = null,Object? note = freezed,}) {
+  return _then(GridRework(
+beadId: null == beadId ? _self.beadId : beadId // ignore: cast_nullable_to_non_nullable
+as String,note: freezed == note ? _self.note : note // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridGateResolve implements GridCommandRequest {
+  const GridGateResolve({required this.gateId, final  Map<String, String> grades = const <String, String>{}, this.rationale}): _grades = grades;
+  
+
+ final  String gateId;
+ final  Map<String, String> _grades;
+@JsonKey() Map<String, String> get grades {
+  if (_grades is EqualUnmodifiableMapView) return _grades;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableMapView(_grades);
+}
+
+ final  String? rationale;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridGateResolveCopyWith<GridGateResolve> get copyWith => _$GridGateResolveCopyWithImpl<GridGateResolve>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridGateResolve&&(identical(other.gateId, gateId) || other.gateId == gateId)&&const DeepCollectionEquality().equals(other._grades, _grades)&&(identical(other.rationale, rationale) || other.rationale == rationale));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,gateId,const DeepCollectionEquality().hash(_grades),rationale);
+
+@override
+String toString() {
+  return 'GridCommandRequest.resolveGate(gateId: $gateId, grades: $grades, rationale: $rationale)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridGateResolveCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridGateResolveCopyWith(GridGateResolve value, $Res Function(GridGateResolve) _then) = _$GridGateResolveCopyWithImpl;
+@useResult
+$Res call({
+ String gateId, Map<String, String> grades, String? rationale
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridGateResolveCopyWithImpl<$Res>
+    implements $GridGateResolveCopyWith<$Res> {
+  _$GridGateResolveCopyWithImpl(this._self, this._then);
+
+  final GridGateResolve _self;
+  final $Res Function(GridGateResolve) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? gateId = null,Object? grades = null,Object? rationale = freezed,}) {
+  return _then(GridGateResolve(
+gateId: null == gateId ? _self.gateId : gateId // ignore: cast_nullable_to_non_nullable
+as String,grades: null == grades ? _self._grades : grades // ignore: cast_nullable_to_non_nullable
+as Map<String, String>,rationale: freezed == rationale ? _self.rationale : rationale // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+mixin _$GridCommandResult {
+
+ String get message;
+/// Create a copy of GridCommandResult
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridCommandResultCopyWith<GridCommandResult> get copyWith => _$GridCommandResultCopyWithImpl<GridCommandResult>(this as GridCommandResult, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridCommandResult&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,message);
+
+@override
+String toString() {
+  return 'GridCommandResult(message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridCommandResultCopyWith<$Res>  {
+  factory $GridCommandResultCopyWith(GridCommandResult value, $Res Function(GridCommandResult) _then) = _$GridCommandResultCopyWithImpl;
+@useResult
+$Res call({
+ String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridCommandResultCopyWithImpl<$Res>
+    implements $GridCommandResultCopyWith<$Res> {
+  _$GridCommandResultCopyWithImpl(this._self, this._then);
+
+  final GridCommandResult _self;
+  final $Res Function(GridCommandResult) _then;
+
+/// Create a copy of GridCommandResult
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? message = null,}) {
+  return _then(_self.copyWith(
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [GridCommandResult].
+extension GridCommandResultPatterns on GridCommandResult {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridCommandCompleted value)?  completed,TResult Function( GridCommandRefused value)?  refused,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case GridCommandCompleted() when completed != null:
+return completed(_that);case GridCommandRefused() when refused != null:
+return refused(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridCommandCompleted value)  completed,required TResult Function( GridCommandRefused value)  refused,}){
+final _that = this;
+switch (_that) {
+case GridCommandCompleted():
+return completed(_that);case GridCommandRefused():
+return refused(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridCommandCompleted value)?  completed,TResult? Function( GridCommandRefused value)?  refused,}){
+final _that = this;
+switch (_that) {
+case GridCommandCompleted() when completed != null:
+return completed(_that);case GridCommandRefused() when refused != null:
+return refused(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String message,  Map<String, Object?> value)?  completed,TResult Function( String code,  String message)?  refused,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case GridCommandCompleted() when completed != null:
+return completed(_that.message,_that.value);case GridCommandRefused() when refused != null:
+return refused(_that.code,_that.message);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String message,  Map<String, Object?> value)  completed,required TResult Function( String code,  String message)  refused,}) {final _that = this;
+switch (_that) {
+case GridCommandCompleted():
+return completed(_that.message,_that.value);case GridCommandRefused():
+return refused(_that.code,_that.message);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String message,  Map<String, Object?> value)?  completed,TResult? Function( String code,  String message)?  refused,}) {final _that = this;
+switch (_that) {
+case GridCommandCompleted() when completed != null:
+return completed(_that.message,_that.value);case GridCommandRefused() when refused != null:
+return refused(_that.code,_that.message);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class GridCommandCompleted implements GridCommandResult {
+  const GridCommandCompleted({required this.message, final  Map<String, Object?> value = const <String, Object?>{}}): _value = value;
+  
+
+@override final  String message;
+ final  Map<String, Object?> _value;
+@JsonKey() Map<String, Object?> get value {
+  if (_value is EqualUnmodifiableMapView) return _value;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableMapView(_value);
+}
+
+
+/// Create a copy of GridCommandResult
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridCommandCompletedCopyWith<GridCommandCompleted> get copyWith => _$GridCommandCompletedCopyWithImpl<GridCommandCompleted>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridCommandCompleted&&(identical(other.message, message) || other.message == message)&&const DeepCollectionEquality().equals(other._value, _value));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,message,const DeepCollectionEquality().hash(_value));
+
+@override
+String toString() {
+  return 'GridCommandResult.completed(message: $message, value: $value)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridCommandCompletedCopyWith<$Res> implements $GridCommandResultCopyWith<$Res> {
+  factory $GridCommandCompletedCopyWith(GridCommandCompleted value, $Res Function(GridCommandCompleted) _then) = _$GridCommandCompletedCopyWithImpl;
+@override @useResult
+$Res call({
+ String message, Map<String, Object?> value
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridCommandCompletedCopyWithImpl<$Res>
+    implements $GridCommandCompletedCopyWith<$Res> {
+  _$GridCommandCompletedCopyWithImpl(this._self, this._then);
+
+  final GridCommandCompleted _self;
+  final $Res Function(GridCommandCompleted) _then;
+
+/// Create a copy of GridCommandResult
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? message = null,Object? value = null,}) {
+  return _then(GridCommandCompleted(
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,value: null == value ? _self._value : value // ignore: cast_nullable_to_non_nullable
+as Map<String, Object?>,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridCommandRefused implements GridCommandResult {
+  const GridCommandRefused({required this.code, required this.message});
+  
+
+ final  String code;
+@override final  String message;
+
+/// Create a copy of GridCommandResult
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridCommandRefusedCopyWith<GridCommandRefused> get copyWith => _$GridCommandRefusedCopyWithImpl<GridCommandRefused>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridCommandRefused&&(identical(other.code, code) || other.code == code)&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,code,message);
+
+@override
+String toString() {
+  return 'GridCommandResult.refused(code: $code, message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridCommandRefusedCopyWith<$Res> implements $GridCommandResultCopyWith<$Res> {
+  factory $GridCommandRefusedCopyWith(GridCommandRefused value, $Res Function(GridCommandRefused) _then) = _$GridCommandRefusedCopyWithImpl;
+@override @useResult
+$Res call({
+ String code, String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridCommandRefusedCopyWithImpl<$Res>
+    implements $GridCommandRefusedCopyWith<$Res> {
+  _$GridCommandRefusedCopyWithImpl(this._self, this._then);
+
+  final GridCommandRefused _self;
+  final $Res Function(GridCommandRefused) _then;
+
+/// Create a copy of GridCommandResult
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? code = null,Object? message = null,}) {
+  return _then(GridCommandRefused(
+code: null == code ? _self.code : code // ignore: cast_nullable_to_non_nullable
+as String,message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+// dart format on

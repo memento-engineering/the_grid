@@ -1,0 +1,335 @@
+import 'dart:async';
+
+import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_runtime/grid_runtime.dart';
+
+import 'command_operation.dart';
+
+/// The resident read/write rails for one substation work store.
+final class ResidentWorkCommandStore {
+  /// Creates one resident work-store command binding.
+  const ResidentWorkCommandStore({
+    required this.source,
+    required this.refresh,
+    required this.writer,
+  });
+
+  /// The already-running controller for this work store.
+  final SnapshotSource source;
+
+  /// Refreshes the already-running controller before a command reads it.
+  final Future<void> Function() refresh;
+
+  /// The work-store chokepoint carrying this substation's ownership set.
+  final StationBeadWriter writer;
+}
+
+/// Executes operator mutations against the controllers owned by one station.
+final class ResidentGridCommandHandler implements GridCommandHandler {
+  /// Binds commands to the resident controller and writer instances.
+  ResidentGridCommandHandler({
+    required SnapshotSource stateSource,
+    required Future<void> Function() refreshState,
+    required StationBeadWriter stateWriter,
+    required BeadOwnershipPredicate stateOwnership,
+    required Map<String, ResidentWorkCommandStore> workStoresByIdentity,
+  }) : _stateSource = stateSource,
+       _refreshState = refreshState,
+       _stateWriter = stateWriter,
+       _stateOwnership = stateOwnership,
+       _workStoresByIdentity = Map.unmodifiable(workStoresByIdentity);
+
+  final SnapshotSource _stateSource;
+  final Future<void> Function() _refreshState;
+  final StationBeadWriter _stateWriter;
+  final BeadOwnershipPredicate _stateOwnership;
+  final Map<String, ResidentWorkCommandStore> _workStoresByIdentity;
+  Future<void> _tail = Future<void>.value();
+
+  @override
+  Future<GridCommandResult> call(GridCommandRequest request) {
+    final completer = Completer<GridCommandResult>();
+    _tail = _tail.then((_) async {
+      try {
+        completer.complete(await _dispatch(request));
+      } on Object catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<GridCommandResult> _dispatch(GridCommandRequest request) async =>
+      switch (request) {
+        GridRework(:final beadId, :final note) => _rework(
+          beadId: beadId,
+          note: note,
+        ),
+        GridGateResolve(:final gateId, :final grades, :final rationale) =>
+          _resolveGate(gateId: gateId, grades: grades, rationale: rationale),
+      };
+
+  Future<GridCommandResult> _rework({
+    required String beadId,
+    required String? note,
+  }) async {
+    final identity = BeadOwnershipPredicate.prefixOf(beadId);
+    final workStore = identity == null ? null : _workStoresByIdentity[identity];
+    if (workStore == null) {
+      return _refused(
+        'work_store_not_owned',
+        'No resident work store owns "$beadId".',
+      );
+    }
+
+    await _refreshState();
+    await workStore.refresh();
+    final state = _stateSource.current;
+    final work = workStore.source.current;
+    if (state == null || work == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'A resident store has no current snapshot.',
+      );
+    }
+    if (work.bead(beadId) == null) {
+      return _refused(
+        'work_bead_missing',
+        'Work bead "$beadId" is absent from its resident store.',
+      );
+    }
+
+    final sessions = state.beads
+        .where((bead) => bead.issueType == IssueType.session)
+        .toList(growable: false);
+    final current = sessions
+        .where((bead) => _meta(bead, SessionBeadKeys.workBead) == beadId)
+        .toList(growable: false);
+    if (current.isEmpty) {
+      return _refused(
+        'session_not_found',
+        'No session is linked to "$beadId".',
+      );
+    }
+    if (current.length != 1) {
+      return _refused(
+        'session_ambiguous',
+        '${current.length} sessions are linked to "$beadId".',
+      );
+    }
+
+    final session = current.single;
+    final round =
+        maxReworkRound(
+          beadId,
+          sessions
+              .map((bead) => _meta(bead, SessionBeadKeys.workBead))
+              .nonNulls,
+        ) +
+        1;
+    if (round > kMaxReworkRounds) {
+      return _refused(
+        'rework_round_cap',
+        '"$beadId" has reached the rework cap of $kMaxReworkRounds.',
+      );
+    }
+
+    if (!session.isClosed) {
+      final cursor =
+          _meta(session, SessionBeadKeys.model) == kSessionModelMolecule
+          ? projectMoleculeCursor(
+              state.beads.where(
+                (bead) =>
+                    bead.issueType == IssueType.step &&
+                    _meta(bead, MoleculeStepKeys.session) == session.id,
+              ),
+              dependencies: state.dependencies,
+            ).cursor
+          : const <String, NodeCursor>{};
+      final states = cursor.values.map((node) => node.state);
+      if (states.contains(StepState.running) ||
+          !states.contains(StepState.gated)) {
+        return _refused(
+          'session_not_parked',
+          'Session "${session.id}" is open and not parked at a gate.',
+        );
+      }
+    }
+
+    try {
+      await workStore.writer.clearSpecifyAuthoredSpec(beadId);
+      await _stateWriter.update(
+        session.id,
+        metadata: {SessionBeadKeys.workBead: reworkKeyFor(beadId, round)},
+      );
+      final finding = note?.trim();
+      if (finding != null && finding.isNotEmpty) {
+        await workStore.writer.update(
+          beadId,
+          metadata: const {},
+          appendNotes: finding,
+        );
+      }
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    }
+
+    return GridCommandResult.completed(
+      message: 'Rework round $round retired session "${session.id}".',
+      value: {
+        'operation': 'grid/rework',
+        'beadId': beadId,
+        'sessionId': session.id,
+        'round': round,
+      },
+    );
+  }
+
+  Future<GridCommandResult> _resolveGate({
+    required String gateId,
+    required Map<String, String> grades,
+    required String? rationale,
+  }) async {
+    await _refreshState();
+    final state = _stateSource.current;
+    if (state == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot.',
+      );
+    }
+    final gate = state.bead(gateId);
+    if (gate == null) {
+      return _refused('gate_not_found', 'Gate "$gateId" was not found.');
+    }
+    if (gate.issueType != IssueType.gate) {
+      return _refused('not_a_gate', '"$gateId" is not a gate.');
+    }
+    if (gate.isClosed) {
+      return _refused('gate_closed', 'Gate "$gateId" is already closed.');
+    }
+    if (!_stateOwnership.owns(gate)) {
+      return _refused(
+        'ownership_refused',
+        'Gate "$gateId" is outside this station ownership set.',
+      );
+    }
+
+    final node = _meta(gate, 'node');
+    final sessionId = _meta(gate, 'blocks');
+    final rulings = <({String path, String grade})>[];
+    for (final entry in grades.entries) {
+      final lane = entry.key.trim();
+      final grade = entry.value.trim().toUpperCase();
+      if (lane.isEmpty || !_isGrade(grade)) {
+        return _refused(
+          'invalid_grade',
+          'Every ruling must name a lane and use a grade from A through F.',
+        );
+      }
+      final path = _resolveLanePath(lane: lane, node: node);
+      if (path == null) {
+        return _refused(
+          'lane_unresolvable',
+          'Bare lane "$lane" cannot be resolved without a parked node.',
+        );
+      }
+      rulings.add((path: path, grade: grade));
+    }
+    final reason = rationale?.trim();
+    if (rulings.isNotEmpty && (reason == null || reason.isEmpty)) {
+      return _refused(
+        'rationale_required',
+        'Grade rulings require a rationale.',
+      );
+    }
+    if (rulings.isNotEmpty && sessionId == null) {
+      return _refused(
+        'session_not_found',
+        'Gate "$gateId" has no blocked session for the ruling.',
+      );
+    }
+
+    final session = sessionId == null ? null : state.bead(sessionId);
+    final ruledAway = {
+      for (final ruling in rulings)
+        if (ruling.grade != 'F') ruling.path,
+    };
+    if (session != null && node != null) {
+      final parent = node.contains('/')
+          ? node.substring(0, node.lastIndexOf('/'))
+          : '';
+      final hasFeedingF = projectCircuitResults(session).entries.any(
+        (entry) =>
+            entry.key != node &&
+            _isSiblingOf(entry.key, parent) &&
+            (entry.value[ResultKeys.grade] ?? '').toUpperCase() == 'F' &&
+            !ruledAway.contains(entry.key),
+      );
+      if (hasFeedingF) {
+        return _refused(
+          'feeding_grade_f',
+          'A feeding lane still has grade F; closing would immediately re-gate.',
+        );
+      }
+    }
+
+    try {
+      for (final ruling in rulings) {
+        await _stateWriter.update(
+          sessionId!,
+          metadata: operatorRulingMetadata(
+            ruling.path,
+            grade: ruling.grade,
+            rationale: reason!,
+          ),
+        );
+      }
+      await _stateWriter.close(
+        gateId,
+        reason: rulings.isEmpty
+            ? 'resolved via grid gate resolve'
+            : 'resolved via grid gate resolve (operator ruling)',
+      );
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    }
+
+    return GridCommandResult.completed(
+      message: 'Resolved gate "$gateId".',
+      value: {
+        'operation': 'grid/gate/resolve',
+        'gateId': gateId,
+        'sessionId': sessionId,
+        'node': node,
+      },
+    );
+  }
+}
+
+GridCommandResult _refused(String code, String message) =>
+    GridCommandResult.refused(code: code, message: message);
+
+String? _meta(Bead bead, String key) {
+  final value = bead.metadata[key];
+  return value is String && value.isNotEmpty ? value : null;
+}
+
+bool _isGrade(String value) =>
+    value.length == 1 &&
+    value.codeUnitAt(0) >= 0x41 &&
+    value.codeUnitAt(0) <= 0x46;
+
+String? _resolveLanePath({required String lane, required String? node}) {
+  if (lane.contains('/')) return lane;
+  if (node == null) return null;
+  final slash = node.lastIndexOf('/');
+  return slash <= 0 ? lane : '${node.substring(0, slash)}/$lane';
+}
+
+bool _isSiblingOf(String path, String parent) {
+  if (parent.isEmpty) return !path.contains('/');
+  if (!path.startsWith('$parent/')) return false;
+  return !path.substring(parent.length + 1).contains('/');
+}
