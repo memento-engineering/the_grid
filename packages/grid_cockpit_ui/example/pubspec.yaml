@@ -1,0 +1,17 @@
+name: grid_cockpit_ui_example
+description: Fixture-only runnable documentation for grid_cockpit_ui.
+publish_to: none
+version: 1.0.0+1
+environment:
+  sdk: ^3.11.0
+  flutter: ">=3.41.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  grid_cockpit_ui:
+    path: ..
+  grid_diagnostics_contract: ^0.1.0
+dev_dependencies:
+  lints: ^5.1.0
+flutter:
+  uses-material-design: true
