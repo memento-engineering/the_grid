@@ -55,11 +55,12 @@ extension GridCommandRequestPatterns on GridCommandRequest {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateResolve value)?  resolveGate,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
-return rework(_that);case GridGateResolve() when resolveGate != null:
+return rework(_that);case GridGateLs() when listGates != null:
+return listGates(_that);case GridGateResolve() when resolveGate != null:
 return resolveGate(_that);case _:
   return orElse();
 
@@ -78,11 +79,12 @@ return resolveGate(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateResolve value)  resolveGate,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,}){
 final _that = this;
 switch (_that) {
 case GridRework():
-return rework(_that);case GridGateResolve():
+return rework(_that);case GridGateLs():
+return listGates(_that);case GridGateResolve():
 return resolveGate(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
@@ -97,11 +99,12 @@ return resolveGate(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateResolve value)?  resolveGate,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
-return rework(_that);case GridGateResolve() when resolveGate != null:
+return rework(_that);case GridGateLs() when listGates != null:
+return listGates(_that);case GridGateResolve() when resolveGate != null:
 return resolveGate(_that);case _:
   return null;
 
@@ -119,10 +122,11 @@ return resolveGate(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note)?  rework,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
-return rework(_that.beadId,_that.note);case GridGateResolve() when resolveGate != null:
+return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
+return listGates();case GridGateResolve() when resolveGate != null:
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
   return orElse();
 
@@ -141,10 +145,11 @@ return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note)  rework,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,}) {final _that = this;
 switch (_that) {
 case GridRework():
-return rework(_that.beadId,_that.note);case GridGateResolve():
+return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs():
+return listGates();case GridGateResolve():
 return resolveGate(_that.gateId,_that.grades,_that.rationale);}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -159,10 +164,11 @@ return resolveGate(_that.gateId,_that.grades,_that.rationale);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note)?  rework,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
-return rework(_that.beadId,_that.note);case GridGateResolve() when resolveGate != null:
+return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
+return listGates();case GridGateResolve() when resolveGate != null:
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
   return null;
 
@@ -175,11 +181,13 @@ return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
 
 
 class GridRework implements GridCommandRequest {
-  const GridRework({required this.beadId, this.note});
-  
+  const GridRework({required this.beadId, this.note, this.beyondCap = false, this.actor});
+
 
  final  String beadId;
  final  String? note;
+@JsonKey() final  bool beyondCap;
+ final  String? actor;
 
 /// Create a copy of GridCommandRequest
 /// with the given fields replaced by the non-null parameter values.
@@ -191,16 +199,16 @@ $GridReworkCopyWith<GridRework> get copyWith => _$GridReworkCopyWithImpl<GridRew
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridRework&&(identical(other.beadId, beadId) || other.beadId == beadId)&&(identical(other.note, note) || other.note == note));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridRework&&(identical(other.beadId, beadId) || other.beadId == beadId)&&(identical(other.note, note) || other.note == note)&&(identical(other.beyondCap, beyondCap) || other.beyondCap == beyondCap)&&(identical(other.actor, actor) || other.actor == actor));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,beadId,note);
+int get hashCode => Object.hash(runtimeType,beadId,note,beyondCap,actor);
 
 @override
 String toString() {
-  return 'GridCommandRequest.rework(beadId: $beadId, note: $note)';
+  return 'GridCommandRequest.rework(beadId: $beadId, note: $note, beyondCap: $beyondCap, actor: $actor)';
 }
 
 
@@ -211,7 +219,7 @@ abstract mixin class $GridReworkCopyWith<$Res> implements $GridCommandRequestCop
   factory $GridReworkCopyWith(GridRework value, $Res Function(GridRework) _then) = _$GridReworkCopyWithImpl;
 @useResult
 $Res call({
- String beadId, String? note
+ String beadId, String? note, bool beyondCap, String? actor
 });
 
 
@@ -228,16 +236,50 @@ class _$GridReworkCopyWithImpl<$Res>
 
 /// Create a copy of GridCommandRequest
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? beadId = null,Object? note = freezed,}) {
+@pragma('vm:prefer-inline') $Res call({Object? beadId = null,Object? note = freezed,Object? beyondCap = null,Object? actor = freezed,}) {
   return _then(GridRework(
 beadId: null == beadId ? _self.beadId : beadId // ignore: cast_nullable_to_non_nullable
 as String,note: freezed == note ? _self.note : note // ignore: cast_nullable_to_non_nullable
+as String?,beyondCap: null == beyondCap ? _self.beyondCap : beyondCap // ignore: cast_nullable_to_non_nullable
+as bool,actor: freezed == actor ? _self.actor : actor // ignore: cast_nullable_to_non_nullable
 as String?,
   ));
 }
 
 
 }
+
+/// @nodoc
+
+
+class GridGateLs implements GridCommandRequest {
+  const GridGateLs();
+
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridGateLs);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'GridCommandRequest.listGates()';
+}
+
+
+}
+
+
+
 
 /// @nodoc
 

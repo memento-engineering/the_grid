@@ -1,452 +1,94 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_runtime/grid_runtime.dart';
-import 'package:grid_sdk/grid_sdk.dart'
-    show DirectoryProbe, GridStateStore, StoreRefusal, SubstationWorkStore;
 
-import 'station_stores.dart';
+import 'station_command_client.dart';
 
-/// `grid rework <bead>` — mint a fresh rework round for a bead whose prior
-/// session has terminated (tg-x1j).
-///
-/// **The gap this closes.** Re-arming a POSITIVELY-CLOSED bead is a designed
-/// NO-OP: `SessionScope` is keyed `'<bead.id>:session'`, so a closed session's
-/// linkage must be moved OFF `bead.id` before a fresh mint can happen under the
-/// same key. The operator mechanic (proven live, session `tgdog-7yw` →
-/// `tgdog-4it`): re-key the session's `work_bead` → `'<bead>#r<N>'` through the
-/// chokepoint — the live tree re-projects, finds no session at `bead.id`, and
-/// mints round N+1 in the SAME worktree. This command makes that mechanic a
-/// verb: it clears stale specify-authored fields on the WORK bead, re-keys the
-/// session, optionally appends the operator's finding to the WORK bead's notes,
-/// reports the round number, and enforces the ~3-round cap (the factoryskills
-/// precedent) — refusing LOUD beyond it (a human decides).
-///
-/// **The OPEN-session refusal.** A session that is still OPEN is a live round
-/// — rekeying it out from under an ACTIVELY RUNNING step would silently
-/// abandon a live process. An exported OPEN `type=gate` bead whose non-empty
-/// `blocks` metadata equals the session id is the authoritative park record.
-/// Otherwise, this command refuses LOUD unless the open session's active
-/// projected cursor is GATED with nothing running. The compatibility cursor is
-/// a MOLECULE session's (`grid.session.model=molecule`) `type=step` beads in
-/// the same store snapshot (`projectMoleculeCursor`). A HISTORICAL FLAT
-/// session's `grid.cursor.*` keys no longer project (tg-eli phase 2 retired
-/// the flat model): an OPEN flat session reads an EMPTY cursor and takes the
-/// refusal path unless a matching OPEN gate is exported — moot by construction
-/// for gate-less flat sessions, since the engine can no longer drive them
-/// anyway (a CLOSED flat session still reworks fine; round N+1 mints molecule).
-///
-/// **Re-seated on the store-at-roots model (v3).** The session lives in the_grid's
-/// OWN **state store** at `<grid.root>/.grid/.beads/` (`--grid-root`; Q5a) — never
-/// `--state-workspace` / cwd discovery. The state-store ownership prefix is a
-/// supplied value (`--prefix`), not the retired `--state-substation`.
-/// `--note-root` points at the WORK bead's substation work store at
-/// `<note-root>/.beads/` — a SEPARATE store, scoped to the WORK bead's own
-/// prefix, never the state store, and never raw SQL/`bd show` on a controller
-/// path.
+/// Retires one rework round through the resident StationControl door.
 class ReworkCommand extends Command<int> {
-  ReworkCommand() {
+  /// Creates the command with an optional injected resident client.
+  ReworkCommand({StationCommandClient? client})
+    : _client = client ?? StationCommandClient() {
     argParser
       ..addOption(
         'note',
-        help:
-            'The operator finding to append to the WORK bead\'s notes, under '
-            'a ROUND N header. Requires --note-root (the WORK bead\'s '
-            'substation root).',
+        help: 'An operator finding to append to the work bead.',
       )
       ..addFlag(
         'beyond-cap',
         negatable: false,
-        help:
-            'Authorize one rework round after the normal cap. Requires both '
-            '--actor and --note, and refuses below the cap.',
+        help: 'Authorize a round beyond the normal cap.',
       )
-      ..addOption(
-        'actor',
-        help: 'The operator authorizing --beyond-cap; required with that flag.',
-      )
-      ..addOption(
-        'note-root',
-        help:
-            'The substation ROOT whose `.beads/` work store holds the WORK '
-            'bead (an absolute path; the store is at `<note-root>/.beads/`). '
-            'REQUIRED - rework clears stale specify-authored design and '
-            'acceptance before retiring the current round.',
-      )
+      ..addOption('actor', help: 'The operator authorizing --beyond-cap.')
       ..addOption(
         'grid-root',
-        help:
-            'The grid HOME (an absolute path). The state store the session bead '
-            'lives in is derived at `<grid.root>/.grid/.beads/` (Q5a). '
-            'REQUIRED — rework is a write, never discovered implicitly.',
-      )
-      ..addOption(
-        'prefix',
-        help:
-            'the_grid\'s OWNED session/gate id-prefix (the state store\'s '
-            'adopted prefix, e.g. the grid\'s own name). Seeds the ownership '
-            'allow-set the chokepoint re-checks fail-closed. REQUIRED.',
+        help: 'The grid HOME containing .grid/station.lock. Required.',
       );
   }
+
+  final StationCommandClient _client;
 
   @override
   final String name = 'rework';
 
   @override
   final String description =
-      'Mint a fresh rework round for <bead>: re-key its terminated (closed, '
-      'or open-but-GATED) session through the StationBeadWriter chokepoint, '
-      'optionally append an operator finding to the work bead\'s notes, and '
-      'report the round number. Refuses LOUD (zero writes) on a live '
-      '(open, non-gated) session or beyond the ~3-round cap unless an '
-      'attributed --beyond-cap ruling authorizes one round.';
-
-  @override
-  String get invocation =>
-      'grid rework <bead-id> --grid-root <dir> --prefix <name> '
-      '--note-root <dir> [--note <finding>] '
-      '[--beyond-cap --actor <operator>]';
+      'Retire the current session round through the resident station.';
 
   @override
   Future<int> run() async {
     final args = argResults!;
-    final rest = args.rest;
-    if (rest.isEmpty) {
+    if (args.rest.length != 1) {
       stderr.writeln(
-        'grid rework: a <bead-id> is required (the bead to rework).',
+        args.rest.isEmpty
+            ? 'grid rework: a <bead-id> is required.'
+            : 'grid rework: rework accepts exactly one bead id.',
       );
       return 64;
     }
-    if (rest.length > 1) {
-      stderr.writeln(
-        'grid rework: reworks ONE bead at a time — got ${rest.length} ids '
-        '(${rest.join(', ')}).',
-      );
-      return 64;
-    }
-
     final gridRoot = args.option('grid-root');
     if (gridRoot == null || gridRoot.trim().isEmpty) {
+      stderr.writeln('grid rework: --grid-root is required.');
+      return 64;
+    }
+    if (!gridRoot.startsWith('/')) {
+      stderr.writeln('grid rework: --grid-root must be an absolute path.');
+      return 64;
+    }
+    final beyondCap = args.flag('beyond-cap');
+    final actor = args.option('actor');
+    final note = args.option('note');
+    if (beyondCap && (actor == null || actor.trim().isEmpty)) {
       stderr.writeln(
-        'grid rework: --grid-root is required (the grid HOME; the session bead '
-        'lives in the state store at <grid.root>/.grid/.beads/). rework is a '
-        'write — it never discovers a store implicitly.',
+        'grid rework: --actor is required with --beyond-cap '
+        '(the human ruling must be attributed).',
       );
       return 64;
     }
-    final GridStateStore stateStore;
-    try {
-      stateStore = GridStateStore.forGridRoot(gridRoot);
-    } on ArgumentError catch (e) {
-      stderr.writeln('grid rework: --grid-root ${e.message}');
-      return 64;
-    }
-
-    final prefix = args.option('prefix');
-    if (prefix == null || prefix.trim().isEmpty) {
+    if (beyondCap && (note == null || note.trim().isEmpty)) {
       stderr.writeln(
-        'grid rework: --prefix is required (the state store\'s owned id-prefix '
-        '— the ownership allow-set the chokepoint re-checks).',
+        'grid rework: --note is required with --beyond-cap '
+        '(the human ruling must carry a reason).',
       );
       return 64;
     }
-
-    final noteRoot = args.option('note-root');
-    if (noteRoot == null || noteRoot.trim().isEmpty) {
-      stderr.writeln(
-        'grid rework: --note-root is required (the WORK bead\'s substation '
-        'root, whose `.beads/` work store holds the bead). rework clears '
-        'stale specify-authored design and acceptance before retiring a round.',
-      );
-      return 64;
-    }
-    final SubstationWorkStore noteStore;
-    try {
-      noteStore = SubstationWorkStore.forRoot(noteRoot);
-    } on ArgumentError catch (e) {
-      stderr.writeln('grid rework: --note-root ${e.message}');
-      return 64;
-    }
-
-    return runRework(
-      beadId: rest.single,
-      note: args.option('note'),
-      beyondCap: args.flag('beyond-cap'),
-      actor: args.option('actor'),
-      stateStore: stateStore,
-      stateStorePrefix: prefix,
-      noteStore: noteStore,
+    final result = await _client.send(
+      gridRoot: gridRoot,
+      method: 'grid/rework',
+      params: {
+        'beadId': args.rest.single,
+        'note': note,
+        'beyondCap': beyondCap,
+        'actor': actor,
+      },
     );
-  }
-}
-
-// The round cap (`kMaxReworkRounds`) and the retired-round key shape
-// (`reworkKeyFor`/`reworkKeyPattern`) live in the engine's rework contract
-// (`grid_engine`, `src/domain/rework.dart`, tg-o90) — this verb and the engine's
-// `Rewind` arm share ONE definition, so they admit exactly the same number of
-// rounds and cannot drift on the key.
-
-/// Runs `grid rework <beadId>`: clears stale specify-authored `design` and
-/// `acceptance_criteria` on the WORK bead through the [StationBeadWriter]
-/// chokepoint, then re-keys [beadId]'s terminated session through the state
-/// store [StationBeadWriter], optionally appends [note] to the WORK bead's
-/// notes after the re-key succeeds, and reports the round number.
-///
-/// **Fail-closed (non-zero exit, ZERO writes)** unless exactly one session is
-/// found for [beadId] and it is either CLOSED, or OPEN-and-parked-at-a-gate
-/// by an exported OPEN gate whose `blocks` metadata equals the session id, or
-/// by an active projected cursor that is gated with nothing running; the round
-/// cap is not yet reached; and [noteStore] is provided and openable. The WORK
-/// store is required even when [note] is absent because every rework clears
-/// stale spec fields before session retirement. `--note` only adds a second
-/// work-bead write after the state re-key succeeds. Seams
-/// ([stateWorkspaceOverride]/[workspaceOverride]/[bdOverride]/
-/// [stateBdOverride]/[dirExists]/[now]) are injectable so an offline test
-/// drives it with fake stores.
-Future<int> runRework({
-  required String beadId,
-  required GridStateStore stateStore,
-  required String stateStorePrefix,
-  String? note,
-  bool beyondCap = false,
-  String? actor,
-  SubstationWorkStore? noteStore,
-  void Function(String)? out,
-  void Function(String)? err,
-  BeadsWorkspace? stateWorkspaceOverride,
-  BeadsWorkspace? workspaceOverride,
-  BdCliService? bdOverride,
-  BdCliService? stateBdOverride,
-  DirectoryProbe? dirExists,
-  DateTime Function()? now,
-}) async {
-  final void Function(String) write = out ?? (m) => stdout.writeln(m);
-  final void Function(String) writeErr = err ?? (m) => stderr.writeln(m);
-  final DateTime Function() clock = now ?? DateTime.now;
-  final normalizedActor = actor?.trim();
-  final wantsNote = note != null && note.trim().isNotEmpty;
-
-  if (beyondCap && (normalizedActor == null || normalizedActor.isEmpty)) {
-    writeErr(
-      'grid rework: --actor is required with --beyond-cap '
-      '(the human ruling must be attributed).',
-    );
-    return 64;
-  }
-  if (beyondCap && !wantsNote) {
-    writeErr(
-      'grid rework: --note is required with --beyond-cap '
-      '(the human ruling must carry a reason).',
-    );
-    return 64;
-  }
-
-  final BeadsWorkspace stateWorkspace;
-  if (stateWorkspaceOverride != null) {
-    stateWorkspace = stateWorkspaceOverride;
-  } else {
-    try {
-      stateWorkspace = openStateStore(stateStore, dirExists: dirExists);
-    } on StoreRefusal catch (e) {
-      writeErr('grid rework: ${e.message}');
-      return 1;
+    switch (result) {
+      case StationCommandCompleted():
+        return 0;
+      case StationCommandRefused(:final message) ||
+          StationCommandUnavailable(:final message):
+        stderr.writeln('grid rework: $message');
+        return 64;
     }
   }
-  final stateBd =
-      stateBdOverride ??
-      BdCliService(ProcessBdRunner(workspaceRoot: stateWorkspace.root));
-
-  final BeadsWorkspace workWorkspace;
-  if (workspaceOverride != null) {
-    workWorkspace = workspaceOverride;
-  } else if (noteStore != null) {
-    try {
-      workWorkspace = openWorkStore(noteStore, dirExists: dirExists);
-    } on StoreRefusal catch (e) {
-      writeErr(
-        'grid rework: the WORK store is unreachable - ${e.message} - '
-        'refusing before the session is retired.',
-      );
-      return 1;
-    }
-  } else {
-    writeErr(
-      'grid rework: --note-root is required (the WORK bead\'s substation root, '
-      'whose `.beads/` work store holds the bead) - refusing before the '
-      'session is retired.',
-    );
-    return 64;
-  }
-  final workBd =
-      bdOverride ??
-      BdCliService(ProcessBdRunner(workspaceRoot: workWorkspace.root));
-
-  // The complete-graph snapshot read (never `bd show` on this controller
-  // path — it self-triggers the watcher).
-  final export = await stateBd.exportAll();
-  final sessions = export.beads
-      .where((b) => b.issueType == IssueType.session)
-      .toList();
-
-  // The CURRENT (un-retired) session — `work_bead` matches EXACTLY.
-  final current = sessions
-      .where((b) => _stringMeta(b, 'work_bead') == beadId)
-      .toList();
-  if (current.isEmpty) {
-    writeErr(
-      'grid rework: no session found for "$beadId" — nothing to rework (run '
-      'the bead through the_grid first).',
-    );
-    return 1;
-  }
-  if (current.length > 1) {
-    writeErr(
-      'grid rework: ${current.length} sessions carry work_bead == "$beadId" '
-      '(${current.map((b) => b.id).join(', ')}) — refused (an ambiguous '
-      'store; this should never happen under D-2\'s one-mint invariant).',
-    );
-    return 64;
-  }
-  final session = current.single;
-
-  // Every RETIRED round already on record for this bead (`work_bead ==
-  // '<beadId>#r<N>'`) — the round-cap + next-round-number source.
-  final roundSuffix = reworkKeyPattern(beadId);
-  var maxRound = 0;
-  for (final s in sessions) {
-    final workBead = _stringMeta(s, 'work_bead');
-    if (workBead == null) continue;
-    final match = roundSuffix.firstMatch(workBead);
-    if (match == null) continue;
-    final n = int.parse(match.group(1)!);
-    if (n > maxRound) maxRound = n;
-  }
-  if (beyondCap && maxRound < kMaxReworkRounds) {
-    writeErr(
-      'grid rework: --beyond-cap is only valid at or beyond the rework cap '
-      '($kMaxReworkRounds); "$beadId" has $maxRound rounds — refused.',
-    );
-    return 64;
-  }
-  if (maxRound >= kMaxReworkRounds && !beyondCap) {
-    writeErr(
-      'grid rework: "$beadId" already has $maxRound rework rounds (cap '
-      '$kMaxReworkRounds) — refused (fail-closed; a human decides beyond the '
-      'cap).',
-    );
-    return 64;
-  }
-  final round = maxRound + 1;
-
-  if (!session.isClosed) {
-    // A gate bead is the state store's authoritative park record (D-7). It is
-    // present in the complete-graph export immediately, before a resident's
-    // derived step cursor necessarily observes the gate and reaches `gated`.
-    final hasOpenBlockingGate = export.beads.any(
-      (b) =>
-          b.issueType == IssueType.gate &&
-          !b.isClosed &&
-          _stringMeta(b, 'blocks') == session.id,
-    );
-
-    // Preserve cursor projection as compatibility evidence for snapshots in
-    // which the gated step is present. A matching OPEN gate is authoritative
-    // over a lagging cursor, including a stale `running` state: D-7 says that
-    // the open gate parks the session.
-    final CircuitCursor cursor;
-    if (_stringMeta(session, SessionBeadKeys.model) == kSessionModelMolecule) {
-      final steps = export.beads.where(
-        (b) =>
-            b.issueType == IssueType.step &&
-            _stringMeta(b, MoleculeStepKeys.session) == session.id,
-      );
-      cursor = projectMoleculeCursor(
-        steps,
-        dependencies: export.dependencies,
-      ).cursor;
-    } else {
-      cursor = const {};
-    }
-    final states = cursor.values.map((n) => n.state);
-    final hasRunning = states.contains(StepState.running);
-    final hasGated = states.contains(StepState.gated);
-    if (!hasOpenBlockingGate && (hasRunning || !hasGated)) {
-      writeErr(
-        'grid rework: session "${session.id}" for "$beadId" is OPEN and not '
-        'parked at a gate — a live round may be running; refused (fail-closed '
-        '— wait for an open gate or termination).',
-      );
-      return 64;
-    }
-  }
-
-  final workOwnership = BeadOwnershipPredicate({
-    BeadOwnershipPredicate.prefixOf(beadId) ?? beadId,
-  });
-  final workWriter = StationBeadWriter(
-    bd: workBd,
-    ownership: workOwnership,
-    onRefusal: writeErr,
-    clock: clock,
-  );
-  try {
-    await workWriter.clearSpecifyAuthoredSpec(beadId);
-  } on OwnershipRefused catch (e) {
-    writeErr('grid rework: work bead spec clear refused: $e');
-    return 64;
-  } on Object catch (e) {
-    writeErr('grid rework: work bead spec clear failed: $e');
-    return 1;
-  }
-
-  final ownership = BeadOwnershipPredicate({stateStorePrefix});
-  final stateWriter = StationBeadWriter(
-    bd: stateBd,
-    ownership: ownership,
-    onRefusal: writeErr,
-    clock: clock,
-  );
-  try {
-    await stateWriter.update(
-      session.id,
-      metadata: {'work_bead': reworkKeyFor(beadId, round)},
-    );
-  } on OwnershipRefused catch (e) {
-    writeErr('grid rework: $e');
-    return 64;
-  }
-
-  if (wantsNote) {
-    final timestamp = clock().toUtc().toIso8601String();
-    final header = beyondCap
-        ? '--- grid rework ROUND $round ($timestamp) '
-              '— BEYOND-CAP by $normalizedActor ---'
-        : '--- grid rework ROUND $round ($timestamp) ---';
-    try {
-      await workWriter.update(
-        beadId,
-        metadata: const {},
-        appendNotes: '$header\n$note',
-      );
-    } on OwnershipRefused catch (e) {
-      writeErr('grid rework: note append refused: $e');
-      return 64;
-    }
-  }
-
-  write(
-    'grid rework — round $round: retired session "${session.id}" '
-    '(work_bead -> "$beadId#r$round"); a fresh session mints on the next '
-    'projection.',
-  );
-  return 0;
-}
-
-/// Reads a string metadata value off a bead, or null when absent/empty.
-String? _stringMeta(Bead bead, String key) {
-  final value = bead.metadata[key];
-  if (value is String && value.isNotEmpty) return value;
-  return null;
 }

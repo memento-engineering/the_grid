@@ -1,741 +1,251 @@
-import 'dart:convert';
-
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/src/gate_command.dart';
-import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_sdk/grid_sdk.dart' show GridStateStore;
+import 'package:grid_cli/src/station_command_client.dart';
 import 'package:test/test.dart';
 
-/// Offline proofs for `grid gate` (committee-gate ls + resolve) — Fakes, not
-/// mocks, no live state, no real `bd`, NO writes to any live store. Re-seated on
-/// the v3 store-at-roots model (`SCRATCH-station-config-model.md`): the state
-/// store is addressed from a **grid root** (`GridStateStore`), never a
-/// `--state-workspace` path arg-list; the ownership prefix is a supplied value,
-/// not the retired `--state-substation`. The DoD:
+/// Offline proofs for the resident-door `grid gate` client.
 ///
-///  1. **ls** lists every OPEN `type=gate` bead (with session / node / reason),
-///     ignores CLOSED gates and non-gate beads, and prints a clear empty line —
-///     performing ZERO writes; a re-gated gate shows a reset age + marker;
-///  2. **resolve** closes the named gate THROUGH the chokepoint carrying
-///     `--actor grid-controller`, and refuses (non-zero exit, ZERO writes) when
-///     the id is (a) not found, (b) not `type=gate`, (c) already closed, or
-///     (d) not owned by the state prefix;
-///  3. **resolve** RULES the lane grades that fed a gate (`--grade`/`--rationale`)
-///     through the chokepoint before closing, and refuses LOUD (the I-14 no-op
-///     loop) on a plain resolve of a still-F gate (tg-i08) — both behaviours
-///     surviving on the new store-at-roots surface;
-///  4. the CLI wiring refuses LOUD when `--grid-root` (state store) is absent.
+/// Ported from the pre-door suite: list rendering, empty and re-gated display,
+/// completed/refused/unavailable outcomes, CLI arity and absolute-root guards,
+/// rationale requirements, and raw grade parsing. Removed with the retired
+/// second-process path: direct `GridStateStore` export/write assertions,
+/// state-prefix CLI guards, and CLI-side bead/gate/ownership/F-lane checks;
+/// those resident semantics are covered by resident_command_handler_test.dart.
 void main() {
-  group('grid gate ls', () {
-    test(
-      'lists the OPEN gates and ignores closed gates + non-gate beads',
-      () async {
-        final store = _FakeStateStore([
-          _gate(
-            'tgdog-g1',
-            blocks: 'tgdog-s1',
-            node: 'code/agent',
-            reason: 'gating-F: Validation Plan failed',
-          ),
-          _gate(
-            'tgdog-g2',
-            blocks: 'tgdog-s2',
-            node: 'code/verify',
-            reason: 'grade spread >= 3',
-          ),
-          // a CLOSED (already-resolved) gate — must NOT appear.
-          _gate(
-            'tgdog-g0',
-            blocks: 'tgdog-s0',
-            node: 'code/agent',
-            reason: 'old',
-            closed: true,
-          ),
-          // a non-gate bead — must NOT appear.
-          Bead(id: 'tgdog-w7', title: 'work', issueType: IssueType.task),
-        ]);
-        final out = <String>[];
-
-        final code = await runGateLs(
-          stateStore: _stateStore(),
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: out.add,
-          err: out.add,
-        );
-
-        expect(code, 0);
-        final text = out.join('\n');
-        expect(text, contains('2 open gates'));
-        expect(text, contains('tgdog-g1'));
-        expect(text, contains('tgdog-s1'));
-        expect(text, contains('code/agent'));
-        expect(text, contains('gating-F: Validation Plan failed'));
-        expect(text, contains('tgdog-g2'));
-        expect(text, contains('grade spread >= 3'));
-        // The closed gate + the non-gate bead are absent.
-        expect(text, isNot(contains('tgdog-g0')));
-        expect(text, isNot(contains('tgdog-w7')));
-        // ls performs NO writes — only the `export` read reached the store.
-        expect(store.writes, isEmpty);
-      },
-    );
-
-    test('prints a clear empty line when there are no open gates', () async {
-      final store = _FakeStateStore([
-        _gate(
-          'tgdog-g0',
-          blocks: 'tgdog-s0',
-          node: 'code/agent',
-          reason: 'old',
-          closed: true,
+  group('grid gate ls resident door', () {
+    test('list renders all resident rows sorted', () async {
+      final output = <String>[];
+      final client = FakeClient(
+        StationCommandCompleted({
+          'gates': [
+            {'id': 'g-2', 'createdAt': '2026-01-01T00:00:00Z'},
+            {'id': 'g-1', 'createdAt': '2026-01-01T00:00:00Z'},
+          ],
+        }),
+      );
+      expect(
+        await runGateLs(
+          gridRoot: '/grid',
+          client: client,
+          out: output.add,
+          now: DateTime.utc(2026, 1, 1),
         ),
-      ]);
-      final out = <String>[];
+        0,
+      );
+      expect(
+        output.join('\n').indexOf('g-1'),
+        lessThan(output.join('\n').indexOf('g-2')),
+      );
+      expect(client.method, 'grid/gate/ls');
+    });
 
+    test('empty resident list is explicit', () async {
+      final output = <String>[];
       final code = await runGateLs(
-        stateStore: _stateStore(),
-        workspaceOverride: _workspace(),
-        bdOverride: BdCliService(store),
-        out: out.add,
-        err: out.add,
-      );
-
-      expect(code, 0);
-      expect(out.join('\n'), contains('no open gates'));
-      expect(store.writes, isEmpty);
-    });
-  });
-
-  group('grid gate resolve', () {
-    test(
-      'closes the named gate through the chokepoint (--actor grid-controller)',
-      () async {
-        final store = _FakeStateStore([
-          _gate(
-            'tgdog-g1',
-            blocks: 'tgdog-s1',
-            node: 'code/agent',
-            reason: 'gating-F',
-          ),
-        ]);
-        final out = <String>[];
-        final errs = <String>[];
-
-        final code = await runGateResolve(
-          gateId: 'tgdog-g1',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog',
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: out.add,
-          err: errs.add,
-        );
-
-        expect(code, 0, reason: errs.join('\n'));
-        expect(out.join('\n'), contains('closed gate tgdog-g1'));
-        // Exactly one write — a `bd close` on the gate, carrying the actor and the
-        // resolve reason.
-        final closes = store.writes.where((c) => c.first == 'close').toList();
-        expect(closes, hasLength(1));
-        final close = closes.single;
-        expect(close, containsAllInOrder(['close', 'tgdog-g1']));
-        expect(close, containsAllInOrder(['--actor', 'grid-controller']));
-        expect(close.join(' '), contains('resolved via grid gate resolve'));
-      },
-    );
-
-    test('refuses (non-zero, ZERO writes) when the id is NOT FOUND', () async {
-      final store = _FakeStateStore([
-        _gate('tgdog-g1', blocks: 'tgdog-s1', node: 'code/agent', reason: 'x'),
-      ]);
-      final errs = <String>[];
-
-      final code = await runGateResolve(
-        gateId: 'tgdog-nope',
-        stateStore: _stateStore(),
-        stateStorePrefix: 'tgdog',
-        workspaceOverride: _workspace(),
-        bdOverride: BdCliService(store),
-        out: (_) {},
-        err: errs.add,
-      );
-
-      expect(code, isNonZero);
-      expect(errs.join('\n'), contains('no bead "tgdog-nope"'));
-      expect(store.writes, isEmpty);
-    });
-
-    test(
-      'refuses (non-zero, ZERO writes) when the id is NOT a type=gate bead',
-      () async {
-        final store = _FakeStateStore([
-          Bead(id: 'tgdog-w7', title: 'work', issueType: IssueType.task),
-        ]);
-        final errs = <String>[];
-
-        final code = await runGateResolve(
-          gateId: 'tgdog-w7',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog',
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: (_) {},
-          err: errs.add,
-        );
-
-        expect(code, isNonZero);
-        expect(errs.join('\n'), contains('not a gate'));
-        expect(store.writes, isEmpty);
-      },
-    );
-
-    test(
-      'refuses (non-zero, ZERO writes) when the gate is already CLOSED',
-      () async {
-        final store = _FakeStateStore([
-          _gate(
-            'tgdog-g1',
-            blocks: 'tgdog-s1',
-            node: 'code/agent',
-            reason: 'x',
-            closed: true,
-          ),
-        ]);
-        final errs = <String>[];
-
-        final code = await runGateResolve(
-          gateId: 'tgdog-g1',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog',
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: (_) {},
-          err: errs.add,
-        );
-
-        expect(code, isNonZero);
-        expect(errs.join('\n'), contains('already closed'));
-        expect(store.writes, isEmpty);
-      },
-    );
-
-    test(
-      'refuses (non-zero, ZERO writes) when the gate is NOT OWNED',
-      () async {
-        final store = _FakeStateStore([
-          // an OPEN gate owned by a FOREIGN prefix (prefix + marker `other`).
-          _gate(
-            'other-g1',
-            blocks: 'other-s1',
-            node: 'code/agent',
-            reason: 'x',
-            substation: 'other',
-          ),
-        ]);
-        final errs = <String>[];
-
-        final code = await runGateResolve(
-          gateId: 'other-g1',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog', // we own tgdog, NOT other.
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: (_) {},
-          err: errs.add,
-        );
-
-        expect(code, isNonZero);
-        expect(errs.join('\n'), contains('not owned by state prefix'));
-        expect(store.writes, isEmpty);
-      },
-    );
-  });
-
-  // The tg-i08 ruling verb + the fail-closed-F re-gate-loop guard, re-seated on
-  // the store-at-roots surface (stateStore / stateStorePrefix).
-  group('grid gate resolve — ruling + re-gate-loop guard (tg-i08)', () {
-    test(
-      'REFUSES plain resolve (64, ZERO writes) on a gate whose feeding lane '
-      'still grades F — naming the lane + its transport provenance',
-      () async {
-        final store = _FakeStateStore([
-          _gate(
-            'tgdog-g1',
-            blocks: 'tgdog-s1',
-            node: 'tg-1/review/route',
-            reason: 'critic test-coverage failed',
-          ),
-          _session(
-            'tgdog-s1',
-            workBead: 'tg-1',
-            results: const {
-              'tg-1/review/test-coverage': {
-                'grade': 'F',
-                'transport': 'no parseable verdict via file or envelope',
-              },
-            },
-          ),
-        ]);
-        final errs = <String>[];
-
-        final code = await runGateResolve(
-          gateId: 'tgdog-g1',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog',
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: (_) {},
-          err: errs.add,
-        );
-
-        expect(code, 64);
-        final text = errs.join('\n');
-        expect(text, contains('RE-GATE'));
-        expect(text, contains('tg-1/review/test-coverage'));
-        expect(text, contains('no parseable verdict via file or envelope'));
-        expect(text, contains('--grade'));
-        // The guaranteed-no-op loop never touched the store.
-        expect(store.writes, isEmpty);
-      },
-    );
-
-    test(
-      '--grade <lane>=<A> --rationale writes the operator ruling through the '
-      'chokepoint THEN closes the gate',
-      () async {
-        final store = _FakeStateStore([
-          _gate(
-            'tgdog-g1',
-            blocks: 'tgdog-s1',
-            node: 'tg-1/review/route',
-            reason: 'critic test-coverage failed',
-          ),
-          _session(
-            'tgdog-s1',
-            workBead: 'tg-1',
-            results: const {
-              'tg-1/review/test-coverage': {
-                'grade': 'F',
-                'transport': 'fail-closed',
-              },
-            },
-          ),
-        ]);
-        final out = <String>[];
-        final errs = <String>[];
-
-        final code = await runGateResolve(
-          gateId: 'tgdog-g1',
-          grades: const ['test-coverage=A'],
-          rationale: 'critic cd\'d; verdict was A — transport F false gate',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog',
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: out.add,
-          err: errs.add,
-        );
-
-        expect(code, 0, reason: errs.join('\n'));
-        expect(
-          out.join('\n'),
-          contains('ruled tg-1/review/test-coverage → grade A'),
-        );
-
-        // A ruling `update` on the SESSION bead carrying the corrected grade +
-        // operator-ruling transport + rationale.
-        final updates = store.writes.where((c) => c.first == 'update').toList();
-        final ruling = updates.firstWhere(
-          (c) =>
-              c.contains('tgdog-s1') && c.join(' ').contains('operator-ruling'),
-        );
-        final meta = _metadataOf(ruling);
-        expect(meta['grid.result.tg-1/review/test-coverage.grade'], 'A');
-        expect(
-          meta['grid.result.tg-1/review/test-coverage.transport'],
-          'operator-ruling',
-        );
-        expect(
-          meta['grid.result.tg-1/review/test-coverage.rationale'],
-          contains('transport F false gate'),
-        );
-        // Then the gate closes through the chokepoint.
-        final closes = store.writes.where((c) => c.first == 'close').toList();
-        expect(closes, hasLength(1));
-        expect(closes.single, containsAllInOrder(['close', 'tgdog-g1']));
-        expect(
-          closes.single,
-          containsAllInOrder(['--actor', 'grid-controller']),
-        );
-      },
-    );
-
-    test('once ruled to a passing grade the lane is no longer a re-gate cause '
-        '— the resolve is NOT refused', () async {
-      final store = _FakeStateStore([
-        _gate(
-          'tgdog-g1',
-          blocks: 'tgdog-s1',
-          node: 'tg-1/review/route',
-          reason: 'critic1 F',
-        ),
-        _session(
-          'tgdog-s1',
-          workBead: 'tg-1',
-          results: const {
-            'tg-1/review/critic1': {'grade': 'F'},
-          },
-        ),
-      ]);
-      final code = await runGateResolve(
-        gateId: 'tgdog-g1',
-        grades: const ['critic1=B'],
-        rationale: 'false gate',
-        stateStore: _stateStore(),
-        stateStorePrefix: 'tgdog',
-        workspaceOverride: _workspace(),
-        bdOverride: BdCliService(store),
-        out: (_) {},
-        err: (_) {},
+        gridRoot: '/grid',
+        client: FakeClient(const StationCommandCompleted({'gates': []})),
+        out: output.add,
       );
       expect(code, 0);
-      expect(store.writes.where((c) => c.first == 'close'), hasLength(1));
+      expect(output.single, contains('no open gates'));
     });
 
-    test('--grade REQUIRES --rationale (refused 64, ZERO writes)', () async {
-      final store = _FakeStateStore([
-        _gate(
-          'tgdog-g1',
-          blocks: 'tgdog-s1',
-          node: 'tg-1/review/route',
-          reason: 'x',
+    test('re-gated row uses reset age and marker', () async {
+      final output = <String>[];
+      final code = await runGateLs(
+        gridRoot: '/grid',
+        client: FakeClient(
+          const StationCommandCompleted({
+            'gates': [
+              {
+                'id': 'g-1',
+                'createdAt': '2026-07-01T12:00:00Z',
+                'regatedAt': '2026-07-07T11:59:00Z',
+                'regateCount': 3,
+              },
+            ],
+          }),
         ),
-        _session(
-          'tgdog-s1',
-          workBead: 'tg-1',
-          results: const {
-            'tg-1/review/critic1': {'grade': 'F'},
-          },
-        ),
-      ]);
-      final errs = <String>[];
-      final code = await runGateResolve(
-        gateId: 'tgdog-g1',
-        grades: const ['critic1=A'],
-        // no rationale
-        stateStore: _stateStore(),
-        stateStorePrefix: 'tgdog',
-        workspaceOverride: _workspace(),
-        bdOverride: BdCliService(store),
-        out: (_) {},
-        err: errs.add,
+        out: output.add,
+        now: DateTime.utc(2026, 7, 7, 12),
       );
-      expect(code, 64);
-      expect(errs.join('\n'), contains('requires --rationale'));
-      expect(store.writes, isEmpty);
-    });
-
-    test(
-      '--grade with a non-A–F letter is refused (64, ZERO writes)',
-      () async {
-        final store = _FakeStateStore([
-          _gate(
-            'tgdog-g1',
-            blocks: 'tgdog-s1',
-            node: 'tg-1/review/route',
-            reason: 'x',
-          ),
-        ]);
-        final errs = <String>[];
-        final code = await runGateResolve(
-          gateId: 'tgdog-g1',
-          grades: const ['critic1=Z'],
-          rationale: 'why',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog',
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: (_) {},
-          err: errs.add,
-        );
-        expect(code, 64);
-        expect(errs.join('\n'), contains('not a grade A–F'));
-        expect(store.writes, isEmpty);
-      },
-    );
-
-    test('a PARTIAL ruling that leaves another feeding lane at F is refused '
-        '(64, ZERO writes)', () async {
-      final store = _FakeStateStore([
-        _gate(
-          'tgdog-g1',
-          blocks: 'tgdog-s1',
-          node: 'tg-1/review/route',
-          reason: 'two critics F',
-        ),
-        _session(
-          'tgdog-s1',
-          workBead: 'tg-1',
-          results: const {
-            'tg-1/review/critic1': {'grade': 'F'},
-            'tg-1/review/critic2': {'grade': 'F'},
-          },
-        ),
-      ]);
-      final errs = <String>[];
-      final code = await runGateResolve(
-        gateId: 'tgdog-g1',
-        grades: const ['critic1=A'], // critic2 left at F
-        rationale: 'ruled only one',
-        stateStore: _stateStore(),
-        stateStorePrefix: 'tgdog',
-        workspaceOverride: _workspace(),
-        bdOverride: BdCliService(store),
-        out: (_) {},
-        err: errs.add,
+      expect(code, 0);
+      expect(
+        output.join('\n'),
+        allOf(contains('age 1m'), contains('re-gated 3x')),
       );
-      expect(code, 64);
-      final text = errs.join('\n');
-      expect(text, contains('still grade F'));
-      expect(text, contains('tg-1/review/critic2'));
-      expect(store.writes, isEmpty);
     });
 
-    test(
-      'a non-committee gate (no feeding lane grades) still resolves plainly',
-      () async {
-        final store = _FakeStateStore([
-          _gate(
-            'tgdog-g1',
-            blocks: 'tgdog-s1',
-            node: 'tg-1/code/agent',
-            reason: 'validation plan failed',
+    for (final result in <StationCommandResult>[
+      const StationCommandRefused('resident refused'),
+      const StationCommandUnavailable('station.lock is absent'),
+    ]) {
+      test('resident list refusal is loud for ${result.runtimeType}', () async {
+        final errors = <String>[];
+        expect(
+          await runGateLs(
+            gridRoot: '/grid',
+            client: FakeClient(result),
+            err: errors.add,
           ),
-          // a session with NO F-graded sibling of the parked node.
-          _session('tgdog-s1', workBead: 'tg-1', results: const {}),
-        ]);
-        final code = await runGateResolve(
-          gateId: 'tgdog-g1',
-          stateStore: _stateStore(),
-          stateStorePrefix: 'tgdog',
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
+          64,
+        );
+        expect(errors.single, isNotEmpty);
+      });
+    }
+  });
+
+  group('grid gate resolve parsing', () {
+    test('resolve parses grades and sends typed map', () async {
+      final client = FakeClient(const StationCommandCompleted({}));
+      expect(
+        await runGateResolve(
+          gridRoot: '/grid',
+          gateId: 'g-1',
+          grades: const ['critic=a'],
+          rationale: 'reviewed',
+          client: client,
           out: (_) {},
-          err: (_) {},
-        );
-        expect(code, 0);
-        expect(store.writes.where((c) => c.first == 'close'), hasLength(1));
-      },
-    );
+        ),
+        0,
+      );
+      expect(client.params!['grades'], {'critic': 'A'});
+    });
+
+    test('malformed pair refuses before dispatch', () async {
+      final client = FakeClient(const StationCommandCompleted({}));
+      final errors = <String>[];
+      expect(
+        await runGateResolve(
+          gridRoot: '/grid',
+          gateId: 'g-1',
+          grades: const ['critic'],
+          rationale: 'reviewed',
+          client: client,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors.single, contains('<lane>=<A-F>'));
+      expect(client.calls, 0);
+    });
+
+    test('invalid letter refuses before dispatch', () async {
+      final client = FakeClient(const StationCommandCompleted({}));
+      final errors = <String>[];
+      expect(
+        await runGateResolve(
+          gridRoot: '/grid',
+          gateId: 'g-1',
+          grades: const ['critic=Z'],
+          rationale: 'reviewed',
+          client: client,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors.single, contains('grade A–F'));
+      expect(client.calls, 0);
+    });
+
+    test('duplicate grade refuses before dispatch', () async {
+      final client = FakeClient(const StationCommandCompleted({}));
+      final errors = <String>[];
+      expect(
+        await runGateResolve(
+          gridRoot: '/grid',
+          gateId: 'g-1',
+          grades: const ['critic=A', 'critic=B'],
+          rationale: 'x',
+          client: client,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors.single, contains('duplicate --grade lane "critic"'));
+      expect(client.calls, 0);
+    });
+
+    test('grade without rationale refuses before dispatch', () async {
+      final client = FakeClient(const StationCommandCompleted({}));
+      final errors = <String>[];
+      expect(
+        await runGateResolve(
+          gridRoot: '/grid',
+          gateId: 'g-1',
+          grades: const ['critic=A'],
+          client: client,
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors.single, contains('requires --rationale'));
+      expect(client.calls, 0);
+    });
+
+    test('resident resolve refusal is loud', () async {
+      final errors = <String>[];
+      expect(
+        await runGateResolve(
+          gridRoot: '/grid',
+          gateId: 'g-1',
+          client: FakeClient(const StationCommandRefused('no gate g-1')),
+          err: errors.add,
+        ),
+        64,
+      );
+      expect(errors.single, contains('no gate g-1'));
+    });
   });
 
-  group('grid gate ls — re-gate visibility (tg-i08)', () {
-    test(
-      'a refreshed (re-gated) gate shows a reset age + a re-gated Nx marker',
-      () async {
-        final store = _FakeStateStore([
-          Bead(
-            id: 'tgdog-g1',
-            title: 'grid gate tgdog-s1@tg-1/review/route',
-            issueType: IssueType.gate,
-            status: BeadStatus.open,
-            createdAt: DateTime.utc(2026, 7, 1, 12), // birth: days ago
-            metadata: {
-              'rig': 'tgdog',
-              'blocks': 'tgdog-s1',
-              'node': 'tg-1/review/route',
-              'reason': 're-gate: critic F again',
-              'regate_count': '3',
-              'regated_at': DateTime.utc(2026, 7, 7, 11, 59).toIso8601String(),
-            },
-          ),
-        ]);
-        final out = <String>[];
-        final code = await runGateLs(
-          stateStore: _stateStore(),
-          workspaceOverride: _workspace(),
-          bdOverride: BdCliService(store),
-          out: out.add,
-          err: out.add,
-          now: DateTime.utc(2026, 7, 7, 12), // 1m after the last re-gate
-        );
-        expect(code, 0);
-        final text = out.join('\n');
-        expect(text, contains('re-gated 3x'));
-        // The age is measured from `regated_at` (1m ago), NOT `createdAt` (days).
-        expect(text, contains('age 1m'));
-        expect(text, isNot(contains('age 6d')));
-      },
-    );
-  });
-
-  group('CLI wiring — the store axis is the grid root (fossils dead)', () {
-    // The missing-flag refusals write to stderr inside the Command and return
-    // the fail-closed code (64) — the observable CLI contract. (The messages
-    // themselves are asserted at the run-level tests, which take injectable
-    // sinks.)
-    test('gate resolve without --grid-root refuses LOUD (exit 64)', () async {
-      final code = await _run([
-        'gate',
-        'resolve',
-        'tgdog-g1',
-        '--prefix',
-        'tgdog',
-      ]);
-      expect(code, 64);
+  group('grid gate command guards', () {
+    test('ls missing or relative root never dispatches', () async {
+      for (final args in <List<String>>[
+        ['gate', 'ls'],
+        ['gate', 'ls', '--grid-root', 'relative'],
+      ]) {
+        final client = FakeClient(const StationCommandCompleted({}));
+        final runner = CommandRunner<int>('grid', 'test')
+          ..addCommand(GateCommand(client: client));
+        expect(await runner.run(args), 64);
+        expect(client.calls, 0);
+      }
     });
 
-    test('gate resolve without --prefix refuses LOUD (exit 64)', () async {
-      final code = await _run([
-        'gate',
-        'resolve',
-        'tgdog-g1',
-        '--grid-root',
-        '/home/grid',
-      ]);
-      expect(code, 64);
+    test('resolve arity and root guards never dispatch', () async {
+      for (final args in <List<String>>[
+        ['gate', 'resolve', '--grid-root', '/grid'],
+        ['gate', 'resolve', 'g-1', 'g-2', '--grid-root', '/grid'],
+        ['gate', 'resolve', 'g-1'],
+        ['gate', 'resolve', 'g-1', '--grid-root', 'relative'],
+      ]) {
+        final client = FakeClient(const StationCommandCompleted({}));
+        final runner = CommandRunner<int>('grid', 'test')
+          ..addCommand(GateCommand(client: client));
+        expect(await runner.run(args), 64);
+        expect(client.calls, 0);
+      }
     });
-
-    test('gate ls without --grid-root refuses LOUD (exit 64)', () async {
-      final code = await _run(['gate', 'ls']);
-      expect(code, 64);
-    });
-
-    test(
-      'the retired --state-workspace / --state-substation flags are GONE',
-      () async {
-        final errs = <String>[];
-        final code = await _run([
-          'gate',
-          'ls',
-          '--state-workspace',
-          '/x',
-          '--state-substation',
-          'y',
-        ], err: errs.add);
-        // args rejects the unknown options — a UsageException, surfaced as 64.
-        expect(code, 64);
-        expect(errs.join('\n'), contains('Could not find an option'));
-      },
-    );
   });
 }
 
-/// Runs the `gate` command through a real [CommandRunner] so the CLI wiring
-/// (flag parsing + the missing-flag refusals) is exercised end to end. Returns
-/// the exit code (64 on a UsageException, mirroring `bin/grid.dart`).
-Future<int> _run(List<String> args, {void Function(String)? err}) async {
-  final writeErr = err ?? (_) {};
-  final runner = CommandRunner<int>('grid', 'test')..addCommand(GateCommand());
-  try {
-    return await runner.run(args) ?? 0;
-  } on UsageException catch (e) {
-    writeErr('$e');
-    return 64;
-  }
-}
+final class FakeClient extends StationCommandClient {
+  FakeClient(this.result);
 
-/// A state store addressed at a grid root (the v3 currency). When a test passes
-/// [runGateLs]/[runGateResolve] a `workspaceOverride`, the store is not opened —
-/// this is the required, model-shaped handle.
-GridStateStore _stateStore() => GridStateStore.forGridRoot('/home/grid');
-
-/// A direct/embedded state-store workspace (no real `.beads/` on disk needed —
-/// the bd runner is faked).
-BeadsWorkspace _workspace() => BeadsWorkspace(
-  root: '/home/grid/.grid',
-  mode: DoltMode.direct,
-  database: 'grid',
-  gtRoot: null,
-  endpoint: null,
-);
-
-/// The `--metadata <json>` payload of a recorded `bd update` argv, decoded.
-Map<String, dynamic> _metadataOf(List<String> argv) {
-  final i = argv.indexOf('--metadata');
-  if (i < 0 || i + 1 >= argv.length) return const {};
-  return jsonDecode(argv[i + 1]) as Map<String, dynamic>;
-}
-
-/// A the_grid-owned `type=session` bead carrying the per-node [results]
-/// (`grid.result.<node>.<field>`) the route re-reads — the substrate the ruling
-/// verb corrects and the re-gate-loop guard inspects.
-Bead _session(
-  String id, {
-  required String workBead,
-  Map<String, Map<String, String>> results = const {},
-  String substation = 'tgdog',
-}) => Bead(
-  id: id,
-  title: 'grid session',
-  issueType: IssueType.session,
-  status: BeadStatus.open,
-  metadata: {
-    'rig': substation,
-    'work_bead': workBead,
-    for (final node in results.entries)
-      for (final field in node.value.entries)
-        'grid.result.${node.key}.${field.key}': field.value,
-  },
-);
-
-/// Builds an OPEN (or [closed]) `type=gate` bead carrying the D-7 block linkage,
-/// stamped with the owned prefix marker exactly as `StationBeadWriter` mints it.
-Bead _gate(
-  String id, {
-  required String blocks,
-  required String node,
-  required String reason,
-  String substation = 'tgdog',
-  bool closed = false,
-}) => Bead(
-  id: id,
-  title: 'grid gate $blocks@$node',
-  issueType: IssueType.gate,
-  status: closed ? BeadStatus.closed : BeadStatus.open,
-  createdAt: DateTime.utc(2026, 6, 29, 12),
-  metadata: {
-    'rig': substation,
-    'blocks': blocks,
-    'node': node,
-    'reason': reason,
-  },
-);
-
-/// A fake [BdRunner] over a fixed set of staged beads (Fakes, not mocks): the
-/// `export` read returns the staged beads as JSONL (the snapshot read path);
-/// mutations return a canned envelope and are recorded so a test can assert that
-/// a refused resolve performed ZERO writes.
-class _FakeStateStore implements BdRunner {
-  _FakeStateStore(this._beads);
-
-  final List<Bead> _beads;
-  final List<List<String>> calls = <List<String>>[];
-
-  /// Every recorded invocation that is NOT the `export` read — i.e. the writes.
-  List<List<String>> get writes =>
-      calls.where((c) => c.isNotEmpty && c.first != 'export').toList();
+  final StationCommandResult result;
+  int calls = 0;
+  String? method;
+  Map<String, Object?>? params;
 
   @override
-  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
-    calls.add(List<String>.unmodifiable(args));
-    final cmd = args.isNotEmpty ? args.first : '';
-    if (cmd == 'export') {
-      // `bd export --all` emits RAW JSONL (one issue object per line).
-      final jsonl = _beads.map((b) => jsonEncode(b.toJson())).join('\n');
-      return Future<BdResult>.value(
-        BdResult(exitCode: 0, stdout: jsonl, stderr: ''),
-      );
-    }
-    // create/update/close/delete/batch — a canned id envelope.
-    final id = args.length >= 2 ? args[1] : '';
-    return Future<BdResult>.value(
-      BdResult(
-        exitCode: 0,
-        stdout: '{"schema_version":1,"data":{"id":"$id"}}',
-        stderr: '',
-      ),
-    );
+  Future<StationCommandResult> send({
+    required String gridRoot,
+    required String method,
+    required Map<String, Object?> params,
+  }) async {
+    calls++;
+    this.method = method;
+    this.params = params;
+    return result;
   }
 }

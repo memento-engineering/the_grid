@@ -11,8 +11,11 @@ void main() {
       grades: {'critic': 'A'},
       rationale: 'false negative',
     );
+    const list = GridCommandRequest.listGates();
 
     expect(rework, isA<GridRework>());
+    expect((rework as GridRework).beyondCap, isFalse);
+    expect(list, isA<GridGateLs>());
     expect(resolve, isA<GridGateResolve>());
     expect(
       const GridCommandResult.completed(message: 'done'),

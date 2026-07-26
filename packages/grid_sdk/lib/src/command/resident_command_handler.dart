@@ -60,20 +60,38 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
     return completer.future;
   }
 
-  Future<GridCommandResult> _dispatch(GridCommandRequest request) async =>
-      switch (request) {
-        GridRework(:final beadId, :final note) => _rework(
-          beadId: beadId,
-          note: note,
-        ),
-        GridGateResolve(:final gateId, :final grades, :final rationale) =>
-          _resolveGate(gateId: gateId, grades: grades, rationale: rationale),
-      };
+  Future<GridCommandResult> _dispatch(
+    GridCommandRequest request,
+  ) async => switch (request) {
+    GridRework(:final beadId, :final note, :final beyondCap, :final actor) =>
+      _rework(beadId: beadId, note: note, beyondCap: beyondCap, actor: actor),
+    GridGateLs() => _listGates(),
+    GridGateResolve(:final gateId, :final grades, :final rationale) =>
+      _resolveGate(gateId: gateId, grades: grades, rationale: rationale),
+  };
 
   Future<GridCommandResult> _rework({
     required String beadId,
     required String? note,
+    required bool beyondCap,
+    required String? actor,
   }) async {
+    final normalizedActor = actor?.trim();
+    final wantsNote = note != null && note.trim().isNotEmpty;
+    if (beyondCap && (normalizedActor == null || normalizedActor.isEmpty)) {
+      return _refused(
+        'actor_required',
+        '--actor is required with --beyond-cap '
+            '(the human ruling must be attributed).',
+      );
+    }
+    if (beyondCap && !wantsNote) {
+      return _refused(
+        'note_required',
+        '--note is required with --beyond-cap '
+            '(the human ruling must carry a reason).',
+      );
+    }
     final identity = BeadOwnershipPredicate.prefixOf(beadId);
     final workStore = identity == null ? null : _workStoresByIdentity[identity];
     if (workStore == null) {
@@ -120,20 +138,24 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
     }
 
     final session = current.single;
-    final round =
-        maxReworkRound(
-          beadId,
-          sessions
-              .map((bead) => _meta(bead, SessionBeadKeys.workBead))
-              .nonNulls,
-        ) +
-        1;
-    if (round > kMaxReworkRounds) {
+    final maxRound = maxReworkRound(
+      beadId,
+      sessions.map((bead) => _meta(bead, SessionBeadKeys.workBead)).nonNulls,
+    );
+    if (beyondCap && maxRound < kMaxReworkRounds) {
+      return _refused(
+        'beyond_cap_premature',
+        '--beyond-cap is only valid at or beyond the rework cap '
+            '($kMaxReworkRounds); "$beadId" has $maxRound rounds.',
+      );
+    }
+    if (maxRound >= kMaxReworkRounds && !beyondCap) {
       return _refused(
         'rework_round_cap',
         '"$beadId" has reached the rework cap of $kMaxReworkRounds.',
       );
     }
+    final round = maxRound + 1;
 
     if (!session.isClosed) {
       final cursor =
@@ -165,10 +187,15 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
       );
       final finding = note?.trim();
       if (finding != null && finding.isNotEmpty) {
+        final timestamp = DateTime.now().toUtc().toIso8601String();
+        final header = beyondCap
+            ? '--- grid rework ROUND $round ($timestamp) '
+                  '— BEYOND-CAP by $normalizedActor ---'
+            : '--- grid rework ROUND $round ($timestamp) ---';
         await workStore.writer.update(
           beadId,
           metadata: const {},
-          appendNotes: finding,
+          appendNotes: '$header\n$finding',
         );
       }
     } on OwnershipRefused catch (error) {
@@ -182,6 +209,44 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
         'beadId': beadId,
         'sessionId': session.id,
         'round': round,
+      },
+    );
+  }
+
+  Future<GridCommandResult> _listGates() async {
+    await _refreshState();
+    final state = _stateSource.current;
+    if (state == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot.',
+      );
+    }
+    final gates =
+        state.beads
+            .where((bead) => bead.issueType == IssueType.gate && !bead.isClosed)
+            .toList(growable: false)
+          ..sort((a, b) => a.id.compareTo(b.id));
+    return GridCommandResult.completed(
+      message: '${gates.length} open gate(s).',
+      value: {
+        'operation': 'grid/gate/ls',
+        'gates': [
+          for (final gate in gates)
+            {
+              'id': gate.id,
+              'blocks': _meta(gate, 'blocks'),
+              'node': _meta(gate, 'node'),
+              'reason': _meta(gate, 'reason'),
+              'createdAt': gate.createdAt?.toUtc().toIso8601String(),
+              'regateCount':
+                  int.tryParse(
+                    '${gate.metadata[StationBeadWriter.gateRegateCountKey] ?? ''}',
+                  ) ??
+                  0,
+              'regatedAt': _meta(gate, StationBeadWriter.gateRegatedAtKey),
+            },
+        ],
       },
     );
   }

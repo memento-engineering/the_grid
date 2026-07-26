@@ -228,7 +228,7 @@ void main() {
       // `grid rework tg-1`: re-keys ONLY `work_bead` on the SAME session
       // bead (bd `--metadata` merge — every other key, incl. the stale
       // `route` cursor, survives byte-identical) and leaves the gate bead
-      // it never touches OPEN, exactly like `ReworkCommand.runRework`.
+      // it never touches OPEN, exactly like the resident command rework path.
       stateSrc.push(
         _state([
           _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
