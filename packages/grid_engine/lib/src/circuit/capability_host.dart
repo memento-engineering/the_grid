@@ -86,6 +86,48 @@ class CapabilityHost extends StatefulSeed with Diagnosable {
   State<CapabilityHost> createState() => CapabilityHostState();
 }
 
+Future<void> persistRaisedEscalation({
+  required StationServices station,
+  required ServiceBundle services,
+  required EscalationRequest request,
+  required String stepBeadId,
+  required Map<String, String> gatedMetadata,
+  required bool Function() isActive,
+  required Future<void> Function(String reason) failToSupervision,
+  required void Function(String name, Map<String, String> data) emitFlare,
+}) async {
+  if (!isActive()) return;
+  final handler = services.escalation ?? const HumanGate();
+  emitFlare('step.escalated', {
+    'handler': handler.id,
+    'reason': truncateReason(request.reason),
+  });
+  final EscalationDecision decision;
+  try {
+    decision = await handler.escalate(request);
+  } on Object catch (error) {
+    await failToSupervision('escalation handler "${handler.id}" threw: $error');
+    return;
+  }
+  if (!isActive()) return;
+  switch (decision) {
+    case ParkAtGate(reason: final parkReason):
+      await station.writer.update(stepBeadId, metadata: gatedMetadata);
+      if (!isActive()) return;
+      await station.writer.createGate(
+        substation: station.stateSubstation,
+        sessionId: request.sessionId,
+        nodePath: request.nodePath,
+        reason: parkReason,
+      );
+      emitFlare('step.gated', {'reason': parkReason});
+    case FailToSupervision(reason: final declineReason):
+      await failToSupervision(
+        'escalation handler "${handler.id}" declined: $declineReason',
+      );
+  }
+}
+
 /// The pinned [CapabilityHost] lifecycle — the thin driver (ADR-0009 D5).
 class CapabilityHostState extends State<CapabilityHost> with Diagnosable {
   StationServices? _ctx;
@@ -618,64 +660,22 @@ class CapabilityHostState extends State<CapabilityHost> with Diagnosable {
   ///
   /// DISTINCT from `SessionScope`'s breaker-exhaustion escalation (D-5), which is
   /// supervision's, not routing's, and is untouched.
-  Future<void> _persistEscalate(String reason) async {
-    if (_cancelled || !context.mounted) return;
-    final handler = _services.escalation ?? const HumanGate();
-    _emitFlare('step.escalated', {
-      'handler': handler.id,
-      'reason': truncateReason(reason),
-    });
-    final EscalationDecision decision;
-    try {
-      decision = await handler.escalate(
-        EscalationRequest(
-          beadId: _beadId,
-          sessionId: _sessionId,
-          nodePath: _nodePath,
-          reason: reason,
-          rewindCount: seed.mount.node.rewindCount,
-        ),
-      );
-    } on Object catch (e) {
-      await _persistFailure('escalation handler "${handler.id}" threw: $e');
-      return;
-    }
-    if (_cancelled || !context.mounted) return;
-    switch (decision) {
-      case ParkAtGate(reason: final parkReason):
-        await _persistGate(parkReason);
-      case FailToSupervision(reason: final declineReason):
-        await _persistFailure(
-          'escalation handler "${handler.id}" declined: $declineReason',
-        );
-    }
-  }
-
-  /// PARK at a human gate (D-7): write `state=gated` (parks the node + withholds
-  /// its dependents) AND mint a real `type=gate` bead in the OWN state store
-  /// through the chokepoint — never a write to the foreign work bead (A37).
-  /// Resolving that gate bead re-arms the node. Reached ONLY through
-  /// [_persistEscalate] (M5 D-4a): a park is a DECISION of the bound handler, not
-  /// a verdict of its own.
-  Future<void> _persistGate(String reason) async {
-    if (_cancelled || !context.mounted) return;
-    await _ctx!.writer.update(
-      _stepBeadId,
-      metadata: _moleculeMetadata(StepState.gated),
-    );
-    if (_cancelled || !context.mounted) return;
-    // The gate bead itself stays keyed to the OWNING SESSION —
-    // `createGate`'s `blocks`/`node` linkage re-arms this exact `nodePath`
-    // on resolve; the `state=gated` cursor write above rides the step bead
-    // (R5b), an orthogonal concern.
-    await _ctx!.writer.createGate(
-      substation: _ctx!.stateSubstation,
+  Future<void> _persistEscalate(String reason) => persistRaisedEscalation(
+    station: _ctx!,
+    services: _services,
+    request: EscalationRequest(
+      beadId: _beadId,
       sessionId: _sessionId,
       nodePath: _nodePath,
       reason: reason,
-    );
-    _emitFlare('step.gated', {'reason': reason});
-  }
+      rewindCount: seed.mount.node.rewindCount,
+    ),
+    stepBeadId: _stepBeadId,
+    gatedMetadata: _moleculeMetadata(StepState.gated),
+    isActive: () => !_cancelled && context.mounted,
+    failToSupervision: _persistFailure,
+    emitFlare: _emitFlare,
+  );
 
   /// The [AllocationRewound] report's dispatch — a REFUSAL, always (Decided
   /// item 7 / `DESIGN-tg-pm6.md` §8/§11): backward motion on the molecule
