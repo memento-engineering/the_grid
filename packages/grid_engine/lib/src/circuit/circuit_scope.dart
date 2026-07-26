@@ -42,6 +42,7 @@ class CircuitScope extends StatelessSeed with Diagnosable {
     required this.circuit,
     required this.cursor,
     required this.nodePath,
+    this.circuitRoundsByPath = const {},
     super.key,
   });
 
@@ -55,6 +56,9 @@ class CircuitScope extends StatelessSeed with Diagnosable {
   /// This circuit instance's path (`bead.id` at the root; `'$parent/$stepId'`
   /// for a nested sub-circuit).
   final String nodePath;
+
+  /// Session circuit incarnation by full step node path.
+  final Map<String, int> circuitRoundsByPath;
 
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
@@ -145,6 +149,7 @@ class CircuitScope extends StatelessSeed with Diagnosable {
                 circuitPath: nodePath,
                 session: session,
                 node: node,
+                circuitRound: circuitRoundsByPath[path] ?? 0,
                 key: ValueKey(
                   beadId == null
                       ? '$path#${node.restartCount}'
@@ -161,6 +166,7 @@ class CircuitScope extends StatelessSeed with Diagnosable {
                 circuit: sub,
                 cursor: cursor,
                 nodePath: path,
+                circuitRoundsByPath: circuitRoundsByPath,
                 key: ValueKey('$path/scope'),
               );
             }

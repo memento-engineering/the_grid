@@ -164,7 +164,10 @@ class CapabilityHostState extends State<CapabilityHost> with Diagnosable {
     // One StepArgs per incarnation: its CancelToken is the effect's cooperative
     // unmount signal (the allocation cancels it in dispose).
     _args = StepArgs(
-      params: seed.mount.step.params,
+      params: {
+        ...seed.mount.step.params,
+        'round': '${seed.mount.circuitRound}',
+      },
       nodePath: seed.mount.nodePath,
       cancel: CancelToken(),
     );
