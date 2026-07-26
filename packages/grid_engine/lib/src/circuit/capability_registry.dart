@@ -42,6 +42,7 @@ class StepMount {
     required this.session,
     required this.node,
     required this.key,
+    this.circuitRound = 0,
     this.backoff = Backoff.standard,
     this.maxRestarts = 3,
   });
@@ -78,6 +79,10 @@ class StepMount {
   /// (tg-o90); either changes the key, so keyed reconcile unmounts the old
   /// incarnation and mounts the new.
   final Key key;
+
+  /// The session circuit incarnation for this step, derived from the active
+  /// step bead's supersedes-chain depth.
+  final int circuitRound;
 
   /// The owning circuit's backoff schedule (D-5) — the host computes the
   /// cooldown for the next restart attempt from it on failure.

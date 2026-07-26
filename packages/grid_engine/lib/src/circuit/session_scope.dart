@@ -992,6 +992,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     var invalidated = const <String>{};
     var heldForSuccessor = const <String>{};
     var moleculeProjectedCursor = const <String, NodeCursor>{};
+    var circuitRoundsByPath = const <String, int>{};
     if (isMolecule) {
       final projected = projectMoleculeCursor(
         joined!.moleculeBeads,
@@ -1003,6 +1004,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
         joined.moleculeBeads,
         joined.moleculeDependencies,
       );
+      circuitRoundsByPath = depthByPath;
       final activeByPath = activeStepBeadsByPath(
         joined.moleculeBeads,
         joined.moleculeDependencies,
@@ -1165,6 +1167,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
       circuit: seed.circuit,
       cursor: cursor,
       nodePath: seed.bead.id,
+      circuitRoundsByPath: circuitRoundsByPath,
     );
     if (isMolecule) {
       // R2/R5: the ambient storage seam, provided as the 4th nested

@@ -36,8 +36,6 @@ const _sub = Circuit(
   steps: [CapabilityStep(stepId: 'route', capabilityId: 'route')],
 );
 
-const _routeStep = CapabilityStep(stepId: 'route', capabilityId: 'route');
-
 /// The step bead id [InheritedCircuit.beadIdByNodePath] resolves the route
 /// node to — the molecule model is the ONLY circuit engine (tg-eli phase 2),
 /// so [CapabilityHost] refuses LOUD at mount without one (proven in
@@ -77,6 +75,8 @@ Future<void> _pump() async {
   String circuitPath = 'tg-1',
   ServiceBundle services = const ServiceBundle(),
   NodeCursor node = const NodeCursor(),
+  int circuitRound = 0,
+  Map<String, String> params = const {},
   bool ambient = true,
 }) {
   final fakes = buildFakes();
@@ -85,12 +85,17 @@ Future<void> _pump() async {
   Seed child = CapabilityHost(
     capability: capability,
     mount: StepMount(
-      step: _routeStep,
+      step: CapabilityStep(
+        stepId: 'route',
+        capabilityId: 'route',
+        params: params,
+      ),
       nodePath: nodePath,
       circuit: circuit,
       circuitPath: circuitPath,
       session: const SessionHandle('tgdog-s'),
       node: node,
+      circuitRound: circuitRound,
       key: ValueKey('$nodePath#${node.restartCount}.${node.rewindCount}'),
     ),
   );
@@ -139,6 +144,8 @@ Future<Fakes> _drive(
   String circuitPath = 'tg-1',
   ServiceBundle services = const ServiceBundle(),
   NodeCursor node = const NodeCursor(),
+  int circuitRound = 0,
+  Map<String, String> params = const {},
   bool ambient = true,
 }) async {
   final h = _mountRoute(
@@ -147,6 +154,8 @@ Future<Fakes> _drive(
     circuitPath: circuitPath,
     services: services,
     node: node,
+    circuitRound: circuitRound,
+    params: params,
     ambient: ambient,
   );
   addTearDown(() {
@@ -175,7 +184,89 @@ class _ThrowingRouteCap extends RouteCapability {
       throw StateError('the route blew up');
 }
 
+class _CurrentRoundCommitteeRoute extends RouteCapability {
+  _CurrentRoundCommitteeRoute(this.verdicts, this.seenRounds);
+
+  final List<Map<String, String>> verdicts;
+  final List<String?> seenRounds;
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
+    final round = args.params['grid.round'];
+    seenRounds.add(round);
+    final current =
+        round != null && verdicts.every((verdict) => verdict['round'] == round);
+    return current
+        ? Advance({
+            for (final verdict in verdicts) verdict['lane']!: verdict['grade']!,
+          })
+        : const Escalate('no current-round verdict');
+  }
+}
+
+class _ParameterCaptureRoute extends RouteCapability {
+  _ParameterCaptureRoute(this.seen);
+
+  final List<Map<String, String>> seen;
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
+    seen.add(Map<String, String>.of(args.params));
+    return const Advance();
+  }
+}
+
 void main() {
+  group('committee verdict circuit round', () {
+    test('preserves authored round beside reserved grid.round', () async {
+      final seen = <Map<String, String>>[];
+      await _drive(
+        _ParameterCaptureRoute(seen),
+        circuitRound: 2,
+        params: const {'round': 'author-round'},
+      );
+
+      expect(seen.single['round'], 'author-round');
+      expect(seen.single['grid.round'], '2');
+    });
+
+    test(
+      'joins successor-incarnation verdicts independently of rewindCount',
+      () async {
+        final verdicts = [
+          {'lane': 'plan-completeness', 'grade': 'A', 'round': '2'},
+          {'lane': 'coherence', 'grade': 'B', 'round': '2'},
+          {'lane': 'adr-alignment', 'grade': 'A', 'round': '2'},
+          {'lane': 'acceptance-testability', 'grade': 'A', 'round': '2'},
+        ];
+        final seenRounds = <String?>[];
+
+        final round2 = await _drive(
+          _CurrentRoundCommitteeRoute(verdicts, seenRounds),
+          circuitRound: 2,
+          node: const NodeCursor(rewindCount: 0),
+        );
+
+        expect(seenRounds, ['2']);
+        expect(
+          round2.runner.metadataOfUpdate(0)['grid.step.state'],
+          'complete',
+        );
+        expect(round2.runner.callsFor('create'), isEmpty);
+
+        await _drive(
+          _CurrentRoundCommitteeRoute([
+            for (final verdict in verdicts) {...verdict, 'round': '3'},
+          ], seenRounds),
+          circuitRound: 3,
+          node: const NodeCursor(rewindCount: 0),
+        );
+
+        expect(seenRounds, ['2', '3']);
+      },
+    );
+  });
+
   group(
     'tg-6gn — the ALLOCATION layer maps each verdict to its OWN report',
     () {
