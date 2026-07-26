@@ -215,6 +215,7 @@ void main() {
     );
     await _pump();
 
+    expect(fakes.runner.callsFor('create'), isEmpty);
     expect(seenRounds, ['2', '3']);
     expect(fakes.runner.callsFor('update').last[1], 'route-3');
   });

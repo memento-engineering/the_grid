@@ -253,30 +253,37 @@ void main() {
           // CLOSED gate (node absent from openGateNodes) → re-arm fires.
           final closed = buildFakes();
           final closedOwner = TreeOwner();
+          final closedSession = SessionProjection(
+            workBeadId: 'tg-1',
+            sessionId: 'tgdog-s',
+            isMolecule: true,
+            moleculeBeads: [
+              _stepBead(
+                _stepBeadId,
+                sessionId: 'tgdog-s',
+                path: 'tg-1/route',
+                state: StepState.gated,
+              ),
+            ],
+          );
           addTearDown(() {
             closedOwner.dispose();
             unawaited(closed.provider.close());
           });
           closedOwner.mountRoot(
-            InheritedSeed<StationServices>(
-              value: closed.ctx,
-              child: InheritedSeed<CapabilityRegistry>(
-                value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-                child: SessionScope(
-                  bead: _bead,
-                  circuit: _gateCircuit,
-                  existingSession: SessionProjection(
-                    workBeadId: 'tg-1',
-                    sessionId: 'tgdog-s',
-                    isMolecule: true,
-                    moleculeBeads: [
-                      _stepBead(
-                        _stepBeadId,
-                        sessionId: 'tgdog-s',
-                        path: 'tg-1/route',
-                        state: StepState.gated,
-                      ),
-                    ],
+            InheritedSeed<JoinedSnapshot>(
+              value: JoinedSnapshot(
+                graph: _graph([_bead]),
+                sessionsByWorkBead: {'tg-1': closedSession},
+              ),
+              child: InheritedSeed<StationServices>(
+                value: closed.ctx,
+                child: InheritedSeed<CapabilityRegistry>(
+                  value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                  child: SessionScope(
+                    bead: _bead,
+                    circuit: _gateCircuit,
+                    existingSession: closedSession,
                   ),
                 ),
               ),
@@ -293,31 +300,38 @@ void main() {
           // STILL-OPEN gate (node present in openGateNodes) → NO re-arm.
           final open = buildFakes();
           final openOwner = TreeOwner();
+          final openSession = SessionProjection(
+            workBeadId: 'tg-1',
+            sessionId: 'tgdog-s',
+            isMolecule: true,
+            moleculeBeads: [
+              _stepBead(
+                _stepBeadId,
+                sessionId: 'tgdog-s',
+                path: 'tg-1/route',
+                state: StepState.gated,
+              ),
+            ],
+            openGateNodes: {'tg-1/route'},
+          );
           addTearDown(() {
             openOwner.dispose();
             unawaited(open.provider.close());
           });
           openOwner.mountRoot(
-            InheritedSeed<StationServices>(
-              value: open.ctx,
-              child: InheritedSeed<CapabilityRegistry>(
-                value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-                child: SessionScope(
-                  bead: _bead,
-                  circuit: _gateCircuit,
-                  existingSession: SessionProjection(
-                    workBeadId: 'tg-1',
-                    sessionId: 'tgdog-s',
-                    isMolecule: true,
-                    moleculeBeads: [
-                      _stepBead(
-                        _stepBeadId,
-                        sessionId: 'tgdog-s',
-                        path: 'tg-1/route',
-                        state: StepState.gated,
-                      ),
-                    ],
-                    openGateNodes: {'tg-1/route'},
+            InheritedSeed<JoinedSnapshot>(
+              value: JoinedSnapshot(
+                graph: _graph([_bead]),
+                sessionsByWorkBead: {'tg-1': openSession},
+              ),
+              child: InheritedSeed<StationServices>(
+                value: open.ctx,
+                child: InheritedSeed<CapabilityRegistry>(
+                  value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                  child: SessionScope(
+                    bead: _bead,
+                    circuit: _gateCircuit,
+                    existingSession: openSession,
                   ),
                 ),
               ),

@@ -62,6 +62,7 @@ import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../diagnostics/diagnosable.dart';
+import '../domain/joined_snapshot.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
@@ -177,6 +178,12 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
   /// default).
   CapabilityRegistry? _registry;
 
+  JoinedSnapshot? _joinedSnapshot;
+  Completer<JoinedSnapshot?>? _mintReadiness;
+  DateTime? _mintDecisionAt;
+  bool _mintBlockedReported = false;
+  bool _requiresFreshMintSnapshot = false;
+
   String? _sessionId;
 
   @override
@@ -275,6 +282,9 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     // Captured for [_mint]'s async use (D-H rule 1) — the reentrant registry
     // (a molecule mint's sub-circuit resolution).
     _registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    _joinedSnapshot = context
+        .dependOnInheritedSeedOfExactType<JoinedSnapshot>();
+    _considerMintReadiness();
   }
 
   @override
@@ -283,6 +293,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     if (existing != null &&
         reworkRoundOf(seed.bead.id, existing.workBeadId) != null) {
       _retiredReworkSessionId = existing.sessionId;
+      _requiresFreshMintSnapshot = true;
       unawaited(_mint());
       return;
     }
@@ -361,6 +372,54 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
         NoSession() || LiveSession() || VoidedSession() => false,
       };
 
+  Future<bool> _awaitFreshReadySnapshot() async {
+    final completer = Completer<JoinedSnapshot?>();
+    _mintDecisionAt = DateTime.now();
+    _mintBlockedReported = false;
+    _mintReadiness = completer;
+    _considerMintReadiness();
+    final snapshot = await completer.future;
+    if (identical(_mintReadiness, completer)) {
+      _mintReadiness = null;
+      _mintDecisionAt = null;
+    }
+    return snapshot != null;
+  }
+
+  void _considerMintReadiness() {
+    final completer = _mintReadiness;
+    final decisionAt = _mintDecisionAt;
+    final snapshot = _joinedSnapshot;
+    if (completer == null || completer.isCompleted || decisionAt == null) {
+      return;
+    }
+    if (snapshot == null) {
+      if (!_mintBlockedReported) {
+        _mintBlockedReported = true;
+        _flare('session.mintRefused', {
+          'workBeadId': seed.bead.id,
+          'reason': 'fresh joined snapshot is unavailable',
+        });
+      }
+      return;
+    }
+    if (snapshot.graph.capturedAt.isBefore(decisionAt)) return;
+    if (!snapshot.graph.readyIds.contains(seed.bead.id)) {
+      if (!_mintBlockedReported) {
+        _mintBlockedReported = true;
+        _flare('session.mintRefused', {
+          'workBeadId': seed.bead.id,
+          'reason': 'work bead is absent from the fresh ready frontier',
+          'snapshotCapturedAt': snapshot.graph.capturedAt
+              .toUtc()
+              .toIso8601String(),
+        });
+      }
+      return;
+    }
+    completer.complete(snapshot);
+  }
+
   Future<void> _mint() async {
     // Yield so didChangeDependencies captures _ctx (genesis runs initState then
     // didChangeDependencies within one performRebuild).
@@ -375,6 +434,11 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
         // Cleanup is not a precondition for the fresh round.
       }
       if (_cancelled || !context.mounted) return;
+    }
+    if (_requiresFreshMintSnapshot) {
+      if (!await _awaitFreshReadySnapshot()) return;
+      if (_cancelled || !context.mounted) return;
+      _requiresFreshMintSnapshot = false;
     }
     _mintAttempts++;
     try {
@@ -865,6 +929,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     _mintAttempts = 0;
     _isMolecule = false;
     _moleculeSessionId = null;
+    _requiresFreshMintSnapshot = true;
     scheduleMicrotask(() => unawaited(_mint()));
   }
 
@@ -917,6 +982,12 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
 
   @override
   void dispose() {
+    final mintReadiness = _mintReadiness;
+    if (mintReadiness != null && !mintReadiness.isCompleted) {
+      mintReadiness.complete(null);
+    }
+    _mintReadiness = null;
+    _mintDecisionAt = null;
     _cancelled = true;
     _mintingSuccessorForPath.clear();
   }
