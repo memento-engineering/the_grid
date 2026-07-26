@@ -42,6 +42,25 @@ void main() {
     }
   });
 
+  test('malformed exact state store refuses with the caller prefix', () {
+    seed(p.join(temp.path, '.grid'), body: '{not-json');
+
+    final result = resolveStateWorkspace(
+      stationName: 'lunar',
+      verb: 'status',
+      stateWorkspacePath: temp.path,
+    );
+
+    expect(result, isA<StateWorkspaceRefusal>());
+    final refusal = result as StateWorkspaceRefusal;
+    expect(refusal.code, 1);
+    expect(refusal.message, startsWith('lunar status:'));
+    expect(
+      refusal.message,
+      contains('could not open the exact grid state store'),
+    );
+  });
+
   test('exact state store returns canonical home and workspace', () {
     seed(p.join(temp.path, '.grid'));
     final result = resolveStateWorkspace(

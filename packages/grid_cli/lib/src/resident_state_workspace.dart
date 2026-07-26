@@ -1,7 +1,7 @@
 /// Exact-root state workspace resolution for resident attach verbs.
 library;
 
-import 'package:beads_dart/beads_dart.dart' show BeadsWorkspace;
+import 'package:beads_dart/beads_dart.dart' show BeadsWorkspace, DoltMode;
 import 'package:grid_sdk/grid_sdk.dart' show GridStateStore, StoreRefusal;
 import 'package:path/path.dart' as p;
 
@@ -55,10 +55,11 @@ StateWorkspaceResult resolveStateWorkspace({
   }
   final home = p.canonicalize(stateWorkspacePath.trim());
   try {
-    return StateWorkspaceFound(
-      home: home,
-      workspace: openStateStore(GridStateStore.forGridRoot(home)),
-    );
+    final workspace = openStateStore(GridStateStore.forGridRoot(home));
+    if (workspace.mode == DoltMode.unknown) {
+      throw const FormatException('malformed or missing store metadata');
+    }
+    return StateWorkspaceFound(home: home, workspace: workspace);
   } on ArgumentError catch (error) {
     return StateWorkspaceRefusal(
       '$stationName $verb: ${error.message}',

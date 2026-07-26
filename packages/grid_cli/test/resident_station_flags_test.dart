@@ -1,8 +1,28 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_cli/grid_cli.dart';
+import 'package:grid_engine/grid_engine.dart' show SessionProjection, StepMount;
+import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
+
+class _Resolver implements SessionResolver {
+  @override
+  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
+      throw UnimplementedError();
+}
+
+class _Registry implements CapabilityRegistry {
+  @override
+  Circuit? circuit(String circuitId) => null;
+
+  @override
+  Seed host(StepMount mount) => throw UnimplementedError();
+
+  @override
+  DateTime now() => DateTime.utc(2026);
+}
 
 ArgParser parser() {
   final parser = ArgParser();
@@ -149,8 +169,26 @@ void main() {
     expect(parser().options, isNot(contains('bead')));
   });
 
-  test('public barrel exposes attach commands', () {
-    expect(ResidentDownCommand(stationName: 'lunar').name, 'down');
-    expect(ResidentStatusCommand(stationName: 'lunar').name, 'status');
+  test('public barrel constructs all resident commands', () {
+    final up = ResidentUpCommand(
+      stationName: 'lunar',
+      delegateFactory:
+          ({
+            required config,
+            required wiring,
+            required provisioner,
+            required gitOps,
+            required prOpener,
+          }) => throw StateError('compile witness only'),
+      codedRoster: ({required gridHome}) => const [],
+      harnessAllowList: const {'safe'},
+      validateHarness: (_) => null,
+      resolver: _Resolver(),
+      registry: _Registry(),
+    );
+    final down = ResidentDownCommand(stationName: 'lunar');
+    final status = ResidentStatusCommand(stationName: 'lunar');
+
+    expect((up.name, down.name, status.name), ('up', 'down', 'status'));
   });
 }
