@@ -84,3 +84,24 @@ The library also exports `ReloadCommand` and the resident-station surfaces
 (`StationControl`, `StationAttach`, `StationLock`, `StationReload`) for a
 composed runner to bind; they are deliberately not registered in the reference
 bin while the resident-station work is in flight.
+# Resident station composition
+
+`grid_cli` vends the resident `up`, `down`, and `status` verbs for base
+stations composed directly on the_grid. A station supplies its own authored
+delegate, roster, harness security policy, and circuit values; no subclass or
+environment registry is imposed:
+
+```dart
+final runner = CommandRunner<int>('lunar', 'Lunar station')
+  ..addCommand(ResidentUpCommand(
+    stationName: 'lunar',
+    delegateFactory: buildLunarDelegate,
+    codedRoster: lunarRoster,
+    harnessAllowList: lunarHarnesses.names.toSet(),
+    validateHarness: (name) => lunarHarnesses.resolve(name).validate(),
+    resolver: lunarCircuitResolver,
+    registry: lunarCapabilityRegistry,
+  ))
+  ..addCommand(ResidentDownCommand(stationName: 'lunar'))
+  ..addCommand(ResidentStatusCommand(stationName: 'lunar'));
+```
