@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0
+
+- **Breaking:** `commandHandler` is now REQUIRED on `StationControl.start`.
+  Migration: pass the handler vended by grid_sdk ≥0.1.1 —
+  `StationControl.start(..., commandHandler: workRuntime.commands)`.
+- Added the vended resident station verbs — `ResidentUpCommand`,
+  `ResidentDownCommand`, `ResidentStatusCommand`, the resident flag surface,
+  and state-workspace/lock resolution — parameterized over a `GridDelegate`
+  factory and a verb-name string, so a station composed directly on the_grid
+  no longer copies ~1000 lines (the_grid #112).
+- Added the fenced station command route on `StationControl` with
+  bearer-first routing, monotonic fencing, and cached idempotent dispatch
+  (the_grid #106).
+- Station control serves tree snapshots; headless projection reads and
+  count-gated snapshot streams are fenced by tests (the_grid #110, #113,
+  #114, #115).
+- Added attributed beyond-cap rework; open gate beads are trusted during
+  rework (the_grid #101, #102).
+
 ## 0.2.0
 
 - **Breaking:** `StationLockService.acquire` no longer takes a `pgid`
@@ -19,4 +38,4 @@
 
 ## 0.1.0
 
-- Initial tagged release (ADR-0003 tag-pattern version solving).
+- Initial tagged release (tag-pattern version solving).

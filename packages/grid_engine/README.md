@@ -1,14 +1,13 @@
 # grid_engine
 
-The M4 tree engine — **`genesis_tree` IS the engine** (ADR-0007, Accepted
-2026-06-24; ADR-0009 adds the third tree). `build(observed)` reconciles the
+The M4 tree engine — **`genesis_tree` IS the engine**. `build(observed)` reconciles the
 running system: keyed reconcile + `Branch` lifecycle = the work lifecycle
 (**mount = spawn, unmount = kill**, a cursor tick = a reconcile transition).
 The kernel is opinion-light — a work bead's running subtree is contributed by
 an extension via a `SessionResolver`; the engine holds no landing / VCS /
 provider opinion.
 
-**Engine-private by intent** (ADR-0008 D1/D2): the authoring surface is
+**Engine-private by intent**: the authoring surface is
 `grid_sdk` — consumers *compose*, they never import `grid_engine` or subclass
 its Seeds. The author-facing value types are fenced under `lib/src/sdk/` so the
 public/private split stays a move, not a rewrite.
@@ -23,7 +22,7 @@ Station → SubstationScope → Substation → WorkList → WorkBead
 Config flows down the *ancestors* (`SubstationScope`/`Substation`); the work
 axis is observed by **exactly one node, `WorkList`** (derailment-invariant 1).
 The `StationJoinBridge` is the only subscription into the snapshot pipelines
-(A39); `FederatedSnapshotSource` fans N local beads workspaces into the ONE
+`FederatedSnapshotSource` fans N local beads workspaces into the ONE
 `SnapshotSource` the bridge's work axis observes.
 
 ## Circuits, steps, capabilities, allocations
@@ -38,7 +37,7 @@ Each inflated node's progress is a `StepState` cursor
 routes to supervision (re-key within the `Backoff` budget — the kernel owns the
 cooldown Timer — then escalation). The cursor persists as a **molecule of
 durable beads** on the_grid's OWN session bead — never the foreign work bead
-(A37); `(tg-eli, 2026-07-19)` the flat, merge-safe `grid.cursor.{nodePath}.*`
+the flat, merge-safe `grid.cursor.{nodePath}.*`
 key model this section previously described has been removed — molecule is
 the only circuit engine. `CircuitScope` re-keys a node on
 `ValueKey('$path#$restartCount.$rewindCount')`, so a supervised restart or a
@@ -49,7 +48,7 @@ The engine ships three `Capability` families — `ProcessCapability` (a spawned,
 supervised process), `ServiceCapability` (an async body over `ServiceBundle`
 collaborators), `LeaseCapability` (a held lease) — and the class is deliberately
 NOT sealed: dispatch is polymorphic through `createAllocation` (the
-`createRenderObject` analogue, ADR-0009 D4), so a new family is an addition,
+`createRenderObject` analogue), so a new family is an addition,
 not a core edit. An `Allocation` is the_grid's **third tree** on `genesis_tree`:
 a persistent, addressable managed object holding the live effect, with four
 lifecycle verbs — `startOrAdopt` / `update` / `dispose` (kill) / `detach`
@@ -80,7 +79,7 @@ fallback.
 tree, and drains one batched microtask flush per dirty edge —
 `root.markNeedsRebuild()` is never called. The OPINIONS (agent/verify/land, the
 `code` circuit, the git `SourceControl`) live in the `grid_assets` package,
-**never in the engine** — a structural fence (ADR-0007 §1) keeps them out. The
+**never in the engine** — a structural fence keeps them out. The
 engine knows `SourceControl` / `DeliveryMethod` / `EscalationHandler` in
 *concept* only; impls ship in asset packs (a null `delivery` means commit-only,
 a null `escalation` means the human gate).

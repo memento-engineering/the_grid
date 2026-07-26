@@ -1,5 +1,5 @@
 name: grid_diagnostics_contract
-version: 0.1.0
+version: 0.1.1
 description: Versioned diagnostics projection wire contract shared by reporters and cockpit consumers.
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
