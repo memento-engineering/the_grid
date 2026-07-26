@@ -26,6 +26,17 @@ const _code = Circuit(
   ],
 );
 
+class _RecordingTransport implements ExplorationTransport {
+  final List<({String name, Map<String, String> data})> flares = [];
+
+  @override
+  void flare(String name, Map<String, String> data) =>
+      flares.add((name: name, data: data));
+
+  List<({String name, Map<String, String> data})> named(String name) =>
+      flares.where((flare) => flare.name == name).toList();
+}
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -58,13 +69,15 @@ Future<void> _pumpUntil(
 JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
+  required DateTime capturedAt,
+  List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessions = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
-    dependencies: const [],
+    dependencies: dependencies,
     readyIds: ready,
-    capturedAt: DateTime(2026),
+    capturedAt: capturedAt,
   ),
   sessionsByWorkBead: sessions,
 );
@@ -75,6 +88,7 @@ Bead _task(String id, {BeadStatus status = BeadStatus.open}) =>
 const _tgConfig = SubstationConfig(
   substationId: 'tg',
   ownedSubstations: {'tg'},
+  driveList: {'tg-1'},
 );
 
 ({TreeOwner owner, Branch root}) _mountFull({
@@ -82,6 +96,7 @@ const _tgConfig = SubstationConfig(
   required StationServices ctx,
   required CapabilityRegistry registry,
   required RootCircuitFor rootCircuit,
+  ExplorationTransport? transport,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -96,6 +111,7 @@ const _tgConfig = SubstationConfig(
             child: Station([
               SubstationScope(
                 configNotifier: SubstationConfigNotifier(_tgConfig),
+                services: ServiceBundle(transport: transport),
                 key: const ValueKey('scope.tg'),
               ),
             ]),
@@ -113,10 +129,15 @@ void main() {
         'mints round N+1, in place (no restart)', () async {
       final f = buildFakes(createdId: 'tgdog-round2');
       final reg = RecordingCapabilityRegistry(circuits: const {});
+      final beforeDecision = DateTime.now().subtract(
+        const Duration(seconds: 1),
+      );
+      final afterDecision = DateTime.now().add(const Duration(seconds: 1));
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [_task('tg-1')],
           ready: {'tg-1'},
+          capturedAt: beforeDecision,
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
@@ -144,6 +165,7 @@ void main() {
         _joined(
           beads: [_task('tg-1')],
           ready: {'tg-1'},
+          capturedAt: beforeDecision,
           sessions: {
             'tg-1#r1': const SessionProjection(
               workBeadId: 'tg-1#r1',
@@ -154,6 +176,21 @@ void main() {
         ),
       );
       m.owner.flush();
+      await _pump();
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: afterDecision,
+          sessions: {
+            'tg-1#r1': const SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+              cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+            ),
+          },
+        ),
+      );
       await _pumpUntil(
         m.owner,
         () =>
@@ -182,6 +219,110 @@ void main() {
       expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));
     });
 
+    test(
+      'dep-add then immediate re-key waits for a fresh ready snapshot before '
+      'minting',
+      () async {
+        final f = buildFakes(createdId: 'tgdog-round2');
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final transport = _RecordingTransport();
+        final beforeDecision = DateTime.now().subtract(
+          const Duration(seconds: 1),
+        );
+        final afterDecision = DateTime.now().add(const Duration(seconds: 1));
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1'), _task('tg-blocker')],
+            ready: {'tg-1', 'tg-blocker'},
+            capturedAt: beforeDecision,
+            sessions: {
+              'tg-1': const SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-round1',
+                cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+              ),
+            },
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+          transport: transport,
+        );
+        addTearDown(m.owner.dispose);
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1'), _task('tg-blocker')],
+            ready: {'tg-1', 'tg-blocker'},
+            capturedAt: beforeDecision,
+            sessions: {
+              'tg-1#r1': const SessionProjection(
+                workBeadId: 'tg-1#r1',
+                sessionId: 'tgdog-round1',
+                cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+              ),
+            },
+          ),
+        );
+        m.owner.flush();
+        await _pump();
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1'), _task('tg-blocker')],
+            ready: {'tg-blocker'},
+            capturedAt: afterDecision,
+            dependencies: const [
+              BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-blocker'),
+            ],
+            sessions: const {
+              'tg-1#r1': SessionProjection(
+                workBeadId: 'tg-1#r1',
+                sessionId: 'tgdog-round1',
+              ),
+            },
+          ),
+        );
+        m.owner.flush();
+        await _pump();
+
+        expect(f.runner.callsFor('create'), isEmpty);
+        expect(transport.named('session.mintRefused'), hasLength(1));
+
+        joined.push(
+          _joined(
+            beads: [
+              _task('tg-1'),
+              _task('tg-blocker', status: BeadStatus.closed),
+            ],
+            ready: {'tg-1'},
+            capturedAt: afterDecision.add(const Duration(seconds: 1)),
+            sessions: const {
+              'tg-1#r1': SessionProjection(
+                workBeadId: 'tg-1#r1',
+                sessionId: 'tgdog-round1',
+              ),
+            },
+          ),
+        );
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () => f.runner.callsFor('create').length >= 2,
+        );
+
+        expect(f.runner.callsFor('create'), hasLength(2));
+        expect(
+          f.runner.callsFor('close').where((call) => call[1] == 'tgdog-round1'),
+          hasLength(1),
+        );
+        expect(transport.named('session.mintRefused'), hasLength(1));
+      },
+    );
+
     test('a RUNNING round with non-#rN disappearance declines LOUD and never '
         're-mints', () async {
       final f = buildFakes();
@@ -190,6 +331,7 @@ void main() {
         _joined(
           beads: [_task('tg-1')],
           ready: {'tg-1'},
+          capturedAt: DateTime(2026),
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
@@ -210,7 +352,13 @@ void main() {
 
       // The session vanishes from the join WITHOUT ever having been observed
       // gated (an out-of-band edit, or a bypassed CLI guard) — declines.
-      joined.push(_joined(beads: [_task('tg-1')], ready: {'tg-1'}));
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime(2026),
+        ),
+      );
       m.owner.flush();
       await _pump();
       m.owner.flush();
@@ -233,7 +381,11 @@ void main() {
       final f = buildFakes();
       final reg = RecordingCapabilityRegistry(circuits: const {});
       final joined = JoinedSnapshotNotifier(
-        _joined(beads: [_task('tg-1')], ready: {'tg-1'}),
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime(2026),
+        ),
       );
       final m = _mountFull(
         joined: joined,

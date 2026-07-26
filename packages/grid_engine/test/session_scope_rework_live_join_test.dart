@@ -236,6 +236,15 @@ void main() {
           _openGate('gate-1', sessionId: 'tgdog-round1'),
         ], tick: 1),
       );
+      workSrc.push(
+        _work(
+          [bead('tg-1')],
+          {'tg-1'},
+          tick: DateTime.now()
+              .add(const Duration(seconds: 1))
+              .millisecondsSinceEpoch,
+        ),
+      );
       await _pumpUntil(
         m.owner,
         () =>
@@ -291,6 +300,15 @@ void main() {
         _state([
           _closedRound1Session('tgdog-round1', workBead: 'tg-1#r1'),
         ], tick: 1),
+      );
+      workSrc.push(
+        _work(
+          [bead('tg-1')],
+          {'tg-1'},
+          tick: DateTime.now()
+              .add(const Duration(seconds: 1))
+              .millisecondsSinceEpoch,
+        ),
       );
       await _pumpUntil(
         m.owner,

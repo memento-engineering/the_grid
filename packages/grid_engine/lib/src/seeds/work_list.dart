@@ -337,12 +337,15 @@ class _WorkListState extends State<WorkList> with Diagnosable {
     // Deterministic order by bead id — all children are keyed, so reconcile is
     // by key regardless, but a stable order keeps the tree legible.
     mounted.sort((a, b) => a.bead.id.compareTo(b.bead.id));
-    // Re-provide the data config as an observed VALUE for descendants. WorkList
-    // still observes only the joined snapshot; SessionScope consumes the value
-    // through the ambient config seam it already depends on.
-    return InheritedSeed<SubstationConfig>(
-      value: seed.substationConfig,
-      child: _WorkBeads(mounted),
+    // Re-provide the settled joined snapshot and data config as observed VALUES
+    // for descendants. WorkList remains the only notifier subscriber;
+    // SessionScope consumes these values through ambient tree seams.
+    return InheritedSeed<JoinedSnapshot>(
+      value: _snapshot,
+      child: InheritedSeed<SubstationConfig>(
+        value: seed.substationConfig,
+        child: _WorkBeads(mounted),
+      ),
     );
   }
 
