@@ -4,7 +4,7 @@ The **public authoring surface of the grid** — "the grid" as concrete code
 (GLOSSARY R9). This is the package a station author lists in their `pubspec.yaml`.
 It sits **over** the private `grid_engine`: consumers **compose** the SDK's
 composition types and drive them with `runGrid`; they **never import
-`grid_engine`** or subclass its sealed Seeds (ADR-0008 Decision 2 — *compose,
+`grid_engine`** or subclass its sealed Seeds (*compose,
 never subclass*). One import authors a station: the barrel re-exports the
 `genesis_tree` vocabulary (`Seed` / `StatelessSeed` / `Nest` / `TreeContext` /
 keys), the `state_notifier` types a `GridDelegate` IS, and the narrow **named**
@@ -109,7 +109,7 @@ read with `<Scope>.of(context)` (loud when absent) or `.maybeOf(context)`.
 
 `runGrid(delegate)` mounts *configuration provision → the master build* and
 returns a `GridHandle`. The delegate is **held by `runGrid`** — it never rides
-the tree, so its `.state` cannot be snapshotted (ADR-0008 D-H); only its
+the tree, so its `.state` cannot be snapshotted; only its
 emitted `GridConfiguration` is ambient, read with
 `GridConfiguration.of(context)` (subscribing — a re-emission re-composes the
 dependent subtree).
@@ -183,7 +183,7 @@ composition tree, fed by runner-assembled off-tree machinery.
 - **`StationWorkRuntime`** — the runner-held lifecycle around `runGrid`, plus
   the readable status values (`wedge`, `latest`, `lastRestartReport`).
 
-The pinned ordering (ADR-0007 §4):
+The pinned ordering:
 
 ```dart
 final work = await buildStationWork(

@@ -6,7 +6,7 @@ not a turnkey tool: a real station is a composed runner that assembles the
 its own `CommandRunner`. The `grid` bin here registers only the generic,
 asset-agnostic driving verbs — `watch`, `gate`, `rework`, `demo` — and
 deliberately carries no composition opinion (there is no baked-in `grid run`;
-ADR-0008 Decision 2).
+the compose-never-subclass rule).
 
 ```
 dart run grid_cli:grid <command> [flags]

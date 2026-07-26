@@ -3,9 +3,9 @@
 The `ext.exploration.*` VM-service host — the layer that makes a running
 the_grid station **debuggable from outside**.
 
-`grid_exploration` registers lenny's exploration wire protocol over a
+`grid_exploration` registers the exploration wire protocol over a
 `GridControllerRuntime` via `dart:developer` service extensions — pure Dart, no
-Flutter binding, no bespoke `ext.grid.*` namespace (ADR-0001 Decision 6). An
+Flutter binding, no bespoke `ext.grid.*` namespace. An
 external debugging harness (a stock leonard) attaches to the station's VM
 service URI, handshakes, discovers the `grid` namespace, and reads live graph
 state.
@@ -40,10 +40,10 @@ idempotent `register()` that binds them to `dart:developer`.
 
 ## "extension", never "plugin"
 
-The org seam word is **extension**. The wire key is `extensions` in both the
-handshake and the stable observation, with **no `plugins` fallback** — leonard
-≥0.1.0 reads only `extensions` (ADR-0000 A33, ratified; the `ext.exploration.*`
-prefix, method names, and protocol version are unchanged). Keep new code, docs,
+The seam word is **extension**. The wire key is `extensions` in both the
+handshake and the stable observation, with **no `plugins` fallback** — readers
+at ≥0.1.0 read only `extensions` (the `ext.exploration.*` prefix, method names,
+and protocol version are unchanged). Keep new code, docs,
 and wire fields in extension vocabulary; one legacy class name still carries
 the old word — its rename is tracked separately; do not add more.
 
