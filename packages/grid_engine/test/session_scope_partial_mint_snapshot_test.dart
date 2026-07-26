@@ -154,14 +154,13 @@ class _Registry implements CapabilityRegistry {
   DateTime now() => DateTime(2026);
 
   @override
-  Circuit? circuit(String circuitId) =>
-      circuitId == 'spec_review'
-          ? const Circuit(
-              id: 'spec_review',
-              terminalStepId: 'route',
-              steps: [CapabilityStep(stepId: 'route', capabilityId: 'route')],
-            )
-          : null;
+  Circuit? circuit(String circuitId) => circuitId == 'spec_review'
+      ? const Circuit(
+          id: 'spec_review',
+          terminalStepId: 'route',
+          steps: [CapabilityStep(stepId: 'route', capabilityId: 'route')],
+        )
+      : null;
 
   @override
   Seed host(StepMount mount) =>
