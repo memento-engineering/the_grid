@@ -251,7 +251,9 @@ int derivedGeneration(
 /// "surfaces escalation instead of demoting" — which `frontier.dart`'s
 /// UNCHANGED runnable-state gate already withholds from the frontier exactly
 /// like a human-parked node today (D-7: `StepState.gated => false`), so
-/// [derivedEscalation] is a companion READ, not a second gate this file adds.
+/// [derivedEscalation] is a companion READ consumed by `SessionScope` through
+/// the existing D-7 `persistRaisedEscalation` effect, not a second gate this
+/// file adds.
 ///
 /// A node nothing currently invalidates passes through from [projected]
 /// UNTOUCHED — in particular its `rewindCount` stays whatever [projected]
@@ -338,12 +340,12 @@ Iterable<String> _declarationOrderPaths(
 /// The FIRST node (declaration order, depth-first) whose [derivedGeneration]
 /// has reached [kMaxReworkRounds] — the rework-cap BELT, derived: at the cap
 /// the derivation STOPS demoting (see [effectiveCursor]) and surfaces the node
-/// here instead, for a later rung's wiring to feed into the EXISTING
-/// `firstBrokenNode` / `_scheduleEscalation` path (`session_scope.dart:696`) —
-/// no router-side check, no engine primitive of its own. Null when nothing is
-/// at the cap. Capture-only shape (mirrors [firstBrokenNode]): never gates
-/// orchestration by itself — [effectiveCursor] already withheld the node via
-/// [StepState.gated] before this is ever consulted.
+/// here for `SessionScope` to feed into the EXISTING D-7
+/// `persistRaisedEscalation` effect — no router-side check, no engine primitive
+/// of its own. Null when nothing is at the cap. Capture-only shape (mirrors
+/// [firstBrokenNode]): never gates orchestration by itself — [effectiveCursor]
+/// already withheld the node via [StepState.gated] before this is ever
+/// consulted.
 ({String path, String reason})? derivedEscalation(
   Circuit circuit,
   CircuitCursor projected,

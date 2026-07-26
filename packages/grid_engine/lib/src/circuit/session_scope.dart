@@ -81,6 +81,8 @@ import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
+import '../sdk/route.dart' show EscalationRequest;
+import 'capability_host.dart' show persistRaisedEscalation;
 import 'capability_registry.dart';
 import 'circuit_scope.dart';
 import 'session_handle.dart';
@@ -764,6 +766,56 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     scheduleMicrotask(() => unawaited(_escalateAndClose(id, reason)));
   }
 
+  void _scheduleDerivedEscalation({
+    required String sessionId,
+    required String nodePath,
+    required String stepBeadId,
+    required String reason,
+    required NodeCursor node,
+  }) {
+    if (_terminalScheduled) return;
+    _terminalScheduled = true;
+    scheduleMicrotask(
+      () => unawaited(
+        _persistDerivedEscalation(
+          sessionId: sessionId,
+          nodePath: nodePath,
+          stepBeadId: stepBeadId,
+          reason: reason,
+          node: node,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _persistDerivedEscalation({
+    required String sessionId,
+    required String nodePath,
+    required String stepBeadId,
+    required String reason,
+    required NodeCursor node,
+  }) async {
+    final station = _ctx;
+    if (station == null) return;
+    await persistRaisedEscalation(
+      station: station,
+      services: _services,
+      request: EscalationRequest(
+        beadId: seed.bead.id,
+        sessionId: sessionId,
+        nodePath: nodePath,
+        reason: reason,
+        rewindCount: node.rewindCount,
+      ),
+      stepBeadId: stepBeadId,
+      gatedMetadata: stepBeadMetadata(node.copyWith(state: StepState.gated)),
+      isActive: () => !_cancelled && context.mounted,
+      failToSupervision: (failure) =>
+          _escalateAndClose(sessionId, '$nodePath: $failure'),
+      emitFlare: _flare,
+    );
+  }
+
   /// Re-arms ONE parked node whose gate bead has closed (D-7): flips its cursor
   /// `gated` → `pending` through the chokepoint so the route re-runs. Deduped
   /// per node via the in-flight [_rearming] guard (see its doc), scheduled off
@@ -1180,7 +1232,21 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
               )
             : null;
         if (derived != null) {
-          _scheduleEscalation(id, '${derived.path}: ${derived.reason}');
+          final stepBeadId = beadIdByNodePath[derived.path];
+          final node = cursorNodeAt(cursor, derived.path);
+          if (stepBeadId == null) {
+            throw StateError(
+              'derived escalation path "${derived.path}" has no step bead '
+              'in session "$id"',
+            );
+          }
+          _scheduleDerivedEscalation(
+            sessionId: id,
+            nodePath: derived.path,
+            stepBeadId: stepBeadId,
+            reason: derived.reason,
+            node: node,
+          );
         } else {
           final broken = firstBrokenNode(
             seed.circuit,
