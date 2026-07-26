@@ -81,6 +81,12 @@ class ProcessBdRunner implements BdRunner {
   /// Timeout applied when [run] is called without an explicit one.
   final Duration defaultTimeout;
 
+  /// Grace given to the post-exit pipe drain before detaching (tg-hceh).
+  /// After the child exits, EOF is normally immediate; it is withheld only
+  /// when an fd-inheriting descendant outlives the child — the case that
+  /// must NEVER hold a concurrency permit hostage.
+  static const Duration drainGrace = Duration(seconds: 2);
+
   final _Semaphore _semaphore;
   final Map<String, String> _baseEnvironment;
 
@@ -136,9 +142,22 @@ class ProcessBdRunner implements BdRunner {
     }
 
     // Drain both pipes concurrently so a full stderr buffer can never deadlock
-    // the child while we wait on stdout.
-    final stdoutFuture = process.stdout.transform(utf8.decoder).join();
-    final stderrFuture = process.stderr.transform(utf8.decoder).join();
+    // the child while we wait on stdout. BUFFERED listens (not `join()`) so
+    // the bounded drain below can detach and still return everything read.
+    final stdoutBuf = StringBuffer();
+    final stderrBuf = StringBuffer();
+    final stdoutSub = process.stdout
+        .transform(utf8.decoder)
+        .listen(stdoutBuf.write);
+    final stderrSub = process.stderr
+        .transform(utf8.decoder)
+        .listen(stderrBuf.write);
+    // Capture the done-futures AT LISTEN TIME: `asFuture` attached after an
+    // `await` would miss a `done` that fired during that await (the event is
+    // delivered to a subscription with no onDone handler and dropped), and
+    // every clean call would then eat the full [drainGrace] timeout.
+    final stdoutDone = stdoutSub.asFuture<void>();
+    final stderrDone = stderrSub.asFuture<void>();
 
     var timedOut = false;
     final timer = Timer(timeout, () {
@@ -155,9 +174,27 @@ class ProcessBdRunner implements BdRunner {
       timer.cancel();
     }
 
-    // Reap the pipes regardless, so we never leak the subscriptions.
-    final stdout = await stdoutFuture;
-    final stderr = await stderrFuture;
+    // Reap the pipes — BOUNDED (tg-hceh). After `bd` exits, pipe EOF only
+    // arrives once every fd-INHERITING DESCENDANT lets go: a store daemon a
+    // bd op leaves behind holds the write end open indefinitely. The old
+    // unbounded `await join()` here then never returned — `guarded` never
+    // released its permit, and a handful of such leaks emptied the
+    // station-wide write semaphore: every later write parked on `acquire()`
+    // forever with the VM idle (the silent-station latch, three arms
+    // running). The child has already exited, so what is buffered IS its
+    // output — give EOF a short grace, then detach and proceed.
+    try {
+      await Future.wait<void>([stdoutDone, stderrDone]).timeout(drainGrace);
+    } on TimeoutException {
+      await stdoutSub.cancel();
+      await stderrSub.cancel();
+      // The abandoned done-futures can still complete (with an error) after
+      // the cancel; never let that surface as an unhandled async error.
+      stdoutDone.ignore();
+      stderrDone.ignore();
+    }
+    final stdout = stdoutBuf.toString();
+    final stderr = stderrBuf.toString();
 
     if (timedOut) {
       throw BdTimeoutException(
