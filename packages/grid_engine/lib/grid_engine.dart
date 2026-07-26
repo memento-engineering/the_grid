@@ -40,7 +40,8 @@ export 'src/sdk/sdk.dart';
 // public/private package split is deferred, D1): the SessionScope adopt-or-mint
 // lifecycle owner (D-2), the CircuitScope inflater + its registry/clock seam
 // (Track D), and the resolver that roots the subtree at the SessionResolver seam.
-export 'src/circuit/capability_host.dart';
+export 'src/circuit/capability_host.dart'
+    show CapabilityHost, CapabilityHostState;
 export 'src/circuit/capability_registry.dart';
 export 'src/circuit/default_capability_registry.dart';
 export 'src/circuit/circuit_resolver.dart';
