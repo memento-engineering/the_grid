@@ -1123,6 +1123,19 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
       );
       moleculeProjectedCursor = projected.cursor;
       beadIdByNodePath = projected.beadIdByNodePath;
+      if (beadIdByNodePath.isEmpty) {
+        // A molecule session ALWAYS carries step beads — `_mintMolecule`
+        // pours them (`createMolecule`) immediately after `createSession`.
+        // A joined snapshot that claims `isMolecule` yet projects ZERO step
+        // beads was captured in the store-write gap BETWEEN those two
+        // writes (tg-nmhy): `matchesJoin` admits it on session-id alone,
+        // and mounting an `InheritedCircuit` from it would hand every
+        // eligible step a null bead id. Treat the partial snapshot as
+        // STILL RESOLVING — the next `JoinedSnapshot` tick carries the
+        // poured graph, and a fresh projection stays complete by
+        // construction.
+        return const Idle();
+      }
       final depthByPath = supersedesDepthByPath(
         joined.moleculeBeads,
         joined.moleculeDependencies,

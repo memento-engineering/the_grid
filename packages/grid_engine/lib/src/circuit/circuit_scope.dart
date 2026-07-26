@@ -130,17 +130,17 @@ class CircuitScope extends StatelessSeed with Diagnosable {
         switch (step) {
           case CapabilityStep():
             final beadId = beadIds[path];
-            // An adopted cursor can briefly lead its successor-bead join. In
-            // that ruled compatibility case CapabilityHost remains the loud
-            // point of consumption; a fresh projection must be complete.
-            if (inheritedCircuit != null &&
-                inheritedCircuit.cursor.isEmpty &&
-                beadId == null) {
-              throw StateError(
-                'CircuitScope has no step-bead id for "$path" '
-                '(InheritedCircuit.beadIdByNodePath is missing it)',
-              );
-            }
+            // An adopted cursor can briefly lead its successor-bead join,
+            // and a fresh projection is complete by construction —
+            // SessionScope refuses to mount an `InheritedCircuit` whose
+            // molecule projection carries zero step beads (tg-nmhy). A
+            // remaining path-level miss is a mis-composition whose LOUD
+            // point of consumption is `CapabilityHost._stepBeadId`,
+            // contained per-work at the allocation seam (ADR-0008 D10: one
+            // bad bead never crashes the station). NEVER throw here: a
+            // build-path throw escapes the tree flush unguarded
+            // (`StationKernel._scheduleFlush` runs in a root-zone
+            // microtask) and killed the whole resident VM.
             effect = registry.host(
               StepMount(
                 step: step,
