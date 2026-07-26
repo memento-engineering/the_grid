@@ -507,26 +507,25 @@ void main() {
       expect(reg.events, ['START agent(sess/root/agent)']);
     });
 
-    test('missing declared node path throws StateError', () {
-      expect(
-        () => _mount(
-          _CursorHost(
-            _code,
-            const {},
-            beadIds: const {
-              'root/verify': 'step-verify-v1',
-              'root/land': 'step-land-v1',
-            },
-          ),
-        ),
-        throwsA(
-          isA<StateError>().having(
-            (error) => error.message,
-            'message',
-            contains('no step-bead id for "root/agent"'),
-          ),
+    test('missing declared node path mounts WITHOUT throwing — CapabilityHost '
+        'is the contained loud point (tg-nmhy: the build-path throw escaped '
+        'the unguarded flush and killed the resident VM on partial-mint '
+        'snapshots)', () {
+      final m = _mount(
+        _CursorHost(
+          _code,
+          const {},
+          beadIds: const {
+            'root/verify': 'step-verify-v1',
+            'root/land': 'step-land-v1',
+          },
         ),
       );
+      // The step still mounts; a genuine mis-composition is refused
+      // per-work by `CapabilityHost._stepBeadId` at the allocation seam
+      // (ADR-0008 D10), never by a fatal build-path throw.
+      expect(m.reg.events, contains('START agent(sess/root/agent)'));
+      expect(_stepBranches(m.root), hasLength(3));
     });
 
     test('empty bead id throws StateError', () {
