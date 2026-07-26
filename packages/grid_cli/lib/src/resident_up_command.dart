@@ -5,6 +5,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
+import 'package:beads_dart/beads_dart.dart' show GraphSnapshot;
+import 'package:grid_engine/grid_engine.dart' show JoinedSnapshot, WedgeState;
 import 'package:grid_exploration/grid_exploration.dart'
     show DevModeSeat, armDevMode, stationVmServiceUri;
 import 'package:grid_runtime/grid_runtime.dart'
@@ -13,8 +15,10 @@ import 'package:grid_sdk/grid_sdk.dart'
     show
         CapabilityRegistry,
         GridDelegate,
+        GridCommandHandler,
         GridHandle,
         GridStateStore,
+        ReassembleReport,
         SessionResolver,
         StationWorkRuntime,
         StationWorkWiring,
@@ -48,6 +52,92 @@ typedef ResidentRosterReader =
 /// Validates one caller-owned harness, returning a refusal or null.
 typedef ResidentHarnessValidator = String? Function(String harness);
 
+/// The lock resource owned by a resident boot.
+abstract interface class ResidentLockResource {
+  String get path;
+  Future<void> updateControl({
+    required String controlUrl,
+    required String token,
+  });
+  Future<void> updateVmService(String vmServiceUri);
+  Future<void> release();
+}
+
+/// The work runtime operations consumed by the resident shell.
+abstract interface class ResidentWorkResource {
+  StationWorkWiring get wiring;
+  GridCommandHandler get commands;
+  StationGitService get git;
+  String get stateSubstation;
+  String get readPathName;
+  JoinedSnapshot get latest;
+  WedgeState get wedge;
+  Future<void> start();
+  void afterFlush();
+  Future<void> sweepOrphans();
+  Future<void> shutdown();
+}
+
+/// The mounted grid operations consumed by the resident shell.
+abstract interface class ResidentGridResource {
+  Future<ReassembleReport> hotReload();
+  Future<ReassembleReport> hotRestart();
+  Future<void> teardown();
+}
+
+/// The control resource owned by a resident boot.
+abstract interface class ResidentControlResource {
+  String get url;
+  Future<void> dispose();
+}
+
+/// The optional development-mode resource owned by a resident boot.
+abstract interface class ResidentDevModeResource {
+  String get vmServiceUri;
+  void register();
+  Future<void> dispose();
+}
+
+typedef ResidentLockAcquirer =
+    Future<ResidentLockResource> Function({
+      required String stateWorkspaceDir,
+      required int pid,
+      required DateTime now,
+    });
+typedef ResidentWorkBuilder =
+    Future<ResidentWorkResource> Function({
+      required GridStateStore stateStore,
+      required List<SubstationWorkSpec> substations,
+      required SessionResolver resolver,
+      required CapabilityRegistry registry,
+      required bool dryRun,
+      required int maxConcurrentWork,
+    });
+typedef ResidentGridRunner =
+    ResidentGridResource Function(
+      GridDelegate delegate, {
+      required void Function() onFlushed,
+      required Future<void> Function() orphanSweep,
+      GridDelegate Function()? delegateFactory,
+    });
+typedef ResidentControlStarter =
+    Future<ResidentControlResource> Function({
+      required int port,
+      required String token,
+      required StationStatus Function() view,
+      required GridCommandHandler commandHandler,
+    });
+typedef ResidentDevModeArmer =
+    Future<ResidentDevModeResource?> Function({
+      required String? vmServiceUri,
+      required Future<Map<String, Object?>> Function() hotReload,
+      required Future<Map<String, Object?>> Function() hotRestart,
+      required GraphSnapshot Function() latest,
+      required String Function() readPath,
+    });
+typedef ResidentVmServiceReader = Future<String?> Function();
+typedef ResidentShutdownWaiter = Future<void> Function();
+
 /// Boots a foreground resident station over `runGrid`.
 class ResidentUpCommand extends Command<int> {
   /// Creates a resident `up` command.
@@ -60,13 +150,27 @@ class ResidentUpCommand extends Command<int> {
     required SessionResolver resolver,
     required CapabilityRegistry registry,
     StationLockService? lockService,
+    ResidentLockAcquirer? acquireLock,
+    ResidentWorkBuilder? buildWork,
+    ResidentGridRunner? runMountedGrid,
+    ResidentControlStarter? startControl,
+    ResidentDevModeArmer? armDevelopmentMode,
+    ResidentVmServiceReader? readVmServiceUri,
+    ResidentShutdownWaiter? waitForShutdown,
   }) : _delegateFactory = delegateFactory,
        _codedRoster = codedRoster,
        _harnessAllowList = Set.unmodifiable(harnessAllowList),
        _validateHarness = validateHarness,
        _resolver = resolver,
        _registry = registry,
-       _lockService = lockService ?? StationLockService() {
+       _lockService = lockService ?? StationLockService(),
+       _acquireLock = acquireLock,
+       _buildWork = buildWork ?? _defaultBuildWork,
+       _runMountedGrid = runMountedGrid ?? _defaultRunMountedGrid,
+       _startControl = startControl ?? _defaultStartControl,
+       _armDevelopmentMode = armDevelopmentMode ?? _defaultArmDevelopmentMode,
+       _readVmServiceUri = readVmServiceUri ?? stationVmServiceUri,
+       _waitForShutdown = waitForShutdown ?? _waitForTerminationSignal {
     if (_harnessAllowList.isEmpty) {
       throw ArgumentError.value(harnessAllowList, 'harnessAllowList');
     }
@@ -86,6 +190,13 @@ class ResidentUpCommand extends Command<int> {
   final SessionResolver _resolver;
   final CapabilityRegistry _registry;
   final StationLockService _lockService;
+  final ResidentLockAcquirer? _acquireLock;
+  final ResidentWorkBuilder _buildWork;
+  final ResidentGridRunner _runMountedGrid;
+  final ResidentControlStarter _startControl;
+  final ResidentDevModeArmer _armDevelopmentMode;
+  final ResidentVmServiceReader _readVmServiceUri;
+  final ResidentShutdownWaiter _waitForShutdown;
 
   @override
   String get name => 'up';
@@ -178,9 +289,22 @@ class ResidentUpCommand extends Command<int> {
     }
 
     final startedAt = DateTime.now();
-    final StationLockHandle stationLock;
+    final ResidentLockResource stationLock;
     try {
-      stationLock = await _lockService.acquire(
+      final acquire =
+          _acquireLock ??
+          ({
+            required String stateWorkspaceDir,
+            required int pid,
+            required DateTime now,
+          }) async => _StationLockResource(
+            await _lockService.acquire(
+              stateWorkspaceDir: stateWorkspaceDir,
+              pid: pid,
+              now: now,
+            ),
+          );
+      stationLock = await acquire(
         stateWorkspaceDir: config.gridHome,
         pid: pid,
         now: startedAt,
@@ -190,9 +314,9 @@ class ResidentUpCommand extends Command<int> {
       return 64;
     }
 
-    final StationWorkRuntime work;
+    final ResidentWorkResource work;
     try {
-      work = await buildStationWork(
+      work = await _buildWork(
         stateStore: stateStore,
         substations: armed,
         resolver: _resolver,
@@ -215,7 +339,7 @@ class ResidentUpCommand extends Command<int> {
     }
 
     final live = !config.dryRun;
-    final vmServiceUri = await stationVmServiceUri();
+    final vmServiceUri = await _readVmServiceUri();
     GridDelegate buildDelegate() => _delegateFactory(
       config: config,
       wiring: work.wiring,
@@ -224,9 +348,9 @@ class ResidentUpCommand extends Command<int> {
       prOpener: live ? GhPrOpener(ghRunner) : null,
     );
 
-    final GridHandle grid;
+    final ResidentGridResource grid;
     try {
-      grid = runGrid(
+      grid = _runMountedGrid(
         buildDelegate(),
         onFlushed: work.afterFlush,
         orphanSweep: () async {
@@ -242,9 +366,9 @@ class ResidentUpCommand extends Command<int> {
     }
 
     final token = mintControlToken();
-    final StationControl control;
+    final ResidentControlResource control;
     try {
-      control = await StationControl.start(
+      control = await _startControl(
         port: config.controlPort,
         token: token,
         view: () => _status(config, armed, startedAt, work),
@@ -259,9 +383,9 @@ class ResidentUpCommand extends Command<int> {
       return 1;
     }
 
-    final DevModeSeat? devMode;
+    final ResidentDevModeResource? devMode;
     try {
-      devMode = await armDevMode(
+      devMode = await _armDevelopmentMode(
         vmServiceUri: vmServiceUri,
         hotReload: () async => (await grid.hotReload()).toJson(),
         hotRestart: () async => (await grid.hotRestart()).toJson(),
@@ -308,21 +432,9 @@ class ResidentUpCommand extends Command<int> {
       await unwind();
       return 0;
     }
-    final interrupt = Completer<void>();
-    final signals = <StreamSubscription<ProcessSignal>>[];
-    for (final signal in const [ProcessSignal.sigint, ProcessSignal.sigterm]) {
-      signals.add(
-        signal.watch().listen((_) {
-          if (!interrupt.isCompleted) interrupt.complete();
-        }),
-      );
-    }
-    await interrupt.future;
+    await _waitForShutdown();
     stdout.writeln('\n$prefix: shutting down…');
     await unwind();
-    for (final signal in signals) {
-      await signal.cancel();
-    }
     return 0;
   }
 
@@ -330,7 +442,7 @@ class ResidentUpCommand extends Command<int> {
     ResidentStationConfig config,
     List<SubstationWorkSpec> armed,
     DateTime startedAt,
-    StationWorkRuntime work,
+    ResidentWorkResource work,
   ) {
     final latest = work.latest;
     final live = latest.sessionsByWorkBead.values
@@ -351,5 +463,167 @@ class ResidentUpCommand extends Command<int> {
       lastSyncAt: capturedAt.millisecondsSinceEpoch == 0 ? null : capturedAt,
       wedge: work.wedge,
     );
+  }
+}
+
+final class _StationLockResource implements ResidentLockResource {
+  _StationLockResource(this._handle);
+  final StationLockHandle _handle;
+
+  @override
+  String get path => _handle.path;
+  @override
+  Future<void> updateControl({
+    required String controlUrl,
+    required String token,
+  }) => _handle.updateControl(controlUrl: controlUrl, token: token);
+  @override
+  Future<void> updateVmService(String vmServiceUri) =>
+      _handle.updateVmService(vmServiceUri);
+  @override
+  Future<void> release() => _handle.release();
+}
+
+final class _StationWorkResource implements ResidentWorkResource {
+  _StationWorkResource(this._runtime);
+  final StationWorkRuntime _runtime;
+
+  @override
+  StationWorkWiring get wiring => _runtime.wiring;
+  @override
+  GridCommandHandler get commands => _runtime.commands;
+  @override
+  StationGitService get git => _runtime.git;
+  @override
+  String get stateSubstation => _runtime.stateSubstation;
+  @override
+  String get readPathName => _runtime.readPathName;
+  @override
+  JoinedSnapshot get latest => _runtime.latest;
+  @override
+  WedgeState get wedge => _runtime.wedge;
+  @override
+  Future<void> start() => _runtime.start();
+  @override
+  void afterFlush() => _runtime.afterFlush();
+  @override
+  Future<void> sweepOrphans() => _runtime.sweepOrphans();
+  @override
+  Future<void> shutdown() => _runtime.shutdown();
+}
+
+final class _GridResource implements ResidentGridResource {
+  _GridResource(this._handle);
+  final GridHandle _handle;
+
+  @override
+  Future<ReassembleReport> hotReload() => _handle.hotReload();
+  @override
+  Future<ReassembleReport> hotRestart() => _handle.hotRestart();
+  @override
+  Future<void> teardown() => _handle.teardown();
+}
+
+final class _ControlResource implements ResidentControlResource {
+  _ControlResource(this._control);
+  final StationControl _control;
+
+  @override
+  String get url => _control.url;
+  @override
+  Future<void> dispose() => _control.dispose();
+}
+
+final class _DevModeResource implements ResidentDevModeResource {
+  _DevModeResource(this._seat);
+  final DevModeSeat _seat;
+
+  @override
+  String get vmServiceUri => _seat.vmServiceUri;
+  @override
+  void register() => _seat.register();
+  @override
+  Future<void> dispose() => _seat.dispose();
+}
+
+Future<ResidentWorkResource> _defaultBuildWork({
+  required GridStateStore stateStore,
+  required List<SubstationWorkSpec> substations,
+  required SessionResolver resolver,
+  required CapabilityRegistry registry,
+  required bool dryRun,
+  required int maxConcurrentWork,
+}) async => _StationWorkResource(
+  await buildStationWork(
+    stateStore: stateStore,
+    substations: substations,
+    resolver: resolver,
+    registry: registry,
+    dryRun: dryRun,
+    maxConcurrentWork: maxConcurrentWork,
+  ),
+);
+
+ResidentGridResource _defaultRunMountedGrid(
+  GridDelegate delegate, {
+  required void Function() onFlushed,
+  required Future<void> Function() orphanSweep,
+  GridDelegate Function()? delegateFactory,
+}) => _GridResource(
+  runGrid(
+    delegate,
+    onFlushed: onFlushed,
+    orphanSweep: orphanSweep,
+    delegateFactory: delegateFactory,
+  ),
+);
+
+Future<ResidentControlResource> _defaultStartControl({
+  required int port,
+  required String token,
+  required StationStatus Function() view,
+  required GridCommandHandler commandHandler,
+}) async => _ControlResource(
+  await StationControl.start(
+    port: port,
+    token: token,
+    view: view,
+    commandHandler: commandHandler,
+  ),
+);
+
+Future<ResidentDevModeResource?> _defaultArmDevelopmentMode({
+  required String? vmServiceUri,
+  required Future<Map<String, Object?>> Function() hotReload,
+  required Future<Map<String, Object?>> Function() hotRestart,
+  required GraphSnapshot Function() latest,
+  required String Function() readPath,
+}) async {
+  final seat = await armDevMode(
+    vmServiceUri: vmServiceUri,
+    hotReload: hotReload,
+    hotRestart: hotRestart,
+    latest: latest,
+    readPath: readPath,
+  );
+  return seat == null ? null : _DevModeResource(seat);
+}
+
+Future<void> _waitForTerminationSignal() async {
+  final interrupt = Completer<void>();
+  final signals = <StreamSubscription<ProcessSignal>>[];
+  try {
+    for (final signal in const [ProcessSignal.sigint, ProcessSignal.sigterm]) {
+      signals.add(
+        signal.watch().listen((_) {
+          if (!interrupt.isCompleted) interrupt.complete();
+        }),
+      );
+    }
+    await interrupt.future;
+  } finally {
+    for (final signal in signals) {
+      await signal.cancel();
+    }
   }
 }
