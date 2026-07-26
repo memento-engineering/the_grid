@@ -56,6 +56,12 @@ Future<WebSocket> _connect(StationControl control) => WebSocket.connect(
   headers: {HttpHeaders.authorizationHeader: 'Bearer t'},
 );
 
+Future<WebSocket> _connectWithProtocol(StationControl control, String token) =>
+    WebSocket.connect(
+      '${control.url.replaceFirst('http:', 'ws:')}/stream',
+      protocols: ['$stationTreeBearerProtocolPrefix$token'],
+    );
+
 TreeSnapshot _decode(Object? frame) => TreeSnapshot.fromJson(
   (jsonDecode(frame! as String) as Map).cast<String, Object?>(),
 );
@@ -139,6 +145,25 @@ void main() {
     await _pump();
 
     expect(frames, [projector.latest]);
+  });
+
+  test('browser bearer subprotocol authenticates and is selected', () async {
+    final control = await _start(projector: projector);
+    addTearDown(control.dispose);
+    final socket = await _connectWithProtocol(control, 't');
+    addTearDown(socket.close);
+
+    expect(socket.protocol, '${stationTreeBearerProtocolPrefix}t');
+  });
+
+  test('wrong browser bearer subprotocol is rejected before upgrade', () async {
+    final control = await _start(projector: projector);
+    addTearDown(control.dispose);
+
+    await expectLater(
+      _connectWithProtocol(control, 'wrong'),
+      throwsA(isA<WebSocketException>()),
+    );
   });
 
   test(

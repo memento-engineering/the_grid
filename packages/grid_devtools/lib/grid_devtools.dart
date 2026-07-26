@@ -1,7 +1,8 @@
 /// DevTools extension for the_grid.
 ///
-/// Attaches to a running grid process over the exploration protocol only
-/// (ADR-0002 Decision 3) — never imports beads_dart directly. The
+/// Attaches to exploration operations through the VM service and reads live
+/// diagnostics through the authenticated station door (ADR-0002 Decision 3).
+/// It never imports beads_dart directly. The
 /// protocol-call layer ([GridExplorationClient]) is kept thin and separate
 /// from the widgets so the panels are unit-testable against a fake client
 /// with no live VM service.
@@ -17,6 +18,26 @@ export 'src/handshake_state.dart'
         HandshakeLoaded,
         HandshakeLoading,
         HandshakeState;
+export 'src/live/live_connection_bar.dart' show LiveConnectionBar;
+export 'src/live/live_connection_controller.dart'
+    show
+        LiveConnected,
+        LiveConnecting,
+        LiveConnectionController,
+        LiveConnectionState,
+        LiveDisconnected,
+        LiveDiscovering,
+        LiveFailed,
+        LiveManual,
+        LiveTreeSourceConnector;
+export 'src/live/station_lock_discovery.dart'
+    show
+        StationLockDiscovery,
+        StationLockDiscoveryFailure,
+        TextFileReader,
+        WorkspaceRootsReader;
+export 'src/live/websocket_tree_wire_source.dart'
+    show WebSocketConnector, WebSocketTreeWireSource;
 export 'src/protocol/grid_exploration_client.dart'
     show
         GridBindingMissing,

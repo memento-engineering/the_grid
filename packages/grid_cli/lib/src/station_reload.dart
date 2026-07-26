@@ -17,6 +17,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show StationLockRecord;
 import 'package:grid_exploration/grid_exploration.dart'
     show ReassembleTool, gridExtension;
 import 'package:vm_service/utils.dart';

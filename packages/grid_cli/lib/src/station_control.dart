@@ -278,8 +278,7 @@ class StationControl {
   }
 
   Future<void> _handle(HttpRequest request) async {
-    final header = request.headers.value(HttpHeaders.authorizationHeader);
-    if (header != 'Bearer $_token') {
+    if (!_isAuthorized(request)) {
       await _respond(request, HttpStatus.unauthorized, <String, Object?>{
         'error': 'unauthorized',
       });
@@ -322,6 +321,23 @@ class StationControl {
     await _respond(request, HttpStatus.ok, route!());
   }
 
+  bool _isAuthorized(HttpRequest request) {
+    if (request.headers.value(HttpHeaders.authorizationHeader) ==
+        'Bearer $_token') {
+      return true;
+    }
+    if (request.uri.path != _streamPath ||
+        !WebSocketTransformer.isUpgradeRequest(request)) {
+      return false;
+    }
+    final requested =
+        request.headers['sec-websocket-protocol'] ?? const <String>[];
+    return requested
+        .expand((value) => value.split(','))
+        .map((value) => value.trim())
+        .contains('$stationTreeBearerProtocolPrefix$_token');
+  }
+
   Future<void> _handleStream(HttpRequest request) async {
     final projector = _treeProjector;
     if (projector == null) {
@@ -337,7 +353,12 @@ class StationControl {
       });
       return;
     }
-    final socket = await WebSocketTransformer.upgrade(request);
+    final bearerProtocol = '$stationTreeBearerProtocolPrefix$_token';
+    final socket = await WebSocketTransformer.upgrade(
+      request,
+      protocolSelector: (protocols) =>
+          protocols.contains(bearerProtocol) ? bearerProtocol : null,
+    );
     _webSockets.add(socket);
     final latest = projector.latest;
     final subscription = projector.snapshots.listen(

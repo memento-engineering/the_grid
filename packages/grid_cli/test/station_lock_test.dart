@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_cli/src/station_lock.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:test/test.dart';
 
 /// RS-2 (D-A1, `docs/SCRATCH-resident-station.md` §4): the station lock —

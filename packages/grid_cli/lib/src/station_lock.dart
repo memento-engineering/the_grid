@@ -20,6 +20,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:grid_runtime/grid_runtime.dart'
     show establishStationProcessGroup;
 
@@ -57,92 +58,6 @@ Future<int> _defaultStationGroupPreparer(int stationPid) =>
 /// same-user arbitration (one operator per store), so EPERM-as-dead is fine.
 bool defaultPidProbe(int pid) =>
     Process.runSync('kill', ['-0', '$pid']).exitCode == 0;
-
-/// The `station.lock` payload. [controlUrl]/[token] are absent until the
-/// control surface (RS-4) advertises itself through
-/// [StationLockHandle.updateControl] — the codec is forward-compatible with
-/// their absence (and tolerant of unknown extra keys), so an RS-2 lock and an
-/// RS-4 lock round-trip through the same type.
-class StationLockRecord {
-  /// Creates the payload; the control fields default to absent.
-  const StationLockRecord({
-    required this.pid,
-    required this.pgid,
-    required this.startedAt,
-    this.controlUrl,
-    this.token,
-    this.vmServiceUri,
-  });
-
-  /// Parses a lock payload. Throws (any [Object]) on a malformed shape — the
-  /// service treats that as a torn write from a crashed acquire.
-  factory StationLockRecord.fromJson(Map<String, Object?> json) =>
-      StationLockRecord(
-        pid: json['pid'] as int,
-        pgid: json['pgid'] as int,
-        startedAt: DateTime.parse(json['startedAt'] as String),
-        controlUrl: json['controlUrl'] as String?,
-        token: json['token'] as String?,
-        vmServiceUri: json['vmServiceUri'] as String?,
-      );
-
-  /// The holder's process id (the liveness-probe target).
-  final int pid;
-
-  /// The holder's process group id (the spawned-agent group root).
-  final int pgid;
-
-  /// When the holder acquired the lock.
-  final DateTime startedAt;
-
-  /// The RS-4 loopback control endpoint; null until advertised.
-  final String? controlUrl;
-
-  /// The RS-4 per-boot bearer token; null until advertised. This field is why
-  /// the lock file is 0600.
-  final String? token;
-
-  /// The station's VM-service URI — advertised ONLY by a JIT station started
-  /// with `--enable-vm-service` (the dev-mode hot-reload target); null on an AOT
-  /// station, which cannot be reloaded. It carries the service auth code, which
-  /// is the OTHER reason this file is 0600.
-  final String? vmServiceUri;
-
-  /// Serializes the payload; absent optional fields are OMITTED (not null).
-  Map<String, Object?> toJson() => <String, Object?>{
-    'pid': pid,
-    'pgid': pgid,
-    'startedAt': startedAt.toIso8601String(),
-    if (controlUrl != null) 'controlUrl': controlUrl,
-    if (token != null) 'token': token,
-    if (vmServiceUri != null) 'vmServiceUri': vmServiceUri,
-  };
-
-  /// The RS-4 advertisement: the same identity with the control fields set.
-  StationLockRecord withControl({
-    required String controlUrl,
-    required String token,
-  }) => StationLockRecord(
-    pid: pid,
-    pgid: pgid,
-    startedAt: startedAt,
-    controlUrl: controlUrl,
-    token: token,
-    // PRESERVED: the control advertisement must not erase a dev-mode station's
-    // VM-service URI — which advertisement lands first is the runner's business.
-    vmServiceUri: vmServiceUri,
-  );
-
-  /// The dev-mode advertisement: the same identity with [vmServiceUri] set.
-  StationLockRecord withVmService(String vmServiceUri) => StationLockRecord(
-    pid: pid,
-    pgid: pgid,
-    startedAt: startedAt,
-    controlUrl: controlUrl,
-    token: token,
-    vmServiceUri: vmServiceUri,
-  );
-}
 
 /// The station-lock service (Services layer: stateless I/O; the reference
 /// type carries the classifier). Owns the exclusive-create / probe / steal /

@@ -14,12 +14,19 @@ final class FakeTreeWireSource implements TreeWireSource {
   TreeSnapshot? current;
   final controller = StreamController<TreeSnapshot>.broadcast();
   late final Stream<TreeSnapshot> stream;
+  int disposeCalls = 0;
 
   @override
   TreeSnapshot? get latest => current;
 
   @override
   Stream<TreeSnapshot> get snapshots => stream;
+
+  @override
+  Future<void> dispose() async {
+    disposeCalls++;
+    await controller.close();
+  }
 }
 
 void main() {
@@ -32,8 +39,8 @@ void main() {
     wire.current = snapshot(version: 1);
     expect(identical(source.latest, wire.current), isTrue);
     await source.dispose();
-    expect(wire.controller.isClosed, isFalse);
-    await wire.controller.close();
+    expect(wire.disposeCalls, 1);
+    expect(source.snapshots, emitsDone);
   });
 
   test('replay refuses an empty recording', () {

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
 
 import 'handshake_state.dart';
+import 'live/live_connection_bar.dart';
+import 'live/live_connection_controller.dart';
 import 'projection/projection_tabs.dart';
 import 'protocol/grid_exploration_client.dart';
 import 'replay/replay_fixture.dart';
@@ -24,6 +26,7 @@ class GridDevToolsShell extends StatefulWidget {
     required this.client,
     this.retrigger,
     this.treeSource,
+    this.liveConnection,
     this.snapshotJsonPicker = pickSnapshotJson,
   });
 
@@ -37,6 +40,9 @@ class GridDevToolsShell extends StatefulWidget {
 
   /// Optional projection source; the shell owns a bundled replay when absent.
   final TreeSource? treeSource;
+
+  /// Optional live source owner and connection affordance.
+  final LiveConnectionController? liveConnection;
 
   /// File-selection boundary forwarded to the projection surface.
   final SnapshotJsonPicker snapshotJsonPicker;
@@ -111,26 +117,47 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ValueListenableBuilder<HandshakeState>(
-            valueListenable: _handshake,
-            builder: (context, state, _) => _HandshakeHeader(state: state),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: ProjectionTabs(
-              client: widget.client,
-              source: widget.treeSource ?? _defaultSource!,
-              snapshotJsonPicker: widget.snapshotJsonPicker,
-            ),
-          ),
-        ],
-      ),
+    final liveConnection = widget.liveConnection;
+    if (liveConnection == null) {
+      return _buildScaffold(widget.treeSource ?? _defaultSource!);
+    }
+    return ValueListenableBuilder<LiveConnectionState>(
+      valueListenable: liveConnection,
+      builder: (context, state, _) {
+        final projectionSource = switch (state) {
+          LiveConnected(:final source) => source,
+          LiveDisconnected() ||
+          LiveDiscovering() ||
+          LiveManual() ||
+          LiveConnecting() ||
+          LiveFailed() => widget.treeSource ?? _defaultSource!,
+        };
+        return _buildScaffold(projectionSource);
+      },
     );
   }
+
+  Widget _buildScaffold(TreeSource projectionSource) => Scaffold(
+    body: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ValueListenableBuilder<HandshakeState>(
+          valueListenable: _handshake,
+          builder: (context, state, _) => _HandshakeHeader(state: state),
+        ),
+        const Divider(height: 1),
+        if (widget.liveConnection case final connection?)
+          LiveConnectionBar(controller: connection),
+        Expanded(
+          child: ProjectionTabs(
+            client: widget.client,
+            source: projectionSource,
+            snapshotJsonPicker: widget.snapshotJsonPicker,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 /// Renders the handshake result: a spinner while probing, the advertised
