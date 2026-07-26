@@ -36,8 +36,6 @@ const _sub = Circuit(
   steps: [CapabilityStep(stepId: 'route', capabilityId: 'route')],
 );
 
-const _routeStep = CapabilityStep(stepId: 'route', capabilityId: 'route');
-
 /// The step bead id [InheritedCircuit.beadIdByNodePath] resolves the route
 /// node to — the molecule model is the ONLY circuit engine (tg-eli phase 2),
 /// so [CapabilityHost] refuses LOUD at mount without one (proven in
@@ -78,6 +76,7 @@ Future<void> _pump() async {
   ServiceBundle services = const ServiceBundle(),
   NodeCursor node = const NodeCursor(),
   int circuitRound = 0,
+  Map<String, String> params = const {},
   bool ambient = true,
 }) {
   final fakes = buildFakes();
@@ -86,7 +85,11 @@ Future<void> _pump() async {
   Seed child = CapabilityHost(
     capability: capability,
     mount: StepMount(
-      step: _routeStep,
+      step: CapabilityStep(
+        stepId: 'route',
+        capabilityId: 'route',
+        params: params,
+      ),
       nodePath: nodePath,
       circuit: circuit,
       circuitPath: circuitPath,
@@ -142,6 +145,7 @@ Future<Fakes> _drive(
   ServiceBundle services = const ServiceBundle(),
   NodeCursor node = const NodeCursor(),
   int circuitRound = 0,
+  Map<String, String> params = const {},
   bool ambient = true,
 }) async {
   final h = _mountRoute(
@@ -151,6 +155,7 @@ Future<Fakes> _drive(
     services: services,
     node: node,
     circuitRound: circuitRound,
+    params: params,
     ambient: ambient,
   );
   addTearDown(() {
@@ -187,7 +192,7 @@ class _CurrentRoundCommitteeRoute extends RouteCapability {
 
   @override
   Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
-    final round = args.params['round'];
+    final round = args.params['grid.round'];
     seenRounds.add(round);
     final current =
         round != null && verdicts.every((verdict) => verdict['round'] == round);
@@ -199,8 +204,32 @@ class _CurrentRoundCommitteeRoute extends RouteCapability {
   }
 }
 
+class _ParameterCaptureRoute extends RouteCapability {
+  _ParameterCaptureRoute(this.seen);
+
+  final List<Map<String, String>> seen;
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
+    seen.add(Map<String, String>.of(args.params));
+    return const Advance();
+  }
+}
+
 void main() {
   group('committee verdict circuit round', () {
+    test('preserves authored round beside reserved grid.round', () async {
+      final seen = <Map<String, String>>[];
+      await _drive(
+        _ParameterCaptureRoute(seen),
+        circuitRound: 2,
+        params: const {'round': 'author-round'},
+      );
+
+      expect(seen.single['round'], 'author-round');
+      expect(seen.single['grid.round'], '2');
+    });
+
     test(
       'joins successor-incarnation verdicts independently of rewindCount',
       () async {

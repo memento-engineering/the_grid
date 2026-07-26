@@ -166,7 +166,7 @@ class CapabilityHostState extends State<CapabilityHost> with Diagnosable {
     _args = StepArgs(
       params: {
         ...seed.mount.step.params,
-        'round': '${seed.mount.circuitRound}',
+        'grid.round': '${seed.mount.circuitRound}',
       },
       nodePath: seed.mount.nodePath,
       cancel: CancelToken(),
