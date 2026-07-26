@@ -23,10 +23,11 @@ import 'package:beads_dart/beads_dart.dart';
 /// nothing.
 class BeadOwnershipPredicate {
   /// Builds a predicate over [substations] — the shared allow-set. Each entry is both
-  /// a rig name (matched against `metadata.rig`) and an issue-id prefix
-  /// (matched against the id's leading dash-delimited segment), so the dogfood
-  /// rig `tgdog` accepts both `metadata.rig == "tgdog"` and an id like
-  /// `tgdog-abc123`.
+  /// a rig name (matched against `metadata.rig`) and an issue-id prefix.
+  /// Prefix ownership matches only at the complete `<substation>-` boundary;
+  /// when configured names overlap, the longest complete match wins. Thus the
+  /// dogfood rig `tgdog` accepts both `metadata.rig == "tgdog"` and an id like
+  /// `tgdog-abc123`, while `swift-infer` accepts `swift-infer-097`.
   ///
   /// When [requireSubstationMarker] is true, a bead must ALSO carry
   /// `metadata.rig == <owned>` to be owned — the belt-and-suspenders posture
@@ -47,7 +48,8 @@ class BeadOwnershipPredicate {
   Set<String> get substations => Set<String>.unmodifiable(_substations);
 
   /// Whether the_grid owns [bead] — may dispatch against it and mutate it.
-  bool owns(Bead bead) => _ownsRig(substationOf(bead), markerOf(bead.metadata));
+  bool owns(Bead bead) =>
+      _ownsRig(_ownedPrefixOf(bead.id), markerOf(bead.metadata));
 
   /// Whether the_grid owns a bead with the given [id] and [metadata], without a
   /// full [Bead] in hand — the form the chokepoint uses on a freshly minted
@@ -56,7 +58,21 @@ class BeadOwnershipPredicate {
   bool ownsTarget({
     required String id,
     Map<String, dynamic> metadata = const {},
-  }) => _ownsRig(prefixOf(id), markerOf(metadata));
+  }) => _ownsRig(_ownedPrefixOf(id), markerOf(metadata));
+
+  String? _ownedPrefixOf(String id) {
+    String? longest;
+    for (final substation in _substations) {
+      final boundary = '$substation-';
+      if (!id.startsWith(boundary)) continue;
+      final suffix = id.substring(boundary.length);
+      if (suffix.isEmpty) continue;
+      if (longest == null || substation.length > longest.length) {
+        longest = substation;
+      }
+    }
+    return longest;
+  }
 
   bool _ownsRig(String? prefix, String? marker) {
     if (requireSubstationMarker) {
@@ -75,7 +91,7 @@ class BeadOwnershipPredicate {
   /// The bead's rig as derived from its axes (the owned prefix if any, else the
   /// `metadata.rig` marker) — for diagnostics / logging.
   String? substationOf(Bead bead) =>
-      prefixOf(bead.id) ?? markerOf(bead.metadata);
+      _ownedPrefixOf(bead.id) ?? markerOf(bead.metadata);
 
   /// The leading dash-delimited segment of an issue id (gc's rig prefix axis,
   /// ADR-0002 D2). `tgdog-abc123` → `tgdog`; a bare id with no dash → null.
