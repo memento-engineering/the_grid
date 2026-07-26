@@ -28,6 +28,11 @@ export 'src/station_lock.dart';
 // The dev-mode reload client: a JIT station picks up landed code changes over
 // its VM service, with no down/up bounce and no killed agents.
 export 'src/station_reload.dart';
+export 'src/resident_station_flags.dart';
+export 'src/resident_state_workspace.dart';
+export 'src/resident_up_command.dart';
+export 'src/resident_down_command.dart';
+export 'src/resident_status_command.dart';
 
 // The generic, asset-agnostic driving commands.
 export 'src/reload_command.dart';
