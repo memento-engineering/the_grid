@@ -282,12 +282,8 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     // Captured for [_mint]'s async use (D-H rule 1) — the reentrant registry
     // (a molecule mint's sub-circuit resolution).
     _registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
-    final joined = context.dependOnInheritedSeedOfExactType<JoinedSnapshot>();
-    assert(
-      joined != null,
-      'SessionScope requires an ambient InheritedSeed<JoinedSnapshot>',
-    );
-    _joinedSnapshot = joined;
+    _joinedSnapshot = context
+        .dependOnInheritedSeedOfExactType<JoinedSnapshot>();
     _considerMintReadiness();
   }
 
@@ -394,13 +390,20 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     final completer = _mintReadiness;
     final decisionAt = _mintDecisionAt;
     final snapshot = _joinedSnapshot;
-    if (completer == null ||
-        completer.isCompleted ||
-        decisionAt == null ||
-        snapshot == null ||
-        snapshot.graph.capturedAt.isBefore(decisionAt)) {
+    if (completer == null || completer.isCompleted || decisionAt == null) {
       return;
     }
+    if (snapshot == null) {
+      if (!_mintBlockedReported) {
+        _mintBlockedReported = true;
+        _flare('session.mintRefused', {
+          'workBeadId': seed.bead.id,
+          'reason': 'fresh joined snapshot is unavailable',
+        });
+      }
+      return;
+    }
+    if (snapshot.graph.capturedAt.isBefore(decisionAt)) return;
     if (!snapshot.graph.readyIds.contains(seed.bead.id)) {
       if (!_mintBlockedReported) {
         _mintBlockedReported = true;
