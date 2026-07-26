@@ -207,7 +207,12 @@ void main() {
           body: {
             'id': 1,
             'method': 'grid/rework',
-            'params': {'beadId': 'tg-1', 'note': 'retry'},
+            'params': {
+              'beadId': 'tg-1',
+              'note': 'retry',
+              'beyondCap': true,
+              'actor': 'Nico',
+            },
           },
         );
         expect(rework.statusCode, 200);
@@ -217,8 +222,28 @@ void main() {
         });
         expect(
           handler.calls.single,
-          const GridCommandRequest.rework(beadId: 'tg-1', note: 'retry'),
+          const GridCommandRequest.rework(
+            beadId: 'tg-1',
+            note: 'retry',
+            beyondCap: true,
+            actor: 'Nico',
+          ),
         );
+
+        final list = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '8',
+          idempotencyKey: 'list-1',
+          body: {
+            'id': 2,
+            'method': 'grid/gate/ls',
+            'params': <String, Object?>{},
+          },
+        );
+        expect(list.statusCode, 200);
+        expect(handler.calls.last, const GridCommandRequest.listGates());
 
         final refused = _FakeCommandHandler(
           result: const GridCommandResult.refused(
@@ -237,7 +262,7 @@ void main() {
           second.url,
           '/command',
           token: 't',
-          fence: '8',
+          fence: '9',
           idempotencyKey: 'gate-1',
           body: {
             'id': 'b',

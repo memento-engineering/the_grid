@@ -9,7 +9,12 @@ sealed class GridCommandRequest with _$GridCommandRequest {
   const factory GridCommandRequest.rework({
     required String beadId,
     String? note,
+    @Default(false) bool beyondCap,
+    String? actor,
   }) = GridRework;
+
+  /// Lists the station's open gate beads.
+  const factory GridCommandRequest.listGates() = GridGateLs;
 
   /// Resolves [gateId], optionally correcting persisted lane grades first.
   const factory GridCommandRequest.resolveGate({

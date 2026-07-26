@@ -23,6 +23,7 @@ export 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
 // attach client) an asset runner orchestrates around `runGrid`.
 export 'src/station_attach.dart';
 export 'src/station_control.dart';
+export 'src/station_command_client.dart';
 export 'src/hooks_resolver.dart';
 export 'src/station_lock.dart';
 // The dev-mode reload client: a JIT station picks up landed code changes over

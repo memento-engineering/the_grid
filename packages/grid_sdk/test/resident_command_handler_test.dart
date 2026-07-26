@@ -8,6 +8,41 @@ import 'package:test/test.dart';
 
 void main() {
   group('resident command dispatch', () {
+    test('grid/gate/ls refreshes and returns sorted open gates only', () async {
+      var refreshed = false;
+      final state = _Source(_snapshot(const []));
+      final handler = _handler(
+        state: state,
+        work: _Source(_snapshot(const [])),
+        stateRunner: _RecordingRunner(),
+        workRunner: _RecordingRunner(),
+        refreshState: () async {
+          refreshed = true;
+          state.current = _snapshot([
+            const Bead(id: 'tgdog-z', issueType: IssueType.gate),
+            const Bead(
+              id: 'tgdog-closed',
+              issueType: IssueType.gate,
+              status: BeadStatus.closed,
+            ),
+            const Bead(id: 'tgdog-a', issueType: IssueType.gate),
+            const Bead(id: 'tgdog-task', issueType: IssueType.task),
+          ]);
+        },
+      );
+
+      final result = await handler(const GridCommandRequest.listGates());
+
+      expect(refreshed, isTrue);
+      final value = (result as GridCommandCompleted).value;
+      expect(
+        (value['gates']! as List<Object?>).cast<Map<String, Object?>>().map(
+          (row) => row['id'],
+        ),
+        ['tgdog-a', 'tgdog-z'],
+      );
+    });
+
     test(
       'grid/rework re-keys a closed session through resident writers',
       () async {

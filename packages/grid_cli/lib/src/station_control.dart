@@ -470,13 +470,23 @@ class StationControl {
     if (method == 'grid/rework') {
       final beadId = params['beadId'];
       final note = params['note'];
+      final beyondCap = params['beyondCap'] ?? false;
+      final actor = params['actor'];
       if (beadId is String &&
           beadId.isNotEmpty &&
-          (note == null || note is String)) {
+          (note == null || note is String) &&
+          beyondCap is bool &&
+          (actor == null || actor is String)) {
         command = GridCommandRequest.rework(
           beadId: beadId,
           note: note as String?,
+          beyondCap: beyondCap,
+          actor: actor as String?,
         );
+      }
+    } else if (method == 'grid/gate/ls') {
+      if (params.isEmpty) {
+        command = const GridCommandRequest.listGates();
       }
     } else if (method == 'grid/gate/resolve') {
       final gateId = params['gateId'];
