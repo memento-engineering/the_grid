@@ -9,7 +9,10 @@ void main() {
       if (entity is! File || !entity.path.endsWith('.dart')) continue;
       final contents = entity.readAsStringSync();
       if (contents.contains('package:grid_controller/') ||
-          contents.contains('package:beads_dart/')) {
+          contents.contains('package:beads_dart/') ||
+          contents.contains('package:grid_cli/') ||
+          contents.contains("import 'dart:io'") ||
+          contents.contains('import "dart:io"')) {
         violations.add(entity.path);
       }
     }

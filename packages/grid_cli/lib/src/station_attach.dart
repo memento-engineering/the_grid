@@ -21,6 +21,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show StationLockRecord;
 import 'package:grid_runtime/grid_runtime.dart'
     show ProcessGroupController, SystemProcessGroupController;
 

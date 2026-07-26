@@ -1,7 +1,10 @@
 import 'package:devtools_extensions/devtools_extensions.dart';
+import 'package:dtd/dtd.dart';
 import 'package:flutter/material.dart';
 
 import 'src/grid_devtools_shell.dart';
+import 'src/live/live_connection_controller.dart';
+import 'src/live/station_lock_discovery.dart';
 import 'src/protocol/grid_exploration_client.dart';
 import 'src/protocol/vm_service_grid_client.dart';
 
@@ -35,7 +38,7 @@ class GridDevToolsExtension extends StatelessWidget {
         final GridExplorationClient client = (vm == null || isolateId == null)
             ? const _UnavailableGridClient()
             : VmServiceGridClient(vm, isolateId);
-        return GridDevToolsShell(
+        return _LiveGridDevToolsShell(
           client: client,
           // Reconnects (hot-restart of the target) flip connectedState;
           // the main isolate may appear slightly after. Re-probe on
@@ -47,6 +50,55 @@ class GridDevToolsExtension extends StatelessWidget {
         );
       },
     ),
+  );
+}
+
+class _LiveGridDevToolsShell extends StatefulWidget {
+  const _LiveGridDevToolsShell({required this.client, required this.retrigger});
+
+  final GridExplorationClient client;
+  final Listenable retrigger;
+
+  @override
+  State<_LiveGridDevToolsShell> createState() => _LiveGridDevToolsShellState();
+}
+
+class _LiveGridDevToolsShellState extends State<_LiveGridDevToolsShell> {
+  late final LiveConnectionController _live = LiveConnectionController(
+    discovery: StationLockDiscovery(
+      workspaceRoots: () async =>
+          (await dtdManager.workspaceRoots())?.ideWorkspaceRoots ??
+          const <Uri>[],
+      readFile: (uri) async {
+        final dtd = dtdManager.connection.value;
+        if (dtd == null) {
+          throw StateError('Dart Tooling Daemon is not connected');
+        }
+        final response = await dtd.readFileAsString(uri);
+        return response.content ??
+            (throw FormatException('DTD returned no text for $uri'));
+      },
+    ),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    // ignore: discarded_futures
+    _live.autoDiscover();
+  }
+
+  @override
+  void dispose() {
+    _live.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => GridDevToolsShell(
+    client: widget.client,
+    retrigger: widget.retrigger,
+    liveConnection: _live,
   );
 }
 

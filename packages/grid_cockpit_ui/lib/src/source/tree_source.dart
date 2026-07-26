@@ -21,6 +21,9 @@ abstract interface class TreeWireSource {
 
   /// Broadcast snapshots received from the wire.
   Stream<TreeSnapshot> get snapshots;
+
+  /// Releases transport-owned resources.
+  Future<void> dispose();
 }
 
 /// Transport-neutral adapter over an injected wire source.
@@ -37,7 +40,7 @@ final class LiveTreeSource implements TreeSource {
   Stream<TreeSnapshot> get snapshots => _wire.snapshots;
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() => _wire.dispose();
 }
 
 /// Deterministic recorded source for tests and demonstrations.

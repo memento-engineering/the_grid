@@ -228,8 +228,11 @@ The surfaces live in `grid_cli` and are exported from `packages/grid_cli/lib/gri
 runner composes the verbs (space_station's `space`, RS-5b), so grid_cli ships clients and
 Commands, never a binding:
 
-- `packages/grid_cli/lib/src/station_lock.dart` — `StationLockService` / `StationLockRecord` /
+- `packages/grid_cli/lib/src/station_lock.dart` — `StationLockService` /
   `StationLockHandle` / `StationRefusal` (D-A1; RS-2).
+- `packages/grid_diagnostics_contract/lib/src/station_lock_record.dart` —
+  `StationLockRecord`, the web-safe lock value consumed across the CLI/DevTools
+  package boundary (D-A1; RS-2; extended by the live DevTools connection).
 - `packages/grid_cli/lib/src/station_control.dart` — `StationControl` / `StationStatus` /
   `SubstationStatus` (D-C2; RS-4). *The landed surface requires the bearer on `/healthz` too —
   one posture, no unauthenticated liveness probe. **Adopted into D-C2** (Nico, 2026-07-19
