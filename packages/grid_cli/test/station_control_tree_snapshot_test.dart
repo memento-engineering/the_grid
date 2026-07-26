@@ -81,11 +81,11 @@ Future<int> _getStatus(StationControl control, {String? authorization}) async {
   }
 }
 
-Future<void> _pump() async {
-  for (var i = 0; i < 5; i++) {
-    await Future<void>.delayed(Duration.zero);
-  }
-}
+Future<List<TreeSnapshot>> _takeSnapshots(WebSocket socket, int count) => socket
+    .map(_decode)
+    .take(count)
+    .toList()
+    .timeout(const Duration(seconds: 5));
 
 void main() {
   late TreeOwner owner;
@@ -115,18 +115,14 @@ void main() {
       addTearDown(control.dispose);
       final socket = await _connect(control);
       addTearDown(socket.close);
-      final frames = <TreeSnapshot>[];
-      final subscription = socket.listen((frame) => frames.add(_decode(frame)));
-      addTearDown(subscription.cancel);
+      final frames = _takeSnapshots(socket, 3);
 
-      await _pump();
       projector.afterFlush(root);
       expected.add(projector.latest!);
       projector.afterFlush(root);
       expected.add(projector.latest!);
-      await _pump();
 
-      expect(frames, expected);
+      expect(await frames, expected);
     },
   );
 
@@ -135,16 +131,12 @@ void main() {
     addTearDown(control.dispose);
     final socket = await _connect(control);
     addTearDown(socket.close);
-    final frames = <TreeSnapshot>[];
-    final subscription = socket.listen((frame) => frames.add(_decode(frame)));
-    addTearDown(subscription.cancel);
+    final frames = _takeSnapshots(socket, 1);
 
-    await _pump();
-    expect(frames, isEmpty);
+    expect(projector.latest, isNull);
     projector.afterFlush(root);
-    await _pump();
 
-    expect(frames, [projector.latest]);
+    expect(await frames, [projector.latest]);
   });
 
   test('browser bearer subprotocol authenticates and is selected', () async {
@@ -201,7 +193,6 @@ void main() {
       await first.close();
       await firstDone.future;
       projector.afterFlush(root);
-      await _pump();
       expect(closedFrames, isEmpty);
 
       final active = await _connect(control);
