@@ -15,6 +15,9 @@
 /// by exactly one node, `WorkList` (derailment-invariant 1).
 library;
 
+export 'package:grid_runtime/grid_runtime.dart'
+    show GridIssueTypes, GridIssueTypeClassification;
+
 export 'src/diagnostics/diagnosable.dart';
 export 'src/diagnostics/diagnostics_tree_walker.dart';
 export 'src/diagnostics/tree_projector.dart';

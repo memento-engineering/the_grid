@@ -66,7 +66,7 @@ Bead _stepBead(
   String capability = 'route',
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     MoleculeStepKeys.path: path,

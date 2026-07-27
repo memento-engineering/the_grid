@@ -338,7 +338,7 @@ Bead _step(
   bool closed = false,
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: {
     MoleculeStepKeys.path: nodePath,

@@ -154,7 +154,7 @@ final _moleculeCircuit = InheritedCircuit(
 /// and untouched by the molecule migration.
 Bead _sessionBead(Map<String, dynamic> metadata, {bool closed = false}) => Bead(
   id: 'tgdog-s',
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: metadata,
 );
@@ -164,7 +164,7 @@ Bead _sessionBead(Map<String, dynamic> metadata, {bool closed = false}) => Bead(
 /// `_stepBead`).
 Bead _stepBead(String path, {Map<String, String> extra = const {}}) => Bead(
   id: 'tgdog-step-${path.replaceAll('/', '-')}',
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   metadata: {MoleculeStepKeys.path: path, ...extra},
 );
 

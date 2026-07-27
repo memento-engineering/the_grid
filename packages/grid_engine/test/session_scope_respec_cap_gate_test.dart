@@ -36,7 +36,7 @@ const routePath = 'tg-lt2a/spec_review/route';
 
 Bead _moleculeBead() => const Bead(
   id: 'molecule-root',
-  issueType: IssueType.molecule,
+  issueType: GridIssueTypes.molecule,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -54,7 +54,7 @@ Bead _stepBead({
   Map<String, String> results = const {},
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,

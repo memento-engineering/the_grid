@@ -35,7 +35,7 @@ void main() {
       GraphNode(
         key: 'root',
         title: 'circuit kCodeCircuit',
-        type: IssueType.molecule.wire,
+        type: GridIssueTypes.molecule.wire,
         parentId: sessionId,
         metadata: {
           'grid.circuit.formula': 'kCodeCircuit',
@@ -45,7 +45,7 @@ void main() {
       GraphNode(
         key: 'root.step-a',
         title: 'step step-a',
-        type: IssueType.step.wire,
+        type: GridIssueTypes.step.wire,
         metadata: {
           'grid.step.id': 'step-a',
           'grid.step.capability': 'code',
@@ -154,7 +154,7 @@ void main() {
             GraphNode(
               key: 'root',
               title: 'circuit x',
-              type: IssueType.molecule.wire,
+              type: GridIssueTypes.molecule.wire,
               // Owned substation, but parented onto a FOREIGN session.
               parentId: 'gascity-sess9',
             ),
@@ -214,7 +214,7 @@ void main() {
           Bead(
             id: 'tgdog-mol1',
             title: 'circuit kCodeCircuit',
-            issueType: IssueType.molecule,
+            issueType: GridIssueTypes.molecule,
             status: BeadStatus.open,
             metadata: const {
               'grid.circuit.session': 'tgdog-sess1',
@@ -242,7 +242,7 @@ void main() {
         Bead(
           id: 'tgdog-step1',
           title: 'step step-a',
-          issueType: IssueType.step,
+          issueType: GridIssueTypes.step,
           status: BeadStatus.open,
           metadata: const {'grid.step.session': 'tgdog-sess1'},
         ),
@@ -267,7 +267,7 @@ void main() {
           Bead(
             id: 'tgdog-molOther',
             title: 'circuit other',
-            issueType: IssueType.molecule,
+            issueType: GridIssueTypes.molecule,
             status: BeadStatus.open,
             metadata: const {'grid.circuit.session': 'tgdog-OTHER-session'},
           ),
@@ -293,7 +293,7 @@ void main() {
           Bead(
             id: 'tgdog-mol1',
             title: 'circuit kCodeCircuit',
-            issueType: IssueType.molecule,
+            issueType: GridIssueTypes.molecule,
             status: BeadStatus.closed,
             metadata: const {'grid.circuit.session': 'tgdog-sess1'},
           ),
@@ -322,14 +322,14 @@ void main() {
           Bead(
             id: 'tgdog-mol1',
             title: 'circuit',
-            issueType: IssueType.molecule,
+            issueType: GridIssueTypes.molecule,
             status: BeadStatus.open,
             metadata: const {'grid.circuit.session': 'tgdog-sess1'},
           ),
           Bead(
             id: 'tgdog-step1',
             title: 'step',
-            issueType: IssueType.step,
+            issueType: GridIssueTypes.step,
             status: BeadStatus.open,
             metadata: const {'grid.step.session': 'tgdog-sess1'},
           ),
@@ -337,7 +337,7 @@ void main() {
           Bead(
             id: 'tgdog-step2',
             title: 'step (already closed)',
-            issueType: IssueType.step,
+            issueType: GridIssueTypes.step,
             status: BeadStatus.closed,
             metadata: const {'grid.step.session': 'tgdog-sess1'},
           ),
@@ -345,7 +345,7 @@ void main() {
           Bead(
             id: 'tgdog-step3',
             title: 'step (other session)',
-            issueType: IssueType.step,
+            issueType: GridIssueTypes.step,
             status: BeadStatus.open,
             metadata: const {'grid.step.session': 'tgdog-OTHER-session'},
           ),
@@ -353,7 +353,7 @@ void main() {
           Bead(
             id: 'tgdog-gate1',
             title: 'gate',
-            issueType: IssueType.gate,
+            issueType: GridIssueTypes.gate,
             status: BeadStatus.open,
             metadata: const {'grid.step.session': 'tgdog-sess1'},
           ),
@@ -381,7 +381,7 @@ void main() {
           Bead(
             id: 'tgdog-step9',
             title: 'unrelated',
-            issueType: IssueType.step,
+            issueType: GridIssueTypes.step,
             status: BeadStatus.open,
             metadata: const {'grid.step.session': 'tgdog-OTHER-session'},
           ),
@@ -409,7 +409,7 @@ void main() {
             id: 'gascity-step1',
             title:
                 'step (foreign prefix, same session key by construction bug)',
-            issueType: IssueType.step,
+            issueType: GridIssueTypes.step,
             status: BeadStatus.open,
             metadata: const {'grid.step.session': 'tgdog-sess1'},
           ),

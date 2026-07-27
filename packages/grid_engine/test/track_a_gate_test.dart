@@ -59,7 +59,7 @@ Bead _gate({
   bool closed = false,
 }) => Bead(
   id: id,
-  issueType: IssueType.gate,
+  issueType: GridIssueTypes.gate,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: {'rig': stateSubstation, 'blocks': blocks, 'node': node},
 );
@@ -76,7 +76,7 @@ Bead _stepBead(
   StepState? state,
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,

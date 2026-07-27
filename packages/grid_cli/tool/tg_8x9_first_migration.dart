@@ -39,7 +39,7 @@ Future<void> main() async {
   final matches = snapshot.beads
       .where(
         (bead) =>
-            bead.issueType == IssueType.link &&
+            bead.issueType == GridIssueTypes.link &&
             !bead.isClosed &&
             bead.metadata[CrossLinkKeys.from] == 'tg-8x9' &&
             bead.metadata[CrossLinkKeys.to] == 'tg-ama' &&

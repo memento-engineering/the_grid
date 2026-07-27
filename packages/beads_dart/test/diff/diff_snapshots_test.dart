@@ -203,7 +203,7 @@ void main() {
     test('the canonical M1 demo event order: created then readyset', () {
       final before = _snap([_bead('a')]);
       final after = _snap(
-        [_bead('a'), _bead('tron', type: IssueType.molecule)],
+        [_bead('a'), _bead('tron', type: const IssueType('molecule'))],
         ready: {'tron'},
       );
       final events = diffSnapshots(before, after);

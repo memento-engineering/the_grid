@@ -616,7 +616,7 @@ Bead sessionBead({
   Map<String, String> metadata = const {},
 }) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: {
     'rig': stateSubstation,

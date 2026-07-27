@@ -82,7 +82,7 @@ void main() {
         'malformed key is skipped', () {
       final sb = Bead(
         id: 'tgdog-s',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         status: BeadStatus.open,
         metadata: const {
           'grid.result.b/critic1.grade': 'A',
@@ -108,7 +108,7 @@ void main() {
         '`moleculeBeads` by a later rung)', () {
       final sb = Bead(
         id: 'tgdog-s',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         status: BeadStatus.open,
         metadata: {
           'rig': stateSubstation,

@@ -35,6 +35,9 @@
 /// crash detection → restart / crash-loop quarantine.
 library;
 
+export 'src/models/grid_issue_types.dart'
+    show GridIssueTypes, GridIssueTypeClassification;
+
 // Track 0.1 — package scaffold marker (kept; the wiring asserts the package is
 // on the path).
 export 'src/runtime_scaffold.dart';

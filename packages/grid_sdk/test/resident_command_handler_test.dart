@@ -19,13 +19,13 @@ void main() {
         refreshState: () async {
           refreshed = true;
           state.current = _snapshot([
-            const Bead(id: 'tgdog-z', issueType: IssueType.gate),
+            const Bead(id: 'tgdog-z', issueType: GridIssueTypes.gate),
             const Bead(
               id: 'tgdog-closed',
-              issueType: IssueType.gate,
+              issueType: GridIssueTypes.gate,
               status: BeadStatus.closed,
             ),
-            const Bead(id: 'tgdog-a', issueType: IssueType.gate),
+            const Bead(id: 'tgdog-a', issueType: GridIssueTypes.gate),
             const Bead(id: 'tgdog-task', issueType: IssueType.task),
           ]);
         },
@@ -53,7 +53,7 @@ void main() {
             _snapshot([
               const Bead(
                 id: 'tgdog-session',
-                issueType: IssueType.session,
+                issueType: GridIssueTypes.session,
                 status: BeadStatus.closed,
                 metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
               ),
@@ -126,7 +126,7 @@ void main() {
             _snapshot([
               const Bead(
                 id: 'tgdog-gate',
-                issueType: IssueType.gate,
+                issueType: GridIssueTypes.gate,
                 metadata: {
                   'node': 'route/committee',
                   'blocks': 'tgdog-session',
@@ -135,7 +135,7 @@ void main() {
               ),
               const Bead(
                 id: 'tgdog-session',
-                issueType: IssueType.session,
+                issueType: GridIssueTypes.session,
                 metadata: {'rig': 'tgdog'},
               ),
             ]),
@@ -176,7 +176,7 @@ void main() {
           _snapshot([
             const Bead(
               id: 'tgdog-gate',
-              issueType: IssueType.gate,
+              issueType: GridIssueTypes.gate,
               metadata: {'rig': 'tgdog'},
             ),
           ]),
@@ -213,7 +213,7 @@ void main() {
             state.current = _snapshot([
               const Bead(
                 id: 'tgdog-session',
-                issueType: IssueType.session,
+                issueType: GridIssueTypes.session,
                 status: BeadStatus.closed,
                 metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
               ),
@@ -247,12 +247,12 @@ void main() {
           _snapshot([
             const Bead(
               id: 'tgdog-a',
-              issueType: IssueType.gate,
+              issueType: GridIssueTypes.gate,
               metadata: {'rig': 'tgdog'},
             ),
             const Bead(
               id: 'tgdog-b',
-              issueType: IssueType.gate,
+              issueType: GridIssueTypes.gate,
               metadata: {'rig': 'tgdog'},
             ),
           ]),
@@ -357,7 +357,7 @@ void main() {
         state: _snapshot([
           const Bead(
             id: 'tgdog-session',
-            issueType: IssueType.session,
+            issueType: GridIssueTypes.session,
             metadata: {'work_bead': 'tg-1', 'grid.session.model': 'flat'},
           ),
         ]),
@@ -491,7 +491,7 @@ void main() {
         snapshot: _snapshot([
           const Bead(
             id: 'tgdog-gate',
-            issueType: IssueType.gate,
+            issueType: GridIssueTypes.gate,
             status: BeadStatus.closed,
             metadata: {'rig': 'tgdog'},
           ),
@@ -506,7 +506,7 @@ void main() {
         snapshot: _snapshot([
           const Bead(
             id: 'other-gate',
-            issueType: IssueType.gate,
+            issueType: GridIssueTypes.gate,
             metadata: {'rig': 'other'},
           ),
         ]),
@@ -531,7 +531,7 @@ void main() {
         snapshot: _snapshot([
           const Bead(
             id: 'tgdog-gate',
-            issueType: IssueType.gate,
+            issueType: GridIssueTypes.gate,
             metadata: {'rig': 'tgdog'},
           ),
         ]),
@@ -572,7 +572,7 @@ void main() {
         snapshot: _snapshot([
           const Bead(
             id: 'tgdog-gate',
-            issueType: IssueType.gate,
+            issueType: GridIssueTypes.gate,
             metadata: {
               'node': 'route/committee',
               'blocks': 'tgdog-session',
@@ -581,7 +581,7 @@ void main() {
           ),
           const Bead(
             id: 'tgdog-session',
-            issueType: IssueType.session,
+            issueType: GridIssueTypes.session,
             metadata: {'rig': 'tgdog', 'grid.result.route/critic.grade': 'F'},
           ),
         ]),
@@ -599,7 +599,7 @@ void main() {
         snapshot: _snapshot([
           const Bead(
             id: 'tgdog-gate',
-            issueType: IssueType.gate,
+            issueType: GridIssueTypes.gate,
             metadata: {
               'node': 'route/committee',
               'blocks': 'tgdog-session',
@@ -608,7 +608,7 @@ void main() {
           ),
           const Bead(
             id: 'tgdog-session',
-            issueType: IssueType.session,
+            issueType: GridIssueTypes.session,
             metadata: {'rig': 'tgdog'},
           ),
         ]),
@@ -626,7 +626,7 @@ void main() {
 
 Bead _session(String id, {String workBead = 'tg-1'}) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: BeadStatus.closed,
   metadata: {'work_bead': workBead},
 );
@@ -638,7 +638,7 @@ GraphSnapshot _workSnapshot() => _snapshot([
 GraphSnapshot _gateSnapshot() => _snapshot([
   const Bead(
     id: 'tgdog-gate',
-    issueType: IssueType.gate,
+    issueType: GridIssueTypes.gate,
     metadata: {'node': 'route/committee', 'rig': 'tgdog'},
   ),
 ]);

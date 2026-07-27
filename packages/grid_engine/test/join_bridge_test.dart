@@ -52,7 +52,7 @@ Bead work(String id) =>
 Bead session(String id, {required String workBeadId, bool closed = false}) =>
     Bead(
       id: id,
-      issueType: IssueType.session,
+      issueType: GridIssueTypes.session,
       status: closed ? BeadStatus.closed : BeadStatus.open,
       metadata: {'rig': 'tgdog', 'work_bead': workBeadId},
     );
@@ -68,7 +68,7 @@ Bead stepBead(
   StepState state = StepState.complete,
 }) => Bead(
   id: '$sessionId-$step',
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     'rig': 'tgdog',
@@ -234,7 +234,7 @@ void main() {
       // A session bead with NO work_bead metadata at all + one valid one.
       final orphan = Bead(
         id: 's-orphan',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         status: BeadStatus.open,
         metadata: const {'rig': 'tgdog'},
       );

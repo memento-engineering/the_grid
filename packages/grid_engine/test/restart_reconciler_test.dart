@@ -123,7 +123,7 @@ Bead _session({
 }) {
   return Bead(
     id: id,
-    issueType: IssueType.session,
+    issueType: GridIssueTypes.session,
     status: closed ? BeadStatus.closed : BeadStatus.open,
     metadata: <String, dynamic>{
       'rig': 'tgdog',

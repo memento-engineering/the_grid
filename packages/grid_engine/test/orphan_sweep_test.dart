@@ -115,7 +115,7 @@ Bead _legacySession({
   required int pid,
 }) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: BeadStatus.open,
   metadata: <String, dynamic>{
     'rig': 'tgstate',

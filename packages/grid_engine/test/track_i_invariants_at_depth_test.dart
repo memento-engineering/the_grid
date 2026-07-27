@@ -148,7 +148,7 @@ List<Bead> _stepBeads(
         beads.add(
           Bead(
             id: _stepBeadId(stepNodePath),
-            issueType: IssueType.step,
+            issueType: GridIssueTypes.step,
             status: BeadStatus.open,
             metadata: {
               MoleculeStepKeys.path: stepNodePath,
@@ -421,7 +421,7 @@ void main() {
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [
-            _bead('tg-conv', type: IssueType.convergence),
+            _bead('tg-conv', type: GridIssueTypes.convergence),
             _bead('tg-ok'),
           ],
           ready: {'tg-conv', 'tg-ok'},
@@ -447,7 +447,7 @@ void main() {
         final joined = JoinedSnapshotNotifier(
           _joined(
             beads: [
-              _bead('tg-conv', type: IssueType.convergence),
+              _bead('tg-conv', type: GridIssueTypes.convergence),
               _bead('tg-epic', type: IssueType.epic),
               _bead('tg-ok'),
             ],
@@ -488,7 +488,7 @@ void main() {
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [
-            _bead('tg-link', type: IssueType.link),
+            _bead('tg-link', type: GridIssueTypes.link),
             _bead('tg-ok'),
           ],
           ready: {'tg-link', 'tg-ok'},

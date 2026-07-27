@@ -182,7 +182,7 @@ void main() {
     test(
       'molecule is excluded by default; -t molecule surfaces it (A14/#6)',
       () async {
-        final mol = await create('mol', type: IssueType.molecule);
+        final mol = await create('mol', type: const IssueType('molecule'));
         expect(
           await readyIds(),
           isNot(contains(mol)),
@@ -487,7 +487,7 @@ void main() {
           return;
         }
         await bd.create(title: 'leaf-task');
-        await bd.create(title: 'mol', type: IssueType.molecule);
+        await bd.create(title: 'mol', type: const IssueType('molecule'));
         // The default ready filter excludes molecule (port spec §3.1); both sides
         // must drop it. (-t molecule is not on ReadyWorkFilter, so the differential
         // never asks for it — the exclusion is the only differentiable behaviour.)
@@ -534,7 +534,7 @@ void main() {
           cBlocker,
           type: DependencyType.conditionalBlocks,
         );
-        await bd.create(title: 'mol', type: IssueType.molecule);
+        await bd.create(title: 'mol', type: const IssueType('molecule'));
         final future = await bd.create(title: 'future');
         await s.runner.run([
           'update',

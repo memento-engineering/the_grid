@@ -9,7 +9,7 @@ void main() {
         'projection retired — cursor stays empty)', () {
       final session = Bead(
         id: 'tgdog-9a',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         status: BeadStatus.open,
         metadata: const {
           'rig': 'tgdog',
@@ -37,7 +37,7 @@ void main() {
       () {
         final session = Bead(
           id: 'tgdog-1',
-          issueType: IssueType.session,
+          issueType: GridIssueTypes.session,
           metadata: const {'work_bead': 'genesis-q8h'},
         );
         final p = projectSession(session);
@@ -51,7 +51,7 @@ void main() {
         'grid.cursor.* key is inert', () {
       final session = Bead(
         id: 'tgdog-2',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         status: BeadStatus.closed,
         metadata: const {
           'work_bead': 'genesis-q8h',
@@ -104,7 +104,7 @@ void main() {
       // The route re-reads it through projectCircuitResults → resultOf().
       final session = Bead(
         id: 'tgdog-9',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         metadata: <String, dynamic>{'work_bead': 'tg-1', ...ruling},
       );
       final results = projectCircuitResults(session);
@@ -126,7 +126,7 @@ void main() {
       };
       final session = Bead(
         id: 'tgdog-9',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         metadata: merged,
       );
       final p = projectSession(session);
@@ -145,7 +145,7 @@ void main() {
       };
       final session = Bead(
         id: 'tgdog-3',
-        issueType: IssueType.session,
+        issueType: GridIssueTypes.session,
         metadata: merged,
       );
       final p = projectSession(session);

@@ -189,7 +189,7 @@ void main() {
             'bd children hides it, the snapshot is the only enumeration',
       );
       expect(step!.ephemeral, isTrue);
-      expect(step.issueType, IssueType.gate);
+      expect(step.issueType, const IssueType('gate'));
       expect(step.metadata['gc.deferred_type'], 'task');
     }
 

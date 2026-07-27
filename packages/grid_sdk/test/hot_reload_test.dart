@@ -155,7 +155,7 @@ Bead _bead(String id) =>
 
 Bead _sessionBead(String id, {required String workBeadId}) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: engine.GridIssueTypes.session,
   status: BeadStatus.open,
   metadata: {
     engine.SessionBeadKeys.workBead: workBeadId,
@@ -165,7 +165,7 @@ Bead _sessionBead(String id, {required String workBeadId}) => Bead(
 
 Bead _moleculeBead(String id, {required String sessionId}) => Bead(
   id: id,
-  issueType: IssueType.molecule,
+  issueType: engine.GridIssueTypes.molecule,
   status: BeadStatus.open,
   metadata: {'grid.circuit.formula': 'code', 'grid.circuit.session': sessionId},
 );
@@ -173,7 +173,7 @@ Bead _moleculeBead(String id, {required String sessionId}) => Bead(
 Bead _stepBead(String id, {required String sessionId, required String path}) =>
     Bead(
       id: id,
-      issueType: IssueType.step,
+      issueType: engine.GridIssueTypes.step,
       status: BeadStatus.open,
       metadata: {
         'grid.step.id': path.split('/').last,

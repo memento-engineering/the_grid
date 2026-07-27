@@ -42,7 +42,11 @@ void main() {
         reader: _FakeReader(
           () => GraphSnapshot.fromParts(
             beads: [
-              Bead(id: 'tg-1', title: 'tron', issueType: IssueType.molecule),
+              Bead(
+                id: 'tg-1',
+                title: 'tron',
+                issueType: const IssueType('molecule'),
+              ),
               const Bead(id: 'tg-2', title: 'ready one'),
             ],
             dependencies: const [],

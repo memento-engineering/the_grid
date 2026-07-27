@@ -111,7 +111,7 @@ Bead _moleculeSession({
   bool closed = false,
 }) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: <String, dynamic>{
     'rig': stateSubstation,
@@ -131,7 +131,7 @@ Bead _stepBead({
   ProcessHandle? lease,
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: <String, dynamic>{
     'rig': stateSubstation,

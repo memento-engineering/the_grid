@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_cli/grid_cli.dart';
+import 'package:grid_engine/grid_engine.dart' show GridIssueTypes;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -296,7 +297,7 @@ Bead _bead(
 
 Bead _link(String id, String from, String to) => _bead(
   id,
-  type: IssueType.link,
+  type: GridIssueTypes.link,
   metadata: {
     'rig': 'houston',
     'grid.link.from': from,
@@ -346,7 +347,7 @@ class _FakeStore implements BdRunner {
         beads.add(
           _bead(
             createdId,
-            type: IssueType.link,
+            type: GridIssueTypes.link,
             metadata: const {'rig': 'houston'},
           ),
         );

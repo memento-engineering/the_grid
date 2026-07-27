@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:beads_dart/beads_dart.dart';
 
 import 'bead_ownership.dart';
+import '../models/grid_issue_types.dart';
 
 /// Raised when the [StationBeadWriter] chokepoint refuses a write because the
 /// target bead's substation is absent or not in the shared allow-set (fail-closed).
@@ -187,7 +188,7 @@ class StationBeadWriter {
     )) {
       _refuse('create', substation, substation);
     }
-    final id = await _bd.create(title: title, type: IssueType.session);
+    final id = await _bd.create(title: title, type: GridIssueTypes.session);
     // Stamp the owned substation marker + linkage FROM BIRTH (merge update; the substation
     // key is what every later write asserts against). The capture-only
     // `started_at` stamp (FT-1) rides the SAME birth write — no extra traffic;
@@ -223,7 +224,7 @@ class StationBeadWriter {
     }
     final id = await _bd.create(
       title: 'grid link $from blocked by $to',
-      type: IssueType.link,
+      type: GridIssueTypes.link,
     );
     await _bd.update(
       id,
@@ -294,7 +295,7 @@ class StationBeadWriter {
     }
     final id = await _bd.create(
       title: 'grid gate $sessionId@$nodePath',
-      type: IssueType.gate,
+      type: GridIssueTypes.gate,
     );
     // Stamp the owned substation marker + the block linkage FROM BIRTH (merge
     // update; the `blocks`/`node` keys are how the join re-arms the parked node).
@@ -469,7 +470,7 @@ class StationBeadWriter {
     required int currentDepth,
     required int maxDepth,
   }) async {
-    if (priorStep.issueType != IssueType.step) {
+    if (priorStep.issueType != GridIssueTypes.step) {
       throw ArgumentError.value(priorStep.id, 'priorStep', 'must be type=step');
     }
     if (currentDepth >= maxDepth) {
@@ -485,7 +486,10 @@ class StationBeadWriter {
     return _serializedMulti({priorStep.id}, () async {
       final existing = await _findOpenSuccessor(priorStep.id);
       if (existing != null) return existing.id;
-      final id = await _bd.create(title: priorStep.title, type: IssueType.step);
+      final id = await _bd.create(
+        title: priorStep.title,
+        type: GridIssueTypes.step,
+      );
       final successorCrumb = _successorStepCrumb(priorStep, id);
       final metadata = <String, String>{
         rigKey: substation,
@@ -725,7 +729,7 @@ class StationBeadWriter {
     try {
       final export = await _bd.exportAll();
       for (final bead in export.beads) {
-        if (bead.issueType != IssueType.gate || bead.isClosed) continue;
+        if (bead.issueType != GridIssueTypes.gate || bead.isClosed) continue;
         if (bead.metadata['blocks'] == sessionId &&
             bead.metadata['node'] == nodePath) {
           return bead;
@@ -747,7 +751,7 @@ class StationBeadWriter {
       final export = await _bd.exportAll();
       for (final bead in export.beads) {
         if (bead.id != sessionId) continue;
-        if (bead.issueType != IssueType.session) return;
+        if (bead.issueType != GridIssueTypes.session) return;
         if (!bead.isClosed) return;
         _refuseClosedSession('create', sessionId, 'session bead is closed');
       }
@@ -840,9 +844,9 @@ class StationBeadWriter {
       for (final bead in export.beads) {
         if (bead.isClosed) continue;
         final owns =
-            (bead.issueType == IssueType.molecule &&
+            (bead.issueType == GridIssueTypes.molecule &&
                 bead.metadata[moleculeSessionKey] == sessionId) ||
-            (bead.issueType == IssueType.step &&
+            (bead.issueType == GridIssueTypes.step &&
                 bead.metadata[stepSessionKey] == sessionId);
         if (owns) matched.add(bead);
       }

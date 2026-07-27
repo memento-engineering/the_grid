@@ -119,7 +119,7 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
     }
 
     final sessions = state.beads
-        .where((bead) => bead.issueType == IssueType.session)
+        .where((bead) => bead.issueType == GridIssueTypes.session)
         .toList(growable: false);
     final current = sessions
         .where((bead) => _meta(bead, SessionBeadKeys.workBead) == beadId)
@@ -163,7 +163,7 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
           ? projectMoleculeCursor(
               state.beads.where(
                 (bead) =>
-                    bead.issueType == IssueType.step &&
+                    bead.issueType == GridIssueTypes.step &&
                     _meta(bead, MoleculeStepKeys.session) == session.id,
               ),
               dependencies: state.dependencies,
@@ -224,7 +224,9 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
     }
     final gates =
         state.beads
-            .where((bead) => bead.issueType == IssueType.gate && !bead.isClosed)
+            .where(
+              (bead) => bead.issueType == GridIssueTypes.gate && !bead.isClosed,
+            )
             .toList(growable: false)
           ..sort((a, b) => a.id.compareTo(b.id));
     return GridCommandResult.completed(
@@ -268,7 +270,7 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
     if (gate == null) {
       return _refused('gate_not_found', 'Gate "$gateId" was not found.');
     }
-    if (gate.issueType != IssueType.gate) {
+    if (gate.issueType != GridIssueTypes.gate) {
       return _refused('not_a_gate', '"$gateId" is not a gate.');
     }
     if (gate.isClosed) {

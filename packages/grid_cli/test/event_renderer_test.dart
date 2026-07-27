@@ -2,12 +2,13 @@ import 'dart:convert';
 
 import 'package:grid_cli/src/event_renderer.dart';
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_engine/grid_engine.dart' show GridIssueTypes;
 import 'package:test/test.dart';
 
 final _at = DateTime.utc(2026, 6, 11, 6, 45, 50, 784);
 
 Bead _bead(String id, {String title = 'title'}) =>
-    Bead(id: id, title: title, issueType: IssueType.molecule);
+    Bead(id: id, title: title, issueType: GridIssueTypes.molecule);
 
 void main() {
   group('EventRenderer human output', () {
