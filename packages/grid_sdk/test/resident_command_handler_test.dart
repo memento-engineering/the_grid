@@ -90,7 +90,7 @@ void main() {
           _snapshot([
             const Bead(
               id: 'tgdog-session',
-              issueType: IssueType.session,
+              issueType: GridIssueTypes.session,
               status: BeadStatus.closed,
               metadata: {'work_bead': 'swift-infer-097', 'rig': 'tgdog'},
             ),
