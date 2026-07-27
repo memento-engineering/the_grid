@@ -82,6 +82,53 @@ void main() {
       },
     );
 
+    test('grid/rework routes a hyphenated work-store prefix', () async {
+      final stateRunner = _RecordingRunner();
+      final workRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tgdog-session',
+              issueType: IssueType.session,
+              status: BeadStatus.closed,
+              metadata: {'work_bead': 'swift-infer-097', 'rig': 'tgdog'},
+            ),
+          ]),
+        ),
+        work: _Source(
+          _snapshot([
+            const Bead(
+              id: 'swift-infer-097',
+              issueType: IssueType.task,
+              metadata: {'rig': 'swift-infer'},
+            ),
+          ]),
+        ),
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+        workIdentity: 'swift-infer',
+        workWriterOwnership: const {'swift-infer'},
+      );
+
+      final result = await handler(
+        const GridCommandRequest.rework(
+          beadId: 'swift-infer-097',
+          note: 'retry',
+        ),
+      );
+
+      expect(result, isA<GridCommandCompleted>());
+      expect(
+        workRunner.calls,
+        contains(containsAll(['update', 'swift-infer-097'])),
+      );
+      expect(
+        stateRunner.calls.single.join(' '),
+        contains('swift-infer-097#r1'),
+      );
+    });
+
     test('beyond-cap header binds the request actor', () async {
       final stateRunner = _RecordingRunner();
       final workRunner = _RecordingRunner();
@@ -669,6 +716,7 @@ ResidentGridCommandHandler _handler({
   Set<String> stateOwnership = const {'tg', 'tgdog'},
   Set<String> stateWriterOwnership = const {'tg', 'tgdog'},
   Set<String> workWriterOwnership = const {'tg'},
+  String workIdentity = 'tg',
 }) => ResidentGridCommandHandler(
   stateSource: state,
   refreshState: refreshState ?? () async {},
@@ -678,7 +726,7 @@ ResidentGridCommandHandler _handler({
   ),
   stateOwnership: BeadOwnershipPredicate(stateOwnership),
   workStoresByIdentity: {
-    'tg': ResidentWorkCommandStore(
+    workIdentity: ResidentWorkCommandStore(
       source: work,
       refresh: refreshWork ?? () async {},
       writer: StationBeadWriter(

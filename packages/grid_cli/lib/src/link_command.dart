@@ -275,7 +275,8 @@ Future<int> runUnlink({
       writeErr('grid unlink: ${link.id} is not an open type=link bead.');
       return 1;
     }
-    if (BeadOwnershipPredicate.prefixOf(link.id) != stateStorePrefix) {
+    if (BeadOwnershipPredicate.ownedPrefixOf(link.id, {stateStorePrefix}) !=
+        stateStorePrefix) {
       writeErr(
         'grid unlink: ${link.id} is not owned by state prefix '
         '"$stateStorePrefix".',
@@ -341,7 +342,7 @@ bool _endpointsArmed(
   String verb,
 ) {
   for (final id in [from, to]) {
-    final prefix = BeadOwnershipPredicate.prefixOf(id);
+    final prefix = BeadOwnershipPredicate.ownedPrefixOf(id, roster.keys);
     if (prefix == null ||
         !roster.containsKey(prefix) ||
         !armed.contains(prefix)) {

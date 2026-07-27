@@ -200,8 +200,14 @@ class FederatedSnapshotSource implements SnapshotSource {
     edges: <BlockEdge>[
       for (final dep in dependencies)
         if (dep.type.affectsBlocking &&
-            BeadOwnershipPredicate.prefixOf(dep.dependsOnId) !=
-                BeadOwnershipPredicate.prefixOf(dep.issueId))
+            BeadOwnershipPredicate.ownedPrefixOf(
+                  dep.dependsOnId,
+                  _sources.keys,
+                ) !=
+                BeadOwnershipPredicate.ownedPrefixOf(
+                  dep.issueId,
+                  _sources.keys,
+                ))
           BlockEdge(
             from: dep.issueId,
             to: dep.dependsOnId,

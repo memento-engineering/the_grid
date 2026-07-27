@@ -92,7 +92,10 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
             '(the human ruling must carry a reason).',
       );
     }
-    final identity = BeadOwnershipPredicate.prefixOf(beadId);
+    final identity = BeadOwnershipPredicate.ownedPrefixOf(
+      beadId,
+      _workStoresByIdentity.keys,
+    );
     final workStore = identity == null ? null : _workStoresByIdentity[identity];
     if (workStore == null) {
       return _refused(
