@@ -142,11 +142,7 @@ void main() {
 
   testWidgets('builds with ambient start tab alignment', (tester) async {
     await tester.pumpWidget(
-      _host(
-        source: source,
-        client: client,
-        ambientStartAlignment: true,
-      ),
+      _host(source: source, client: client, ambientStartAlignment: true),
     );
     await tester.pump();
 
