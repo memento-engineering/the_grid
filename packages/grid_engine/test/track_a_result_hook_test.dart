@@ -176,49 +176,43 @@ void main() {
         );
       });
 
-      test(
-        'an arbitrary result envelope persists every field verbatim on the '
-        'step bead',
-        () async {
-          const payload = <String, String>{
-            'cache_read_input_tokens': '137',
-            'model_latency_ms': '842',
-            'transport_reliability': 'fail-closed-default',
-          };
-          final h = _host(const _EnvelopeCritic(payload));
-          addTearDown(() {
-            h.owner.dispose();
-            unawaited(h.fakes.provider.close());
-          });
-          await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/critic');
+      test('an arbitrary result envelope persists every field verbatim on the '
+          'step bead', () async {
+        const payload = <String, String>{
+          'cache_read_input_tokens': '137',
+          'model_latency_ms': '842',
+          'transport_reliability': 'fail-closed-default',
+        };
+        final h = _host(const _EnvelopeCritic(payload));
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/critic');
 
-          h.fakes.provider.emit(
-            const Exited(name: 'tgdog-s/tg-1/critic', exitCode: 0),
-          );
-          await _pump();
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/critic', exitCode: 0),
+        );
+        await _pump();
 
-          // pow-4ld is the interface consumer: its remaining envelope fields
-          // must cross this schema-ignorant result chokepoint unchanged.
-          final updates = h.fakes.runner.callsFor('update');
-          expect(updates, hasLength(1));
-          expect(updates.single[1], _stepBeadId);
-          final metadata = h.fakes.runner.metadataOfUpdate(0);
-          final resultMetadata = <String, String>{
-            for (final entry in metadata.entries)
-              if (entry.key.startsWith('grid.result.'))
-                entry.key: entry.value as String,
-          };
-          expect(
-            resultMetadata,
-            const {
-              'grid.result.tg-1/critic.cache_read_input_tokens': '137',
-              'grid.result.tg-1/critic.model_latency_ms': '842',
-              'grid.result.tg-1/critic.transport_reliability':
-                  'fail-closed-default',
-            },
-          );
-        },
-      );
+        // pow-4ld is the interface consumer: its remaining envelope fields
+        // must cross this schema-ignorant result chokepoint unchanged.
+        final updates = h.fakes.runner.callsFor('update');
+        expect(updates, hasLength(1));
+        expect(updates.single[1], _stepBeadId);
+        final metadata = h.fakes.runner.metadataOfUpdate(0);
+        final resultMetadata = <String, String>{
+          for (final entry in metadata.entries)
+            if (entry.key.startsWith('grid.result.'))
+              entry.key: entry.value as String,
+        };
+        expect(resultMetadata, const {
+          'grid.result.tg-1/critic.cache_read_input_tokens': '137',
+          'grid.result.tg-1/critic.model_latency_ms': '842',
+          'grid.result.tg-1/critic.transport_reliability':
+              'fail-closed-default',
+        });
+      });
 
       test(
         'a null-result process writes state only (positive control: no grade '
