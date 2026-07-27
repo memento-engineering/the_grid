@@ -19,7 +19,7 @@ final class WebSocketTreeWireSource implements TreeWireSource {
     );
   }
 
-  /// Connects to [controlUrl] using the station bearer subprotocol.
+  /// Connects to [controlUrl] with the station bearer in the stream query.
   static WebSocketTreeWireSource connect({
     required Uri controlUrl,
     required String token,
@@ -30,12 +30,10 @@ final class WebSocketTreeWireSource implements TreeWireSource {
       host: controlUrl.host,
       port: controlUrl.hasPort ? controlUrl.port : null,
       path: '/stream',
+      queryParameters: <String, String>{'token': token},
     );
     return WebSocketTreeWireSource._(
-      connector(
-        uri,
-        protocols: <String>['$stationTreeBearerProtocolPrefix$token'],
-      ),
+      connector(uri, protocols: const <String>[]),
     );
   }
 
