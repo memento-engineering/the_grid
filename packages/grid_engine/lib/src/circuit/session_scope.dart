@@ -833,6 +833,58 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     scheduleMicrotask(() => unawaited(_rearm(id, nodePath, moleculeTarget)));
   }
 
+  /// One-shot latch for [_resumeOrphanedPour] — a build can fire many times
+  /// while the resume's own write is in flight; the pour must not be
+  /// re-submitted per tick. Reset ONLY on failure (so a later build retries);
+  /// on success the next snapshot carries the steps and the caller's branch
+  /// stops firing.
+  bool _resumingOrphanedPour = false;
+
+  /// Schedules [_resumeOrphanedPour] off the build (a build never awaits).
+  void _scheduleOrphanedPourResume(String sessionId) {
+    if (_resumingOrphanedPour) return;
+    _resumingOrphanedPour = true;
+    scheduleMicrotask(() => unawaited(_resumeOrphanedPour(sessionId)));
+  }
+
+  /// Completes an ORPHANED molecule pour (tg-nmhy case 2): this scope joined
+  /// a molecule session bead whose step graph never landed — the minting
+  /// predecessor was reconciled away between `createSession` and
+  /// `createMolecule`, and its mounted-check abandoned the pour silently.
+  /// The plan is rebuilt deterministically and poured through the SAME
+  /// re-entry-safe `createMolecule` (R6 dedup) the original mint uses.
+  Future<void> _resumeOrphanedPour(String sessionId) async {
+    final ctx = _ctx;
+    if (ctx == null || _cancelled) {
+      _resumingOrphanedPour = false;
+      return;
+    }
+    try {
+      final root = BeadPathKey([seed.bead.id, sessionId]);
+      final plan = instantiateMolecule(
+        seed.circuit,
+        sessionId: sessionId,
+        root: root,
+        nodePath: seed.bead.id,
+        circuitById: _registry?.circuit,
+      );
+      await ctx.writer.createMolecule(
+        plan,
+        substation: ctx.stateSubstation,
+        sessionId: sessionId,
+        rootCrumbs: root.crumbs,
+      );
+    } on Object catch (error) {
+      _flare('session.orphanedPourResumeFailed', {
+        'sessionId': sessionId,
+        'workBeadId': seed.bead.id,
+        'error': '$error',
+      });
+      // A later build retries while the projection stays step-less.
+      _resumingOrphanedPour = false;
+    }
+  }
+
   void _scheduleStepSuccessorMint({
     required String sessionId,
     required String nodePath,
@@ -1127,13 +1179,25 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
         // A molecule session ALWAYS carries step beads — `_mintMolecule`
         // pours them (`createMolecule`) immediately after `createSession`.
         // A joined snapshot that claims `isMolecule` yet projects ZERO step
-        // beads was captured in the store-write gap BETWEEN those two
-        // writes (tg-nmhy): `matchesJoin` admits it on session-id alone,
-        // and mounting an `InheritedCircuit` from it would hand every
-        // eligible step a null bead id. Treat the partial snapshot as
-        // STILL RESOLVING — the next `JoinedSnapshot` tick carries the
-        // poured graph, and a fresh projection stays complete by
-        // construction.
+        // beads is one of two things (tg-nmhy):
+        //
+        // 1. The store-write gap BETWEEN the two writes — the next tick
+        //    carries the poured graph; idling is enough.
+        // 2. An ORPHANED POUR: `_mintMolecule`'s own post-`createSession`
+        //    mounted-check silently abandoned the pour because the session
+        //    write's snapshot tick reconciled THIS scope's predecessor out
+        //    from under it mid-mint. The adopting scope (us) joins a
+        //    step-less molecule session that NO ONE will ever pour — the
+        //    exact `DESIGN-tg-pm6.md` §3 "crashed pour" ambiguity. Live
+        //    receipt: 14/14 sessions minted and ZERO poured, an entire arm
+        //    idle (2026-07-26).
+        //
+        // Idling alone cannot distinguish them, so RESUME the pour: the
+        // plan is deterministic (`instantiateMolecule`) and `createMolecule`
+        // is re-entry-safe (R6's dedup probe), so case 1 degrades to a
+        // no-op and case 2 completes the mint. Either way the next
+        // snapshot carries the steps and this branch stops firing.
+        _scheduleOrphanedPourResume(id);
         return const Idle();
       }
       final depthByPath = supersedesDepthByPath(
