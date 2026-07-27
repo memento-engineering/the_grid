@@ -21,7 +21,7 @@ Bead _stepBead(
   bool closed = false,
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: {MoleculeStepKeys.path: nodePath, ...extra},
 );
@@ -208,7 +208,7 @@ void main() {
       () {
         final molecule = Bead(
           id: 'tgdog-mol-1',
-          issueType: IssueType.molecule,
+          issueType: GridIssueTypes.molecule,
           metadata: {
             MoleculeCircuitKeys.formula: 'code',
             MoleculeCircuitKeys.session: 'tgdog-sess-1',
@@ -225,7 +225,7 @@ void main() {
       () {
         final bead = Bead(
           id: 's-broken',
-          issueType: IssueType.step,
+          issueType: GridIssueTypes.step,
           metadata: {MoleculeStepKeys.state: 'running'},
         );
         expect(() => projectMoleculeCursor([bead]), returnsNormally);
@@ -450,21 +450,24 @@ void main() {
           'tg-42/land',
         });
 
-        expect(byKey['tg-42']!.type, IssueType.molecule.wire);
+        expect(byKey['tg-42']!.type, GridIssueTypes.molecule.wire);
         expect(byKey['tg-42']!.metadata[MoleculeCircuitKeys.formula], 'code');
         expect(
           byKey['tg-42']!.metadata[MoleculeCircuitKeys.session],
           sessionId,
         );
 
-        expect(byKey['tg-42/harnessPeripheral']!.type, IssueType.molecule.wire);
+        expect(
+          byKey['tg-42/harnessPeripheral']!.type,
+          GridIssueTypes.molecule.wire,
+        );
         expect(
           byKey['tg-42/harnessPeripheral']!.metadata[MoleculeCircuitKeys
               .formula],
           'harness-peripheral',
         );
 
-        expect(byKey['tg-42/build']!.type, IssueType.step.wire);
+        expect(byKey['tg-42/build']!.type, GridIssueTypes.step.wire);
         expect(
           byKey['tg-42/build']!.metadata[MoleculeStepKeys.stepId],
           'build',

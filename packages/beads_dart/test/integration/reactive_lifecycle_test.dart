@@ -98,7 +98,7 @@ void main() {
       final afterMolecule = await mutateAndReact('create molecule', () async {
         moleculeId = await bd.create(
           title: 'tron lives',
-          type: IssueType.molecule,
+          type: const IssueType('molecule'),
           priority: 1,
         );
       });
@@ -111,7 +111,7 @@ void main() {
       );
       expect(created.single.bead.id, moleculeId);
       expect(created.single.bead.title, 'tron lives');
-      expect(created.single.bead.issueType, IssueType.molecule);
+      expect(created.single.bead.issueType, const IssueType('molecule'));
       // A molecule is a container — it must not have entered the ready set.
       expect(
         afterMolecule.whereType<ReadySetChanged>(),

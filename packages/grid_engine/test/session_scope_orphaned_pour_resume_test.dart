@@ -51,7 +51,7 @@ Bead _task(String id) =>
 Bead _stepBead(String id, {required String path, required String session}) =>
     Bead(
       id: id,
-      issueType: IssueType.step,
+      issueType: GridIssueTypes.step,
       status: BeadStatus.open,
       metadata: {
         MoleculeStepKeys.path: path,

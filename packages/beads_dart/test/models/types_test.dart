@@ -41,54 +41,31 @@ void main() {
   });
 
   group('IssueType', () {
-    test('core vs custom classification', () {
-      expect(IssueType.task.isCore, isTrue);
-      expect(IssueType.molecule.isCore, isFalse);
-    });
-
-    test('infra types are the list-hidden set (A5)', () {
-      expect(IssueType.agent.isInfra, isTrue);
-      expect(IssueType.rig.isInfra, isTrue);
-      expect(IssueType.role.isInfra, isTrue);
-      expect(IssueType.session.isInfra, isFalse);
-      expect(IssueType.molecule.isInfra, isFalse);
-    });
-
-    test('custom-types fixture is fully covered by named constants', () {
-      final env = BdEnvelope.parse(fixtureText('tg-types.json'));
-      final customNames = (env.dataMap['custom_types']! as List)
-          .cast<String>()
-          .toSet();
-      const known = <IssueType>[
-        IssueType.agent,
-        IssueType.convergence,
-        IssueType.convoy,
-        IssueType.event,
-        IssueType.gate,
-        IssueType.mergeRequest,
-        IssueType.message,
-        IssueType.molecule,
-        IssueType.rig,
-        IssueType.role,
-        IssueType.session,
-        IssueType.spec,
-        IssueType.step,
-      ];
-      expect(known.map((t) => t.wire).toSet(), customNames);
+    test('contains exactly the nine upstream built-ins', () {
       expect(
-        customNames,
-        isNot(contains(IssueType.link.wire)),
-        reason:
-            'link is a grid STATE-store type; a work store like tg never '
-            'registers it, so it must not appear in this fixture',
+        IssueType.coreTypes.map((type) => type.wire).toSet(),
+        equals({
+          'task',
+          'bug',
+          'feature',
+          'chore',
+          'epic',
+          'decision',
+          'spike',
+          'story',
+          'milestone',
+        }),
       );
+      for (final type in IssueType.coreTypes) {
+        expect(type.isCore, isTrue, reason: type.wire);
+      }
+      expect(const IssueType('molecule').isCore, isFalse);
+      expect(const IssueType('unknown-custom').isCore, isFalse);
     });
 
-    test('link is never core, infra, or fixture-implied', () {
-      expect(IssueType.link.wire, 'link');
-      expect(IssueType.link.isCore, isFalse);
-      expect(IssueType.link.isInfra, isFalse);
-      expect(IssueType.coreTypes, isNot(contains(IssueType.link)));
+    test('preserves workspace-specific values', () {
+      const type = IssueType('workspace-specific');
+      expect(type.wire, 'workspace-specific');
     });
   });
 

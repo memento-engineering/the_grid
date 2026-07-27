@@ -76,7 +76,7 @@ GraphSnapshot _state(List<Bead> beads, {int tick = 0}) =>
 /// this bead's metadata.
 Bead _round1Session(String id, {required String workBead}) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -87,7 +87,7 @@ Bead _round1Session(String id, {required String workBead}) => Bead(
 
 Bead _closedRound1Session(String id, {required String workBead}) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: BeadStatus.closed,
   metadata: {
     'rig': stateSubstation,
@@ -104,7 +104,7 @@ Bead _closedRound1Session(String id, {required String workBead}) => Bead(
 List<Bead> _round1Steps(String sessionId) => [
   Bead(
     id: 'tgdog-step-agent',
-    issueType: IssueType.step,
+    issueType: GridIssueTypes.step,
     status: BeadStatus.closed,
     metadata: {
       'rig': stateSubstation,
@@ -118,7 +118,7 @@ List<Bead> _round1Steps(String sessionId) => [
   ),
   Bead(
     id: 'tgdog-step-verify',
-    issueType: IssueType.step,
+    issueType: GridIssueTypes.step,
     status: BeadStatus.closed,
     metadata: {
       'rig': stateSubstation,
@@ -132,7 +132,7 @@ List<Bead> _round1Steps(String sessionId) => [
   ),
   Bead(
     id: 'tgdog-step-route',
-    issueType: IssueType.step,
+    issueType: GridIssueTypes.step,
     status: BeadStatus.open,
     metadata: {
       'rig': stateSubstation,
@@ -151,7 +151,7 @@ List<Bead> _round1Steps(String sessionId) => [
 /// bead, so it stays open across the rekey exactly like the live incident.
 Bead _openGate(String id, {required String sessionId}) => Bead(
   id: id,
-  issueType: IssueType.gate,
+  issueType: GridIssueTypes.gate,
   status: BeadStatus.open,
   metadata: {'rig': stateSubstation, 'blocks': sessionId, 'node': 'tg-1/route'},
 );

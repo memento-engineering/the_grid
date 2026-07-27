@@ -14,7 +14,7 @@ void main() {
     test('session bead decodes core + snake_case fields', () {
       final bead = _firstBead('fx-session-sample.json');
       expect(bead.id, 'fx-hbc');
-      expect(bead.issueType, IssueType.session);
+      expect(bead.issueType, const IssueType('session'));
       expect(bead.status, BeadStatus.closed);
       expect(bead.isClosed, isTrue);
       expect(bead.status.category, StatusCategory.done);
@@ -26,7 +26,7 @@ void main() {
 
     test('message bead decodes labels, ephemeral, assignee', () {
       final bead = _firstBead('fx-message-sample.json');
-      expect(bead.issueType, IssueType.message);
+      expect(bead.issueType, const IssueType('message'));
       expect(bead.assignee, 'operator');
       expect(bead.ephemeral, isTrue);
       expect(bead.labels, contains('thread:thread-0001'));
@@ -35,7 +35,7 @@ void main() {
 
     test('molecule bead decodes', () {
       final bead = _firstBead('fx-molecule-sample.json');
-      expect(bead.issueType, IssueType.molecule);
+      expect(bead.issueType, const IssueType('molecule'));
       expect(bead.title, 'mol-fx-sample');
     });
 

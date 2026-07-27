@@ -30,7 +30,7 @@ GraphSnapshot _graph(
 /// A `type=molecule` bead owned by [sessionId] (`MoleculeCircuitKeys.session`).
 Bead _moleculeBead(String id, {required String sessionId}) => Bead(
   id: id,
-  issueType: IssueType.molecule,
+  issueType: GridIssueTypes.molecule,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -44,7 +44,7 @@ Bead _moleculeBead(String id, {required String sessionId}) => Bead(
 Bead _stepBead(String id, {required String sessionId, required String path}) =>
     Bead(
       id: id,
-      issueType: IssueType.step,
+      issueType: GridIssueTypes.step,
       status: BeadStatus.open,
       metadata: {
         'rig': stateSubstation,
@@ -229,7 +229,7 @@ void main() {
       final work = FakeSnapshotSource(_graph([bead('w1')]));
       final unstamped = Bead(
         id: 'm-unstamped',
-        issueType: IssueType.molecule,
+        issueType: GridIssueTypes.molecule,
         status: BeadStatus.open,
         metadata: const {'rig': stateSubstation},
       );
@@ -263,14 +263,17 @@ void main() {
 
   group('R5a — molecule beads never leak into work/drive projections '
       '(work_list.dart:317 regression, at the projection level)', () {
-    test('IssueType.molecule / IssueType.step are non-core — the invariant '
-        '`_isDispatchableWork` (work_list.dart:317) fails closed on, '
-        'regardless of what mounts', () {
-      expect(IssueType.molecule.isCore, isFalse);
-      expect(IssueType.step.isCore, isFalse);
-      expect(driveableTypes.contains(IssueType.molecule), isFalse);
-      expect(driveableTypes.contains(IssueType.step), isFalse);
-    });
+    test(
+      'GridIssueTypes.molecule / GridIssueTypes.step are non-core — the invariant '
+      '`_isDispatchableWork` (work_list.dart:317) fails closed on, '
+      'regardless of what mounts',
+      () {
+        expect(GridIssueTypes.molecule.isCore, isFalse);
+        expect(GridIssueTypes.step.isCore, isFalse);
+        expect(driveableTypes.contains(GridIssueTypes.molecule), isFalse);
+        expect(driveableTypes.contains(GridIssueTypes.step), isFalse);
+      },
+    );
 
     test('molecule/step beads live ONLY in sessionsByWorkBead[...].'
         'moleculeBeads — JoinedSnapshot.graph (the work axis WorkList reads) '

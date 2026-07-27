@@ -189,7 +189,7 @@ void main() {
         'ephemeral': '1',
       });
       expect(step.ephemeral, isTrue);
-      expect(step.issueType, IssueType.gate);
+      expect(step.issueType, const IssueType('gate'));
       expect(step.isClosed, isTrue);
       expect(step.metadata['gc.deferred_type'], 'task');
     });
@@ -254,7 +254,7 @@ void main() {
           'issue_type': 'convergence',
         });
         expect(bead.status, const BeadStatus('convoy-running'));
-        expect(bead.issueType, IssueType.convergence);
+        expect(bead.issueType, const IssueType('convergence'));
       },
     );
 

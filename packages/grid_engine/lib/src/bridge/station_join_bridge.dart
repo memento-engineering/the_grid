@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
 import '../domain/cross_link.dart';
 import '../domain/joined_snapshot.dart';
@@ -210,7 +211,7 @@ class StationJoinBridge {
     final sessions = <String, SessionProjection>{};
     if (state != null) {
       for (final bead in state.beadsById.values) {
-        if (bead.issueType != IssueType.session) continue;
+        if (bead.issueType != GridIssueTypes.session) continue;
         final projection = projectSession(bead);
         if (projection.workBeadId.isEmpty) continue; // no JOIN key — skip.
         sessions[projection.workBeadId] = projection;
@@ -303,7 +304,7 @@ class StationJoinBridge {
     final workBeadBySessionId = _workBeadIdBySessionId(sessions);
     final gateNodesByWorkBead = <String, Set<String>>{};
     for (final bead in state.beadsById.values) {
-      if (bead.issueType != IssueType.gate) continue;
+      if (bead.issueType != GridIssueTypes.gate) continue;
       if (bead.isClosed) continue; // a resolved gate re-arms — drop it.
       final blocks = bead.metadata['blocks'] as String?;
       if (blocks == null) continue;
@@ -350,9 +351,9 @@ class StationJoinBridge {
     final workBeadByMoleculeBeadId = <String, String>{};
     for (final bead in state.beadsById.values) {
       final String? sessionId;
-      if (bead.issueType == IssueType.molecule) {
+      if (bead.issueType == GridIssueTypes.molecule) {
         sessionId = bead.metadata[MoleculeCircuitKeys.session] as String?;
-      } else if (bead.issueType == IssueType.step) {
+      } else if (bead.issueType == GridIssueTypes.step) {
         sessionId = bead.metadata[MoleculeStepKeys.session] as String?;
       } else {
         continue;

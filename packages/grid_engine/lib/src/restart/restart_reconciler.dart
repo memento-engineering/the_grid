@@ -521,7 +521,7 @@ class RestartReconciler {
 
     final candidates = <LeaseSweepCandidate>[];
     for (final bead in _stateSnapshot().beadsById.values) {
-      if (bead.issueType != IssueType.step) continue;
+      if (bead.issueType != GridIssueTypes.step) continue;
       final owner = bead.metadata[MoleculeStepKeys.session];
       if (owner is! String) continue;
       final willRemount = remountBySession[owner];
@@ -683,7 +683,7 @@ class RestartReconciler {
   Map<String, SessionProjection> _projectOwnedSessions() {
     final out = <String, SessionProjection>{};
     for (final bead in _stateSnapshot().beadsById.values) {
-      if (bead.issueType != IssueType.session) continue;
+      if (bead.issueType != GridIssueTypes.session) continue;
       final projection = projectSession(bead);
       if (projection.workBeadId.isEmpty) continue;
       out[projection.workBeadId] = projection;

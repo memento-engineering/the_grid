@@ -99,7 +99,7 @@ Bead _moleculeBead(
   String formula = 'code',
 }) => Bead(
   id: id,
-  issueType: IssueType.molecule,
+  issueType: GridIssueTypes.molecule,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -120,7 +120,7 @@ Bead _stepBead(
   Map<String, String> extra = const {},
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -793,7 +793,7 @@ void main() {
               c.isNotEmpty &&
               c[0] == 'create' &&
               c.contains('--type') &&
-              c.contains(IssueType.step.wire),
+              c.contains(GridIssueTypes.step.wire),
         ),
         isTrue,
       );

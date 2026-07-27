@@ -1215,7 +1215,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
       // merging every step bead's slice yields the identical shape.
       final stepResults = <String, Map<String, String>>{};
       for (final b in joined.moleculeBeads) {
-        if (b.issueType != IssueType.step) continue;
+        if (b.issueType != GridIssueTypes.step) continue;
         stepResults.addAll(projectCircuitResults(b));
       }
       results = stepResults;

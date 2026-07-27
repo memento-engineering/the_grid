@@ -123,7 +123,8 @@ Future<int> runLink({
       final links =
           state.beads
               .where(
-                (bead) => bead.issueType == IssueType.link && !bead.isClosed,
+                (bead) =>
+                    bead.issueType == GridIssueTypes.link && !bead.isClosed,
               )
               .toList()
             ..sort((a, b) => a.id.compareTo(b.id));
@@ -256,7 +257,7 @@ Future<int> runUnlink({
         : export.beads
               .where(
                 (bead) =>
-                    bead.issueType == IssueType.link &&
+                    bead.issueType == GridIssueTypes.link &&
                     !bead.isClosed &&
                     _metadata(bead, CrossLinkKeys.from) == arguments.rest[0] &&
                     _metadata(bead, CrossLinkKeys.to) == arguments.rest[1],
@@ -270,7 +271,7 @@ Future<int> runUnlink({
       return 1;
     }
     final link = matches.single;
-    if (link.issueType != IssueType.link || link.isClosed) {
+    if (link.issueType != GridIssueTypes.link || link.isClosed) {
       writeErr('grid unlink: ${link.id} is not an open type=link bead.');
       return 1;
     }

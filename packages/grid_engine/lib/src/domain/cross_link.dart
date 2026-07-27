@@ -1,4 +1,5 @@
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
 import '../bridge/block_guard.dart';
 
@@ -74,7 +75,7 @@ List<CrossLink> projectCrossLinks(
 }) {
   final links = <CrossLink>[];
   for (final bead in state.beadsById.values) {
-    if (bead.issueType != IssueType.link) continue;
+    if (bead.issueType != GridIssueTypes.link) continue;
     if (bead.isClosed) continue; // a closed link RETIRES the edge.
     final from = _str(bead.metadata[CrossLinkKeys.from]);
     final to = _str(bead.metadata[CrossLinkKeys.to]);
@@ -147,9 +148,9 @@ String? crossLinkTypeRefusal(
         else if (entry is Map && entry['name'] is String)
           entry['name'] as String,
   };
-  if (names.contains(IssueType.link.wire)) return null;
+  if (names.contains(GridIssueTypes.link.wire)) return null;
   return 'grid: the state store "$store" has not registered the '
-      '"${IssueType.link.wire}" issue type, so a cross-repo link bead cannot '
+      '"${GridIssueTypes.link.wire}" issue type, so a cross-repo link bead cannot '
       'be minted and every cross-repo block would be silently absent. Add it '
       "to that store's `types.custom` (docs/SUBSTATION-INIT.md, step 4) "
       'before arming.';

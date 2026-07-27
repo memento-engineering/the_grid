@@ -60,7 +60,7 @@ void main() {
   // state — a non-molecule session contributes no nodes).
   Bead step(String id, String nodePath, StepState state) => Bead(
     id: id,
-    issueType: IssueType.step,
+    issueType: GridIssueTypes.step,
     status: BeadStatus.open,
     metadata: {
       MoleculeStepKeys.path: nodePath,

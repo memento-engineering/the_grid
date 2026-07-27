@@ -128,7 +128,7 @@ void main() {
           beads: [
             Bead(
               id: 'tgdog-s1',
-              issueType: IssueType.session,
+              issueType: GridIssueTypes.session,
               status: BeadStatus.open,
               metadata: const {'rig': 'tgdog', 'work_bead': 'tg-burn'},
             ),

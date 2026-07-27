@@ -68,7 +68,7 @@ GraphSnapshot _state(List<Bead> beads, {int tick = 0}) =>
 /// companion `type=step` bead ([_routeStep]), never on this bead's metadata.
 Bead _gatedSession(String id, {required String workBead}) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -89,7 +89,7 @@ Bead _routeStep(
   required StepState state,
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -106,7 +106,7 @@ Bead _routeStep(
 /// node; CLOSED (a space gate resolve) re-arms it.
 Bead _gate(String id, {required String sessionId, bool closed = false}) => Bead(
   id: id,
-  issueType: IssueType.gate,
+  issueType: GridIssueTypes.gate,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: {'rig': stateSubstation, 'blocks': sessionId, 'node': 'tg-1/route'},
 );
@@ -115,7 +115,7 @@ Bead _gate(String id, {required String sessionId, bool closed = false}) => Bead(
 /// never reads the cursor at all, so no companion step bead is needed here.
 Bead _doneGatedSession(String id, {required String workBead}) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: GridIssueTypes.session,
   status: BeadStatus.closed,
   metadata: {
     'rig': stateSubstation,

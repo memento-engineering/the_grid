@@ -26,7 +26,7 @@ void main() {
   Bead session(String id, {bool closed = false}) => Bead(
     id: id,
     title: 'session $id',
-    issueType: IssueType.session,
+    issueType: GridIssueTypes.session,
     status: closed ? BeadStatus.closed : BeadStatus.open,
     metadata: const {'rig': 'tgdog'},
   );
@@ -82,7 +82,7 @@ void main() {
         Bead(
           id: 'tgdog-gopen',
           title: 'grid gate tgdog-s@tg-1/review/route',
-          issueType: IssueType.gate,
+          issueType: GridIssueTypes.gate,
           status: BeadStatus.open,
           metadata: const {
             'rig': 'tgdog',
@@ -128,7 +128,7 @@ void main() {
         Bead(
           id: 'tgdog-gclosed',
           title: 'grid gate tgdog-s@tg-1/review/route',
-          issueType: IssueType.gate,
+          issueType: GridIssueTypes.gate,
           status: BeadStatus.closed,
           metadata: const {
             'rig': 'tgdog',
@@ -157,7 +157,7 @@ void main() {
       Bead(
         id: 'tgdog-gother',
         title: 'grid gate tgdog-s@tg-1/review/other',
-        issueType: IssueType.gate,
+        issueType: GridIssueTypes.gate,
         status: BeadStatus.open,
         metadata: const {
           'rig': 'tgdog',

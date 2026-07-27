@@ -16,7 +16,7 @@ void main() {
       expect(IssueType.spike.isDriveable, isFalse);
       expect(IssueType.story.isDriveable, isFalse);
       expect(IssueType.milestone.isDriveable, isFalse);
-      expect(IssueType.molecule.isDriveable, isFalse);
+      expect(GridIssueTypes.molecule.isDriveable, isFalse);
     });
   });
 }

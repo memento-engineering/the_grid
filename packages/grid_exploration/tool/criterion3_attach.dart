@@ -20,7 +20,7 @@ class _FakeReader implements SnapshotReader {
   @override
   Future<GraphSnapshot> read() async => GraphSnapshot.fromParts(
     beads: [
-      Bead(id: 'tg-1', title: 'tron', issueType: IssueType.molecule),
+      Bead(id: 'tg-1', title: 'tron', issueType: const IssueType('molecule')),
       const Bead(id: 'tg-2', title: 'ready one'),
     ],
     dependencies: const [],

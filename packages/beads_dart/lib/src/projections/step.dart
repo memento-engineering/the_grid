@@ -7,6 +7,8 @@ import 'projection_error.dart';
 
 part 'step.freezed.dart';
 
+const _stepIssueType = IssueType('step');
+
 /// Typed view over a step bead's `metadata` namespace.
 ///
 /// Steps carry per-step run metadata; unknown keys are preserved in [raw].
@@ -63,7 +65,7 @@ abstract class Step with _$Step {
     Bead bead, {
     List<String> needs = const [],
   }) {
-    if (bead.issueType != IssueType.step) {
+    if (bead.issueType != _stepIssueType) {
       return ProjectionFailed(
         ProjectionError(
           beadId: bead.id,

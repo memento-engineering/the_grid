@@ -56,7 +56,7 @@ Bead linkBead(
   bool closed = false,
 }) => Bead(
   id: id,
-  issueType: IssueType.link,
+  issueType: GridIssueTypes.link,
   status: closed ? BeadStatus.closed : BeadStatus.open,
   metadata: <String, dynamic>{
     CrossLinkKeys.from: from,
@@ -218,7 +218,7 @@ void main() {
         graphOf([
           const Bead(
             id: 'houston-bad',
-            issueType: IssueType.link,
+            issueType: GridIssueTypes.link,
             metadata: <String, dynamic>{CrossLinkKeys.to: 'pow-9'},
           ),
         ], readyIds: const {}),

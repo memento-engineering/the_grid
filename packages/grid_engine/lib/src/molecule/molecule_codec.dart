@@ -18,6 +18,7 @@
 library;
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
 import '../domain/session_bead.dart' show truncateReason;
 import '../sdk/circuit.dart';
@@ -73,7 +74,9 @@ Map<String, int> supersedesDepthByStepId(
   Iterable<BeadDependency> dependencies,
 ) {
   final steps = {
-    for (final b in moleculeBeads.where((b) => b.issueType == IssueType.step))
+    for (final b in moleculeBeads.where(
+      (b) => b.issueType == GridIssueTypes.step,
+    ))
       b.id: b,
   };
   final priorBySuccessor = <String, String>{};
@@ -109,7 +112,7 @@ Map<String, Bead> activeStepBeadsByPath(
   final depths = supersedesDepthByStepId(moleculeBeads, dependencies);
   final active = <String, Bead>{};
   for (final bead in moleculeBeads) {
-    if (bead.issueType != IssueType.step) continue;
+    if (bead.issueType != GridIssueTypes.step) continue;
     final path = bead.metadata[MoleculeStepKeys.path];
     if (path is! String || path.isEmpty) continue;
     final prior = active[path];
@@ -266,7 +269,7 @@ void _emitCircuit(
     GraphNode(
       key: nodePath,
       title: 'circuit ${circuit.id}',
-      type: IssueType.molecule.wire,
+      type: GridIssueTypes.molecule.wire,
       parentId: parentId,
       metadata: {
         MoleculeCircuitKeys.formula: circuit.id,
@@ -283,7 +286,7 @@ void _emitCircuit(
           GraphNode(
             key: stepKey,
             title: 'step ${step.stepId}',
-            type: IssueType.step.wire,
+            type: GridIssueTypes.step.wire,
             metadata: {
               MoleculeStepKeys.stepId: step.stepId,
               MoleculeStepKeys.capability: capabilityId,

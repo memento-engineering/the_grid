@@ -347,7 +347,7 @@ Bead _step(
   DateTime? cooldownUntil,
 }) => Bead(
   id: 'tgdog-step-${nodePath.replaceAll('/', '-')}',
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     MoleculeStepKeys.path: nodePath,

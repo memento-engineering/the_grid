@@ -409,20 +409,14 @@ void main() {
       // especially the orchestration nouns (convoy/event/step/spec/gate/
       // molecule/message/merge-request) that bd ready does NOT narrow out and a
       // deny-list missed.
+      final excludedTypes = <IssueType>[
+        ...GridIssueTypes.customTypes,
+        GridIssueTypes.link,
+        const IssueType('workspace-unknown'),
+      ];
       final customs = <String, IssueType>{
-        'tg-conv': IssueType.convergence,
-        'tg-cvy': IssueType.convoy,
-        'tg-evt': IssueType.event,
-        'tg-gate': IssueType.gate,
-        'tg-mr': IssueType.mergeRequest,
-        'tg-msg': IssueType.message,
-        'tg-mol': IssueType.molecule,
-        'tg-role': IssueType.role,
-        'tg-rig': IssueType.rig,
-        'tg-agent': IssueType.agent,
-        'tg-sess': IssueType.session,
-        'tg-spec': IssueType.spec,
-        'tg-step': IssueType.step,
+        for (final (index, type) in excludedTypes.indexed)
+          'tg-custom-$index': type,
       };
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -454,10 +448,8 @@ void main() {
     test('core work types each mount (the allow-list is not over-narrow)', () {
       final recorder = _Recorder();
       final core = <String, IssueType>{
-        'tg-task': IssueType.task,
-        'tg-bug': IssueType.bug,
-        'tg-feat': IssueType.feature,
-        'tg-chore': IssueType.chore,
+        for (final (index, type) in IssueType.coreTypes.indexed)
+          'tg-core-$index': type,
       };
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -635,7 +627,7 @@ void main() {
             _bead('gc-9'), // blessed but UNOWNED → no
             _bead(
               'tg-conv',
-              type: IssueType.convergence,
+              type: GridIssueTypes.convergence,
             ), // blessed but non-core → no
           ],
           ready: {'tg-1', 'gc-9', 'tg-conv'},

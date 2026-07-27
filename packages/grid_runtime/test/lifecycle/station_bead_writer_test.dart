@@ -21,7 +21,7 @@ Bead _step(
 }) => Bead(
   id: id,
   title: 'step build',
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: status,
   metadata: {
     StationBeadWriter.rigKey: 'tgdog',
@@ -36,7 +36,7 @@ Bead _step(
 
 Bead _molecule(String id, {String sessionId = 'tgdog-sess1'}) => Bead(
   id: id,
-  issueType: IssueType.molecule,
+  issueType: GridIssueTypes.molecule,
   status: BeadStatus.open,
   metadata: {
     StationBeadWriter.rigKey: 'tgdog',

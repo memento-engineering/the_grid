@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_engine/grid_engine.dart' show GridIssueTypes;
 import 'package:grid_sdk/grid_sdk.dart' show SubstationWorkStore;
 
 import 'watch_command.dart';
@@ -63,7 +64,11 @@ class DemoCommand extends Command<int> {
     Future<void> pause() =>
         Future<void>.delayed(const Duration(milliseconds: 1600));
     await Future<void>.delayed(const Duration(seconds: 3));
-    await bd.create(title: 'tron lives', type: IssueType.molecule, priority: 1);
+    await bd.create(
+      title: 'tron lives',
+      type: GridIssueTypes.molecule,
+      priority: 1,
+    );
     await pause();
     final task = await bd.create(
       title: 'reach the I/O tower',

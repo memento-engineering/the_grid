@@ -178,7 +178,7 @@ void _stagePriorBreadcrumb(Fakes fakes) {
   fakes.runner.exportBeads = [
     Bead(
       id: _stepBeadId,
-      issueType: IssueType.step,
+      issueType: GridIssueTypes.step,
       status: BeadStatus.open,
       metadata: {'rig': stateSubstation, ...leaseBreadcrumb(_priorHandle)},
     ),

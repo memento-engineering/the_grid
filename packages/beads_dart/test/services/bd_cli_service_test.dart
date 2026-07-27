@@ -246,7 +246,7 @@ void main() {
         expect(root.metadata['idempotency_key'], 'converge:tg-root:iter:1');
         final step = snapshot.beads.singleWhere((b) => b.id == 'tg-wisp-s1');
         expect(step.ephemeral, isTrue);
-        expect(step.issueType, IssueType.gate);
+        expect(step.issueType, const IssueType('gate'));
         // A closed wisp remains visible (snapshot = all statuses).
         expect(step.status.wire, 'closed');
         expect(

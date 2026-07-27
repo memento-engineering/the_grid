@@ -77,7 +77,7 @@ Bead _stepBead(
   String? failureReason,
 }) => Bead(
   id: id,
-  issueType: IssueType.step,
+  issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
     'rig': stateSubstation,
@@ -297,7 +297,7 @@ void main() {
         // consequence this test is not about).
         final sessionBead = Bead(
           id: 'tgdog-s',
-          issueType: IssueType.session,
+          issueType: GridIssueTypes.session,
           status: BeadStatus.closed,
           metadata: <String, dynamic>{
             'rig': 'tgdog',
@@ -362,7 +362,7 @@ void main() {
           beads: [
             Bead(
               id: 'tgdog-s',
-              issueType: IssueType.session,
+              issueType: GridIssueTypes.session,
               status: BeadStatus.closed,
               metadata: const <String, dynamic>{
                 'rig': 'tgdog',

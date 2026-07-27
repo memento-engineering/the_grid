@@ -164,7 +164,7 @@ Bead _bead(String id, {IssueType type = IssueType.task}) =>
 
 Bead _sessionBead(String id, {required String workBeadId}) => Bead(
   id: id,
-  issueType: IssueType.session,
+  issueType: engine.GridIssueTypes.session,
   status: BeadStatus.open,
   metadata: {
     engine.SessionBeadKeys.workBead: workBeadId,
@@ -174,7 +174,7 @@ Bead _sessionBead(String id, {required String workBeadId}) => Bead(
 
 Bead _moleculeBead(String id, {required String sessionId}) => Bead(
   id: id,
-  issueType: IssueType.molecule,
+  issueType: engine.GridIssueTypes.molecule,
   status: BeadStatus.open,
   metadata: {'grid.circuit.formula': 'code', 'grid.circuit.session': sessionId},
 );
@@ -182,7 +182,7 @@ Bead _moleculeBead(String id, {required String sessionId}) => Bead(
 Bead _stepBead(String id, {required String sessionId, required String path}) =>
     Bead(
       id: id,
-      issueType: IssueType.step,
+      issueType: engine.GridIssueTypes.step,
       status: BeadStatus.open,
       metadata: {
         'grid.step.id': path.split('/').last,
@@ -469,7 +469,7 @@ void main() {
         _graph(
           [
             _bead('pow-1'),
-            _bead('pow-2', type: IssueType.convergence),
+            _bead('pow-2', type: engine.GridIssueTypes.convergence),
             _bead('pow-3', type: IssueType.epic),
           ],
           {'pow-1', 'pow-2', 'pow-3'},

@@ -283,7 +283,7 @@ List<Bead> _stepBeads(
         beads.add(
           Bead(
             id: _stepBeadId(stepNodePath),
-            issueType: IssueType.step,
+            issueType: GridIssueTypes.step,
             status: BeadStatus.open,
             metadata: {
               MoleculeStepKeys.path: stepNodePath,
