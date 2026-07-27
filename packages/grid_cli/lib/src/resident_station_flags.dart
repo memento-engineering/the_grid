@@ -30,6 +30,7 @@ class ResidentStationConfig {
     required this.gridHome,
     required this.appended,
     required this.dryRun,
+    required this.allowStale,
     required this.controlPort,
     required this.runFor,
     required this.harness,
@@ -47,6 +48,9 @@ class ResidentStationConfig {
 
   /// Whether all effect seams are inert.
   final bool dryRun;
+
+  /// Whether checkout-freshness refusals are downgraded to warnings.
+  final bool allowStale;
 
   /// The station-control loopback port; zero requests an ephemeral port.
   final int controlPort;
@@ -98,6 +102,11 @@ void residentStationFlags(
       'dry-run',
       defaultsTo: true,
       help: 'Observe only: no writes, spawns, git, or delivery.',
+    )
+    ..addFlag(
+      'allow-stale',
+      defaultsTo: false,
+      help: 'Warn and continue when a primary checkout is stale or unreadable.',
     )
     ..addOption('for-seconds', help: 'Exit after this many seconds.')
     ..addOption(
@@ -186,6 +195,7 @@ ResidentStationConfig residentStationConfigFrom(
     gridHome: p.canonicalize(rawHome),
     appended: List.unmodifiable(appended),
     dryRun: args.flag('dry-run'),
+    allowStale: args.flag('allow-stale'),
     controlPort: controlPort,
     runFor: runSeconds == null ? null : Duration(seconds: runSeconds),
     harness: args.option('harness')!,

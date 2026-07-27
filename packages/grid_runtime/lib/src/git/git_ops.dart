@@ -1,5 +1,48 @@
 import 'git_runner.dart';
 
+/// Classified state of one Layer-1 primary checkout.
+enum PrimaryCheckoutState {
+  fresh,
+  unreadable,
+  detached,
+  remoteUnreadable,
+  offDefaultBranch,
+  behind,
+}
+
+/// Immutable result of inspecting one Layer-1 primary checkout.
+class PrimaryCheckoutFreshness {
+  /// Creates a checkout freshness result.
+  const PrimaryCheckoutFreshness({
+    required this.state,
+    this.branch,
+    this.defaultBranch,
+    this.behindBy = 0,
+  });
+
+  final PrimaryCheckoutState state;
+  final String? branch;
+  final String? defaultBranch;
+  final int behindBy;
+
+  /// Whether every freshness probe succeeded and the checkout is current.
+  bool get isFresh => state == PrimaryCheckoutState.fresh;
+
+  /// Atomic operator-facing verdict for this checkout.
+  String get verdict => switch (state) {
+    PrimaryCheckoutState.fresh => 'fresh',
+    PrimaryCheckoutState.unreadable => 'unreadable: not a git repository',
+    PrimaryCheckoutState.detached => 'stale: detached HEAD',
+    PrimaryCheckoutState.remoteUnreadable =>
+      'unreadable: origin/HEAD or remote default history',
+    PrimaryCheckoutState.offDefaultBranch =>
+      'stale: branch $branch != $defaultBranch',
+    PrimaryCheckoutState.behind =>
+      'stale: $behindBy commit${behindBy == 1 ? '' : 's'} behind '
+          'origin/$defaultBranch',
+  };
+}
+
 /// One git worktree entry, parsed from `git worktree list --porcelain`. Plain
 /// value type (predictable-flutter). gc's `git.Worktree`
 /// (`internal/git/git.go:13-18`).
@@ -119,6 +162,20 @@ class GitOps {
     return r.output.trim();
   }
 
+  /// Reads only the configured `origin/HEAD` remote default branch.
+  Future<String?> probeRemoteDefaultBranch(String workDir) async {
+    final result = await _run(workDir, const <String>[
+      'symbolic-ref',
+      'refs/remotes/origin/HEAD',
+    ]);
+    if (!result.ok) return null;
+    const prefix = 'refs/remotes/origin/';
+    final ref = result.output.trim();
+    return ref.startsWith(prefix) && ref.length > prefix.length
+        ? ref.substring(prefix.length)
+        : null;
+  }
+
   /// Probes the repo's mainline branch at registration time — the VERBATIM
   /// port of gc's `ProbeDefaultBranch` (`git.go:92-106`):
   ///
@@ -129,24 +186,79 @@ class GitOps {
   /// Used at Layer-1 root-checkout registration to record the repo's actual
   /// mainline rather than a hardcoded `main` (ADR-0006 Decision 3).
   Future<String> probeDefaultBranch(String workDir) async {
-    final symref = await _run(workDir, const <String>[
-      'symbolic-ref',
-      'refs/remotes/origin/HEAD',
-    ]);
-    if (symref.ok) {
-      final ref = symref.output.trim();
-      const prefix = 'refs/remotes/origin/';
-      if (ref.startsWith(prefix)) {
-        final branch = ref.substring(prefix.length);
-        if (branch.isNotEmpty) return branch;
-      }
-    }
+    final remoteDefault = await probeRemoteDefaultBranch(workDir);
+    if (remoteDefault != null) return remoteDefault;
     final branch = await currentBranch(workDir);
     if (branch != null) {
       final trimmed = branch.trim();
       if (trimmed.isNotEmpty && trimmed != 'HEAD') return trimmed;
     }
     return '';
+  }
+
+  /// Counts commits reachable from the remote default but not from `HEAD`.
+  Future<int?> commitsBehindRemoteDefault(
+    String workDir,
+    String defaultBranch,
+  ) async {
+    final result = await _run(workDir, <String>[
+      'rev-list',
+      '--count',
+      'HEAD..refs/remotes/origin/$defaultBranch',
+    ]);
+    return result.ok ? int.tryParse(result.output.trim()) : null;
+  }
+
+  /// Inspects [workDir] in fail-closed probe order without mutating git state.
+  Future<PrimaryCheckoutFreshness> inspectPrimaryCheckout(
+    String workDir,
+  ) async {
+    if (!await isRepo(workDir)) {
+      return const PrimaryCheckoutFreshness(
+        state: PrimaryCheckoutState.unreadable,
+      );
+    }
+    final branch = await currentBranch(workDir);
+    if (branch == null) {
+      return const PrimaryCheckoutFreshness(
+        state: PrimaryCheckoutState.unreadable,
+      );
+    }
+    if (branch == 'HEAD') {
+      return const PrimaryCheckoutFreshness(
+        state: PrimaryCheckoutState.detached,
+      );
+    }
+    final defaultBranch = await probeRemoteDefaultBranch(workDir);
+    if (defaultBranch == null) {
+      return PrimaryCheckoutFreshness(
+        state: PrimaryCheckoutState.remoteUnreadable,
+        branch: branch,
+      );
+    }
+    if (branch != defaultBranch) {
+      return PrimaryCheckoutFreshness(
+        state: PrimaryCheckoutState.offDefaultBranch,
+        branch: branch,
+        defaultBranch: defaultBranch,
+      );
+    }
+    final behindBy = await commitsBehindRemoteDefault(workDir, defaultBranch);
+    if (behindBy == null) {
+      return PrimaryCheckoutFreshness(
+        state: PrimaryCheckoutState.remoteUnreadable,
+        branch: branch,
+        defaultBranch: defaultBranch,
+      );
+    }
+    return PrimaryCheckoutFreshness(
+      state: behindBy == 0
+          ? PrimaryCheckoutState.fresh
+          : PrimaryCheckoutState.behind,
+      branch: branch,
+      defaultBranch: defaultBranch,
+      behindBy: behindBy,
+    );
   }
 
   /// **Gate 1.** Whether the working dir has uncommitted changes (staged,

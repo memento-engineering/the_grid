@@ -7,7 +7,8 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_engine/grid_engine.dart'
     show JoinedSnapshot, SessionProjection, StepMount, WedgeState, kNotWedged;
-import 'package:grid_runtime/grid_runtime.dart' show StationGitService;
+import 'package:grid_runtime/grid_runtime.dart'
+    show PrimaryCheckoutFreshness, PrimaryCheckoutState, StationGitService;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -47,6 +48,7 @@ final class _Harness {
     required this.devMode,
     required this.signalShutdown,
     required this.includeMissingCoded,
+    required this.checkoutFreshness,
   });
 
   static Future<_Harness> create({
@@ -54,6 +56,8 @@ final class _Harness {
     bool devMode = false,
     bool signalShutdown = false,
     bool includeMissingCoded = false,
+    Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
+        const <String, PrimaryCheckoutFreshness>{},
   }) async {
     final temp = Directory.systemTemp.createTempSync('resident-up-');
     final home = p.join(temp.path, 'home');
@@ -70,6 +74,7 @@ final class _Harness {
       devMode: devMode,
       signalShutdown: signalShutdown,
       includeMissingCoded: includeMissingCoded,
+      checkoutFreshness: checkoutFreshness,
     );
   }
 
@@ -81,6 +86,7 @@ final class _Harness {
   final bool devMode;
   final bool signalShutdown;
   final bool includeMissingCoded;
+  final Map<String, PrimaryCheckoutFreshness> checkoutFreshness;
   final events = <String>[];
   final _stdout = _ByteConsumer();
   final _stderr = _ByteConsumer();
@@ -178,6 +184,11 @@ final class _Harness {
             return devMode ? _DevMode(events) : null;
           },
       readVmServiceUri: () async => 'ws://vm',
+      inspectPrimaryCheckout: (seat) async {
+        events.add('inspect:${seat.name}');
+        return checkoutFreshness[seat.name] ??
+            const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.fresh);
+      },
       waitForShutdown: () async {
         events.add('signal');
         if (!signalShutdown) {
@@ -447,6 +458,12 @@ void main() {
       registry: _Registry(),
     );
     expect(command.argParser.defaultFor('dry-run'), isTrue);
+    expect(command.argParser.defaultFor('allow-stale'), isFalse);
+    expect(
+      command.argParser.parse(<String>['--allow-stale']).flag('allow-stale'),
+      isTrue,
+    );
+    expect(command.argParser.options['allow-stale']!.abbr, isNull);
     expect(command.argParser.options, isNot(contains('bead')));
   });
 
@@ -461,6 +478,7 @@ void main() {
       addTearDown(h.dispose);
       expect(await h.run(), 0);
       expect(h.events, <String>[
+        'inspect:earth',
         'lock',
         'buildStationWork',
         'work.start',
@@ -487,7 +505,11 @@ void main() {
       expect(h.stdoutText, contains('lunar up: skipping coded substation'));
       expect(
         h.events,
-        containsAllInOrder(<String>['lock', 'buildStationWork']),
+        containsAllInOrder(<String>[
+          'inspect:earth',
+          'lock',
+          'buildStationWork',
+        ]),
       );
     });
 
@@ -503,18 +525,145 @@ void main() {
       final h = await _Harness.create(failAt: 'lock');
       addTearDown(h.dispose);
       expect(await h.run(), 64);
-      expect(h.events, <String>['lock']);
+      expect(h.events, <String>['inspect:earth', 'lock']);
       expect(h.stderrText, startsWith('lunar up:'));
+    });
+
+    test(
+      'coded and appended roots are inspected in roster order before lock',
+      () async {
+        final h = await _Harness.create();
+        addTearDown(h.dispose);
+        final moon = p.join(h.temp.path, 'moon');
+        _seedStore(moon);
+        expect(await h.run(extra: <String>['--substation', 'moon=$moon']), 0);
+        expect(
+          h.events,
+          containsAllInOrder(<String>['inspect:earth', 'inspect:moon', 'lock']),
+        );
+        expect(
+          h.stdoutText,
+          contains('substations: {earth: fresh, moon: fresh}'),
+        );
+      },
+    );
+
+    test('every non-fresh state refuses before lock', () async {
+      final cases = <PrimaryCheckoutFreshness>[
+        const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.unreadable),
+        const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.detached),
+        const PrimaryCheckoutFreshness(
+          state: PrimaryCheckoutState.remoteUnreadable,
+          branch: 'main',
+        ),
+        const PrimaryCheckoutFreshness(
+          state: PrimaryCheckoutState.offDefaultBranch,
+          branch: 'work',
+          defaultBranch: 'main',
+        ),
+        const PrimaryCheckoutFreshness(
+          state: PrimaryCheckoutState.behind,
+          branch: 'main',
+          defaultBranch: 'main',
+          behindBy: 5,
+        ),
+      ];
+      for (final value in cases) {
+        final h = await _Harness.create(
+          checkoutFreshness: <String, PrimaryCheckoutFreshness>{'earth': value},
+        );
+        try {
+          expect(await h.run(), 64);
+          expect(h.events, <String>['inspect:earth']);
+          expect(h.stderrText, contains(value.verdict));
+          expect(h.stderrText, contains('pass --allow-stale'));
+        } finally {
+          await h.dispose();
+        }
+      }
+    });
+
+    test('multiple verdicts occupy one refusal line in roster order', () async {
+      final h = await _Harness.create(
+        checkoutFreshness: const <String, PrimaryCheckoutFreshness>{
+          'earth': PrimaryCheckoutFreshness(
+            state: PrimaryCheckoutState.behind,
+            branch: 'main',
+            defaultBranch: 'main',
+            behindBy: 5,
+          ),
+          'moon': PrimaryCheckoutFreshness(
+            state: PrimaryCheckoutState.detached,
+          ),
+        },
+      );
+      addTearDown(h.dispose);
+      final moon = p.join(h.temp.path, 'moon');
+      _seedStore(moon);
+      expect(await h.run(extra: <String>['--substation', 'moon=$moon']), 64);
+      final lines = h.stderrText.trim().split('\n');
+      expect(lines, hasLength(1));
+      expect(
+        lines.single,
+        contains(
+          '{earth: stale: 5 commits behind origin/main, '
+          'moon: stale: detached HEAD}',
+        ),
+      );
+      expect(h.events, <String>['inspect:earth', 'inspect:moon']);
+    });
+
+    test(
+      'allow-stale warns once with unchanged verdict and reaches lock',
+      () async {
+        const stale = PrimaryCheckoutFreshness(
+          state: PrimaryCheckoutState.behind,
+          branch: 'main',
+          defaultBranch: 'main',
+          behindBy: 5,
+        );
+        final h = await _Harness.create(
+          checkoutFreshness: const <String, PrimaryCheckoutFreshness>{
+            'earth': stale,
+          },
+        );
+        addTearDown(h.dispose);
+        expect(await h.run(extra: const <String>['--allow-stale']), 0);
+        final warnings = h.stderrText
+            .trim()
+            .split('\n')
+            .where((line) => line.contains('WARNING'));
+        expect(warnings, hasLength(1));
+        expect(warnings.single, contains('{earth: ${stale.verdict}}'));
+        expect(h.events, containsAllInOrder(<String>['inspect:earth', 'lock']));
+      },
+    );
+
+    test('fresh banner retains mode and atomic checkout verdict', () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      expect(await h.run(), 0);
+      expect(
+        h.stdoutText,
+        contains(
+          'mode: DRY-RUN (observe-only)  ·  substations: {earth: fresh}',
+        ),
+      );
     });
   });
 
   group('ResidentUpCommand partial failure unwind', () {
     final cases = <(String point, int code, List<String> events)>[
-      ('buildStationWork', 1, ['lock', 'buildStationWork', 'lock.release']),
+      (
+        'buildStationWork',
+        1,
+        ['inspect:earth', 'lock', 'buildStationWork', 'lock.release'],
+      ),
       (
         'work.start',
         1,
         [
+          'inspect:earth',
           'lock',
           'buildStationWork',
           'work.start',
@@ -526,6 +675,7 @@ void main() {
         'runGrid',
         64,
         [
+          'inspect:earth',
           'lock',
           'buildStationWork',
           'work.start',
@@ -538,6 +688,7 @@ void main() {
         'control',
         1,
         [
+          'inspect:earth',
           'lock',
           'buildStationWork',
           'work.start',
@@ -552,6 +703,7 @@ void main() {
         'devMode',
         1,
         [
+          'inspect:earth',
           'lock',
           'buildStationWork',
           'work.start',

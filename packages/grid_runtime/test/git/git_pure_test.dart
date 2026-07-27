@@ -8,10 +8,14 @@ import 'package:test/test.dart';
 /// fail-closed-on-probe-error invariant is proven with NO real `git` and NO
 /// filesystem — the runner can deterministically make any probe ERROR.
 class _ScriptedGitRunner implements GitRunner {
-  _ScriptedGitRunner(this._byVerb);
+  _ScriptedGitRunner(
+    this._byVerb, {
+    Map<String, GitRunResult> byCommand = const <String, GitRunResult>{},
+  }) : _byCommand = byCommand;
 
   /// Keyed by `args.first` (the git subcommand: status/log/stash/worktree/…).
   final Map<String, GitRunResult> _byVerb;
+  final Map<String, GitRunResult> _byCommand;
 
   /// Every command run, recorded as the joined argv (for asserting that
   /// `worktree remove` was NEVER reached on a fail-closed path).
@@ -22,9 +26,12 @@ class _ScriptedGitRunner implements GitRunner {
     required String workingDirectory,
     required List<String> args,
   }) async {
-    calls.add(args.join(' '));
+    final command = args.join(' ');
+    calls.add(command);
     final verb = args.isEmpty ? '' : args.first;
-    return _byVerb[verb] ?? const GitRunResult(exitCode: 0, output: '');
+    return _byCommand[command] ??
+        _byVerb[verb] ??
+        const GitRunResult(exitCode: 0, output: '');
   }
 }
 
@@ -35,12 +42,133 @@ const _probeError = GitRunResult(
   output: 'fatal: not a git repository',
 );
 
+_ScriptedGitRunner _primaryRunner({
+  GitRunResult repo = const GitRunResult(exitCode: 0, output: '.git'),
+  GitRunResult branch = const GitRunResult(exitCode: 0, output: 'main'),
+  GitRunResult remote = const GitRunResult(
+    exitCode: 0,
+    output: 'refs/remotes/origin/main',
+  ),
+  GitRunResult behind = const GitRunResult(exitCode: 0, output: '0'),
+}) => _ScriptedGitRunner(
+  const <String, GitRunResult>{},
+  byCommand: <String, GitRunResult>{
+    'rev-parse --git-dir': repo,
+    'rev-parse --abbrev-ref HEAD': branch,
+    'symbolic-ref refs/remotes/origin/HEAD': remote,
+    'rev-list --count HEAD..refs/remotes/origin/main': behind,
+  },
+);
+
 /// Pure, IO-free unit tests for Track 3's load-bearing logic that does NOT need
 /// the `git` binary: the GIT_* env blacklist, the worktree-list parser, the
 /// `<root>/.grid/worktrees/<rig>/<beadId>` layout + bead-id round-trip, and the
 /// scope gate. (The real-git behaviour is exercised in
 /// `station_git_service_test.dart` against temp repos.)
 void main() {
+  group('primary checkout freshness', () {
+    test('fresh runs every strict probe with exact argv', () async {
+      final runner = _primaryRunner();
+      final value = await GitOps(runner).inspectPrimaryCheckout('/primary');
+      expect(value.state, PrimaryCheckoutState.fresh);
+      expect(value.verdict, 'fresh');
+      expect(runner.calls, <String>[
+        'rev-parse --git-dir',
+        'rev-parse --abbrev-ref HEAD',
+        'symbolic-ref refs/remotes/origin/HEAD',
+        'rev-list --count HEAD..refs/remotes/origin/main',
+      ]);
+    });
+
+    test('repository and current-branch failures are unreadable', () async {
+      for (final runner in <_ScriptedGitRunner>[
+        _primaryRunner(repo: _probeError),
+        _primaryRunner(branch: _probeError),
+      ]) {
+        final value = await GitOps(runner).inspectPrimaryCheckout('/primary');
+        expect(value.state, PrimaryCheckoutState.unreadable);
+        expect(value.verdict, 'unreadable: not a git repository');
+      }
+    });
+
+    test('detached HEAD stops before the remote probe', () async {
+      final runner = _primaryRunner(
+        branch: const GitRunResult(exitCode: 0, output: 'HEAD'),
+      );
+      final value = await GitOps(runner).inspectPrimaryCheckout('/primary');
+      expect(value.state, PrimaryCheckoutState.detached);
+      expect(value.verdict, 'stale: detached HEAD');
+      expect(
+        runner.calls,
+        isNot(contains('symbolic-ref refs/remotes/origin/HEAD')),
+      );
+    });
+
+    test('missing origin HEAD is remote-unreadable', () async {
+      final value = await GitOps(
+        _primaryRunner(remote: _probeError),
+      ).inspectPrimaryCheckout('/primary');
+      expect(value.state, PrimaryCheckoutState.remoteUnreadable);
+      expect(
+        value.verdict,
+        'unreadable: origin/HEAD or remote default history',
+      );
+    });
+
+    test('off-default stops before rev-list', () async {
+      final runner = _primaryRunner(
+        branch: const GitRunResult(exitCode: 0, output: 'feature'),
+      );
+      final value = await GitOps(runner).inspectPrimaryCheckout('/primary');
+      expect(value.state, PrimaryCheckoutState.offDefaultBranch);
+      expect(value.branch, 'feature');
+      expect(value.defaultBranch, 'main');
+      expect(value.verdict, 'stale: branch feature != main');
+      expect(runner.calls, isNot(contains(startsWith('rev-list'))));
+    });
+
+    test(
+      'failed and non-numeric behind probes are remote-unreadable',
+      () async {
+        for (final result in <GitRunResult>[
+          _probeError,
+          const GitRunResult(exitCode: 0, output: 'not-a-count'),
+        ]) {
+          final value = await GitOps(
+            _primaryRunner(behind: result),
+          ).inspectPrimaryCheckout('/primary');
+          expect(value.state, PrimaryCheckoutState.remoteUnreadable);
+        }
+      },
+    );
+
+    test(
+      'positive count reports behind with singular and plural verdicts',
+      () async {
+        for (final entry in <(String, String)>[
+          ('1', 'stale: 1 commit behind origin/main'),
+          ('5', 'stale: 5 commits behind origin/main'),
+        ]) {
+          final value = await GitOps(
+            _primaryRunner(behind: GitRunResult(exitCode: 0, output: entry.$1)),
+          ).inspectPrimaryCheckout('/primary');
+          expect(value.state, PrimaryCheckoutState.behind);
+          expect(value.behindBy, int.parse(entry.$1));
+          expect(value.verdict, entry.$2);
+        }
+      },
+    );
+
+    test('registration probe retains current-branch fallback', () async {
+      final runner = _primaryRunner(remote: _probeError);
+      expect(await GitOps(runner).probeDefaultBranch('/primary'), 'main');
+      expect(runner.calls, <String>[
+        'symbolic-ref refs/remotes/origin/HEAD',
+        'rev-parse --abbrev-ref HEAD',
+      ]);
+    });
+  });
+
   group('cleanGitEnvironment — the GIT_* blacklist', () {
     test('strips every blacklisted GIT_* var, keeps everything else', () {
       final parent = <String, String>{
