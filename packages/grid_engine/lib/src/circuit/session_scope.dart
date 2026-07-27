@@ -1218,7 +1218,7 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
         if (b.issueType != GridIssueTypes.step) continue;
         stepResults.addAll(projectCircuitResults(b));
       }
-      results = stepResults;
+      results = mergeOperatorRulings(stepResults, joined.results);
       invalidated = invalidatedNodes(
         seed.circuit,
         projected.cursor,

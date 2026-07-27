@@ -66,7 +66,11 @@ GraphSnapshot _state(List<Bead> beads, {int tick = 0}) =>
 /// A MOLECULE session bead (tg-eli phase 2: the flat cursor model is
 /// retired), linked to [workBead] — its OWN parked state lives on a
 /// companion `type=step` bead ([_routeStep]), never on this bead's metadata.
-Bead _gatedSession(String id, {required String workBead}) => Bead(
+Bead _gatedSession(
+  String id, {
+  required String workBead,
+  Map<String, String> results = const {},
+}) => Bead(
   id: id,
   issueType: GridIssueTypes.session,
   status: BeadStatus.open,
@@ -74,6 +78,7 @@ Bead _gatedSession(String id, {required String workBead}) => Bead(
     'rig': stateSubstation,
     SessionBeadKeys.workBead: workBead,
     SessionBeadKeys.model: kSessionModelMolecule,
+    ...results,
   },
 );
 
@@ -99,6 +104,29 @@ Bead _routeStep(
     MoleculeStepKeys.path: 'tg-1/route',
     MoleculeStepKeys.session: sessionId,
     MoleculeStepKeys.state: state.name,
+  },
+);
+
+Bead _stepBead(
+  String id, {
+  required String sessionId,
+  required String path,
+  required StepState state,
+  Map<String, String> results = const {},
+}) => Bead(
+  id: id,
+  issueType: GridIssueTypes.step,
+  status: BeadStatus.open,
+  metadata: {
+    'rig': stateSubstation,
+    MoleculeStepKeys.stepId: path.split('/').last,
+    MoleculeStepKeys.capability: path.split('/').last,
+    MoleculeStepKeys.kind: StepKind.job.name,
+    MoleculeStepKeys.path: path,
+    MoleculeStepKeys.session: sessionId,
+    MoleculeStepKeys.state: state.name,
+    for (final entry in results.entries)
+      ResultKeys.keyFor(path, entry.key): entry.value,
   },
 );
 
@@ -143,6 +171,44 @@ class _RecordingTransport implements ExplorationTransport {
   @override
   void flare(String name, Map<String, String> data) =>
       flares.add((name: name, data: data));
+}
+
+class _RulingAwareRoute extends RouteCapability {
+  const _RulingAwareRoute(this.lane, this.log);
+
+  final String lane;
+  final List<String> log;
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
+    final siblings =
+        context.getInheritedSeedOfExactType<SiblingView>() ??
+        const SiblingView();
+    final result = siblings.resultOf(lane);
+    final grade = result[ResultKeys.grade] ?? 'F';
+    final transport = result[ResultKeys.transport] ?? 'missing';
+    log.add('$lane:$grade:$transport');
+    return grade == 'A'
+        ? Advance({ResultKeys.grade: grade, ResultKeys.transport: transport})
+        : Escalate('$lane graded $grade via $transport');
+  }
+}
+
+class _RulingAwareRegistry implements CapabilityRegistry {
+  const _RulingAwareRegistry(this.route);
+
+  final _RulingAwareRoute route;
+
+  @override
+  Circuit? circuit(String circuitId) => null;
+
+  @override
+  Seed host(StepMount mount) => mount.step.capabilityId == 'route'
+      ? CapabilityHost(capability: route, mount: mount, key: mount.key)
+      : const Idle();
+
+  @override
+  DateTime now() => DateTime(2026);
 }
 
 /// A [BdRunner] that FAILS the first [failUpdates] `update` calls (throwing, as
@@ -409,6 +475,89 @@ void main() {
         );
         expect(updates.single[1], _routeStepId);
         expect(runner.metadataOfUpdate(0), {MoleculeStepKeys.state: 'pending'});
+      },
+    );
+
+    test(
+      'a resolved gate re-arms and advances its route from an operator ruling',
+      () async {
+        const lane = 'tg-1/review/test-coverage';
+        final log = <String>[];
+        final runner = RecordingBdRunner();
+        final ctx = _ctxOver(runner);
+        final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final ruling = operatorRulingMetadata(
+          lane,
+          grade: 'A',
+          rationale: 'operator inspected the lane',
+        );
+        final critic = _stepBead(
+          'critic-step',
+          sessionId: 'tgdog-s',
+          path: lane,
+          state: StepState.complete,
+          results: const {
+            ResultKeys.grade: 'F',
+            ResultKeys.transport: 'reported',
+            ResultKeys.rationale: 'critic transport failed',
+          },
+        );
+        final state = FakeSnapshotSource(
+          _state([
+            _gatedSession('tgdog-s', workBead: 'tg-1', results: ruling),
+            _routeStep(
+              _routeStepId,
+              sessionId: 'tgdog-s',
+              state: StepState.gated,
+            ),
+            critic,
+            _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+          ]),
+        );
+        final bridge = StationJoinBridge(work: work, state: state)..start();
+        addTearDown(bridge.dispose);
+
+        final m = _mountFull(
+          joined: bridge.notifier,
+          ctx: ctx,
+          registry: _RulingAwareRegistry(_RulingAwareRoute(lane, log)),
+        );
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        expect(runner.callsFor('update'), hasLength(1));
+        expect(runner.metadataOfUpdate(0), {
+          MoleculeStepKeys.state: StepState.pending.name,
+        });
+        expect(log, isEmpty, reason: 'the gated route only re-arms this tick');
+
+        state.push(
+          _state([
+            _gatedSession('tgdog-s', workBead: 'tg-1', results: ruling),
+            _routeStep(
+              _routeStepId,
+              sessionId: 'tgdog-s',
+              state: StepState.pending,
+            ),
+            critic,
+            _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+          ], tick: 1),
+        );
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        expect(log, ['$lane:A:$kOperatorRulingTransport']);
+        expect(runner.callsFor('update'), hasLength(2));
+        final completion = runner.metadataOfUpdate(1);
+        expect(completion[MoleculeStepKeys.state], StepState.complete.name);
+        expect(
+          completion.keys.where((key) => key.startsWith('grid.rework.')),
+          isEmpty,
+        );
+        expect(runner.callsFor('create'), isEmpty);
       },
     );
 
