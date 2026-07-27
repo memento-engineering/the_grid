@@ -101,15 +101,28 @@ Widget _host({
   required ReplayTreeSource source,
   required FakeGridExplorationClient client,
   SnapshotJsonPicker? picker,
-}) => MaterialApp(
-  home: Scaffold(
+  bool ambientStartAlignment = false,
+}) {
+  final child = Scaffold(
     body: ProjectionTabs(
       source: source,
       client: client,
       snapshotJsonPicker: picker ?? () async => null,
     ),
-  ),
-);
+  );
+  return MaterialApp(
+    home: ambientStartAlignment
+        ? Theme(
+            data: ThemeData(
+              tabBarTheme: const TabBarThemeData(
+                tabAlignment: TabAlignment.start,
+              ),
+            ),
+            child: child,
+          )
+        : child,
+  );
+}
 
 void main() {
   late ReplayTreeSource source;
@@ -125,6 +138,20 @@ void main() {
   tearDown(() async {
     await source.dispose();
     await client.dispose();
+  });
+
+  testWidgets('builds with ambient start tab alignment', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        source: source,
+        client: client,
+        ambientStartAlignment: true,
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(tester.widget<TabBar>(find.byType(TabBar)).isScrollable, isTrue);
   });
 
   testWidgets('renders Station Inspector and Events with independent events', (

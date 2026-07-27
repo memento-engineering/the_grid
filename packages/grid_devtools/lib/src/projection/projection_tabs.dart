@@ -83,6 +83,7 @@ final class _ProjectionTabsState extends State<ProjectionTabs> {
             children: [
               const Expanded(
                 child: TabBar(
+                  isScrollable: true,
                   tabs: [
                     Tab(text: 'Station'),
                     Tab(text: 'Inspector'),
