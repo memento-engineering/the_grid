@@ -332,10 +332,12 @@ class StationControl {
     }
     final requested =
         request.headers['sec-websocket-protocol'] ?? const <String>[];
-    return requested
+    final hasBearerProtocol = requested
         .expand((value) => value.split(','))
         .map((value) => value.trim())
         .contains('$stationTreeBearerProtocolPrefix$_token');
+    if (hasBearerProtocol) return true;
+    return request.uri.queryParameters['token'] == _token;
   }
 
   Future<void> _handleStream(HttpRequest request) async {

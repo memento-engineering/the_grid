@@ -62,6 +62,13 @@ Future<WebSocket> _connectWithProtocol(StationControl control, String token) =>
       protocols: ['$stationTreeBearerProtocolPrefix$token'],
     );
 
+Future<WebSocket> _connectWithQuery(StationControl control, String token) {
+  final uri = Uri.parse(
+    '${control.url.replaceFirst('http:', 'ws:')}/stream',
+  ).replace(queryParameters: <String, String>{'token': token});
+  return WebSocket.connect(uri.toString());
+}
+
 TreeSnapshot _decode(Object? frame) => TreeSnapshot.fromJson(
   (jsonDecode(frame! as String) as Map).cast<String, Object?>(),
 );
@@ -139,7 +146,7 @@ void main() {
     expect(await frames, [projector.latest]);
   });
 
-  test('browser bearer subprotocol authenticates and is selected', () async {
+  test('legacy bearer subprotocol authenticates and is selected', () async {
     final control = await _start(projector: projector);
     addTearDown(control.dispose);
     final socket = await _connectWithProtocol(control, 't');
@@ -148,10 +155,25 @@ void main() {
     expect(socket.protocol, '${stationTreeBearerProtocolPrefix}t');
   });
 
-  test('wrong browser bearer subprotocol is rejected before upgrade', () async {
+  test('query bearer authenticates without selecting a protocol', () async {
+    projector.afterFlush(root);
+    final control = await _start(projector: projector);
+    addTearDown(control.dispose);
+    final socket = await _connectWithQuery(control, 't');
+    addTearDown(socket.close);
+
+    expect(socket.protocol, isNull);
+    expect(await _takeSnapshots(socket, 1), [projector.latest]);
+  });
+
+  test('wrong query and legacy bearer are rejected before upgrade', () async {
     final control = await _start(projector: projector);
     addTearDown(control.dispose);
 
+    await expectLater(
+      _connectWithQuery(control, 'wrong'),
+      throwsA(isA<WebSocketException>()),
+    );
     await expectLater(
       _connectWithProtocol(control, 'wrong'),
       throwsA(isA<WebSocketException>()),

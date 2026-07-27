@@ -65,24 +65,30 @@ TreeSnapshot _snapshot(int day) => TreeSnapshot(
 );
 
 void main() {
-  test('constructs stream URI and browser bearer protocol', () async {
-    final channel = _FakeChannel();
-    Uri? connectedUri;
-    Iterable<String>? connectedProtocols;
-    final source = WebSocketTreeWireSource.connect(
-      controlUrl: Uri.parse('https://user@host:42/control?q=x#fragment'),
-      token: 'secret',
-      connector: (uri, {required protocols}) {
-        connectedUri = uri;
-        connectedProtocols = protocols;
-        return channel;
-      },
-    );
+  test(
+    'constructs browser stream URI with query bearer and no protocol',
+    () async {
+      final channel = _FakeChannel();
+      Uri? connectedUri;
+      Iterable<String>? connectedProtocols;
+      final source = WebSocketTreeWireSource.connect(
+        controlUrl: Uri.parse('https://user@host:42/control?q=x#fragment'),
+        token: 'padded-token==',
+        connector: (uri, {required protocols}) {
+          connectedUri = uri;
+          connectedProtocols = protocols;
+          return channel;
+        },
+      );
 
-    expect(connectedUri, Uri.parse('wss://host:42/stream'));
-    expect(connectedProtocols, ['${stationTreeBearerProtocolPrefix}secret']);
-    await source.dispose();
-  });
+      expect(
+        connectedUri,
+        Uri.parse('wss://host:42/stream?token=padded-token%3D%3D'),
+      );
+      expect(connectedProtocols, isEmpty);
+      await source.dispose();
+    },
+  );
 
   test(
     'updates latest before ordered broadcasts and forwards errors',
