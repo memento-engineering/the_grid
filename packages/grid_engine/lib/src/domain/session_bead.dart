@@ -254,6 +254,28 @@ Map<String, Map<String, String>> projectCircuitResults(Bead sessionBead) {
   return results;
 }
 
+/// Overlays explicit session-level operator rulings on molecule step results.
+///
+/// [stepResults] remain authoritative unless the matching [sessionResults]
+/// lane declares [kOperatorRulingTransport]. A ruling replaces the complete
+/// lane map so its grade, transport, and rationale are observed together.
+Map<String, Map<String, String>> mergeOperatorRulings(
+  Map<String, Map<String, String>> stepResults,
+  Map<String, Map<String, String>> sessionResults,
+) {
+  final merged = <String, Map<String, String>>{
+    for (final entry in stepResults.entries)
+      entry.key: Map<String, String>.of(entry.value),
+  };
+  for (final entry in sessionResults.entries) {
+    if (entry.value[ResultKeys.transport] != kOperatorRulingTransport) {
+      continue;
+    }
+    merged[entry.key] = Map<String, String>.of(entry.value);
+  }
+  return merged;
+}
+
 DateTime? _parseDate(Object? wire) =>
     wire == null ? null : DateTime.tryParse(wire.toString());
 

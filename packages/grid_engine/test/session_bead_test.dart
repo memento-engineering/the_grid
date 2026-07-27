@@ -115,6 +115,55 @@ void main() {
       );
     });
 
+    test('only operator rulings atomically override molecule step results', () {
+      const lane = 'tg-1/review/test-coverage';
+      final stepResults = <String, Map<String, String>>{
+        lane: {
+          ResultKeys.grade: 'F',
+          ResultKeys.transport: 'reported',
+          ResultKeys.rationale: 'critic transport failed',
+        },
+        'tg-1/review/coherence': {ResultKeys.grade: 'A'},
+      };
+      final ordinarySession = <String, Map<String, String>>{
+        lane: {ResultKeys.grade: 'A', ResultKeys.transport: 'reported'},
+      };
+
+      expect(
+        mergeOperatorRulings(stepResults, ordinarySession)[lane],
+        stepResults[lane],
+      );
+
+      final session = Bead(
+        id: 'tgdog-s',
+        issueType: GridIssueTypes.session,
+        metadata: operatorRulingMetadata(
+          lane,
+          grade: 'A',
+          rationale: 'operator inspected the lane',
+        ),
+      );
+      final sessionResults = projectCircuitResults(session);
+      final merged = mergeOperatorRulings(stepResults, sessionResults);
+
+      expect(merged[lane], {
+        ResultKeys.grade: 'A',
+        ResultKeys.transport: kOperatorRulingTransport,
+        ResultKeys.rationale: 'operator inspected the lane',
+      });
+      expect(merged['tg-1/review/coherence'], {ResultKeys.grade: 'A'});
+      expect(stepResults[lane], {
+        ResultKeys.grade: 'F',
+        ResultKeys.transport: 'reported',
+        ResultKeys.rationale: 'critic transport failed',
+      });
+      expect(sessionResults[lane], {
+        ResultKeys.grade: 'A',
+        ResultKeys.transport: kOperatorRulingTransport,
+        ResultKeys.rationale: 'operator inspected the lane',
+      });
+    });
+
     test('a grid.result.* key is never misread as cursor state — cursor '
         'stays empty (tg-eli phase 2: the flat projection retired, so a '
         'grid.result.* key has nothing left to collide with)', () {
