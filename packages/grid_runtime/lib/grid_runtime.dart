@@ -76,7 +76,14 @@ export 'src/git/git_runner.dart'
         cleanGitEnvironment,
         gitEnvBlacklist;
 export 'src/git/git_ops.dart'
-    show GateOutcome, GitOps, GitWorktree, gateBlocks, parseWorktreeList;
+    show
+        GateOutcome,
+        GitOps,
+        GitWorktree,
+        PrimaryCheckoutFreshness,
+        PrimaryCheckoutState,
+        gateBlocks,
+        parseWorktreeList;
 export 'src/git/station_git_service.dart'
     show
         BeadWorktree,

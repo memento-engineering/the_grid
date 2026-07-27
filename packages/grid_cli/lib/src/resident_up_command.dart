@@ -10,7 +10,13 @@ import 'package:grid_engine/grid_engine.dart' show JoinedSnapshot, WedgeState;
 import 'package:grid_exploration/grid_exploration.dart'
     show DevModeSeat, armDevMode, stationVmServiceUri;
 import 'package:grid_runtime/grid_runtime.dart'
-    show GitOps, GhPrOpener, PrOpener, StationGitService, SystemGitRunner;
+    show
+        GitOps,
+        GhPrOpener,
+        PrimaryCheckoutFreshness,
+        PrOpener,
+        StationGitService,
+        SystemGitRunner;
 import 'package:grid_sdk/grid_sdk.dart'
     show
         CapabilityRegistry,
@@ -137,6 +143,8 @@ typedef ResidentDevModeArmer =
     });
 typedef ResidentVmServiceReader = Future<String?> Function();
 typedef ResidentShutdownWaiter = Future<void> Function();
+typedef ResidentPrimaryCheckoutInspector =
+    Future<PrimaryCheckoutFreshness> Function(SubstationWorkSpec substation);
 
 /// Boots a foreground resident station over `runGrid`.
 class ResidentUpCommand extends Command<int> {
@@ -157,6 +165,7 @@ class ResidentUpCommand extends Command<int> {
     ResidentDevModeArmer? armDevelopmentMode,
     ResidentVmServiceReader? readVmServiceUri,
     ResidentShutdownWaiter? waitForShutdown,
+    ResidentPrimaryCheckoutInspector? inspectPrimaryCheckout,
   }) : _delegateFactory = delegateFactory,
        _codedRoster = codedRoster,
        _harnessAllowList = Set.unmodifiable(harnessAllowList),
@@ -170,6 +179,8 @@ class ResidentUpCommand extends Command<int> {
        _startControl = startControl ?? _defaultStartControl,
        _armDevelopmentMode = armDevelopmentMode ?? _defaultArmDevelopmentMode,
        _readVmServiceUri = readVmServiceUri ?? stationVmServiceUri,
+       _inspectPrimaryCheckout =
+           inspectPrimaryCheckout ?? _defaultInspectPrimaryCheckout,
        _waitForShutdown = waitForShutdown ?? _waitForTerminationSignal {
     if (_harnessAllowList.isEmpty) {
       throw ArgumentError.value(harnessAllowList, 'harnessAllowList');
@@ -196,7 +207,12 @@ class ResidentUpCommand extends Command<int> {
   final ResidentControlStarter _startControl;
   final ResidentDevModeArmer _armDevelopmentMode;
   final ResidentVmServiceReader _readVmServiceUri;
+  final ResidentPrimaryCheckoutInspector _inspectPrimaryCheckout;
   final ResidentShutdownWaiter _waitForShutdown;
+
+  static Future<PrimaryCheckoutFreshness> _defaultInspectPrimaryCheckout(
+    SubstationWorkSpec seat,
+  ) => GitOps(SystemGitRunner()).inspectPrimaryCheckout(seat.root);
 
   @override
   String get name => 'up';
@@ -286,6 +302,29 @@ class ResidentUpCommand extends Command<int> {
         '$prefix: no substation resolved a work store at its root.',
       );
       return 1;
+    }
+
+    final freshness = await Future.wait([
+      for (final seat in armed)
+        _inspectPrimaryCheckout(
+          seat,
+        ).then((value) => (seat: seat, value: value)),
+    ]);
+    final freshnessText = freshness
+        .map((entry) => '${entry.seat.name}: ${entry.value.verdict}')
+        .join(', ');
+    if (freshness.any((entry) => !entry.value.isFresh)) {
+      if (!config.allowStale) {
+        stderr.writeln(
+          '$prefix: refusing stale primary checkout(s): {$freshnessText}; '
+          'pass --allow-stale to warn and continue.',
+        );
+        return 64;
+      }
+      stderr.writeln(
+        '$prefix: WARNING --allow-stale accepted primary checkout verdicts: '
+        '{$freshnessText}',
+      );
     }
 
     final startedAt = DateTime.now();
@@ -409,7 +448,7 @@ class ResidentUpCommand extends Command<int> {
       ..writeln('$stationName up — resident station (runGrid)')
       ..writeln(
         'mode: ${config.dryRun ? 'DRY-RUN (observe-only)' : 'LIVE'}  ·  '
-        'substations: {${armed.map((seat) => seat.name).join(', ')}}',
+        'substations: {$freshnessText}',
       )
       ..writeln(
         'stores: read-path {${work.readPathName}}  ·  state partition: '

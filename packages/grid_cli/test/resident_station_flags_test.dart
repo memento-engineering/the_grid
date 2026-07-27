@@ -68,6 +68,7 @@ void main() {
     );
     expect(config.gridHome, temp.path);
     expect(config.dryRun, isTrue);
+    expect(config.allowStale, isFalse);
     expect(config.controlPort, 42);
     expect(config.runFor, const Duration(seconds: 3));
     expect(config.harness, 'codex');
@@ -77,6 +78,22 @@ void main() {
     expect(config.maxAgents, 7);
     expect(config.appended.single.name, 'other');
     expect(config.appended.single.prefix, 'oth');
+  });
+
+  test('allow-stale defaults false and is enabled only explicitly', () {
+    final defaults = residentStationConfigFrom(
+      parser().parse(<String>['--grid-home', temp.path]),
+      stationName: 'lunar',
+      codedNames: const <String>{},
+    );
+    final allowed = residentStationConfigFrom(
+      parser().parse(<String>['--grid-home', temp.path, '--allow-stale']),
+      stationName: 'lunar',
+      codedNames: const <String>{},
+    );
+    expect(defaults.allowStale, isFalse);
+    expect(allowed.allowStale, isTrue);
+    expect(parser().options['allow-stale']!.abbr, isNull);
   });
 
   test('equal aliases are accepted and conflicts refused', () {
