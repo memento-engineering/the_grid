@@ -83,6 +83,7 @@ export 'src/domain/joined_snapshot.dart';
 // shared by the `Rewind` arm (the engine) and `grid rework` (the operator verb).
 export 'src/domain/rework.dart';
 export 'src/domain/session_bead.dart';
+export 'src/domain/session_ledger_metrics_projection.dart';
 // The session DISPOSITION (tg-4rw) — the pure done|held|voided reading of a
 // closed session, consumed by BOTH the mount boundary (WorkList) and the
 // adopt-or-mint decision (SessionScope). A closed session is never blanket-
