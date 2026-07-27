@@ -196,6 +196,73 @@ void main() {
     },
   );
 
+  test('link and unlink accept configured hyphenated prefixes', () async {
+    final inferRoot = Directory('${temp.path}/swift_infer')
+      ..createSync(recursive: true);
+    final trainRoot = Directory('${temp.path}/swift_train')
+      ..createSync(recursive: true);
+    Directory('${inferRoot.path}/.beads').createSync();
+    Directory('${trainRoot.path}/.beads').createSync();
+    final infer = _FakeStore([_bead('swift-infer-097')], customTypes: const []);
+    final train = _FakeStore([_bead('swift-train-042')], customTypes: const []);
+    final hyphenatedEndpoints = [
+      LinkEndpointStore(
+        prefix: 'swift-infer',
+        store: SubstationWorkStore(root: inferRoot.path),
+      ),
+      LinkEndpointStore(
+        prefix: 'swift-train',
+        store: SubstationWorkStore(root: trainRoot.path),
+      ),
+    ];
+    stores[inferRoot.path] = infer;
+    stores[trainRoot.path] = train;
+    state.createdIdOverride = 'tranquility-state-link1';
+
+    expect(
+      await runLink(
+        arguments: _linkArgs([
+          'swift-infer-097',
+          '--blocked-by',
+          'swift-train-042',
+          '--grid-root',
+          temp.path,
+          '--prefix',
+          'swift-infer',
+          '--prefix',
+          'swift-train',
+          '--actor',
+          'specify',
+          '--reason',
+          'waits',
+        ]),
+        stateStorePrefix: 'tranquility-state',
+        endpoints: hyphenatedEndpoints,
+        bdFactory: factory,
+      ),
+      0,
+    );
+    expect(
+      await runUnlink(
+        arguments: _unlinkArgs([
+          'tranquility-state-link1',
+          '--grid-root',
+          temp.path,
+          '--prefix',
+          'tranquility-state',
+          '--actor',
+          'operator',
+          '--reason',
+          'done',
+        ]),
+        stateStorePrefix: 'tranquility-state',
+        endpoints: hyphenatedEndpoints,
+        bdFactory: factory,
+      ),
+      0,
+    );
+  });
+
   test(
     'unrostered and unarmed prefixes refuse before writes or reads',
     () async {
@@ -316,6 +383,7 @@ class _FakeStore implements BdRunner {
   final List<Bead> beads;
   List<String> customTypes;
   final String createdId;
+  String? createdIdOverride;
   final List<List<String>> calls = [];
   int exportCount = 0;
 
@@ -344,14 +412,15 @@ class _FakeStore implements BdRunner {
           stderr: '',
         );
       case 'create':
+        final effectiveCreatedId = createdIdOverride ?? createdId;
         beads.add(
           _bead(
-            createdId,
+            effectiveCreatedId,
             type: GridIssueTypes.link,
             metadata: const {'rig': 'houston'},
           ),
         );
-        return _envelope({'id': createdId});
+        return _envelope({'id': effectiveCreatedId});
       case 'update':
         final index = beads.indexWhere((bead) => bead.id == args[1]);
         final metadataIndex = args.indexOf('--metadata');

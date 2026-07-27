@@ -130,10 +130,22 @@ void main() {
     });
   });
 
-  group('substationOf / prefixOf helpers', () {
-    test('prefixOf returns the leading dash-delimited segment', () {
-      expect(BeadOwnershipPredicate.prefixOf('tgdog-abc'), 'tgdog');
-      expect(BeadOwnershipPredicate.prefixOf('nodash'), isNull);
+  group('substationOf / ownedPrefixOf helpers', () {
+    test('ownedPrefixOf returns the longest complete known prefix', () {
+      const known = {'swift', 'swift-infer'};
+      expect(
+        BeadOwnershipPredicate.ownedPrefixOf('swift-infer-097', known),
+        'swift-infer',
+      );
+      expect(BeadOwnershipPredicate.ownedPrefixOf('nodash', known), isNull);
+      expect(
+        BeadOwnershipPredicate.ownedPrefixOf('swiftish-097', known),
+        isNull,
+      );
+      expect(
+        BeadOwnershipPredicate.ownedPrefixOf('swift-infer-', known),
+        isNull,
+      );
     });
 
     test('substationOf prefers the prefix, falls back to the marker', () {

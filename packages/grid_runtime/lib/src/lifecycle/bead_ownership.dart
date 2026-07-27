@@ -60,15 +60,21 @@ class BeadOwnershipPredicate {
     Map<String, dynamic> metadata = const {},
   }) => _ownsRig(_ownedPrefixOf(id), markerOf(metadata));
 
-  String? _ownedPrefixOf(String id) {
+  String? _ownedPrefixOf(String id) => ownedPrefixOf(id, _substations);
+
+  /// Resolves [id] to the longest prefix in [knownPrefixes] that matches at a
+  /// complete `<prefix>-` boundary with a non-empty suffix.
+  ///
+  /// Returns `null` when no known prefix owns [id].
+  static String? ownedPrefixOf(String id, Iterable<String> knownPrefixes) {
+    final prefixes = knownPrefixes.toSet();
+    if (prefixes.any((prefix) => id == '$prefix-')) return null;
     String? longest;
-    for (final substation in _substations) {
-      final boundary = '$substation-';
-      if (!id.startsWith(boundary)) continue;
-      final suffix = id.substring(boundary.length);
-      if (suffix.isEmpty) continue;
-      if (longest == null || substation.length > longest.length) {
-        longest = substation;
+    for (final prefix in prefixes) {
+      final boundary = '$prefix-';
+      if (!id.startsWith(boundary) || id.length == boundary.length) continue;
+      if (longest == null || prefix.length > longest.length) {
+        longest = prefix;
       }
     }
     return longest;
@@ -92,14 +98,6 @@ class BeadOwnershipPredicate {
   /// `metadata.rig` marker) — for diagnostics / logging.
   String? substationOf(Bead bead) =>
       _ownedPrefixOf(bead.id) ?? markerOf(bead.metadata);
-
-  /// The leading dash-delimited segment of an issue id (gc's rig prefix axis,
-  /// ADR-0002 D2). `tgdog-abc123` → `tgdog`; a bare id with no dash → null.
-  static String? prefixOf(String id) {
-    final dash = id.indexOf('-');
-    if (dash <= 0) return null;
-    return id.substring(0, dash);
-  }
 
   /// The explicit `metadata.rig` marker (the alternative axis), or null.
   static String? markerOf(Map<String, dynamic> metadata) {

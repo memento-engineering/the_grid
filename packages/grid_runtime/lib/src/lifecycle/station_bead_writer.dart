@@ -863,7 +863,11 @@ class StationBeadWriter {
     Map<String, dynamic> metadata,
   ) {
     if (_ownership.ownsTarget(id: id, metadata: metadata)) return;
-    _refuse(operation, id, BeadOwnershipPredicate.prefixOf(id));
+    _refuse(
+      operation,
+      id,
+      BeadOwnershipPredicate.ownedPrefixOf(id, _ownership.substations),
+    );
   }
 
   Never _refuse(String operation, String targetId, String? substation) {

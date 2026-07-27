@@ -104,6 +104,29 @@ void main() {
       },
     );
 
+    test('strict refusal reports the full hyphenated owned prefix', () async {
+      final strictWriter = StationBeadWriter(
+        bd: bd,
+        ownership: BeadOwnershipPredicate({
+          'swift-infer',
+        }, requireSubstationMarker: true),
+        onRefusal: refusals.add,
+      );
+
+      await expectLater(
+        strictWriter.update('swift-infer-097', metadata: {'state': 'active'}),
+        throwsA(
+          isA<OwnershipRefused>().having(
+            (e) => e.substation,
+            'substation',
+            'swift-infer',
+          ),
+        ),
+      );
+      expect(refusals.single, contains('swift-infer'));
+      expect(runner.calls, isEmpty);
+    });
+
     test(
       'createSession with a non-owned rig is refused before any bd create',
       () async {

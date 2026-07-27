@@ -272,6 +272,58 @@ void main() {
       expect(union.current!.readyIds, {'tg-1', 'tg-2'});
     });
 
+    test(
+      'hyphenated member prefixes distinguish same and cross-store deps',
+      () async {
+        final infer = FakeSnapshotSource();
+        final train = FakeSnapshotSource();
+        final union = FederatedSnapshotSource({
+          'swift-infer': infer,
+          'swift-train': train,
+        });
+        addTearDown(union.dispose);
+
+        infer.push(
+          graphOf(
+            [bead('swift-infer-001'), bead('swift-infer-002')],
+            dependencies: const [
+              BeadDependency(
+                issueId: 'swift-infer-001',
+                dependsOnId: 'swift-infer-002',
+              ),
+              BeadDependency(
+                issueId: 'swift-infer-001',
+                dependsOnId: 'swift-train-001',
+              ),
+            ],
+            readyIds: {'swift-infer-001', 'swift-infer-002'},
+            tick: 1,
+          ),
+        );
+        train.push(
+          graphOf(
+            [bead('swift-train-001'), bead('swift-train-002')],
+            dependencies: const [
+              BeadDependency(
+                issueId: 'swift-train-002',
+                dependsOnId: 'swift-infer-002',
+              ),
+            ],
+            readyIds: {'swift-train-001', 'swift-train-002'},
+            tick: 1,
+          ),
+        );
+        await settle();
+
+        expect(
+          union.current!.readyIds,
+          {'swift-infer-002', 'swift-train-001'},
+          reason:
+              'same-store edge is skipped; both cross directions are guarded',
+        );
+      },
+    );
+
     test('a non-blocking dependency type (e.g. `related`) never triggers the '
         'guard, cross-store or not', () async {
       final tg = FakeSnapshotSource();
