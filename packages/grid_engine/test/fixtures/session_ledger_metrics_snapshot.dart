@@ -32,7 +32,7 @@ Bead _step({
   }
   return Bead(
     id: id,
-    issueType: IssueType.step,
+    issueType: GridIssueTypes.step,
     status: BeadStatus.open,
     metadata: metadata,
   );
@@ -42,7 +42,7 @@ GraphSnapshot sessionLedgerMetricsFixture() => GraphSnapshot.fromParts(
   beads: <Bead>[
     Bead(
       id: 'session-legacy',
-      issueType: IssueType.session,
+      issueType: GridIssueTypes.session,
       status: BeadStatus.closed,
       metadata: <String, dynamic>{
         SessionBeadKeys.workBead: 'tg-work-1',
@@ -65,7 +65,7 @@ GraphSnapshot sessionLedgerMetricsFixture() => GraphSnapshot.fromParts(
     ),
     Bead(
       id: 'session-molecule',
-      issueType: IssueType.session,
+      issueType: GridIssueTypes.session,
       status: BeadStatus.open,
       metadata: <String, dynamic>{SessionBeadKeys.workBead: 'tg-work-1'},
     ),

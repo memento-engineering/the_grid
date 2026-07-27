@@ -1,5 +1,6 @@
 import 'package:beads_dart/beads_dart.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
 import '../molecule/molecule_codec.dart' show supersedesDepthByStepId;
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
@@ -358,7 +359,7 @@ LedgerNodeMetrics _decodeNode({
     ),
     modelLatencyMs: integer(ResultMetricFields.modelLatencyMs),
     transportReliability: field(ResultMetricFields.transportReliability),
-    startedAt: bead.issueType == IssueType.step
+    startedAt: bead.issueType == GridIssueTypes.step
         ? _parseDate(
             bead,
             sessionId,
@@ -368,7 +369,7 @@ LedgerNodeMetrics _decodeNode({
             issues,
           )
         : null,
-    finishedAt: bead.issueType == IssueType.step
+    finishedAt: bead.issueType == GridIssueTypes.step
         ? _parseDate(
             bead,
             sessionId,
@@ -378,7 +379,7 @@ LedgerNodeMetrics _decodeNode({
             issues,
           )
         : null,
-    durationMs: bead.issueType == IssueType.step
+    durationMs: bead.issueType == GridIssueTypes.step
         ? _parseInt(
             bead,
             sessionId,
@@ -491,7 +492,9 @@ Map<String, int> _reworkRounds(
   Iterable<BeadDependency> dependencies,
 ) {
   final steps = <String, List<Bead>>{};
-  for (final bead in beads.where((bead) => bead.issueType == IssueType.step)) {
+  for (final bead in beads.where(
+    (bead) => bead.issueType == GridIssueTypes.step,
+  )) {
     final owner = bead.metadata[MoleculeStepKeys.session]?.toString();
     if (owner != null) (steps[owner] ??= <Bead>[]).add(bead);
   }
@@ -530,7 +533,7 @@ SessionLedgerMetricsProjection projectSessionLedgerMetrics(
 ) {
   final sessionBeads = <String, Bead>{
     for (final bead in snapshot.beads)
-      if (bead.issueType == IssueType.session) bead.id: bead,
+      if (bead.issueType == GridIssueTypes.session) bead.id: bead,
   };
   final nodesBySession = <String, List<LedgerNodeMetrics>>{};
   final issues = <MetricsDecodeIssue>[];
@@ -548,7 +551,7 @@ SessionLedgerMetricsProjection projectSessionLedgerMetrics(
     }
   }
   for (final step in snapshot.beads.where(
-    (bead) => bead.issueType == IssueType.step,
+    (bead) => bead.issueType == GridIssueTypes.step,
   )) {
     final sessionId = step.metadata[MoleculeStepKeys.session]?.toString();
     final nodePath = step.metadata[MoleculeStepKeys.path]?.toString();
