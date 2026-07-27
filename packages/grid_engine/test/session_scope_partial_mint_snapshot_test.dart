@@ -114,7 +114,17 @@ void main() {
 
     expect(ranRounds, isEmpty, reason: 'no step may mount off a partial pour');
     expect(fakes.runner.callsFor('update'), isEmpty);
-    expect(fakes.runner.callsFor('create'), isEmpty);
+    // The partial projection no longer merely idles: the scope RESUMES the
+    // potentially-orphaned pour (a single re-entry-safe graph pour — see
+    // session_scope_orphaned_pour_resume_test.dart). What it must NEVER do
+    // is mint a second session bead.
+    expect(
+      fakes.runner
+          .callsFor('create')
+          .where((c) => c.length > 1 && c[1] != '--graph'),
+      isEmpty,
+      reason: 'a partial projection must never mint a fresh session',
+    );
 
     // Phase B — the next snapshot tick carries the poured graph: the SAME
     // scope shape proceeds into a normal fresh round.
