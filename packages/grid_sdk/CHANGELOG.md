@@ -1,3 +1,7 @@
+## 0.1.2
+
+- `buildStationWork` composes capability registries over its owned note appender: a `registryBuilder` callback receives a `NoteAppender` backed by the assembled `StationBeadWriter` (append-notes chokepoint), so station compositions can wire capability receipt lines to work-bead notes (#137).
+
 ## 0.1.1
 
 - Added the command-operation seam: `grid/rework` and `grid/gate/resolve`
