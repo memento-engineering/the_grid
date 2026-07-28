@@ -25,7 +25,7 @@ const _specReview = Circuit(
 class _RealCommitteeRegistry implements CapabilityRegistry {
   _RealCommitteeRegistry(this.route);
 
-  final _CurrentRoundRoute route;
+  final RouteCapability route;
 
   @override
   DateTime now() => DateTime(2026);
@@ -59,11 +59,31 @@ class _CurrentRoundRoute extends RouteCapability {
   }
 }
 
+class _SiblingResultRoute extends RouteCapability {
+  _SiblingResultRoute(this.sourcePath, this.seenGrades);
+
+  final String sourcePath;
+  final List<String?> seenGrades;
+
+  @override
+  Future<RouteVerdict> route(TreeContext context, StepArgs args) async {
+    final siblings =
+        context.getInheritedSeedOfExactType<SiblingView>() ??
+        const SiblingView();
+    final grade = siblings.resultOf(sourcePath)[ResultKeys.grade];
+    seenGrades.add(grade);
+    return grade == 'A'
+        ? const Advance({'joined': 'A'})
+        : const Escalate('current verdict unavailable');
+  }
+}
+
 Bead _stepBead(
   String id, {
   required String path,
   required StepState state,
   String capability = 'route',
+  Map<String, String> result = const {},
 }) => Bead(
   id: id,
   issueType: GridIssueTypes.step,
@@ -75,6 +95,8 @@ Bead _stepBead(
     MoleculeStepKeys.stepId: path.split('/').last,
     MoleculeStepKeys.capability: capability,
     MoleculeStepKeys.kind: StepKind.job.name,
+    for (final entry in result.entries)
+      ResultKeys.keyFor(path, entry.key): entry.value,
   },
 );
 
@@ -219,6 +241,102 @@ void main() {
     expect(fakes.runner.callsFor('create'), isEmpty);
     expect(seenRounds, ['2', '3']);
     expect(fakes.runner.callsFor('update').last[1], 'route-3');
+  });
+
+  test('routes with results from only the active step incarnation', () async {
+    final fakes = buildFakes();
+    final services = StationServices(
+      provider: fakes.provider,
+      writer: StationBeadWriter(
+        bd: BdCliService(fakes.runner),
+        ownership: BeadOwnershipPredicate(const {stateSubstation, 'route'}),
+      ),
+      stateSubstation: stateSubstation,
+    );
+    final transport = RecordingExplorationTransport();
+    final seenGrades = <String?>[];
+    var owner = TreeOwner();
+    addTearDown(() {
+      owner.dispose();
+      unawaited(fakes.provider.close());
+    });
+
+    const sourcePath = 'tg-rvt7/spec_review/coherence';
+
+    void mount(SessionProjection projection) {
+      owner.mountRoot(
+        InheritedSeed<StationServices>(
+          value: services,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: _RealCommitteeRegistry(
+              _SiblingResultRoute(sourcePath, seenGrades),
+            ),
+            child: InheritedSeed<ServiceBundle>(
+              value: ServiceBundle(transport: transport),
+              child: SessionScope(
+                bead: bead('tg-rvt7'),
+                circuit: _root,
+                existingSession: projection,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final predecessor = _stepBead(
+      'coherence-prior',
+      path: sourcePath,
+      state: StepState.complete,
+      result: const {ResultKeys.grade: 'F'},
+    );
+    final successor = _stepBead(
+      'coherence-current',
+      path: sourcePath,
+      state: StepState.complete,
+      result: const {ResultKeys.grade: 'A'},
+    );
+    final pendingRoute = _stepBead(
+      'route-current',
+      path: _routePath,
+      state: StepState.pending,
+    );
+    mount(
+      _projection(
+        [successor, predecessor, pendingRoute],
+        [_supersedes(successor.id, predecessor.id)],
+      ),
+    );
+    await _pump();
+
+    expect(seenGrades, ['A']);
+    expect(fakes.runner.callsFor('update').single[1], 'route-current');
+    expect(
+      fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
+      StepState.complete.name,
+    );
+
+    owner.dispose();
+    owner = TreeOwner();
+    final resultFreeSuccessor = _stepBead(
+      'coherence-result-free',
+      path: sourcePath,
+      state: StepState.complete,
+    );
+    final secondPendingRoute = _stepBead(
+      'route-result-free',
+      path: _routePath,
+      state: StepState.pending,
+    );
+    mount(
+      _projection(
+        [resultFreeSuccessor, predecessor, secondPendingRoute],
+        [_supersedes(resultFreeSuccessor.id, predecessor.id)],
+      ),
+    );
+    await _pump();
+
+    expect(seenGrades.last, isNull);
   });
 }
 
