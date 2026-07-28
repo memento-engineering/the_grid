@@ -5,6 +5,8 @@
 // minted sessions into the work source.
 import 'dart:io';
 
+import 'package:beads_dart/beads_dart.dart';
+import 'package:grid_engine/grid_engine.dart' as engine;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -15,6 +17,25 @@ class _NullResolver implements SessionResolver {
   @override
   Seed sessionFor({required bead, session}) =>
       throw UnimplementedError('never reached in refusal tests');
+}
+
+final class _RecordingBdRunner implements BdRunner {
+  final List<List<String>> calls = <List<String>>[];
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    calls.add(List<String>.unmodifiable(args));
+    final id = args.length > 1 ? args[1] : '';
+    return BdResult(
+      exitCode: 0,
+      stdout: '{"schema_version":1,"data":{"id":"$id"}}',
+      stderr: '',
+    );
+  }
 }
 
 void _seedStore(String dir, {String? database}) {
@@ -216,6 +237,80 @@ void main() {
       expect(report.isClean, isTrue);
       expect(report.settled, isTrue);
       expect(work.stateSubstation, 'tgstate');
+    });
+  });
+
+  group('registry builder seam', () {
+    test(
+      'registry builder seam emits append-notes through the owned writer',
+      () async {
+        _seedStore('${tmp.path}/proj', database: 'pow');
+        _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+        final runner = _RecordingBdRunner();
+        late WorkNoteAppender appendWorkNote;
+        final builtRegistry = engine.DefaultCapabilityRegistry();
+
+        final work = await buildStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: true,
+          stateBdOverride: BdCliService(runner),
+          registryBuilder: (appender) {
+            appendWorkNote = appender;
+            return builtRegistry;
+          },
+        );
+        addTearDown(work.shutdown);
+
+        expect(identical(work.wiring.registry, builtRegistry), isTrue);
+        await appendWorkNote('tgstate-note1', 'seat finding');
+
+        expect(runner.calls, [
+          <String>[
+            'update',
+            'tgstate-note1',
+            '--json',
+            '--actor',
+            'grid-controller',
+            '--append-notes',
+            'seat finding',
+          ],
+        ]);
+        expect(runner.calls.single, isNot(contains('--metadata')));
+      },
+    );
+
+    test('registry and registryBuilder refuse before assembly', () async {
+      var builderCalled = false;
+
+      await expectLater(
+        buildStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: true,
+          registry: engine.DefaultCapabilityRegistry(),
+          registryBuilder: (_) {
+            builderCalled = true;
+            return engine.DefaultCapabilityRegistry();
+          },
+        ),
+        throwsA(
+          isA<ArgumentError>()
+              .having((e) => '${e.message}', 'message', contains('registry'))
+              .having(
+                (e) => '${e.message}',
+                'message',
+                contains('registryBuilder'),
+              ),
+        ),
+      );
+      expect(builderCalled, isFalse);
     });
   });
 }
