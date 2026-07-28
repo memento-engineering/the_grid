@@ -1216,13 +1216,13 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
         joined.moleculeBeads,
         joined.moleculeDependencies,
       );
-      // ResultKeys is reused VERBATIM on the step bead (R1) — each step
-      // bead's OWN `grid.result.<itsOwnNodePath>.*` keys project through the
-      // SAME `projectCircuitResults` the flat codec uses on the session bead;
-      // merging every step bead's slice yields the identical shape.
+      // ResultKeys is reused VERBATIM on the step bead (R1) — each ACTIVE
+      // step bead's OWN `grid.result.<itsOwnNodePath>.*` keys project through
+      // the SAME `projectCircuitResults` the flat codec used on the session
+      // bead; merging the active incarnation at each path yields that shape
+      // without allowing superseded results to overwrite current results.
       final stepResults = <String, Map<String, String>>{};
-      for (final b in joined.moleculeBeads) {
-        if (b.issueType != GridIssueTypes.step) continue;
+      for (final b in activeByPath.values) {
         stepResults.addAll(projectCircuitResults(b));
       }
       results = mergeOperatorRulings(stepResults, joined.results);
