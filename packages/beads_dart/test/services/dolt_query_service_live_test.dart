@@ -14,9 +14,14 @@ import '../support/schema_probe_rows.dart';
 /// A fake [DoltConnection] backed by a canned query→rows table, with a
 /// programmable "reaped" flip so the reconnect path can be exercised offline.
 class _FakeConnection implements DoltConnection {
-  _FakeConnection(this._answers, {this.failFirstWith});
+  _FakeConnection(
+    this._answers, {
+    this.failFirstWith,
+    this.markClosedOnFailure = true,
+  });
 
   final Map<String, List<Map<String, Object?>>> _answers;
+  final bool markClosedOnFailure;
 
   /// If set, the first [query] call throws this and then marks the connection
   /// closed (simulating the 30s idle reap mid-query).
@@ -33,7 +38,7 @@ class _FakeConnection implements DoltConnection {
     final fail = failFirstWith;
     if (fail != null) {
       failFirstWith = null;
-      _open = false;
+      if (markClosedOnFailure) _open = false;
       throw fail;
     }
     if (!_open) {
@@ -141,6 +146,37 @@ void main() {
         await svc.connect();
         expect(svc.probeSql, 'SELECT @@tg_working');
         expect(await svc.probe(), 'hash-abc');
+      },
+    );
+
+    test(
+      'failed probe disposes cached connection and next probe rebuilds',
+      () async {
+        var opened = 0;
+        late _FakeConnection first;
+        final svc = DoltQueryService(
+          endpoint,
+          poolSize: 1,
+          connectionFactory: (_) async {
+            opened++;
+            final connection = _FakeConnection(
+              answers(),
+              markClosedOnFailure: false,
+            );
+            if (opened == 1) first = connection;
+            return connection;
+          },
+        );
+        addTearDown(svc.close);
+
+        await svc.connect();
+        expect(opened, 1);
+        first.failFirstWith = StateError('probe failed');
+        await expectLater(svc.probe(), throwsStateError);
+        expect(first.connected, isFalse);
+
+        expect(await svc.probe(), 'hash-abc');
+        expect(opened, 2);
       },
     );
 
