@@ -1,7 +1,6 @@
 # the_grid
 
-A Dart-native reactive orchestrator for multi-agent software development, built to
-replace [Gas City](https://docs.gascityhall.com) over a [beads](https://github.com/steveyegge/beads)
+A Dart-native reactive orchestrator for multi-agent software development, inspired by [Gas City](https://docs.gascityhall.com), built over a [beads](https://github.com/steveyegge/beads)
 work graph. Part of a long-term bet on Dart as a full-stack agentic platform:
 
 > Apps are built in Flutter. Lenny drives and debugs the apps. Lenny files bugs as beads
