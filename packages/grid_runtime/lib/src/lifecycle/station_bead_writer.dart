@@ -506,8 +506,16 @@ class StationBeadWriter {
         if (successorCrumb != null) stepCrumbKey: successorCrumb,
         stepStateKey: 'pending',
       };
-      await _bd.update(id, metadata: metadata);
+      // tg-q3q0 (deep): the supersedes edge MUST land before the metadata
+      // that makes this successor selectable as the path's active bead. A
+      // snapshot taken between the two writes used to see a fully-formed
+      // pending step at the SAME path with NO edge — supersedes depth 0 — so
+      // the host mounted with grid.round frozen at the OLD round, and the
+      // dedup probe (which searches BY the edge) could never find it. With
+      // the edge first, a half-minted successor is an inert bead with no
+      // path metadata: invisible to activeStepBeadsByPath, harmless.
       await _bd.depAdd(id, priorStep.id, type: DependencyType.supersedes);
+      await _bd.update(id, metadata: metadata);
       return id;
     });
   }

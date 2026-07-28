@@ -482,6 +482,40 @@ void main() {
       },
     );
 
+    test(
+      'tg-q3q0 (deep): the supersedes edge lands BEFORE the metadata that '
+      'makes the successor selectable — a snapshot between the writes used '
+      'to see an edge-less pending step at the same path (depth 0), freezing '
+      'grid.round at the old value and blinding the edge-keyed dedup probe',
+      () async {
+        runner.nextCreatedId = 'tgdog-step-new';
+        await writer().createStepSuccessor(
+          substation: 'tgdog',
+          priorStep: _step(
+            'tgdog-step-old',
+            metadata: {
+              StationBeadWriter.stepCrumbKey:
+                  'tgdog-work1/tgdog-sess1/tgdog-mol1/tgdog-step-old',
+              StationBeadWriter.stepStateKey: 'complete',
+            },
+          ),
+          currentDepth: 1,
+          maxDepth: 3,
+        );
+        final depIndex = runner.calls.indexWhere((c) => c.first == 'dep');
+        final updateIndex = runner.calls.indexWhere((c) => c.first == 'update');
+        expect(depIndex, isNot(-1));
+        expect(updateIndex, isNot(-1));
+        expect(
+          depIndex,
+          lessThan(updateIndex),
+          reason:
+              'the half-minted successor must stay inert (no path '
+              'metadata) until its supersedes edge exists',
+        );
+      },
+    );
+
     test('createStepSuccessor dedups an existing open successor', () async {
       const dep = BeadDependency(
         issueId: 'tgdog-step-existing',
