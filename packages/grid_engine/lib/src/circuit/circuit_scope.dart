@@ -150,10 +150,19 @@ class CircuitScope extends StatelessSeed with Diagnosable {
                 session: session,
                 node: node,
                 circuitRound: circuitRoundsByPath[path] ?? 0,
+                // tg-q3q0 (deep): the circuit round is part of the key. The
+                // host freezes StepArgs (grid.round included) at initState
+                // and NEVER re-keys on seed change, so a round that flips
+                // after mount (the supersedes edge landing a snapshot later,
+                // a generation demotion) MUST re-key the element or the lane
+                // runs an entire wave stamping the old round — the round-0
+                // starvation class.
                 key: ValueKey(
                   beadId == null
                       ? '$path#${node.restartCount}'
-                      : '$beadId#${node.restartCount}',
+                            '#g${circuitRoundsByPath[path] ?? 0}'
+                      : '$beadId#${node.restartCount}'
+                            '#g${circuitRoundsByPath[path] ?? 0}',
                 ),
                 backoff: circuit.backoff,
                 maxRestarts: circuit.maxRestarts,

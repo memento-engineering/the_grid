@@ -118,6 +118,7 @@ Future<void> _pump() async {
 }
 
 void main() {
+  roundFreezeRegression();
   test('threads nested committee rounds from supersedes depth', () async {
     final fakes = buildFakes();
     final services = StationServices(
@@ -218,5 +219,124 @@ void main() {
     expect(fakes.runner.callsFor('create'), isEmpty);
     expect(seenRounds, ['2', '3']);
     expect(fakes.runner.callsFor('update').last[1], 'route-3');
+  });
+}
+
+/// Delivers a projection UPDATE into the SAME tree — the mid-wave shape the
+/// single-shot mounts above cannot reproduce (tg-q3q0 deep).
+class _ProjectionHost extends StatefulSeed {
+  const _ProjectionHost({
+    required this.initial,
+    required this.registry,
+    required this.onState,
+  });
+
+  final SessionProjection initial;
+  final CapabilityRegistry registry;
+  final void Function(_ProjectionHostState) onState;
+
+  @override
+  State<_ProjectionHost> createState() => _ProjectionHostState();
+}
+
+class _ProjectionHostState extends State<_ProjectionHost> {
+  late SessionProjection _projection;
+
+  @override
+  void initState() {
+    _projection = seed.initial;
+    seed.onState(this);
+  }
+
+  void update(SessionProjection next) => setState(() => _projection = next);
+
+  @override
+  Seed build(TreeContext context) => InheritedSeed<CapabilityRegistry>(
+    value: seed.registry,
+    child: SessionScope(
+      bead: bead('tg-rvt7'),
+      circuit: _root,
+      existingSession: _projection,
+    ),
+  );
+}
+
+void roundFreezeRegression() {
+  test('tg-q3q0 (deep): a supersedes edge landing AFTER the successor mounts '
+      're-keys the element — grid.round can never stay frozen at the old '
+      'round (the round-0 starvation class)', () async {
+    final fakes = buildFakes();
+    final services = StationServices(
+      provider: fakes.provider,
+      writer: StationBeadWriter(
+        bd: BdCliService(fakes.runner),
+        ownership: BeadOwnershipPredicate(const {stateSubstation, 'route'}),
+      ),
+      stateSubstation: stateSubstation,
+    );
+    final transport = RecordingExplorationTransport();
+    final seenRounds = <String?>[];
+    final owner = TreeOwner();
+    addTearDown(() {
+      owner.dispose();
+      unawaited(fakes.provider.close());
+    });
+
+    final route0 = _stepBead(
+      'route-0',
+      path: _routePath,
+      state: StepState.complete,
+    );
+    final route1 = _stepBead(
+      'route-1',
+      path: _routePath,
+      state: StepState.pending,
+    );
+    // THE WINDOW: the successor exists at the path with NO supersedes edge
+    // (the mint's writes are not atomic) — both incarnations at depth 0, and
+    // the active-bead tie-break (strict >, first-encountered wins) selects
+    // the SUCCESSOR when it happens to iterate first: a pending step at
+    // round 0.
+    final windowProjection = _projection([route1, route0], const []);
+    // THE EDGE LANDS a snapshot later — depth 1.
+    final edgedProjection = _projection(
+      [route1, route0],
+      [_supersedes('route-1', 'route-0')],
+    );
+
+    _ProjectionHostState? hostState;
+    final host = _ProjectionHost(
+      initial: windowProjection,
+      registry: _RealCommitteeRegistry(
+        _CurrentRoundRoute(_verdicts('1'), seenRounds),
+      ),
+      onState: (state) => hostState = state,
+    );
+    owner.mountRoot(
+      InheritedSeed<StationServices>(
+        value: services,
+        child: InheritedSeed<ServiceBundle>(
+          value: ServiceBundle(transport: transport),
+          child: host,
+        ),
+      ),
+    );
+    await _pump();
+    expect(seenRounds, [
+      '0',
+    ], reason: 'the window mount runs with the pre-edge round');
+
+    hostState!.update(edgedProjection);
+    owner.flush();
+    await _pump();
+
+    expect(
+      seenRounds,
+      ['0', '1'],
+      reason:
+          'the edge landing must RE-KEY the step element so the lane '
+          're-runs with the incremented round — a frozen element repeats '
+          "round 0 and the route's current-round join starves",
+    );
   });
 }

@@ -167,6 +167,63 @@ void main() {
   });
 
   test(
+    'tg-q3q0 (deep): a resume whose createMolecule NO-OPS (R6 dedup — open '
+    'steps already in the store, projection lagging) resets the latch: the '
+    'next build RE-SCHEDULES the resume instead of idling the scope forever',
+    () async {
+      final f = buildFakes();
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      // The store ALREADY holds an open step for this session, so the
+      // resume's dedup probe no-ops (no --graph pour) — but the injected
+      // projection stays step-less, the exact lag that used to latch the
+      // scope idle permanently.
+      f.runner.exportBeads = [
+        _stepBead('step-agent', path: 'tg-1/agent', session: 'tgdog-orphan'),
+      ];
+      final joined = JoinedSnapshotNotifier(_joined(const {'tg-1': _orphan}));
+      final m = _mount(
+        joined: joined,
+        ctx: f.ctx,
+        registry: reg,
+        transport: transport,
+      );
+      addTearDown(m.owner.dispose);
+
+      await _pumpUntil(m.owner, () => f.runner.callsFor('export').isNotEmpty);
+      final probesAfterFirst = f.runner.callsFor('export').length;
+      expect(probesAfterFirst, greaterThan(0));
+      expect(
+        f.runner
+            .callsFor('create')
+            .where((c) => c.length > 1 && c[1] == '--graph'),
+        isEmpty,
+        reason: 'the dedup probe suppresses the pour',
+      );
+
+      // A later snapshot (fresh instance, same step-less shape) rebuilds the
+      // scope. Pre-fix: the success-path latch was never reset, the build
+      // hit the guard, and the scope idled forever. Post-fix: the resume is
+      // re-scheduled (another dedup probe fires).
+      joined.push(_joined(const {'tg-1': _orphan}));
+      await _pumpUntil(
+        m.owner,
+        () => f.runner.callsFor('export').length > probesAfterFirst,
+        maxRounds: 200,
+      );
+      expect(
+        f.runner.callsFor('export').length,
+        greaterThan(probesAfterFirst),
+        reason:
+            'the latch must reset after a no-op resume so a later '
+            'build can retry — the reset-only-on-failure posture idled '
+            'the scope for the life of the arm',
+      );
+      expect(transport.named('session.orphanedPourResumeFailed'), isEmpty);
+    },
+  );
+
+  test(
     'a healthy adopted molecule session (steps present) pours NOTHING',
     () async {
       final f = buildFakes();

@@ -833,11 +833,11 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
     scheduleMicrotask(() => unawaited(_rearm(id, nodePath, moleculeTarget)));
   }
 
-  /// One-shot latch for [_resumeOrphanedPour] — a build can fire many times
+  /// In-flight guard for [_resumeOrphanedPour] — a build can fire many times
   /// while the resume's own write is in flight; the pour must not be
-  /// re-submitted per tick. Reset ONLY on failure (so a later build retries);
-  /// on success the next snapshot carries the steps and the caller's branch
-  /// stops firing.
+  /// re-submitted per tick. Reset on BOTH arms (tg-q3q0 deep): a resume whose
+  /// createMolecule no-ops (R6 dedup) used to leave the latch set forever,
+  /// idling the scope; re-submission is dedup-safe and snapshot-gated.
   bool _resumingOrphanedPour = false;
 
   /// Schedules [_resumeOrphanedPour] off the build (a build never awaits).
@@ -874,6 +874,13 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
         sessionId: sessionId,
         rootCrumbs: root.crumbs,
       );
+      // tg-q3q0 (deep): reset on SUCCESS too. createMolecule's R6 dedup can
+      // no-op (steps exist but closed, or the projection lags) — the old
+      // reset-only-on-failure posture then idled this scope FOREVER: every
+      // build saw the empty projection, hit the latched guard, and returned
+      // Idle. Re-submission is dedup-safe and builds are snapshot-gated, so
+      // resetting here is bounded, not a hot loop.
+      _resumingOrphanedPour = false;
     } on Object catch (error) {
       _flare('session.orphanedPourResumeFailed', {
         'sessionId': sessionId,
