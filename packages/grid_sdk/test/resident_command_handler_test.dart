@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -47,7 +48,15 @@ void main() {
       'grid/rework re-keys a closed session through resident writers',
       () async {
         final stateRunner = _RecordingRunner();
-        final workRunner = _RecordingRunner();
+        final operatorWorkBead = const Bead(
+          id: 'tg-1',
+          issueType: IssueType.task,
+          design: 'operator design',
+          acceptanceCriteria: 'operator acceptance',
+          metadata: {'rig': 'tg'},
+        );
+        final workRunner = _RecordingRunner(exportBeads: [operatorWorkBead]);
+        final work = _Source(_snapshot([operatorWorkBead]));
         final handler = _handler(
           state: _Source(
             _snapshot([
@@ -59,15 +68,7 @@ void main() {
               ),
             ]),
           ),
-          work: _Source(
-            _snapshot([
-              const Bead(
-                id: 'tg-1',
-                issueType: IssueType.task,
-                metadata: {'rig': 'tg'},
-              ),
-            ]),
-          ),
+          work: work,
           stateRunner: stateRunner,
           workRunner: workRunner,
         );
@@ -77,8 +78,24 @@ void main() {
         );
 
         expect(result, isA<GridCommandCompleted>());
-        expect(workRunner.calls.single, containsAll(['update', 'tg-1']));
+        expect(
+          workRunner.calls.where((call) => call.first == 'export'),
+          hasLength(1),
+        );
+        expect(
+          workRunner.calls.where(
+            (call) =>
+                call.first == 'update' &&
+                (call.contains('--design') || call.contains('--acceptance')),
+          ),
+          isEmpty,
+        );
         expect(stateRunner.calls.single.join(' '), contains('tg-1#r1'));
+        expect(work.current!.beads.single.design, 'operator design');
+        expect(
+          work.current!.beads.single.acceptanceCriteria,
+          'operator acceptance',
+        );
       },
     );
 
@@ -755,11 +772,15 @@ final class _Source implements SnapshotSource {
 }
 
 final class _RecordingRunner implements BdRunner {
-  _RecordingRunner({this.blockFirst = false, List<BdResult> results = const []})
-    : _results = List.of(results);
+  _RecordingRunner({
+    this.blockFirst = false,
+    List<BdResult> results = const [],
+    this.exportBeads = const [],
+  }) : _results = List.of(results);
 
   final bool blockFirst;
   final List<BdResult> _results;
+  final List<Bead> exportBeads;
   final calls = <List<String>>[];
   Completer<void>? _blocked;
 
@@ -775,6 +796,13 @@ final class _RecordingRunner implements BdRunner {
     if (blockFirst && calls.length == 1) {
       _blocked = Completer<void>();
       await _blocked!.future;
+    }
+    if (args.isNotEmpty && args.first == 'export') {
+      return BdResult(
+        exitCode: 0,
+        stdout: exportBeads.map((bead) => jsonEncode(bead.toJson())).join('\n'),
+        stderr: '',
+      );
     }
     return _results.isEmpty
         ? const BdResult(

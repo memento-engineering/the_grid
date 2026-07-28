@@ -412,6 +412,7 @@ Future<StationWorkRuntime> buildStationWork({
         bd: workBd,
         ownership: BeadOwnershipPredicate({spec.name, spec.prefix}),
         onRefusal: refusalSink,
+        onFlare: transport?.flare,
       ),
     );
     workCommandStores[spec.name] = binding;

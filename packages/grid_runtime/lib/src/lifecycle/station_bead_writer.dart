@@ -108,15 +108,18 @@ class StationBeadWriter {
     required BdCliService bd,
     required BeadOwnershipPredicate ownership,
     void Function(String message)? onRefusal,
+    void Function(String name, Map<String, String> data)? onFlare,
     DateTime Function()? clock,
   }) : _bd = bd,
        _ownership = ownership,
        _onRefusal = onRefusal,
+       _onFlare = onFlare,
        _clock = clock ?? DateTime.now;
 
   final BdCliService _bd;
   final BeadOwnershipPredicate _ownership;
   final void Function(String message)? _onRefusal;
+  final void Function(String name, Map<String, String> data)? _onFlare;
 
   /// The wall clock for capture-only session lifecycle stamps (FT-1, tg-pez) —
   /// injected so tests are deterministic; never read on a build path.
@@ -136,6 +139,12 @@ class StationBeadWriter {
 
   /// The owned-substation metadata key stamped on every minted session bead.
   static const String rigKey = 'rig';
+
+  /// Content-provenance marker for work-bead specification fields.
+  static const String specAuthorKey = 'spec.author';
+
+  /// Marker value written by [writeSpecifyAuthoredSpec].
+  static const String specifyAuthor = 'specify';
 
   /// The re-gate marker keys a [createGate] REFRESH stamps on a REUSED gate
   /// bead (tg-i08 mint-dedup): the count of times the node re-gated onto the
@@ -596,15 +605,66 @@ class StationBeadWriter {
     );
   }
 
-  /// Clears specify-authored spec fields on an owned WORK bead before a rework
-  /// session is retired. The next specify round re-authors these fields fresh;
-  /// description and notes are intentionally untouched.
-  Future<void> clearSpecifyAuthoredSpec(String id) async {
-    _assertOwned('clearSpecifyAuthoredSpec', id, const {});
+  /// Writes SPECIFY-authored fields and their provenance atomically.
+  ///
+  /// A hand-authored `bd update --design` does not stamp [specAuthorKey].
+  /// Therefore only this method establishes SPECIFY provenance; once rework
+  /// clears the prior marker, a later operator overwrite is preserved.
+  Future<void> writeSpecifyAuthoredSpec(
+    String id, {
+    required String design,
+    required String acceptanceCriteria,
+  }) async {
+    _assertOwned('writeSpecifyAuthoredSpec', id, const {});
     return _serialized(
       id,
-      () => _bd.update(id, design: '', acceptanceCriteria: ''),
+      () => _bd.update(
+        id,
+        design: design,
+        acceptanceCriteria: acceptanceCriteria,
+        metadata: const {specAuthorKey: specifyAuthor},
+      ),
     );
+  }
+
+  /// Clears only currently SPECIFY-authored spec fields on an owned WORK bead
+  /// before a rework session is retired. Operator-authored or unknown
+  /// provenance is preserved and signalled; description and notes are always
+  /// untouched.
+  Future<void> clearSpecifyAuthoredSpec(String id) async {
+    _assertOwned('clearSpecifyAuthoredSpec', id, const {});
+    return _serialized(id, () async {
+      String? author;
+      try {
+        final export = await _bd.exportAll();
+        for (final bead in export.beads) {
+          if (bead.id == id) {
+            author = bead.metadata[specAuthorKey] as String?;
+            break;
+          }
+        }
+      } catch (_) {
+        author = null;
+      }
+      if (author != specifyAuthor) {
+        _flare('rework.specPreserved', {'beadId': id});
+        return;
+      }
+      await _bd.update(
+        id,
+        design: '',
+        acceptanceCriteria: '',
+        unsetMetadata: const [specAuthorKey],
+      );
+    });
+  }
+
+  void _flare(String name, Map<String, String> data) {
+    try {
+      _onFlare?.call(name, data);
+    } catch (_) {
+      // Fire-and-continue observability cannot fail the protected transition.
+    }
   }
 
   /// `bd close` on a the_grid-owned session bead (terminal lifecycle).

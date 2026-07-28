@@ -439,6 +439,29 @@ void main() {
       },
     );
 
+    test(
+      'update() carries spec fields, metadata, and metadata unset atomically',
+      () async {
+        await service.update(
+          'tg-7',
+          design: '',
+          acceptanceCriteria: '',
+          metadata: const {'other': 'value'},
+          unsetMetadata: const ['spec.author'],
+        );
+
+        final argv = runner.calls.single;
+        expect(argv.first, 'update');
+        expectActor(argv);
+        expect(argv, containsAllInOrder(['--design', '']));
+        expect(argv, containsAllInOrder(['--acceptance', '']));
+        expect(jsonDecode(argv[argv.indexOf('--metadata') + 1]), {
+          'other': 'value',
+        });
+        expect(argv, containsAllInOrder(['--unset-metadata', 'spec.author']));
+      },
+    );
+
     test('close() stamps actor and forwards the reason', () async {
       await service.close('tg-7', reason: 'done');
       final argv = runner.calls.single;
