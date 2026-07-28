@@ -118,16 +118,28 @@ class DoltQueryService {
   /// idempotent when the workspace is idle — two back-to-back probes return the
   /// same value until a write commits.
   Future<String> probe() async {
-    final rows = await _runSelect(probeSql);
-    if (rows.isEmpty) {
-      throw const BdParseException('working-set probe returned no rows');
+    try {
+      final rows = await _runSelect(probeSql);
+      if (rows.isEmpty) {
+        throw const BdParseException('working-set probe returned no rows');
+      }
+      final first = rows.first;
+      final value = first.values.isNotEmpty ? first.values.first : null;
+      if (value == null) {
+        throw const BdParseException('working-set probe returned a null hash');
+      }
+      return value.toString();
+    } on Object {
+      await _disposeCachedConnections();
+      rethrow;
     }
-    final first = rows.first;
-    final value = first.values.isNotEmpty ? first.values.first : null;
-    if (value == null) {
-      throw const BdParseException('working-set probe returned a null hash');
-    }
-    return value.toString();
+  }
+
+  Future<void> _disposeCachedConnections() async {
+    final conns = List<DoltConnection>.of(_pool);
+    _pool.clear();
+    _rr = 0;
+    await Future.wait(conns.map(_safeClose));
   }
 
   /// Reads the parts that compose a graph snapshot and returns the value-typed

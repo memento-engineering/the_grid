@@ -70,7 +70,7 @@ void main() {
       });
     });
 
-    test('swallows probe errors and recovers on the next tick', () {
+    test('surfaces persistent probe death every fifth failure', () {
       fakeAsync((async) {
         final probe = FakeChangeProbe('h1')..error = StateError('reaped');
         final source = WorkingSetProbeSource(
@@ -80,16 +80,61 @@ void main() {
         final signals = <DirtySignal>[];
         source.signals.listen(signals.add);
 
+        async.elapse(const Duration(seconds: 4));
+        async.flushMicrotasks();
+        expect(signals, isEmpty);
+
         async.elapse(const Duration(seconds: 1));
-        async.flushMicrotasks(); // errors, swallowed
+        async.flushMicrotasks();
+        expect(signals, hasLength(1));
+        expect(signals.single.origin, DirtyOrigin.workingSetProbe);
+        expect(signals.single.detail, startsWith('probe-dead:'));
+
+        async.elapse(const Duration(seconds: 4));
+        async.flushMicrotasks();
+        expect(signals, hasLength(1));
+
+        async.elapse(const Duration(seconds: 1));
+        async.flushMicrotasks();
+        expect(signals, hasLength(2));
+        expect(signals.last.detail, startsWith('probe-dead:'));
+        source.dispose();
+      });
+    });
+
+    test('success resets failures and later hash change emits normally', () {
+      fakeAsync((async) {
+        final probe = FakeChangeProbe('h1');
+        final source = WorkingSetProbeSource(
+          probe,
+          interval: const Duration(seconds: 1),
+        );
+        final signals = <DirtySignal>[];
+        source.signals.listen(signals.add);
+
+        async.elapse(const Duration(seconds: 1));
+        async.flushMicrotasks();
+        probe.error = StateError('first outage');
+        async.elapse(const Duration(seconds: 4));
+        async.flushMicrotasks();
         probe.error = null;
-        probe.hash = 'h1';
         async.elapse(const Duration(seconds: 1));
-        async.flushMicrotasks(); // baseline now
+        async.flushMicrotasks();
+
+        probe.error = StateError('second outage');
+        async.elapse(const Duration(seconds: 4));
+        async.flushMicrotasks();
+        expect(signals, isEmpty);
+
+        probe.error = null;
+        async.elapse(const Duration(seconds: 1));
+        async.flushMicrotasks();
         probe.hash = 'h2';
         async.elapse(const Duration(seconds: 1));
         async.flushMicrotasks();
         expect(signals, hasLength(1));
+        expect(signals.single.origin, DirtyOrigin.workingSetProbe);
+        expect(signals.single.detail, 'h2');
         source.dispose();
       });
     });

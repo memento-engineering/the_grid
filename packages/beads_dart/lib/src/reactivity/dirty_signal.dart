@@ -77,9 +77,9 @@ class WorkspaceBeadsWatcher implements DirtySignalSource {
 
 /// Polls a [ChangeProbe] (`SELECT @@<db>_working`) on a fixed cadence and emits
 /// only when the working-set hash changes. Catches cross-workspace writes that
-/// a file watch alone misses, at ~1ms per probe. Reconnect/error recovery is
-/// the probe's concern; transient probe errors are swallowed (the next tick
-/// retries), and the probe doubles as connection keepalive.
+/// a file watch alone misses, at ~1ms per probe. Transient probe errors retry on
+/// the next tick; persistent errors emit periodically so consumers refresh via
+/// their authoritative fallback, and the probe doubles as connection keepalive.
 class WorkingSetProbeSource implements DirtySignalSource {
   WorkingSetProbeSource(
     this.probe, {
@@ -88,9 +88,11 @@ class WorkingSetProbeSource implements DirtySignalSource {
 
   final ChangeProbe probe;
   final Duration interval;
+  static const int _probeDeadThreshold = 5;
   final _controller = StreamController<DirtySignal>.broadcast();
   Timer? _timer;
   String? _lastHash;
+  int _consecutiveFailures = 0;
   bool _inFlight = false;
 
   @override
@@ -104,12 +106,21 @@ class WorkingSetProbeSource implements DirtySignalSource {
     _inFlight = true;
     try {
       final hash = await probe.probe();
+      _consecutiveFailures = 0;
       if (_lastHash != null && hash != _lastHash) {
         _controller.add(DirtySignal(DirtyOrigin.workingSetProbe, detail: hash));
       }
       _lastHash = hash;
-    } on Object {
-      // Swallow: reconnect is the probe's job; next tick retries.
+    } on Object catch (error) {
+      _consecutiveFailures++;
+      if (_consecutiveFailures % _probeDeadThreshold == 0) {
+        _controller.add(
+          DirtySignal(
+            DirtyOrigin.workingSetProbe,
+            detail: 'probe-dead: $error',
+          ),
+        );
+      }
     } finally {
       _inFlight = false;
     }
