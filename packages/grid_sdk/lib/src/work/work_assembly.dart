@@ -217,6 +217,13 @@ List<String> droppedReapReports(RestartReport report) => [
 bool _sameCanonicalRoot(String left, String right) =>
     p.equals(p.canonicalize(left), p.canonicalize(right));
 
+/// Appends [line] to the owned lifecycle bead identified by [beadId].
+typedef WorkNoteAppender = Future<void> Function(String beadId, String line);
+
+/// Builds a station capability registry over its owned [appendWorkNote] seam.
+typedef CapabilityRegistryBuilder =
+    CapabilityRegistry Function(WorkNoteAppender appendWorkNote);
+
 /// Assembles the station's off-tree work machinery over REAL stores at their
 /// roots — the v3 replacement for the deleted `buildControllers` +
 /// `buildLiveWiring` + `composeStation` assembly (H3), consumed by every
@@ -242,6 +249,7 @@ Future<StationWorkRuntime> buildStationWork({
   required SessionResolver resolver,
   required bool dryRun,
   CapabilityRegistry? registry,
+  CapabilityRegistryBuilder? registryBuilder,
   int maxConcurrentWork = kDefaultMaxConcurrentWork,
   bool preferSql = true,
   RuntimeProvider? providerOverride,
@@ -256,6 +264,11 @@ Future<StationWorkRuntime> buildStationWork({
   Duration wedgeThreshold = kDefaultWedgeThreshold,
   Duration wedgePollInterval = kDefaultWedgePollInterval,
 }) async {
+  if (registry != null && registryBuilder != null) {
+    throw ArgumentError(
+      'buildStationWork: registry and registryBuilder are mutually exclusive.',
+    );
+  }
   if (substations.isEmpty) {
     throw ArgumentError(
       'buildStationWork: at least one substation is required — there is no '
@@ -394,6 +407,12 @@ Future<StationWorkRuntime> buildStationWork({
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
   );
+  final resolvedRegistry =
+      registry ??
+      registryBuilder?.call(
+        (beadId, line) =>
+            writer.update(beadId, metadata: const {}, appendNotes: line),
+      );
   final workCommandStores = <String, ResidentWorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
@@ -539,7 +558,7 @@ Future<StationWorkRuntime> buildStationWork({
   // parallel escalation channel.
   final driver = StationDriver(
     bridge: bridge,
-    registry: registry,
+    registry: resolvedRegistry,
     transport: transport,
     wedgeThreshold: wedgeThreshold,
     wedgePollInterval: wedgePollInterval,
@@ -559,7 +578,7 @@ Future<StationWorkRuntime> buildStationWork({
       notifier: bridge.notifier,
       services: services,
       resolver: liveResolver,
-      registry: registry,
+      registry: resolvedRegistry,
       // tg-2mb: build the vendor OFF-tree (the DI rule — a branch never builds a
       // service) so the production work subtree resolves the SAME real vendor
       // StationKernel.start mounts. Without this the molecule allocation at the
