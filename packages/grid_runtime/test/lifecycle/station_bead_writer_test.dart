@@ -48,20 +48,25 @@ void main() {
   late RecordingBdRunner runner;
   late BdCliService bd;
   late List<String> refusals;
+  late List<({String name, Map<String, String> data})> flares;
 
   // The shared rig allow-set seed (A35): exactly {tgdog}.
   BeadOwnershipPredicate predicate() => BeadOwnershipPredicate({'tgdog'});
 
-  StationBeadWriter writer() => StationBeadWriter(
+  StationBeadWriter writer({
+    void Function(String, Map<String, String>)? onFlare,
+  }) => StationBeadWriter(
     bd: bd,
     ownership: predicate(),
     onRefusal: refusals.add,
+    onFlare: onFlare ?? (name, data) => flares.add((name: name, data: data)),
   );
 
   setUp(() {
     runner = RecordingBdRunner(createdId: 'tgdog-sess1');
     bd = BdCliService(runner);
     refusals = <String>[];
+    flares = <({String name, Map<String, String> data})>[];
   });
 
   group('the fail-closed refusal (the key safety test)', () {
@@ -282,21 +287,95 @@ void main() {
     );
 
     test(
-      'clearSpecifyAuthoredSpec clears only design and acceptance',
+      'writeSpecifyAuthoredSpec stamps fields and provenance atomically',
       () async {
-        await writer().clearSpecifyAuthoredSpec('tgdog-work1');
+        await writer().writeSpecifyAuthoredSpec(
+          'tgdog-work1',
+          design: 'a design',
+          acceptanceCriteria: 'the acceptance',
+        );
+
         final updates = runner.callsFor('update');
         expect(updates, hasLength(1));
-        expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
-        expect(updates.single, containsAllInOrder(['--design', '']));
-        expect(updates.single, containsAllInOrder(['--acceptance', '']));
-        expect(updates.single, isNot(contains('--description')));
-        expect(updates.single, isNot(contains('--notes')));
-        expect(updates.single, isNot(contains('--append-notes')));
+        expect(updates.single, containsAllInOrder(['--design', 'a design']));
+        expect(
+          updates.single,
+          containsAllInOrder(['--acceptance', 'the acceptance']),
+        );
+        expect(
+          jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>,
+          {StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor},
+        );
         expect(runner.everyMutationHasActor, isTrue);
-        expect(refusals, isEmpty);
       },
     );
+
+    test('clearSpecifyAuthoredSpec clears and unmarks a marked spec', () async {
+      runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-work1',
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+          },
+        ),
+      ];
+
+      await writer().clearSpecifyAuthoredSpec('tgdog-work1');
+
+      expect(runner.callsFor('export'), hasLength(1));
+      final updates = runner.callsFor('update');
+      expect(updates, hasLength(1));
+      expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
+      expect(updates.single, containsAllInOrder(['--design', '']));
+      expect(updates.single, containsAllInOrder(['--acceptance', '']));
+      expect(
+        updates.single,
+        containsAllInOrder([
+          '--unset-metadata',
+          StationBeadWriter.specAuthorKey,
+        ]),
+      );
+      expect(updates.single, isNot(contains('--description')));
+      expect(updates.single, isNot(contains('--notes')));
+      expect(updates.single, isNot(contains('--append-notes')));
+      expect(runner.everyMutationHasActor, isTrue);
+      expect(runner.neverCalledShow, isTrue);
+      expect(refusals, isEmpty);
+    });
+
+    test(
+      'clearSpecifyAuthoredSpec preserves and flares an unmarked spec',
+      () async {
+        runner.exportBeads = const [
+          Bead(
+            id: 'tgdog-work1',
+            design: 'operator design',
+            acceptanceCriteria: 'operator acceptance',
+          ),
+        ];
+
+        await writer().clearSpecifyAuthoredSpec('tgdog-work1');
+
+        expect(runner.callsFor('export'), hasLength(1));
+        expect(runner.callsFor('update'), isEmpty);
+        expect(flares, hasLength(1));
+        expect(flares.single.name, 'rework.specPreserved');
+        expect(flares.single.data, {'beadId': 'tgdog-work1'});
+        expect(runner.neverCalledShow, isTrue);
+      },
+    );
+
+    test('a throwing preservation flare does not fail rework', () async {
+      runner.exportBeads = const [Bead(id: 'tgdog-work1')];
+
+      await writer(
+        onFlare: (_, __) => throw StateError('sink unavailable'),
+      ).clearSpecifyAuthoredSpec('tgdog-work1');
+
+      expect(runner.callsFor('export'), hasLength(1));
+      expect(runner.callsFor('update'), isEmpty);
+      expect(runner.neverCalledShow, isTrue);
+    });
 
     test('close issues `bd close <id> --reason`', () async {
       await writer().close('tgdog-sess1', reason: 'session ended');

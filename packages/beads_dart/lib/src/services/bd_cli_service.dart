@@ -204,6 +204,7 @@ class BdCliService {
     IssueType? type,
     String? assignee,
     Map<String, String>? metadata,
+    Iterable<String> unsetMetadata = const [],
     String? appendNotes,
   }) async {
     // Decode asserts the schema version (drift guard) on the mutation path too;
@@ -220,6 +221,7 @@ class BdCliService {
         type: type,
         assignee: assignee,
         metadata: metadata,
+        unsetMetadata: unsetMetadata,
         appendNotes: appendNotes,
       ),
     );
@@ -383,6 +385,7 @@ class BdCliService {
     IssueType? type,
     String? assignee,
     Map<String, String>? metadata,
+    Iterable<String> unsetMetadata = const [],
     String? appendNotes,
   }) => [
     'update',
@@ -403,6 +406,7 @@ class BdCliService {
       '--metadata',
       jsonEncode(metadata),
     ],
+    for (final key in unsetMetadata) ...['--unset-metadata', key],
     if (appendNotes != null && appendNotes.isNotEmpty) ...[
       '--append-notes',
       appendNotes,
