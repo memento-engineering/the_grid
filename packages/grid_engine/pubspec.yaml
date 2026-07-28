@@ -1,7 +1,7 @@
 name: grid_engine
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.1.1
+version: 0.1.2
 description: >-
   Tree engine for the_grid — genesis_tree reconciles the running system:
   build(observed), mount = spawn, unmount = kill.
@@ -12,14 +12,14 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart: ^0.1.0
+  beads_dart: ^0.1.1
   freezed_annotation: ^3.0.0
   # The engine. Pinned (^0.1.5) — the composition layer is EXPERIMENTAL and
   # the_grid is its triggering 2nd consumer (ADR-0007 / A34 precedent). A
   # workspace-root dependency_overrides path dep supplies it during dev.
   genesis_tree: ^0.1.5
   grid_diagnostics_contract: ^0.1.1
-  grid_runtime: ^0.1.1
+  grid_runtime: ^0.1.2
   json_annotation: ^4.9.0
   meta: ^1.16.0
   path: ^1.9.0

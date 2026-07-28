@@ -1,7 +1,7 @@
 # beads_dart
 
 A pure-Dart client for the **beads (`bd`) issue tracker** — the M1 kernel of
-the_grid, wearing its ecosystem name (D-A6; recorded in ADR-0002's
+the_grid, wearing its ecosystem name (recorded in the repo's
 alignment amendment).
 
 It knows **beads facts only**: the `Bead`/`GraphSnapshot` value models, the
@@ -15,8 +15,8 @@ here.
 **Seat:** the base of the workspace. `grid_engine`, `grid_runtime`,
 `grid_cli`, `grid_sdk`, and `grid_exploration` all depend on it directly
 (`grid_devtools` deliberately does not — it consumes the engine only,
-ADR-0002 Decision 3). It is **framework-free at the package boundary**
-(D-A7): **Futures for acts, Streams for observations**, a synchronous
+package-topology docs). It is **framework-free at the package boundary**
+: **Futures for acts, Streams for observations**, a synchronous
 `current` where a seed value is needed; no riverpod, no StateNotifier —
 consumers build their notifiers/providers on top.
 
@@ -49,7 +49,7 @@ consumers build their notifiers/providers on top.
 
 `src/ready/` additionally ports beads' ready-work predicate to SELECT-only SQL
 (`ReadyWorkQuery`/`ReadyWorkFilter`) with `ReadyWorkDifferential` diffing it
-against the `bd ready --json` oracle (ADR-0003 Decision 5).
+against the `bd ready --json` oracle (the ready-work port's differential contract).
 
 ## Version-compat contract
 
@@ -69,8 +69,7 @@ fallback for anything the SQL path will not serve. The full contract is in the
 library doc (`lib/beads_dart.dart`).
 
 **Operator hazard — `bd doctor --fix` and cross-store edges.** bd 1.1's
-`bd doctor --fix` treats a raw cross-store bead-id dependency (the ADR-0000
-A44 mechanism — a foreign bead id stored in
+`bd doctor --fix` treats a raw cross-store bead-id dependency (a foreign bead id stored in
 `dependencies.depends_on_external`, which the origin store's own `is_blocked`
 recompute never reads) as an ORPHAN and removes it. Never run
 `bd doctor --fix` against an org store without excluding cross-store edges.
@@ -81,7 +80,7 @@ REQUIRED column in the shape probe and is always COALESCE'd into the
 
 ## Tests
 
-**Fakes, not mocks** (ADR-0001 Decision 7): the offline suite drives
+**Fakes, not mocks**: the offline suite drives
 `BdCliService` through a `FakeBdRunner` with programmed results, and the
 reactivity core through `FakeSnapshotReader`/`FakeChangeProbe` (+
 `fake_async`). `test/integration/` (tagged `integration`) exercises a real
@@ -96,8 +95,8 @@ cd packages/beads_dart && dart analyze && dart test
 
 ## Docs
 
-Layering and decisions live at the repo level: `docs/adr/ADR-0001` (technical
+Layering and decisions live at the repo level: the technical-foundation docs (technical
 foundations — the envelope pin, bd-only writes, fakes-not-mocks),
-`docs/adr/ADR-0002` (package topology: what stays here vs `grid_engine`), and
-`docs/adr/ADR-0003` (the ready-work port). `docs/M1-BUILD-ORDER.md` records
+the package-topology docs (what stays here vs `grid_engine`), and
+the ready-work-port docs. The repo's build-order notes record
 the order this package was built in.

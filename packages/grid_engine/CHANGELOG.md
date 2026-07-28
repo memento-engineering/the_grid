@@ -1,3 +1,7 @@
+## 0.1.2
+
+- Family coherence release: step results filter by active incarnation (live route joins, the_grid#139); current session-scope surface.
+
 ## 0.1.1
 
 - Every circuit step now mounts as a tree node (the_grid #105).
