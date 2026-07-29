@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart' as engine;
+import 'package:grid_runtime/grid_runtime.dart' show OwnershipRefused;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -242,11 +243,12 @@ void main() {
 
   group('registry builder seam', () {
     test(
-      'registry builder seam emits append-notes through the owned writer',
+      'registry builder seam routes append-notes by owned store and refuses unowned ids',
       () async {
         _seedStore('${tmp.path}/proj', database: 'pow');
         _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
-        final runner = _RecordingBdRunner();
+        final stateRunner = _RecordingBdRunner();
+        final workRunner = _RecordingBdRunner();
         late WorkNoteAppender appendWorkNote;
         final builtRegistry = engine.DefaultCapabilityRegistry();
 
@@ -257,7 +259,8 @@ void main() {
           ],
           resolver: const _NullResolver(),
           dryRun: true,
-          stateBdOverride: BdCliService(runner),
+          stateBdOverride: BdCliService(stateRunner),
+          workBdOverrides: {'proj': BdCliService(workRunner)},
           registryBuilder: (appender) {
             appendWorkNote = appender;
             return builtRegistry;
@@ -266,9 +269,23 @@ void main() {
         addTearDown(work.shutdown);
 
         expect(identical(work.wiring.registry, builtRegistry), isTrue);
-        await appendWorkNote('tgstate-note1', 'seat finding');
 
-        expect(runner.calls, [
+        await appendWorkNote('proj-note1', 'work finding');
+        expect(workRunner.calls, [
+          <String>[
+            'update',
+            'proj-note1',
+            '--json',
+            '--actor',
+            'grid-controller',
+            '--append-notes',
+            'work finding',
+          ],
+        ]);
+        expect(stateRunner.calls, isEmpty);
+
+        await appendWorkNote('tgstate-note1', 'state finding');
+        expect(stateRunner.calls, [
           <String>[
             'update',
             'tgstate-note1',
@@ -276,10 +293,19 @@ void main() {
             '--actor',
             'grid-controller',
             '--append-notes',
-            'seat finding',
+            'state finding',
           ],
         ]);
-        expect(runner.calls.single, isNot(contains('--metadata')));
+        expect(workRunner.calls, hasLength(1));
+
+        await expectLater(
+          appendWorkNote('foreign-note1', 'refused finding'),
+          throwsA(isA<OwnershipRefused>()),
+        );
+        expect(stateRunner.calls, hasLength(1));
+        expect(workRunner.calls, hasLength(1));
+        expect(stateRunner.calls.single, isNot(contains('--metadata')));
+        expect(workRunner.calls.single, isNot(contains('--metadata')));
       },
     );
 

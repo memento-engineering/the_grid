@@ -407,12 +407,6 @@ Future<StationWorkRuntime> buildStationWork({
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
   );
-  final resolvedRegistry =
-      registry ??
-      registryBuilder?.call(
-        (beadId, line) =>
-            writer.update(beadId, metadata: const {}, appendNotes: line),
-      );
   final workCommandStores = <String, ResidentWorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
@@ -437,6 +431,24 @@ Future<StationWorkRuntime> buildStationWork({
     workCommandStores[spec.name] = binding;
     workCommandStores[spec.prefix] = binding;
   }
+  final writersByOwnedPrefix = <String, StationBeadWriter>{
+    stateSubstation: writer,
+    for (final entry in workCommandStores.entries)
+      entry.key: entry.value.writer,
+  };
+  final resolvedRegistry =
+      registry ??
+      registryBuilder?.call((beadId, line) {
+        final ownedPrefix = BeadOwnershipPredicate.ownedPrefixOf(
+          beadId,
+          writersByOwnedPrefix.keys,
+        );
+        return (writersByOwnedPrefix[ownedPrefix] ?? writer).update(
+          beadId,
+          metadata: const {},
+          appendNotes: line,
+        );
+      });
   final commands = ResidentGridCommandHandler(
     stateSource: stateSource,
     refreshState: stateBundle.runtime.requery,
