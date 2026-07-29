@@ -101,6 +101,9 @@ void main() {
       alloc.deliverEventForTest(
         const Exited(name: 'sess-1/tg-1/agent', exitCode: 0),
       );
+      // The capability boundary holds a successful result for one turn so an
+      // immediate detached rejection can fail the allocation instead.
+      await Future<void>.delayed(Duration.zero);
       await Future<void>.delayed(Duration.zero);
       expect(reports.single, isA<AllocationCompleted>());
       expect((reports.single as AllocationCompleted).payload, {'grade': 'A'});

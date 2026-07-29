@@ -34,6 +34,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:path/path.dart' as p;
 
 import 'capability.dart';
+import 'capability_error_zone.dart';
 import 'circuit.dart';
 import 'route.dart';
 
@@ -495,7 +496,9 @@ class ServiceAllocation extends Allocation {
     // posture (ADR-0008 Decision 10, OQ-c moment 2).
     final StepOutcome outcome;
     try {
-      outcome = await capability.run(context.treeContext, context.args);
+      outcome = await runCapabilityGuarded(
+        () => capability.run(context.treeContext, context.args),
+      );
     } on Object catch (e) {
       state = AllocationState.gone;
       if (!context.args.cancel.isCancelled) {
@@ -526,7 +529,7 @@ class ServiceAllocation extends Allocation {
     state = AllocationState.dying;
     context.args.cancel.cancel();
     try {
-      await capability.teardown(context.args);
+      await runCapabilityGuarded(() => capability.teardown(context.args));
     } on Object {
       // A throwing teardown must not break unmount (no one left to report
       // to). Mirrors LeaseAllocation._release.
@@ -585,10 +588,26 @@ class ProcessAllocation extends Allocation {
     // cross-process output re-wire is the deferred adopt-a-live-process piece,
     // ADR-0008 D6; the load-bearing part built now is the adopt DECISION + not
     // double-spawning a survivor.)
-    if (isAdoptable &&
-        context.fence.hasIdentity &&
-        context.liveness(context.fence) &&
-        await capability.proveFreshness(context.fence, tree, args)) {
+    final bool fresh;
+    try {
+      fresh =
+          isAdoptable &&
+              context.fence.hasIdentity &&
+              context.liveness(context.fence)
+          ? await runCapabilityGuarded(
+              () => capability.proveFreshness(context.fence, tree, args),
+            )
+          : false;
+    } on Object catch (e) {
+      if (_terminal) return;
+      _terminal = true;
+      state = AllocationState.gone;
+      if (!args.cancel.isCancelled) {
+        context.sink(AllocationFailed('spawn failed: $e'));
+      }
+      return;
+    }
+    if (fresh) {
       if (args.cancel.isCancelled) {
         state = AllocationState.gone;
         return;
@@ -650,7 +669,9 @@ class ProcessAllocation extends Allocation {
       _sub = context.transport.events
           .where((e) => e.name == name)
           .listen(_onEvent);
-      final base = capability.spawn(tree, args);
+      final base = await runCapabilityGuarded(
+        () => capability.spawn(tree, args),
+      );
       if (workspace != null &&
           !_isInsideWorkspace(workspace.workspaceDir, base.workDir)) {
         throw StateError(
@@ -836,7 +857,9 @@ class ProcessAllocation extends Allocation {
     // must not leave the node silently STUCK — review finding 2026-07-02).
     final Map<String, String>? payload;
     try {
-      payload = await capability.result(context.treeContext, context.args);
+      payload = await runCapabilityGuarded(
+        () => capability.result(context.treeContext, context.args),
+      );
     } on Object catch (e) {
       state = AllocationState.gone;
       if (!context.args.cancel.isCancelled) {
@@ -882,7 +905,7 @@ class ProcessAllocation extends Allocation {
       unawaited(context.transport.stop(address.providerName));
     }
     try {
-      await capability.teardown(context.args);
+      await runCapabilityGuarded(() => capability.teardown(context.args));
     } on Object {
       // A throwing teardown must not break unmount (the group is already
       // stopped; there is no one left to report to — the sink drops
