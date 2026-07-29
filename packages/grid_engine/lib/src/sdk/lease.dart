@@ -34,6 +34,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 
 import 'allocation.dart';
 import 'capability.dart';
+import 'capability_error_zone.dart';
 import 'circuit.dart';
 
 /// The outcome of a [LeaseCapability.acquire] (or an adopt resolution): a live
@@ -156,25 +157,39 @@ class LeaseAllocation<H> extends Allocation {
     // prove → acquire fresh. The daemon's rendezvous payload persists on the
     // node's cursor from the prior incarnation, so a bare `ready` re-surfaces it.
     if (isAdoptable) {
-      final prior = await capability.adoptable(tree, args);
-      if (args.cancel.isCancelled) {
-        state = AllocationState.gone;
-        return;
-      }
-      if (prior != null &&
-          await capability.proveFresh(prior.handle, tree, args)) {
+      try {
+        final prior = await runCapabilityGuarded(
+          () => capability.adoptable(tree, args),
+        );
         if (args.cancel.isCancelled) {
-          // A dispose raced the adopt proof: release the proven handle so it
-          // isn't orphaned (the immediate-release contract the fresh path honors).
-          await _release(prior.handle);
           state = AllocationState.gone;
           return;
         }
-        state = AllocationState.adopting;
-        _bind(prior.handle);
-        _adopted = true;
-        state = AllocationState.ready;
-        context.sink(const AllocationReady());
+        final fresh = prior == null
+            ? false
+            : await runCapabilityGuarded(
+                () => capability.proveFresh(prior.handle, tree, args),
+              );
+        if (prior != null && fresh) {
+          if (args.cancel.isCancelled) {
+            // A dispose raced the adopt proof: release the proven handle so it
+            // isn't orphaned (the immediate-release contract the fresh path honors).
+            await _release(prior.handle);
+            state = AllocationState.gone;
+            return;
+          }
+          state = AllocationState.adopting;
+          _bind(prior.handle);
+          _adopted = true;
+          state = AllocationState.ready;
+          context.sink(const AllocationReady());
+          return;
+        }
+      } on Object catch (e) {
+        state = AllocationState.gone;
+        if (!args.cancel.isCancelled) {
+          _reportTerminal(AllocationFailed('adopt failed: $e'));
+        }
         return;
       }
     }
@@ -184,7 +199,9 @@ class LeaseAllocation<H> extends Allocation {
     // posture, ADR-0008 Decision 10).
     final LeaseResolution<H> resolution;
     try {
-      resolution = await capability.acquire(tree, args);
+      resolution = await runCapabilityGuarded(
+        () => capability.acquire(tree, args),
+      );
     } on Object catch (e) {
       state = AllocationState.gone;
       if (!args.cancel.isCancelled) {
@@ -212,7 +229,9 @@ class LeaseAllocation<H> extends Allocation {
     // by dispose on unmount.
     final StepOutcome outcome;
     try {
-      outcome = await capability.dispatchOn(_handle as H, tree, args);
+      outcome = await runCapabilityGuarded(
+        () => capability.dispatchOn(_handle as H, tree, args),
+      );
     } on Object catch (e) {
       state = AllocationState.gone;
       if (!args.cancel.isCancelled) {
@@ -292,7 +311,7 @@ class LeaseAllocation<H> extends Allocation {
   /// unmount).
   Future<void> _release(H handle) async {
     try {
-      await capability.release(handle);
+      await runCapabilityGuarded(() => capability.release(handle));
     } on Object {
       // Already reaped/invalid/unreachable — release is idempotent for the holder.
     }
