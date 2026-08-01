@@ -1,31 +1,29 @@
 /// The thin, injectable protocol-call layer for grid_devtools.
 ///
 /// `grid_devtools` rides the exploration protocol ONLY (ADR-0002 Decision 3):
-/// it never links `beads_dart` for live data. To keep the widgets
+/// it imports only Leonard's pure protocol constant and does not import
+/// `grid_exploration` or `grid_controller`. To keep the widgets
 /// testable without a live VM service, every call into the protocol goes
 /// through [GridExplorationClient]; production wires a `VmService`-backed
 /// implementation, tests inject a fake.
 ///
-/// The wire shapes consumed here are defined by the grid exploration host
-/// (`packages/grid_exploration/lib/src/grid_exploration_protocol.dart` and
-/// `grid_exploration_host.dart`). We do NOT import `grid_exploration` — the
-/// contract is the wire JSON, so the minimal shapes we consume are
+/// The wire shapes consumed here are defined by the grid exploration host and
 /// re-declared as plain value types below.
 library;
+
+import 'package:leonard_contract/leonard_contract.dart'
+    show kLeonardExtensionPrefix;
 
 /// Default postEvent stream id the grid host streams `GraphEvent`s on
 /// (`developer.postEvent('grid.controller.event', ...)`). Mirrors
 /// `GridExplorationHost.eventStreamId`.
 const String kGridEventStreamId = 'grid.controller.event';
 
-/// Grid-owned prefix mirrored from grid_exploration and checked in dev tests.
-const String kExplorationPrefix = 'ext.leonard';
-
 /// Fully-qualified `ext.leonard.core.handshake` extension method.
-const String kHandshakeExtension = '$kExplorationPrefix.core.handshake';
+const String kHandshakeExtension = '$kLeonardExtensionPrefix.core.handshake';
 
 /// Fully-qualified `ext.leonard.grid.events` extension method.
-const String kEventsExtension = '$kExplorationPrefix.grid.events';
+const String kEventsExtension = '$kLeonardExtensionPrefix.grid.events';
 
 /// One extension entry from the handshake `extensions` array:
 /// `{namespace, tools}`. (The Dart type stays `GridPlugin` — it is the

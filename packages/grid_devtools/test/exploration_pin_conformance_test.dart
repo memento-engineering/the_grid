@@ -1,24 +1,16 @@
-// Exploration-extension-name pin guard.
+// Shared exploration-extension-name conformance guard.
 //
-// `GridExplorationClient` (lib/src/protocol/grid_exploration_client.dart)
-// deliberately does NOT import `grid_exploration` at runtime (ADR-0002
-// Decision 3: grid_devtools rides the exploration protocol only, never links
-// beads_dart or its host transitively) — so `kHandshakeExtension` and
-// `kEventsExtension` are hand-retyped string literals with no compile-time
-// link back to the host's `coreExtension`/`gridExtension` builders in
-// `packages/grid_exploration/lib/src/grid_exploration_protocol.dart`. This
-// test is the enforcement: it pulls `grid_exploration` in as a DEV-ONLY
-// dependency (pubspec.yaml `dev_dependencies` — the ship graph is
-// unchanged) purely so the pinned literals can be asserted equal to the
-// live protocol constants.
+// Leonard's pure contract owns the prefix. `grid_exploration` remains a
+// dev-only dependency so these derived method names can be compared with the
+// host builders without adding the host to the runtime graph.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grid_devtools/grid_devtools.dart';
 import 'package:grid_exploration/grid_exploration.dart' as grid_exploration;
 
 void main() {
   group('grid_devtools exploration-extension pins match grid_exploration', () {
-    test('kExplorationPrefix matches the host prefix', () {
-      expect(kExplorationPrefix, grid_exploration.kExplorationPrefix);
+    test('shared prefix matches the host prefix', () {
+      expect(kLeonardExtensionPrefix, grid_exploration.kLeonardExtensionPrefix);
     });
 
     test('kHandshakeExtension == coreExtension("handshake")', () {
