@@ -47,6 +47,7 @@ export 'src/protocol/grid_exploration_client.dart'
         GridHandshake,
         GridPlugin,
         kEventsExtension,
+        kExplorationPrefix,
         kGridEventStreamId,
         kHandshakeExtension;
 export 'src/protocol/vm_service_grid_client.dart' show VmServiceGridClient;

@@ -34,7 +34,7 @@ Scope: `the_grid`, `power_station`, `space_station`, `tgdog` (retired 2026-07-08
 | `power_station` | The asset packs: the code circuit, committee, landing, agent harnesses, compute/lease, federation, zero-conf |
 | `space_station` | The composed station runner: the `space` binary and its resident-station verbs |
 | `tgdog` | **Retired** — archived read-only as `archive-tgdog-20260708` (`SUBSTATION-INIT.md` §4). The former separate state DB; the A37 split lives on, with the state store now the grid home's own `.grid/.beads/` (prefix `houston`) |
-| `lenny` (external) | The **org's** debugging arm — a genesis sibling, not a grid component: attaches to a running Dart VM over `ext.exploration.*`. The grid and lenny share genesis patterns but deliberately avoid coupling to each other (R1) |
+| `lenny` (external) | The **org's** debugging arm — a genesis sibling, not a grid component: attaches to a running Dart VM over `ext.leonard.*`. The grid and lenny share genesis patterns but deliberately avoid coupling to each other (R1) |
 
 ---
 
@@ -531,7 +531,7 @@ any exploration-conforming client can attach (`kGridNamespace = 'grid'`). Model-
 design; proven live (tg-e28/A40).
 
 **Host** `ratified, clean` — The server surface inside a target process that registers
-`ext.exploration.*` — the one exploration seam word used consistently across the org.
+`ext.leonard.*` — the one exploration seam word used consistently across the org.
 
 **ADR-0012 (observability)** `reserved/parked` — Observable-source first-class; OTel and
 perception as co-emitted sinks; the AOT HTTP/WS exploration transport under

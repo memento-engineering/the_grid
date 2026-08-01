@@ -13,16 +13,20 @@
 // live protocol constants.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grid_devtools/grid_devtools.dart';
-import 'package:grid_exploration/grid_exploration.dart';
+import 'package:grid_exploration/grid_exploration.dart' as grid_exploration;
 
 void main() {
   group('grid_devtools exploration-extension pins match grid_exploration', () {
+    test('kExplorationPrefix matches the host prefix', () {
+      expect(kExplorationPrefix, grid_exploration.kExplorationPrefix);
+    });
+
     test('kHandshakeExtension == coreExtension("handshake")', () {
-      expect(kHandshakeExtension, coreExtension('handshake'));
+      expect(kHandshakeExtension, grid_exploration.coreExtension('handshake'));
     });
 
     test('kEventsExtension == gridExtension("events")', () {
-      expect(kEventsExtension, gridExtension('events'));
+      expect(kEventsExtension, grid_exploration.gridExtension('events'));
     });
   });
 }

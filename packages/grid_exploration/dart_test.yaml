@@ -9,4 +9,4 @@ tags:
   integration:
     description: >-
       Attaches to the running process over the VM service and exercises the
-      ext.exploration.* extensions. Self-skips without --enable-vm-service.
+      ext.leonard.* extensions. Self-skips without --enable-vm-service.

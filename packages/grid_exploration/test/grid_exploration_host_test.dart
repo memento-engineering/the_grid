@@ -34,10 +34,11 @@ Future<GridControllerRuntime> _startedRuntime(
 
 void main() {
   group('protocol constants + wire shapes', () {
-    test('extension prefix is the ratified ext.exploration (ADR-0001 D6)', () {
-      expect(kExplorationPrefix, 'ext.exploration');
-      expect(coreExtension('handshake'), 'ext.exploration.core.handshake');
-      expect(gridExtension('requery'), 'ext.exploration.grid.requery');
+    test('extension prefix and protocol version use leonard ownership', () {
+      expect(kExplorationPrefix, 'ext.leonard');
+      expect(kProtocolVersion, '2');
+      expect(coreExtension('handshake'), 'ext.leonard.core.handshake');
+      expect(gridExtension('requery'), 'ext.leonard.grid.requery');
     });
 
     test('graphEventToWire is exhaustive and compact', () {
@@ -70,7 +71,7 @@ void main() {
       final host = GridExplorationHost(runtime);
 
       final handshake = host.handshakeJson();
-      expect(handshake['protocolVersion'], '1');
+      expect(handshake['protocolVersion'], '2');
       // ADR-0000 A33: the wire key is `extensions`, no legacy `plugins`.
       expect(handshake.containsKey('plugins'), isFalse);
       final extensions = handshake[kExtensionsKey]! as List;

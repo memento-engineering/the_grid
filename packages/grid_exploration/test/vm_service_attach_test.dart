@@ -72,16 +72,16 @@ void main() {
       // Handshake advertises the grid extension + its tools (ADR-0000 A33:
       // the wire key is `extensions`, matching leonard's reader).
       final handshake = await vm.callServiceExtension(
-        'ext.exploration.core.handshake',
+        'ext.leonard.core.handshake',
         isolateId: isolateId,
       );
-      expect(handshake.json!['protocolVersion'], '1');
+      expect(handshake.json!['protocolVersion'], '2');
       final extensions = handshake.json!['extensions']! as List;
       expect((extensions.single as Map)['namespace'], 'grid');
 
       // Stable observation returns graph state under extensions.grid.
       final observation = await vm.callServiceExtension(
-        'ext.exploration.core.get_stable_observation',
+        'ext.leonard.core.get_stable_observation',
         isolateId: isolateId,
       );
       expect(observation.json!['type'], 'Observation');
@@ -93,7 +93,7 @@ void main() {
 
       // A grid tool is invocable.
       final ready = await vm.callServiceExtension(
-        'ext.exploration.grid.ready',
+        'ext.leonard.grid.ready',
         isolateId: isolateId,
       );
       expect(ready.json!['ok'], isTrue);

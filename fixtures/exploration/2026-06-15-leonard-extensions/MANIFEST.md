@@ -15,19 +15,19 @@ hand-edited — re-capture only via the tool below.
     `json['extensions']` only.
   - observation: `leonard_agent/lib/src/observation/models.dart`
     (`Observation.fromJson`) reads `j['extensions']` only.
-- **prefix / methods / protocol version:** unchanged — `ext.exploration.*`,
+- **prefix / methods / protocol version:** unchanged — `ext.leonard.*`,
   `core.handshake` / `core.get_stable_observation` / `<ns>.<tool>`,
-  protocol version `'1'`.
+  protocol version `'2'`.
 
 ## Files (the_grid host output)
 
-- `handshake.json` — `ext.exploration.core.handshake` result. Manifest under
+- `handshake.json` — `ext.leonard.core.handshake` result. Manifest under
   the `extensions` array: `[{namespace: grid, tools: [requery, snapshot,
   ready, events, stats]}]`. No legacy `plugins` / `pluginCount`.
-- `observation.json` — `ext.exploration.core.get_stable_observation` result.
+- `observation.json` — `ext.leonard.core.get_stable_observation` result.
   Grid state under `value.extensions.grid` (the bare-fragment shape leonard's
   `ExtensionFragment.fromJson` peels): `beadCount`, `readyCount`, `readyBeads`.
-- `grid-ready.json` — `ext.exploration.grid.ready` tool result (`{ok, value:
+- `grid-ready.json` — `ext.leonard.grid.ready` tool result (`{ok, value:
   {count, beads}}`).
 
 ## Capture provenance

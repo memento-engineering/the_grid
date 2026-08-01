@@ -2,8 +2,8 @@
 /// hot-restart of a JIT station.
 ///
 /// It lives HERE, not in `grid_sdk`, because this package owns the
-/// `ext.exploration.*` namespace (ADR-0002 Decision 1 — "the minimal pure-Dart
-/// host registering the `ext.exploration.*` extensions"; ADR-0001 Decision 6 —
+/// `ext.leonard.*` namespace (ADR-0002 Decision 1 — "the minimal pure-Dart
+/// host registering the `ext.leonard.*` extensions"; ADR-0001 Decision 6 —
 /// "no bespoke `ext.grid.*` namespace"). [GridExplorationHost] stays the SOLE
 /// registrar, so the tool is advertised in the handshake like the other five and
 /// a stock leonard discovers it (ADR-0000 A33).
@@ -56,7 +56,7 @@ class ReassembleTool {
   /// Re-run the delegate FACTORY and re-compose on a fresh delegate.
   final StationReassemble hotRestart;
 
-  /// The bare tool name — `ext.exploration.grid.reload` once qualified by
+  /// The bare tool name — `ext.leonard.grid.reload` once qualified by
   /// [gridExtension]. It collides with none of [GridControllerPlugin.tools]
   /// (`requery`/`snapshot`/`ready`/`events`/`stats`), and [GridExplorationHost]
   /// REFUSES at construction if that ever changes.

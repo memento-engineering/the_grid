@@ -14,11 +14,11 @@ import 'reassemble_tool.dart';
 /// via `dart:developer` — no bespoke `ext.grid.*` namespace, no Flutter
 /// binding:
 ///
-/// * `ext.exploration.core.handshake`
-/// * `ext.exploration.core.get_stable_observation` (empty semantics/routes,
+/// * `ext.leonard.core.handshake`
+/// * `ext.leonard.core.get_stable_observation` (empty semantics/routes,
 ///   grid state under `extensions.grid`, stability from the sync loop)
-/// * `ext.exploration.grid.{requery,snapshot,ready,events,stats}`
-/// * `ext.exploration.grid.reload` — ONLY when a dev-mode station composes a
+/// * `ext.leonard.grid.{requery,snapshot,ready,events,stats}`
+/// * `ext.leonard.grid.reload` — ONLY when a dev-mode station composes a
 ///   [ReassembleTool] (see [reassemble]); absent otherwise.
 ///
 /// and streams each [GraphEvent] via `developer.postEvent('grid.controller.

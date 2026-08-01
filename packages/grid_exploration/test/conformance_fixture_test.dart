@@ -86,7 +86,7 @@ void main() {
 
     test('handshake decodes leonard-faithfully (extensions only)', () {
       final handshake = _readJson(dir, 'handshake.json');
-      expect(handshake['protocolVersion'], '1');
+      expect(handshake['protocolVersion'], '2');
       // No legacy keys leaked back in.
       expect(handshake.containsKey('plugins'), isFalse);
       expect(handshake.containsKey('pluginCount'), isFalse);

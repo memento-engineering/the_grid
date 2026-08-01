@@ -8,7 +8,7 @@ import 'package:test/test.dart';
 
 /// Cross-process exploration-attach conformance (M3 Track 6 DoD): a STOCK
 /// `leonard_cli --extensions grid` attaches to the_grid's pure-Dart VM and
-/// reads live grid state over `ext.exploration.*`.
+/// reads live grid state over `ext.leonard.*`.
 ///
 /// This is the real-leonard analog of `attach_conformance_test.dart` (which
 /// uses an in-process leonard-shaped reader). It launches `tool/attach_target.dart`

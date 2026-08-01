@@ -86,7 +86,7 @@ void main() {
 
       // The handshake DISCOVERS it (a registered tool is a discoverable tool).
       final handshake = await vm.callServiceExtension(
-        'ext.exploration.core.handshake',
+        'ext.leonard.core.handshake',
         isolateId: isolateId,
       );
       final extensions = handshake.json![kExtensionsKey]! as List;

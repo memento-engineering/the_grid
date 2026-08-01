@@ -17,7 +17,7 @@ import 'replay/snapshot_json_loader.dart';
 /// touch the browser-only `serviceManager` globals. The shell is
 /// `serviceManager`-free by construction: it talks only through [client].
 ///
-/// On mount it runs `ext.exploration.core.handshake` and publishes a
+/// On mount it runs `ext.leonard.core.handshake` and publishes a
 /// [HandshakeState]; [retrigger], when supplied, re-runs the probe on every
 /// fire (production wires reconnect listenables).
 class GridDevToolsShell extends StatefulWidget {

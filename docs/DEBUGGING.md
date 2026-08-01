@@ -17,9 +17,9 @@ the grid's namespace is `grid` (`kGridNamespace`).
 
 **Core methods:**
 
-- `ext.exploration.core.handshake` — protocol version, `bindingType`, and the
+- `ext.leonard.core.handshake` — protocol version, `bindingType`, and the
   `extensions` list: namespace `grid` + its tool names.
-- `ext.exploration.core.get_stable_observation` — the live grid state under
+- `ext.leonard.core.get_stable_observation` — the live grid state under
   `extensions.grid`, with a `readPath` marker (e.g. `cli`/`sql`) and a `stability`
   block (`refreshing`, `pendingFollowUp`, `refreshCount`, `lastRefreshMs`).
 

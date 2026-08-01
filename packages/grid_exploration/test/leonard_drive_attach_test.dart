@@ -199,7 +199,7 @@ void main() {
     return jsonDecode(lines.last) as Map<String, Object?>;
   }
 
-  test('stock leonard_drive reads the grid host over ext.exploration.* '
+  test('stock leonard_drive reads the grid host over ext.leonard.* '
       '(handshake + observe + invoke), credential-free', () async {
     final discovered = _discoverLeonardDrive();
     if (discovered == null) {

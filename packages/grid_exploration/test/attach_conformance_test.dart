@@ -127,10 +127,10 @@ void main() {
 
       // (a) handshake `extensions` carries namespace `grid` with its 5 tools.
       final handshake = await vm.callServiceExtension(
-        'ext.exploration.core.handshake',
+        'ext.leonard.core.handshake',
         isolateId: isolateId,
       );
-      expect(handshake.json!['protocolVersion'], '1');
+      expect(handshake.json!['protocolVersion'], '2');
       final manifest = readManifest(handshake.json!.cast<String, Object?>());
       final grid = manifest.singleWhere((e) => e.namespace == 'grid');
       expect(grid.tools, ['requery', 'snapshot', 'ready', 'events', 'stats']);
@@ -138,7 +138,7 @@ void main() {
       // (b) pullObservation yields `extensions['grid'].data` with the grid
       //     state fields a leonard prompt renders.
       final observation = await vm.callServiceExtension(
-        'ext.exploration.core.get_stable_observation',
+        'ext.leonard.core.get_stable_observation',
         isolateId: isolateId,
       );
       expect(observation.json!['type'], 'Observation');
@@ -154,7 +154,7 @@ void main() {
 
       // (c) a `grid.ready` tool call returns ok.
       final ready = await vm.callServiceExtension(
-        'ext.exploration.grid.ready',
+        'ext.leonard.grid.ready',
         isolateId: isolateId,
       );
       expect(ready.json!['ok'], isTrue);

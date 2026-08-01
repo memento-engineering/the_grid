@@ -6,7 +6,7 @@ import '../protocol/grid_exploration_client.dart';
 
 /// Append-only feed of [GridEventRecord]s for the events timeline panel.
 ///
-/// Seeds from the `ext.exploration.grid.events` tool (the ring-buffer
+/// Seeds from the `ext.leonard.grid.events` tool (the ring-buffer
 /// snapshot of recent events) then grows live off the
 /// `grid.controller.event` postEvent stream. Keeps at most [maxRecords]
 /// rows, newest last, so a long-running session does not grow unbounded.

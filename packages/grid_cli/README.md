@@ -14,7 +14,7 @@ dart run grid_cli:grid <command> [flags]
 
 Run long-lived commands under `dart run --enable-vm-service` so exploration
 tools (DevTools, `exploration_cli`, leonard) can attach over
-`ext.exploration.*`.
+`ext.leonard.*`.
 
 **Stores are addressed at their roots — never cwd discovery.** A substation's
 work store lives at `<root>/.beads/` (a positional root or `--note-root`); the

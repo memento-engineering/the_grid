@@ -6,7 +6,7 @@ live-write authorization). M3 gives the_grid **hands**: it spawns and supervises
 subprocess per ready bead, tracks each session's lifecycle **as a bead** (bd-only writes,
 `--actor grid-controller`), isolates each bead's work in a **git worktree**, and lands finished
 work as a **pushed branch / PR** for Nico — never an auto-merge. The other half of the loop:
-**leonard debugs the_grid's pure-Dart VM** over `ext.exploration.*` once the wire-key mismatch is
+**leonard debugs the_grid's pure-Dart VM** over `ext.leonard.*` once the wire-key mismatch is
 fixed. Tracks run in parallel where inputs allow; ⊣ marks a hard dependency. AI decisions made
 en route: ADR-0000 amendments (A32+), never silent.
 
@@ -56,7 +56,7 @@ Friday critical path** (see the spine).
    recovery — it spawns agents on work beads and tracks session lifecycle beads only.
 2. **leonard DEBUGS the_grid's Dart VM.** the_grid runs as a pure-Dart process under
    `--enable-vm-service`; stock `leonard_cli --vm-uri ws://… --extensions grid --goal '…'` attaches
-   over `ext.exploration.*` (the prefix is already aligned), the handshake returns the `grid`
+   over `ext.leonard.*` (the prefix is already aligned), the handshake returns the `grid`
    namespace with its 5 tools, and `pullObservation` carries live grid state — **after** the
    `plugins`→`extensions` wire-key rename ships (Track 6). leonard executes at least one grid tool
    (e.g. `grid.ready`).
@@ -266,8 +266,8 @@ the gc-replacement dogfood rung on the fs adoption ladder (drive-one-rig; M4-SCO
 - **Track 6 — exploration-attach fix (leonard truly attaches)** ⊣ 0.1 *(self-contained, entirely
   in the_grid; the prompt's required explicit track)*:
   The mismatch is a precise **wire KEY-NAME** rename, **not** a prefix or method-name problem — the
-  `ext.exploration.*` prefix and the `core.handshake`/`core.get_stable_observation`/`<ns>.<tool>`
-  method names and protocol version `'1'` are **already aligned** with leonard main. lenny's 0.1.0
+  `ext.leonard.*` prefix and the `core.handshake`/`core.get_stable_observation`/`<ns>.<tool>`
+  method names and protocol version `'2'` are aligned with leonard. lenny's 0.1.0
   rebrand renamed the serialized map `plugins`→`extensions`; the_grid's host still emits `plugins`,
   and leonard's reader reads **only** `extensions` with **no fallback** — so leonard attaches to the
   VM but sees zero extensions and empty grid state. **Edits, all in the_grid:** (1)

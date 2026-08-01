@@ -1,6 +1,6 @@
 # grid_exploration
 
-The `ext.exploration.*` VM-service host — the layer that makes a running
+The `ext.leonard.*` VM-service host — the layer that makes a running
 the_grid station **debuggable from outside**.
 
 `grid_exploration` registers the exploration wire protocol over a
@@ -12,18 +12,18 @@ state.
 
 ## The surface
 
-- `ext.exploration.core.handshake` — protocol version `'1'`, host identity, and
+- `ext.leonard.core.handshake` — protocol version `'2'`, host identity, and
   the **`extensions` manifest** (`[{namespace: 'grid', tools: [...]}]`). The
   handshake and the registrar read the SAME tool list, so a registered tool is
   always a discoverable tool.
-- `ext.exploration.core.get_stable_observation` — empty semantics/routes,
+- `ext.leonard.core.get_stable_observation` — empty semantics/routes,
   sync-loop stability, and the grid fragment under `extensions.grid`: read
   path, bead/ready counts, ready-bead summaries, recent events, stats.
-- `ext.exploration.grid.{requery,snapshot,ready,events,stats}` — the closed,
+- `ext.leonard.grid.{requery,snapshot,ready,events,stats}` — the closed,
   read-only tool set. Every dispatch returns an `{ok, value|error}` envelope;
   a thrown error becomes a `ServiceExtensionResponse.error`, never a silent
   drop.
-- `ext.exploration.grid.reload` — **dev-mode only**. It exists only when a JIT
+- `ext.leonard.grid.reload` — **dev-mode only**. It exists only when a JIT
   station under `--enable-vm-service` composes a `ReassembleTool` (the
   station's `hotReload`/`hotRestart` wired in as plain callbacks, so this
   package never depends on `grid_sdk`); an AOT composition passes none and the
@@ -42,7 +42,7 @@ idempotent `register()` that binds them to `dart:developer`.
 
 The seam word is **extension**. The wire key is `extensions` in both the
 handshake and the stable observation, with **no `plugins` fallback** — readers
-at ≥0.1.0 read only `extensions` (the `ext.exploration.*` prefix, method names,
+at ≥0.1.0 read only `extensions` (the `ext.leonard.*` prefix, method names,
 and protocol version are unchanged). Keep new code, docs,
 and wire fields in extension vocabulary; one legacy class name still carries
 the old word — its rename is tracked separately; do not add more.
