@@ -54,6 +54,9 @@
 /// `live_frontier.dart` derives generation from that chain depth.
 library;
 
+// ignore_for_file: undefined_hidden_name — the hidden genesis_foundation
+// names exist only when genesis resolves by path (post-y61 source); on pub
+// (tree 0.1.4) the hide is a no-op. tg-vg5k removes this with the hides.
 import 'dart:async';
 
 // Foundation wire-type names hidden: grid_diagnostics_contract's stay
