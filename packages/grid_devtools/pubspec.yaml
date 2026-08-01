@@ -22,6 +22,7 @@ dependencies:
     path: ../grid_cockpit_ui
   grid_diagnostics_contract:
     path: ../grid_diagnostics_contract
+  leonard_contract: ^0.2.0
   vm_service: ^14.2.0
   web_socket_channel: ^3.0.3
 
@@ -30,15 +31,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   freezed: ^3.0.0
-  # Dev-only conformance pin: grid_devtools re-declares the exploration wire
-  # constants it consumes (ADR-0002 Decision 3 says it never links this
-  # package at runtime) — this dependency exists solely so the test suite can
-  # assert the hand-pinned strings against the real protocol constants. Ship
-  # graph is unchanged.
+  # Dev-only conformance input: checks DevTools method constants against the
+  # host builders without adding grid_exploration to the runtime graph.
   grid_exploration:
-    # Intra-repo sibling: a PATH dep so this package resolves when consumed
-    # as a git dependency (ADR-0003 D1) — pub resolves it inside the fetched
-    # checkout. Workspace/dev resolution is unchanged.
     path: ../grid_exploration
   lints: ^5.1.0
   stream_channel: ^2.1.4

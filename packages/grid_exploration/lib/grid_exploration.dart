@@ -1,11 +1,13 @@
 /// Exploration-protocol host for the_grid.
 ///
-/// Hosts a GridControllerPlugin speaking lenny's `ext.leonard.*` wire
-/// protocol (handshake / get_stable_observation / namespaced tools) via
-/// `dart:developer` service extensions. Until lenny's exploration_contract
-/// extraction lands (lenny M0), wire shapes are mirrored here and verified
-/// against lenny source. See ADR-0001 Decision 6.
+/// Hosts a GridControllerPlugin speaking Leonard's `ext.leonard.*` wire
+/// protocol through `dart:developer` service extensions. Leonard owns the
+/// shared extension prefix and protocol version; grid_exploration owns the
+/// grid namespace, host behavior, and grid-specific wire shapes.
 library;
+
+export 'package:leonard_contract/leonard_contract.dart'
+    show kLeonardExtensionPrefix, kLeonardProtocolVersion;
 
 export 'src/dev_mode.dart';
 export 'src/grid_controller_plugin.dart';

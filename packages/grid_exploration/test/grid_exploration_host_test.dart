@@ -35,8 +35,8 @@ Future<GridControllerRuntime> _startedRuntime(
 void main() {
   group('protocol constants + wire shapes', () {
     test('extension prefix and protocol version use leonard ownership', () {
-      expect(kExplorationPrefix, 'ext.leonard');
-      expect(kProtocolVersion, '2');
+      expect(kLeonardExtensionPrefix, 'ext.leonard');
+      expect(kLeonardProtocolVersion, '2');
       expect(coreExtension('handshake'), 'ext.leonard.core.handshake');
       expect(gridExtension('requery'), 'ext.leonard.grid.requery');
     });

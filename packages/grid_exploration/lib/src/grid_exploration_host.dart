@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:leonard_contract/leonard_contract.dart'
+    show kLeonardProtocolVersion;
 
 import 'grid_controller_plugin.dart';
 import 'grid_exploration_protocol.dart';
@@ -76,7 +78,7 @@ class GridExplorationHost {
   // ---------- pure JSON builders (testable without a VM service) ----------
 
   Map<String, Object?> handshakeJson() => {
-    'protocolVersion': kProtocolVersion,
+    'protocolVersion': kLeonardProtocolVersion,
     'bindingType': 'GridControllerHost',
     'hostType': 'dart',
     kExtensionsKey: [

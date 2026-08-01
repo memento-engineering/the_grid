@@ -8,6 +8,9 @@
 /// with no live VM service.
 library;
 
+export 'package:leonard_contract/leonard_contract.dart'
+    show kLeonardExtensionPrefix;
+
 export 'src/events/events_panel.dart' show EventsPanel;
 export 'src/events/events_source.dart' show GridEventsSource;
 export 'src/grid_devtools_shell.dart' show GridDevToolsShell;
@@ -47,7 +50,6 @@ export 'src/protocol/grid_exploration_client.dart'
         GridHandshake,
         GridPlugin,
         kEventsExtension,
-        kExplorationPrefix,
         kGridEventStreamId,
         kHandshakeExtension;
 export 'src/protocol/vm_service_grid_client.dart' show VmServiceGridClient;

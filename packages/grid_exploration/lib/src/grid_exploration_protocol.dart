@@ -1,14 +1,6 @@
 import 'package:beads_dart/beads_dart.dart';
-
-/// VM-service prefix owned by the `leonard_*` package family.
-///
-/// Unlike the rejected `ext.flutter.exploration` namespace, this does not
-/// squat on a foreign framework's reserved prefix. Kept grid-owned until
-/// tg-99rr can import leonard_contract 0.2.0 after lenny-uoiw publishes it.
-const String kExplorationPrefix = 'ext.leonard';
-
-/// Exploration protocol version this host speaks.
-const String kProtocolVersion = '2';
+import 'package:leonard_contract/leonard_contract.dart'
+    show kLeonardExtensionPrefix;
 
 /// The grid extension's namespace; tools are exposed at
 /// `ext.leonard.grid.<tool>`.
@@ -26,11 +18,11 @@ const String kGridNamespace = 'grid';
 const String kExtensionsKey = 'extensions';
 
 /// Fully-qualified extension method name for a core method.
-String coreExtension(String suffix) => '$kExplorationPrefix.core.$suffix';
+String coreExtension(String suffix) => '$kLeonardExtensionPrefix.core.$suffix';
 
 /// Fully-qualified extension method name for a grid tool.
 String gridExtension(String tool) =>
-    '$kExplorationPrefix.$kGridNamespace.$tool';
+    '$kLeonardExtensionPrefix.$kGridNamespace.$tool';
 
 /// A compact, bounded JSON summary of a bead (events/observations carry these
 /// rather than full beads to stay within observation budgets).
