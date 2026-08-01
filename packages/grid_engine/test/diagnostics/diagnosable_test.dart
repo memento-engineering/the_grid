@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
@@ -39,10 +38,10 @@ TreeNode _onlyChild(TreeNode node) {
   return node.children.single;
 }
 
-List<DiagnosticsProperty> _propertiesOf(Diagnosable value) {
+List<DiagnosticsProperty> _propertiesOf(Diagnosticable value) {
   final builder = DiagnosticsBuilder();
   value.debugFillProperties(builder);
-  return builder.build();
+  return builder.properties;
 }
 
 const _diagnosticsCircuit = Circuit(
@@ -81,25 +80,25 @@ void main() {
     test('converts every property kind to the contract union', () {
       final timestamp = DateTime.utc(2026, 7, 23);
       final builder = DiagnosticsBuilder()
-        ..add(const StringProperty('string', 'value'))
-        ..add(const IntProperty('int', 7))
-        ..add(const DoubleProperty('double', 1.5))
-        ..add(const FlagProperty('flag', true))
-        ..add(const EnumProperty('enum', _Mode.active))
-        ..add(const DurationProperty('duration', Duration(seconds: 2)))
-        ..add(TimestampProperty('timestamp', timestamp))
-        ..add(
+        ..addTyped(const StringProperty('string', 'value'))
+        ..addTyped(const IntProperty('int', 7))
+        ..addTyped(const DoubleProperty('double', 1.5))
+        ..addTyped(const FlagProperty('flag', true))
+        ..addTyped(const EnumProperty('enum', _Mode.active))
+        ..addTyped(const DurationProperty('duration', Duration(seconds: 2)))
+        ..addTyped(TimestampProperty('timestamp', timestamp))
+        ..addTyped(
           const ReferenceProperty(
             'reference',
             'bead-1',
             kind: ReferenceKind.bead,
           ),
         )
-        ..add(
+        ..addTyped(
           const ObjectProperty('object', [StringProperty('nested', 'value')]),
         );
 
-      final properties = builder.build();
+      final properties = builder.properties;
       expect(properties, hasLength(9));
       expect(
         () => properties.add(
@@ -148,7 +147,7 @@ void main() {
       final builder = DiagnosticsBuilder();
       const _DerivedDescription().debugFillProperties(builder);
 
-      expect(builder.build().map((property) => property.name), [
+      expect(builder.properties.map((property) => property.name), [
         'base',
         'derived',
       ]);
@@ -243,7 +242,7 @@ void main() {
       expect(snapshot.root.children.map((node) => node.id), ['3', '4']);
       expect(
         snapshot.root.children[1].properties.map((property) => property.name),
-        ['seed', 'state'],
+        ['seedType', 'key', 'seed', 'state'],
       );
     });
 
@@ -293,6 +292,11 @@ void main() {
     test('WorkBead emits bead and guarded session references', () {
       final bead = _task('tg-1');
       expect(_propertiesOf(WorkBead(bead: bead)), [
+        isA<DiagnosticsStringProperty>().having(
+          (p) => p.name,
+          'name',
+          'seedType',
+        ),
         isA<DiagnosticsReferenceProperty>()
             .having((p) => p.name, 'name', 'bead')
             .having((p) => p.referenceKind, 'kind', ReferenceKind.bead)
@@ -301,6 +305,11 @@ void main() {
       expect(
         _propertiesOf(WorkBead(bead: bead, session: _diagnosticsSession)),
         [
+          isA<DiagnosticsStringProperty>().having(
+            (p) => p.name,
+            'name',
+            'seedType',
+          ),
           isA<DiagnosticsReferenceProperty>().having(
             (p) => p.name,
             'name',
@@ -319,6 +328,11 @@ void main() {
       expect(
         _propertiesOf(SessionScope(bead: bead, circuit: _diagnosticsCircuit)),
         [
+          isA<DiagnosticsStringProperty>().having(
+            (p) => p.name,
+            'name',
+            'seedType',
+          ),
           isA<DiagnosticsReferenceProperty>().having(
             (p) => p.name,
             'name',
@@ -335,6 +349,11 @@ void main() {
           ),
         ),
         [
+          isA<DiagnosticsStringProperty>().having(
+            (p) => p.name,
+            'name',
+            'seedType',
+          ),
           isA<DiagnosticsReferenceProperty>().having(
             (p) => p.name,
             'name',
@@ -358,6 +377,11 @@ void main() {
           ),
         ),
         [
+          isA<DiagnosticsStringProperty>().having(
+            (p) => p.name,
+            'name',
+            'seedType',
+          ),
           isA<DiagnosticsStringProperty>()
               .having((p) => p.name, 'name', 'nodePath')
               .having((p) => p.value, 'value', 'tg-1/sub'),
@@ -431,13 +455,13 @@ void main() {
   });
 }
 
-class _BaseDescription with Diagnosable {
+class _BaseDescription with Diagnosticable, GridDiagnosticable {
   const _BaseDescription();
 
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(const StringProperty('base', 'base'));
+    builder.addTyped(const StringProperty('base', 'base'));
   }
 }
 
@@ -447,11 +471,11 @@ class _DerivedDescription extends _BaseDescription {
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(const StringProperty('derived', 'derived'));
+    builder.addTyped(const StringProperty('derived', 'derived'));
   }
 }
 
-class _SemanticContainer extends MultiChildSeed with Diagnosable {
+class _SemanticContainer extends MultiChildSeed with GridDiagnosticable {
   _SemanticContainer(this.label, List<Seed> children, {super.key})
     : super(children: children);
 
@@ -460,7 +484,7 @@ class _SemanticContainer extends MultiChildSeed with Diagnosable {
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(StringProperty('label', label));
+    builder.addTyped(StringProperty('label', label));
   }
 }
 
@@ -468,7 +492,7 @@ class _TransparentContainer extends MultiChildSeed {
   _TransparentContainer(List<Seed> children) : super(children: children);
 }
 
-class _SemanticLeaf extends Seed with Diagnosable {
+class _SemanticLeaf extends Seed with GridDiagnosticable {
   const _SemanticLeaf(this.label, {super.key});
 
   final String label;
@@ -476,7 +500,7 @@ class _SemanticLeaf extends Seed with Diagnosable {
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(StringProperty('label', label));
+    builder.addTyped(StringProperty('label', label));
   }
 
   @override
@@ -494,24 +518,25 @@ class _LeafBranch extends Branch {
   _LeafBranch(super.seed);
 }
 
-class _StatefulDescription extends StatefulSeed with Diagnosable {
+class _StatefulDescription extends StatefulSeed with GridDiagnosticable {
   const _StatefulDescription({super.key});
 
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(const StringProperty('seed', 'seed'));
+    builder.addTyped(const StringProperty('seed', 'seed'));
   }
 
   @override
   State<_StatefulDescription> createState() => _DescriptionState();
 }
 
-class _DescriptionState extends State<_StatefulDescription> with Diagnosable {
+class _DescriptionState extends State<_StatefulDescription>
+    with Diagnosticable, GridDiagnosticable {
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(const StringProperty('state', 'state'));
+    builder.addTyped(const StringProperty('state', 'state'));
   }
 
   @override

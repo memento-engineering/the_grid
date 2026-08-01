@@ -1,5 +1,5 @@
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 
 const _info = DiagnosticsLevel.info;
 

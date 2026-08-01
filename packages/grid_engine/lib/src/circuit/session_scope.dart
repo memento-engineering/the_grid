@@ -54,35 +54,10 @@
 /// `live_frontier.dart` derives generation from that chain depth.
 library;
 
-// The hidden genesis_foundation names exist only when genesis resolves by
-// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
-// analyzer warns about. tg-vg5k removes this with the hides.
-// ignore_for_file: undefined_hidden_name
 import 'dart:async';
 
-// Foundation wire-type names hidden: grid_diagnostics_contract's stay
-// operative until tg-vg5k migrates onto genesis_foundation.
-import 'package:genesis_tree/genesis_tree.dart'
-    hide
-        CheckedFromJsonException,
-        Diagnosticable,
-        DiagnosticableTree,
-        DiagnosticsDoubleProperty,
-        DiagnosticsDurationProperty,
-        DiagnosticsEnumProperty,
-        DiagnosticsFlagProperty,
-        DiagnosticsIntProperty,
-        DiagnosticsLevel,
-        DiagnosticsObjectProperty,
-        DiagnosticsProperty,
-        DiagnosticsReferenceProperty,
-        DiagnosticsStringProperty,
-        DiagnosticsTimestampProperty,
-        ReferenceKind,
-        TreeNode,
-        TreeSnapshot;
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../diagnostics/diagnosable.dart';
@@ -114,7 +89,7 @@ import 'session_handle.dart';
 /// The adopt-or-mint session lifecycle owner for one work [bead]'s [circuit]
 /// (D-2). Key it `ValueKey('${bead.id}:session')` so it persists across cursor
 /// ticks while the work node keeps its branch identity.
-class SessionScope extends StatefulSeed with Diagnosable {
+class SessionScope extends StatefulSeed with GridDiagnosticable {
   /// Creates the scope for [bead] running [circuit], with the bead's linked
   /// [existingSession] (null until a session exists — then `SessionScope` mints
   /// one; non-null → it adopts).
@@ -149,11 +124,13 @@ class SessionScope extends StatefulSeed with Diagnosable {
   final RootCheckout? workRoot;
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
-    builder.add(ReferenceProperty('bead', bead.id, kind: ReferenceKind.bead));
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
+    properties.addTyped(
+      ReferenceProperty('bead', bead.id, kind: ReferenceKind.bead),
+    );
     if (existingSession?.sessionId case final sessionId?) {
-      builder.add(
+      properties.addTyped(
         ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
       );
     }
@@ -166,7 +143,8 @@ class SessionScope extends StatefulSeed with Diagnosable {
 /// The `{resolving | ready | failed}` lifecycle (D-2). The async-gap guards
 /// (`_cancelled` set first in `dispose`, `context.mounted` after every await,
 /// the captured `_ctx`) are the same discipline as `CapabilityHostState`.
-class SessionScopeState extends State<SessionScope> with Diagnosable {
+class SessionScopeState extends State<SessionScope>
+    with Diagnosticable, GridDiagnosticable {
   /// The bounded `createSession` retry budget (tg-6nf) — a mint failure is
   /// RETRIED up to this many TOTAL attempts before the scope escalates LOUD
   /// (the circuit-breaker's bounded-retry discipline, D-5). Small on purpose:
@@ -213,10 +191,10 @@ class SessionScopeState extends State<SessionScope> with Diagnosable {
   String? _sessionId;
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
     if (_sessionId case final sessionId?) {
-      builder.add(
+      properties.addTyped(
         ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
       );
     }

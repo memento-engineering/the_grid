@@ -1,26 +1,23 @@
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    as contract;
+import 'package:genesis_foundation/genesis_foundation.dart';
 
-/// Collects typed diagnostic properties in insertion order.
-final class DiagnosticsBuilder {
-  final List<contract.DiagnosticsProperty> _properties = [];
+/// Marks a genesis diagnostic object as part of the grid semantic projection.
+mixin GridDiagnosticable {}
 
-  /// Adds [property] to this node.
-  void add<T>(DiagnosticProperty<T> property) {
-    _properties.add(property.toContract());
+/// Adds grid's strongly typed property adapter to foundation's builder.
+extension GridDiagnosticsBuilder on DiagnosticsBuilder {
+  /// Converts and appends [property] in display order.
+  void addTyped<T>(DiagnosticProperty<T> property) {
+    add(property.toContract());
   }
-
-  /// Returns an immutable snapshot of the collected wire properties.
-  List<contract.DiagnosticsProperty> build() => List.unmodifiable(_properties);
 }
 
-/// A typed property contributed by a [Diagnosable] object.
+/// A typed property contributed by a [Diagnosticable] object.
 abstract class DiagnosticProperty<T> {
   /// Creates a typed property.
   const DiagnosticProperty(
     this.name,
     this.value, {
-    this.level = contract.DiagnosticsLevel.info,
+    this.level = DiagnosticsLevel.info,
   });
 
   /// Property label on the diagnostics wire.
@@ -30,10 +27,10 @@ abstract class DiagnosticProperty<T> {
   final T value;
 
   /// Display severity.
-  final contract.DiagnosticsLevel level;
+  final DiagnosticsLevel level;
 
   /// Converts this typed object to the versioned contract union.
-  contract.DiagnosticsProperty toContract();
+  DiagnosticsProperty toContract();
 }
 
 /// A string-valued diagnostic property.
@@ -42,12 +39,8 @@ final class StringProperty extends DiagnosticProperty<String> {
   const StringProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.string(
-        name: name,
-        level: level,
-        value: value,
-      );
+  DiagnosticsProperty toContract() =>
+      DiagnosticsProperty.string(name: name, level: level, value: value);
 }
 
 /// An integer-valued diagnostic property.
@@ -56,8 +49,8 @@ final class IntProperty extends DiagnosticProperty<int> {
   const IntProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.int(name: name, level: level, value: value);
+  DiagnosticsProperty toContract() =>
+      DiagnosticsProperty.int(name: name, level: level, value: value);
 }
 
 /// A double-valued diagnostic property.
@@ -66,12 +59,8 @@ final class DoubleProperty extends DiagnosticProperty<double> {
   const DoubleProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.double(
-        name: name,
-        level: level,
-        value: value,
-      );
+  DiagnosticsProperty toContract() =>
+      DiagnosticsProperty.double(name: name, level: level, value: value);
 }
 
 /// A boolean flag diagnostic property.
@@ -80,8 +69,8 @@ final class FlagProperty extends DiagnosticProperty<bool> {
   const FlagProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.flag(name: name, level: level, value: value);
+  DiagnosticsProperty toContract() =>
+      DiagnosticsProperty.flag(name: name, level: level, value: value);
 }
 
 /// An enum-valued diagnostic property.
@@ -90,13 +79,12 @@ final class EnumProperty<T extends Enum> extends DiagnosticProperty<T> {
   const EnumProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.enumValue(
-        name: name,
-        level: level,
-        value: value.name,
-        enumType: T.toString(),
-      );
+  DiagnosticsProperty toContract() => DiagnosticsProperty.enumValue(
+    name: name,
+    level: level,
+    value: value.name,
+    enumType: T.toString(),
+  );
 }
 
 /// A duration-valued diagnostic property.
@@ -105,12 +93,8 @@ final class DurationProperty extends DiagnosticProperty<Duration> {
   const DurationProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.duration(
-        name: name,
-        level: level,
-        value: value,
-      );
+  DiagnosticsProperty toContract() =>
+      DiagnosticsProperty.duration(name: name, level: level, value: value);
 }
 
 /// A timestamp-valued diagnostic property.
@@ -119,12 +103,8 @@ final class TimestampProperty extends DiagnosticProperty<DateTime> {
   const TimestampProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.timestamp(
-        name: name,
-        level: level,
-        value: value,
-      );
+  DiagnosticsProperty toContract() =>
+      DiagnosticsProperty.timestamp(name: name, level: level, value: value);
 }
 
 /// A reference-valued diagnostic property.
@@ -138,16 +118,15 @@ final class ReferenceProperty extends DiagnosticProperty<String> {
   });
 
   /// The kind of referenced engine identity.
-  final contract.ReferenceKind kind;
+  final ReferenceKind kind;
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.reference(
-        name: name,
-        level: level,
-        referenceKind: kind,
-        value: value,
-      );
+  DiagnosticsProperty toContract() => DiagnosticsProperty.reference(
+    name: name,
+    level: level,
+    referenceKind: kind,
+    value: value,
+  );
 }
 
 /// A nested object diagnostic property.
@@ -157,16 +136,9 @@ final class ObjectProperty
   const ObjectProperty(super.name, super.value, {super.level});
 
   @override
-  contract.DiagnosticsProperty toContract() =>
-      contract.DiagnosticsProperty.object(
-        name: name,
-        level: level,
-        properties: [for (final property in value) property.toContract()],
-      );
-}
-
-/// Internal engine objects opt into ordered, super-chainable introspection.
-mixin Diagnosable {
-  /// Adds this inheritance level's properties to [builder].
-  void debugFillProperties(DiagnosticsBuilder builder) {}
+  DiagnosticsProperty toContract() => DiagnosticsProperty.object(
+    name: name,
+    level: level,
+    properties: [for (final property in value) property.toContract()],
+  );
 }

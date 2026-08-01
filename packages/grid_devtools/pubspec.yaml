@@ -18,6 +18,7 @@ dependencies:
   flutter:
     sdk: flutter
   freezed_annotation: ^3.0.0
+  genesis_foundation: ^0.2.0
   grid_cockpit_ui:
     path: ../grid_cockpit_ui
   grid_diagnostics_contract:

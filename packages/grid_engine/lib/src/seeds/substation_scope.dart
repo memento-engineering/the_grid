@@ -1,29 +1,4 @@
-// Foundation wire-type names hidden: grid_diagnostics_contract's stay
-// operative until tg-vg5k migrates onto genesis_foundation.
-// The hidden genesis_foundation names exist only when genesis resolves by
-// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
-// analyzer warns about. tg-vg5k removes this with the hides.
-// ignore_for_file: undefined_hidden_name
-import 'package:genesis_tree/genesis_tree.dart'
-    hide
-        CheckedFromJsonException,
-        Diagnosticable,
-        DiagnosticableTree,
-        DiagnosticsDoubleProperty,
-        DiagnosticsDurationProperty,
-        DiagnosticsEnumProperty,
-        DiagnosticsFlagProperty,
-        DiagnosticsIntProperty,
-        DiagnosticsLevel,
-        DiagnosticsObjectProperty,
-        DiagnosticsProperty,
-        DiagnosticsReferenceProperty,
-        DiagnosticsStringProperty,
-        DiagnosticsTimestampProperty,
-        ReferenceKind,
-        TreeNode,
-        TreeSnapshot;
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../diagnostics/diagnosable.dart';
@@ -60,7 +35,7 @@ import 'substation.dart';
 /// lifetime (the kernel builds it once). genesis `State` has no
 /// did-update-config hook, so a swapped notifier instance would not re-bind;
 /// that does not occur in P0.
-class SubstationScope extends StatefulSeed with Diagnosable {
+class SubstationScope extends StatefulSeed with GridDiagnosticable {
   /// Creates a scope driven by [configNotifier], providing [services] to its
   /// subtree. Key it by substation id at the Station level so a substation add/remove
   /// mounts/unmounts exactly this scope.
@@ -82,7 +57,8 @@ class SubstationScope extends StatefulSeed with Diagnosable {
   State<SubstationScope> createState() => _SubstationScopeState();
 }
 
-class _SubstationScopeState extends State<SubstationScope> with Diagnosable {
+class _SubstationScopeState extends State<SubstationScope>
+    with Diagnosticable, GridDiagnosticable {
   RemoveListener? _remove;
   late SubstationConfig _config;
 
@@ -111,7 +87,7 @@ class _SubstationScopeState extends State<SubstationScope> with Diagnosable {
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(
+    builder.addTyped(
       ReferenceProperty(
         'substation',
         _config.substationId,

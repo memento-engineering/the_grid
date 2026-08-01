@@ -1,29 +1,4 @@
-// Foundation wire-type names hidden: grid_diagnostics_contract's stay
-// operative until tg-vg5k migrates onto genesis_foundation.
-// The hidden genesis_foundation names exist only when genesis resolves by
-// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
-// analyzer warns about. tg-vg5k removes this with the hides.
-// ignore_for_file: undefined_hidden_name
-import 'package:genesis_tree/genesis_tree.dart'
-    hide
-        CheckedFromJsonException,
-        Diagnosticable,
-        DiagnosticableTree,
-        DiagnosticsDoubleProperty,
-        DiagnosticsDurationProperty,
-        DiagnosticsEnumProperty,
-        DiagnosticsFlagProperty,
-        DiagnosticsIntProperty,
-        DiagnosticsLevel,
-        DiagnosticsObjectProperty,
-        DiagnosticsProperty,
-        DiagnosticsReferenceProperty,
-        DiagnosticsStringProperty,
-        DiagnosticsTimestampProperty,
-        ReferenceKind,
-        TreeNode,
-        TreeSnapshot;
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_tree/genesis_tree.dart';
 
 import '../diagnostics/diagnosable.dart';
 import '../domain/substation_config.dart';
@@ -37,7 +12,7 @@ import 'work_list.dart';
 /// `WorkList`, marks dirty). A config change reaches it via the
 /// `InheritedSeed<SubstationConfig>` dependency (`dependencyChanged`), the config
 /// axis, which is exactly when it *should* rebuild.
-class Substation extends StatefulSeed with Diagnosable {
+class Substation extends StatefulSeed with GridDiagnosticable {
   /// Creates a substation node, optionally [key]ed.
   const Substation({super.key});
 
@@ -45,7 +20,8 @@ class Substation extends StatefulSeed with Diagnosable {
   State<Substation> createState() => _SubstationState();
 }
 
-class _SubstationState extends State<Substation> with Diagnosable {
+class _SubstationState extends State<Substation>
+    with Diagnosticable, GridDiagnosticable {
   late SubstationConfig _config;
 
   @override
@@ -59,7 +35,7 @@ class _SubstationState extends State<Substation> with Diagnosable {
   @override
   void debugFillProperties(DiagnosticsBuilder builder) {
     super.debugFillProperties(builder);
-    builder.add(
+    builder.addTyped(
       ReferenceProperty(
         'substation',
         _config.substationId,

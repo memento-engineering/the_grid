@@ -33,7 +33,7 @@ import 'session_handle.dart';
 
 /// The pure inflater for one circuit instance rooted at [nodePath], under
 /// [cursor] (M4-P1 §4). Engine-private — an asset never subclasses it.
-class CircuitScope extends StatelessSeed with Diagnosable {
+class CircuitScope extends StatelessSeed with GridDiagnosticable {
   /// Inflates [circuit] at [nodePath] under [cursor]. The work `Bead` and the
   /// session `SiblingView` are AMBIENT (mounted by `WorkBead`/`SessionScope`,
   /// 2026-07-02) — an effect reads them with the non-binding lookup; the
@@ -61,9 +61,9 @@ class CircuitScope extends StatelessSeed with Diagnosable {
   final Map<String, int> circuitRoundsByPath;
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
-    builder.add(StringProperty('nodePath', nodePath));
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
+    properties.addTyped(StringProperty('nodePath', nodePath));
   }
 
   @override

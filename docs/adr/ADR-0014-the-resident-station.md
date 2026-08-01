@@ -160,6 +160,8 @@ containers for multiples. **The ceiling (later, separate passes):** the ADR-0008
 leasing-is-core for substation attention-scheduling — this ADR deliberately builds neither; the
 lock is the only arbitration a single-machine dogfood needs.
 
+**Preserved by `tg-vg5k` (2026-08-01):** `packages/grid_diagnostics_contract/lib/src/station_lock_record.dart` remains byte-for-byte unchanged, and the CLI/DevTools package boundary for `StationLockRecord` remains in `grid_diagnostics_contract`.
+
 ## Supersessions and amendments
 
 **APPLIED at ratification, 2026-07-19.**
@@ -197,7 +199,7 @@ on ratification day — never silent.
   route and resident-loop operation seam; this ADR bead is documentation only.
 - **ADR-0012 Decision 2 / tg-0ds:** the retired `docs/SCRATCH-cockpit.md` §5
   `SessionView`/`NodeView`/`CircuitTopology` wire model is superseded by tg-0ds’s
-  `grid_diagnostics_contract` tree projection. That read-side convergence is distinct from this
+  `genesis_foundation` tree projection. That read-side convergence is distinct from this
   command mutation half and lands on the same unified surface rather than creating a server.
 - **ADR-0000 A50 forward supersession:** A50’s `reload` distinction remains a debugger operation
   on the exploration wire, but its statements that bd is the only mutation surface and

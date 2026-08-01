@@ -4,7 +4,8 @@ import 'dart:io';
 import 'package:grid_cli/src/station_attach.dart';
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_cli/src/station_lock.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show StationLockRecord;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';

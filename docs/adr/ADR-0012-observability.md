@@ -30,7 +30,7 @@ A **read-only observability transport over the session ledger** + a thin Flutter
 - **Scope** — watch-only, grid-wide (all owned substations). No acting/feeding (deferred). Not perception, not DevTools, not OTel.
 - **Server = in-station**, extending RS-4 `StationControl` (already owns the live reactive runtime + every work store), bound to the **LAN** (not loopback). Read-only, no mutation endpoints by construction.
 - **Transport = HTTP + WebSocket** — `GET /status` (kept), `GET /sessions` (snapshot), `WS /stream` (deltas). The **same "impl #1" HTTP/WS grain federation uses** behind its bus seam (ADR-0011); SSE and MQTT-now were considered and rejected for v1 (MQTT is asset-layer + unbuilt even for the bus; D-B5). If a unified substrate incl. an MQTT face (the D-C5 "want") lands later, the cockpit re-homes behind its contract with no rework.
-- **Wire contract** — superseded by Decision 2’s shared `grid_diagnostics_contract` tree-projection payload; the cockpit derives its UI-side session, node, and circuit view-models from that payload.
+- **Wire contract** — superseded by Decision 2’s shared `genesis_foundation` tree-projection payload; the cockpit derives its UI-side session, node, and circuit view-models from that payload.
 - **Auth = a static, operator-provisioned bearer token** (LAN trust); genesis **`consent`** is the deferred replacement.
 - **Discovery = mDNS** (`_grid-cockpit._tcp`) + a manual `host:port` fallback.
 - **Prereq** — persist the resolved `harness`+`model` per node at the `StationBeadWriter` chokepoint (capture-only), so cost/tokens gain model attribution.
@@ -47,10 +47,19 @@ Observability's **second ratified slice: the running engine tree describes itsel
 - **Transport seam — observable source (SCRATCH §5).** `TreeProjector` is an **optional kernel-owned seam** (null = zero cost). `StationKernel` retains the root `Branch` and calls `projector.afterFlush(root)` in the flush microtask; the projector re-walks **once** per flush and exposes `latest` (connect-time replay) + a **broadcast `Stream<TreeSnapshot>`**; `projectedAt` is stamped from an injected clock, never inside the pure walk.
 - **Reporters — pluggable, same payload.** Reporters compose **beside** the kernel and subscribe; the kernel never learns what transports exist. Two bindings, **one payload**: **(a) the VM-service exploration wire** (JIT dev loop — DevTools + leonard; `tg-0ds.5`) and **(b) a LAN WS/HTTP socket** (AOT builds + the cockpit; `tg-wisp-5xa` C-3). This is the **same "impl #1" HTTP/WS grain** Decision 1's cockpit and ADR-0011's federation bus use — one payload over many transports, the correction Decision 2 makes concrete against the Context conflation above.
 
-**Amended 2026-07-25 (Nico ruling, `tg-0ds.5`):** reporter binding is reassigned explicitly, never silently. No VM-service `TreeSnapshot` publisher ships; `ext.exploration.*` remains the separate JIT debug/attach channel. The diagnostics reporter is the bearer-authenticated LAN HTTP/WS `/stream` route on `StationControl`, owned by `tg-0ds.5`, and works in JIT and AOT. This absorbs the closed-superseded `tg-wisp-5xa.3` LAN transport scope while preserving the rule that reporters compose beside the kernel and carry the unchanged `grid_diagnostics_contract` payload.
-- **Wire contract — typed, sealed (SCRATCH §6).** `grid_diagnostics_contract` carries `TreeSnapshot { contractVersion, projectedAt, root }` + `TreeNode { seedType, id, key, properties, children }` + a **sealed freezed `DiagnosticsProperty` union** (`string | int | double | flag | enumValue | duration | timestamp | reference | object`), each carrying `name` + `level`. Consumers **switch exhaustively**. Adding a **property** is data; adding a property **kind** is a `contractVersion` bump. This IS `tg-wisp-5xa`'s C-1; it **supersedes** `SCRATCH-cockpit.md`'s `SessionView`/`NodeView`/`CircuitTopology` wire types (now UI-side view-models over the tree).
+**Amended 2026-07-25 (Nico ruling, `tg-0ds.5`):** reporter binding is reassigned explicitly, never silently. No VM-service `TreeSnapshot` publisher ships; `ext.exploration.*` remains the separate JIT debug/attach channel. The diagnostics reporter is the bearer-authenticated LAN HTTP/WS `/stream` route on `StationControl`, owned by `tg-0ds.5`, and works in JIT and AOT. This absorbs the closed-superseded `tg-wisp-5xa.3` LAN transport scope while preserving the rule that reporters compose beside the kernel and carry the unchanged `genesis_foundation` JSON payload.
+- **Wire contract — typed, sealed (SCRATCH §6).** `genesis_foundation` carries `TreeSnapshot { contractVersion, projectedAt, root }` + `TreeNode { seedType, id, key, properties, children }` + a **sealed freezed `DiagnosticsProperty` union** (`string | int | double | flag | enumValue | duration | timestamp | reference | object`), each carrying `name` + `level`. Consumers **switch exhaustively**. Adding a **property** is data; adding a property **kind** is a `contractVersion` bump. This IS `tg-wisp-5xa`'s C-1; it **supersedes** `SCRATCH-cockpit.md`'s `SessionView`/`NodeView`/`CircuitTopology` wire types (now UI-side view-models over the tree).
 
 Like Decision 1, this **touches the engine only at an optional seam** — the `TreeProjector` hook is null by default; the projection is pure/AOT-safe; the reporters and the wire contract live outside the engine core. **Extraction of the `Diagnosable`/walker to genesis is deferred** (the org dependency arc, cf `genesis_tmux`); the projection is grid-local for now.
+
+**Amended 2026-08-01 (Nico’s builder-in-foundation ruling, `tg-vg5k`):**
+the dependency-free wire values and the native
+`Diagnosticable.debugFillProperties(DiagnosticsBuilder)` hook are owned by
+`genesis_foundation` 0.2.0. The engine retains only its semantic opt-in marker,
+typed property conversion adapter, mounted-tree walker, and projector; the
+override + super-chain mechanism and base-before-derived ordering are unchanged.
+The “A48” label in the bead’s governor receipts names that live ruling and is
+not ADR-0000 A48, which governs session disposition.
 
 ## Open questions — RESERVED, not decided by this ADR
 

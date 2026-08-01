@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 
 /// Observable diagnostics snapshots consumed by cockpit projections.
 abstract interface class TreeSource {

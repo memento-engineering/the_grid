@@ -2,12 +2,11 @@ import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
 
-final class _DiagnosableRoot extends Seed with Diagnosable {
+final class _DiagnosableRoot extends Seed with GridDiagnosticable {
   const _DiagnosableRoot();
 
   @override

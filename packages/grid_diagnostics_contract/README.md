@@ -1,7 +1,5 @@
 # grid_diagnostics_contract
 
-Versioned diagnostics projection wire contract shared by reporters and cockpit consumers.
+Grid-local protocol values for the resident station. This package owns `.grid/station.lock`, `StationLockRecord`, and the `grid.tree.bearer.` WebSocket subprotocol prefix.
 
-## Status
-
-Early development (0.1.x). Part of [the_grid](https://github.com/memento-engineering/the_grid) — the memento.engineering grid station monorepo. APIs move fast; pin exact versions.
+Diagnostics tree wire values are owned by `genesis_foundation`.

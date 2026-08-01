@@ -17,7 +17,8 @@ executables:
 dependencies:
   args: ^2.6.0
   beads_dart: ^0.1.0
-  genesis_tree: ^0.1.5
+  genesis_foundation: ^0.2.0
+  genesis_tree: ^0.2.0
   grid_diagnostics_contract: ^0.1.1
   grid_engine: ^0.1.1
   grid_exploration: ^0.1.1

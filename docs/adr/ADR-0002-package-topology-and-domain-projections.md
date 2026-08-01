@@ -54,7 +54,8 @@ Dependency direction gains: `grid_engine ──► grid_controller` (snapshot/ow
 
 | Package | Role | Milestone | Notes |
 |---|---|---|---|
-| **`grid_diagnostics_contract`** | The versioned diagnostics projection wire contract: `TreeSnapshot`, `TreeNode`, and the sealed `DiagnosticsProperty` union. | P2 observability | Pure Dart; zero grid dependencies; shared by engine-side projectors/reporters and Flutter/headless consumers. |
+| **`genesis_foundation`** | The dependency-free versioned diagnostics projection wire contract and shared `Diagnosticable.debugFillProperties(DiagnosticsBuilder)` substrate. | P2 observability | Shared by engine-side projectors/reporters and Flutter/headless consumers; it sits below `genesis_tree`. |
+| **`grid_diagnostics_contract`** | The grid-local resident-station lock and bearer-subprotocol contract. | P2 observability | Owns `.grid/station.lock`, `StationLockRecord`, and the `grid.tree.bearer.` prefix across the CLI/DevTools boundary. |
 
 ## Decision 2 — Reactive domain projections, grounded in Gas City's primitive model
 
@@ -99,7 +100,7 @@ Consequences:
 
 `grid_devtools` never links `grid_controller` for live data — it attaches to the process VM service and consumes the same `ext.exploration.*` surface as lenny's tooling (handshake → observation → tools). This keeps one protocol (ADR-0001 Decision 6) and makes the panels work against any future grid process (reconciler daemon, runtime supervisor) for free.
 
-**Amended 2026-07-25 (Nico ruling, `tg-0ds.5`):** the “exploration protocol only” clause gains one live-data exception: `grid_devtools` may consume `grid_diagnostics_contract` `TreeSnapshot`s from the bearer-authenticated unified `StationControl` HTTP/WS door. It still never links `grid_controller` for live data; debugger operations remain on `ext.exploration.*`.
+**Amended 2026-08-01 (`tg-vg5k`), preserving the 2026-07-25 Nico ruling (`tg-0ds.5`):** the “exploration protocol only” clause retains one live-data exception: `grid_devtools` may consume `genesis_foundation` `TreeSnapshot`s from the bearer-authenticated unified `StationControl` HTTP/WS door. It still never links `grid_controller` for live data; debugger operations remain on `ext.exploration.*`; lock discovery continues through `grid_diagnostics_contract`.
 
 ---
 

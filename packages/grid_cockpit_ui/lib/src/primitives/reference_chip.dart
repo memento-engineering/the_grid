@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 
 /// A typed target emitted when a diagnostics reference is activated.
 @immutable

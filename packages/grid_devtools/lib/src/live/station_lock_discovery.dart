@@ -1,6 +1,7 @@
 import 'dart:convert';
 
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show StationLockRecord;
 
 /// Reads IDE workspace roots from the connected tooling daemon.
 typedef WorkspaceRootsReader = Future<List<Uri>> Function();

@@ -17,9 +17,9 @@ dependencies:
   beads_dart: ^0.1.1
   freezed_annotation: ^3.0.0
   # The element model the composition Seeds are authored on (re-exported: one
-  # import authors a station). Floor = 0.1.5 (Nest + the non-binding effect
-  # lookup).
-  genesis_tree: ^0.1.5
+  # import authors a station). The 0.2 wave shares foundation's native
+  # diagnostics hook with the engine.
+  genesis_tree: ^0.2.0
   # The private element layer this SDK surfaces (ADR-0002 / ADR-0008 D2).
   # Consumers compose `grid_sdk`; they never import `grid_engine` directly.
   grid_engine: ^0.1.2

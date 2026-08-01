@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../models/view_state.dart';

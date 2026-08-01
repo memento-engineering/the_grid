@@ -12,7 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
   freezed_annotation: ^3.0.0
-  grid_diagnostics_contract: ^0.1.0
+  genesis_foundation: ^0.2.0
   state_notifier: ^1.0.0
 
 dev_dependencies:
