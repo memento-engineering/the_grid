@@ -416,22 +416,30 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.0.0"
+  genesis_foundation:
+    dependency: transitive
+    description:
+      name: genesis_foundation
+      sha256: "99c1fc5b79d7aadce7b7b887079f400b111c55715b3cb69fce47260c937a5bc3"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.0"
   genesis_perception:
     dependency: transitive
     description:
       name: genesis_perception
-      sha256: "65c866496f05564e11a61ff6683e2f33fb6bac30b70d056e232b6309033cb3b5"
+      sha256: "71fafcd4db7148635163496ed710360acbe3baee1fc3181624056972f9f32bca"
       url: "https://pub.dev"
     source: hosted
-    version: "0.1.3"
+    version: "0.2.0"
   genesis_tree:
     dependency: transitive
     description:
       name: genesis_tree
-      sha256: "03f1bbd0e2f6d8ac3f43fb9a1729c06d43a332012b72d51f2f0dab499d7d4199"
+      sha256: e9af052b12c7e7cfc2eec6d54f6013e3416ae3e3b61c22612f91298c3bcc1fc1
       url: "https://pub.dev"
     source: hosted
-    version: "0.1.5"
+    version: "0.2.0"
   glob:
     dependency: transitive
     description:
@@ -532,10 +540,10 @@ packages:
     dependency: transitive
     description:
       name: leonard_contract
-      sha256: fdfaf2306134fe5de1e1de464a99d674da62267baef5bd6ce2b4ac418b7edd87
+      sha256: "6195985d4d92250fafddf1a64c343cfef0152537d7522ef58acbdf24b18a9ed5"
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.0"
+    version: "0.2.1"
   lints:
     dependency: transitive
     description:

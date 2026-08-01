@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grid_cockpit_ui/src/selectors/tree_selectors.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 
 import '../fixtures.dart';
 

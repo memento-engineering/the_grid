@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_cli/src/station_control.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart' show TreeSnapshot;
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show stationTreeBearerProtocolPrefix;
 import 'package:grid_engine/grid_engine.dart' show Diagnosable, TreeProjector;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';

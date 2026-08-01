@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 const allowedRuntimeDependencies = <String>{
   'flutter',
   'freezed_annotation',
-  'grid_diagnostics_contract',
+  'genesis_foundation',
   'state_notifier',
 };
 

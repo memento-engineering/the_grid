@@ -10,7 +10,7 @@ import 'substation_scope.dart';
 /// A [MultiChildSeed] (not a component): it *declares* its substation children up
 /// front rather than building one. Each [SubstationScope] should be keyed by substation id so
 /// adding/removing a substation mounts/unmounts exactly that scope.
-class Station extends MultiChildSeed with Diagnosable {
+class Station extends MultiChildSeed with GridDiagnosticable {
   /// Creates the Station over [substations].
   Station(List<SubstationScope> substations, {super.key})
     : super(children: substations);

@@ -30,20 +30,20 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.0"
+  genesis_foundation:
+    dependency: "direct main"
+    description:
+      name: genesis_foundation
+      sha256: "99c1fc5b79d7aadce7b7b887079f400b111c55715b3cb69fce47260c937a5bc3"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.0"
   grid_cockpit_ui:
     dependency: "direct main"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.1.0"
-  grid_diagnostics_contract:
-    dependency: "direct main"
-    description:
-      name: grid_diagnostics_contract
-      sha256: "021f6d51a5f2aa6f645482bc7309855eaa94c80ead1eb60002519cb9ef7c4af4"
-      url: "https://pub.dev"
-    source: hosted
     version: "0.1.0"
   json_annotation:
     dependency: transitive

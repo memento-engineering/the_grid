@@ -27,7 +27,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart' show TreeSnapshot;
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show stationTreeBearerProtocolPrefix;
 import 'package:grid_engine/grid_engine.dart' show TreeProjector;
 // The wedge signal is the STATION's own derivation — this surface only reports
 // it. Named through the SDK, never the private engine (ADR-0008 D2).

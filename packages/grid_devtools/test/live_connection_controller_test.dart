@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
 import 'package:grid_devtools/src/live/live_connection_controller.dart';
 import 'package:grid_devtools/src/live/station_lock_discovery.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 
 final class _Source implements TreeSource {
   final controller = StreamController<TreeSnapshot>.broadcast();

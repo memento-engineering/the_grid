@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_cli/src/station_command_client.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show StationLockRecord;
 import 'package:test/test.dart';
 
 void main() {

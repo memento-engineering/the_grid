@@ -1,29 +1,4 @@
-// Foundation wire-type names hidden: grid_diagnostics_contract's stay
-// operative until tg-vg5k migrates onto genesis_foundation.
-// The hidden genesis_foundation names exist only when genesis resolves by
-// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
-// analyzer warns about. tg-vg5k removes this with the hides.
-// ignore_for_file: undefined_hidden_name
-import 'package:genesis_tree/genesis_tree.dart'
-    hide
-        CheckedFromJsonException,
-        Diagnosticable,
-        DiagnosticableTree,
-        DiagnosticsDoubleProperty,
-        DiagnosticsDurationProperty,
-        DiagnosticsEnumProperty,
-        DiagnosticsFlagProperty,
-        DiagnosticsIntProperty,
-        DiagnosticsLevel,
-        DiagnosticsObjectProperty,
-        DiagnosticsProperty,
-        DiagnosticsReferenceProperty,
-        DiagnosticsStringProperty,
-        DiagnosticsTimestampProperty,
-        ReferenceKind,
-        TreeNode,
-        TreeSnapshot;
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_tree/genesis_tree.dart';
 
 import '../diagnostics/diagnosable.dart';
 import 'package:beads_dart/beads_dart.dart';
@@ -42,7 +17,7 @@ import '../kernel/session_resolver.dart';
 /// advance arrives as a NEW WorkBead config (same bead-id key); the subtree root
 /// is re-keyed identically, so reconcile threads the new cursor down in place
 /// while THIS branch keeps its identity.
-class WorkBead extends StatelessSeed with Diagnosable {
+class WorkBead extends StatelessSeed with GridDiagnosticable {
   /// Creates a work node for [bead] with its linked [session]. Key it
   /// `ValueKey(bead.id)` at the `WorkList` level so reconcile keeps the branch
   /// across snapshot ticks.
@@ -56,11 +31,13 @@ class WorkBead extends StatelessSeed with Diagnosable {
   final SessionProjection? session;
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
-    builder.add(ReferenceProperty('bead', bead.id, kind: ReferenceKind.bead));
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
+    properties.addTyped(
+      ReferenceProperty('bead', bead.id, kind: ReferenceKind.bead),
+    );
     if (session?.sessionId case final sessionId?) {
-      builder.add(
+      properties.addTyped(
         ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
       );
     }

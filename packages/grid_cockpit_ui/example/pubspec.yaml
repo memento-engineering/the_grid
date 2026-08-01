@@ -10,7 +10,7 @@ dependencies:
     sdk: flutter
   grid_cockpit_ui:
     path: ..
-  grid_diagnostics_contract: ^0.1.0
+  genesis_foundation: ^0.2.0
 dev_dependencies:
   lints: ^5.1.0
 flutter:

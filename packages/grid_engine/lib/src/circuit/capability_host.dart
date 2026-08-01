@@ -30,35 +30,10 @@
 /// (a daemon `ready` does NOT latch — OQ-5).
 library;
 
-// The hidden genesis_foundation names exist only when genesis resolves by
-// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
-// analyzer warns about. tg-vg5k removes this with the hides.
-// ignore_for_file: undefined_hidden_name
 import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
-// Foundation wire-type names hidden: grid_diagnostics_contract's stay
-// operative until tg-vg5k migrates onto genesis_foundation.
-import 'package:genesis_tree/genesis_tree.dart'
-    hide
-        CheckedFromJsonException,
-        Diagnosticable,
-        DiagnosticableTree,
-        DiagnosticsDoubleProperty,
-        DiagnosticsDurationProperty,
-        DiagnosticsEnumProperty,
-        DiagnosticsFlagProperty,
-        DiagnosticsIntProperty,
-        DiagnosticsLevel,
-        DiagnosticsObjectProperty,
-        DiagnosticsProperty,
-        DiagnosticsReferenceProperty,
-        DiagnosticsStringProperty,
-        DiagnosticsTimestampProperty,
-        ReferenceKind,
-        TreeNode,
-        TreeSnapshot;
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../diagnostics/diagnosable.dart';
@@ -78,7 +53,7 @@ import 'capability_registry.dart';
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
 /// keyed `ValueKey('$nodePath#$restartCount')` so a supervised restart re-keys.
-class CapabilityHost extends StatefulSeed with Diagnosable {
+class CapabilityHost extends StatefulSeed with GridDiagnosticable {
   /// Creates the carrier for [capability] at [mount].
   const CapabilityHost({
     required this.capability,
@@ -93,17 +68,17 @@ class CapabilityHost extends StatefulSeed with Diagnosable {
   final StepMount mount;
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
-    builder.add(StringProperty('nodePath', mount.nodePath));
-    builder.add(
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
+    properties.addTyped(StringProperty('nodePath', mount.nodePath));
+    properties.addTyped(
       ReferenceProperty(
         'session',
         mount.session.sessionId,
         kind: ReferenceKind.session,
       ),
     );
-    builder.add(EnumProperty('stepState', mount.node.state));
+    properties.addTyped(EnumProperty('stepState', mount.node.state));
   }
 
   @override
@@ -153,7 +128,8 @@ Future<void> persistRaisedEscalation({
 }
 
 /// The pinned [CapabilityHost] lifecycle — the thin driver (ADR-0009 D5).
-class CapabilityHostState extends State<CapabilityHost> with Diagnosable {
+class CapabilityHostState extends State<CapabilityHost>
+    with Diagnosticable, GridDiagnosticable {
   StationServices? _ctx;
   ServiceBundle _services = const ServiceBundle();
   CapabilityRegistry? _registry;
@@ -170,10 +146,10 @@ class CapabilityHostState extends State<CapabilityHost> with Diagnosable {
   DateTime? _startedAt;
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
     if (_allocation case final allocation?) {
-      builder.add(
+      properties.addTyped(
         ObjectProperty('allocation', [EnumProperty('state', allocation.state)]),
       );
     }

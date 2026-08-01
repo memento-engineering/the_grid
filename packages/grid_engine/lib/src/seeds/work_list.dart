@@ -1,33 +1,8 @@
-// The hidden genesis_foundation names exist only when genesis resolves by
-// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
-// analyzer warns about. tg-vg5k removes this with the hides.
-// ignore_for_file: undefined_hidden_name
 import 'dart:math' as math;
 
-// Foundation wire-type names hidden: grid_diagnostics_contract's stay
-// operative until tg-vg5k migrates onto genesis_foundation.
-import 'package:genesis_tree/genesis_tree.dart'
-    hide
-        CheckedFromJsonException,
-        Diagnosticable,
-        DiagnosticableTree,
-        DiagnosticsDoubleProperty,
-        DiagnosticsDurationProperty,
-        DiagnosticsEnumProperty,
-        DiagnosticsFlagProperty,
-        DiagnosticsIntProperty,
-        DiagnosticsLevel,
-        DiagnosticsObjectProperty,
-        DiagnosticsProperty,
-        DiagnosticsReferenceProperty,
-        DiagnosticsStringProperty,
-        DiagnosticsTimestampProperty,
-        ReferenceKind,
-        TreeNode,
-        TreeSnapshot;
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/driveable_work.dart';
@@ -55,7 +30,7 @@ import 'work_bead.dart';
 ///
 /// `root.markNeedsRebuild()` is banned; a single over-broad observation would
 /// re-create the "config built 100×" bug ADR-0007 §6.1 exists to prevent.
-class WorkList extends StatefulSeed with Diagnosable {
+class WorkList extends StatefulSeed with GridDiagnosticable {
   /// Creates the work list under [substationConfig]. The list itself uses the
   /// value as data for ownership, drive-list, resident, and budget decisions;
   /// its build output re-provides the same value as `InheritedSeed` so
@@ -70,9 +45,9 @@ class WorkList extends StatefulSeed with Diagnosable {
   State<WorkList> createState() => _WorkListState();
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
-    builder.add(
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
+    properties.addTyped(
       ReferenceProperty(
         'substation',
         substationConfig.substationId,
@@ -82,7 +57,8 @@ class WorkList extends StatefulSeed with Diagnosable {
   }
 }
 
-class _WorkListState extends State<WorkList> with Diagnosable {
+class _WorkListState extends State<WorkList>
+    with Diagnosticable, GridDiagnosticable {
   RemoveListener? _remove;
   JoinedSnapshotNotifier? _notifier;
   late JoinedSnapshot _snapshot;
@@ -124,9 +100,9 @@ class _WorkListState extends State<WorkList> with Diagnosable {
   }
 
   @override
-  void debugFillProperties(DiagnosticsBuilder builder) {
-    super.debugFillProperties(builder);
-    builder.add(IntProperty('mountedWorkCount', _mountedIds.length));
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
+    properties.addTyped(IntProperty('mountedWorkCount', _mountedIds.length));
   }
 
   @override

@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:file_selector/file_selector.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 
 /// Injectable boundary for selecting the contents of a snapshot recording.
 typedef SnapshotJsonPicker = Future<String?> Function();

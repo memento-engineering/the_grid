@@ -1,4 +1,4 @@
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 
 /// Bundled snapshots for the fixture-only example.
 final cockpitRecording = [

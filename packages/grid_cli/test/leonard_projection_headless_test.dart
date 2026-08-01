@@ -6,9 +6,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:genesis_foundation/genesis_foundation.dart'
+    show TreeNode, TreeSnapshot;
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_cli/src/station_control.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
+    show StationLockRecord;
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_sdk/grid_sdk.dart'

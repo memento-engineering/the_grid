@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
-import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
+import 'package:genesis_foundation/genesis_foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// Injectable browser-compatible WebSocket connection seam.
