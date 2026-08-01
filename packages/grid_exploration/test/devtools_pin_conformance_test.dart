@@ -4,7 +4,7 @@ import 'package:grid_exploration/grid_exploration.dart';
 import 'package:test/test.dart';
 
 /// Cross-pinning conformance for `grid_devtools`' hand-pinned
-/// `ext.exploration.*` method strings (ADR-0002 Decision 3, tg-8gv.11(e)).
+/// `ext.leonard.*` method strings (ADR-0002 Decision 3, tg-8gv.11(e)).
 ///
 /// `grid_devtools` deliberately does NOT depend on `grid_exploration` (it
 /// rides the wire protocol only, per the client's own doc comment), so it
@@ -21,32 +21,29 @@ import 'package:test/test.dart';
 /// `grid_exploration`'s own [coreExtension]/[gridExtension] builders — no
 /// import of `grid_devtools`.
 void main() {
-  test(
-    'grid_devtools pinned ext.exploration.* strings match grid_exploration',
-    () {
-      final source = _readDevtoolsProtocolSource();
+  test('grid_devtools pinned ext.leonard.* strings match grid_exploration', () {
+    final source = _readDevtoolsProtocolSource();
 
-      final handshake = _pinnedLiteral(source, 'kHandshakeExtension');
-      final events = _pinnedLiteral(source, 'kEventsExtension');
+    final prefix = _pinnedLiteral(source, 'kExplorationPrefix');
 
-      expect(
-        handshake,
-        coreExtension('handshake'),
-        reason:
-            "grid_devtools' kHandshakeExtension has drifted from "
-            "grid_exploration's coreExtension('handshake') — update the pin "
-            'in grid_devtools/lib/src/protocol/grid_exploration_client.dart.',
-      );
-      expect(
-        events,
-        gridExtension('events'),
-        reason:
-            "grid_devtools' kEventsExtension has drifted from "
-            "grid_exploration's gridExtension('events') — update the pin in "
-            'grid_devtools/lib/src/protocol/grid_exploration_client.dart.',
-      );
-    },
-  );
+    expect(prefix, kExplorationPrefix);
+    expect(
+      '$prefix.core.handshake',
+      coreExtension('handshake'),
+      reason:
+          "grid_devtools' kHandshakeExtension has drifted from "
+          "grid_exploration's coreExtension('handshake') — update the pin "
+          'in grid_devtools/lib/src/protocol/grid_exploration_client.dart.',
+    );
+    expect(
+      '$prefix.grid.events',
+      gridExtension('events'),
+      reason:
+          "grid_devtools' kEventsExtension has drifted from "
+          "grid_exploration's gridExtension('events') — update the pin in "
+          'grid_devtools/lib/src/protocol/grid_exploration_client.dart.',
+    );
+  });
 }
 
 /// Locates and reads `grid_devtools`' pinned-constants source, resolved

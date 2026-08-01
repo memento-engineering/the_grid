@@ -163,7 +163,7 @@ class _ThrowingSession implements StationVmSession {
 
   @override
   Future<Map<String, Object?>> invokeReload(String mode) async =>
-      throw StateError('method not found: ext.exploration.grid.reload');
+      throw StateError('method not found: ext.leonard.grid.reload');
 
   @override
   Future<void> close() async => closed = true;

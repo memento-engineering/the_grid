@@ -50,7 +50,7 @@ asset-agnostic verbs only.
 | `grid_sdk` | The public authoring surface: composition Seeds (`RawAssetGrid`/`Station`/`Substations`/`Substation`), `runGrid` + `GridDelegate`, stores-at-roots, the `StationWork`/`SubstationWork` work binding. One import authors a station (re-exports `genesis_tree`) |
 | `grid_runtime` | The hands: the `SubprocessProvider` process transport (the only `RuntimeProvider` — ADR-0004's `TmuxProvider` was never built), `StationGitService` git-worktree-per-bead isolation + the land step, lifecycle-as-beads through the `StationBeadWriter` chokepoint |
 | `grid_cli` | The CLI SDK a composed runner assembles: the generic verbs (`watch`/`gate`/`rework`/`demo`), the dev-mode `reload` command a runner binds, and the resident-station lock/control/attach pieces. Ships the minimal generic `grid` bin |
-| `grid_exploration` | Exploration-protocol host: registers `ext.exploration.*` over the Dart VM service so exploration clients (lenny) can observe and drive a running station; carries the hot-reload `ReassembleTool` |
+| `grid_exploration` | Exploration-protocol host: registers `ext.leonard.*` over the Dart VM service so exploration clients (lenny) can observe and drive a running station; carries the hot-reload `ReassembleTool` |
 | `grid_devtools` | DevTools extension (the only Flutter package — test it with `flutter test`, not `dart test`) — attaches over the exploration protocol only, no direct `beads_dart` dependency |
 
 ## Quickstart

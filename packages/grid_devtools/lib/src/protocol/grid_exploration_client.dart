@@ -18,11 +18,14 @@ library;
 /// `GridExplorationHost.eventStreamId`.
 const String kGridEventStreamId = 'grid.controller.event';
 
-/// Fully-qualified `ext.exploration.core.handshake` extension method.
-const String kHandshakeExtension = 'ext.exploration.core.handshake';
+/// Grid-owned prefix mirrored from grid_exploration and checked in dev tests.
+const String kExplorationPrefix = 'ext.leonard';
 
-/// Fully-qualified `ext.exploration.grid.events` extension method.
-const String kEventsExtension = 'ext.exploration.grid.events';
+/// Fully-qualified `ext.leonard.core.handshake` extension method.
+const String kHandshakeExtension = '$kExplorationPrefix.core.handshake';
+
+/// Fully-qualified `ext.leonard.grid.events` extension method.
+const String kEventsExtension = '$kExplorationPrefix.grid.events';
 
 /// One extension entry from the handshake `extensions` array:
 /// `{namespace, tools}`. (The Dart type stays `GridPlugin` — it is the
@@ -174,7 +177,7 @@ class GridEventsPage {
 /// Methods are Futures for acts; [eventStream] is a Stream for observations
 /// (house rule: Futures for acts, Streams for observations).
 abstract interface class GridExplorationClient {
-  /// Runs `ext.exploration.core.handshake` and returns the advertised
+  /// Runs `ext.leonard.core.handshake` and returns the advertised
   /// protocol version + plugin manifest.
   ///
   /// Throws [GridBindingMissing] when the extension is absent (the target
@@ -182,7 +185,7 @@ abstract interface class GridExplorationClient {
   /// propagates.
   Future<GridHandshake> handshake();
 
-  /// Calls the `ext.exploration.grid.events` tool, optionally bounding the
+  /// Calls the `ext.leonard.grid.events` tool, optionally bounding the
   /// number of recent events returned by [limit].
   Future<GridEventsPage> fetchEvents({int? limit});
 

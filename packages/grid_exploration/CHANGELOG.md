@@ -7,4 +7,4 @@
 
 ## 0.1.0
 
-- Initial release: exploration-protocol host exposing the ext.exploration.* wire protocol as Dart VM-service extensions.
+- Initial release: exploration-protocol host exposing the ext.leonard.* wire protocol as Dart VM-service extensions.

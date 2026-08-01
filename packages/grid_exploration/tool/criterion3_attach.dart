@@ -50,20 +50,20 @@ Future<void> main() async {
   final isolateId = developer.Service.getIsolateId(iso.Isolate.current)!;
 
   final handshake = await vm.callServiceExtension(
-    'ext.exploration.core.handshake',
+    'ext.leonard.core.handshake',
     isolateId: isolateId,
   );
   final observation = await vm.callServiceExtension(
-    'ext.exploration.core.get_stable_observation',
+    'ext.leonard.core.get_stable_observation',
     isolateId: isolateId,
   );
   final ready = await vm.callServiceExtension(
-    'ext.exploration.grid.ready',
+    'ext.leonard.grid.ready',
     isolateId: isolateId,
   );
 
   final checks = <String, bool>{
-    'handshake.protocolVersion == 1': handshake.json!['protocolVersion'] == '1',
+    'handshake.protocolVersion == 2': handshake.json!['protocolVersion'] == '2',
     // ADR-0000 A33: the wire key is `extensions`, matching leonard's reader.
     'handshake advertises grid extension':
         ((handshake.json!['extensions']! as List).first as Map)['namespace'] ==

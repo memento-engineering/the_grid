@@ -1,6 +1,6 @@
 import 'protocol/grid_exploration_client.dart';
 
-/// State of the latest `ext.exploration.core.handshake` probe, rendered by
+/// State of the latest `ext.leonard.core.handshake` probe, rendered by
 /// the shell via a `ValueListenable<HandshakeState>` so the UI reacts to
 /// (re)connects without rebuilding the whole tree.
 ///

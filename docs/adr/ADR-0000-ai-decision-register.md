@@ -583,3 +583,13 @@ Two modes, both re-composing through the EXISTING configuration scope (the tree'
 **Affects (if promoted):** `beads_dart` `lib/src/models/issue_type.dart` (`IssueType.link`, non-core so the mount allow-list excludes it unchanged). `grid_engine`: new `lib/src/bridge/block_guard.dart` (`BlockEdge`, `applyBlockGuard`), new `lib/src/domain/cross_link.dart` (`CrossLinkKeys`, `kCrossLinkBlocks`, `CrossLink`, `projectCrossLinks`, `crossLinkEdges`, `crossLinkTypeRefusal`), `lib/src/bridge/federated_snapshot_source.dart` (delegation), `lib/src/bridge/station_join_bridge.dart` (`onUnresolvedCrossLink`, `_applyCrossLinks`). `grid_sdk`: `lib/src/work/work_assembly.dart` (the shared sink). Tests: new `grid_engine/test/cross_link_guard_test.dart`, `grid_sdk/test/cross_link_wiring_test.dart`; extended `beads_dart/test/models/types_test.dart`, `grid_engine/test/track_i_invariants_at_depth_test.dart`, `grid_engine/test/join_bridge_test.dart`. Docs: `docs/SUBSTATION-INIT.md` §2 step 4.
 
 **Status:** Pending — Nico promotes or rejects.
+
+## A56 (2026-08-01) — the exploration VM-service prefix is owned by leonard (tg-4a78)
+
+**Decision (AI; pending Nico promotion).** Rename the_grid's locally owned VM-service prefix from the historical `ext.exploration.*` to `ext.leonard.*`, and align the locally owned protocol version from `1` to `2`. The resulting methods are `ext.leonard.core.handshake`, `ext.leonard.core.get_stable_observation`, and `ext.leonard.grid.<tool>`. The `extensions` wire key and existing method suffixes remain unchanged. `grid_devtools` mirrors the prefix locally and pins it against `grid_exploration` in dev tests, preserving its protocol-only runtime boundary.
+
+**Why.** The anonymous exploration prefix has no owner. The published package family is consistently named `leonard_*`, and the_grid already treats leonard's published read contract as authoritative. This differs from the rejected `ext.flutter.exploration.*`: that name squatted on a foreign framework's reserved prefix, whereas `ext.leonard.*` is owned by the package family that publishes the protocol.
+
+**Scope and promotion.** tg-4a78 changes only the_grid's own constants; dependent bead tg-99rr imports shared constants after lenny-uoiw publishes leonard_contract 0.2.0. Per the register preamble and the A33/A50 precedents, ADR-0001 Decision 6 remains untouched now. Upon Nico's promotion, its one-line prefix/version amendment should also repoint the dead `lenny-wisp-41rdl` reference to `lenny-uoiw`.
+
+**Status:** pending Nico promotion.

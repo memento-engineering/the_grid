@@ -4,11 +4,11 @@ DevTools extension for the_grid — **eyes on a running station**.
 
 `grid_devtools` is a Flutter web panel DevTools embeds beside a running grid
 process. It attaches over the **exploration protocol only** (ADR-0002
-Decision 3): everything it renders arrives through the `ext.exploration.*`
+Decision 3): everything it renders arrives through the `ext.leonard.*`
 service extensions the `grid_exploration` host registers in the target — it
 never links `beads_dart` for live data. The panel is a handshake header (the
 host's advertised protocol version + extension namespaces/tools) over an
-events timeline that seeds from the `ext.exploration.grid.events` ring buffer
+events timeline that seeds from the `ext.leonard.grid.events` ring buffer
 and then grows live off the `grid.controller.event` postEvent stream.
 
 ## How it connects
@@ -23,8 +23,8 @@ distinct "no grid host detected" banner, re-probing on every reconnect.
 
 **The wire constants are hand-pinned, deliberately.**
 `lib/src/protocol/grid_exploration_client.dart` re-declares the method names —
-`kHandshakeExtension` (`ext.exploration.core.handshake`) and
-`kEventsExtension` (`ext.exploration.grid.events`) — plus the minimal response
+`kHandshakeExtension` (`ext.leonard.core.handshake`) and
+`kEventsExtension` (`ext.leonard.grid.events`) — plus the minimal response
 shapes as plain value types instead of importing `grid_exploration`: the
 contract is the wire JSON, not a Dart symbol. The method-name pin is guarded
 by `test/exploration_pin_conformance_test.dart`, which pulls

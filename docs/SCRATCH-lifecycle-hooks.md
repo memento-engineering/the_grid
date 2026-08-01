@@ -41,7 +41,7 @@ vertical slice.
 
 **Explicitly unchanged:** the committee/`Circuit` (the *graded* gating pipeline stays first-class —
 hooks are the *lightweight, deterministic, cross-cutting* seam, never a second committee); RS-4's
-read-only invariant; `ext.exploration` (the JIT debug surface); the `.beads/hooks` files (chained,
+read-only invariant; `ext.leonard` (the JIT debug surface); the `.beads/hooks` files (chained,
 never edited); bd-CLI-only mutation.
 
 ## 1. Ground truth (scouted 2026-07-18, file:line; all repos at the umbrella checkout)
@@ -150,7 +150,7 @@ sites.
 
 ## 3. Transport & execution (D-T1…D-T3)
 
-**D-T1 — git resolve rides RS-4 as a read-only GET; `ext.exploration` is never used.** A new
+**D-T1 — git resolve rides RS-4 as a read-only GET; `ext.leonard` is never used.** A new
 `GET /hooks?event=<e>&worktree=<abs>` on `StationControl` returns the resolved contribution list
 (bearer-auth off the 0600 lock, exactly like `/status`). This is a **pure read** — it resolves,
 it does not act — so **D-C4 holds** (the trigger is git, not the control plane), and it sits in the

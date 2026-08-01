@@ -1,6 +1,6 @@
 /// Exploration-protocol host for the_grid.
 ///
-/// Hosts a GridControllerPlugin speaking lenny's `ext.exploration.*` wire
+/// Hosts a GridControllerPlugin speaking lenny's `ext.leonard.*` wire
 /// protocol (handshake / get_stable_observation / namespaced tools) via
 /// `dart:developer` service extensions. Until lenny's exploration_contract
 /// extraction lands (lenny M0), wire shapes are mirrored here and verified

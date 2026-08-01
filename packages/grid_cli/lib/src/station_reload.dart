@@ -54,7 +54,7 @@ abstract interface class StationVmSession {
   /// Swaps changed sources into the running isolate.
   Future<SourceReload> reloadSources();
 
-  /// Invokes `ext.exploration.grid.reload` with [mode]; returns its JSON body.
+  /// Invokes `ext.leonard.grid.reload` with [mode]; returns its JSON body.
   Future<Map<String, Object?>> invokeReload(String mode);
 
   /// Closes the connection.

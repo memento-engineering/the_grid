@@ -1,21 +1,17 @@
 import 'package:beads_dart/beads_dart.dart';
 
-/// VM-service extension prefix for the_grid's exploration host.
+/// VM-service prefix owned by the `leonard_*` package family.
 ///
-/// ADR-0001 Decision 6 ratifies `ext.exploration.` (not the framework-reserved
-/// `ext.flutter.exploration.` lenny historically used): registration is via
-/// `dart:developer.registerExtension`, so the `flutter` segment was never
-/// framework-imposed, and a pure-Dart host advertising it would mislead
-/// Flutter-detection tooling. Lenny renames repo-wide in lockstep (lenny M0,
-/// bead lenny-wisp-41rdl); until that lands, interop with lenny's consumers
-/// requires matching prefixes — kept as a single constant to switch trivially.
-const String kExplorationPrefix = 'ext.exploration';
+/// Unlike the rejected `ext.flutter.exploration` namespace, this does not
+/// squat on a foreign framework's reserved prefix. Kept grid-owned until
+/// tg-99rr can import leonard_contract 0.2.0 after lenny-uoiw publishes it.
+const String kExplorationPrefix = 'ext.leonard';
 
 /// Exploration protocol version this host speaks.
-const String kProtocolVersion = '1';
+const String kProtocolVersion = '2';
 
-/// The grid plugin's namespace; tools are exposed at
-/// `ext.exploration.grid.<tool>`.
+/// The grid extension's namespace; tools are exposed at
+/// `ext.leonard.grid.<tool>`.
 const String kGridNamespace = 'grid';
 
 /// Serialized map key carrying the per-namespace extension entries/fragments
@@ -25,9 +21,8 @@ const String kGridNamespace = 'grid';
 /// Renamed from `plugins` to converge on leonard ≥0.1.0's published read
 /// contract, which reads **only** `extensions` with no fallback
 /// (`leonard_agent/.../vm_service_client.dart`, `observation/models.dart`).
-/// ADR-0000 A33 (ratified) records the rename; the `ext.exploration.*` prefix,
-/// the method names, and protocol version `'1'` are unchanged. Centralized
-/// (mirroring [kExplorationPrefix]) so the host emits one key.
+/// ADR-0000 A33 governed the key rename; A56 governs the later prefix and
+/// protocol-version change. Centralized so the host emits one key.
 const String kExtensionsKey = 'extensions';
 
 /// Fully-qualified extension method name for a core method.
