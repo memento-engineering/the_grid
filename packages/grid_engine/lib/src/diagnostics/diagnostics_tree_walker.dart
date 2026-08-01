@@ -1,6 +1,32 @@
 // ignore_for_file: invalid_use_of_protected_member
 
-import 'package:genesis_tree/genesis_tree.dart';
+// genesis_tree re-exports genesis_foundation, whose wire types collide with
+// grid_diagnostics_contract's identically-named originals. The contract's
+// types stay operative here until tg-vg5k migrates this walker onto
+// genesis_foundation and retires the local contract package.
+// The hidden genesis_foundation names exist only when genesis resolves by
+// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
+// analyzer warns about. tg-vg5k removes this with the hides.
+// ignore_for_file: undefined_hidden_name
+import 'package:genesis_tree/genesis_tree.dart'
+    hide
+        CheckedFromJsonException,
+        Diagnosticable,
+        DiagnosticableTree,
+        DiagnosticsDoubleProperty,
+        DiagnosticsDurationProperty,
+        DiagnosticsEnumProperty,
+        DiagnosticsFlagProperty,
+        DiagnosticsIntProperty,
+        DiagnosticsLevel,
+        DiagnosticsObjectProperty,
+        DiagnosticsProperty,
+        DiagnosticsReferenceProperty,
+        DiagnosticsStringProperty,
+        DiagnosticsTimestampProperty,
+        ReferenceKind,
+        TreeNode,
+        TreeSnapshot;
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 
 import 'diagnosable.dart';
