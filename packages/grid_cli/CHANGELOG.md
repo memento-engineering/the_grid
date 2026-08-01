@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0
+
+- Breaking: `acquire()` establishes and verifies station-owned process
+  groups — resident stations own their spawn tree, and `down` kills only the
+  station's own group. Callers embedding grid_cli must not assume the old
+  detached-spawn behavior.
+- Breaking: the exploration surface speaks the `ext.leonard.*` VM-service
+  namespace (protocol version 2) via `leonard_contract`; `ext.exploration.*`
+  is gone. Attach tooling must be on `leonard_*` 0.2.x.
+- Fix: link authoring compiles against the published `beads_dart` — the
+  retired `IssueType.link` constant is replaced by the grid-owned
+  `GridIssueTypes.link` vocabulary (0.3.0 was broken here at load time).
+- Diagnostics ride the `genesis_foundation` substrate (typed tree snapshots
+  over the station door).
+
 ## 0.3.0
 
 - **Breaking:** `commandHandler` is now REQUIRED on `StationControl.start`.
