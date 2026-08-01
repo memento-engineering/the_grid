@@ -1,4 +1,24 @@
-import 'package:genesis_tree/genesis_tree.dart';
+// Foundation wire-type names hidden: grid_diagnostics_contract's stay
+// operative until tg-vg5k migrates onto genesis_foundation.
+import 'package:genesis_tree/genesis_tree.dart'
+    hide
+        CheckedFromJsonException,
+        Diagnosticable,
+        DiagnosticableTree,
+        DiagnosticsDoubleProperty,
+        DiagnosticsDurationProperty,
+        DiagnosticsEnumProperty,
+        DiagnosticsFlagProperty,
+        DiagnosticsIntProperty,
+        DiagnosticsLevel,
+        DiagnosticsObjectProperty,
+        DiagnosticsProperty,
+        DiagnosticsReferenceProperty,
+        DiagnosticsStringProperty,
+        DiagnosticsTimestampProperty,
+        ReferenceKind,
+        TreeNode,
+        TreeSnapshot;
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart';
 import 'package:state_notifier/state_notifier.dart';
 
