@@ -594,4 +594,4 @@ Two modes, both re-composing through the EXISTING configuration scope (the tree'
 
 **Revision (2026-08-01, governor, pre-promotion).** The original text called the prefix "the_grid's locally owned" while the title assigned ownership to leonard — two conflicting ownership claims in one entry (Nico's catch). Rewritten so ownership is unambiguous: leonard owns `ext.leonard.*`; the grid's constants are an interim re-declaration retired by tg-99rr.
 
-**Status:** pending Nico promotion.
+**Status:** PROMOTED (Nico, 2026-08-01) into ADR-0001 Decision 6 as the ext.leonard.* ownership amendment.
