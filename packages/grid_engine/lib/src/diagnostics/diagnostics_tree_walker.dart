@@ -4,9 +4,10 @@
 // grid_diagnostics_contract's identically-named originals. The contract's
 // types stay operative here until tg-vg5k migrates this walker onto
 // genesis_foundation and retires the local contract package.
-// ignore_for_file: undefined_hidden_name — the hidden genesis_foundation
-// names exist only when genesis resolves by path (post-y61 source); on pub
-// (tree 0.1.4) the hide is a no-op. tg-vg5k removes this with the hides.
+// The hidden genesis_foundation names exist only when genesis resolves by
+// path (post-y61 source); on pub (tree 0.1.4) the hide is a no-op the
+// analyzer warns about. tg-vg5k removes this with the hides.
+// ignore_for_file: undefined_hidden_name
 import 'package:genesis_tree/genesis_tree.dart'
     hide
         CheckedFromJsonException,
