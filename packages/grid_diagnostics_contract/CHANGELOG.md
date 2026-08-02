@@ -1,3 +1,10 @@
+## 0.2.0
+
+- Breaking: the tree wire types (`TreeSnapshot`, `TreeNode`, `DiagnosticsProperty`,
+  `DiagnosticsLevel`, `ReferenceKind`) moved to `genesis_foundation`; this package
+  now exports only the grid-local `StationLockRecord` and the bearer subprotocol.
+  Migrate wire-type imports to `package:genesis_foundation`.
+
 ## 0.1.2
 
 - Retain only the grid-local `.grid/station.lock`, `StationLockRecord`, and `grid.tree.bearer.` WebSocket subprotocol contract.

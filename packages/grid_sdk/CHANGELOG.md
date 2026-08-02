@@ -1,3 +1,8 @@
+## 0.2.0
+
+- Breaking: rides `grid_engine` 0.2.0's foundation diagnostics substrate.
+- Fix: registry notes route to the owning store.
+
 ## 0.1.3
 
 - Constraint coherence: requires grid_runtime ^0.1.2 / grid_engine ^0.1.2 / beads_dart ^0.1.1 (fixes hosted 0.1.2 resolving against grid_runtime 0.1.1, which lacks `onFlare`/`ownedPrefixOf`).
