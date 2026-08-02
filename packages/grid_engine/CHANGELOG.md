@@ -1,3 +1,12 @@
+## 0.2.0
+
+- Breaking: diagnostics ride the `genesis_foundation` substrate — the local
+  `Diagnosable` mixin and `DiagnosticsBuilder` class are retired in favor of
+  foundation's `Diagnosticable`/`DiagnosticsBuilder` (a `GridDiagnosticable`
+  marker and the typed `addTyped` adapter remain). Seed hooks override
+  `debugFillProperties(DiagnosticsBuilder)`.
+- State-owned cross-repo link beads gate the ready frontier (fail-closed).
+
 ## 0.1.2
 
 - Family coherence release: step results filter by active incarnation (live route joins, the_grid#139); current session-scope surface.

@@ -1,5 +1,5 @@
 name: grid_diagnostics_contract
-version: 0.1.2
+version: 0.2.0
 description: Grid-local station-lock record and bearer subprotocol contract.
 repository: https://github.com/memento-engineering/the_grid
 resolution: workspace
