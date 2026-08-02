@@ -1,7 +1,7 @@
 name: grid_cli
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.4.0
+version: 0.4.1
 description: >-
   Management CLI for the_grid — `grid watch` and companion commands for
   operating a grid station.
@@ -19,11 +19,11 @@ dependencies:
   beads_dart: ^0.1.0
   genesis_foundation: ^0.2.0
   genesis_tree: ^0.2.0
-  grid_diagnostics_contract: ^0.1.1
-  grid_engine: ^0.1.1
-  grid_exploration: ^0.1.1
+  grid_diagnostics_contract: ^0.2.0
+  grid_engine: ^0.2.0
+  grid_exploration: ^0.2.0
   grid_runtime: ^0.1.1
-  grid_sdk: ^0.1.1
+  grid_sdk: ^0.2.0
   meta: ^1.15.0
   path: ^1.9.0
   # The VM-service client `reload` drives: reloadSources + the

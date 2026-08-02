@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Bump the family floors onto the 0.2.0 substrate wave: `grid_engine`,
+  `grid_exploration`, `grid_sdk` `^0.2.0`; `grid_diagnostics_contract` `^0.2.0`.
+  No API changes.
+
 ## 0.4.0
 
 - Breaking: `acquire()` establishes and verifies station-owned process
