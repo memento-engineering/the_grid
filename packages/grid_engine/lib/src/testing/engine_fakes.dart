@@ -188,11 +188,9 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
   /// The `--stdin` payload of every recorded call (null when none), in order.
   final List<String?> stdins = <String?>[];
 
-  /// The beads an `export --all` scan returns as JSONL (`DESIGN-tg-pm6.md`
-  /// R6) — the store `StationBeadWriter.createMolecule`'s mint-dedup probe
-  /// and `reapMolecule`'s collection scan both read via `exportAll`. Default
-  /// empty (a fresh store); a molecule test stages the OPEN molecule/step
-  /// beads it expects those scans to see.
+  /// Beads returned by the lifecycle probe reader. Default empty (a fresh
+  /// store); molecule tests stage the OPEN molecule/step beads they expect
+  /// targeted reads to see.
   List<Bead> exportBeads = const <Bead>[];
   List<BeadDependency> exportDependencies = const <BeadDependency>[];
 
@@ -246,8 +244,8 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
     if (sub == 'export') {
-      // `bd export --all` emits RAW JSONL (one issue object per line), NOT an
-      // envelope — the snapshot read path `exportAll` parses it that way.
+      // Legacy tripwire payload retained for tests that deliberately exercise
+      // an unsupported command; production readers never reach this branch.
       final depsByIssue = <String, List<Map<String, dynamic>>>{};
       for (final dep in exportDependencies) {
         (depsByIssue[dep.issueId] ??= <Map<String, dynamic>>[]).add(

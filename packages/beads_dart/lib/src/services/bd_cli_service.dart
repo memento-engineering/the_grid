@@ -56,13 +56,6 @@ class BdCliService {
     return _parseIssueList(env.dataList);
   }
 
-  /// Throwing compatibility tombstone for the unsupported proxied-store read.
-  @Deprecated('use listScope or a SQL reader')
-  Future<({List<Bead> beads, List<BeadDependency> dependencies})> exportAll() =>
-      throw UnsupportedError(
-        'exportAll was retired because proxied-server stores reject bd export',
-      );
-
   /// `bd query "<expr>" --json` — a filtered read returning matching [Bead]s.
   Future<List<Bead>> query(String expr) async {
     final env = await _runEnvelope(queryArgs(expr));
@@ -308,11 +301,6 @@ class BdCliService {
     required IssueType type,
     required BeadStatus status,
   }) => ['list', '-t', type.wire, '--status', status.wire, '--json'];
-
-  @Deprecated('use listScopeArgs')
-  List<String> exportArgs() => throw UnsupportedError(
-    'exportArgs was retired because proxied-server stores reject bd export',
-  );
 
   List<String> queryArgs(String expr) => ['query', expr, '--json'];
 

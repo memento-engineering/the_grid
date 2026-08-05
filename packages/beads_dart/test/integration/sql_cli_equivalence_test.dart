@@ -15,7 +15,8 @@ import 'package:test/test.dart';
 ///
 /// WHEN `GC_DOLT_PASSWORD` is set and a server endpoint is discoverable, this
 /// composes the bead set over the SAME live workspace twice — once via the
-/// pooled [DoltQueryService] SQL read path, once via [BdCliService.exportAll] —
+/// pooled [DoltQueryService] SQL read path, once via [CliSnapshotReader]'s
+/// complete scoped type/status composition —
 /// and asserts the two bead sets are identical (sorted-label parity holds,
 /// ADR-0000 A11). The per-field equivalence is already unit-proven in
 /// `dolt_row_mapper_test.dart`; this is the end-to-end drift canary the

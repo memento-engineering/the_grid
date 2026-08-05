@@ -561,10 +561,9 @@ class StationBeadWriter {
   /// carries a foreign id refuses the WHOLE reap exactly like an unowned
   /// [createMolecule] node does.
   ///
-  /// Best-effort on the scan (mirrors [_findOpenGate]): a snapshot-read
-  /// failure closes nothing rather than crashing session close; the beads
-  /// stay open for a later reap attempt. An empty match set — a flat-mode
-  /// session, or a molecule already reaped — is a silent no-op.
+  /// The targeted read is loud: a failure aborts session close so lifecycle
+  /// debt cannot accumulate invisibly. An empty match set — a flat-mode
+  /// session, or a molecule already reaped — is a no-op.
   Future<void> reapMolecule({required String sessionId}) async {
     final matched = await _moleculeBeadsFor(sessionId: sessionId);
     if (matched.isEmpty) return;
