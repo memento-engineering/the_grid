@@ -1,3 +1,22 @@
+## 0.2.0-rc.1
+
+- Breaking: `BdCliService.exportAll` and `exportArgs` are REMOVED. `bd export` is
+  refused in proxied-server mode, so every read that shelled it degraded silently
+  there instead of failing. Migration: use `query(expr, includeClosed: …)` for a
+  filtered read, `listScope(type:, status:)` for one scope, or the new
+  `BeadProbeReader` seam for lifecycle probes.
+- Breaking: `query` gains `includeClosed`, which appends `--all`. An all-status
+  read is `query('status=open OR status=in_progress OR status=blocked OR
+  status=deferred OR status=closed', includeClosed: true)`.
+- Added: `BeadProbeReader` with `SqlBeadProbeReader` and `CliBeadProbeReader`
+  implementations (`beadById`, `openBeads`, `openSuperseding`).
+- Changed: `CliSnapshotReader` composes a snapshot from one broad query plus one
+  batched dependency read instead of `bd export --all`. `SqlSnapshotReader` no
+  longer falls back to the CLI reader — a persistent SQL failure is loud
+  (transients are still absorbed by the pool's reconnect retry).
+- Fixes the read path behind the 2026-08-04 station outage: unreapable molecules
+  and an always-empty gate-dedup probe.
+
 ## 0.1.1
 
 - Family coherence release from current mainline: probe-death recovery (`WorkingSetProbeSource` failure surfacing + reconnect-by-rebuild, the_grid#135) and current CLI service surface.

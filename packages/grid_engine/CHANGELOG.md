@@ -1,3 +1,10 @@
+## 0.3.0-rc.1
+
+- Breaking: tracks beads_dart 0.2.0-rc.1 and grid_runtime 0.2.0-rc.1 — the
+  `bd export` retirement and `StationBeadWriter(reader:)`. No engine API change of
+  its own; the constraint bump is the breaking part for resolvers.
+- Changed: lifecycle reads are observed through the probe-reader seam.
+
 ## 0.2.0
 
 - Breaking: diagnostics ride the `genesis_foundation` substrate — the local

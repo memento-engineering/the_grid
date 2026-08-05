@@ -1,3 +1,10 @@
+## 0.3.0-rc.1
+
+- Breaking: tracks beads_dart 0.2.0-rc.1, grid_runtime 0.2.0-rc.1 and
+  grid_engine 0.3.0-rc.1. No SDK API change of its own; the constraint bump is the
+  breaking part for resolvers.
+- Changed: work assembly wires a probe reader beside each write chokepoint.
+
 ## 0.2.0
 
 - Breaking: rides `grid_engine` 0.2.0's foundation diagnostics substrate.
