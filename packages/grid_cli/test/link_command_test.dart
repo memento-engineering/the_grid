@@ -106,9 +106,21 @@ void main() {
           'pow-missing [unobserved]',
       'houston-link2 tg-q9k [open] --blocked-by pow-60g [closed]',
     ]);
-    expect(state.exportCount, 1);
-    expect(tg.exportCount, 1);
-    expect(pow.exportCount, 1);
+    for (final store in [state, tg, pow]) {
+      expect(store.calls.where((call) => call.first == 'export'), isEmpty);
+      expect(
+        store.calls.where((call) => call.first == 'list'),
+        everyElement(
+          predicate<List<String>>(
+            (call) =>
+                call.length == 6 &&
+                call[1] == '-t' &&
+                call[3] == '--status' &&
+                call[5] == '--json',
+          ),
+        ),
+      );
+    }
   });
 
   test(
@@ -323,6 +335,25 @@ void main() {
     expect(state.mutationCalls, hasLength(before));
   });
 
+  test('malformed type discovery fails without mutations or export', () async {
+    state.malformedTypes = true;
+    final errors = <String>[];
+    final before = state.mutationCalls.length;
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls', '--grid-root', temp.path]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+        err: errors.add,
+      ),
+      1,
+    );
+    expect(errors.single, contains('type discovery'));
+    expect(state.mutationCalls, hasLength(before));
+    expect(state.calls.where((call) => call.first == 'export'), isEmpty);
+  });
+
   test('command source has no raw mutation path', () {
     final source = File('lib/src/link_command.dart').readAsStringSync();
     expect(source, isNot(contains('.create(')));
@@ -385,7 +416,7 @@ class _FakeStore implements BdRunner {
   final String createdId;
   String? createdIdOverride;
   final List<List<String>> calls = [];
-  int exportCount = 0;
+  bool malformedTypes = false;
 
   List<List<String>> get mutationCalls => calls
       .where((call) => const {'create', 'update', 'close'}.contains(call.first))
@@ -400,16 +431,42 @@ class _FakeStore implements BdRunner {
     calls.add(List<String>.unmodifiable(args));
     switch (args.first) {
       case 'types':
+        if (malformedTypes) {
+          return _envelope({'core_types': 'task', 'custom_types': customTypes});
+        }
         return _envelope({
-          'core_types': <String>[],
+          'core_types': const ['task'],
           'custom_types': customTypes,
         });
       case 'export':
-        exportCount++;
         return BdResult(
-          exitCode: 0,
-          stdout: beads.map((bead) => jsonEncode(bead.toJson())).join('\n'),
-          stderr: '',
+          exitCode: 1,
+          stdout: '',
+          stderr: 'Error: export is not supported in proxied-server mode',
+        );
+      case 'list':
+        final type = args[2];
+        final status = args[4];
+        return _listEnvelope(
+          beads
+              .where(
+                (bead) =>
+                    bead.issueType.wire == type && bead.status.wire == status,
+              )
+              .map((bead) => bead.toJson())
+              .toList(),
+        );
+      case 'query':
+        final expression = args[1];
+        if (!expression.startsWith('id=')) {
+          throw StateError('unexpected bd query: $args');
+        }
+        final id = expression.substring('id='.length);
+        return _listEnvelope(
+          beads
+              .where((bead) => bead.id == id)
+              .map((bead) => bead.toJson())
+              .toList(),
         );
       case 'create':
         final effectiveCreatedId = createdIdOverride ?? createdId;
@@ -440,6 +497,12 @@ class _FakeStore implements BdRunner {
   }
 
   BdResult _envelope(Map<String, dynamic> data) => BdResult(
+    exitCode: 0,
+    stdout: jsonEncode({'schema_version': 1, 'data': data}),
+    stderr: '',
+  );
+
+  BdResult _listEnvelope(List<Map<String, dynamic>> data) => BdResult(
     exitCode: 0,
     stdout: jsonEncode({'schema_version': 1, 'data': data}),
     stderr: '',

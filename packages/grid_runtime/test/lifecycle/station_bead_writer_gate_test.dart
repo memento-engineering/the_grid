@@ -19,6 +19,7 @@ void main() {
 
   StationBeadWriter writer() => StationBeadWriter(
     bd: bd,
+    reader: runner,
     ownership: predicate(),
     onRefusal: refusals.add,
   );

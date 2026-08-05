@@ -47,55 +47,20 @@ class BdCliService {
     return _beadsFromList(env.dataList);
   }
 
-  /// `bd export --all` — the full-graph JSONL snapshot in a single spawn, and
-  /// the CLI-fallback snapshot read (ADR-0001 D4). Output is **raw JSONL**
-  /// (one JSON object per line, `_type == "issue"`), NOT an envelope — parsed
-  /// line-by-line.
-  ///
-  /// **The snapshot is the COMPLETE graph: issues ∪ wisps, all statuses,
-  /// including infra/template/gate-typed beads** — identical inclusion
-  /// semantics to the SQL capture path (`DoltQueryService.snapshotParts`,
-  /// which reads `issues` ∪ `wisps`). Filtering is the consumer's job
-  /// (projections/selectors). `--all` subsumes `--include-infra` and lifts the
-  /// default template + ephemeral exclusions (beads cmd/bd/export.go:96-126;
-  /// ephemeral beads live in the separate `wisps` tables per
-  /// internal/storage/dolt/ephemeral_routing.go and would otherwise never
-  /// appear in a snapshot). `--all` also emits persistent memories, but those
-  /// arrive as `_type == "memory"` config-KV records — not graph nodes — and
-  /// are skipped by the JSONL parse on this path, exactly as the SQL path
-  /// never reads the config table.
-  ///
-  /// Each issue record may carry an inline `dependencies` array (the upstream
-  /// `Issue.Dependencies` field); those edges are gathered alongside the beads
-  /// (bd's bulk loaders route wisp ids to `wisp_dependencies`/`wisp_labels`,
-  /// so wisp edges and labels arrive inline too).
-  ///
-  /// **Proxied-server fallback:** bd's experimental proxied-server mode
-  /// refuses `bd export` outright ("export is not supported in proxied-server
-  /// mode"). When that exact refusal comes back, the snapshot is composed from
-  /// `bd list --all --json` instead — the same upstream issue records (issues
-  /// ∪ wisps, inline `dependencies`), delivered as one JSON array rather than
-  /// JSONL. Any other failure still throws.
-  Future<({List<Bead> beads, List<BeadDependency> dependencies})>
-  exportAll() async {
-    final result = await _run(exportArgs());
-    if (result.exitCode != 0 &&
-        (result.stderr.contains(_kProxiedExportRefusal) ||
-            result.stdout.contains(_kProxiedExportRefusal))) {
-      final fallback = await _run(listAllArgs());
-      _throwIfFailed(listAllArgs(), fallback);
-      return _parseExportList(fallback.stdout);
-    }
-    _throwIfFailed(exportArgs(), result);
-    return _parseExportJsonl(result.stdout);
+  /// Reads one explicit type scope, optionally narrowed to [status].
+  Future<({List<Bead> beads, List<BeadDependency> dependencies})> listScope({
+    required IssueType type,
+    BeadStatus? status,
+  }) async {
+    final env = await _runEnvelope(listScopeArgs(type: type, status: status));
+    return _parseIssueList(env.dataList);
   }
 
-  static const _kProxiedExportRefusal =
-      'export is not supported in proxied-server mode';
-
   /// `bd query "<expr>" --json` — a filtered read returning matching [Bead]s.
-  Future<List<Bead>> query(String expr) async {
-    final env = await _runEnvelope(queryArgs(expr));
+  Future<List<Bead>> query(String expr, {bool includeClosed = false}) async {
+    final env = await _runEnvelope(
+      queryArgs(expr, includeClosed: includeClosed),
+    );
     return _beadsFromList(env.dataList);
   }
 
@@ -134,7 +99,7 @@ class BdCliService {
   /// WARNING: `bd show` writes `.beads/last-touched`, which self-triggers the
   /// `.beads/` file watcher. **NEVER call this from the re-query / controller
   /// hot path** (ADR-0001 Decision 5) — doing so creates a refresh→show→
-  /// watcher→refresh feedback loop. Use [exportAll] (or pooled SQL) for
+  /// watcher→refresh feedback loop. Use scoped lists (or pooled SQL) for
   /// snapshot composition; reserve [show] for explicit, user-driven lookups.
   Future<List<Bead>> show(List<String> ids) async {
     if (ids.isEmpty) return const [];
@@ -334,11 +299,20 @@ class BdCliService {
 
   List<String> readyArgs() => const ['ready', '--json'];
 
-  List<String> exportArgs() => const ['export', '--all'];
+  List<String> listScopeArgs({required IssueType type, BeadStatus? status}) => [
+    'list',
+    '-t',
+    type.wire,
+    if (status != null) ...['--status', status.wire],
+    '--json',
+  ];
 
-  List<String> listAllArgs() => const ['list', '--all', '--json'];
-
-  List<String> queryArgs(String expr) => ['query', expr, '--json'];
+  List<String> queryArgs(String expr, {bool includeClosed = false}) => [
+    'query',
+    expr,
+    if (includeClosed) '--all',
+    '--json',
+  ];
 
   List<String> depListArgs(List<String> ids) => [
     'dep',
@@ -544,74 +518,21 @@ class BdCliService {
     );
   }
 
-  ({List<Bead> beads, List<BeadDependency> dependencies}) _parseExportJsonl(
-    String jsonl,
+  ({List<Bead> beads, List<BeadDependency> dependencies}) _parseIssueList(
+    List<dynamic> records,
   ) {
     final beads = <Bead>[];
     final edges = <String, BeadDependency>{};
-    for (final line in const LineSplitter().convert(jsonl)) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty) continue;
-      final Object? decoded;
-      try {
-        decoded = jsonDecode(trimmed);
-      } on FormatException catch (e) {
-        throw BdParseException(
-          'invalid JSONL line from bd export: ${e.message}',
-          trimmed,
-        );
+    for (final record in records) {
+      if (record is! Map<String, dynamic>) {
+        throw BdParseException('list row was not a JSON object', '$record');
       }
-      if (decoded is! Map<String, dynamic>) {
-        throw BdParseException('export line was not a JSON object', trimmed);
-      }
-      _collectSnapshotRecord(decoded, beads, edges);
+      _collectIssueRecord(record, beads, edges);
     }
     return (beads: beads, dependencies: edges.values.toList(growable: false));
   }
 
-  /// The proxied-mode fallback shape: `bd list --all --json` emits the same
-  /// issue records `bd export` emits as JSONL lines — as a bare JSON array on
-  /// a TTY, or wrapped in the `{"data": [...]}` envelope when bd runs
-  /// non-interactively (the [ProcessBdRunner] path). Both are accepted.
-  ({List<Bead> beads, List<BeadDependency> dependencies}) _parseExportList(
-    String json,
-  ) {
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(json);
-    } on FormatException catch (e) {
-      throw BdParseException(
-        'invalid JSON from bd list --all: ${e.message}',
-        json,
-      );
-    }
-    final List<dynamic> rows;
-    if (decoded is List) {
-      rows = decoded;
-    } else if (decoded is Map<String, dynamic> && decoded['data'] is List) {
-      rows = decoded['data'] as List;
-    } else {
-      throw BdParseException(
-        'bd list --all output was neither a JSON array nor a {"data": [...]} '
-        'envelope',
-        json,
-      );
-    }
-    final beads = <Bead>[];
-    final edges = <String, BeadDependency>{};
-    for (final raw in rows) {
-      if (raw is! Map<String, dynamic>) {
-        throw BdParseException('list row was not a JSON object', '$raw');
-      }
-      _collectSnapshotRecord(raw, beads, edges);
-    }
-    return (beads: beads, dependencies: edges.values.toList(growable: false));
-  }
-
-  /// Shared per-record collection for both snapshot shapes. Export interleaves
-  /// record types (issue / memory / …); only issues are beads. Records without
-  /// `_type` are treated as issues for forward-compat.
-  void _collectSnapshotRecord(
+  void _collectIssueRecord(
     Map<String, dynamic> decoded,
     List<Bead> beads,
     Map<String, BeadDependency> edges,

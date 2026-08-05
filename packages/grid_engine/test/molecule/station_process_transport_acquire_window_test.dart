@@ -162,6 +162,7 @@ void main() {
       final runner = _GatedUpdateBdRunner();
       final writer = StationBeadWriter(
         bd: BdCliService(runner),
+        reader: const EmptyBeadProbeReader(),
         ownership: BeadOwnershipPredicate(const {'tgdog'}),
       );
       final vendor = StationProcessLeaseVendor(

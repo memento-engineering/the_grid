@@ -36,6 +36,8 @@ abstract final class GridIssueTypes {
   ];
 
   static const infrastructureTypes = <IssueType>[agent, rig, role];
+
+  static const all = <IssueType>{...customTypes, link};
 }
 
 /// the_grid-only classifications over beads' open [IssueType].

@@ -190,8 +190,8 @@ void main() {
       );
       addTearDown(m.owner.dispose);
 
-      await _pumpUntil(m.owner, () => f.runner.callsFor('export').isNotEmpty);
-      final probesAfterFirst = f.runner.callsFor('export').length;
+      await _pumpUntil(m.owner, () => f.runner.openBeadsCallCount > 0);
+      final probesAfterFirst = f.runner.openBeadsCallCount;
       expect(probesAfterFirst, greaterThan(0));
       expect(
         f.runner
@@ -208,11 +208,11 @@ void main() {
       joined.push(_joined(const {'tg-1': _orphan}));
       await _pumpUntil(
         m.owner,
-        () => f.runner.callsFor('export').length > probesAfterFirst,
+        () => f.runner.openBeadsCallCount > probesAfterFirst,
         maxRounds: 200,
       );
       expect(
-        f.runner.callsFor('export').length,
+        f.runner.openBeadsCallCount,
         greaterThan(probesAfterFirst),
         reason:
             'the latch must reset after a no-op resume so a later '

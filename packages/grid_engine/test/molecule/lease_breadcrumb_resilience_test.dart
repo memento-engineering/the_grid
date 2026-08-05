@@ -157,6 +157,7 @@ void main() {
     final runner = _FlakyBdRunner(failFirstUpdates: 2);
     final writer = StationBeadWriter(
       bd: BdCliService(runner),
+      reader: const EmptyBeadProbeReader(),
       ownership: BeadOwnershipPredicate(const {stateSubstation}),
     );
     final request = _request(transport);

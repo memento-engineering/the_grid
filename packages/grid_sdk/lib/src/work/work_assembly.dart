@@ -360,11 +360,13 @@ Future<StationWorkRuntime> buildStationWork({
     bundles[entry.key] = await GridRuntimeFactory.build(
       workspace: entry.value,
       preferSql: preferSql,
+      lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
     );
   }
   final stateBundle = await GridRuntimeFactory.build(
     workspace: stateWs,
     preferSql: preferSql,
+    lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
   );
   final readPathName = [
     for (final e in bundles.entries) '${e.key}=${e.value.readPath.name}',
@@ -404,6 +406,7 @@ Future<StationWorkRuntime> buildStationWork({
   final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
   final writer = StationBeadWriter(
     bd: bd,
+    reader: stateBundle.probeReader,
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
   );
@@ -423,6 +426,7 @@ Future<StationWorkRuntime> buildStationWork({
       refresh: bundles[spec.name]!.runtime.requery,
       writer: StationBeadWriter(
         bd: workBd,
+        reader: bundles[spec.name]!.probeReader,
         ownership: BeadOwnershipPredicate({spec.name, spec.prefix}),
         onRefusal: refusalSink,
         onFlare: transport?.flare,

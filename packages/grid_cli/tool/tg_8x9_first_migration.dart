@@ -35,12 +35,13 @@ Future<void> main() async {
   final bd = BdCliService(
     ProcessBdRunner(workspaceRoot: stateStore.runtimeDir),
   );
-  final snapshot = await bd.exportAll();
-  final matches = snapshot.beads
+  final links = await bd.listScope(
+    type: GridIssueTypes.link,
+    status: BeadStatus.open,
+  );
+  final matches = links.beads
       .where(
         (bead) =>
-            bead.issueType == GridIssueTypes.link &&
-            !bead.isClosed &&
             bead.metadata[CrossLinkKeys.from] == 'tg-8x9' &&
             bead.metadata[CrossLinkKeys.to] == 'tg-ama' &&
             bead.metadata[CrossLinkKeys.type] == kCrossLinkBlocks,

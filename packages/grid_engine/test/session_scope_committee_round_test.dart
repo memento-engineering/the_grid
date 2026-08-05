@@ -147,6 +147,7 @@ void main() {
       provider: fakes.provider,
       writer: StationBeadWriter(
         bd: BdCliService(fakes.runner),
+        reader: fakes.runner,
         ownership: BeadOwnershipPredicate(const {stateSubstation, 'route'}),
       ),
       stateSubstation: stateSubstation,
@@ -249,6 +250,7 @@ void main() {
       provider: fakes.provider,
       writer: StationBeadWriter(
         bd: BdCliService(fakes.runner),
+        reader: fakes.runner,
         ownership: BeadOwnershipPredicate(const {stateSubstation, 'route'}),
       ),
       stateSubstation: stateSubstation,
@@ -388,6 +390,7 @@ void roundFreezeRegression() {
       provider: fakes.provider,
       writer: StationBeadWriter(
         bd: BdCliService(fakes.runner),
+        reader: fakes.runner,
         ownership: BeadOwnershipPredicate(const {stateSubstation, 'route'}),
       ),
       stateSubstation: stateSubstation,

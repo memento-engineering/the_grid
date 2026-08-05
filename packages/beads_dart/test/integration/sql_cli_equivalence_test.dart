@@ -4,6 +4,7 @@ library;
 
 import 'package:beads_dart/src/errors/bd_exception.dart';
 import 'package:beads_dart/src/models/bead.dart';
+import 'package:beads_dart/src/reactivity/snapshot_readers.dart';
 import 'package:beads_dart/src/services/bd_cli_service.dart';
 import 'package:beads_dart/src/services/bd_runner.dart';
 import 'package:beads_dart/src/services/beads_workspace.dart';
@@ -14,7 +15,8 @@ import 'package:test/test.dart';
 ///
 /// WHEN `GC_DOLT_PASSWORD` is set and a server endpoint is discoverable, this
 /// composes the bead set over the SAME live workspace twice — once via the
-/// pooled [DoltQueryService] SQL read path, once via [BdCliService.exportAll] —
+/// pooled [DoltQueryService] SQL read path, once via [CliSnapshotReader]'s
+/// complete scoped type/status composition —
 /// and asserts the two bead sets are identical (sorted-label parity holds,
 /// ADR-0000 A11). The per-field equivalence is already unit-proven in
 /// `dolt_row_mapper_test.dart`; this is the end-to-end drift canary the
@@ -65,7 +67,7 @@ void main() {
     // it and skip rather than flake.
     final probeBefore = await dolt.probe();
     final sqlParts = await dolt.snapshotParts();
-    final cliExport = await bd.exportAll();
+    final cliSnapshot = await CliSnapshotReader(bd).read();
     final probeAfter = await dolt.probe();
     if (probeBefore != probeAfter) {
       markTestSkipped(
@@ -76,7 +78,7 @@ void main() {
     }
 
     final sqlById = {for (final b in sqlParts.beads) b.id: b};
-    final cliById = {for (final b in cliExport.beads) b.id: b};
+    final cliById = cliSnapshot.beadsById;
 
     // 1) Identical id sets. Name the per-path-only ids so an inclusion
     //    divergence (e.g. a wisp or template visible to one path only) is

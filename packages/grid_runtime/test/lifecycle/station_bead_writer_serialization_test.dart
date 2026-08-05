@@ -95,8 +95,23 @@ class MergingBdRunner implements BdRunner {
 
 StationBeadWriter _writer(BdRunner runner) => StationBeadWriter(
   bd: BdCliService(runner),
+  reader: _EmptyReader(),
   ownership: BeadOwnershipPredicate({'tgdog'}),
 );
+
+final class _EmptyReader implements BeadProbeReader {
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
+      null;
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const [];
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+}
 
 void main() {
   group('D-1 — per-target-id serialization', () {

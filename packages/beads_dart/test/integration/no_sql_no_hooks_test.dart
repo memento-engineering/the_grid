@@ -47,7 +47,14 @@ void main() {
             'socket) — SQL writes are impossible when no SQL connection exists',
       );
 
+      final startup = Stopwatch()..start();
       await bundle.runtime.start();
+      startup.stop();
+      expect(
+        startup.elapsed,
+        lessThan(const Duration(seconds: 5)),
+        reason: 'empty CLI runtime baseline must not fan out subprocesses',
+      );
 
       // Drive a full create → update → close lifecycle through bd only.
       final bd = BdCliService(ProcessBdRunner(workspaceRoot: ws.rootPath));
@@ -86,7 +93,7 @@ void main() {
         bd.depAddArgs('a', 'b', DependencyType.blocks),
         bd.batchArgs(),
         bd.readyArgs(),
-        bd.exportArgs(),
+        bd.listScopeArgs(type: IssueType.task, status: BeadStatus.open),
         bd.queryArgs('status:open'),
       ];
       const sqlVerbs = {
@@ -127,7 +134,7 @@ void main() {
             'dep',
             'batch',
             'ready',
-            'export',
+            'list',
             'query',
           ]),
         );

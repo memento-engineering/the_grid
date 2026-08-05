@@ -26,235 +26,64 @@ void main() {
       expect(runner.calls.single, ['ready', '--json']);
     });
 
-    test('exportAll() parses all 25 export records from raw JSONL', () async {
-      final runner = FakeBdRunner()
-        ..stubCommand(
-          'export',
-          BdReply(stdout: fixtureText('fx-export-sample.jsonl')),
-        );
-      final service = BdCliService(runner);
-
-      final snapshot = await service.exportAll();
-
-      expect(snapshot.beads, hasLength(25));
-      expect(snapshot.beads.first.id, 'fx-eu5');
-      // The fx sample carries real edges: the fixture epic's two parent-child
-      // links plus one blocks edge between its children.
-      expect(snapshot.dependencies, hasLength(3));
-      expect(snapshot.dependencies.map((d) => d.type).toSet(), {
-        'blocks',
-        'parent-child',
-      });
-      // export is the single-spawn snapshot read: `export --all` (the
-      // complete graph — `--all` subsumes `--include-infra` and lifts the
-      // default template + ephemeral-wisp exclusions, export.go:96-126).
-      expect(runner.calls.single, ['export', '--all']);
-    });
-
-    test('exportAll() falls back to `list --all --json` when proxied-server '
-        'mode refuses export, parsing the array shape', () async {
-      final runner = FakeBdRunner()
-        ..stubCommand(
-          'export',
-          BdReply(
-            exitCode: 1,
-            stderr: 'Error: export is not supported in proxied-server mode',
-          ),
-        )
-        ..stubCommand(
-          'list',
-          BdReply(
-            stdout: jsonEncode([
-              {
-                'id': 'tg-1',
-                'title': 'a bead',
-                'status': 'open',
-                'issue_type': 'task',
-                'dependencies': [
+    test(
+      'listScope uses explicit type and status and parses inline edges',
+      () async {
+        final runner = FakeBdRunner()
+          ..stubCommand(
+            'list',
+            BdReply(
+              stdout: jsonEncode({
+                'schema_version': 1,
+                'data': [
                   {
-                    'issue_id': 'tg-1',
-                    'depends_on_id': 'tg-2',
-                    'type': 'blocks',
+                    'id': 'tg-gate',
+                    'issue_type': 'gate',
+                    'status': 'open',
+                    'dependencies': [
+                      {
+                        'issue_id': 'tg-gate',
+                        'depends_on_id': 'tg-s',
+                        'type': 'blocks',
+                      },
+                    ],
                   },
                 ],
-              },
-              {
-                'id': 'tg-2',
-                'title': 'another bead',
-                'status': 'open',
-                'issue_type': 'task',
-              },
-            ]),
-          ),
+              }),
+            ),
+          );
+        final service = BdCliService(runner);
+        final scope = await service.listScope(
+          type: const IssueType('gate'),
+          status: BeadStatus.open,
         );
-      final service = BdCliService(runner);
-
-      final snapshot = await service.exportAll();
-
-      expect(snapshot.beads, hasLength(2));
-      expect(snapshot.beads.first.id, 'tg-1');
-      expect(snapshot.dependencies, hasLength(1));
-      expect(snapshot.dependencies.single.type, 'blocks');
-      expect(runner.calls, [
-        ['export', '--all'],
-        ['list', '--all', '--json'],
-      ]);
-    });
-
-    test('exportAll() fallback accepts the non-interactive {"data": [...]} '
-        'envelope bd emits under ProcessBdRunner', () async {
-      final runner = FakeBdRunner()
-        ..stubCommand(
-          'export',
-          BdReply(
-            exitCode: 1,
-            stderr: 'Error: export is not supported in proxied-server mode',
-          ),
-        )
-        ..stubCommand(
+        expect(scope.beads.single.id, 'tg-gate');
+        expect(scope.dependencies.single.dependsOnId, 'tg-s');
+        expect(runner.calls.single, [
           'list',
-          BdReply(
-            stdout: jsonEncode({
-              'data': [
-                {
-                  'id': 'tg-1',
-                  'title': 'a bead',
-                  'status': 'open',
-                  'issue_type': 'task',
-                  'dependencies': [
-                    {
-                      'issue_id': 'tg-1',
-                      'depends_on_id': 'tg-2',
-                      'type': 'blocks',
-                    },
-                  ],
-                },
-              ],
-            }),
-          ),
-        );
-      final service = BdCliService(runner);
+          '-t',
+          'gate',
+          '--status',
+          'open',
+          '--json',
+        ]);
+      },
+    );
 
-      final snapshot = await service.exportAll();
+    test('listScopeArgs supports all-status and narrowed type scopes', () {
+      final service = BdCliService(FakeBdRunner());
 
-      expect(snapshot.beads.single.id, 'tg-1');
-      expect(snapshot.dependencies.single.type, 'blocks');
-    });
-
-    test('exportAll() still throws on non-proxied export failures '
-        '(no silent fallback)', () async {
-      final runner = FakeBdRunner()
-        ..stubCommand(
-          'export',
-          BdReply(exitCode: 1, stderr: 'some other failure'),
-        );
-      final service = BdCliService(runner);
-
-      await expectLater(service.exportAll(), throwsA(isA<BdCommandFailed>()));
+      expect(service.listScopeArgs(type: const IssueType('gate')), [
+        'list',
+        '-t',
+        'gate',
+        '--json',
+      ]);
       expect(
-        runner.calls,
-        [
-          ['export', '--all'],
-        ],
-        reason: 'the fallback must never fire for unrelated failures',
+        service.listScopeArgs(type: IssueType.task, status: BeadStatus.closed),
+        ['list', '-t', 'task', '--status', 'closed', '--json'],
       );
     });
-
-    test(
-      'exportAll() gathers inline dependency edges and skips non-issues',
-      () async {
-        // Built locally (not a pinned fixture): one issue with a dependencies
-        // array, plus a memory record that must be skipped.
-        final lines = [
-          jsonEncode({
-            '_type': 'issue',
-            'id': 'tg-a',
-            'title': 'A',
-            'dependencies': [
-              {'issue_id': 'tg-a', 'depends_on_id': 'tg-b', 'type': 'blocks'},
-            ],
-          }),
-          jsonEncode({'_type': 'issue', 'id': 'tg-b', 'title': 'B'}),
-          jsonEncode({'_type': 'memory', 'id': 'mem-1'}),
-        ].join('\n');
-
-        final runner = FakeBdRunner()
-          ..stubCommand('export', BdReply(stdout: lines));
-        final service = BdCliService(runner);
-
-        final snapshot = await service.exportAll();
-
-        expect(snapshot.beads.map((b) => b.id), ['tg-a', 'tg-b']);
-        expect(snapshot.dependencies, hasLength(1));
-        expect(snapshot.dependencies.single.issueId, 'tg-a');
-        expect(snapshot.dependencies.single.dependsOnId, 'tg-b');
-        expect(snapshot.dependencies.single.type, DependencyType.blocks);
-      },
-    );
-
-    test(
-      'exportAll() surfaces ephemeral wisp records (A15 pour shape: '
-      'ephemeral root with idempotency_key, gate-typed step, parent edge)',
-      () async {
-        // `bd export --all` includes ephemeral wisps (the wisps tables) —
-        // the M2 contract beads: a poured convergence wisp root and its
-        // gate-typed (speculative) step, with the parent-child edge inline.
-        final lines = [
-          jsonEncode({
-            '_type': 'issue',
-            'id': 'tg-wisp-r1',
-            'title': 'Convergence wisp iter 1',
-            'issue_type': 'epic',
-            'status': 'open',
-            'ephemeral': true,
-            'metadata': {'idempotency_key': 'converge:tg-root:iter:1'},
-            'dependencies': [
-              {
-                'issue_id': 'tg-wisp-r1',
-                'depends_on_id': 'tg-root',
-                'type': 'parent-child',
-              },
-            ],
-          }),
-          jsonEncode({
-            '_type': 'issue',
-            'id': 'tg-wisp-s1',
-            'title': 'iterate on tron',
-            'issue_type': 'gate',
-            'status': 'closed',
-            'ephemeral': true,
-            'metadata': {'gc.deferred_type': 'task'},
-            'dependencies': [
-              {
-                'issue_id': 'tg-wisp-s1',
-                'depends_on_id': 'tg-wisp-r1',
-                'type': 'parent-child',
-              },
-            ],
-          }),
-          jsonEncode({'_type': 'issue', 'id': 'tg-root', 'title': 'root'}),
-        ].join('\n');
-
-        final runner = FakeBdRunner()
-          ..stubCommand('export', BdReply(stdout: lines));
-        final service = BdCliService(runner);
-
-        final snapshot = await service.exportAll();
-
-        final root = snapshot.beads.singleWhere((b) => b.id == 'tg-wisp-r1');
-        expect(root.ephemeral, isTrue);
-        expect(root.metadata['idempotency_key'], 'converge:tg-root:iter:1');
-        final step = snapshot.beads.singleWhere((b) => b.id == 'tg-wisp-s1');
-        expect(step.ephemeral, isTrue);
-        expect(step.issueType, const IssueType('gate'));
-        // A closed wisp remains visible (snapshot = all statuses).
-        expect(step.status.wire, 'closed');
-        expect(
-          snapshot.dependencies.map((d) => '${d.issueId}->${d.dependsOnId}'),
-          containsAll(['tg-wisp-r1->tg-root', 'tg-wisp-s1->tg-wisp-r1']),
-        );
-      },
-    );
 
     test('query() forwards the expression and parses beads', () async {
       final runner = FakeBdRunner()
@@ -514,6 +343,7 @@ void main() {
           'ready',
           BdReply(stdout: fixtureText('fx-ready-sample.json')),
         )
+        ..stubCommand('list', BdReply(stdout: _emptyListEnvelope()))
         ..stubCommand(
           'export',
           BdReply(stdout: fixtureText('fx-export-sample.jsonl')),
@@ -544,7 +374,7 @@ void main() {
       final service = BdCliService(runner);
 
       await service.ready();
-      await service.exportAll();
+      await service.listScope(type: IssueType.task, status: BeadStatus.open);
       await service.query('x');
       await service.statuses();
       await service.types();

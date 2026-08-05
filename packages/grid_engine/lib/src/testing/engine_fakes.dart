@@ -175,7 +175,7 @@ class FakeRuntimeProvider implements RuntimeProvider {
 /// stdin so a test asserts the EXACT bd commands, and `create` returns a
 /// caller-controlled synthetic id so the mint+stamp is exercised with no real
 /// `bd`.
-class RecordingBdRunner implements BdRunner {
+class RecordingBdRunner implements BdRunner, BeadProbeReader {
   /// Creates the recorder; `create` returns [createdId].
   RecordingBdRunner({String createdId = 'tgdog-sess1'})
     : _createdId = createdId;
@@ -188,13 +188,17 @@ class RecordingBdRunner implements BdRunner {
   /// The `--stdin` payload of every recorded call (null when none), in order.
   final List<String?> stdins = <String?>[];
 
-  /// The beads an `export --all` scan returns as JSONL (`DESIGN-tg-pm6.md`
-  /// R6) — the store `StationBeadWriter.createMolecule`'s mint-dedup probe
-  /// and `reapMolecule`'s collection scan both read via `exportAll`. Default
-  /// empty (a fresh store); a molecule test stages the OPEN molecule/step
-  /// beads it expects those scans to see.
+  /// Beads returned by the lifecycle probe reader. Default empty (a fresh
+  /// store); molecule tests stage the OPEN molecule/step beads they expect
+  /// targeted reads to see.
   List<Bead> exportBeads = const <Bead>[];
   List<BeadDependency> exportDependencies = const <BeadDependency>[];
+
+  /// Number of purpose-shaped [openBeads] lifecycle reads.
+  int openBeadsCallCount = 0;
+
+  /// Number of purpose-shaped [openSuperseding] lifecycle reads.
+  int openSupersedingCallCount = 0;
 
   /// The `key → id` map the next `bd create --graph` invocation reports
   /// (`applyGraph`'s `data.ids`) — `StationBeadWriter.createMolecule`'s pour
@@ -204,13 +208,54 @@ class RecordingBdRunner implements BdRunner {
   Map<String, String> graphApplyIds = const <String, String>{};
 
   @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    final matches = exportBeads.where(
+      (b) => b.id == id && types.contains(b.issueType),
+    );
+    return matches.isEmpty ? null : matches.single;
+  }
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async {
+    openBeadsCallCount += 1;
+    return exportBeads
+        .where(
+          (b) =>
+              !b.isClosed &&
+              types.contains(b.issueType) &&
+              metadataAll.entries.every((e) => b.metadata[e.key] == e.value) &&
+              (metadataAny.isEmpty ||
+                  metadataAny.entries.any((e) => b.metadata[e.key] == e.value)),
+        )
+        .toList();
+  }
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async {
+    openSupersedingCallCount += 1;
+    final ids = exportDependencies
+        .where(
+          (e) =>
+              e.type == DependencyType.supersedes &&
+              priorIds.contains(e.dependsOnId),
+        )
+        .map((e) => e.issueId)
+        .toSet();
+    return exportBeads.where((b) => ids.contains(b.id) && !b.isClosed).toList();
+  }
+
+  @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
     if (sub == 'export') {
-      // `bd export --all` emits RAW JSONL (one issue object per line), NOT an
-      // envelope — the snapshot read path `exportAll` parses it that way.
+      // Legacy tripwire payload retained for tests that deliberately exercise
+      // an unsupported command; production readers never reach this branch.
       final depsByIssue = <String, List<Map<String, dynamic>>>{};
       for (final dep in exportDependencies) {
         (depsByIssue[dep.issueId] ??= <Map<String, dynamic>>[]).add(
@@ -283,6 +328,25 @@ class RecordingBdRunner implements BdRunner {
   /// construction).
   bool get neverShowOrSql =>
       calls.every((c) => c.isEmpty || (c.first != 'show' && c.first != 'sql'));
+}
+
+/// Empty lifecycle reader for mutation-only fixtures.
+final class EmptyBeadProbeReader implements BeadProbeReader {
+  const EmptyBeadProbeReader();
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
+      null;
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const [];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
 }
 
 /// A [BdRunner] whose `create` parks until [releaseCreate] is called, so a test
@@ -571,6 +635,7 @@ Fakes buildFakes({
   final pr = FakePrOpener();
   final writer = StationBeadWriter(
     bd: BdCliService(runner),
+    reader: runner,
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   );
   return (

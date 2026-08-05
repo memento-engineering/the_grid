@@ -747,6 +747,7 @@ void main() {
       expect(reg.events, ['START land(tgdog-mol-sess/tg-7/land)']);
       reg.events.clear();
       final callsBeforeRound2 = f.runner.calls.length;
+      final supersedingProbesBeforeRound2 = f.runner.openSupersedingCallCount;
 
       // Round 2: critic's grade flips to F — a validates-source stamp,
       // nothing else changes. SessionScope holds the retired build bead and
@@ -782,10 +783,9 @@ void main() {
             'arrives in the joined snapshot',
       );
       expect(
-        round2Calls.any(
-          (c) => c.length >= 2 && c[0] == 'export' && c[1] == '--all',
-        ),
-        isTrue,
+        f.runner.openSupersedingCallCount,
+        greaterThan(supersedingProbesBeforeRound2),
+        reason: 'successor mint performs the purpose-shaped superseding read',
       );
       expect(
         round2Calls.any(

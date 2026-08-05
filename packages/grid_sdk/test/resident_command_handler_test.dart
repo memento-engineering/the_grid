@@ -80,7 +80,7 @@ void main() {
         expect(result, isA<GridCommandCompleted>());
         expect(
           workRunner.calls.where((call) => call.first == 'export'),
-          hasLength(1),
+          isEmpty,
         );
         expect(
           workRunner.calls.where(
@@ -300,7 +300,7 @@ void main() {
 
         expect(result, isA<GridCommandCompleted>());
         expect(stateRunner.calls, hasLength(1));
-        expect(workRunner.calls, hasLength(1));
+        expect(workRunner.calls, isEmpty);
       },
     );
 
@@ -739,6 +739,7 @@ ResidentGridCommandHandler _handler({
   refreshState: refreshState ?? () async {},
   stateWriter: StationBeadWriter(
     bd: BdCliService(stateRunner),
+    reader: stateRunner,
     ownership: BeadOwnershipPredicate(stateWriterOwnership),
   ),
   stateOwnership: BeadOwnershipPredicate(stateOwnership),
@@ -748,6 +749,7 @@ ResidentGridCommandHandler _handler({
       refresh: refreshWork ?? () async {},
       writer: StationBeadWriter(
         bd: BdCliService(workRunner),
+        reader: workRunner,
         ownership: BeadOwnershipPredicate(workWriterOwnership),
       ),
     ),
@@ -771,7 +773,24 @@ final class _Source implements SnapshotSource {
   Stream<GraphSnapshot> get snapshots => const Stream.empty();
 }
 
-final class _RecordingRunner implements BdRunner {
+final class _RecordingRunner implements BdRunner, BeadProbeReader {
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    final matches = exportBeads.where(
+      (bead) => bead.id == id && types.contains(bead.issueType),
+    );
+    return matches.isEmpty ? null : matches.single;
+  }
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const [];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
   _RecordingRunner({
     this.blockFirst = false,
     List<BdResult> results = const [],

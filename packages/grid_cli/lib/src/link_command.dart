@@ -107,27 +107,35 @@ Future<int> runLink({
     try {
       final factory = bdFactory ?? _processBd;
       final stateWorkspace = openStateStore(stateStore, dirExists: dirExists);
-      final state = await factory(stateWorkspace).exportAll();
+      final stateProbe = await _probeReader(factory(stateWorkspace));
+      final links = await stateProbe.reader.openBeads(
+        types: {GridIssueTypes.link},
+      );
       final statuses = <String, String>{};
+      final endpointIds = <String>{
+        for (final bead in links) ...[
+          _metadata(bead, CrossLinkKeys.from),
+          _metadata(bead, CrossLinkKeys.to),
+        ],
+      };
       for (final endpoint in roster.values) {
         final workspace = openWorkStore(
           endpoint.store,
           substationName: endpoint.prefix,
           dirExists: dirExists,
         );
-        final snapshot = await factory(workspace).exportAll();
-        for (final bead in snapshot.beads) {
-          statuses[bead.id] = bead.status.wire;
+        final probe = await _probeReader(factory(workspace));
+        final ownedIds = endpointIds.where(
+          (id) =>
+              BeadOwnershipPredicate.ownedPrefixOf(id, roster.keys) ==
+              endpoint.prefix,
+        );
+        for (final id in ownedIds) {
+          final bead = await probe.reader.beadById(id, types: probe.types);
+          if (bead != null) statuses[id] = bead.status.wire;
         }
       }
-      final links =
-          state.beads
-              .where(
-                (bead) =>
-                    bead.issueType == GridIssueTypes.link && !bead.isClosed,
-              )
-              .toList()
-            ..sort((a, b) => a.id.compareTo(b.id));
+      links.sort((a, b) => a.id.compareTo(b.id));
       for (final bead in links) {
         final from = _metadata(bead, CrossLinkKeys.from);
         final to = _metadata(bead, CrossLinkKeys.to);
@@ -138,6 +146,9 @@ Future<int> runLink({
       }
       return 0;
     } on StoreRefusal catch (e) {
+      writeErr('grid link ls: ${e.message}');
+      return 1;
+    } on BdException catch (e) {
       writeErr('grid link ls: ${e.message}');
       return 1;
     }
@@ -168,6 +179,7 @@ Future<int> runLink({
   try {
     final workspace = openStateStore(stateStore, dirExists: dirExists);
     final bd = (bdFactory ?? _processBd)(workspace);
+    final probe = await _probeReader(bd);
     final refusal = crossLinkTypeRefusal(
       await bd.types(),
       store: stateStore.beadsDir,
@@ -178,6 +190,7 @@ Future<int> runLink({
     }
     final writer = StationBeadWriter(
       bd: bd,
+      reader: probe.reader,
       ownership: BeadOwnershipPredicate({...armed, stateStorePrefix}),
     );
     final id = await writer.createLink(
@@ -194,6 +207,9 @@ Future<int> runLink({
     return 1;
   } on OwnershipRefused catch (e) {
     writeErr('grid link: $e');
+    return 1;
+  } on BdException catch (e) {
+    writeErr('grid link: ${e.message}');
     return 1;
   }
 }
@@ -249,20 +265,21 @@ Future<int> runUnlink({
   try {
     final workspace = openStateStore(stateStore, dirExists: dirExists);
     final bd = (bdFactory ?? _processBd)(workspace);
-    final export = await bd.exportAll();
+    final probe = await _probeReader(bd);
     final matches = arguments.rest.length == 1
-        ? export.beads
-              .where((bead) => bead.id == arguments.rest.single)
-              .toList()
-        : export.beads
-              .where(
-                (bead) =>
-                    bead.issueType == GridIssueTypes.link &&
-                    !bead.isClosed &&
-                    _metadata(bead, CrossLinkKeys.from) == arguments.rest[0] &&
-                    _metadata(bead, CrossLinkKeys.to) == arguments.rest[1],
-              )
-              .toList();
+        ? [
+            await probe.reader.beadById(
+              arguments.rest.single,
+              types: probe.types,
+            ),
+          ].whereType<Bead>().toList()
+        : await probe.reader.openBeads(
+            types: {GridIssueTypes.link},
+            metadataAll: {
+              CrossLinkKeys.from: arguments.rest[0],
+              CrossLinkKeys.to: arguments.rest[1],
+            },
+          );
     if (matches.length != 1) {
       writeErr(
         'grid unlink: expected exactly one matching open link; found '
@@ -285,6 +302,7 @@ Future<int> runUnlink({
     }
     final writer = StationBeadWriter(
       bd: bd,
+      reader: probe.reader,
       ownership: BeadOwnershipPredicate({...armed, stateStorePrefix}),
     );
     await writer.close(link.id, reason: '$reason (unlink actor: $actor)');
@@ -296,11 +314,42 @@ Future<int> runUnlink({
   } on OwnershipRefused catch (e) {
     writeErr('grid unlink: $e');
     return 1;
+  } on BdException catch (e) {
+    writeErr('grid unlink: ${e.message}');
+    return 1;
   }
 }
 
 BdCliService _processBd(BeadsWorkspace workspace) =>
     BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
+
+Future<({CliBeadProbeReader reader, Set<IssueType> types})> _probeReader(
+  BdCliService bd,
+) async {
+  final data = await bd.types();
+  final types = <IssueType>{};
+  for (final key in const ['core_types', 'custom_types']) {
+    final raw = data[key];
+    if (raw is! List) {
+      throw BdParseException('bd type discovery field "$key" was not a list');
+    }
+    for (final value in raw) {
+      final name = value is String
+          ? value
+          : value is Map<String, dynamic>
+          ? value['name']
+          : null;
+      if (name is! String || name.isEmpty) {
+        throw BdParseException('bd type discovery field "$key" had no name');
+      }
+      types.add(IssueType(name));
+    }
+  }
+  if (types.isEmpty) {
+    throw const BdParseException('bd type discovery was empty');
+  }
+  return (reader: CliBeadProbeReader(bd, lifecycleTypes: types), types: types);
+}
 
 Map<String, LinkEndpointStore>? _roster(
   Iterable<LinkEndpointStore> endpoints,

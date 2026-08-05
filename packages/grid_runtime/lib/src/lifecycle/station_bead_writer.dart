@@ -106,17 +106,20 @@ class SessionClosedRefused implements Exception {
 class StationBeadWriter {
   StationBeadWriter({
     required BdCliService bd,
+    required BeadProbeReader reader,
     required BeadOwnershipPredicate ownership,
     void Function(String message)? onRefusal,
     void Function(String name, Map<String, String> data)? onFlare,
     DateTime Function()? clock,
   }) : _bd = bd,
+       _reader = reader,
        _ownership = ownership,
        _onRefusal = onRefusal,
        _onFlare = onFlare,
        _clock = clock ?? DateTime.now;
 
   final BdCliService _bd;
+  final BeadProbeReader _reader;
   final BeadOwnershipPredicate _ownership;
   final void Function(String message)? _onRefusal;
   final void Function(String name, Map<String, String> data)? _onFlare;
@@ -558,10 +561,9 @@ class StationBeadWriter {
   /// carries a foreign id refuses the WHOLE reap exactly like an unowned
   /// [createMolecule] node does.
   ///
-  /// Best-effort on the scan (mirrors [_findOpenGate]): a snapshot-read
-  /// failure closes nothing rather than crashing session close; the beads
-  /// stay open for a later reap attempt. An empty match set — a flat-mode
-  /// session, or a molecule already reaped — is a silent no-op.
+  /// The targeted read is loud: a failure aborts session close so lifecycle
+  /// debt cannot accumulate invisibly. An empty match set — a flat-mode
+  /// session, or a molecule already reaped — is a no-op.
   Future<void> reapMolecule({required String sessionId}) async {
     final matched = await _moleculeBeadsFor(sessionId: sessionId);
     if (matched.isEmpty) return;
@@ -634,18 +636,11 @@ class StationBeadWriter {
   Future<void> clearSpecifyAuthoredSpec(String id) async {
     _assertOwned('clearSpecifyAuthoredSpec', id, const {});
     return _serialized(id, () async {
-      String? author;
-      try {
-        final export = await _bd.exportAll();
-        for (final bead in export.beads) {
-          if (bead.id == id) {
-            author = bead.metadata[specAuthorKey] as String?;
-            break;
-          }
-        }
-      } catch (_) {
-        author = null;
-      }
+      final bead = await _reader.beadById(
+        id,
+        types: {...IssueType.coreTypes, ...GridIssueTypes.all},
+      );
+      final author = bead?.metadata[specAuthorKey] as String?;
       if (author != specifyAuthor) {
         _flare('rework.specPreserved', {'beadId': id});
         return;
@@ -694,30 +689,18 @@ class StationBeadWriter {
   ///
   /// **Never `bd show`.** ADR-0006 Decision 2's FORBIDDEN list is verbatim:
   /// "No `bd show` from any controller/re-query/dispatch path (self-triggers
-  /// the watcher) — use snapshot reads / `bd export` / the SELECT probe" (the
-  /// same posture ADR-0001 Decision 5 ratifies for the re-query path). This
-  /// read rides [BdCliService.exportAll], the SAME snapshot path
-  /// [_findOpenGate]/[_moleculeBeadsFor] already use, under the SAME
-  /// chokepoint authority (ADR-0000 A32).
-  ///
-  /// Best-effort (mirrors [_findOpenGate]): returns null when the bead is
-  /// absent OR the read fails — a partial/unreadable breadcrumb is simply not
-  /// adoptable (no-adopt-on-faith starts at this read), never a crash.
+  /// the watcher) — use snapshot reads / the SELECT probe". This targeted read
+  /// uses the same-store reader injected beside the write chokepoint.
   Future<Map<String, String>?> metadataOf(String beadId) async {
-    try {
-      final export = await _bd.exportAll();
-      for (final bead in export.beads) {
-        if (bead.id != beadId) continue;
-        return {
-          for (final entry in bead.metadata.entries)
-            if (entry.value is String) entry.key: entry.value as String,
-        };
-      }
-    } catch (_) {
-      // Best-effort: a snapshot-read failure reads as "no metadata" — the
-      // vendor then acquires fresh rather than adopting blind (or crashing).
-    }
-    return null;
+    final bead = await _reader.beadById(
+      beadId,
+      types: {...IssueType.coreTypes, ...GridIssueTypes.all},
+    );
+    if (bead == null) return null;
+    return {
+      for (final entry in bead.metadata.entries)
+        if (entry.value is String) entry.key: entry.value as String,
+    };
   }
 
   /// `bd delete <id> --force` — the burn primitive, used only for speculative
@@ -794,19 +777,11 @@ class StationBeadWriter {
     required String sessionId,
     required String nodePath,
   }) async {
-    try {
-      final export = await _bd.exportAll();
-      for (final bead in export.beads) {
-        if (bead.issueType != GridIssueTypes.gate || bead.isClosed) continue;
-        if (bead.metadata['blocks'] == sessionId &&
-            bead.metadata['node'] == nodePath) {
-          return bead;
-        }
-      }
-    } catch (_) {
-      // Best-effort: a snapshot-read failure must never block a real gate mint.
-    }
-    return null;
+    final gates = await _reader.openBeads(
+      types: {GridIssueTypes.gate},
+      metadataAll: {'blocks': sessionId, 'node': nodePath},
+    );
+    return gates.isEmpty ? null : gates.first;
   }
 
   /// Refuses gate mint/refresh when the snapshot proves [sessionId] is closed.
@@ -815,20 +790,12 @@ class StationBeadWriter {
   /// existing fake/offline behavior, while a present closed session is a hard
   /// refusal before `bd create` or a dedup refresh can run.
   Future<void> _assertGateSessionOpen(String sessionId) async {
-    try {
-      final export = await _bd.exportAll();
-      for (final bead in export.beads) {
-        if (bead.id != sessionId) continue;
-        if (bead.issueType != GridIssueTypes.session) return;
-        if (!bead.isClosed) return;
-        _refuseClosedSession('create', sessionId, 'session bead is closed');
-      }
-    } on SessionClosedRefused {
-      rethrow;
-    } catch (_) {
-      // The existing gate-dedup probe is best-effort. A snapshot read failure
-      // cannot prove the session is closed, so the legacy mint path remains
-      // available; proven-closed sessions are refused above.
+    final bead = await _reader.beadById(
+      sessionId,
+      types: {GridIssueTypes.session},
+    );
+    if (bead?.isClosed ?? false) {
+      _refuseClosedSession('create', sessionId, 'session bead is closed');
     }
   }
 
@@ -855,74 +822,35 @@ class StationBeadWriter {
       (await _moleculeBeadsFor(sessionId: sessionId)).isNotEmpty;
 
   Future<Bead?> _findOpenSuccessor(String priorStepId) async {
-    try {
-      final export = await _bd.exportAll();
-      final beadsById = {for (final bead in export.beads) bead.id: bead};
-      for (final dep in export.dependencies) {
-        if (dep.type != DependencyType.supersedes ||
-            dep.dependsOnId != priorStepId) {
-          continue;
-        }
-        final bead = beadsById[dep.issueId];
-        if (bead != null && !bead.isClosed) return bead;
-      }
-    } catch (_) {
-      // Best-effort: a snapshot-read failure must never block a successor mint.
-    }
-    return null;
+    final successors = await _reader.openSuperseding({priorStepId});
+    return successors.isEmpty ? null : successors.first;
   }
 
   Future<List<Bead>> _supersedesChainFor(List<Bead> roots) async {
     if (roots.isEmpty) return const [];
-    try {
-      final export = await _bd.exportAll();
-      final beadsById = {for (final bead in export.beads) bead.id: bead};
-      final successorsByPrior = <String, List<String>>{};
-      for (final dep in export.dependencies) {
-        if (dep.type != DependencyType.supersedes) continue;
-        (successorsByPrior[dep.dependsOnId] ??= <String>[]).add(dep.issueId);
+    final seen = {for (final bead in roots) bead.id};
+    var frontier = Set<String>.of(seen);
+    final found = <Bead>[];
+    while (frontier.isNotEmpty) {
+      final successors = await _reader.openSuperseding(frontier);
+      frontier = <String>{};
+      for (final bead in successors) {
+        if (!seen.add(bead.id)) continue;
+        found.add(bead);
+        frontier.add(bead.id);
       }
-      final seen = {for (final bead in roots) bead.id};
-      final queue = roots.map((b) => b.id).toList();
-      final found = <Bead>[];
-      for (var i = 0; i < queue.length; i++) {
-        for (final id in successorsByPrior[queue[i]] ?? const <String>[]) {
-          if (!seen.add(id)) continue;
-          queue.add(id);
-          final bead = beadsById[id];
-          if (bead != null && !bead.isClosed) found.add(bead);
-        }
-      }
-      return found;
-    } catch (_) {
-      // Best-effort: a snapshot-read failure leaves successors for a later reap.
-      return const [];
     }
+    return found;
   }
 
   /// The OPEN molecule/step beads stamped with [sessionId] — the shared scan
   /// [_moleculeAlreadyMinted] and [reapMolecule] both read. Reads the OWN
-  /// state store via the safe snapshot path (never `bd show` on a controller
-  /// path); returns an empty list on ANY read error so both callers degrade
-  /// gracefully instead of throwing (mirrors [_findOpenGate]).
+  /// state store through the targeted reader and propagates read failures.
   Future<List<Bead>> _moleculeBeadsFor({required String sessionId}) async {
-    final matched = <Bead>[];
-    try {
-      final export = await _bd.exportAll();
-      for (final bead in export.beads) {
-        if (bead.isClosed) continue;
-        final owns =
-            (bead.issueType == GridIssueTypes.molecule &&
-                bead.metadata[moleculeSessionKey] == sessionId) ||
-            (bead.issueType == GridIssueTypes.step &&
-                bead.metadata[stepSessionKey] == sessionId);
-        if (owns) matched.add(bead);
-      }
-    } catch (_) {
-      // Best-effort: a snapshot-read failure must never block a mint or
-      // crash a session close.
-    }
-    return matched;
+    return _reader.openBeads(
+      types: {GridIssueTypes.molecule, GridIssueTypes.step},
+      metadataAny: {moleculeSessionKey: sessionId, stepSessionKey: sessionId},
+    );
   }
 
   void _assertOwned(
