@@ -143,19 +143,14 @@ final class CliBeadProbeReader implements BeadProbeReader {
 
   @override
   Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
-    Bead? found;
-    for (final type in types) {
-      for (final status in BeadStatus.builtIns) {
-        final scope = await _bd.listScope(type: type, status: status);
-        for (final bead in scope.beads.where((bead) => bead.id == id)) {
-          if (found != null) {
-            throw BdParseException('duplicate bead id "$id" in scoped lists');
-          }
-          found = bead;
-        }
-      }
+    if (types.isEmpty) return null;
+    final matches = (await _bd.query('id=$id'))
+        .where((bead) => bead.id == id && types.contains(bead.issueType))
+        .toList(growable: false);
+    if (matches.length > 1) {
+      throw BdParseException('duplicate bead id "$id" in query result');
     }
-    return found;
+    return matches.isEmpty ? null : matches.single;
   }
 
   @override

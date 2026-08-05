@@ -7,42 +7,89 @@ import '../support/schema_probe_rows.dart';
 
 void main() {
   group('CliBeadProbeReader', () {
+    test('uses one filtered query for an exact id and allowed type', () async {
+      final runner = _ScopedRunner();
+      final reader = _reader(runner);
+
+      final bead = await reader.beadById(
+        'tg-step1',
+        types: const {IssueType('step')},
+      );
+
+      expect(bead?.id, 'tg-step1');
+      expect(runner.calls.where((args) => args.first == 'query'), [
+        ['query', 'id=tg-step1', '--json'],
+      ]);
+      expect(runner.calls.where((args) => args.first == 'show'), isEmpty);
+      expect(runner.calls.where((args) => args.first == 'export'), isEmpty);
+    });
+
+    test('empty allowed types make no calls', () async {
+      final runner = _ScopedRunner();
+
+      expect(
+        await _reader(runner).beadById('tg-step1', types: const {}),
+        isNull,
+      );
+      expect(runner.calls, isEmpty);
+    });
+
     test(
-      'uses scoped lists for multi-status lookup and supersedes edges',
+      'returns null when the query has no exact id and type match',
       () async {
         final runner = _ScopedRunner();
-        final reader = CliBeadProbeReader(
-          BdCliService(runner),
-          lifecycleTypes: const {IssueType('step'), IssueType('gate')},
-        );
 
-        final bead = await reader.beadById(
-          'tg-step1',
-          types: const {IssueType('step')},
-        );
-        final lookupCalls = runner.calls
-            .where((args) => args.first == 'list')
-            .toList();
-        final successors = await reader.openSuperseding({'tg-old'});
-
-        expect(bead?.id, 'tg-step1');
-        expect(successors.map((bead) => bead.id), ['tg-gate1']);
-        expect(lookupCalls, hasLength(BeadStatus.builtIns.length));
-        expect(runner.calls.where((args) => args.first == 'export'), isEmpty);
         expect(
-          runner.calls.where((args) => args.first == 'list'),
-          everyElement(
-            predicate<List<String>>(
-              (args) =>
-                  args.length == 6 &&
-                  args[1] == '-t' &&
-                  args[3] == '--status' &&
-                  args[5] == '--json',
-            ),
-          ),
+          await _reader(
+            runner,
+          ).beadById('tg-step1', types: const {IssueType('molecule')}),
+          isNull,
         );
       },
     );
+
+    test('refuses duplicate exact query matches', () async {
+      final runner = _ScopedRunner(duplicateExactMatch: true);
+
+      expect(
+        () => _reader(
+          runner,
+        ).beadById('tg-step1', types: const {IssueType('step')}),
+        throwsA(isA<BdParseException>()),
+      );
+    });
+
+    test('propagates a failed query', () async {
+      final runner = _ScopedRunner(failQuery: true);
+
+      expect(
+        () => _reader(
+          runner,
+        ).beadById('tg-step1', types: const {IssueType('step')}),
+        throwsA(isA<BdCommandFailed>()),
+      );
+    });
+
+    test('retains exact scoped open reads and supersedes edges', () async {
+      final runner = _ScopedRunner();
+      final reader = _reader(runner);
+
+      final open = await reader.openBeads(
+        types: const {IssueType('step'), IssueType('gate')},
+      );
+      final successors = await reader.openSuperseding({'tg-old'});
+
+      expect(open.map((bead) => bead.id), ['tg-gate1']);
+      expect(successors.map((bead) => bead.id), ['tg-gate1']);
+      expect(runner.calls.where((args) => args.first == 'list'), [
+        ['list', '-t', 'step', '--status', 'open', '--json'],
+        ['list', '-t', 'gate', '--status', 'open', '--json'],
+        ['list', '-t', 'step', '--status', 'open', '--json'],
+        ['list', '-t', 'gate', '--status', 'open', '--json'],
+      ]);
+      expect(runner.calls.where((args) => args.first == 'show'), isEmpty);
+      expect(runner.calls.where((args) => args.first == 'export'), isEmpty);
+    });
   });
 
   group('SqlBeadProbeReader', () {
@@ -92,7 +139,16 @@ void main() {
   });
 }
 
+CliBeadProbeReader _reader(_ScopedRunner runner) => CliBeadProbeReader(
+  BdCliService(runner),
+  lifecycleTypes: const {IssueType('step'), IssueType('gate')},
+);
+
 class _ScopedRunner implements BdRunner {
+  _ScopedRunner({this.duplicateExactMatch = false, this.failQuery = false});
+
+  final bool duplicateExactMatch;
+  final bool failQuery;
   final List<List<String>> calls = [];
 
   @override
@@ -109,14 +165,37 @@ class _ScopedRunner implements BdRunner {
         stderr: 'Error: export is not supported in proxied-server mode',
       );
     }
-    if (args.first != 'list') throw StateError('unexpected call: $args');
-    final type = args[2];
-    final status = args[4];
-    final data = <Map<String, dynamic>>[];
-    if (type == 'step' && status == 'closed') {
-      data.add({'id': 'tg-step1', 'issue_type': 'step', 'status': 'closed'});
+    if (args.first == 'query') {
+      if (args.length != 3 || args[1] != 'id=tg-step1' || args[2] != '--json') {
+        throw StateError('unexpected query: $args');
+      }
+      if (failQuery) {
+        return const BdResult(exitCode: 1, stdout: '', stderr: 'query failed');
+      }
+      final data = <Map<String, dynamic>>[
+        {'id': 'tg-step1', 'issue_type': 'step', 'status': 'closed'},
+        {'id': 'tg-other', 'issue_type': 'step', 'status': 'open'},
+        {'id': 'tg-step1', 'issue_type': 'gate', 'status': 'open'},
+        if (duplicateExactMatch)
+          {'id': 'tg-step1', 'issue_type': 'step', 'status': 'open'},
+      ];
+      return BdResult(
+        exitCode: 0,
+        stdout: jsonEncode({'schema_version': 1, 'data': data}),
+        stderr: '',
+      );
     }
-    if (type == 'gate' && status == 'open') {
+    if (args.first != 'list') throw StateError('unexpected call: $args');
+    if (args.length != 6 ||
+        args[1] != '-t' ||
+        args[3] != '--status' ||
+        args[4] != 'open' ||
+        args[5] != '--json') {
+      throw StateError('unexpected list: $args');
+    }
+    final type = args[2];
+    final data = <Map<String, dynamic>>[];
+    if (type == 'gate') {
       data.add({
         'id': 'tg-gate1',
         'issue_type': 'gate',

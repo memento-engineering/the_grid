@@ -456,6 +456,18 @@ class _FakeStore implements BdRunner {
               .map((bead) => bead.toJson())
               .toList(),
         );
+      case 'query':
+        final expression = args[1];
+        if (!expression.startsWith('id=')) {
+          throw StateError('unexpected bd query: $args');
+        }
+        final id = expression.substring('id='.length);
+        return _listEnvelope(
+          beads
+              .where((bead) => bead.id == id)
+              .map((bead) => bead.toJson())
+              .toList(),
+        );
       case 'create':
         final effectiveCreatedId = createdIdOverride ?? createdId;
         beads.add(

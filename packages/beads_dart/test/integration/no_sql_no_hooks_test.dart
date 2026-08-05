@@ -127,7 +127,7 @@ void main() {
             'dep',
             'batch',
             'ready',
-            'export',
+            'list',
             'query',
           ]),
         );
