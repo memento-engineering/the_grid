@@ -194,6 +194,12 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
   List<Bead> exportBeads = const <Bead>[];
   List<BeadDependency> exportDependencies = const <BeadDependency>[];
 
+  /// Number of purpose-shaped [openBeads] lifecycle reads.
+  int openBeadsCallCount = 0;
+
+  /// Number of purpose-shaped [openSuperseding] lifecycle reads.
+  int openSupersedingCallCount = 0;
+
   /// The `key → id` map the next `bd create --graph` invocation reports
   /// (`applyGraph`'s `data.ids`) — `StationBeadWriter.createMolecule`'s pour
   /// reads this back through `BdCliService.applyGraph`. A molecule-mode test
@@ -214,19 +220,23 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
     required Set<IssueType> types,
     Map<String, String> metadataAll = const {},
     Map<String, String> metadataAny = const {},
-  }) async => exportBeads
-      .where(
-        (b) =>
-            !b.isClosed &&
-            types.contains(b.issueType) &&
-            metadataAll.entries.every((e) => b.metadata[e.key] == e.value) &&
-            (metadataAny.isEmpty ||
-                metadataAny.entries.any((e) => b.metadata[e.key] == e.value)),
-      )
-      .toList();
+  }) async {
+    openBeadsCallCount += 1;
+    return exportBeads
+        .where(
+          (b) =>
+              !b.isClosed &&
+              types.contains(b.issueType) &&
+              metadataAll.entries.every((e) => b.metadata[e.key] == e.value) &&
+              (metadataAny.isEmpty ||
+                  metadataAny.entries.any((e) => b.metadata[e.key] == e.value)),
+        )
+        .toList();
+  }
 
   @override
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async {
+    openSupersedingCallCount += 1;
     final ids = exportDependencies
         .where(
           (e) =>
