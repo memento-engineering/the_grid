@@ -47,18 +47,20 @@ class BdCliService {
     return _beadsFromList(env.dataList);
   }
 
-  /// Reads one explicit type/status scope, which is supported by proxied stores.
+  /// Reads one explicit type scope, optionally narrowed to [status].
   Future<({List<Bead> beads, List<BeadDependency> dependencies})> listScope({
     required IssueType type,
-    required BeadStatus status,
+    BeadStatus? status,
   }) async {
     final env = await _runEnvelope(listScopeArgs(type: type, status: status));
     return _parseIssueList(env.dataList);
   }
 
   /// `bd query "<expr>" --json` — a filtered read returning matching [Bead]s.
-  Future<List<Bead>> query(String expr) async {
-    final env = await _runEnvelope(queryArgs(expr));
+  Future<List<Bead>> query(String expr, {bool includeClosed = false}) async {
+    final env = await _runEnvelope(
+      queryArgs(expr, includeClosed: includeClosed),
+    );
     return _beadsFromList(env.dataList);
   }
 
@@ -297,12 +299,20 @@ class BdCliService {
 
   List<String> readyArgs() => const ['ready', '--json'];
 
-  List<String> listScopeArgs({
-    required IssueType type,
-    required BeadStatus status,
-  }) => ['list', '-t', type.wire, '--status', status.wire, '--json'];
+  List<String> listScopeArgs({required IssueType type, BeadStatus? status}) => [
+    'list',
+    '-t',
+    type.wire,
+    if (status != null) ...['--status', status.wire],
+    '--json',
+  ];
 
-  List<String> queryArgs(String expr) => ['query', expr, '--json'];
+  List<String> queryArgs(String expr, {bool includeClosed = false}) => [
+    'query',
+    expr,
+    if (includeClosed) '--all',
+    '--json',
+  ];
 
   List<String> depListArgs(List<String> ids) => [
     'dep',

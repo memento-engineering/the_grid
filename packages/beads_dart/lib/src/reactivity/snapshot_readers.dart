@@ -1,14 +1,9 @@
-import '../errors/bd_exception.dart';
-import '../models/bead.dart';
-import '../models/bead_dependency.dart';
-import '../models/bead_status.dart';
-import '../models/issue_type.dart';
 import '../models/graph_snapshot.dart';
 import '../services/bd_cli_service.dart';
 import '../services/dolt_query_service.dart';
 import 'snapshot_reader.dart';
 
-/// Composes a CLI snapshot from every registered type/status scope.
+/// Composes a CLI snapshot with one broad graph query and one dependency read.
 class CliSnapshotReader implements SnapshotReader {
   CliSnapshotReader(this._bd, {DateTime Function()? clock})
     : _clock = clock ?? DateTime.now;
@@ -18,62 +13,21 @@ class CliSnapshotReader implements SnapshotReader {
 
   @override
   Future<GraphSnapshot> read() async {
-    final typeData = await _bd.types();
-    final statusData = await _bd.statuses();
-    final types = _names(typeData, const [
-      'core_types',
-      'custom_types',
-    ]).map(IssueType.new).toSet();
-    final statuses = _names(
-      statusData,
-      statusData.keys.where((key) => key.contains('status')).toList(),
-    ).map(BeadStatus.new).toSet();
-    if (types.isEmpty || statuses.isEmpty) {
-      throw const BdParseException('bd type/status discovery was empty');
-    }
-    final beads = <String, Bead>{};
-    final dependencies = <String, BeadDependency>{};
-    for (final type in types) {
-      for (final status in statuses) {
-        final scope = await _bd.listScope(type: type, status: status);
-        for (final bead in scope.beads) {
-          beads[bead.id] = bead;
-        }
-        for (final edge in scope.dependencies) {
-          dependencies[edge.edgeKey] = edge;
-        }
-      }
-    }
+    final beads = await _bd.query(
+      'status=open OR status=in_progress OR status=blocked OR '
+      'status=deferred OR status=closed',
+      includeClosed: true,
+    );
+    final dependencies = await _bd.depList(
+      beads.map((bead) => bead.id).toList(growable: false),
+    );
     final ready = await _bd.ready();
     return GraphSnapshot.fromParts(
-      beads: beads.values,
-      dependencies: dependencies.values,
+      beads: beads,
+      dependencies: dependencies,
       readyIds: ready.map((bead) => bead.id),
       capturedAt: _clock(),
     );
-  }
-
-  static Set<String> _names(Map<String, dynamic> data, Iterable<String> keys) {
-    final result = <String>{};
-    for (final key in keys) {
-      final values = data[key];
-      if (values == null) continue;
-      if (values is! List) {
-        throw BdParseException('bd discovery field "$key" was not a list');
-      }
-      for (final value in values) {
-        final name = value is String
-            ? value
-            : value is Map<String, dynamic>
-            ? value['name']
-            : null;
-        if (name is! String || name.isEmpty) {
-          throw BdParseException('bd discovery field "$key" had no name');
-        }
-        result.add(name);
-      }
-    }
-    return result;
   }
 }
 

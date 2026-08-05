@@ -70,6 +70,21 @@ void main() {
       },
     );
 
+    test('listScopeArgs supports all-status and narrowed type scopes', () {
+      final service = BdCliService(FakeBdRunner());
+
+      expect(service.listScopeArgs(type: const IssueType('gate')), [
+        'list',
+        '-t',
+        'gate',
+        '--json',
+      ]);
+      expect(
+        service.listScopeArgs(type: IssueType.task, status: BeadStatus.closed),
+        ['list', '-t', 'task', '--status', 'closed', '--json'],
+      );
+    });
+
     test('query() forwards the expression and parses beads', () async {
       final runner = FakeBdRunner()
         ..stubCommand(

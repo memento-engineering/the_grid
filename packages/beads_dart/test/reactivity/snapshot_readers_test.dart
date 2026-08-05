@@ -4,43 +4,62 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('CLI snapshot composes every discovered type/status scope', () async {
+  const allStatuses =
+      'status=open OR status=in_progress OR status=blocked OR '
+      'status=deferred OR status=closed';
+  test('CLI snapshot uses one broad graph query', () async {
     final runner = _SnapshotRunner();
     final snapshot = await CliSnapshotReader(BdCliService(runner)).read();
 
     expect(snapshot.beadsById['tg-gate']?.issueType, const IssueType('gate'));
     expect(snapshot.beadsById['tg-task']?.status, BeadStatus.closed);
-    expect(snapshot.dependencies, hasLength(1));
-    expect(runner.calls.where((args) => args.first == 'list'), hasLength(4));
+    expect(snapshot.dependencies.single.type, DependencyType.blocks);
+    expect(snapshot.readyIds, contains('tg-gate'));
+    expect(runner.calls, [
+      ['query', allStatuses, '--all', '--json'],
+      ['dep', 'list', 'tg-gate', 'tg-task', '--json'],
+      ['ready', '--json'],
+    ]);
     expect(
-      runner.calls.where((args) => args.first == 'list'),
-      everyElement(
-        predicate<List<String>>(
-          (args) =>
-              args.length == 6 &&
-              args[1] == '-t' &&
-              args[3] == '--status' &&
-              args[5] == '--json',
-        ),
+      runner.calls.any(
+        (args) => const {
+          'export',
+          'show',
+          'statuses',
+          'types',
+          'list',
+        }.contains(args.first),
       ),
+      isFalse,
     );
-    expect(runner.calls.where((args) => args.contains('--all')), isEmpty);
-    expect(runner.calls.where((args) => args.first == 'export'), isEmpty);
   });
 
-  test('CLI snapshot refuses malformed discovery loudly', () async {
-    final runner = _SnapshotRunner()..malformed = true;
+  test('CLI snapshot skips dependency subprocess for an empty graph', () async {
+    final runner = _SnapshotRunner()..empty = true;
+    final snapshot = await CliSnapshotReader(BdCliService(runner)).read();
+    expect(snapshot.beadsById, isEmpty);
+    expect(runner.calls, [
+      ['query', allStatuses, '--all', '--json'],
+      ['ready', '--json'],
+    ]);
+  });
+
+  test('CLI snapshot propagates broad-query command failures', () async {
+    final runner = _SnapshotRunner()..failQuery = true;
     await expectLater(
       CliSnapshotReader(BdCliService(runner)).read(),
-      throwsA(isA<BdParseException>()),
+      throwsA(isA<BdCommandFailed>()),
     );
-    expect(runner.calls.where((args) => args.first == 'list'), isEmpty);
+    expect(runner.calls, [
+      ['query', allStatuses, '--all', '--json'],
+    ]);
   });
 }
 
 class _SnapshotRunner implements BdRunner {
   final List<List<String>> calls = [];
-  bool malformed = false;
+  bool empty = false;
+  bool failQuery = false;
 
   @override
   Future<BdResult> run(
@@ -49,62 +68,35 @@ class _SnapshotRunner implements BdRunner {
     String? stdin,
   }) async {
     calls.add(List.unmodifiable(args));
-    switch (args.first) {
-      case 'export':
-        return const BdResult(
-          exitCode: 1,
-          stdout: '',
-          stderr: 'Error: export is not supported in proxied-server mode',
-        );
-      case 'types':
-        return _map({
-          'core_types': malformed ? 'task' : const ['task'],
-          'custom_types': const [
-            {'name': 'gate'},
-          ],
-        });
-      case 'statuses':
-        return _map({
-          'built_in_statuses': const ['open', 'closed'],
-          'custom_statuses': const <String>[],
-        });
-      case 'ready':
-        return _list(const []);
-      case 'list':
-        final type = args[2];
-        final status = args[4];
-        if (type == 'gate' && status == 'open') {
-          return _list([
-            {
-              'id': 'tg-gate',
-              'issue_type': 'gate',
-              'status': 'open',
-              'dependencies': [
-                {
-                  'issue_id': 'tg-gate',
-                  'depends_on_id': 'tg-task',
-                  'type': 'blocks',
-                },
+    if (args.first == 'query') {
+      if (failQuery) {
+        return const BdResult(exitCode: 1, stdout: '', stderr: 'query failed');
+      }
+      return _list(
+        empty
+            ? const []
+            : const [
+                {'id': 'tg-gate', 'issue_type': 'gate', 'status': 'open'},
+                {'id': 'tg-task', 'issue_type': 'task', 'status': 'closed'},
               ],
-            },
-          ]);
-        }
-        if (type == 'task' && status == 'closed') {
-          return _list(const [
-            {'id': 'tg-task', 'issue_type': 'task', 'status': 'closed'},
-          ]);
-        }
-        return _list(const []);
-      default:
-        throw StateError('unexpected call: $args');
+      );
     }
+    if (args.first == 'dep') {
+      return _list(const [
+        {'issue_id': 'tg-gate', 'depends_on_id': 'tg-task', 'type': 'blocks'},
+      ]);
+    }
+    if (args.first == 'ready') {
+      return _list(
+        empty
+            ? const []
+            : const [
+                {'id': 'tg-gate', 'issue_type': 'gate', 'status': 'open'},
+              ],
+      );
+    }
+    throw StateError('unexpected call: $args');
   }
-
-  BdResult _map(Map<String, dynamic> data) => BdResult(
-    exitCode: 0,
-    stdout: jsonEncode({'schema_version': 1, 'data': data}),
-    stderr: '',
-  );
 
   BdResult _list(List<Map<String, dynamic>> data) => BdResult(
     exitCode: 0,
