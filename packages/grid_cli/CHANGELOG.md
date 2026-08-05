@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0-rc.1
+
+- Breaking: tracks the beads_dart 0.2.0-rc.1 wave. `grid link`, `grid link ls` and
+  `grid unlink` are migrated off `BdCliService.exportAll` onto scoped reads, and
+  construct `StationBeadWriter` with the required `reader:`.
+
 ## 0.4.1
 
 - Bump the family floors onto the 0.2.0 substrate wave: `grid_engine`,
