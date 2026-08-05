@@ -57,6 +57,7 @@ void main() {
     void Function(String, Map<String, String>)? onFlare,
   }) => StationBeadWriter(
     bd: bd,
+    reader: runner,
     ownership: predicate(),
     onRefusal: refusals.add,
     onFlare: onFlare ?? (name, data) => flares.add((name: name, data: data)),
@@ -112,6 +113,7 @@ void main() {
     test('strict refusal reports the full hyphenated owned prefix', () async {
       final strictWriter = StationBeadWriter(
         bd: bd,
+        reader: runner,
         ownership: BeadOwnershipPredicate({
           'swift-infer',
         }, requireSubstationMarker: true),
@@ -172,6 +174,7 @@ void main() {
         // with the wrong rig, even a tgdog-prefixed bead is refused.
         final w = StationBeadWriter(
           bd: bd,
+          reader: runner,
           ownership: BeadOwnershipPredicate({'someotherrig'}),
           onRefusal: refusals.add,
         );
@@ -322,7 +325,7 @@ void main() {
 
       await writer().clearSpecifyAuthoredSpec('tgdog-work1');
 
-      expect(runner.callsFor('export'), hasLength(1));
+      expect(runner.callsFor('export'), isEmpty);
       final updates = runner.callsFor('update');
       expect(updates, hasLength(1));
       expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
@@ -356,7 +359,7 @@ void main() {
 
         await writer().clearSpecifyAuthoredSpec('tgdog-work1');
 
-        expect(runner.callsFor('export'), hasLength(1));
+        expect(runner.callsFor('export'), isEmpty);
         expect(runner.callsFor('update'), isEmpty);
         expect(flares, hasLength(1));
         expect(flares.single.name, 'rework.specPreserved');
@@ -372,7 +375,7 @@ void main() {
         onFlare: (_, __) => throw StateError('sink unavailable'),
       ).clearSpecifyAuthoredSpec('tgdog-work1');
 
-      expect(runner.callsFor('export'), hasLength(1));
+      expect(runner.callsFor('export'), isEmpty);
       expect(runner.callsFor('update'), isEmpty);
       expect(runner.neverCalledShow, isTrue);
     });
@@ -420,6 +423,7 @@ void main() {
     final clock = DateTime.utc(2026, 7, 2, 9, 30);
     StationBeadWriter clockedWriter() => StationBeadWriter(
       bd: bd,
+      reader: runner,
       ownership: predicate(),
       onRefusal: refusals.add,
       clock: () => clock,
@@ -519,7 +523,7 @@ void main() {
         );
 
         expect(id, 'tgdog-step-new');
-        expect(runner.callsFor('export'), hasLength(1));
+        expect(runner.callsFor('export'), isEmpty);
         final creates = runner.callsFor('create');
         expect(creates, hasLength(1));
         expect(creates.single, containsAllInOrder(['--type', 'step']));
@@ -615,7 +619,7 @@ void main() {
       );
 
       expect(id, 'tgdog-step-existing');
-      expect(runner.callsFor('export'), hasLength(1));
+      expect(runner.callsFor('export'), isEmpty);
       expect(runner.callsFor('create'), isEmpty);
       expect(runner.callsFor('dep'), isEmpty);
     });
@@ -704,8 +708,7 @@ void main() {
       expect(metadata['grid.lease.pid'], '4343');
       expect(metadata['grid.lease.token'], 'tok-abc');
       expect(metadata[StationBeadWriter.stepSessionKey], 'tgdog-sess1');
-      // The read rides `bd export` — the safe snapshot path, never `show`.
-      expect(runner.callsFor('export'), hasLength(1));
+      expect(runner.callsFor('export'), isEmpty);
       expect(runner.neverCalledShow, isTrue);
     });
 

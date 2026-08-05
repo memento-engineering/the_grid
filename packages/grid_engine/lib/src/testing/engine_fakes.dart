@@ -175,7 +175,7 @@ class FakeRuntimeProvider implements RuntimeProvider {
 /// stdin so a test asserts the EXACT bd commands, and `create` returns a
 /// caller-controlled synthetic id so the mint+stamp is exercised with no real
 /// `bd`.
-class RecordingBdRunner implements BdRunner {
+class RecordingBdRunner implements BdRunner, BeadProbeReader {
   /// Creates the recorder; `create` returns [createdId].
   RecordingBdRunner({String createdId = 'tgdog-sess1'})
     : _createdId = createdId;
@@ -202,6 +202,43 @@ class RecordingBdRunner implements BdRunner {
   /// stages the ids it expects `instantiateMolecule`'s plan-local keys to
   /// receive.
   Map<String, String> graphApplyIds = const <String, String>{};
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    final matches = exportBeads.where(
+      (b) => b.id == id && types.contains(b.issueType),
+    );
+    return matches.isEmpty ? null : matches.single;
+  }
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => exportBeads
+      .where(
+        (b) =>
+            !b.isClosed &&
+            types.contains(b.issueType) &&
+            metadataAll.entries.every((e) => b.metadata[e.key] == e.value) &&
+            (metadataAny.isEmpty ||
+                metadataAny.entries.any((e) => b.metadata[e.key] == e.value)),
+      )
+      .toList();
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async {
+    final ids = exportDependencies
+        .where(
+          (e) =>
+              e.type == DependencyType.supersedes &&
+              priorIds.contains(e.dependsOnId),
+        )
+        .map((e) => e.issueId)
+        .toSet();
+    return exportBeads.where((b) => ids.contains(b.id) && !b.isClosed).toList();
+  }
 
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
@@ -283,6 +320,25 @@ class RecordingBdRunner implements BdRunner {
   /// construction).
   bool get neverShowOrSql =>
       calls.every((c) => c.isEmpty || (c.first != 'show' && c.first != 'sql'));
+}
+
+/// Empty lifecycle reader for mutation-only fixtures.
+final class EmptyBeadProbeReader implements BeadProbeReader {
+  const EmptyBeadProbeReader();
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
+      null;
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const [];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
 }
 
 /// A [BdRunner] whose `create` parks until [releaseCreate] is called, so a test
@@ -571,6 +627,7 @@ Fakes buildFakes({
   final pr = FakePrOpener();
   final writer = StationBeadWriter(
     bd: BdCliService(runner),
+    reader: runner,
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   );
   return (

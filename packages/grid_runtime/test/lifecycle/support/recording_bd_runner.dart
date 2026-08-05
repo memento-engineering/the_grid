@@ -18,7 +18,7 @@ import 'package:beads_dart/beads_dart.dart';
 /// matched by the invocation's leading subcommand; `create` returns a synthetic
 /// id the caller controls so the chokepoint's mint+stamp can be exercised
 /// end-to-end with no real `bd`.
-class RecordingBdRunner implements BdRunner {
+class RecordingBdRunner implements BdRunner, BeadProbeReader {
   RecordingBdRunner({String createdId = 'tgdog-sess1'})
     : _createdId = createdId;
 
@@ -56,29 +56,54 @@ class RecordingBdRunner implements BdRunner {
   Map<String, String> graphApplyIds = const <String, String>{};
 
   @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    final matches = exportBeads.where(
+      (bead) => bead.id == id && types.contains(bead.issueType),
+    );
+    return matches.isEmpty ? null : matches.single;
+  }
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => exportBeads.where((bead) {
+    if (bead.isClosed || !types.contains(bead.issueType)) return false;
+    if (!metadataAll.entries.every((e) => bead.metadata[e.key] == e.value)) {
+      return false;
+    }
+    return metadataAny.isEmpty ||
+        metadataAny.entries.any((e) => bead.metadata[e.key] == e.value);
+  }).toList();
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async {
+    final ids = exportDependencies
+        .where(
+          (edge) =>
+              edge.type == DependencyType.supersedes &&
+              priorIds.contains(edge.dependsOnId),
+        )
+        .map((edge) => edge.issueId)
+        .toSet();
+    return exportBeads
+        .where((bead) => ids.contains(bead.id) && !bead.isClosed)
+        .toList();
+  }
+
+  @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
     if (sub == 'export') {
-      // `bd export --all` emits RAW JSONL (one issue object per line), NOT an
-      // envelope — the snapshot read path `exportAll` parses.
-      final depsByIssue = <String, List<Map<String, dynamic>>>{};
-      for (final dep in exportDependencies) {
-        (depsByIssue[dep.issueId] ??= <Map<String, dynamic>>[]).add(
-          dep.toJson(),
-        );
-      }
-      final jsonl = exportBeads
-          .map((b) {
-            final json = b.toJson();
-            final deps = depsByIssue[b.id];
-            if (deps != null) json['dependencies'] = deps;
-            return jsonEncode(json);
-          })
-          .join('\n');
       return Future<BdResult>.value(
-        BdResult(exitCode: 0, stdout: jsonl, stderr: ''),
+        const BdResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'Error: export is not supported in proxied-server mode',
+        ),
       );
     }
     if (sub == 'create' && failCreateError != null) {

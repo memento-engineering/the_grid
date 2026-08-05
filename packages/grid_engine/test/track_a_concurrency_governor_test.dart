@@ -278,6 +278,7 @@ void main() {
             provider: FakeRuntimeProvider(),
             writer: StationBeadWriter(
               bd: BdCliService(RecordingBdRunner()),
+              reader: RecordingBdRunner(),
               ownership: BeadOwnershipPredicate(const {'tg'}),
             ),
             stateSubstation: 'tg',
@@ -403,6 +404,7 @@ void main() {
             provider: FakeRuntimeProvider(),
             writer: StationBeadWriter(
               bd: BdCliService(RecordingBdRunner()),
+              reader: RecordingBdRunner(),
               ownership: BeadOwnershipPredicate(const {'tg'}),
             ),
             stateSubstation: 'tg',
@@ -495,6 +497,7 @@ void main() {
             provider: FakeRuntimeProvider(),
             writer: StationBeadWriter(
               bd: BdCliService(RecordingBdRunner()),
+              reader: RecordingBdRunner(),
               ownership: BeadOwnershipPredicate(const {'a', 'b'}),
             ),
             stateSubstation: 'a',

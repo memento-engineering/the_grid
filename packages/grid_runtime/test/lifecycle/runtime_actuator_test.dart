@@ -22,6 +22,7 @@ void main() {
     runner = RecordingBdRunner(createdId: 'tgdog-sess1');
     final writer = StationBeadWriter(
       bd: BdCliService(runner),
+      reader: runner,
       ownership: BeadOwnershipPredicate({'tgdog'}),
     );
     return RuntimeActuator(

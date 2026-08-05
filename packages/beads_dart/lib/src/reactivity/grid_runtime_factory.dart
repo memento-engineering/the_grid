@@ -1,7 +1,9 @@
 import '../services/bd_cli_service.dart';
 import '../services/bd_runner.dart';
 import '../services/beads_workspace.dart';
+import '../services/bead_probe_reader.dart';
 import '../services/dolt_query_service.dart';
+import '../models/issue_type.dart';
 import 'dirty_signal.dart';
 import 'grid_controller_runtime.dart';
 import 'snapshot_reader.dart';
@@ -15,14 +17,16 @@ enum ReadPath { sql, cli }
 class GridRuntimeBundle {
   GridRuntimeBundle({
     required this.runtime,
+    required this.probeReader,
     required this.readPath,
     required this.shutdown,
   });
 
   final GridControllerRuntime runtime;
+  final BeadProbeReader probeReader;
 
   /// The active read path: [ReadPath.sql] when pooled Dolt reads are in use,
-  /// [ReadPath.cli] when composing via `bd export` (embedded mode, no
+  /// [ReadPath.cli] when composing via scoped lists (embedded mode, no
   /// credentials, or SQL unavailable/drifted).
   final ReadPath readPath;
 
@@ -39,7 +43,7 @@ class GridRuntimeBundle {
 ///   *and* a credential, and the pool connects (drift guard passes): pooled
 ///   Dolt reads + a `@@<db>_working` probe source, with the CLI reader as the
 ///   per-refresh fallback.
-/// * **CLI path** otherwise: `bd export` composition + a polling backstop.
+/// * **CLI path** otherwise: scoped-list composition + a polling backstop.
 ///
 /// Both paths always include the `.beads/` workspace watcher for sub-second
 /// local-mutation push.
@@ -51,6 +55,7 @@ class GridRuntimeFactory {
     Duration probeInterval = const Duration(seconds: 1),
     Duration pollInterval = const Duration(seconds: 5),
     BdRunner? runner,
+    Set<IssueType> lifecycleTypes = const {},
   }) async {
     final bd = BdCliService(
       runner ?? ProcessBdRunner(workspaceRoot: workspace.root),
@@ -63,13 +68,14 @@ class GridRuntimeFactory {
     var readPath = ReadPath.cli;
     DoltQueryService? dolt;
     SnapshotReader reader = cliReader;
+    BeadProbeReader probeReader = CliBeadProbeReader(
+      bd,
+      lifecycleTypes: lifecycleTypes,
+    );
 
     final endpoint = workspace.endpoint;
-    // Proxied-server mode (bd experimental) is server-shaped for reads: the
-    // bd-managed proxy fronts a loopback MySQL endpoint. NOTE: its CLI
-    // fallback is degraded — `bd export` is unsupported in proxied mode — so
-    // the SQL path is the primary and a failed connect falls back to a
-    // polling CLI reader that will surface bd's own error loudly.
+    // Proxied-server mode is server-shaped for reads; SQL stays primary and a
+    // failed connection assembles the explicitly-scoped CLI implementation.
     final serverShaped =
         workspace.mode == DoltMode.server ||
         workspace.mode == DoltMode.proxiedServer;
@@ -81,7 +87,8 @@ class GridRuntimeFactory {
       try {
         await candidate.connect(); // runs the schema-drift guard
         dolt = candidate;
-        reader = SqlSnapshotReader(dolt: dolt, bd: bd, fallback: cliReader);
+        reader = SqlSnapshotReader(dolt: dolt, bd: bd);
+        probeReader = SqlBeadProbeReader(dolt);
         dirtySources.add(
           WorkingSetProbeSource(DoltChangeProbe(dolt), interval: probeInterval),
         );
@@ -104,6 +111,7 @@ class GridRuntimeFactory {
 
     return GridRuntimeBundle(
       runtime: runtime,
+      probeReader: probeReader,
       readPath: readPath,
       shutdown: () async {
         await runtime.dispose();

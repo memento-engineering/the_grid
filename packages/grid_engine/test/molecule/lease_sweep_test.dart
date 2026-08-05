@@ -385,6 +385,7 @@ void main() {
         () async {
           final writer = StationBeadWriter(
             bd: BdCliService(_ThrowingBdRunner()),
+            reader: RecordingBdRunner(),
             ownership: BeadOwnershipPredicate(const {stateSubstation}),
           );
           final vendor = StationProcessLeaseVendor(

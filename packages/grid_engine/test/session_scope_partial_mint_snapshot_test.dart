@@ -65,6 +65,7 @@ void main() {
       provider: fakes.provider,
       writer: StationBeadWriter(
         bd: BdCliService(fakes.runner),
+        reader: fakes.runner,
         ownership: BeadOwnershipPredicate(const {stateSubstation, 'route'}),
       ),
       stateSubstation: stateSubstation,

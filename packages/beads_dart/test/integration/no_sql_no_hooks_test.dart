@@ -86,7 +86,7 @@ void main() {
         bd.depAddArgs('a', 'b', DependencyType.blocks),
         bd.batchArgs(),
         bd.readyArgs(),
-        bd.exportArgs(),
+        bd.listScopeArgs(type: IssueType.task, status: BeadStatus.open),
         bd.queryArgs('status:open'),
       ];
       const sqlVerbs = {

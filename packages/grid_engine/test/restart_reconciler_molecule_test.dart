@@ -96,6 +96,7 @@ class _FakeProcessGroupController implements ProcessGroupController {
   return (
     writer: StationBeadWriter(
       bd: BdCliService(bd),
+      reader: bd,
       ownership: BeadOwnershipPredicate(const {stateSubstation}),
     ),
     bd: bd,

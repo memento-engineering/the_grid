@@ -22,6 +22,7 @@ void main() {
 
   StationBeadWriter writer() => StationBeadWriter(
     bd: bd,
+    reader: runner,
     ownership: predicate(),
     onRefusal: refusals.add,
   );
@@ -90,8 +91,8 @@ void main() {
 
         // The dedup probe reads the store BEFORE pouring, then the pour is
         // followed by one crumb stamp per minted molecule/step bead.
-        expect(runner.callsFor('export'), hasLength(1));
-        expect(runner.calls, hasLength(4));
+        expect(runner.callsFor('export'), isEmpty);
+        expect(runner.calls, hasLength(3));
       },
     );
 
@@ -390,7 +391,7 @@ void main() {
         await writer().reapMolecule(sessionId: 'tgdog-sess1');
 
         expect(runner.callsFor('batch'), isEmpty);
-        expect(runner.calls, hasLength(1)); // just the export scan
+        expect(runner.calls, isEmpty);
       },
     );
 

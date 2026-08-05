@@ -154,8 +154,7 @@ class DoltQueryService {
   /// ephemeral_routing.go; migrations 0020/0021/0035), so a read over `issues`
   /// alone would never see a poured wisp — or, post-0035, any agent/rig/role/
   /// message bead. Filtering is the consumer's job (projections/selectors);
-  /// the CLI capture path (`bd export --all`, cmd/bd/export.go) shares these
-  /// inclusion semantics so the two paths produce identical snapshots.
+  /// the scoped CLI capture path shares these inclusion semantics.
   ///
   /// Four SELECTs (issues, wisps, labels∪wisp_labels, dependencies∪
   /// wisp_dependencies); labels are grouped per issue and dependency/dependent
@@ -358,8 +357,7 @@ class DoltQueryService {
   /// SQL string literal: single-quote-wrapped, backslash + single-quote
   /// doubling — mirrors `mysql_client`'s `_escapeString` so an inlined
   /// literal matches the bound-parameter encoding byte-for-byte (same
-  /// escaper Track F's ready-work port uses). Exposed for tests.
-  @visibleForTesting
+  /// escaper Track F's ready-work port uses). Shared by targeted readers.
   static String sqlString(String value) {
     final escaped = value.replaceAll(r'\', r'\\').replaceAll("'", "''");
     return "'$escaped'";

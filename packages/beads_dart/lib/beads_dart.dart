@@ -58,6 +58,7 @@ export 'src/ready/ready_work_query.dart';
 
 // Services (stateless I/O): workspace discovery, bd CLI, Dolt SQL reads.
 export 'src/services/bd_cli_service.dart';
+export 'src/services/bead_probe_reader.dart';
 export 'src/services/bd_runner.dart';
 export 'src/services/beads_workspace.dart';
 export 'src/services/dolt_endpoint.dart';

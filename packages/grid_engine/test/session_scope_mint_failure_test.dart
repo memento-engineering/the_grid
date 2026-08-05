@@ -161,6 +161,7 @@ StationServices _ctxOver(BdRunner runner) => StationServices(
   provider: FakeRuntimeProvider(),
   writer: StationBeadWriter(
     bd: BdCliService(runner),
+    reader: const EmptyBeadProbeReader(),
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   ),
   stateSubstation: stateSubstation,

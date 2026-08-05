@@ -1,14 +1,14 @@
 import '../errors/bd_exception.dart';
+import '../models/bead.dart';
+import '../models/bead_dependency.dart';
+import '../models/bead_status.dart';
+import '../models/issue_type.dart';
 import '../models/graph_snapshot.dart';
 import '../services/bd_cli_service.dart';
 import '../services/dolt_query_service.dart';
 import 'snapshot_reader.dart';
 
-/// Composes a snapshot entirely from the bd CLI: `bd export --all` for the
-/// complete bead/dependency graph (issues ∪ wisps — see [SnapshotReader] for
-/// the unified inclusion semantics) and `bd ready` for the ready set. The
-/// guaranteed-correct path (and the SQL path's fallback). Two bd spawns per
-/// refresh.
+/// Composes a CLI snapshot from every registered type/status scope.
 class CliSnapshotReader implements SnapshotReader {
   CliSnapshotReader(this._bd, {DateTime Function()? clock})
     : _clock = clock ?? DateTime.now;
@@ -18,59 +18,94 @@ class CliSnapshotReader implements SnapshotReader {
 
   @override
   Future<GraphSnapshot> read() async {
-    final export = await _bd.exportAll();
+    final typeData = await _bd.types();
+    final statusData = await _bd.statuses();
+    final types = _names(typeData, const [
+      'core_types',
+      'custom_types',
+    ]).map(IssueType.new).toSet();
+    final statuses = _names(
+      statusData,
+      statusData.keys.where((key) => key.contains('status')).toList(),
+    ).map(BeadStatus.new).toSet();
+    if (types.isEmpty || statuses.isEmpty) {
+      throw const BdParseException('bd type/status discovery was empty');
+    }
+    final beads = <String, Bead>{};
+    final dependencies = <String, BeadDependency>{};
+    for (final type in types) {
+      for (final status in statuses) {
+        final scope = await _bd.listScope(type: type, status: status);
+        for (final bead in scope.beads) {
+          beads[bead.id] = bead;
+        }
+        for (final edge in scope.dependencies) {
+          dependencies[edge.edgeKey] = edge;
+        }
+      }
+    }
     final ready = await _bd.ready();
     return GraphSnapshot.fromParts(
-      beads: export.beads,
-      dependencies: export.dependencies,
+      beads: beads.values,
+      dependencies: dependencies.values,
       readyIds: ready.map((bead) => bead.id),
       capturedAt: _clock(),
     );
+  }
+
+  static Set<String> _names(Map<String, dynamic> data, Iterable<String> keys) {
+    final result = <String>{};
+    for (final key in keys) {
+      final values = data[key];
+      if (values == null) continue;
+      if (values is! List) {
+        throw BdParseException('bd discovery field "$key" was not a list');
+      }
+      for (final value in values) {
+        final name = value is String
+            ? value
+            : value is Map<String, dynamic>
+            ? value['name']
+            : null;
+        if (name is! String || name.isEmpty) {
+          throw BdParseException('bd discovery field "$key" had no name');
+        }
+        result.add(name);
+      }
+    }
+    return result;
   }
 }
 
 /// Composes a snapshot from pooled Dolt SQL (issues ∪ wisps, plus both label
 /// and dependency tables — see [SnapshotReader] for the unified inclusion
 /// semantics) plus `bd ready` for the ready set (authoritative in M1; M2 ports
-/// ready-work to SQL, differential-tested). One bd spawn per refresh instead
-/// of two, and the heavy read is ~1–5ms SQL instead of a ~70–140ms `bd export`
-/// spawn.
+/// ready-work to SQL, differential-tested). The heavy read stays on pooled SQL.
 ///
-/// Any failure — schema drift ([BdSchemaDriftException]), a reaped connection,
-/// or any other SQL error — falls back to [fallback] (the CLI reader) so a
-/// refresh never fails because the optimization path did. The SQL-vs-CLI
-/// equivalence test (ADR-0001 D7) guards that the two paths agree.
+/// SQL failures propagate: assembly chooses the source once and reads stay loud.
 class SqlSnapshotReader implements SnapshotReader {
   SqlSnapshotReader({
     required DoltQueryService dolt,
     required BdCliService bd,
-    required SnapshotReader fallback,
     DateTime Function()? clock,
   }) : _dolt = dolt,
        _bd = bd,
-       _fallback = fallback,
        _clock = clock ?? DateTime.now;
 
   final DoltQueryService _dolt;
   final BdCliService _bd;
-  final SnapshotReader _fallback;
   final DateTime Function() _clock;
 
   @override
   Future<GraphSnapshot> read() async {
-    try {
-      final parts = await _dolt.snapshotParts();
-      final ready = await _bd.ready();
-      return GraphSnapshot.fromParts(
-        beads: parts.beads,
-        dependencies: parts.dependencies,
-        readyIds: ready.map((bead) => bead.id),
-        capturedAt: _clock(),
-      );
-    } on Object {
-      // Drift / connection loss / any SQL error → the authoritative CLI path.
-      return _fallback.read();
-    }
+    final parts = await _dolt.snapshotParts();
+    final ready = await _bd.ready();
+    return GraphSnapshot.fromParts(
+      beads: parts.beads,
+      dependencies: parts.dependencies,
+      readyIds: ready.map((bead) => bead.id),
+      capturedAt: _clock(),
+    );
   }
 }
 
