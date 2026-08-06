@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0-rc.2
+
+- Fixed: `grid link ls` / `link` / `unlink` crashed with `bd type discovery
+  field "custom_types" was not a list` against any store that has no custom
+  types. `bd types --json` OMITS an empty group rather than emitting an empty
+  list, so the absent key was read as malformed. Absent now means none.
+- Fixed: on a store whose types do not include `link`, the scoped read that
+  replaced the whole-store export was refused by bd (`invalid issue type`)
+  where the export had simply found nothing. A store without the `link` type
+  cannot hold link beads, so `link ls` now reports an empty listing and
+  `unlink` reports no match, instead of erroring.
+
 ## 0.5.0-rc.1
 
 - Breaking: tracks the beads_dart 0.2.0-rc.1 wave. `grid link`, `grid link ls` and

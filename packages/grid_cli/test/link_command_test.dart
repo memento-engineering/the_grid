@@ -335,6 +335,79 @@ void main() {
     expect(state.mutationCalls, hasLength(before));
   });
 
+  test('a store with no custom types lists zero links, not an error', () async {
+    // The 0.5.0-rc.1 regression pair, measured against space_station's state
+    // store on 2026-08-05: (1) `bd types --json` omits an empty group, so a
+    // store with no custom types has NO `custom_types` key and _probeReader
+    // threw BdParseException on it; (2) when discovery did succeed, the
+    // scoped `list -t link` read that replaced the whole-store export is
+    // REFUSED by bd for an unregistered type ("invalid issue type"), where
+    // the export had simply found nothing. No link type ⇒ no link beads ⇒ an
+    // empty listing, exit 0.
+    state.customTypes = const [];
+    final lines = <String>[];
+    final errors = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls', '--grid-root', temp.path]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: lines.add,
+        err: errors.add,
+      ),
+      0,
+    );
+    expect(lines, isEmpty);
+    expect(errors, isEmpty);
+    // The refusable scoped read must never be issued against the store.
+    expect(
+      state.calls.where((call) => call.first == 'list' && call[2] == 'link'),
+      isEmpty,
+    );
+  });
+
+  test(
+    'unlink by pair on a store without the link type finds nothing',
+    () async {
+      state.customTypes = const [];
+      final errors = <String>[];
+      expect(
+        await runUnlink(
+          arguments: _unlinkArgs([
+            'tg-q9k',
+            'pow-60g',
+            '--grid-root',
+            temp.path,
+            '--prefix',
+            'houston',
+            '--prefix',
+            'tg',
+            '--prefix',
+            'pow',
+            '--actor',
+            'operator',
+            '--reason',
+            'landed',
+          ]),
+          stateStorePrefix: 'houston',
+          endpoints: endpoints,
+          bdFactory: factory,
+          err: errors.add,
+        ),
+        1,
+      );
+      // A clean "found 0" refusal — not a BdParseException, not a bd type
+      // refusal from a scoped read the store cannot answer.
+      expect(errors.single, contains('found 0'));
+      expect(
+        state.calls.where((call) => call.first == 'list' && call[2] == 'link'),
+        isEmpty,
+      );
+      expect(state.mutationCalls, isEmpty);
+    },
+  );
+
   test('malformed type discovery fails without mutations or export', () async {
     state.malformedTypes = true;
     final errors = <String>[];
@@ -434,9 +507,12 @@ class _FakeStore implements BdRunner {
         if (malformedTypes) {
           return _envelope({'core_types': 'task', 'custom_types': customTypes});
         }
+        // Real `bd types --json` OMITS an empty group — a store with no
+        // custom types carries no `custom_types` key at all. The fake mirrors
+        // that shape so every test runs against what bd actually emits.
         return _envelope({
           'core_types': const ['task'],
-          'custom_types': customTypes,
+          if (customTypes.isNotEmpty) 'custom_types': customTypes,
         });
       case 'export':
         return BdResult(
