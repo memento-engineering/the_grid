@@ -108,9 +108,13 @@ Future<int> runLink({
       final factory = bdFactory ?? _processBd;
       final stateWorkspace = openStateStore(stateStore, dirExists: dirExists);
       final stateProbe = await _probeReader(factory(stateWorkspace));
-      final links = await stateProbe.reader.openBeads(
-        types: {GridIssueTypes.link},
-      );
+      // A scoped read REFUSES an unregistered type (bd: invalid issue type
+      // 'link'), where the whole-store export this replaced simply found
+      // nothing. A store without the `link` custom type cannot hold link
+      // beads, so that is an empty result, not an error.
+      final links = stateProbe.types.contains(GridIssueTypes.link)
+          ? await stateProbe.reader.openBeads(types: {GridIssueTypes.link})
+          : <Bead>[];
       final statuses = <String, String>{};
       final endpointIds = <String>{
         for (final bead in links) ...[
@@ -273,6 +277,8 @@ Future<int> runUnlink({
               types: probe.types,
             ),
           ].whereType<Bead>().toList()
+        : !probe.types.contains(GridIssueTypes.link)
+        ? <Bead>[]
         : await probe.reader.openBeads(
             types: {GridIssueTypes.link},
             metadataAll: {
@@ -330,6 +336,12 @@ Future<({CliBeadProbeReader reader, Set<IssueType> types})> _probeReader(
   final types = <IssueType>{};
   for (final key in const ['core_types', 'custom_types']) {
     final raw = data[key];
+    // `bd types --json` OMITS an empty group: a store with no custom types
+    // carries no `custom_types` key at all, not an empty list. Absent means
+    // NONE, not malformed — only a present-but-wrong-shape value is a parse
+    // error. The `types.isEmpty` check below still catches a store that
+    // discovered nothing at all.
+    if (raw == null) continue;
     if (raw is! List) {
       throw BdParseException('bd type discovery field "$key" was not a list');
     }
