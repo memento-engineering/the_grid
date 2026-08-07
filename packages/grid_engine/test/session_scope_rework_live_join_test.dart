@@ -271,6 +271,71 @@ void main() {
       expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));
     });
 
+    test(
+      'a re-keyed round mints on a QUIET board — no fresh work publish ever '
+      'arrives (change-gated pipeline): the SESSION view, not the snapshot '
+      'clock, is the staleness evidence (2026-08-07 afternoon wedge)',
+      () async {
+        SessionScopeState.freshMintSnapshotGrace = const Duration(
+          milliseconds: 60,
+        );
+        addTearDown(
+          () => SessionScopeState.freshMintSnapshotGrace = const Duration(
+            seconds: 90,
+          ),
+        );
+        final f = buildFakes(createdId: 'tgdog-round2');
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+
+        // The work snapshot is OLD (tick 0) and will NEVER republish — the
+        // exact quiet-board shape: an unchanged store's floor refresh
+        // publishes nothing, so capturedAt cannot pass any decision time.
+        final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final stateSrc = FakeSnapshotSource(
+          _state([_closedRound1Session('tgdog-round1', workBead: 'tg-1')]),
+        );
+        final bridge = StationJoinBridge(work: workSrc, state: stateSrc)
+          ..start();
+        addTearDown(bridge.dispose);
+
+        final m = _mountFull(
+          joined: bridge.notifier,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+        );
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
+        await _pump();
+        expect(f.runner.callsFor('create'), isEmpty);
+
+        // The operator re-keys round 1 (the ONLY store change — state side).
+        stateSrc.push(
+          _state([
+            _closedRound1Session('tgdog-round1', workBead: 'tg-1#r1'),
+          ], tick: 1),
+        );
+        // NO work push. Pre-fix this hung forever in
+        // _awaitFreshReadySnapshot (capturedAt < decisionAt, return),
+        // parking every post-rework mint on a quiet board.
+        await _pumpUntil(
+          m.owner,
+          () =>
+              reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
+              f.runner.callsFor('create').length >= 2,
+        );
+
+        expect(
+          reg.events,
+          contains('START agent(tgdog-round2/tg-1/agent)'),
+          reason:
+              'the joined view already shows tg-1 ready + sessionless — '
+              'the mint must not wait for a publish that never comes',
+        );
+      },
+    );
+
     test('a CLOSED round re-keyed by `grid rework` remounts through the same '
         'owner and mints round N+1 without a restart', () async {
       final f = buildFakes(createdId: 'tgdog-round2');
