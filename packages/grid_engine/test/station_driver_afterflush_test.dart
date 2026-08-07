@@ -65,8 +65,7 @@ void main() {
           steps: [CapabilityStep(stepId: 'land', capabilityId: 'land')],
         ),
         registry: RecordingCapabilityRegistry(circuits: const {}),
-        onUnclaimedFrontier: (_) =>
-            throw StateError('frontier consumer broke'),
+        onUnclaimedFrontier: (_) => throw StateError('frontier consumer broke'),
       );
       addTearDown(driver.dispose);
 
