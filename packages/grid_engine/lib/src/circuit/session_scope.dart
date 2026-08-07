@@ -380,10 +380,20 @@ class SessionScopeState extends State<SessionScope>
         NoSession() || LiveSession() || VoidedSession() => false,
       };
 
+  /// How long the fresh-snapshot barrier waits for a post-decision publish
+  /// before letting the SESSION-view evidence decide (see
+  /// [_considerMintReadiness]). Static and mutable so an offline test can
+  /// shrink the quiet-board window; production never changes it.
+  static Duration freshMintSnapshotGrace = const Duration(seconds: 90);
+
+  Timer? _mintGraceTimer;
+  bool _mintGraceLapsed = false;
+
   Future<bool> _awaitFreshReadySnapshot() async {
     final completer = Completer<JoinedSnapshot?>();
     _mintDecisionAt = DateTime.now();
     _mintBlockedReported = false;
+    _mintGraceLapsed = false;
     _mintReadiness = completer;
     _considerMintReadiness();
     final snapshot = await completer.future;
@@ -391,6 +401,8 @@ class SessionScopeState extends State<SessionScope>
       _mintReadiness = null;
       _mintDecisionAt = null;
     }
+    _mintGraceTimer?.cancel();
+    _mintGraceTimer = null;
     return snapshot != null;
   }
 
@@ -411,7 +423,31 @@ class SessionScopeState extends State<SessionScope>
       }
       return;
     }
-    if (snapshot.graph.capturedAt.isBefore(decisionAt)) return;
+    if (snapshot.graph.capturedAt.isBefore(decisionAt)) {
+      // The barrier's authored case (tg-x1j v2): a dep-add raced against an
+      // immediate re-key — the fresh round must NOT mint from the snapshot
+      // that predates the operator's own writes, so an older capture WAITS.
+      //
+      // But a change-gated pipeline withholds publishes for unchanged
+      // stores, so on a QUIET board capturedAt may never pass decisionAt —
+      // waiting on the clock alone parked every post-rework mint forever
+      // (the 2026-08-07 afternoon: admission clean, slots free, no round
+      // ever minted; the same freshness-vs-change-gating class as the
+      // federation heartbeat fix). So the wait is BOUNDED: past
+      // [freshMintSnapshotGrace] the SESSION view decides — the staleness
+      // that matters is a snapshot still carrying a LIVE session for this
+      // bead (pre-retire); one already showing it sessionless/terminal is
+      // current in every fact the mint reads, whatever its capture time.
+      if (!_mintGraceLapsed) {
+        _mintGraceTimer ??= Timer(freshMintSnapshotGrace, () {
+          _mintGraceLapsed = true;
+          _considerMintReadiness();
+        });
+        return;
+      }
+      final joined = snapshot.sessionsByWorkBead[seed.bead.id];
+      if (joined != null && !joined.isTerminal) return;
+    }
     if (!snapshot.graph.readyIds.contains(seed.bead.id)) {
       if (!_mintBlockedReported) {
         _mintBlockedReported = true;
@@ -1147,6 +1183,8 @@ class SessionScopeState extends State<SessionScope>
     }
     _mintReadiness = null;
     _mintDecisionAt = null;
+    _mintGraceTimer?.cancel();
+    _mintGraceTimer = null;
     _cancelled = true;
     _mintingSuccessorForPath.clear();
   }
