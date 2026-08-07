@@ -196,19 +196,16 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
       }
     }
 
+    String? reapFailure;
     try {
       await workStore.writer.clearSpecifyAuthoredSpec(beadId);
       await _stateWriter.update(
         session.id,
         metadata: {SessionBeadKeys.workBead: reworkKeyFor(beadId, round)},
       );
-      // Reap the retired round's molecule (tg-ehht): the positive-terminal
-      // close already collects its own graph; rework is the OTHER designed
-      // session exit and left every retired round's step beads open forever
-      // — 9,389 orphans across 307 closed sessions by 2026-08-07, the
-      // dependency bloat behind the graph-apply pour timeouts. A no-op for a
-      // flat or never-poured (pour-parked) session.
-      await _stateWriter.reapMolecule(sessionId: session.id);
+      // The operator finding lands BEFORE collection housekeeping: the note
+      // is what the fresh round's architect reads, and losing it to a reap
+      // hiccup cost a live round its findings (2026-08-07).
       final finding = note?.trim();
       if (finding != null && finding.isNotEmpty) {
         final timestamp = DateTime.now().toUtc().toIso8601String();
@@ -222,17 +219,35 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
           appendNotes: '$header\n$finding',
         );
       }
+      // Reap the retired round's molecule (tg-ehht): the positive-terminal
+      // close already collects its own graph; rework is the OTHER designed
+      // session exit and left every retired round's step beads open forever
+      // — 9,389 orphans across 307 closed sessions by 2026-08-07, the
+      // dependency bloat behind the graph-apply pour timeouts. A no-op for a
+      // flat or never-poured (pour-parked) session. NON-FATAL: the retire
+      // and the note already landed — a collection failure is reported LOUD
+      // in the result, never thrown into the control door's generic 500.
+      try {
+        await _stateWriter.reapMolecule(sessionId: session.id);
+      } on Object catch (error) {
+        reapFailure = '$error';
+      }
     } on OwnershipRefused catch (error) {
       return _refused('ownership_refused', error.toString());
     }
 
     return GridCommandResult.completed(
-      message: 'Rework round $round retired session "${session.id}".',
+      message: reapFailure == null
+          ? 'Rework round $round retired session "${session.id}".'
+          : 'Rework round $round retired session "${session.id}" — but its '
+                'molecule reap FAILED (open step beads remain; sweep them): '
+                '$reapFailure',
       value: {
         'operation': 'grid/rework',
         'beadId': beadId,
         'sessionId': session.id,
         'round': round,
+        if (reapFailure != null) 'reapFailure': reapFailure,
       },
     );
   }

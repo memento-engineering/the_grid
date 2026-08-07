@@ -550,12 +550,18 @@ class StationControl {
           },
         ),
       };
-    } on Object {
+    } on Object catch (error) {
+      // Carry the actual failure (bounded) — a bare 'Command handler failed.'
+      // swallowed a live rework's reap exception whole (2026-08-07); the
+      // operator could not diagnose it without instrumenting the resident.
+      final detail = '$error';
       return _CommandResponse(HttpStatus.internalServerError, {
         'id': id,
         'error': {
           'code': 'internal_error',
-          'message': 'Command handler failed.',
+          'message':
+              'Command handler failed: '
+              '${detail.length > 500 ? detail.substring(0, 500) : detail}',
         },
       });
     }
