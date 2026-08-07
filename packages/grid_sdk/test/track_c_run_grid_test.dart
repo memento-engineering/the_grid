@@ -18,6 +18,7 @@ import 'dart:io';
 // (Station/Substation/SubstationScope), so only the sweep's own types are
 // pulled in here.
 import 'package:beads_dart/beads_dart.dart' show GraphSnapshot;
+import 'package:grid_engine/grid_engine.dart' show GridDiagnosticable;
 import 'package:grid_engine/testing.dart' show FakeRuntimeProvider;
 import 'package:grid_runtime/grid_runtime.dart'
     show ProcessGroupController, RootCheckout, RuntimeConfig;
@@ -27,6 +28,17 @@ import 'package:test/test.dart';
 /// A terminal leaf (an empty fan-out).
 class Leaf extends MultiChildSeed {
   const Leaf({super.key}) : super(children: const []);
+}
+
+final class _DiagnosableRoot extends Seed with GridDiagnosticable {
+  const _DiagnosableRoot();
+
+  @override
+  Branch createBranch() => _DiagnosableBranch(this);
+}
+
+final class _DiagnosableBranch extends Branch {
+  _DiagnosableBranch(super.seed);
 }
 
 /// A process-group seam that signals nothing — the sweep's TRANSPORT half is
@@ -534,6 +546,44 @@ void main() {
   });
 
   group('a watched value re-composes (v3 §1)', () {
+    test('projects every completed flush before the runner callback', () async {
+      final projector = TreeProjector();
+      final snapshots = <Object>[];
+      final order = <String>[];
+      var closed = false;
+      projector.snapshots.listen((_) {
+        snapshots.add(projector.latest!);
+        order.add('project');
+      }, onDone: () => closed = true);
+      final delegate = RecordingDelegate(
+        initial: const GridConfiguration(settings: <String, Object?>{'v': 1}),
+        buildOverride: (_, _) => const _DiagnosableRoot(),
+      );
+
+      final handle = runGrid(
+        delegate,
+        treeProjector: projector,
+        onFlushed: () => order.add('callback'),
+      );
+
+      expect(projector.latest, isNotNull);
+      expect(snapshots, hasLength(1));
+      expect(order, <String>['project', 'callback']);
+
+      delegate.emit(
+        const GridConfiguration(settings: <String, Object?>{'v': 2}),
+      );
+      await pump();
+
+      expect(snapshots, hasLength(2));
+      expect(order, <String>['project', 'callback', 'project', 'callback']);
+
+      await handle.teardown();
+      await pump();
+      expect(closed, isFalse, reason: 'the runner owns the projector lifetime');
+      projector.dispose();
+    });
+
     test(
       'emitting a new configuration re-runs the master build with it',
       () async {

@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_engine/grid_engine.dart' show TreeProjector;
 import 'package:state_notifier/state_notifier.dart';
 
 import 'configuration.dart';
@@ -48,6 +48,10 @@ import 'reassemble.dart';
 /// tg-yl8). Nullable and opinion-free: `runGrid` neither knows nor cares what
 /// rides it.
 ///
+/// [treeProjector], when supplied, receives that same completed-flush rail
+/// before [onFlushed]. Its lifetime remains owned by the composing runner;
+/// [GridHandle.teardown] does not dispose it.
+///
 /// [delegateFactory] arms the dev-mode hot-RESTART ([GridHandle.hotRestart]):
 /// it is re-invoked to build a FRESH delegate from the same runner inputs
 /// (flags, env, wiring, harness registry). A JIT station (started with
@@ -57,6 +61,7 @@ GridHandle runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
   void Function()? onFlushed,
+  TreeProjector? treeProjector,
   Future<void> Function()? orphanSweep,
   GridDelegate Function()? delegateFactory,
 }) {
@@ -77,6 +82,7 @@ GridHandle runGrid(
   final reassemble = ReassembleBus();
   final handle = GridHandle._(
     owner,
+    treeProjector,
     delegate,
     report,
     onFlushed,
@@ -89,10 +95,12 @@ GridHandle runGrid(
   // baseline directly, never setState during mount), so onNeedsFlush cannot
   // fire during it.
   handle._wireFlush();
-  owner.mountRoot(
+  final root = owner.mountRoot(
     _GridConfigurationScope(delegate: delegate, reassemble: reassemble),
   );
   owner.flush();
+  handle._root = root;
+  treeProjector?.afterFlush(root);
   onFlushed?.call();
 
   // 3. Post-mount async kickoff — unawaited by the caller; onReady chained
@@ -140,6 +148,7 @@ Future<void> _kickoff(
 class GridHandle {
   GridHandle._(
     this._owner,
+    this._treeProjector,
     this._delegate,
     this._report,
     this._onFlushed,
@@ -149,6 +158,8 @@ class GridHandle {
   );
 
   final TreeOwner _owner;
+  final TreeProjector? _treeProjector;
+  late final Branch _root;
 
   /// The LIVE delegate. Mutable: a hot-RESTART retires the running delegate for
   /// a fresh one from the factory, and the rails (`onTeardown`/`dispose`) must
@@ -196,6 +207,7 @@ class GridHandle {
         }
         try {
           final rebuilt = _owner.flush();
+          _treeProjector?.afterFlush(_root);
           _onFlushed?.call();
           _completeWaiters(rebuilt.length);
         } catch (error, stackTrace) {
@@ -229,13 +241,11 @@ class GridHandle {
     }
   }
 
+  // The refusal rides its first-class carriers only: the awaited
+  // [ReassembleReport] when a caller is waiting, the [GridHookError] report
+  // rail when none is. No VM-service log side channel — that surface is the
+  // JIT debug channel, never a diagnostic dependency (ADR-0012 D2).
   void _refusePostSwapFlush(Object error, StackTrace stackTrace) {
-    developer.log(
-      'refused: re-compose failed after source swap - bounce the station',
-      name: 'grid.reassemble',
-      error: error,
-      stackTrace: stackTrace,
-    );
     final waiters = List<_ReassembleWaiter>.of(_flushWaiters);
     _flushWaiters.clear();
     if (waiters.isEmpty) {
@@ -346,14 +356,10 @@ class GridHandle {
     _flushWaiters.add(waiter);
     try {
       _reassemble.request(request);
-    } catch (error, stackTrace) {
+    } catch (error) {
       _flushWaiters.remove(waiter);
-      developer.log(
-        'refused: re-compose failed after source swap - bounce the station',
-        name: 'grid.reassemble',
-        error: error,
-        stackTrace: stackTrace,
-      );
+      // Delivered via the awaited report — no VM-service log side channel
+      // (ADR-0012 D2; the refusal's carrier is [ReassembleReport]).
       waiter.completer.complete(
         ReassembleReport.refusedAfterSourceSwap(
           mode: mode,
