@@ -98,10 +98,7 @@ class _RecordingTransport implements ExplorationTransport {
 /// larger than the mint budget models the PERSISTENT misconfiguration; `1`
 /// models a transient blip. Records every argv in order.
 class _FailCreateRunner implements BdRunner {
-  _FailCreateRunner({
-    required this.failCreates,
-    this.failGraphApplies = 0,
-  });
+  _FailCreateRunner({required this.failCreates, this.failGraphApplies = 0});
 
   final int failCreates;
   final int failGraphApplies;
@@ -284,82 +281,79 @@ void main() {
       },
     );
 
-    test(
-      'a thrown molecule POUR (post-createSession) flares once, parks the '
-      'existing session at a durable gate, and never burns the mint budget — '
-      'terminal, not retried (tg-aec)',
-      () async {
-        final runner = _FailCreateRunner(failCreates: 0, failGraphApplies: 1);
-        final ctx = _ctxOver(runner);
-        final transport = _RecordingTransport();
-        final reg = RecordingCapabilityRegistry(circuits: const {});
-        final bridge = StationJoinBridge(
-          work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
-          state: FakeSnapshotSource(_state(const [])),
-        )..start();
-        addTearDown(bridge.dispose);
+    test('a thrown molecule POUR (post-createSession) flares once, parks the '
+        'existing session at a durable gate, and never burns the mint budget — '
+        'terminal, not retried (tg-aec)', () async {
+      final runner = _FailCreateRunner(failCreates: 0, failGraphApplies: 1);
+      final ctx = _ctxOver(runner);
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final bridge = StationJoinBridge(
+        work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
+        state: FakeSnapshotSource(_state(const [])),
+      )..start();
+      addTearDown(bridge.dispose);
 
-        final m = _mountFull(
-          joined: bridge.notifier,
-          ctx: ctx,
-          registry: reg,
-          services: ServiceBundle(transport: transport),
-        );
-        addTearDown(m.owner.dispose);
-        await _pump();
-        m.owner.flush();
-        // The park chains createSession → thrown pour → gate create → the
-        // gate's blocks/node metadata stamp; settle on the stamp landing.
-        await _pumpUntil(
-          m.owner,
-          () => runner
-              .callsFor('update')
-              .any((c) => c.any((a) => a.contains('"blocks"'))),
-        );
-
-        // LOUD once, with the cause: one moleculePourFailed naming the parked
-        // session, its work bead, and the thrown error.
-        final parked = transport.named('session.moleculePourFailed').toList();
-        expect(parked, hasLength(1));
-        expect(parked.single.data['sessionId'], 'tgdog-sess1');
-        expect(parked.single.data['workBeadId'], 'tg-1');
-        expect(
-          parked.single.data['reason'],
-          contains('fake molecule graph pour refused'),
-        );
-
-        // ONE pour attempt — the park is terminal, never a blind re-pour.
-        expect(
-          runner.calls.where((c) => c.length > 1 && c[1] == '--graph'),
-          hasLength(1),
-        );
-        // Exactly two plain creates: the session, then the gate bead.
-        expect(
-          runner
-              .callsFor('create')
-              .where((c) => c.length <= 1 || c[1] != '--graph'),
-          hasLength(2),
-        );
-        // The gate stamp carries the re-arm linkage + the cause.
-        final stamps = runner
+      final m = _mountFull(
+        joined: bridge.notifier,
+        ctx: ctx,
+        registry: reg,
+        services: ServiceBundle(transport: transport),
+      );
+      addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
+      // The park chains createSession → thrown pour → gate create → the
+      // gate's blocks/node metadata stamp; settle on the stamp landing.
+      await _pumpUntil(
+        m.owner,
+        () => runner
             .callsFor('update')
-            .where((c) => c.any((a) => a.contains('"blocks"')))
-            .toList();
-        expect(stamps, hasLength(1));
-        final stamp = stamps.single.join(' ');
-        expect(stamp, contains('"blocks":"tgdog-sess1"'));
-        expect(stamp, contains('"node":"tg-1"'));
-        expect(stamp, contains('fake molecule graph pour refused'));
+            .any((c) => c.any((a) => a.contains('"blocks"'))),
+      );
 
-        // The mint budget is UNTOUCHED: a post-session pour failure is not a
-        // mint failure — no retry flares, no exhaustion escalation.
-        expect(transport.named('session.mintFailed'), isEmpty);
-        expect(transport.named('session.mintExhausted'), isEmpty);
+      // LOUD once, with the cause: one moleculePourFailed naming the parked
+      // session, its work bead, and the thrown error.
+      final parked = transport.named('session.moleculePourFailed').toList();
+      expect(parked, hasLength(1));
+      expect(parked.single.data['sessionId'], 'tgdog-sess1');
+      expect(parked.single.data['workBeadId'], 'tg-1');
+      expect(
+        parked.single.data['reason'],
+        contains('fake molecule graph pour refused'),
+      );
 
-        // INERT: the parked session never inflates the circuit.
-        expect(reg.events, isEmpty);
-      },
-    );
+      // ONE pour attempt — the park is terminal, never a blind re-pour.
+      expect(
+        runner.calls.where((c) => c.length > 1 && c[1] == '--graph'),
+        hasLength(1),
+      );
+      // Exactly two plain creates: the session, then the gate bead.
+      expect(
+        runner
+            .callsFor('create')
+            .where((c) => c.length <= 1 || c[1] != '--graph'),
+        hasLength(2),
+      );
+      // The gate stamp carries the re-arm linkage + the cause.
+      final stamps = runner
+          .callsFor('update')
+          .where((c) => c.any((a) => a.contains('"blocks"')))
+          .toList();
+      expect(stamps, hasLength(1));
+      final stamp = stamps.single.join(' ');
+      expect(stamp, contains('"blocks":"tgdog-sess1"'));
+      expect(stamp, contains('"node":"tg-1"'));
+      expect(stamp, contains('fake molecule graph pour refused'));
+
+      // The mint budget is UNTOUCHED: a post-session pour failure is not a
+      // mint failure — no retry flares, no exhaustion escalation.
+      expect(transport.named('session.mintFailed'), isEmpty);
+      expect(transport.named('session.mintExhausted'), isEmpty);
+
+      // INERT: the parked session never inflates the circuit.
+      expect(reg.events, isEmpty);
+    });
 
     test(
       'a TRANSIENT mint blip (first attempt throws, then succeeds) RECOVERS — '
