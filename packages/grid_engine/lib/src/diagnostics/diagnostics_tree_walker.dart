@@ -8,16 +8,30 @@ final class DiagnosticsTreeWalker {
   /// Walks [root] without mutating or subscribing to it.
   TreeSnapshot walk(Branch root, {required DateTime projectedAt}) {
     final roots = _walk(root);
-    if (roots.length != 1) {
+    if (roots.isEmpty) {
       throw StateError(
-        'Diagnostics walk requires exactly one semantic root; '
-        'found ${roots.length}',
+        'Diagnostics walk found no semantic root — nothing diagnosable is '
+        'mounted.',
       );
     }
+    // A wide roster surfaces SEVERAL top-level diagnosables (a resident
+    // station mounts one SubstationScope per store — seven on the first
+    // armed lunar boot, 2026-08-07, which this walk refused and took the
+    // whole arm down). Synthesize the station root instead: the projection
+    // is a VIEW, and a view never dictates the tree's shape.
+    final semanticRoot = roots.length == 1
+        ? roots.single
+        : TreeNode(
+            seedType: 'Station',
+            id: root.branchId,
+            key: root.key?.toString(),
+            properties: const [],
+            children: roots,
+          );
     return TreeSnapshot(
       contractVersion: 1,
       projectedAt: projectedAt,
-      root: roots.single,
+      root: semanticRoot,
     );
   }
 
