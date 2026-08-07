@@ -266,6 +266,45 @@ void main() {
         expect(flares, hasLength(2));
       },
     );
+    test(
+      'a QUIETLY-refreshing member (floor ticks, unchanged store) never ages '
+      'out — the age judgement reads the live heartbeat, not the last '
+      'published snapshot (the ready 16->4 live regression)',
+      () async {
+        var now = DateTime.fromMillisecondsSinceEpoch(0);
+        final flares = <String>[];
+        final tg = FakeSnapshotSource();
+        final quiet = FakeSnapshotSource();
+        final union = FederatedSnapshotSource(
+          {'tg': tg, 'quiet': quiet},
+          readyStaleAge: const Duration(seconds: 10),
+          now: () => now,
+          onFlare: (name, data) => flares.add(name),
+        );
+        addTearDown(union.dispose);
+
+        tg.push(graphOf([bead('tg-1')], tick: 1000));
+        quiet.push(graphOf([bead('quiet-1')], tick: 1000));
+        await settle();
+
+        // 'quiet' has NO changes to publish, but its runtime floor-refreshes:
+        // current.capturedAt advances with zero emissions (change-gated).
+        now = DateTime.fromMillisecondsSinceEpoch(15000);
+        quiet.refreshQuietly(graphOf([bead('quiet-1')], tick: 15000));
+        tg.push(graphOf([bead('tg-1')], tick: 15000));
+        await settle();
+
+        expect(
+          union.current!.readyIds,
+          {'tg-1', 'quiet-1'},
+          reason:
+              'a healthy quiet member must keep its frontier — aging it out '
+              'silently shrank ready 16->4 on the first armed night',
+        );
+        expect(union.freshness['quiet']!.stale, isFalse);
+        expect(flares, isEmpty);
+      },
+    );
   });
 
   group('FederatedSnapshotSource — the external-dep guard (D-F2)', () {

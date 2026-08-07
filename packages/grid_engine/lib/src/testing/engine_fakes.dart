@@ -493,6 +493,11 @@ class FakeSnapshotSource implements SnapshotSource {
     _controller.add(snapshot);
   }
 
+  /// Sets [current] WITHOUT emitting — the change-gated runtime's QUIET
+  /// refresh: a floor tick against an unchanged store advances `current`'s
+  /// capture time but publishes nothing (tg-zd4v freshness).
+  void refreshQuietly(GraphSnapshot snapshot) => _current = snapshot;
+
   /// Emits an error on the stream WITHOUT touching [current] — a fake
   /// connection blip, so a consumer's absence-≠-deletion handling (tg-nsj
   /// D-Z3) can be proven without retracting the last known snapshot.

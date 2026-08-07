@@ -107,18 +107,32 @@ class FederatedSnapshotSource implements SnapshotSource {
   Map<String, MemberFreshness> get freshness => {
     for (final id in _sources.keys)
       id: MemberFreshness(
-        capturedAt: _latestByMember[id]?.capturedAt,
+        capturedAt: _freshCapturedAt(id),
         stale: _isStale(id),
       ),
   };
 
+  /// The member's freshest known capture time — the LIVE source's `current`
+  /// first, the last PUBLISHED snapshot as fallback.
+  ///
+  /// The distinction is load-bearing (the first-night regression): a healthy
+  /// floor refresh against an UNCHANGED store advances the runtime's
+  /// `current.capturedAt` but publishes nothing (change-gated), so judging
+  /// age off the published snapshot alone ages every quiet-but-healthy member
+  /// into ready-staleness at 3x floor and silently shrinks the frontier
+  /// (observed live 2026-08-07: ready 16 → 4 within minutes of arming).
+  /// Content still comes from the published snapshot — only the AGE
+  /// judgement reads the live heartbeat.
+  DateTime? _freshCapturedAt(String id) =>
+      _sources[id]?.current?.capturedAt ?? _latestByMember[id]?.capturedAt;
+
   /// A member is stale for READY purposes when its stream errored (D-Z4) OR
-  /// its latest capture has aged past [_readyStaleAge] (tg-zd4v). Its beads
-  /// stay visible either way (D-Z3 — absence is not deletion).
+  /// its freshest known capture has aged past [_readyStaleAge] (tg-zd4v).
+  /// Its beads stay visible either way (D-Z3 — absence is not deletion).
   bool _isStale(String id) {
     if (_staleByMember[id] == true) return true;
     final age = _readyStaleAge;
-    final capturedAt = _latestByMember[id]?.capturedAt;
+    final capturedAt = _freshCapturedAt(id);
     if (age == null || capturedAt == null) return false;
     return _now().difference(capturedAt) > age;
   }
@@ -129,7 +143,7 @@ class FederatedSnapshotSource implements SnapshotSource {
     final sink = _onFlare;
     if (_readyStaleAge == null) return;
     for (final id in _sources.keys) {
-      final capturedAt = _latestByMember[id]?.capturedAt;
+      final capturedAt = _freshCapturedAt(id);
       final staleNow =
           capturedAt != null && _now().difference(capturedAt) > _readyStaleAge;
       if (staleNow && _ageStale.add(id)) {
