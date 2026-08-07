@@ -638,6 +638,35 @@ void main() {
     });
 
     test(
+      'reapMolecule degrades to per-bead closes when the store refuses batch '
+      '(proxied-server mode) — the tg-ehht 9,389-orphan mechanism',
+      () async {
+        final proxied = _ProxiedBatchRunner(createdId: 'tgdog-sess1');
+        proxied.exportBeads = [_molecule('tgdog-mol'), _step('tgdog-step-a')];
+        final w = StationBeadWriter(
+          bd: BdCliService(proxied),
+          reader: proxied,
+          ownership: BeadOwnershipPredicate(const {'tgdog'}),
+        );
+
+        await w.reapMolecule(sessionId: 'tgdog-sess1');
+
+        expect(proxied.callsFor('batch'), hasLength(1), reason: 'tried first');
+        final closes = proxied
+            .callsFor('close')
+            .map((c) => c[1])
+            .toList(growable: false);
+        expect(
+          closes,
+          unorderedEquals(['tgdog-mol', 'tgdog-step-a']),
+          reason:
+              'the proxied refusal degrades to bounded per-bead closes '
+              'instead of silently leaving the graph open forever',
+        );
+      },
+    );
+
+    test(
       'reapMolecule batches root beads plus open successor chain closes',
       () async {
         const dep1 = BeadDependency(
@@ -725,4 +754,25 @@ void main() {
       expect(await writer().metadataOf('tgdog-step-1'), isNull);
     });
   });
+}
+
+/// A [RecordingBdRunner] whose `batch` refuses like a proxied-server store.
+final class _ProxiedBatchRunner extends RecordingBdRunner {
+  _ProxiedBatchRunner({required super.createdId});
+
+  @override
+  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
+    if (args.isNotEmpty && args.first == 'batch') {
+      calls.add(List<String>.unmodifiable(args));
+      stdins.add(stdin);
+      return Future.value(
+        const BdResult(
+          exitCode: 1,
+          stdout: '',
+          stderr: 'Error: batch is not supported in proxied-server mode',
+        ),
+      );
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
 }
