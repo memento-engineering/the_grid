@@ -1,3 +1,15 @@
+## 0.3.0-rc.2
+
+- A failed molecule pour FLARES (`session.moleculePourFailed`) and parks the
+  session at a durable gate (tg-aec) — both the fresh-mint and adopted-orphan
+  paths; the silent inert-session class is closed.
+- `FederatedSnapshotSource` judges ready-staleness by AGE (`readyStaleAge`)
+  from the live source heartbeat, with rising-edge
+  `sync.memberStaleByAge`/`sync.memberRecovered` flares (tg-zd4v).
+- The wedge alarm samples LAST and ALWAYS in `StationDriver.afterFlush` — a
+  throwing scan can no longer silence the stall detector (tg-60n).
+- A throwing rebuild no longer decapitates the flush tick (tg-60n, #154).
+
 ## 0.3.0-rc.1
 
 - Breaking: tracks beads_dart 0.2.0-rc.1 and grid_runtime 0.2.0-rc.1 — the

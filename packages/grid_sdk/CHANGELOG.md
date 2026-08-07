@@ -1,3 +1,15 @@
+## 0.3.0-rc.2
+
+- `runGrid` gains the `treeProjector` seam; completed flushes feed the
+  diagnostics reporter (tg-j4ym); the `dart:developer` log side channel is
+  retired — the VM service stays a debug surface, never a diagnostics
+  dependency.
+- `buildStationWork` threads `syncFloorInterval`, arms the federation's
+  freshness + flare wiring, and exposes `syncStats`/`workFreshness`.
+- `grid rework` reaps the retired round's molecule, accepts pour-parked
+  sessions, appends the operator note BEFORE housekeeping, and reports a reap
+  failure LOUD in the result (tg-ehht).
+
 ## 0.3.0-rc.1
 
 - Breaking: tracks beads_dart 0.2.0-rc.1, grid_runtime 0.2.0-rc.1 and
