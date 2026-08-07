@@ -76,6 +76,17 @@ an edit to the work.
 
 ### 2.3 Gates and rework
 
+- **A `session.moleculePourFailed` flare means the session exists but its
+  molecule graph does not.** The engine creates an OPEN gate whose `reason`
+  starts with `Molecule pour failed:` and includes the original writer error;
+  `grid gate ls --grid-root <grid-home>` shows the gate id, blocked session,
+  work-bead root node, and cause. Treat the cause literally: repair the refused
+  lifecycle type, slow store read, or other reported fault first. Then run
+  `grid rework <work-bead-id> --grid-root <grid-home>
+  --note "recovered failed molecule pour"` to
+  retire the gated empty session and mint a fresh round. Do not blind-resolve
+  this gate: the failed scope has no molecule step to re-arm, so closing the
+  evidence without rework only hides the partial mint.
 - **Never bare-resolve a gate born from a persisted lane F** (I-14). The route re-reads
   the **persisted** lane grades on the session bead, not the fresh verdict files — so a
   plain close of a still-F gate re-arms the node and re-gates seconds later, a

@@ -323,6 +323,27 @@ class StationBeadWriter {
     return id;
   }
 
+  /// Parks an EXISTING session at a durable human gate for a SESSION-LIFECYCLE
+  /// failure (tg-aec: a thrown molecule pour) — deliberately a DISTINCT verb
+  /// from [createGate]'s route-verdict use, though the wire shape is identical.
+  ///
+  /// The distinction is WHO decides what: a route verdict (advance/block/
+  /// re-key) is effected only by the one router (`CapabilityHost`, tg-6gn);
+  /// this park records that a session EXISTS but never became drivable — no
+  /// step, no cursor, nothing to route. Per A47 the park is FOR a human
+  /// (repair the cause, then `grid rework`); the engine never resolves it.
+  Future<String> parkSessionAtGate({
+    required String substation,
+    required String sessionId,
+    required String nodePath,
+    required String reason,
+  }) => createGate(
+    substation: substation,
+    sessionId: sessionId,
+    nodePath: nodePath,
+    reason: reason,
+  );
+
   /// Mints a the_grid-owned MOLECULE — the durable, graph-shaped mint
   /// parallel to [createSession]/[createGate] (`DESIGN-tg-pm6.md` R6): one
   /// `bd create --graph` pour = one Dolt transaction
