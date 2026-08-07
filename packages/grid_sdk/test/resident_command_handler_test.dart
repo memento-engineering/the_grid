@@ -146,6 +146,133 @@ void main() {
       );
     });
 
+    test(
+      'grid/rework REAPS the retired round\'s molecule (tg-ehht): every '
+      'open step/molecule bead of the retired session is batch-closed',
+      () async {
+        final stateRunner = _RecordingRunner()
+          ..openBeadsResult = const [
+            Bead(
+              id: 'tgdog-step-a',
+              issueType: GridIssueTypes.step,
+              metadata: {'grid.step.session': 'tgdog-session', 'rig': 'tgdog'},
+            ),
+            Bead(
+              id: 'tgdog-step-b',
+              issueType: GridIssueTypes.step,
+              metadata: {'grid.step.session': 'tgdog-session', 'rig': 'tgdog'},
+            ),
+            Bead(
+              id: 'tgdog-step-other',
+              issueType: GridIssueTypes.step,
+              metadata: {'grid.step.session': 'tgdog-OTHER', 'rig': 'tgdog'},
+            ),
+          ];
+        final workRunner = _RecordingRunner();
+        final handler = _handler(
+          state: _Source(
+            _snapshot([
+              const Bead(
+                id: 'tgdog-session',
+                issueType: GridIssueTypes.session,
+                status: BeadStatus.closed,
+                metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
+              ),
+            ]),
+          ),
+          work: _Source(
+            _snapshot([
+              const Bead(
+                id: 'tg-1',
+                issueType: IssueType.task,
+                metadata: {'rig': 'tg'},
+              ),
+            ]),
+          ),
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+        );
+
+        final result = await handler(
+          const GridCommandRequest.rework(beadId: 'tg-1', note: 'retry'),
+        );
+
+        expect(result, isA<GridCommandCompleted>());
+        final batch = stateRunner.calls.where((c) => c.first == 'batch');
+        expect(
+          batch,
+          hasLength(1),
+          reason:
+              'the retire must collect the retired round\'s graph — the '
+              'rework exit left 9,389 orphaned step beads by 2026-08-07',
+        );
+      },
+    );
+
+    test(
+      'grid/rework accepts a POUR-PARKED session: no steps at all, an open '
+      'gate blocking the session at the work-bead root (tg-aec park)',
+      () async {
+        final stateRunner = _RecordingRunner();
+        final workRunner = _RecordingRunner();
+        final handler = _handler(
+          state: _Source(
+            _snapshot([
+              const Bead(
+                id: 'tgdog-parked',
+                issueType: GridIssueTypes.session,
+                metadata: {
+                  'work_bead': 'tg-1',
+                  'rig': 'tgdog',
+                  'grid.session.model': 'molecule',
+                },
+              ),
+              const Bead(
+                id: 'tgdog-gate',
+                issueType: GridIssueTypes.gate,
+                metadata: {
+                  'rig': 'tgdog',
+                  'blocks': 'tgdog-parked',
+                  'node': 'tg-1',
+                  'reason': 'Molecule pour failed: BdTimeoutException',
+                },
+              ),
+            ]),
+          ),
+          work: _Source(
+            _snapshot([
+              const Bead(
+                id: 'tg-1',
+                issueType: IssueType.task,
+                metadata: {'rig': 'tg'},
+              ),
+            ]),
+          ),
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+        );
+
+        final result = await handler(
+          const GridCommandRequest.rework(
+            beadId: 'tg-1',
+            note: 'recovered failed molecule pour',
+          ),
+        );
+
+        expect(
+          result,
+          isA<GridCommandCompleted>(),
+          reason:
+              'a pour-failure park has no gated STEP to find — refusing it '
+              'made the OPERATIONS 2.3 runbook unexecutable (2026-08-06 live)',
+        );
+        expect(
+          stateRunner.calls.any((c) => c.join(' ').contains('tg-1#r1')),
+          isTrue,
+        );
+      },
+    );
+
     test('beyond-cap header binds the request actor', () async {
       final stateRunner = _RecordingRunner();
       final workRunner = _RecordingRunner();
@@ -782,12 +909,24 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
     return matches.isEmpty ? null : matches.single;
   }
 
+  /// Beads served to [openBeads] scans (e.g. `reapMolecule`'s collection
+  /// probe), filtered by [types] + every [metadataAll] pair like the real
+  /// probe reader.
+  List<Bead> openBeadsResult = const [];
+
   @override
   Future<List<Bead>> openBeads({
     required Set<IssueType> types,
     Map<String, String> metadataAll = const {},
     Map<String, String> metadataAny = const {},
-  }) async => const [];
+  }) async => [
+    for (final bead in openBeadsResult)
+      if (types.contains(bead.issueType) &&
+          metadataAll.entries.every(
+            (e) => (bead.metadata[e.key] ?? '') == e.value,
+          ))
+        bead,
+  ];
 
   @override
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
