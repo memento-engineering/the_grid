@@ -1,3 +1,12 @@
+## 0.2.0-rc.2
+
+- The sync FLOOR (tg-zd4v): `GridRuntimeFactory.build` adds a
+  `PollingTickerSource` on the SQL read path too (`syncFloorInterval`,
+  default 45s) — the working-set probe is edge-triggered, so a store nobody
+  writes to never re-captured and served a frozen frontier.
+- `GridControllerRuntime` gains `onDirtySourceClosed` — a closed dirty-signal
+  source is reported once instead of silencing sync forever.
+
 ## 0.2.0-rc.1
 
 - Breaking: `BdCliService.exportAll` and `exportArgs` are REMOVED. `bd export` is

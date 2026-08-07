@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0-rc.3
+
+- `StationDiagnosticsReporter` — the ratified diagnostics reporter, armed:
+  engine flares as JSON lines + the shared `TreeProjector` feeding `/stream`
+  (tg-j4ym); works in JIT and AOT.
+- `StationStatus` gains the `sync` payload (per-store `GraphSyncStats` + the
+  federation freshness vector) — WHY a sync did or did not happen (tg-zd4v).
+- `StationControl`'s internal_error responses carry the bounded exception
+  detail instead of a bare 'Command handler failed.'.
+
 ## 0.5.0-rc.2
 
 - Fixed: `grid link ls` / `link` / `unlink` crashed with `bd type discovery

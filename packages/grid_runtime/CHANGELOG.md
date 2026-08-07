@@ -1,3 +1,11 @@
+## 0.2.0-rc.2
+
+- `StationBeadWriter.parkSessionAtGate` — the session-lifecycle park distinct
+  from the router's gate mint (tg-aec).
+- `reapMolecule` degrades to per-bead closes on proxied-server stores, where
+  `bd batch` is unsupported — the reap silently threw on EVERY session close
+  there, the mechanism behind 9,389 orphaned step beads (tg-ehht).
+
 ## 0.2.0-rc.1
 
 - Breaking: `StationBeadWriter`'s constructor now requires `reader:`, a

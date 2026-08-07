@@ -1,7 +1,7 @@
 name: grid_runtime
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.2.0-rc.1
+version: 0.2.0-rc.2
 description: >-
   Runtime providers for the_grid — spawns and supervises a coding agent per
   ready bead, isolating each bead's work in a git worktree.
