@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart' show TreeProjector;
@@ -242,13 +241,11 @@ class GridHandle {
     }
   }
 
+  // The refusal rides its first-class carriers only: the awaited
+  // [ReassembleReport] when a caller is waiting, the [GridHookError] report
+  // rail when none is. No VM-service log side channel — that surface is the
+  // JIT debug channel, never a diagnostic dependency (ADR-0012 D2).
   void _refusePostSwapFlush(Object error, StackTrace stackTrace) {
-    developer.log(
-      'refused: re-compose failed after source swap - bounce the station',
-      name: 'grid.reassemble',
-      error: error,
-      stackTrace: stackTrace,
-    );
     final waiters = List<_ReassembleWaiter>.of(_flushWaiters);
     _flushWaiters.clear();
     if (waiters.isEmpty) {
@@ -359,14 +356,10 @@ class GridHandle {
     _flushWaiters.add(waiter);
     try {
       _reassemble.request(request);
-    } catch (error, stackTrace) {
+    } catch (error) {
       _flushWaiters.remove(waiter);
-      developer.log(
-        'refused: re-compose failed after source swap - bounce the station',
-        name: 'grid.reassemble',
-        error: error,
-        stackTrace: stackTrace,
-      );
+      // Delivered via the awaited report — no VM-service log side channel
+      // (ADR-0012 D2; the refusal's carrier is [ReassembleReport]).
       waiter.completer.complete(
         ReassembleReport.refusedAfterSourceSwap(
           mode: mode,
