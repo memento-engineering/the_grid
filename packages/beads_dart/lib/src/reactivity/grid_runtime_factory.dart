@@ -54,8 +54,10 @@ class GridRuntimeFactory {
     Duration quietPeriod = const Duration(milliseconds: 150),
     Duration probeInterval = const Duration(seconds: 1),
     Duration pollInterval = const Duration(seconds: 5),
+    Duration syncFloorInterval = const Duration(seconds: 45),
     BdRunner? runner,
     Set<IssueType> lifecycleTypes = const {},
+    void Function(String source)? onDirtySourceClosed,
   }) async {
     final bd = BdCliService(
       runner ?? ProcessBdRunner(workspaceRoot: workspace.root),
@@ -92,6 +94,17 @@ class GridRuntimeFactory {
         dirtySources.add(
           WorkingSetProbeSource(DoltChangeProbe(dolt), interval: probeInterval),
         );
+        // The sync FLOOR (tg-zd4v): the probe is edge-triggered — no store
+        // write, no hash change, no signal, FOREVER — so a purely quiet (or
+        // silently wedged) member never re-captures and its snapshot ages
+        // into a stale mint. A coarse ticker bounds the worst-case refresh
+        // age on the SQL path too. Correctness, not latency: the refresh is
+        // change-gated end to end, so a floor tick against an unchanged
+        // store costs one scoped read and emits nothing downstream.
+        // Re-entry safe by ORIGIN: `GraphSyncInteractor` drops a pollTicker
+        // signal while a refresh is in flight (tg-07y's guard keys on the
+        // origin, not the path).
+        dirtySources.add(PollingTickerSource(interval: syncFloorInterval));
         readPath = ReadPath.sql;
       } on Object {
         // Drift / auth / unreachable → CLI path, polling backstop.
@@ -107,6 +120,7 @@ class GridRuntimeFactory {
       reader: reader,
       dirtySources: dirtySources,
       quietPeriod: quietPeriod,
+      onDirtySourceClosed: onDirtySourceClosed,
     );
 
     return GridRuntimeBundle(

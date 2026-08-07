@@ -262,6 +262,8 @@ final class _Work implements ResidentWorkResource {
   @override
   StationWorkWiring get wiring => _Wiring();
   @override
+  Map<String, Object?> syncStatus() => const <String, Object?>{};
+  @override
   GridCommandHandler get commands => _Commands();
   @override
   StationGitService get git => _Git();

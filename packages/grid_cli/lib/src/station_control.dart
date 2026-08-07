@@ -114,6 +114,7 @@ class StationStatus {
     required this.lastSyncAt,
     this.perSubstation = const <SubstationStatus>[],
     this.wedge = kNotWedged,
+    this.sync = const <String, Object?>{},
   });
 
   /// The owned substation allow-set, joined for display.
@@ -171,6 +172,15 @@ class StationStatus {
   /// alarm.
   final WedgeState wedge;
 
+  /// The sync-loop observability payload (tg-zd4v LOUD): per-store
+  /// `GraphSyncStats` (`stats`) + the federation's per-member freshness
+  /// vector (`freshness`), already JSON-shaped by the runner's view. Today's
+  /// status says WHEN the last sync happened; this says WHY a sync did or did
+  /// not happen — per-origin signal counts, refresh latency, in-flight state,
+  /// and which member has gone stale by age. Empty when the runner has no
+  /// work runtime (or an older runner predates the field).
+  final Map<String, Object?> sync;
+
   /// Serializes to the wire shape `/status` returns.
   Map<String, Object?> toJson() => <String, Object?>{
     'station': <String, Object?>{
@@ -194,6 +204,7 @@ class StationStatus {
     },
     // First-class, top-level — a watcher reads THIS, never the gate list.
     'wedge': wedge.toJson(),
+    if (sync.isNotEmpty) 'sync': sync,
   };
 }
 

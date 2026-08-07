@@ -114,6 +114,88 @@ void main() {
       await sub.cancel();
     });
 
+    test(
+      'the sync FLOOR (tg-zd4v): a PollingTickerSource drives refreshes with '
+      'ZERO store writes, and unchanged reads emit NOTHING downstream',
+      () async {
+        final reader = FakeSnapshotReader(() => snap([bead('a')]));
+        final runtime = GridControllerRuntime(
+          reader: reader,
+          dirtySources: [
+            PollingTickerSource(interval: const Duration(milliseconds: 20)),
+          ],
+          quietPeriod: const Duration(milliseconds: 5),
+        );
+        addTearDown(runtime.dispose);
+
+        await runtime.start();
+        // Subscribe AFTER the baseline snapshot so only floor-driven
+        // emissions land here.
+        final emitted = <GraphSnapshot>[];
+        final sub = runtime.snapshots.listen(emitted.add);
+        final baseline = runtime.stats.refreshCount;
+
+        // No writes, no manual signals — only the floor ticking.
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+
+        expect(
+          runtime.stats.refreshCount,
+          greaterThan(baseline),
+          reason:
+              'the floor must re-refresh a store NOBODY wrote to — the '
+              'edge-triggered probe alone never would',
+        );
+        expect(
+          runtime.stats.signalCounts[DirtyOrigin.pollTicker],
+          greaterThanOrEqualTo(1),
+        );
+        expect(
+          emitted,
+          isEmpty,
+          reason:
+              'a floor tick against an unchanged graph is change-gated to '
+              'silence — the floor must never become a rebuild storm',
+        );
+        await sub.cancel();
+      },
+    );
+
+    test('a CLOSED dirty-signal source is LOUD exactly once — and a deliberate '
+        'dispose is not (tg-zd4v)', () async {
+      final closing = ManualDirtySource();
+      final closed = <String>[];
+      final runtime = GridControllerRuntime(
+        reader: FakeSnapshotReader(() => snap([bead('a')])),
+        dirtySources: [closing],
+        onDirtySourceClosed: closed.add,
+      );
+      await runtime.start();
+
+      await closing.dispose(); // the stream closes out from under the loop
+      await Future<void>.delayed(Duration.zero);
+      expect(closed, ['ManualDirtySource']);
+
+      await runtime.dispose();
+      expect(
+        closed,
+        hasLength(1),
+        reason: 'our own teardown closing the source must not re-flare',
+      );
+
+      // A runtime disposed with the source still open never flares at all.
+      final quiet = ManualDirtySource();
+      final quietClosed = <String>[];
+      final second = GridControllerRuntime(
+        reader: FakeSnapshotReader(() => snap([bead('a')])),
+        dirtySources: [quiet],
+        onDirtySourceClosed: quietClosed.add,
+      );
+      await second.start();
+      await second.dispose();
+      await Future<void>.delayed(Duration.zero);
+      expect(quietClosed, isEmpty);
+    });
+
     test('errors forwards a failed refresh from the repository', () async {
       final reader = FakeSnapshotReader(() => snap([bead('a')]))
         ..error = StateError('dolt down');

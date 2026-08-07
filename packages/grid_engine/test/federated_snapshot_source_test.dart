@@ -173,6 +173,101 @@ void main() {
     );
   });
 
+  group('FederatedSnapshotSource — ready-staleness by AGE (tg-zd4v)', () {
+    test(
+      'a member that stops emitting stops contributing readyIds once its age '
+      'exceeds the window — beads stay visible — and recovers on re-capture',
+      () async {
+        var now = DateTime.fromMillisecondsSinceEpoch(0);
+        final tg = FakeSnapshotSource();
+        final quiet = FakeSnapshotSource();
+        final union = FederatedSnapshotSource(
+          {'tg': tg, 'quiet': quiet},
+          readyStaleAge: const Duration(seconds: 10),
+          now: () => now,
+        );
+        addTearDown(union.dispose);
+
+        tg.push(graphOf([bead('tg-1')], tick: 1000));
+        quiet.push(graphOf([bead('quiet-1')], tick: 1000));
+        await settle();
+        expect(union.current!.readyIds, {'tg-1', 'quiet-1'});
+        expect(union.freshness['quiet']!.stale, isFalse);
+
+        // 'quiet' goes silent; a healthy member's floor tick recomputes the
+        // union — the exact event-driven judgement a live resident performs.
+        now = DateTime.fromMillisecondsSinceEpoch(15000);
+        tg.push(graphOf([bead('tg-1')], tick: 15000));
+        await settle();
+
+        expect(
+          union.current!.readyIds,
+          {'tg-1'},
+          reason: 'an aged-out member mints no NEW ready ids (D-Z4 by age)',
+        );
+        expect(
+          union.current!.beadsById.keys,
+          containsAll(['tg-1', 'quiet-1']),
+          reason: 'absence is not deletion (D-Z3) — beads stay visible',
+        );
+        expect(union.freshness['quiet']!.stale, isTrue);
+
+        // The member re-captures: fresh again, ready ids restored.
+        quiet.push(graphOf([bead('quiet-1')], tick: 16000));
+        await settle();
+        expect(union.current!.readyIds, {'tg-1', 'quiet-1'});
+        expect(union.freshness['quiet']!.stale, isFalse);
+      },
+    );
+
+    test(
+      'stale-by-age and recovery each flare EXACTLY once per edge',
+      () async {
+        var now = DateTime.fromMillisecondsSinceEpoch(0);
+        final flares = <String>[];
+        final tg = FakeSnapshotSource();
+        final quiet = FakeSnapshotSource();
+        final union = FederatedSnapshotSource(
+          {'tg': tg, 'quiet': quiet},
+          readyStaleAge: const Duration(seconds: 10),
+          now: () => now,
+          onFlare: (name, data) => flares.add('$name:${data['substation']}'),
+        );
+        addTearDown(union.dispose);
+
+        tg.push(graphOf([bead('tg-1')], tick: 1000));
+        quiet.push(graphOf([bead('quiet-1')], tick: 1000));
+        await settle();
+        expect(flares, isEmpty);
+
+        now = DateTime.fromMillisecondsSinceEpoch(15000);
+        tg.push(graphOf([bead('tg-1')], tick: 15000));
+        await settle();
+        expect(flares, ['sync.memberStaleByAge:quiet']);
+
+        // More healthy ticks while 'quiet' stays stale: NO flare spam.
+        now = DateTime.fromMillisecondsSinceEpoch(20000);
+        tg.push(graphOf([bead('tg-1')], tick: 20000));
+        now = DateTime.fromMillisecondsSinceEpoch(25000);
+        tg.push(graphOf([bead('tg-1')], tick: 25000));
+        await settle();
+        expect(flares, ['sync.memberStaleByAge:quiet']);
+
+        // Recovery flares once, then healthy silence.
+        quiet.push(graphOf([bead('quiet-1')], tick: 26000));
+        await settle();
+        expect(flares, [
+          'sync.memberStaleByAge:quiet',
+          'sync.memberRecovered:quiet',
+        ]);
+        now = DateTime.fromMillisecondsSinceEpoch(27000);
+        tg.push(graphOf([bead('tg-1')], tick: 27000));
+        await settle();
+        expect(flares, hasLength(2));
+      },
+    );
+  });
+
   group('FederatedSnapshotSource — the external-dep guard (D-F2)', () {
     test('a candidate blocked by an OPEN cross-store dependency is excluded '
         'from ready; closing the target re-admits it', () async {
