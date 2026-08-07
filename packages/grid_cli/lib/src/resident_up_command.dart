@@ -78,6 +78,11 @@ abstract interface class ResidentWorkResource {
   String get readPathName;
   JoinedSnapshot get latest;
   WedgeState get wedge;
+
+  /// The JSON-shaped sync-loop observability payload for `/status` (tg-zd4v):
+  /// per-store `GraphSyncStats` under `stats`, the federation's per-member
+  /// freshness vector under `freshness`. Empty when the assembly exposes none.
+  Map<String, Object?> syncStatus();
   Future<void> start();
   void afterFlush();
   Future<void> sweepOrphans();
@@ -501,6 +506,7 @@ class ResidentUpCommand extends Command<int> {
       liveSessions: live,
       lastSyncAt: capturedAt.millisecondsSinceEpoch == 0 ? null : capturedAt,
       wedge: work.wedge,
+      sync: work.syncStatus(),
     );
   }
 }
@@ -541,6 +547,29 @@ final class _StationWorkResource implements ResidentWorkResource {
   JoinedSnapshot get latest => _runtime.latest;
   @override
   WedgeState get wedge => _runtime.wedge;
+  @override
+  Map<String, Object?> syncStatus() => <String, Object?>{
+    'stats': <String, Object?>{
+      for (final e in _runtime.syncStats.entries)
+        e.key: <String, Object?>{
+          'signalCounts': <String, Object?>{
+            for (final s in e.value.signalCounts.entries) s.key.name: s.value,
+          },
+          'refreshCount': e.value.refreshCount,
+          'lastRefreshMs': e.value.lastRefresh?.inMilliseconds,
+          'lastReactionMs': e.value.lastReaction?.inMilliseconds,
+          'refreshing': e.value.refreshing,
+          'pendingFollowUp': e.value.pendingFollowUp,
+        },
+    },
+    'freshness': <String, Object?>{
+      for (final e in _runtime.workFreshness.entries)
+        e.key: <String, Object?>{
+          'capturedAt': e.value.capturedAt?.toIso8601String(),
+          'stale': e.value.stale,
+        },
+    },
+  };
   @override
   Future<void> start() => _runtime.start();
   @override

@@ -77,6 +77,8 @@ class StationWorkRuntime {
     required Future<void> Function() sourcesStart,
     required Future<void> Function() sourcesShutdown,
     required Future<void> Function() freshnessBarrier,
+    required Map<String, GraphSyncStats> Function() syncStats,
+    required Map<String, MemberFreshness> Function() workFreshness,
   }) : _driver = driver,
        _restart = restart,
        _provider = provider,
@@ -84,7 +86,9 @@ class StationWorkRuntime {
        _onRefusal = onRefusal,
        _sourcesStart = sourcesStart,
        _sourcesShutdown = sourcesShutdown,
-       _freshnessBarrier = freshnessBarrier;
+       _freshnessBarrier = freshnessBarrier,
+       _syncStats = syncStats,
+       _workFreshness = workFreshness;
 
   /// The ambient VALUES the tree's [StationWork] provides.
   final StationWorkWiring wiring;
@@ -118,6 +122,19 @@ class StationWorkRuntime {
   final Future<void> Function() _sourcesStart;
   final Future<void> Function() _sourcesShutdown;
   final Future<void> Function() _freshnessBarrier;
+  final Map<String, GraphSyncStats> Function() _syncStats;
+  final Map<String, MemberFreshness> Function() _workFreshness;
+
+  /// Per-store sync-loop counters (tg-zd4v LOUD, the `/status` half): every
+  /// work store's + the state store's (`state`) [GraphSyncStats] — per-origin
+  /// signal counts, refresh count, last refresh/reaction latency, in-flight
+  /// state. Today's `/status` says WHEN the last sync happened; this says WHY
+  /// syncs are or are not happening, without attaching to the VM service.
+  Map<String, GraphSyncStats> get syncStats => _syncStats();
+
+  /// The federation's per-member freshness vector (D-F3) — capture age +
+  /// ready-staleness per work store, never averaged into one scalar.
+  Map<String, MemberFreshness> get workFreshness => _workFreshness();
   bool _started = false;
   bool _shutdown = false;
   RestartReport? _lastRestartReport;
@@ -243,6 +260,13 @@ typedef CapabilityRegistryBuilder =
 /// `git` executed, provisioning materializes nothing). Live wires
 /// `ProcessBdRunner` over the state store, `SubprocessProvider`, and the real
 /// `git`/`gh` service. The per-seam overrides are TEST seams.
+/// The default sync FLOOR interval (tg-zd4v): the bounded worst-case refresh
+/// age on the SQL read path, where the working-set probe is edge-triggered
+/// and a quiet store would otherwise never re-capture. Coarse relative to the
+/// 1s probe on purpose — the floor is correctness, not latency — and
+/// threadable so a resident with many work stores can widen it.
+const kDefaultSyncFloorInterval = Duration(seconds: 45);
+
 Future<StationWorkRuntime> buildStationWork({
   required GridStateStore stateStore,
   required List<SubstationWorkSpec> substations,
@@ -263,6 +287,7 @@ Future<StationWorkRuntime> buildStationWork({
   ExplorationTransport? transport,
   Duration wedgeThreshold = kDefaultWedgeThreshold,
   Duration wedgePollInterval = kDefaultWedgePollInterval,
+  Duration syncFloorInterval = kDefaultSyncFloorInterval,
 }) async {
   if (registry != null && registryBuilder != null) {
     throw ArgumentError(
@@ -357,16 +382,27 @@ Future<StationWorkRuntime> buildStationWork({
   // --- the controllers (one per work store + the state store).
   final bundles = <String, GridRuntimeBundle>{};
   for (final entry in workspacesByName.entries) {
+    final storeName = entry.key;
     bundles[entry.key] = await GridRuntimeFactory.build(
       workspace: entry.value,
       preferSql: preferSql,
+      syncFloorInterval: syncFloorInterval,
       lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
+      onDirtySourceClosed: (source) => transport?.flare(
+        'sync.dirtySignalsClosed',
+        {'substation': storeName, 'source': source},
+      ),
     );
   }
   final stateBundle = await GridRuntimeFactory.build(
     workspace: stateWs,
     preferSql: preferSql,
+    syncFloorInterval: syncFloorInterval,
     lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
+    onDirtySourceClosed: (source) => transport?.flare(
+      'sync.dirtySignalsClosed',
+      {'substation': 'state', 'source': source},
+    ),
   );
   final readPathName = [
     for (final e in bundles.entries) '${e.key}=${e.value.readPath.name}',
@@ -378,10 +414,21 @@ Future<StationWorkRuntime> buildStationWork({
   final unresolvedSink =
       onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
-  final work = FederatedSnapshotSource({
-    for (final e in bundles.entries)
-      e.key: _RuntimeSnapshotSource(e.value.runtime),
-  }, onUnresolvedExternalDep: unresolvedSink);
+  final work = FederatedSnapshotSource(
+    {
+      for (final e in bundles.entries)
+        e.key: _RuntimeSnapshotSource(e.value.runtime),
+    },
+    onUnresolvedExternalDep: unresolvedSink,
+    // Ready-staleness by AGE (tg-zd4v face 2): a small multiple of the floor,
+    // so a healthy member (re-capturing every floor tick) never trips it and
+    // a genuinely quiet member stops minting ready ids instead of serving a
+    // frozen frontier into a stale mint.
+    readyStaleAge: syncFloorInterval * 3,
+    // Rising-edge staleness flares ride the SAME emit-only transport as every
+    // other engine LOUD signal (ADR-0008 D9 / ADR-0012 D2's armed reporter).
+    onFlare: (name, data) => transport?.flare(name, data),
+  );
   final SnapshotSource stateSource = _RuntimeSnapshotSource(
     stateBundle.runtime,
   );
@@ -621,6 +668,11 @@ Future<StationWorkRuntime> buildStationWork({
       await work.dispose();
     },
     freshnessBarrier: freshnessBarrier,
+    syncStats: () => {
+      for (final e in bundles.entries) e.key: e.value.runtime.stats,
+      'state': stateBundle.runtime.stats,
+    },
+    workFreshness: () => work.freshness,
   );
 }
 

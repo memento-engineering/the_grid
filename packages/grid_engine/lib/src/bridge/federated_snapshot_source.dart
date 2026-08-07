@@ -17,9 +17,10 @@ class MemberFreshness {
   /// first baseline arrives.
   final DateTime? capturedAt;
 
-  /// True once the member's stream has errored and not yet recovered — its
-  /// last known snapshot is RETAINED (absence ≠ deletion, D-Z3) but mints no
-  /// NEW ready ids while stale (D-Z4).
+  /// True while the member counts as stale for READY purposes — its stream
+  /// errored and has not recovered (D-Z4), or its latest capture aged past
+  /// the ready-stale window (tg-zd4v). Its last known snapshot is RETAINED
+  /// either way (absence ≠ deletion, D-Z3) but mints no NEW ready ids.
   final bool stale;
 }
 
@@ -50,12 +51,37 @@ class FederatedSnapshotSource implements SnapshotSource {
   FederatedSnapshotSource(
     Map<String, SnapshotSource> members, {
     void Function(String message)? onUnresolvedExternalDep,
-  }) : _onUnresolvedExternalDep = onUnresolvedExternalDep {
+    Duration? readyStaleAge,
+    DateTime Function() now = DateTime.now,
+    void Function(String name, Map<String, String> data)? onFlare,
+  }) : _onUnresolvedExternalDep = onUnresolvedExternalDep,
+       _readyStaleAge = readyStaleAge,
+       _now = now,
+       _onFlare = onFlare {
     members.forEach(_attach);
     _current = _combine();
   }
 
   final void Function(String message)? _onUnresolvedExternalDep;
+
+  /// The age past which a member's snapshot stops minting NEW ready ids
+  /// (tg-zd4v face 2) — a bounded multiple of the sync floor, or null to
+  /// judge staleness by stream error only (the pre-floor behavior).
+  ///
+  /// Age is judged at every [_recompute] — event-driven, so a lone quiet
+  /// member is judged when any OTHER member's floor tick recomputes the
+  /// union. With the floor in place a healthy member re-captures every tick;
+  /// exceeding the window means the member has GENUINELY gone quiet — the
+  /// exact state that produced the stale mint.
+  final Duration? _readyStaleAge;
+  final DateTime Function() _now;
+
+  /// The rising-edge staleness flare sink (tg-zd4v face 3): fires ONCE when a
+  /// member goes stale by age (`sync.memberStaleByAge`) and ONCE when it
+  /// recovers (`sync.memberRecovered`). Stale-by-ERROR and probe death are
+  /// tg-dwyl's, already flared elsewhere — never re-emitted here.
+  final void Function(String name, Map<String, String> data)? _onFlare;
+  final Set<String> _ageStale = {};
 
   final Map<String, SnapshotSource> _sources = {};
   final Map<String, StreamSubscription<GraphSnapshot>> _subs = {};
@@ -82,9 +108,45 @@ class FederatedSnapshotSource implements SnapshotSource {
     for (final id in _sources.keys)
       id: MemberFreshness(
         capturedAt: _latestByMember[id]?.capturedAt,
-        stale: _staleByMember[id] ?? false,
+        stale: _isStale(id),
       ),
   };
+
+  /// A member is stale for READY purposes when its stream errored (D-Z4) OR
+  /// its latest capture has aged past [_readyStaleAge] (tg-zd4v). Its beads
+  /// stay visible either way (D-Z3 — absence is not deletion).
+  bool _isStale(String id) {
+    if (_staleByMember[id] == true) return true;
+    final age = _readyStaleAge;
+    final capturedAt = _latestByMember[id]?.capturedAt;
+    if (age == null || capturedAt == null) return false;
+    return _now().difference(capturedAt) > age;
+  }
+
+  /// Detects age-staleness EDGES and flares each exactly once. Runs before
+  /// every combine so the judgement is as fresh as the union it gates.
+  void _flareAgeEdges() {
+    final sink = _onFlare;
+    if (_readyStaleAge == null) return;
+    for (final id in _sources.keys) {
+      final capturedAt = _latestByMember[id]?.capturedAt;
+      final staleNow =
+          capturedAt != null && _now().difference(capturedAt) > _readyStaleAge;
+      if (staleNow && _ageStale.add(id)) {
+        sink?.call('sync.memberStaleByAge', {
+          'substation': id,
+          'capturedAt': capturedAt.toIso8601String(),
+          'ageSeconds': '${_now().difference(capturedAt).inSeconds}',
+          'windowSeconds': '${_readyStaleAge.inSeconds}',
+        });
+      } else if (!staleNow && _ageStale.remove(id)) {
+        sink?.call('sync.memberRecovered', {
+          'substation': id,
+          if (capturedAt != null) 'capturedAt': capturedAt.toIso8601String(),
+        });
+      }
+    }
+  }
 
   /// Attaches a NEW member at runtime (D-Z1/D-Z2 — mutable membership; a
   /// future zero-conf browser calls this behind the same seam a static
@@ -129,6 +191,7 @@ class FederatedSnapshotSource implements SnapshotSource {
   }
 
   void _recompute() {
+    _flareAgeEdges();
     final previous = _current;
     final next = _combine();
     _current = next;
@@ -159,7 +222,7 @@ class FederatedSnapshotSource implements SnapshotSource {
       if (capturedAt == null || snapshot.capturedAt.isAfter(capturedAt)) {
         capturedAt = snapshot.capturedAt;
       }
-      if (_staleByMember[entry.key] != true) {
+      if (!_isStale(entry.key)) {
         readyCandidates.addAll(snapshot.readyIds);
       }
     }

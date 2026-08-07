@@ -23,11 +23,24 @@ class GridControllerRuntime {
     required List<DirtySignalSource> dirtySources,
     Duration quietPeriod = const Duration(milliseconds: 150),
     int eventBufferSize = 256,
+    void Function(String source)? onDirtySourceClosed,
   }) : _dirtySources = dirtySources,
+       _onDirtySourceClosed = onDirtySourceClosed,
        repository = BeadsRepository(reader, eventBufferSize: eventBufferSize) {
     _merged = StreamController<DirtySignal>.broadcast();
     for (final source in dirtySources) {
-      _subs.add(source.signals.listen(_merged.add, onError: (_) {}));
+      _subs.add(
+        source.signals.listen(
+          _merged.add,
+          onError: (_) {},
+          // A CLOSED source is a sync channel gone forever — no more signals,
+          // no more refreshes from that source, silently (tg-zd4v LOUD). Say
+          // it once, unless this runtime is the one closing it on dispose.
+          onDone: () {
+            if (!_disposing) _onDirtySourceClosed?.call('${source.runtimeType}');
+          },
+        ),
+      );
     }
     interactor = GraphSyncInteractor(
       signals: _merged.stream,
@@ -41,7 +54,9 @@ class GridControllerRuntime {
   late final GraphSyncInteractor interactor;
   late final StreamController<DirtySignal> _merged;
   final List<StreamSubscription<DirtySignal>> _subs = [];
+  final void Function(String source)? _onDirtySourceClosed;
   bool _started = false;
+  bool _disposing = false;
 
   /// Subscribes the sync loop and takes the baseline snapshot.
   Future<void> start() async {
@@ -64,6 +79,7 @@ class GridControllerRuntime {
   Future<void> requery() => interactor.refreshNow();
 
   Future<void> dispose() async {
+    _disposing = true;
     for (final sub in _subs) {
       await sub.cancel();
     }
