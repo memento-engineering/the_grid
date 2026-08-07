@@ -227,10 +227,22 @@ void main() {
         p.join(libSrc.path, 'circuit', 'session_scope.dart'),
       ).readAsStringSync();
       // The scope may close its OWN session (D-2 / breaker escalation / rework);
-      // it may never MINT or RESOLVE a gate bead — that is what made the tg-b3k
-      // workaround a machine loop wearing a human gate's clothes.
+      // it may never operate the ROUTER's gate verbs or RESOLVE a gate bead —
+      // that is what made the tg-b3k workaround a machine loop wearing a human
+      // gate's clothes. The ONE sanctioned gate write besides the D-7 re-arm
+      // is the tg-aec session-lifecycle PARK (`parkSessionAtGate`): a thrown
+      // molecule pour leaves a session that EXISTS but has no step and no
+      // cursor — nothing to route — so the scope parks it durably FOR a human
+      // (A47: repair the cause, then `grid rework`) and still never resolves.
       expect(source.contains('createGate'), isFalse);
       expect(source.contains('closeGate'), isFalse);
+      expect(
+        source.contains('parkSessionAtGate'),
+        isTrue,
+        reason:
+            'sanity (non-vacuous): the tg-aec pour-failure park is the '
+            'sanctioned session-lifecycle gate write',
+      );
       expect(
         // The D-7 re-arm write targets the STEP bead's molecule state key
         // (tg-eli phase 2 — the flat `nodeStateMetadata` write retired).

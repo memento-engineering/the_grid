@@ -18,6 +18,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 const _code = Circuit(
@@ -121,6 +122,43 @@ Future<void> _pumpUntil(
   }
 }
 
+/// A [RecordingBdRunner] whose first [graphThrows] `create --graph` pours
+/// THROW (the tg-aec shape: a completed future that failed — a bd timeout or
+/// refused lifecycle type — against an EXISTING adopted session).
+class _ThrowingGraphRunner extends RecordingBdRunner {
+  int graphThrows = 1;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) {
+    if (args.length > 1 &&
+        args[0] == 'create' &&
+        args[1] == '--graph' &&
+        graphThrows > 0) {
+      graphThrows--;
+      calls.add(List<String>.unmodifiable(args));
+      stdins.add(stdin);
+      throw StateError('fake orphan graph pour timed out');
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
+/// A [StationServices] over [runner] with the runner as its probe reader too,
+/// so the gate path's session-open assert and dedup probe read the same fake.
+StationServices _ctxOver(_ThrowingGraphRunner runner) => StationServices(
+  provider: FakeRuntimeProvider(),
+  writer: StationBeadWriter(
+    bd: BdCliService(runner),
+    reader: runner,
+    ownership: BeadOwnershipPredicate(const {stateSubstation}),
+  ),
+  stateSubstation: stateSubstation,
+);
+
 /// The orphan: an OPEN molecule session bead with ZERO step beads — the
 /// abandoned-pour shape the adopting scope joins.
 const _orphan = SessionProjection(
@@ -220,6 +258,74 @@ void main() {
             'the scope for the life of the arm',
       );
       expect(transport.named('session.orphanedPourResumeFailed'), isEmpty);
+    },
+  );
+
+  test(
+    'a THROWN resume pour flares moleculePourFailed once, parks the adopted '
+    'session at a durable gate, and never re-pours (tg-aec)',
+    () async {
+      final runner = _ThrowingGraphRunner();
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final joined = JoinedSnapshotNotifier(_joined(const {'tg-1': _orphan}));
+      final m = _mount(
+        joined: joined,
+        ctx: _ctxOver(runner),
+        registry: reg,
+        transport: transport,
+      );
+      addTearDown(m.owner.dispose);
+
+      await _pumpUntil(
+        m.owner,
+        () => runner
+            .callsFor('update')
+            .any((c) => c.join(' ').contains('Molecule pour failed')),
+      );
+
+      // The same orphan shape lands again — the parked scope must stay
+      // parked: no second pour, no second gate, no flare spam.
+      joined.push(_joined(const {'tg-1': _orphan}));
+      await _pumpUntil(m.owner, () => false, maxRounds: 30);
+
+      // LOUD once, cause-bearing, naming the ADOPTED session.
+      final parked = transport.named('session.moleculePourFailed');
+      expect(parked, hasLength(1));
+      expect(parked.single.data['sessionId'], 'tgdog-orphan');
+      expect(parked.single.data['workBeadId'], 'tg-1');
+      expect(
+        parked.single.data['reason'],
+        contains('fake orphan graph pour timed out'),
+      );
+      // The park REPLACES the old silent-retry flare, it does not add to it.
+      expect(transport.named('session.orphanedPourResumeFailed'), isEmpty);
+
+      // ONE pour attempt total — terminal park, never a blind re-pour.
+      expect(
+        runner.calls.where((c) => c.length > 1 && c[1] == '--graph'),
+        hasLength(1),
+      );
+      // One gate bead created (the only plain create — adoption never mints
+      // a fresh session), and one cause-bearing stamp re-arm linkage.
+      expect(
+        runner
+            .callsFor('create')
+            .where((c) => c.length <= 1 || c[1] != '--graph'),
+        hasLength(1),
+      );
+      final stamps = runner
+          .callsFor('update')
+          .where((c) => c.join(' ').contains('"blocks"'))
+          .toList();
+      expect(stamps, hasLength(1));
+      final stamp = stamps.single.join(' ');
+      expect(stamp, contains('"blocks":"tgdog-orphan"'));
+      expect(stamp, contains('"node":"tg-1"'));
+      expect(stamp, contains('fake orphan graph pour timed out'));
+
+      // The parked session never inflates the circuit.
+      expect(reg.events, isEmpty);
     },
   );
 

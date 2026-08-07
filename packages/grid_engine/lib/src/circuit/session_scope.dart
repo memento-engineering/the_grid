@@ -163,6 +163,10 @@ class SessionScopeState extends State<SessionScope>
   /// store — the exact FIRST-LIVE-ARM incident).
   static const _mintExhaustedFlare = 'session.mintExhausted';
 
+  /// A session exists, but its molecule graph could not be poured. The session
+  /// is parked at a durable gate for operator repair and rework.
+  static const _moleculePourFailedFlare = 'session.moleculePourFailed';
+
   StationServices? _ctx;
 
   /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
@@ -490,9 +494,13 @@ class SessionScopeState extends State<SessionScope>
 
   /// The molecule-mode mint (`DESIGN-tg-pm6.md` §9/§12, R5/R6): `createSession`
   /// stamping `grid.session.model=molecule`, THEN `createMolecule` pours the
-  /// pure `instantiateMolecule` compile step's plan — both under [_mint]'s
-  /// SAME [_maxMintAttempts] budget (a throw here propagates to [_mint]'s
-  /// `catch`, which retries or escalates exactly like a flat mint failure).
+  /// pure `instantiateMolecule` compile step's plan. The two throws differ by
+  /// lifecycle position: a `createSession` throw happens BEFORE a durable
+  /// session exists and propagates to [_mint]'s `catch` under the
+  /// [_maxMintAttempts] budget; a `createMolecule` throw happens AFTER the
+  /// session exists and parks it durably via [_parkFailedMoleculePour] —
+  /// terminal, budget-untouched. Only a throwing PARK (the gate write itself
+  /// failing) falls back to [_mint]'s bounded retry.
   ///
   /// [_moleculeSessionId] makes a retry-after-`createMolecule`-throws SAFE: on
   /// re-entry the session id from the FIRST attempt is reused (`??=`
@@ -518,18 +526,58 @@ class SessionScopeState extends State<SessionScope>
       nodePath: seed.bead.id,
       circuitById: _registry?.circuit,
     );
-    await _ctx!.writer.createMolecule(
-      plan,
-      substation: _ctx!.stateSubstation,
-      sessionId: id,
-      rootCrumbs: root.crumbs,
-    );
+    try {
+      await _ctx!.writer.createMolecule(
+        plan,
+        substation: _ctx!.stateSubstation,
+        sessionId: id,
+        rootCrumbs: root.crumbs,
+      );
+    } on Object catch (error) {
+      await _parkFailedMoleculePour(id, error);
+      return;
+    }
     if (_cancelled || !context.mounted) return;
     setState(() {
       _sessionId = id;
       _resolving = false;
       _isMolecule = true;
       _moleculeSessionId = null;
+    });
+  }
+
+  /// Makes a thrown post-session molecule-pour failure LOUD and durable.
+  ///
+  /// No step bead is guaranteed to exist, so this parks the existing session
+  /// at the work-bead root. Once the gate lands this mounted scope is terminal;
+  /// recovery is cause repair followed by rework.
+  ///
+  /// Lifecycle rule: a `createSession` throw happens BEFORE a durable session
+  /// exists and stays under [_maxMintAttempts]; a `createMolecule` throw
+  /// happens AFTER the session exists and — when this gate write lands — parks
+  /// once without consuming that retry budget. If the fresh-path gate write
+  /// itself throws, it propagates to [_mint] and remains under the existing
+  /// bounded LOUD retry path, because durable parking did not complete.
+  Future<void> _parkFailedMoleculePour(String sessionId, Object error) async {
+    final reason = truncateReason('Molecule pour failed: $error');
+    _flare(_moleculePourFailedFlare, {
+      'sessionId': sessionId,
+      'workBeadId': seed.bead.id,
+      'reason': reason,
+    });
+    // The chokepoint's session-lifecycle park — NOT the router's gate-mint
+    // verb (tg-6gn one-router): no step exists, so there is no route verdict
+    // here, only a session that must not stay silently un-drivable.
+    await _ctx!.writer.parkSessionAtGate(
+      substation: _ctx!.stateSubstation,
+      sessionId: sessionId,
+      nodePath: seed.bead.id,
+      reason: reason,
+    );
+    if (_cancelled || !context.mounted) return;
+    setState(() {
+      _failed = true;
+      _resolving = false;
     });
   }
 
@@ -884,12 +932,10 @@ class SessionScopeState extends State<SessionScope>
       // resetting here is bounded, not a hot loop.
       _resumingOrphanedPour = false;
     } on Object catch (error) {
-      _flare('session.orphanedPourResumeFailed', {
-        'sessionId': sessionId,
-        'workBeadId': seed.bead.id,
-        'error': '$error',
-      });
-      // A later build retries while the projection stays step-less.
+      // Same terminal park as the fresh-mint path: the session bead EXISTS
+      // (this scope adopted it), so a thrown pour is made LOUD and durable
+      // instead of silently retried against the same cause forever.
+      await _parkFailedMoleculePour(sessionId, error);
       _resumingOrphanedPour = false;
     }
   }
