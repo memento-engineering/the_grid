@@ -592,9 +592,26 @@ class StationBeadWriter {
     final beads = {
       for (final bead in [...matched, ...chain]) bead.id: bead,
     };
-    await batch([
-      for (final bead in beads.values) (id: bead.id, line: 'close ${bead.id}'),
-    ]);
+    try {
+      await batch([
+        for (final bead in beads.values)
+          (id: bead.id, line: 'close ${bead.id}'),
+      ]);
+    } on BdCommandFailed catch (error) {
+      // PROXIED-SERVER stores refuse `bd batch` outright ("batch is not
+      // supported in proxied-server mode") — so the reap threw on EVERY
+      // session close on such a store, silently accumulating 9,389 orphaned
+      // step/molecule beads by 2026-08-07 (tg-ehht). Degrading to per-bead
+      // closes trades ADR-0001 D4's one-transaction grouping for the only
+      // write shape the store supports; the set is bounded (one session's
+      // graph, ~35 beads). Any OTHER batch failure still propagates.
+      if (!'$error'.contains('not supported in proxied-server mode')) {
+        rethrow;
+      }
+      for (final bead in beads.values) {
+        await close(bead.id, reason: 'molecule reaped (session close)');
+      }
+    }
   }
 
   /// A lifecycle `bd update --metadata <json>` (merge semantics; works on
