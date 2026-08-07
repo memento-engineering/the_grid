@@ -144,61 +144,51 @@ _harness() {
 }
 
 void main() {
-  test(
-    'THE REGRESSION: a throwing rebuild no longer decapitates the tick — '
-    'the driver post-flush scans still run, so the wedge alarm keeps its '
-    'heartbeat',
-    () async {
-      final h = _harness();
-      h.kernel.start();
-      // The baseline scan at start().
-      expect(h.scans, hasLength(1));
-      final before = h.scans.length;
+  test('THE REGRESSION: a throwing rebuild no longer decapitates the tick — '
+      'the driver post-flush scans still run, so the wedge alarm keeps its '
+      'heartbeat', () async {
+    final h = _harness();
+    h.kernel.start();
+    // The baseline scan at start().
+    expect(h.scans, hasLength(1));
+    final before = h.scans.length;
 
-      h.boom().explode();
-      await _pump();
+    h.boom().explode();
+    await _pump();
 
-      // The pass threw...
-      expect(h.errors, hasLength(1));
-      expect(h.errors.single, isStateError);
-      // ...and the post-flush scan STILL ran. Before the guard this was
-      // `before` — the driver never heard about the flush, and the wedge
-      // monitor froze at its last good sample.
-      expect(
-        h.scans.length,
-        greaterThan(before),
-        reason: 'afterFlush must run even when the flush pass threw',
-      );
-    },
-  );
+    // The pass threw...
+    expect(h.errors, hasLength(1));
+    expect(h.errors.single, isStateError);
+    // ...and the post-flush scan STILL ran. Before the guard this was
+    // `before` — the driver never heard about the flush, and the wedge
+    // monitor froze at its last good sample.
+    expect(
+      h.scans.length,
+      greaterThan(before),
+      reason: 'afterFlush must run even when the flush pass threw',
+    );
+  });
 
-  test(
-    'a failed pass RE-ARMS, so a dirty set stranded by the throw cannot '
-    'silently freeze the tree (TreeOwner fires onNeedsFlush only on the '
-    'empty→non-empty edge)',
-    () async {
-      final h = _harness();
-      h.kernel.start();
+  test('a failed pass RE-ARMS, so a dirty set stranded by the throw cannot '
+      'silently freeze the tree (TreeOwner fires onNeedsFlush only on the '
+      'empty→non-empty edge)', () async {
+    final h = _harness();
+    h.kernel.start();
 
-      h.boom().explode();
-      await _pump();
-      expect(h.errors, hasLength(1));
-      expect(
-        h.timers,
-        isNotEmpty,
-        reason: 'a failed pass must schedule a retry',
-      );
+    h.boom().explode();
+    await _pump();
+    expect(h.errors, hasLength(1));
+    expect(h.timers, isNotEmpty, reason: 'a failed pass must schedule a retry');
 
-      // The branch recovers; firing the re-arm drives a clean pass.
-      h.boom().defuse();
-      final scansBefore = h.scans.length;
-      h.timers.removeAt(0)();
-      await _pump();
+    // The branch recovers; firing the re-arm drives a clean pass.
+    h.boom().defuse();
+    final scansBefore = h.scans.length;
+    h.timers.removeAt(0)();
+    await _pump();
 
-      expect(h.errors, hasLength(1), reason: 'the retry pass succeeded');
-      expect(h.scans.length, greaterThan(scansBefore));
-    },
-  );
+    expect(h.errors, hasLength(1), reason: 'the retry pass succeeded');
+    expect(h.scans.length, greaterThan(scansBefore));
+  });
 
   test(
     'the re-arm is BOUNDED — a branch that throws every pass degrades into a '
@@ -235,19 +225,16 @@ void main() {
     },
   );
 
-  test(
-    'a clean station is UNCHANGED: no flush error is ever reported and no '
-    'retry is ever armed',
-    () async {
-      final h = _harness();
-      h.kernel.start();
+  test('a clean station is UNCHANGED: no flush error is ever reported and no '
+      'retry is ever armed', () async {
+    final h = _harness();
+    h.kernel.start();
 
-      h.boom().defuse(); // a normal dirty→rebuild cycle, no throw
-      await _pump();
+    h.boom().defuse(); // a normal dirty→rebuild cycle, no throw
+    await _pump();
 
-      expect(h.errors, isEmpty);
-      expect(h.timers, isEmpty);
-      expect(h.scans.length, greaterThan(1));
-    },
-  );
+    expect(h.errors, isEmpty);
+    expect(h.timers, isEmpty);
+    expect(h.scans.length, greaterThan(1));
+  });
 }
