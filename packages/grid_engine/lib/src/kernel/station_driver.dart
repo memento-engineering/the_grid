@@ -111,10 +111,18 @@ class StationDriver {
   /// this.
   void afterFlush() {
     if (_disposed) return;
-    _scanCooldowns();
-    _scanUnclaimedFrontier();
-    // A resumed grid clears the alarm on the very next flush.
-    _wedge.poll();
+    // The alarm samples LAST and ALWAYS (tg-60n residual 2): a throwing
+    // cooldown/frontier scan must never silence the stall detector — that is
+    // the same fail-open shape as the flush seam, one level down. The live
+    // receipt: /status reporting kNotWedged ("no live session", live: 0)
+    // beside liveSessions: 6, because a scan threw before poll() was reached.
+    try {
+      _scanCooldowns();
+      _scanUnclaimedFrontier();
+    } finally {
+      // A resumed grid clears the alarm on the very next flush.
+      _wedge.poll();
+    }
   }
 
   /// Scans every owned session's cursor for the EARLIEST future cooldown and
