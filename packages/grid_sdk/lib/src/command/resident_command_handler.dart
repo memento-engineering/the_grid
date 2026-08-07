@@ -173,8 +173,22 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
             ).cursor
           : const <String, NodeCursor>{};
       final states = cursor.values.map((node) => node.state);
-      if (states.contains(StepState.running) ||
-          !states.contains(StepState.gated)) {
+      // The SESSION-LEVEL park (tg-aec / tg-ehht): a failed molecule pour
+      // leaves a session with NO steps at all, parked by an open gate bead
+      // blocking it at the work-bead root. There is no gated STEP to find —
+      // recognizing the gate is what makes the pour-failure runbook's
+      // "repair the cause, then grid rework" actually executable.
+      final pourParked =
+          cursor.isEmpty &&
+          state.beads.any(
+            (bead) =>
+                bead.issueType == GridIssueTypes.gate &&
+                !bead.isClosed &&
+                _meta(bead, 'blocks') == session.id,
+          );
+      if (!pourParked &&
+          (states.contains(StepState.running) ||
+              !states.contains(StepState.gated))) {
         return _refused(
           'session_not_parked',
           'Session "${session.id}" is open and not parked at a gate.',
@@ -188,6 +202,13 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
         session.id,
         metadata: {SessionBeadKeys.workBead: reworkKeyFor(beadId, round)},
       );
+      // Reap the retired round's molecule (tg-ehht): the positive-terminal
+      // close already collects its own graph; rework is the OTHER designed
+      // session exit and left every retired round's step beads open forever
+      // — 9,389 orphans across 307 closed sessions by 2026-08-07, the
+      // dependency bloat behind the graph-apply pour timeouts. A no-op for a
+      // flat or never-poured (pour-parked) session.
+      await _stateWriter.reapMolecule(sessionId: session.id);
       final finding = note?.trim();
       if (finding != null && finding.isNotEmpty) {
         final timestamp = DateTime.now().toUtc().toIso8601String();
