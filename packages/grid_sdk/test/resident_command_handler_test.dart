@@ -273,6 +273,62 @@ void main() {
       },
     );
 
+    test('a THROWING reap is non-fatal: the retire and the note both land, and '
+        'the failure rides the result LOUD (2026-08-07 live: a reap exception '
+        'ate the round\'s findings behind a generic 500)', () async {
+      final stateRunner = _RecordingRunner()
+        ..openBeadsResult = const [
+          Bead(
+            id: 'tgdog-step-a',
+            issueType: GridIssueTypes.step,
+            metadata: {'grid.step.session': 'tgdog-session', 'rig': 'tgdog'},
+          ),
+        ]
+        ..throwOnBatch = true;
+      final workRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tgdog-session',
+              issueType: GridIssueTypes.session,
+              status: BeadStatus.closed,
+              metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
+            ),
+          ]),
+        ),
+        work: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tg-1',
+              issueType: IssueType.task,
+              metadata: {'rig': 'tg'},
+            ),
+          ]),
+        ),
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+      );
+
+      final result = await handler(
+        const GridCommandRequest.rework(beadId: 'tg-1', note: 'finding'),
+      );
+
+      expect(result, isA<GridCommandCompleted>());
+      final value = (result as GridCommandCompleted).value;
+      expect(value['reapFailure'], isNotNull);
+      expect(
+        stateRunner.calls.any((c) => c.join(' ').contains('tg-1#r1')),
+        isTrue,
+        reason: 'the retire landed despite the reap throw',
+      );
+      expect(
+        workRunner.calls.any((c) => c.contains('--append-notes')),
+        isTrue,
+        reason: 'the operator finding landed BEFORE the reap could throw',
+      );
+    });
+
     test('beyond-cap header binds the request actor', () async {
       final stateRunner = _RecordingRunner();
       final workRunner = _RecordingRunner();
@@ -937,6 +993,9 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
   }) : _results = List.of(results);
 
   final bool blockFirst;
+
+  /// When set, a `batch` invocation throws — the reap-failure shape.
+  bool throwOnBatch = false;
   final List<BdResult> _results;
   final List<Bead> exportBeads;
   final calls = <List<String>>[];
@@ -951,6 +1010,9 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
     String? stdin,
   }) async {
     calls.add(List.unmodifiable(args));
+    if (throwOnBatch && args.isNotEmpty && args.first == 'batch') {
+      throw StateError('fake batch refused');
+    }
     if (blockFirst && calls.length == 1) {
       _blocked = Completer<void>();
       await _blocked!.future;

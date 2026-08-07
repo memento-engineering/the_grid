@@ -514,7 +514,7 @@ void main() {
             'id': 1,
             'error': {
               'code': 'internal_error',
-              'message': 'Command handler failed.',
+              'message': 'Command handler failed: Bad state: fake failure',
             },
           });
         }
