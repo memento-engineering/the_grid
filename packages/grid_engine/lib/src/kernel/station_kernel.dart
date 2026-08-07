@@ -35,6 +35,15 @@ import 'station_driver.dart';
 /// dirties (derailment-invariant 1); the kernel just drains what the dirty set
 /// holds. Flushes are coalesced: many dirties between microtask turns collapse
 /// into one flush.
+/// How long the kernel waits before re-attempting a flush pass that threw
+/// (tg-60n). Coarse on purpose: the retry exists to un-strand a dirty set, not
+/// to drive latency.
+const Duration _kFlushRetryDelay = Duration(seconds: 1);
+
+/// How many CONSECUTIVE failed flush passes the kernel re-arms before it stops
+/// and lets the stall become a visible wedge (tg-60n).
+const int _kMaxFlushRetries = 5;
+
 class StationKernel {
   /// Assembles the kernel. The tree is not mounted until [start].
   ///
@@ -78,6 +87,7 @@ class StationKernel {
     RootCircuitFor? rootCircuitFor,
     CapabilityFacts stationFacts = const CapabilityFacts(),
     void Function(List<UnclaimedRequirement>)? onUnclaimedFrontier,
+    void Function(Object error, StackTrace stack)? onFlushError,
   }) : _stationServices = stationServices,
        _resolver = resolver,
        _substations = substations,
@@ -85,6 +95,8 @@ class StationKernel {
        _processLeaseVendor = processLeaseVendor,
        _treeProjector = treeProjector,
        _wrapRoot = wrapRoot,
+       _scheduleTimer = scheduleTimer ?? Timer.new,
+       _onFlushError = onFlushError ?? _rethrowToZone,
        _driver = StationDriver(
          bridge: bridge,
          clock: clock,
@@ -132,11 +144,32 @@ class StationKernel {
   /// kernel delegates the same duties it always owned.
   final StationDriver _driver;
 
+  /// The flush-failure sink (tg-60n). Defaults to [_rethrowToZone] — the
+  /// SAME escalation an unguarded throw already had, so nothing about how a
+  /// failure is REPORTED changes by default; what changes is that the rest of
+  /// the tick no longer dies with it.
+  final void Function(Object error, StackTrace stack) _onFlushError;
+
+  /// The retry clock for [_rearmAfterFailedFlush] — injectable so the re-arm is
+  /// driven deterministically offline, exactly like the driver's backoff.
+  final Timer Function(Duration, void Function()) _scheduleTimer;
+
   final TreeOwner _owner = TreeOwner();
   Branch? _root;
   bool _started = false;
   bool _disposed = false;
   bool _flushScheduled = false;
+
+  /// Consecutive failed flush passes — reset by the first clean pass. Bounds
+  /// [_rearmAfterFailedFlush] so a branch that throws every single time
+  /// degrades into a visible wedge instead of a hot retry loop.
+  int _consecutiveFlushFailures = 0;
+
+  /// The pending failure re-arm, if any (cancelled on [dispose]).
+  Timer? _flushRetry;
+
+  static void _rethrowToZone(Object error, StackTrace stack) =>
+      Zone.current.handleUncaughtError(error, stack);
 
   /// Mounts the tree and starts the reactive loop. Idempotent.
   void start() {
@@ -186,18 +219,91 @@ class StationKernel {
   void _scheduleFlush() {
     if (_flushScheduled || _disposed) return;
     _flushScheduled = true;
-    scheduleMicrotask(() {
-      _flushScheduled = false;
-      if (_disposed) return;
+    scheduleMicrotask(_runFlushPass);
+  }
+
+  /// One flush pass, FAIL-CLOSED (tg-60n).
+  ///
+  /// `TreeOwner.flush()` has no internal catch (genesis_tree 0.2.0
+  /// `tree_owner.dart:69-93`), so one throwing `branch.rebuild()` propagates
+  /// straight out. Before this guard that killed the WHOLE remainder of the
+  /// tick, and the two consequences were invisible and unbounded:
+  ///
+  /// 1. **`_driver.afterFlush()` never ran.** The driver's post-flush scans
+  ///    include `WedgeMonitor.poll` — the station's ONLY stall alarm. A
+  ///    non-stalled sample cancels the monitor's timer by design ("a healthy
+  ///    grid arms no wall clock at all"), so a flush is its only remaining
+  ///    heartbeat. Skipping it froze the wedge state at its last good sample:
+  ///    a live arm reported `wedged: false, live: 0` while `/status` computed
+  ///    6 live sessions from the SAME bridge, for 18.6 hours (receipt on
+  ///    tg-60n, 2026-08-06). The alarm could not fire in the one scenario it
+  ///    exists for.
+  /// 2. **The dirty set could strand NON-EMPTY.** `TreeOwner.scheduleRebuildFor`
+  ///    fires `onNeedsFlush` only on the empty→non-empty EDGE. A pass that
+  ///    threw part-way leaves branches dirty, so every later
+  ///    `markNeedsRebuild` sees a non-empty set and schedules NOTHING — the
+  ///    tree freezes for the life of the process. That is why a bounce was the
+  ///    only cure ever found: it is the one thing that yields a fresh owner
+  ///    with an empty dirty set.
+  ///
+  /// The guard fixes both: the driver's scans run in a `finally`, and a failed
+  /// pass re-arms so a stranded set cannot wedge the tree silently.
+  void _runFlushPass() {
+    _flushScheduled = false;
+    if (_disposed) return;
+    var failed = false;
+    try {
       _owner.flush();
       _treeProjector?.afterFlush(_root!);
+      _consecutiveFlushFailures = 0;
+    } on Object catch (error, stack) {
+      failed = true;
+      _consecutiveFlushFailures++;
+      _report(error, stack);
+    } finally {
       // Re-scan after each flush (the driver's cooldown + unclaimed-frontier
       // scans): a failure cursor written this tick may carry a new cooldown to
       // arm, and whatever this flush left unfulfillable is what a composed
       // claim asset sees next. No persistent subscription — the kernel already
-      // owns this cycle.
-      _driver.afterFlush();
+      // owns this cycle. It runs even when the pass THREW: a broken tick is
+      // exactly when the stall alarm must keep sampling.
+      if (!_disposed) {
+        try {
+          _driver.afterFlush();
+        } on Object catch (error, stack) {
+          _report(error, stack);
+        }
+      }
+    }
+    if (failed) _rearmAfterFailedFlush();
+  }
+
+  /// Re-arms a flush after a failed pass, so a dirty set stranded by the throw
+  /// cannot silently freeze the tree (the edge-trigger trap above).
+  ///
+  /// BOUNDED on purpose: a branch that throws on every pass would otherwise
+  /// spin. After [_kMaxFlushRetries] consecutive failures the kernel stops
+  /// re-arming and lets the station ripen into a VISIBLE wedge — which it now
+  /// can, because `afterFlush` keeps running. Loud and stuck beats silent and
+  /// stuck; a hot loop is neither.
+  void _rearmAfterFailedFlush() {
+    if (_disposed || _flushScheduled) return;
+    if (_consecutiveFlushFailures > _kMaxFlushRetries) return;
+    _flushRetry?.cancel();
+    _flushRetry = _scheduleTimer(_kFlushRetryDelay, () {
+      _flushRetry = null;
+      if (_disposed) return;
+      _scheduleFlush();
     });
+  }
+
+  void _report(Object error, StackTrace stack) {
+    try {
+      _onFlushError(error, stack);
+    } on Object {
+      // A throwing sink must never break the reconcile — the same posture
+      // every other engine flare site takes.
+    }
   }
 
   /// Tears down the tree (unmounting every effect → kill) and the driver
@@ -205,6 +311,8 @@ class StationKernel {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _flushRetry?.cancel();
+    _flushRetry = null;
     _owner.dispose();
     _treeProjector?.dispose();
     _driver.dispose();
