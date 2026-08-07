@@ -246,6 +246,32 @@ void main() {
       );
     });
 
+    test('synthesizes a Station root over SEVERAL top-level semantic nodes — '
+        'a wide resident roster is a view problem, never a boot refusal '
+        '(2026-08-07: seven substations took the first armed arm down)', () {
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      final root = owner.mountRoot(
+        _TransparentContainer([
+          const _SemanticLeaf('a', key: ValueKey('a-key')),
+          const _SemanticLeaf('b', key: ValueKey('b-key')),
+          const _SemanticLeaf('c', key: ValueKey('c-key')),
+        ]),
+      );
+
+      final snapshot = DiagnosticsTreeWalker().walk(
+        root,
+        projectedAt: DateTime.utc(2026, 8, 7),
+      );
+
+      expect(snapshot.root.seedType, 'Station');
+      expect(snapshot.root.children.map((node) => node.key), [
+        const ValueKey('a-key').toString(),
+        const ValueKey('b-key').toString(),
+        const ValueKey('c-key').toString(),
+      ]);
+    });
+
     test('rejects a tree with no semantic root', () {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
@@ -258,34 +284,33 @@ void main() {
           isA<StateError>().having(
             (error) => error.message,
             'message',
-            contains('found 0'),
+            contains('no semantic root'),
           ),
         ),
       );
     });
 
-    test('rejects a tree with multiple semantic roots', () {
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      final root = owner.mountRoot(
-        _TransparentContainer([
-          const _SemanticLeaf('first'),
-          const _SemanticLeaf('second'),
-        ]),
-      );
+    test(
+      'multiple semantic roots project under one synthesized Station node — '
+      'the former rejection took a seven-substation resident down at boot',
+      () {
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        final root = owner.mountRoot(
+          _TransparentContainer([
+            const _SemanticLeaf('first'),
+            const _SemanticLeaf('second'),
+          ]),
+        );
 
-      expect(
-        () =>
-            DiagnosticsTreeWalker().walk(root, projectedAt: DateTime.utc(2026)),
-        throwsA(
-          isA<StateError>().having(
-            (error) => error.message,
-            'message',
-            contains('found 2'),
-          ),
-        ),
-      );
-    });
+        final snapshot = DiagnosticsTreeWalker().walk(
+          root,
+          projectedAt: DateTime.utc(2026),
+        );
+        expect(snapshot.root.seedType, 'Station');
+        expect(snapshot.root.children, hasLength(2));
+      },
+    );
   });
 
   group('engine descriptions', () {
