@@ -90,6 +90,9 @@ final class _Harness {
   final events = <String>[];
   final _stdout = _ByteConsumer();
   final _stderr = _ByteConsumer();
+  ExplorationTransport? transport;
+  TreeProjector? gridProjector;
+  TreeProjector? controlProjector;
 
   String get stdoutText => _stdout.text;
   String get stderrText => _stderr.text;
@@ -144,7 +147,9 @@ final class _Harness {
             required registry,
             required dryRun,
             required maxConcurrentWork,
+            required transport,
           }) async {
+            this.transport = transport;
             events.add('buildStationWork');
             _throwIf('buildStationWork');
             return _Work(events, failAt);
@@ -154,8 +159,10 @@ final class _Harness {
             delegate, {
             required onFlushed,
             required orphanSweep,
+            required treeProjector,
             delegateFactory,
           }) {
+            gridProjector = treeProjector;
             events.add('runGrid');
             _throwIf('runGrid');
             return _Grid(events);
@@ -166,7 +173,9 @@ final class _Harness {
             required token,
             required view,
             required commandHandler,
+            required treeProjector,
           }) async {
+            controlProjector = treeProjector;
             events.add('control');
             _throwIf('control');
             return _Control(events);
@@ -496,6 +505,17 @@ void main() {
         'lock.release',
       ]);
       expect(h.stdoutText, contains('lunar up — resident station (runGrid)'));
+      expect(h.transport, isA<StationDiagnosticsReporter>());
+      final reporter = h.transport! as StationDiagnosticsReporter;
+      expect(h.gridProjector, same(reporter.treeProjector));
+      expect(h.controlProjector, same(reporter.treeProjector));
+      reporter.flare('station.wedged', <String, String>{'gated': '2'});
+      expect(jsonDecode(h.stderrText.trim()), <String, Object?>{
+        'type': 'flare',
+        'name': 'station.wedged',
+        'data': <String, Object?>{'gated': '2'},
+      });
+      await expectLater(reporter.treeProjector.snapshots, emitsDone);
     });
 
     test('missing coded store skips loudly and continues', () async {
@@ -727,6 +747,8 @@ void main() {
           expect(await h.run(), entry.$2);
           expect(h.events, entry.$3);
           expect(h.stderrText, startsWith('lunar up:'));
+          final reporter = h.transport! as StationDiagnosticsReporter;
+          await expectLater(reporter.treeProjector.snapshots, emitsDone);
         },
       );
     }

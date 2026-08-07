@@ -20,6 +20,7 @@ import 'package:grid_runtime/grid_runtime.dart'
 import 'package:grid_sdk/grid_sdk.dart'
     show
         CapabilityRegistry,
+        ExplorationTransport,
         GridDelegate,
         GridCommandHandler,
         GridHandle,
@@ -31,12 +32,14 @@ import 'package:grid_sdk/grid_sdk.dart'
         StoreLocator,
         StoreRefusal,
         SubstationWorkSpec,
+        TreeProjector,
         buildStationWork,
         ghRunner,
         runGrid;
 import 'package:path/path.dart' as p;
 
 import 'resident_station_flags.dart';
+import 'resident_diagnostics_reporter.dart';
 import 'station_control.dart';
 import 'station_lock.dart';
 
@@ -118,12 +121,14 @@ typedef ResidentWorkBuilder =
       required CapabilityRegistry registry,
       required bool dryRun,
       required int maxConcurrentWork,
+      required ExplorationTransport transport,
     });
 typedef ResidentGridRunner =
     ResidentGridResource Function(
       GridDelegate delegate, {
       required void Function() onFlushed,
       required Future<void> Function() orphanSweep,
+      required TreeProjector treeProjector,
       GridDelegate Function()? delegateFactory,
     });
 typedef ResidentControlStarter =
@@ -132,6 +137,7 @@ typedef ResidentControlStarter =
       required String token,
       required StationStatus Function() view,
       required GridCommandHandler commandHandler,
+      required TreeProjector treeProjector,
     });
 typedef ResidentDevModeArmer =
     Future<ResidentDevModeResource?> Function({
@@ -353,6 +359,7 @@ class ResidentUpCommand extends Command<int> {
       return 64;
     }
 
+    final diagnostics = StationDiagnosticsReporter(writeLine: stderr.writeln);
     final ResidentWorkResource work;
     try {
       work = await _buildWork(
@@ -362,8 +369,10 @@ class ResidentUpCommand extends Command<int> {
         registry: _registry,
         dryRun: config.dryRun,
         maxConcurrentWork: config.maxAgents,
+        transport: diagnostics,
       );
     } on Object catch (error) {
+      diagnostics.dispose();
       await stationLock.release();
       stderr.writeln('$prefix: $error');
       return 1;
@@ -371,6 +380,7 @@ class ResidentUpCommand extends Command<int> {
     try {
       await work.start();
     } on Object catch (error) {
+      diagnostics.dispose();
       await work.shutdown();
       await stationLock.release();
       stderr.writeln('$prefix: $error');
@@ -395,9 +405,11 @@ class ResidentUpCommand extends Command<int> {
         orphanSweep: () async {
           await work.sweepOrphans();
         },
+        treeProjector: diagnostics.treeProjector,
         delegateFactory: vmServiceUri == null ? null : buildDelegate,
       );
     } on Object catch (error) {
+      diagnostics.dispose();
       await work.shutdown();
       await stationLock.release();
       stderr.writeln('$prefix: $error');
@@ -412,10 +424,12 @@ class ResidentUpCommand extends Command<int> {
         token: token,
         view: () => _status(config, armed, startedAt, work),
         commandHandler: work.commands,
+        treeProjector: diagnostics.treeProjector,
       );
       await stationLock.updateControl(controlUrl: control.url, token: token);
     } on Object catch (error) {
       await grid.teardown();
+      diagnostics.dispose();
       await work.shutdown();
       await stationLock.release();
       stderr.writeln('$prefix: $error');
@@ -438,6 +452,7 @@ class ResidentUpCommand extends Command<int> {
     } on Object catch (error) {
       await control.dispose();
       await grid.teardown();
+      diagnostics.dispose();
       await work.shutdown();
       await stationLock.release();
       stderr.writeln('$prefix: $error');
@@ -462,6 +477,7 @@ class ResidentUpCommand extends Command<int> {
       await devMode?.dispose();
       await control.dispose();
       await grid.teardown();
+      diagnostics.dispose();
       await work.shutdown();
       await stationLock.release();
     }
@@ -592,6 +608,7 @@ Future<ResidentWorkResource> _defaultBuildWork({
   required CapabilityRegistry registry,
   required bool dryRun,
   required int maxConcurrentWork,
+  required ExplorationTransport transport,
 }) async => _StationWorkResource(
   await buildStationWork(
     stateStore: stateStore,
@@ -600,6 +617,7 @@ Future<ResidentWorkResource> _defaultBuildWork({
     registry: registry,
     dryRun: dryRun,
     maxConcurrentWork: maxConcurrentWork,
+    transport: transport,
   ),
 );
 
@@ -607,12 +625,14 @@ ResidentGridResource _defaultRunMountedGrid(
   GridDelegate delegate, {
   required void Function() onFlushed,
   required Future<void> Function() orphanSweep,
+  required TreeProjector treeProjector,
   GridDelegate Function()? delegateFactory,
 }) => _GridResource(
   runGrid(
     delegate,
     onFlushed: onFlushed,
     orphanSweep: orphanSweep,
+    treeProjector: treeProjector,
     delegateFactory: delegateFactory,
   ),
 );
@@ -622,12 +642,14 @@ Future<ResidentControlResource> _defaultStartControl({
   required String token,
   required StationStatus Function() view,
   required GridCommandHandler commandHandler,
+  required TreeProjector treeProjector,
 }) async => _ControlResource(
   await StationControl.start(
     port: port,
     token: token,
     view: view,
     commandHandler: commandHandler,
+    treeProjector: treeProjector,
   ),
 );
 

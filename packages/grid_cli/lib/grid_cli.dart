@@ -32,6 +32,7 @@ export 'src/station_reload.dart';
 export 'src/resident_station_flags.dart';
 export 'src/resident_state_workspace.dart';
 export 'src/resident_up_command.dart';
+export 'src/resident_diagnostics_reporter.dart';
 export 'src/resident_down_command.dart';
 export 'src/resident_status_command.dart';
 
