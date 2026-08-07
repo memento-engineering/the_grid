@@ -37,7 +37,8 @@ class GridControllerRuntime {
           // no more refreshes from that source, silently (tg-zd4v LOUD). Say
           // it once, unless this runtime is the one closing it on dispose.
           onDone: () {
-            if (!_disposing) _onDirtySourceClosed?.call('${source.runtimeType}');
+            if (!_disposing)
+              _onDirtySourceClosed?.call('${source.runtimeType}');
           },
         ),
       );

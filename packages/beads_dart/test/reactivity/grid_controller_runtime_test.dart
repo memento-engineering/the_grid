@@ -160,44 +160,41 @@ void main() {
       },
     );
 
-    test(
-      'a CLOSED dirty-signal source is LOUD exactly once — and a deliberate '
-      'dispose is not (tg-zd4v)',
-      () async {
-        final closing = ManualDirtySource();
-        final closed = <String>[];
-        final runtime = GridControllerRuntime(
-          reader: FakeSnapshotReader(() => snap([bead('a')])),
-          dirtySources: [closing],
-          onDirtySourceClosed: closed.add,
-        );
-        await runtime.start();
+    test('a CLOSED dirty-signal source is LOUD exactly once — and a deliberate '
+        'dispose is not (tg-zd4v)', () async {
+      final closing = ManualDirtySource();
+      final closed = <String>[];
+      final runtime = GridControllerRuntime(
+        reader: FakeSnapshotReader(() => snap([bead('a')])),
+        dirtySources: [closing],
+        onDirtySourceClosed: closed.add,
+      );
+      await runtime.start();
 
-        await closing.dispose(); // the stream closes out from under the loop
-        await Future<void>.delayed(Duration.zero);
-        expect(closed, ['ManualDirtySource']);
+      await closing.dispose(); // the stream closes out from under the loop
+      await Future<void>.delayed(Duration.zero);
+      expect(closed, ['ManualDirtySource']);
 
-        await runtime.dispose();
-        expect(
-          closed,
-          hasLength(1),
-          reason: 'our own teardown closing the source must not re-flare',
-        );
+      await runtime.dispose();
+      expect(
+        closed,
+        hasLength(1),
+        reason: 'our own teardown closing the source must not re-flare',
+      );
 
-        // A runtime disposed with the source still open never flares at all.
-        final quiet = ManualDirtySource();
-        final quietClosed = <String>[];
-        final second = GridControllerRuntime(
-          reader: FakeSnapshotReader(() => snap([bead('a')])),
-          dirtySources: [quiet],
-          onDirtySourceClosed: quietClosed.add,
-        );
-        await second.start();
-        await second.dispose();
-        await Future<void>.delayed(Duration.zero);
-        expect(quietClosed, isEmpty);
-      },
-    );
+      // A runtime disposed with the source still open never flares at all.
+      final quiet = ManualDirtySource();
+      final quietClosed = <String>[];
+      final second = GridControllerRuntime(
+        reader: FakeSnapshotReader(() => snap([bead('a')])),
+        dirtySources: [quiet],
+        onDirtySourceClosed: quietClosed.add,
+      );
+      await second.start();
+      await second.dispose();
+      await Future<void>.delayed(Duration.zero);
+      expect(quietClosed, isEmpty);
+    });
 
     test('errors forwards a failed refresh from the repository', () async {
       final reader = FakeSnapshotReader(() => snap([bead('a')]))
