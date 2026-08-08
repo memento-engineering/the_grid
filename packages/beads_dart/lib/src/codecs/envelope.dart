@@ -46,6 +46,44 @@ class BdEnvelope {
     return BdEnvelope(schemaVersion: version, data: decoded['data']);
   }
 
+  /// Parses a flat bd `--json` payload from the upstream protocol corpus.
+  ///
+  /// Flat object payloads carry `schema_version` beside their command fields;
+  /// flat arrays and scalars omit it. The returned [data] is therefore the
+  /// value comparable with an enveloped variant's `data`. Throws
+  /// [BdParseException] for malformed JSON and [BdSchemaDriftException] when
+  /// an object advertises a schema other than [kBdSchemaVersion].
+  factory BdEnvelope.parseFlat(String source) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(source);
+    } on FormatException catch (e) {
+      throw BdParseException('invalid JSON from bd: ${e.message}', source);
+    }
+
+    if (decoded case final Map<String, dynamic> object
+        when object.containsKey('schema_version')) {
+      final version = object['schema_version'];
+      if (version is! int) {
+        throw BdParseException(
+          'flat bd payload has non-integer schema_version',
+          source,
+        );
+      }
+      if (version != kBdSchemaVersion) {
+        throw BdSchemaDriftException(
+          found: version,
+          expected: kBdSchemaVersion,
+          source: source,
+        );
+      }
+      final data = Map<String, dynamic>.of(object)..remove('schema_version');
+      return BdEnvelope(schemaVersion: version, data: data);
+    }
+
+    return BdEnvelope(schemaVersion: kBdSchemaVersion, data: decoded);
+  }
+
   final int schemaVersion;
   final Object? data;
 
