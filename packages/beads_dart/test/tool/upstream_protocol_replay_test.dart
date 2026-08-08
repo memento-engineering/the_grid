@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:test/test.dart';
 
-const protocolRoot = String.fromEnvironment('BD_PROTOCOL_ROOT');
+final protocolRoot = Platform.environment['BD_PROTOCOL_ROOT'] ?? '';
 
 void main() {
   group(

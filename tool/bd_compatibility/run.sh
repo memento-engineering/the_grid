@@ -19,7 +19,7 @@ dart test \
   test/integration/wisp_snapshot_test.dart
 corpus_test=test/tool/upstream_protocol_replay_test.dart
 if [[ -f "$corpus_test" ]]; then
-  dart test "$corpus_test" --define="BD_PROTOCOL_ROOT=$upstream_dir/cmd/bd/protocol"
+  BD_PROTOCOL_ROOT="$upstream_dir/cmd/bd/protocol" dart test "$corpus_test"
 else
   echo 'A2 corpus replay not landed; tg-7ukf owns this test seam.' >&2
 fi
