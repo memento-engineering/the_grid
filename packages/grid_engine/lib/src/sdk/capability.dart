@@ -350,6 +350,7 @@ class ServiceBundle {
     this.delivery,
     this.escalation,
     this.trust,
+    this.trustFloor = const TrustFloor(TrustLevel.trusted),
     this.transport,
   });
 
@@ -368,9 +369,12 @@ class ServiceBundle {
   /// bead). The engine hardcodes no authority.
   final EscalationHandler? escalation;
 
-  /// Reserved (OQ-7) — local/reputation/ledger trust, distinct from
-  /// `genesis_consent`. Designed-to-be-lifted; null in P1.
+  /// This substation's trust resolver. It is used at intake, never by the mount
+  /// guard; null makes an origin-stamped bead fail closed when guarded.
   final Trust? trust;
+
+  /// This substation's minimum admitted origin trust.
+  final TrustFloor trustFloor;
 
   /// Reserved — the outbound exploration sink (no inbound pipeline handle);
   /// null in P1.
@@ -414,9 +418,38 @@ abstract interface class SourceControl {
   });
 }
 
-/// Reserved trust abstraction (OQ-7) — local/reputation/ledger; designed to be
-/// lifted to a genesis-shared home. No members in P1.
-abstract interface class Trust {}
+/// An actor identity whose scheme and identifier are opaque to the engine.
+class ActorIdentity {
+  /// Creates an identity in [scheme] with opaque [id].
+  const ActorIdentity({required this.scheme, required this.id});
+
+  /// The producer-owned origin scheme; the engine never parses it.
+  final String scheme;
+
+  /// The producer-owned actor identifier; the engine never parses it.
+  final String id;
+}
+
+/// Origin trust on the single admission axis, ordered least to most trusted.
+enum TrustLevel { external, trusted, self }
+
+/// The minimum origin trust a substation admits at its mount boundary.
+class TrustFloor {
+  /// Creates a floor at [level].
+  const TrustFloor(this.level);
+
+  /// The least [TrustLevel] that may mount.
+  final TrustLevel level;
+}
+
+/// Resolves producer-owned actor identities for intake admission.
+///
+/// Ordinary bead metadata is forgeable by any holder of bead-write authority.
+/// Signed origin stamps and their verification are outside this abstraction.
+abstract interface class Trust {
+  /// Resolves [actor] off the mount path; implementations may perform I/O.
+  Future<TrustLevel> levelOf(ActorIdentity actor);
+}
 
 /// Reserved outbound exploration transport — an emit-only sink, never an inbound
 /// pipeline handle (invariant 1). The live arm adapts it over the exploration
