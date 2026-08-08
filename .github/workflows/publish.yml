@@ -18,15 +18,75 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       package: ${{ steps.parse.outputs.package }}
+      bd_refs: ${{ steps.parse.outputs.bd_refs }}
     steps:
+      - uses: actions/checkout@v4
       - id: parse
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           pkg="${GITHUB_REF_NAME%-v*}"
           echo "package=$pkg" >> "$GITHUB_OUTPUT"
           echo "Publishing package: $pkg (tag $GITHUB_REF_NAME)"
+          if [[ "$pkg" != beads_dart ]]; then
+            echo 'bd_refs=["none"]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          policy=packages/beads_dart/bd_compatibility.yaml
+          floor=$(ruby -e 'require "yaml"; puts YAML.load_file(ARGV[0]).fetch(ARGV[1])' "$policy" floor)
+          wait=$(ruby -e 'require "yaml"; puts YAML.load_file(ARGV[0]).fetch(ARGV[1])' "$policy" day_one_wait_through)
+          latest=$(gh api repos/gastownhall/beads/releases/latest --jq .tag_name)
+          semver='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          [[ "$floor" =~ $semver && "$wait" =~ $semver && "$latest" =~ $semver ]] || {
+            echo 'bd compatibility policy and latest release must be vMAJOR.MINOR.PATCH' >&2
+            exit 1
+          }
+          newest=$(printf '%s\n%s\n' "$wait" "$latest" | sort -V | tail -n1)
+          [[ "$newest" == "$latest" && "$latest" != "$wait" ]] || {
+            echo "beads_dart release waits for a bd tag newer than $wait" >&2
+            exit 1
+          }
+          echo "bd_refs=$(jq -cn --arg floor "$floor" --arg latest "$latest" '[$floor,$latest]|unique')" >> "$GITHUB_OUTPUT"
+
+  bd-compatibility:
+    needs: parse
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bd_ref: ${{ fromJSON(needs.parse.outputs.bd_refs) }}
+    steps:
+      - uses: actions/checkout@v4
+        if: matrix.bd_ref != 'none'
+      - uses: actions/checkout@v4
+        if: matrix.bd_ref != 'none'
+        with:
+          repository: gastownhall/beads
+          ref: ${{ matrix.bd_ref }}
+          path: ${{ runner.temp }}/beads
+      - uses: subosito/flutter-action@v2
+        if: matrix.bd_ref != 'none'
+        with:
+          channel: stable
+      - uses: actions/setup-go@v5
+        if: matrix.bd_ref != 'none'
+        with:
+          go-version-file: ${{ runner.temp }}/beads/go.mod
+      - uses: dolthub/setup-dolt@v1
+        if: matrix.bd_ref != 'none'
+      - name: Build bd
+        if: matrix.bd_ref != 'none'
+        run: |
+          mkdir -p "${{ runner.temp }}/bin"
+          (cd "${{ runner.temp }}/beads" && CGO_ENABLED=0 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
+      - name: Run compatibility suite
+        if: matrix.bd_ref != 'none'
+        run: tool/bd_compatibility/run.sh "${{ runner.temp }}/beads" "${{ runner.temp }}/bin/bd"
+      - if: matrix.bd_ref == 'none'
+        run: echo 'bd compatibility not required for this package'
 
   publish:
-    needs: parse
+    needs: [parse, bd-compatibility]
     permissions:
       id-token: write # pub.dev OIDC trusted publishing
     uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
