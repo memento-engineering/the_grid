@@ -585,6 +585,10 @@ class StationBeadWriter {
   /// The targeted read is loud: a failure aborts session close so lifecycle
   /// debt cannot accumulate invisibly. An empty match set — a flat-mode
   /// session, or a molecule already reaped — is a no-op.
+  ///
+  /// The unforced close script is ordered with step leaves, including open
+  /// successor steps, before molecule roots to satisfy bd close policy. The
+  /// proxied-server fallback consumes that identical order per bead.
   Future<void> reapMolecule({required String sessionId}) async {
     final matched = await _moleculeBeadsFor(sessionId: sessionId);
     if (matched.isEmpty) return;
@@ -592,9 +596,16 @@ class StationBeadWriter {
     final beads = {
       for (final bead in [...matched, ...chain]) bead.id: bead,
     };
+    final orderedBeads = beads.values.toList(growable: false)
+      ..sort((left, right) {
+        final rank = _moleculeReapRank(
+          left,
+        ).compareTo(_moleculeReapRank(right));
+        return rank != 0 ? rank : left.id.compareTo(right.id);
+      });
     try {
       await batch([
-        for (final bead in beads.values)
+        for (final bead in orderedBeads)
           (id: bead.id, line: 'close ${bead.id}'),
       ]);
     } on BdCommandFailed catch (error) {
@@ -608,7 +619,7 @@ class StationBeadWriter {
       if (!'$error'.contains('not supported in proxied-server mode')) {
         rethrow;
       }
-      for (final bead in beads.values) {
+      for (final bead in orderedBeads) {
         await close(bead.id, reason: 'molecule reaped (session close)');
       }
     }
@@ -880,6 +891,14 @@ class StationBeadWriter {
     }
     return found;
   }
+
+  static int _moleculeReapRank(Bead bead) => switch (bead.issueType) {
+    GridIssueTypes.step => 0,
+    GridIssueTypes.molecule => 1,
+    _ => throw StateError(
+      'reapMolecule collected unsupported type ${bead.issueType}',
+    ),
+  };
 
   /// The OPEN molecule/step beads stamped with [sessionId] — the shared scan
   /// [_moleculeAlreadyMinted] and [reapMolecule] both read. Reads the OWN
