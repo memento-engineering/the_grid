@@ -317,6 +317,8 @@ void main() {
       runner.exportBeads = const [
         Bead(
           id: 'tgdog-work1',
+          status: BeadStatus.open,
+          assignee: StationBeadWriter.specifyAuthor,
           metadata: {
             StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
           },
@@ -329,6 +331,8 @@ void main() {
       final updates = runner.callsFor('update');
       expect(updates, hasLength(1));
       expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
+      expect(updates.single, containsAllInOrder(['--if-assignee', 'specify']));
+      expect(updates.single, containsAllInOrder(['--if-status', 'open']));
       expect(updates.single, containsAllInOrder(['--design', '']));
       expect(updates.single, containsAllInOrder(['--acceptance', '']));
       expect(
@@ -344,6 +348,31 @@ void main() {
       expect(runner.everyMutationHasActor, isTrue);
       expect(runner.neverCalledShow, isTrue);
       expect(refusals, isEmpty);
+    });
+
+    test('guard mismatch surfaces a typed ownership refusal once', () async {
+      const guardMismatchEnvelope =
+          '{"schema_version":1,"data":{"error":"guard mismatch",'
+          '"guard_mismatch":true}}';
+      runner = _GuardMismatchRunner(guardMismatchEnvelope);
+      bd = BdCliService(runner);
+
+      await expectLater(
+        writer().update(
+          'tgdog-work1',
+          metadata: const {'state': 'active'},
+          ifAssignee: 'specify',
+          ifStatus: BeadStatus.open,
+        ),
+        throwsA(
+          isA<OwnershipGuardRefused>()
+              .having((error) => error.operation, 'operation', 'update')
+              .having((error) => error.targetId, 'targetId', 'tgdog-work1')
+              .having((error) => error.cause, 'cause', isA<BdGuardMismatch>()),
+        ),
+      );
+      expect(runner.calls, hasLength(1));
+      expect(refusals, hasLength(1));
     });
 
     test(
@@ -757,6 +786,22 @@ void main() {
       expect(await writer().metadataOf('tgdog-step-1'), isNull);
     });
   });
+}
+
+final class _GuardMismatchRunner extends RecordingBdRunner {
+  _GuardMismatchRunner(this.envelope);
+
+  final String envelope;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    await super.run(args, timeout: timeout, stdin: stdin);
+    return BdResult(exitCode: 13, stdout: envelope, stderr: '');
+  }
 }
 
 /// A [RecordingBdRunner] whose `batch` refuses like a proxied-server store.

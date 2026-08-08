@@ -352,6 +352,21 @@ void main() {
       expect(argv, containsAllInOrder(['--priority', '0']));
       expect(argv, isNot(contains('--title')));
       expect(argv, isNot(contains('--description')));
+      expect(argv, isNot(contains('--if-assignee')));
+      expect(argv, isNot(contains('--if-status')));
+    });
+
+    test('conditional update guards preserve empty assignee', () async {
+      await service.update(
+        'tg-7',
+        ifAssignee: '',
+        ifStatus: BeadStatus.open,
+        status: BeadStatus.inProgress,
+      );
+      final argv = runner.calls.single;
+      expect(argv, containsAllInOrder(['--if-assignee', '']));
+      expect(argv, containsAllInOrder(['--if-status', 'open']));
+      expect(argv.indexOf('--if-status'), lessThan(argv.indexOf('--status')));
     });
 
     test(

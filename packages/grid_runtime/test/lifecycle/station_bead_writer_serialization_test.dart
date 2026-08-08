@@ -34,6 +34,9 @@ class GatedBdRunner implements BdRunner {
   /// Call indexes (0-based, in start order) whose op throws after release.
   Set<int> failIndexes = {};
 
+  /// Explicit replies by call index, returned after that call is released.
+  Map<int, BdResult> replies = {};
+
   int get startedCount => startedIds.length;
 
   @override
@@ -51,6 +54,8 @@ class GatedBdRunner implements BdRunner {
     if (failIndexes.contains(idx)) {
       throw StateError('bd failed (call $idx)');
     }
+    final reply = replies[idx];
+    if (reply != null) return reply;
     return BdResult(
       exitCode: 0,
       stdout: '{"schema_version":1,"data":{"id":"$id"}}',
@@ -208,5 +213,40 @@ void main() {
         await f2;
       },
     );
+
+    test('guard mismatch is not retried and the queue recovers', () async {
+      const guardMismatchEnvelope =
+          '{"schema_version":1,"data":{"error":"guard mismatch",'
+          '"guard_mismatch":true}}';
+      final r = GatedBdRunner()
+        ..replies = {
+          0: const BdResult(
+            exitCode: 13,
+            stdout: guardMismatchEnvelope,
+            stderr: '',
+          ),
+        };
+      final w = _writer(r);
+
+      final first = w.update(
+        'tgdog-s',
+        metadata: const {'meta.a': 'stale'},
+        ifStatus: BeadStatus.open,
+      );
+      final second = w.update(
+        'tgdog-s',
+        metadata: const {'meta.b': 'fresh'},
+        ifStatus: BeadStatus.open,
+      );
+      await _settle();
+      expect(r.startedCount, 1);
+      r.release(0);
+      await expectLater(first, throwsA(isA<OwnershipGuardRefused>()));
+      await _settle();
+      expect(r.startedCount, 2);
+      r.release(1);
+      await second;
+      expect(r.startedCount, 2);
+    });
   });
 }

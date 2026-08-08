@@ -170,6 +170,12 @@ class BdCliService {
   /// service never sends `--notes`, so no conflict arises here.
   Future<void> update(
     String id, {
+
+    /// Expected current assignee for bd's conditional-update guard.
+    String? ifAssignee,
+
+    /// Expected current status for bd's conditional-update guard.
+    BeadStatus? ifStatus,
     String? title,
     BeadStatus? status,
     int? priority,
@@ -187,6 +193,8 @@ class BdCliService {
     await _runEnvelope(
       updateArgs(
         id,
+        ifAssignee: ifAssignee,
+        ifStatus: ifStatus,
         title: title,
         status: status,
         priority: priority,
@@ -364,6 +372,8 @@ class BdCliService {
 
   List<String> updateArgs(
     String id, {
+    String? ifAssignee,
+    BeadStatus? ifStatus,
     String? title,
     BeadStatus? status,
     int? priority,
@@ -380,6 +390,8 @@ class BdCliService {
     id,
     '--json',
     ..._actorArgs,
+    if (ifAssignee != null) ...['--if-assignee', ifAssignee],
+    if (ifStatus != null) ...['--if-status', ifStatus.wire],
     if (title != null) ...['--title', title],
     if (status != null) ...['--status', status.wire],
     if (priority != null) ...['--priority', '$priority'],

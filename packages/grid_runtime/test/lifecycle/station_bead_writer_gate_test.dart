@@ -85,6 +85,7 @@ void main() {
           title: 'grid gate tgdog-s@tg-1/review/route',
           issueType: GridIssueTypes.gate,
           status: BeadStatus.open,
+          assignee: 'specify',
           metadata: const {
             'rig': 'tgdog',
             'blocks': 'tgdog-s',
@@ -110,6 +111,8 @@ void main() {
       final updates = runner.callsFor('update');
       expect(updates, hasLength(1));
       expect(updates.single, containsAllInOrder(['update', 'tgdog-gopen']));
+      expect(updates.single, containsAllInOrder(['--if-assignee', 'specify']));
+      expect(updates.single, containsAllInOrder(['--if-status', 'open']));
       final refresh =
           jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
       expect(refresh['reason'], 'second gate (re-gate)');
