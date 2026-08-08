@@ -193,7 +193,25 @@ void main() {
       final runner = FakeBdRunner()
         ..stubCommand(
           'ready',
-          BdReply(stdout: _oracleEnvelope(['tg-2', 'tg-1'])),
+          BdReply(
+            stdout: jsonEncode({
+              'schema_version': 1,
+              'data': [
+                {
+                  'id': 'tg-1',
+                  'title': 'tg-1',
+                  'status': 'open',
+                  'priority': 2,
+                },
+                {
+                  'id': 'tg-2',
+                  'title': 'tg-2',
+                  'status': 'open',
+                  'priority': 1,
+                },
+              ],
+            }),
+          ),
         );
       final h = _harness(['tg-1', 'tg-2'], runner);
       final diff = await h.run(const ReadyWorkFilter());

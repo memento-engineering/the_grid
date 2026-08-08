@@ -1,6 +1,7 @@
 import '../models/bead_status.dart';
 import '../services/dolt_query_service.dart';
 import 'ready_work_filter.dart';
+import 'ready_work_sort.dart';
 
 /// The table family a single predicate pass runs against (beads `FilterTables`,
 /// `internal/storage/issueops/filters.go:15-25`). The `--json` oracle runs the
@@ -146,7 +147,14 @@ class ReadyWorkQuery {
       allRows = [...issueRows, ...wispRows];
     }
 
-    _sortByPolicy(allRows, filter.sortPolicy, recentCutoff);
+    sortReadyWork(
+      allRows,
+      filter.sortPolicy,
+      idOf: (row) => row.id,
+      priorityOf: (row) => row.priority,
+      createdAtOf: (row) => row.createdAt,
+      now: basis,
+    );
     if (filter.limit > 0 && allRows.length > filter.limit) {
       allRows = allRows.sublist(0, filter.limit);
     }
@@ -334,53 +342,6 @@ class ReadyWorkQuery {
   }
 
   // -------------------------------------------------------------------------
-  // In-memory re-sort after the wisp merge — sortReadyIssues / the counts
-  // variant (ready_work.go:568-608 / ready_work_counts.go:77-103). Stable sort;
-  // the comparator mirrors the SQL ORDER BY for the same policy.
-  // -------------------------------------------------------------------------
-
-  void _sortByPolicy(
-    List<ReadyWorkRow> rows,
-    ReadyWorkSortPolicy policy,
-    DateTime recentCutoff,
-  ) {
-    int byCreated(ReadyWorkRow a, ReadyWorkRow b) {
-      if (!a.createdAt.isAtSameMomentAs(b.createdAt)) {
-        return a.createdAt.compareTo(b.createdAt);
-      }
-      return a.id.compareTo(b.id);
-    }
-
-    int byPriority(ReadyWorkRow a, ReadyWorkRow b) {
-      if (a.priority != b.priority) return a.priority.compareTo(b.priority);
-      if (!a.createdAt.isAtSameMomentAs(b.createdAt)) {
-        // priority policy breaks priority ties by created_at DESC.
-        return b.createdAt.compareTo(a.createdAt);
-      }
-      return a.id.compareTo(b.id);
-    }
-
-    int comparator(ReadyWorkRow a, ReadyWorkRow b) {
-      switch (policy) {
-        case ReadyWorkSortPolicy.oldest:
-          return byCreated(a, b);
-        case ReadyWorkSortPolicy.priority:
-          return byPriority(a, b);
-        case ReadyWorkSortPolicy.hybrid:
-          final aRecent = !a.createdAt.isBefore(recentCutoff);
-          final bRecent = !b.createdAt.isBefore(recentCutoff);
-          if (aRecent != bRecent) return aRecent ? -1 : 1;
-          if (aRecent && a.priority != b.priority) {
-            return a.priority.compareTo(b.priority);
-          }
-          return byCreated(a, b);
-      }
-    }
-
-    _stableSort(rows, comparator);
-  }
-
-  // -------------------------------------------------------------------------
   // Sub-queries: deferred-parent children, descendant ids, wisp-pass probe.
   // -------------------------------------------------------------------------
 
@@ -563,21 +524,6 @@ class ReadyWorkQuery {
   static Iterable<List<T>> _batches<T>(List<T> items, int size) sync* {
     for (var i = 0; i < items.length; i += size) {
       yield items.sublist(i, i + size > items.length ? items.length : i + size);
-    }
-  }
-
-  static void _stableSort(
-    List<ReadyWorkRow> rows,
-    int Function(ReadyWorkRow, ReadyWorkRow) compare,
-  ) {
-    // Decorate-sort-undecorate to make Dart's List.sort stable on equal keys.
-    final indexed = [for (var i = 0; i < rows.length; i++) (i, rows[i])];
-    indexed.sort((a, b) {
-      final c = compare(a.$2, b.$2);
-      return c != 0 ? c : a.$1.compareTo(b.$1);
-    });
-    for (var i = 0; i < rows.length; i++) {
-      rows[i] = indexed[i].$2;
     }
   }
 

@@ -113,10 +113,12 @@ void main() {
         everyElement(
           predicate<List<String>>(
             (call) =>
-                call.length == 6 &&
+                call.length == 8 &&
                 call[1] == '-t' &&
                 call[3] == '--status' &&
-                call[5] == '--json',
+                call[5] == '--json' &&
+                call[6] == '--limit' &&
+                call[7] == '0',
           ),
         ),
       );

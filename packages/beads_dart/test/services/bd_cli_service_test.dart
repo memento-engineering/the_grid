@@ -10,20 +10,96 @@ import '../support/fixtures.dart';
 
 void main() {
   group('BdCliService reads (FakeBdRunner + pinned fixtures)', () {
-    test('ready() parses the ready envelope into Beads', () async {
+    test('ready() returns more than the default page', () async {
       final runner = FakeBdRunner()
-        ..stubCommand(
-          'ready',
-          BdReply(stdout: fixtureText('fx-ready-sample.json')),
-        );
+        ..stubCommand('ready', BdReply(stdout: beadListEnvelope(120)));
       final service = BdCliService(runner);
 
       final beads = await service.ready();
 
-      expect(beads, hasLength(5));
-      expect(beads.first.id, 'fx-eu5');
-      // argv: exactly `ready --json`.
-      expect(runner.calls.single, ['ready', '--json']);
+      expect(beads, hasLength(120));
+      expect(beads.map((bead) => bead.id), containsAll(['tg-0', 'tg-119']));
+      expect(runner.calls.single, ['ready', '--json', '--limit', '0']);
+    });
+
+    test('ready() restores priority order after the unlimited fetch', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand(
+          'ready',
+          BdReply(
+            stdout: jsonEncode({
+              'schema_version': 1,
+              'data': [
+                {
+                  'id': 'tg-null',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 2,
+                },
+                {
+                  'id': 'tg-b',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 1,
+                  'created_at': '2026-08-07T10:00:00Z',
+                },
+                {
+                  'id': 'tg-a',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 1,
+                  'created_at': '2026-08-07T10:00:00Z',
+                },
+                {
+                  'id': 'tg-new',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 1,
+                  'created_at': '2026-08-07T11:00:00Z',
+                },
+              ],
+            }),
+          ),
+        );
+      final beads = await BdCliService(runner).ready();
+
+      expect(beads.map((bead) => bead.id), [
+        'tg-new',
+        'tg-a',
+        'tg-b',
+        'tg-null',
+      ]);
+      expect(runner.calls.single, ['ready', '--json', '--limit', '0']);
+    });
+
+    test('listScope returns more than the default page', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand(
+          'list',
+          BdReply(stdout: beadListEnvelope(120, type: 'gate')),
+        );
+      final service = BdCliService(runner);
+
+      final scope = await service.listScope(
+        type: const IssueType('gate'),
+        status: BeadStatus.open,
+      );
+
+      expect(scope.beads, hasLength(120));
+      expect(
+        scope.beads.map((bead) => bead.id),
+        containsAll(['tg-0', 'tg-119']),
+      );
+      expect(runner.calls.single, [
+        'list',
+        '-t',
+        'gate',
+        '--status',
+        'open',
+        '--json',
+        '--limit',
+        '0',
+      ]);
     });
 
     test(
@@ -66,6 +142,8 @@ void main() {
           '--status',
           'open',
           '--json',
+          '--limit',
+          '0',
         ]);
       },
     );
@@ -78,27 +156,30 @@ void main() {
         '-t',
         'gate',
         '--json',
+        '--limit',
+        '0',
       ]);
       expect(
         service.listScopeArgs(type: IssueType.task, status: BeadStatus.closed),
-        ['list', '-t', 'task', '--status', 'closed', '--json'],
+        ['list', '-t', 'task', '--status', 'closed', '--json', '--limit', '0'],
       );
     });
 
-    test('query() forwards the expression and parses beads', () async {
+    test('query() returns more than the default page', () async {
       final runner = FakeBdRunner()
-        ..stubCommand(
-          'query',
-          BdReply(stdout: fixtureText('fx-ready-sample.json')),
-        );
+        ..stubCommand('query', BdReply(stdout: beadListEnvelope(120)));
       final service = BdCliService(runner);
 
-      await service.query('status:open priority<=1');
+      final beads = await service.query('status:open priority<=1');
 
+      expect(beads, hasLength(120));
+      expect(beads.map((bead) => bead.id), containsAll(['tg-0', 'tg-119']));
       expect(runner.calls.single, [
         'query',
         'status:open priority<=1',
         '--json',
+        '--limit',
+        '0',
       ]);
     });
 
@@ -493,6 +574,14 @@ void main() {
     );
   });
 }
+
+String beadListEnvelope(int count, {String type = 'task'}) => jsonEncode({
+  'schema_version': 1,
+  'data': [
+    for (var i = 0; i < count; i++)
+      {'id': 'tg-$i', 'issue_type': type, 'status': 'open'},
+  ],
+});
 
 BdReply _okEnvelope() => BdReply(stdout: _emptyObjectEnvelope());
 BdReply _okEnvelopeResult() => BdReply(stdout: _emptyObjectEnvelope());

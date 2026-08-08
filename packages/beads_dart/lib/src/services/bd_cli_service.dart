@@ -9,6 +9,8 @@ import '../models/bead_status.dart';
 import '../models/dependency_type.dart';
 import '../models/graph_apply_plan.dart';
 import '../models/issue_type.dart';
+import '../ready/ready_work_filter.dart';
+import '../ready/ready_work_sort.dart';
 import 'bd_runner.dart';
 
 /// The bd-CLI service tier (predictable-flutter Services: stateless I/O).
@@ -40,11 +42,19 @@ class BdCliService {
   // READS
   // ---------------------------------------------------------------------------
 
-  /// `bd ready --json` — the authoritative ready-work set (ADR-0001 D4: ready
-  /// is never reimplemented in M1). Decodes the list envelope into [Bead]s.
+  /// `bd ready --json --limit 0` — the authoritative complete ready-work set,
+  /// normalized to the CLI default priority order after the unlimited fetch.
   Future<List<Bead>> ready() async {
     final env = await _runEnvelope(readyArgs());
-    return _beadsFromList(env.dataList);
+    final beads = _beadsFromList(env.dataList);
+    sortReadyWork(
+      beads,
+      ReadyWorkSortPolicy.priority,
+      idOf: (bead) => bead.id,
+      priorityOf: (bead) => bead.priority,
+      createdAtOf: (bead) => bead.createdAt,
+    );
+    return beads;
   }
 
   /// Reads one explicit type scope, optionally narrowed to [status].
@@ -297,7 +307,7 @@ class BdCliService {
 
   static const List<String> _actorArgs = ['--actor', actor];
 
-  List<String> readyArgs() => const ['ready', '--json'];
+  List<String> readyArgs() => const ['ready', '--json', '--limit', '0'];
 
   List<String> listScopeArgs({required IssueType type, BeadStatus? status}) => [
     'list',
@@ -305,6 +315,8 @@ class BdCliService {
     type.wire,
     if (status != null) ...['--status', status.wire],
     '--json',
+    '--limit',
+    '0',
   ];
 
   List<String> queryArgs(String expr, {bool includeClosed = false}) => [
@@ -312,6 +324,8 @@ class BdCliService {
     expr,
     if (includeClosed) '--all',
     '--json',
+    '--limit',
+    '0',
   ];
 
   List<String> depListArgs(List<String> ids) => [
