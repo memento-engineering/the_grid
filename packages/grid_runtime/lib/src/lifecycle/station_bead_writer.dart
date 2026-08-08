@@ -38,6 +38,32 @@ class OwnershipRefused implements Exception {
       'ADR-0006 Decision 2)';
 }
 
+/// Raised when bd refuses an ownership-sensitive conditional update.
+///
+/// This is fail-closed and non-retryable: the caller must obtain a fresh
+/// snapshot before deciding whether another write is valid.
+class OwnershipGuardRefused implements Exception {
+  OwnershipGuardRefused({
+    required this.operation,
+    required this.targetId,
+    required this.cause,
+  });
+
+  /// The writer operation whose conditional update was refused.
+  final String operation;
+
+  /// The bead id protected by the failed guard.
+  final String targetId;
+
+  /// The typed bd exit-13 result; retained for diagnostics.
+  final BdGuardMismatch cause;
+
+  @override
+  String toString() =>
+      'OwnershipGuardRefused: $operation on "$targetId" refused by bd CAS '
+      '(fail-closed; refresh ownership/status before another decision): $cause';
+}
+
 /// Raised when [StationBeadWriter] refuses to mint or refresh a gate for a
 /// session bead that the state snapshot already shows as closed.
 class SessionClosedRefused implements Exception {
@@ -82,20 +108,13 @@ class SessionClosedRefused implements Exception {
 /// surface), the mint is `create` + a stamping `update` — the stamp is part of
 /// birth, not a later mutation.
 ///
-/// **Per-target-id write SERIALIZATION (ADR-0007 Amended / D-1).** `bd update
-/// --metadata` is a client-side read-modify-write inside the bd subprocess with
-/// no row lock across the read and the write, so two concurrent `update`s on the
-/// SAME bead with DISJOINT flat keys can still last-writer-wins → a
-/// `grid.cursor.{path}.state` key is lost → the barrier never opens → a silent
-/// liveness stall at depth (the exact case the reentrant engine exists for).
-/// P0's 1-wide frontier never raced it; the Burn's fan-out makes concurrency
-/// structural. Because invariant 2 already makes the_grid the SOLE process
-/// writing `tgdog`, an in-process per-id queue ([_tail]) fully closes it — no
-/// SQL/cross-process lock. Every `update`/`close`/`delete`/`batch` on an id
-/// chains after the prior op on that id (a `create` mints a fresh id no other op
-/// can reference yet, so it is not queued). Flat-per-key merge-safety closes the
-/// disjoint-key half; this closes the same-key half. So invariant 2 is
-/// ownership/auth **AND** write-ordering.
+/// **Per-target-id write SERIALIZATION (ADR-0007 Amended / D-1).** The
+/// in-process per-id queue ([_tail]) remains defense-in-depth and the ordering
+/// guarantee for the_grid's sole-process writes to `tgdog`. Every
+/// `update`/`close`/`delete`/`batch` on an id chains after the prior op on that
+/// id (a `create` mints a fresh id no other op can reference yet, so it is not
+/// queued). Ownership-sensitive snapshot-backed writes additionally use bd's
+/// conditional-update guards and fail closed on stale state.
 ///
 /// **bd-only, `--actor grid-controller`, never SQL, never `bd show`.** The
 /// chokepoint holds a [BdCliService] (which holds no Dolt dependency by
@@ -205,7 +224,8 @@ class StationBeadWriter {
     // key is what every later write asserts against). The capture-only
     // `started_at` stamp (FT-1) rides the SAME birth write — no extra traffic;
     // a caller-supplied [metadata] value wins (it can override the default).
-    await _bd.update(
+    await _updateBead(
+      'createSession',
       id,
       mergeMetadata: {
         rigKey: substation,
@@ -238,7 +258,8 @@ class StationBeadWriter {
       title: 'grid link $from blocked by $to',
       type: GridIssueTypes.link,
     );
-    await _bd.update(
+    await _updateBead(
+      'createLink',
       id,
       mergeMetadata: {
         rigKey: substation,
@@ -302,6 +323,8 @@ class StationBeadWriter {
           gateRegateCountKey: (priorCount + 1).toString(),
           gateRegatedAtKey: _clock().toUtc().toIso8601String(),
         },
+        ifAssignee: existing.assignee,
+        ifStatus: existing.status,
       );
       return existing.id;
     }
@@ -311,7 +334,8 @@ class StationBeadWriter {
     );
     // Stamp the owned substation marker + the block linkage FROM BIRTH (merge
     // update; the `blocks`/`node` keys are how the join re-arms the parked node).
-    await _bd.update(
+    await _updateBead(
+      'createGate',
       id,
       mergeMetadata: {
         rigKey: substation,
@@ -444,7 +468,8 @@ class StationBeadWriter {
       final metadataKey = _moleculeCrumbMetadataKey(node);
       if (metadataKey == null) continue;
       _assertOwned('update', id, const {});
-      await _bd.update(
+      await _updateBead(
+        'update',
         id,
         mergeMetadata: {
           metadataKey: _canonicalMoleculeCrumb(
@@ -548,7 +573,7 @@ class StationBeadWriter {
       // the edge first, a half-minted successor is an inert bead with no
       // path metadata: invisible to activeStepBeadsByPath, harmless.
       await _bd.depAdd(id, priorStep.id, type: DependencyType.supersedes);
-      await _bd.update(id, mergeMetadata: metadata);
+      await _updateBead('createStepSuccessor', id, mergeMetadata: metadata);
       return id;
     });
   }
@@ -646,6 +671,8 @@ class StationBeadWriter {
     String id, {
     required Map<String, String> metadata,
     String? appendNotes,
+    String? ifAssignee,
+    BeadStatus? ifStatus,
   }) async {
     // `async` so the fail-closed `_assertOwned` throw surfaces as a rejected
     // future (not a synchronous throw at the call site); `_serialized` registers
@@ -653,7 +680,14 @@ class StationBeadWriter {
     _assertOwned('update', id, metadata);
     return _serialized(
       id,
-      () => _bd.update(id, mergeMetadata: metadata, appendNotes: appendNotes),
+      () => _updateBead(
+        'update',
+        id,
+        mergeMetadata: metadata,
+        appendNotes: appendNotes,
+        ifAssignee: ifAssignee,
+        ifStatus: ifStatus,
+      ),
     );
   }
 
@@ -670,7 +704,8 @@ class StationBeadWriter {
     _assertOwned('writeSpecifyAuthoredSpec', id, const {});
     return _serialized(
       id,
-      () => _bd.update(
+      () => _updateBead(
+        'writeSpecifyAuthoredSpec',
         id,
         design: design,
         acceptanceCriteria: acceptanceCriteria,
@@ -695,13 +730,61 @@ class StationBeadWriter {
         _flare('rework.specPreserved', {'beadId': id});
         return;
       }
-      await _bd.update(
+      await _updateBead(
+        'clearSpecifyAuthoredSpec',
         id,
+        ifAssignee: bead!.assignee,
+        ifStatus: bead.status,
         design: '',
         acceptanceCriteria: '',
         unsetMetadata: const [specAuthorKey],
       );
     });
+  }
+
+  Future<void> _updateBead(
+    String operation,
+    String id, {
+    String? ifAssignee,
+    BeadStatus? ifStatus,
+    String? title,
+    BeadStatus? status,
+    int? priority,
+    String? description,
+    String? design,
+    String? acceptanceCriteria,
+    IssueType? type,
+    String? assignee,
+    Map<String, String> mergeMetadata = const {},
+    Iterable<String> unsetMetadata = const [],
+    String? appendNotes,
+  }) async {
+    try {
+      await _bd.update(
+        id,
+        ifAssignee: ifAssignee,
+        ifStatus: ifStatus,
+        title: title,
+        status: status,
+        priority: priority,
+        description: description,
+        design: design,
+        acceptanceCriteria: acceptanceCriteria,
+        type: type,
+        assignee: assignee,
+        mergeMetadata: mergeMetadata,
+        unsetMetadata: unsetMetadata,
+        appendNotes: appendNotes,
+      );
+    } on BdGuardMismatch catch (cause) {
+      final refusal = OwnershipGuardRefused(
+        operation: operation,
+        targetId: id,
+        cause: cause,
+      );
+      _onRefusal?.call(refusal.toString());
+      throw refusal;
+    }
   }
 
   void _flare(String name, Map<String, String> data) {
@@ -724,7 +807,8 @@ class StationBeadWriter {
   Future<void> close(String id, {String? reason}) async {
     _assertOwned('close', id, const {});
     return _serialized(id, () async {
-      await _bd.update(
+      await _updateBead(
+        'close',
         id,
         mergeMetadata: {closedAtKey: _clock().toUtc().toIso8601String()},
       );

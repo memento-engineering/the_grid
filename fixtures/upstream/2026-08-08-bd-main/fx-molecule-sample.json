@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "id": "fx-molecule",
+      "title": "Fixture molecule",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "molecule",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-08-08T21:36:23Z",
+      "created_by": "Nico Spencer",
+      "updated_at": "2026-08-08T21:36:23Z",
+      "metadata": {
+        "molecule": "fixture"
+      },
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "schema_version": 1
+}
