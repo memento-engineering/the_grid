@@ -4,10 +4,155 @@ import 'dart:convert';
 sealed class BdException implements Exception {
   const BdException();
 
+  /// Classifies a non-zero `bd` result using its exit code, command, and
+  /// machine-readable output contracts.
+  static BdException fromOutput({
+    required List<String> command,
+    required int exitCode,
+    required String stdout,
+    required String stderr,
+  }) {
+    final stdoutData = _envelopeData(stdout);
+    if (exitCode == 13 && stdoutData?['guard_mismatch'] == true) {
+      return BdGuardMismatch(
+        command: command,
+        message: _messageFromOutput(exitCode, stdout, stderr),
+        stdout: stdout,
+        stderr: stderr,
+      );
+    }
+
+    if (command.length > 1 && command[1] == 'update') {
+      final report = _envelopeData(_lastNonEmptyLine(stderr));
+      final failed = report?['failed'];
+      if (failed is List) {
+        final failures = <BdUpdateFailure>[];
+        for (final item in failed) {
+          if (item is! Map<String, dynamic>) {
+            return BdCommandFailed.fromOutput(
+              command: command,
+              exitCode: exitCode,
+              stdout: stdout,
+              stderr: stderr,
+            );
+          }
+          final id = item['id'];
+          final error = item['error'];
+          if (id is! String ||
+              id.isEmpty ||
+              error is! String ||
+              error.isEmpty) {
+            return BdCommandFailed.fromOutput(
+              command: command,
+              exitCode: exitCode,
+              stdout: stdout,
+              stderr: stderr,
+            );
+          }
+          failures.add(BdUpdateFailure(id: id, error: error));
+        }
+        if (failures.isNotEmpty) {
+          return BdUpdatePartialFailure(
+            command: command,
+            exitCode: exitCode,
+            message: report?['error'] is String
+                ? report!['error'] as String
+                : _messageFromOutput(exitCode, stdout, stderr),
+            failures: List.unmodifiable(failures),
+            stdout: stdout,
+            stderr: stderr,
+          );
+        }
+      }
+    }
+
+    if (exitCode == 2 &&
+        command.length > 1 &&
+        command[1] == 'list' &&
+        command.contains('--ready')) {
+      return BdUsageException(
+        command: command,
+        exitCode: exitCode,
+        message: _messageFromOutput(exitCode, stdout, stderr),
+        stdout: stdout,
+        stderr: stderr,
+      );
+    }
+
+    return BdCommandFailed.fromOutput(
+      command: command,
+      exitCode: exitCode,
+      stdout: stdout,
+      stderr: stderr,
+    );
+  }
+
   String get message;
 
   @override
   String toString() => '$runtimeType: $message';
+}
+
+/// One failed id reported by a multi-id `bd update`.
+class BdUpdateFailure {
+  const BdUpdateFailure({required this.id, required this.error});
+
+  final String id;
+  final String error;
+}
+
+/// Exit 13 from a conditional update whose envelope confirms a guard mismatch.
+class BdGuardMismatch extends BdException {
+  const BdGuardMismatch({
+    required this.command,
+    required this.message,
+    required this.stdout,
+    required this.stderr,
+  });
+
+  final List<String> command;
+  @override
+  final String message;
+  final String stdout;
+  final String stderr;
+}
+
+/// A multi-id update applied some ids and reported failures for others.
+class BdUpdatePartialFailure extends BdException {
+  const BdUpdatePartialFailure({
+    required this.command,
+    required this.exitCode,
+    required this.message,
+    required this.failures,
+    required this.stdout,
+    required this.stderr,
+  });
+
+  final List<String> command;
+  final int exitCode;
+  @override
+  final String message;
+  final List<BdUpdateFailure> failures;
+  final String stdout;
+  final String stderr;
+}
+
+/// The invocation was refused because its argv combination is unsupported.
+class BdUsageException extends BdException {
+  const BdUsageException({
+    required this.command,
+    required this.exitCode,
+    required this.message,
+    required this.stdout,
+    required this.stderr,
+  });
+
+  final List<String> command;
+  final int exitCode;
+  @override
+  final String message;
+  final String stdout;
+  final String stderr;
 }
 
 /// A `bd` command exited non-zero.
@@ -32,18 +177,10 @@ class BdCommandFailed extends BdException {
     required String stdout,
     required String stderr,
   }) {
-    final fromStdout = _errorFromEnvelope(stdout);
-    final message =
-        fromStdout ??
-        (stderr.trim().isNotEmpty
-            ? stderr.trim()
-            : (stdout.trim().isNotEmpty
-                  ? stdout.trim()
-                  : 'bd exited $exitCode with no output'));
     return BdCommandFailed(
       command: command,
       exitCode: exitCode,
-      message: message,
+      message: _messageFromOutput(exitCode, stdout, stderr),
       stdout: stdout,
       stderr: stderr,
     );
@@ -55,27 +192,38 @@ class BdCommandFailed extends BdException {
   final String message;
   final String stdout;
   final String stderr;
+}
 
-  /// Extracts `data.error` from a bd envelope, or null if [source] is not a
-  /// JSON object carrying a string error.
-  static String? _errorFromEnvelope(String source) {
-    if (source.trim().isEmpty) return null;
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(source);
-    } on FormatException {
-      return null;
-    }
-    if (decoded is! Map<String, dynamic>) return null;
-    final data = decoded['data'];
-    if (data is Map<String, dynamic>) {
-      final error = data['error'];
-      if (error is String && error.isNotEmpty) return error;
-    }
-    final topError = decoded['error'];
-    if (topError is String && topError.isNotEmpty) return topError;
+Map<String, dynamic>? _envelopeData(String source) {
+  if (source.trim().isEmpty) return null;
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(source);
+  } on FormatException {
     return null;
   }
+  if (decoded is! Map<String, dynamic>) return null;
+  final data = decoded['data'];
+  return data is Map<String, dynamic> ? data : null;
+}
+
+String _messageFromOutput(int exitCode, String stdout, String stderr) {
+  final stdoutData = _envelopeData(stdout);
+  final envelopeError = stdoutData?['error'];
+  if (envelopeError is String && envelopeError.isNotEmpty) {
+    return envelopeError;
+  }
+  if (stderr.trim().isNotEmpty) return stderr.trim();
+  if (stdout.trim().isNotEmpty) return stdout.trim();
+  return 'bd exited $exitCode with no output';
+}
+
+String _lastNonEmptyLine(String source) {
+  final lines = source.split('\n');
+  for (var i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim().isNotEmpty) return lines[i].trim();
+  }
+  return '';
 }
 
 /// A `bd` invocation exceeded its timeout and was killed.
