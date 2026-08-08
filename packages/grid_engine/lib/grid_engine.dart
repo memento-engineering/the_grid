@@ -32,6 +32,7 @@ export 'src/bridge/federated_snapshot_source.dart';
 // The ONE cross-store block enforcement, shared by the union's dependency-row
 // edges and the join's state-owned link beads.
 export 'src/bridge/block_guard.dart';
+export 'src/bridge/trust_guard.dart';
 
 // The reentrant authoring SDK surface (ADR-0008 D2/D4 / M4-P1 Track A/E): the
 // value-types + the pure frontier predicate + the opaque Capability/Service
