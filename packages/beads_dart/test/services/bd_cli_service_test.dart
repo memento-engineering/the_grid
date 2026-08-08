@@ -22,6 +22,56 @@ void main() {
       expect(runner.calls.single, ['ready', '--json', '--limit', '0']);
     });
 
+    test('ready() restores priority order after the unlimited fetch', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand(
+          'ready',
+          BdReply(
+            stdout: jsonEncode({
+              'schema_version': 1,
+              'data': [
+                {
+                  'id': 'tg-null',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 2,
+                },
+                {
+                  'id': 'tg-b',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 1,
+                  'created_at': '2026-08-07T10:00:00Z',
+                },
+                {
+                  'id': 'tg-a',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 1,
+                  'created_at': '2026-08-07T10:00:00Z',
+                },
+                {
+                  'id': 'tg-new',
+                  'issue_type': 'task',
+                  'status': 'open',
+                  'priority': 1,
+                  'created_at': '2026-08-07T11:00:00Z',
+                },
+              ],
+            }),
+          ),
+        );
+      final beads = await BdCliService(runner).ready();
+
+      expect(beads.map((bead) => bead.id), [
+        'tg-new',
+        'tg-a',
+        'tg-b',
+        'tg-null',
+      ]);
+      expect(runner.calls.single, ['ready', '--json', '--limit', '0']);
+    });
+
     test('listScope returns more than the default page', () async {
       final runner = FakeBdRunner()
         ..stubCommand(

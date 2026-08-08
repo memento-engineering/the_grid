@@ -3,6 +3,7 @@ import '../services/bd_runner.dart';
 import '../codecs/envelope.dart';
 import 'ready_work_filter.dart';
 import 'ready_work_query.dart';
+import 'ready_work_sort.dart';
 
 /// The outcome of one differential run: the ordered ready id list from each
 /// side plus the diagnosis. [diverged] is the gate (ADR-0003 Decision 5: fail on
@@ -110,7 +111,7 @@ class ReadyWorkDifferential {
   /// keep deferred/hybrid scenarios coarse-grained for this reason.)
   Future<ReadyWorkDiff> run(ReadyWorkFilter filter, {DateTime? now}) async {
     final sqlIds = await sqlPort.readyIds(filter, now: now);
-    final oracleIds = await _oracleIds(filter);
+    final oracleIds = await _oracleIds(filter, now: now);
     return ReadyWorkDiff(
       sqlIds: sqlIds,
       oracleIds: oracleIds,
@@ -175,7 +176,10 @@ class ReadyWorkDifferential {
     ];
   }
 
-  Future<List<String>> _oracleIds(ReadyWorkFilter filter) async {
+  Future<List<String>> _oracleIds(
+    ReadyWorkFilter filter, {
+    DateTime? now,
+  }) async {
     final result = await runner.run(oracleArgs(filter));
     if (result.exitCode != 0) {
       throw StateError(
@@ -183,6 +187,15 @@ class ReadyWorkDifferential {
       );
     }
     final env = BdEnvelope.parse(result.stdout);
-    return [for (final row in env.dataList) Bead.fromJson(row).id];
+    final beads = [for (final row in env.dataList) Bead.fromJson(row)];
+    sortReadyWork(
+      beads,
+      filter.sortPolicy,
+      idOf: (bead) => bead.id,
+      priorityOf: (bead) => bead.priority,
+      createdAtOf: (bead) => bead.createdAt,
+      now: now,
+    );
+    return [for (final bead in beads) bead.id];
   }
 }
