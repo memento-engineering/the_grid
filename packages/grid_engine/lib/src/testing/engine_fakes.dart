@@ -315,12 +315,23 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
       .where((c) => c.length > 1 && c[0] == 'create' && c[1] == '--graph')
       .toList();
 
-  /// The decoded `--metadata` JSON object of the `update` call at [index].
+  /// The metadata object of the `update` call at [index] — decoded from
+  /// `--metadata '<json>'` when present, else assembled from the op-shaped
+  /// `--set-metadata key=value` pairs (BdCliService's atomic-merge emission).
   Map<String, dynamic> metadataOfUpdate(int index) {
     final updates = callsFor('update');
     final c = updates[index];
     final i = c.indexOf('--metadata');
-    return jsonDecode(c[i + 1]) as Map<String, dynamic>;
+    if (i != -1) return jsonDecode(c[i + 1]) as Map<String, dynamic>;
+    final merged = <String, dynamic>{};
+    for (var j = 0; j < c.length - 1; j++) {
+      if (c[j] == '--set-metadata') {
+        final pair = c[j + 1];
+        final eq = pair.indexOf('=');
+        if (eq > 0) merged[pair.substring(0, eq)] = pair.substring(eq + 1);
+      }
+    }
+    return merged;
   }
 
   /// True if no call was `bd show` (forbidden on a controller path) and no call
