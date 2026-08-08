@@ -1,0 +1,29 @@
+{
+  "data": [
+    {
+      "id": "fx-show",
+      "title": "Shown fixture",
+      "status": "open",
+      "priority": 1,
+      "issue_type": "task",
+      "assignee": "fixture-owner",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-08-08T21:36:23Z",
+      "created_by": "Nico Spencer",
+      "updated_at": "2026-08-08T21:36:23Z",
+      "metadata": {
+        "fixture": "main"
+      },
+      "labels": [
+        "captured",
+        "show"
+      ],
+      "dependent_count": 0,
+      "dependency_count": 0,
+      "comment_count": 3,
+      "comments_omitted": true,
+      "revision": -2165446762628067276
+    }
+  ],
+  "schema_version": 1
+}
