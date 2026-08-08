@@ -489,18 +489,21 @@ never surfaces infra types), `bd query`, `bd ready`, multi-id `bd show`. `bd dep
 broken against the server store ("Field 'id' doesn't have a default value") — use
 `bd batch` with `dep add <blocked> <blocker>` lines.
 
-**Dolt server mode** `environment fact` — db `tg` at `127.0.0.1:34947`; local
-`.beads/dolt/` empty; creds `GC_DOLT_USER`/`GC_DOLT_PASSWORD`; idle connections reaped at
-**30s** (pools reconnect, keep ≤2); cross-workspace writes route via `.beads/routes.jsonl`.
+**Dolt proxied-server mode** `environment fact` — `.beads/metadata.json` selects the
+mode and database; optional `.beads/proxied_server_client_info.json` selects the proxy
+root, whose `proxy.pid` supplies the loopback port and whose `beads_dart.secret` supplies
+the read-only SQL password. Server config uses `idle_timeout: -1`; pools reconnect on
+error and retain 1–2 connections. Cross-workspace writes route via
+`.beads/routes.jsonl`.
 
 **`@@tg_working`** `ratified · A21` — The authoritative ~1ms change probe: Dolt's working
 root is content-addressed over **all** tables including dolt-ignored ones, so it catches
 gc's cross-workspace wisp closes that a file watcher provably cannot.
 
-**Coexistence** `ratified · ADR-0003 D6` — A live Gas City still runs and assumes a single
-writer per bead. Never reconcile or mutate beads gc owns; shadow/conformance work against
-live convergence traffic is strictly read-only. Process kills are scoped to our own
-worktree/session pgids — never broad pkills.
+**Coexistence** `ratified · ADR-0003 D6` — the_grid preserves a disjoint ownership
+partition for foreign work stores: never reconcile or mutate beads owned by another
+writer, and keep shadow/conformance work strictly read-only. Process kills are scoped
+to an exactly identified config or owned worktree/session pgid — never a broad pkill.
 
 **Convergence** `ratified · ADR-0003` — gc's work-convergence engine, byte-ported as
 `ConvergenceReducer` and retained as a **coexistence shim** (excluded at the mount
