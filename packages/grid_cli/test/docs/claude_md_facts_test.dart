@@ -13,10 +13,7 @@ void main() {
     );
     expect(claudeMd, contains('<proxy-root>/beads_dart.secret'));
     expect(claudeMd, contains('idle_timeout: -1'));
-    expect(
-      claudeMd,
-      contains("the_grid's file-watch signal is advisory"),
-    );
+    expect(claudeMd, contains("the_grid's file-watch signal is advisory"));
     expect(
       claudeMd,
       contains('single-writer-per-bead as a disjoint ownership partition'),
