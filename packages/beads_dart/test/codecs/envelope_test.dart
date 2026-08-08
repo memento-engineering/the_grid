@@ -48,6 +48,31 @@ void main() {
       );
     });
 
+    test('parseFlat removes an object schema canary from data', () {
+      final env = BdEnvelope.parseFlat('{"schema_version":1,"count":3}');
+      expect(env.schemaVersion, kBdSchemaVersion);
+      expect(env.dataMap, {'count': 3});
+    });
+
+    test('parseFlat accepts an unversioned array payload', () {
+      final env = BdEnvelope.parseFlat('[{"id":"tg-1"}]');
+      expect(env.schemaVersion, kBdSchemaVersion);
+      expect(env.dataList, [
+        {'id': 'tg-1'},
+      ]);
+    });
+
+    test('parseFlat rejects malformed JSON and schema drift', () {
+      expect(
+        () => BdEnvelope.parseFlat('{not json'),
+        throwsA(isA<BdParseException>()),
+      );
+      expect(
+        () => BdEnvelope.parseFlat('{"schema_version":2,"count":3}'),
+        throwsA(isA<BdSchemaDriftException>()),
+      );
+    });
+
     test('dataList throws on shape mismatch', () {
       final env = BdEnvelope.parse('{"schema_version": 1, "data": {}}');
       expect(() => env.dataList, throwsA(isA<BdParseException>()));
