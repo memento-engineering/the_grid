@@ -18,9 +18,9 @@ import 'bd_runner.dart';
 /// Wraps a [BdRunner] and turns each `bd` subcommand into a typed Future.
 /// **Futures for acts** (every method here is one-shot); observations are the
 /// repository's job. Reads decode through [BdEnvelope.parse] (asserting
-/// `schema_version == 1`); a non-zero exit is always raised as
-/// [BdCommandFailed], which reads the error envelope off stdout first
-/// (ADR-0001 Decision 4).
+/// `schema_version == 1`); non-zero results route through
+/// [BdException.fromOutput], which classifies known contracts and reads error
+/// envelopes off stdout first (ADR-0001 Decision 4).
 ///
 /// **Mutations go through `bd` only — never SQL** (ADR-0001 D4). Every
 /// mutation carries `--actor grid-controller`. This service holds no Dolt
@@ -480,14 +480,13 @@ class BdCliService {
   }
 
   void _throwIfFailed(List<String> args, BdResult result) {
-    if (result.exitCode != 0) {
-      throw BdCommandFailed.fromOutput(
-        command: ['bd', ...args],
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      );
-    }
+    if (result.exitCode == 0) return;
+    throw BdException.fromOutput(
+      command: ['bd', ...args],
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    );
   }
 
   List<Bead> _beadsFromList(List<Map<String, dynamic>> rows) => [

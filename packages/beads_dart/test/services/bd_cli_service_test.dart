@@ -269,6 +269,27 @@ void main() {
         );
       },
     );
+
+    test('non-zero results route through the typed decoder', () async {
+      const guardMismatchEnvelope =
+          '{"schema_version":1,"data":{"error":"guard mismatch",'
+          '"guard_mismatch":true}}';
+      final runner = FakeBdRunner()
+        ..stubSub(
+          'dep',
+          'list',
+          const BdReply(
+            stdout: guardMismatchEnvelope,
+            stderr: '',
+            exitCode: 13,
+          ),
+        );
+
+      await expectLater(
+        BdCliService(runner).depList(['tg-guarded']),
+        throwsA(isA<BdGuardMismatch>()),
+      );
+    });
   });
 
   group('BdCliService mutations carry --actor grid-controller', () {

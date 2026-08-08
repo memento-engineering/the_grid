@@ -9,7 +9,7 @@ import '../errors/bd_exception.dart';
 /// The captured result of one `bd` subprocess: exit code plus decoded
 /// stdout/stderr text. Immutable, value-y — the [BdCliService] decodes
 /// [stdout] via [BdEnvelope] and routes non-zero [exitCode]s through
-/// [BdCommandFailed.fromOutput].
+/// [BdException.fromOutput].
 class BdResult {
   const BdResult({
     required this.exitCode,
@@ -43,7 +43,7 @@ abstract interface class BdRunner {
   /// Runs `bd <args>`. Throws [BdTimeoutException] if the call exceeds
   /// [timeout] (the implementation kills the process tree); never throws for a
   /// non-zero exit — that is reported via [BdResult.exitCode] for the caller to
-  /// route through [BdCommandFailed.fromOutput].
+  /// route through [BdException.fromOutput].
   ///
   /// [stdin], when provided, is written to the child's stdin and the stream is
   /// closed (EOF). `bd batch` reads its line-oriented script this way — one
