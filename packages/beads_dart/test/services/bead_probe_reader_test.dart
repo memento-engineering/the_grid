@@ -18,7 +18,7 @@ void main() {
 
       expect(bead?.id, 'tg-step1');
       expect(runner.calls.where((args) => args.first == 'query'), [
-        ['query', 'id=tg-step1', '--json'],
+        ['query', 'id=tg-step1', '--json', '--limit', '0'],
       ]);
       expect(runner.calls.where((args) => args.first == 'show'), isEmpty);
       expect(runner.calls.where((args) => args.first == 'export'), isEmpty);
@@ -82,10 +82,10 @@ void main() {
       expect(open.map((bead) => bead.id), ['tg-gate1']);
       expect(successors.map((bead) => bead.id), ['tg-gate1']);
       expect(runner.calls.where((args) => args.first == 'list'), [
-        ['list', '-t', 'step', '--status', 'open', '--json'],
-        ['list', '-t', 'gate', '--status', 'open', '--json'],
-        ['list', '-t', 'step', '--status', 'open', '--json'],
-        ['list', '-t', 'gate', '--status', 'open', '--json'],
+        ['list', '-t', 'step', '--status', 'open', '--json', '--limit', '0'],
+        ['list', '-t', 'gate', '--status', 'open', '--json', '--limit', '0'],
+        ['list', '-t', 'step', '--status', 'open', '--json', '--limit', '0'],
+        ['list', '-t', 'gate', '--status', 'open', '--json', '--limit', '0'],
       ]);
       expect(runner.calls.where((args) => args.first == 'show'), isEmpty);
       expect(runner.calls.where((args) => args.first == 'export'), isEmpty);
@@ -166,7 +166,11 @@ class _ScopedRunner implements BdRunner {
       );
     }
     if (args.first == 'query') {
-      if (args.length != 3 || args[1] != 'id=tg-step1' || args[2] != '--json') {
+      if (args.length != 5 ||
+          args[1] != 'id=tg-step1' ||
+          args[2] != '--json' ||
+          args[3] != '--limit' ||
+          args[4] != '0') {
         throw StateError('unexpected query: $args');
       }
       if (failQuery) {
@@ -186,11 +190,13 @@ class _ScopedRunner implements BdRunner {
       );
     }
     if (args.first != 'list') throw StateError('unexpected call: $args');
-    if (args.length != 6 ||
+    if (args.length != 8 ||
         args[1] != '-t' ||
         args[3] != '--status' ||
         args[4] != 'open' ||
-        args[5] != '--json') {
+        args[5] != '--json' ||
+        args[6] != '--limit' ||
+        args[7] != '0') {
       throw StateError('unexpected list: $args');
     }
     final type = args[2];

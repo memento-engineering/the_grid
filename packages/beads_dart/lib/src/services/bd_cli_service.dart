@@ -297,7 +297,7 @@ class BdCliService {
 
   static const List<String> _actorArgs = ['--actor', actor];
 
-  List<String> readyArgs() => const ['ready', '--json'];
+  List<String> readyArgs() => const ['ready', '--json', '--limit', '0'];
 
   List<String> listScopeArgs({required IssueType type, BeadStatus? status}) => [
     'list',
@@ -305,6 +305,8 @@ class BdCliService {
     type.wire,
     if (status != null) ...['--status', status.wire],
     '--json',
+    '--limit',
+    '0',
   ];
 
   List<String> queryArgs(String expr, {bool includeClosed = false}) => [
@@ -312,6 +314,8 @@ class BdCliService {
     expr,
     if (includeClosed) '--all',
     '--json',
+    '--limit',
+    '0',
   ];
 
   List<String> depListArgs(List<String> ids) => [
