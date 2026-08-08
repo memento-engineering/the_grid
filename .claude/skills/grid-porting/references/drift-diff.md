@@ -33,8 +33,9 @@ hand-written `SELECT`s were written against. Three numbers must agree:
 ```bash
 # (a) The live store's applied migration high-water mark.
 #     This is exactly the query beads itself uses (internal/storage/schema/schema.go).
-#     SELECT-only — safe against the live `tg` server. Use the controller's pooled reader,
-#     or a one-off mysql client with the discovered creds (host 127.0.0.1, port 34947, db tg).
+#     SELECT-only — safe against the selected store. Use the controller pooled reader,
+#     or discover the current proxied-server endpoint and credentials through
+#     BeadsWorkspace from .beads/metadata.json plus proxied_server_client_info.json.
 #     SELECT COALESCE(MAX(version), 0) FROM schema_migrations;
 
 # (b) The highest migration shipped by the PINNED beads checkout.
