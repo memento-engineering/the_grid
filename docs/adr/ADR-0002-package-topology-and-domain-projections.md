@@ -50,6 +50,18 @@ Dependency direction gains: `grid_engine ──► grid_controller` (snapshot/ow
 - **Empty stub directories removed** (R13, 2026-07-05): `packages/{grid_controller,grid_reconciler,grid_federation}` husks deleted from disk (untracked `.iml` remnants only; the workspace pubspec had already dropped them).
 - The live workspace as of this stamp: `beads_dart · grid_cli · grid_exploration · grid_devtools · grid_runtime · grid_engine` (+ external consumers `space_station`, `power_station/packages/*_grid_assets`).
 
+**Supersession stamp 2026-08-08 (D-BD1, ratified Nico):** the historical
+`beads_dart` clause “pinned against bd 1.0.5” is superseded. `beads_dart`
+supports `bd >= 1.0.5` through two compatibility rails: scheduled drift CI
+against `gastownhall/beads@main`, and release gating against the declared
+floor plus GitHub's latest published non-prerelease bd tag. See
+`docs/SCRATCH-bd-repin.md` §3 and `packages/beads_dart/bd_compatibility.yaml`.
+
+This ratified stamp fulfills and supersedes only ADR-0000 A54’s overlapping
+`Affects (if promoted)` note for the ADR-0002 `beads_dart` row. A54’s
+separate ADR-0001 Decision 4 shape-probe mechanism remains Pending and is
+unchanged by D-BD1 or this stamp.
+
 **Amended 2026-07-23 (ADR-0012 Decision 2, ratified 2026-07-18):** add the diagnostics wire-contract package:
 
 | Package | Role | Milestone | Notes |

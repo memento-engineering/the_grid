@@ -1,7 +1,8 @@
 # Fixtures Reference
 
-Upstream fixtures are the verbatim bytes of pinned `bd` invocations under `BD_JSON_ENVELOPE=1`. They
-pin the codec parser to real upstream output. They are **captured, never authored** — hand-editing one
+Upstream fixtures are the verbatim bytes of `bd` invocations under `BD_JSON_ENVELOPE=1`, using the
+executable resolved from a caller-supplied `--ref <main-or-tag>`. They bind the codec parser to real
+upstream output. They are **captured, never authored** — hand-editing one
 defeats the only guarantee it gives.
 
 ## Layout
@@ -22,16 +23,16 @@ fixtures/upstream/
     └── hq-export-sample.jsonl    ← raw `bd export --include-infra` JSONL, first N records
 ```
 
-The dated dir name carries both the capture date and the bd version. One dir per pin; the prior dir
-stays in place as the historical record of the prior pin.
+The dated directory identifies the capture session. Every new ref capture gets a new directory; all
+prior directories remain as historical records.
 
 ## Capture environment
 
 - **`BD_JSON_ENVELOPE=1` on every invocation.** This is what makes errors arrive enveloped on stdout
   and every success carry `schema_version`. A fixture captured without it is the wrong shape.
-- **On the pin.** `bd version` must report the recorded commit, and the beads checkout must be at the
-  same commit, before you capture (see SKILL.md → "Reading the current pin"). A fixture captured off-pin
-  is worse than no fixture.
+- **On the requested ref and SHA.** Callers supply `--ref <main-or-tag>` and its independently resolved
+  40-character SHA. The beads checkout and every command's executable must resolve from that ref at
+  that SHA before capture.
 - **Two sources.** `tg-*` fixtures come from the_grid's own (empty) workspace, db `tg`. `hq-*` fixtures
   come from city HQ (`~/gascity`), which has populated, real-shaped data.
 - **No hand-edits, ever.** Not to redact, not to "fix", not to prettify. If a value looks wrong, the
@@ -39,8 +40,9 @@ stays in place as the historical record of the prior pin.
 
 ## Exact capture commands
 
-These produced the `2026-06-11-bd-1.0.5/` set. They are the template for any re-capture — same commands,
-new dated dir. All run with `BD_JSON_ENVELOPE=1` exported.
+These produced the historical `2026-06-11-bd-1.0.5/` set. They are the command template for a complete
+capture into a new dated directory. All commands use the executable resolved from the requested ref
+and run with `BD_JSON_ENVELOPE=1` exported.
 
 In **the_grid** workspace (db `tg`, empty):
 
@@ -85,7 +87,8 @@ bd export --include-infra | head -n 25          > hq-export-sample.jsonl
 
 Each dated dir's `README.md` is part of the fixture set and is written at capture time. It must carry:
 
-- The bd version + commit, and the note that `BD_JSON_ENVELOPE=1` was set everywhere.
+- The supplied ref, independently resolved 40-character SHA, executable provenance, and the note that
+  `BD_JSON_ENVELOPE=1` was set everywhere.
 - The source(s): the_grid db `tg` (empty) and city HQ (`~/gascity`).
 - A table: **file → what it is → exact capture command** (the commands above).
 - **Capture-time findings** — anything observed at capture that informs the models or an ADR (e.g. the
@@ -95,10 +98,10 @@ Each dated dir's `README.md` is part of the fixture set and is written at captur
 
 ## When to re-capture
 
-- A **bd version / commit bump** → full re-capture into a new dated dir (this is the common case; see
+- A **new ref or resolved SHA** changes captured output → full capture into a new dated directory (see
   `references/realignment.md`).
 - The **envelope `schema_version` changes** → the codec contract moved; re-capture is mandatory and a
   hard ADR-0000 gate (the parser's `kBdSchemaVersion` assertion will be failing).
 - A **new domain projection** needs a fixture it lacks → still a full re-capture into a fresh dir at the
-  current pin, not a one-off file dropped into an existing dir. Keep each dir internally consistent:
-  every file in a dir is the same pin, same capture session.
+  explicitly selected ref, not a one-off file dropped into an existing directory. Keep each directory
+  internally consistent: every file has the same ref, resolved SHA, executable, and capture session.
