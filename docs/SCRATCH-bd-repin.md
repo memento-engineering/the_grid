@@ -123,7 +123,9 @@ transcript.
   community artifact (A2) is preferred over private machinery.
 
 **Ratification points embedded below** (collaborative-session decisions, carried out on
-Nico's word, per the register rule — no ADR-0000 traffic): B6 amends ADR-0008 D-1's rationale;
+Nico's word, per the register rule — no ADR-0000 traffic): B6 amends ADR-0007 D-1's rationale
+(corrected 2026-08-08 — the filing said ADR-0008, a same-name D-1 collision across the M4-P1/M5
+build-order promotions; the serialization-queue D-1 lives in ADR-0007 ~line 189);
 C10's outcome lands as a short decision note wherever it concludes.
 
 ## 4. The backlog
@@ -169,7 +171,7 @@ edges only where real.
   (+ `revision` where a read is already in hand) on ownership-sensitive writes; on mismatch,
   surface exit 13 as `OwnershipRefused`-adjacent, never retry blind. Then **re-scope D-1**:
   the per-target serialization queue's stated rationale (client-side RMW last-writer-wins) is
-  fixed upstream; the queue stays as defense-in-depth + ordering guarantee, and ADR-0008's
+  fixed upstream; the queue stays as defense-in-depth + ordering guarantee, and ADR-0007's
   D-1 note gets a one-line amendment saying so (Nico ratifies; quote-and-supersede, never
   silent). *Blocked by: A4.*
 - **B7 · Atomic metadata ops.** Where the writer does merge-shaped metadata edits, move to the
