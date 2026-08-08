@@ -1,0 +1,49 @@
+{
+  "data": {
+    "built_in_statuses": [
+      {
+        "name": "open",
+        "category": "active",
+        "icon": "○",
+        "description": "Available to work (default)"
+      },
+      {
+        "name": "in_progress",
+        "category": "wip",
+        "icon": "◐",
+        "description": "Actively being worked on"
+      },
+      {
+        "name": "blocked",
+        "category": "wip",
+        "icon": "●",
+        "description": "Blocked by a dependency"
+      },
+      {
+        "name": "deferred",
+        "category": "frozen",
+        "icon": "❄",
+        "description": "Deliberately put on ice for later"
+      },
+      {
+        "name": "closed",
+        "category": "done",
+        "icon": "✓",
+        "description": "Completed"
+      },
+      {
+        "name": "pinned",
+        "category": "frozen",
+        "icon": "📌",
+        "description": "Persistent, stays open indefinitely"
+      },
+      {
+        "name": "hooked",
+        "category": "wip",
+        "icon": "◇",
+        "description": "Attached to an agent's hook"
+      }
+    ]
+  },
+  "schema_version": 1
+}

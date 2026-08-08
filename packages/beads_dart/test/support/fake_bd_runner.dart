@@ -13,9 +13,12 @@ import 'package:beads_dart/src/services/bd_runner.dart';
 /// Concurrency is observable: [maxConcurrent] records the high-water mark of
 /// in-flight [run] calls, which the semaphore test asserts.
 class FakeBdRunner implements BdRunner {
-  FakeBdRunner({List<BdReply>? replies}) : _replies = replies ?? <BdReply>[];
+  FakeBdRunner({List<BdReply>? replies, List<BdReply>? queuedReplies})
+    : _replies = replies ?? <BdReply>[],
+      _queuedReplies = List<BdReply>.of(queuedReplies ?? const <BdReply>[]);
 
   final List<BdReply> _replies;
+  final List<BdReply> _queuedReplies;
 
   /// Every invocation's argv, in call order.
   final List<List<String>> calls = <List<String>>[];
@@ -31,6 +34,11 @@ class FakeBdRunner implements BdRunner {
   /// are matched in registration order. Returns `this` for chaining.
   FakeBdRunner stub(BdMatcher matcher, BdReply reply) {
     _replies.add(reply.withMatcher(matcher));
+    return this;
+  }
+
+  FakeBdRunner enqueue(BdReply reply) {
+    _queuedReplies.add(reply);
     return this;
   }
 
@@ -68,6 +76,7 @@ class FakeBdRunner implements BdRunner {
   }
 
   BdReply _match(List<String> args) {
+    if (_queuedReplies.isNotEmpty) return _queuedReplies.removeAt(0);
     for (final reply in _replies) {
       final matcher = reply.matcher;
       if (matcher == null) continue;

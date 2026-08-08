@@ -1,0 +1,99 @@
+{
+  "data": [
+    {
+      "id": "fx-show",
+      "title": "Shown fixture",
+      "status": "open",
+      "priority": 1,
+      "issue_type": "task",
+      "assignee": "fixture-owner",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-08-08T21:36:23Z",
+      "created_by": "Nico Spencer",
+      "updated_at": "2026-08-08T21:36:23Z",
+      "metadata": {
+        "fixture": "main"
+      },
+      "labels": [
+        "captured",
+        "show"
+      ],
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 3
+    },
+    {
+      "id": "fx-child-a",
+      "title": "Epic child A",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "task",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-08-08T21:36:24Z",
+      "created_by": "Nico Spencer",
+      "updated_at": "2026-08-08T21:36:24Z",
+      "dependencies": [
+        {
+          "issue_id": "fx-child-a",
+          "depends_on_id": "fx-epic",
+          "type": "parent-child",
+          "created_at": "2026-08-08T21:36:24Z",
+          "created_by": "Nico Spencer",
+          "metadata": "{}"
+        }
+      ],
+      "dependency_count": 0,
+      "dependent_count": 1,
+      "comment_count": 0,
+      "parent": "fx-epic"
+    },
+    {
+      "id": "fx-epic",
+      "title": "Fixture epic",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "epic",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-08-08T21:36:24Z",
+      "created_by": "Nico Spencer",
+      "updated_at": "2026-08-08T21:36:24Z",
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    },
+    {
+      "id": "fx-ready-01",
+      "title": "Ready fixture 01",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "task",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-08-08T21:36:25Z",
+      "created_by": "Nico Spencer",
+      "updated_at": "2026-08-08T21:36:25Z",
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    },
+    {
+      "id": "fx-ready-02",
+      "title": "Ready fixture 02",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "task",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-08-08T21:36:25Z",
+      "created_by": "Nico Spencer",
+      "updated_at": "2026-08-08T21:36:25Z",
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "pagination": {
+    "returned": 5,
+    "total": 21,
+    "truncated": true
+  },
+  "schema_version": 1
+}
