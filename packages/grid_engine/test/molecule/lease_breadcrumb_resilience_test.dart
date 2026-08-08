@@ -19,8 +19,6 @@
 //    writes) is reported LOUD through `onOrphan` — never a silent skip.
 //
 // Fully offline (Fakes, not mocks).
-import 'dart:convert';
-
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -96,7 +94,7 @@ class _FlakyBdRunner implements BdRunner {
   /// How many `update` attempts were made (failed + landed), in order.
   int updateAttempts = 0;
 
-  /// The decoded `--metadata` JSON of every LANDED `update`, in order.
+  /// The metadata of every LANDED `update`, in order.
   final List<Map<String, dynamic>> landedUpdateMetadata =
       <Map<String, dynamic>>[];
 
@@ -112,12 +110,17 @@ class _FlakyBdRunner implements BdRunner {
         failFirstUpdates -= 1;
         throw StateError('bd unavailable (transient)');
       }
-      final i = args.indexOf('--metadata');
-      if (i >= 0) {
-        landedUpdateMetadata.add(
-          jsonDecode(args[i + 1]) as Map<String, dynamic>,
+      final metadata = <String, dynamic>{};
+      for (var i = 0; i < args.length - 1; i++) {
+        if (args[i] != '--set-metadata') continue;
+        final assignment = args[i + 1];
+        final separator = assignment.indexOf('=');
+        if (separator < 0) continue;
+        metadata[assignment.substring(0, separator)] = assignment.substring(
+          separator + 1,
         );
       }
+      if (metadata.isNotEmpty) landedUpdateMetadata.add(metadata);
     }
     final id = args.length >= 2 ? args[1] : '';
     return BdResult(

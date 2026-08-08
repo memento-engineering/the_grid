@@ -166,11 +166,11 @@ Future<Fakes> _drive(
   return h.fakes;
 }
 
-/// Every `--metadata` payload of every recorded `update`, as raw JSON.
+/// Every metadata payload of every recorded `update`.
 Iterable<String> _allWrites(RecordingBdRunner runner) sync* {
-  for (final call in runner.callsFor('update')) {
-    final i = call.indexOf('--metadata');
-    if (i >= 0) yield call[i + 1];
+  final updates = runner.callsFor('update');
+  for (var i = 0; i < updates.length; i++) {
+    yield runner.metadataOfUpdate(i).toString();
   }
 }
 

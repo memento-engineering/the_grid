@@ -308,15 +308,17 @@ void main() {
           .where((c) => c.length <= 1 || c[1] != '--graph'),
       hasLength(1),
     );
-    final stamps = runner
-        .callsFor('update')
-        .where((c) => c.join(' ').contains('"blocks"'))
-        .toList();
+    final updates = runner.callsFor('update');
+    final stamps = [
+      for (var i = 0; i < updates.length; i++)
+        if (runner.metadataOfUpdate(i).containsKey('blocks'))
+          runner.metadataOfUpdate(i),
+    ];
     expect(stamps, hasLength(1));
-    final stamp = stamps.single.join(' ');
-    expect(stamp, contains('"blocks":"tgdog-orphan"'));
-    expect(stamp, contains('"node":"tg-1"'));
-    expect(stamp, contains('fake orphan graph pour timed out'));
+    final stamp = stamps.single;
+    expect(stamp['blocks'], 'tgdog-orphan');
+    expect(stamp['node'], 'tg-1');
+    expect(stamp['reason'], contains('fake orphan graph pour timed out'));
 
     // The parked session never inflates the circuit.
     expect(reg.events, isEmpty);

@@ -437,11 +437,14 @@ void main() {
       // molecule model, tg-eli phase 2: never the session bead) — and NOT ONE
       // bd call touches the foreign work bead `tg-b`.
       final routeBead = _stepBeadId('tg-b/review/route');
-      final gatedWrites = m.fakes.runner
-          .callsFor('update')
-          .where((c) => c[1] == routeBead)
-          .where((c) => c.join(' ').contains('"grid.step.state":"gated"'))
-          .toList();
+      final updates = m.fakes.runner.callsFor('update');
+      final gatedWrites = [
+        for (var i = 0; i < updates.length; i++)
+          if (updates[i][1] == routeBead &&
+              m.fakes.runner.metadataOfUpdate(i)[MoleculeStepKeys.state] ==
+                  'gated')
+            updates[i],
+      ];
       expect(gatedWrites, isNotEmpty);
       for (final call in m.fakes.runner.calls) {
         if (call.length > 1) expect(call[1], isNot('tg-b'));

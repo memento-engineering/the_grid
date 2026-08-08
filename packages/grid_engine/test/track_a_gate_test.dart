@@ -156,9 +156,11 @@ void main() {
         expect(stamp['rig'], stateSubstation);
 
         // No `complete` was ever written (the park is not a positive terminal).
-        for (final u in updates) {
-          final i = u.indexOf('--metadata');
-          expect(i < 0 || !u[i + 1].contains('"complete"'), isTrue);
+        for (var i = 0; i < updates.length; i++) {
+          expect(
+            fakes.runner.metadataOfUpdate(i).values,
+            isNot(contains('complete')),
+          );
         }
       },
     );

@@ -6,8 +6,6 @@
 // fence that is still ALIVE refuses the mint (fail-closed, never double-run).
 //
 // Zero I/O — the recording chokepoint + a fake transport (Fakes, not mocks).
-import 'dart:convert';
-
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -141,12 +139,15 @@ StationServices _withLiveness(StationServices base, AllocationLiveness probe) =>
       liveness: probe,
     );
 
-/// The decoded `--metadata` of every `update` call targeting [id].
-List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) => [
-  for (final c in runner.callsFor('update'))
-    if (c.length > 1 && c[1] == id && c.contains('--metadata'))
-      jsonDecode(c[c.indexOf('--metadata') + 1]) as Map<String, dynamic>,
-];
+/// The metadata of every `update` call targeting [id].
+List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
+  final updates = runner.callsFor('update');
+  return [
+    for (var i = 0; i < updates.length; i++)
+      if (updates[i].length > 1 && updates[i][1] == id)
+        runner.metadataOfUpdate(i),
+  ];
+}
 
 void main() {
   group('tg-4rw / I-10 — a dead session key mints fresh instead of wedging', () {

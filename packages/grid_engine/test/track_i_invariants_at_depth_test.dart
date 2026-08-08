@@ -405,10 +405,12 @@ void main() {
           .where((c) => c[1] == buildBead)
           .toList();
       expect(writes, isNotEmpty);
-      expect(
-        writes.any((c) => c.join(' ').contains('"grid.step.state":"complete"')),
-        isTrue,
-      );
+      final updates = m.fakes.runner.callsFor('update');
+      expect([
+        for (var i = 0; i < updates.length; i++)
+          if (updates[i][1] == buildBead)
+            m.fakes.runner.metadataOfUpdate(i)[MoleculeStepKeys.state],
+      ], contains('complete'));
       for (final call in m.fakes.runner.calls) {
         if (call.length > 1) expect(call[1], isNot('tg-b'));
       }
@@ -567,12 +569,12 @@ void main() {
             .where((c) => c[1] == buildBead)
             .toList();
         expect(writes, isNotEmpty);
-        expect(
-          writes.any(
-            (c) => c.join(' ').contains('"grid.step.state":"complete"'),
-          ),
-          isTrue,
-        );
+        final updates = m.fakes.runner.callsFor('update');
+        expect([
+          for (var i = 0; i < updates.length; i++)
+            if (updates[i][1] == buildBead)
+              m.fakes.runner.metadataOfUpdate(i)[MoleculeStepKeys.state],
+        ], contains('complete'));
         for (final call in m.fakes.runner.calls) {
           if (call.length > 1) expect(call[1], isNot('genesis-x'));
         }
