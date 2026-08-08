@@ -101,7 +101,11 @@ export 'src/git/stale_ancestor_guard.dart'
 // Track 4 — lifecycle-as-beads + the single bd write chokepoint.
 export 'src/lifecycle/bead_ownership.dart' show BeadOwnershipPredicate;
 export 'src/lifecycle/station_bead_writer.dart'
-    show StationBeadWriter, OwnershipRefused, SessionClosedRefused;
+    show
+        StationBeadWriter,
+        OwnershipRefused,
+        OwnershipGuardRefused,
+        SessionClosedRefused;
 export 'src/lifecycle/runtime_actuator.dart'
     show
         CrashDecision,
