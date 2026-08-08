@@ -658,10 +658,10 @@ void main() {
             .toList(growable: false);
         expect(
           closes,
-          unorderedEquals(['tgdog-mol', 'tgdog-step-a']),
+          orderedEquals(['tgdog-step-a', 'tgdog-mol']),
           reason:
-              'the proxied refusal degrades to bounded per-bead closes '
-              'instead of silently leaving the graph open forever',
+              'the proxied fallback must satisfy close policy by closing '
+              'step leaves before the molecule root',
         );
       },
     );
@@ -705,12 +705,15 @@ void main() {
         final script = runner.stdins[runner.calls.indexOf(batches.single)]!;
         expect(
           script.split('\n'),
-          unorderedEquals([
-            'close tgdog-mol',
+          orderedEquals([
             'close tgdog-step-old',
             'close tgdog-step-r1',
             'close tgdog-step-r2',
+            'close tgdog-mol',
           ]),
+          reason:
+              'an unforced batch must close every step leaf before its '
+              'molecule root or bd rolls back the transaction',
         );
       },
     );
