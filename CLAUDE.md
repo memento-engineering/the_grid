@@ -64,15 +64,15 @@ builds everything.**
 ## bd / beads rules
 
 - Always `BD_JSON_ENVELOPE=1`; assert `schema_version == 1`. Errors arrive **enveloped on stdout** with exit ≠ 0 (ADR-0001 Decision 4).
-- Mutations: bd CLI only, `--actor grid-controller`. **Never SQL writes. Never touch `.beads/hooks/` (gc owns them).**
+- Mutations: bd CLI only, `--actor grid-controller`. **Never SQL writes. Never modify `.beads/hooks/`; the_grid's file-watch signal is advisory, so keep the directory write-free on principle.**
 - Grouped mutations: `bd batch` (one transaction, one DOLT_COMMIT). Bulk reads: `bd export --include-infra` / `bd query` / multi-id `bd show`. **Never spawn bd per issue in a loop.**
 - **Never call `bd show` from a re-query/controller path** — it writes `.beads/last-touched` and self-triggers the watcher.
 - `bd list` does not surface infra-typed beads (agent/rig/role) — use export for those (ADR-0001 Decision 4).
-- **Coexistence safety (ADR-0003 Decision 6):** gc's convergence handler assumes a single writer per bead. Never reconcile or mutate beads gc's reconciler owns; any shadow/conformance experiment against live convergence traffic is strictly read-only.
+- **Coexistence safety (ADR-0003 Decision 6):** upstream's CAS-everywhere convergence layer does not enforce a single-writer fleet; the_grid therefore treats single-writer-per-bead as a disjoint ownership partition. Never reconcile or mutate beads gc's reconciler owns; any shadow/conformance experiment against live convergence traffic is strictly read-only.
 
 ## Environment facts
 
-- Dolt **server mode**: db `tg` at `127.0.0.1:34947`; local `.beads/dolt/` is empty. Creds `GC_DOLT_USER`/`GC_DOLT_PASSWORD`; `GT_ROOT=<path to the gascity checkout>` (from `.beads/.env`). Server reaps idle connections at **30s** — pools must reconnect; keep ≤2 pooled connections.
+- Dolt **`proxied-server` mode**: each repo uses its own bd-managed proxy for database `tg`. `.beads/metadata.json` selects the mode and database; optional `.beads/proxied_server_client_info.json` selects the proxy root (a relative `root_path` resolves under `.beads/`, with `.beads/dolt/` as the fallback). `<proxy-root>/proxy.pid` supplies the loopback endpoint port, and `<proxy-root>/beads_dart.secret` supplies the password for the read-only `beads_dart` SQL user. Server config disables idle reaping (`idle_timeout: -1`); retain 1–2 pooled MySQL-protocol connections and reconnect on error.
 - Cross-workspace writes into `tg` are routine (`.beads/routes.jsonl`) — `SELECT @@tg_working` (~1ms) is the authoritative change probe.
 - gc keeps running during M1–M3; the_grid coexists (reads + bd-mediated writes only).
 - Pinned upstream: **bd 1.0.5 (f9fe4ef2a)**. Sources on disk: gascity `~/development/com.gastownhall/gascity`, beads `~/development/com.gastownhall/beads`, lenny `~/development/com.nicospencer/lenny`, predictable-flutter `~/development/com.nicospencer/predictable-flutter`, **genesis** `~/development/engineering.memento/genesis` (the shared Seed/Branch/keyed-reconcile substrate — since **ADR-0007** (Accepted 2026-06-24) `genesis_tree` IS the engine: A30/A31's surface-only stance is explicitly reversed, Riverpod → `StateNotifier`; see the M4 entries above and Conventions).
