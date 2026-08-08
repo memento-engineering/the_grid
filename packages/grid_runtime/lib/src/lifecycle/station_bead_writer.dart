@@ -207,7 +207,7 @@ class StationBeadWriter {
     // a caller-supplied [metadata] value wins (it can override the default).
     await _bd.update(
       id,
-      metadata: {
+      mergeMetadata: {
         rigKey: substation,
         'work_bead': workBeadId,
         startedAtKey: _clock().toUtc().toIso8601String(),
@@ -240,7 +240,7 @@ class StationBeadWriter {
     );
     await _bd.update(
       id,
-      metadata: {
+      mergeMetadata: {
         rigKey: substation,
         'grid.link.from': from,
         'grid.link.to': to,
@@ -313,7 +313,7 @@ class StationBeadWriter {
     // update; the `blocks`/`node` keys are how the join re-arms the parked node).
     await _bd.update(
       id,
-      metadata: {
+      mergeMetadata: {
         rigKey: substation,
         'blocks': sessionId,
         'node': nodePath,
@@ -446,7 +446,7 @@ class StationBeadWriter {
       _assertOwned('update', id, const {});
       await _bd.update(
         id,
-        metadata: {
+        mergeMetadata: {
           metadataKey: _canonicalMoleculeCrumb(
             rootCrumbs,
             node.key,
@@ -548,7 +548,7 @@ class StationBeadWriter {
       // the edge first, a half-minted successor is an inert bead with no
       // path metadata: invisible to activeStepBeadsByPath, harmless.
       await _bd.depAdd(id, priorStep.id, type: DependencyType.supersedes);
-      await _bd.update(id, metadata: metadata);
+      await _bd.update(id, mergeMetadata: metadata);
       return id;
     });
   }
@@ -625,8 +625,8 @@ class StationBeadWriter {
     }
   }
 
-  /// A lifecycle `bd update --metadata <json>` (merge semantics; works on
-  /// closed beads) on a the_grid-owned session bead.
+  /// A lifecycle atomic metadata merge (works on closed beads) on a
+  /// the_grid-owned session bead.
   ///
   /// Fail-closed: refuses when [id]'s substation is not owned. The chokepoint derives
   /// the substation from the id PREFIX (the owned-from-birth axis) plus any
@@ -638,9 +638,10 @@ class StationBeadWriter {
   /// rides the SAME serialized, ownership-checked write as [metadata], never a
   /// separate chokepoint call.
   ///
-  /// Serialized per-id (D-1): ownership is checked synchronously (fail-closed
-  /// immediately), then the bd write chains after any prior write on [id] so two
-  /// concurrent updates with disjoint keys can never last-writer-wins.
+  /// #4732 makes the row-locked transaction own the merge re-read. Serialized
+  /// per-id (D-1): ownership is checked synchronously (fail-closed immediately),
+  /// then the bd write chains after any prior write on [id]. The queue remains
+  /// defense-in-depth and provides deterministic same-id ordering.
   Future<void> update(
     String id, {
     required Map<String, String> metadata,
@@ -652,7 +653,7 @@ class StationBeadWriter {
     _assertOwned('update', id, metadata);
     return _serialized(
       id,
-      () => _bd.update(id, metadata: metadata, appendNotes: appendNotes),
+      () => _bd.update(id, mergeMetadata: metadata, appendNotes: appendNotes),
     );
   }
 
@@ -673,7 +674,7 @@ class StationBeadWriter {
         id,
         design: design,
         acceptanceCriteria: acceptanceCriteria,
-        metadata: const {specAuthorKey: specifyAuthor},
+        mergeMetadata: const {specAuthorKey: specifyAuthor},
       ),
     );
   }
@@ -725,7 +726,7 @@ class StationBeadWriter {
     return _serialized(id, () async {
       await _bd.update(
         id,
-        metadata: {closedAtKey: _clock().toUtc().toIso8601String()},
+        mergeMetadata: {closedAtKey: _clock().toUtc().toIso8601String()},
       );
       await _bd.close(id, reason: reason);
     });

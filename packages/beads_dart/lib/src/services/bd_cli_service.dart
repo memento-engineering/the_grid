@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import '../codecs/envelope.dart';
@@ -145,24 +144,24 @@ class BdCliService {
   }
 
   /// `bd update` with any of `--title`, `--status`, `--priority`,
-  /// `--description`, `--type`, `--assignee`, `--metadata '{…}'`.
+  /// `--description`, `--type`, `--assignee`, and metadata operations.
   /// Only the provided fields are sent.
   ///
-  /// **[metadata] is the convergence-transition write channel (ADR-0000
-  /// A16).** It is emitted as `--metadata '<json>'` (a single JSON object),
-  /// which bd **MERGES** into the bead's existing metadata — keys carried
-  /// here overwrite, keys absent are preserved (beads `cmd/bd/update.go`
-  /// `mergeMetadata`, spike-pinned `tool/wisp_pour_spike.sh`) — so a write
+  /// **[mergeMetadata] is the convergence-transition write channel (ADR-0000
+  /// A16).** Each entry is emitted as `--set-metadata key=value`, whose
+  /// server-side `MergeMetadata` semantics overwrite named keys while
+  /// preserving absent keys. The operations run in the row-locked transaction,
+  /// so a write
   /// sequence carries ONLY its named keys and never clobbers the agent-owned
   /// `convergence.agent_verdict*` channel. The update **succeeds on a CLOSED
   /// bead**, which the terminal `last_processed_wisp` write (written AFTER
-  /// the close) requires (ADR-0000 A19). An empty [metadata] map is omitted.
+  /// the close) requires (ADR-0000 A19). An empty [mergeMetadata] map is omitted.
   ///
   /// [type] and [assignee] are the speculative-wisp **activation** channel
   /// (`ActivateWisp`, convergence_store.go:204-246): a deferred node is
   /// promoted by restoring its real `gc.deferred_type`/`gc.deferred_assignee`
   /// via `-t`/`--assignee` (with the `gc.routed_to`/`gc.execution_routed_to`
-  /// values riding [metadata]).
+  /// values riding [mergeMetadata]).
   ///
   /// [appendNotes] is a straight `--append-notes <text>` passthrough (bd
   /// concatenates it onto the bead's existing notes with a newline separator,
@@ -178,7 +177,7 @@ class BdCliService {
     String? acceptanceCriteria,
     IssueType? type,
     String? assignee,
-    Map<String, String>? metadata,
+    Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
     String? appendNotes,
   }) async {
@@ -195,7 +194,7 @@ class BdCliService {
         acceptanceCriteria: acceptanceCriteria,
         type: type,
         assignee: assignee,
-        metadata: metadata,
+        mergeMetadata: mergeMetadata,
         unsetMetadata: unsetMetadata,
         appendNotes: appendNotes,
       ),
@@ -372,7 +371,7 @@ class BdCliService {
     String? acceptanceCriteria,
     IssueType? type,
     String? assignee,
-    Map<String, String>? metadata,
+    Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
     String? appendNotes,
   }) => [
@@ -388,11 +387,11 @@ class BdCliService {
     if (acceptanceCriteria != null) ...['--acceptance', acceptanceCriteria],
     if (type != null) ...['--type', type.wire],
     if (assignee != null) ...['--assignee', assignee],
-    // `--metadata '<json>'` MERGES (named keys overwrite, absent preserved)
-    // and works on a closed bead (ADR-0000 A16/A19). Empty map ⇒ omitted.
-    if (metadata != null && metadata.isNotEmpty) ...[
-      '--metadata',
-      jsonEncode(metadata),
+    // Server-side MergeMetadata overwrites named keys, preserves absent keys,
+    // and runs in the row-locked transaction. Empty map ⇒ omitted.
+    for (final entry in mergeMetadata.entries) ...[
+      '--set-metadata',
+      '${entry.key}=${entry.value}',
     ],
     for (final key in unsetMetadata) ...['--unset-metadata', key],
     if (appendNotes != null && appendNotes.isNotEmpty) ...[

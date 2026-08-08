@@ -8,7 +8,7 @@ import '../support/fake_bd_runner.dart';
 /// Part 1 (Track E) — the actuation surface BdCliService grew for the M2
 /// pour/burn/transition writes. The pour invariants are load-bearing
 /// (ADR-0000 A15/A16): the graph-apply pour is PERSISTENT (no `--ephemeral`),
-/// `--metadata` carries a JSON object (merge semantics), burn is `bd delete`
+/// atomic metadata operations carry merge semantics, burn is `bd delete`
 /// (never close), and `cook` resolves with `--mode=runtime`.
 void main() {
   BdReply okObject([Map<String, dynamic>? data]) => BdReply(
@@ -24,45 +24,47 @@ void main() {
     expect(argv[i + 1], 'grid-controller');
   }
 
-  group('update(--metadata) — the convergence transition write channel', () {
-    test(
-      'emits --metadata as a single JSON object and stamps the actor',
-      () async {
-        final runner = FakeBdRunner()..stubCommand('update', okObject());
-        final service = BdCliService(runner);
+  group('update metadata operations — convergence transition writes', () {
+    test('emits ordered merge operations and stamps the actor', () async {
+      final runner = FakeBdRunner()..stubCommand('update', okObject());
+      final service = BdCliService(runner);
 
-        await service.update(
-          'tg-conv',
-          metadata: const {
-            'convergence.state': 'terminated',
-            'convergence.last_processed_wisp': 'tg-w3',
-          },
-        );
-
-        final argv = runner.calls.single;
-        expect(argv.first, 'update');
-        expect(argv[1], 'tg-conv');
-        expectActor(argv);
-        final mi = argv.indexOf('--metadata');
-        expect(mi, greaterThanOrEqualTo(0), reason: 'no --metadata in $argv');
-        // The value is ONE JSON object string (merge semantics, A16) — not a
-        // batch of key=value flags. Decode it back to assert the shape.
-        final decoded = jsonDecode(argv[mi + 1]) as Map<String, dynamic>;
-        expect(decoded, {
+      await service.update(
+        'tg-conv',
+        mergeMetadata: const {
           'convergence.state': 'terminated',
-          'convergence.last_processed_wisp': 'tg-w3',
-        });
-      },
-    );
+          'convergence.detail': 'left=right',
+          'convergence.empty': '',
+        },
+      );
+
+      final argv = runner.calls.single;
+      expect(argv.first, 'update');
+      expect(argv[1], 'tg-conv');
+      expectActor(argv);
+      expect(
+        argv,
+        containsAllInOrder([
+          '--set-metadata',
+          'convergence.state=terminated',
+          '--set-metadata',
+          'convergence.detail=left=right',
+          '--set-metadata',
+          'convergence.empty=',
+        ]),
+      );
+      expect(argv, isNot(contains('--metadata')));
+    });
 
     test('an empty metadata map omits the --metadata flag entirely', () async {
       final runner = FakeBdRunner()..stubCommand('update', okObject());
       final service = BdCliService(runner);
 
-      await service.update('tg-1', metadata: const {}, priority: 1);
+      await service.update('tg-1', mergeMetadata: const {}, priority: 1);
 
       final argv = runner.calls.single;
       expect(argv, isNot(contains('--metadata')));
+      expect(argv, isNot(contains('--set-metadata')));
       expect(argv, containsAllInOrder(['--priority', '1']));
     });
 
@@ -95,14 +97,16 @@ void main() {
           'tg-step',
           type: IssueType.task,
           assignee: 'rig/polisher',
-          metadata: const {'gc.routed_to': 'rig/polisher'},
+          mergeMetadata: const {'gc.routed_to': 'rig/polisher'},
         );
 
         final argv = runner.calls.single;
         expect(argv, containsAllInOrder(['--type', 'task']));
         expect(argv, containsAllInOrder(['--assignee', 'rig/polisher']));
-        final mi = argv.indexOf('--metadata');
-        expect(jsonDecode(argv[mi + 1]), {'gc.routed_to': 'rig/polisher'});
+        expect(
+          argv,
+          containsAllInOrder(['--set-metadata', 'gc.routed_to=rig/polisher']),
+        );
       },
     );
   });

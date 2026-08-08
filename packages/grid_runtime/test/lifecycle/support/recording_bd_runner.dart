@@ -14,7 +14,7 @@ import 'package:beads_dart/beads_dart.dart';
 ///
 /// Records the full argv + piped stdin of every `bd` invocation so tests can
 /// assert the EXACT commands the chokepoint issued (`--actor grid-controller`,
-/// `--metadata {…}`, never `show`, never SQL). A canned envelope reply is
+/// `--set-metadata key=value`, never `show`, never SQL). A canned envelope reply is
 /// matched by the invocation's leading subcommand; `create` returns a synthetic
 /// id the caller controls so the chokepoint's mint+stamp can be exercised
 /// end-to-end with no real `bd`.
@@ -180,13 +180,19 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
   bool get neverCalledShow =>
       calls.every((c) => c.isEmpty || c.first != 'show');
 
-  /// The JSON string passed to `--metadata` on the call at [index] of the
-  /// `update` calls, or null if that update carried no metadata.
+  /// A JSON test view of the merge operations on the indexed update call.
   String? metadataOfUpdate(int index) {
-    final updates = callsFor('update');
-    if (index >= updates.length) return null;
-    final c = updates[index];
-    final i = c.indexOf('--metadata');
-    return (i >= 0 && i + 1 < c.length) ? c[i + 1] : null;
+    final call = callsFor('update')[index];
+    final metadata = <String, String>{};
+    for (var i = 0; i < call.length - 1; i++) {
+      if (call[i] != '--set-metadata') continue;
+      final assignment = call[i + 1];
+      final separator = assignment.indexOf('=');
+      if (separator < 0) continue;
+      metadata[assignment.substring(0, separator)] = assignment.substring(
+        separator + 1,
+      );
+    }
+    return metadata.isEmpty ? null : jsonEncode(metadata);
   }
 }
