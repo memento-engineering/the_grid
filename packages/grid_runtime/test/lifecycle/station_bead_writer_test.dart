@@ -274,20 +274,21 @@ void main() {
       expect(runner.neverCalledShow, isTrue);
     });
 
-    test(
-      'update issues exactly one `bd update --metadata <json>` (merge)',
-      () async {
-        await writer().update('tgdog-sess1', metadata: {'state': 'active'});
-        final updates = runner.callsFor('update');
-        expect(updates, hasLength(1));
-        expect(updates.single, containsAllInOrder(['update', 'tgdog-sess1']));
-        // metadata is a single merged JSON object (bd merges named keys).
-        final meta =
-            jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
-        expect(meta, {'state': 'active'});
-        expect(runner.everyMutationHasActor, isTrue);
-      },
-    );
+    test('update issues exactly one atomic metadata merge', () async {
+      await writer().update('tgdog-sess1', metadata: {'state': 'active'});
+      final updates = runner.callsFor('update');
+      expect(updates, hasLength(1));
+      expect(updates.single, containsAllInOrder(['update', 'tgdog-sess1']));
+      expect(
+        updates.single,
+        containsAllInOrder(['--set-metadata', 'state=active']),
+      );
+      expect(updates.single, isNot(contains('--metadata')));
+      final meta =
+          jsonDecode(runner.metadataOfUpdate(0)!) as Map<String, dynamic>;
+      expect(meta, {'state': 'active'});
+      expect(runner.everyMutationHasActor, isTrue);
+    });
 
     test(
       'writeSpecifyAuthoredSpec stamps fields and provenance atomically',

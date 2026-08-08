@@ -227,7 +227,7 @@ class StationBeadWriter {
     await _updateBead(
       'createSession',
       id,
-      metadata: {
+      mergeMetadata: {
         rigKey: substation,
         'work_bead': workBeadId,
         startedAtKey: _clock().toUtc().toIso8601String(),
@@ -261,7 +261,7 @@ class StationBeadWriter {
     await _updateBead(
       'createLink',
       id,
-      metadata: {
+      mergeMetadata: {
         rigKey: substation,
         'grid.link.from': from,
         'grid.link.to': to,
@@ -337,7 +337,7 @@ class StationBeadWriter {
     await _updateBead(
       'createGate',
       id,
-      metadata: {
+      mergeMetadata: {
         rigKey: substation,
         'blocks': sessionId,
         'node': nodePath,
@@ -471,7 +471,7 @@ class StationBeadWriter {
       await _updateBead(
         'update',
         id,
-        metadata: {
+        mergeMetadata: {
           metadataKey: _canonicalMoleculeCrumb(
             rootCrumbs,
             node.key,
@@ -573,7 +573,7 @@ class StationBeadWriter {
       // the edge first, a half-minted successor is an inert bead with no
       // path metadata: invisible to activeStepBeadsByPath, harmless.
       await _bd.depAdd(id, priorStep.id, type: DependencyType.supersedes);
-      await _updateBead('createStepSuccessor', id, metadata: metadata);
+      await _updateBead('createStepSuccessor', id, mergeMetadata: metadata);
       return id;
     });
   }
@@ -650,8 +650,8 @@ class StationBeadWriter {
     }
   }
 
-  /// A lifecycle `bd update --metadata <json>` (merge semantics; works on
-  /// closed beads) on a the_grid-owned session bead.
+  /// A lifecycle atomic metadata merge (works on closed beads) on a
+  /// the_grid-owned session bead.
   ///
   /// Fail-closed: refuses when [id]'s substation is not owned. The chokepoint derives
   /// the substation from the id PREFIX (the owned-from-birth axis) plus any
@@ -663,12 +663,10 @@ class StationBeadWriter {
   /// rides the SAME serialized, ownership-checked write as [metadata], never a
   /// separate chokepoint call.
   ///
-  /// [ifAssignee] and [ifStatus] are conditional-update guards. Callers supply
-  /// them only when they came from an authoritative bead snapshot.
-  ///
-  /// Serialized per-id (D-1): ownership is checked synchronously (fail-closed
-  /// immediately), then the bd write chains after any prior write on [id] to
-  /// preserve per-target operation ordering.
+  /// #4732 makes the row-locked transaction own the merge re-read. Serialized
+  /// per-id (D-1): ownership is checked synchronously (fail-closed immediately),
+  /// then the bd write chains after any prior write on [id]. The queue remains
+  /// defense-in-depth and provides deterministic same-id ordering.
   Future<void> update(
     String id, {
     required Map<String, String> metadata,
@@ -685,7 +683,7 @@ class StationBeadWriter {
       () => _updateBead(
         'update',
         id,
-        metadata: metadata,
+        mergeMetadata: metadata,
         appendNotes: appendNotes,
         ifAssignee: ifAssignee,
         ifStatus: ifStatus,
@@ -711,7 +709,7 @@ class StationBeadWriter {
         id,
         design: design,
         acceptanceCriteria: acceptanceCriteria,
-        metadata: const {specAuthorKey: specifyAuthor},
+        mergeMetadata: const {specAuthorKey: specifyAuthor},
       ),
     );
   }
@@ -757,7 +755,7 @@ class StationBeadWriter {
     String? acceptanceCriteria,
     IssueType? type,
     String? assignee,
-    Map<String, String>? metadata,
+    Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
     String? appendNotes,
   }) async {
@@ -774,7 +772,7 @@ class StationBeadWriter {
         acceptanceCriteria: acceptanceCriteria,
         type: type,
         assignee: assignee,
-        metadata: metadata,
+        mergeMetadata: mergeMetadata,
         unsetMetadata: unsetMetadata,
         appendNotes: appendNotes,
       );
@@ -812,7 +810,7 @@ class StationBeadWriter {
       await _updateBead(
         'close',
         id,
-        metadata: {closedAtKey: _clock().toUtc().toIso8601String()},
+        mergeMetadata: {closedAtKey: _clock().toUtc().toIso8601String()},
       );
       await _bd.close(id, reason: reason);
     });

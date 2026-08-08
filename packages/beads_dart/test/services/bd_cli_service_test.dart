@@ -392,7 +392,7 @@ void main() {
           'tg-7',
           design: '',
           acceptanceCriteria: '',
-          metadata: const {'other': 'value'},
+          mergeMetadata: const {'other': 'value'},
           unsetMetadata: const ['spec.author'],
         );
 
@@ -401,9 +401,8 @@ void main() {
         expectActor(argv);
         expect(argv, containsAllInOrder(['--design', '']));
         expect(argv, containsAllInOrder(['--acceptance', '']));
-        expect(jsonDecode(argv[argv.indexOf('--metadata') + 1]), {
-          'other': 'value',
-        });
+        expect(argv, containsAllInOrder(['--set-metadata', 'other=value']));
+        expect(argv, isNot(contains('--metadata')));
         expect(argv, containsAllInOrder(['--unset-metadata', 'spec.author']));
       },
     );

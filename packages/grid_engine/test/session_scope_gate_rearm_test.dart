@@ -23,7 +23,6 @@
 //
 // Zero I/O: fakes + the recording chokepoint + a fake transport.
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
@@ -225,9 +224,18 @@ class _FailFirstUpdateRunner implements BdRunner {
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
 
   Map<String, dynamic> metadataOfUpdate(int index) {
-    final c = callsFor('update')[index];
-    final i = c.indexOf('--metadata');
-    return jsonDecode(c[i + 1]) as Map<String, dynamic>;
+    final call = callsFor('update')[index];
+    final metadata = <String, dynamic>{};
+    for (var i = 0; i < call.length - 1; i++) {
+      if (call[i] != '--set-metadata') continue;
+      final assignment = call[i + 1];
+      final separator = assignment.indexOf('=');
+      if (separator < 0) continue;
+      metadata[assignment.substring(0, separator)] = assignment.substring(
+        separator + 1,
+      );
+    }
+    return metadata;
   }
 
   @override

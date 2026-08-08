@@ -116,6 +116,21 @@ class _FailCreateRunner implements BdRunner {
   List<List<String>> callsFor(String sub) =>
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
 
+  Map<String, dynamic> metadataOfUpdate(int index) {
+    final call = callsFor('update')[index];
+    final metadata = <String, dynamic>{};
+    for (var i = 0; i < call.length - 1; i++) {
+      if (call[i] != '--set-metadata') continue;
+      final assignment = call[i + 1];
+      final separator = assignment.indexOf('=');
+      if (separator < 0) continue;
+      metadata[assignment.substring(0, separator)] = assignment.substring(
+        separator + 1,
+      );
+    }
+    return metadata;
+  }
+
   @override
   Future<BdResult> run(
     List<String> args, {
@@ -305,12 +320,12 @@ void main() {
       m.owner.flush();
       // The park chains createSession → thrown pour → gate create → the
       // gate's blocks/node metadata stamp; settle on the stamp landing.
-      await _pumpUntil(
-        m.owner,
-        () => runner
-            .callsFor('update')
-            .any((c) => c.any((a) => a.contains('"blocks"'))),
-      );
+      await _pumpUntil(m.owner, () {
+        final updates = runner.callsFor('update');
+        return [
+          for (var i = 0; i < updates.length; i++) runner.metadataOfUpdate(i),
+        ].any((metadata) => metadata.containsKey('blocks'));
+      });
 
       // LOUD once, with the cause: one moleculePourFailed naming the parked
       // session, its work bead, and the thrown error.
@@ -336,15 +351,17 @@ void main() {
         hasLength(2),
       );
       // The gate stamp carries the re-arm linkage + the cause.
-      final stamps = runner
-          .callsFor('update')
-          .where((c) => c.any((a) => a.contains('"blocks"')))
-          .toList();
+      final updates = runner.callsFor('update');
+      final stamps = [
+        for (var i = 0; i < updates.length; i++)
+          if (runner.metadataOfUpdate(i).containsKey('blocks'))
+            runner.metadataOfUpdate(i),
+      ];
       expect(stamps, hasLength(1));
-      final stamp = stamps.single.join(' ');
-      expect(stamp, contains('"blocks":"tgdog-sess1"'));
-      expect(stamp, contains('"node":"tg-1"'));
-      expect(stamp, contains('fake molecule graph pour refused'));
+      final stamp = stamps.single;
+      expect(stamp['blocks'], 'tgdog-sess1');
+      expect(stamp['node'], 'tg-1');
+      expect(stamp['reason'], contains('fake molecule graph pour refused'));
 
       // The mint budget is UNTOUCHED: a post-session pour failure is not a
       // mint failure — no retry flares, no exhaustion escalation.

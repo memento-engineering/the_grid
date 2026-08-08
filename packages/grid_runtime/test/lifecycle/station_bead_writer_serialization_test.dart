@@ -1,17 +1,15 @@
 // D-1 — the chokepoint SERIALIZES per target id (ADR-0007 Amended / M4-P1
 // Track C foundation, the race gate).
 //
-// `bd update --metadata` is a client-side read-modify-write with no row lock, so
-// two concurrent updates on the SAME bead with DISJOINT keys can last-writer-win
-// → a metadata key is lost → the barrier never opens (a silent liveness stall at
-// depth). The per-target-id queue closes it. These tests fail on the
-// un-serialized writer. The sample payload keys are deliberately NEUTRAL
+// #4732 makes each metadata merge a row-locked server transaction. The
+// per-target-id queue remains defense-in-depth and guarantees deterministic
+// same-id ordering. These tests pin that writer-level ordering independently
+// of the upstream transaction. The sample payload keys are deliberately NEUTRAL
 // (`meta.*`, not `grid.cursor.*`) — this suite proves the writer's generic
 // per-target-id serialization, independent of any one caller's key schema
 // (the flat `grid.cursor.*` model this file's keys once echoed retired with
 // tg-eli phase 2). Zero I/O — pure fakes.
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -66,12 +64,10 @@ class GatedBdRunner implements BdRunner {
   void release(int i) => _gates[i].complete();
 }
 
-/// A [BdRunner] that simulates bd's client-side read-modify-write metadata merge
-/// WITH a race window (a yield between the read and the write), so concurrent
-/// un-serialized updates clobber each other (the bug D-1 fixes), and serialized
-/// updates apply cumulatively (the fix).
+/// A [BdRunner] that simulates bd's row-locked metadata merge transaction.
 class MergingBdRunner implements BdRunner {
   final Map<String, Map<String, String>> store = {};
+  final Map<String, Future<void>> _tails = {};
 
   @override
   Future<BdResult> run(
@@ -82,13 +78,25 @@ class MergingBdRunner implements BdRunner {
     final sub = args.isNotEmpty ? args.first : '';
     final id = args.length >= 2 ? args[1] : '';
     if (sub == 'update') {
-      final i = args.indexOf('--metadata');
-      final patch = (jsonDecode(args[i + 1]) as Map).cast<String, String>();
-      // Read-modify-write with a RACE WINDOW between the read and the write.
-      final merged = Map<String, String>.from(store[id] ?? const {});
-      await Future<void>.delayed(Duration.zero); // the window
-      merged.addAll(patch);
-      store[id] = merged;
+      final patch = <String, String>{};
+      for (var i = 0; i < args.length - 1; i++) {
+        if (args[i] != '--set-metadata') continue;
+        final assignment = args[i + 1];
+        final separator = assignment.indexOf('=');
+        if (separator < 0) continue;
+        patch[assignment.substring(0, separator)] = assignment.substring(
+          separator + 1,
+        );
+      }
+      final prior = _tails[id] ?? Future<void>.value();
+      final transaction = prior.then((_) async {
+        final merged = Map<String, String>.from(store[id] ?? const {});
+        await Future<void>.delayed(Duration.zero);
+        merged.addAll(patch);
+        store[id] = merged;
+      });
+      _tails[id] = transaction.catchError((_) {});
+      await transaction;
     }
     return BdResult(
       exitCode: 0,
@@ -176,8 +184,8 @@ void main() {
             w.update('tgdog-s', metadata: {'meta.n$i.state': 'complete'}),
         ]);
 
-        // Serialized → all 5 keys present. The un-serialized writer's race window
-        // would clobber down to 1 (last-writer-wins).
+        // The writer orders the calls and the simulated server transaction
+        // merges all five keys under its per-id lock.
         expect(r.store['tgdog-s'], hasLength(5));
         for (var i = 0; i < 5; i++) {
           expect(r.store['tgdog-s']!['meta.n$i.state'], 'complete');

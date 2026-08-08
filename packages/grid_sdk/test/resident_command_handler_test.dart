@@ -407,8 +407,7 @@ void main() {
           'close',
         ]);
         final ruling = runner.calls.first.join(' ');
-        expect(ruling, contains('grid.result.route/critic.grade'));
-        expect(ruling, contains('"A"'));
+        expect(ruling, contains('grid.result.route/critic.grade=A'));
         expect(ruling, contains('grid.result.route/critic.transport'));
         expect(ruling, contains('operator-ruling'));
         expect(ruling, contains('grid.result.route/critic.rationale'));

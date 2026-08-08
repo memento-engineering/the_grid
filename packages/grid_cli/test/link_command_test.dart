@@ -90,6 +90,10 @@ void main() {
       state.beads.single.metadata,
       containsPair('grid.link.to', 'pow-60g'),
     );
+    expect(
+      state.calls.where((call) => call.isNotEmpty && call.first == 'update'),
+      everyElement(isNot(contains('--metadata'))),
+    );
 
     state.beads.add(_link('houston-link1', 'tg-missing', 'pow-missing'));
     final lines = <String>[];
@@ -558,9 +562,16 @@ class _FakeStore implements BdRunner {
         return _envelope({'id': effectiveCreatedId});
       case 'update':
         final index = beads.indexWhere((bead) => bead.id == args[1]);
-        final metadataIndex = args.indexOf('--metadata');
-        final metadata =
-            jsonDecode(args[metadataIndex + 1]) as Map<String, dynamic>;
+        final metadata = <String, dynamic>{};
+        for (var i = 0; i < args.length - 1; i++) {
+          if (args[i] != '--set-metadata') continue;
+          final assignment = args[i + 1];
+          final separator = assignment.indexOf('=');
+          if (separator < 0) continue;
+          metadata[assignment.substring(0, separator)] = assignment.substring(
+            separator + 1,
+          );
+        }
         beads[index] = beads[index].copyWith(
           metadata: {...beads[index].metadata, ...metadata},
         );
