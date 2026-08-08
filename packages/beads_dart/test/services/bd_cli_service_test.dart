@@ -515,13 +515,17 @@ void main() {
   });
 
   group('ProcessBdRunner contract (no real bd spawned)', () {
-    test('environment forces BD_JSON_ENVELOPE=1 over the base env', () {
+    test('environment forces service-mode variables over the base env', () {
       final runner = ProcessBdRunner(
         workspaceRoot: Directory.systemTemp.path,
-        environment: const {'PATH': '/usr/bin', 'BD_JSON_ENVELOPE': '0'},
+        environment: const {
+          'PATH': '/usr/bin',
+          'BD_JSON_ENVELOPE': '0',
+          'BD_NON_INTERACTIVE': '0',
+        },
       );
-      // The contract: BD_JSON_ENVELOPE is always '1', inherited keys survive.
       expect(runner.environment['BD_JSON_ENVELOPE'], '1');
+      expect(runner.environment['BD_NON_INTERACTIVE'], '1');
       expect(runner.environment['PATH'], '/usr/bin');
     });
 

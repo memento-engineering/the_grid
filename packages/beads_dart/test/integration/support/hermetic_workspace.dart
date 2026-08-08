@@ -38,7 +38,11 @@ class HermeticWorkspace {
       'bd',
       ['init'],
       workingDirectory: resolved.path,
-      environment: {...Platform.environment, 'BD_JSON_ENVELOPE': '1'},
+      environment: {
+        ...Platform.environment,
+        'BD_JSON_ENVELOPE': '1',
+        'BD_NON_INTERACTIVE': '1',
+      },
       includeParentEnvironment: false,
       runInShell: false,
     );

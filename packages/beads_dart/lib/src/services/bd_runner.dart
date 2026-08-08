@@ -37,8 +37,9 @@ class BdResult {
 /// (ADR-0001 Decision 7: Fakes, not mocks).
 ///
 /// Implementations MUST run under `BD_JSON_ENVELOPE=1` so every read decodes
-/// through [BdEnvelope] and every error arrives enveloped on stdout
-/// (ADR-0001 Decision 4).
+/// through [BdEnvelope] and every error arrives enveloped on stdout, and under
+/// `BD_NON_INTERACTIVE=1` so no command can use interactive-only fallbacks
+/// (ADR-0001 Decision 4; SCRATCH-bd-repin §2 and §4 A4).
 abstract interface class BdRunner {
   /// Runs `bd <args>`. Throws [BdTimeoutException] if the call exceeds
   /// [timeout] (the implementation kills the process tree); never throws for a
@@ -55,7 +56,8 @@ abstract interface class BdRunner {
 ///
 /// - Working directory is the [BeadsWorkspace.root] (so `.beads/` is found and
 ///   `bd` writes land in the right store).
-/// - `BD_JSON_ENVELOPE=1` is merged over [Platform.environment] (ADR-0001 D4);
+/// - `BD_JSON_ENVELOPE=1` and `BD_NON_INTERACTIVE=1` are merged over
+///   [Platform.environment] (ADR-0001 D4; SCRATCH-bd-repin §2 and §4 A4);
 ///   the inherited environment carries `GT_ROOT`, `GC_DOLT_*`, `PATH`, etc.
 /// - Default timeout 15s (ADR-0001 D4); on timeout the process tree is killed
 ///   ([ProcessSignal.sigkill]) and [BdTimeoutException] is thrown.
@@ -91,10 +93,12 @@ class ProcessBdRunner implements BdRunner {
   final Map<String, String> _baseEnvironment;
 
   /// The environment every spawn runs under: the base environment with
-  /// `BD_JSON_ENVELOPE=1` forced on. Exposed for tests asserting the contract.
+  /// `BD_JSON_ENVELOPE=1` and `BD_NON_INTERACTIVE=1` forced on. Exposed for
+  /// tests asserting the contract.
   Map<String, String> get environment => {
     ..._baseEnvironment,
     'BD_JSON_ENVELOPE': '1',
+    'BD_NON_INTERACTIVE': '1',
   };
 
   @override
