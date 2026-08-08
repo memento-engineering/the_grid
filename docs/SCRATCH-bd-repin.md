@@ -50,8 +50,9 @@ transcript.
   metadata edits resolve against a re-read **inside** the mutation transaction
   (`SELECT … FOR UPDATE`). Upstream's own hammer: *7 of 200 exit-0 `--set-metadata` writes
   vanished under 8 writers* on the old binary. This is `StationBeadWriter` D-1's exact threat
-  model. **Open question: whether `8ebd53e88` is an ancestor of `a45199a54`** — verify before
-  leaning on it (bead A4/B7).
+  model. **Verified: `8ebd53e88` is an ancestor of `a45199a54`** — `git merge-base --is-ancestor`
+  against the upstream beads history exited 0, so the shipped `HEAD-a45199a546f9` binary
+  contains the server-side metadata RMW fix required by the `StationBeadWriter` D-1 threat model.
 
 **New primitives worth adopting:**
 - **CAS guards:** `bd update --if-assignee` / `--if-status` — atomic, nothing written on
