@@ -6,6 +6,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/driveable_work.dart';
+import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/rework.dart';
@@ -82,6 +83,8 @@ class _WorkListState extends State<WorkList>
   /// LOUD but said ONCE per bead per station lifetime, never once per build (the
   /// same rising-edge discipline as the wedge monitor).
   final Set<String> _heldReported = <String>{};
+
+  final Set<String> _trustRefusedReported = <String>{};
 
   static SessionProjection? _latestRetiredSession(
     String beadId,
@@ -199,6 +202,22 @@ class _WorkListState extends State<WorkList>
       // narrows further, never widens.
       final driveList = seed.substationConfig.driveList;
       if (driveList.isNotEmpty && !driveList.contains(bead.id)) continue;
+
+      final trust = services?.trust;
+      if (trust != null) {
+        final reasons = <String>[];
+        final admitted = applyTrustGuard(
+          candidates: {bead.id},
+          beadsById: _snapshot.graph.beadsById,
+          floor: services!.trustFloor,
+          trustConfigured: true,
+          onUnresolved: reasons.add,
+        );
+        if (!admitted.contains(bead.id)) {
+          _reportTrustRefused(services, bead, reasons.single);
+          continue;
+        }
+      }
 
       final session = _snapshot.sessionsByWorkBead[bead.id];
       final retiredSession = session == null
@@ -407,6 +426,29 @@ class _WorkListState extends State<WorkList>
       });
     } catch (_) {
       // A throwing transport never breaks the mount reconcile — swallow.
+    }
+  }
+
+  void _reportTrustRefused(ServiceBundle services, Bead bead, String reason) {
+    if (!_trustRefusedReported.add(bead.id)) return;
+    final scheme = bead.metadata[OriginTrustKeys.scheme];
+    final actor = bead.metadata[OriginTrustKeys.actor];
+    final origin =
+        scheme is String &&
+            scheme.isNotEmpty &&
+            actor is String &&
+            actor.isNotEmpty
+        ? '$scheme:$actor'
+        : 'malformed';
+    try {
+      services.transport?.flare('work.trustRefused', {
+        'beadId': bead.id,
+        'origin': origin,
+        'floor': services.trustFloor.level.name,
+        'reason': reason,
+      });
+    } catch (_) {
+      // A throwing transport never breaks mount reconciliation.
     }
   }
 }
