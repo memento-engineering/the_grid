@@ -7,7 +7,8 @@ import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart' as engine;
-import 'package:grid_runtime/grid_runtime.dart' show OwnershipRefused;
+import 'package:grid_runtime/grid_runtime.dart'
+    show OwnershipRefused, StationGitService, SubprocessProvider;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -238,6 +239,60 @@ void main() {
       expect(report.isClean, isTrue);
       expect(report.settled, isTrue);
       expect(work.stateSubstation, 'tgstate');
+    });
+  });
+
+  group('dry-run effect posture (ONE dry/live switch, asserted by type)', () {
+    Future<void> git(List<String> args, String dir) async {
+      final result = await Process.run('git', args, workingDirectory: dir);
+      expect(
+        result.exitCode,
+        0,
+        reason: 'git $args: ${result.stdout}${result.stderr}',
+      );
+    }
+
+    test('dryRun: true selects the INERT provider and git service — no '
+        'effect transport is wired', () async {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+
+      final work = await build();
+      addTearDown(work.shutdown);
+
+      // The posture the tree observes: the ambient services carry the
+      // recording no-spawn transport and the inert git service, by TYPE —
+      // not a banner flag.
+      expect(work.wiring.services.provider, isA<DryRunProvider>());
+      expect(work.git, isA<DryStationGitService>());
+    });
+
+    test('dryRun: false selects the REAL subprocess provider and live git '
+        'service', () async {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      // A live assembly registers the root checkout against REAL git; the
+      // assigned head skips the origin/HEAD probe (no remote in the fixture).
+      await git(['init', '--initial-branch=main'], '${tmp.path}/proj');
+
+      final work = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+        substations: [
+          SubstationWorkSpec(
+            name: 'proj',
+            root: '${tmp.path}/proj',
+            head: 'main',
+          ),
+        ],
+        resolver: const _NullResolver(),
+        dryRun: false,
+      );
+      addTearDown(work.shutdown);
+
+      expect(work.wiring.services.provider, isA<SubprocessProvider>());
+      expect(work.wiring.services.provider, isNot(isA<DryRunProvider>()));
+      expect(work.git, isA<StationGitService>());
+      expect(work.git, isNot(isA<DryStationGitService>()));
     });
   });
 
