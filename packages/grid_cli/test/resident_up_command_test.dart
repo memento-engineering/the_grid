@@ -248,7 +248,7 @@ final class _Harness {
             controlProjector = treeProjector;
             events.add('control');
             _throwIf('control');
-            return _Control(events);
+            return _Control(events, failAt: failAt);
           },
       armDevelopmentMode:
           ({
@@ -398,13 +398,17 @@ final class _Grid implements ResidentGridResource {
 }
 
 final class _Control implements ResidentControlResource {
-  _Control(this.events);
+  _Control(this.events, {this.failAt});
   final List<String> events;
+  final String? failAt;
   @override
   String get url => 'http://127.0.0.1:9999';
   @override
   Future<void> dispose() async {
     events.add('control.dispose');
+    if (failAt == 'control.dispose') {
+      throw StateError('boom at control.dispose');
+    }
   }
 }
 
@@ -891,6 +895,26 @@ void main() {
       ]);
       expect(h.stderrText, startsWith('lunar up:'));
     });
+  });
+
+  test('a throwing control dispose is loud and never strands the teardown '
+      'or the lock', () async {
+    // The unwind runs each step in its own guard (teardown's rail posture):
+    // the control socket's dispose blowing up must not skip the tree
+    // teardown, the sweep, the delegate, the projector — or the lock release
+    // at the tail.
+    final h = await _Harness.create(devMode: true, failAt: 'control.dispose');
+    addTearDown(h.dispose);
+    expect(await h.run(), 0);
+    expect(h.events.sublist(h.events.indexOf('render') + 1), <String>[
+      'devMode.dispose',
+      'control.dispose',
+      'grid.teardown',
+      'sweep:earth',
+      'delegate.dispose',
+      'lock.release',
+    ]);
+    expect(h.stderrText, contains('unwind step "control dispose" failed'));
   });
 
   test('run-for shutdown does not enter the signal coordinator', () async {

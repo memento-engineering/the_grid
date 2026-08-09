@@ -401,6 +401,18 @@ class ResidentUpCommand extends Command<int> {
       return 64;
     }
 
+    // One unwind step, loud-but-non-aborting (mirroring teardown's rail
+    // posture): a throwing dispose is reported to stderr and the unwind
+    // CONTINUES — every later step still runs, so the lock release at the
+    // tail is guaranteed regardless of which seat's dispose blew up.
+    Future<void> settle(String step, FutureOr<void> Function() action) async {
+      try {
+        await action();
+      } on Object catch (error) {
+        stderr.writeln('$prefix: unwind step "$step" failed: $error');
+      }
+    }
+
     // The ONE post-mount arming unwind: every shell seat created so far is
     // disposed in reverse creation order — including the seat whose OWN
     // arming step threw (a bound control socket or a registered dev-mode
@@ -410,11 +422,11 @@ class ResidentUpCommand extends Command<int> {
       ResidentControlResource? control,
       ResidentDevModeResource? devMode,
     }) async {
-      await devMode?.dispose();
-      await control?.dispose();
-      await grid.teardown();
-      treeProjector.dispose();
-      await stationLock.release();
+      if (devMode != null) await settle('dev-mode dispose', devMode.dispose);
+      if (control != null) await settle('control dispose', control.dispose);
+      await settle('grid teardown', grid.teardown);
+      await settle('projector dispose', treeProjector.dispose);
+      await settle('lock release', stationLock.release);
       stderr.writeln('$prefix: $error');
       return 1;
     }
@@ -478,12 +490,14 @@ class ResidentUpCommand extends Command<int> {
     // delegate and disposes it last) → release the shell's projector →
     // release lock. The shell's own seats (dev mode, the control socket)
     // close first — they are process concerns that never entered the tree.
+    // Each step is settled independently: a throwing dispose is loud but
+    // never strands the steps beneath it — the lock release always runs last.
     Future<void> unwind() async {
-      await devMode?.dispose();
-      await control.dispose();
-      await grid.teardown();
-      treeProjector.dispose();
-      await stationLock.release();
+      if (devMode case final seat?) await settle('dev-mode dispose', seat.dispose);
+      await settle('control dispose', control.dispose);
+      await settle('grid teardown', grid.teardown);
+      await settle('projector dispose', treeProjector.dispose);
+      await settle('lock release', stationLock.release);
     }
 
     if (config.runFor case final runFor?) {
