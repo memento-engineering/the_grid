@@ -16,7 +16,11 @@ typedef ProviderCreate<T extends Object> = T Function(TreeContext context);
 ///
 /// Never called for an adopted ([Provider.value]) instance — ownership follows
 /// construction (`docs/STYLE.md` rule 2): the tree disposes only what the tree
-/// created.
+/// created. Runs only after the provider's subtree is FULLY unmounted, so a
+/// descendant's teardown read (`context.read` from `State.dispose` — the
+/// substrate-endorsed last get-lookup) observes a live value, and a [Nest]
+/// chain disposes inner-before-outer (reverse creation order — a value built
+/// from an ancestor-provided one goes down before its dependency).
 typedef ProviderDispose<T extends Object> = void Function(T value);
 
 /// A MOUNTED SEED providing an ambient value of type [T] to its subtree.
@@ -40,7 +44,9 @@ typedef ProviderDispose<T extends Object> = void Function(T value);
 ///
 /// **Lifecycle.** A create-provider runs [ProviderCreate] exactly once per
 /// mount, in `initState`; the tree owns the created value and disposes it at
-/// unmount through [ProviderDispose]. A [Provider.value] provider ADOPTS an
+/// unmount through [ProviderDispose] — AFTER the subtree is fully down, so
+/// teardown reads see a live value and a [Nest] chain disposes
+/// inner-before-outer. A [Provider.value] provider ADOPTS an
 /// instance held by another owner and never disposes it (`docs/STYLE.md` rule
 /// 2). The build is pure: it projects the value over the child as an
 /// [InheritedSeed] and does nothing else (`docs/STYLE.md` rule 1).
@@ -184,6 +190,13 @@ final class _ProviderState<T extends Object>
   /// The unmount disposal, captured AT CREATION (ownership follows
   /// construction): a created value pairs with the dispose it was authored
   /// with; an adopted value captures nothing and is never tree-disposed.
+  ///
+  /// NOT run by this state's own `dispose` — `StatefulBranch.unmount` runs
+  /// `State.dispose` BEFORE the subtree comes down, which would hand every
+  /// descendant's teardown read an already-disposed value and invert the
+  /// inner-before-outer order across a [Nest] chain. It is threaded into the
+  /// built [_ProviderInherited] and runs in [_ProviderInheritedBranch.unmount]
+  /// AFTER the subtree is fully unmounted.
   void Function()? _disposeOwned;
 
   @override
@@ -210,19 +223,28 @@ final class _ProviderState<T extends Object>
         'updates in place). Change the type or key to remount instead.',
       );
     }
-    return _ProviderInherited<T>(value: value, child: child);
-  }
-
-  @override
-  void dispose() {
-    _disposeOwned?.call();
+    return _ProviderInherited<T>(
+      value: value,
+      child: child,
+      disposeOwned: _disposeOwned,
+    );
   }
 }
 
 /// The provider's projection over its child: a plain [InheritedSeed] whose
 /// branch additionally announces mount/unmount to the availability registry.
 final class _ProviderInherited<T extends Object> extends InheritedSeed<T> {
-  const _ProviderInherited({required super.value, required super.child});
+  const _ProviderInherited({
+    required super.value,
+    required super.child,
+    required this.disposeOwned,
+  });
+
+  /// The owned value's disposal (null for an adopted `.value` instance),
+  /// stable for the life of the mount — created once in `initState` alongside
+  /// the value it pairs with. Run by the branch at unmount, AFTER the subtree
+  /// is fully down (see [_ProviderInheritedBranch.unmount]).
+  final void Function()? disposeOwned;
 
   @override
   InheritedBranch<T> createBranch() => _ProviderInheritedBranch<T>(this);
@@ -273,7 +295,15 @@ final class _ProviderInheritedBranch<T extends Object>
     // pending through its own watch miss.
     _registry?.providerUnmounted(T, List.of(_live));
     _live.clear();
+    final disposeOwned = (seed as _ProviderInherited<T>).disposeOwned;
     super.unmount();
+    // Dispose an OWNED value only now, with the subtree fully down: a
+    // descendant's teardown read (`context.read` from `State.dispose`) saw a
+    // live value, and across a Nest chain this branch's subtree contained
+    // every inner provider — disposal therefore runs inner-before-outer,
+    // reverse creation order (an inner value built from an outer one goes
+    // down before its dependency).
+    disposeOwned?.call();
   }
 }
 

@@ -206,6 +206,28 @@ final class _ReadProbeState extends State<_ReadProbe> {
   }
 }
 
+/// Records a last effect-path read during its own teardown — the
+/// substrate-endorsed get-lookup from `State.dispose` ("a last read during
+/// teardown", stateful.dart's dispose guard), which must observe a value the
+/// tree has NOT yet disposed.
+final class _TeardownRead extends StatefulSeed {
+  const _TeardownRead(this.events);
+  final List<String> events;
+
+  @override
+  State<_TeardownRead> createState() => _TeardownReadState();
+}
+
+final class _TeardownReadState extends State<_TeardownRead> {
+  @override
+  Seed build(TreeContext context) => const _Leaf();
+
+  @override
+  void dispose() {
+    seed.events.add('teardown read ${context.read<_Value>()?.name}');
+  }
+}
+
 /// Re-provides a mutable `.value` pair on every [update] — the reconcile-in-
 /// place surface for the notification tests.
 final class _ValueHost extends StatefulSeed {
@@ -317,6 +339,49 @@ void main() {
 
       owner.dispose();
       expect(events, ['create', 'dispose owned']);
+    });
+
+    test('owned values dispose AFTER the subtree, inner before outer', () {
+      final events = <String>[];
+      final owner = TreeOwner();
+
+      owner.mountRoot(
+        Nest(
+          children: [
+            Provider<_Value>(
+              create: (_) {
+                events.add('create outer');
+                return const _Value('outer');
+              },
+              dispose: (value) => events.add('dispose ${value.name}'),
+            ),
+            Provider<_Other>(
+              // Constructed FROM the outer value — the dependency that makes
+              // creation-order disposal unsound.
+              create: (context) {
+                events.add('create inner');
+                return _Other('${context.read<_Value>()!.name}-derived');
+              },
+              dispose: (value) => events.add('dispose ${value.name}'),
+            ),
+          ],
+          child: _TeardownRead(events),
+        ),
+      );
+      expect(events, ['create outer', 'create inner']);
+
+      owner.dispose();
+      // Teardown is subtree-first: the descendant's State.dispose reads a
+      // still-live owned value, then the chain disposes inner-before-outer —
+      // REVERSE creation order, so the derived inner value goes down before
+      // the outer value it was built from.
+      expect(events, [
+        'create outer',
+        'create inner',
+        'teardown read outer',
+        'dispose outer-derived',
+        'dispose outer',
+      ]);
     });
 
     test('keyed identity: same key updates in place, new key remounts', () {
