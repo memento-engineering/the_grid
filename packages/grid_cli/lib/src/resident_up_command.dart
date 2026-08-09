@@ -292,13 +292,22 @@ class ResidentUpCommand extends Command<int> {
     final armed = delegate.armedRoster;
 
     // The shell OBSERVES checkout freshness (a process-level git probe); the
-    // POSTURE over the observations is the delegate's.
-    final freshness = await Future.wait([
-      for (final seat in armed)
-        _inspectPrimaryCheckout(
-          seat,
-        ).then((value) => (seat: seat, value: value)),
-    ]);
+    // POSTURE over the observations is the delegate's. A THROWING inspector
+    // is an unexpected error, not a styled refusal: dispose the delegate the
+    // probes run under, then let the error propagate in its own shape.
+    final List<({SubstationWorkSpec seat, PrimaryCheckoutFreshness value})>
+    freshness;
+    try {
+      freshness = await Future.wait([
+        for (final seat in armed)
+          _inspectPrimaryCheckout(
+            seat,
+          ).then((value) => (seat: seat, value: value)),
+      ]);
+    } on Object {
+      delegate.dispose();
+      rethrow;
+    }
     final freshnessText = freshness
         .map((entry) => '${entry.seat.name}: ${entry.value.verdict}')
         .join(', ');
@@ -345,7 +354,18 @@ class ResidentUpCommand extends Command<int> {
       return 64;
     }
 
-    final vmServiceUri = await _readVmServiceUri();
+    // Between the lock and the mount: a throwing VM-service probe must not
+    // strand the un-disposed delegate NOR the held lock file. Unexpected
+    // error, not a styled refusal — unwind (lock released LAST, the unwind's
+    // standing tail) and rethrow in its own shape.
+    final String? vmServiceUri;
+    try {
+      vmServiceUri = await _readVmServiceUri();
+    } on Object {
+      delegate.dispose();
+      await stationLock.release();
+      rethrow;
+    }
 
     // The LIVE delegate: a hot restart retires the running one for a fresh
     // factory build, so every per-request read below goes through this
