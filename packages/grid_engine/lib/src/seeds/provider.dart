@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:meta/meta.dart';
 
 /// Creates the value a [Provider] OWNS, from ambient tree state.
 ///
@@ -51,7 +54,8 @@ typedef ProviderDispose<T extends Object> = void Function(T value);
 /// **Availability.** Descendants bind with [ProviderTreeContext.watch] —
 /// nullable always; absence is a designed posture (`docs/STYLE.md` rules 3-4).
 /// Mount and unmount are announced to the enclosing [ProviderScope] so
-/// availability notification is bidirectional.
+/// availability notification is bidirectional; delivery is deferred past the
+/// announcing flush pass (see [ProviderScope] for the scheduling contract).
 final class Provider<T extends Object> extends SingleChildStatefulSeed {
   /// A provider whose value the TREE creates and owns: [create] runs once per
   /// mount and [dispose] (if any) runs at unmount with the created value.
@@ -94,12 +98,31 @@ final class Provider<T extends Object> extends SingleChildStatefulSeed {
 /// [ProviderTreeContext.watch] resolves through the normal inherited ancestor
 /// walk (nearest provider shadows); on a MISS it registers the calling branch
 /// here, keyed by the missed type. A [Provider] announces its mount and
-/// unmount to this scope: on mount, pending dependents of the type are
-/// notified (`dependencyChanged` through the owner's rebuild scheduling —
-/// never re-entering a build) and rebuild — the ones that now resolve the
-/// value migrate their registration onto the provider's `InheritedBranch`; on
-/// unmount, the provider's live dependents are re-registered as pending and
-/// notified, rebuilding into the null posture.
+/// unmount to this scope, and the scope notifies the affected dependents
+/// (`dependencyChanged` through the owner's rebuild scheduling — never
+/// re-entering a build).
+///
+/// **Scheduling.** A provider mounts and unmounts MID-FLUSH (inside some
+/// ancestor's rebuild), and the substrate forbids re-dirtying a branch that
+/// was already built in the in-progress flush pass
+/// (`TreeOwner.scheduleRebuildFor`). Notification is therefore DEFERRED: the
+/// registry queues the affected dependents and delivers `dependencyChanged`
+/// from a microtask, after the current pass has drained. The marked branches
+/// ride the owner's next flush (the kernel schedules one off the
+/// `onNeedsFlush` edge; tests pump the microtask queue and flush again).
+///
+/// **What each direction observably does on THIS substrate.** genesis_tree
+/// has no reparenting, so a live dependent of a provider is always a
+/// DESCENDANT of it and unmounts with it. Consequently: the mount-side drain
+/// of pending dependents is the load-bearing direction (a parked watcher
+/// rebuilds and re-resolves — still null when the new provider is not its
+/// ancestor, the value when a remount placed it under one); the unmount-side
+/// ping is contract-mandated bidirectional notification whose recipients are,
+/// today, always torn down with the provider before delivery — a surviving
+/// dependent (should reparenting ever exist) would rebuild, observe the null
+/// posture, and re-register pending through its own watch miss. Value
+/// transitions across a provider boundary otherwise ride unmount + remount of
+/// the dependent subtree by ordinary substrate reconcile rules.
 final class ProviderScope extends SingleChildStatefulSeed {
   /// Creates the registry over [child] (null when placed in a [Nest]).
   const ProviderScope({super.child, super.key});
@@ -117,8 +140,11 @@ extension ProviderTreeContext on TreeContext {
   ///
   /// Nullable ALWAYS, and deliberately without a throwing variant:
   /// unavailability is a designed posture (`docs/STYLE.md` rule 3). The
-  /// notification is bidirectional — a provider mounting rebuilds this branch
-  /// from null to value; a provider unmounting rebuilds it from value to null.
+  /// notification is bidirectional — mount and unmount announcements both
+  /// reach the registered dependents — and DEFERRED: delivery is a microtask
+  /// after the flush pass the provider (un)mounted in, so the rebuild lands
+  /// in the owner's next flush (see [ProviderScope] for scheduling and for
+  /// what each direction observably does on this substrate).
   ///
   /// Use [read] for a non-binding snapshot lookup from an effect path.
   T? watch<T extends Object>() {
@@ -129,11 +155,11 @@ extension ProviderTreeContext on TreeContext {
     // substrate's own addDependent path (see _RegistryBranch): the registry
     // branch never notifies (its value is scope-lifetime stable), and the
     // dependency edge auto-releases when this branch unmounts.
-    final registry = getInheritedSeedOfExactType<_AvailabilityRegistry>();
+    final registry = getInheritedSeedOfExactType<AvailabilityRegistry>();
     if (registry != null) {
       registry._registering = T;
       try {
-        dependOnInheritedSeedOfExactType<_AvailabilityRegistry>();
+        dependOnInheritedSeedOfExactType<AvailabilityRegistry>();
       } finally {
         registry._registering = null;
       }
@@ -208,7 +234,7 @@ final class _ProviderInheritedBranch<T extends Object>
 
   /// The registry captured at mount — the unmount announcement must not
   /// re-walk a tree that is already coming down.
-  _AvailabilityRegistry? _registry;
+  AvailabilityRegistry? _registry;
 
   /// Live dependents, mirrored through the addDependent/removeDependent
   /// chokepoints (the base class set is a test-only surface).
@@ -233,17 +259,18 @@ final class _ProviderInheritedBranch<T extends Object>
     // build); only then are the scope's parked dependents notified.
     super.mount(parent, slot);
     final registry = _registry =
-        getInheritedSeedOfExactType<_AvailabilityRegistry>();
+        getInheritedSeedOfExactType<AvailabilityRegistry>();
     registry?.providerMounted(T);
   }
 
   @override
   void unmount() {
-    // Announce BEFORE the subtree comes down: the live dependents re-register
-    // as pending while their branches are still mounted, and the notification
-    // rides the owner's scheduling (a dependent that unmounts with this
-    // subtree is drained as a no-op; one that survives rebuilds and observes
-    // the null posture).
+    // Announce BEFORE the subtree comes down. Delivery is deferred (see
+    // AvailabilityRegistry): by the time the notification microtask runs, a
+    // dependent that unmounted with this subtree — on this no-reparent
+    // substrate, all of them — is skipped by its own `mounted` guard; a
+    // surviving one would rebuild, observe the null posture, and re-register
+    // pending through its own watch miss.
     _registry?.providerUnmounted(T, List.of(_live));
     _live.clear();
     super.unmount();
@@ -257,18 +284,18 @@ final class _ProviderScopeState extends SingleChildState<ProviderScope> {
   /// the state so it survives reconcile; shared with providers and watchers
   /// as a scope-lifetime-stable inherited value (identity-equal across
   /// rebuilds, so InheritedSeed.updateShouldNotify never fires for it).
-  final _AvailabilityRegistry _registry = _AvailabilityRegistry();
+  final AvailabilityRegistry _registry = AvailabilityRegistry();
 
   @override
   Seed buildWithChild(TreeContext context, Seed child) =>
       _RegistrySeed(value: _registry, child: child);
 }
 
-final class _RegistrySeed extends InheritedSeed<_AvailabilityRegistry> {
+final class _RegistrySeed extends InheritedSeed<AvailabilityRegistry> {
   const _RegistrySeed({required super.value, required super.child});
 
   @override
-  InheritedBranch<_AvailabilityRegistry> createBranch() =>
+  InheritedBranch<AvailabilityRegistry> createBranch() =>
       _RegistryBranch(this);
 }
 
@@ -277,7 +304,7 @@ final class _RegistrySeed extends InheritedSeed<_AvailabilityRegistry> {
 /// branch (see [ProviderTreeContext.watch]); the interception below files it
 /// under the missed type, and the substrate's unmount bookkeeping calls
 /// [removeDependent], auto-releasing the parked registration.
-final class _RegistryBranch extends InheritedBranch<_AvailabilityRegistry> {
+final class _RegistryBranch extends InheritedBranch<AvailabilityRegistry> {
   _RegistryBranch(_RegistrySeed super.seed);
 
   @override
@@ -295,8 +322,24 @@ final class _RegistryBranch extends InheritedBranch<_AvailabilityRegistry> {
 }
 
 /// The pending-dependents-by-type map ([ProviderScope]'s only possession).
-final class _AvailabilityRegistry {
+///
+/// Public ONLY as a test seam (`@visibleForTesting`): the unmount-side
+/// notification has no observable end-to-end effect on this no-reparent
+/// substrate (every live dependent of an unmounting provider is a descendant
+/// and unmounts with it), so its contract behavior is pinned by direct unit
+/// tests against this class. Production code composes [ProviderScope] and
+/// never names the registry.
+@visibleForTesting
+final class AvailabilityRegistry {
   final Map<Type, Set<Branch>> _pending = {};
+
+  /// Branches queued for a deferred [Branch.dependencyChanged] — provider
+  /// (un)mount announcements land here mid-flush and are delivered from a
+  /// microtask, after the in-progress pass has drained. Delivering
+  /// synchronously would re-dirty a branch the current flush pass already
+  /// built, which the substrate forbids (`TreeOwner.scheduleRebuildFor`).
+  final Set<Branch> _notifying = {};
+  bool _deliveryScheduled = false;
 
   /// Set by [ProviderTreeContext.watch] around its registry-dependency call so
   /// [_RegistryBranch.addDependent] knows which missed type to file the
@@ -314,26 +357,49 @@ final class _AvailabilityRegistry {
     }
   }
 
+  /// Queues [dependents] for notification and schedules one delivery
+  /// microtask. Delivery guards on [Branch.mounted]: a branch that unmounted
+  /// between announcement and delivery is skipped, not retained.
+  void _notifyDeferred(Iterable<Branch> dependents) {
+    _notifying.addAll(dependents);
+    if (_deliveryScheduled || _notifying.isEmpty) return;
+    _deliveryScheduled = true;
+    scheduleMicrotask(() {
+      _deliveryScheduled = false;
+      final batch = List.of(_notifying);
+      _notifying.clear();
+      for (final dependent in batch) {
+        if (dependent.mounted) dependent.dependencyChanged();
+      }
+    });
+  }
+
   /// A [Provider] of [type] mounted: drain its pending dependents and notify
   /// each through [Branch.dependencyChanged] — mark-needs-rebuild through the
-  /// owner, never a re-entered build. A rebuilt dependent that now resolves
-  /// the value registers live with the provider's branch (the migration); one
+  /// owner, DEFERRED past the flush pass the mount happened in. A notified
+  /// dependent rebuilds in the owner's next flush; one that now resolves the
+  /// value registers live with the provider's branch (the migration), one
   /// that still misses re-registers pending on its own rebuild.
   void providerMounted(Type type) {
     final waiting = _pending.remove(type);
     if (waiting == null) return;
-    for (final dependent in waiting) {
-      if (dependent.mounted) dependent.dependencyChanged();
-    }
+    _notifyDeferred(waiting);
   }
 
-  /// A [Provider] of [type] unmounted: its live [dependents] return to the
-  /// pending map and are notified — they rebuild and observe the null posture.
+  /// A [Provider] of [type] unmounted: its live [dependents] are notified
+  /// (deferred, like the mount side). They are deliberately NOT re-parked
+  /// here: a dependent that unmounts with the provider's subtree — on this
+  /// no-reparent substrate, all of them — must not be retained by the
+  /// registry, and a surviving one re-registers pending through its own
+  /// rebuild's watch miss, which rides the [_RegistryBranch] dependency path
+  /// that IS released on unmount.
   void providerUnmounted(Type type, Iterable<Branch> dependents) {
-    for (final dependent in dependents) {
-      if (!dependent.mounted) continue;
-      _addPending(type, dependent);
-      dependent.dependencyChanged();
-    }
+    _notifyDeferred(dependents);
   }
+
+  /// The pending dependents parked under [type] — a read-only test probe
+  /// (leak regressions assert no unmounted branch is ever retained here).
+  @visibleForTesting
+  Set<Branch> debugPendingOf(Type type) =>
+      Set.unmodifiable(_pending[type] ?? const <Branch>{});
 }

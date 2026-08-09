@@ -19,6 +19,11 @@ final class _Other {
   final String name;
 }
 
+/// Drains the event queue (and with it the microtask queue): the availability
+/// registry delivers its notifications from a microtask scheduled during the
+/// announcing flush, so tests pump, then flush again to observe the rebuild.
+Future<void> _pump() => Future<void>.delayed(Duration.zero);
+
 final class _Watch extends StatelessSeed {
   const _Watch(this.values);
   final List<String?> values;
@@ -82,6 +87,49 @@ final class _HostState extends State<_Host> {
 
 final class _Slots extends MultiChildSeed {
   _Slots(List<Seed> children) : super(children: children);
+}
+
+/// A watcher whose OWN branch can be dirtied directly ([poke]) — the shape
+/// that lands the watch-calling branch itself in the owner's drained set, as
+/// opposed to being force-rebuilt by a parent's update cascade.
+final class _PokableWatch extends StatefulSeed {
+  const _PokableWatch({required this.onCreate, required this.values});
+
+  final void Function(_PokableWatchState state) onCreate;
+  final List<String?> values;
+
+  @override
+  State<_PokableWatch> createState() {
+    final state = _PokableWatchState();
+    onCreate(state);
+    return state;
+  }
+}
+
+final class _PokableWatchState extends State<_PokableWatch> {
+  void poke() => setState(() {});
+
+  @override
+  Seed build(TreeContext context) {
+    seed.values.add(context.watch<_Value>()?.name);
+    return const _Leaf();
+  }
+}
+
+/// A bare mounted-looking [Branch] fake for driving [AvailabilityRegistry]
+/// directly: records [dependencyChanged] instead of scheduling, and reports
+/// whatever mountedness the test sets (a Fake, not a mock — house rules).
+final class _RecordingDependent extends Branch {
+  _RecordingDependent() : super(const _Leaf());
+
+  bool isMounted = true;
+  int pings = 0;
+
+  @override
+  bool get mounted => isMounted;
+
+  @override
+  void dependencyChanged() => pings++;
 }
 
 final class _DependencyProbe extends StatefulSeed {
@@ -378,7 +426,7 @@ void main() {
     });
 
     test('a watch miss parks a pending registration the scope notifies on '
-        'every later provider mount', () {
+        'every later provider mount', () async {
       final values = <String?>[];
       late _HostState slot;
       final owner = TreeOwner();
@@ -400,9 +448,12 @@ void main() {
 
       // A Provider<_Value> mounts in the SIBLING slot. The scope's pending
       // registration is the ONLY edge that can reach the parked watcher —
-      // nothing in its own ancestry changed. It rebuilds; resolution stays
-      // ancestral (nearest provider), so the sibling value is out of reach and
-      // the posture remains null.
+      // nothing in its own ancestry changed. Notification is DEFERRED past
+      // the announcing flush (the mount runs mid-flush; re-dirtying a branch
+      // that pass already built would trip the substrate invariant), so the
+      // rebuild lands in the NEXT flush after the microtask delivers. It
+      // rebuilds; resolution stays ancestral (nearest provider), so the
+      // sibling value is out of reach and the posture remains null.
       slot.swap(
         () => Provider<_Value>.value(
           const _Value('sibling'),
@@ -410,11 +461,16 @@ void main() {
         ),
       );
       owner.flush();
+      expect(values, [null], reason: 'delivery is deferred past the flush');
+      await _pump();
+      owner.flush();
       expect(values, [null, null]);
 
       // Unmount the sibling provider: the watcher holds no live edge to it,
       // so nothing pings the watcher.
       slot.swap(() => const _Leaf());
+      owner.flush();
+      await _pump();
       owner.flush();
       expect(values, [null, null]);
 
@@ -425,11 +481,68 @@ void main() {
             Provider<_Value>.value(const _Value('again'), child: const _Leaf()),
       );
       owner.flush();
+      await _pump();
+      owner.flush();
       expect(values, [null, null, null]);
     });
 
-    test('availability is bidirectional: provider mount moves the dependent '
-        'null-to-value and unmount moves it value-to-null', () {
+    test('a provider mount later in the SAME flush that already rebuilt a '
+        'parked watcher defers the ping instead of re-dirtying it', () async {
+      // Regression for the substrate flush invariant
+      // (TreeOwner.scheduleRebuildFor: a branch must not be re-dirtied after
+      // it was built in the in-progress pass). The watcher's own setState and
+      // the provider-mounting swap land in ONE flush; depth/branchId order
+      // drains the watcher first, so a synchronous pending-notify from the
+      // provider's mount would re-dirty an already-built branch and crash
+      // every asserts-enabled run.
+      final values = <String?>[];
+      late _PokableWatchState watcher;
+      late _HostState slot;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Slots([
+            _PokableWatch(onCreate: (state) => watcher = state, values: values),
+            _Host(
+              onCreate: (state) => slot = state,
+              describe: () => const _Leaf(),
+            ),
+          ]),
+        ),
+      );
+      expect(values, [null]);
+
+      watcher.poke();
+      slot.swap(
+        () => Provider<_Value>.value(
+          const _Value('same-flush'),
+          child: const _Leaf(),
+        ),
+      );
+      owner.flush(); // Must not throw: the ping is deferred, not synchronous.
+      expect(values, [null, null]);
+
+      // The deferred notification delivers after the pass; the watcher
+      // rebuilds in the next flush and, resolution being ancestral, the
+      // sibling value stays out of reach.
+      await _pump();
+      owner.flush();
+      expect(values, [null, null, null]);
+    });
+
+    test('remount across a provider boundary moves the watcher null-to-value '
+        'and back — the unmount/remount path, not registry notification', () async {
+      // Honest scope note: swapping the child between `watcher` and
+      // `Provider(child: watcher)` changes the runtimeType at the slot, so
+      // the substrate unmounts the old _Watch branch and mounts a FRESH one
+      // each time (canUpdate false). Every transition below is an initial
+      // build of a new branch; on this no-reparent substrate a watcher can
+      // never keep its branch across its provider's (un)mount, so this IS the
+      // path a null-to-value or value-to-null transition actually rides. The
+      // registry's genuine notification mechanism is pinned by the pending-
+      // registration tests above and the direct-seam tests below.
       final values = <String?>[];
       late _HostState host;
       final owner = TreeOwner();
@@ -455,9 +568,57 @@ void main() {
       host.swap(() => watcher);
       owner.flush();
       expect(values, [null, 'armed', null]);
+
+      // No stray deferred pings land afterwards: the unmount announcement's
+      // recipients went down with the provider subtree and are skipped by the
+      // delivery's mounted guard.
+      await _pump();
+      owner.flush();
+      expect(values, [null, 'armed', null]);
     });
 
-    test('read is the snapshot verb: no live edge, no pending registration', () {
+    test('the registry never retains a watcher that unmounted with its '
+        'provider subtree', () async {
+      // Leak regression: the old unmount announcement re-parked live
+      // dependents into the pending map directly; a dependent that then
+      // unmounted with the subtree released its PROVIDER edge, not a registry
+      // edge, so the dead branch (and everything its State captured) stayed
+      // in the scope-lifetime pending map forever.
+      final values = <String?>[];
+      late _HostState host;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Host(
+            onCreate: (state) => host = state,
+            describe: () => Provider<_Value>.value(
+              const _Value('held'),
+              child: _Watch(values),
+            ),
+          ),
+        ),
+      );
+      expect(values, ['held']);
+      final registry = host.context.read<AvailabilityRegistry>()!;
+      expect(registry.debugPendingOf(_Value), isEmpty);
+
+      // The watcher holds a LIVE edge on the provider branch and unmounts
+      // with it when the subtree swaps out.
+      host.swap(() => const _Leaf());
+      owner.flush();
+      await _pump();
+      owner.flush();
+      expect(
+        registry.debugPendingOf(_Value),
+        isEmpty,
+        reason: 'a dead dependent must not be parked on its way down',
+      );
+    });
+
+    test('read is the snapshot verb: no live edge, no pending '
+        'registration', () async {
       final builds = <int>[];
       late _ReadProbeState reader;
       late _HostState slot;
@@ -485,6 +646,12 @@ void main() {
         () =>
             Provider<_Value>.value(const _Value('late'), child: const _Leaf()),
       );
+      owner.flush();
+      expect(builds, [1]);
+
+      // Nor does the deferred delivery window reach it: read<T> queued
+      // nothing, so pumping the microtask and flushing again is still silent.
+      await _pump();
       owner.flush();
       expect(builds, [1]);
     });
@@ -532,6 +699,54 @@ void main() {
         ),
       );
       expect(values, ['first', 'second']);
+    });
+  });
+
+  group('availability registry (direct seam)', () {
+    // The unmount-side announcement has no observable end-to-end effect on
+    // this no-reparent substrate (a live dependent is always a descendant of
+    // its provider and unmounts with it before delivery), so its contract
+    // behavior is pinned HERE, against the registry itself, with a Fake
+    // dependent.
+    test('providerUnmounted pings surviving dependents — deferred, guarded '
+        'on mounted, and never re-parked', () async {
+      final registry = AvailabilityRegistry();
+      final survivor = _RecordingDependent();
+      final doomed = _RecordingDependent();
+
+      registry.providerUnmounted(_Value, [survivor, doomed]);
+      // Deferred: nothing is delivered inside the announcing pass.
+      expect(survivor.pings, 0);
+      expect(doomed.pings, 0);
+
+      // The doomed dependent unmounts with the provider subtree before the
+      // microtask runs — exactly what happens to every real dependent today.
+      doomed.isMounted = false;
+
+      await _pump();
+      expect(survivor.pings, 1, reason: 'a survivor is notified');
+      expect(doomed.pings, 0, reason: 'delivery guards on mounted');
+
+      // Leak fix pinned at the unit level: the announcement re-parks NOTHING.
+      // A genuine survivor re-registers pending through its own rebuild's
+      // watch miss, which rides the registry-branch dependency path that IS
+      // released at unmount.
+      expect(registry.debugPendingOf(_Value), isEmpty);
+    });
+
+    test('a second announcement in the same pass rides one delivery '
+        'microtask', () async {
+      final registry = AvailabilityRegistry();
+      final dependent = _RecordingDependent();
+
+      registry.providerUnmounted(_Value, [dependent]);
+      registry.providerUnmounted(_Other, [dependent]);
+      expect(dependent.pings, 0);
+
+      await _pump();
+      // The queue is a set and both announcements landed in one batch: the
+      // dependent rebuilds once, not once per announcement.
+      expect(dependent.pings, 1);
     });
   });
 }
