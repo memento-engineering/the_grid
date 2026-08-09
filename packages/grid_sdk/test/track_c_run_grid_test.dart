@@ -138,6 +138,7 @@ class RecordingDelegate extends GridDelegate {
     this.assetsBuilder,
     this.buildOverride,
     this.onDidLaunch,
+    this.onBoot,
     this.onInitGrid,
     this.onReadyHook,
     this.onTeardownHook,
@@ -148,6 +149,7 @@ class RecordingDelegate extends GridDelegate {
   final List<Seed> Function()? assetsBuilder;
   final Seed Function(TreeContext, GridConfiguration)? buildOverride;
   final void Function()? onDidLaunch;
+  final Future<void> Function(GridConfiguration)? onBoot;
   final Future<void> Function()? onInitGrid;
   final void Function()? onReadyHook;
   final void Function()? onTeardownHook;
@@ -180,6 +182,12 @@ class RecordingDelegate extends GridDelegate {
   void didLaunch() {
     events.add('didLaunch');
     onDidLaunch?.call();
+  }
+
+  @override
+  Future<void> boot(GridConfiguration configuration) async {
+    events.add('boot');
+    if (onBoot != null) await onBoot!(configuration);
   }
 
   @override
@@ -216,7 +224,7 @@ Future<void> pump() => Future<void>.delayed(Duration.zero);
 void main() {
   group('the observable + provision + master build', () {
     test('runGrid mounts configuration; build sees the config; the config is '
-        'ambient below (the delegate is NOT — D-H)', () {
+        'ambient below (the delegate is NOT — D-H)', () async {
       final probed = <GridConfiguration>[];
       final delegate = RecordingDelegate(
         rootPath: '/home/space',
@@ -224,7 +232,7 @@ void main() {
         initial: const GridConfiguration(settings: {'v': 1}),
       );
 
-      final handle = runGrid(delegate);
+      final handle = await runGrid(delegate);
       addTearDown(handle.teardown);
 
       // The master build ran with the initial configuration.
@@ -239,7 +247,7 @@ void main() {
     });
 
     test('the default build returns the §2 shape (RawAssetGrid → Station → '
-        'Substations → Substation)', () {
+        'Substations → Substation)', () async {
       final seen =
           <({GridRoot? grid, StationScope? station, SubstationScope? sub})>[];
       final delegate = RecordingDelegate(
@@ -258,7 +266,7 @@ void main() {
         ],
       );
 
-      final handle = runGrid(delegate);
+      final handle = await runGrid(delegate);
       addTearDown(handle.teardown);
 
       // The default build produced a real §2 tree: the probe sees the whole
@@ -275,10 +283,10 @@ void main() {
     });
 
     test('a bare delegate (no root, no build override) refuses LOUD — there is '
-        'no default root', () {
+        'no default root', () async {
       // The default build calls `root`, which throws (v3 §0: no default root).
-      expect(
-        () => runGrid(_BareDelegate()),
+      await expectLater(
+        runGrid(_BareDelegate()),
         throwsA(
           isA<StateError>().having(
             (e) => e.message,
@@ -292,21 +300,27 @@ void main() {
 
   group('the lifecycle rails', () {
     test(
-      'order: didLaunch (pre-tree) → build (mount) → initGrid → onReady',
+      'order: didLaunch → boot → build (mount) → initGrid → onReady',
       () async {
         final delegate = RecordingDelegate();
-        final handle = runGrid(delegate);
+        final handle = await runGrid(delegate);
         addTearDown(handle.teardown);
 
         // Synchronously after runGrid: pre-tree rail, then mount, then the async
         // kickoff STARTED (initGrid ran up to its await) — but onReady has not
         // fired (it is unawaited, scheduled).
-        expect(delegate.events, ['didLaunch', 'build', 'initGrid']);
+        expect(delegate.events, ['didLaunch', 'boot', 'build', 'initGrid']);
 
         await pump();
         // onReady fires once the (default, immediately-completing) initGrid
         // resolves.
-        expect(delegate.events, ['didLaunch', 'build', 'initGrid', 'onReady']);
+        expect(delegate.events, [
+          'didLaunch',
+          'boot',
+          'build',
+          'initGrid',
+          'onReady',
+        ]);
       },
     );
 
@@ -314,11 +328,11 @@ void main() {
         'waits for it', () async {
       final gate = Completer<void>();
       final delegate = RecordingDelegate(onInitGrid: () => gate.future);
-      final handle = runGrid(delegate);
+      final handle = await runGrid(delegate);
       addTearDown(handle.teardown);
 
       // runGrid returned while initGrid is still suspended on `gate`.
-      expect(delegate.events, ['didLaunch', 'build', 'initGrid']);
+      expect(delegate.events, ['didLaunch', 'boot', 'build', 'initGrid']);
       await pump();
       expect(delegate.events, isNot(contains('onReady')));
 
@@ -328,13 +342,13 @@ void main() {
     });
 
     test('didLaunch failure ABORTS the launch: throws GridHookError, no tree '
-        'mounts', () {
+        'mounts', () async {
       final delegate = RecordingDelegate(
         onDidLaunch: () => throw StateError('boom'),
       );
 
-      expect(
-        () => runGrid(delegate),
+      await expectLater(
+        runGrid(delegate),
         throwsA(
           isA<GridHookError>()
               .having((e) => e.hook, 'hook', 'didLaunch')
@@ -346,6 +360,103 @@ void main() {
       expect(delegate.events, ['didLaunch']);
     });
 
+    test(
+      'boot receives the initial configuration and gates first mount exactly '
+      'once',
+      () async {
+        final gate = Completer<void>();
+        GridConfiguration? received;
+        final initial = const GridConfiguration(settings: {'phase': 'boot'});
+        final delegate = RecordingDelegate(
+          initial: initial,
+          onBoot: (configuration) {
+            received = configuration;
+            return gate.future;
+          },
+        );
+
+        final launch = runGrid(delegate);
+        await pump();
+        expect(received, initial);
+        expect(delegate.events, ['didLaunch', 'boot']);
+        expect(delegate.events, isNot(contains('build')));
+
+        gate.complete();
+        final handle = await launch;
+        addTearDown(handle.teardown);
+        expect(delegate.events.where((event) => event == 'boot'), hasLength(1));
+        expect(delegate.events, containsAllInOrder(['boot', 'build']));
+      },
+    );
+
+    test('boot failure is attributed, mounts nothing, and disposes the '
+        'delegate', () async {
+      final delegate = RecordingDelegate(
+        onBoot: (_) async => throw StateError('assembly failed'),
+      );
+
+      await expectLater(
+        runGrid(delegate),
+        throwsA(
+          isA<GridHookError>()
+              .having((error) => error.hook, 'hook', 'boot')
+              .having(
+                (error) => error.delegateType,
+                'delegateType',
+                RecordingDelegate,
+              )
+              .having((error) => error.cause, 'cause', isA<StateError>()),
+        ),
+      );
+      expect(delegate.events, ['didLaunch', 'boot']);
+      expect(delegate.mounted, isFalse);
+    });
+
+    test(
+      'hot restart boots a fresh delegate before swap and preserves the live '
+      'delegate when fresh boot fails',
+      () async {
+        final first = RecordingDelegate();
+        final fresh = <RecordingDelegate>[];
+        var refuse = true;
+        RecordingDelegate factory() {
+          final next = RecordingDelegate(
+            onBoot: (_) async {
+              if (refuse) throw StateError('fresh assembly failed');
+            },
+          );
+          fresh.add(next);
+          return next;
+        }
+
+        final handle = await runGrid(first, delegateFactory: factory);
+        addTearDown(handle.teardown);
+        await expectLater(
+          handle.hotRestart(),
+          throwsA(
+            isA<GridHookError>().having((error) => error.hook, 'hook', 'boot'),
+          ),
+        );
+        expect(first.mounted, isTrue);
+        expect(fresh.single.events, ['boot']);
+        expect(fresh.single.mounted, isFalse);
+
+        refuse = false;
+        final report = await handle.hotRestart();
+        expect(
+          report.generation,
+          1,
+          reason: 'a failed boot does not advance it',
+        );
+        expect(first.mounted, isFalse);
+        expect(fresh.last.events, containsAllInOrder(['boot', 'build']));
+        expect(
+          fresh.last.events.where((event) => event == 'boot'),
+          hasLength(1),
+        );
+      },
+    );
+
     test('initGrid failure: captured/attributed/loud via onError; onReady is '
         'NOT called; the grid stands', () async {
       final refusals = <GridHookError>[];
@@ -353,7 +464,7 @@ void main() {
         onInitGrid: () => throw StateError('init blew up'),
       );
 
-      final handle = runGrid(delegate, onError: refusals.add);
+      final handle = await runGrid(delegate, onError: refusals.add);
       addTearDown(handle.teardown);
       await pump();
 
@@ -370,7 +481,7 @@ void main() {
         onReadyHook: () => throw StateError('ready blew up'),
       );
 
-      final handle = runGrid(delegate, onError: refusals.add);
+      final handle = await runGrid(delegate, onError: refusals.add);
       addTearDown(handle.teardown);
       await pump();
 
@@ -386,7 +497,7 @@ void main() {
           onInitGrid: () => throw StateError('init blew up'),
         );
         // No onError → the default rethrows into the current zone.
-        final handle = runGrid(delegate);
+        final handle = await runGrid(delegate);
         addTearDown(handle.teardown);
         await pump();
       }, (error, stack) => zoneErrors.add(error));
@@ -403,7 +514,7 @@ void main() {
       final delegate = RecordingDelegate(
         assetsBuilder: () => [DisposeProbe(() => disposed++)],
       );
-      final handle = runGrid(delegate);
+      final handle = await runGrid(delegate);
       await pump();
 
       await handle.teardown();
@@ -427,7 +538,7 @@ void main() {
         assetsBuilder: () => [DisposeProbe(() => disposed++)],
         onTeardownHook: () => throw StateError('teardown blew up'),
       );
-      final handle = runGrid(delegate, onError: refusals.add);
+      final handle = await runGrid(delegate, onError: refusals.add);
       await pump();
 
       await handle.teardown();
@@ -455,7 +566,7 @@ void main() {
         final delegate = RecordingDelegate(
           assetsBuilder: () => [DisposeProbe(() => order.add('unmount'))],
         );
-        final handle = runGrid(
+        final handle = await runGrid(
           delegate,
           orphanSweep: () => _sweeper().sweepOrphans(
             transport: provider,
@@ -488,7 +599,7 @@ void main() {
         'st-1/tg-gpg/agent',
         const RuntimeConfig(workDir: '/tmp', command: 'sh'),
       );
-      final handle = runGrid(
+      final handle = await runGrid(
         RecordingDelegate(),
         orphanSweep: () => _sweeper().sweepOrphans(
           transport: provider,
@@ -512,7 +623,7 @@ void main() {
       final delegate = RecordingDelegate(
         assetsBuilder: () => [DisposeProbe(() => disposed++)],
       );
-      final handle = runGrid(
+      final handle = await runGrid(
         delegate,
         onError: refusals.add,
         orphanSweep: () async => throw StateError('the state store blew up'),
@@ -530,7 +641,7 @@ void main() {
       'a station with no sweep wired tears down unchanged (the null default)',
       () async {
         var disposed = 0;
-        final handle = runGrid(
+        final handle = await runGrid(
           RecordingDelegate(
             assetsBuilder: () => [DisposeProbe(() => disposed++)],
           ),
@@ -560,7 +671,7 @@ void main() {
         buildOverride: (_, _) => const _DiagnosableRoot(),
       );
 
-      final handle = runGrid(
+      final handle = await runGrid(
         delegate,
         treeProjector: projector,
         onFlushed: () => order.add('callback'),
@@ -592,7 +703,7 @@ void main() {
           assetsBuilder: () => [ConfigProbe(probed.add)],
           initial: const GridConfiguration(settings: {'v': 1}),
         );
-        final handle = runGrid(delegate);
+        final handle = await runGrid(delegate);
         addTearDown(handle.teardown);
         await pump();
 
@@ -632,7 +743,7 @@ void main() {
 
   group('the delegate is not ambient (ADR-0008 D-H)', () {
     test('a running grid provides the configuration VALUE, never the delegate '
-        '(the StateNotifier) — it is not lookuppable from the tree', () {
+        '(the StateNotifier) — it is not lookuppable from the tree', () async {
       GridDelegate? seenDelegate;
       GridConfiguration? seenConfig;
       final delegate = RecordingDelegate(
@@ -647,7 +758,7 @@ void main() {
         ],
         initial: const GridConfiguration(settings: {'v': 9}),
       );
-      final handle = runGrid(delegate);
+      final handle = await runGrid(delegate);
       addTearDown(handle.teardown);
 
       expect(

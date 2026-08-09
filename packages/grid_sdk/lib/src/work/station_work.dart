@@ -15,7 +15,7 @@ import '../composition/scopes.dart';
 /// throws at the readiness gate and the station wedges to zero).
 ///
 /// Impls = DI (ADR-0008 D-H): every field is constructed OFF-tree by the
-/// runner's assembly (`buildStationWork`) and enters the tree only as a
+/// runner's assembly (`assembleStationWork`) and enters the tree only as a
 /// provided value — a branch holds config values and effect handles, never
 /// builds a service.
 class StationWorkWiring {
@@ -44,7 +44,7 @@ class StationWorkWiring {
   final CapabilityRegistry? registry;
 
   /// The molecule model's process-lease seam (tg-2mb): the vendor a circuit's
-  /// allocation resolves. Built OFF-tree by `buildStationWork`
+  /// allocation resolves. Built OFF-tree by `assembleStationWork`
   /// (`defaultProcessLeaseVendor` over [services]); null falls back to that
   /// same default at mount, mirroring `StationKernel.start`'s
   /// `_processLeaseVendor ?? defaultProcessLeaseVendor` provision.
@@ -70,7 +70,7 @@ class StationWork extends SingleChildStatelessSeed {
   /// enclosing `Nest` when chained).
   const StationWork({required this.wiring, super.child, super.key});
 
-  /// The DI'd work-axis values (built by `buildStationWork`).
+  /// The DI'd work-axis values (built by `assembleStationWork`).
   final StationWorkWiring wiring;
 
   @override

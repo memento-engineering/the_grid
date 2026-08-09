@@ -67,7 +67,7 @@ void main() {
     });
   });
 
-  group('buildStationWork wires the reap', () {
+  group('assembleStationWork wires the reap', () {
     late Directory tmp;
     setUp(() => tmp = Directory.systemTemp.createTempSync('tg-szb-'));
     tearDown(() => tmp.deleteSync(recursive: true));
@@ -79,7 +79,7 @@ void main() {
         _seedStore('${tmp.path}/proj', database: 'pow');
         _seedStore('${tmp.path}/home/.grid', database: 'houston');
 
-        final work = await buildStationWork(
+        final work = await assembleStationWork(
           stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
           substations: [
             SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),

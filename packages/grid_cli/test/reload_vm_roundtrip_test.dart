@@ -54,7 +54,7 @@ void main() {
       }
 
       final builds = <int>[];
-      final grid = runGrid(
+      final grid = await runGrid(
         _ProbeDelegate(builds),
         delegateFactory: () => _ProbeDelegate(builds),
       );

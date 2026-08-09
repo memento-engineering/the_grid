@@ -130,7 +130,7 @@ List<BlockEdge> crossLinkEdges(Iterable<CrossLink> links) => <BlockEdge>[
 /// block is silently absent — so the arming caller (the link-authoring verb)
 /// refuses LOUDLY with the remedy instead of assuming the store is capable.
 ///
-/// Deliberately NOT wired into `buildStationWork`: that path is driven offline
+/// Deliberately NOT wired into `assembleStationWork`: that path is driven offline
 /// over metadata-only temp stores, so probing `bd types` there would spawn a
 /// process at every arming and break offline tests that exercise a different
 /// contract. The probe belongs at the authoring verb, which already shells out
