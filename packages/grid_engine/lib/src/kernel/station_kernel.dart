@@ -185,14 +185,16 @@ class StationKernel {
     // baseline unclaimed-frontier scan (D-B5 hook #1). Both read only
     // bridge.latest, so running them before mount is value-identical.
     _driver.start();
-    // Build the ambient-provider stack inside-out. Every provider is a plain
-    // InheritedSeed: the root never rebuilds, and genesis's default identity
-    // check declines to notify for a re-provided handle anyway (ADR-0008 D-6,
-    // superseded 2026-07-02 — the prior stable-inherited-seed guard is deleted).
-    // The registry is wrapped only when present (a non-reentrant fake resolver
-    // needs none). The `ServiceBundle` is NOT provided here — it is a
-    // per-substation responsibility provided by each `SubstationScope` so two
-    // substations get isolated source control (ADR-0008 D5).
+    // The kernel-tier ambient stack: mounted `Provider` seeds chained through
+    // `Nest` (the multi-provider sugar), under the tree's ONE `ProviderScope`
+    // (the availability registry, at the station root — tg-1fa2.5). The root
+    // never rebuilds, and genesis's default identity check declines to notify
+    // for a re-provided handle anyway (ADR-0008 D-6, superseded 2026-07-02 —
+    // the prior stable-inherited-seed guard is deleted). The registry is
+    // wrapped only when present (a non-reentrant fake resolver needs none).
+    // The `ServiceBundle` is NOT provided here — it is a per-substation
+    // responsibility provided by each `SubstationScope` so two substations get
+    // isolated source control (ADR-0008 D5).
     final registry = _registry;
     // The molecule model's process-lease seam (R3/R5) — ALWAYS mounted at the
     // SAME kernel-tier trust level as the registry above: the composer's
@@ -202,14 +204,16 @@ class StationKernel {
     final leaseVendor =
         _processLeaseVendor ?? defaultProcessLeaseVendor(_stationServices);
     Seed root = ProviderScope(
-      providers: <Provider<Object>>[
-        Provider<JoinedSnapshotNotifier>.value(bridge.notifier),
-        Provider<StationServices>.value(_stationServices),
-        Provider<SessionResolver>.value(_resolver),
-        Provider<ProcessLeaseVendor>.value(leaseVendor),
-        if (registry != null) Provider<CapabilityRegistry>.value(registry),
-      ],
-      child: Station(_substations),
+      child: Nest(
+        children: [
+          Provider<JoinedSnapshotNotifier>.value(bridge.notifier),
+          Provider<StationServices>.value(_stationServices),
+          Provider<SessionResolver>.value(_resolver),
+          Provider<ProcessLeaseVendor>.value(leaseVendor),
+          if (registry != null) Provider<CapabilityRegistry>.value(registry),
+        ],
+        child: Station(_substations),
+      ),
     );
     final wrap = _wrapRoot;
     if (wrap != null) root = wrap(root);

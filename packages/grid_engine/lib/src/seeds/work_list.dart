@@ -358,8 +358,8 @@ class _WorkListState extends State<WorkList>
     // Re-provide the settled joined snapshot and data config as observed VALUES
     // for descendants. WorkList remains the only notifier subscriber;
     // SessionScope consumes these values through ambient tree seams.
-    return ProviderScope(
-      providers: <Provider<Object>>[
+    return Nest(
+      children: [
         Provider<JoinedSnapshot>.value(_snapshot),
         Provider<SubstationConfig>.value(seed.substationConfig),
       ],

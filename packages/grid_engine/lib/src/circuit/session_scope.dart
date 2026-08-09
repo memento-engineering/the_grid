@@ -1473,8 +1473,8 @@ class SessionScopeState extends State<SessionScope>
       nodePath: seed.bead.id,
       circuitRoundsByPath: circuitRoundsByPath,
     );
-    return ProviderScope(
-      providers: <Provider<Object>>[
+    return Nest(
+      children: [
         Provider<SessionHandle>.value(SessionHandle(id)),
         Provider<Workspace>.value(workspace),
         Provider<SiblingView>.value(
