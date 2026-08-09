@@ -505,16 +505,34 @@ final class AvailabilityRegistry {
     if (_deliveryScheduled || _notifying.isEmpty) return;
     _deliveryScheduled = true;
     scheduleMicrotask(() {
+      // Reset FIRST — fail-closed: even if a dependent throws below, a later
+      // announcement schedules a fresh delivery instead of wedging behind a
+      // stuck flag.
       _deliveryScheduled = false;
       final batch = List.of(_notifying);
       _notifying.clear();
+      Object? firstError;
+      StackTrace? firstStackTrace;
       for (final dependent in batch) {
         // Delivery CONSUMES the recipient's parked registrations (all types,
         // release semantics rule 2): the rebuild this ping triggers re-files
         // the branch's current interests through its own watch misses, so a
         // stale interest cannot outlive the branch's next notification.
         _dropPending(dependent);
-        if (dependent.mounted) dependent.dependencyChanged();
+        if (!dependent.mounted) continue;
+        try {
+          dependent.dependencyChanged();
+        } catch (error, stackTrace) {
+          // Exception-isolate the batch: one throwing dependent must not
+          // swallow the remaining notifications. The first failure is
+          // rethrown after the batch drains, so it still reaches the zone's
+          // error handler — isolated, never silenced.
+          firstError ??= error;
+          firstStackTrace ??= stackTrace;
+        }
+      }
+      if (firstError != null) {
+        Error.throwWithStackTrace(firstError, firstStackTrace!);
       }
     });
   }

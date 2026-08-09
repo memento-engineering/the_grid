@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:test/test.dart';
 
@@ -171,6 +173,23 @@ final class _RecordingDependent extends Branch {
 
   @override
   void dependencyChanged() => pings++;
+}
+
+/// A Fake dependent whose [dependencyChanged] THROWS — the batch-poisoning
+/// shape for the delivery isolation tests.
+final class _ThrowingDependent extends Branch {
+  _ThrowingDependent() : super(const _Leaf());
+
+  int pings = 0;
+
+  @override
+  bool get mounted => true;
+
+  @override
+  void dependencyChanged() {
+    pings++;
+    throw const _Boom();
+  }
 }
 
 final class _DependencyProbe extends StatefulSeed {
@@ -1240,6 +1259,36 @@ void main() {
       // watch miss, which rides the registry-branch dependency path that IS
       // released at unmount.
       expect(registry.debugPendingOf(_Value), isEmpty);
+    });
+
+    test('one throwing dependent neither swallows the rest of the batch nor '
+        'wedges the delivery guard', () async {
+      final registry = AvailabilityRegistry();
+      final thrower = _ThrowingDependent();
+      final healthy = _RecordingDependent();
+      final errors = <Object>[];
+
+      // The delivery microtask is scheduled inside the guarded zone, so the
+      // batch's rethrown failure lands in the zone handler — isolated from
+      // the test's own zone, but NOT silenced.
+      await runZonedGuarded(() async {
+        registry.providerUnmounted(_Value, [thrower, healthy]);
+        await _pump();
+      }, (Object error, StackTrace stackTrace) => errors.add(error))!;
+
+      expect(thrower.pings, 1);
+      expect(
+        healthy.pings,
+        1,
+        reason: 'the throw must not swallow the remaining notifications',
+      );
+      expect(errors, [isA<_Boom>()], reason: 'the failure is rethrown, not eaten');
+
+      // Fail-closed flush guard: the throw did not wedge _deliveryScheduled —
+      // a later announcement schedules and delivers a fresh batch.
+      registry.providerUnmounted(_Other, [healthy]);
+      await _pump();
+      expect(healthy.pings, 2);
     });
 
     test('a second announcement in the same pass rides one delivery '
