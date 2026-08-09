@@ -82,6 +82,15 @@ export 'src/run/grid_delegate.dart';
 // lives in the package that owns the namespace.
 export 'src/run/reassemble.dart';
 export 'src/run/run_grid.dart';
+// The station composition contract's supporting types (tg-at3r — the old
+// grid_cli ResidentGridDelegate contract folded into GridDelegate): the
+// vended status view (StationView), the staleness postures, the arming
+// refusal (StationRefusal), and the appended-substation identity
+// (SubstationConfig) the arming policy folds over.
+export 'src/run/staleness_posture.dart';
+export 'src/run/station_refusal.dart';
+export 'src/run/station_view.dart';
+export 'src/run/substation_config.dart';
 
 // ── Stores at roots + substation init (Track D — tg-y1b) ────────────────────
 // A store lives at a root, uniformly (Q5a):
@@ -155,6 +164,7 @@ export 'package:grid_engine/grid_engine.dart'
         ExplorationTransport,
         FalseFMetrics,
         Flowing,
+        JoinedSnapshot,
         LedgerGrade,
         LedgerNodeMetrics,
         LedgerSessionMetrics,
