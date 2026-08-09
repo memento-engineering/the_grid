@@ -3,39 +3,66 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_engine/grid_engine.dart'
-    show JoinedSnapshot, SessionProjection, StepMount, WedgeState, kNotWedged;
+    show JoinedSnapshot, WedgeState, kNotWedged;
 import 'package:grid_runtime/grid_runtime.dart'
-    show PrimaryCheckoutFreshness, PrimaryCheckoutState, StationGitService;
+    show PrimaryCheckoutFreshness, PrimaryCheckoutState;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-class _Resolver implements SessionResolver {
+final class _View implements ResidentStationView {
   @override
-  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
+  String get stateSubstation => 'lunar-state';
+  @override
+  String get readPathName => 'earth';
+  @override
+  JoinedSnapshot get latest => JoinedSnapshot.empty();
+  @override
+  WedgeState get wedge => kNotWedged;
+  @override
+  Map<String, Object?> syncStatus() => const <String, Object?>{};
+}
+
+final class _Commands implements GridCommandHandler {
+  @override
+  Future<GridCommandResult> call(GridCommandRequest request) =>
       throw UnimplementedError();
 }
 
-class _Registry implements CapabilityRegistry {
-  @override
-  Circuit? circuit(String circuitId) => null;
+/// The config-only fake: boot is the delegate's assembly rail; the vended
+/// views are canned values; dispose records the delegate's own step of the
+/// three-step unwind and releases the construction-owned projector.
+final class _Delegate extends ResidentGridDelegate {
+  _Delegate(this.events, {this.failAt, TreeProjector? projector})
+    : _projector = projector;
+
+  final List<String> events;
+  final String? failAt;
+  final TreeProjector? _projector;
 
   @override
-  Seed host(StepMount mount) => throw UnimplementedError();
+  Future<void> boot(GridConfiguration configuration) async {
+    events.add('delegate.boot');
+    if (failAt == 'boot') throw StateError('boom at boot');
+  }
 
   @override
-  DateTime now() => DateTime.utc(2026);
-}
-
-final class _Delegate extends GridDelegate {
-  _Delegate(this._root);
-  final String _root;
+  ResidentStationView get stationView => _View();
 
   @override
-  String get root => _root;
+  GridCommandHandler get commandHandler => _Commands();
+
+  @override
+  TreeProjector? get treeProjector => _projector;
+
+  @override
+  void dispose() {
+    events.add('delegate.dispose');
+    _projector?.dispose();
+    super.dispose();
+  }
 }
 
 final class _Harness {
@@ -90,7 +117,7 @@ final class _Harness {
   final events = <String>[];
   final _stdout = _ByteConsumer();
   final _stderr = _ByteConsumer();
-  ExplorationTransport? transport;
+  final projector = TreeProjector();
   TreeProjector? gridProjector;
   TreeProjector? controlProjector;
 
@@ -114,14 +141,8 @@ final class _Harness {
     };
     final command = ResidentUpCommand(
       stationName: 'lunar',
-      delegateFactory:
-          ({
-            required config,
-            required wiring,
-            required provisioner,
-            required gitOps,
-            required prOpener,
-          }) => _Delegate(config.gridHome),
+      delegateFactory: ({required config}) =>
+          _Delegate(events, failAt: failAt, projector: projector),
       codedRoster: ({required gridHome}) => [
         SubstationWorkSpec(name: 'earth', root: workRoot, prefix: 'earth'),
         if (includeMissingCoded)
@@ -129,8 +150,6 @@ final class _Harness {
       ],
       harnessAllowList: const {'safe'},
       validateHarness: (_) => null,
-      resolver: _Resolver(),
-      registry: _Registry(),
       acquireLock:
           ({required stateWorkspaceDir, required pid, required now}) async {
             events.add('lock');
@@ -138,21 +157,6 @@ final class _Harness {
               throw const StationRefusal('held', code: 64);
             }
             return _Lock(events);
-          },
-      buildWork:
-          ({
-            required stateStore,
-            required substations,
-            required resolver,
-            required registry,
-            required dryRun,
-            required maxConcurrentWork,
-            required transport,
-          }) async {
-            this.transport = transport;
-            events.add('assembleStationWork');
-            _throwIf('assembleStationWork');
-            return _Work(events, failAt);
           },
       runMountedGrid:
           (
@@ -163,9 +167,18 @@ final class _Harness {
             delegateFactory,
           }) async {
             gridProjector = treeProjector;
-            events.add('runGrid');
-            _throwIf('runGrid');
-            return _Grid(events);
+            // The seam's contract mirrors runGrid: the boot rail is awaited
+            // before the first mount, and on ANY failure the delegate is
+            // disposed before the error reaches the shell.
+            try {
+              await delegate.boot(const GridConfiguration());
+              events.add('runGrid');
+              _throwIf('runGrid');
+            } on Object {
+              delegate.dispose();
+              rethrow;
+            }
+            return _Grid(events, delegate);
           },
       startControl:
           ({
@@ -254,65 +267,10 @@ final class _Lock implements ResidentLockResource {
   }
 }
 
-final class _Work implements ResidentWorkResource {
-  _Work(this.events, this.failAt);
-  final List<String> events;
-  final String? failAt;
-
-  @override
-  StationWorkWiring get wiring => _Wiring();
-  @override
-  Map<String, Object?> syncStatus() => const <String, Object?>{};
-  @override
-  GridCommandHandler get commands => _Commands();
-  @override
-  StationGitService get git => _Git();
-  @override
-  String get stateSubstation => 'lunar-state';
-  @override
-  String get readPathName => 'earth';
-  @override
-  JoinedSnapshot get latest => JoinedSnapshot.empty();
-  @override
-  WedgeState get wedge => kNotWedged;
-
-  @override
-  Future<void> start() async {
-    events.add('work.start');
-    if (failAt == 'work.start') {
-      throw StateError('boom at work.start');
-    }
-  }
-
-  @override
-  void afterFlush() {}
-  @override
-  Future<void> sweepOrphans() async {}
-  @override
-  Future<void> shutdown() async {
-    events.add('work.shutdown');
-  }
-}
-
-final class _Wiring implements StationWorkWiring {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-final class _Git implements StationGitService {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-final class _Commands implements GridCommandHandler {
-  @override
-  Future<GridCommandResult> call(GridCommandRequest request) =>
-      throw UnimplementedError();
-}
-
 final class _Grid implements ResidentGridResource {
-  _Grid(this.events);
+  _Grid(this.events, this.delegate);
   final List<String> events;
+  final ResidentGridDelegate delegate;
 
   @override
   Future<ReassembleReport> hotReload() => throw UnimplementedError();
@@ -320,7 +278,10 @@ final class _Grid implements ResidentGridResource {
   Future<ReassembleReport> hotRestart() => throw UnimplementedError();
   @override
   Future<void> teardown() async {
+    // The three-step unwind's first two steps, in runGrid's own teardown
+    // order: unmount the tree, THEN dispose the delegate.
     events.add('grid.teardown');
+    delegate.dispose();
   }
 }
 
@@ -425,25 +386,16 @@ void main() {
     var validations = 0;
     final command = ResidentUpCommand(
       stationName: 'lunar',
-      delegateFactory:
-          ({
-            required config,
-            required wiring,
-            required provisioner,
-            required gitOps,
-            required prOpener,
-          }) {
-            delegateCalls++;
-            throw UnimplementedError();
-          },
+      delegateFactory: ({required config}) {
+        delegateCalls++;
+        throw UnimplementedError();
+      },
       codedRoster: ({required gridHome}) => const [],
       harnessAllowList: const {'safe'},
       validateHarness: (name) {
         validations++;
         return 'not configured';
       },
-      resolver: _Resolver(),
-      registry: _Registry(),
     );
     final runner = CommandRunner<int>('lunar', 'test')..addCommand(command);
     expect(await runner.run(['up', '--grid-home', home.path]), 64);
@@ -454,19 +406,10 @@ void main() {
   test('safe dry-run is the parser default and no bead option exists', () {
     final command = ResidentUpCommand(
       stationName: 'lunar',
-      delegateFactory:
-          ({
-            required config,
-            required wiring,
-            required provisioner,
-            required gitOps,
-            required prOpener,
-          }) => throw UnimplementedError(),
+      delegateFactory: ({required config}) => throw UnimplementedError(),
       codedRoster: ({required gridHome}) => const [],
       harnessAllowList: const {'safe'},
       validateHarness: (_) => null,
-      resolver: _Resolver(),
-      registry: _Registry(),
     );
     expect(command.argParser.defaultFor('dry-run'), isTrue);
     expect(command.argParser.defaultFor('allow-stale'), isFalse);
@@ -478,21 +421,25 @@ void main() {
     expect(command.argParser.options, isNot(contains('bead')));
   });
 
-  test('assembly never references a builtin environment registry', () {
+  test('the shell neither assembles work nor hardcodes diagnostics', () {
     final source = File('lib/src/resident_up_command.dart').readAsStringSync();
     expect(source, isNot(contains('buildBuiltinEnvironmentRegistry')));
+    // tg-1fa2.4: station-work assembly and the diagnostics-reporter effect
+    // are boot-owned (the delegate's), never the shell's.
+    expect(source, isNot(contains('assembleStationWork')));
+    expect(source, isNot(contains('StationDiagnosticsReporter')));
+    expect(source, isNot(contains('GhPrOpener')));
   });
 
   group('ResidentUpCommand assembly', () {
-    test('success pins startup and reverse shutdown order', () async {
+    test('success pins startup and the three-step reverse shutdown', () async {
       final h = await _Harness.create(devMode: true);
       addTearDown(h.dispose);
       expect(await h.run(), 0);
       expect(h.events, <String>[
         'inspect:earth',
         'lock',
-        'assembleStationWork',
-        'work.start',
+        'delegate.boot',
         'runGrid',
         'control',
         'lock.control',
@@ -503,21 +450,15 @@ void main() {
         'devMode.dispose',
         'control.dispose',
         'grid.teardown',
-        'work.shutdown',
+        'delegate.dispose',
         'lock.release',
       ]);
       expect(h.stdoutText, contains('lunar up — resident station (runGrid)'));
-      expect(h.transport, isA<StationDiagnosticsReporter>());
-      final reporter = h.transport! as StationDiagnosticsReporter;
-      expect(h.gridProjector, same(reporter.treeProjector));
-      expect(h.controlProjector, same(reporter.treeProjector));
-      reporter.flare('station.wedged', <String, String>{'gated': '2'});
-      expect(jsonDecode(h.stderrText.trim()), <String, Object?>{
-        'type': 'flare',
-        'name': 'station.wedged',
-        'data': <String, Object?>{'gated': '2'},
-      });
-      await expectLater(reporter.treeProjector.snapshots, emitsDone);
+      // The delegate's construction-owned projector reaches BOTH consumers …
+      expect(h.gridProjector, same(h.projector));
+      expect(h.controlProjector, same(h.projector));
+      // … and is released by the delegate's dispose (its snapshots close).
+      await expectLater(h.projector.snapshots, emitsDone);
     });
 
     test('missing coded store skips loudly and continues', () async {
@@ -527,11 +468,7 @@ void main() {
       expect(h.stdoutText, contains('lunar up: skipping coded substation'));
       expect(
         h.events,
-        containsAllInOrder(<String>[
-          'inspect:earth',
-          'lock',
-          'assembleStationWork',
-        ]),
+        containsAllInOrder(<String>['inspect:earth', 'lock', 'delegate.boot']),
       );
     });
 
@@ -540,14 +477,14 @@ void main() {
       addTearDown(h.dispose);
       expect(await h.run(extra: ['--substation', 'moon=${h.missingRoot}']), 1);
       expect(h.stderrText, startsWith('lunar up:'));
-      expect(h.events, isEmpty);
+      expect(h.events, <String>['delegate.dispose']);
     });
 
-    test('lock conflict refuses before build', () async {
+    test('lock conflict refuses before boot', () async {
       final h = await _Harness.create(failAt: 'lock');
       addTearDown(h.dispose);
       expect(await h.run(), 64);
-      expect(h.events, <String>['inspect:earth', 'lock']);
+      expect(h.events, <String>['inspect:earth', 'lock', 'delegate.dispose']);
       expect(h.stderrText, startsWith('lunar up:'));
     });
 
@@ -596,7 +533,7 @@ void main() {
         );
         try {
           expect(await h.run(), 64);
-          expect(h.events, <String>['inspect:earth']);
+          expect(h.events, <String>['inspect:earth', 'delegate.dispose']);
           expect(h.stderrText, contains(value.verdict));
           expect(h.stderrText, contains('pass --allow-stale'));
         } finally {
@@ -632,7 +569,11 @@ void main() {
           'moon: stale: detached HEAD}',
         ),
       );
-      expect(h.events, <String>['inspect:earth', 'inspect:moon']);
+      expect(h.events, <String>[
+        'inspect:earth',
+        'inspect:moon',
+        'delegate.dispose',
+      ]);
     });
 
     test(
@@ -674,22 +615,16 @@ void main() {
     });
   });
 
-  group('ResidentUpCommand partial failure unwind', () {
+  group('ResidentUpCommand three-step partial failure unwind', () {
     final cases = <(String point, int code, List<String> events)>[
       (
-        'assembleStationWork',
-        1,
-        ['inspect:earth', 'lock', 'assembleStationWork', 'lock.release'],
-      ),
-      (
-        'work.start',
-        1,
+        'boot',
+        64,
         [
           'inspect:earth',
           'lock',
-          'assembleStationWork',
-          'work.start',
-          'work.shutdown',
+          'delegate.boot',
+          'delegate.dispose',
           'lock.release',
         ],
       ),
@@ -699,10 +634,9 @@ void main() {
         [
           'inspect:earth',
           'lock',
-          'assembleStationWork',
-          'work.start',
+          'delegate.boot',
           'runGrid',
-          'work.shutdown',
+          'delegate.dispose',
           'lock.release',
         ],
       ),
@@ -712,12 +646,11 @@ void main() {
         [
           'inspect:earth',
           'lock',
-          'assembleStationWork',
-          'work.start',
+          'delegate.boot',
           'runGrid',
           'control',
           'grid.teardown',
-          'work.shutdown',
+          'delegate.dispose',
           'lock.release',
         ],
       ),
@@ -727,32 +660,29 @@ void main() {
         [
           'inspect:earth',
           'lock',
-          'assembleStationWork',
-          'work.start',
+          'delegate.boot',
           'runGrid',
           'control',
           'lock.control',
           'devMode',
           'control.dispose',
           'grid.teardown',
-          'work.shutdown',
+          'delegate.dispose',
           'lock.release',
         ],
       ),
     ];
     for (final entry in cases) {
-      test(
-        '${entry.$1} failure cleans acquired resources in reverse',
-        () async {
-          final h = await _Harness.create(failAt: entry.$1);
-          addTearDown(h.dispose);
-          expect(await h.run(), entry.$2);
-          expect(h.events, entry.$3);
-          expect(h.stderrText, startsWith('lunar up:'));
-          final reporter = h.transport! as StationDiagnosticsReporter;
-          await expectLater(reporter.treeProjector.snapshots, emitsDone);
-        },
-      );
+      test('${entry.$1} failure unwinds tree, delegate, then lock', () async {
+        final h = await _Harness.create(failAt: entry.$1);
+        addTearDown(h.dispose);
+        expect(await h.run(), entry.$2);
+        expect(h.events, entry.$3);
+        expect(h.stderrText, startsWith('lunar up:'));
+        // The delegate went down on every path, so its construction-owned
+        // projector is released.
+        await expectLater(h.projector.snapshots, emitsDone);
+      });
     }
   });
 
@@ -764,7 +694,7 @@ void main() {
     expect(h.events.sublist(h.events.indexOf('render') + 1), <String>[
       'control.dispose',
       'grid.teardown',
-      'work.shutdown',
+      'delegate.dispose',
       'lock.release',
     ]);
   });
@@ -780,7 +710,7 @@ void main() {
         'signal',
         'control.dispose',
         'grid.teardown',
-        'work.shutdown',
+        'delegate.dispose',
         'lock.release',
       ]),
     );
