@@ -8,8 +8,7 @@
 /// Reference types flow OUT of the delegate, never in.
 library;
 
-import 'package:grid_engine/grid_engine.dart'
-    show JoinedSnapshot, TreeProjector, WedgeState;
+import 'package:grid_engine/grid_engine.dart' show JoinedSnapshot, WedgeState;
 import 'package:grid_sdk/grid_sdk.dart'
     show
         GridCommandHandler,
@@ -94,18 +93,44 @@ final class StalenessRefused extends StalenessPosture {
 ///  3. **`boot`** (`runGrid` awaits it before the first mount) — assembles
 ///     AND starts the off-tree work machinery, including the diagnostics
 ///     reporter effect (previously the command's one hardcoded seamless
-///     effect). Assembly only — policy stays in `build` (docs/STYLE.md
-///     rule 5).
+///     effect). Assembly only — no NEW policy may enter it (the rule-5
+///     ratchet; see the honest posture note below).
 ///  4. **The vended views** ([stationView], [commandHandler], [afterFlush],
 ///     [sweepOrphans]) are valid once `boot` completed; the shell reads them
-///     per request, never earlier. [treeProjector] alone must be stable from
-///     CONSTRUCTION — the shell threads it into `runGrid` before the boot
-///     rail runs (a projector is a passive sink; the reporter that renders it
-///     is boot-owned).
+///     per request, never earlier. The diagnostics `TreeProjector` is NOT a
+///     delegate concern: it is shell-owned and process-lifetime (the shell
+///     threads ONE instance into `runGrid` and `/stream`, and a hot restart's
+///     fresh delegate flushes into that same sink — a delegate-owned
+///     projector would be disposed with the retired delegate and leave the
+///     flush rail and `/stream` permanently dark).
 ///  5. **`dispose`** unwinds what boot assembled, in reverse creation order.
-///     The shell's whole teardown is three steps: unmount tree (in-tree
-///     resources unwind by unmount order — tree-owned `Provider`
-///     create/dispose) → dispose delegate → release lock.
+///     The shell's teardown: unmount tree (in-tree resources unwind by
+///     unmount order — tree-owned `Provider` create/dispose; the delegate is
+///     disposed inside the runner's teardown) → dispose the shell projector →
+///     release lock.
+///
+/// **The rule-5 posture, honestly stated.** [armRoster] (which seats arm,
+/// skip-coded vs refuse-appended) and [stalenessPosture] are STATION POLICY
+/// executing on the pre-boot rail, not in `build` — docs/STYLE.md rule 5
+/// names exactly these decisions as tree policy. They live here pre-tree by
+/// NECESSITY: their outcomes are exit codes and the lock decision, both of
+/// which must land before anything mounts. That makes them ratchet DEBT under
+/// rule 5's own clause ("assembly moves into the tree as lifecycle-capable
+/// providers become available"), not rule-5-clean: the decisions render to
+/// the operator's stdout/stderr, invisible to the tree projection, and must
+/// migrate into `build` (where `/stream` can observe them) once the tree can
+/// carry refusal postures with exit semantics. Do not add new policy here.
+///
+/// **OPEN SEAM — no reference boot implementation ships yet.** This contract
+/// specifies the delegate half of the tg-1fa2.4 migration (boot-owned
+/// `assembleStationWork` + the `StationDiagnosticsReporter` effect, views
+/// vended over the assembled `StationWorkRuntime`, dry-run declared as
+/// provider ABSENCE in the tree), but grid_cli ships only the abstract
+/// contract — every concrete `boot` today lives in tests. The reference
+/// boot-owned assembly delegate is deliberate follow-up work under the
+/// tg-1fa2 epic (file it as its own bead when composing the first production
+/// station on this command); until it lands, a composing station authors its
+/// own `boot` from this contract plus `assembleStationWork`'s docs.
 abstract class ResidentGridDelegate extends GridDelegate {
   /// Creates the delegate seeded like any [GridDelegate].
   ResidentGridDelegate([super.initialConfiguration]);
@@ -137,13 +162,14 @@ abstract class ResidentGridDelegate extends GridDelegate {
     return _armed = List.unmodifiable(armed);
   }
 
-  /// THE arming policy (relocated from the command's for-loops, tg-1fa2.4):
-  /// which seats arm is a station opinion. The standing default: a CODED seat
-  /// whose root resolves no work store is skipped loudly via [onSkip] (not
-  /// present in this checkout — a legitimate partial checkout); an APPENDED
-  /// seat that refuses is a boot refusal ([StationRefusal] — the operator
-  /// explicitly asked for it, so absence is an error: exit 64 for a malformed
-  /// spec, exit 1 for a missing store).
+  /// THE arming policy (relocated from the command's for-loops, tg-1fa2.4 —
+  /// pre-tree by necessity, ratchet debt under STYLE.md rule 5; see the class
+  /// doc): which seats arm is a station opinion. The standing default: a
+  /// CODED seat whose root resolves no work store is skipped loudly via
+  /// [onSkip] (not present in this checkout — a legitimate partial checkout);
+  /// an APPENDED seat that refuses is a boot refusal ([StationRefusal] — the
+  /// operator explicitly asked for it, so absence is an error: exit 64 for a
+  /// malformed spec, exit 1 for a missing store).
   ///
   /// Override to change the opinion; the shell renders whatever this decides
   /// (messages are written without the `<station> up: ` prefix — the shell
@@ -186,7 +212,9 @@ abstract class ResidentGridDelegate extends GridDelegate {
   }
 
   /// The staleness posture over the inspected freshness vector (relocated
-  /// from the command's `--allow-stale` refusal, tg-1fa2.4). [verdicts] is
+  /// from the command's `--allow-stale` refusal, tg-1fa2.4 — pre-tree by
+  /// necessity, ratchet debt under STYLE.md rule 5; see the class doc).
+  /// [verdicts] is
   /// the rendered per-seat verdict line (`earth: fresh, moon: stale: …`, in
   /// roster order); the standing default refuses any stale checkout unless
   /// [allowStale] downgrades the refusal to one warning.
@@ -213,13 +241,6 @@ abstract class ResidentGridDelegate extends GridDelegate {
   /// The operator-command handler `POST /command` dispatches to (valid once
   /// `boot` completed).
   GridCommandHandler get commandHandler;
-
-  /// The tree projector the shell threads into `runGrid` and the control
-  /// surface's `/stream` — stable from CONSTRUCTION (the shell reads it
-  /// before the boot rail), owned and disposed by this delegate. Null is the
-  /// designed absence posture: no diagnostics projection, `/stream` serves
-  /// 503.
-  TreeProjector? get treeProjector => null;
 
   /// The `runGrid(onFlushed:)` hook — post-flush machinery (cooldown and
   /// unclaimed-frontier re-scans) on the boot-assembled runtime. Default:
