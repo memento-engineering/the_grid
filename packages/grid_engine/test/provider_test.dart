@@ -683,6 +683,83 @@ void main() {
       );
       expect(owner.flush, throwsStateError);
     });
+
+    test('a failing rebuild of an ATTACHED provider does not run the '
+        'failed-mount unwind: the value stays live for the real unmount', () {
+      final events = <String>[];
+      final values = <String?>[];
+      late _HostState host;
+      final owner = TreeOwner();
+
+      owner.mountRoot(
+        _Host(
+          onCreate: (state) => host = state,
+          describe: () => Provider<_Value>(
+            create: (_) => const _Value('owned'),
+            dispose: (value) => events.add('dispose ${value.name}'),
+            child: _Watch(values),
+          ),
+        ),
+      );
+      expect(values, ['owned']);
+
+      // The kind flip throws INSIDE the attached provider's rebuild frame.
+      // The mount-only guard ([_ProviderBranch._mountBuild]) must keep the
+      // unwind out of this path: disposing here would leave the branch
+      // attached over a dead value AND double-dispose at the real unmount.
+      host.swap(
+        () => Provider<_Value>.value(
+          const _Value('adopted'),
+          child: _Watch(values),
+        ),
+      );
+      expect(owner.flush, throwsStateError);
+      expect(
+        events,
+        isEmpty,
+        reason: 'a failed ATTACHED rebuild must not dispose the live value',
+      );
+
+      owner.dispose();
+      expect(
+        events,
+        ['dispose owned'],
+        reason: 'disposal rides the real unmount, exactly once',
+      );
+    });
+  });
+
+  group('scope-less composition', () {
+    test('a watch miss with no ProviderScope ancestor asserts, naming '
+        'ProviderScope; read stays a silent null', () {
+      final values = <String?>[];
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      // The debug guard (watch<T> miss, no availability registry to park
+      // with) fails LOUD in development; deleting the assert would leave a
+      // mis-composed tree returning null forever with no signal.
+      expect(
+        () => owner.mountRoot(_Watch(values)),
+        throwsA(
+          isA<AssertionError>().having(
+            (error) => '${error.message}',
+            'message',
+            contains('ProviderScope'),
+          ),
+        ),
+      );
+
+      // The effect verb stays silent on the same scope-less shape: a
+      // one-shot snapshot has nothing to park and nothing to assert.
+      final builds = <int>[];
+      late _ReadProbeState reader;
+      final readOwner = TreeOwner();
+      addTearDown(readOwner.dispose);
+      readOwner.mountRoot(
+        _ReadProbe(onCreate: (state) => reader = state, builds: builds),
+      );
+      expect(reader.readValue(), isNull);
+    });
   });
 
   group('reconcile notification', () {

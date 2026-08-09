@@ -235,9 +235,12 @@ final class _ProviderState<T extends Object>
   /// The failed-mount unwind (see [_ProviderBranch]): disposes the owned
   /// value NOW, exactly once, because this provider's mount failed and the
   /// substrate will never attach — and therefore never unmount — the branch
-  /// that would have carried the disposal. Nulling both fields keeps the
-  /// disposal single-shot and unarms the closure threaded into any
-  /// already-built [_ProviderInherited].
+  /// that would have carried the disposal. Nulling both fields keeps THIS
+  /// method single-shot and stops any future [buildWithChild] from
+  /// re-threading the disposal; an already-built [_ProviderInherited] still
+  /// holds the armed closure — what forecloses a double dispose is that its
+  /// branch was orphaned by the failed mount, and unmount, the only site
+  /// that runs the closure, never fires on an orphan.
   void _disposeOwnedForFailedMount() {
     final dispose = _disposeOwned;
     _disposeOwned = null;
