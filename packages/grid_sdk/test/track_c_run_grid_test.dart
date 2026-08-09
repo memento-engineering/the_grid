@@ -130,6 +130,26 @@ class _DisposeProbeState extends State<DisposeProbe> {
   void dispose() => seed.onDispose();
 }
 
+/// Dirties itself the moment it mounts — arming the handle's coalesced flush
+/// microtask during the first build, before the mount rail completes.
+class DirtyOnMountProbe extends StatefulSeed {
+  const DirtyOnMountProbe({super.key});
+
+  @override
+  State<DirtyOnMountProbe> createState() => _DirtyOnMountProbeState();
+}
+
+class _DirtyOnMountProbeState extends State<DirtyOnMountProbe> {
+  @override
+  void initState() {
+    super.initState();
+    setState(() {});
+  }
+
+  @override
+  Seed build(TreeContext context) => const Leaf();
+}
+
 /// A configurable delegate that records every rail invocation and lets a test
 /// inject failures / async control into any rail.
 class RecordingDelegate extends GridDelegate {
@@ -163,6 +183,10 @@ class RecordingDelegate extends GridDelegate {
   /// Emits a new configuration (the protected `state` setter, reachable from a
   /// subclass) — the observable's write path.
   void emit(GridConfiguration config) => state = config;
+
+  /// Whether anything is still subscribed (the configuration scope is the sole
+  /// sanctioned subscriber) — the observable proof the scope unmounted.
+  bool get observed => hasListeners;
 
   @override
   String get root => rootPath;
@@ -429,7 +453,16 @@ void main() {
           return next;
         }
 
-        final handle = await runGrid(first, delegateFactory: factory);
+        // The COMMIT seam: each swap notification, with whether the retired
+        // delegate was still alive at notify time (it must be — the corpse is
+        // disposed only by the re-composition, after the shell re-pointed).
+        final swaps = <({GridDelegate next, bool retiredAlive})>[];
+        final handle = await runGrid(
+          first,
+          delegateFactory: factory,
+          onDelegateSwapped: (next) =>
+              swaps.add((next: next, retiredAlive: first.mounted)),
+        );
         addTearDown(handle.teardown);
         await expectLater(
           handle.hotRestart(),
@@ -440,6 +473,9 @@ void main() {
         expect(first.mounted, isTrue);
         expect(fresh.single.events, ['boot']);
         expect(fresh.single.mounted, isFalse);
+        // A FAILED restart never commits: the shell is never told to re-point,
+        // so its read surface stays on the live (old) delegate.
+        expect(swaps, isEmpty);
 
         refuse = false;
         final report = await handle.hotRestart();
@@ -454,8 +490,77 @@ void main() {
           fresh.last.events.where((event) => event == 'boot'),
           hasLength(1),
         );
+        // The successful restart commits EXACTLY once, with the booted fresh
+        // delegate, while the retired one was still alive.
+        expect(swaps, hasLength(1));
+        expect(identical(swaps.single.next, fresh.last), isTrue);
+        expect(swaps.single.retiredAlive, isTrue);
       },
     );
+
+    test('teardown during the restart boot: the fresh delegate is disposed and '
+        'the holders never swap', () async {
+      final first = RecordingDelegate();
+      final gate = Completer<void>();
+      final fresh = <RecordingDelegate>[];
+      RecordingDelegate factory() {
+        final next = RecordingDelegate(onBoot: (_) => gate.future);
+        fresh.add(next);
+        return next;
+      }
+
+      final swaps = <GridDelegate>[];
+      final handle = await runGrid(
+        first,
+        delegateFactory: factory,
+        onDelegateSwapped: swaps.add,
+      );
+      await pump();
+
+      // The restart suspends on the fresh delegate's awaited boot …
+      final restart = handle.hotRestart();
+      await pump();
+      expect(fresh.single.events, ['boot']);
+
+      // … teardown lands mid-boot …
+      await handle.teardown();
+      expect(
+        first.mounted,
+        isFalse,
+        reason:
+            'teardown disposed the live '
+            'delegate',
+      );
+
+      // … and the boot then completing must NOT commit: the fresh delegate
+      // is disposed, the swap seam never fires, no post-mount rail runs.
+      gate.complete();
+      await expectLater(
+        restart,
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('tore down during the restart boot'),
+          ),
+        ),
+      );
+      expect(
+        fresh.single.mounted,
+        isFalse,
+        reason:
+            'the fresh delegate is '
+            'disposed, never adopted',
+      );
+      expect(swaps, isEmpty, reason: 'the commit seam never fired');
+      expect(
+        fresh.single.events,
+        ['boot'],
+        reason:
+            'no initGrid/onReady '
+            'kickoff on the refused restart',
+      );
+    });
 
     test('initGrid failure: captured/attributed/loud via onError; onReady is '
         'NOT called; the grid stands', () async {
@@ -504,6 +609,89 @@ void main() {
 
       expect(zoneErrors.single, isA<GridHookError>());
       expect((zoneErrors.single as GridHookError).hook, 'initGrid');
+    });
+  });
+
+  group('first-mount failure unwinds the owner and the bus', () {
+    test('a build that throws during first mount: runGrid rethrows raw and '
+        'releases the owner/bus', () async {
+      final delegate = RecordingDelegate(
+        buildOverride: (_, _) => throw StateError('boom at build'),
+      );
+
+      // The raw error, NOT a GridHookError: build is not a named rail.
+      await expectLater(
+        runGrid(delegate),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'boom at build',
+          ),
+        ),
+      );
+      // The delegate is left to the CALLER's unwind on this path (grid_cli's
+      // defaultRunMountedGrid pins dispose-on-failure); runGrid must not have
+      // disposed it. The owner/bus were released — though genesis_tree
+      // 0.2.0's mountRoot assigns its root only after mount returns, so the
+      // partially mounted branches (the scope's subscription among them) stay
+      // unreachable: the residual limit the production comment names.
+      expect(delegate.mounted, isTrue);
+      delegate.dispose();
+    });
+
+    test('a throwing onFlushed after the first flush: rethrows AND the '
+        'mounted tree unwinds (owner disposed, scope unsubscribed)', () async {
+      var disposed = 0;
+      final delegate = RecordingDelegate(
+        assetsBuilder: () => [DisposeProbe(() => disposed++)],
+      );
+
+      await expectLater(
+        runGrid(delegate, onFlushed: () => throw StateError('boom at flush')),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'boom at flush',
+          ),
+        ),
+      );
+      // The owner disposed: the fully mounted tree unmounted (the effect tore
+      // down) and the configuration scope unsubscribed from the delegate — no
+      // stranded TreeOwner, no leaked listener.
+      expect(disposed, 1);
+      expect(delegate.observed, isFalse);
+      expect(delegate.mounted, isTrue, reason: 'the caller owns the delegate');
+      delegate.dispose();
+    });
+
+    test('a flush scheduled during mount dies with the rail: the pending '
+        'microtask early-outs instead of crashing the unwind', () async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        final delegate = RecordingDelegate(
+          assetsBuilder: () => [const DirtyOnMountProbe()],
+        );
+        await expectLater(
+          runGrid(delegate, onFlushed: () => throw StateError('boom at flush')),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'boom at flush',
+            ),
+          ),
+        );
+        delegate.dispose();
+        // Drain the coalesced flush microtask the mount-time dirtying
+        // armed. The catch marked the handle torn down, so it must take
+        // its early-out — not flush the disposed owner, re-run the
+        // throwing onFlushed, and surface a spurious uncaught zone error
+        // mid-unwind.
+        await pump();
+      }, (error, stack) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
     });
   });
 
@@ -591,6 +779,27 @@ void main() {
         );
       },
     );
+
+    test('the sweep runs on the LIVE delegate — dispose follows the '
+        'sweep', () async {
+      // The sweep is the reap on the delegate's boot-assembled runtime, and
+      // dispose unwinds exactly that machinery (a StateNotifier's state
+      // throws after dispose): a teardown that disposed first would serve
+      // the sweep off a corpse and silently reopen the orphan window.
+      final order = <String>[];
+      final delegate = RecordingDelegate();
+      final handle = await runGrid(
+        delegate,
+        orphanSweep: () async =>
+            order.add(delegate.mounted ? 'sweep-live' : 'sweep-on-corpse'),
+      );
+      await pump();
+
+      await handle.teardown();
+
+      expect(order, ['sweep-live']);
+      expect(delegate.mounted, isFalse, reason: 'disposed after the sweep');
+    });
 
     test('teardown is idempotent — the sweep runs exactly once', () async {
       final provider = FakeRuntimeProvider();

@@ -716,7 +716,7 @@ Future<GitRunResult> ghRunner(String workDir, List<String> args) async {
 /// executing a real `git`, the restart reconcile finds no survivors, and
 /// `provisionWorktree` materializes NOTHING. Exposed for the inertness
 /// regression tests.
-StationGitService buildDryStationGitService() => _DryStationGitService();
+StationGitService buildDryStationGitService() => DryStationGitService();
 
 /// Adapts a live [GridControllerRuntime] to the engine's [SnapshotSource] —
 /// re-homed from the deleted `grid_cli` adapter (H3): a pure pass-through
@@ -816,9 +816,12 @@ class DryRunProvider implements RuntimeProvider {
 
 /// The dry-run [StationGitService]: inherits the no-op-runner worktree probe
 /// and overrides [provisionWorktree] so a dry run materializes NO worktree —
-/// it returns a synthetic descriptor the host ignores.
-class _DryStationGitService extends StationGitService {
-  _DryStationGitService()
+/// it returns a synthetic descriptor the host ignores. PUBLIC so the effect
+/// posture is assertable by type: the dry-run inertness tests pin that
+/// `dryRun: true` (and only `dryRun: true`) selects THIS service.
+class DryStationGitService extends StationGitService {
+  /// Creates the inert service over the no-op runner and PR opener.
+  DryStationGitService()
     : super(runner: const _DryGitRunner(), prOpener: const _DryPrOpener());
 
   @override

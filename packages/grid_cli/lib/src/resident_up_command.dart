@@ -6,53 +6,40 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart' show GraphSnapshot;
-import 'package:grid_engine/grid_engine.dart' show JoinedSnapshot, WedgeState;
 import 'package:grid_exploration/grid_exploration.dart'
     show DevModeSeat, armDevMode, stationVmServiceUri;
 import 'package:grid_runtime/grid_runtime.dart'
-    show
-        GitOps,
-        GhPrOpener,
-        PrimaryCheckoutFreshness,
-        PrOpener,
-        StationGitService,
-        SystemGitRunner;
+    show GitOps, PrimaryCheckoutFreshness, SystemGitRunner;
 import 'package:grid_sdk/grid_sdk.dart'
     show
-        CapabilityRegistry,
-        ExplorationTransport,
-        GridDelegate,
         GridCommandHandler,
+        GridCommandRequest,
+        GridCommandResult,
         GridHandle,
-        GridStateStore,
+        GridHookError,
         ReassembleReport,
-        SessionResolver,
-        StationWorkRuntime,
-        StationWorkWiring,
-        StoreLocator,
-        StoreRefusal,
         SubstationWorkSpec,
         TreeProjector,
-        assembleStationWork,
-        ghRunner,
         runGrid;
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 
+import 'resident_grid_delegate.dart';
 import 'resident_station_flags.dart';
-import 'resident_diagnostics_reporter.dart';
 import 'station_control.dart';
 import 'station_lock.dart';
 
-/// Builds the station-authored tree from shared boot values and injected
-/// effect implementations.
+/// Builds the station-authored delegate from parsed boot configuration ALONE
+/// (tg-1fa2.4): no wiring, no provisioner, no effect implementations —
+/// assembly is `GridDelegate.boot`-owned. The dry-run posture TODAY is
+/// boot-selected OFF-tree: boot hands the config's `dryRun` to grid_sdk's
+/// station-work assembly, which picks inert implementations by type (no-op bd
+/// runner, dry provider, dry git). Declaring it in the delegate's TREE (no
+/// effect providers mounted, visible to the projection) is the TARGET state,
+/// owned by the reference-boot follow-up bead — either way, no nulls thread
+/// through this factory.
 typedef ResidentGridDelegateFactory =
-    GridDelegate Function({
-      required ResidentStationConfig config,
-      required StationWorkWiring wiring,
-      required StationGitService provisioner,
-      required GitOps? gitOps,
-      required PrOpener? prOpener,
-    });
+    ResidentGridDelegate Function({required ResidentStationConfig config});
 
 /// Reads the station's coded roster for a particular grid home.
 typedef ResidentRosterReader =
@@ -70,26 +57,6 @@ abstract interface class ResidentLockResource {
   });
   Future<void> updateVmService(String vmServiceUri);
   Future<void> release();
-}
-
-/// The work runtime operations consumed by the resident shell.
-abstract interface class ResidentWorkResource {
-  StationWorkWiring get wiring;
-  GridCommandHandler get commands;
-  StationGitService get git;
-  String get stateSubstation;
-  String get readPathName;
-  JoinedSnapshot get latest;
-  WedgeState get wedge;
-
-  /// The JSON-shaped sync-loop observability payload for `/status` (tg-zd4v):
-  /// per-store `GraphSyncStats` under `stats`, the federation's per-member
-  /// freshness vector under `freshness`. Empty when the assembly exposes none.
-  Map<String, Object?> syncStatus();
-  Future<void> start();
-  void afterFlush();
-  Future<void> sweepOrphans();
-  Future<void> shutdown();
 }
 
 /// The mounted grid operations consumed by the resident shell.
@@ -118,23 +85,25 @@ typedef ResidentLockAcquirer =
       required int pid,
       required DateTime now,
     });
-typedef ResidentWorkBuilder =
-    Future<ResidentWorkResource> Function({
-      required GridStateStore stateStore,
-      required List<SubstationWorkSpec> substations,
-      required SessionResolver resolver,
-      required CapabilityRegistry registry,
-      required bool dryRun,
-      required int maxConcurrentWork,
-      required ExplorationTransport transport,
-    });
+
+/// Mounts [delegate]'s grid (`runGrid`): awaits its boot rail before the
+/// first mount, then mounts the tree. CONTRACT: on failure the delegate is
+/// disposed before the error propagates (the shell then releases the
+/// projector and the lock — the unwind's tail).
+///
+/// `onDelegateSwapped` is the hot-restart COMMIT seam: the runner invokes it
+/// synchronously once a fresh `delegateFactory` delegate has booted and been
+/// adopted as the live one — NEVER inside the factory call itself, and never
+/// on a failed restart boot (the old delegate stays live and keeps serving
+/// every per-request read).
 typedef ResidentGridRunner =
     Future<ResidentGridResource> Function(
-      GridDelegate delegate, {
+      ResidentGridDelegate delegate, {
       required void Function() onFlushed,
       required Future<void> Function() orphanSweep,
-      required TreeProjector treeProjector,
-      GridDelegate Function()? delegateFactory,
+      required void Function(ResidentGridDelegate next) onDelegateSwapped,
+      required TreeProjector? treeProjector,
+      ResidentGridDelegate Function()? delegateFactory,
     });
 typedef ResidentControlStarter =
     Future<ResidentControlResource> Function({
@@ -142,7 +111,7 @@ typedef ResidentControlStarter =
       required String token,
       required StationStatus Function() view,
       required GridCommandHandler commandHandler,
-      required TreeProjector treeProjector,
+      required TreeProjector? treeProjector,
     });
 typedef ResidentDevModeArmer =
     Future<ResidentDevModeResource?> Function({
@@ -158,6 +127,16 @@ typedef ResidentPrimaryCheckoutInspector =
     Future<PrimaryCheckoutFreshness> Function(SubstationWorkSpec substation);
 
 /// Boots a foreground resident station over `runGrid`.
+///
+/// The shell owns the PROCESS concerns — flag parsing, the freshness probes,
+/// the station lock, the control socket, the dev-mode seat, the diagnostics
+/// [TreeProjector] (process-lifetime, so `/stream` survives hot restarts),
+/// signals, exit codes — and reads everything stateful off the delegate's
+/// narrow vended views ([ResidentGridDelegate]): reference types flow OUT of
+/// the delegate, never in. Teardown: unmount tree → orphan sweep → dispose
+/// the delegate (all inside the runner's teardown, in that order — the sweep
+/// reaps over the delegate's boot-assembled runtime, so the delegate must
+/// outlive it) → dispose the shell's projector → release lock.
 class ResidentUpCommand extends Command<int> {
   /// Creates a resident `up` command.
   ResidentUpCommand({
@@ -166,11 +145,8 @@ class ResidentUpCommand extends Command<int> {
     required ResidentRosterReader codedRoster,
     required Set<String> harnessAllowList,
     required ResidentHarnessValidator validateHarness,
-    required SessionResolver resolver,
-    required CapabilityRegistry registry,
     StationLockService? lockService,
     ResidentLockAcquirer? acquireLock,
-    ResidentWorkBuilder? buildWork,
     ResidentGridRunner? runMountedGrid,
     ResidentControlStarter? startControl,
     ResidentDevModeArmer? armDevelopmentMode,
@@ -181,12 +157,9 @@ class ResidentUpCommand extends Command<int> {
        _codedRoster = codedRoster,
        _harnessAllowList = Set.unmodifiable(harnessAllowList),
        _validateHarness = validateHarness,
-       _resolver = resolver,
-       _registry = registry,
        _lockService = lockService ?? StationLockService(),
        _acquireLock = acquireLock,
-       _buildWork = buildWork ?? _defaultBuildWork,
-       _runMountedGrid = runMountedGrid ?? _defaultRunMountedGrid,
+       _runMountedGrid = runMountedGrid ?? defaultRunMountedGrid,
        _startControl = startControl ?? _defaultStartControl,
        _armDevelopmentMode = armDevelopmentMode ?? _defaultArmDevelopmentMode,
        _readVmServiceUri = readVmServiceUri ?? stationVmServiceUri,
@@ -209,11 +182,8 @@ class ResidentUpCommand extends Command<int> {
   final ResidentRosterReader _codedRoster;
   final Set<String> _harnessAllowList;
   final ResidentHarnessValidator _validateHarness;
-  final SessionResolver _resolver;
-  final CapabilityRegistry _registry;
   final StationLockService _lockService;
   final ResidentLockAcquirer? _acquireLock;
-  final ResidentWorkBuilder _buildWork;
   final ResidentGridRunner _runMountedGrid;
   final ResidentControlStarter _startControl;
   final ResidentDevModeArmer _armDevelopmentMode;
@@ -260,13 +230,10 @@ class ResidentUpCommand extends Command<int> {
 
     for (final selected in [config.harness, config.buildHarness]) {
       if (selected == null) continue;
-      if (!_harnessAllowList.contains(selected)) {
-        stderr.writeln(
-          '$prefix: harness "$selected" names no armed environment '
-          '(armed: ${_harnessAllowList.join(', ')}).',
-        );
-        return 64;
-      }
+      // Membership needs no shell check: `residentStationFlags` declares both
+      // harness flags with `allowed:` over the same allow list, so the parser
+      // already refused any name outside it. The shell validates only the
+      // CONFIGURATION of the armed environment.
       final refusal = _validateHarness(selected);
       if (refusal != null) {
         stderr.writeln(
@@ -276,66 +243,101 @@ class ResidentUpCommand extends Command<int> {
       }
     }
 
-    final stateStore = GridStateStore.forGridRoot(config.gridHome);
-    final locator = StoreLocator();
-    final armed = <SubstationWorkSpec>[];
-    for (final seat in roster) {
+    // Config-only construction — THE one delegate-assembly path, shared by
+    // launch (below) and every hot restart: each call arms a fresh delegate
+    // from the same inputs, resolving the roster from the canonicalized
+    // `config.gridHome`. An ASSEMBLY verb, not `build*`: this closure
+    // re-reads the coded roster and resolves the armed one — filesystem
+    // probes, skip renders, possible refusals — which STYLE.md rule 1 keeps
+    // out of any `build*` name.
+    ResidentGridDelegate assembleFreshDelegate() {
+      final delegate = _delegateFactory(config: config);
       try {
-        locator.locateWorkStore(root: seat.root, substationName: seat.name);
-        armed.add(seat);
-      } on StoreRefusal {
-        stdout.writeln(
-          '$prefix: skipping coded substation "${seat.name}" — no work store '
-          'at ${seat.root} (not present in this checkout).',
+        delegate.resolveArmedRoster(
+          coded: _codedRoster(gridHome: config.gridHome),
+          appended: config.appended,
+          onSkip: (message) => stdout.writeln('$prefix: $message'),
         );
+      } on Object {
+        // ANY resolution failure — a styled StationRefusal (no armed seat, a
+        // vanished appended store) or an unexpected throw — must leave
+        // nothing to unwind: no runner has adopted this delegate, so dispose
+        // the fresh corpse here and let the error reach the caller loudly
+        // (the launch call site maps it to an exit code; a restart caller
+        // sees it raw).
+        delegate.dispose();
+        rethrow;
       }
-    }
-    for (final seat in config.appended) {
-      try {
-        locator.locateWorkStore(root: seat.root, substationName: seat.name);
-        armed.add(
-          SubstationWorkSpec(
-            name: seat.name,
-            root: seat.root,
-            prefix: seat.prefix,
-          ),
-        );
-      } on ArgumentError catch (error) {
-        stderr.writeln('$prefix: ${error.message}');
-        return 64;
-      } on StoreRefusal catch (error) {
-        stderr.writeln('$prefix: $error');
-        return 1;
-      }
-    }
-    if (armed.isEmpty) {
-      stderr.writeln(
-        '$prefix: no substation resolved a work store at its root.',
-      );
-      return 1;
+      return delegate;
     }
 
-    final freshness = await Future.wait([
-      for (final seat in armed)
-        _inspectPrimaryCheckout(
-          seat,
-        ).then((value) => (seat: seat, value: value)),
-    ]);
+    // The ARMING POLICY is the delegate's (skip-coded vs refuse-appended,
+    // tg-1fa2.4); the shell renders its decisions and maps refusals to exit
+    // codes — the operator-visible surface is unchanged. Launch rides the
+    // SAME assembly closure as a hot restart (one roster-resolution path, off
+    // the canonicalized `config.gridHome`); on any failure the closure has
+    // already disposed the fresh delegate, so this site only renders: a
+    // styled refusal keeps its own exit code, anything else is the factory's
+    // (or the roster probe's) construction failure — exit 64, as before.
+    final ResidentGridDelegate delegate;
+    try {
+      delegate = assembleFreshDelegate();
+    } on StationRefusal catch (refusal) {
+      stderr.writeln('$prefix: $refusal');
+      return refusal.code;
+    } on Object catch (error) {
+      stderr.writeln('$prefix: $error');
+      return 64;
+    }
+    final armed = delegate.armedRoster;
+
+    // The shell OBSERVES checkout freshness (a process-level git probe); the
+    // POSTURE over the observations is the delegate's. A THROWING inspector
+    // is an unexpected error, not a styled refusal: dispose the delegate the
+    // probes run under, then let the error propagate in its own shape.
+    // One unwind step, loud-but-non-aborting (mirroring teardown's rail
+    // posture): a throwing dispose is reported to stderr and the unwind
+    // CONTINUES — every later step still runs, so the original error is
+    // never masked and a lock release at the tail is guaranteed regardless
+    // of which seat's dispose blew up.
+    Future<void> settle(String step, FutureOr<void> Function() action) async {
+      try {
+        await action();
+      } on Object catch (error) {
+        stderr.writeln('$prefix: unwind step "$step" failed: $error');
+      }
+    }
+
+    final List<({SubstationWorkSpec seat, PrimaryCheckoutFreshness value})>
+    freshness;
+    try {
+      freshness = await Future.wait([
+        for (final seat in armed)
+          _inspectPrimaryCheckout(
+            seat,
+          ).then((value) => (seat: seat, value: value)),
+      ]);
+    } on Object {
+      await settle('delegate dispose', delegate.dispose);
+      rethrow;
+    }
     final freshnessText = freshness
         .map((entry) => '${entry.seat.name}: ${entry.value.verdict}')
         .join(', ');
-    if (freshness.any((entry) => !entry.value.isFresh)) {
-      if (!config.allowStale) {
-        stderr.writeln(
-          '$prefix: refusing stale primary checkout(s): {$freshnessText}; '
-          'pass --allow-stale to warn and continue.',
-        );
+    final posture = delegate.stalenessPosture(
+      anyStale: freshness.any((entry) => !entry.value.isFresh),
+      allowStale: config.allowStale,
+      verdicts: freshnessText,
+    );
+    switch (posture) {
+      case StalenessRefused(:final message):
+        delegate.dispose();
+        stderr.writeln('$prefix: $message');
         return 64;
-      }
-      stderr.writeln(
-        '$prefix: WARNING --allow-stale accepted primary checkout verdicts: '
-        '{$freshnessText}',
-      );
+      case StalenessWarned(:final message):
+        stderr.writeln('$prefix: $message');
+      case StalenessClear():
+        break;
     }
 
     final startedAt = DateTime.now();
@@ -360,110 +362,117 @@ class ResidentUpCommand extends Command<int> {
         now: startedAt,
       );
     } on Object catch (error) {
+      await settle('delegate dispose', delegate.dispose);
       stderr.writeln('$prefix: $error');
       return 64;
     }
 
-    final diagnostics = StationDiagnosticsReporter(writeLine: stderr.writeln);
-    final ResidentWorkResource work;
+    // Between the lock and the mount: a throwing VM-service probe must not
+    // strand the un-disposed delegate NOR the held lock file. Unexpected
+    // error, not a styled refusal — unwind (lock released LAST, the unwind's
+    // standing tail) and rethrow in its own shape.
+    final String? vmServiceUri;
     try {
-      work = await _buildWork(
-        stateStore: stateStore,
-        substations: armed,
-        resolver: _resolver,
-        registry: _registry,
-        dryRun: config.dryRun,
-        maxConcurrentWork: config.maxAgents,
-        transport: diagnostics,
-      );
-    } on Object catch (error) {
-      diagnostics.dispose();
-      await stationLock.release();
-      stderr.writeln('$prefix: $error');
-      return 1;
-    }
-    try {
-      await work.start();
-    } on Object catch (error) {
-      diagnostics.dispose();
-      await work.shutdown();
-      await stationLock.release();
-      stderr.writeln('$prefix: $error');
-      return 1;
+      vmServiceUri = await _readVmServiceUri();
+    } on Object {
+      await settle('delegate dispose', delegate.dispose);
+      await settle('lock release', stationLock.release);
+      rethrow;
     }
 
-    final live = !config.dryRun;
-    final vmServiceUri = await _readVmServiceUri();
-    GridDelegate buildDelegate() => _delegateFactory(
-      config: config,
-      wiring: work.wiring,
-      provisioner: work.git,
-      gitOps: live ? GitOps(SystemGitRunner()) : null,
-      prOpener: live ? GhPrOpener(ghRunner) : null,
-    );
+    // The LIVE delegate: a hot restart retires the running one for a fresh
+    // factory build, so every per-request read below goes through this
+    // holder — never a captured stale instance. It is re-pointed ONLY at the
+    // runner's commit seam (`onDelegateSwapped`), after the fresh delegate's
+    // boot succeeded: swapping inside the factory would route reads to an
+    // un-booted delegate during the awaited boot, and to a disposed corpse
+    // forever after a FAILED restart boot.
+    var live = delegate;
+
+    // The diagnostics projection is SHELL-owned and process-lifetime: one
+    // sink for `runGrid`'s flush rail and the control surface's `/stream`,
+    // surviving hot restarts (a fresh delegate's tree flushes into the same
+    // projector). The shell disposes it after the tree unmounts.
+    final treeProjector = TreeProjector();
 
     final ResidentGridResource grid;
     try {
       grid = await _runMountedGrid(
-        buildDelegate(),
-        onFlushed: work.afterFlush,
-        orphanSweep: () async {
-          await work.sweepOrphans();
-        },
-        treeProjector: diagnostics.treeProjector,
-        delegateFactory: vmServiceUri == null ? null : buildDelegate,
+        delegate,
+        onFlushed: () => live.afterFlush(),
+        orphanSweep: () => live.sweepOrphans(),
+        onDelegateSwapped: (next) => live = next,
+        treeProjector: treeProjector,
+        delegateFactory: vmServiceUri == null ? null : assembleFreshDelegate,
       );
     } on Object catch (error) {
-      diagnostics.dispose();
-      await work.shutdown();
-      await stationLock.release();
+      // The runner's contract disposed the delegate; the shell's remaining
+      // steps are its own projector and the lock.
+      await settle('projector dispose', treeProjector.dispose);
+      await settle('lock release', stationLock.release);
       stderr.writeln('$prefix: $error');
       return 64;
     }
 
-    final token = mintControlToken();
-    final ResidentControlResource control;
-    try {
-      control = await _startControl(
-        port: config.controlPort,
-        token: token,
-        view: () => _status(config, armed, startedAt, work),
-        commandHandler: work.commands,
-        treeProjector: diagnostics.treeProjector,
-      );
-      await stationLock.updateControl(controlUrl: control.url, token: token);
-    } on Object catch (error) {
-      await grid.teardown();
-      diagnostics.dispose();
-      await work.shutdown();
-      await stationLock.release();
+    // The ONE post-mount arming unwind: every shell seat created so far is
+    // disposed in reverse creation order — including the seat whose OWN
+    // arming step threw (a bound control socket or a registered dev-mode
+    // seat must never be stranded because its lock advertisement failed).
+    Future<int> failArming(
+      Object error, {
+      ResidentControlResource? control,
+      ResidentDevModeResource? devMode,
+    }) async {
+      if (devMode != null) await settle('dev-mode dispose', devMode.dispose);
+      if (control != null) await settle('control dispose', control.dispose);
+      await settle('grid teardown', grid.teardown);
+      await settle('projector dispose', treeProjector.dispose);
+      await settle('lock release', stationLock.release);
       stderr.writeln('$prefix: $error');
       return 1;
     }
 
-    final ResidentDevModeResource? devMode;
+    final token = mintControlToken();
+    ResidentControlResource? armingControl;
+    try {
+      armingControl = await _startControl(
+        port: config.controlPort,
+        token: token,
+        // Per-request reads come off the LIVE delegate — roster included: a
+        // hot restart re-resolves the armed roster, and a closure capturing
+        // the launch-time list would render retired seats forever.
+        view: () =>
+            _status(config, live.armedRoster, startedAt, live.stationView),
+        commandHandler: _LiveDelegateCommandHandler(() => live),
+        treeProjector: treeProjector,
+      );
+      await stationLock.updateControl(
+        controlUrl: armingControl.url,
+        token: token,
+      );
+    } on Object catch (error) {
+      return failArming(error, control: armingControl);
+    }
+    final control = armingControl;
+
+    ResidentDevModeResource? devMode;
     try {
       devMode = await _armDevelopmentMode(
         vmServiceUri: vmServiceUri,
         hotReload: () async => (await grid.hotReload()).toJson(),
         hotRestart: () async => (await grid.hotRestart()).toJson(),
-        latest: () => work.latest.graph,
-        readPath: () => work.readPathName,
+        latest: () => live.stationView.latest.graph,
+        readPath: () => live.stationView.readPathName,
       );
       devMode?.register();
       if (devMode != null) {
         await stationLock.updateVmService(devMode.vmServiceUri);
       }
     } on Object catch (error) {
-      await control.dispose();
-      await grid.teardown();
-      diagnostics.dispose();
-      await work.shutdown();
-      await stationLock.release();
-      stderr.writeln('$prefix: $error');
-      return 1;
+      return failArming(error, control: control, devMode: devMode);
     }
 
+    final view = live.stationView;
     stdout
       ..writeln('$stationName up — resident station (runGrid)')
       ..writeln(
@@ -471,20 +480,28 @@ class ResidentUpCommand extends Command<int> {
         'substations: {$freshnessText}',
       )
       ..writeln(
-        'stores: read-path {${work.readPathName}}  ·  state partition: '
-        '${work.stateSubstation}',
+        'stores: read-path {${view.readPathName}}  ·  state partition: '
+        '${view.stateSubstation}',
       )
       ..writeln(
         'control: ${control.url}  ·  token: (see ${stationLock.path}, 0600)',
       );
 
+    // The unwind (tg-1fa2.4): unmount tree (in-tree resources unwind by
+    // unmount order; `teardown` then runs the orphan sweep on the still-live
+    // delegate and disposes it last) → release the shell's projector →
+    // release lock. The shell's own seats (dev mode, the control socket)
+    // close first — they are process concerns that never entered the tree.
+    // Each step is settled independently: a throwing dispose is loud but
+    // never strands the steps beneath it — the lock release always runs last.
     Future<void> unwind() async {
-      await devMode?.dispose();
-      await control.dispose();
-      await grid.teardown();
-      diagnostics.dispose();
-      await work.shutdown();
-      await stationLock.release();
+      if (devMode case final seat?) {
+        await settle('dev-mode dispose', seat.dispose);
+      }
+      await settle('control dispose', control.dispose);
+      await settle('grid teardown', grid.teardown);
+      await settle('projector dispose', treeProjector.dispose);
+      await settle('lock release', stationLock.release);
     }
 
     if (config.runFor case final runFor?) {
@@ -502,10 +519,10 @@ class ResidentUpCommand extends Command<int> {
     ResidentStationConfig config,
     List<SubstationWorkSpec> armed,
     DateTime startedAt,
-    ResidentWorkResource work,
+    ResidentStationView view,
   ) {
-    final latest = work.latest;
-    final live = latest.sessionsByWorkBead.values
+    final latest = view.latest;
+    final liveSessions = latest.sessionsByWorkBead.values
         .where((session) => !session.isTerminal)
         .length;
     final capturedAt = latest.graph.capturedAt;
@@ -518,11 +535,11 @@ class ResidentUpCommand extends Command<int> {
       startedAt: startedAt,
       version: Platform.version,
       ready: latest.graph.readyIds.length,
-      mounted: live,
-      liveSessions: live,
+      mounted: liveSessions,
+      liveSessions: liveSessions,
       lastSyncAt: capturedAt.millisecondsSinceEpoch == 0 ? null : capturedAt,
-      wedge: work.wedge,
-      sync: work.syncStatus(),
+      wedge: view.wedge,
+      sync: view.syncStatus(),
     );
   }
 }
@@ -545,55 +562,16 @@ final class _StationLockResource implements ResidentLockResource {
   Future<void> release() => _handle.release();
 }
 
-final class _StationWorkResource implements ResidentWorkResource {
-  _StationWorkResource(this._runtime);
-  final StationWorkRuntime _runtime;
+/// Routes each control-plane command to the LIVE delegate's handler — a hot
+/// restart swaps the delegate under the running control socket, so the bound
+/// handler must be re-read per request, never captured once at start.
+final class _LiveDelegateCommandHandler implements GridCommandHandler {
+  _LiveDelegateCommandHandler(this._live);
+  final ResidentGridDelegate Function() _live;
 
   @override
-  StationWorkWiring get wiring => _runtime.wiring;
-  @override
-  GridCommandHandler get commands => _runtime.commands;
-  @override
-  StationGitService get git => _runtime.git;
-  @override
-  String get stateSubstation => _runtime.stateSubstation;
-  @override
-  String get readPathName => _runtime.readPathName;
-  @override
-  JoinedSnapshot get latest => _runtime.latest;
-  @override
-  WedgeState get wedge => _runtime.wedge;
-  @override
-  Map<String, Object?> syncStatus() => <String, Object?>{
-    'stats': <String, Object?>{
-      for (final e in _runtime.syncStats.entries)
-        e.key: <String, Object?>{
-          'signalCounts': <String, Object?>{
-            for (final s in e.value.signalCounts.entries) s.key.name: s.value,
-          },
-          'refreshCount': e.value.refreshCount,
-          'lastRefreshMs': e.value.lastRefresh?.inMilliseconds,
-          'lastReactionMs': e.value.lastReaction?.inMilliseconds,
-          'refreshing': e.value.refreshing,
-          'pendingFollowUp': e.value.pendingFollowUp,
-        },
-    },
-    'freshness': <String, Object?>{
-      for (final e in _runtime.workFreshness.entries)
-        e.key: <String, Object?>{
-          'capturedAt': e.value.capturedAt?.toIso8601String(),
-          'stale': e.value.stale,
-        },
-    },
-  };
-  @override
-  Future<void> start() => _runtime.start();
-  @override
-  void afterFlush() => _runtime.afterFlush();
-  @override
-  Future<void> sweepOrphans() => _runtime.sweepOrphans();
-  @override
-  Future<void> shutdown() => _runtime.shutdown();
+  Future<GridCommandResult> call(GridCommandRequest request) =>
+      _live().commandHandler(request);
 }
 
 final class _GridResource implements ResidentGridResource {
@@ -630,48 +608,58 @@ final class _DevModeResource implements ResidentDevModeResource {
   Future<void> dispose() => _seat.dispose();
 }
 
-Future<ResidentWorkResource> _defaultBuildWork({
-  required GridStateStore stateStore,
-  required List<SubstationWorkSpec> substations,
-  required SessionResolver resolver,
-  required CapabilityRegistry registry,
-  required bool dryRun,
-  required int maxConcurrentWork,
-  required ExplorationTransport transport,
-}) async => _StationWorkResource(
-  await assembleStationWork(
-    stateStore: stateStore,
-    substations: substations,
-    resolver: resolver,
-    registry: registry,
-    dryRun: dryRun,
-    maxConcurrentWork: maxConcurrentWork,
-    transport: transport,
-  ),
-);
-
-Future<ResidentGridResource> _defaultRunMountedGrid(
-  GridDelegate delegate, {
+/// The production [ResidentGridRunner]: `runGrid` plus the seam's
+/// dispose-on-failure contract. Visible for testing so the contract is pinned
+/// on THIS glue, not re-implemented by every test fake.
+@visibleForTesting
+Future<ResidentGridResource> defaultRunMountedGrid(
+  ResidentGridDelegate delegate, {
   required void Function() onFlushed,
   required Future<void> Function() orphanSweep,
-  required TreeProjector treeProjector,
-  GridDelegate Function()? delegateFactory,
-}) async => _GridResource(
-  await runGrid(
-    delegate,
-    onFlushed: onFlushed,
-    orphanSweep: orphanSweep,
-    treeProjector: treeProjector,
-    delegateFactory: delegateFactory,
-  ),
-);
+  required void Function(ResidentGridDelegate next) onDelegateSwapped,
+  required TreeProjector? treeProjector,
+  ResidentGridDelegate Function()? delegateFactory,
+}) async {
+  try {
+    return _GridResource(
+      await runGrid(
+        delegate,
+        onFlushed: onFlushed,
+        orphanSweep: orphanSweep,
+        treeProjector: treeProjector,
+        delegateFactory: delegateFactory,
+        // The only delegates the runner ever swaps in come from
+        // `delegateFactory` above, which produces [ResidentGridDelegate]s —
+        // the downcast is total by construction.
+        onDelegateSwapped: (next) =>
+            onDelegateSwapped(next as ResidentGridDelegate),
+      ),
+    );
+  } on Object catch (error, stackTrace) {
+    // runGrid's boot-failure path already disposed the delegate; the other
+    // pre-handle failures (`didLaunch`, the mount itself) leave it live —
+    // dispose it here so the seam's contract holds either way: on failure
+    // the delegate is DOWN before the error reaches the shell. A throwing
+    // dispose is loud but never masks the mount failure being rethrown.
+    if (error is! GridHookError || error.hook != 'boot') {
+      try {
+        delegate.dispose();
+      } on Object catch (disposeError) {
+        stderr.writeln(
+          'delegate dispose during failure unwind failed: $disposeError',
+        );
+      }
+    }
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+}
 
 Future<ResidentControlResource> _defaultStartControl({
   required int port,
   required String token,
   required StationStatus Function() view,
   required GridCommandHandler commandHandler,
-  required TreeProjector treeProjector,
+  required TreeProjector? treeProjector,
 }) async => _ControlResource(
   await StationControl.start(
     port: port,

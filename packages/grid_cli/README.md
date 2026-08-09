@@ -88,19 +88,19 @@ bin while the resident-station work is in flight.
 
 `grid_cli` vends the resident `up`, `down`, and `status` verbs for base
 stations composed directly on the_grid. A station supplies its own authored
-delegate, roster, harness security policy, and circuit values; no subclass or
-environment registry is imposed:
+`ResidentGridDelegate` factory (config-only construction — assembly, circuit
+resolution, and the capability registry are the delegate's `boot` concern),
+roster, and harness security policy; no subclass or environment registry is
+imposed:
 
 ```dart
 final runner = CommandRunner<int>('lunar', 'Lunar station')
   ..addCommand(ResidentUpCommand(
     stationName: 'lunar',
-    delegateFactory: buildLunarDelegate,
+    delegateFactory: ({required config}) => LunarDelegate(config: config),
     codedRoster: lunarRoster,
     harnessAllowList: lunarHarnesses.names.toSet(),
     validateHarness: (name) => lunarHarnesses.resolve(name).validate(),
-    resolver: lunarCircuitResolver,
-    registry: lunarCapabilityRegistry,
   ))
   ..addCommand(ResidentDownCommand(stationName: 'lunar'))
   ..addCommand(ResidentStatusCommand(stationName: 'lunar'));

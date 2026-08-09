@@ -34,8 +34,10 @@ import 'reassemble.dart';
 ///     attributed, and reported loudly via [onError] — the running grid stands.
 ///
 /// Returns a [GridHandle]: `await teardown()` runs `onTeardown`, unmounts the
-/// tree (every mounted effect tears down with it), then runs [orphanSweep] —
-/// the teardown-vs-spawn reap. [orphanSweep] is null by default (a station with
+/// tree (every mounted effect tears down with it), runs [orphanSweep] — the
+/// teardown-vs-spawn reap — and only then disposes the delegate: the sweep
+/// reconciles over the delegate's boot-assembled runtime, so the delegate must
+/// still be LIVE to serve it. [orphanSweep] is null by default (a station with
 /// no process transport has nothing to sweep); a runner with work machinery
 /// passes `work.sweepOrphans`.
 ///
@@ -60,6 +62,16 @@ import 'reassemble.dart';
 /// (flags, env, wiring, harness registry). A JIT station (started with
 /// `--enable-vm-service`) passes it; an AOT station omits it and `hotRestart`
 /// then refuses LOUDLY. [GridHandle.hotReload] needs no factory.
+///
+/// [onDelegateSwapped] fires synchronously at the hot-restart COMMIT point —
+/// after the fresh delegate's `boot` succeeded and the handle adopted it as
+/// the live delegate, before the retired one is disposed. It is the seam a
+/// composing shell re-points its per-request read surface (status views,
+/// command handlers, sweep closures) through: swapping a shell-side holder
+/// inside [delegateFactory] instead would publish an un-booted delegate, and
+/// a FAILED restart boot would leave the shell reading a disposed corpse
+/// while the mounted grid keeps running the old delegate. Never invoked for
+/// the launch delegate, and never on a failed restart.
 Future<GridHandle> runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
@@ -67,6 +79,7 @@ Future<GridHandle> runGrid(
   TreeProjector? treeProjector,
   Future<void> Function()? orphanSweep,
   GridDelegate Function()? delegateFactory,
+  void Function(GridDelegate next)? onDelegateSwapped,
 }) async {
   final report = onError ?? _rethrowToZone;
 
@@ -100,19 +113,40 @@ Future<GridHandle> runGrid(
     orphanSweep,
     reassemble,
     delegateFactory,
+    onDelegateSwapped,
   );
   // Wire the flush trigger BEFORE mounting: the first build runs synchronously
   // in mountRoot with no markNeedsRebuild (the config scope assigns its
   // baseline directly, never setState during mount), so onNeedsFlush cannot
   // fire during it.
   handle._wireFlush();
-  final root = owner.mountRoot(
-    _GridConfigurationScope(delegate: delegate, reassemble: reassemble),
-  );
-  owner.flush();
-  handle._root = root;
-  treeProjector?.afterFlush(root);
-  onFlushed?.call();
+  try {
+    final root = owner.mountRoot(
+      _GridConfigurationScope(delegate: delegate, reassemble: reassemble),
+    );
+    owner.flush();
+    handle._root = root;
+    treeProjector?.afterFlush(root);
+    onFlushed?.call();
+  } on Object {
+    // A throw anywhere between mount and the first completed flush must not
+    // strand the owner and the reassemble bus — release both, then let the
+    // error reach the caller raw (the composing shell owns the delegate's
+    // disposal on this path). RESIDUAL LIMIT: genesis_tree 0.2.0's
+    // `mountRoot` assigns its root only after `mount` returns, so a
+    // mid-mount throw leaves the partially mounted branches unreachable —
+    // `owner.dispose()` then unmounts nothing. That is an upstream seam (a
+    // bead will track it); do not fork or patch genesis_tree here.
+    // The handle dies with the rail: a branch dirtied during mount has already
+    // scheduled the coalesced flush microtask, and TreeOwner.dispose does not
+    // clear onNeedsFlush — marking the handle torn down makes that pending
+    // microtask take its early-out instead of flushing a disposed owner and
+    // reading the never-assigned root mid-unwind.
+    handle._tornDown = true;
+    owner.dispose();
+    reassemble.dispose();
+    rethrow;
+  }
 
   // 4. Post-mount async kickoff — unawaited by the caller; onReady chained
   // after it; both surfaced loud on failure.
@@ -166,6 +200,7 @@ class GridHandle {
     this._orphanSweep,
     this._reassemble,
     this._delegateFactory,
+    this._onDelegateSwapped,
   );
 
   final TreeOwner _owner;
@@ -191,6 +226,9 @@ class GridHandle {
 
   /// The hot-RESTART factory — null when the station never armed one.
   final GridDelegate Function()? _delegateFactory;
+
+  /// The hot-restart COMMIT notification (see [runGrid]'s `onDelegateSwapped`).
+  final void Function(GridDelegate next)? _onDelegateSwapped;
 
   /// Callers awaiting the NEXT completed flush (one per in-flight reassemble),
   /// completed with the reassemble report — or failed LOUDLY if the grid tears
@@ -350,10 +388,24 @@ class GridHandle {
       next.dispose();
       throw GridHookError('boot', next.runtimeType, error, stackTrace);
     }
+    // Re-check AFTER the awaited boot: teardown() can land while the fresh
+    // delegate boots, and committing past it would swap the shell's read
+    // surface onto a delegate whose tree is already unmounted (and dispose
+    // the corpse twice — teardown already disposed the live one). Refuse
+    // LOUDLY before assigning the live holder, notifying the commit seam, or
+    // kicking off the post-mount rails.
+    if (_tornDown) {
+      next.dispose();
+      throw StateError('the grid tore down during the restart boot');
+    }
     final generation = ++_generation;
     // The LIVE delegate from here on: teardown must reach this one, never the
     // corpse the configuration scope is about to retire.
     _delegate = next;
+    // THE COMMIT NOTIFICATION — synchronous with the swap, so a composing
+    // shell's read surface never spans an event-loop turn pointed at either
+    // an un-booted fresh delegate or the retired corpse.
+    _onDelegateSwapped?.call(next);
     final done = _reassemble0(
       RestartRequest(generation, next),
       ReassembleMode.restart,
@@ -400,8 +452,12 @@ class GridHandle {
   }
 
   /// Tears the grid down: runs `onTeardown` (loud on failure, non-aborting),
-  /// unmounts the tree (every mounted effect tears down), disposes the delegate,
-  /// and ENDS with the ORPHAN SWEEP when one is wired.
+  /// unmounts the tree (every mounted effect tears down), runs the ORPHAN
+  /// SWEEP when one is wired, and ENDS by disposing the delegate. The sweep
+  /// precedes the dispose BY CONTRACT: it is the teardown-vs-spawn reap on the
+  /// delegate's boot-assembled runtime, and `dispose` unwinds exactly that
+  /// machinery — a sweep served off a disposed delegate would silently
+  /// recreate the orphaned-agent window it exists to close.
   ///
   /// **`await` it.** Unmount = kill, but the kill chain is fire-and-forget
   /// (`CapabilityHost.dispose` → `unawaited(allocation.dispose())` →
@@ -438,20 +494,22 @@ class GridHandle {
       _report(GridHookError('onTeardown', _delegate.runtimeType, e, st));
     }
     // Unmount first (the configuration scope's dispose removes its listener
-    // off the delegate), then dispose the delegate.
+    // off the delegate).
     _owner.dispose();
-    _delegate.dispose();
     _reassemble.dispose();
-    // ... and END with the sweep: no effect of this tree may outlive its
-    // unmount. It runs AFTER the unmount by construction — the stragglers it
-    // reconciles against zero-expected only exist once the kills are in flight.
+    // The sweep runs AFTER the unmount by construction — the stragglers it
+    // reconciles against zero-expected only exist once the kills are in
+    // flight — and BEFORE the delegate disposes: it is the reap on the
+    // delegate's boot-assembled runtime, which `dispose` unwinds.
     final sweep = _orphanSweep;
-    if (sweep == null) return;
-    try {
-      await sweep();
-    } catch (e, st) {
-      _report(GridHookError('orphanSweep', _delegate.runtimeType, e, st));
+    if (sweep != null) {
+      try {
+        await sweep();
+      } catch (e, st) {
+        _report(GridHookError('orphanSweep', _delegate.runtimeType, e, st));
+      }
     }
+    _delegate.dispose();
   }
 }
 
