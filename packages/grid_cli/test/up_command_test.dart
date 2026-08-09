@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/grid_cli.dart';
+import 'package:grid_exploration/grid_exploration.dart' show armDevMode;
 import 'package:grid_runtime/grid_runtime.dart'
     show PrimaryCheckoutFreshness, PrimaryCheckoutState;
 import 'package:grid_sdk/grid_sdk.dart';
@@ -1208,6 +1209,83 @@ void main() {
 
       h.release.complete();
       expect(await run, 0);
+    });
+
+    test('through the REAL armDevMode stack, a null-view station arms '
+        'dev mode and never fabricates a join: no baseline is captured, '
+        'the graph tools render the never-joined shape, the refused '
+        'refresh rides the errors stream, and the per-request read '
+        'refuses LOUD', () async {
+      // The default dev-mode wiring hands `armDevMode` closures that read
+      // the LIVE delegate's vended view; with no view they refuse. The
+      // injected-seam test above pins the refusal itself — THIS test pins
+      // what the refusal renders as end-to-end through the production
+      // stack: `latest` feeds the seat's graph refresh, whose refusal is
+      // published on the runtime's errors stream (never thrown into the
+      // boot, never a fabricated snapshot), so the graph tools serve zero
+      // beads with `capturedAt: null` — distinguishable from every real
+      // join, which always carries its capture time — while `readPath` is
+      // read per-request and throws through to the RPC layer.
+      StationView? vended; // a delegate vending no station view
+      StationView requireView() =>
+          vended ??
+          (throw StateError(
+            'this station\'s delegate vends no station view '
+            '(GridDelegate.stationView is null).',
+          ));
+      final seat = (await armDevMode(
+        vmServiceUri: 'ws://test-vm',
+        hotReload: () async => const {},
+        hotRestart: () async => const {},
+        latest: () => requireView().latest.graph,
+        readPath: () => requireView().readPathName,
+      ))!;
+      addTearDown(seat.dispose);
+
+      // Arming SURVIVED the refused baseline read — and captured nothing.
+      expect(seat.runtime.current, isNull);
+
+      // The latest-backed graph tools render the honest never-joined
+      // shape, not a fabricated join.
+      final snapshot = await seat.host.plugin.dispatch('snapshot', const {});
+      expect(snapshot['ok'], isTrue);
+      final value = snapshot['value']! as Map<String, Object?>;
+      expect(value['beadCount'], 0);
+      expect(value['readyCount'], 0);
+      expect(value['readyBeads'], isEmpty);
+      expect(value['capturedAt'], isNull);
+
+      // The refused refresh is published on the runtime's errors stream —
+      // where a listener finds it — never swallowed into a thrown boot.
+      final refusals = <Object>[];
+      final tap = seat.runtime.errors.listen(
+        (refusal) => refusals.add(refusal.error),
+      );
+      addTearDown(tap.cancel);
+      final requery = await seat.host.plugin.dispatch('requery', const {});
+      expect(requery['ok'], isTrue);
+      await pumpEventQueue();
+      expect(refusals, [
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('vends no station view'),
+        ),
+      ]);
+      expect(seat.runtime.current, isNull, reason: 'still no baseline');
+
+      // The per-request read refuses LOUD through to the RPC layer.
+      expect(
+        () => seat.host.plugin.observe(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'this station\'s delegate vends no station view '
+                '(GridDelegate.stationView is null).',
+          ),
+        ),
+      );
     });
   });
 

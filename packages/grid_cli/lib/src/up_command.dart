@@ -467,9 +467,16 @@ class UpCommand extends Command<int> {
         vmServiceUri: vmServiceUri,
         hotReload: () async => (await grid.hotReload()).toJson(),
         hotRestart: () async => (await grid.hotRestart()).toJson(),
-        // A station that vends no view has no join to serve: the seat's
-        // per-request read refuses LOUD (a designed absence, never a silent
-        // empty answer).
+        // A station that vends no view has no join to serve, and a
+        // fabricated snapshot would masquerade as a real one. The refusal
+        // renders where each read actually reaches the delegate: [readPath]
+        // is per-request and refuses LOUD through the RPC layer, while
+        // [latest] feeds the seat's graph refresh — the refused refresh
+        // rides the runtime's errors stream, no baseline is ever captured,
+        // and the graph tools serve the distinguishable never-joined shape
+        // (zero beads, `capturedAt: null`), never a fabricated join. Pinned
+        // end-to-end through the real `armDevMode` stack by
+        // up_command_test's absence-posture group.
         latest: () => _requireView(live).latest.graph,
         readPath: () => _requireView(live).readPathName,
       );
