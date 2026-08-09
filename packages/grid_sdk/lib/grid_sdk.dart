@@ -57,13 +57,15 @@ export 'src/composition/composition.dart' hide AssetFanOut;
 export 'src/composition/scopes.dart';
 
 // ── runGrid + GridDelegate + GridConfiguration (Track C — tg-tv3) ────────────
-// The entry point + lifecycle rails: `runGrid(delegate)` mounts *configuration
-// provision → build*, returning a `GridHandle`. The delegate is held by
+// The entry point + lifecycle rails: `await runGrid(delegate)` runs
+// `didLaunch → boot → mount`, returning a `GridHandle`; `initGrid → onReady`
+// follows as an unawaited kickoff. The delegate is held by
 // `runGrid` — it never rides the tree, so its `.state` can't be snapshotted
 // (ADR-0008 D-H); only its emitted `GridConfiguration` is ambient.
 //   GridDelegate      · the observable `StateNotifier<GridConfiguration>`; the
-//                       lifecycle rails (`didLaunch` pre-tree / `initGrid`
-//                       post-mount async / `onReady` / `onTeardown`, failures
+//                       lifecycle rails (`didLaunch` / awaited `boot` pre-tree /
+//                       `initGrid` post-mount async / `onReady` / `onTeardown`,
+//                       failures
 //                       captured + attributed + loud as a `GridHookError`); and
 //                       the master `build(context, configuration)` returning
 //                       the §2 station tree (default: the `RawAssetGrid` root).
@@ -125,7 +127,7 @@ export 'src/command/resident_command_handler.dart';
 //                           {name, prefix} — BOTH identity axes) and mounts
 //                           the `WorkList`. Unarmed (no `StationWork` above)
 //                           it mounts nothing — the authored tree stands.
-//   buildStationWork(...) · assembles the off-tree machinery over REAL stores
+//   assembleStationWork(...) · assembles the off-tree machinery over REAL stores
 //                           at their roots (controllers → join bridge →
 //                           chokepoint → restart reconciler → driver), one
 //                           dry/live posture, exact-at-root store binding
@@ -139,10 +141,10 @@ export 'src/work/station_work.dart';
 export 'src/work/work_assembly.dart';
 // The narrow engine seam a RUNNER names when assembling (ADR-0008 D2 —
 // consumers still never import grid_engine): the bead→circuit resolver + the
-// registry/resolver types `buildStationWork` accepts. An asset pack (e.g.
+// registry/resolver types `assembleStationWork` accepts. An asset pack (e.g.
 // grid_assets' code circuit) supplies the values.
 // The wedge signal (tg-jwh) rides here too: a runner reads `work.wedge` for its
-// status view, and passes an `ExplorationTransport` to `buildStationWork` when it
+// status view, and passes an `ExplorationTransport` to `assembleStationWork` when it
 // adapts a sink for the `station.wedged` flare. `WedgeMonitor` itself is NOT
 // exported — the driver owns it; a runner only ever READS the state.
 export 'package:grid_engine/grid_engine.dart'

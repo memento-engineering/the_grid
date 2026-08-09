@@ -1,4 +1,4 @@
-// Track J (tg-yl8) — buildStationWork's fail-closed store binding: EXACT at
+// Track J (tg-yl8) — assembleStationWork's fail-closed store binding: EXACT at
 // the root, LOUD refusal, never a walk-up. The A37 gate is the load-bearing
 // one: a missing `<grid.root>/.grid/.beads` must REFUSE — the old walk-up
 // discovery would have silently bound the dual-role repo's WORK store and
@@ -57,7 +57,7 @@ void main() {
     List<SubstationWorkSpec>? substations,
     String? gridRoot,
     GridStateStore? stateStore,
-  }) => buildStationWork(
+  }) => assembleStationWork(
     stateStore:
         stateStore ??
         GridStateStore.forGridRoot(gridRoot ?? '${tmp.path}/home'),
@@ -252,7 +252,7 @@ void main() {
         late WorkNoteAppender appendWorkNote;
         final builtRegistry = engine.DefaultCapabilityRegistry();
 
-        final work = await buildStationWork(
+        final work = await assembleStationWork(
           stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
           substations: [
             SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
@@ -313,7 +313,7 @@ void main() {
       var builderCalled = false;
 
       await expectLater(
-        buildStationWork(
+        assembleStationWork(
           stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
           substations: [
             SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),

@@ -34,7 +34,7 @@ typedef StationReassemble = Future<Map<String, Object?>> Function();
 /// subclass):
 ///
 /// ```dart
-/// final grid = runGrid(delegate, delegateFactory: buildDelegate);
+/// final grid = await runGrid(delegate, delegateFactory: buildDelegate);
 /// GridExplorationHost(
 ///   runtime,
 ///   reassemble: ReassembleTool(

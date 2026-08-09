@@ -90,16 +90,21 @@ class _TestDelegate extends GridDelegate {
     required this.wiring,
     required this.substationProbe,
     required this.launches,
+    required this.boots,
     required this.inits,
   });
 
   final StationWorkWiring wiring;
   final List<int> substationProbe;
   final List<String> launches;
+  final List<String> boots;
   final List<String> inits;
 
   @override
   void didLaunch() => launches.add('didLaunch');
+
+  @override
+  Future<void> boot(GridConfiguration configuration) async => boots.add('boot');
 
   @override
   Future<void> initGrid() async => inits.add('initGrid');
@@ -208,6 +213,7 @@ typedef _Rig = ({
   Fakes fakes,
   List<int> substationProbe,
   List<String> launches,
+  List<String> boots,
   List<String> inits,
 });
 
@@ -251,7 +257,7 @@ Future<void> _pushMoleculeState(_Rig rig, String workBeadId) async {
 
 /// Mounts the full composition via runGrid over fakes, with the delegate built
 /// by a FACTORY the handle can re-run.
-_Rig _arm({bool withFactory = true}) {
+Future<_Rig> _arm({bool withFactory = true}) async {
   final work = FakeSnapshotSource();
   final state = FakeSnapshotSource();
   final bridge = engine.StationJoinBridge(work: work, state: state);
@@ -267,6 +273,7 @@ _Rig _arm({bool withFactory = true}) {
   final resolver = _RecordingResolver(engine.CircuitResolver((_) => _code));
   final substationProbe = <int>[];
   final launches = <String>[];
+  final boots = <String>[];
   final inits = <String>[];
   final delegates = <_TestDelegate>[];
   // The runner-level wiring is built ONCE and captured by the factory closure —
@@ -284,6 +291,7 @@ _Rig _arm({bool withFactory = true}) {
       wiring: wiring,
       substationProbe: substationProbe,
       launches: launches,
+      boots: boots,
       inits: inits,
     );
     delegates.add(delegate);
@@ -291,7 +299,10 @@ _Rig _arm({bool withFactory = true}) {
   }
 
   bridge.start();
-  final grid = runGrid(build(), delegateFactory: withFactory ? build : null);
+  final grid = await runGrid(
+    build(),
+    delegateFactory: withFactory ? build : null,
+  );
   return (
     grid: grid,
     delegates: delegates,
@@ -301,6 +312,7 @@ _Rig _arm({bool withFactory = true}) {
     fakes: fakes,
     substationProbe: substationProbe,
     launches: launches,
+    boots: boots,
     inits: inits,
   );
 }
@@ -310,7 +322,7 @@ void main() {
     test(
       'hot RELOAD re-runs the master build and ADOPTS the running agent',
       () async {
-        final rig = _arm();
+        final rig = await _arm();
         addTearDown(rig.grid.teardown);
         rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
         await _pump();
@@ -347,7 +359,7 @@ void main() {
         StackTrace? uncaughtStack;
         ReassembleReport? report;
         final delegate = _ThrowingReloadDelegate();
-        final grid = runGrid(delegate);
+        final grid = await runGrid(delegate);
         addTearDown(grid.teardown);
 
         await runZonedGuarded(
@@ -375,7 +387,7 @@ void main() {
     );
 
     test('hot RESTART re-runs the delegate FACTORY and STILL adopts', () async {
-      final rig = _arm();
+      final rig = await _arm();
       addTearDown(rig.grid.teardown);
       rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
       await _pump();
@@ -400,6 +412,7 @@ void main() {
       // pre-tree, terminal rail — did NOT (the tree never re-mounted).
       expect(rig.inits, ['initGrid', 'initGrid']);
       expect(rig.launches, ['didLaunch']);
+      expect(rig.boots, ['boot', 'boot']);
       // …and the session's agent is still the SAME running process.
       expect(rig.fakes.provider.stopped, isEmpty);
       expect(rig.fakes.provider.started, hasLength(1));
@@ -409,7 +422,7 @@ void main() {
 
     test('POSITIVE CONTROL: a real unmount DOES kill (the probe is not '
         'vacuous)', () async {
-      final rig = _arm();
+      final rig = await _arm();
       rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
       await _pump();
       await _pushMoleculeState(rig, 'pow-1');
@@ -422,13 +435,13 @@ void main() {
     });
 
     test('hotRestart with NO delegateFactory refuses LOUDLY', () async {
-      final rig = _arm(withFactory: false);
+      final rig = await _arm(withFactory: false);
       addTearDown(rig.grid.teardown);
       expect(rig.grid.hotRestart, throwsA(isA<StateError>()));
     });
 
     test('both verbs refuse LOUDLY after teardown', () async {
-      final rig = _arm();
+      final rig = await _arm();
       await rig.grid.teardown();
       expect(rig.grid.hotReload, throwsA(isA<StateError>()));
       expect(rig.grid.hotRestart, throwsA(isA<StateError>()));

@@ -8,18 +8,19 @@ import 'configuration.dart';
 ///
 /// The v2 `buildServices`/`buildSources` hook split **died** with the
 /// code-as-config pivot: framework-owned layering is gone, because assets mount
-/// in the tree at the right scope. What survives is exactly three things:
+/// in the tree at the right scope. What survives is exactly three things, with
+/// five lifecycle rails:
 ///
 ///  1. **Being the observable.** A `GridDelegate` *is* a
 ///     `StateNotifier<GridConfiguration>` (a thin plain value, Q6). Its state is
 ///     the current configuration; emitting a new one (`state = …` from a
 ///     subclass) re-composes the tree through the same reconcile path as any
 ///     observed change — no restart, no re-parse.
-///  2. **The lifecycle rails** — [didLaunch] (pre-tree), [initGrid] (post-mount
-///     async kickoff, unawaited), [onReady], [onTeardown]. A rail that throws is
-///     captured, **attributed, and surfaced loud** as a [GridHookError] — a
-///     named refusal, never a bare stack trace from library plumbing (the guard
-///     principle).
+///  2. **The lifecycle rails** — [didLaunch] (synchronous pre-tree), [boot]
+///     (awaited pre-tree assembly), [initGrid] (post-mount async kickoff,
+///     unawaited), [onReady], [onTeardown]. A rail that throws is captured,
+///     **attributed, and surfaced loud** as a [GridHookError] — a named refusal,
+///     never a bare stack trace from library plumbing (the guard principle).
 ///  3. **The master [build]** `(context, configuration) → Seed` — returns the
 ///     station tree (v3 §2). §2's `SpaceStationAsASeed.build` *is* this method
 ///     in delegate clothing; a full station overrides it wholesale.
@@ -80,6 +81,14 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// mounts. Default: no-op. (Override to run; `runGrid` calls it.)
   void didLaunch() {}
 
+  /// PRE-tree asynchronous assembly rail.
+  ///
+  /// [configuration] is the delegate's initial observed value. Override only to
+  /// construct and connect owner-held resources required before the first mount;
+  /// policy remains in [build]. `runGrid` awaits this method exactly once for
+  /// each delegate instance. A failure is terminal for that instance.
+  Future<void> boot(GridConfiguration configuration) async {}
+
   /// **POST-mount async kickoff** — started after the tree is up and
   /// **unawaited** by `runGrid` (the grid is live while this runs). This is
   /// where post-mount async work belongs: warming caches, opening federation
@@ -122,8 +131,8 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
 /// stack trace from library plumbing (v3 §4; the guard principle: loud when an
 /// invariant is violated).
 ///
-/// A `didLaunch` failure is thrown from `runGrid` (the launch aborts). The
-/// post-mount rails ([GridDelegate.initGrid] / [GridDelegate.onReady] /
+/// A `didLaunch` or `boot` failure is thrown from `runGrid` (the launch aborts).
+/// The post-mount rails ([GridDelegate.initGrid] / [GridDelegate.onReady] /
 /// [GridDelegate.onTeardown]) cannot throw to a caller, so `runGrid` reports
 /// their refusals through its error sink (loud by default — rethrown into the
 /// current zone).
@@ -132,7 +141,8 @@ class GridHookError extends Error {
   /// of type [delegateType].
   GridHookError(this.hook, this.delegateType, this.cause, this.causeStackTrace);
 
-  /// The rail that threw: `didLaunch` / `initGrid` / `onReady` / `onTeardown`.
+  /// The rail that threw: `didLaunch` / `boot` / `initGrid` / `onReady` /
+  /// `onTeardown`.
   final String hook;
 
   /// The runtime type of the delegate whose rail threw.

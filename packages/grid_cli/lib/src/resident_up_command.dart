@@ -33,7 +33,7 @@ import 'package:grid_sdk/grid_sdk.dart'
         StoreRefusal,
         SubstationWorkSpec,
         TreeProjector,
-        buildStationWork,
+        assembleStationWork,
         ghRunner,
         runGrid;
 import 'package:path/path.dart' as p;
@@ -129,7 +129,7 @@ typedef ResidentWorkBuilder =
       required ExplorationTransport transport,
     });
 typedef ResidentGridRunner =
-    ResidentGridResource Function(
+    Future<ResidentGridResource> Function(
       GridDelegate delegate, {
       required void Function() onFlushed,
       required Future<void> Function() orphanSweep,
@@ -404,7 +404,7 @@ class ResidentUpCommand extends Command<int> {
 
     final ResidentGridResource grid;
     try {
-      grid = _runMountedGrid(
+      grid = await _runMountedGrid(
         buildDelegate(),
         onFlushed: work.afterFlush,
         orphanSweep: () async {
@@ -639,7 +639,7 @@ Future<ResidentWorkResource> _defaultBuildWork({
   required int maxConcurrentWork,
   required ExplorationTransport transport,
 }) async => _StationWorkResource(
-  await buildStationWork(
+  await assembleStationWork(
     stateStore: stateStore,
     substations: substations,
     resolver: resolver,
@@ -650,14 +650,14 @@ Future<ResidentWorkResource> _defaultBuildWork({
   ),
 );
 
-ResidentGridResource _defaultRunMountedGrid(
+Future<ResidentGridResource> _defaultRunMountedGrid(
   GridDelegate delegate, {
   required void Function() onFlushed,
   required Future<void> Function() orphanSweep,
   required TreeProjector treeProjector,
   GridDelegate Function()? delegateFactory,
-}) => _GridResource(
-  runGrid(
+}) async => _GridResource(
+  await runGrid(
     delegate,
     onFlushed: onFlushed,
     orphanSweep: orphanSweep,

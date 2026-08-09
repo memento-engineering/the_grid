@@ -150,8 +150,8 @@ final class _Harness {
             required transport,
           }) async {
             this.transport = transport;
-            events.add('buildStationWork');
-            _throwIf('buildStationWork');
+            events.add('assembleStationWork');
+            _throwIf('assembleStationWork');
             return _Work(events, failAt);
           },
       runMountedGrid:
@@ -161,7 +161,7 @@ final class _Harness {
             required orphanSweep,
             required treeProjector,
             delegateFactory,
-          }) {
+          }) async {
             gridProjector = treeProjector;
             events.add('runGrid');
             _throwIf('runGrid');
@@ -491,7 +491,7 @@ void main() {
       expect(h.events, <String>[
         'inspect:earth',
         'lock',
-        'buildStationWork',
+        'assembleStationWork',
         'work.start',
         'runGrid',
         'control',
@@ -530,7 +530,7 @@ void main() {
         containsAllInOrder(<String>[
           'inspect:earth',
           'lock',
-          'buildStationWork',
+          'assembleStationWork',
         ]),
       );
     });
@@ -677,9 +677,9 @@ void main() {
   group('ResidentUpCommand partial failure unwind', () {
     final cases = <(String point, int code, List<String> events)>[
       (
-        'buildStationWork',
+        'assembleStationWork',
         1,
-        ['inspect:earth', 'lock', 'buildStationWork', 'lock.release'],
+        ['inspect:earth', 'lock', 'assembleStationWork', 'lock.release'],
       ),
       (
         'work.start',
@@ -687,7 +687,7 @@ void main() {
         [
           'inspect:earth',
           'lock',
-          'buildStationWork',
+          'assembleStationWork',
           'work.start',
           'work.shutdown',
           'lock.release',
@@ -699,7 +699,7 @@ void main() {
         [
           'inspect:earth',
           'lock',
-          'buildStationWork',
+          'assembleStationWork',
           'work.start',
           'runGrid',
           'work.shutdown',
@@ -712,7 +712,7 @@ void main() {
         [
           'inspect:earth',
           'lock',
-          'buildStationWork',
+          'assembleStationWork',
           'work.start',
           'runGrid',
           'control',
@@ -727,7 +727,7 @@ void main() {
         [
           'inspect:earth',
           'lock',
-          'buildStationWork',
+          'assembleStationWork',
           'work.start',
           'runGrid',
           'control',

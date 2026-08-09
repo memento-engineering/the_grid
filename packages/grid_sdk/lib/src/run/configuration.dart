@@ -48,7 +48,7 @@ abstract class GridConfiguration with _$GridConfiguration {
       throw StateError(
         'GridConfiguration.of: no configuration in scope. The ambient '
         'GridConfiguration is provided by runGrid — read it inside the grid '
-        'tree, below runGrid(delegate).',
+        'tree, below await runGrid(delegate).',
       );
     }
     return config;

@@ -223,7 +223,10 @@ typedef _Rig = ({
 /// Mounts the FULL new composition via runGrid over fakes — the bridge started
 /// first (the pinned ordering's tail: barrier/restart are runner concerns
 /// proven in the assembly; here the bridge simply precedes the mount).
-_Rig _arm({bool armed = true, engine.CapabilityRegistry? registryOverride}) {
+Future<_Rig> _arm({
+  bool armed = true,
+  engine.CapabilityRegistry? registryOverride,
+}) async {
   final work = FakeSnapshotSource();
   final state = FakeSnapshotSource();
   final bridge = engine.StationJoinBridge(work: work, state: state);
@@ -254,7 +257,7 @@ _Rig _arm({bool armed = true, engine.CapabilityRegistry? registryOverride}) {
     substationProbe: substationProbe,
   );
   bridge.start();
-  final grid = runGrid(delegate);
+  final grid = await runGrid(delegate);
   return (
     grid: grid,
     delegate: delegate,
@@ -309,7 +312,7 @@ void main() {
     test('the baseline: an owned ready bead mounts THROUGH the composition — '
         'resolver rooted it, the session minted through the chokepoint, the '
         'transport spawned (mount = spawn)', () async {
-      final rig = _arm();
+      final rig = await _arm();
       addTearDown(rig.grid.teardown);
       rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
       await _pump();
@@ -353,7 +356,7 @@ void main() {
       'to zero; positive control: the probe capability actually spawns.',
       () async {
         final seen = <engine.ProcessLeaseVendor>[];
-        final rig = _arm(
+        final rig = await _arm(
           registryOverride: engine.DefaultCapabilityRegistry(
             capabilities: {'agent': _VendorProbeCap(seen)},
             clock: () => DateTime(2026),
@@ -388,7 +391,7 @@ void main() {
       'WorkList — the config ancestors (station + substation assets) hold '
       'still; positive control: a configuration emission rebuilds them',
       () async {
-        final rig = _arm();
+        final rig = await _arm();
         addTearDown(rig.grid.teardown);
         rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
         await _pump();
@@ -428,7 +431,7 @@ void main() {
       'run produced is a bd call on the RECORDING chokepoint, and none of '
       'them targets a work bead — the work source is never written',
       () async {
-        final rig = _arm();
+        final rig = await _arm();
         addTearDown(rig.grid.teardown);
         rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
         await _pump();
@@ -463,7 +466,7 @@ void main() {
     test('invariant 3 (the mount boundary): a convergence bead and an epic in '
         'the ready set NEVER mount — fail-closed type gate (A41 + the RS-3 '
         'resident narrowing) with the task as the positive control', () async {
-      final rig = _arm();
+      final rig = await _arm();
       addTearDown(rig.grid.teardown);
       rig.work.push(
         _graph(
@@ -484,7 +487,7 @@ void main() {
     test('ownership is fail-closed across substation boundaries: a ready bead '
         'with a foreign prefix (neither the name nor the prefix axis) never '
         'mounts', () async {
-      final rig = _arm();
+      final rig = await _arm();
       addTearDown(rig.grid.teardown);
       rig.work.push(
         _graph([_bead('pow-1'), _bead('other-9')], {'pow-1', 'other-9'}),
@@ -498,7 +501,7 @@ void main() {
       'the authored tree stands — nothing resolves, nothing spawns, nothing '
       'writes',
       () async {
-        final rig = _arm(armed: false);
+        final rig = await _arm(armed: false);
         addTearDown(rig.grid.teardown);
         rig.work.push(_graph([_bead('pow-1')], {'pow-1'}));
         await _pump();

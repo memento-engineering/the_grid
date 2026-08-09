@@ -42,7 +42,7 @@ class SubstationWorkSpec {
   String get prefix => _prefix ?? name;
 }
 
-/// The runner-held OFF-tree work machinery `buildStationWork` assembles — the
+/// The runner-held OFF-tree work machinery `assembleStationWork` assembles — the
 /// v3 successor to the deleted `StationSources`/`StationWiring`/
 /// `TreeRunWiring` boot path (H3), re-shaped for `runGrid`: the tree no longer
 /// rides a kernel-owned `TreeOwner`; it mounts inside the `runGrid`
@@ -52,10 +52,10 @@ class SubstationWorkSpec {
 /// Lifecycle (the pinned ordering, ADR-0007 §4):
 ///
 /// ```dart
-/// final work = await buildStationWork(...);
+/// final work = await assembleStationWork(...);
 /// await work.start();                       // controllers → freshness →
 ///                                           // restart-reconcile → bridge
-/// final grid = runGrid(delegate,            // NOW the tree mounts + spawns
+/// final grid = await runGrid(delegate,      // NOW the tree mounts + spawns
 ///     onFlushed: work.afterFlush,           // D-5 cooldown/unclaimed re-scan
 ///     orphanSweep: work.sweepOrphans);      // the teardown reap
 /// // ... resident ...
@@ -267,7 +267,7 @@ typedef CapabilityRegistryBuilder =
 /// threadable so a resident with many work stores can widen it.
 const kDefaultSyncFloorInterval = Duration(seconds: 45);
 
-Future<StationWorkRuntime> buildStationWork({
+Future<StationWorkRuntime> assembleStationWork({
   required GridStateStore stateStore,
   required List<SubstationWorkSpec> substations,
   required SessionResolver resolver,
@@ -291,12 +291,12 @@ Future<StationWorkRuntime> buildStationWork({
 }) async {
   if (registry != null && registryBuilder != null) {
     throw ArgumentError(
-      'buildStationWork: registry and registryBuilder are mutually exclusive.',
+      'assembleStationWork: registry and registryBuilder are mutually exclusive.',
     );
   }
   if (substations.isEmpty) {
     throw ArgumentError(
-      'buildStationWork: at least one substation is required — there is no '
+      'assembleStationWork: at least one substation is required — there is no '
       'default substation (v3 §0).',
     );
   }
@@ -306,7 +306,7 @@ Future<StationWorkRuntime> buildStationWork({
       .toList(growable: false);
   if (unknownOverrides.isNotEmpty) {
     throw ArgumentError(
-      'buildStationWork: work bd overrides name unknown substations: '
+      'assembleStationWork: work bd overrides name unknown substations: '
       '${unknownOverrides.join(', ')}.',
     );
   }
@@ -322,7 +322,7 @@ Future<StationWorkRuntime> buildStationWork({
       final prior = identityOwner[token];
       if (prior != null) {
         throw ArgumentError(
-          'buildStationWork: substations "$prior" and "${s.name}" share the '
+          'assembleStationWork: substations "$prior" and "${s.name}" share the '
           'identity token "$token" (a name or prefix) — ownership matches '
           'EITHER axis, so a bead carrying it would mount under BOTH '
           'WorkLists. Give every substation disjoint {name, prefix} sets.',
@@ -347,7 +347,7 @@ Future<StationWorkRuntime> buildStationWork({
     final ws = BeadsWorkspace.discover(start: s.root);
     if (ws == null || !_sameCanonicalRoot(ws.root, s.root)) {
       throw StoreRefusal(
-        'buildStationWork: substation "${s.name}": could not parse the work '
+        'assembleStationWork: substation "${s.name}": could not parse the work '
         'store at ${s.root}/.beads (resolved: ${ws?.root ?? 'nothing'}).',
       );
     }
@@ -355,7 +355,7 @@ Future<StationWorkRuntime> buildStationWork({
   }
   if (!File('${stateStore.beadsDir}/metadata.json').existsSync()) {
     throw StoreRefusal(
-      'buildStationWork: no grid state store at ${stateStore.beadsDir} — the '
+      'assembleStationWork: no grid state store at ${stateStore.beadsDir} — the '
       'grid\'s own store lives under <grid.root>/.grid/ (Q5a). Seed it with '
       'the substation-init process (docs/SUBSTATION-INIT.md) before arming.',
     );
@@ -364,7 +364,7 @@ Future<StationWorkRuntime> buildStationWork({
   if (stateWs == null ||
       !_sameCanonicalRoot(stateWs.root, stateStore.runtimeDir)) {
     throw StoreRefusal(
-      'buildStationWork: could not parse the grid state store at '
+      'assembleStationWork: could not parse the grid state store at '
       '${stateStore.beadsDir} (resolved: ${stateWs?.root ?? 'nothing'}).',
     );
   }
@@ -373,7 +373,7 @@ Future<StationWorkRuntime> buildStationWork({
   final stateSubstation = stateWs.database;
   if (stateSubstation == null || stateSubstation.isEmpty) {
     throw StoreRefusal(
-      'buildStationWork: the grid state store at ${stateStore.beadsDir} names '
+      'assembleStationWork: the grid state store at ${stateStore.beadsDir} names '
       'no dolt_database in metadata.json — cannot derive the owned state '
       'partition (re-seed the store; see docs/SUBSTATION-INIT.md).',
     );
@@ -541,7 +541,7 @@ Future<StationWorkRuntime> buildStationWork({
       );
     } on Object catch (e) {
       throw StoreRefusal(
-        'buildStationWork: could not register root "${s.name}"="${s.root}": '
+        'assembleStationWork: could not register root "${s.name}"="${s.root}": '
         '$e',
       );
     }
