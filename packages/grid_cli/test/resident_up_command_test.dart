@@ -154,6 +154,10 @@ final class _Harness {
   TreeProjector? gridProjector;
   TreeProjector? controlProjector;
 
+  /// The `/status` view closure handed to the control seat (per-request
+  /// reads must come off the LIVE delegate, roster included).
+  StationStatus Function()? statusView;
+
   /// Captured dev-mode closures (the seat the operator's reload rides).
   Future<Map<String, Object?>> Function()? devHotRestart;
   String Function()? devReadPath;
@@ -246,6 +250,7 @@ final class _Harness {
             required treeProjector,
           }) async {
             controlProjector = treeProjector;
+            statusView = view;
             events.add('control');
             _throwIf('control');
             return _Control(events, failAt: failAt);
@@ -264,9 +269,13 @@ final class _Harness {
             devReadPath = readPath;
             return devMode ? _DevMode(events) : null;
           },
-      readVmServiceUri: () async => 'ws://vm',
+      readVmServiceUri: () async {
+        _throwIf('vmService');
+        return 'ws://vm';
+      },
       inspectPrimaryCheckout: (seat) async {
         events.add('inspect:${seat.name}');
+        _throwIf('inspect');
         return checkoutFreshness[seat.name] ??
             const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.fresh);
       },
@@ -844,6 +853,51 @@ void main() {
       });
     }
 
+    test('a throwing checkout inspector unwinds the delegate and propagates '
+        'raw — the lock was never acquired', () async {
+      // Unexpected error, not a styled refusal: the probes run under a live
+      // delegate that must not leak, and the error keeps its own shape.
+      final h = await _Harness.create(failAt: 'inspect');
+      addTearDown(h.dispose);
+      await expectLater(
+        h.run(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'boom at inspect',
+          ),
+        ),
+      );
+      expect(h.events, ['inspect:earth', 'delegate.dispose']);
+      expect(h.built.single.disposed, isTrue);
+    });
+
+    test('a throwing VM-service probe unwinds the delegate and releases the '
+        'held lock LAST, rethrowing raw', () async {
+      // The probe sits between lock acquisition and the mount: a throw must
+      // strand neither the delegate nor the lock file, and the release is
+      // the unwind's standing tail.
+      final h = await _Harness.create(failAt: 'vmService');
+      addTearDown(h.dispose);
+      await expectLater(
+        h.run(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'boom at vmService',
+          ),
+        ),
+      );
+      expect(h.events, [
+        'inspect:earth',
+        'lock',
+        'delegate.dispose',
+        'lock.release',
+      ]);
+    });
+
     test('an updateControl failure disposes the bound control socket '
         'first', () async {
       // The lock advertisement throws AFTER the control socket bound: the
@@ -1007,6 +1061,31 @@ void main() {
       // The final sweep ran on the LIVE (fresh) delegate, not the retiree.
       expect(h.events, contains('sweep:gen1'));
       expect(h.events, isNot(contains('sweep:earth')));
+    });
+
+    test('/status renders the LIVE delegate\'s re-resolved roster, not the '
+        'captured launch list', () async {
+      // The dark seat's store is absent at launch (skip-coded-loudly), then
+      // appears before the restart: the fresh delegate re-resolves and arms
+      // it. A view closure capturing the launch-time roster would keep
+      // rendering the single-seat list forever.
+      final h = await _Harness.create(
+        devMode: true,
+        holdOpen: true,
+        includeMissingCoded: true,
+      );
+      addTearDown(h.dispose);
+      final run = h.run(untimed: true);
+      await h.stationUp.future;
+
+      expect(h.statusView!().substation, 'earth');
+
+      _seedStore(h.missingRoot);
+      await h.devHotRestart!();
+      expect(h.statusView!().substation, 'earth,dark');
+
+      h.release.complete();
+      expect(await run, 0);
     });
 
     test('a restart-time roster refusal disposes the fresh delegate and '
