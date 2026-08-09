@@ -51,9 +51,18 @@ final class ProviderScope extends SingleChildStatefulSeed {
       _ProviderScopeState();
 }
 
-/// Adds nullable, dependency-registering provider lookup to [TreeContext].
+/// Adds nullable provider lookup verbs to [TreeContext].
 extension ProviderTreeContext on TreeContext {
+  /// Watches the nearest [T] for build-time use and registers a dependency.
+  ///
+  /// Use [read] for a non-binding snapshot lookup from an effect path.
   T? watch<T extends Object>() => dependOnInheritedSeedOfExactType<T>();
+
+  /// Reads the nearest [T] without registering a dependency.
+  ///
+  /// This is the effect verb for off-build snapshot reads. Use [watch] during
+  /// build when changes to [T] must rebuild the dependent branch.
+  T? read<T extends Object>() => getInheritedSeedOfExactType<T>();
 }
 
 final class _ProviderScopeState
