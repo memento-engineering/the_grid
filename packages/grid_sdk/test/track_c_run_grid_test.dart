@@ -609,6 +609,27 @@ void main() {
       },
     );
 
+    test('the sweep runs on the LIVE delegate — dispose follows the '
+        'sweep', () async {
+      // The sweep is the reap on the delegate's boot-assembled runtime, and
+      // dispose unwinds exactly that machinery (a StateNotifier's state
+      // throws after dispose): a teardown that disposed first would serve
+      // the sweep off a corpse and silently reopen the orphan window.
+      final order = <String>[];
+      final delegate = RecordingDelegate();
+      final handle = await runGrid(
+        delegate,
+        orphanSweep: () async =>
+            order.add(delegate.mounted ? 'sweep-live' : 'sweep-on-corpse'),
+      );
+      await pump();
+
+      await handle.teardown();
+
+      expect(order, ['sweep-live']);
+      expect(delegate.mounted, isFalse, reason: 'disposed after the sweep');
+    });
+
     test('teardown is idempotent — the sweep runs exactly once', () async {
       final provider = FakeRuntimeProvider();
       addTearDown(provider.close);

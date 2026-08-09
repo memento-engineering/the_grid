@@ -34,8 +34,10 @@ import 'reassemble.dart';
 ///     attributed, and reported loudly via [onError] — the running grid stands.
 ///
 /// Returns a [GridHandle]: `await teardown()` runs `onTeardown`, unmounts the
-/// tree (every mounted effect tears down with it), then runs [orphanSweep] —
-/// the teardown-vs-spawn reap. [orphanSweep] is null by default (a station with
+/// tree (every mounted effect tears down with it), runs [orphanSweep] — the
+/// teardown-vs-spawn reap — and only then disposes the delegate: the sweep
+/// reconciles over the delegate's boot-assembled runtime, so the delegate must
+/// still be LIVE to serve it. [orphanSweep] is null by default (a station with
 /// no process transport has nothing to sweep); a runner with work machinery
 /// passes `work.sweepOrphans`.
 ///
@@ -420,8 +422,12 @@ class GridHandle {
   }
 
   /// Tears the grid down: runs `onTeardown` (loud on failure, non-aborting),
-  /// unmounts the tree (every mounted effect tears down), disposes the delegate,
-  /// and ENDS with the ORPHAN SWEEP when one is wired.
+  /// unmounts the tree (every mounted effect tears down), runs the ORPHAN
+  /// SWEEP when one is wired, and ENDS by disposing the delegate. The sweep
+  /// precedes the dispose BY CONTRACT: it is the teardown-vs-spawn reap on the
+  /// delegate's boot-assembled runtime, and `dispose` unwinds exactly that
+  /// machinery — a sweep served off a disposed delegate would silently
+  /// recreate the orphaned-agent window it exists to close.
   ///
   /// **`await` it.** Unmount = kill, but the kill chain is fire-and-forget
   /// (`CapabilityHost.dispose` → `unawaited(allocation.dispose())` →
@@ -458,20 +464,22 @@ class GridHandle {
       _report(GridHookError('onTeardown', _delegate.runtimeType, e, st));
     }
     // Unmount first (the configuration scope's dispose removes its listener
-    // off the delegate), then dispose the delegate.
+    // off the delegate).
     _owner.dispose();
-    _delegate.dispose();
     _reassemble.dispose();
-    // ... and END with the sweep: no effect of this tree may outlive its
-    // unmount. It runs AFTER the unmount by construction — the stragglers it
-    // reconciles against zero-expected only exist once the kills are in flight.
+    // The sweep runs AFTER the unmount by construction — the stragglers it
+    // reconciles against zero-expected only exist once the kills are in
+    // flight — and BEFORE the delegate disposes: it is the reap on the
+    // delegate's boot-assembled runtime, which `dispose` unwinds.
     final sweep = _orphanSweep;
-    if (sweep == null) return;
-    try {
-      await sweep();
-    } catch (e, st) {
-      _report(GridHookError('orphanSweep', _delegate.runtimeType, e, st));
+    if (sweep != null) {
+      try {
+        await sweep();
+      } catch (e, st) {
+        _report(GridHookError('orphanSweep', _delegate.runtimeType, e, st));
+      }
     }
+    _delegate.dispose();
   }
 }
 
