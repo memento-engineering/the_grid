@@ -164,6 +164,10 @@ class RecordingDelegate extends GridDelegate {
   /// subclass) — the observable's write path.
   void emit(GridConfiguration config) => state = config;
 
+  /// Whether anything is still subscribed (the configuration scope is the sole
+  /// sanctioned subscriber) — the observable proof the scope unmounted.
+  bool get observed => hasListeners;
+
   @override
   String get root => rootPath;
 
@@ -573,6 +577,61 @@ void main() {
 
       expect(zoneErrors.single, isA<GridHookError>());
       expect((zoneErrors.single as GridHookError).hook, 'initGrid');
+    });
+  });
+
+  group('first-mount failure unwinds the owner and the bus', () {
+    test('a build that throws during first mount: runGrid rethrows raw and '
+        'releases the owner/bus', () async {
+      final delegate = RecordingDelegate(
+        buildOverride: (_, _) => throw StateError('boom at build'),
+      );
+
+      // The raw error, NOT a GridHookError: build is not a named rail.
+      await expectLater(
+        runGrid(delegate),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'boom at build',
+          ),
+        ),
+      );
+      // The delegate is left to the CALLER's unwind on this path (grid_cli's
+      // defaultRunMountedGrid pins dispose-on-failure); runGrid must not have
+      // disposed it. The owner/bus were released — though genesis_tree
+      // 0.2.0's mountRoot assigns its root only after mount returns, so the
+      // partially mounted branches (the scope's subscription among them) stay
+      // unreachable: the residual limit the production comment names.
+      expect(delegate.mounted, isTrue);
+      delegate.dispose();
+    });
+
+    test('a throwing onFlushed after the first flush: rethrows AND the '
+        'mounted tree unwinds (owner disposed, scope unsubscribed)', () async {
+      var disposed = 0;
+      final delegate = RecordingDelegate(
+        assetsBuilder: () => [DisposeProbe(() => disposed++)],
+      );
+
+      await expectLater(
+        runGrid(delegate, onFlushed: () => throw StateError('boom at flush')),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'boom at flush',
+          ),
+        ),
+      );
+      // The owner disposed: the fully mounted tree unmounted (the effect tore
+      // down) and the configuration scope unsubscribed from the delegate — no
+      // stranded TreeOwner, no leaked listener.
+      expect(disposed, 1);
+      expect(delegate.observed, isFalse);
+      expect(delegate.mounted, isTrue, reason: 'the caller owns the delegate');
+      delegate.dispose();
     });
   });
 

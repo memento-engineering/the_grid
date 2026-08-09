@@ -120,13 +120,27 @@ Future<GridHandle> runGrid(
   // baseline directly, never setState during mount), so onNeedsFlush cannot
   // fire during it.
   handle._wireFlush();
-  final root = owner.mountRoot(
-    _GridConfigurationScope(delegate: delegate, reassemble: reassemble),
-  );
-  owner.flush();
-  handle._root = root;
-  treeProjector?.afterFlush(root);
-  onFlushed?.call();
+  try {
+    final root = owner.mountRoot(
+      _GridConfigurationScope(delegate: delegate, reassemble: reassemble),
+    );
+    owner.flush();
+    handle._root = root;
+    treeProjector?.afterFlush(root);
+    onFlushed?.call();
+  } on Object {
+    // A throw anywhere between mount and the first completed flush must not
+    // strand the owner and the reassemble bus — release both, then let the
+    // error reach the caller raw (the composing shell owns the delegate's
+    // disposal on this path). RESIDUAL LIMIT: genesis_tree 0.2.0's
+    // `mountRoot` assigns its root only after `mount` returns, so a
+    // mid-mount throw leaves the partially mounted branches unreachable —
+    // `owner.dispose()` then unmounts nothing. That is an upstream seam (a
+    // bead will track it); do not fork or patch genesis_tree here.
+    owner.dispose();
+    reassemble.dispose();
+    rethrow;
+  }
 
   // 4. Post-mount async kickoff — unawaited by the caller; onReady chained
   // after it; both surfaced loud on failure.
