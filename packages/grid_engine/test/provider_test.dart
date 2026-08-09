@@ -442,7 +442,8 @@ void main() {
       expect(
         spy.disposed,
         isFalse,
-        reason: 'an adopted value is held by its owner; the tree never '
+        reason:
+            'an adopted value is held by its owner; the tree never '
             'disposes what it did not create',
       );
     });
@@ -589,10 +590,7 @@ void main() {
       // claim is carried by the events list instead.
 
       owner.mountRoot(
-        _Host(
-          onCreate: (state) => host = state,
-          describe: () => const _Leaf(),
-        ),
+        _Host(onCreate: (state) => host = state, describe: () => const _Leaf()),
       );
 
       host.swap(
@@ -651,8 +649,10 @@ void main() {
       // place, so the kind flip must be refused loudly — silently adopting
       // would shadow the owned value while its unmount disposal stays armed.
       host.swap(
-        () =>
-            Provider<_Value>.value(const _Value('adopted'), child: _Watch(values)),
+        () => Provider<_Value>.value(
+          const _Value('adopted'),
+          child: _Watch(values),
+        ),
       );
       expect(owner.flush, throwsStateError);
     });
@@ -721,11 +721,9 @@ void main() {
       );
 
       owner.dispose();
-      expect(
-        events,
-        ['dispose owned'],
-        reason: 'disposal rides the real unmount, exactly once',
-      );
+      expect(events, [
+        'dispose owned',
+      ], reason: 'disposal rides the real unmount, exactly once');
     });
   });
 
@@ -977,50 +975,53 @@ void main() {
       expect(values, [null, null, null]);
     });
 
-    test('remount across a provider boundary moves the watcher null-to-value '
-        'and back — the unmount/remount path, not registry notification', () async {
-      // Honest scope note: swapping the child between `watcher` and
-      // `Provider(child: watcher)` changes the runtimeType at the slot, so
-      // the substrate unmounts the old _Watch branch and mounts a FRESH one
-      // each time (canUpdate false). Every transition below is an initial
-      // build of a new branch; on this no-reparent substrate a watcher can
-      // never keep its branch across its provider's (un)mount, so this IS the
-      // path a null-to-value or value-to-null transition actually rides. The
-      // registry's genuine notification mechanism is pinned by the pending-
-      // registration tests above and the direct-seam tests below.
-      final values = <String?>[];
-      late _HostState host;
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
+    test(
+      'remount across a provider boundary moves the watcher null-to-value '
+      'and back — the unmount/remount path, not registry notification',
+      () async {
+        // Honest scope note: swapping the child between `watcher` and
+        // `Provider(child: watcher)` changes the runtimeType at the slot, so
+        // the substrate unmounts the old _Watch branch and mounts a FRESH one
+        // each time (canUpdate false). Every transition below is an initial
+        // build of a new branch; on this no-reparent substrate a watcher can
+        // never keep its branch across its provider's (un)mount, so this IS the
+        // path a null-to-value or value-to-null transition actually rides. The
+        // registry's genuine notification mechanism is pinned by the pending-
+        // registration tests above and the direct-seam tests below.
+        final values = <String?>[];
+        late _HostState host;
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
 
-      final watcher = _Watch(values);
-      owner.mountRoot(
-        ProviderScope(
-          child: _Host(
-            onCreate: (state) => host = state,
-            describe: () => watcher,
+        final watcher = _Watch(values);
+        owner.mountRoot(
+          ProviderScope(
+            child: _Host(
+              onCreate: (state) => host = state,
+              describe: () => watcher,
+            ),
           ),
-        ),
-      );
-      expect(values, [null]);
+        );
+        expect(values, [null]);
 
-      host.swap(
-        () => Provider<_Value>.value(const _Value('armed'), child: watcher),
-      );
-      owner.flush();
-      expect(values, [null, 'armed']);
+        host.swap(
+          () => Provider<_Value>.value(const _Value('armed'), child: watcher),
+        );
+        owner.flush();
+        expect(values, [null, 'armed']);
 
-      host.swap(() => watcher);
-      owner.flush();
-      expect(values, [null, 'armed', null]);
+        host.swap(() => watcher);
+        owner.flush();
+        expect(values, [null, 'armed', null]);
 
-      // No stray deferred pings land afterwards: the unmount announcement's
-      // recipients went down with the provider subtree and are skipped by the
-      // delivery's mounted guard.
-      await _pump();
-      owner.flush();
-      expect(values, [null, 'armed', null]);
-    });
+        // No stray deferred pings land afterwards: the unmount announcement's
+        // recipients went down with the provider subtree and are skipped by the
+        // delivery's mounted guard.
+        await _pump();
+        owner.flush();
+        expect(values, [null, 'armed', null]);
+      },
+    );
 
     test('an unmounting provider ANNOUNCES its collected live dependents to '
         'the registry — the transmit side of the bidirectional '
@@ -1061,7 +1062,8 @@ void main() {
       expect(
         registry.debugNotifying.any((branch) => branch.mounted),
         isFalse,
-        reason: 'recipients went down with the subtree (no-reparent '
+        reason:
+            'recipients went down with the subtree (no-reparent '
             'substrate); delivery will skip them on the mounted guard',
       );
 
@@ -1405,7 +1407,9 @@ void main() {
         1,
         reason: 'the throw must not swallow the remaining notifications',
       );
-      expect(errors, [isA<_Boom>()], reason: 'the failure is rethrown, not eaten');
+      expect(errors, [
+        isA<_Boom>(),
+      ], reason: 'the failure is rethrown, not eaten');
 
       // Fail-closed flush guard: the throw did not wedge _deliveryScheduled —
       // a later announcement schedules and delivers a fresh batch.

@@ -427,8 +427,7 @@ final class _RegistrySeed extends InheritedSeed<AvailabilityRegistry> {
   const _RegistrySeed({required super.value, required super.child});
 
   @override
-  InheritedBranch<AvailabilityRegistry> createBranch() =>
-      _RegistryBranch(this);
+  InheritedBranch<AvailabilityRegistry> createBranch() => _RegistryBranch(this);
 }
 
 /// The registry's branch: the substrate's addDependent path doubles as the
