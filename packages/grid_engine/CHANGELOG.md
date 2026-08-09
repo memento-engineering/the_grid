@@ -1,3 +1,11 @@
+## 0.3.0-rc.3
+
+- Breaking (tg-1fa2.5): the provider layer — `Provider<T>` is a MOUNTED seed
+  (`SingleChildStatefulSeed`): `create:` runs once per mount (tree-owned,
+  tree-disposed), `.value` adopts without ownership; `ProviderScope` is the
+  availability registry (a `watch<T>()` miss parks the dependent and a later
+  provider mount rebuilds it); `read<T>()` never registers. Kind is fixed for
+  a branch's lifetime — both create/value flips throw.
 ## 0.3.0-rc.2
 
 - A failed molecule pour FLARES (`session.moleculePourFailed`) and parks the
