@@ -305,12 +305,18 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// The narrow status view (valid once [boot] completed), or null when this
   /// station vends none — absence is a designed posture (docs/STYLE.md rule
   /// 3): the shell reports what it can without one, never throws.
+  ///
+  /// The null default compiles, so a forgotten override is silent at build
+  /// time: a production station should override [stationView] (and
+  /// [commandHandler]) — a delegate vending neither still boots, but renders
+  /// an empty work axis and refuses every operator command.
   StationView? get stationView => null;
 
   /// The operator-command handler `POST /command` dispatches to (valid once
   /// [boot] completed), or null when this station vends none — the control
   /// surface then refuses commands with a clear message (docs/STYLE.md rule
-  /// 3: absence is rendered, never converted into an exception).
+  /// 3: absence is rendered, never converted into an exception). Production
+  /// stations should override this (see [stationView]).
   GridCommandHandler? get commandHandler => null;
 
   /// The `runGrid(onFlushed:)` hook — post-flush machinery (cooldown and

@@ -1,7 +1,7 @@
 name: grid_cli
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.5.0-rc.3
+version: 0.5.0-rc.4
 description: >-
   Management CLI for the_grid — `grid watch` and companion commands for
   operating a grid station.
