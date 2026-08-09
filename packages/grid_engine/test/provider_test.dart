@@ -533,6 +533,63 @@ void main() {
     });
   });
 
+  group('kind-swap guard', () {
+    test('a mounted create-provider reconciled with .value throws '
+        'StateError', () {
+      final values = <String?>[];
+      late _HostState host;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        _Host(
+          onCreate: (state) => host = state,
+          describe: () => Provider<_Value>(
+            create: (_) => const _Value('owned'),
+            child: _Watch(values),
+          ),
+        ),
+      );
+      expect(values, ['owned']);
+
+      // Same runtimeType + key at the same slot: the substrate reconciles in
+      // place, so the kind flip must be refused loudly — silently adopting
+      // would shadow the owned value while its unmount disposal stays armed.
+      host.swap(
+        () =>
+            Provider<_Value>.value(const _Value('adopted'), child: _Watch(values)),
+      );
+      expect(owner.flush, throwsStateError);
+    });
+
+    test('a mounted .value provider reconciled with create throws '
+        'StateError', () {
+      final values = <String?>[];
+      late _HostState host;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        _Host(
+          onCreate: (state) => host = state,
+          describe: () => Provider<_Value>.value(
+            const _Value('adopted'),
+            child: _Watch(values),
+          ),
+        ),
+      );
+      expect(values, ['adopted']);
+
+      host.swap(
+        () => Provider<_Value>(
+          create: (_) => const _Value('owned'),
+          child: _Watch(values),
+        ),
+      );
+      expect(owner.flush, throwsStateError);
+    });
+  });
+
   group('reconcile notification', () {
     test(
       '.value update notifies dependents once; an equal value is silent',

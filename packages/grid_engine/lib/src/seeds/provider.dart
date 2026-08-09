@@ -238,7 +238,21 @@ final class _ProviderState<T extends Object>
     // mutation, no side effects — the value over the child, nothing else.
     // Reading seed._value (not a cached copy) is what propagates a `.value`
     // update through InheritedSeed.updateShouldNotify.
-    final value = seed._value ?? _owned;
+    //
+    // The kind guard is BIDIRECTIONAL: the provider's kind (create vs .value)
+    // is fixed for the life of a mounted branch, and a flip in either
+    // direction is incoherent — value-to-create has no owned value to
+    // project; create-to-value would silently shadow the owned value with the
+    // adopted one while the unmount disposal stays armed with the original.
+    final adopted = seed._value;
+    if (adopted != null && _owned != null) {
+      throw StateError(
+        'Provider<$T> reconciled from create: into .value — the provider kind '
+        'is fixed for the life of a mounted branch (same runtimeType + key '
+        'updates in place). Change the type or key to remount instead.',
+      );
+    }
+    final value = adopted ?? _owned;
     if (value == null) {
       throw StateError(
         'Provider<$T> reconciled from .value into create: — the provider kind '
