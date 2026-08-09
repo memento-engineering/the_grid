@@ -12,12 +12,14 @@ import 'reassemble.dart';
 /// the delegation pattern's `runGrid(delegate)`). The framework root is
 /// `final`; all station behaviour enters through the delegate.
 ///
-/// It runs the lifecycle rails around a single mounted tree:
+/// It runs five lifecycle rails around a single mounted tree:
 ///
 ///  1. `delegate.didLaunch()` — **pre-tree**, synchronous. A failure is
 ///     terminal: it is wrapped as a [GridHookError] and **thrown** (the launch
 ///     aborts loudly — nothing mounts).
-///  2. **Mount the tree**: *configuration provision → `delegate.build`*. The
+///  2. `await delegate.boot(delegate.state)` — **pre-tree**, asynchronous
+///     resource assembly. Failure is terminal and mounts nothing.
+///  3. **Mount the tree**: *configuration provision → `delegate.build`*. The
 ///     delegate does **not** ride the tree — `runGrid` holds it and drives the
 ///     configuration scope directly (by construction), because a
 ///     `StateNotifier`'s `.state` must never be reachable as a snapshot
@@ -26,7 +28,7 @@ import 'reassemble.dart';
 ///     on every emission; `delegate.build(context, configuration)` roots the
 ///     station subtree. A configuration re-emission re-composes that subtree on
 ///     a coalesced microtask flush (the reactive loop, mirroring the kernel).
-///  3. **Kick off** `delegate.initGrid()` — post-mount, async, **unawaited**;
+///  4. **Kick off** `delegate.initGrid()` — post-mount, async, **unawaited**;
 ///     on success `delegate.onReady()` fires. A failure in either is captured,
 ///     attributed, and reported loudly via [onError] — the running grid stands.
 ///
@@ -57,14 +59,14 @@ import 'reassemble.dart';
 /// (flags, env, wiring, harness registry). A JIT station (started with
 /// `--enable-vm-service`) passes it; an AOT station omits it and `hotRestart`
 /// then refuses LOUDLY. [GridHandle.hotReload] needs no factory.
-GridHandle runGrid(
+Future<GridHandle> runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
   void Function()? onFlushed,
   TreeProjector? treeProjector,
   Future<void> Function()? orphanSweep,
   GridDelegate Function()? delegateFactory,
-}) {
+}) async {
   final report = onError ?? _rethrowToZone;
 
   // 1. Pre-tree rail — synchronous; a failure aborts the launch (loud throw).
@@ -74,7 +76,15 @@ GridHandle runGrid(
     throw GridHookError('didLaunch', delegate.runtimeType, e, st);
   }
 
-  // 2. Mount: configuration provision → build. The delegate is held here (by
+  try {
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    await delegate.boot(delegate.state);
+  } catch (error, stackTrace) {
+    delegate.dispose();
+    throw GridHookError('boot', delegate.runtimeType, error, stackTrace);
+  }
+
+  // 3. Mount: configuration provision → build. The delegate is held here (by
   //    construction), never provided ambiently (D-H).
   final owner = TreeOwner();
   // The dev-mode reassemble bus: held HERE and handed to the scope by
@@ -103,7 +113,7 @@ GridHandle runGrid(
   treeProjector?.afterFlush(root);
   onFlushed?.call();
 
-  // 3. Post-mount async kickoff — unawaited by the caller; onReady chained
+  // 4. Post-mount async kickoff — unawaited by the caller; onReady chained
   // after it; both surfaced loud on failure.
   unawaited(_kickoff(delegate, report));
 
@@ -311,15 +321,16 @@ class GridHandle {
   ///
   /// The retired delegate is unsubscribed then `dispose`d; its `onTeardown` rail
   /// does NOT run (the grid did not tear down — the delegate was replaced). The
-  /// fresh delegate takes the POST-MOUNT rails (`initGrid` → `onReady`,
-  /// unawaited, loud on failure) but **not `didLaunch`**: that rail is defined
+  /// fresh delegate takes the awaited pre-recomposition `boot` rail and the
+  /// POST-MOUNT rails (`initGrid` → `onReady`, unawaited, loud on failure), but
+  /// **not `didLaunch`**: that rail is defined
   /// pre-tree and terminal ("nothing mounts" on failure), and a restart mounts
   /// no new tree — re-running it would let a fresh delegate's throw kill a live
   /// station with agents mid-build.
   ///
   /// Launched without a `delegateFactory` → a LOUD [StateError] (never a silent
   /// no-op).
-  Future<ReassembleReport> hotRestart() {
+  Future<ReassembleReport> hotRestart() async {
     _refuseIfTornDown('hotRestart');
     final factory = _delegateFactory;
     if (factory == null) {
@@ -331,6 +342,13 @@ class GridHandle {
       );
     }
     final next = factory();
+    try {
+      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+      await next.boot(next.state);
+    } catch (error, stackTrace) {
+      next.dispose();
+      throw GridHookError('boot', next.runtimeType, error, stackTrace);
+    }
     final generation = ++_generation;
     // The LIVE delegate from here on: teardown must reach this one, never the
     // corpse the configuration scope is about to retire.

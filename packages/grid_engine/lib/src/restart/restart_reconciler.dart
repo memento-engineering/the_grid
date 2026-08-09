@@ -410,7 +410,7 @@ class RestartReconciler {
   /// (`docs/OPERATIONS.md` §2.4 — an orphan is an invariant violation, never
   /// reaped quietly). OPTIONAL but never silent: with no sink wired, the swept
   /// groups still ride [RestartReport.sweptLeases] for the caller to report;
-  /// the live assembly (`buildStationWork`) always wires it.
+  /// the live assembly (`assembleStationWork`) always wires it.
   final void Function(String message) _onOrphan;
 
   /// Whether the ONE bd chokepoint reached this pass — a wiring proof for the

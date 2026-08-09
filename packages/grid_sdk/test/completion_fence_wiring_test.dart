@@ -3,10 +3,10 @@ library;
 
 // The live station's completion fence, END TO END.
 //
-// Half 1 (the source gate): `buildStationWork` is the ONE composition site of
+// Half 1 (the source gate): `assembleStationWork` is the ONE composition site of
 // `StationServices` for a real run; if it stops binding the work-signal probe the
 // engine fence is inert and an INTERRUPTED agent again reads as a completion.
-// `buildStationWork` cannot be driven to a successful build offline (it constructs
+// `assembleStationWork` cannot be driven to a successful build offline (it constructs
 // Dolt-backed controllers — every `track_j_work_assembly_test` case is a refusal),
 // so the WIRE is gated at the source, the same structural technique as
 // grid_engine/test/structural_test.dart.
@@ -108,14 +108,14 @@ class _NoopPrOpener implements PrOpener {
 }
 
 void main() {
-  test('buildStationWork binds the work-signal probe into StationServices', () {
+  test('assembleStationWork binds the work-signal probe into StationServices', () {
     final src = File('lib/src/work/work_assembly.dart').readAsStringSync();
 
     expect(
       src.contains('workSignal: stationWorkSignal(git)'),
       isTrue,
       reason:
-          'buildStationWork must arm the completion fence by binding '
+          'assembleStationWork must arm the completion fence by binding '
           'StationServices.workSignal to stationWorkSignal(git). Unwired, the '
           'engine falls back to noWorkSignal and a KILLED coding agent reads as a '
           'COMPLETION — the circuit advances to review over a broken uncommitted '
