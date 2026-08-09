@@ -295,6 +295,19 @@ class ResidentUpCommand extends Command<int> {
     // POSTURE over the observations is the delegate's. A THROWING inspector
     // is an unexpected error, not a styled refusal: dispose the delegate the
     // probes run under, then let the error propagate in its own shape.
+    // One unwind step, loud-but-non-aborting (mirroring teardown's rail
+    // posture): a throwing dispose is reported to stderr and the unwind
+    // CONTINUES — every later step still runs, so the original error is
+    // never masked and a lock release at the tail is guaranteed regardless
+    // of which seat's dispose blew up.
+    Future<void> settle(String step, FutureOr<void> Function() action) async {
+      try {
+        await action();
+      } on Object catch (error) {
+        stderr.writeln('$prefix: unwind step "$step" failed: $error');
+      }
+    }
+
     final List<({SubstationWorkSpec seat, PrimaryCheckoutFreshness value})>
     freshness;
     try {
@@ -305,7 +318,7 @@ class ResidentUpCommand extends Command<int> {
           ).then((value) => (seat: seat, value: value)),
       ]);
     } on Object {
-      delegate.dispose();
+      await settle('delegate dispose', delegate.dispose);
       rethrow;
     }
     final freshnessText = freshness
@@ -349,7 +362,7 @@ class ResidentUpCommand extends Command<int> {
         now: startedAt,
       );
     } on Object catch (error) {
-      delegate.dispose();
+      await settle('delegate dispose', delegate.dispose);
       stderr.writeln('$prefix: $error');
       return 64;
     }
@@ -362,8 +375,8 @@ class ResidentUpCommand extends Command<int> {
     try {
       vmServiceUri = await _readVmServiceUri();
     } on Object {
-      delegate.dispose();
-      await stationLock.release();
+      await settle('delegate dispose', delegate.dispose);
+      await settle('lock release', stationLock.release);
       rethrow;
     }
 
@@ -395,22 +408,10 @@ class ResidentUpCommand extends Command<int> {
     } on Object catch (error) {
       // The runner's contract disposed the delegate; the shell's remaining
       // steps are its own projector and the lock.
-      treeProjector.dispose();
-      await stationLock.release();
+      await settle('projector dispose', treeProjector.dispose);
+      await settle('lock release', stationLock.release);
       stderr.writeln('$prefix: $error');
       return 64;
-    }
-
-    // One unwind step, loud-but-non-aborting (mirroring teardown's rail
-    // posture): a throwing dispose is reported to stderr and the unwind
-    // CONTINUES — every later step still runs, so the lock release at the
-    // tail is guaranteed regardless of which seat's dispose blew up.
-    Future<void> settle(String step, FutureOr<void> Function() action) async {
-      try {
-        await action();
-      } on Object catch (error) {
-        stderr.writeln('$prefix: unwind step "$step" failed: $error');
-      }
     }
 
     // The ONE post-mount arming unwind: every shell seat created so far is
@@ -638,9 +639,16 @@ Future<ResidentGridResource> defaultRunMountedGrid(
     // runGrid's boot-failure path already disposed the delegate; the other
     // pre-handle failures (`didLaunch`, the mount itself) leave it live —
     // dispose it here so the seam's contract holds either way: on failure
-    // the delegate is DOWN before the error reaches the shell.
+    // the delegate is DOWN before the error reaches the shell. A throwing
+    // dispose is loud but never masks the mount failure being rethrown.
     if (error is! GridHookError || error.hook != 'boot') {
-      delegate.dispose();
+      try {
+        delegate.dispose();
+      } on Object catch (disposeError) {
+        stderr.writeln(
+          'delegate dispose during failure unwind failed: $disposeError',
+        );
+      }
     }
     Error.throwWithStackTrace(error, stackTrace);
   }
