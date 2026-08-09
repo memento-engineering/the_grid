@@ -1121,12 +1121,31 @@ void main() {
       expect(delegate.disposeCount, 1);
     });
 
-    test('success: the resource mounts and its teardown disposes the '
-        'delegate', () async {
+    test('success: the resource mounts and its teardown sweeps on the LIVE '
+        'delegate before disposing it', () async {
       final delegate = _RunnerDelegate();
-      final resource = await mount(delegate);
+      var sweepRan = false;
+      final resource = await defaultRunMountedGrid(
+        delegate,
+        onFlushed: () {},
+        // The sweep-after-dispose regression class, pinned HERE (grid_cli is
+        // self-sufficient — not only in grid_sdk's track_c): the sweep reaps
+        // over the boot-assembled runtime, which dispose unwinds.
+        orphanSweep: () async {
+          sweepRan = true;
+          expect(
+            delegate.disposeCount,
+            0,
+            reason: 'the sweep must run on the still-live delegate',
+          );
+        },
+        onDelegateSwapped: (_) {},
+        treeProjector: null,
+        delegateFactory: null,
+      );
       expect(delegate.disposeCount, 0);
       await resource.teardown();
+      expect(sweepRan, isTrue, reason: 'teardown must run the wired sweep');
       expect(delegate.disposeCount, 1);
     });
   });
