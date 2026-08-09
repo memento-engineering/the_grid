@@ -104,10 +104,7 @@ final class _ProbeChildren extends MultiChildSeed {
 }
 
 final class _ReadProbe extends StatefulSeed {
-  const _ReadProbe({
-    required this.onCreate,
-    required this.dependencyChanges,
-  });
+  const _ReadProbe({required this.onCreate, required this.dependencyChanges});
 
   final void Function(_ReadProbeState state) onCreate;
   final List<int> dependencyChanges;
