@@ -1,8 +1,16 @@
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart';
 
+import '../command/command_operation.dart';
 import '../composition/composition.dart';
+import '../stores/stores.dart';
+import '../work/work_assembly.dart';
 import 'configuration.dart';
+import 'staleness_posture.dart';
+import 'station_refusal.dart';
+import 'station_view.dart';
+import 'substation_config.dart';
 
 /// The station author's delegate — **rails, not layers** (v3 §4).
 ///
@@ -32,6 +40,89 @@ import 'configuration.dart';
 /// Convenience build hooks (sugar over asset mounting) are **not designed up
 /// front** — they are earned from real usage (v3 §4). The only compose surface
 /// the base ships is [root] + [assets], feeding the default [build].
+///
+/// ## The station composition contract (tg-1fa2.4, unified here by tg-at3r)
+///
+/// A station-authored delegate the station `up` shell can drive. This is the
+/// delegate-boot + mounted-provider composition: the delegate is constructed
+/// from parsed configuration ALONE, assembles its off-tree work machinery
+/// inside the [boot] rail (awaited by `runGrid` before the first mount — once
+/// per delegate instance, fresh delegate + fresh boot on hot restart), and
+/// VENDS the narrow views the command shell reads. Reference types flow OUT
+/// of the delegate, never in.
+///
+/// The composition contract, in lifecycle order:
+///
+///  1. **Construction is config-only** (the station `up` command's
+///     `delegateFactory` receives the parsed `StationConfig` and nothing
+///     else). No wiring, no provisioner, no effect implementations enter the
+///     factory — assembly is [boot]-owned. The dry-run effect posture TODAY
+///     is boot-selected OFF-tree: boot passes the config's `dryRun` to
+///     `assembleStationWork`, which selects inert implementations by type.
+///     Declaring the posture in the TREE (dry-run mounts no effect providers,
+///     so the projection sees the absence) is the TARGET state, owned by the
+///     reference-boot follow-up bead.
+///  2. **[resolveArmedRoster]** — the shell calls it exactly once per
+///     delegate instance, BEFORE the boot rail, folding the station's arming
+///     policy (skip a coded seat with no store, refuse an appended one) over
+///     the roster. The delegate retains the result ([armedRoster]) — what
+///     [boot] assembles over.
+///  3. **[boot]** (`runGrid` awaits it before the first mount) — assembles
+///     AND starts the off-tree work machinery, including the diagnostics
+///     reporter effect (previously the command's one hardcoded seamless
+///     effect). Assembly only — no NEW policy may enter it (the rule-5
+///     ratchet; see the honest posture note below).
+///  4. **The vended views** ([stationView], [commandHandler], [afterFlush],
+///     [sweepOrphans]) are valid once [boot] completed; the shell reads them
+///     per request, never earlier. Absence is a designed posture
+///     (docs/STYLE.md rules 3/4): [stationView] and [commandHandler] default
+///     to null, and the shell renders the absence honestly — `/status`
+///     reports what it can, the control surface refuses commands with a clear
+///     message. The diagnostics `TreeProjector` is NOT a delegate concern: it
+///     is shell-owned and process-lifetime (the shell threads ONE instance
+///     into `runGrid` and `/stream`, and a hot restart's fresh delegate
+///     flushes into that same sink — a delegate-owned projector would be
+///     disposed with the retired delegate and leave the flush rail and
+///     `/stream` permanently dark).
+///  5. **[dispose]** unwinds what boot assembled, in reverse creation order.
+///     It does NOT presume the earlier steps ran: `dispose` MUST tolerate
+///     (i) a delegate whose [resolveArmedRoster]/[boot] never ran and (ii) a
+///     boot that threw partway through assembly — the shell disposes
+///     never-booted delegates on its refusal paths (roster refusal,
+///     staleness, lock conflict); the runner (`runGrid`) disposes a
+///     partially-booted one when the boot rail throws. Implement it over
+///     nullable fields or a booted flag; never assume boot completed.
+///     The shell's teardown: unmount tree (in-tree resources unwind by
+///     unmount order — tree-owned `Provider` create/dispose) → [sweepOrphans]
+///     on the STILL-LIVE delegate → dispose the delegate (both inside the
+///     runner's teardown, in that order — the sweep reaps over the
+///     boot-assembled runtime, exactly what `dispose` unwinds) → dispose the
+///     shell projector → release lock.
+///
+/// **The rule-5 posture, honestly stated.** [armRoster] (which seats arm,
+/// skip-coded vs refuse-appended) and [stalenessPosture] are STATION POLICY
+/// executing on the pre-boot rail, not in `build` — docs/STYLE.md rule 5
+/// names exactly these decisions as tree policy. They live here pre-tree by
+/// NECESSITY: their outcomes are exit codes and the lock decision, both of
+/// which must land before anything mounts. That makes them ratchet DEBT under
+/// rule 5's own clause ("assembly moves into the tree as lifecycle-capable
+/// providers become available"), not rule-5-clean: the decisions render to
+/// the operator's stdout/stderr, invisible to the tree projection, and must
+/// migrate into `build` (where `/stream` can observe them) once the tree can
+/// carry refusal postures with exit semantics. Do not add new policy here.
+///
+/// **OPEN SEAM — no reference boot implementation ships yet.** The station
+/// half of the tg-1fa2.4 migration (boot-owned `assembleStationWork` + the
+/// `StationDiagnosticsReporter` effect, views vended over the assembled
+/// `StationWorkRuntime`; dry-run as provider ABSENCE in the tree is that
+/// follow-up's target — today `assembleStationWork` selects inert
+/// implementations off-tree from its `dryRun` flag) ships only as this
+/// abstract contract — every concrete `boot` today lives in tests. The
+/// reference boot-owned assembly delegate is deliberate follow-up work under
+/// the tg-1fa2 epic (file it as its own bead when composing the first
+/// production station on this command); until it lands, a composing station
+/// authors its own `boot` from this contract plus `assembleStationWork`'s
+/// docs.
 abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// Creates a delegate seeded with [initialConfiguration] (an empty
   /// configuration by default — the delegate emits a richer one, e.g. after a
@@ -110,6 +201,135 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// teardown proceeds regardless (an effect must never leak because a rail
   /// threw). Default: no-op. (Override to run; `runGrid` calls it.)
   void onTeardown() {}
+
+  List<SubstationWorkSpec> _armed = const <SubstationWorkSpec>[];
+
+  /// The armed roster [resolveArmedRoster] resolved — what [boot] assembles
+  /// over. Empty until resolved.
+  List<SubstationWorkSpec> get armedRoster => _armed;
+
+  /// Resolves and RETAINS the armed roster: applies [armRoster] (the
+  /// overridable policy), refuses an empty result LOUD, and stores the
+  /// outcome for [boot]. Called by the shell exactly once per delegate
+  /// instance, before the boot rail (a hot restart's fresh delegate is
+  /// re-resolved by the shell's delegate factory).
+  @nonVirtual
+  List<SubstationWorkSpec> resolveArmedRoster({
+    required List<SubstationWorkSpec> coded,
+    required List<SubstationConfig> appended,
+    required void Function(String message) onSkip,
+  }) {
+    final armed = armRoster(coded: coded, appended: appended, onSkip: onSkip);
+    if (armed.isEmpty) {
+      throw const StationRefusal(
+        'no substation resolved a work store at its root.',
+        code: 1,
+      );
+    }
+    return _armed = List.unmodifiable(armed);
+  }
+
+  /// THE arming policy (relocated from the command's for-loops, tg-1fa2.4 —
+  /// pre-tree by necessity, ratchet debt under STYLE.md rule 5; see the class
+  /// doc): which seats arm is a station opinion. The standing default: a
+  /// CODED seat whose root resolves no work store is skipped loudly via
+  /// [onSkip] (not present in this checkout — a legitimate partial checkout);
+  /// an APPENDED seat that refuses is a boot refusal ([StationRefusal] — the
+  /// operator explicitly asked for it, so absence is an error: exit 64 for a
+  /// malformed spec, exit 1 for a missing store).
+  ///
+  /// Override to change the opinion; the shell renders whatever this decides
+  /// (messages are written without the `<station> up: ` prefix — the shell
+  /// adds it).
+  List<SubstationWorkSpec> armRoster({
+    required List<SubstationWorkSpec> coded,
+    required List<SubstationConfig> appended,
+    required void Function(String message) onSkip,
+  }) {
+    final locator = StoreLocator();
+    final armed = <SubstationWorkSpec>[];
+    for (final seat in coded) {
+      try {
+        locator.locateWorkStore(root: seat.root, substationName: seat.name);
+        armed.add(seat);
+      } on StoreRefusal {
+        onSkip(
+          'skipping coded substation "${seat.name}" — no work store '
+          'at ${seat.root} (not present in this checkout).',
+        );
+      }
+    }
+    for (final seat in appended) {
+      try {
+        locator.locateWorkStore(root: seat.root, substationName: seat.name);
+        armed.add(
+          SubstationWorkSpec(
+            name: seat.name,
+            root: seat.root,
+            prefix: seat.prefix,
+          ),
+        );
+      } on ArgumentError catch (error) {
+        throw StationRefusal('${error.message}', code: 64);
+      } on StoreRefusal catch (error) {
+        throw StationRefusal('$error', code: 1);
+      }
+    }
+    return armed;
+  }
+
+  /// The staleness posture over the inspected freshness vector (relocated
+  /// from the command's `--allow-stale` refusal, tg-1fa2.4 — pre-tree by
+  /// necessity, ratchet debt under STYLE.md rule 5; see the class doc).
+  /// [verdicts] is
+  /// the rendered per-seat verdict line (`earth: fresh, moon: stale: …`, in
+  /// roster order); the standing default refuses any stale checkout unless
+  /// [allowStale] downgrades the refusal to one warning.
+  StalenessPosture stalenessPosture({
+    required bool anyStale,
+    required bool allowStale,
+    required String verdicts,
+  }) {
+    if (!anyStale) return const StalenessClear();
+    if (!allowStale) {
+      return StalenessRefused(
+        'refusing stale primary checkout(s): {$verdicts}; '
+        'pass --allow-stale to warn and continue.',
+      );
+    }
+    return StalenessWarned(
+      'WARNING --allow-stale accepted primary checkout verdicts: {$verdicts}',
+    );
+  }
+
+  /// The narrow status view (valid once [boot] completed), or null when this
+  /// station vends none — absence is a designed posture (docs/STYLE.md rule
+  /// 3): the shell reports what it can without one, never throws.
+  ///
+  /// The null default compiles, so a forgotten override is silent at build
+  /// time: a production station should override [stationView] (and
+  /// [commandHandler]) — a delegate vending neither still boots, but renders
+  /// an empty work axis and refuses every operator command.
+  StationView? get stationView => null;
+
+  /// The operator-command handler `POST /command` dispatches to (valid once
+  /// [boot] completed), or null when this station vends none — the control
+  /// surface then refuses commands with a clear message (docs/STYLE.md rule
+  /// 3: absence is rendered, never converted into an exception). Production
+  /// stations should override this (see [stationView]).
+  GridCommandHandler? get commandHandler => null;
+
+  /// The `runGrid(onFlushed:)` hook — post-flush machinery (cooldown and
+  /// unclaimed-frontier re-scans) on the boot-assembled runtime. Default:
+  /// nothing rides the flush rail.
+  void afterFlush() {}
+
+  /// The `runGrid(orphanSweep:)` hook — the teardown-vs-spawn reap on the
+  /// boot-assembled runtime. The runner calls it AFTER the tree unmounted
+  /// (the stragglers it reconciles only exist once the kills are in flight)
+  /// and BEFORE [dispose] — an implementation may rely on everything boot
+  /// assembled still being live. Default: nothing to sweep.
+  Future<void> sweepOrphans() async {}
 
   // Deliberately NO ambient `of`/`maybeOf` accessor for the delegate itself.
   //

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0-rc.4
+
+- Breaking (tg-at3r): the `Resident*` prefix is swept off the vended shell —
+  `ResidentUpCommand`→`UpCommand`, `ResidentDownCommand`→`DownCommand`,
+  `ResidentStatusCommand`→`StatusCommand`,
+  `ResidentStationConfig`→`StationConfig`,
+  `ResidentGridRunner`→`GridRunner`,
+  `ResidentGridDelegateFactory`→`GridDelegateFactory`, and
+  `ResidentLockResource`/`ResidentGridResource`/`ResidentControlResource`/
+  `ResidentDevModeResource` drop the prefix. Filenames follow
+  (`resident_up_command.dart`→`up_command.dart`, …). Behavior — exit codes,
+  stderr text, event and teardown order — is unchanged.
+- Breaking (tg-at3r): the delegate contract left this package —
+  `ResidentGridDelegate` is folded into grid_sdk's `GridDelegate` (subclass
+  that instead), and its supporting types (`StationView`, the
+  `StalenessPosture` family, `StationRefusal`, `SubstationConfig`) ride
+  grid_sdk's barrel.
+
 ## 0.5.0-rc.3
 
 - `StationDiagnosticsReporter` — the ratified diagnostics reporter, armed:

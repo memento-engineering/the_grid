@@ -75,9 +75,7 @@ void main() {
   });
 
   test('helper delegates probing to the existing opener', () {
-    final source = File(
-      'lib/src/resident_state_workspace.dart',
-    ).readAsStringSync();
+    final source = File('lib/src/state_workspace.dart').readAsStringSync();
     expect(source, isNot(contains('metadata.json')));
     expect(source, isNot(contains('BeadsWorkspace.discover')));
     expect(source, contains('openStateStore'));

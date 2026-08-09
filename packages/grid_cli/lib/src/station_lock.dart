@@ -24,25 +24,12 @@ import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
     show StationLockRecord;
 import 'package:grid_runtime/grid_runtime.dart'
     show establishStationProcessGroup;
+import 'package:grid_sdk/grid_sdk.dart' show StationRefusal;
 
-/// A composition-time refusal (a live lock holder, a lost steal race) — the
-/// runner prints [message] and exits with [code]. The one arming gate the
-/// resident-station survivors still throw (the old `station_runner` assembly
-/// that also raised it is deleted; the boot path moved to the asset's own
-/// runner + `runGrid`).
-class StationRefusal implements Exception {
-  /// Creates the refusal with its user-facing [message] and exit [code].
-  const StationRefusal(this.message, {this.code = 64});
-
-  /// The user-facing refusal text.
-  final String message;
-
-  /// The process exit code (64 = usage, 1 = environment).
-  final int code;
-
-  @override
-  String toString() => message;
-}
+// `StationRefusal` moved to grid_sdk with the delegate contract (tg-at3r —
+// the delegate's arming policy throws it too, and grid_sdk must not import
+// grid_cli). Re-exported here so the lock's callers keep one import.
+export 'package:grid_sdk/grid_sdk.dart' show StationRefusal;
 
 /// The injected pid-liveness seam: true iff [pid] is a running process.
 /// The real probe is [defaultPidProbe]; offline tests inject a fake.

@@ -1,3 +1,23 @@
+## 0.3.0-rc.3
+
+- Breaking (tg-at3r): grid_cli's old `ResidentGridDelegate` contract is
+  folded into `GridDelegate` — ONE delegate class. Absorbed hooks:
+  `stationView`, `commandHandler`, `afterFlush`, `sweepOrphans`,
+  `treeProjector`, `armRoster` (+ the non-virtual `resolveArmedRoster`),
+  and `stalenessPosture`. `stationView` and `commandHandler` are now
+  NULLABLE with null defaults — absence is a rendered posture (docs/STYLE.md
+  rule 3): the shell banner and `/status` report what they can without a
+  view, and the control surface refuses commands with a clear message when
+  no handler is vended. Migration for delegate subclasses (space_station /
+  lunar_station / power_station): extend `GridDelegate` directly and drop
+  the `Resident` prefix from overridden names; supporting types moved here —
+  `StationView` (was grid_cli `ResidentStationView`), the `StalenessPosture`
+  family, `StationRefusal`, and `SubstationConfig`.
+- Breaking (tg-at3r): the command extension's `ResidentGridCommandHandler` /
+  `ResidentWorkCommandStore` are renamed `StationCommandHandler` /
+  `WorkCommandStore` (now `src/command/station_command_handler.dart`);
+  construction signatures are unchanged.
+
 ## 0.3.0-rc.2
 
 - `runGrid` gains the `treeProjector` seam; completed flushes feed the

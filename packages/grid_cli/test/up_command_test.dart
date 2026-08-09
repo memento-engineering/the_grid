@@ -4,15 +4,14 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/grid_cli.dart';
-import 'package:grid_engine/grid_engine.dart'
-    show JoinedSnapshot, WedgeState, kNotWedged;
+import 'package:grid_exploration/grid_exploration.dart' show armDevMode;
 import 'package:grid_runtime/grid_runtime.dart'
     show PrimaryCheckoutFreshness, PrimaryCheckoutState;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-final class _View implements ResidentStationView {
+final class _View implements StationView {
   const _View(this._label);
   final String _label;
   @override
@@ -37,12 +36,22 @@ final class _Commands implements GridCommandHandler {
 /// views are canned values labeled per delegate GENERATION (so a test can
 /// tell WHICH delegate a per-request read reached); dispose records the
 /// delegate's own step of the unwind.
-final class _Delegate extends ResidentGridDelegate {
-  _Delegate(this.events, {this.failAt, this.label = 'earth'});
+final class _Delegate extends GridDelegate {
+  _Delegate(
+    this.events, {
+    this.failAt,
+    this.label = 'earth',
+    this.vendsViews = true,
+  });
 
   final List<String> events;
   final String? failAt;
   final String label;
+
+  /// False = the ABSENCE posture: this station vends neither a status view
+  /// nor a command handler (the unified base's null defaults, tg-at3r), and
+  /// the shell must render that honestly.
+  final bool vendsViews;
   var _disposed = false;
 
   /// Whether [dispose] ran (the leak probes read this).
@@ -55,7 +64,8 @@ final class _Delegate extends ResidentGridDelegate {
   }
 
   @override
-  ResidentStationView get stationView {
+  StationView? get stationView {
+    if (!vendsViews) return null;
     // The poisoned-corpse tripwire: a per-request read reaching a DISPOSED
     // delegate is exactly the hot-restart live-holder desync bug.
     if (_disposed) {
@@ -65,7 +75,7 @@ final class _Delegate extends ResidentGridDelegate {
   }
 
   @override
-  GridCommandHandler get commandHandler => _Commands();
+  GridCommandHandler? get commandHandler => vendsViews ? _Commands() : null;
 
   @override
   Future<void> sweepOrphans() async {
@@ -99,6 +109,7 @@ final class _Harness {
     required this.restartBootFails,
     required this.includeMissingCoded,
     required this.checkoutFreshness,
+    required this.vendsViews,
   });
 
   static Future<_Harness> create({
@@ -109,6 +120,7 @@ final class _Harness {
     bool restartBootFails = false,
     bool includeMissingCoded = false,
     bool seedWorkStore = true,
+    bool vendsViews = true,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -130,6 +142,7 @@ final class _Harness {
       restartBootFails: restartBootFails,
       includeMissingCoded: includeMissingCoded,
       checkoutFreshness: checkoutFreshness,
+      vendsViews: vendsViews,
     );
   }
 
@@ -144,6 +157,7 @@ final class _Harness {
   final bool restartBootFails;
   final bool includeMissingCoded;
   final Map<String, PrimaryCheckoutFreshness> checkoutFreshness;
+  final bool vendsViews;
   final events = <String>[];
   final _stdout = _ByteConsumer();
   final _stderr = _ByteConsumer();
@@ -157,6 +171,10 @@ final class _Harness {
   /// The `/status` view closure handed to the control seat (per-request
   /// reads must come off the LIVE delegate, roster included).
   StationStatus Function()? statusView;
+
+  /// The command handler handed to the control seat (routes to the LIVE
+  /// delegate's vended handler — or renders its absence as a refusal).
+  GridCommandHandler? controlCommandHandler;
 
   /// Captured dev-mode closures (the seat the operator's reload rides).
   Future<Map<String, Object?>> Function()? devHotRestart;
@@ -185,7 +203,7 @@ final class _Harness {
         events.add('render');
       }
     };
-    final command = ResidentUpCommand(
+    final command = UpCommand(
       stationName: 'lunar',
       delegateFactory: ({required config}) {
         final generation = built.length;
@@ -193,6 +211,7 @@ final class _Harness {
           events,
           failAt: generation == 0 ? failAt : (restartBootFails ? 'boot' : null),
           label: generation == 0 ? 'earth' : 'gen$generation',
+          vendsViews: vendsViews,
         );
         built.add(delegate);
         return delegate;
@@ -251,6 +270,7 @@ final class _Harness {
           }) async {
             controlProjector = treeProjector;
             statusView = view;
+            controlCommandHandler = commandHandler;
             events.add('control');
             _throwIf('control');
             return _Control(events, failAt: failAt);
@@ -314,7 +334,7 @@ final class _Harness {
   }
 }
 
-final class _Lock implements ResidentLockResource {
+final class _Lock implements LockResource {
   _Lock(this.events, {this.failAt});
   final List<String> events;
   final String? failAt;
@@ -343,7 +363,7 @@ final class _Lock implements ResidentLockResource {
   }
 }
 
-final class _Grid implements ResidentGridResource {
+final class _Grid implements GridResource {
   _Grid(
     this.events,
     this.delegate, {
@@ -356,10 +376,10 @@ final class _Grid implements ResidentGridResource {
 
   /// The MOUNTED live delegate — a successful hot restart retires it for the
   /// factory's fresh one, mirroring `GridHandle`.
-  ResidentGridDelegate delegate;
+  GridDelegate delegate;
   final Future<void> Function() orphanSweep;
-  final ResidentGridDelegate Function()? delegateFactory;
-  final void Function(ResidentGridDelegate next)? onDelegateSwapped;
+  final GridDelegate Function()? delegateFactory;
+  final void Function(GridDelegate next)? onDelegateSwapped;
   var _generation = 0;
 
   @override
@@ -406,7 +426,7 @@ final class _Grid implements ResidentGridResource {
   }
 }
 
-final class _Control implements ResidentControlResource {
+final class _Control implements ControlResource {
   _Control(this.events, {this.failAt});
   final List<String> events;
   final String? failAt;
@@ -421,7 +441,7 @@ final class _Control implements ResidentControlResource {
   }
 }
 
-final class _DevMode implements ResidentDevModeResource {
+final class _DevMode implements DevModeResource {
   _DevMode(this.events);
   final List<String> events;
   @override
@@ -509,7 +529,7 @@ void main() {
     addTearDown(() => home.deleteSync(recursive: true));
     var delegateCalls = 0;
     var validations = 0;
-    final command = ResidentUpCommand(
+    final command = UpCommand(
       stationName: 'lunar',
       delegateFactory: ({required config}) {
         delegateCalls++;
@@ -542,7 +562,7 @@ void main() {
   });
 
   test('safe dry-run is the parser default and no bead option exists', () {
-    final command = ResidentUpCommand(
+    final command = UpCommand(
       stationName: 'lunar',
       delegateFactory: ({required config}) => throw UnimplementedError(),
       codedRoster: ({required gridHome}) => const [],
@@ -560,7 +580,7 @@ void main() {
   });
 
   test('the shell neither assembles work nor hardcodes diagnostics', () {
-    final source = File('lib/src/resident_up_command.dart').readAsStringSync();
+    final source = File('lib/src/up_command.dart').readAsStringSync();
     expect(source, isNot(contains('buildBuiltinEnvironmentRegistry')));
     // tg-1fa2.4: station-work assembly and the diagnostics-reporter effect
     // are boot-owned (the delegate's), never the shell's.
@@ -569,7 +589,7 @@ void main() {
     expect(source, isNot(contains('GhPrOpener')));
   });
 
-  group('ResidentUpCommand assembly', () {
+  group('UpCommand assembly', () {
     test('success pins startup and the reverse shutdown', () async {
       final h = await _Harness.create(devMode: true);
       addTearDown(h.dispose);
@@ -782,7 +802,7 @@ void main() {
     });
   });
 
-  group('ResidentUpCommand three-step partial failure unwind', () {
+  group('UpCommand three-step partial failure unwind', () {
     final cases = <(String point, int code, List<String> events)>[
       (
         'boot',
@@ -1114,7 +1134,162 @@ void main() {
     });
   });
 
-  group('ResidentGridDelegate lifecycle contract', () {
+  group('absence postures (tg-at3r — STYLE.md rule 3: rendered, never '
+      'thrown)', () {
+    test('a delegate vending no view or handler boots; the banner and '
+        '/status render the absence honestly and commands refuse with a '
+        'clear message', () async {
+      final h = await _Harness.create(holdOpen: true, vendsViews: false);
+      addTearDown(h.dispose);
+      final run = h.run(untimed: true);
+      await h.stationUp.future;
+
+      // /status reports what the shell knows first-hand and renders the
+      // work axis EMPTY — zero counts, no sync baseline, not wedged.
+      final status = h.statusView!();
+      expect(status.substation, 'earth');
+      expect(status.dryRun, isTrue);
+      expect(status.ready, 0);
+      expect(status.mounted, 0);
+      expect(status.liveSessions, 0);
+      expect(status.lastSyncAt, isNull);
+      expect(status.wedge, kNotWedged);
+      expect(status.sync, isEmpty);
+
+      // POST /command refuses with a clear message — never a throw across
+      // the control surface, never a silent success.
+      final result = await h.controlCommandHandler!(
+        const GridCommandRequest.listGates(),
+      );
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((refusal) => refusal.code, 'code', 'unsupported')
+            .having(
+              (refusal) => refusal.message,
+              'message',
+              'this station\'s delegate vends no command handler — '
+                  'POST /command is unavailable on this station.',
+            ),
+      );
+
+      h.release.complete();
+      expect(await run, 0);
+      // The banner's stores line renders the absence, not a crash.
+      expect(h.stdoutText, contains('stores: (no station view vended)'));
+      expect(
+        h.stdoutText,
+        isNot(contains('read-path')),
+        reason: 'no view — no fabricated read-path banner material',
+      );
+    });
+
+    test('the dev-mode per-request reads refuse LOUD without a view — a '
+        'fabricated snapshot would masquerade as a real join', () async {
+      final h = await _Harness.create(
+        devMode: true,
+        holdOpen: true,
+        vendsViews: false,
+      );
+      addTearDown(h.dispose);
+      final run = h.run(untimed: true);
+      await h.stationUp.future;
+
+      expect(
+        () => h.devReadPath!(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'this station\'s delegate vends no station view '
+                '(GridDelegate.stationView is null).',
+          ),
+        ),
+      );
+
+      h.release.complete();
+      expect(await run, 0);
+    });
+
+    test('through the REAL armDevMode stack, a null-view station arms '
+        'dev mode and never fabricates a join: no baseline is captured, '
+        'the graph tools render the never-joined shape, the refused '
+        'refresh rides the errors stream, and the per-request read '
+        'refuses LOUD', () async {
+      // The default dev-mode wiring hands `armDevMode` closures that read
+      // the LIVE delegate's vended view; with no view they refuse. The
+      // injected-seam test above pins the refusal itself — THIS test pins
+      // what the refusal renders as end-to-end through the production
+      // stack: `latest` feeds the seat's graph refresh, whose refusal is
+      // published on the runtime's errors stream (never thrown into the
+      // boot, never a fabricated snapshot), so the graph tools serve zero
+      // beads with `capturedAt: null` — distinguishable from every real
+      // join, which always carries its capture time — while `readPath` is
+      // read per-request and throws through to the RPC layer.
+      StationView? vended; // a delegate vending no station view
+      StationView requireView() =>
+          vended ??
+          (throw StateError(
+            'this station\'s delegate vends no station view '
+            '(GridDelegate.stationView is null).',
+          ));
+      final seat = (await armDevMode(
+        vmServiceUri: 'ws://test-vm',
+        hotReload: () async => const {},
+        hotRestart: () async => const {},
+        latest: () => requireView().latest.graph,
+        readPath: () => requireView().readPathName,
+      ))!;
+      addTearDown(seat.dispose);
+
+      // Arming SURVIVED the refused baseline read — and captured nothing.
+      expect(seat.runtime.current, isNull);
+
+      // The latest-backed graph tools render the honest never-joined
+      // shape, not a fabricated join.
+      final snapshot = await seat.host.plugin.dispatch('snapshot', const {});
+      expect(snapshot['ok'], isTrue);
+      final value = snapshot['value']! as Map<String, Object?>;
+      expect(value['beadCount'], 0);
+      expect(value['readyCount'], 0);
+      expect(value['readyBeads'], isEmpty);
+      expect(value['capturedAt'], isNull);
+
+      // The refused refresh is published on the runtime's errors stream —
+      // where a listener finds it — never swallowed into a thrown boot.
+      final refusals = <Object>[];
+      final tap = seat.runtime.errors.listen(
+        (refusal) => refusals.add(refusal.error),
+      );
+      addTearDown(tap.cancel);
+      final requery = await seat.host.plugin.dispatch('requery', const {});
+      expect(requery['ok'], isTrue);
+      await pumpEventQueue();
+      expect(refusals, [
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('vends no station view'),
+        ),
+      ]);
+      expect(seat.runtime.current, isNull, reason: 'still no baseline');
+
+      // The per-request read refuses LOUD through to the RPC layer.
+      expect(
+        () => seat.host.plugin.observe(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'this station\'s delegate vends no station view '
+                '(GridDelegate.stationView is null).',
+          ),
+        ),
+      );
+    });
+  });
+
+  group('GridDelegate lifecycle contract', () {
     test('dispose tolerates a delegate that never resolved a roster nor '
         'booted', () {
       // Five shell paths dispose never-booted (or partially-booted)
@@ -1128,7 +1303,7 @@ void main() {
     });
   });
 
-  group('ResidentGridDelegate roster retention', () {
+  group('GridDelegate roster retention', () {
     test('resolveArmedRoster RETAINS the armed roster for boot', () async {
       // The one contract line a composing station's boot depends on: the
       // resolved roster is retained as `armedRoster` — what boot assembles
@@ -1154,7 +1329,7 @@ void main() {
   });
 
   group('defaultRunMountedGrid dispose-on-failure contract', () {
-    Future<ResidentGridResource> mount(_RunnerDelegate delegate) =>
+    Future<GridResource> mount(_RunnerDelegate delegate) =>
         defaultRunMountedGrid(
           delegate,
           onFlushed: () {},
@@ -1238,7 +1413,7 @@ final class _Leaf extends MultiChildSeed {
 /// Drives the REAL `defaultRunMountedGrid` glue (production code, not a fake):
 /// each error hook reproduces one of runGrid's failure classes so the seam's
 /// dispose-on-failure contract is pinned on the shipped default.
-final class _RunnerDelegate extends ResidentGridDelegate {
+final class _RunnerDelegate extends GridDelegate {
   _RunnerDelegate({this.bootError, this.didLaunchError, this.buildError});
 
   final Object? bootError;
@@ -1265,7 +1440,7 @@ final class _RunnerDelegate extends ResidentGridDelegate {
   }
 
   @override
-  ResidentStationView get stationView => throw UnimplementedError();
+  StationView get stationView => throw UnimplementedError();
 
   @override
   GridCommandHandler get commandHandler => throw UnimplementedError();

@@ -29,13 +29,17 @@ export 'src/station_lock.dart';
 // The dev-mode reload client: a JIT station picks up landed code changes over
 // its VM service, with no down/up bounce and no killed agents.
 export 'src/station_reload.dart';
-export 'src/resident_grid_delegate.dart';
-export 'src/resident_station_flags.dart';
-export 'src/resident_state_workspace.dart';
-export 'src/resident_up_command.dart';
-export 'src/resident_diagnostics_reporter.dart';
-export 'src/resident_down_command.dart';
-export 'src/resident_status_command.dart';
+// The delegate contract itself lives in grid_sdk (tg-at3r): `GridDelegate`
+// absorbed the old `ResidentGridDelegate` hooks, and its supporting types
+// (`StationView`, the `StalenessPosture` family, `StationRefusal`,
+// `SubstationConfig`) ride grid_sdk's barrel. This library keeps the SHELL:
+// the up/down/status commands and their seams.
+export 'src/station_flags.dart';
+export 'src/state_workspace.dart';
+export 'src/up_command.dart';
+export 'src/diagnostics_reporter.dart';
+export 'src/down_command.dart';
+export 'src/status_command.dart';
 
 // The generic, asset-agnostic driving commands.
 export 'src/reload_command.dart';

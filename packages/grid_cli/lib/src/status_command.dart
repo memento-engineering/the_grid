@@ -8,7 +8,7 @@ import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart' show BeadOwnershipPredicate;
 
-import 'resident_state_workspace.dart';
+import 'state_workspace.dart';
 import 'station_attach.dart';
 
 /// Constructs the one-shot snapshot reader used by the down fallback.
@@ -21,16 +21,16 @@ SnapshotReader cliSnapshotReader(BeadsWorkspace workspace) => CliSnapshotReader(
 );
 
 /// Renders live resident status or a read-only store fallback.
-class ResidentStatusCommand extends Command<int> {
+class StatusCommand extends Command<int> {
   /// Creates the command for [stationName].
-  ResidentStatusCommand({
+  StatusCommand({
     required this.stationName,
     StationAttach? attach,
     SnapshotReaderFactory? snapshotReader,
   }) : _attach = attach ?? StationAttach(),
        _snapshotReader = snapshotReader ?? cliSnapshotReader {
     argParser
-      ..addOption('state-workspace', help: residentStateWorkspaceHelp)
+      ..addOption('state-workspace', help: stateWorkspaceHelp)
       ..addOption(
         'workspace',
         abbr: 'w',

@@ -331,10 +331,14 @@ grid_cli `run_command_tree_test.dart`, power_station 6 (`substation_service_bund
 acceptance). Dissolving the type = replacing the `InheritedSeed<ServiceBundle>` DI with
 per-substation git/GitHub ASSETS mounted at substation scope (§3).
 
-**11. hand-mirrored flag surface** — CONCRETE: space_station `up_command.dart`:301
-`_addResidentStationFlags` byte-duplicates grid_cli `station_runner.dart`:126
-`addStationFlags` (its own doc, `up_command.dart`:294–300, admits "Kept in lockstep with
-`addStationFlags` by hand"); `up_command.dart`:405 `_residentStationArgsFrom` mirrors
+**11. hand-mirrored flag surface** — CONCRETE (2026-07-07 snapshot; DEAD on the
+grid_cli side since: `station_runner.dart` was deleted by the tg-1fa2.4
+delegate-boot migration, the surviving shell flags live un-prefixed in
+`station_flags.dart` after the tg-at3r sweep, and the space_station mirror's
+retirement is space_station's own adoption work): space_station
+`up_command.dart`:301 hand-copied grid_cli `station_runner.dart`:126
+`addStationFlags` byte-for-byte (its own doc, `up_command.dart`:294–300, admitted
+"Kept in lockstep with `addStationFlags` by hand"); `up_command.dart`:405 mirrored
 `StationArgs.from` (`station_runner.dart`:400). Dies with Track G (absorbs tg-da7).
 
 **12. `workRoot` fallback chain** — the chain: grid_cli `station_runner.dart`:1003–1010

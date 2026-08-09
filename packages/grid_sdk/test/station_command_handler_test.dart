@@ -890,7 +890,7 @@ GraphSnapshot _gateSnapshot() => _snapshot([
 ]);
 
 Future<void> _expectRefused(
-  ResidentGridCommandHandler handler,
+  StationCommandHandler handler,
   GridCommandRequest request, {
   required String code,
   required _RecordingRunner stateRunner,
@@ -905,7 +905,7 @@ Future<void> _expectRefused(
   expect(workRunner.calls, isEmpty, reason: 'refusal must be zero-write');
 }
 
-ResidentGridCommandHandler _handler({
+StationCommandHandler _handler({
   required _Source state,
   required _Source work,
   required _RecordingRunner stateRunner,
@@ -916,7 +916,7 @@ ResidentGridCommandHandler _handler({
   Set<String> stateWriterOwnership = const {'tg', 'tgdog'},
   Set<String> workWriterOwnership = const {'tg'},
   String workIdentity = 'tg',
-}) => ResidentGridCommandHandler(
+}) => StationCommandHandler(
   stateSource: state,
   refreshState: refreshState ?? () async {},
   stateWriter: StationBeadWriter(
@@ -926,7 +926,7 @@ ResidentGridCommandHandler _handler({
   ),
   stateOwnership: BeadOwnershipPredicate(stateOwnership),
   workStoresByIdentity: {
-    workIdentity: ResidentWorkCommandStore(
+    workIdentity: WorkCommandStore(
       source: work,
       refresh: refreshWork ?? () async {},
       writer: StationBeadWriter(

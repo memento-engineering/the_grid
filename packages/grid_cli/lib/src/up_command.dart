@@ -15,18 +15,24 @@ import 'package:grid_sdk/grid_sdk.dart'
         GridCommandHandler,
         GridCommandRequest,
         GridCommandResult,
+        GridDelegate,
         GridHandle,
         GridHookError,
         ReassembleReport,
+        StalenessClear,
+        StalenessRefused,
+        StalenessWarned,
+        StationRefusal,
+        StationView,
         SubstationWorkSpec,
         TreeProjector,
+        kNotWedged,
         runGrid;
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 
-import 'resident_grid_delegate.dart';
-import 'resident_station_flags.dart';
 import 'station_control.dart';
+import 'station_flags.dart';
 import 'station_lock.dart';
 
 /// Builds the station-authored delegate from parsed boot configuration ALONE
@@ -38,18 +44,18 @@ import 'station_lock.dart';
 /// effect providers mounted, visible to the projection) is the TARGET state,
 /// owned by the reference-boot follow-up bead — either way, no nulls thread
 /// through this factory.
-typedef ResidentGridDelegateFactory =
-    ResidentGridDelegate Function({required ResidentStationConfig config});
+typedef GridDelegateFactory =
+    GridDelegate Function({required StationConfig config});
 
 /// Reads the station's coded roster for a particular grid home.
-typedef ResidentRosterReader =
+typedef RosterReader =
     List<SubstationWorkSpec> Function({required String gridHome});
 
 /// Validates one caller-owned harness, returning a refusal or null.
-typedef ResidentHarnessValidator = String? Function(String harness);
+typedef HarnessValidator = String? Function(String harness);
 
 /// The lock resource owned by a resident boot.
-abstract interface class ResidentLockResource {
+abstract interface class LockResource {
   String get path;
   Future<void> updateControl({
     required String controlUrl,
@@ -60,27 +66,27 @@ abstract interface class ResidentLockResource {
 }
 
 /// The mounted grid operations consumed by the resident shell.
-abstract interface class ResidentGridResource {
+abstract interface class GridResource {
   Future<ReassembleReport> hotReload();
   Future<ReassembleReport> hotRestart();
   Future<void> teardown();
 }
 
 /// The control resource owned by a resident boot.
-abstract interface class ResidentControlResource {
+abstract interface class ControlResource {
   String get url;
   Future<void> dispose();
 }
 
 /// The optional development-mode resource owned by a resident boot.
-abstract interface class ResidentDevModeResource {
+abstract interface class DevModeResource {
   String get vmServiceUri;
   void register();
   Future<void> dispose();
 }
 
-typedef ResidentLockAcquirer =
-    Future<ResidentLockResource> Function({
+typedef LockAcquirer =
+    Future<LockResource> Function({
       required String stateWorkspaceDir,
       required int pid,
       required DateTime now,
@@ -96,34 +102,34 @@ typedef ResidentLockAcquirer =
 /// adopted as the live one — NEVER inside the factory call itself, and never
 /// on a failed restart boot (the old delegate stays live and keeps serving
 /// every per-request read).
-typedef ResidentGridRunner =
-    Future<ResidentGridResource> Function(
-      ResidentGridDelegate delegate, {
+typedef GridRunner =
+    Future<GridResource> Function(
+      GridDelegate delegate, {
       required void Function() onFlushed,
       required Future<void> Function() orphanSweep,
-      required void Function(ResidentGridDelegate next) onDelegateSwapped,
+      required void Function(GridDelegate next) onDelegateSwapped,
       required TreeProjector? treeProjector,
-      ResidentGridDelegate Function()? delegateFactory,
+      GridDelegate Function()? delegateFactory,
     });
-typedef ResidentControlStarter =
-    Future<ResidentControlResource> Function({
+typedef ControlStarter =
+    Future<ControlResource> Function({
       required int port,
       required String token,
       required StationStatus Function() view,
       required GridCommandHandler commandHandler,
       required TreeProjector? treeProjector,
     });
-typedef ResidentDevModeArmer =
-    Future<ResidentDevModeResource?> Function({
+typedef DevModeArmer =
+    Future<DevModeResource?> Function({
       required String? vmServiceUri,
       required Future<Map<String, Object?>> Function() hotReload,
       required Future<Map<String, Object?>> Function() hotRestart,
       required GraphSnapshot Function() latest,
       required String Function() readPath,
     });
-typedef ResidentVmServiceReader = Future<String?> Function();
-typedef ResidentShutdownWaiter = Future<void> Function();
-typedef ResidentPrimaryCheckoutInspector =
+typedef VmServiceReader = Future<String?> Function();
+typedef ShutdownWaiter = Future<void> Function();
+typedef PrimaryCheckoutInspector =
     Future<PrimaryCheckoutFreshness> Function(SubstationWorkSpec substation);
 
 /// Boots a foreground resident station over `runGrid`.
@@ -132,27 +138,27 @@ typedef ResidentPrimaryCheckoutInspector =
 /// the station lock, the control socket, the dev-mode seat, the diagnostics
 /// [TreeProjector] (process-lifetime, so `/stream` survives hot restarts),
 /// signals, exit codes — and reads everything stateful off the delegate's
-/// narrow vended views ([ResidentGridDelegate]): reference types flow OUT of
+/// narrow vended views ([GridDelegate]): reference types flow OUT of
 /// the delegate, never in. Teardown: unmount tree → orphan sweep → dispose
 /// the delegate (all inside the runner's teardown, in that order — the sweep
 /// reaps over the delegate's boot-assembled runtime, so the delegate must
 /// outlive it) → dispose the shell's projector → release lock.
-class ResidentUpCommand extends Command<int> {
+class UpCommand extends Command<int> {
   /// Creates a resident `up` command.
-  ResidentUpCommand({
+  UpCommand({
     required this.stationName,
-    required ResidentGridDelegateFactory delegateFactory,
-    required ResidentRosterReader codedRoster,
+    required GridDelegateFactory delegateFactory,
+    required RosterReader codedRoster,
     required Set<String> harnessAllowList,
-    required ResidentHarnessValidator validateHarness,
+    required HarnessValidator validateHarness,
     StationLockService? lockService,
-    ResidentLockAcquirer? acquireLock,
-    ResidentGridRunner? runMountedGrid,
-    ResidentControlStarter? startControl,
-    ResidentDevModeArmer? armDevelopmentMode,
-    ResidentVmServiceReader? readVmServiceUri,
-    ResidentShutdownWaiter? waitForShutdown,
-    ResidentPrimaryCheckoutInspector? inspectPrimaryCheckout,
+    LockAcquirer? acquireLock,
+    GridRunner? runMountedGrid,
+    ControlStarter? startControl,
+    DevModeArmer? armDevelopmentMode,
+    VmServiceReader? readVmServiceUri,
+    ShutdownWaiter? waitForShutdown,
+    PrimaryCheckoutInspector? inspectPrimaryCheckout,
   }) : _delegateFactory = delegateFactory,
        _codedRoster = codedRoster,
        _harnessAllowList = Set.unmodifiable(harnessAllowList),
@@ -169,7 +175,7 @@ class ResidentUpCommand extends Command<int> {
     if (_harnessAllowList.isEmpty) {
       throw ArgumentError.value(harnessAllowList, 'harnessAllowList');
     }
-    residentStationFlags(
+    stationFlags(
       argParser,
       codedNames: [for (final seat in codedRoster(gridHome: '/')) seat.name],
       harnessAllowList: _harnessAllowList,
@@ -178,18 +184,18 @@ class ResidentUpCommand extends Command<int> {
 
   /// The composing runner's operator-facing station name.
   final String stationName;
-  final ResidentGridDelegateFactory _delegateFactory;
-  final ResidentRosterReader _codedRoster;
+  final GridDelegateFactory _delegateFactory;
+  final RosterReader _codedRoster;
   final Set<String> _harnessAllowList;
-  final ResidentHarnessValidator _validateHarness;
+  final HarnessValidator _validateHarness;
   final StationLockService _lockService;
-  final ResidentLockAcquirer? _acquireLock;
-  final ResidentGridRunner _runMountedGrid;
-  final ResidentControlStarter _startControl;
-  final ResidentDevModeArmer _armDevelopmentMode;
-  final ResidentVmServiceReader _readVmServiceUri;
-  final ResidentPrimaryCheckoutInspector _inspectPrimaryCheckout;
-  final ResidentShutdownWaiter _waitForShutdown;
+  final LockAcquirer? _acquireLock;
+  final GridRunner _runMountedGrid;
+  final ControlStarter _startControl;
+  final DevModeArmer _armDevelopmentMode;
+  final VmServiceReader _readVmServiceUri;
+  final PrimaryCheckoutInspector _inspectPrimaryCheckout;
+  final ShutdownWaiter _waitForShutdown;
 
   static Future<PrimaryCheckoutFreshness> _defaultInspectPrimaryCheckout(
     SubstationWorkSpec seat,
@@ -203,9 +209,9 @@ class ResidentUpCommand extends Command<int> {
       'Boot the foreground resident station; safe dry-run is the default.';
 
   @override
-  Future<int> run() => _runResidentStation();
+  Future<int> run() => _runStation();
 
-  Future<int> _runResidentStation() async {
+  Future<int> _runStation() async {
     final args = argResults!;
     final prefix = '$stationName up';
     final rawHome = (args.option('grid-home') ?? args.option('state-workspace'))
@@ -213,9 +219,9 @@ class ResidentUpCommand extends Command<int> {
     final roster = _codedRoster(
       gridHome: rawHome != null && p.isAbsolute(rawHome) ? rawHome : '/',
     );
-    final ResidentStationConfig config;
+    final StationConfig config;
     try {
-      config = residentStationConfigFrom(
+      config = stationConfigFrom(
         args,
         stationName: stationName,
         codedNames: {for (final seat in roster) seat.name},
@@ -230,7 +236,7 @@ class ResidentUpCommand extends Command<int> {
 
     for (final selected in [config.harness, config.buildHarness]) {
       if (selected == null) continue;
-      // Membership needs no shell check: `residentStationFlags` declares both
+      // Membership needs no shell check: `stationFlags` declares both
       // harness flags with `allowed:` over the same allow list, so the parser
       // already refused any name outside it. The shell validates only the
       // CONFIGURATION of the armed environment.
@@ -250,7 +256,7 @@ class ResidentUpCommand extends Command<int> {
     // re-reads the coded roster and resolves the armed one — filesystem
     // probes, skip renders, possible refusals — which STYLE.md rule 1 keeps
     // out of any `build*` name.
-    ResidentGridDelegate assembleFreshDelegate() {
+    GridDelegate assembleFreshDelegate() {
       final delegate = _delegateFactory(config: config);
       try {
         delegate.resolveArmedRoster(
@@ -279,7 +285,7 @@ class ResidentUpCommand extends Command<int> {
     // already disposed the fresh delegate, so this site only renders: a
     // styled refusal keeps its own exit code, anything else is the factory's
     // (or the roster probe's) construction failure — exit 64, as before.
-    final ResidentGridDelegate delegate;
+    final GridDelegate delegate;
     try {
       delegate = assembleFreshDelegate();
     } on StationRefusal catch (refusal) {
@@ -341,7 +347,7 @@ class ResidentUpCommand extends Command<int> {
     }
 
     final startedAt = DateTime.now();
-    final ResidentLockResource stationLock;
+    final LockResource stationLock;
     try {
       final acquire =
           _acquireLock ??
@@ -395,7 +401,7 @@ class ResidentUpCommand extends Command<int> {
     // projector). The shell disposes it after the tree unmounts.
     final treeProjector = TreeProjector();
 
-    final ResidentGridResource grid;
+    final GridResource grid;
     try {
       grid = await _runMountedGrid(
         delegate,
@@ -420,8 +426,8 @@ class ResidentUpCommand extends Command<int> {
     // seat must never be stranded because its lock advertisement failed).
     Future<int> failArming(
       Object error, {
-      ResidentControlResource? control,
-      ResidentDevModeResource? devMode,
+      ControlResource? control,
+      DevModeResource? devMode,
     }) async {
       if (devMode != null) await settle('dev-mode dispose', devMode.dispose);
       if (control != null) await settle('control dispose', control.dispose);
@@ -433,7 +439,7 @@ class ResidentUpCommand extends Command<int> {
     }
 
     final token = mintControlToken();
-    ResidentControlResource? armingControl;
+    ControlResource? armingControl;
     try {
       armingControl = await _startControl(
         port: config.controlPort,
@@ -455,14 +461,24 @@ class ResidentUpCommand extends Command<int> {
     }
     final control = armingControl;
 
-    ResidentDevModeResource? devMode;
+    DevModeResource? devMode;
     try {
       devMode = await _armDevelopmentMode(
         vmServiceUri: vmServiceUri,
         hotReload: () async => (await grid.hotReload()).toJson(),
         hotRestart: () async => (await grid.hotRestart()).toJson(),
-        latest: () => live.stationView.latest.graph,
-        readPath: () => live.stationView.readPathName,
+        // A station that vends no view has no join to serve, and a
+        // fabricated snapshot would masquerade as a real one. The refusal
+        // renders where each read actually reaches the delegate: [readPath]
+        // is per-request and refuses LOUD through the RPC layer, while
+        // [latest] feeds the seat's graph refresh — the refused refresh
+        // rides the runtime's errors stream, no baseline is ever captured,
+        // and the graph tools serve the distinguishable never-joined shape
+        // (zero beads, `capturedAt: null`), never a fabricated join. Pinned
+        // end-to-end through the real `armDevMode` stack by
+        // up_command_test's absence-posture group.
+        latest: () => _requireView(live).latest.graph,
+        readPath: () => _requireView(live).readPathName,
       );
       devMode?.register();
       if (devMode != null) {
@@ -479,9 +495,13 @@ class ResidentUpCommand extends Command<int> {
         'mode: ${config.dryRun ? 'DRY-RUN (observe-only)' : 'LIVE'}  ·  '
         'substations: {$freshnessText}',
       )
+      // Absence is a designed posture (STYLE.md rule 3): a delegate that
+      // vends no station view gets an honest banner line, not a crash.
       ..writeln(
-        'stores: read-path {${view.readPathName}}  ·  state partition: '
-        '${view.stateSubstation}',
+        view == null
+            ? 'stores: (no station view vended)'
+            : 'stores: read-path {${view.readPathName}}  ·  state partition: '
+                  '${view.stateSubstation}',
       )
       ..writeln(
         'control: ${control.url}  ·  token: (see ${stationLock.path}, 0600)',
@@ -515,17 +535,25 @@ class ResidentUpCommand extends Command<int> {
     return 0;
   }
 
+  /// Builds the `/status` snapshot off the LIVE delegate's vended [view].
+  ///
+  /// A null [view] is a designed absence (STYLE.md rule 3): `/status` still
+  /// reports everything the shell knows first-hand (roster, mode, process),
+  /// and renders the work axis empty — zero counts, no sync baseline
+  /// (`lastSyncAt` null), the not-wedged default — never a throw.
   StationStatus _status(
-    ResidentStationConfig config,
+    StationConfig config,
     List<SubstationWorkSpec> armed,
     DateTime startedAt,
-    ResidentStationView view,
+    StationView? view,
   ) {
-    final latest = view.latest;
-    final liveSessions = latest.sessionsByWorkBead.values
-        .where((session) => !session.isTerminal)
-        .length;
-    final capturedAt = latest.graph.capturedAt;
+    final latest = view?.latest;
+    final liveSessions =
+        latest?.sessionsByWorkBead.values
+            .where((session) => !session.isTerminal)
+            .length ??
+        0;
+    final capturedAt = latest?.graph.capturedAt;
     return StationStatus(
       substation: armed.map((seat) => seat.name).join(','),
       stateStore: config.gridHome,
@@ -534,17 +562,29 @@ class ResidentUpCommand extends Command<int> {
       pid: pid,
       startedAt: startedAt,
       version: Platform.version,
-      ready: latest.graph.readyIds.length,
+      ready: latest?.graph.readyIds.length ?? 0,
       mounted: liveSessions,
       liveSessions: liveSessions,
-      lastSyncAt: capturedAt.millisecondsSinceEpoch == 0 ? null : capturedAt,
-      wedge: view.wedge,
-      sync: view.syncStatus(),
+      lastSyncAt: capturedAt == null || capturedAt.millisecondsSinceEpoch == 0
+          ? null
+          : capturedAt,
+      wedge: view?.wedge ?? kNotWedged,
+      sync: view?.syncStatus() ?? const <String, Object?>{},
     );
   }
 }
 
-final class _StationLockResource implements ResidentLockResource {
+/// Reads the LIVE delegate's vended view or refuses LOUD when the station
+/// vends none — the dev-mode seat's per-request reads have no honest empty
+/// rendering (a fabricated snapshot would masquerade as a real join).
+StationView _requireView(GridDelegate live) =>
+    live.stationView ??
+    (throw StateError(
+      'this station\'s delegate vends no station view '
+      '(GridDelegate.stationView is null).',
+    ));
+
+final class _StationLockResource implements LockResource {
   _StationLockResource(this._handle);
   final StationLockHandle _handle;
 
@@ -564,17 +604,30 @@ final class _StationLockResource implements ResidentLockResource {
 
 /// Routes each control-plane command to the LIVE delegate's handler — a hot
 /// restart swaps the delegate under the running control socket, so the bound
-/// handler must be re-read per request, never captured once at start.
+/// handler must be re-read per request, never captured once at start. A
+/// delegate that vends NO handler is a designed absence (STYLE.md rule 3):
+/// every command is refused with a clear message, never a throw across the
+/// control surface.
 final class _LiveDelegateCommandHandler implements GridCommandHandler {
   _LiveDelegateCommandHandler(this._live);
-  final ResidentGridDelegate Function() _live;
+  final GridDelegate Function() _live;
 
   @override
-  Future<GridCommandResult> call(GridCommandRequest request) =>
-      _live().commandHandler(request);
+  Future<GridCommandResult> call(GridCommandRequest request) async {
+    final handler = _live().commandHandler;
+    if (handler == null) {
+      return const GridCommandResult.refused(
+        code: 'unsupported',
+        message:
+            'this station\'s delegate vends no command handler — '
+            'POST /command is unavailable on this station.',
+      );
+    }
+    return handler(request);
+  }
 }
 
-final class _GridResource implements ResidentGridResource {
+final class _GridResource implements GridResource {
   _GridResource(this._handle);
   final GridHandle _handle;
 
@@ -586,7 +639,7 @@ final class _GridResource implements ResidentGridResource {
   Future<void> teardown() => _handle.teardown();
 }
 
-final class _ControlResource implements ResidentControlResource {
+final class _ControlResource implements ControlResource {
   _ControlResource(this._control);
   final StationControl _control;
 
@@ -596,7 +649,7 @@ final class _ControlResource implements ResidentControlResource {
   Future<void> dispose() => _control.dispose();
 }
 
-final class _DevModeResource implements ResidentDevModeResource {
+final class _DevModeResource implements DevModeResource {
   _DevModeResource(this._seat);
   final DevModeSeat _seat;
 
@@ -608,17 +661,17 @@ final class _DevModeResource implements ResidentDevModeResource {
   Future<void> dispose() => _seat.dispose();
 }
 
-/// The production [ResidentGridRunner]: `runGrid` plus the seam's
+/// The production [GridRunner]: `runGrid` plus the seam's
 /// dispose-on-failure contract. Visible for testing so the contract is pinned
 /// on THIS glue, not re-implemented by every test fake.
 @visibleForTesting
-Future<ResidentGridResource> defaultRunMountedGrid(
-  ResidentGridDelegate delegate, {
+Future<GridResource> defaultRunMountedGrid(
+  GridDelegate delegate, {
   required void Function() onFlushed,
   required Future<void> Function() orphanSweep,
-  required void Function(ResidentGridDelegate next) onDelegateSwapped,
+  required void Function(GridDelegate next) onDelegateSwapped,
   required TreeProjector? treeProjector,
-  ResidentGridDelegate Function()? delegateFactory,
+  GridDelegate Function()? delegateFactory,
 }) async {
   try {
     return _GridResource(
@@ -628,11 +681,7 @@ Future<ResidentGridResource> defaultRunMountedGrid(
         orphanSweep: orphanSweep,
         treeProjector: treeProjector,
         delegateFactory: delegateFactory,
-        // The only delegates the runner ever swaps in come from
-        // `delegateFactory` above, which produces [ResidentGridDelegate]s —
-        // the downcast is total by construction.
-        onDelegateSwapped: (next) =>
-            onDelegateSwapped(next as ResidentGridDelegate),
+        onDelegateSwapped: onDelegateSwapped,
       ),
     );
   } on Object catch (error, stackTrace) {
@@ -654,7 +703,7 @@ Future<ResidentGridResource> defaultRunMountedGrid(
   }
 }
 
-Future<ResidentControlResource> _defaultStartControl({
+Future<ControlResource> _defaultStartControl({
   required int port,
   required String token,
   required StationStatus Function() view,
@@ -670,7 +719,7 @@ Future<ResidentControlResource> _defaultStartControl({
   ),
 );
 
-Future<ResidentDevModeResource?> _defaultArmDevelopmentMode({
+Future<DevModeResource?> _defaultArmDevelopmentMode({
   required String? vmServiceUri,
   required Future<Map<String, Object?>> Function() hotReload,
   required Future<Map<String, Object?>> Function() hotRestart,
