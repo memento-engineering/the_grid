@@ -1011,6 +1011,20 @@ void main() {
     });
   });
 
+  group('ResidentGridDelegate lifecycle contract', () {
+    test('dispose tolerates a delegate that never resolved a roster nor '
+        'booted', () {
+      // Five shell paths dispose never-booted (or partially-booted)
+      // delegates: the restart-refusal, launch-refusal, staleness, and lock
+      // paths, plus runGrid's boot-throw. The contract (class doc, step 5):
+      // dispose must never assume resolveArmedRoster/boot ran.
+      final delegate = _Delegate(<String>[]);
+      expect(delegate.armedRoster, isEmpty);
+      expect(delegate.dispose, returnsNormally);
+      expect(delegate.disposed, isTrue);
+    });
+  });
+
   group('ResidentGridDelegate roster retention', () {
     test('resolveArmedRoster RETAINS the armed roster for boot', () async {
       // The one contract line a composing station's boot depends on: the

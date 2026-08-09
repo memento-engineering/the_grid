@@ -107,6 +107,13 @@ final class StalenessRefused extends StalenessPosture {
 ///     projector would be disposed with the retired delegate and leave the
 ///     flush rail and `/stream` permanently dark).
 ///  5. **`dispose`** unwinds what boot assembled, in reverse creation order.
+///     It does NOT presume the earlier steps ran: `dispose` MUST tolerate
+///     (i) a delegate whose [resolveArmedRoster]/`boot` never ran and (ii) a
+///     boot that threw partway through assembly — the shell disposes
+///     never-booted delegates on its refusal paths (roster refusal,
+///     staleness, lock conflict) and partially-booted ones when the boot rail
+///     throws. Implement it over nullable fields or a booted flag; never
+///     assume boot completed.
 ///     The shell's teardown: unmount tree (in-tree resources unwind by
 ///     unmount order — tree-owned `Provider` create/dispose) → [sweepOrphans]
 ///     on the STILL-LIVE delegate → dispose the delegate (both inside the
