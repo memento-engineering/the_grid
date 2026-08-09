@@ -551,6 +551,49 @@ void main() {
       expect(values, [null, null, null]);
     });
 
+    test('the pending drain is TYPE-SCOPED: a provider mount of a different '
+        'type leaves a parked watcher untouched', () async {
+      final values = <String?>[];
+      late _HostState slot;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Slots([
+            _Watch(values),
+            _Host(
+              onCreate: (state) => slot = state,
+              describe: () => const _Leaf(),
+            ),
+          ]),
+        ),
+      );
+      expect(values, [null]);
+      final registry = slot.context.read<AvailabilityRegistry>()!;
+      expect(registry.debugPendingOf(_Value), hasLength(1));
+
+      // A Provider<_Other> mounts in the sibling slot. The watcher is parked
+      // under _Value; the mount drains only the pending set keyed by ITS type,
+      // so no ping reaches the watcher — no rebuild, and the registration
+      // stays parked under the missed type.
+      slot.swap(
+        () => Provider<_Other>.value(
+          const _Other('unrelated'),
+          child: const _Leaf(),
+        ),
+      );
+      owner.flush();
+      await _pump();
+      owner.flush();
+      expect(values, [null], reason: 'no cross-type ping, no rebuild');
+      expect(
+        registry.debugPendingOf(_Value),
+        hasLength(1),
+        reason: 'the registration stays parked under its own type',
+      );
+    });
+
     test('a provider mount later in the SAME flush that already rebuilt a '
         'parked watcher defers the ping instead of re-dirtying it', () async {
       // Regression for the substrate flush invariant
@@ -640,6 +683,55 @@ void main() {
       await _pump();
       owner.flush();
       expect(values, [null, 'armed', null]);
+    });
+
+    test('an unmounting provider ANNOUNCES its collected live dependents to '
+        'the registry — the transmit side of the bidirectional '
+        'contract', () async {
+      final left = <String?>[];
+      final right = <String?>[];
+      late _HostState host;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Host(
+            onCreate: (state) => host = state,
+            describe: () => Provider<_Value>.value(
+              const _Value('held'),
+              child: _Slots([_Watch(left), _Watch(right)]),
+            ),
+          ),
+        ),
+      );
+      expect(left, ['held']);
+      expect(right, ['held']);
+      final registry = host.context.read<AvailabilityRegistry>()!;
+      expect(registry.debugNotifying, isEmpty);
+
+      // Swap the provider subtree out. The provider branch must hand the
+      // registry the live dependents it mirrored through addDependent: both
+      // watcher branches land in the deferred delivery queue, observable
+      // between the announcing flush and the delivery microtask.
+      host.swap(() => const _Leaf());
+      owner.flush();
+      expect(
+        registry.debugNotifying,
+        hasLength(2),
+        reason: 'both live dependents were announced',
+      );
+      expect(
+        registry.debugNotifying.any((branch) => branch.mounted),
+        isFalse,
+        reason: 'recipients went down with the subtree (no-reparent '
+            'substrate); delivery will skip them on the mounted guard',
+      );
+
+      await _pump();
+      expect(registry.debugNotifying, isEmpty, reason: 'the queue drains');
+      expect(left, ['held'], reason: 'a dead recipient is never pinged');
+      expect(right, ['held']);
     });
 
     test('the registry never retains a watcher that unmounted with its '

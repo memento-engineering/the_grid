@@ -356,9 +356,10 @@ final class _RegistryBranch extends InheritedBranch<AvailabilityRegistry> {
 /// Public ONLY as a test seam (`@visibleForTesting`): the unmount-side
 /// notification has no observable end-to-end effect on this no-reparent
 /// substrate (every live dependent of an unmounting provider is a descendant
-/// and unmounts with it), so its contract behavior is pinned by direct unit
-/// tests against this class. Production code composes [ProviderScope] and
-/// never names the registry.
+/// and unmounts with it), so its receive-side contract behavior is pinned by
+/// direct unit tests against this class, and the provider branch's transmit
+/// side through [debugNotifying]. Production code composes [ProviderScope]
+/// and never names the registry.
 @visibleForTesting
 final class AvailabilityRegistry {
   final Map<Type, Set<Branch>> _pending = {};
@@ -432,4 +433,13 @@ final class AvailabilityRegistry {
   @visibleForTesting
   Set<Branch> debugPendingOf(Type type) =>
       Set.unmodifiable(_pending[type] ?? const <Branch>{});
+
+  /// The branches queued for the next delivery microtask — a read-only test
+  /// probe. Pins the TRANSMIT side of the unmount announcement end-to-end:
+  /// the provider branch's mirrored live-dependent set has no other
+  /// observable outlet on this no-reparent substrate (every recipient is
+  /// down before delivery), so tests read the queue between the announcing
+  /// flush and the delivery microtask.
+  @visibleForTesting
+  Set<Branch> get debugNotifying => Set.unmodifiable(_notifying);
 }
