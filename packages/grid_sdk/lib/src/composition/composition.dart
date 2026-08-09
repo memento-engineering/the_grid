@@ -71,10 +71,8 @@ class RawAssetGrid extends StatelessSeed {
   @override
   Seed build(TreeContext context) {
     _requireRoot(root, 'RawAssetGrid');
-    return ProviderScope(
-      providers: <Provider<Object>>[
-        Provider<GridRoot>.value(GridRoot(path: root)),
-      ],
+    return Provider<GridRoot>.value(
+      GridRoot(path: root),
       child: AssetFanOut(assets),
     );
   }
@@ -123,10 +121,8 @@ class Station extends StatelessSeed {
               .path,
       'Station("$name")',
     );
-    return ProviderScope(
-      providers: <Provider<Object>>[
-        Provider<StationScope>.value(StationScope(name: name, root: resolved)),
-      ],
+    return Provider<StationScope>.value(
+      StationScope(name: name, root: resolved),
       child: AssetFanOut(assets),
     );
   }
@@ -199,16 +195,8 @@ class Substation extends StatelessSeed {
   Seed build(TreeContext context) {
     _requireName(name, 'Substation');
     _requireName(prefix, 'Substation("$name").prefix');
-    return ProviderScope(
-      providers: <Provider<Object>>[
-        Provider<SubstationScope>.value(
-          SubstationScope(
-            name: name,
-            root: _resolveRoot(context),
-            prefix: prefix,
-          ),
-        ),
-      ],
+    return Provider<SubstationScope>.value(
+      SubstationScope(name: name, root: _resolveRoot(context), prefix: prefix),
       child: AssetFanOut(assets),
     );
   }

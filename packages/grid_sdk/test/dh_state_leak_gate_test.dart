@@ -69,14 +69,15 @@ void main() {
       ]) {
         expect(barrelSource, contains(symbol));
       }
-      expect(all, contains('Provider<GridConfiguration>.value(_config)'));
+      expect(all, contains('Provider<GridConfiguration>.value('));
       expect(all, contains('watch<GridConfiguration>()'));
       for (final file in sources) {
         expect(
           _code(file.readAsStringSync()),
           isNot(contains('InheritedSeed<')),
           reason:
-              '${file.path}: raw inherited construction belongs to ProviderScope',
+              '${file.path}: raw inherited construction belongs to the '
+              'engine provider layer',
         );
       }
     },

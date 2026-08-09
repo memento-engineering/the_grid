@@ -31,27 +31,27 @@ final class _LeafBranch extends Branch {
 }
 
 void main() {
-  test(
-    'curated SDK provider API mounts both constructors and nullable watch',
-    () {
-      final seen = <Object?>[];
-      final disposed = <String>[];
-      final owner = TreeOwner();
-      owner.mountRoot(
-        ProviderScope(
-          providers: <Provider<Object>>[
+  test('curated SDK provider API mounts Provider seeds under Nest with '
+      'nullable watch', () {
+    final seen = <Object?>[];
+    final disposed = <String>[];
+    final owner = TreeOwner();
+    owner.mountRoot(
+      ProviderScope(
+        child: Nest(
+          children: [
             Provider<_Owned>(
-              create: () => const _Owned('created'),
+              create: (_) => const _Owned('created'),
               dispose: (value) => disposed.add(value.value),
             ),
             const Provider<String>.value('adopted'),
           ],
           child: _Consumer(seen),
         ),
-      );
-      expect(seen, ['created', 'adopted', null]);
-      owner.dispose();
-      expect(disposed, ['created']);
-    },
-  );
+      ),
+    );
+    expect(seen, ['created', 'adopted', null]);
+    owner.dispose();
+    expect(disposed, ['created']);
+  });
 }

@@ -84,8 +84,8 @@ class StationWork extends SingleChildStatelessSeed {
     // `requireProcessLeaseVendor` throws at readiness and the station wedges to
     // zero. Null wiring falls back to the real production vendor over the
     // ambient services, mirroring the kernel's `?? defaultProcessLeaseVendor`.
-    return ProviderScope(
-      providers: <Provider<Object>>[
+    return Nest(
+      children: [
         Provider<JoinedSnapshotNotifier>.value(wiring.notifier),
         Provider<StationServices>.value(wiring.services),
         Provider<SessionResolver>.value(wiring.resolver),
