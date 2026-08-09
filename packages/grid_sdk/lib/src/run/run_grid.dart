@@ -60,6 +60,16 @@ import 'reassemble.dart';
 /// (flags, env, wiring, harness registry). A JIT station (started with
 /// `--enable-vm-service`) passes it; an AOT station omits it and `hotRestart`
 /// then refuses LOUDLY. [GridHandle.hotReload] needs no factory.
+///
+/// [onDelegateSwapped] fires synchronously at the hot-restart COMMIT point —
+/// after the fresh delegate's `boot` succeeded and the handle adopted it as
+/// the live delegate, before the retired one is disposed. It is the seam a
+/// composing shell re-points its per-request read surface (status views,
+/// command handlers, sweep closures) through: swapping a shell-side holder
+/// inside [delegateFactory] instead would publish an un-booted delegate, and
+/// a FAILED restart boot would leave the shell reading a disposed corpse
+/// while the mounted grid keeps running the old delegate. Never invoked for
+/// the launch delegate, and never on a failed restart.
 Future<GridHandle> runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
@@ -67,6 +77,7 @@ Future<GridHandle> runGrid(
   TreeProjector? treeProjector,
   Future<void> Function()? orphanSweep,
   GridDelegate Function()? delegateFactory,
+  void Function(GridDelegate next)? onDelegateSwapped,
 }) async {
   final report = onError ?? _rethrowToZone;
 
@@ -100,6 +111,7 @@ Future<GridHandle> runGrid(
     orphanSweep,
     reassemble,
     delegateFactory,
+    onDelegateSwapped,
   );
   // Wire the flush trigger BEFORE mounting: the first build runs synchronously
   // in mountRoot with no markNeedsRebuild (the config scope assigns its
@@ -166,6 +178,7 @@ class GridHandle {
     this._orphanSweep,
     this._reassemble,
     this._delegateFactory,
+    this._onDelegateSwapped,
   );
 
   final TreeOwner _owner;
@@ -191,6 +204,9 @@ class GridHandle {
 
   /// The hot-RESTART factory — null when the station never armed one.
   final GridDelegate Function()? _delegateFactory;
+
+  /// The hot-restart COMMIT notification (see [runGrid]'s `onDelegateSwapped`).
+  final void Function(GridDelegate next)? _onDelegateSwapped;
 
   /// Callers awaiting the NEXT completed flush (one per in-flight reassemble),
   /// completed with the reassemble report — or failed LOUDLY if the grid tears
@@ -354,6 +370,10 @@ class GridHandle {
     // The LIVE delegate from here on: teardown must reach this one, never the
     // corpse the configuration scope is about to retire.
     _delegate = next;
+    // THE COMMIT NOTIFICATION — synchronous with the swap, so a composing
+    // shell's read surface never spans an event-loop turn pointed at either
+    // an un-booted fresh delegate or the retired corpse.
+    _onDelegateSwapped?.call(next);
     final done = _reassemble0(
       RestartRequest(generation, next),
       ReassembleMode.restart,

@@ -429,7 +429,16 @@ void main() {
           return next;
         }
 
-        final handle = await runGrid(first, delegateFactory: factory);
+        // The COMMIT seam: each swap notification, with whether the retired
+        // delegate was still alive at notify time (it must be — the corpse is
+        // disposed only by the re-composition, after the shell re-pointed).
+        final swaps = <({GridDelegate next, bool retiredAlive})>[];
+        final handle = await runGrid(
+          first,
+          delegateFactory: factory,
+          onDelegateSwapped: (next) =>
+              swaps.add((next: next, retiredAlive: first.mounted)),
+        );
         addTearDown(handle.teardown);
         await expectLater(
           handle.hotRestart(),
@@ -440,6 +449,9 @@ void main() {
         expect(first.mounted, isTrue);
         expect(fresh.single.events, ['boot']);
         expect(fresh.single.mounted, isFalse);
+        // A FAILED restart never commits: the shell is never told to re-point,
+        // so its read surface stays on the live (old) delegate.
+        expect(swaps, isEmpty);
 
         refuse = false;
         final report = await handle.hotRestart();
@@ -454,6 +466,11 @@ void main() {
           fresh.last.events.where((event) => event == 'boot'),
           hasLength(1),
         );
+        // The successful restart commits EXACTLY once, with the booted fresh
+        // delegate, while the retired one was still alive.
+        expect(swaps, hasLength(1));
+        expect(identical(swaps.single.next, fresh.last), isTrue);
+        expect(swaps.single.retiredAlive, isTrue);
       },
     );
 
