@@ -76,6 +76,33 @@ final class _DependencyProbeState extends State<_DependencyProbe> {
   }
 }
 
+final class _OtherDependencyProbe extends StatefulSeed {
+  const _OtherDependencyProbe(this.values, this.dependencyChanges);
+
+  final List<String?> values;
+  final List<int> dependencyChanges;
+
+  @override
+  State<_OtherDependencyProbe> createState() => _OtherDependencyProbeState();
+}
+
+final class _OtherDependencyProbeState extends State<_OtherDependencyProbe> {
+  @override
+  void didChangeDependencies() {
+    seed.dependencyChanges.add(seed.dependencyChanges.length + 1);
+  }
+
+  @override
+  Seed build(TreeContext context) {
+    seed.values.add(context.watch<_Other>()?.name);
+    return const _Leaf();
+  }
+}
+
+final class _ProbeChildren extends MultiChildSeed {
+  _ProbeChildren(List<Seed> children) : super(children: children);
+}
+
 final class _ScopeRebuilder extends StatefulSeed {
   const _ScopeRebuilder({required this.onCreate, required this.child});
 
@@ -98,7 +125,10 @@ final class _ScopeRebuilderState extends State<_ScopeRebuilder> {
   @override
   Seed build(TreeContext context) => ProviderScope(
     key: const ValueKey('stable-provider-scope'),
-    providers: <Provider<Object>>[Provider<_Value>.value(_value)],
+    providers: <Provider<Object>>[
+      Provider<_Value>.value(_value),
+      Provider<_Other>.value(const _Other('stable')),
+    ],
     child: seed.child,
   );
 }
@@ -106,8 +136,10 @@ final class _ScopeRebuilderState extends State<_ScopeRebuilder> {
 void main() {
   group('notification stability', () {
     test('equal leaf rebuild is silent and changed leaf notifies once', () {
-      final values = <String?>[];
-      final dependencyChanges = <int>[];
+      final valueValues = <String?>[];
+      final valueDependencyChanges = <int>[];
+      final otherValues = <String?>[];
+      final otherDependencyChanges = <int>[];
       late _ScopeRebuilderState rebuilder;
       final owner = TreeOwner();
       addTearDown(owner.dispose);
@@ -115,21 +147,29 @@ void main() {
       owner.mountRoot(
         _ScopeRebuilder(
           onCreate: (state) => rebuilder = state,
-          child: _DependencyProbe(values, dependencyChanges),
+          child: _ProbeChildren([
+            _DependencyProbe(valueValues, valueDependencyChanges),
+            _OtherDependencyProbe(otherValues, otherDependencyChanges),
+          ]),
         ),
       );
 
-      expect(values, ['one']);
-      expect(dependencyChanges, [1]);
+      expect(valueValues, ['one']);
+      expect(valueDependencyChanges, [1]);
+      expect(otherValues, ['stable']);
+      expect(otherDependencyChanges, [1]);
 
       rebuilder.update(_Value('one'));
       owner.flush();
-      expect(dependencyChanges, [1]);
+      expect(valueDependencyChanges, [1]);
+      expect(otherDependencyChanges, [1]);
 
       rebuilder.update(const _Value('two'));
       owner.flush();
-      expect(dependencyChanges, [1, 2]);
-      expect(values.last, 'two');
+      expect(valueDependencyChanges, [1, 2]);
+      expect(valueValues.last, 'two');
+      expect(otherDependencyChanges, [1]);
+      expect(otherValues, ['stable']);
     });
   });
 
