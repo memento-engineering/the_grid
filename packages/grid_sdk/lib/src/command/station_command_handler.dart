@@ -7,9 +7,9 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'command_operation.dart';
 
 /// The resident read/write rails for one substation work store.
-final class ResidentWorkCommandStore {
+final class WorkCommandStore {
   /// Creates one resident work-store command binding.
-  const ResidentWorkCommandStore({
+  const WorkCommandStore({
     required this.source,
     required this.refresh,
     required this.writer,
@@ -26,14 +26,14 @@ final class ResidentWorkCommandStore {
 }
 
 /// Executes operator mutations against the controllers owned by one station.
-final class ResidentGridCommandHandler implements GridCommandHandler {
+final class StationCommandHandler implements GridCommandHandler {
   /// Binds commands to the resident controller and writer instances.
-  ResidentGridCommandHandler({
+  StationCommandHandler({
     required SnapshotSource stateSource,
     required Future<void> Function() refreshState,
     required StationBeadWriter stateWriter,
     required BeadOwnershipPredicate stateOwnership,
-    required Map<String, ResidentWorkCommandStore> workStoresByIdentity,
+    required Map<String, WorkCommandStore> workStoresByIdentity,
   }) : _stateSource = stateSource,
        _refreshState = refreshState,
        _stateWriter = stateWriter,
@@ -44,7 +44,7 @@ final class ResidentGridCommandHandler implements GridCommandHandler {
   final Future<void> Function() _refreshState;
   final StationBeadWriter _stateWriter;
   final BeadOwnershipPredicate _stateOwnership;
-  final Map<String, ResidentWorkCommandStore> _workStoresByIdentity;
+  final Map<String, WorkCommandStore> _workStoresByIdentity;
   Future<void> _tail = Future<void>.value();
 
   @override

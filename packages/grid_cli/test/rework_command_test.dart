@@ -9,7 +9,7 @@ import 'package:test/test.dart';
 /// unavailable outcomes, bead arity, absolute-root guards, and beyond-cap
 /// actor/note syntax guards. Removed with the retired second-process path:
 /// direct store export/write, prefix and note-root options, session cursor and
-/// round projection; resident semantics live in resident_command_handler_test.dart.
+/// round projection; resident semantics live in station_command_handler_test.dart.
 void main() {
   CommandRunner<int> runner(FakeClient client) =>
       CommandRunner<int>('grid', 'test')

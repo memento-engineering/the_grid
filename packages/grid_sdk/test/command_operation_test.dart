@@ -30,7 +30,7 @@ void main() {
   test('command implementation has no lock, process, or cli dependency', () {
     final sources = [
       File('lib/src/command/command_operation.dart').readAsStringSync(),
-      File('lib/src/command/resident_command_handler.dart').readAsStringSync(),
+      File('lib/src/command/station_command_handler.dart').readAsStringSync(),
     ].join();
 
     for (final forbidden in [

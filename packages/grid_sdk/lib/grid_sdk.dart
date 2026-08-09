@@ -116,11 +116,13 @@ export 'src/run/substation_config.dart';
 export 'src/stores/stores.dart';
 export 'src/stores/substation_init.dart';
 
-// ── Resident command extension ──────────────────────────────────────────────
-// The SDK supplies the typed extension seam and resident implementation; a
-// station composes it, while its control-surface adapter owns wire envelopes.
+// ── Station command extension ───────────────────────────────────────────────
+// The SDK supplies the typed extension seam and the implementation a running
+// station dispatches to; the station composes it, while its control-surface
+// adapter owns wire envelopes. (tg-at3r sweep: formerly
+// `ResidentGridCommandHandler` / `ResidentWorkCommandStore`.)
 export 'src/command/command_operation.dart';
-export 'src/command/resident_command_handler.dart';
+export 'src/command/station_command_handler.dart';
 
 // ── The work binding (Track J0 — tg-yl8) ────────────────────────────────────
 // The runGrid→engine bridge: the engine's work subtree mounts INSIDE the

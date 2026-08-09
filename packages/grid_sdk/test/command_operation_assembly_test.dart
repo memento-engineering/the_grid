@@ -10,7 +10,7 @@ void main() {
     expect(source, contains('Map<String, BdCliService> workBdOverrides'));
     expect(source, contains('workCommandStores[spec.name] = binding;'));
     expect(source, contains('workCommandStores[spec.prefix] = binding;'));
-    expect(source, contains('ResidentGridCommandHandler('));
+    expect(source, contains('StationCommandHandler('));
     expect(source, contains('commands: commands,'));
   });
 }

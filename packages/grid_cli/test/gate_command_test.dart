@@ -10,7 +10,7 @@ import 'package:test/test.dart';
 /// rationale requirements, and raw grade parsing. Removed with the retired
 /// second-process path: direct `GridStateStore` export/write assertions,
 /// state-prefix CLI guards, and CLI-side bead/gate/ownership/F-lane checks;
-/// those resident semantics are covered by resident_command_handler_test.dart.
+/// those resident semantics are covered by station_command_handler_test.dart.
 void main() {
   group('grid gate ls resident door', () {
     test('list renders all resident rows sorted', () async {

@@ -7,7 +7,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:path/path.dart' as p;
 
 import '../command/command_operation.dart';
-import '../command/resident_command_handler.dart';
+import '../command/station_command_handler.dart';
 import '../stores/stores.dart';
 import 'station_work.dart';
 
@@ -457,7 +457,7 @@ Future<StationWorkRuntime> assembleStationWork({
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
   );
-  final workCommandStores = <String, ResidentWorkCommandStore>{};
+  final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
         workBdOverrides[spec.name] ??
@@ -468,7 +468,7 @@ Future<StationWorkRuntime> assembleStationWork({
                   workspaceRoot: workspacesByName[spec.name]!.root,
                 ),
         );
-    final binding = ResidentWorkCommandStore(
+    final binding = WorkCommandStore(
       source: _RuntimeSnapshotSource(bundles[spec.name]!.runtime),
       refresh: bundles[spec.name]!.runtime.requery,
       writer: StationBeadWriter(
@@ -500,7 +500,7 @@ Future<StationWorkRuntime> assembleStationWork({
           appendNotes: line,
         );
       });
-  final commands = ResidentGridCommandHandler(
+  final commands = StationCommandHandler(
     stateSource: stateSource,
     refreshState: stateBundle.runtime.requery,
     stateWriter: writer,
