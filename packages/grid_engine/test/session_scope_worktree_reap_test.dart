@@ -6,6 +6,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 const _circuit = Circuit(
   id: 'done',
@@ -83,42 +84,44 @@ _mount({required _RecordingReap reap, bool terminal = true}) {
     JoinedSnapshot(graph: graph, sessionsByWorkBead: {beadId: session}),
   );
   owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: fakes.ctx,
-        child: InheritedSeed<ServiceBundle>(
-          value: ServiceBundle(
-            sourceControl: const _SourceControl(),
-            transport: transport,
-          ),
-          child: InheritedSeed<CapabilityRegistry>(
-            value: RecordingCapabilityRegistry(),
-            child: InheritedSeed<SessionResolver>(
-              value: CircuitResolver(
-                (_) => _circuit,
-                reapWorktree: reap.call,
-                workRoot: const RootCheckout(
-                  path: '/root',
-                  defaultBranch: 'main',
-                  substation: 'tg',
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: fakes.ctx,
+          child: InheritedSeed<ServiceBundle>(
+            value: ServiceBundle(
+              sourceControl: const _SourceControl(),
+              transport: transport,
+            ),
+            child: InheritedSeed<CapabilityRegistry>(
+              value: RecordingCapabilityRegistry(),
+              child: InheritedSeed<SessionResolver>(
+                value: CircuitResolver(
+                  (_) => _circuit,
+                  reapWorktree: reap.call,
+                  workRoot: const RootCheckout(
+                    path: '/root',
+                    defaultBranch: 'main',
+                    substation: 'tg',
+                  ),
                 ),
-              ),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(
-                    const SubstationConfig(
-                      substationId: 'tg',
-                      ownedSubstations: {'tg'},
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(
+                      const SubstationConfig(
+                        substationId: 'tg',
+                        ownedSubstations: {'tg'},
+                      ),
                     ),
+                    services: ServiceBundle(
+                      sourceControl: const _SourceControl(),
+                      transport: transport,
+                    ),
+                    key: const ValueKey('scope.tg'),
                   ),
-                  services: ServiceBundle(
-                    sourceControl: const _SourceControl(),
-                    transport: transport,
-                  ),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+                ]),
+              ),
             ),
           ),
         ),

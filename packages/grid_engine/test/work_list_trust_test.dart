@@ -4,6 +4,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 final class _ThrowingTrust implements Trust {
   var calls = 0;
@@ -100,25 +101,27 @@ void main() {
     addTearDown(owner.dispose);
 
     final root = owner.mountRoot(
-      _root(
-        joined: joined,
-        resolver: resolver,
-        scopes: [
-          SubstationScope(
-            configNotifier: _config('strict'),
-            services: ServiceBundle(
-              trust: strictTrust,
-              trustFloor: const TrustFloor(TrustLevel.trusted),
-              transport: strictTransport,
+      ProviderScope(
+        child: _root(
+          joined: joined,
+          resolver: resolver,
+          scopes: [
+            SubstationScope(
+              configNotifier: _config('strict'),
+              services: ServiceBundle(
+                trust: strictTrust,
+                trustFloor: const TrustFloor(TrustLevel.trusted),
+                transport: strictTransport,
+              ),
+              key: const ValueKey('strict'),
             ),
-            key: const ValueKey('strict'),
-          ),
-          SubstationScope(
-            configNotifier: _config('legacy'),
-            services: ServiceBundle(transport: legacyTransport),
-            key: const ValueKey('legacy'),
-          ),
-        ],
+            SubstationScope(
+              configNotifier: _config('legacy'),
+              services: ServiceBundle(transport: legacyTransport),
+              key: const ValueKey('legacy'),
+            ),
+          ],
+        ),
       ),
     );
 
@@ -154,18 +157,20 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _RecordingResolver(),
-          scopes: [
-            SubstationScope(
-              configNotifier: _config('strict'),
-              services: ServiceBundle(
-                trust: trust,
-                trustFloor: const TrustFloor(TrustLevel.trusted),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _RecordingResolver(),
+            scopes: [
+              SubstationScope(
+                configNotifier: _config('strict'),
+                services: ServiceBundle(
+                  trust: trust,
+                  trustFloor: const TrustFloor(TrustLevel.trusted),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
       expect(_workBeads(root).map((work) => work.bead.id), ['tg-1']);

@@ -18,6 +18,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 /// The REAL transport-backed lease vendor (tg-h4u) — routes a molecule-mode
 /// `ProcessCapability` through the SAME `RuntimeProvider` machinery the
@@ -209,23 +210,25 @@ _mount({
   final reg = RecordingCapabilityRegistry(circuits: const {'deploy': _deploy});
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: fakes.ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: reg,
-          // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
-          // D5). With none set the scope provides the empty default (an offline
-          // build wires no SourceControl).
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver((_) => _burn),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(config),
-                key: const ValueKey('scope'),
-              ),
-            ]),
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: fakes.ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: reg,
+            // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
+            // D5). With none set the scope provides the empty default (an offline
+            // build wires no SourceControl).
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver((_) => _burn),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(config),
+                  key: const ValueKey('scope'),
+                ),
+              ]),
+            ),
           ),
         ),
       ),
@@ -263,25 +266,27 @@ Branch _whereSeed(Branch root, bool Function(Seed) test) =>
   );
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: fakes.ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: registry,
-          // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
-          // D5). With none set the scope provides the empty default (an offline
-          // build wires no SourceControl).
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver((_) => _burn),
-            child: InheritedSeed<ProcessLeaseVendor>(
-              value: _realVendor,
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(config),
-                  key: const ValueKey('scope'),
-                ),
-              ]),
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: fakes.ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: registry,
+            // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
+            // D5). With none set the scope provides the empty default (an offline
+            // build wires no SourceControl).
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver((_) => _burn),
+              child: InheritedSeed<ProcessLeaseVendor>(
+                value: _realVendor,
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(config),
+                    key: const ValueKey('scope'),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),

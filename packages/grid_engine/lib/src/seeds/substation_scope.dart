@@ -103,8 +103,8 @@ class _SubstationScopeState extends State<SubstationScope>
     // re-provided on every config tick, and genesis's default identity check
     // (`value != oldSeed.value`) declines to notify — no guard type needed
     // (ADR-0008 D-6, superseded 2026-07-02).
-    return ProviderScope(
-      providers: <Provider<Object>>[
+    return Nest(
+      children: [
         Provider<ServiceBundle>.value(seed.services),
         Provider<SubstationConfig>.value(_config),
       ],

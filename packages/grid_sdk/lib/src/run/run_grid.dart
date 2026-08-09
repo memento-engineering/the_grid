@@ -577,12 +577,16 @@ class _GridConfigurationScopeState extends State<_GridConfigurationScope> {
 
   @override
   Seed build(TreeContext context) {
+    // The tree's ONE ProviderScope (the availability registry) sits HERE, at
+    // the production root, over the observed-configuration provider.
     return ProviderScope(
-      providers: <Provider<Object>>[Provider<GridConfiguration>.value(_config)],
-      child: _DelegateRoot(
-        delegate: _delegate,
-        configuration: _config,
-        generation: _generation,
+      child: Provider<GridConfiguration>.value(
+        _config,
+        child: _DelegateRoot(
+          delegate: _delegate,
+          configuration: _config,
+          generation: _generation,
+        ),
       ),
     );
   }

@@ -56,8 +56,8 @@ class WorkBead extends StatelessSeed with GridDiagnosticable {
     // reads it with the non-binding lookup instead of having it threaded
     // through every mount. Bead is a freezed value type, so a re-provide with
     // an unchanged bead never notifies dependents.
-    return ProviderScope(
-      providers: <Provider<Object>>[Provider<Bead>.value(bead)],
+    return Provider<Bead>.value(
+      bead,
       child: resolver!.sessionFor(bead: bead, session: session),
     );
   }

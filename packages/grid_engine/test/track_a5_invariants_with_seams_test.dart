@@ -15,6 +15,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 // --- the inline committee-shaped capabilities (the author leaves) ------------
 
@@ -168,20 +169,22 @@ const _tg = SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'});
   final fakes = buildFakes();
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: fakes.ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: reg,
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver((_) => _code),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(_tg),
-                key: const ValueKey('scope'),
-              ),
-            ]),
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: fakes.ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: reg,
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver((_) => _code),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(_tg),
+                  key: const ValueKey('scope'),
+                ),
+              ]),
+            ),
           ),
         ),
       ),
@@ -205,21 +208,23 @@ _mountReal(JoinedSnapshotNotifier joined, {SubstationConfig config = _tg}) {
   );
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: fakes.ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: registry,
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver((_) => _code),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(config),
-                services: ServiceBundle(transport: flares),
-                key: const ValueKey('scope'),
-              ),
-            ]),
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: fakes.ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: registry,
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver((_) => _code),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(config),
+                  services: ServiceBundle(transport: flares),
+                  key: const ValueKey('scope'),
+                ),
+              ]),
+            ),
           ),
         ),
       ),

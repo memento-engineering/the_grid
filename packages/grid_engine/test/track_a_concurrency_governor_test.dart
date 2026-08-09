@@ -11,6 +11,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 class _Recorder {
   final List<String> events = [];
@@ -152,17 +153,19 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            const SubstationConfig(
-              substationId: 'tg',
-              ownedSubstations: {'tg'},
-              maxConcurrentWork: 2,
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 2,
+              ),
             ),
+            services: ServiceBundle(transport: transport),
           ),
-          services: ServiceBundle(transport: transport),
         ),
       );
 
@@ -193,17 +196,19 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            const SubstationConfig(
-              substationId: 'tg',
-              ownedSubstations: {'tg'},
-              maxConcurrentWork: 2,
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 2,
+              ),
             ),
+            services: ServiceBundle(transport: transport),
           ),
-          services: ServiceBundle(transport: transport),
         ),
       );
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
@@ -262,27 +267,29 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            const SubstationConfig(
-              substationId: 'tg',
-              ownedSubstations: {'tg'},
-              // The substation asks for 5 — well above the station ceiling.
-              maxConcurrentWork: 5,
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                // The substation asks for 5 — well above the station ceiling.
+                maxConcurrentWork: 5,
+              ),
             ),
-          ),
-          services: ServiceBundle(transport: transport),
-          stationServices: StationServices(
-            provider: FakeRuntimeProvider(),
-            writer: StationBeadWriter(
-              bd: BdCliService(RecordingBdRunner()),
-              reader: RecordingBdRunner(),
-              ownership: BeadOwnershipPredicate(const {'tg'}),
+            services: ServiceBundle(transport: transport),
+            stationServices: StationServices(
+              provider: FakeRuntimeProvider(),
+              writer: StationBeadWriter(
+                bd: BdCliService(RecordingBdRunner()),
+                reader: RecordingBdRunner(),
+                ownership: BeadOwnershipPredicate(const {'tg'}),
+              ),
+              stateSubstation: 'tg',
+              maxConcurrentWork: 2,
             ),
-            stateSubstation: 'tg',
-            maxConcurrentWork: 2,
           ),
         ),
       );
@@ -300,41 +307,42 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            const SubstationConfig(
-              substationId: 'tg',
-              ownedSubstations: {'tg'},
-              maxConcurrentWork: 2,
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 2,
+              ),
             ),
+            services: ServiceBundle(transport: transport),
           ),
-          services: ServiceBundle(transport: transport),
         ),
       );
       expect(recorder.events, ['START work(tg-1)']);
       expect(transport.flares, isEmpty);
     });
 
-    test(
-      'nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
-      'fallback binds — no substation override, no ambient StationServices',
-      () {
-        final recorder = _Recorder();
-        final transport = _RecordingTransport();
-        // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
-        final beadIds = List.generate(
-          kDefaultMaxConcurrentWork + 2,
-          (i) => 'tg-${i + 1}',
-        );
-        final joined = JoinedSnapshotNotifier(
-          _joined(beads: beadIds.map(_bead).toList(), ready: beadIds.toSet()),
-        );
-        final owner = TreeOwner();
-        addTearDown(owner.dispose);
-        owner.mountRoot(
-          _root(
+    test('nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
+        'fallback binds — no substation override, no ambient StationServices', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
+      final beadIds = List.generate(
+        kDefaultMaxConcurrentWork + 2,
+        (i) => 'tg-${i + 1}',
+      );
+      final joined = JoinedSnapshotNotifier(
+        _joined(beads: beadIds.map(_bead).toList(), ready: beadIds.toSet()),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
             joined: joined,
             resolver: _FakeSessionResolver(recorder),
             // No `maxConcurrentWork` override — falls all the way through to
@@ -350,24 +358,24 @@ void main() {
             // this file's other cases wire deliberately, exercised here as the
             // genuinely-nothing-configured case.
           ),
-        );
+        ),
+      );
 
-        expect(
-          recorder.events,
-          List.generate(
-            kDefaultMaxConcurrentWork,
-            (i) => 'START work(tg-${i + 1})',
-          ),
-        );
-        expect(transport.flares, hasLength(1));
-        expect(transport.flares.single.name, 'work.throttled');
-        expect(transport.flares.single.data, {
-          'count': '2',
-          'beadIds':
-              'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
-        });
-      },
-    );
+      expect(
+        recorder.events,
+        List.generate(
+          kDefaultMaxConcurrentWork,
+          (i) => 'START work(tg-${i + 1})',
+        ),
+      );
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.name, 'work.throttled');
+      expect(transport.flares.single.data, {
+        'count': '2',
+        'beadIds':
+            'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
+      });
+    });
 
     test('a rework re-key (tg-zat): a bead whose session becomes momentarily '
         'unkeyed (its retired session still counts, live, under a DIFFERENT '
@@ -390,27 +398,29 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            const SubstationConfig(
-              substationId: 'tg',
-              ownedSubstations: {'tg'},
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+              ),
             ),
-          ),
-          services: ServiceBundle(transport: transport),
-          stationServices: StationServices(
-            provider: FakeRuntimeProvider(),
-            writer: StationBeadWriter(
-              bd: BdCliService(RecordingBdRunner()),
-              reader: RecordingBdRunner(),
-              ownership: BeadOwnershipPredicate(const {'tg'}),
+            services: ServiceBundle(transport: transport),
+            stationServices: StationServices(
+              provider: FakeRuntimeProvider(),
+              writer: StationBeadWriter(
+                bd: BdCliService(RecordingBdRunner()),
+                reader: RecordingBdRunner(),
+                ownership: BeadOwnershipPredicate(const {'tg'}),
+              ),
+              stateSubstation: 'tg',
+              // A tight station-wide ceiling: the retired session (still open,
+              // now keyed 'tg-1#r1') fills the ONLY slot on its own.
+              maxConcurrentWork: 1,
             ),
-            stateSubstation: 'tg',
-            // A tight station-wide ceiling: the retired session (still open,
-            // now keyed 'tg-1#r1') fills the ONLY slot on its own.
-            maxConcurrentWork: 1,
           ),
         ),
       );
@@ -482,26 +492,34 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        _twoSubstationRoot(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationA: SubstationConfigNotifier(
-            const SubstationConfig(substationId: 'a', ownedSubstations: {'a'}),
-          ),
-          substationB: SubstationConfigNotifier(
-            const SubstationConfig(substationId: 'b', ownedSubstations: {'b'}),
-          ),
-          servicesA: ServiceBundle(transport: transportA),
-          servicesB: ServiceBundle(transport: transportB),
-          stationServices: StationServices(
-            provider: FakeRuntimeProvider(),
-            writer: StationBeadWriter(
-              bd: BdCliService(RecordingBdRunner()),
-              reader: RecordingBdRunner(),
-              ownership: BeadOwnershipPredicate(const {'a', 'b'}),
+        ProviderScope(
+          child: _twoSubstationRoot(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationA: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'a',
+                ownedSubstations: {'a'},
+              ),
             ),
-            stateSubstation: 'a',
-            maxConcurrentWork: 3,
+            substationB: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'b',
+                ownedSubstations: {'b'},
+              ),
+            ),
+            servicesA: ServiceBundle(transport: transportA),
+            servicesB: ServiceBundle(transport: transportB),
+            stationServices: StationServices(
+              provider: FakeRuntimeProvider(),
+              writer: StationBeadWriter(
+                bd: BdCliService(RecordingBdRunner()),
+                reader: RecordingBdRunner(),
+                ownership: BeadOwnershipPredicate(const {'a', 'b'}),
+              ),
+              stateSubstation: 'a',
+              maxConcurrentWork: 3,
+            ),
           ),
         ),
       );
