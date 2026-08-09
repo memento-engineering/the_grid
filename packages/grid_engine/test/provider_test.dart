@@ -127,6 +127,36 @@ final class _PokableWatchState extends State<_PokableWatch> {
   }
 }
 
+/// A watcher whose interest set CHANGES across rebuilds: it watches both
+/// types until [retarget], only `_Other` after — the shape that leaves a
+/// stale parked registration behind unless the release semantics consume it.
+final class _RetargetingWatch extends StatefulSeed {
+  const _RetargetingWatch({required this.onCreate, required this.values});
+
+  final void Function(_RetargetingWatchState state) onCreate;
+  final List<Object?> values;
+
+  @override
+  State<_RetargetingWatch> createState() {
+    final state = _RetargetingWatchState();
+    onCreate(state);
+    return state;
+  }
+}
+
+final class _RetargetingWatchState extends State<_RetargetingWatch> {
+  bool _watchValue = true;
+
+  void retarget() => setState(() => _watchValue = false);
+
+  @override
+  Seed build(TreeContext context) {
+    if (_watchValue) seed.values.add(context.watch<_Value>()?.name);
+    seed.values.add(context.watch<_Other>()?.name);
+    return const _Leaf();
+  }
+}
+
 /// A bare mounted-looking [Branch] fake for driving [AvailabilityRegistry]
 /// directly: records [dependencyChanged] instead of scheduling, and reports
 /// whatever mountedness the test sets (a Fake, not a mock — house rules).
@@ -936,6 +966,162 @@ void main() {
         registry.debugPendingOf(_Value),
         isEmpty,
         reason: 'a dead dependent must not be parked on its way down',
+      );
+    });
+
+    test('a parked watcher that unmounts is released from the pending map — '
+        'the registry-branch dependency release', () {
+      // The release path rides the substrate's own unmount bookkeeping: the
+      // watch miss registered a dependency on the registry branch, so the
+      // watcher's unmount reaches _RegistryBranch.removeDependent, which
+      // drops the branch from every bucket (release semantics rule 3).
+      final values = <String?>[];
+      late _HostState slot;
+      late _HostState watcherSlot;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Slots([
+            _Host(
+              onCreate: (state) => watcherSlot = state,
+              describe: () => _Watch(values),
+            ),
+            _Host(
+              onCreate: (state) => slot = state,
+              describe: () => const _Leaf(),
+            ),
+          ]),
+        ),
+      );
+      expect(values, [null]);
+      final registry = slot.context.read<AvailabilityRegistry>()!;
+      expect(registry.debugPendingOf(_Value), hasLength(1));
+
+      // Unmount ONLY the watcher (the scope stays up): the parked
+      // registration must not survive the branch it belongs to.
+      watcherSlot.swap(() => const _Leaf());
+      owner.flush();
+      expect(
+        registry.debugPendingOf(_Value),
+        isEmpty,
+        reason: 'unmount releases the parked registration',
+      );
+    });
+
+    test('a delivered ping consumes ALL of the recipient\'s parked '
+        'registrations; its rebuild re-files only current interests', () async {
+      // Release semantics rule 2, pinning the under-specified case: a branch
+      // that rebuilt WITHOUT re-issuing watch<_Value> must not linger in the
+      // _Value bucket past its next notification.
+      final values = <Object?>[];
+      late _RetargetingWatchState watcher;
+      late _HostState slot;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Slots([
+            _RetargetingWatch(
+              onCreate: (state) => watcher = state,
+              values: values,
+            ),
+            _Host(
+              onCreate: (state) => slot = state,
+              describe: () => const _Leaf(),
+            ),
+          ]),
+        ),
+      );
+      expect(values, [null, null]);
+      final registry = slot.context.read<AvailabilityRegistry>()!;
+      expect(registry.debugPendingOf(_Value), hasLength(1));
+      expect(registry.debugPendingOf(_Other), hasLength(1));
+
+      // The watcher rebuilds and stops watching _Value. No substrate hook
+      // fires on the hook-free non-watch, so the stale _Value registration
+      // survives THIS rebuild (the documented bounded posture)...
+      watcher.retarget();
+      owner.flush();
+      expect(values, [null, null, null]);
+      expect(registry.debugPendingOf(_Value), hasLength(1));
+
+      // ...but the next delivered ping consumes it: a Provider<_Other> mount
+      // in the sibling slot pings the watcher (parked under _Other), delivery
+      // drops the branch from EVERY bucket, and the triggered rebuild
+      // re-files only what the build still watches.
+      slot.swap(
+        () => Provider<_Other>.value(
+          const _Other('sibling'),
+          child: const _Leaf(),
+        ),
+      );
+      owner.flush();
+      await _pump();
+      owner.flush();
+      expect(values, [null, null, null, null]);
+      expect(
+        registry.debugPendingOf(_Value),
+        isEmpty,
+        reason: 'the stale interest must not outlive the next notification',
+      );
+      expect(
+        registry.debugPendingOf(_Other),
+        hasLength(1),
+        reason: 'the current interest re-filed through the rebuild\'s miss',
+      );
+    });
+
+    test('the mount-side drain removes the bucket AT the announcement, before '
+        'delivery re-files anything', () async {
+      // Pins providerMounted's remove-the-bucket semantics on its own: the
+      // probe between the announcing flush and the delivery microtask sees an
+      // EMPTY bucket (a drain that pinged without removing would show the old
+      // registration still parked), and only the delivered rebuild's re-miss
+      // re-files it.
+      final values = <String?>[];
+      late _HostState slot;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Slots([
+            _Watch(values),
+            _Host(
+              onCreate: (state) => slot = state,
+              describe: () => const _Leaf(),
+            ),
+          ]),
+        ),
+      );
+      expect(values, [null]);
+      final registry = slot.context.read<AvailabilityRegistry>()!;
+      expect(registry.debugPendingOf(_Value), hasLength(1));
+
+      slot.swap(
+        () => Provider<_Value>.value(
+          const _Value('sibling'),
+          child: const _Leaf(),
+        ),
+      );
+      owner.flush();
+      expect(
+        registry.debugPendingOf(_Value),
+        isEmpty,
+        reason: 'the drain consumed the bucket synchronously at the announce',
+      );
+      expect(registry.debugNotifying, hasLength(1));
+
+      await _pump();
+      owner.flush();
+      expect(values, [null, null]);
+      expect(
+        registry.debugPendingOf(_Value),
+        hasLength(1),
+        reason: 'the rebuild\'s re-miss re-filed the registration',
       );
     });
 

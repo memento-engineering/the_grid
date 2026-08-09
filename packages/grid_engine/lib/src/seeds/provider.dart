@@ -446,6 +446,26 @@ final class _RegistryBranch extends InheritedBranch<AvailabilityRegistry> {
 /// direct unit tests against this class, and the provider branch's transmit
 /// side through [debugNotifying]. Production code composes [ProviderScope]
 /// and never names the registry.
+///
+/// **Release semantics.** A parked registration (per branch, per type,
+/// idempotent) is released by exactly three events:
+///
+/// 1. **Drain** — a [Provider] mount of the type removes the WHOLE bucket
+///    ([providerMounted]); recipients that still miss re-file through their
+///    own rebuild's watch miss.
+/// 2. **Delivery consumes** — any notification delivered to a branch first
+///    drops ALL of that branch's parked registrations (every type): the
+///    rebuild the ping triggers re-files the branch's CURRENT interests, so a
+///    type the branch stopped watching does not linger past its next
+///    notification.
+/// 3. **Unmount** — the substrate's own dependency release
+///    ([_RegistryBranch.removeDependent], riding the registry-branch edge the
+///    watch miss registered) drops the branch from every bucket.
+///
+/// A mounted branch that rebuilds WITHOUT issuing any watch keeps its prior
+/// registrations until the next of these events — there is no substrate hook
+/// on a hook-free rebuild — which is bounded (at most one entry per type, all
+/// for live branches) and self-corrects at the branch's next ping or unmount.
 @visibleForTesting
 final class AvailabilityRegistry {
   final Map<Type, Set<Branch>> _pending = {};
@@ -468,6 +488,9 @@ final class AvailabilityRegistry {
   void _addPending(Type type, Branch dependent) =>
       (_pending[type] ??= {}).add(dependent);
 
+  /// Drops [dependent] from EVERY bucket — the shared release chokepoint for
+  /// rules 2 (delivery consumes) and 3 (unmount, via
+  /// [_RegistryBranch.removeDependent]) of the release semantics.
   void _dropPending(Branch dependent) {
     for (final waiting in _pending.values) {
       waiting.remove(dependent);
@@ -486,6 +509,11 @@ final class AvailabilityRegistry {
       final batch = List.of(_notifying);
       _notifying.clear();
       for (final dependent in batch) {
+        // Delivery CONSUMES the recipient's parked registrations (all types,
+        // release semantics rule 2): the rebuild this ping triggers re-files
+        // the branch's current interests through its own watch misses, so a
+        // stale interest cannot outlive the branch's next notification.
+        _dropPending(dependent);
         if (dependent.mounted) dependent.dependencyChanged();
       }
     });
