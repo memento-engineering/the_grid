@@ -43,10 +43,7 @@ void main() {
   Future<int?> run(AttachResult result, [List<String> extra = const []]) {
     final runner = CommandRunner<int>('lunar', 'test')
       ..addCommand(
-        ResidentStatusCommand(
-          stationName: 'lunar',
-          attach: _FakeAttach(result),
-        ),
+        StatusCommand(stationName: 'lunar', attach: _FakeAttach(result)),
       );
     return runner.run(['status', '--state-workspace', temp.path, ...extra]);
   }

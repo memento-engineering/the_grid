@@ -6,7 +6,7 @@ import 'package:test/test.dart';
 
 ArgParser parser() {
   final parser = ArgParser();
-  residentStationFlags(
+  stationFlags(
     parser,
     codedNames: const ['grid'],
     harnessAllowList: const {'claude', 'codex'},
@@ -41,7 +41,7 @@ void main() {
       '--for-seconds',
       '3',
     ]);
-    final config = residentStationConfigFrom(
+    final config = stationConfigFrom(
       args,
       stationName: 'lunar',
       codedNames: const {'grid'},
@@ -61,12 +61,12 @@ void main() {
   });
 
   test('allow-stale defaults false and is enabled only explicitly', () {
-    final defaults = residentStationConfigFrom(
+    final defaults = stationConfigFrom(
       parser().parse(<String>['--grid-home', temp.path]),
       stationName: 'lunar',
       codedNames: const <String>{},
     );
-    final allowed = residentStationConfigFrom(
+    final allowed = stationConfigFrom(
       parser().parse(<String>['--grid-home', temp.path, '--allow-stale']),
       stationName: 'lunar',
       codedNames: const <String>{},
@@ -84,7 +84,7 @@ void main() {
       temp.path,
     ]);
     expect(
-      residentStationConfigFrom(
+      stationConfigFrom(
         equal,
         stationName: 'lunar',
         codedNames: const {},
@@ -98,7 +98,7 @@ void main() {
       '${temp.path}/other',
     ]);
     expect(
-      () => residentStationConfigFrom(
+      () => stationConfigFrom(
         conflict,
         stationName: 'lunar',
         codedNames: const {},
@@ -116,7 +116,7 @@ void main() {
       'new@one@two=${temp.path}',
     ]) {
       expect(
-        () => residentStationConfigFrom(
+        () => stationConfigFrom(
           parser().parse(['--grid-home', temp.path, '--substation', value]),
           stationName: 'lunar',
           codedNames: const {'grid'},
@@ -130,7 +130,7 @@ void main() {
       ['new=${temp.path}', 'new=${temp.path}'],
     ]) {
       expect(
-        () => residentStationConfigFrom(
+        () => stationConfigFrom(
           parser().parse([
             '--grid-home',
             temp.path,
@@ -152,7 +152,7 @@ void main() {
       ['--max-agents', '-1'],
     ]) {
       expect(
-        () => residentStationConfigFrom(
+        () => stationConfigFrom(
           parser().parse(['--grid-home', temp.path, ...pair]),
           stationName: 'lunar',
           codedNames: const {},
@@ -167,7 +167,7 @@ void main() {
   });
 
   test('public barrel constructs all resident commands', () {
-    final up = ResidentUpCommand(
+    final up = UpCommand(
       stationName: 'lunar',
       delegateFactory: ({required config}) =>
           throw StateError('compile witness only'),
@@ -175,8 +175,8 @@ void main() {
       harnessAllowList: const {'safe'},
       validateHarness: (_) => null,
     );
-    final down = ResidentDownCommand(stationName: 'lunar');
-    final status = ResidentStatusCommand(stationName: 'lunar');
+    final down = DownCommand(stationName: 'lunar');
+    final status = StatusCommand(stationName: 'lunar');
 
     expect((up.name, down.name, status.name), ('up', 'down', 'status'));
   });

@@ -2,31 +2,19 @@
 library;
 
 import 'package:args/args.dart';
+import 'package:grid_sdk/grid_sdk.dart' show SubstationConfig;
 import 'package:path/path.dart' as p;
 
-/// Operator-supplied appended substation identity.
-class ResidentSubstationConfig {
-  /// Creates an appended substation value.
-  const ResidentSubstationConfig({
-    required this.name,
-    required this.root,
-    required this.prefix,
-  });
-
-  /// The station-unique name.
-  final String name;
-
-  /// The absolute work-store root.
-  final String root;
-
-  /// The work store's issue-id prefix.
-  final String prefix;
-}
+// `SubstationConfig` (the appended-substation identity) moved to grid_sdk
+// with the delegate contract (tg-at3r — the delegate's arming policy folds
+// over it, and grid_sdk must not import grid_cli). Re-exported here so the
+// flag parser's callers keep one import.
+export 'package:grid_sdk/grid_sdk.dart' show SubstationConfig;
 
 /// Parsed values passed to a resident delegate factory.
-class ResidentStationConfig {
+class StationConfig {
   /// Creates resident boot configuration.
-  const ResidentStationConfig({
+  const StationConfig({
     required this.gridHome,
     required this.appended,
     required this.dryRun,
@@ -44,7 +32,7 @@ class ResidentStationConfig {
   final String gridHome;
 
   /// The append-only operator roster layer.
-  final List<ResidentSubstationConfig> appended;
+  final List<SubstationConfig> appended;
 
   /// Whether all effect seams are inert.
   final bool dryRun;
@@ -75,7 +63,7 @@ class ResidentStationConfig {
 }
 
 /// Adds the shared resident `up` flags; deliberately adds no `--bead`.
-void residentStationFlags(
+void stationFlags(
   ArgParser parser, {
   required List<String> codedNames,
   required Set<String> harnessAllowList,
@@ -135,7 +123,7 @@ void residentStationFlags(
 }
 
 /// Parses and validates the shared resident values.
-ResidentStationConfig residentStationConfigFrom(
+StationConfig stationConfigFrom(
   ArgResults args, {
   required String stationName,
   required Set<String> codedNames,
@@ -159,7 +147,7 @@ ResidentStationConfig residentStationConfigFrom(
     throw FormatException('--grid-home must be absolute: $rawHome');
   }
 
-  final appended = <ResidentSubstationConfig>[];
+  final appended = <SubstationConfig>[];
   final seen = <String>{};
   for (final raw in args.multiOption('substation')) {
     if (raw.trim().isEmpty) continue;
@@ -191,7 +179,7 @@ ResidentStationConfig residentStationConfigFrom(
       ? null
       : _positiveInt(seconds, '--for-seconds');
   final maxAgents = _positiveInt(args.option('max-agents')!, '--max-agents');
-  return ResidentStationConfig(
+  return StationConfig(
     gridHome: p.canonicalize(rawHome),
     appended: List.unmodifiable(appended),
     dryRun: args.flag('dry-run'),
@@ -206,10 +194,7 @@ ResidentStationConfig residentStationConfigFrom(
   );
 }
 
-ResidentSubstationConfig _parseSubstation(
-  String raw, {
-  required String stationName,
-}) {
+SubstationConfig _parseSubstation(String raw, {required String stationName}) {
   final equals = raw.indexOf('=');
   if (equals < 0) {
     throw FormatException(
@@ -236,7 +221,7 @@ ResidentSubstationConfig _parseSubstation(
       'and an absolute root',
     );
   }
-  return ResidentSubstationConfig(
+  return SubstationConfig(
     name: name,
     root: p.canonicalize(root),
     prefix: prefix,

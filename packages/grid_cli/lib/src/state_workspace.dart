@@ -8,7 +8,7 @@ import 'package:path/path.dart' as p;
 import 'station_stores.dart';
 
 /// Help for the resident attach root.
-const String residentStateWorkspaceHelp =
+const String stateWorkspaceHelp =
     'The grid home whose .grid/station.lock this verb attaches to. Required; '
     'the state store is never guessed.';
 

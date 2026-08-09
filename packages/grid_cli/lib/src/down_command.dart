@@ -5,15 +5,15 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 
-import 'resident_state_workspace.dart';
+import 'state_workspace.dart';
 import 'station_attach.dart';
 
 /// Gracefully stops a composed resident station through its lock.
-class ResidentDownCommand extends Command<int> {
+class DownCommand extends Command<int> {
   /// Creates the command for [stationName].
-  ResidentDownCommand({required this.stationName, StationAttach? attach})
+  DownCommand({required this.stationName, StationAttach? attach})
     : _attach = attach ?? StationAttach() {
-    argParser.addOption('state-workspace', help: residentStateWorkspaceHelp);
+    argParser.addOption('state-workspace', help: stateWorkspaceHelp);
   }
 
   /// The composing runner's operator-facing station name.

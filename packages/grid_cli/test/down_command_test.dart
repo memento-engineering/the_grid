@@ -40,7 +40,7 @@ void main() {
   Future<int?> run(StopResult result) {
     final runner = CommandRunner<int>('lunar', 'test')
       ..addCommand(
-        ResidentDownCommand(stationName: 'lunar', attach: _FakeAttach(result)),
+        DownCommand(stationName: 'lunar', attach: _FakeAttach(result)),
       );
     return runner.run(['down', '--state-workspace', temp.path]);
   }
@@ -56,7 +56,7 @@ void main() {
 
   test('missing root is a usage refusal', () async {
     final runner = CommandRunner<int>('lunar', 'test')
-      ..addCommand(ResidentDownCommand(stationName: 'lunar'));
+      ..addCommand(DownCommand(stationName: 'lunar'));
     expect(await runner.run(['down']), 64);
   });
 }
