@@ -425,7 +425,10 @@ class ResidentUpCommand extends Command<int> {
       armingControl = await _startControl(
         port: config.controlPort,
         token: token,
-        view: () => _status(config, armed, startedAt, live.stationView),
+        // Per-request reads come off the LIVE delegate — roster included: a
+        // hot restart re-resolves the armed roster, and a closure capturing
+        // the launch-time list would render retired seats forever.
+        view: () => _status(config, live.armedRoster, startedAt, live.stationView),
         commandHandler: _LiveDelegateCommandHandler(() => live),
         treeProjector: treeProjector,
       );
