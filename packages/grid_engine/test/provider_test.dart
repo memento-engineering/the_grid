@@ -19,6 +19,17 @@ final class _Other {
   final String name;
 }
 
+final class _Third {
+  const _Third();
+}
+
+/// The distinguishable failure a throwing `create` raises — never a
+/// [StateError], so a test rethrow assertion cannot be satisfied by one of the
+/// provider's own guard throws.
+final class _Boom implements Exception {
+  const _Boom();
+}
+
 /// Drains the event queue (and with it the microtask queue): the availability
 /// registry delivers its notifications from a microtask scheduled during the
 /// announcing flush, so tests pump, then flush again to observe the rebuild.
@@ -422,6 +433,103 @@ void main() {
       expect(created, 2);
       expect(disposed, ['v1']);
       expect(values.last, 'v2');
+    });
+  });
+
+  group('failed mount unwind', () {
+    test('a throwing create disposes the chain values already created — '
+        'reverse creation order — and rethrows', () {
+      // The substrate strands every branch mounted within the failed
+      // reconcile (updateChild propagates before the child-slot assignment,
+      // so unmount — the disposal site — never runs). The provider unwind
+      // must dispose each already-created owned value as the error passes
+      // its mount frame: innermost link first, the old ProviderScope
+      // reverse-order contract.
+      final events = <String>[];
+      final owner = TreeOwner();
+      addTearDown(owner.dispose); // The root never mounted; dispose is a no-op.
+
+      expect(
+        () => owner.mountRoot(
+          Nest(
+            children: [
+              Provider<_Value>(
+                create: (_) {
+                  events.add('create outer');
+                  return const _Value('outer');
+                },
+                dispose: (value) => events.add('dispose ${value.name}'),
+              ),
+              Provider<_Other>(
+                create: (context) {
+                  events.add('create inner');
+                  return _Other('${context.read<_Value>()!.name}-derived');
+                },
+                dispose: (value) => events.add('dispose ${value.name}'),
+              ),
+              Provider<_Third>(create: (_) => throw const _Boom()),
+            ],
+            child: const _Leaf(),
+          ),
+        ),
+        throwsA(isA<_Boom>()),
+      );
+      expect(events, [
+        'create outer',
+        'create inner',
+        'dispose outer-derived',
+        'dispose outer',
+      ]);
+    });
+
+    test('a failed mid-flush mount disposes an already-created ancestor '
+        'value exactly once', () {
+      final events = <String>[];
+      late _HostState host;
+      final owner = TreeOwner();
+      // Deliberately NO owner.dispose teardown: a failed mid-flush reconcile
+      // leaves the host's child slot pointing at the branch it already
+      // unmounted (the assignment was skipped), so a root unmount cascade
+      // would trip the substrate's double-unmount assert. The exactly-once
+      // claim is carried by the events list instead.
+
+      owner.mountRoot(
+        _Host(
+          onCreate: (state) => host = state,
+          describe: () => const _Leaf(),
+        ),
+      );
+
+      host.swap(
+        () => Provider<_Value>(
+          create: (_) {
+            events.add('create');
+            return const _Value('doomed');
+          },
+          dispose: (_) => events.add('dispose'),
+          child: Provider<_Third>(
+            create: (_) => throw const _Boom(),
+            child: const _Leaf(),
+          ),
+        ),
+      );
+      expect(owner.flush, throwsA(isA<_Boom>()));
+      expect(events, ['create', 'dispose']);
+    });
+
+    test('a create that throws on its own leaves nothing to dispose and '
+        'rethrows the original error', () {
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      expect(
+        () => owner.mountRoot(
+          Provider<_Value>(
+            create: (_) => throw const _Boom(),
+            child: const _Leaf(),
+          ),
+        ),
+        throwsA(isA<_Boom>()),
+      );
     });
   });
 

@@ -51,6 +51,13 @@ typedef ProviderDispose<T extends Object> = void Function(T value);
 /// 2). The build is pure: it projects the value over the child as an
 /// [InheritedSeed] and does nothing else (`docs/STYLE.md` rule 1).
 ///
+/// **Failed mount.** A `create` that throws fails the whole mount, and the
+/// unwind strands no owned value: every provider whose own mount encloses the
+/// failure — the failing provider itself, each earlier link of the same
+/// [Nest] chain, every provider ancestor — disposes what it already created,
+/// in reverse creation order, before the error rethrows (see
+/// [_ProviderBranch] for the mechanism and its exact extent).
+///
 /// **Reconcile.** Same runtimeType + key updates in place: a `.value` update
 /// propagates to dependents through [InheritedSeed.updateShouldNotify]; a
 /// create-provider never re-runs `create` on update. A type or key change is
@@ -91,6 +98,9 @@ final class Provider<T extends Object> extends SingleChildStatefulSeed {
 
   @override
   SingleChildState<Provider<T>> createState() => _ProviderState<T>();
+
+  @override
+  SingleChildStatefulBranch createBranch() => _ProviderBranch(this);
 }
 
 /// The AVAILABILITY REGISTRY — one per tree, near the station root.
@@ -209,6 +219,19 @@ final class _ProviderState<T extends Object>
     if (dispose != null) _disposeOwned = () => dispose(value);
   }
 
+  /// The failed-mount unwind (see [_ProviderBranch]): disposes the owned
+  /// value NOW, exactly once, because this provider's mount failed and the
+  /// substrate will never attach — and therefore never unmount — the branch
+  /// that would have carried the disposal. Nulling both fields keeps the
+  /// disposal single-shot and unarms the closure threaded into any
+  /// already-built [_ProviderInherited].
+  void _disposeOwnedForFailedMount() {
+    final dispose = _disposeOwned;
+    _disposeOwned = null;
+    _owned = null;
+    dispose?.call();
+  }
+
   @override
   Seed buildWithChild(TreeContext context, Seed child) {
     // Pure projection (docs/STYLE.md rule 1): no creation, no registry
@@ -228,6 +251,55 @@ final class _ProviderState<T extends Object>
       child: child,
       disposeOwned: _disposeOwned,
     );
+  }
+}
+
+/// The provider's branch: a [SingleChildStatefulBranch] that additionally
+/// carries the FAILED-MOUNT unwind.
+///
+/// **Substrate unwind semantics** (genesis_tree, investigated at 0.2.0): when
+/// a mount throws mid-reconcile, `updateChild` propagates the error BEFORE the
+/// caller's child-slot assignment, at every level of the failing spine. Every
+/// branch mounted within the failed reconcile call is left orphaned — still
+/// `mounted == true`, unreachable from the root, its `unmount()` never to be
+/// called. For providers that means the disposal site
+/// ([_ProviderInheritedBranch.unmount]) is unreachable: an owned value created
+/// before the failure would be STRANDED, never disposed.
+///
+/// The unwind therefore rides the exception's own propagation: the mount-time
+/// [performRebuild] frame of a provider encloses its `create` call AND the
+/// mount of its entire subtree, so catching there and disposing the owned
+/// value covers (a) the failing provider itself (its `create` threw — nothing
+/// created, nothing to do), (b) every earlier link of the same [Nest] chain
+/// (chain links nest, so each earlier "sibling" is a structural ancestor of
+/// the failure — they dispose innermost-first, reverse creation order, the old
+/// ProviderScope contract), and (c) any provider ancestor elsewhere up the
+/// spine. The error then rethrows unchanged.
+///
+/// Known extent: a provider subtree that fully mounted under a NON-provider
+/// multi-child container before a LATER sibling of that container failed is
+/// orphaned by an assignment skipped ABOVE any provider frame; no provider
+/// code is on that stack, so its disposal is out of this seam's reach. The
+/// multi-provider composition surface is [Nest] (which nests, and is fully
+/// covered), so that shape has no production author today.
+final class _ProviderBranch extends SingleChildStatefulBranch {
+  _ProviderBranch(Provider<Object> super.seed);
+
+  /// True until the first (mount-pass) build completes or fails. Rebuilds of
+  /// an ATTACHED provider must not run the unwind: a failure there leaves the
+  /// branch attached, its value live, and its normal unmount disposal intact.
+  bool _mountBuild = true;
+
+  @override
+  void performRebuild() {
+    if (!_mountBuild) return super.performRebuild();
+    _mountBuild = false;
+    try {
+      super.performRebuild();
+    } catch (error, stackTrace) {
+      (state as _ProviderState)._disposeOwnedForFailedMount();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 }
 
