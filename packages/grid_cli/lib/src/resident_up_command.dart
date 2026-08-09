@@ -129,8 +129,10 @@ typedef ResidentPrimaryCheckoutInspector =
 /// [TreeProjector] (process-lifetime, so `/stream` survives hot restarts),
 /// signals, exit codes — and reads everything stateful off the delegate's
 /// narrow vended views ([ResidentGridDelegate]): reference types flow OUT of
-/// the delegate, never in. Teardown: unmount tree (which disposes the
-/// delegate and sweeps) → dispose the shell's projector → release lock.
+/// the delegate, never in. Teardown: unmount tree → orphan sweep → dispose
+/// the delegate (all inside the runner's teardown, in that order — the sweep
+/// reaps over the delegate's boot-assembled runtime, so the delegate must
+/// outlive it) → dispose the shell's projector → release lock.
 class ResidentUpCommand extends Command<int> {
   /// Creates a resident `up` command.
   ResidentUpCommand({
@@ -224,13 +226,10 @@ class ResidentUpCommand extends Command<int> {
 
     for (final selected in [config.harness, config.buildHarness]) {
       if (selected == null) continue;
-      if (!_harnessAllowList.contains(selected)) {
-        stderr.writeln(
-          '$prefix: harness "$selected" names no armed environment '
-          '(armed: ${_harnessAllowList.join(', ')}).',
-        );
-        return 64;
-      }
+      // Membership needs no shell check: `residentStationFlags` declares both
+      // harness flags with `allowed:` over the same allow list, so the parser
+      // already refused any name outside it. The shell validates only the
+      // CONFIGURATION of the armed environment.
       final refusal = _validateHarness(selected);
       if (refusal != null) {
         stderr.writeln(
@@ -247,11 +246,20 @@ class ResidentUpCommand extends Command<int> {
     // rule 1 keeps out of any `build*` name.
     ResidentGridDelegate assembleFreshDelegate() {
       final delegate = _delegateFactory(config: config);
-      delegate.resolveArmedRoster(
-        coded: _codedRoster(gridHome: config.gridHome),
-        appended: config.appended,
-        onSkip: (message) => stdout.writeln('$prefix: $message'),
-      );
+      try {
+        delegate.resolveArmedRoster(
+          coded: _codedRoster(gridHome: config.gridHome),
+          appended: config.appended,
+          onSkip: (message) => stdout.writeln('$prefix: $message'),
+        );
+      } on Object {
+        // A restart-time refusal (the re-probe found no armed seat, or an
+        // appended seat's store vanished) must leave nothing to unwind: the
+        // runner never adopted this delegate, so dispose the fresh corpse
+        // here and let the refusal reach the restart caller loudly.
+        delegate.dispose();
+        rethrow;
+      }
       return delegate;
     }
 
@@ -368,18 +376,17 @@ class ResidentUpCommand extends Command<int> {
       return 64;
     }
 
-    final token = mintControlToken();
-    final ResidentControlResource control;
-    try {
-      control = await _startControl(
-        port: config.controlPort,
-        token: token,
-        view: () => _status(config, armed, startedAt, live.stationView),
-        commandHandler: _LiveDelegateCommandHandler(() => live),
-        treeProjector: treeProjector,
-      );
-      await stationLock.updateControl(controlUrl: control.url, token: token);
-    } on Object catch (error) {
+    // The ONE post-mount arming unwind: every shell seat created so far is
+    // disposed in reverse creation order — including the seat whose OWN
+    // arming step threw (a bound control socket or a registered dev-mode
+    // seat must never be stranded because its lock advertisement failed).
+    Future<int> failArming(
+      Object error, {
+      ResidentControlResource? control,
+      ResidentDevModeResource? devMode,
+    }) async {
+      await devMode?.dispose();
+      await control?.dispose();
       await grid.teardown();
       treeProjector.dispose();
       await stationLock.release();
@@ -387,7 +394,26 @@ class ResidentUpCommand extends Command<int> {
       return 1;
     }
 
-    final ResidentDevModeResource? devMode;
+    final token = mintControlToken();
+    ResidentControlResource? armingControl;
+    try {
+      armingControl = await _startControl(
+        port: config.controlPort,
+        token: token,
+        view: () => _status(config, armed, startedAt, live.stationView),
+        commandHandler: _LiveDelegateCommandHandler(() => live),
+        treeProjector: treeProjector,
+      );
+      await stationLock.updateControl(
+        controlUrl: armingControl.url,
+        token: token,
+      );
+    } on Object catch (error) {
+      return failArming(error, control: armingControl);
+    }
+    final control = armingControl;
+
+    ResidentDevModeResource? devMode;
     try {
       devMode = await _armDevelopmentMode(
         vmServiceUri: vmServiceUri,
@@ -401,12 +427,7 @@ class ResidentUpCommand extends Command<int> {
         await stationLock.updateVmService(devMode.vmServiceUri);
       }
     } on Object catch (error) {
-      await control.dispose();
-      await grid.teardown();
-      treeProjector.dispose();
-      await stationLock.release();
-      stderr.writeln('$prefix: $error');
-      return 1;
+      return failArming(error, control: control, devMode: devMode);
     }
 
     final view = live.stationView;
@@ -425,10 +446,10 @@ class ResidentUpCommand extends Command<int> {
       );
 
     // The unwind (tg-1fa2.4): unmount tree (in-tree resources unwind by
-    // unmount order; `teardown` also disposes the delegate and runs the
-    // orphan sweep) → release the shell's projector → release lock. The
-    // shell's own seats (dev mode, the control socket) close first — they are
-    // process concerns that never entered the tree.
+    // unmount order; `teardown` then runs the orphan sweep on the still-live
+    // delegate and disposes it last) → release the shell's projector →
+    // release lock. The shell's own seats (dev mode, the control socket)
+    // close first — they are process concerns that never entered the tree.
     Future<void> unwind() async {
       await devMode?.dispose();
       await control.dispose();

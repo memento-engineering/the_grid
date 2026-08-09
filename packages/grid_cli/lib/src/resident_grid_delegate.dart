@@ -105,9 +105,11 @@ final class StalenessRefused extends StalenessPosture {
 ///     flush rail and `/stream` permanently dark).
 ///  5. **`dispose`** unwinds what boot assembled, in reverse creation order.
 ///     The shell's teardown: unmount tree (in-tree resources unwind by
-///     unmount order — tree-owned `Provider` create/dispose; the delegate is
-///     disposed inside the runner's teardown) → dispose the shell projector →
-///     release lock.
+///     unmount order — tree-owned `Provider` create/dispose) → [sweepOrphans]
+///     on the STILL-LIVE delegate → dispose the delegate (both inside the
+///     runner's teardown, in that order — the sweep reaps over the
+///     boot-assembled runtime, exactly what `dispose` unwinds) → dispose the
+///     shell projector → release lock.
 ///
 /// **The rule-5 posture, honestly stated.** [armRoster] (which seats arm,
 /// skip-coded vs refuse-appended) and [stalenessPosture] are STATION POLICY
@@ -248,6 +250,9 @@ abstract class ResidentGridDelegate extends GridDelegate {
   void afterFlush() {}
 
   /// The `runGrid(orphanSweep:)` hook — the teardown-vs-spawn reap on the
-  /// boot-assembled runtime. Default: nothing to sweep.
+  /// boot-assembled runtime. The runner calls it AFTER the tree unmounted
+  /// (the stragglers it reconciles only exist once the kills are in flight)
+  /// and BEFORE [dispose] — an implementation may rely on everything boot
+  /// assembled still being live. Default: nothing to sweep.
   Future<void> sweepOrphans() async {}
 }
