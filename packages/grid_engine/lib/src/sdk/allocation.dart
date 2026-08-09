@@ -30,6 +30,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
+
+import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:path/path.dart' as p;
 
@@ -629,13 +631,11 @@ class ProcessAllocation extends Allocation {
     // posture, ADR-0008 Decision 10 / OQ-c moment 2: one bad bead's config
     // parks THAT work; the station never crashes).
     try {
-      // Read the ambient values at ENTRY (synchronously, while mounted — the
-      // kick guarantees it): the per-substation services + the per-session
-      // workspace.
-      final services =
-          tree.getInheritedSeedOfExactType<ServiceBundle>() ??
-          const ServiceBundle();
-      final workspace = tree.getInheritedSeedOfExactType<Workspace>();
+      // Take synchronous `read<T>()` EFFECT snapshots at entry while mounted
+      // (the kick guarantees it), without subscribing the branch: the
+      // per-substation services + the per-session workspace.
+      final services = tree.read<ServiceBundle>() ?? const ServiceBundle();
+      final workspace = tree.read<Workspace>();
       // Materialize the workspace BEFORE spawning into it (the effect owns
       // provisioning; ADR-0008 D5). Idempotent — a later step in the same
       // worktree no-ops, and an offline build with no source control no-ops. A
@@ -811,8 +811,9 @@ class ProcessAllocation extends Allocation {
     await _reportComplete();
   }
 
-  /// The work signal for THIS effect's workspace — read with the EFFECT verb
-  /// (off-build, after the cancel guard), and ONLY when both seams AGREE.
+  /// The work signal for THIS effect's workspace — captured with synchronous
+  /// `read<T>()` EFFECT snapshots (off-build, non-binding, after the cancel
+  /// guard), and ONLY when both seams AGREE.
   ///
   /// The probe the composer bound is a REAL source-control probe expecting a REAL
   /// workspace path. But `SessionScope` mounts a SYNTHETIC [Workspace] when the
@@ -827,10 +828,8 @@ class ProcessAllocation extends Allocation {
   /// address; always fence one that is real but merely unreadable.
   Future<GateOutcome> _probeWorkSignal() async {
     final tree = context.treeContext;
-    final services =
-        tree.getInheritedSeedOfExactType<ServiceBundle>() ??
-        const ServiceBundle();
-    final workspace = tree.getInheritedSeedOfExactType<Workspace>();
+    final services = tree.read<ServiceBundle>() ?? const ServiceBundle();
+    final workspace = tree.read<Workspace>();
     if (services.sourceControl == null || workspace == null) {
       return GateOutcome.clear;
     }

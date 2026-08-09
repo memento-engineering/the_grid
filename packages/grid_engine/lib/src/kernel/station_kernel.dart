@@ -14,6 +14,7 @@ import '../notifiers/joined_snapshot_notifier.dart';
 import '../sdk/capability_facts.dart';
 import '../seeds/station_seed.dart';
 import '../seeds/substation_scope.dart';
+import '../seeds/provider.dart';
 import 'session_resolver.dart';
 import 'station_driver.dart';
 
@@ -192,11 +193,7 @@ class StationKernel {
     // needs none). The `ServiceBundle` is NOT provided here — it is a
     // per-substation responsibility provided by each `SubstationScope` so two
     // substations get isolated source control (ADR-0008 D5).
-    Seed root = Station(_substations);
     final registry = _registry;
-    if (registry != null) {
-      root = InheritedSeed<CapabilityRegistry>(value: registry, child: root);
-    }
     // The molecule model's process-lease seam (R3/R5) — ALWAYS mounted at the
     // SAME kernel-tier trust level as the registry above: the composer's
     // explicit vendor when supplied, else the REAL production vendor over
@@ -204,12 +201,15 @@ class StationKernel {
     // process step on a kernel-rooted tree always resolves a real vendor).
     final leaseVendor =
         _processLeaseVendor ?? defaultProcessLeaseVendor(_stationServices);
-    root = InheritedSeed<ProcessLeaseVendor>(value: leaseVendor, child: root);
-    root = InheritedSeed<SessionResolver>(value: _resolver, child: root);
-    root = InheritedSeed<StationServices>(value: _stationServices, child: root);
-    root = InheritedSeed<JoinedSnapshotNotifier>(
-      value: bridge.notifier,
-      child: root,
+    Seed root = ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<JoinedSnapshotNotifier>.value(bridge.notifier),
+        Provider<StationServices>.value(_stationServices),
+        Provider<SessionResolver>.value(_resolver),
+        Provider<ProcessLeaseVendor>.value(leaseVendor),
+        if (registry != null) Provider<CapabilityRegistry>.value(registry),
+      ],
+      child: Station(_substations),
     );
     final wrap = _wrapRoot;
     if (wrap != null) root = wrap(root);

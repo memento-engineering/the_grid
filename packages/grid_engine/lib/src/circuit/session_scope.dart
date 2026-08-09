@@ -81,6 +81,7 @@ import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
 import '../sdk/frontier.dart';
 import '../sdk/route.dart' show EscalationRequest;
+import '../seeds/provider.dart';
 import 'capability_host.dart' show persistRaisedEscalation;
 import 'capability_registry.dart';
 import 'circuit_scope.dart';
@@ -276,7 +277,7 @@ class SessionScopeState extends State<SessionScope>
   void didChangeDependencies() {
     // ALWAYS re-read (D-H rule 1) — the captured field exists for async-gap use
     // (`context` throws post-unmount), never as a read-once cache.
-    final ctx = context.dependOnInheritedSeedOfExactType<StationServices>();
+    final ctx = context.watch<StationServices>();
     assert(
       ctx != null,
       'SessionScope requires an ambient InheritedSeed<StationServices>',
@@ -284,14 +285,11 @@ class SessionScopeState extends State<SessionScope>
     _ctx = ctx;
     // Capture the (fixed-at-mount) ambient bundle for the off-build re-arm
     // flare (tg-boq) — same discipline as `CapabilityHostState._services`.
-    _services =
-        context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
-        const ServiceBundle();
+    _services = context.watch<ServiceBundle>() ?? const ServiceBundle();
     // Captured for [_mint]'s async use (D-H rule 1) — the reentrant registry
     // (a molecule mint's sub-circuit resolution).
-    _registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
-    _joinedSnapshot = context
-        .dependOnInheritedSeedOfExactType<JoinedSnapshot>();
+    _registry = context.watch<CapabilityRegistry>();
+    _joinedSnapshot = context.watch<JoinedSnapshot>();
     _considerMintReadiness();
   }
 
@@ -1243,8 +1241,7 @@ class SessionScopeState extends State<SessionScope>
     // the flat broken/complete check below needs it to resolve a
     // `SubCircuitStep`'s own nested circuit (`firstBrokenNode`/
     // `isCircuitComplete`).
-    final registry = context
-        .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    final registry = context.watch<CapabilityRegistry>();
 
     // Project this session's OWN molecule graph into the in-memory
     // CircuitCursor shape, then layer A52 Ratified live derivation over it.
@@ -1476,29 +1473,23 @@ class SessionScopeState extends State<SessionScope>
       nodePath: seed.bead.id,
       circuitRoundsByPath: circuitRoundsByPath,
     );
-    if (isMolecule) {
-      // R2/R5: the ambient storage seam, provided as the 4th nested
-      // InheritedSeed ONLY in molecule mode — a flat session provides
-      // nothing new here (the additive fork lives entirely at
-      // `CapabilityHost`'s persist call sites, R5b).
-      inflater = InheritedSeed<InheritedCircuit>(
-        value: InheritedCircuit(
-          root: BeadPathKey([seed.bead.id, id]),
-          beadIdByNodePath: beadIdByNodePath,
-          cursor: cursor,
+    return ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<SessionHandle>.value(SessionHandle(id)),
+        Provider<Workspace>.value(workspace),
+        Provider<SiblingView>.value(
+          SiblingView(cursor: cursor, results: results),
         ),
-        child: inflater,
-      );
-    }
-    return InheritedSeed<SessionHandle>(
-      value: SessionHandle(id),
-      child: InheritedSeed<Workspace>(
-        value: workspace,
-        child: InheritedSeed<SiblingView>(
-          value: SiblingView(cursor: cursor, results: results),
-          child: inflater,
-        ),
-      ),
+        if (isMolecule)
+          Provider<InheritedCircuit>.value(
+            InheritedCircuit(
+              root: BeadPathKey([seed.bead.id, id]),
+              beadIdByNodePath: beadIdByNodePath,
+              cursor: cursor,
+            ),
+          ),
+      ],
+      child: inflater,
     );
   }
 }

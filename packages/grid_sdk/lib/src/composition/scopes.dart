@@ -1,5 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 part 'scopes.freezed.dart';
 
@@ -15,8 +16,7 @@ abstract class GridRoot with _$GridRoot {
 
   /// The ambient [GridRoot], or null when no `RawAssetGrid` encloses
   /// [context]. Subscribes: a changed root rebuilds the dependent.
-  static GridRoot? maybeOf(TreeContext context) =>
-      context.dependOnInheritedSeedOfExactType<GridRoot>();
+  static GridRoot? maybeOf(TreeContext context) => context.watch<GridRoot>();
 
   /// The ambient [GridRoot]. Loud when absent: composition outside a
   /// `RawAssetGrid` is an authoring error, not a default (v3 §0).
@@ -45,7 +45,7 @@ abstract class StationScope with _$StationScope {
   /// The ambient [StationScope], or null when no `Station` encloses
   /// [context].
   static StationScope? maybeOf(TreeContext context) =>
-      context.dependOnInheritedSeedOfExactType<StationScope>();
+      context.watch<StationScope>();
 
   /// The ambient [StationScope], loud when absent.
   static StationScope of(TreeContext context) {
@@ -80,7 +80,7 @@ abstract class SubstationScope with _$SubstationScope {
   /// The ambient [SubstationScope], or null when no `Substation` encloses
   /// [context].
   static SubstationScope? maybeOf(TreeContext context) =>
-      context.dependOnInheritedSeedOfExactType<SubstationScope>();
+      context.watch<SubstationScope>();
 
   /// The ambient [SubstationScope], loud when absent.
   static SubstationScope of(TreeContext context) {

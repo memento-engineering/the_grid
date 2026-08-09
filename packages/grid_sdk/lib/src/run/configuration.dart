@@ -1,5 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:genesis_tree/genesis_tree.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 part 'configuration.freezed.dart';
 
@@ -36,7 +37,7 @@ abstract class GridConfiguration with _$GridConfiguration {
   /// running grid. **Subscribes**: a re-emitted configuration rebuilds the
   /// reader (use this in a `build`, never in `State.initState`).
   static GridConfiguration? maybeOf(TreeContext context) =>
-      context.dependOnInheritedSeedOfExactType<GridConfiguration>();
+      context.watch<GridConfiguration>();
 
   /// The ambient [GridConfiguration], **loud when absent** — reading
   /// configuration outside a running grid is an authoring error, not a default

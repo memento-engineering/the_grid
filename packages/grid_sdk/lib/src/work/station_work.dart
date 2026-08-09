@@ -2,6 +2,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 // The engine's OLD SubstationScope seed collides in name with the SDK's scope
 // VALUE (`scopes.dart`) — hide it; this module reads only the SDK scope.
 import 'package:grid_engine/grid_engine.dart' hide SubstationScope;
+import 'package:grid_engine/src/seeds/provider.dart';
 
 import '../composition/scopes.dart';
 
@@ -75,11 +76,7 @@ class StationWork extends SingleChildStatelessSeed {
 
   @override
   Seed buildWithChild(TreeContext context, Seed child) {
-    Seed out = child;
     final registry = wiring.registry;
-    if (registry != null) {
-      out = InheritedSeed<CapabilityRegistry>(value: registry, child: out);
-    }
     // The molecule model's process-lease seam — mounted at the SAME position
     // `StationKernel.start` mounts it (between the registry and the resolver,
     // tg-h4u / tg-2mb). The PRODUCTION runGrid path uses THIS seat, not
@@ -87,17 +84,18 @@ class StationWork extends SingleChildStatelessSeed {
     // `requireProcessLeaseVendor` throws at readiness and the station wedges to
     // zero. Null wiring falls back to the real production vendor over the
     // ambient services, mirroring the kernel's `?? defaultProcessLeaseVendor`.
-    out = InheritedSeed<ProcessLeaseVendor>(
-      value:
+    return ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<JoinedSnapshotNotifier>.value(wiring.notifier),
+        Provider<StationServices>.value(wiring.services),
+        Provider<SessionResolver>.value(wiring.resolver),
+        Provider<ProcessLeaseVendor>.value(
           wiring.processLeaseVendor ??
-          defaultProcessLeaseVendor(wiring.services),
-      child: out,
-    );
-    out = InheritedSeed<SessionResolver>(value: wiring.resolver, child: out);
-    out = InheritedSeed<StationServices>(value: wiring.services, child: out);
-    return InheritedSeed<JoinedSnapshotNotifier>(
-      value: wiring.notifier,
-      child: out,
+              defaultProcessLeaseVendor(wiring.services),
+        ),
+        if (registry != null) Provider<CapabilityRegistry>.value(registry),
+      ],
+      child: child,
     );
   }
 }
@@ -151,8 +149,7 @@ class SubstationWork extends StatelessSeed {
     final scope = SubstationScope.of(context);
     // The tree/build verb (subscribing): a re-provided notifier VALUE (not an
     // emission — the handle itself) re-composes this seat. Null = unarmed.
-    final notifier = context
-        .dependOnInheritedSeedOfExactType<JoinedSnapshotNotifier>();
+    final notifier = context.watch<JoinedSnapshotNotifier>();
     if (notifier == null) return const _UnarmedWork();
     return WorkList(
       substationConfig: SubstationConfig(

@@ -21,6 +21,8 @@ library;
 import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
+
+import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../kernel/station_services.dart';
@@ -88,12 +90,11 @@ Future<ProcessHandle> stationProcessSpawner(
   });
   var handedOff = false;
   try {
-    // Materialize the workspace BEFORE spawning into it (idempotent; the
+    // Take synchronous `read<T>()` EFFECT snapshots without subscribing this
+    // branch, then materialize the workspace BEFORE spawning into it (idempotent; the
     // effect owns provisioning — ADR-0008 D5). Mirrors ProcessAllocation.
-    final services =
-        context.getInheritedSeedOfExactType<ServiceBundle>() ??
-        const ServiceBundle();
-    final workspace = context.getInheritedSeedOfExactType<Workspace>();
+    final services = context.read<ServiceBundle>() ?? const ServiceBundle();
+    final workspace = context.read<Workspace>();
     final sc = services.sourceControl;
     if (sc != null && workspace != null) {
       await sc.provisionWorkspace(
@@ -362,10 +363,10 @@ Future<GateOutcome> _probeLeasedWorkSignal(
   TreeContext context,
   AllocationContext ctx,
 ) {
-  final services =
-      context.getInheritedSeedOfExactType<ServiceBundle>() ??
-      const ServiceBundle();
-  final workspace = context.getInheritedSeedOfExactType<Workspace>();
+  // Synchronous `read<T>()` EFFECT snapshots keep this probe non-binding and
+  // do not subscribe the branch.
+  final services = context.read<ServiceBundle>() ?? const ServiceBundle();
+  final workspace = context.read<Workspace>();
   if (services.sourceControl == null || workspace == null) {
     return Future<GateOutcome>.value(GateOutcome.clear);
   }

@@ -1,5 +1,7 @@
 import 'package:genesis_tree/genesis_tree.dart';
 
+import 'provider.dart';
+
 import '../diagnostics/diagnosable.dart';
 import '../domain/substation_config.dart';
 import 'work_list.dart';
@@ -29,7 +31,7 @@ class _SubstationState extends State<Substation>
     // Reading SubstationConfig here (not initState) registers this branch as a
     // dependent of the ambient InheritedSeed<SubstationConfig>, so a config change
     // re-runs didChangeDependencies and rebuilds — the config axis.
-    _config = context.dependOnInheritedSeedOfExactType<SubstationConfig>()!;
+    _config = context.watch<SubstationConfig>()!;
   }
 
   @override

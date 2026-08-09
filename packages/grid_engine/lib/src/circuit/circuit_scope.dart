@@ -23,6 +23,8 @@ library;
 
 import 'package:genesis_tree/genesis_tree.dart';
 
+import '../seeds/provider.dart';
+
 import '../diagnostics/diagnosable.dart';
 import '../molecule/inherited_circuit.dart';
 import '../sdk/cursor.dart';
@@ -68,23 +70,21 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
 
   @override
   Seed build(TreeContext context) {
-    final registry = context
-        .dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    final registry = context.watch<CapabilityRegistry>();
     if (registry == null) {
       throw StateError(
         'CircuitScope requires an ambient CapabilityRegistry '
         '(the kernel/extension provides one; tests inject a fake)',
       );
     }
-    final session = context.dependOnInheritedSeedOfExactType<SessionHandle>();
+    final session = context.watch<SessionHandle>();
     if (session == null) {
       throw StateError(
         'CircuitScope requires an ambient SessionHandle '
         '(SessionScope provides it once the session resolves)',
       );
     }
-    final inheritedCircuit = context
-        .dependOnInheritedSeedOfExactType<InheritedCircuit>();
+    final inheritedCircuit = context.watch<InheritedCircuit>();
 
     final beadIds = <String, String>{};
     if (inheritedCircuit != null) {

@@ -5,6 +5,7 @@ import 'package:beads_dart/beads_dart.dart';
 
 import '../domain/session_projection.dart';
 import '../kernel/session_resolver.dart';
+import 'provider.dart';
 
 /// One unit of work as a persistent tree node (ADR-0007: a Branch IS the work
 /// lifecycle — mount = spawn, unmount = kill; progress is the per-node reentrant
@@ -45,8 +46,7 @@ class WorkBead extends StatelessSeed with GridDiagnosticable {
 
   @override
   Seed build(TreeContext context) {
-    final resolver = context
-        .dependOnInheritedSeedOfExactType<SessionResolver>();
+    final resolver = context.watch<SessionResolver>();
     assert(
       resolver != null,
       'WorkBead requires an ambient SessionResolver (the kernel/extension '
@@ -56,8 +56,8 @@ class WorkBead extends StatelessSeed with GridDiagnosticable {
     // reads it with the non-binding lookup instead of having it threaded
     // through every mount. Bead is a freezed value type, so a re-provide with
     // an unchanged bead never notifies dependents.
-    return InheritedSeed<Bead>(
-      value: bead,
+    return ProviderScope(
+      providers: <Provider<Object>>[Provider<Bead>.value(bead)],
       child: resolver!.sessionFor(bead: bead, session: session),
     );
   }

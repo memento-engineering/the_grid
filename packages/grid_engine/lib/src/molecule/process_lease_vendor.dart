@@ -61,6 +61,8 @@ library;
 import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
+
+import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../sdk/allocation.dart';
@@ -277,7 +279,8 @@ class ProcessLeaseRequest {
 /// but choosing it is the composer's decision to make explicitly (mount one),
 /// never this call's decision to make for them.
 ///
-/// Uses the EFFECT verb (`getInheritedSeedOfExactType`), not the tree verb: a
+/// Uses the `read<T>()` effect verb (a wrapper over
+/// `getInheritedSeedOfExactType<T>()`), not the tree verb: a
 /// `CapabilityHost` consults this OFF `build`, in the async report/persist
 /// path (`_persistStarted`, mirroring `_moleculeTarget`'s own
 /// `InheritedCircuit` read one method above) — a one-shot presence guard, not
@@ -287,7 +290,7 @@ class ProcessLeaseRequest {
 /// re-instantiates the vendor would fire a spurious `didChangeDependencies`
 /// on an already-live process.
 ProcessLeaseVendor requireProcessLeaseVendor(TreeContext context) {
-  final vendor = context.getInheritedSeedOfExactType<ProcessLeaseVendor>();
+  final vendor = context.read<ProcessLeaseVendor>();
   if (vendor == null) {
     throw StateError(
       'No ProcessLeaseVendor is mounted ambient to this branch. A '

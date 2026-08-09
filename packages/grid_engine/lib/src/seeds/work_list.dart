@@ -18,6 +18,7 @@ import '../kernel/station_services.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../sdk/capability.dart';
 import 'work_bead.dart';
+import 'provider.dart';
 
 /// The work axis observer and keyed-reconcile container — **the heart**.
 ///
@@ -113,8 +114,7 @@ class _WorkListState extends State<WorkList>
     // Resolve the ambient work-axis notifier and subscribe. The notifier
     // instance is stable in P0; the identity guard makes a re-run (or a future
     // instance swap) idempotent.
-    final notifier = context
-        .dependOnInheritedSeedOfExactType<JoinedSnapshotNotifier>();
+    final notifier = context.watch<JoinedSnapshotNotifier>();
     assert(
       notifier != null,
       'WorkList requires an ambient JoinedSnapshotNotifier provided above Station',
@@ -154,15 +154,14 @@ class _WorkListState extends State<WorkList>
     // the SAME emit-only sink every other engine LOUD signal uses. This is a
     // config-axis dependency (never notifies once mounted), not the snapshot
     // pipeline — derailment-invariant 1 stays about the JOINED SNAPSHOT axis.
-    final services = context.dependOnInheritedSeedOfExactType<ServiceBundle>();
+    final services = context.watch<ServiceBundle>();
     // The concurrency governor's ambient station default/ceiling (tg-42f) —
     // a config-axis lookup exactly like `ServiceBundle` above: a stable,
     // fixed-at-mount value that never notifies, so this new dependency stays
     // outside derailment-invariant 1 (the snapshot axis). Null (no
     // `StationServices` provided — the offline-test default) falls back to
     // the same generous constant `StationServices` itself defaults to.
-    final stationServices = context
-        .dependOnInheritedSeedOfExactType<StationServices>();
+    final stationServices = context.watch<StationServices>();
     // Two bins: `mounted` already carries a live (non-terminal) session — an
     // in-flight agent that is NEVER evicted for budget reasons (positive-
     // terminal-only unmount stays the only unmount trigger). `pending` is
@@ -359,12 +358,12 @@ class _WorkListState extends State<WorkList>
     // Re-provide the settled joined snapshot and data config as observed VALUES
     // for descendants. WorkList remains the only notifier subscriber;
     // SessionScope consumes these values through ambient tree seams.
-    return InheritedSeed<JoinedSnapshot>(
-      value: _snapshot,
-      child: InheritedSeed<SubstationConfig>(
-        value: seed.substationConfig,
-        child: _WorkBeads(mounted),
-      ),
+    return ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<JoinedSnapshot>.value(_snapshot),
+        Provider<SubstationConfig>.value(seed.substationConfig),
+      ],
+      child: _WorkBeads(mounted),
     );
   }
 

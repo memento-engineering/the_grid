@@ -25,6 +25,13 @@ library;
 // The tree vocabulary a station author needs (Seed / StatelessSeed / Nest /
 // TreeContext / keys) comes WITH the SDK — one import authors a station.
 export 'package:genesis_tree/genesis_tree.dart';
+export 'package:grid_engine/src/seeds/provider.dart'
+    show
+        Provider,
+        ProviderCreate,
+        ProviderDispose,
+        ProviderScope,
+        ProviderTreeContext;
 
 // The observable a `GridDelegate` IS. Re-exported so `addListener` / its
 // callback + remover types are usable from the one SDK import (a station author

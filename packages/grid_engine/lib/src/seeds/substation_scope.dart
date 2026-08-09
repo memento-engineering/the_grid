@@ -6,6 +6,7 @@ import '../domain/substation_config.dart';
 import '../notifiers/substation_config_notifier.dart';
 import '../sdk/capability.dart';
 import 'substation.dart';
+import 'provider.dart';
 
 /// The per-substation **config scope** — an ancestor of the substation's work nodes
 /// (ADR-0007: config nodes are ancestors of work nodes).
@@ -102,12 +103,12 @@ class _SubstationScopeState extends State<SubstationScope>
     // re-provided on every config tick, and genesis's default identity check
     // (`value != oldSeed.value`) declines to notify — no guard type needed
     // (ADR-0008 D-6, superseded 2026-07-02).
-    return InheritedSeed<ServiceBundle>(
-      value: seed.services,
-      child: InheritedSeed<SubstationConfig>(
-        value: _config,
-        child: Substation(key: ValueKey('substation.${_config.substationId}')),
-      ),
+    return ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<ServiceBundle>.value(seed.services),
+        Provider<SubstationConfig>.value(_config),
+      ],
+      child: Substation(key: ValueKey('substation.${_config.substationId}')),
     );
   }
 }

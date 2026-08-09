@@ -1,5 +1,6 @@
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:path/path.dart' as p;
+import 'package:grid_engine/src/seeds/provider.dart';
 
 import 'scopes.dart';
 
@@ -70,8 +71,10 @@ class RawAssetGrid extends StatelessSeed {
   @override
   Seed build(TreeContext context) {
     _requireRoot(root, 'RawAssetGrid');
-    return InheritedSeed<GridRoot>(
-      value: GridRoot(path: root),
+    return ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<GridRoot>.value(GridRoot(path: root)),
+      ],
       child: AssetFanOut(assets),
     );
   }
@@ -120,8 +123,10 @@ class Station extends StatelessSeed {
               .path,
       'Station("$name")',
     );
-    return InheritedSeed<StationScope>(
-      value: StationScope(name: name, root: resolved),
+    return ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<StationScope>.value(StationScope(name: name, root: resolved)),
+      ],
       child: AssetFanOut(assets),
     );
   }
@@ -194,12 +199,16 @@ class Substation extends StatelessSeed {
   Seed build(TreeContext context) {
     _requireName(name, 'Substation');
     _requireName(prefix, 'Substation("$name").prefix');
-    return InheritedSeed<SubstationScope>(
-      value: SubstationScope(
-        name: name,
-        root: _resolveRoot(context),
-        prefix: prefix,
-      ),
+    return ProviderScope(
+      providers: <Provider<Object>>[
+        Provider<SubstationScope>.value(
+          SubstationScope(
+            name: name,
+            root: _resolveRoot(context),
+            prefix: prefix,
+          ),
+        ),
+      ],
       child: AssetFanOut(assets),
     );
   }
