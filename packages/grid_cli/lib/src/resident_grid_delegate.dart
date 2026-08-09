@@ -82,9 +82,12 @@ final class StalenessRefused extends StalenessPosture {
 ///  1. **Construction is config-only** (the resident `up` command's
 ///     `delegateFactory` receives the parsed [ResidentStationConfig] and
 ///     nothing else). No wiring, no provisioner, no effect implementations
-///     enter the factory — assembly is [boot]-owned; effect posture (dry-run
-///     mounts no effect providers) is declared in the TREE, where the
-///     projection sees the absence.
+///     enter the factory — assembly is [boot]-owned. The dry-run effect
+///     posture TODAY is boot-selected OFF-tree: boot passes the config's
+///     `dryRun` to `assembleStationWork`, which selects inert implementations
+///     by type. Declaring the posture in the TREE (dry-run mounts no effect
+///     providers, so the projection sees the absence) is the TARGET state,
+///     owned by the reference-boot follow-up bead.
 ///  2. **[resolveArmedRoster]** — the shell calls it exactly once per
 ///     delegate instance, BEFORE the boot rail, folding the station's arming
 ///     policy (skip a coded seat with no store, refuse an appended one) over
@@ -126,8 +129,10 @@ final class StalenessRefused extends StalenessPosture {
 /// **OPEN SEAM — no reference boot implementation ships yet.** This contract
 /// specifies the delegate half of the tg-1fa2.4 migration (boot-owned
 /// `assembleStationWork` + the `StationDiagnosticsReporter` effect, views
-/// vended over the assembled `StationWorkRuntime`, dry-run declared as
-/// provider ABSENCE in the tree), but grid_cli ships only the abstract
+/// vended over the assembled `StationWorkRuntime`; dry-run as provider
+/// ABSENCE in the tree is that follow-up's target — today
+/// `assembleStationWork` selects inert implementations off-tree from its
+/// `dryRun` flag), but grid_cli ships only the abstract
 /// contract — every concrete `boot` today lives in tests. The reference
 /// boot-owned assembly delegate is deliberate follow-up work under the
 /// tg-1fa2 epic (file it as its own bead when composing the first production

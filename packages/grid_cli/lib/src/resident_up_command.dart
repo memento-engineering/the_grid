@@ -31,9 +31,13 @@ import 'station_lock.dart';
 
 /// Builds the station-authored delegate from parsed boot configuration ALONE
 /// (tg-1fa2.4): no wiring, no provisioner, no effect implementations —
-/// assembly is `GridDelegate.boot`-owned, and the dry-run posture is declared
-/// in the delegate's TREE (no effect providers mounted) instead of nulls
-/// threaded through this factory.
+/// assembly is `GridDelegate.boot`-owned. The dry-run posture TODAY is
+/// boot-selected OFF-tree: boot hands the config's `dryRun` to
+/// `assembleStationWork`, which picks inert implementations by type (no-op bd
+/// runner, dry provider, dry git). Declaring it in the delegate's TREE (no
+/// effect providers mounted, visible to the projection) is the TARGET state,
+/// owned by the reference-boot follow-up bead — either way, no nulls thread
+/// through this factory.
 typedef ResidentGridDelegateFactory =
     ResidentGridDelegate Function({required ResidentStationConfig config});
 
