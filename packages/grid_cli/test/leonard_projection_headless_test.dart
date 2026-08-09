@@ -6,8 +6,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
-import 'package:genesis_foundation/genesis_foundation.dart'
-    show TreeNode, TreeSnapshot;
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
