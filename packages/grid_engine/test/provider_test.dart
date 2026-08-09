@@ -103,6 +103,35 @@ final class _ProbeChildren extends MultiChildSeed {
   _ProbeChildren(List<Seed> children) : super(children: children);
 }
 
+final class _ReadProbe extends StatefulSeed {
+  const _ReadProbe({
+    required this.onCreate,
+    required this.dependencyChanges,
+  });
+
+  final void Function(_ReadProbeState state) onCreate;
+  final List<int> dependencyChanges;
+
+  @override
+  State<_ReadProbe> createState() {
+    final state = _ReadProbeState();
+    onCreate(state);
+    return state;
+  }
+}
+
+final class _ReadProbeState extends State<_ReadProbe> {
+  String? readValue() => context.read<_Value>()?.name;
+
+  @override
+  void didChangeDependencies() {
+    seed.dependencyChanges.add(seed.dependencyChanges.length + 1);
+  }
+
+  @override
+  Seed build(TreeContext context) => const _Leaf();
+}
+
 final class _ScopeRebuilder extends StatefulSeed {
   const _ScopeRebuilder({required this.onCreate, required this.child});
 
@@ -170,6 +199,33 @@ void main() {
       expect(valueValues.last, 'two');
       expect(otherDependencyChanges, [1]);
       expect(otherValues, ['stable']);
+    });
+
+    test('off-build read sees the value without subscribing', () {
+      final dependencyChanges = <int>[];
+      late _ScopeRebuilderState rebuilder;
+      late _ReadProbeState reader;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        _ScopeRebuilder(
+          onCreate: (state) => rebuilder = state,
+          child: _ReadProbe(
+            onCreate: (state) => reader = state,
+            dependencyChanges: dependencyChanges,
+          ),
+        ),
+      );
+
+      expect(dependencyChanges, [1]);
+      expect(reader.readValue(), 'one');
+
+      rebuilder.update(const _Value('two'));
+      owner.flush();
+
+      expect(reader.readValue(), 'two');
+      expect(dependencyChanges, [1]);
     });
   });
 
