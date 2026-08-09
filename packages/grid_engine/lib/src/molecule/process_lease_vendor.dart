@@ -61,6 +61,8 @@ library;
 import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
+
+import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../sdk/allocation.dart';
@@ -287,7 +289,7 @@ class ProcessLeaseRequest {
 /// re-instantiates the vendor would fire a spurious `didChangeDependencies`
 /// on an already-live process.
 ProcessLeaseVendor requireProcessLeaseVendor(TreeContext context) {
-  final vendor = context.getInheritedSeedOfExactType<ProcessLeaseVendor>();
+  final vendor = context.watch<ProcessLeaseVendor>();
   if (vendor == null) {
     throw StateError(
       'No ProcessLeaseVendor is mounted ambient to this branch. A '

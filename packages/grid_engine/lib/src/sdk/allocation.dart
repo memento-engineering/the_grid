@@ -30,6 +30,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
+
+import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:path/path.dart' as p;
 
@@ -632,10 +634,8 @@ class ProcessAllocation extends Allocation {
       // Read the ambient values at ENTRY (synchronously, while mounted — the
       // kick guarantees it): the per-substation services + the per-session
       // workspace.
-      final services =
-          tree.getInheritedSeedOfExactType<ServiceBundle>() ??
-          const ServiceBundle();
-      final workspace = tree.getInheritedSeedOfExactType<Workspace>();
+      final services = tree.watch<ServiceBundle>() ?? const ServiceBundle();
+      final workspace = tree.watch<Workspace>();
       // Materialize the workspace BEFORE spawning into it (the effect owns
       // provisioning; ADR-0008 D5). Idempotent — a later step in the same
       // worktree no-ops, and an offline build with no source control no-ops. A
@@ -827,10 +827,8 @@ class ProcessAllocation extends Allocation {
   /// address; always fence one that is real but merely unreadable.
   Future<GateOutcome> _probeWorkSignal() async {
     final tree = context.treeContext;
-    final services =
-        tree.getInheritedSeedOfExactType<ServiceBundle>() ??
-        const ServiceBundle();
-    final workspace = tree.getInheritedSeedOfExactType<Workspace>();
+    final services = tree.watch<ServiceBundle>() ?? const ServiceBundle();
+    final workspace = tree.watch<Workspace>();
     if (services.sourceControl == null || workspace == null) {
       return GateOutcome.clear;
     }

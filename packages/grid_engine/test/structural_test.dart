@@ -117,7 +117,39 @@ Directory _libSrc() {
   );
 }
 
+String _codeWithoutLineComments(String source) =>
+    source.split('\n').map((line) => line.split('//').first).join('\n');
+
 void main() {
+  test('ProviderScope is the only production inherited provision seam', () {
+    final src = _libSrc();
+    final provider = p.normalize(p.join(src.path, 'seeds', 'provider.dart'));
+    final offenders = src
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((file) => file.path.endsWith('.dart'))
+        .where((file) => p.normalize(file.path) != provider)
+        .where(
+          (file) => _codeWithoutLineComments(
+            file.readAsStringSync(),
+          ).contains(RegExp(r'InheritedSeed<[^>]+>\s*\(')),
+        )
+        .map((file) => file.path)
+        .toList();
+    expect(offenders, isEmpty);
+
+    final barrel = File(
+      p.join(src.parent.path, 'grid_engine.dart'),
+    ).readAsStringSync();
+    for (final symbol in [
+      'src/seeds/provider.dart',
+      'ProviderScope',
+      'ProviderTreeContext',
+    ]) {
+      expect(barrel, isNot(contains(symbol)));
+    }
+  });
+
   group('the engine is opinion-free (ADR-0007 §1)', () {
     final libSrc = _libSrc();
 

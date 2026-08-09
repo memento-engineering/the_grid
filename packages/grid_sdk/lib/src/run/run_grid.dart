@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart' show TreeProjector;
+import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import 'configuration.dart';
@@ -558,8 +559,8 @@ class _GridConfigurationScopeState extends State<_GridConfigurationScope> {
 
   @override
   Seed build(TreeContext context) {
-    return InheritedSeed<GridConfiguration>(
-      value: _config,
+    return ProviderScope(
+      providers: <Provider<Object>>[Provider<GridConfiguration>.value(_config)],
       child: _DelegateRoot(
         delegate: _delegate,
         configuration: _config,

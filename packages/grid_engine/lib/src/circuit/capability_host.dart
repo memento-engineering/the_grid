@@ -34,6 +34,8 @@ import 'dart:async';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
+
+import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../diagnostics/diagnosable.dart';
@@ -182,7 +184,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// it flares. Same for a MOUNTED circuit missing its own node in
   /// [InheritedCircuit.beadIdByNodePath] (a join/mint mis-composition).
   String get _stepBeadId {
-    final circuit = context.getInheritedSeedOfExactType<InheritedCircuit>();
+    final circuit = context.watch<InheritedCircuit>();
     if (circuit == null) {
       throw StateError(
         'No InheritedCircuit at "$_nodePath" (session "$_sessionId") — the '
@@ -220,16 +222,14 @@ class CapabilityHostState extends State<CapabilityHost>
     // ALWAYS re-read every dependency (D-H rule 1: assume a reference can
     // change; dependencyChanged re-runs this). The fields are captured for
     // async-gap use — never a read-once cache.
-    final ctx = context.dependOnInheritedSeedOfExactType<StationServices>();
+    final ctx = context.watch<StationServices>();
     assert(
       ctx != null,
       'CapabilityHost requires an ambient InheritedSeed<StationServices>',
     );
     _ctx = ctx;
-    _services =
-        context.dependOnInheritedSeedOfExactType<ServiceBundle>() ??
-        const ServiceBundle();
-    _registry = context.dependOnInheritedSeedOfExactType<CapabilityRegistry>();
+    _services = context.watch<ServiceBundle>() ?? const ServiceBundle();
+    _registry = context.watch<CapabilityRegistry>();
 
     final existing = _allocation;
     if (existing == null) {
@@ -607,8 +607,8 @@ class CapabilityHostState extends State<CapabilityHost>
     // runs off `build`, on a still-mounted branch — guarded above) and handed to
     // the method as VALUES, so a long push/PR round-trip cannot race an unmount
     // into a thrown tree lookup (ADR-0013 items 1/4).
-    final workBead = context.getInheritedSeedOfExactType<Bead>();
-    final workspace = context.getInheritedSeedOfExactType<Workspace>();
+    final workBead = context.watch<Bead>();
+    final workspace = context.watch<Workspace>();
     if (workBead == null || workspace == null) {
       // LOUD (ADR-0008 Decision 3): a delivery method bound under a tree that
       // mounts no work bead / no workspace is a MIS-COMPOSITION — never a silent

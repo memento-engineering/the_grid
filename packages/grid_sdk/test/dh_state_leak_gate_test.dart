@@ -51,6 +51,37 @@ String _code(String source) => source
     .join('\n');
 
 void main() {
+  test(
+    'provider API is curated and raw inherited construction stays private',
+    () {
+      final sources = _libSources().toList();
+      final all = sources.map((file) => file.readAsStringSync()).join('\n');
+      final barrel = sources.singleWhere(
+        (file) => file.path.endsWith('${Platform.pathSeparator}grid_sdk.dart'),
+      );
+      final barrelSource = barrel.readAsStringSync();
+      for (final symbol in [
+        'Provider',
+        'ProviderCreate',
+        'ProviderDispose',
+        'ProviderScope',
+        'ProviderTreeContext',
+      ]) {
+        expect(barrelSource, contains(symbol));
+      }
+      expect(all, contains('Provider<GridConfiguration>.value(_config)'));
+      expect(all, contains('watch<GridConfiguration>()'));
+      for (final file in sources) {
+        expect(
+          _code(file.readAsStringSync()),
+          isNot(contains('InheritedSeed<')),
+          reason:
+              '${file.path}: raw inherited construction belongs to ProviderScope',
+        );
+      }
+    },
+  );
+
   group('D-H fence: no public sync accessor over StateNotifier state (grid_sdk)', () {
     test('positive control: the scan sees real source AND the sanctioned '
         'subscribing observation', () {
@@ -66,7 +97,7 @@ void main() {
       // negative gates below cannot pass vacuously against a moved/empty dir.
       expect(
         all,
-        contains('dependOnInheritedSeedOfExactType<GridConfiguration>'),
+        contains('watch<GridConfiguration>()'),
         reason:
             'the sanctioned subscribing observation '
             '(GridConfiguration.of) must appear in the scanned source '
