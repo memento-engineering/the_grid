@@ -368,6 +368,16 @@ class GridHandle {
       next.dispose();
       throw GridHookError('boot', next.runtimeType, error, stackTrace);
     }
+    // Re-check AFTER the awaited boot: teardown() can land while the fresh
+    // delegate boots, and committing past it would swap the shell's read
+    // surface onto a delegate whose tree is already unmounted (and dispose
+    // the corpse twice — teardown already disposed the live one). Refuse
+    // LOUDLY before assigning the live holder, notifying the commit seam, or
+    // kicking off the post-mount rails.
+    if (_tornDown) {
+      next.dispose();
+      throw StateError('the grid tore down during the restart boot');
+    }
     final generation = ++_generation;
     // The LIVE delegate from here on: teardown must reach this one, never the
     // corpse the configuration scope is about to retire.
