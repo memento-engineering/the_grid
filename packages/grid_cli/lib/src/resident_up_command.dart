@@ -32,8 +32,8 @@ import 'station_lock.dart';
 /// Builds the station-authored delegate from parsed boot configuration ALONE
 /// (tg-1fa2.4): no wiring, no provisioner, no effect implementations —
 /// assembly is `GridDelegate.boot`-owned. The dry-run posture TODAY is
-/// boot-selected OFF-tree: boot hands the config's `dryRun` to
-/// `assembleStationWork`, which picks inert implementations by type (no-op bd
+/// boot-selected OFF-tree: boot hands the config's `dryRun` to grid_sdk's
+/// station-work assembly, which picks inert implementations by type (no-op bd
 /// runner, dry provider, dry git). Declaring it in the delegate's TREE (no
 /// effect providers mounted, visible to the projection) is the TARGET state,
 /// owned by the reference-boot follow-up bead — either way, no nulls thread
@@ -243,11 +243,13 @@ class ResidentUpCommand extends Command<int> {
       }
     }
 
-    // Config-only construction; a fresh call (below, hot-restart only) re-arms
-    // a fresh delegate from the same inputs. An ASSEMBLY verb, not `build*`:
-    // this closure re-reads the coded roster and resolves the armed one —
-    // filesystem probes, skip renders, possible refusals — which STYLE.md
-    // rule 1 keeps out of any `build*` name.
+    // Config-only construction — THE one delegate-assembly path, shared by
+    // launch (below) and every hot restart: each call arms a fresh delegate
+    // from the same inputs, resolving the roster from the canonicalized
+    // `config.gridHome`. An ASSEMBLY verb, not `build*`: this closure
+    // re-reads the coded roster and resolves the armed one — filesystem
+    // probes, skip renders, possible refusals — which STYLE.md rule 1 keeps
+    // out of any `build*` name.
     ResidentGridDelegate assembleFreshDelegate() {
       final delegate = _delegateFactory(config: config);
       try {
@@ -257,10 +259,12 @@ class ResidentUpCommand extends Command<int> {
           onSkip: (message) => stdout.writeln('$prefix: $message'),
         );
       } on Object {
-        // A restart-time refusal (the re-probe found no armed seat, or an
-        // appended seat's store vanished) must leave nothing to unwind: the
-        // runner never adopted this delegate, so dispose the fresh corpse
-        // here and let the refusal reach the restart caller loudly.
+        // ANY resolution failure — a styled StationRefusal (no armed seat, a
+        // vanished appended store) or an unexpected throw — must leave
+        // nothing to unwind: no runner has adopted this delegate, so dispose
+        // the fresh corpse here and let the error reach the caller loudly
+        // (the launch call site maps it to an exit code; a restart caller
+        // sees it raw).
         delegate.dispose();
         rethrow;
       }
@@ -269,26 +273,23 @@ class ResidentUpCommand extends Command<int> {
 
     // The ARMING POLICY is the delegate's (skip-coded vs refuse-appended,
     // tg-1fa2.4); the shell renders its decisions and maps refusals to exit
-    // codes — the operator-visible surface is unchanged.
+    // codes — the operator-visible surface is unchanged. Launch rides the
+    // SAME assembly closure as a hot restart (one roster-resolution path, off
+    // the canonicalized `config.gridHome`); on any failure the closure has
+    // already disposed the fresh delegate, so this site only renders: a
+    // styled refusal keeps its own exit code, anything else is the factory's
+    // (or the roster probe's) construction failure — exit 64, as before.
     final ResidentGridDelegate delegate;
     try {
-      delegate = _delegateFactory(config: config);
+      delegate = assembleFreshDelegate();
+    } on StationRefusal catch (refusal) {
+      stderr.writeln('$prefix: $refusal');
+      return refusal.code;
     } on Object catch (error) {
       stderr.writeln('$prefix: $error');
       return 64;
     }
-    final List<SubstationWorkSpec> armed;
-    try {
-      armed = delegate.resolveArmedRoster(
-        coded: roster,
-        appended: config.appended,
-        onSkip: (message) => stdout.writeln('$prefix: $message'),
-      );
-    } on StationRefusal catch (refusal) {
-      delegate.dispose();
-      stderr.writeln('$prefix: $refusal');
-      return refusal.code;
-    }
+    final armed = delegate.armedRoster;
 
     // The shell OBSERVES checkout freshness (a process-level git probe); the
     // POSTURE over the observations is the delegate's.
