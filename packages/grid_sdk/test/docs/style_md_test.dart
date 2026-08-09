@@ -18,9 +18,7 @@ void main() {
 
     expect(
       style,
-      contains(
-        'The async `buildStationWork` name is pending `tg-1fa2.3`',
-      ),
+      contains('The async `buildStationWork` name is pending `tg-1fa2.3`'),
     );
     expect(
       style,
@@ -29,11 +27,6 @@ void main() {
         'lifecycle rails; it does not yet have `GridDelegate.boot`.',
       ),
     );
-    expect(
-      style,
-      contains(
-        "ADR-0000 A45's pinned ordering requires it",
-      ),
-    );
+    expect(style, contains("ADR-0000 A45's pinned ordering requires it"));
   });
 }
