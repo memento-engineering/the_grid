@@ -137,13 +137,48 @@ final class _ProviderEntry {
 }
 
 final class _ProviderValues {
-  const _ProviderValues(this.entries, this.parent);
+  factory _ProviderValues(
+    Map<Type, _ProviderEntry> entries,
+    _ProviderValues? parent,
+  ) => _ProviderValues._(
+    Map<Type, Object>.unmodifiable({
+      for (final entry in entries.entries) entry.key: entry.value.value,
+    }),
+    parent,
+  );
 
-  final Map<Type, _ProviderEntry> entries;
+  const _ProviderValues._(this.entries, this.parent);
+
+  final Map<Type, Object> entries;
   final _ProviderValues? parent;
 
   T? find<T extends Object>() {
     final local = entries[T];
-    return local == null ? parent?.find<T>() : local.value as T;
+    return local == null ? parent?.find<T>() : local as T;
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! _ProviderValues ||
+        parent != other.parent ||
+        entries.length != other.entries.length) {
+      return false;
+    }
+    return entries.entries.every(
+      (entry) =>
+          other.entries.containsKey(entry.key) &&
+          other.entries[entry.key] == entry.value,
+    );
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    parent,
+    entries.length,
+    entries.entries.fold<int>(
+      0,
+      (hash, entry) => hash ^ Object.hash(entry.key, entry.value),
+    ),
+  );
 }

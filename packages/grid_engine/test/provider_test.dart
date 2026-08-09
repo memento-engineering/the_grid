@@ -6,6 +6,12 @@ import 'package:grid_engine/src/seeds/provider.dart';
 final class _Value {
   const _Value(this.name);
   final String name;
+
+  @override
+  bool operator ==(Object other) => other is _Value && other.name == name;
+
+  @override
+  int get hashCode => name.hashCode;
 }
 
 final class _Other {
@@ -47,7 +53,86 @@ final class _LeafBranch extends Branch {
   _LeafBranch(_Leaf super.seed);
 }
 
+final class _DependencyProbe extends StatefulSeed {
+  const _DependencyProbe(this.values, this.dependencyChanges);
+
+  final List<String?> values;
+  final List<int> dependencyChanges;
+
+  @override
+  State<_DependencyProbe> createState() => _DependencyProbeState();
+}
+
+final class _DependencyProbeState extends State<_DependencyProbe> {
+  @override
+  void didChangeDependencies() {
+    seed.dependencyChanges.add(seed.dependencyChanges.length + 1);
+  }
+
+  @override
+  Seed build(TreeContext context) {
+    seed.values.add(context.watch<_Value>()?.name);
+    return const _Leaf();
+  }
+}
+
+final class _ScopeRebuilder extends StatefulSeed {
+  const _ScopeRebuilder({required this.onCreate, required this.child});
+
+  final void Function(_ScopeRebuilderState state) onCreate;
+  final Seed child;
+
+  @override
+  State<_ScopeRebuilder> createState() {
+    final state = _ScopeRebuilderState();
+    onCreate(state);
+    return state;
+  }
+}
+
+final class _ScopeRebuilderState extends State<_ScopeRebuilder> {
+  _Value _value = const _Value('one');
+
+  void update(_Value value) => setState(() => _value = value);
+
+  @override
+  Seed build(TreeContext context) => ProviderScope(
+    key: const ValueKey('stable-provider-scope'),
+    providers: <Provider<Object>>[Provider<_Value>.value(_value)],
+    child: seed.child,
+  );
+}
+
 void main() {
+  group('notification stability', () {
+    test('equal leaf rebuild is silent and changed leaf notifies once', () {
+      final values = <String?>[];
+      final dependencyChanges = <int>[];
+      late _ScopeRebuilderState rebuilder;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        _ScopeRebuilder(
+          onCreate: (state) => rebuilder = state,
+          child: _DependencyProbe(values, dependencyChanges),
+        ),
+      );
+
+      expect(values, ['one']);
+      expect(dependencyChanges, [1]);
+
+      rebuilder.update(_Value('one'));
+      owner.flush();
+      expect(dependencyChanges, [1]);
+
+      rebuilder.update(const _Value('two'));
+      owner.flush();
+      expect(dependencyChanges, [1, 2]);
+      expect(values.last, 'two');
+    });
+  });
+
   group('ownership', () {
     test('creates once and disposes owned values in reverse order', () {
       final events = <String>[];
