@@ -13,6 +13,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 // --- the Burn circuits (§9) --------------------------------------------------
 
@@ -102,22 +103,24 @@ class _Burn {
     _cursor.addAll(cursor);
     _push(cursor: _cursor, terminal: terminal);
     root = owner.mountRoot(
-      InheritedSeed<JoinedSnapshotNotifier>(
-        value: joined,
-        child: InheritedSeed<StationServices>(
-          value: fakes.ctx,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: reg,
-            // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
-            // D5). With none set the scope provides the empty default.
-            child: InheritedSeed<SessionResolver>(
-              value: CircuitResolver((_) => _burn),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(_tgConfig),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+      ProviderScope(
+        child: InheritedSeed<JoinedSnapshotNotifier>(
+          value: joined,
+          child: InheritedSeed<StationServices>(
+            value: fakes.ctx,
+            child: InheritedSeed<CapabilityRegistry>(
+              value: reg,
+              // No ServiceBundle here: it is provided per-SubstationScope (ADR-0008
+              // D5). With none set the scope provides the empty default.
+              child: InheritedSeed<SessionResolver>(
+                value: CircuitResolver((_) => _burn),
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(_tgConfig),
+                    key: const ValueKey('scope.tg'),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),

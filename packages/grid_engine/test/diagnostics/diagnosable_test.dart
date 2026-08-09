@@ -9,6 +9,7 @@ import 'package:grid_engine/src/molecule/bead_path_key.dart';
 import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 enum _Mode { active }
 
@@ -431,19 +432,21 @@ void main() {
           key: const ValueKey('tg-1/agent#0.0'),
         );
         final root = owner.mountRoot(
-          InheritedSeed<StationServices>(
-            value: fakes.ctx,
-            child: InheritedSeed<CapabilityRegistry>(
-              value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-              child: InheritedSeed<InheritedCircuit>(
-                value: InheritedCircuit(
-                  root: BeadPathKey(const ['tg-1', 'tgdog-s', 'tgdog-step1']),
-                  beadIdByNodePath: const {'tg-1/agent': 'tgdog-step1'},
-                  cursor: const {},
-                ),
-                child: CapabilityHost(
-                  capability: _PendingServiceCapability(pending),
-                  mount: mount,
+          ProviderScope(
+            child: InheritedSeed<StationServices>(
+              value: fakes.ctx,
+              child: InheritedSeed<CapabilityRegistry>(
+                value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                child: InheritedSeed<InheritedCircuit>(
+                  value: InheritedCircuit(
+                    root: BeadPathKey(const ['tg-1', 'tgdog-s', 'tgdog-step1']),
+                    beadIdByNodePath: const {'tg-1/agent': 'tgdog-step1'},
+                    cursor: const {},
+                  ),
+                  child: CapabilityHost(
+                    capability: _PendingServiceCapability(pending),
+                    mount: mount,
+                  ),
                 ),
               ),
             ),

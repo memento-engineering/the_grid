@@ -6,6 +6,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 const _sessionId = 'tgdog-session';
 const _routePath = 'tg-rvt7/spec_review/route';
@@ -162,18 +163,20 @@ void main() {
 
     void mount(SessionProjection projection, String round) {
       owner.mountRoot(
-        InheritedSeed<StationServices>(
-          value: services,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: _RealCommitteeRegistry(
-              _CurrentRoundRoute(_verdicts(round), seenRounds),
-            ),
-            child: InheritedSeed<ServiceBundle>(
-              value: ServiceBundle(transport: transport),
-              child: SessionScope(
-                bead: bead('tg-rvt7'),
-                circuit: _root,
-                existingSession: projection,
+        ProviderScope(
+          child: InheritedSeed<StationServices>(
+            value: services,
+            child: InheritedSeed<CapabilityRegistry>(
+              value: _RealCommitteeRegistry(
+                _CurrentRoundRoute(_verdicts(round), seenRounds),
+              ),
+              child: InheritedSeed<ServiceBundle>(
+                value: ServiceBundle(transport: transport),
+                child: SessionScope(
+                  bead: bead('tg-rvt7'),
+                  circuit: _root,
+                  existingSession: projection,
+                ),
               ),
             ),
           ),
@@ -267,18 +270,20 @@ void main() {
 
     void mount(SessionProjection projection) {
       owner.mountRoot(
-        InheritedSeed<StationServices>(
-          value: services,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: _RealCommitteeRegistry(
-              _SiblingResultRoute(sourcePath, seenGrades),
-            ),
-            child: InheritedSeed<ServiceBundle>(
-              value: ServiceBundle(transport: transport),
-              child: SessionScope(
-                bead: bead('tg-rvt7'),
-                circuit: _root,
-                existingSession: projection,
+        ProviderScope(
+          child: InheritedSeed<StationServices>(
+            value: services,
+            child: InheritedSeed<CapabilityRegistry>(
+              value: _RealCommitteeRegistry(
+                _SiblingResultRoute(sourcePath, seenGrades),
+              ),
+              child: InheritedSeed<ServiceBundle>(
+                value: ServiceBundle(transport: transport),
+                child: SessionScope(
+                  bead: bead('tg-rvt7'),
+                  circuit: _root,
+                  existingSession: projection,
+                ),
               ),
             ),
           ),
@@ -434,11 +439,13 @@ void roundFreezeRegression() {
       onState: (state) => hostState = state,
     );
     owner.mountRoot(
-      InheritedSeed<StationServices>(
-        value: services,
-        child: InheritedSeed<ServiceBundle>(
-          value: ServiceBundle(transport: transport),
-          child: host,
+      ProviderScope(
+        child: InheritedSeed<StationServices>(
+          value: services,
+          child: InheritedSeed<ServiceBundle>(
+            value: ServiceBundle(transport: transport),
+            child: host,
+          ),
         ),
       ),
     );

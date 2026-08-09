@@ -6,6 +6,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 /// tg-nmhy — a partial-mint joined snapshot must NEVER crash the tree.
 ///
@@ -81,16 +82,18 @@ void main() {
 
     void mount(SessionProjection projection) {
       owner.mountRoot(
-        InheritedSeed<StationServices>(
-          value: services,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: registry,
-            child: InheritedSeed<ServiceBundle>(
-              value: ServiceBundle(transport: transport),
-              child: SessionScope(
-                bead: bead('tg-nmhy'),
-                circuit: root,
-                existingSession: projection,
+        ProviderScope(
+          child: InheritedSeed<StationServices>(
+            value: services,
+            child: InheritedSeed<CapabilityRegistry>(
+              value: registry,
+              child: InheritedSeed<ServiceBundle>(
+                value: ServiceBundle(transport: transport),
+                child: SessionScope(
+                  bead: bead('tg-nmhy'),
+                  circuit: root,
+                  existingSession: projection,
+                ),
               ),
             ),
           ),

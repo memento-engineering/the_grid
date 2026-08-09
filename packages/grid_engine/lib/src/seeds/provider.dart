@@ -172,6 +172,19 @@ extension ProviderTreeContext on TreeContext {
     // branch never notifies (its value is scope-lifetime stable), and the
     // dependency edge auto-releases when this branch unmounts.
     final registry = getInheritedSeedOfExactType<AvailabilityRegistry>();
+    // Debug guard, release behavior unchanged (return null): a scope-less
+    // miss is almost always a composition mistake — the registration cannot
+    // park anywhere, so the branch would never learn when a Provider<T>
+    // mounts. Production roots (StationKernel.start, runGrid) always mount
+    // the scope.
+    assert(
+      registry != null,
+      'watch<$T>() missed with no ProviderScope ancestor: there is no '
+      'availability registry to park the pending registration with, so this '
+      'branch can never be notified when a Provider<$T> mounts. Mount a '
+      'ProviderScope near the tree root (above every watching branch), or '
+      'use read<$T>() if a one-shot snapshot is all that is needed.',
+    );
     if (registry != null) {
       registry._registering = T;
       try {

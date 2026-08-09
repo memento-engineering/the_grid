@@ -10,6 +10,8 @@ import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
+import 'package:grid_engine/src/seeds/provider.dart';
+
 class _NoopPrOpener implements PrOpener {
   const _NoopPrOpener();
 
@@ -140,38 +142,40 @@ void main() {
       JoinedSnapshot(graph: graph, sessionsByWorkBead: {beadId: session}),
     );
     owner.mountRoot(
-      InheritedSeed<JoinedSnapshotNotifier>(
-        value: joined,
-        child: InheritedSeed<StationServices>(
-          value: fakes.ctx,
-          child: InheritedSeed<ServiceBundle>(
-            value: ServiceBundle(
-              sourceControl: _RepoSourceControl(worktree.path),
-              transport: transport,
-            ),
-            child: InheritedSeed<CapabilityRegistry>(
-              value: RecordingCapabilityRegistry(),
-              child: InheritedSeed<SessionResolver>(
-                value: CircuitResolver(
-                  (_) => _terminalCircuit,
-                  reapWorktree: git.reap,
-                  workRoot: rootCheckout,
-                ),
-                child: Station([
-                  SubstationScope(
-                    configNotifier: SubstationConfigNotifier(
-                      const SubstationConfig(
-                        substationId: 'tg',
-                        ownedSubstations: {'tg'},
-                      ),
-                    ),
-                    services: ServiceBundle(
-                      sourceControl: _RepoSourceControl(worktree.path),
-                      transport: transport,
-                    ),
-                    key: const ValueKey('scope.tg'),
+      ProviderScope(
+        child: InheritedSeed<JoinedSnapshotNotifier>(
+          value: joined,
+          child: InheritedSeed<StationServices>(
+            value: fakes.ctx,
+            child: InheritedSeed<ServiceBundle>(
+              value: ServiceBundle(
+                sourceControl: _RepoSourceControl(worktree.path),
+                transport: transport,
+              ),
+              child: InheritedSeed<CapabilityRegistry>(
+                value: RecordingCapabilityRegistry(),
+                child: InheritedSeed<SessionResolver>(
+                  value: CircuitResolver(
+                    (_) => _terminalCircuit,
+                    reapWorktree: git.reap,
+                    workRoot: rootCheckout,
                   ),
-                ]),
+                  child: Station([
+                    SubstationScope(
+                      configNotifier: SubstationConfigNotifier(
+                        const SubstationConfig(
+                          substationId: 'tg',
+                          ownedSubstations: {'tg'},
+                        ),
+                      ),
+                      services: ServiceBundle(
+                        sourceControl: _RepoSourceControl(worktree.path),
+                        transport: transport,
+                      ),
+                      key: const ValueKey('scope.tg'),
+                    ),
+                  ]),
+                ),
               ),
             ),
           ),

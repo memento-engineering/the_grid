@@ -12,6 +12,7 @@ import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 const _code = Circuit(
   id: 'code',
@@ -102,26 +103,28 @@ const _deadKey = SessionProjection(
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: registry,
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver((_) => _code),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(
-                  const SubstationConfig(
-                    substationId: 'tg',
-                    ownedSubstations: {'tg'},
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: registry,
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver((_) => _code),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(
+                    const SubstationConfig(
+                      substationId: 'tg',
+                      ownedSubstations: {'tg'},
+                    ),
                   ),
+                  services: ServiceBundle(transport: transport),
+                  key: const ValueKey('scope.tg'),
                 ),
-                services: ServiceBundle(transport: transport),
-                key: const ValueKey('scope.tg'),
-              ),
-            ]),
+              ]),
+            ),
           ),
         ),
       ),

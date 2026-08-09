@@ -14,6 +14,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 // ---------------------------------------------------------------------------
 // Fakes: an SessionResolver that mounts a recording subtree-root per work bead.
@@ -155,10 +156,12 @@ void main() {
       addTearDown(owner.dispose);
 
       owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ),
         ),
       );
 
@@ -181,10 +184,12 @@ void main() {
         final owner = TreeOwner();
         addTearDown(owner.dispose);
         final root = owner.mountRoot(
-          _root(
-            joined: joined,
-            resolver: _FakeSessionResolver(recorder),
-            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              substationConfig: SubstationConfigNotifier(_tgConfig()),
+            ),
           ),
         );
 
@@ -256,10 +261,12 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: substationConfig,
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: substationConfig,
+          ),
         ),
       );
       expect(recorder.events, ['START work(tg-1)']);
@@ -296,10 +303,12 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ),
         ),
       );
       expect(recorder.events, ['START work(tg-1)']);
@@ -366,10 +375,12 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ),
         ),
       );
       expect(recorder.events, ['START work(tg-1)']);
@@ -430,10 +441,12 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ),
         ),
       );
 
@@ -460,10 +473,12 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ),
         ),
       );
 
@@ -505,11 +520,13 @@ void main() {
         final owner = TreeOwner();
         addTearDown(owner.dispose);
         final root = owner.mountRoot(
-          _root(
-            joined: joined,
-            resolver: _FakeSessionResolver(recorder),
-            substationConfig: SubstationConfigNotifier(
-              _tgConfig().copyWith(resident: true),
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              substationConfig: SubstationConfigNotifier(
+                _tgConfig().copyWith(resident: true),
+              ),
             ),
           ),
         );
@@ -554,10 +571,12 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ),
         ),
       );
 
@@ -578,10 +597,12 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(_tgConfig()),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(_tgConfig()),
+          ),
         ),
       );
 
@@ -601,11 +622,13 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            _tgConfig().copyWith(driveList: const {'tg-2'}),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              _tgConfig().copyWith(driveList: const {'tg-2'}),
+            ),
           ),
         ),
       );
@@ -636,13 +659,17 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        _root(
-          joined: joined,
-          resolver: _FakeSessionResolver(recorder),
-          substationConfig: SubstationConfigNotifier(
-            // ALL three blessed — the drive-list cannot resurrect a bead the
-            // ownership / type gates reject.
-            _tgConfig().copyWith(driveList: const {'tg-1', 'gc-9', 'tg-conv'}),
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              // ALL three blessed — the drive-list cannot resurrect a bead the
+              // ownership / type gates reject.
+              _tgConfig().copyWith(
+                driveList: const {'tg-1', 'gc-9', 'tg-conv'},
+              ),
+            ),
           ),
         ),
       );

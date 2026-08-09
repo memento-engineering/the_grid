@@ -11,6 +11,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 const _code = Circuit(
   id: 'code',
@@ -164,25 +165,27 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: registry,
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver(rootCircuit),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(
-                  const SubstationConfig(
-                    substationId: 'tg',
-                    ownedSubstations: {'tg'},
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: registry,
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver(rootCircuit),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(
+                    const SubstationConfig(
+                      substationId: 'tg',
+                      ownedSubstations: {'tg'},
+                    ),
                   ),
+                  key: const ValueKey('scope.tg'),
                 ),
-                key: const ValueKey('scope.tg'),
-              ),
-            ]),
+              ]),
+            ),
           ),
         ),
       ),

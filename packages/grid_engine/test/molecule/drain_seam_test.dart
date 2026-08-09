@@ -17,6 +17,7 @@ import 'package:grid_engine/src/molecule/molecule_schema.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 /// The `code` circuit `track_c_session_scope_test.dart` also drives
 /// (`agent → verify → land`) — reused so the flat-mode assertions here read
@@ -148,22 +149,24 @@ Bead _stepBead(
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: registry,
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver(rootCircuit),
-            child: InheritedSeed<ProcessLeaseVendor>(
-              value: defaultProcessLeaseVendor(ctx),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(config),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: registry,
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver(rootCircuit),
+              child: InheritedSeed<ProcessLeaseVendor>(
+                value: defaultProcessLeaseVendor(ctx),
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(config),
+                    key: const ValueKey('scope.tg'),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),

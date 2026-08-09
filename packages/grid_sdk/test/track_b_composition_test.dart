@@ -82,7 +82,7 @@ class ComposedSubstation extends StatelessSeed {
 
 void mount(Seed root) {
   final owner = TreeOwner();
-  owner.mountRoot(root);
+  owner.mountRoot(ProviderScope(child: root));
   owner.flush();
 }
 

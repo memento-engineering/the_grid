@@ -15,6 +15,7 @@ import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 /// The step bead id [InheritedCircuit.beadIdByNodePath] resolves `tg-1/route`
 /// to across the host-level tests in this file (every persist now targets the
@@ -102,27 +103,29 @@ void main() {
           unawaited(fakes.provider.close());
         });
         owner.mountRoot(
-          InheritedSeed<StationServices>(
-            value: fakes.ctx,
-            child: InheritedSeed<CapabilityRegistry>(
-              value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-              child: InheritedSeed<ServiceBundle>(
-                value: const ServiceBundle(),
-                child: InheritedSeed<InheritedCircuit>(
-                  value: _moleculeCircuit(),
-                  child: CapabilityHost(
-                    capability: const FixedRouteCapability(Escalate('x')),
-                    mount: const StepMount(
-                      step: CapabilityStep(
-                        stepId: 'route',
-                        capabilityId: 'route',
+          ProviderScope(
+            child: InheritedSeed<StationServices>(
+              value: fakes.ctx,
+              child: InheritedSeed<CapabilityRegistry>(
+                value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                child: InheritedSeed<ServiceBundle>(
+                  value: const ServiceBundle(),
+                  child: InheritedSeed<InheritedCircuit>(
+                    value: _moleculeCircuit(),
+                    child: CapabilityHost(
+                      capability: const FixedRouteCapability(Escalate('x')),
+                      mount: const StepMount(
+                        step: CapabilityStep(
+                          stepId: 'route',
+                          capabilityId: 'route',
+                        ),
+                        nodePath: 'tg-1/route',
+                        circuit: _gateCircuit,
+                        circuitPath: 'tg-1',
+                        session: SessionHandle('tgdog-s'),
+                        node: NodeCursor(),
+                        key: ValueKey('tg-1/route#0.0'),
                       ),
-                      nodePath: 'tg-1/route',
-                      circuit: _gateCircuit,
-                      circuitPath: 'tg-1',
-                      session: SessionHandle('tgdog-s'),
-                      node: NodeCursor(),
-                      key: ValueKey('tg-1/route#0.0'),
                     ),
                   ),
                 ),
@@ -273,19 +276,21 @@ void main() {
             unawaited(closed.provider.close());
           });
           closedOwner.mountRoot(
-            InheritedSeed<JoinedSnapshot>(
-              value: JoinedSnapshot(
-                graph: _graph([_bead]),
-                sessionsByWorkBead: {'tg-1': closedSession},
-              ),
-              child: InheritedSeed<StationServices>(
-                value: closed.ctx,
-                child: InheritedSeed<CapabilityRegistry>(
-                  value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-                  child: SessionScope(
-                    bead: _bead,
-                    circuit: _gateCircuit,
-                    existingSession: closedSession,
+            ProviderScope(
+              child: InheritedSeed<JoinedSnapshot>(
+                value: JoinedSnapshot(
+                  graph: _graph([_bead]),
+                  sessionsByWorkBead: {'tg-1': closedSession},
+                ),
+                child: InheritedSeed<StationServices>(
+                  value: closed.ctx,
+                  child: InheritedSeed<CapabilityRegistry>(
+                    value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                    child: SessionScope(
+                      bead: _bead,
+                      circuit: _gateCircuit,
+                      existingSession: closedSession,
+                    ),
                   ),
                 ),
               ),
@@ -321,19 +326,21 @@ void main() {
             unawaited(open.provider.close());
           });
           openOwner.mountRoot(
-            InheritedSeed<JoinedSnapshot>(
-              value: JoinedSnapshot(
-                graph: _graph([_bead]),
-                sessionsByWorkBead: {'tg-1': openSession},
-              ),
-              child: InheritedSeed<StationServices>(
-                value: open.ctx,
-                child: InheritedSeed<CapabilityRegistry>(
-                  value: RecordingCapabilityRegistry(clock: DateTime(2026)),
-                  child: SessionScope(
-                    bead: _bead,
-                    circuit: _gateCircuit,
-                    existingSession: openSession,
+            ProviderScope(
+              child: InheritedSeed<JoinedSnapshot>(
+                value: JoinedSnapshot(
+                  graph: _graph([_bead]),
+                  sessionsByWorkBead: {'tg-1': openSession},
+                ),
+                child: InheritedSeed<StationServices>(
+                  value: open.ctx,
+                  child: InheritedSeed<CapabilityRegistry>(
+                    value: RecordingCapabilityRegistry(clock: DateTime(2026)),
+                    child: SessionScope(
+                      bead: _bead,
+                      circuit: _gateCircuit,
+                      existingSession: openSession,
+                    ),
                   ),
                 ),
               ),

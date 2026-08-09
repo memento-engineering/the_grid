@@ -11,6 +11,7 @@ import 'package:grid_engine/src/molecule/inherited_circuit.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 // --- the canonical circuits (local copies; Track H ships the real ones) ------
 
@@ -164,11 +165,13 @@ _mount(_CursorHost host, {Map<String, Circuit> circuits = const {}}) {
   final reg = RecordingCapabilityRegistry(circuits: circuits);
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<CapabilityRegistry>(
-      value: reg,
-      child: InheritedSeed<SessionHandle>(
-        value: const SessionHandle('sess'),
-        child: host,
+    ProviderScope(
+      child: InheritedSeed<CapabilityRegistry>(
+        value: reg,
+        child: InheritedSeed<SessionHandle>(
+          value: const SessionHandle('sess'),
+          child: host,
+        ),
       ),
     ),
   );
@@ -494,11 +497,13 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        InheritedSeed<CapabilityRegistry>(
-          value: reg,
-          child: const InheritedSeed<SessionHandle>(
-            value: SessionHandle('sess'),
-            child: _BareCircuitHost(),
+        ProviderScope(
+          child: InheritedSeed<CapabilityRegistry>(
+            value: reg,
+            child: const InheritedSeed<SessionHandle>(
+              value: SessionHandle('sess'),
+              child: _BareCircuitHost(),
+            ),
           ),
         ),
       );

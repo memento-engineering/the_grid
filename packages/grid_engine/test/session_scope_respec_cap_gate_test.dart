@@ -9,6 +9,7 @@ import 'package:grid_engine/src/molecule/molecule_codec.dart'
 import 'package:grid_engine/src/molecule/molecule_schema.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 
 const rootCircuit = Circuit(
   id: 'root',
@@ -177,18 +178,20 @@ JoinedSnapshotNotifier _joined(SessionProjection projection) =>
     circuits: const {'spec_review': specReviewCircuit},
   );
   owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: fakes.ctx,
-        child: InheritedSeed<ServiceBundle>(
-          value: services,
-          child: InheritedSeed<CapabilityRegistry>(
-            value: registry,
-            child: SessionScope(
-              bead: bead('tg-lt2a'),
-              circuit: rootCircuit,
-              existingSession: projection,
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: fakes.ctx,
+          child: InheritedSeed<ServiceBundle>(
+            value: services,
+            child: InheritedSeed<CapabilityRegistry>(
+              value: registry,
+              child: SessionScope(
+                bead: bead('tg-lt2a'),
+                circuit: rootCircuit,
+                existingSession: projection,
+              ),
             ),
           ),
         ),
