@@ -6,7 +6,7 @@ These rules are the house style for station and asset authors. They give the exi
 
 A `build*` method returns structure synchronously, with Flutter `WidgetBuilder` semantics. It does not `await`, perform I/O, allocate off-tree runtime machinery, or make lifecycle effects happen. Observe outside `build`; project the observed value inside `build`.
 
-Async assembly must use an assembly verb instead of `build`. The async `buildStationWork` name is pending `tg-1fa2.3`, which owns the choice to rename it `assembleStationWork` or fold it into delegate assembly; do not change that symbol under this rule's rename sweep. `GridDelegate.boot` is also a not-yet-landed name whose disposition belongs to `tg-1fa2.3`.
+Async assembly must use an assembly verb instead of `build`. The house examples are landed now: `assembleStationWork` (the `tg-1fa2.3` disposition of the old `buildStationWork` name) and the awaited pre-tree `GridDelegate.boot` rail (tg-1fa2.4).
 
 When sweeping a `build*` name, keep synchronous describers unchanged. Rename only async assembly disguised as description. The current-tree sweep found no uncontested rename: `buildDelegate` synchronously returns a `GridDelegate`, while no `buildRunner` or `buildWorkRegistry` symbol exists.
 
@@ -28,6 +28,6 @@ A station is not only a code writer, and git is not the only source-control syst
 
 ## 5. Boot is an assembly ratchet
 
-The live `GridDelegate` API has `didLaunch` and `initGrid` lifecycle rails; it does not yet have `GridDelegate.boot`. Any introduction or fold into a `boot` surface belongs to `tg-1fa2.3`. Assembly on the current rails constructs resources and connects them. Policy belongs in `build`, where the tree projection can observe it. Decisions such as which seats arm, which posture to choose, or whether a refusal skips work are tree policy and must not migrate into lifecycle assembly.
+The live `GridDelegate` API has `didLaunch`, the awaited pre-tree `boot` (tg-1fa2.4), and `initGrid` lifecycle rails — and it is ONE class: `tg-at3r` folded grid_cli's old resident delegate contract (`ResidentGridDelegate`) into grid_sdk's `GridDelegate`, retiring the two-layer delegate split (a station "running resident" is a state, never a type name). Assembly on the rails constructs resources and connects them. Policy belongs in `build`, where the tree projection can observe it. Decisions such as which seats arm, which posture to choose, or whether a refusal skips work are tree policy and must not migrate into lifecycle assembly. The standing exceptions — `GridDelegate.armRoster` and `GridDelegate.stalenessPosture`, whose outcomes are exit codes and the lock decision — are acknowledged ratchet DEBT under this rule (see the `GridDelegate` class doc), not license for new pre-tree policy.
 
 A line belongs on a delegate lifecycle rail only when ADR-0000 A45's pinned ordering requires it: `didLaunch` is synchronous and pre-tree, while `initGrid` is the post-mount asynchronous kickoff. This is a ratchet: new policy does not enter lifecycle assembly, and assembly moves into the tree as lifecycle-capable providers become available.

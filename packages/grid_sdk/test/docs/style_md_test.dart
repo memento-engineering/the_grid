@@ -18,15 +18,18 @@ void main() {
 
     expect(
       style,
-      contains('The async `buildStationWork` name is pending `tg-1fa2.3`'),
+      contains('the awaited pre-tree `GridDelegate.boot` rail (tg-1fa2.4)'),
     );
     expect(
       style,
       contains(
-        'The live `GridDelegate` API has `didLaunch` and `initGrid` '
-        'lifecycle rails; it does not yet have `GridDelegate.boot`.',
+        'The live `GridDelegate` API has `didLaunch`, the awaited pre-tree '
+        '`boot` (tg-1fa2.4), and `initGrid` lifecycle rails',
       ),
     );
+    // tg-at3r: ONE delegate class — the two-layer split is retired, and
+    // "running resident" survives only as a STATE description.
+    expect(style, contains('retiring the two-layer delegate split'));
     expect(style, contains("ADR-0000 A45's pinned ordering requires it"));
   });
 }
