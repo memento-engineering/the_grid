@@ -34,6 +34,9 @@ final class Provider<T extends Object> {
     return _ProviderEntry(value, dispose == null ? null : () => dispose(value));
   }
 
+  Seed _inherit(_ProviderEntry entry, Seed child) =>
+      InheritedSeed<T>(value: entry.value as T, child: child);
+
   bool get _isAdopted => _create == null;
 }
 
@@ -50,14 +53,7 @@ final class ProviderScope extends SingleChildStatefulSeed {
 
 /// Adds nullable, dependency-registering provider lookup to [TreeContext].
 extension ProviderTreeContext on TreeContext {
-  T? watch<T extends Object>() {
-    final values = dependOnInheritedSeedOfExactType<_ProviderValues>();
-    final provided = values?.find<T>();
-    if (provided != null) return provided;
-    // Compatibility for engine-private tests and staged migrations that still
-    // mount a raw genesis inherited value above no ProviderScope at all.
-    return dependOnInheritedSeedOfExactType<T>();
-  }
+  T? watch<T extends Object>() => dependOnInheritedSeedOfExactType<T>();
 }
 
 final class _ProviderScopeState
@@ -99,15 +95,16 @@ final class _ProviderScopeState
 
   Seed _build(TreeContext context, Seed child) {
     for (final descriptor in _scope.providers) {
+      _entries[descriptor._type] ??= descriptor._initialize();
       if (descriptor._isAdopted) {
-        _entries[descriptor._type]?.value = descriptor._value as Object;
+        _entries[descriptor._type]!.value = descriptor._value as Object;
       }
     }
-    final parent = context.dependOnInheritedSeedOfExactType<_ProviderValues>();
-    return InheritedSeed<_ProviderValues>(
-      value: _ProviderValues(_entries, parent),
-      child: child,
-    );
+    var inherited = child;
+    for (final descriptor in _scope.providers.reversed) {
+      inherited = descriptor._inherit(_entries[descriptor._type]!, inherited);
+    }
+    return inherited;
   }
 
   @override
@@ -134,51 +131,4 @@ final class _ProviderEntry {
 
   Object value;
   final void Function()? dispose;
-}
-
-final class _ProviderValues {
-  factory _ProviderValues(
-    Map<Type, _ProviderEntry> entries,
-    _ProviderValues? parent,
-  ) => _ProviderValues._(
-    Map<Type, Object>.unmodifiable({
-      for (final entry in entries.entries) entry.key: entry.value.value,
-    }),
-    parent,
-  );
-
-  const _ProviderValues._(this.entries, this.parent);
-
-  final Map<Type, Object> entries;
-  final _ProviderValues? parent;
-
-  T? find<T extends Object>() {
-    final local = entries[T];
-    return local == null ? parent?.find<T>() : local as T;
-  }
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    if (other is! _ProviderValues ||
-        parent != other.parent ||
-        entries.length != other.entries.length) {
-      return false;
-    }
-    return entries.entries.every(
-      (entry) =>
-          other.entries.containsKey(entry.key) &&
-          other.entries[entry.key] == entry.value,
-    );
-  }
-
-  @override
-  int get hashCode => Object.hash(
-    parent,
-    entries.length,
-    entries.entries.fold<int>(
-      0,
-      (hash, entry) => hash ^ Object.hash(entry.key, entry.value),
-    ),
-  );
 }
