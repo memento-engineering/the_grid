@@ -32,6 +32,39 @@ final class _Boom implements Exception {
   const _Boom();
 }
 
+/// An ADOPTED instance carrying a dispose spy: it exposes the canonical
+/// `dispose()` protocol a wrong tree implementation would reach for (an
+/// auto-dispose of disposable-looking adopted values, or a disposal wrongly
+/// armed for a `.value` provider), and records into the shared events list so
+/// an erroneous call also corrupts the events-order assertion. The
+/// falsifiable channel for "adopted values are never disposed".
+final class _DisposeSpy {
+  _DisposeSpy(this.events);
+
+  final List<String> events;
+  bool disposed = false;
+
+  void dispose() {
+    disposed = true;
+    events.add('dispose adopted');
+  }
+}
+
+/// Watches the owned `_Value` and the adopted `_DisposeSpy` — the dependent
+/// that keeps both providers' branches genuinely load-bearing while mounted.
+final class _SpyWatch extends StatelessSeed {
+  const _SpyWatch(this.values);
+  final List<Object?> values;
+
+  @override
+  Seed build(TreeContext context) {
+    values
+      ..add(context.watch<_Value>()?.name)
+      ..add(context.watch<_DisposeSpy>() != null);
+    return const _Leaf();
+  }
+}
+
 /// Drains the event queue (and with it the microtask queue): the availability
 /// registry delivers its notifications from a microtask scheduled during the
 /// announcing flush, so tests pump, then flush again to observe the rebuild.
@@ -376,6 +409,10 @@ void main() {
     test('created values are disposed at unmount, adopted values never', () {
       final events = <String>[];
       final values = <Object?>[];
+      // The adopted instance is TEST-held and carries a dispose spy: a tree
+      // that wrongly disposed an adopted value WOULD record — the assertion
+      // after unmount is falsifiable, not vacuous.
+      final spy = _DisposeSpy(events);
       final owner = TreeOwner();
 
       owner.mountRoot(
@@ -388,17 +425,26 @@ void main() {
               },
               dispose: (value) => events.add('dispose ${value.name}'),
             ),
-            // Adopted: owner-held; the tree has no disposal hook for it at all.
-            Provider<_Other>.value(const _Other('adopted')),
+            // Adopted: owner-held; ownership follows construction, so the
+            // tree must leave the spy's dispose() untouched at unmount.
+            Provider<_DisposeSpy>.value(spy),
           ],
-          child: _WatchBoth(values),
+          child: _SpyWatch(values),
         ),
       );
-      expect(values, ['owned', 'adopted']);
+      expect(values, ['owned', true]);
       expect(events, ['create']);
 
       owner.dispose();
+      // Ordering channel: a wrong adopted-dispose would also inject
+      // 'dispose adopted' here and break the exact-events assertion.
       expect(events, ['create', 'dispose owned']);
+      expect(
+        spy.disposed,
+        isFalse,
+        reason: 'an adopted value is held by its owner; the tree never '
+            'disposes what it did not create',
+      );
     });
 
     test('owned values dispose AFTER the subtree, inner before outer', () {
