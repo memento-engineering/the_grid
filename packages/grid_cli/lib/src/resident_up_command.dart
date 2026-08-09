@@ -494,8 +494,9 @@ class ResidentUpCommand extends Command<int> {
     // Each step is settled independently: a throwing dispose is loud but
     // never strands the steps beneath it — the lock release always runs last.
     Future<void> unwind() async {
-      if (devMode case final seat?)
+      if (devMode case final seat?) {
         await settle('dev-mode dispose', seat.dispose);
+      }
       await settle('control dispose', control.dispose);
       await settle('grid teardown', grid.teardown);
       await settle('projector dispose', treeProjector.dispose);
