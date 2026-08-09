@@ -130,6 +130,26 @@ class _DisposeProbeState extends State<DisposeProbe> {
   void dispose() => seed.onDispose();
 }
 
+/// Dirties itself the moment it mounts — arming the handle's coalesced flush
+/// microtask during the first build, before the mount rail completes.
+class DirtyOnMountProbe extends StatefulSeed {
+  const DirtyOnMountProbe({super.key});
+
+  @override
+  State<DirtyOnMountProbe> createState() => _DirtyOnMountProbeState();
+}
+
+class _DirtyOnMountProbeState extends State<DirtyOnMountProbe> {
+  @override
+  void initState() {
+    super.initState();
+    setState(() {});
+  }
+
+  @override
+  Seed build(TreeContext context) => const Leaf();
+}
+
 /// A configurable delegate that records every rail invocation and lets a test
 /// inject failures / async control into any rail.
 class RecordingDelegate extends GridDelegate {
@@ -644,6 +664,34 @@ void main() {
       expect(delegate.observed, isFalse);
       expect(delegate.mounted, isTrue, reason: 'the caller owns the delegate');
       delegate.dispose();
+    });
+
+    test('a flush scheduled during mount dies with the rail: the pending '
+        'microtask early-outs instead of crashing the unwind', () async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        final delegate = RecordingDelegate(
+          assetsBuilder: () => [const DirtyOnMountProbe()],
+        );
+        await expectLater(
+          runGrid(delegate, onFlushed: () => throw StateError('boom at flush')),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'boom at flush',
+            ),
+          ),
+        );
+        delegate.dispose();
+        // Drain the coalesced flush microtask the mount-time dirtying
+        // armed. The catch marked the handle torn down, so it must take
+        // its early-out — not flush the disposed owner, re-run the
+        // throwing onFlushed, and surface a spurious uncaught zone error
+        // mid-unwind.
+        await pump();
+      }, (error, stack) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
     });
   });
 

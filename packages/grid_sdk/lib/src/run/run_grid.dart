@@ -137,6 +137,12 @@ Future<GridHandle> runGrid(
     // mid-mount throw leaves the partially mounted branches unreachable —
     // `owner.dispose()` then unmounts nothing. That is an upstream seam (a
     // bead will track it); do not fork or patch genesis_tree here.
+    // The handle dies with the rail: a branch dirtied during mount has already
+    // scheduled the coalesced flush microtask, and TreeOwner.dispose does not
+    // clear onNeedsFlush — marking the handle torn down makes that pending
+    // microtask take its early-out instead of flushing a disposed owner and
+    // reading the never-assigned root mid-unwind.
+    handle._tornDown = true;
     owner.dispose();
     reassemble.dispose();
     rethrow;
