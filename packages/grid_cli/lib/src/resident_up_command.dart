@@ -440,7 +440,8 @@ class ResidentUpCommand extends Command<int> {
         // Per-request reads come off the LIVE delegate — roster included: a
         // hot restart re-resolves the armed roster, and a closure capturing
         // the launch-time list would render retired seats forever.
-        view: () => _status(config, live.armedRoster, startedAt, live.stationView),
+        view: () =>
+            _status(config, live.armedRoster, startedAt, live.stationView),
         commandHandler: _LiveDelegateCommandHandler(() => live),
         treeProjector: treeProjector,
       );
@@ -493,7 +494,8 @@ class ResidentUpCommand extends Command<int> {
     // Each step is settled independently: a throwing dispose is loud but
     // never strands the steps beneath it — the lock release always runs last.
     Future<void> unwind() async {
-      if (devMode case final seat?) await settle('dev-mode dispose', seat.dispose);
+      if (devMode case final seat?)
+        await settle('dev-mode dispose', seat.dispose);
       await settle('control dispose', control.dispose);
       await settle('grid teardown', grid.teardown);
       await settle('projector dispose', treeProjector.dispose);

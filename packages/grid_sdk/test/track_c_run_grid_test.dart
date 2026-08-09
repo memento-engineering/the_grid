@@ -478,57 +478,69 @@ void main() {
       },
     );
 
-    test(
-      'teardown during the restart boot: the fresh delegate is disposed and '
-      'the holders never swap',
-      () async {
-        final first = RecordingDelegate();
-        final gate = Completer<void>();
-        final fresh = <RecordingDelegate>[];
-        RecordingDelegate factory() {
-          final next = RecordingDelegate(onBoot: (_) => gate.future);
-          fresh.add(next);
-          return next;
-        }
+    test('teardown during the restart boot: the fresh delegate is disposed and '
+        'the holders never swap', () async {
+      final first = RecordingDelegate();
+      final gate = Completer<void>();
+      final fresh = <RecordingDelegate>[];
+      RecordingDelegate factory() {
+        final next = RecordingDelegate(onBoot: (_) => gate.future);
+        fresh.add(next);
+        return next;
+      }
 
-        final swaps = <GridDelegate>[];
-        final handle = await runGrid(
-          first,
-          delegateFactory: factory,
-          onDelegateSwapped: swaps.add,
-        );
-        await pump();
+      final swaps = <GridDelegate>[];
+      final handle = await runGrid(
+        first,
+        delegateFactory: factory,
+        onDelegateSwapped: swaps.add,
+      );
+      await pump();
 
-        // The restart suspends on the fresh delegate's awaited boot …
-        final restart = handle.hotRestart();
-        await pump();
-        expect(fresh.single.events, ['boot']);
+      // The restart suspends on the fresh delegate's awaited boot …
+      final restart = handle.hotRestart();
+      await pump();
+      expect(fresh.single.events, ['boot']);
 
-        // … teardown lands mid-boot …
-        await handle.teardown();
-        expect(first.mounted, isFalse, reason: 'teardown disposed the live '
-            'delegate');
+      // … teardown lands mid-boot …
+      await handle.teardown();
+      expect(
+        first.mounted,
+        isFalse,
+        reason:
+            'teardown disposed the live '
+            'delegate',
+      );
 
-        // … and the boot then completing must NOT commit: the fresh delegate
-        // is disposed, the swap seam never fires, no post-mount rail runs.
-        gate.complete();
-        await expectLater(
-          restart,
-          throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              contains('tore down during the restart boot'),
-            ),
+      // … and the boot then completing must NOT commit: the fresh delegate
+      // is disposed, the swap seam never fires, no post-mount rail runs.
+      gate.complete();
+      await expectLater(
+        restart,
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('tore down during the restart boot'),
           ),
-        );
-        expect(fresh.single.mounted, isFalse, reason: 'the fresh delegate is '
-            'disposed, never adopted');
-        expect(swaps, isEmpty, reason: 'the commit seam never fired');
-        expect(fresh.single.events, ['boot'], reason: 'no initGrid/onReady '
-            'kickoff on the refused restart');
-      },
-    );
+        ),
+      );
+      expect(
+        fresh.single.mounted,
+        isFalse,
+        reason:
+            'the fresh delegate is '
+            'disposed, never adopted',
+      );
+      expect(swaps, isEmpty, reason: 'the commit seam never fired');
+      expect(
+        fresh.single.events,
+        ['boot'],
+        reason:
+            'no initGrid/onReady '
+            'kickoff on the refused restart',
+      );
+    });
 
     test('initGrid failure: captured/attributed/loud via onError; onReady is '
         'NOT called; the grid stands', () async {
