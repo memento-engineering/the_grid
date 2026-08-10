@@ -56,10 +56,10 @@ void main() {
       'data': {'bead': 'tg-sww5'},
     });
 
-    reporter.flare(
-      'step.persistFailed',
-      {'bead': 'tg-6e4j', 'nodePath': 'tg-6e4j/review/route'},
-    );
+    reporter.flare('step.persistFailed', {
+      'bead': 'tg-6e4j',
+      'nodePath': 'tg-6e4j/review/route',
+    });
     expect(lines, hasLength(3));
 
     reporter.flare('step.allocationFailed', {'bead': 'tg-6e4j'});
