@@ -146,7 +146,10 @@ List<_ResultRow> _resultRows(
       );
       continue;
     }
-    final path = rest.substring(0, dot);
+    // Decode the encoded key segment (tg-6e4j) so the comparison below runs
+    // against the RAW step path the cursor algebra names; a historical bead's
+    // raw key decodes to itself.
+    final path = decodeNodePathKey(rest.substring(0, dot));
     if (expectedPath != null && path != expectedPath) {
       issues.add(
         _issue(

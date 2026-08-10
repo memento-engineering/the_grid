@@ -217,7 +217,7 @@ void main() {
     expect(fakes.runner.callsFor('create'), isEmpty);
     for (final verdict in _verdicts('2')) {
       expect(
-        round2Metadata['grid.result.$_routePath.${verdict['lane']}'],
+        round2Metadata[ResultKeys.keyFor(_routePath, verdict['lane']!)],
         verdict['grade'],
       );
     }

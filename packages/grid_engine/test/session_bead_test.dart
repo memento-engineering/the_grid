@@ -64,6 +64,78 @@ void main() {
     });
   });
 
+  group('node-path key codec (tg-6e4j — bd metadata-key charset)', () {
+    // bd's server-side atomic merge validates metadata keys against
+    // [a-zA-Z_][a-zA-Z0-9_.]* — the charset every emitted key must fit.
+    final bdKeyCharset = RegExp(r'^[a-zA-Z_][a-zA-Z0-9_.]*$');
+
+    test('encode maps /, - and _ into the accepted charset, reversibly', () {
+      const paths = [
+        'pow-1rn.3/spec_review/intake',
+        'tg-1/review/test-coverage',
+        'genesis-7r9/land',
+        'tg-burn/follower',
+        'lenny-749o/code_review/route',
+        'a__h/b-c_d', // pathological underscore/hyphen adjacency
+      ];
+      for (final path in paths) {
+        final encoded = encodeNodePathKey(path);
+        expect(decodeNodePathKey(encoded), path, reason: path);
+        expect(
+          bdKeyCharset.hasMatch('x$encoded'),
+          isTrue,
+          reason: 'encoded "$encoded" must fit bd\'s key charset',
+        );
+      }
+      expect(
+        encodeNodePathKey('pow-1rn.3/spec_review/intake'),
+        'pow_h1rn.3_sspec_ureview_sintake',
+      );
+    });
+
+    test('every keyFor emission is a valid bd metadata key', () {
+      for (final path in [
+        'pow-1rn.3/spec_review/intake',
+        'tg-1/review/test-coverage',
+        'tg-burn/follower',
+      ]) {
+        final key = ResultKeys.keyFor(path, ResultKeys.grade);
+        expect(bdKeyCharset.hasMatch(key), isTrue, reason: key);
+      }
+    });
+
+    test('decode is lenient on RAW legacy paths (historical beads): unknown '
+        'escape pairs pass through, so pre-encoding keys read unchanged', () {
+      expect(
+        decodeNodePathKey('tg-1/review/test-coverage'),
+        'tg-1/review/test-coverage',
+      );
+      expect(
+        decodeNodePathKey('bead/spec_review/intake'),
+        'bead/spec_review/intake',
+      );
+    });
+
+    test('projectCircuitResults decodes encoded keys and still reads legacy '
+        'raw keys, bucketing both under RAW node paths', () {
+      final session = Bead(
+        id: 'tgdog-c',
+        issueType: GridIssueTypes.session,
+        metadata: <String, dynamic>{
+          // The new (encoded) shape.
+          ...nodeResultMetadata('pow-1rn.3/spec_review/intake', {
+            'verdict': 'driveable',
+          }),
+          // A historical bead's raw pre-encoding key.
+          'grid.result.tg-1/review/coherence.grade': 'B',
+        },
+      );
+      final results = projectCircuitResults(session);
+      expect(results['pow-1rn.3/spec_review/intake']!['verdict'], 'driveable');
+      expect(results['tg-1/review/coherence']!['grade'], 'B');
+    });
+  });
+
   group('write payloads (the write half of the contract)', () {
     test(
       'startedIdentityMetadata stringifies the scalar pgid/pid/token fence',
@@ -76,11 +148,12 @@ void main() {
       },
     );
 
-    test('nodeResultMetadata namespaces the payload under grid.result.; a '
-        'null/empty payload writes nothing', () {
+    test('nodeResultMetadata namespaces the payload under grid.result. with '
+        'the node path ENCODED into bd\'s key charset (tg-6e4j); a null/empty '
+        'payload writes nothing', () {
       expect(
         nodeResultMetadata('genesis-7r9/land', {'pr_url': 'https://x/pull/3'}),
-        {'grid.result.genesis-7r9/land.pr_url': 'https://x/pull/3'},
+        {'grid.result.genesis_h7r9_sland.pr_url': 'https://x/pull/3'},
       );
       expect(nodeResultMetadata('genesis-7r9/land', null), isEmpty);
       expect(nodeResultMetadata('genesis-7r9/land', const {}), isEmpty);
@@ -95,9 +168,10 @@ void main() {
         rationale: 'critic cd\'d; verdict was A — transport-F false gate',
       );
       expect(ruling, {
-        'grid.result.tg-1/review/test-coverage.grade': 'A',
-        'grid.result.tg-1/review/test-coverage.transport': 'operator-ruling',
-        'grid.result.tg-1/review/test-coverage.rationale':
+        'grid.result.tg_h1_sreview_stest_hcoverage.grade': 'A',
+        'grid.result.tg_h1_sreview_stest_hcoverage.transport':
+            'operator-ruling',
+        'grid.result.tg_h1_sreview_stest_hcoverage.rationale':
             'critic cd\'d; verdict was A — transport-F false gate',
       });
       expect(kOperatorRulingTransport, 'operator-ruling');

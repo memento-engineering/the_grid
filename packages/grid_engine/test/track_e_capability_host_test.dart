@@ -703,7 +703,7 @@ void main() {
         expect(h.fakes.runner.metadataOfUpdate(0), {
           MoleculeStepKeys.state: 'complete',
           MoleculeStepKeys.restartCount: '0',
-          'grid.result.tg-1/agent.pr_url': pr,
+          'grid.result.tg_h1_sagent.pr_url': pr,
           ..._timing(),
         });
       },

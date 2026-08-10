@@ -171,7 +171,7 @@ void main() {
           'complete',
         );
         expect(
-          h.fakes.runner.metadataOfUpdate(0)['grid.result.tg-1/critic.grade'],
+          h.fakes.runner.metadataOfUpdate(0)['grid.result.tg_h1_scritic.grade'],
           'B',
         );
       });
@@ -207,9 +207,9 @@ void main() {
               entry.key: entry.value as String,
         };
         expect(resultMetadata, const {
-          'grid.result.tg-1/critic.cache_read_input_tokens': '137',
-          'grid.result.tg-1/critic.model_latency_ms': '842',
-          'grid.result.tg-1/critic.transport_reliability':
+          'grid.result.tg_h1_scritic.cache_read_input_tokens': '137',
+          'grid.result.tg_h1_scritic.model_latency_ms': '842',
+          'grid.result.tg_h1_scritic.transport_reliability':
               'fail-closed-default',
         });
       });
