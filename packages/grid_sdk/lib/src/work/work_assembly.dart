@@ -648,6 +648,7 @@ Future<StationWorkRuntime> assembleStationWork({
       // readiness gate throws `No ProcessLeaseVendor` and the station wedges.
       // The SAME instance the restart reconciler sweeps with (tg-eli phase 1).
       processLeaseVendor: leaseVendor,
+      transport: transport,
     ),
     commands: commands,
     git: git,

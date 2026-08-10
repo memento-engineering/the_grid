@@ -12,16 +12,27 @@ final class StationDiagnosticsReporter implements ExplorationTransport {
   StationDiagnosticsReporter({
     required DiagnosticLineWriter writeLine,
     TreeProjector? treeProjector,
+    Duration flareRateLimit = const Duration(seconds: 30),
+    DateTime Function()? now,
   }) : _writeLine = writeLine,
+       _flareRateLimit = flareRateLimit,
+       _now = now ?? DateTime.now,
        treeProjector = treeProjector ?? TreeProjector();
 
   final DiagnosticLineWriter _writeLine;
+  final Duration _flareRateLimit;
+  final DateTime Function() _now;
+  final Map<String, DateTime> _lastFlareAt = <String, DateTime>{};
 
   /// Projects the mounted tree for the authenticated `/stream` reporter.
   final TreeProjector treeProjector;
 
   @override
   void flare(String name, Map<String, String> data) {
+    final now = _now();
+    final last = _lastFlareAt[name];
+    if (last != null && now.difference(last) < _flareRateLimit) return;
+    _lastFlareAt[name] = now;
     _writeLine(
       jsonEncode(<String, Object?>{
         'type': 'flare',

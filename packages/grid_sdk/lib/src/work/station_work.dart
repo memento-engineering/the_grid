@@ -27,6 +27,7 @@ class StationWorkWiring {
     required this.resolver,
     this.registry,
     this.processLeaseVendor,
+    this.transport,
   });
 
   /// The work-axis notifier the substations' `WorkList`s observe — driven by
@@ -50,6 +51,9 @@ class StationWorkWiring {
   /// same default at mount, mirroring `StationKernel.start`'s
   /// `_processLeaseVendor ?? defaultProcessLeaseVendor` provision.
   final ProcessLeaseVendor? processLeaseVendor;
+
+  /// The emit-only observability sink assembled by the runner.
+  final ExplorationTransport? transport;
 }
 
 /// The STATION-scoped work asset (tg-yl8): provides the engine's ambient
@@ -89,6 +93,7 @@ class StationWork extends SingleChildStatelessSeed {
     // assumed ancestor of every StationWork mount (debug-asserted on a miss).
     return Nest(
       children: [
+        Provider<StationWorkWiring>.value(wiring),
         Provider<JoinedSnapshotNotifier>.value(wiring.notifier),
         Provider<StationServices>.value(wiring.services),
         Provider<SessionResolver>.value(wiring.resolver),
@@ -154,7 +159,10 @@ class SubstationWork extends StatelessSeed {
     // emission — the handle itself) re-composes this seat. Null = unarmed.
     final notifier = context.watch<JoinedSnapshotNotifier>();
     if (notifier == null) return const _UnarmedWork();
-    return WorkList(
+    final stationWiring = context.watch<StationWorkWiring>();
+    final transport = stationWiring?.transport;
+    final inherited = context.watch<ServiceBundle>() ?? const ServiceBundle();
+    final workList = WorkList(
       substationConfig: SubstationConfig(
         substationId: scope.name,
         ownedSubstations: {scope.name, scope.prefix},
@@ -163,6 +171,18 @@ class SubstationWork extends StatelessSeed {
         maxConcurrentWork: maxConcurrentWork,
       ),
       key: ValueKey<String>('worklist:${scope.name}'),
+    );
+    if (transport == null) return workList;
+    return Provider<ServiceBundle>.value(
+      ServiceBundle(
+        sourceControl: inherited.sourceControl,
+        delivery: inherited.delivery,
+        escalation: inherited.escalation,
+        trust: inherited.trust,
+        trustFloor: inherited.trustFloor,
+        transport: transport,
+      ),
+      child: workList,
     );
   }
 }
