@@ -111,6 +111,61 @@ const String kSessionModelFlat = 'flat';
 /// write as [SessionBeadKeys.workBead].
 const String kSessionModelMolecule = 'molecule';
 
+/// Encodes [nodePath] for use inside a bd metadata KEY (tg-6e4j).
+///
+/// bd's server-side atomic metadata merge — the `--set-metadata` path EVERY
+/// chokepoint write rides since the mergeMetadata migration — validates keys
+/// against `[a-zA-Z_][a-zA-Z0-9_.]*`. A raw node path
+/// (`pow-1rn.3/spec_review/intake`) carries `/` and `-`, so any write embedding
+/// one was refused WHOLESALE (`BdUpdatePartialFailure`), which silently froze
+/// every circuit advance on the first live arm of the rc.3 foundation. (The
+/// retired `--metadata` JSON-replace path never validated keys, which is why
+/// the shape survived until the merge migration.)
+///
+/// Reversible per-character escape into the accepted charset, `_` as the
+/// escape lead: `_` → `_u`, `/` → `_s`, `-` → `_h`. [decodeNodePathKey]
+/// reverses it; any other character passes through unchanged. Today's id
+/// vocabulary (bead/circuit/step ids: `[a-z0-9._-]` + the `/` separator) is
+/// covered exactly; a new special character in ids must extend BOTH halves.
+///
+/// `_` is escaped FIRST so the `_s`/`_h` sequences the later rules introduce
+/// are never re-escaped.
+String encodeNodePathKey(String nodePath) =>
+    nodePath.replaceAll('_', '_u').replaceAll('/', '_s').replaceAll('-', '_h');
+
+/// Decodes a [encodeNodePathKey]-encoded node path back to its raw form.
+///
+/// Single-pass: `_u` → `_`, `_s` → `/`, `_h` → `-`; an `_` followed by any
+/// OTHER character is passed through literally. That leniency is deliberate:
+/// historical beads carry RAW (pre-encoding) paths in their keys — e.g.
+/// `spec_review`'s literal `_r` — and those must survive a decode unchanged so
+/// [projectCircuitResults] keeps reading retired rounds' results. (A raw
+/// legacy path containing a literal `_u`/`_s`/`_h` sequence would mis-decode;
+/// no id in the org's vocabulary has ever contained one.)
+String decodeNodePathKey(String encoded) {
+  final out = StringBuffer();
+  var i = 0;
+  while (i < encoded.length) {
+    final c = encoded[i];
+    if (c == '_' && i + 1 < encoded.length) {
+      final decoded = switch (encoded[i + 1]) {
+        'u' => '_',
+        's' => '/',
+        'h' => '-',
+        _ => null,
+      };
+      if (decoded != null) {
+        out.write(decoded);
+        i += 2;
+        continue;
+      }
+    }
+    out.write(c);
+    i += 1;
+  }
+  return out.toString();
+}
+
 /// The per-node RESULT keys — the payload a positive terminal publishes: a job's
 /// [Ok.payload] on `complete` (e.g. the land step's `pr_url`) OR a daemon's
 /// rendezvous payload on `ready` (e.g. the burn-follower's `{endpoint, …}`),
@@ -127,9 +182,10 @@ abstract final class ResultKeys {
   static const prefix = 'grid.result.';
 
   /// The flat key for [field] of the node at [nodePath]
-  /// (`grid.result.{nodePath}.{field}`).
+  /// (`grid.result.{encoded nodePath}.{field}` — see [encodeNodePathKey] for
+  /// why the path segment is encoded, tg-6e4j).
   static String keyFor(String nodePath, String field) =>
-      '$prefix$nodePath.$field';
+      '$prefix${encodeNodePathKey(nodePath)}.$field';
 
   /// The committee VERDICT payload fields the code asset's `route` step reads
   /// off each critic lane's result node (`grid.result.<lane>.<field>`). the_grid
@@ -237,8 +293,12 @@ Map<String, String> nodeResultMetadata(
 
 /// Projects every `grid.result.*` key on [sessionBead] into a per-node result
 /// map (the read half of [nodeResultMetadata]):
-/// `grid.result.{nodePath}.{field}` → results[nodePath][field].
-/// Values are stringified; a malformed key (no field segment) is skipped.
+/// `grid.result.{encoded nodePath}.{field}` → results[nodePath][field], with
+/// the path segment decoded through [decodeNodePathKey] — so consumers (the
+/// cursor algebra, the `SiblingView`) always see RAW node paths. A historical
+/// bead's raw (pre-encoding) key decodes to itself (the decoder's leniency),
+/// so retired rounds keep projecting. Values are stringified; a malformed key
+/// (no field segment) is skipped.
 Map<String, Map<String, String>> projectCircuitResults(Bead sessionBead) {
   final results = <String, Map<String, String>>{};
   for (final entry in sessionBead.metadata.entries) {
@@ -247,7 +307,7 @@ Map<String, Map<String, String>> projectCircuitResults(Bead sessionBead) {
     final rest = key.substring(ResultKeys.prefix.length); // {nodePath}.{field}
     final dot = rest.lastIndexOf('.');
     if (dot <= 0 || dot == rest.length - 1) continue; // need a path AND a field
-    final nodePath = rest.substring(0, dot);
+    final nodePath = decodeNodePathKey(rest.substring(0, dot));
     final field = rest.substring(dot + 1);
     (results[nodePath] ??= <String, String>{})[field] = entry.value.toString();
   }

@@ -372,12 +372,12 @@ void main() {
       // receipt, and the audit record of HOW the work left — atomically.
       final meta = fakes.runner.metadataOfUpdate(0);
       expect(meta['grid.step.state'], 'complete');
-      expect(meta['grid.result.tg-1/route.grade'], 'A');
+      expect(meta['grid.result.tg_h1_sroute.grade'], 'A');
       expect(
-        meta['grid.result.tg-1/route.pr_url'],
+        meta['grid.result.tg_h1_sroute.pr_url'],
         'https://example.test/pr/1',
       );
-      expect(meta['grid.result.tg-1/route.delivery'], 'fake-delivery');
+      expect(meta['grid.result.tg_h1_sroute.delivery'], 'fake-delivery');
     });
 
     test('COMMIT-ONLY: with NO method bound the terminal advance still '
@@ -576,16 +576,16 @@ void main() {
 
       final metaA = a.runner.metadataOfUpdate(0);
       expect(metaA['grid.step.state'], 'complete');
-      expect(metaA['grid.result.tg-1/route.delivery'], 'pr-no-merge');
+      expect(metaA['grid.result.tg_h1_sroute.delivery'], 'pr-no-merge');
       expect(
-        metaA['grid.result.tg-1/route.pr_url'],
+        metaA['grid.result.tg_h1_sroute.pr_url'],
         'https://example.test/pr/1',
       );
 
       final metaB = b.runner.metadataOfUpdate(0);
       expect(metaB['grid.step.state'], 'complete');
-      expect(metaB['grid.result.tg-1/route.delivery'], 'direct-merge');
-      expect(metaB['grid.result.tg-1/route.merged_sha'], 'abc123');
+      expect(metaB['grid.result.tg_h1_sroute.delivery'], 'direct-merge');
+      expect(metaB['grid.result.tg_h1_sroute.merged_sha'], 'abc123');
     });
   });
 }

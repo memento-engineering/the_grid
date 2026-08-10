@@ -73,10 +73,10 @@ void main() {
         leaseGrantToResultPayload(grant),
       );
       expect(merged, {
-        'grid.result.tg-burn/follower.leaseId': 'lease-9',
-        'grid.result.tg-burn/follower.claimedBy': 'peer.local',
-        'grid.result.tg-burn/follower.fencingToken': '2',
-        'grid.result.tg-burn/follower.kind': kDefaultKind,
+        'grid.result.tg_hburn_sfollower.leaseId': 'lease-9',
+        'grid.result.tg_hburn_sfollower.claimedBy': 'peer.local',
+        'grid.result.tg_hburn_sfollower.fencingToken': '2',
+        'grid.result.tg_hburn_sfollower.kind': kDefaultKind,
       });
     });
   });

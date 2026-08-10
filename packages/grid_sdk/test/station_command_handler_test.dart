@@ -407,10 +407,12 @@ void main() {
           'close',
         ]);
         final ruling = runner.calls.first.join(' ');
-        expect(ruling, contains('grid.result.route/critic.grade=A'));
-        expect(ruling, contains('grid.result.route/critic.transport'));
+        // The node-path infix rides the tg-6e4j key encoding ('/' → '_s') so
+        // the ruling write fits bd's metadata-key charset.
+        expect(ruling, contains('grid.result.route_scritic.grade=A'));
+        expect(ruling, contains('grid.result.route_scritic.transport'));
         expect(ruling, contains('operator-ruling'));
-        expect(ruling, contains('grid.result.route/critic.rationale'));
+        expect(ruling, contains('grid.result.route_scritic.rationale'));
         expect(ruling, contains('operator inspected it'));
       },
     );

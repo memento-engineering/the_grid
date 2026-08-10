@@ -354,7 +354,7 @@ void main() {
         expect(h.fakes.runner.callsFor('update').single[1], _stepBeadId);
         final meta = h.fakes.runner.metadataOfUpdate(0);
         expect(meta['grid.step.state'], 'complete');
-        expect(meta['grid.result.tg-1/agent.pr_url'], pr);
+        expect(meta['grid.result.tg_h1_sagent.pr_url'], pr);
         expect(meta.keys.where((k) => k.startsWith('grid.cursor.')), isEmpty);
         expect(
           meta.keys.where((k) => k.startsWith('grid.result.')),
