@@ -27,12 +27,19 @@ final class StationDiagnosticsReporter implements ExplorationTransport {
   /// Projects the mounted tree for the authenticated `/stream` reporter.
   final TreeProjector treeProjector;
 
+  /// The rate-limit bucket for one flare name about one subject.
+  static String _bucketFor(String name, Map<String, String> data) {
+    final subject = data['nodePath'] ?? data['bead'] ?? '';
+    return '$name\u0000$subject';
+  }
+
   @override
   void flare(String name, Map<String, String> data) {
     final now = _now();
-    final last = _lastFlareAt[name];
+    final bucket = _bucketFor(name, data);
+    final last = _lastFlareAt[bucket];
     if (last != null && now.difference(last) < _flareRateLimit) return;
-    _lastFlareAt[name] = now;
+    _lastFlareAt[bucket] = now;
     _writeLine(
       jsonEncode(<String, Object?>{
         'type': 'flare',
