@@ -775,6 +775,10 @@ class StationBeadWriter {
         mergeMetadata: mergeMetadata,
         unsetMetadata: unsetMetadata,
         appendNotes: appendNotes,
+        // ADR-0006 D2 / ADR-0001 D5: controller writes never issue bd show.
+        // BdCliService still applies every pre-exec argv-text guard; only the
+        // post-write verification read is disabled here.
+        verifyTextRoundTrip: false,
       );
     } on BdGuardMismatch catch (cause) {
       final refusal = OwnershipGuardRefused(

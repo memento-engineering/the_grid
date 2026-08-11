@@ -291,6 +291,25 @@ void main() {
     });
 
     test(
+      'ADR-0006 D2 / ADR-0001 D5: appendNotes update issues no bd show',
+      () async {
+        await writer().update(
+          'tgdog-sess1',
+          metadata: const {'state': 'active'},
+          appendNotes: 'operator finding',
+        );
+
+        expect(runner.calls, hasLength(1));
+        expect(runner.calls.single.first, 'update');
+        expect(
+          runner.calls.single,
+          containsAllInOrder(['--append-notes', 'operator finding']),
+        );
+        expect(runner.neverCalledShow, isTrue);
+      },
+    );
+
+    test(
       'writeSpecifyAuthoredSpec stamps fields and provenance atomically',
       () async {
         await writer().writeSpecifyAuthoredSpec(
@@ -301,7 +320,8 @@ void main() {
 
         final updates = runner.callsFor('update');
         expect(updates, hasLength(1));
-        expect(updates.single, containsAllInOrder(['--design', 'a design']));
+        expect(updates.single, containsAllInOrder(['--design-file', '-']));
+        expect(runner.stdins.single, 'a design');
         expect(
           updates.single,
           containsAllInOrder(['--acceptance', 'the acceptance']),
@@ -311,6 +331,9 @@ void main() {
           {StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor},
         );
         expect(runner.everyMutationHasActor, isTrue);
+        expect(runner.calls, hasLength(1));
+        expect(runner.calls.single.first, 'update');
+        expect(runner.neverCalledShow, isTrue);
       },
     );
 
@@ -334,7 +357,8 @@ void main() {
       expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
       expect(updates.single, containsAllInOrder(['--if-assignee', 'specify']));
       expect(updates.single, containsAllInOrder(['--if-status', 'open']));
-      expect(updates.single, containsAllInOrder(['--design', '']));
+      expect(updates.single, containsAllInOrder(['--design-file', '-']));
+      expect(runner.stdins.single, '');
       expect(updates.single, containsAllInOrder(['--acceptance', '']));
       expect(
         updates.single,

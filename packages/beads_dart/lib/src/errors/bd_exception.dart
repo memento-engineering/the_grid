@@ -155,6 +155,48 @@ class BdUsageException extends BdException {
   final String stderr;
 }
 
+/// An argv-only bead text field contains a control character that Dart cannot
+/// transport safely.
+class BeadTextRefused extends BdException {
+  const BeadTextRefused({
+    required this.field,
+    required this.offset,
+    required this.context,
+  });
+
+  final String field;
+  final int offset;
+  final String context;
+
+  @override
+  String get message =>
+      'Refused $field at offset $offset near ${jsonEncode(context)}';
+}
+
+/// An argv-only bead text field differed when read back after persistence.
+class BeadTextRoundTripFailure extends BdException {
+  const BeadTextRoundTripFailure({
+    required this.field,
+    required this.sentLength,
+    required this.storedLength,
+    required this.offset,
+    required this.sentContext,
+    required this.storedContext,
+  });
+
+  final String field;
+  final int sentLength;
+  final int storedLength;
+  final int offset;
+  final String sentContext;
+  final String storedContext;
+
+  @override
+  String get message =>
+      '$field round-trip differed at offset $offset '
+      '(sent $sentLength, stored $storedLength)';
+}
+
 /// A `bd` command exited non-zero.
 ///
 /// Under `BD_JSON_ENVELOPE=1`, bd emits the error **enveloped on stdout**

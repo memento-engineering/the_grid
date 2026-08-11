@@ -372,13 +372,19 @@ void main() {
     test(
       'update() can clear design and acceptance without touching body text',
       () async {
+        runner.stubCommand(
+          'show',
+          BdReply(stdout: _beadEnvelope(acceptanceCriteria: '')),
+        );
         await service.update('tg-7', design: '', acceptanceCriteria: '');
-        final argv = runner.calls.single;
+        final argv = runner.calls.first;
         expect(argv.first, 'update');
         expect(argv[1], 'tg-7');
         expectActor(argv);
-        expect(argv, containsAllInOrder(['--design', '']));
+        expect(argv, containsAllInOrder(['--design-file', '-']));
+        expect(runner.stdins.first, '');
         expect(argv, containsAllInOrder(['--acceptance', '']));
+        expect(argv, isNot(contains('--design')));
         expect(argv, isNot(contains('--description')));
         expect(argv, isNot(contains('--notes')));
         expect(argv, isNot(contains('--append-notes')));
@@ -388,6 +394,10 @@ void main() {
     test(
       'update() carries spec fields, metadata, and metadata unset atomically',
       () async {
+        runner.stubCommand(
+          'show',
+          BdReply(stdout: _beadEnvelope(acceptanceCriteria: '')),
+        );
         await service.update(
           'tg-7',
           design: '',
@@ -396,16 +406,297 @@ void main() {
           unsetMetadata: const ['spec.author'],
         );
 
-        final argv = runner.calls.single;
+        final argv = runner.calls.first;
         expect(argv.first, 'update');
         expectActor(argv);
-        expect(argv, containsAllInOrder(['--design', '']));
+        expect(argv, containsAllInOrder(['--design-file', '-']));
         expect(argv, containsAllInOrder(['--acceptance', '']));
         expect(argv, containsAllInOrder(['--set-metadata', 'other=value']));
         expect(argv, isNot(contains('--metadata')));
         expect(argv, containsAllInOrder(['--unset-metadata', 'spec.author']));
       },
     );
+
+    test('metadata update is guarded but not read back', () async {
+      final runner = FakeBdRunner(queuedReplies: [_okEnvelope()]);
+
+      await BdCliService(
+        runner,
+      ).update('tg-7', mergeMetadata: const {'attempt': '3'});
+
+      expect(runner.calls, hasLength(1));
+      expect(runner.calls.single.first, 'update');
+      expect(
+        runner.calls.single,
+        containsAllInOrder(['--set-metadata', 'attempt=3']),
+      );
+    });
+
+    test('text transport keeps body and design outside argv', () async {
+      const body = 'body\r\n\ufeff\u200b\u00a0\t\n  ';
+      const design = 'design\u0000tail';
+      String? fileText;
+      final inspectingRunner = _InspectingRunner((args, stdin) async {
+        final designIndex = args.indexOf('--design-file');
+        if (designIndex >= 0 && args[designIndex + 1] != '-') {
+          fileText = await File(args[designIndex + 1]).readAsString();
+        }
+        return BdResult(
+          exitCode: 0,
+          stdout: _emptyObjectEnvelope(),
+          stderr: '',
+        );
+      });
+
+      await BdCliService(
+        inspectingRunner,
+      ).update('tg-7', description: body, design: design);
+
+      final argv = inspectingRunner.calls.single;
+      expect(argv, containsAllInOrder(['--body-file', '-']));
+      expect(argv, contains('--design-file'));
+      expect(argv, isNot(contains('--description')));
+      expect(argv, isNot(contains('--design')));
+      expect(argv, isNot(contains(body)));
+      expect(argv, isNot(contains(design)));
+      expect(inspectingRunner.stdins.single, body);
+      expect(fileText, design);
+    });
+
+    test('text transport sends each single field through stdin', () async {
+      const design = 'a\u0000b';
+      await service.update('tg-7', description: '');
+      await service.update('tg-7', design: design);
+
+      expect(runner.calls[0], containsAllInOrder(['--body-file', '-']));
+      expect(runner.stdins[0], '');
+      expect(runner.calls[1], containsAllInOrder(['--design-file', '-']));
+      expect(runner.stdins[1], design);
+    });
+
+    test(
+      'failed combined text update propagates and cleans temp directory',
+      () async {
+        String? designPath;
+        String? tempPath;
+        final runner = _InspectingRunner((args, stdin) async {
+          final index = args.indexOf('--design-file');
+          designPath = args[index + 1];
+          tempPath = File(designPath!).parent.path;
+          expect(await File(designPath!).readAsString(), 'design');
+          return const BdResult(
+            exitCode: 1,
+            stdout: '{"schema_version":1,"data":{"error":"mutation failed"}}',
+            stderr: '',
+          );
+        });
+
+        await expectLater(
+          BdCliService(
+            runner,
+          ).update('tg-7', description: 'body', design: 'design'),
+          throwsA(
+            isA<BdCommandFailed>().having(
+              (error) => error.message,
+              'message',
+              contains('mutation failed'),
+            ),
+          ),
+        );
+        expect(designPath, isNotNull);
+        expect(await Directory(tempPath!).exists(), isFalse);
+      },
+    );
+
+    test('argv text guard refuses unsafe C0 before any process call', () async {
+      for (final update in <Future<void> Function()>[
+        () => service.update('tg-7', acceptanceCriteria: 'safe\u0000tail'),
+        () => service.update('tg-7', appendNotes: 'safe\u0001tail'),
+        () => service.update(
+          'tg-7',
+          mergeMetadata: const {'key': 'safe\u001ftail'},
+        ),
+      ]) {
+        await expectLater(
+          update(),
+          throwsA(
+            isA<BeadTextRefused>()
+                .having((error) => error.offset, 'offset', 4)
+                .having((error) => error.context, 'context', contains('tail')),
+          ),
+        );
+      }
+      expect(runner.calls, isEmpty);
+    });
+
+    test('argv text guard reports exact clamped context', () async {
+      final boundary =
+          '${List.filled(30, 'a').join()}\u0000${List.filled(29, 'b').join()}';
+      final clamped =
+          '${List.filled(61, 'a').join()}\u0001${List.filled(60, 'b').join()}';
+
+      await expectLater(
+        service.update('tg-7', mergeMetadata: {'key': boundary}),
+        throwsA(
+          isA<BeadTextRefused>()
+              .having((error) => error.field, 'field', 'metadata.key')
+              .having((error) => error.offset, 'offset', 30)
+              .having((error) => error.context, 'context', boundary)
+              .having((error) => error.context.length, 'context length', 60),
+        ),
+      );
+      await expectLater(
+        service.update('tg-7', acceptanceCriteria: clamped),
+        throwsA(
+          isA<BeadTextRefused>()
+              .having((error) => error.offset, 'offset', 61)
+              .having(
+                (error) => error.context,
+                'context',
+                clamped.substring(31, 91),
+              )
+              .having((error) => error.context.length, 'context length', 60),
+        ),
+      );
+      expect(runner.calls, isEmpty);
+    });
+
+    test('argv text guard permits tabs and newlines', () async {
+      const text = 'tab\tline\nend';
+      runner.stubCommand(
+        'show',
+        BdReply(stdout: _beadEnvelope(acceptanceCriteria: text)),
+      );
+      await service.update(
+        'tg-7',
+        acceptanceCriteria: text,
+        mergeMetadata: const {'key': text},
+      );
+      expect(runner.calls.first, contains(text));
+    });
+
+    test('argv text preserves authored text', () async {
+      const authored = 'line1\r\n\ufeff\u200b\u00a0\t\ntrailing  ';
+      final runner = FakeBdRunner(
+        queuedReplies: [
+          BdReply(stdout: _beadEnvelope(notes: 'before')),
+          _okEnvelope(),
+          BdReply(
+            stdout: _beadEnvelope(
+              acceptanceCriteria: authored,
+              notes: 'before\n$authored',
+            ),
+          ),
+        ],
+      );
+
+      await BdCliService(
+        runner,
+      ).update('tg-7', acceptanceCriteria: authored, appendNotes: authored);
+      expect(
+        runner.calls[1],
+        containsAllInOrder([
+          '--acceptance',
+          authored,
+          '--append-notes',
+          authored,
+        ]),
+      );
+    });
+
+    test('argv text round trip reports first divergent offset', () async {
+      runner.stubCommand(
+        'show',
+        BdReply(stdout: _beadEnvelope(acceptanceCriteria: 'abcX')),
+      );
+      await expectLater(
+        service.update('tg-7', acceptanceCriteria: 'abcde'),
+        throwsA(
+          isA<BeadTextRoundTripFailure>()
+              .having((error) => error.field, 'field', 'acceptanceCriteria')
+              .having((error) => error.offset, 'offset', 3)
+              .having((error) => error.sentLength, 'sent length', 5)
+              .having((error) => error.storedLength, 'stored length', 4),
+        ),
+      );
+    });
+
+    test(
+      'round-trip verification can be disabled without disabling guard',
+      () async {
+        final runner = FakeBdRunner(queuedReplies: [_okEnvelope()]);
+        final service = BdCliService(runner);
+
+        await service.update(
+          'tg-7',
+          acceptanceCriteria: 'safe text',
+          appendNotes: 'operator note',
+          verifyTextRoundTrip: false,
+        );
+
+        expect(runner.calls, hasLength(1));
+        expect(runner.calls.single.first, 'update');
+        expect(
+          runner.calls.single,
+          containsAllInOrder(['--append-notes', 'operator note']),
+        );
+
+        for (final unsafeUpdate in <Future<void> Function()>[
+          () => service.update(
+            'tg-7',
+            acceptanceCriteria: 'unsafe\u0000text',
+            verifyTextRoundTrip: false,
+          ),
+          () => service.update(
+            'tg-7',
+            appendNotes: 'unsafe\u0001text',
+            verifyTextRoundTrip: false,
+          ),
+        ]) {
+          await expectLater(unsafeUpdate(), throwsA(isA<BeadTextRefused>()));
+        }
+        expect(runner.calls, hasLength(1));
+      },
+    );
+
+    test('argv text round trip shares one post-read across fields', () async {
+      const text = 'tab\tline\nend';
+      final verifyingRunner = FakeBdRunner(
+        queuedReplies: [
+          BdReply(stdout: _beadEnvelope(notes: 'before')),
+          _okEnvelope(),
+          BdReply(
+            stdout: _beadEnvelope(
+              acceptanceCriteria: text,
+              notes: 'before\n$text',
+            ),
+          ),
+        ],
+      );
+
+      await BdCliService(verifyingRunner).update(
+        'tg-7',
+        acceptanceCriteria: text,
+        appendNotes: text,
+        mergeMetadata: const {'key': text},
+      );
+
+      expect(verifyingRunner.calls.map((args) => args.first), [
+        'show',
+        'update',
+        'show',
+      ]);
+      expect(
+        verifyingRunner.calls[1],
+        containsAllInOrder(['--append-notes', text]),
+      );
+    });
+
+    test('stdin-only text update performs no verification read', () async {
+      await service.update('tg-7', design: 'design');
+      expect(runner.calls, hasLength(1));
+      expect(runner.calls.single.first, 'update');
+    });
 
     test('close() stamps actor and forwards the reason', () async {
       await service.close('tg-7', reason: 'done');
@@ -630,6 +921,41 @@ String _emptyObjectEnvelope() =>
 
 String _emptyListEnvelope() =>
     jsonEncode({'schema_version': 1, 'data': <dynamic>[]});
+
+String _beadEnvelope({
+  String acceptanceCriteria = '',
+  String notes = '',
+  Map<String, dynamic> metadata = const {},
+}) => jsonEncode({
+  'schema_version': 1,
+  'data': [
+    {
+      'id': 'tg-7',
+      'acceptance_criteria': acceptanceCriteria,
+      'notes': notes,
+      'metadata': metadata,
+    },
+  ],
+});
+
+class _InspectingRunner implements BdRunner {
+  _InspectingRunner(this.reply);
+
+  final Future<BdResult> Function(List<String>, String?) reply;
+  final calls = <List<String>>[];
+  final stdins = <String?>[];
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    calls.add(args);
+    stdins.add(stdin);
+    return reply(args, stdin);
+  }
+}
 
 /// Spins the event loop a few turns so queued microtasks/timers run.
 Future<void> _pump() async {

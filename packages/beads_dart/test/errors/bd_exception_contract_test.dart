@@ -11,6 +11,35 @@ const partialFailureStderr =
 const readyRefusalStderr = 'Error: --ready cannot be combined with --status\n';
 
 void main() {
+  test('bead text transport failures expose diagnostics', () {
+    const refused = BeadTextRefused(
+      field: 'acceptanceCriteria',
+      offset: 4,
+      context: 'text\u0000tail',
+    );
+    expect(refused.field, 'acceptanceCriteria');
+    expect(refused.offset, 4);
+    expect(
+      refused.message,
+      r'Refused acceptanceCriteria at offset 4 near "text\u0000tail"',
+    );
+
+    const mismatch = BeadTextRoundTripFailure(
+      field: 'metadata.key',
+      sentLength: 5,
+      storedLength: 3,
+      offset: 3,
+      sentContext: 'value',
+      storedContext: 'val',
+    );
+    expect(mismatch.sentContext, 'value');
+    expect(mismatch.storedContext, 'val');
+    expect(
+      mismatch.message,
+      'metadata.key round-trip differed at offset 3 (sent 5, stored 3)',
+    );
+  });
+
   test(
     'exit 13 guard mismatch is typed and unmarked exit 13 stays generic',
     () {
