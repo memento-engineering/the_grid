@@ -621,6 +621,33 @@ void main() {
       );
     });
 
+    test(
+      'round-trip verification can be disabled without disabling guard',
+      () async {
+        final runner = FakeBdRunner(queuedReplies: [_okEnvelope()]);
+        final service = BdCliService(runner);
+
+        await service.update(
+          'tg-7',
+          acceptanceCriteria: 'safe text',
+          verifyTextRoundTrip: false,
+        );
+
+        expect(runner.calls, hasLength(1));
+        expect(runner.calls.single.first, 'update');
+
+        await expectLater(
+          service.update(
+            'tg-7',
+            acceptanceCriteria: 'unsafe\u0000text',
+            verifyTextRoundTrip: false,
+          ),
+          throwsA(isA<BeadTextRefused>()),
+        );
+        expect(runner.calls, hasLength(1));
+      },
+    );
+
     test('argv text round trip shares one post-read across fields', () async {
       const text = 'tab\tline\nend';
       final verifyingRunner = FakeBdRunner(

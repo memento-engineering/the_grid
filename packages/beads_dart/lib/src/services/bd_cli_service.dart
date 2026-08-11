@@ -186,6 +186,12 @@ class BdCliService {
     Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
     String? appendNotes,
+
+    /// Whether to re-read and verify argv-transported text after mutation.
+    ///
+    /// When false, acceptance criteria and appended notes remain guarded before
+    /// process execution, but the successful write is unverified.
+    bool verifyTextRoundTrip = true,
   }) async {
     if (acceptanceCriteria != null) {
       _refuseUnsafeArgvText('acceptanceCriteria', acceptanceCriteria);
@@ -253,6 +259,8 @@ class BdCliService {
         }
       }
     }
+
+    if (!verifyTextRoundTrip) return;
 
     final expected = <String, String>{
       if (acceptanceCriteria != null) 'acceptanceCriteria': acceptanceCriteria,

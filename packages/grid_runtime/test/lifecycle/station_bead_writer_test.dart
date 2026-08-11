@@ -301,7 +301,8 @@ void main() {
 
         final updates = runner.callsFor('update');
         expect(updates, hasLength(1));
-        expect(updates.single, containsAllInOrder(['--design', 'a design']));
+        expect(updates.single, containsAllInOrder(['--design-file', '-']));
+        expect(runner.stdins.single, 'a design');
         expect(
           updates.single,
           containsAllInOrder(['--acceptance', 'the acceptance']),
@@ -311,6 +312,9 @@ void main() {
           {StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor},
         );
         expect(runner.everyMutationHasActor, isTrue);
+        expect(runner.calls, hasLength(1));
+        expect(runner.calls.single.first, 'update');
+        expect(runner.neverCalledShow, isTrue);
       },
     );
 
@@ -334,7 +338,8 @@ void main() {
       expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
       expect(updates.single, containsAllInOrder(['--if-assignee', 'specify']));
       expect(updates.single, containsAllInOrder(['--if-status', 'open']));
-      expect(updates.single, containsAllInOrder(['--design', '']));
+      expect(updates.single, containsAllInOrder(['--design-file', '-']));
+      expect(runner.stdins.single, '');
       expect(updates.single, containsAllInOrder(['--acceptance', '']));
       expect(
         updates.single,
