@@ -160,6 +160,30 @@ void main() {
         '0',
       ]);
       expect(
+        service.listScopeArgs(
+          type: const IssueType('step'),
+          status: BeadStatus.open,
+          metadataFields: const {
+            'grid.step.session': 'tgdog-sess1',
+            'grid.circuit.session': 'tgdog-sess1',
+          },
+        ),
+        [
+          'list',
+          '-t',
+          'step',
+          '--status',
+          'open',
+          '--metadata-field',
+          'grid.circuit.session=tgdog-sess1',
+          '--metadata-field',
+          'grid.step.session=tgdog-sess1',
+          '--json',
+          '--limit',
+          '0',
+        ],
+      );
+      expect(
         service.listScopeArgs(type: IssueType.task, status: BeadStatus.closed),
         ['list', '-t', 'task', '--status', 'closed', '--json', '--limit', '0'],
       );
