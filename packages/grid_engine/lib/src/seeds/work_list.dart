@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:genesis_tree/genesis_tree.dart';
@@ -84,8 +85,38 @@ class _WorkListState extends State<WorkList>
   /// LOUD but said ONCE per bead per station lifetime, never once per build (the
   /// same rising-edge discipline as the wedge monitor).
   final Set<String> _heldReported = <String>{};
+  final Set<String> _gateSweepsScheduled = <String>{};
 
   final Set<String> _trustRefusedReported = <String>{};
+
+  void _scheduleGateSweep(
+    StationServices stationServices,
+    ServiceBundle? services, {
+    required Bead workBead,
+    required String sessionId,
+    required GateCloseCause cause,
+    required GateSweepSessionDisposition disposition,
+    Bead? terminalWorkBead,
+  }) {
+    final latch = '$sessionId:${cause.wireValue}';
+    if (!_gateSweepsScheduled.add(latch)) return;
+    scheduleMicrotask(() async {
+      try {
+        await stationServices.writer.closeOpenGatesForTerminal(
+          sessionId: sessionId,
+          trigger: cause,
+          disposition: disposition,
+          terminalWorkBead: terminalWorkBead,
+        );
+      } on Object catch (error) {
+        services?.transport?.flare('gate.autoCloseFailed', {
+          'sessionId': sessionId,
+          'cause': cause.wireValue,
+          'reason': truncateReason('$error'),
+        });
+      }
+    });
+  }
 
   static SessionProjection? _latestRetiredSession(
     String beadId,
@@ -241,8 +272,39 @@ class _WorkListState extends State<WorkList>
       // would kill the live agent.
       if (bead.isClosed || disposition.blocksMount) {
         _mountedIds.remove(bead.id);
-        if (disposition case HeldSession(:final reason)) {
-          _reportHeld(services, bead.id, session?.sessionId ?? '', reason);
+        final liveSessionId = session?.sessionId ?? '';
+        if (bead.isClosed &&
+            disposition is LiveSession &&
+            liveSessionId.isNotEmpty &&
+            stationServices != null) {
+          _scheduleGateSweep(
+            stationServices,
+            services,
+            workBead: bead,
+            sessionId: liveSessionId,
+            cause: GateCloseCause.workBeadClosed,
+            disposition: GateSweepSessionDisposition.live,
+            terminalWorkBead: bead,
+          );
+        } else {
+          switch (disposition) {
+            case DoneSession():
+              final sessionId = session?.sessionId ?? '';
+              if (sessionId.isNotEmpty && stationServices != null) {
+                _scheduleGateSweep(
+                  stationServices,
+                  services,
+                  workBead: bead,
+                  sessionId: sessionId,
+                  cause: GateCloseCause.sessionTerminal,
+                  disposition: GateSweepSessionDisposition.done,
+                );
+              }
+            case HeldSession(:final reason):
+              _reportHeld(services, bead.id, session?.sessionId ?? '', reason);
+            case NoSession() || LiveSession() || VoidedSession():
+              break;
+          }
         }
         continue;
       }

@@ -312,6 +312,14 @@ void main() {
     test('CONTROL — a DONE session (the grid.outcome marker) still blocks: no '
         'mount, no mint, no retire (landed work is never re-driven)', () async {
       final f = buildFakes();
+      f.runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-done',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.closed,
+          metadata: {'rig': 'tgdog', 'grid.outcome': 'complete'},
+        ),
+      ];
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
       final m = _mount(

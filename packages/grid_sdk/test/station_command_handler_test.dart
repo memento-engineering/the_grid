@@ -404,6 +404,7 @@ void main() {
         expect(runner.calls.map((call) => call.first), [
           'update',
           'update',
+          'update',
           'close',
         ]);
         final ruling = runner.calls.first.join(' ');
@@ -414,6 +415,23 @@ void main() {
         expect(ruling, contains('operator-ruling'));
         expect(ruling, contains('grid.result.route_scritic.rationale'));
         expect(ruling, contains('operator inspected it'));
+        final causeUpdate = runner.calls
+            .where(
+              (call) =>
+                  call.first == 'update' &&
+                  call.any(
+                    (arg) =>
+                        arg ==
+                        '${StationBeadWriter.gateCloseCauseKey}='
+                            '${GateCloseCause.adjudicated.wireValue}',
+                  ),
+            )
+            .single;
+        expect(
+          causeUpdate,
+          containsAll(<String>['--if-assignee', '--if-status']),
+        );
+        expect(runner.calls.last.join(' '), contains('operator ruling'));
       },
     );
 
@@ -439,10 +457,24 @@ void main() {
       );
 
       expect(result, isA<GridCommandCompleted>());
-      expect(runner.calls.map((call) => call.first), ['update', 'close']);
+      expect(runner.calls.map((call) => call.first), [
+        'update',
+        'update',
+        'close',
+      ]);
       expect(runner.calls.every((call) => call.contains('tgdog-gate')), isTrue);
       expect(runner.calls.join(' '), isNot(contains('tgdog-session')));
       expect(runner.calls.join(' '), isNot(contains('grid.result.')));
+      expect(
+        gateCloseCauseOf(
+          const Bead(
+            id: 'historical-gate',
+            issueType: GridIssueTypes.gate,
+            status: BeadStatus.closed,
+          ),
+        ),
+        GateCloseCause.unclassified,
+      );
     });
 
     test(

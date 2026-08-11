@@ -24,12 +24,16 @@ void main() {
     onRefusal: refusals.add,
   );
 
-  Bead session(String id, {bool closed = false}) => Bead(
+  Bead session(
+    String id, {
+    bool closed = false,
+    Map<String, dynamic> metadata = const {'rig': 'tgdog'},
+  }) => Bead(
     id: id,
     title: 'session $id',
     issueType: GridIssueTypes.session,
     status: closed ? BeadStatus.closed : BeadStatus.open,
-    metadata: const {'rig': 'tgdog'},
+    metadata: metadata,
   );
 
   setUp(() {
@@ -227,5 +231,113 @@ void main() {
     // source is never touched (A37).
     expect(runner.calls, isEmpty);
     expect(refusals, hasLength(1));
+  });
+
+  test('terminal sweep closes gates and classifies duplicate mints', () async {
+    runner.exportBeads = [
+      session('tgdog-s', closed: true),
+      Bead(
+        id: 'tgdog-gate-old',
+        issueType: GridIssueTypes.gate,
+        assignee: 'operator',
+        createdAt: DateTime.utc(2026),
+        metadata: const {
+          'rig': 'tgdog',
+          'blocks': 'tgdog-s',
+          'node': 'review/route',
+        },
+      ),
+      Bead(
+        id: 'tgdog-gate-new',
+        issueType: GridIssueTypes.gate,
+        createdAt: DateTime.utc(2026, 1, 2),
+        metadata: const {
+          'rig': 'tgdog',
+          'blocks': 'tgdog-s',
+          'node': 'review/route',
+        },
+      ),
+    ];
+
+    final receipts = await writer().closeOpenGatesForTerminal(
+      sessionId: 'tgdog-s',
+      trigger: GateCloseCause.sessionTerminal,
+      disposition: GateSweepSessionDisposition.done,
+    );
+
+    expect(receipts.map((receipt) => receipt.cause), [
+      GateCloseCause.sessionTerminal,
+      GateCloseCause.duplicateMint,
+    ]);
+    expect(
+      jsonDecode(runner.metadataOfUpdate(0)!)['grid.gate.close_cause'],
+      'session-terminal',
+    );
+    expect(
+      jsonDecode(runner.metadataOfUpdate(2)!)['grid.gate.close_cause'],
+      'duplicate-mint',
+    );
+    expect(runner.callsFor('close'), hasLength(2));
+  });
+
+  test('A48 held session preserves its open gate', () async {
+    runner.exportBeads = [
+      session(
+        'tgdog-held',
+        closed: true,
+        metadata: const {
+          'rig': 'tgdog',
+          'grid.escalation': 'breaker-exhausted',
+        },
+      ),
+      const Bead(
+        id: 'tgdog-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'rig': 'tgdog',
+          'blocks': 'tgdog-held',
+          'node': 'review/route',
+        },
+      ),
+    ];
+    await expectLater(
+      writer().closeOpenGatesForTerminal(
+        sessionId: 'tgdog-held',
+        trigger: GateCloseCause.sessionTerminal,
+        disposition: GateSweepSessionDisposition.held,
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect(runner.callsFor('update'), isEmpty);
+    expect(runner.callsFor('close'), isEmpty);
+  });
+
+  test('live sweep requires the matching closed work bead', () async {
+    runner.exportBeads = [
+      session(
+        'tgdog-s',
+        metadata: const {'rig': 'tgdog', 'work_bead': 'tg-work'},
+      ),
+      const Bead(
+        id: 'tgdog-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {'rig': 'tgdog', 'blocks': 'tgdog-s', 'node': 'route'},
+      ),
+    ];
+    await expectLater(
+      writer().closeOpenGatesForTerminal(
+        sessionId: 'tgdog-s',
+        trigger: GateCloseCause.workBeadClosed,
+        disposition: GateSweepSessionDisposition.live,
+      ),
+      throwsA(isA<StateError>()),
+    );
+    final receipts = await writer().closeOpenGatesForTerminal(
+      sessionId: 'tgdog-s',
+      trigger: GateCloseCause.workBeadClosed,
+      disposition: GateSweepSessionDisposition.live,
+      terminalWorkBead: const Bead(id: 'tg-work', status: BeadStatus.closed),
+    );
+    expect(receipts.single.cause, GateCloseCause.workBeadClosed);
   });
 }
