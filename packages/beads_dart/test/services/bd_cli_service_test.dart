@@ -630,20 +630,31 @@ void main() {
         await service.update(
           'tg-7',
           acceptanceCriteria: 'safe text',
+          appendNotes: 'operator note',
           verifyTextRoundTrip: false,
         );
 
         expect(runner.calls, hasLength(1));
         expect(runner.calls.single.first, 'update');
+        expect(
+          runner.calls.single,
+          containsAllInOrder(['--append-notes', 'operator note']),
+        );
 
-        await expectLater(
-          service.update(
+        for (final unsafeUpdate in <Future<void> Function()>[
+          () => service.update(
             'tg-7',
             acceptanceCriteria: 'unsafe\u0000text',
             verifyTextRoundTrip: false,
           ),
-          throwsA(isA<BeadTextRefused>()),
-        );
+          () => service.update(
+            'tg-7',
+            appendNotes: 'unsafe\u0001text',
+            verifyTextRoundTrip: false,
+          ),
+        ]) {
+          await expectLater(unsafeUpdate(), throwsA(isA<BeadTextRefused>()));
+        }
         expect(runner.calls, hasLength(1));
       },
     );

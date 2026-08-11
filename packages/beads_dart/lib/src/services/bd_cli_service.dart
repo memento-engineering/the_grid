@@ -204,7 +204,7 @@ class BdCliService {
     }
 
     var expectedNotes = '';
-    if (appendNotes != null && appendNotes.isNotEmpty) {
+    if (verifyTextRoundTrip && appendNotes != null && appendNotes.isNotEmpty) {
       final before = (await show([id])).single;
       expectedNotes = before.notes.isEmpty
           ? appendNotes
