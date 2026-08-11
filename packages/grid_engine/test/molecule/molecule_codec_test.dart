@@ -26,6 +26,29 @@ Bead _stepBead(
   metadata: {MoleculeStepKeys.path: nodePath, ...extra},
 );
 
+List<BeadDependency> _chain(List<Bead> beads) => [
+  for (var index = 1; index < beads.length; index++)
+    BeadDependency(
+      issueId: beads[index].id,
+      dependsOnId: beads[index - 1].id,
+      type: DependencyType.supersedes,
+    ),
+];
+
+List<Bead> _reworkChain(String path, Iterable<bool> verdicts) => [
+  for (final (index, reachedVerdict) in verdicts.indexed)
+    _stepBead(
+      'step-$index',
+      path,
+      extra: reachedVerdict
+          ? {
+              ResultKeys.keyFor(path, ResultKeys.grade): 'F',
+              ResultKeys.keyFor(path, ResultKeys.rationale): 'review failed',
+            }
+          : const {},
+    ),
+];
+
 // --- the kCodeCircuit-shaped fixture (mirrors rewind_arm_test.dart's style) --
 //
 // `harnessPeripheral` is a SubCircuitStep nested under the root `code` circuit
@@ -83,6 +106,37 @@ Circuit? _circuitById(String id) => switch (id) {
 };
 
 void main() {
+  group('supersedes verdict spend', () {
+    test('three verdict-less retired rounds spend zero', () {
+      final beads = _reworkChain('tg-1/build', [false, false, false, false]);
+      final dependencies = _chain(beads);
+      expect(supersedesDepthByPath(beads, dependencies)['tg-1/build'], 3);
+      expect(
+        supersedesVerdictCountByPath(beads, dependencies)['tg-1/build'],
+        0,
+      );
+    });
+
+    test('three verdict rounds spend three', () {
+      final beads = _reworkChain('tg-1/build', [true, true, true]);
+      expect(
+        supersedesVerdictCountByPath(beads, _chain(beads))['tg-1/build'],
+        3,
+      );
+    });
+
+    test(
+      'lenny-749o (tg-9q58): one verdict and two infrastructure losses spend one',
+      () {
+        final beads = _reworkChain('tg-1/build', [true, false, false]);
+        expect(
+          supersedesVerdictCountByPath(beads, _chain(beads))['tg-1/build'],
+          1,
+        );
+      },
+    );
+  });
+
   group('stepBeadMetadata (the write half — mirrors nodeCursorMetadata)', () {
     test('writes state + restartCount always; omits null optionals', () {
       final meta = stepBeadMetadata(const NodeCursor(state: StepState.running));

@@ -1057,8 +1057,8 @@ class SessionScopeState extends State<SessionScope>
       await ctx.writer.createStepSuccessor(
         substation: ctx.stateSubstation,
         priorStep: priorStep,
-        currentDepth: currentDepth,
-        maxDepth: currentDepth + 1,
+        spentRounds: spentRounds,
+        maxRounds: kMaxReworkRounds,
       );
     } on Object catch (error) {
       _flare('session.stepSuccessorMintFailed', {

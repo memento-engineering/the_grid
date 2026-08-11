@@ -649,20 +649,23 @@ class StationBeadWriter {
   }
 
   /// Mints the A52 Ratified successor incarnation bead for an invalidated
-  /// terminal molecule step. The prior bead stays terminal with its verdict
-  /// stamps; the new `type=step` bead carries the same structural identity and
-  /// one `supersedes` edge back to the prior incarnation.
+  /// terminal molecule step.
+  ///
+  /// [spentRounds] is the number of predecessor incarnations with durable
+  /// verdicts. The single bd-write chokepoint refuses before mutation when that
+  /// spend reaches [maxRounds]. Structural supersedes depth is identity history
+  /// and is deliberately not a refusal axis.
   Future<String> createStepSuccessor({
     required String substation,
     required Bead priorStep,
-    required int currentDepth,
-    required int maxDepth,
+    required int spentRounds,
+    required int maxRounds,
   }) async {
     if (priorStep.issueType != GridIssueTypes.step) {
       throw ArgumentError.value(priorStep.id, 'priorStep', 'must be type=step');
     }
-    if (currentDepth >= maxDepth) {
-      throw StateError('rework cap reached ($currentDepth/$maxDepth)');
+    if (spentRounds >= maxRounds) {
+      throw StateError('rework verdict cap reached ($spentRounds/$maxRounds)');
     }
     if (!_ownership.ownsTarget(
       id: '$substation-pending',
