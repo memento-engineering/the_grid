@@ -396,12 +396,7 @@ void main() {
       () async {
         runner.stubCommand(
           'show',
-          BdReply(
-            stdout: _beadEnvelope(
-              acceptanceCriteria: '',
-              metadata: const {'other': 'value'},
-            ),
-          ),
+          BdReply(stdout: _beadEnvelope(acceptanceCriteria: '')),
         );
         await service.update(
           'tg-7',
@@ -421,6 +416,21 @@ void main() {
         expect(argv, containsAllInOrder(['--unset-metadata', 'spec.author']));
       },
     );
+
+    test('metadata update is guarded but not read back', () async {
+      final runner = FakeBdRunner(queuedReplies: [_okEnvelope()]);
+
+      await BdCliService(
+        runner,
+      ).update('tg-7', mergeMetadata: const {'attempt': '3'});
+
+      expect(runner.calls, hasLength(1));
+      expect(runner.calls.single.first, 'update');
+      expect(
+        runner.calls.single,
+        containsAllInOrder(['--set-metadata', 'attempt=3']),
+      );
+    });
 
     test('text transport keeps body and design outside argv', () async {
       const body = 'body\r\n\ufeff\u200b\u00a0\t\n  ';
@@ -464,6 +474,40 @@ void main() {
       expect(runner.stdins[1], design);
     });
 
+    test(
+      'failed combined text update propagates and cleans temp directory',
+      () async {
+        String? designPath;
+        String? tempPath;
+        final runner = _InspectingRunner((args, stdin) async {
+          final index = args.indexOf('--design-file');
+          designPath = args[index + 1];
+          tempPath = File(designPath!).parent.path;
+          expect(await File(designPath!).readAsString(), 'design');
+          return const BdResult(
+            exitCode: 1,
+            stdout: '{"schema_version":1,"data":{"error":"mutation failed"}}',
+            stderr: '',
+          );
+        });
+
+        await expectLater(
+          BdCliService(
+            runner,
+          ).update('tg-7', description: 'body', design: 'design'),
+          throwsA(
+            isA<BdCommandFailed>().having(
+              (error) => error.message,
+              'message',
+              contains('mutation failed'),
+            ),
+          ),
+        );
+        expect(designPath, isNotNull);
+        expect(await Directory(tempPath!).exists(), isFalse);
+      },
+    );
+
     test('argv text guard refuses unsafe C0 before any process call', () async {
       for (final update in <Future<void> Function()>[
         () => service.update('tg-7', acceptanceCriteria: 'safe\u0000tail'),
@@ -485,16 +529,43 @@ void main() {
       expect(runner.calls, isEmpty);
     });
 
+    test('argv text guard reports exact clamped context', () async {
+      final boundary =
+          '${List.filled(30, 'a').join()}\u0000${List.filled(29, 'b').join()}';
+      final clamped =
+          '${List.filled(61, 'a').join()}\u0001${List.filled(60, 'b').join()}';
+
+      await expectLater(
+        service.update('tg-7', mergeMetadata: {'key': boundary}),
+        throwsA(
+          isA<BeadTextRefused>()
+              .having((error) => error.field, 'field', 'metadata.key')
+              .having((error) => error.offset, 'offset', 30)
+              .having((error) => error.context, 'context', boundary)
+              .having((error) => error.context.length, 'context length', 60),
+        ),
+      );
+      await expectLater(
+        service.update('tg-7', acceptanceCriteria: clamped),
+        throwsA(
+          isA<BeadTextRefused>()
+              .having((error) => error.offset, 'offset', 61)
+              .having(
+                (error) => error.context,
+                'context',
+                clamped.substring(31, 91),
+              )
+              .having((error) => error.context.length, 'context length', 60),
+        ),
+      );
+      expect(runner.calls, isEmpty);
+    });
+
     test('argv text guard permits tabs and newlines', () async {
       const text = 'tab\tline\nend';
       runner.stubCommand(
         'show',
-        BdReply(
-          stdout: _beadEnvelope(
-            acceptanceCriteria: text,
-            metadata: const {'key': text},
-          ),
-        ),
+        BdReply(stdout: _beadEnvelope(acceptanceCriteria: text)),
       );
       await service.update(
         'tg-7',
@@ -502,6 +573,35 @@ void main() {
         mergeMetadata: const {'key': text},
       );
       expect(runner.calls.first, contains(text));
+    });
+
+    test('argv text preserves authored text', () async {
+      const authored = 'line1\r\n\ufeff\u200b\u00a0\t\ntrailing  ';
+      final runner = FakeBdRunner(
+        queuedReplies: [
+          BdReply(stdout: _beadEnvelope(notes: 'before')),
+          _okEnvelope(),
+          BdReply(
+            stdout: _beadEnvelope(
+              acceptanceCriteria: authored,
+              notes: 'before\n$authored',
+            ),
+          ),
+        ],
+      );
+
+      await BdCliService(
+        runner,
+      ).update('tg-7', acceptanceCriteria: authored, appendNotes: authored);
+      expect(
+        runner.calls[1],
+        containsAllInOrder([
+          '--acceptance',
+          authored,
+          '--append-notes',
+          authored,
+        ]),
+      );
     });
 
     test('argv text round trip reports first divergent offset', () async {
@@ -531,7 +631,6 @@ void main() {
             stdout: _beadEnvelope(
               acceptanceCriteria: text,
               notes: 'before\n$text',
-              metadata: const {'key': text},
             ),
           ),
         ],

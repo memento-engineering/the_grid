@@ -258,8 +258,6 @@ class BdCliService {
       if (acceptanceCriteria != null) 'acceptanceCriteria': acceptanceCriteria,
       if (appendNotes != null && appendNotes.isNotEmpty)
         'appendNotes': expectedNotes,
-      for (final entry in mergeMetadata.entries)
-        'metadata.${entry.key}': entry.value,
     };
     if (expected.isEmpty) return;
 
@@ -269,10 +267,6 @@ class BdCliService {
         'acceptanceCriteria': storedBead.acceptanceCriteria,
       if (appendNotes != null && appendNotes.isNotEmpty)
         'appendNotes': storedBead.notes,
-      for (final entry in mergeMetadata.entries)
-        'metadata.${entry.key}': storedBead.metadata[entry.key] is String
-            ? storedBead.metadata[entry.key] as String
-            : '',
     };
     for (final entry in expected.entries) {
       _verifyRoundTrip(entry.key, entry.value, stored[entry.key]!);
@@ -556,7 +550,7 @@ class BdCliService {
   void _refuseUnsafeArgvText(String field, String value) {
     for (var offset = 0; offset < value.length; offset++) {
       final unit = value.codeUnitAt(offset);
-      if (unit <= 0x1f && unit != 0x09 && unit != 0x0a) {
+      if (unit <= 0x1f && unit != 0x09 && unit != 0x0a && unit != 0x0d) {
         throw BeadTextRefused(
           field: field,
           offset: offset,
