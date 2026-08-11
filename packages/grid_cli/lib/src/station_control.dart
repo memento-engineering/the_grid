@@ -31,6 +31,7 @@ import 'package:genesis_foundation/genesis_foundation.dart' show TreeSnapshot;
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
     show stationTreeBearerProtocolPrefix;
 import 'package:grid_engine/grid_engine.dart' show TreeProjector;
+import 'package:grid_runtime/grid_runtime.dart' show OperatorBeadTextField;
 // The wedge signal is the STATION's own derivation — this surface only reports
 // it. Named through the SDK, never the private engine (ADR-0008 D2).
 import 'package:grid_sdk/grid_sdk.dart'
@@ -516,6 +517,30 @@ class StationControl {
           gateId: gateId,
           grades: grades.cast<String, String>(),
           rationale: rationale as String?,
+        );
+      }
+    } else if (method == 'grid/bead/set') {
+      final beadId = params['beadId'];
+      final field = params['field'];
+      final content = params['content'];
+      final append = params['append'];
+      final fieldValue = switch (field) {
+        'description' => OperatorBeadTextField.description,
+        'design' => OperatorBeadTextField.design,
+        'acceptance' => OperatorBeadTextField.acceptance,
+        'notes' => OperatorBeadTextField.notes,
+        _ => null,
+      };
+      if (beadId is String &&
+          beadId.isNotEmpty &&
+          content is String &&
+          append is bool &&
+          fieldValue != null) {
+        command = GridCommandRequest.setBeadText(
+          beadId: beadId,
+          field: fieldValue,
+          content: content,
+          append: append,
         );
       }
     }

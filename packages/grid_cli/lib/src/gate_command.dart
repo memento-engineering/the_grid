@@ -4,6 +4,7 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 
 import 'station_command_client.dart';
+import 'operator_text_file.dart';
 
 /// Lists and resolves gates through the resident StationControl door.
 ///
@@ -11,10 +12,10 @@ import 'station_command_client.dart';
 /// `bd list --json` currently omits gate beads.
 class GateCommand extends Command<int> {
   /// Creates the gate command with an optional injected resident client.
-  GateCommand({StationCommandClient? client})
+  GateCommand({StationCommandClient? client, Stream<List<int>>? input})
     : _client = client ?? StationCommandClient() {
     addSubcommand(GateLsCommand(client: _client));
-    addSubcommand(GateResolveCommand(client: _client));
+    addSubcommand(GateResolveCommand(client: _client, input: input));
   }
 
   final StationCommandClient _client;
@@ -87,15 +88,21 @@ class GateLsCommand extends Command<int> {
 /// `grid gate resolve <gate-id>` resolves one gate in the resident loop.
 class GateResolveCommand extends Command<int> {
   /// Creates the resolve verb.
-  GateResolveCommand({StationCommandClient? client})
-    : _client = client ?? StationCommandClient() {
+  GateResolveCommand({StationCommandClient? client, Stream<List<int>>? input})
+    : _client = client ?? StationCommandClient(),
+      _input = input {
     _addGridRootOption(argParser);
     argParser
       ..addMultiOption('grade', help: 'A repeated <lane>=<A-F> ruling.')
-      ..addOption('rationale', help: 'Required rationale for grade rulings.');
+      ..addOption('rationale', help: 'Required rationale for grade rulings.')
+      ..addOption(
+        'rationale-file',
+        help: 'Read rationale from UTF-8 file or - for stdin.',
+      );
   }
 
   final StationCommandClient _client;
+  final Stream<List<int>>? _input;
 
   @override
   final String name = 'resolve';
@@ -117,11 +124,34 @@ class GateResolveCommand extends Command<int> {
     }
     final root = _gridRoot(argResults!, stderr.writeln, 'resolve');
     if (root == null) return 64;
+    String? rationale;
+    try {
+      rationale = await selectOperatorText(
+        inlineFlag: '--rationale',
+        fileFlag: '--rationale-file',
+        inlineValue: argResults!.option('rationale'),
+        filePath: argResults!.option('rationale-file'),
+        input: _input,
+      );
+    } on OperatorTextUsage catch (error) {
+      stderr.writeln('grid gate resolve: ${error.message}.');
+      return 64;
+    } on FileSystemException catch (error) {
+      stderr.writeln(
+        'grid gate resolve: cannot read --rationale-file ${argResults!.option('rationale-file')}: ${error.message}',
+      );
+      return 64;
+    } on FormatException catch (error) {
+      stderr.writeln(
+        'grid gate resolve: --rationale-file ${argResults!.option('rationale-file')} is not valid UTF-8: ${error.message}',
+      );
+      return 64;
+    }
     return runGateResolve(
       gridRoot: root,
       gateId: rest.single,
       grades: argResults!.multiOption('grade'),
-      rationale: argResults!.option('rationale'),
+      rationale: rationale,
       client: _client,
     );
   }

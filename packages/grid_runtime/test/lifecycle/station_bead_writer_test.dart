@@ -291,6 +291,25 @@ void main() {
     });
 
     test(
+      'writeOperatorText routes description through guarded service',
+      () async {
+        await writer().writeOperatorText(
+          'tgdog-work1',
+          field: OperatorBeadTextField.description,
+          content: 'operator description',
+          append: false,
+        );
+
+        expect(runner.callsFor('update'), hasLength(1));
+        expect(
+          runner.callsFor('update').single,
+          containsAllInOrder(['--body-file', '-']),
+        );
+        expect(runner.stdins.single, 'operator description');
+      },
+    );
+
+    test(
       'ADR-0006 D2 / ADR-0001 D5: appendNotes update issues no bd show',
       () async {
         await writer().update(

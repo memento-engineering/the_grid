@@ -55,6 +55,66 @@ void main() {
 
   tearDown(() => temp.deleteSync(recursive: true));
 
+  test('--reason-file preserves text and collisions precede probing', () async {
+    const fixture =
+        "literal `cmd` and \$(cmd) and \$VAR and 'single'\n  trailing  ";
+    final reasonFile = File('${temp.path}/reason.txt');
+    await reasonFile.writeAsString(fixture, encoding: utf8, flush: true);
+    expect(
+      await runLink(
+        arguments: _linkArgs([
+          'tg-q9k',
+          '--blocked-by',
+          'pow-60g',
+          '--grid-root',
+          temp.path,
+          '--prefix',
+          'tg',
+          '--prefix',
+          'pow',
+          '--actor',
+          'specify',
+          '--reason-file',
+          reasonFile.path,
+        ]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+      ),
+      0,
+    );
+    final update = state.calls.where((call) => call.first == 'update').single;
+    expect(update, contains('grid.link.reason=$fixture'));
+
+    final calls = state.calls.length;
+    expect(
+      await runLink(
+        arguments: _linkArgs([
+          'tg-q9k',
+          '--blocked-by',
+          'pow-60g',
+          '--grid-root',
+          temp.path,
+          '--prefix',
+          'tg',
+          '--prefix',
+          'pow',
+          '--actor',
+          'specify',
+          '--reason',
+          fixture,
+          '--reason-file',
+          reasonFile.path,
+        ]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+      ),
+      64,
+    );
+    expect(state.calls, hasLength(calls));
+  });
+
   test('mint then list reports metadata and endpoint statuses', () async {
     final minted = <String>[];
     final code = await runLink(
@@ -454,6 +514,7 @@ ArgParser _parser({bool blockedBy = false}) {
     ..addOption('grid-root')
     ..addMultiOption('prefix')
     ..addOption('reason')
+    ..addOption('reason-file')
     ..addOption('actor');
   if (blockedBy) parser.addOption('blocked-by');
   return parser;

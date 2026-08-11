@@ -604,6 +604,23 @@ void main() {
       );
     });
 
+    test('notes replacement uses replacement flag and verifies', () async {
+      const text =
+          "literal `cmd` and \$(cmd) and \$VAR and 'single'\n  trailing  ";
+      final runner = FakeBdRunner(
+        queuedReplies: [
+          _okEnvelope(),
+          BdReply(stdout: _beadEnvelope(notes: text)),
+        ],
+      );
+
+      await BdCliService(runner).update('tg-7', notes: text);
+
+      expect(runner.calls.map((call) => call.first), ['update', 'show']);
+      expect(runner.calls.first, containsAllInOrder(['--notes', text]));
+      expect(runner.calls.first, isNot(contains('--append-notes')));
+    });
+
     test('argv text round trip reports first divergent offset', () async {
       runner.stubCommand(
         'show',

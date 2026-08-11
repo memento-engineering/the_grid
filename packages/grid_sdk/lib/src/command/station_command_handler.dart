@@ -68,7 +68,79 @@ final class StationCommandHandler implements GridCommandHandler {
     GridGateLs() => _listGates(),
     GridGateResolve(:final gateId, :final grades, :final rationale) =>
       _resolveGate(gateId: gateId, grades: grades, rationale: rationale),
+    GridSetBeadText(
+      :final beadId,
+      :final field,
+      :final content,
+      :final append,
+    ) =>
+      _setBeadText(
+        beadId: beadId,
+        field: field,
+        content: content,
+        append: append,
+      ),
   };
+
+  Future<GridCommandResult> _setBeadText({
+    required String beadId,
+    required OperatorBeadTextField field,
+    required String content,
+    required bool append,
+  }) async {
+    if (append && field != OperatorBeadTextField.notes) {
+      return _refused('append_invalid', '--append is valid only for notes.');
+    }
+    final identity = BeadOwnershipPredicate.ownedPrefixOf(
+      beadId,
+      _workStoresByIdentity.keys,
+    );
+    final workStore = identity == null ? null : _workStoresByIdentity[identity];
+    if (workStore == null) {
+      return _refused(
+        'work_store_not_owned',
+        'No resident work store owns "$beadId".',
+      );
+    }
+    await workStore.refresh();
+    final work = workStore.source.current;
+    if (work == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'A resident store has no current snapshot.',
+      );
+    }
+    if (work.bead(beadId) == null) {
+      return _refused(
+        'work_bead_missing',
+        'Work bead "$beadId" is absent from its resident store.',
+      );
+    }
+    try {
+      await workStore.writer.writeOperatorText(
+        beadId,
+        field: field,
+        content: content,
+        append: append,
+      );
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on BeadTextRefused catch (error) {
+      return _refused('text_refused', error.toString());
+    } on BeadTextRoundTripFailure catch (error) {
+      return _refused('text_round_trip_failed', error.toString());
+    }
+    return GridCommandResult.completed(
+      message: 'Updated ${field.name} on "$beadId".',
+      value: {
+        'operation': 'grid/bead/set',
+        'beadId': beadId,
+        'field': field.name,
+      },
+    );
+  }
 
   Future<GridCommandResult> _rework({
     required String beadId,
@@ -206,8 +278,7 @@ final class StationCommandHandler implements GridCommandHandler {
       // The operator finding lands BEFORE collection housekeeping: the note
       // is what the fresh round's architect reads, and losing it to a reap
       // hiccup cost a live round its findings (2026-08-07).
-      final finding = note?.trim();
-      if (finding != null && finding.isNotEmpty) {
+      if (wantsNote) {
         final timestamp = DateTime.now().toUtc().toIso8601String();
         final header = beyondCap
             ? '--- grid rework ROUND $round ($timestamp) '
@@ -216,7 +287,7 @@ final class StationCommandHandler implements GridCommandHandler {
         await workStore.writer.update(
           beadId,
           metadata: const {},
-          appendNotes: '$header\n$finding',
+          appendNotes: '$header\n$note',
         );
       }
       // Reap the retired round's molecule (tg-ehht): the positive-terminal
@@ -349,8 +420,8 @@ final class StationCommandHandler implements GridCommandHandler {
       }
       rulings.add((path: path, grade: grade));
     }
-    final reason = rationale?.trim();
-    if (rulings.isNotEmpty && (reason == null || reason.isEmpty)) {
+    final hasRationale = rationale != null && rationale.trim().isNotEmpty;
+    if (rulings.isNotEmpty && !hasRationale) {
       return _refused(
         'rationale_required',
         'Grade rulings require a rationale.',
@@ -394,7 +465,7 @@ final class StationCommandHandler implements GridCommandHandler {
           metadata: operatorRulingMetadata(
             ruling.path,
             grade: ruling.grade,
-            rationale: reason!,
+            rationale: rationale!,
           ),
         );
       }

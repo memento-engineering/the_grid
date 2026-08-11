@@ -185,6 +185,7 @@ class BdCliService {
     String? assignee,
     Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
+    String? notes,
     String? appendNotes,
 
     /// Whether to re-read and verify argv-transported text after mutation.
@@ -193,6 +194,10 @@ class BdCliService {
     /// process execution, but the successful write is unverified.
     bool verifyTextRoundTrip = true,
   }) async {
+    if (notes != null && appendNotes != null && appendNotes.isNotEmpty) {
+      throw ArgumentError('notes and appendNotes are mutually exclusive');
+    }
+    if (notes != null) _refuseUnsafeArgvText('notes', notes);
     if (acceptanceCriteria != null) {
       _refuseUnsafeArgvText('acceptanceCriteria', acceptanceCriteria);
     }
@@ -246,6 +251,7 @@ class BdCliService {
           assignee: assignee,
           mergeMetadata: mergeMetadata,
           unsetMetadata: unsetMetadata,
+          notes: notes,
           appendNotes: appendNotes,
         ),
         stdin: stdinText,
@@ -264,6 +270,7 @@ class BdCliService {
 
     final expected = <String, String>{
       if (acceptanceCriteria != null) 'acceptanceCriteria': acceptanceCriteria,
+      if (notes != null) 'notes': notes,
       if (appendNotes != null && appendNotes.isNotEmpty)
         'appendNotes': expectedNotes,
     };
@@ -273,6 +280,7 @@ class BdCliService {
     final stored = <String, String>{
       if (acceptanceCriteria != null)
         'acceptanceCriteria': storedBead.acceptanceCriteria,
+      if (notes != null) 'notes': storedBead.notes,
       if (appendNotes != null && appendNotes.isNotEmpty)
         'appendNotes': storedBead.notes,
     };
@@ -455,6 +463,7 @@ class BdCliService {
     String? assignee,
     Map<String, String> mergeMetadata = const {},
     Iterable<String> unsetMetadata = const [],
+    String? notes,
     String? appendNotes,
   }) => [
     'update',
@@ -478,6 +487,7 @@ class BdCliService {
       '${entry.key}=${entry.value}',
     ],
     for (final key in unsetMetadata) ...['--unset-metadata', key],
+    if (notes != null) ...['--notes', notes],
     if (appendNotes != null && appendNotes.isNotEmpty) ...[
       '--append-notes',
       appendNotes,

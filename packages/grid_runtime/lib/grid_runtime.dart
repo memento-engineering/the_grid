@@ -103,6 +103,7 @@ export 'src/lifecycle/bead_ownership.dart' show BeadOwnershipPredicate;
 export 'src/lifecycle/station_bead_writer.dart'
     show
         StationBeadWriter,
+        OperatorBeadTextField,
         OwnershipRefused,
         OwnershipGuardRefused,
         SessionClosedRefused,

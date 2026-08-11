@@ -153,6 +153,9 @@ GateCloseCause gateCloseCauseOf(Bead gate) => GateCloseCause.values.firstWhere(
 /// controller path (it self-triggers the watcher). Grouped `close`+`dep`
 /// mutations go through `bd batch` (one transaction); session lifecycle is
 /// single-bead writes.
+/// A bead prose field writable by an operator one-shot.
+enum OperatorBeadTextField { description, design, acceptance, notes }
+
 class StationBeadWriter {
   StationBeadWriter({
     required BdCliService bd,
@@ -816,6 +819,39 @@ class StationBeadWriter {
         ifStatus: ifStatus,
       ),
     );
+  }
+
+  /// Writes one owned operator prose field through the verified bd seam.
+  Future<void> writeOperatorText(
+    String id, {
+    required OperatorBeadTextField field,
+    required String content,
+    required bool append,
+  }) async {
+    _assertOwned('writeOperatorText', id, const {});
+    if (append && field != OperatorBeadTextField.notes) {
+      throw ArgumentError.value(
+        field,
+        'field',
+        'append is valid only for notes',
+      );
+    }
+    return _serialized(id, () async {
+      switch (field) {
+        case OperatorBeadTextField.description:
+          await _bd.update(id, description: content);
+        case OperatorBeadTextField.design:
+          await _bd.update(id, design: content);
+        case OperatorBeadTextField.acceptance:
+          await _bd.update(id, acceptanceCriteria: content);
+        case OperatorBeadTextField.notes:
+          await _bd.update(
+            id,
+            notes: append ? null : content,
+            appendNotes: append ? content : null,
+          );
+      }
+    });
   }
 
   /// Writes SPECIFY-authored fields and their provenance atomically.

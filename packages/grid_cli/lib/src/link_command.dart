@@ -8,6 +8,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 
 import 'station_stores.dart';
+import 'operator_text_file.dart';
 
 /// One observable work store in the composing station's armed roster.
 class LinkEndpointStore {
@@ -23,17 +24,21 @@ class LinkCommand extends Command<int> {
   LinkCommand({
     required this.stateStorePrefix,
     required Iterable<LinkEndpointStore> endpoints,
-  }) : endpoints = List.unmodifiable(endpoints) {
+    Stream<List<int>>? input,
+  }) : endpoints = List.unmodifiable(endpoints),
+       _input = input {
     argParser
       ..addOption('grid-root')
       ..addMultiOption('prefix')
       ..addOption('blocked-by')
       ..addOption('reason')
+      ..addOption('reason-file')
       ..addOption('actor');
   }
 
   final String stateStorePrefix;
   final List<LinkEndpointStore> endpoints;
+  final Stream<List<int>>? _input;
 
   @override
   final String name = 'link';
@@ -46,6 +51,7 @@ class LinkCommand extends Command<int> {
     arguments: argResults!,
     stateStorePrefix: stateStorePrefix,
     endpoints: endpoints,
+    input: _input,
   );
 }
 
@@ -53,16 +59,20 @@ class UnlinkCommand extends Command<int> {
   UnlinkCommand({
     required this.stateStorePrefix,
     required Iterable<LinkEndpointStore> endpoints,
-  }) : endpoints = List.unmodifiable(endpoints) {
+    Stream<List<int>>? input,
+  }) : endpoints = List.unmodifiable(endpoints),
+       _input = input {
     argParser
       ..addOption('grid-root')
       ..addMultiOption('prefix')
       ..addOption('reason')
+      ..addOption('reason-file')
       ..addOption('actor');
   }
 
   final String stateStorePrefix;
   final List<LinkEndpointStore> endpoints;
+  final Stream<List<int>>? _input;
 
   @override
   final String name = 'unlink';
@@ -75,6 +85,7 @@ class UnlinkCommand extends Command<int> {
     arguments: argResults!,
     stateStorePrefix: stateStorePrefix,
     endpoints: endpoints,
+    input: _input,
   );
 }
 
@@ -86,6 +97,7 @@ Future<int> runLink({
   void Function(String)? err,
   DirectoryProbe? dirExists,
   LinkBdFactory? bdFactory,
+  Stream<List<int>>? input,
 }) async {
   final void Function(String) write =
       out ?? (message) => stdout.writeln(message);
@@ -97,6 +109,7 @@ Future<int> runLink({
   if (arguments.rest.length == 1 && arguments.rest.single == 'ls') {
     if (_hasValue(arguments, 'blocked-by') ||
         _hasValue(arguments, 'reason') ||
+        _hasValue(arguments, 'reason-file') ||
         _hasValue(arguments, 'actor') ||
         arguments.multiOption('prefix').isNotEmpty) {
       writeErr('grid link ls: only --grid-root is accepted.');
@@ -164,10 +177,39 @@ Future<int> runLink({
   }
   final from = arguments.rest.single;
   final to = arguments.option('blocked-by')?.trim() ?? '';
-  final reason = arguments.option('reason')?.trim() ?? '';
+  final String? reason;
+  final reasonFile = arguments.options.contains('reason-file')
+      ? arguments.option('reason-file')
+      : null;
+  try {
+    reason = await selectOperatorText(
+      inlineFlag: '--reason',
+      fileFlag: '--reason-file',
+      inlineValue: arguments.option('reason'),
+      filePath: reasonFile,
+      input: input,
+    );
+  } on OperatorTextUsage catch (error) {
+    writeErr('grid link: ${error.message}.');
+    return 64;
+  } on FileSystemException catch (error) {
+    writeErr(
+      'grid link: cannot read --reason-file $reasonFile: ${error.message}',
+    );
+    return 64;
+  } on FormatException catch (error) {
+    writeErr(
+      'grid link: --reason-file $reasonFile is not valid UTF-8: ${error.message}',
+    );
+    return 64;
+  }
   final actor = arguments.option('actor')?.trim() ?? '';
   final stateStore = _stateStore(arguments, writeErr, 'link');
-  if (to.isEmpty || reason.isEmpty || actor.isEmpty || stateStore == null) {
+  if (to.isEmpty ||
+      reason == null ||
+      reason.trim().isEmpty ||
+      actor.isEmpty ||
+      stateStore == null) {
     writeErr(
       'grid link: --blocked-by, --reason, --actor, and --grid-root are required.',
     );
@@ -226,6 +268,7 @@ Future<int> runUnlink({
   void Function(String)? err,
   DirectoryProbe? dirExists,
   LinkBdFactory? bdFactory,
+  Stream<List<int>>? input,
 }) async {
   final void Function(String) write =
       out ?? (message) => stdout.writeln(message);
@@ -233,12 +276,38 @@ Future<int> runUnlink({
       err ?? (message) => stderr.writeln(message);
   final roster = _roster(endpoints, writeErr, 'unlink');
   if (roster == null) return 64;
-  final reason = arguments.option('reason')?.trim() ?? '';
+  final String? reason;
+  final reasonFile = arguments.options.contains('reason-file')
+      ? arguments.option('reason-file')
+      : null;
+  try {
+    reason = await selectOperatorText(
+      inlineFlag: '--reason',
+      fileFlag: '--reason-file',
+      inlineValue: arguments.option('reason'),
+      filePath: reasonFile,
+      input: input,
+    );
+  } on OperatorTextUsage catch (error) {
+    writeErr('grid unlink: ${error.message}.');
+    return 64;
+  } on FileSystemException catch (error) {
+    writeErr(
+      'grid unlink: cannot read --reason-file $reasonFile: ${error.message}',
+    );
+    return 64;
+  } on FormatException catch (error) {
+    writeErr(
+      'grid unlink: --reason-file $reasonFile is not valid UTF-8: ${error.message}',
+    );
+    return 64;
+  }
   final actor = arguments.option('actor')?.trim() ?? '';
   final stateStore = _stateStore(arguments, writeErr, 'unlink');
   final armed = arguments.multiOption('prefix').toSet();
   if ((arguments.rest.length != 1 && arguments.rest.length != 2) ||
-      reason.isEmpty ||
+      reason == null ||
+      reason.trim().isEmpty ||
       actor.isEmpty ||
       stateStore == null ||
       armed.isEmpty) {
@@ -418,6 +487,7 @@ bool _endpointsArmed(
 }
 
 bool _hasValue(ArgResults arguments, String name) =>
+    arguments.options.contains(name) &&
     (arguments.option(name)?.trim() ?? '').isNotEmpty;
 
 String _metadata(Bead bead, String key) {

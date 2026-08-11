@@ -55,13 +55,14 @@ extension GridCommandRequestPatterns on GridCommandRequest {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,TResult Function( GridSetBeadText value)?  setBeadText,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that);case GridGateLs() when listGates != null:
 return listGates(_that);case GridGateResolve() when resolveGate != null:
-return resolveGate(_that);case _:
+return resolveGate(_that);case GridSetBeadText() when setBeadText != null:
+return setBeadText(_that);case _:
   return orElse();
 
 }
@@ -79,13 +80,14 @@ return resolveGate(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,required TResult Function( GridSetBeadText value)  setBeadText,}){
 final _that = this;
 switch (_that) {
 case GridRework():
 return rework(_that);case GridGateLs():
 return listGates(_that);case GridGateResolve():
-return resolveGate(_that);}
+return resolveGate(_that);case GridSetBeadText():
+return setBeadText(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -99,13 +101,14 @@ return resolveGate(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,TResult? Function( GridSetBeadText value)?  setBeadText,}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that);case GridGateLs() when listGates != null:
 return listGates(_that);case GridGateResolve() when resolveGate != null:
-return resolveGate(_that);case _:
+return resolveGate(_that);case GridSetBeadText() when setBeadText != null:
+return setBeadText(_that);case _:
   return null;
 
 }
@@ -122,12 +125,13 @@ return resolveGate(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
 return listGates();case GridGateResolve() when resolveGate != null:
-return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
+return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText() when setBeadText != null:
+return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case _:
   return orElse();
 
 }
@@ -145,12 +149,13 @@ return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,required TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)  setBeadText,}) {final _that = this;
 switch (_that) {
 case GridRework():
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs():
 return listGates();case GridGateResolve():
-return resolveGate(_that.gateId,_that.grades,_that.rationale);}
+return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText():
+return setBeadText(_that.beadId,_that.field,_that.content,_that.append);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -164,12 +169,13 @@ return resolveGate(_that.gateId,_that.grades,_that.rationale);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult? Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
 return listGates();case GridGateResolve() when resolveGate != null:
-return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
+return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText() when setBeadText != null:
+return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case _:
   return null;
 
 }
@@ -182,7 +188,7 @@ return resolveGate(_that.gateId,_that.grades,_that.rationale);case _:
 
 class GridRework implements GridCommandRequest {
   const GridRework({required this.beadId, this.note, this.beyondCap = false, this.actor});
-
+  
 
  final  String beadId;
  final  String? note;
@@ -254,7 +260,7 @@ as String?,
 
 class GridGateLs implements GridCommandRequest {
   const GridGateLs();
-
+  
 
 
 
@@ -351,6 +357,78 @@ gateId: null == gateId ? _self.gateId : gateId // ignore: cast_nullable_to_non_n
 as String,grades: null == grades ? _self._grades : grades // ignore: cast_nullable_to_non_nullable
 as Map<String, String>,rationale: freezed == rationale ? _self.rationale : rationale // ignore: cast_nullable_to_non_nullable
 as String?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridSetBeadText implements GridCommandRequest {
+  const GridSetBeadText({required this.beadId, required this.field, required this.content, this.append = false});
+  
+
+ final  String beadId;
+ final  OperatorBeadTextField field;
+ final  String content;
+@JsonKey() final  bool append;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridSetBeadTextCopyWith<GridSetBeadText> get copyWith => _$GridSetBeadTextCopyWithImpl<GridSetBeadText>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridSetBeadText&&(identical(other.beadId, beadId) || other.beadId == beadId)&&(identical(other.field, field) || other.field == field)&&(identical(other.content, content) || other.content == content)&&(identical(other.append, append) || other.append == append));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,beadId,field,content,append);
+
+@override
+String toString() {
+  return 'GridCommandRequest.setBeadText(beadId: $beadId, field: $field, content: $content, append: $append)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridSetBeadTextCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridSetBeadTextCopyWith(GridSetBeadText value, $Res Function(GridSetBeadText) _then) = _$GridSetBeadTextCopyWithImpl;
+@useResult
+$Res call({
+ String beadId, OperatorBeadTextField field, String content, bool append
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridSetBeadTextCopyWithImpl<$Res>
+    implements $GridSetBeadTextCopyWith<$Res> {
+  _$GridSetBeadTextCopyWithImpl(this._self, this._then);
+
+  final GridSetBeadText _self;
+  final $Res Function(GridSetBeadText) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? beadId = null,Object? field = null,Object? content = null,Object? append = null,}) {
+  return _then(GridSetBeadText(
+beadId: null == beadId ? _self.beadId : beadId // ignore: cast_nullable_to_non_nullable
+as String,field: null == field ? _self.field : field // ignore: cast_nullable_to_non_nullable
+as OperatorBeadTextField,content: null == content ? _self.content : content // ignore: cast_nullable_to_non_nullable
+as String,append: null == append ? _self.append : append // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 
