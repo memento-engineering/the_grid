@@ -646,6 +646,21 @@ void main() {
       );
     });
 
+    test('throwing maintenance is loud and boot continues', () async {
+      final h = await _Harness.create(failAt: 'gc');
+      addTearDown(h.dispose);
+      expect(await h.run(extra: const ['--no-dry-run']), 0);
+      expect(h.stderrText, contains('state-store gc FAILED'));
+      expect(h.stderrText, contains('boom at gc'));
+      expect(
+        h.events,
+        containsAllInOrder(<String>['gc', 'lock', 'delegate.boot', 'runGrid']),
+      );
+      final gc = h.events.indexOf('gc');
+      final boot = h.events.indexOf('delegate.boot');
+      expect(h.events.sublist(gc, boot), isNot(contains('delegate.dispose')));
+    });
+
     test('success pins startup and the reverse shutdown', () async {
       final h = await _Harness.create(devMode: true);
       addTearDown(h.dispose);

@@ -128,6 +128,57 @@ void main() {
     }
   });
 
+  test('malformed metadata skips without subprocess', () async {
+    final fixture = _Fixture.create();
+    addTearDown(fixture.dispose);
+    File(
+      p.join(fixture.runtimeDir, '.beads', 'metadata.json'),
+    ).writeAsStringSync('{malformed');
+    final output = <String>[];
+    var measured = false;
+    var processCalls = 0;
+
+    await StateStoreGc(
+      readSize: (_) async {
+        measured = true;
+        return 0;
+      },
+      runProcess: (_, __, {required workingDirectory}) async {
+        processCalls++;
+        return _result(0);
+      },
+      out: output.add,
+    ).run(gridHome: fixture.gridHome);
+
+    expect(measured, isFalse);
+    expect(processCalls, 0);
+    expect(output.single, contains('state-store gc skipped'));
+    expect(output.single, contains('store=${fixture.runtimeDir}'));
+    expect(output.single, contains('reason=no dolt_database'));
+  });
+
+  test('initial size failure is loud and returns normally', () async {
+    final fixture = _Fixture.create();
+    addTearDown(fixture.dispose);
+    final errors = <String>[];
+    var processCalls = 0;
+
+    await StateStoreGc(
+      readSize: (_) async => throw const FileSystemException('size failed'),
+      runProcess: (_, __, {required workingDirectory}) async {
+        processCalls++;
+        return _result(0);
+      },
+      err: errors.add,
+    ).run(gridHome: fixture.gridHome);
+
+    expect(processCalls, 0);
+    expect(errors.single, contains('state-store gc FAILED'));
+    expect(errors.single, contains('store=${fixture.databaseDir}'));
+    expect(errors.single, contains('elapsed_ms=0'));
+    expect(errors.single, contains('size failed'));
+  });
+
   test('stop failure is loud, skips cleanup and gc, and returns', () async {
     final fixture = _Fixture.create();
     addTearDown(fixture.dispose);

@@ -356,7 +356,11 @@ class UpCommand extends Command<int> {
     }
 
     if (!config.dryRun) {
-      await _maintainStateStore(gridHome: config.gridHome);
+      try {
+        await _maintainStateStore(gridHome: config.gridHome);
+      } on Object catch (error) {
+        stderr.writeln('$prefix: state-store gc FAILED: error=$error');
+      }
     }
 
     final startedAt = DateTime.now();

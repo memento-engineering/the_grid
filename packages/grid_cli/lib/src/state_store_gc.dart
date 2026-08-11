@@ -57,37 +57,52 @@ final class StateStoreGc {
 
   Future<void> run({required String gridHome}) async {
     final runtimeDir = p.join(gridHome, '.grid');
-    final workspace = BeadsWorkspace.discover(start: runtimeDir);
-    final database = workspace?.database;
-    if (workspace == null ||
-        p.canonicalize(workspace.root) != p.canonicalize(runtimeDir) ||
-        database == null ||
-        database.isEmpty) {
-      _out('state-store gc skipped: store=$runtimeDir reason=no dolt_database');
-      return;
-    }
-
-    final proxyRoot = p.join(workspace.beadsDir, 'dolt');
-    final databaseDir = p.join(proxyRoot, database);
-    if (!await Directory(databaseDir).exists()) {
-      _out(
-        'state-store gc skipped: store=$databaseDir '
-        'reason=database directory absent',
-      );
-      return;
-    }
-
-    final before = await _readSize(databaseDir);
-    if (before <= kStateStoreGcThresholdBytes) {
-      _out(
-        'state-store gc skipped: store=$databaseDir before_bytes=$before '
-        'threshold_bytes=$kStateStoreGcThresholdBytes',
-      );
-      return;
-    }
-
-    final startedAt = _now();
+    var failureStore = runtimeDir;
+    int? failureBefore;
+    DateTime? startedAt;
     try {
+      BeadsWorkspace? workspace;
+      try {
+        workspace = BeadsWorkspace.discover(start: runtimeDir);
+      } on FormatException {
+        _out(
+          'state-store gc skipped: store=$runtimeDir reason=no dolt_database',
+        );
+        return;
+      }
+      final database = workspace?.database;
+      if (workspace == null ||
+          p.canonicalize(workspace.root) != p.canonicalize(runtimeDir) ||
+          database == null ||
+          database.isEmpty) {
+        _out(
+          'state-store gc skipped: store=$runtimeDir reason=no dolt_database',
+        );
+        return;
+      }
+
+      final proxyRoot = p.join(workspace.beadsDir, 'dolt');
+      final databaseDir = p.join(proxyRoot, database);
+      failureStore = databaseDir;
+      if (!await Directory(databaseDir).exists()) {
+        _out(
+          'state-store gc skipped: store=$databaseDir '
+          'reason=database directory absent',
+        );
+        return;
+      }
+
+      final before = await _readSize(databaseDir);
+      failureBefore = before;
+      if (before <= kStateStoreGcThresholdBytes) {
+        _out(
+          'state-store gc skipped: store=$databaseDir before_bytes=$before '
+          'threshold_bytes=$kStateStoreGcThresholdBytes',
+        );
+        return;
+      }
+
+      startedAt = _now();
       final stop = await _runProcess('bd', const <String>[
         'dolt',
         'stop',
@@ -122,9 +137,14 @@ final class StateStoreGc {
         'after_bytes=$after elapsed_ms=$elapsed',
       );
     } on Object catch (error) {
-      final elapsed = _now().difference(startedAt).inMilliseconds;
+      final elapsed = startedAt == null
+          ? 0
+          : _now().difference(startedAt).inMilliseconds;
+      final beforeText = failureBefore == null
+          ? ''
+          : ' before_bytes=$failureBefore';
       _err(
-        'state-store gc FAILED: store=$databaseDir before_bytes=$before '
+        'state-store gc FAILED: store=$failureStore$beforeText '
         'elapsed_ms=$elapsed error=$error',
       );
     }
