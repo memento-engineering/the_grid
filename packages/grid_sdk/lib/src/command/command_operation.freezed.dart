@@ -188,7 +188,7 @@ return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case _:
 
 class GridRework implements GridCommandRequest {
   const GridRework({required this.beadId, this.note, this.beyondCap = false, this.actor});
-
+  
 
  final  String beadId;
  final  String? note;
@@ -260,7 +260,7 @@ as String?,
 
 class GridGateLs implements GridCommandRequest {
   const GridGateLs();
-
+  
 
 
 
@@ -292,7 +292,7 @@ String toString() {
 
 class GridGateResolve implements GridCommandRequest {
   const GridGateResolve({required this.gateId, final  Map<String, String> grades = const <String, String>{}, this.rationale}): _grades = grades;
-
+  
 
  final  String gateId;
  final  Map<String, String> _grades;
@@ -368,7 +368,7 @@ as String?,
 
 class GridSetBeadText implements GridCommandRequest {
   const GridSetBeadText({required this.beadId, required this.field, required this.content, this.append = false});
-
+  
 
  final  String beadId;
  final  OperatorBeadTextField field;
@@ -631,7 +631,7 @@ return refused(_that.code,_that.message);case _:
 
 class GridCommandCompleted implements GridCommandResult {
   const GridCommandCompleted({required this.message, final  Map<String, Object?> value = const <String, Object?>{}}): _value = value;
-
+  
 
 @override final  String message;
  final  Map<String, Object?> _value;
@@ -705,7 +705,7 @@ as Map<String, Object?>,
 
 class GridCommandRefused implements GridCommandResult {
   const GridCommandRefused({required this.code, required this.message});
-
+  
 
  final  String code;
 @override final  String message;

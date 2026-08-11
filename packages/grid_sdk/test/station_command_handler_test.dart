@@ -9,6 +9,69 @@ import 'package:test/test.dart';
 
 void main() {
   group('resident command dispatch', () {
+    test('grid/bead/set routes an owned description through writer', () async {
+      final stateRunner = _RecordingRunner();
+      final workRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(_snapshot(const [])),
+        work: _Source(_workSnapshot()),
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+      );
+
+      final result = await handler(
+        const GridCommandRequest.setBeadText(
+          beadId: 'tg-1',
+          field: OperatorBeadTextField.description,
+          content: 'operator description',
+        ),
+      );
+
+      expect(result, isA<GridCommandCompleted>());
+      expect(
+        workRunner.calls.single,
+        containsAllInOrder(['update', 'tg-1', '--body-file', '-']),
+      );
+    });
+
+    test('grid/bead/set maps ownership and snapshot refusals', () async {
+      for (final entry in <(GridCommandRequest, GraphSnapshot?, String)>[
+        (
+          const GridCommandRequest.setBeadText(
+            beadId: 'other-1',
+            field: OperatorBeadTextField.description,
+            content: 'text',
+          ),
+          _workSnapshot(),
+          'work_store_not_owned',
+        ),
+        (
+          const GridCommandRequest.setBeadText(
+            beadId: 'tg-1',
+            field: OperatorBeadTextField.description,
+            content: 'text',
+          ),
+          null,
+          'snapshot_unavailable',
+        ),
+      ]) {
+        final stateRunner = _RecordingRunner();
+        final workRunner = _RecordingRunner();
+        await _expectRefused(
+          _handler(
+            state: _Source(_snapshot(const [])),
+            work: _Source(entry.$2),
+            stateRunner: stateRunner,
+            workRunner: workRunner,
+          ),
+          entry.$1,
+          code: entry.$3,
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+        );
+      }
+    });
+
     test('grid/gate/ls refreshes and returns sorted open gates only', () async {
       var refreshed = false;
       final state = _Source(_snapshot(const []));

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/src/rework_command.dart';
 import 'package:grid_cli/src/station_command_client.dart';
@@ -11,6 +14,8 @@ import 'package:test/test.dart';
 /// direct store export/write, prefix and note-root options, session cursor and
 /// round projection; resident semantics live in station_command_handler_test.dart.
 void main() {
+  const fixture =
+      "literal `cmd` and \$(cmd) and \$VAR and 'single'\n  trailing  ";
   CommandRunner<int> runner(FakeClient client) =>
       CommandRunner<int>('grid', 'test')
         ..addCommand(ReworkCommand(client: client));
@@ -38,6 +43,45 @@ void main() {
       'beyondCap': true,
       'actor': 'Nico',
     });
+  });
+
+  test('--note-file preserves shell-sensitive text exactly', () async {
+    final temp = await Directory.systemTemp.createTemp('grid-rework-text-');
+    addTearDown(() => temp.delete(recursive: true));
+    final file = File('${temp.path}/note.txt');
+    await file.writeAsString(fixture, encoding: utf8, flush: true);
+    final client = FakeClient(const StationCommandCompleted({}));
+
+    expect(
+      await runner(client).run([
+        'rework',
+        'work-1',
+        '--grid-root',
+        '/grid',
+        '--note-file',
+        file.path,
+      ]),
+      0,
+    );
+    expect(client.params!['note'], fixture);
+  });
+
+  test('--note and --note-file refuse before dispatch', () async {
+    final client = FakeClient(const StationCommandCompleted({}));
+    expect(
+      await runner(client).run(const [
+        'rework',
+        'work-1',
+        '--grid-root',
+        '/grid',
+        '--note',
+        fixture,
+        '--note-file',
+        '-',
+      ]),
+      64,
+    );
+    expect(client.calls, 0);
   });
 
   for (final result in <StationCommandResult>[

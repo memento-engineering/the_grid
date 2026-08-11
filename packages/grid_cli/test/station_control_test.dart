@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_cli/src/hooks_resolver.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -245,6 +246,34 @@ void main() {
         expect(list.statusCode, 200);
         expect(handler.calls.last, const GridCommandRequest.listGates());
 
+        final beadSet = await _post(
+          control.url,
+          '/command',
+          token: 't',
+          fence: '9',
+          idempotencyKey: 'bead-set-1',
+          body: {
+            'id': 'set-1',
+            'method': 'grid/bead/set',
+            'params': {
+              'beadId': 'tg-1',
+              'field': 'notes',
+              'content': 'operator finding',
+              'append': true,
+            },
+          },
+        );
+        expect(beadSet.statusCode, HttpStatus.ok);
+        expect(
+          handler.calls.last,
+          const GridCommandRequest.setBeadText(
+            beadId: 'tg-1',
+            field: OperatorBeadTextField.notes,
+            content: 'operator finding',
+            append: true,
+          ),
+        );
+
         final refused = _FakeCommandHandler(
           result: const GridCommandResult.refused(
             code: 'gate_closed',
@@ -262,7 +291,7 @@ void main() {
           second.url,
           '/command',
           token: 't',
-          fence: '9',
+          fence: '10',
           idempotencyKey: 'gate-1',
           body: {
             'id': 'b',

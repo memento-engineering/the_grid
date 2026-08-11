@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/src/gate_command.dart';
 import 'package:grid_cli/src/station_command_client.dart';
@@ -12,6 +15,8 @@ import 'package:test/test.dart';
 /// state-prefix CLI guards, and CLI-side bead/gate/ownership/F-lane checks;
 /// those resident semantics are covered by station_command_handler_test.dart.
 void main() {
+  const fixture =
+      "literal `cmd` and \$(cmd) and \$VAR and 'single'\n  trailing  ";
   group('grid gate ls resident door', () {
     test('list renders all resident rows sorted', () async {
       final output = <String>[];
@@ -96,6 +101,53 @@ void main() {
   });
 
   group('grid gate resolve parsing', () {
+    test('--rationale-file preserves shell-sensitive text exactly', () async {
+      final temp = await Directory.systemTemp.createTemp('grid-gate-text-');
+      addTearDown(() => temp.delete(recursive: true));
+      final file = File('${temp.path}/rationale.txt');
+      await file.writeAsString(fixture, encoding: utf8, flush: true);
+      final client = FakeClient(const StationCommandCompleted({}));
+      final runner = CommandRunner<int>('grid', 'test')
+        ..addCommand(GateCommand(client: client));
+
+      expect(
+        await runner.run([
+          'gate',
+          'resolve',
+          'g-1',
+          '--grid-root',
+          '/grid',
+          '--grade',
+          'critic=A',
+          '--rationale-file',
+          file.path,
+        ]),
+        0,
+      );
+      expect(client.params!['rationale'], fixture);
+    });
+
+    test('--rationale and --rationale-file refuse before dispatch', () async {
+      final client = FakeClient(const StationCommandCompleted({}));
+      final runner = CommandRunner<int>('grid', 'test')
+        ..addCommand(GateCommand(client: client));
+      expect(
+        await runner.run(const [
+          'gate',
+          'resolve',
+          'g-1',
+          '--grid-root',
+          '/grid',
+          '--rationale',
+          fixture,
+          '--rationale-file',
+          '-',
+        ]),
+        64,
+      );
+      expect(client.calls, 0);
+    });
+
     test('resolve parses grades and sends typed map', () async {
       final client = FakeClient(const StationCommandCompleted({}));
       expect(
