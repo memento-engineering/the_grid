@@ -125,6 +125,15 @@ class ReadyWorkFilter {
   final int limit;
 }
 
+/// Encodes conjunctive metadata equality filters as deterministic bd CLI args.
+List<String> metadataFieldArgs(Map<String, String> fields) => [
+  for (final entry
+      in (fields.entries.toList()..sort((a, b) => a.key.compareTo(b.key)))) ...[
+    '--metadata-field',
+    '${entry.key}=${entry.value}',
+  ],
+];
+
 /// The failure-close vocabulary (beads `types.FailureCloseKeywords`,
 /// `internal/types/types.go:907-921`), ported **verbatim and in order**.
 ///

@@ -162,10 +162,7 @@ class ReadyWorkDifferential {
         '--has-metadata-key',
         filter.hasMetadataKey!,
       ],
-      for (final e
-          in (filter.metadataFields.entries.toList()..sort(
-            (a, b) => a.key.compareTo(b.key),
-          ))) ...['--metadata-field', '${e.key}=${e.value}'],
+      ...metadataFieldArgs(filter.metadataFields),
       // status is NOT a bd ready flag — the CLI hardcodes Status:'open'. A
       // non-open filter has no oracle and must not be run differentially.
       if (status != null && status.wire != 'open')

@@ -3,6 +3,18 @@ import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
 
+final class OpenBeadsCall {
+  const OpenBeadsCall({
+    required this.types,
+    required this.metadataAll,
+    required this.metadataAny,
+  });
+
+  final Set<IssueType> types;
+  final Map<String, String> metadataAll;
+  final Map<String, String> metadataAny;
+}
+
 // DRIFT NOTE (tg-8gv.11(e)): this class has a twin,
 // `package:grid_engine/src/testing/engine_fakes.dart`'s `RecordingBdRunner`.
 // The duplication is dependency-direction-forced — grid_runtime's test
@@ -29,6 +41,10 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
 
   /// Each invocation's piped stdin (null when none), parallel to [calls].
   final List<String?> stdins = <String?>[];
+
+  final List<OpenBeadsCall> _openBeadCalls = [];
+
+  List<OpenBeadsCall> get openBeadCalls => List.unmodifiable(_openBeadCalls);
 
   /// Sets the id the next `bd create` reports (so a test can mint two sessions
   /// with distinct ids).
@@ -68,14 +84,23 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
     required Set<IssueType> types,
     Map<String, String> metadataAll = const {},
     Map<String, String> metadataAny = const {},
-  }) async => exportBeads.where((bead) {
-    if (bead.isClosed || !types.contains(bead.issueType)) return false;
-    if (!metadataAll.entries.every((e) => bead.metadata[e.key] == e.value)) {
-      return false;
-    }
-    return metadataAny.isEmpty ||
-        metadataAny.entries.any((e) => bead.metadata[e.key] == e.value);
-  }).toList();
+  }) async {
+    _openBeadCalls.add(
+      OpenBeadsCall(
+        types: Set.unmodifiable(types),
+        metadataAll: Map.unmodifiable(metadataAll),
+        metadataAny: Map.unmodifiable(metadataAny),
+      ),
+    );
+    return exportBeads.where((bead) {
+      if (bead.isClosed || !types.contains(bead.issueType)) return false;
+      if (!metadataAll.entries.every((e) => bead.metadata[e.key] == e.value)) {
+        return false;
+      }
+      return metadataAny.isEmpty ||
+          metadataAny.entries.any((e) => bead.metadata[e.key] == e.value);
+    }).toList();
+  }
 
   @override
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async {

@@ -56,12 +56,16 @@ class BdCliService {
     return beads;
   }
 
-  /// Reads one explicit type scope, optionally narrowed to [status].
+  /// Reads one explicit type scope, optionally narrowed to [status] and the
+  /// conjunctive metadata equality filters in [metadataFields].
   Future<({List<Bead> beads, List<BeadDependency> dependencies})> listScope({
     required IssueType type,
     BeadStatus? status,
+    Map<String, String> metadataFields = const {},
   }) async {
-    final env = await _runEnvelope(listScopeArgs(type: type, status: status));
+    final env = await _runEnvelope(
+      listScopeArgs(type: type, status: status, metadataFields: metadataFields),
+    );
     return _parseIssueList(env.dataList);
   }
 
@@ -396,11 +400,16 @@ class BdCliService {
 
   List<String> readyArgs() => const ['ready', '--json', '--limit', '0'];
 
-  List<String> listScopeArgs({required IssueType type, BeadStatus? status}) => [
+  List<String> listScopeArgs({
+    required IssueType type,
+    BeadStatus? status,
+    Map<String, String> metadataFields = const {},
+  }) => [
     'list',
     '-t',
     type.wire,
     if (status != null) ...['--status', status.wire],
+    ...metadataFieldArgs(metadataFields),
     '--json',
     '--limit',
     '0',

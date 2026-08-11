@@ -130,10 +130,17 @@ final class CliBeadProbeReader implements BeadProbeReader {
   final BdCliService _bd;
   final Set<IssueType> _lifecycleTypes;
 
-  Future<List<Bead>> _open(Set<IssueType> types) async {
+  Future<List<Bead>> _open(
+    Set<IssueType> types, {
+    Map<String, String> metadataFields = const {},
+  }) async {
     final beads = <String, Bead>{};
     for (final type in types) {
-      final scope = await _bd.listScope(type: type, status: BeadStatus.open);
+      final scope = await _bd.listScope(
+        type: type,
+        status: BeadStatus.open,
+        metadataFields: metadataFields,
+      );
       for (final bead in scope.beads) {
         beads[bead.id] = bead;
       }
@@ -159,15 +166,17 @@ final class CliBeadProbeReader implements BeadProbeReader {
     Map<String, String> metadataAll = const {},
     Map<String, String> metadataAny = const {},
   }) async {
-    final beads = await _open(types);
+    final beads = await _open(types, metadataFields: metadataAll);
     return beads
         .where((bead) {
           final all = metadataAll.entries.every(
-            (e) => bead.metadata[e.key] == e.value,
+            (entry) => bead.metadata[entry.key] == entry.value,
           );
           final any =
               metadataAny.isEmpty ||
-              metadataAny.entries.any((e) => bead.metadata[e.key] == e.value);
+              metadataAny.entries.any(
+                (entry) => bead.metadata[entry.key] == entry.value,
+              );
           return all && any;
         })
         .toList(growable: false);
