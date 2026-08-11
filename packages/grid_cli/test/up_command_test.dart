@@ -299,6 +299,15 @@ final class _Harness {
         return checkoutFreshness[seat.name] ??
             const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.fresh);
       },
+      maintainStateStore: ({required gridHome}) async {
+        expect(gridHome, p.canonicalize(home));
+        events.add('gc');
+        if (failAt == 'gc-contained') {
+          stderr.writeln('state-store gc FAILED: fake failure');
+          return;
+        }
+        _throwIf('gc');
+      },
       waitForShutdown: () async {
         events.add('signal');
         if (holdOpen) {
@@ -590,6 +599,68 @@ void main() {
   });
 
   group('UpCommand assembly', () {
+    test('oversized live state store runs maintenance before lock', () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      expect(await h.run(extra: const ['--no-dry-run']), 0);
+      expect(
+        h.events,
+        containsAllInOrder(<String>[
+          'inspect:earth',
+          'gc',
+          'lock',
+          'delegate.boot',
+        ]),
+      );
+    });
+
+    test('dry-run skips state-store maintenance', () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      expect(await h.run(), 0);
+      expect(h.events, isNot(contains('gc')));
+    });
+
+    test('work stores never enter maintenance', () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      final moon = p.join(h.temp.path, 'oversized-work-store');
+      _seedStore(moon);
+      expect(
+        await h.run(
+          extra: <String>['--no-dry-run', '--substation', 'moon=$moon'],
+        ),
+        0,
+      );
+      expect(h.events.where((event) => event == 'gc'), hasLength(1));
+    });
+
+    test('maintenance failure is loud and non-aborting', () async {
+      final h = await _Harness.create(failAt: 'gc-contained');
+      addTearDown(h.dispose);
+      expect(await h.run(extra: const ['--no-dry-run']), 0);
+      expect(h.stderrText, contains('state-store gc FAILED'));
+      expect(
+        h.events,
+        containsAllInOrder(<String>['gc', 'lock', 'delegate.boot', 'runGrid']),
+      );
+    });
+
+    test('throwing maintenance is loud and boot continues', () async {
+      final h = await _Harness.create(failAt: 'gc');
+      addTearDown(h.dispose);
+      expect(await h.run(extra: const ['--no-dry-run']), 0);
+      expect(h.stderrText, contains('state-store gc FAILED'));
+      expect(h.stderrText, contains('boom at gc'));
+      expect(
+        h.events,
+        containsAllInOrder(<String>['gc', 'lock', 'delegate.boot', 'runGrid']),
+      );
+      final gc = h.events.indexOf('gc');
+      final boot = h.events.indexOf('delegate.boot');
+      expect(h.events.sublist(gc, boot), isNot(contains('delegate.dispose')));
+    });
+
     test('success pins startup and the reverse shutdown', () async {
       final h = await _Harness.create(devMode: true);
       addTearDown(h.dispose);

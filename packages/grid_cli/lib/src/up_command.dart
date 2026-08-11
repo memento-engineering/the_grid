@@ -34,6 +34,7 @@ import 'package:path/path.dart' as p;
 import 'station_control.dart';
 import 'station_flags.dart';
 import 'station_lock.dart';
+import 'state_store_gc.dart';
 
 /// Builds the station-authored delegate from parsed boot configuration ALONE
 /// (tg-1fa2.4): no wiring, no provisioner, no effect implementations —
@@ -131,6 +132,8 @@ typedef VmServiceReader = Future<String?> Function();
 typedef ShutdownWaiter = Future<void> Function();
 typedef PrimaryCheckoutInspector =
     Future<PrimaryCheckoutFreshness> Function(SubstationWorkSpec substation);
+typedef StateStoreMaintainer =
+    Future<void> Function({required String gridHome});
 
 /// Boots a foreground resident station over `runGrid`.
 ///
@@ -159,6 +162,7 @@ class UpCommand extends Command<int> {
     VmServiceReader? readVmServiceUri,
     ShutdownWaiter? waitForShutdown,
     PrimaryCheckoutInspector? inspectPrimaryCheckout,
+    StateStoreMaintainer? maintainStateStore,
   }) : _delegateFactory = delegateFactory,
        _codedRoster = codedRoster,
        _harnessAllowList = Set.unmodifiable(harnessAllowList),
@@ -171,6 +175,7 @@ class UpCommand extends Command<int> {
        _readVmServiceUri = readVmServiceUri ?? stationVmServiceUri,
        _inspectPrimaryCheckout =
            inspectPrimaryCheckout ?? _defaultInspectPrimaryCheckout,
+       _maintainStateStore = maintainStateStore ?? _defaultMaintainStateStore,
        _waitForShutdown = waitForShutdown ?? _waitForTerminationSignal {
     if (_harnessAllowList.isEmpty) {
       throw ArgumentError.value(harnessAllowList, 'harnessAllowList');
@@ -195,11 +200,15 @@ class UpCommand extends Command<int> {
   final DevModeArmer _armDevelopmentMode;
   final VmServiceReader _readVmServiceUri;
   final PrimaryCheckoutInspector _inspectPrimaryCheckout;
+  final StateStoreMaintainer _maintainStateStore;
   final ShutdownWaiter _waitForShutdown;
 
   static Future<PrimaryCheckoutFreshness> _defaultInspectPrimaryCheckout(
     SubstationWorkSpec seat,
   ) => GitOps(SystemGitRunner()).inspectPrimaryCheckout(seat.root);
+
+  static Future<void> _defaultMaintainStateStore({required String gridHome}) =>
+      StateStoreGc().run(gridHome: gridHome);
 
   @override
   String get name => 'up';
@@ -344,6 +353,14 @@ class UpCommand extends Command<int> {
         stderr.writeln('$prefix: $message');
       case StalenessClear():
         break;
+    }
+
+    if (!config.dryRun) {
+      try {
+        await _maintainStateStore(gridHome: config.gridHome);
+      } on Object catch (error) {
+        stderr.writeln('$prefix: state-store gc FAILED: error=$error');
+      }
     }
 
     final startedAt = DateTime.now();
