@@ -236,6 +236,12 @@ final class StationCommandHandler implements GridCommandHandler {
       return _refused('ownership_refused', error.toString());
     }
 
+    // A resident-internal caller can issue this command inside the current
+    // projection/flush turn. Publish the durable retire now so the join sees
+    // the session under beadId#rN and schedules the successor without waiting
+    // for an unrelated dirty-source edge.
+    await _refreshState();
+
     return GridCommandResult.completed(
       message: reapFailure == null
           ? 'Rework round $round retired session "${session.id}".'

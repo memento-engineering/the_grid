@@ -336,6 +336,26 @@ void main() {
               'the joined view already shows tg-1 ready + sessionless — '
               'the mint must not wait for a publish that never comes',
         );
+
+        stateSrc.push(
+          _state([
+            _closedRound1Session('tgdog-round1', workBead: 'tg-1#r1'),
+          ], tick: 2),
+        );
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        final creates = f.runner.callsFor('create');
+        expect(
+          creates.where((call) => !call.contains('--graph')),
+          hasLength(1),
+        );
+        expect(creates.where((call) => call.contains('--graph')), hasLength(1));
+        expect(
+          f.runner.callsFor('close').where((call) => call[1] == 'tgdog-round1'),
+          hasLength(1),
+        );
       },
     );
 

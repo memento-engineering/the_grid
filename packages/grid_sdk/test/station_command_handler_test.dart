@@ -99,6 +99,64 @@ void main() {
       },
     );
 
+    test(
+      'grid/rework publishes its own retire and replay does not retire twice',
+      () async {
+        final stateRunner = _RecordingRunner();
+        final workRunner = _RecordingRunner();
+        final state = _Source(_snapshot([_session('tgdog-session')]));
+        final work = _Source(_workSnapshot());
+        addTearDown(state.dispose);
+        addTearDown(work.dispose);
+
+        var refreshes = 0;
+        final emitted = <GraphSnapshot>[];
+        final subscription = state.snapshots.listen(emitted.add);
+        addTearDown(subscription.cancel);
+
+        final handler = _handler(
+          state: state,
+          work: work,
+          stateRunner: stateRunner,
+          workRunner: workRunner,
+          refreshState: () async {
+            refreshes++;
+            if (refreshes == 2) {
+              state.push(
+                _snapshot([_session('tgdog-session', workBead: 'tg-1#r1')]),
+              );
+            }
+          },
+        );
+
+        final first = await handler(
+          const GridCommandRequest.rework(beadId: 'tg-1'),
+        );
+
+        expect(first, isA<GridCommandCompleted>());
+        expect(refreshes, 2);
+        expect(
+          emitted.single.beads.single.metadata[SessionBeadKeys.workBead],
+          'tg-1#r1',
+        );
+        expect(_reworkUpdates(stateRunner), hasLength(1));
+
+        final replay = await handler(
+          const GridCommandRequest.rework(beadId: 'tg-1'),
+        );
+        expect(
+          replay,
+          isA<GridCommandRefused>().having(
+            (value) => value.code,
+            'code',
+            'session_not_found',
+          ),
+        );
+        expect(_reworkUpdates(stateRunner), hasLength(1));
+        expect(emitted, hasLength(1));
+      },
+    );
+
     test('grid/rework routes a hyphenated work-store prefix', () async {
       final stateRunner = _RecordingRunner();
       final workRunner = _RecordingRunner();
@@ -968,6 +1026,16 @@ GraphSnapshot _gateSnapshot() => _snapshot([
   ),
 ]);
 
+List<List<String>> _reworkUpdates(_RecordingRunner runner) => runner.calls
+    .where(
+      (call) =>
+          call.length > 1 &&
+          call[0] == 'update' &&
+          call[1] == 'tgdog-session' &&
+          call.any((argument) => argument.contains('tg-1#r1')),
+    )
+    .toList(growable: false);
+
 Future<void> _expectRefused(
   StationCommandHandler handler,
   GridCommandRequest request, {
@@ -1027,11 +1095,23 @@ GraphSnapshot _snapshot(Iterable<Bead> beads) => GraphSnapshot.fromParts(
 final class _Source implements SnapshotSource {
   _Source(this.current);
 
+  final StreamController<GraphSnapshot> _controller =
+      StreamController<GraphSnapshot>.broadcast(sync: true);
+
   @override
   GraphSnapshot? current;
 
+  void push(GraphSnapshot snapshot) {
+    current = snapshot;
+    _controller.add(snapshot);
+  }
+
   @override
-  Stream<GraphSnapshot> get snapshots => const Stream.empty();
+  Stream<GraphSnapshot> get snapshots => _controller.stream;
+
+  Future<void> dispose() async {
+    await _controller.close();
+  }
 }
 
 final class _RecordingRunner implements BdRunner, BeadProbeReader {
