@@ -187,26 +187,96 @@ class BdCliService {
     Iterable<String> unsetMetadata = const [],
     String? appendNotes,
   }) async {
+    if (acceptanceCriteria != null) {
+      _refuseUnsafeArgvText('acceptanceCriteria', acceptanceCriteria);
+    }
+    if (appendNotes != null && appendNotes.isNotEmpty) {
+      _refuseUnsafeArgvText('appendNotes', appendNotes);
+    }
+    for (final entry in mergeMetadata.entries) {
+      _refuseUnsafeArgvText('metadata.${entry.key}', entry.value);
+    }
+
+    var expectedNotes = '';
+    if (appendNotes != null && appendNotes.isNotEmpty) {
+      final before = (await show([id])).single;
+      expectedNotes = before.notes.isEmpty
+          ? appendNotes
+          : '${before.notes}\n$appendNotes';
+    }
+
+    Directory? tempDir;
+    String? stdinText;
+    String? bodyFile;
+    String? designFile;
     // Decode asserts the schema version (drift guard) on the mutation path too;
     // a non-zero exit was already raised inside _runEnvelope.
-    await _runEnvelope(
-      updateArgs(
-        id,
-        ifAssignee: ifAssignee,
-        ifStatus: ifStatus,
-        title: title,
-        status: status,
-        priority: priority,
-        description: description,
-        design: design,
-        acceptanceCriteria: acceptanceCriteria,
-        type: type,
-        assignee: assignee,
-        mergeMetadata: mergeMetadata,
-        unsetMetadata: unsetMetadata,
-        appendNotes: appendNotes,
-      ),
-    );
+    try {
+      if (description != null) {
+        bodyFile = '-';
+        stdinText = description;
+      }
+      if (design != null && description == null) {
+        designFile = '-';
+        stdinText = design;
+      } else if (design != null) {
+        tempDir = await Directory.systemTemp.createTemp('beads-dart-update-');
+        final file = File('${tempDir.path}/design.txt');
+        await file.writeAsString(design);
+        designFile = file.path;
+      }
+      await _runEnvelope(
+        updateArgs(
+          id,
+          ifAssignee: ifAssignee,
+          ifStatus: ifStatus,
+          title: title,
+          status: status,
+          priority: priority,
+          bodyFile: bodyFile,
+          designFile: designFile,
+          acceptanceCriteria: acceptanceCriteria,
+          type: type,
+          assignee: assignee,
+          mergeMetadata: mergeMetadata,
+          unsetMetadata: unsetMetadata,
+          appendNotes: appendNotes,
+        ),
+        stdin: stdinText,
+      );
+    } finally {
+      if (tempDir != null) {
+        try {
+          await tempDir.delete(recursive: true);
+        } on Object {
+          // Best-effort cleanup; never mask the mutation result/error.
+        }
+      }
+    }
+
+    final expected = <String, String>{
+      if (acceptanceCriteria != null) 'acceptanceCriteria': acceptanceCriteria,
+      if (appendNotes != null && appendNotes.isNotEmpty)
+        'appendNotes': expectedNotes,
+      for (final entry in mergeMetadata.entries)
+        'metadata.${entry.key}': entry.value,
+    };
+    if (expected.isEmpty) return;
+
+    final storedBead = (await show([id])).single;
+    final stored = <String, String>{
+      if (acceptanceCriteria != null)
+        'acceptanceCriteria': storedBead.acceptanceCriteria,
+      if (appendNotes != null && appendNotes.isNotEmpty)
+        'appendNotes': storedBead.notes,
+      for (final entry in mergeMetadata.entries)
+        'metadata.${entry.key}': storedBead.metadata[entry.key] is String
+            ? storedBead.metadata[entry.key] as String
+            : '',
+    };
+    for (final entry in expected.entries) {
+      _verifyRoundTrip(entry.key, entry.value, stored[entry.key]!);
+    }
   }
 
   /// `bd close <id> [--reason …]`.
@@ -376,8 +446,8 @@ class BdCliService {
     String? title,
     BeadStatus? status,
     int? priority,
-    String? description,
-    String? design,
+    String? bodyFile,
+    String? designFile,
     String? acceptanceCriteria,
     IssueType? type,
     String? assignee,
@@ -394,8 +464,8 @@ class BdCliService {
     if (title != null) ...['--title', title],
     if (status != null) ...['--status', status.wire],
     if (priority != null) ...['--priority', '$priority'],
-    if (description != null) ...['--description', description],
-    if (design != null) ...['--design', design],
+    if (bodyFile != null) ...['--body-file', bodyFile],
+    if (designFile != null) ...['--design-file', designFile],
     if (acceptanceCriteria != null) ...['--acceptance', acceptanceCriteria],
     if (type != null) ...['--type', type.wire],
     if (assignee != null) ...['--assignee', assignee],
@@ -479,9 +549,47 @@ class BdCliService {
   // ---------------------------------------------------------------------------
 
   Future<BdResult> _run(List<String> args, {String? stdin}) {
-    // [stdin] feeds `bd batch`'s line-oriented script to the child process
-    // (ADR-0001 D4: one spawn, one Dolt transaction).
+    // [stdin] feeds text through bd's native stdin transports.
     return _runner.run(args, stdin: stdin);
+  }
+
+  void _refuseUnsafeArgvText(String field, String value) {
+    for (var offset = 0; offset < value.length; offset++) {
+      final unit = value.codeUnitAt(offset);
+      if (unit <= 0x1f && unit != 0x09 && unit != 0x0a) {
+        throw BeadTextRefused(
+          field: field,
+          offset: offset,
+          context: _contextAt(value, offset),
+        );
+      }
+    }
+  }
+
+  String _contextAt(String value, int offset) {
+    final start = (offset - 30).clamp(0, value.length);
+    final end = (start + 60).clamp(0, value.length);
+    return value.substring(start, end);
+  }
+
+  void _verifyRoundTrip(String field, String sent, String stored) {
+    if (sent == stored) return;
+    final sharedLength = sent.length < stored.length
+        ? sent.length
+        : stored.length;
+    var offset = 0;
+    while (offset < sharedLength &&
+        sent.codeUnitAt(offset) == stored.codeUnitAt(offset)) {
+      offset++;
+    }
+    throw BeadTextRoundTripFailure(
+      field: field,
+      sentLength: sent.length,
+      storedLength: stored.length,
+      offset: offset,
+      sentContext: _contextAt(sent, offset),
+      storedContext: _contextAt(stored, offset),
+    );
   }
 
   Future<BdEnvelope> _runEnvelope(List<String> args, {String? stdin}) async {

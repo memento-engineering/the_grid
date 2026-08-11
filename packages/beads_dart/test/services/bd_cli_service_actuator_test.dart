@@ -18,6 +18,13 @@ void main() {
     }),
   );
 
+  BdReply bead(Map<String, dynamic> data) => BdReply(
+    stdout: jsonEncode({
+      'schema_version': 1,
+      'data': [data],
+    }),
+  );
+
   void expectActor(List<String> argv) {
     final i = argv.indexOf('--actor');
     expect(i, greaterThanOrEqualTo(0), reason: 'no --actor in $argv');
@@ -26,7 +33,19 @@ void main() {
 
   group('update metadata operations — convergence transition writes', () {
     test('emits ordered merge operations and stamps the actor', () async {
-      final runner = FakeBdRunner()..stubCommand('update', okObject());
+      final runner = FakeBdRunner()
+        ..stubCommand('update', okObject())
+        ..stubCommand(
+          'show',
+          bead({
+            'id': 'tg-conv',
+            'metadata': {
+              'convergence.state': 'terminated',
+              'convergence.detail': 'left=right',
+              'convergence.empty': '',
+            },
+          }),
+        );
       final service = BdCliService(runner);
 
       await service.update(
@@ -38,7 +57,7 @@ void main() {
         },
       );
 
-      final argv = runner.calls.single;
+      final argv = runner.calls.first;
       expect(argv.first, 'update');
       expect(argv[1], 'tg-conv');
       expectActor(argv);
@@ -80,7 +99,7 @@ void main() {
           priority: 0,
         );
 
-        final argv = runner.calls.single;
+        final argv = runner.calls.first;
         expect(argv, containsAllInOrder(['--status', 'in_progress']));
         expect(argv, containsAllInOrder(['--priority', '0']));
         expect(argv, isNot(contains('--metadata')));
@@ -90,7 +109,15 @@ void main() {
     test(
       'activation channel: --type and --assignee promote a deferred node',
       () async {
-        final runner = FakeBdRunner()..stubCommand('update', okObject());
+        final runner = FakeBdRunner()
+          ..stubCommand('update', okObject())
+          ..stubCommand(
+            'show',
+            bead({
+              'id': 'tg-step',
+              'metadata': {'gc.routed_to': 'rig/polisher'},
+            }),
+          );
         final service = BdCliService(runner);
 
         await service.update(
@@ -100,7 +127,7 @@ void main() {
           mergeMetadata: const {'gc.routed_to': 'rig/polisher'},
         );
 
-        final argv = runner.calls.single;
+        final argv = runner.calls.first;
         expect(argv, containsAllInOrder(['--type', 'task']));
         expect(argv, containsAllInOrder(['--assignee', 'rig/polisher']));
         expect(
