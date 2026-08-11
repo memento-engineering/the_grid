@@ -70,6 +70,9 @@ class Advance extends RouteVerdict {
 /// dangling name is an authoring bug and routes to a supervised [Failed] — never
 /// a silent no-op.
 class Rewind extends RouteVerdict {
+  /// The rework budget counts only incarnations that reached a durable
+  /// `grid.result.*` committee or route verdict. Verdict-less infrastructure
+  /// retirements retain structural history without spending it.
   /// Rewinds the sibling steps [stepIds] (plus their transitive dependents and
   /// this node), carrying a human-readable [reason] (flared + recorded as
   /// diagnostics; the engine NEVER parses it).
@@ -303,9 +306,10 @@ class EscalationRequest {
   /// Why the route declined — the route's OWN words. The engine never parses it.
   final String reason;
 
-  /// How many rework rounds this node already spent (`kMaxReworkRounds` is the
-  /// belt) — the input a policy handler needs to tell "the route declined" from
-  /// "the loop hit its cap".
+  /// The number of rework incarnations that reached a durable
+  /// `grid.result.*` committee or route verdict. Agent death, failed spawn,
+  /// station bounce, readiness hold, and every other verdict-less retirement
+  /// retain structural history but do not spend this budget.
   final int rewindCount;
 }
 

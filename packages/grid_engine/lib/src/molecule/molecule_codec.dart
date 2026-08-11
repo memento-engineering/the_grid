@@ -20,7 +20,7 @@ library;
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
-import '../domain/session_bead.dart' show truncateReason;
+import '../domain/session_bead.dart' show projectCircuitResults, truncateReason;
 import '../sdk/circuit.dart';
 import '../sdk/cursor.dart';
 import '../sdk/frontier.dart' show depTerminalPath, stepPath;
@@ -135,6 +135,49 @@ Map<String, int> supersedesDepthByPath(
     ).entries)
       entry.key: depths[entry.value.id] ?? 0,
   };
+}
+
+/// Verdict-spending supersedes incarnations for each active step path.
+Map<String, int> supersedesVerdictCountByPath(
+  Iterable<Bead> moleculeBeads,
+  Iterable<BeadDependency> dependencies,
+) {
+  final beads = moleculeBeads.toList(growable: false);
+  final byId = {for (final bead in beads) bead.id: bead};
+  final priorBySuccessor = <String, String>{
+    for (final dependency in dependencies)
+      if (dependency.type == DependencyType.supersedes)
+        dependency.issueId: dependency.dependsOnId,
+  };
+  return {
+    for (final entry in activeStepBeadsByPath(beads, dependencies).entries)
+      entry.key: _supersedesVerdictCount(
+        entry.value,
+        byId: byId,
+        priorBySuccessor: priorBySuccessor,
+        visited: <String>{},
+      ),
+  };
+}
+
+int _supersedesVerdictCount(
+  Bead bead, {
+  required Map<String, Bead> byId,
+  required Map<String, String> priorBySuccessor,
+  required Set<String> visited,
+}) {
+  if (!visited.add(bead.id)) return 0;
+  final priorId = priorBySuccessor[bead.id];
+  final prior = priorId == null ? null : byId[priorId];
+  return (projectCircuitResults(bead).isEmpty ? 0 : 1) +
+      (prior == null
+          ? 0
+          : _supersedesVerdictCount(
+              prior,
+              byId: byId,
+              priorBySuccessor: priorBySuccessor,
+              visited: visited,
+            ));
 }
 
 ({CircuitCursor cursor, Map<String, String> beadIdByNodePath})

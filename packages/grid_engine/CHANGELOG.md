@@ -1,5 +1,8 @@
 ## 0.3.0-rc.3
 
+- Breaking: the `kMaxReworkRounds` budget now counts only rounds that reached a
+  durable verdict; verdict-less infrastructure losses retain history but do not
+  spend rework budget (tg-9q58).
 - Breaking (tg-1fa2.5): the provider layer — `Provider<T>` is a MOUNTED seed
   (`SingleChildStatefulSeed`): `create:` runs once per mount (tree-owned,
   tree-disposed), `.value` adopts without ownership; `ProviderScope` is the

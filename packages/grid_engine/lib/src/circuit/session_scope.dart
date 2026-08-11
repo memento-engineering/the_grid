@@ -1018,6 +1018,7 @@ class SessionScopeState extends State<SessionScope>
     required String nodePath,
     required Bead priorStep,
     required int currentDepth,
+    required int spentRounds,
   }) {
     if (_mintingSuccessorForPath.contains(nodePath)) return;
     _mintingSuccessorForPath.add(nodePath);
@@ -1028,6 +1029,7 @@ class SessionScopeState extends State<SessionScope>
           nodePath: nodePath,
           priorStep: priorStep,
           currentDepth: currentDepth,
+          spentRounds: spentRounds,
         ),
       ),
     );
@@ -1038,6 +1040,7 @@ class SessionScopeState extends State<SessionScope>
     required String nodePath,
     required Bead priorStep,
     required int currentDepth,
+    required int spentRounds,
   }) async {
     final ctx = _ctx;
     if (ctx == null) {
@@ -1045,11 +1048,17 @@ class SessionScopeState extends State<SessionScope>
       return;
     }
     try {
+      if (spentRounds >= kMaxReworkRounds) {
+        throw StateError(
+          'step successor refused at verdict cap '
+          '($spentRounds/$kMaxReworkRounds) for "$nodePath"',
+        );
+      }
       await ctx.writer.createStepSuccessor(
         substation: ctx.stateSubstation,
         priorStep: priorStep,
         currentDepth: currentDepth,
-        maxDepth: kMaxReworkRounds,
+        maxDepth: currentDepth + 1,
       );
     } on Object catch (error) {
       _flare('session.stepSuccessorMintFailed', {
@@ -1296,6 +1305,8 @@ class SessionScopeState extends State<SessionScope>
     var invalidated = const <String>{};
     var heldForSuccessor = const <String>{};
     var moleculeProjectedCursor = const <String, NodeCursor>{};
+    var structuralDepthByPath = const <String, int>{};
+    var spentRoundsByPath = const <String, int>{};
     var circuitRoundsByPath = const <String, int>{};
     if (isMolecule) {
       final projected = projectMoleculeCursor(
@@ -1329,11 +1340,15 @@ class SessionScopeState extends State<SessionScope>
         _scheduleOrphanedPourResume(id);
         return const Idle();
       }
-      final depthByPath = supersedesDepthByPath(
+      structuralDepthByPath = supersedesDepthByPath(
         joined.moleculeBeads,
         joined.moleculeDependencies,
       );
-      circuitRoundsByPath = depthByPath;
+      spentRoundsByPath = supersedesVerdictCountByPath(
+        joined.moleculeBeads,
+        joined.moleculeDependencies,
+      );
+      circuitRoundsByPath = structuralDepthByPath;
       final activeByPath = activeStepBeadsByPath(
         joined.moleculeBeads,
         joined.moleculeDependencies,
@@ -1354,7 +1369,7 @@ class SessionScopeState extends State<SessionScope>
         results,
         seed.bead.id,
         circuitById: registry?.circuit ?? (String _) => null,
-        supersedesDepthByPath: depthByPath,
+        supersedesDepthByPath: structuralDepthByPath,
       );
       final effective = effectiveCursor(
         seed.circuit,
@@ -1362,12 +1377,14 @@ class SessionScopeState extends State<SessionScope>
         results,
         seed.bead.id,
         circuitById: registry?.circuit ?? (String _) => null,
-        supersedesDepthByPath: depthByPath,
+        supersedesDepthByPath: structuralDepthByPath,
+        spentReworkRoundsByPath: spentRoundsByPath,
       );
       final holds = <String>{};
       for (final path in invalidated) {
-        final depth = depthByPath[path] ?? 0;
-        if (depth >= kMaxReworkRounds) continue;
+        final depth = structuralDepthByPath[path] ?? 0;
+        final spentRounds = spentRoundsByPath[path] ?? 0;
+        if (spentRounds >= kMaxReworkRounds) continue;
         final priorStep = activeByPath[path];
         final node = projected.cursor[path];
         if (priorStep == null || node == null || !node.isPositiveTerminal) {
@@ -1378,6 +1395,7 @@ class SessionScopeState extends State<SessionScope>
           nodePath: path,
           priorStep: priorStep,
           currentDepth: depth,
+          spentRounds: spentRounds,
         );
         holds.add(path);
       }
@@ -1431,10 +1449,8 @@ class SessionScopeState extends State<SessionScope>
                 results,
                 seed.bead.id,
                 circuitById: registry.circuit,
-                supersedesDepthByPath: supersedesDepthByPath(
-                  joined!.moleculeBeads,
-                  joined.moleculeDependencies,
-                ),
+                supersedesDepthByPath: structuralDepthByPath,
+                spentReworkRoundsByPath: spentRoundsByPath,
               )
             : null;
         if (derived != null) {

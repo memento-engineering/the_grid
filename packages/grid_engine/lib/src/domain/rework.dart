@@ -35,6 +35,10 @@ library;
 /// fresh session ⇒ a fresh cursor ⇒ a fresh count).
 const int kMaxReworkRounds = 3;
 
+/// One retired rework round and whether durable result metadata proves that
+/// its session reached a committee or route verdict.
+typedef RetiredReworkRound = ({String workBeadKey, bool reachedVerdict});
+
 /// The retired-round `work_bead` value for [beadId] at [round] (`<beadId>#r<N>`)
 /// — the ONE place the key shape is authored.
 String reworkKeyFor(String beadId, int round) => '$beadId#r$round';
@@ -65,6 +69,19 @@ int maxReworkRound(String beadId, Iterable<String> workBeadKeys) {
   }
   return highest;
 }
+
+/// The matching retired rounds for [beadId] that spent verdict budget.
+///
+/// Every `#r<N>` key remains ordinal history. A matching key spends budget
+/// only when [RetiredReworkRound.reachedVerdict] is true; `#void-` keys and
+/// foreign or malformed keys never spend it.
+int spentReworkRounds(
+  String beadId,
+  Iterable<RetiredReworkRound> retiredRounds,
+) => retiredRounds.where((round) {
+  return round.reachedVerdict &&
+      reworkRoundOf(beadId, round.workBeadKey) != null;
+}).length;
 
 /// The VOIDED-session `work_bead` value (I-10, tg-4rw) — the key a DEAD session
 /// is retired to when the engine mints fresh over it
