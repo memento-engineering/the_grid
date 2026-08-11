@@ -79,7 +79,11 @@ void main() {
       );
       final successors = await reader.openSuperseding({'tg-old'});
 
-      expect(open.map((bead) => bead.id), ['tg-gate1']);
+      expect(open.map((bead) => bead.id), [
+        'tg-step-session',
+        'tg-step-foreign',
+        'tg-gate1',
+      ]);
       expect(successors.map((bead) => bead.id), ['tg-gate1']);
       expect(runner.calls.where((args) => args.first == 'list'), [
         ['list', '-t', 'step', '--status', 'open', '--json', '--limit', '0'],
@@ -89,6 +93,31 @@ void main() {
       ]);
       expect(runner.calls.where((args) => args.first == 'show'), isEmpty);
       expect(runner.calls.where((args) => args.first == 'export'), isEmpty);
+    });
+
+    test('pushes metadataAll into list and defensively filters rows', () async {
+      final runner = _ScopedRunner();
+
+      final beads = await _reader(runner).openBeads(
+        types: const {IssueType('step')},
+        metadataAll: const {'grid.step.session': 'tgdog-sess1'},
+      );
+
+      expect(beads.map((bead) => bead.id), ['tg-step-session']);
+      expect(runner.calls, [
+        [
+          'list',
+          '-t',
+          'step',
+          '--status',
+          'open',
+          '--metadata-field',
+          'grid.step.session=tgdog-sess1',
+          '--json',
+          '--limit',
+          '0',
+        ],
+      ]);
     });
   });
 
@@ -190,17 +219,38 @@ class _ScopedRunner implements BdRunner {
       );
     }
     if (args.first != 'list') throw StateError('unexpected call: $args');
-    if (args.length != 8 ||
+    if (args.length < 8 ||
         args[1] != '-t' ||
         args[3] != '--status' ||
         args[4] != 'open' ||
-        args[5] != '--json' ||
-        args[6] != '--limit' ||
-        args[7] != '0') {
+        args[args.length - 3] != '--json' ||
+        args[args.length - 2] != '--limit' ||
+        args.last != '0') {
       throw StateError('unexpected list: $args');
+    }
+    for (var i = 5; i < args.length - 3; i += 2) {
+      if (i + 1 >= args.length - 3 || args[i] != '--metadata-field') {
+        throw StateError('unexpected list metadata fields: $args');
+      }
     }
     final type = args[2];
     final data = <Map<String, dynamic>>[];
+    if (type == 'step') {
+      data.addAll([
+        {
+          'id': 'tg-step-session',
+          'issue_type': 'step',
+          'status': 'open',
+          'metadata': {'grid.step.session': 'tgdog-sess1'},
+        },
+        {
+          'id': 'tg-step-foreign',
+          'issue_type': 'step',
+          'status': 'open',
+          'metadata': {'grid.step.session': 'tgdog-sess2'},
+        },
+      ]);
+    }
     if (type == 'gate') {
       data.add({
         'id': 'tg-gate1',
