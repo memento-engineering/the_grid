@@ -18,6 +18,7 @@
 //       give up" but genuine bounded retry.
 //
 // Zero I/O: fakes + the recording chokepoint + a fake transport.
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:genesis_tree/genesis_tree.dart';
@@ -99,13 +100,19 @@ class _RecordingTransport implements ExplorationTransport {
 /// larger than the mint budget models the PERSISTENT misconfiguration; `1`
 /// models a transient blip. Records every argv in order.
 class _FailCreateRunner implements BdRunner {
-  _FailCreateRunner({required this.failCreates, this.failGraphApplies = 0});
+  _FailCreateRunner({
+    required this.failCreates,
+    this.failGraphApplies = 0,
+    this.failListsWithTimeout = false,
+  });
 
   final int failCreates;
   final int failGraphApplies;
+  final bool failListsWithTimeout;
   final List<List<String>> calls = <List<String>>[];
   int _creates = 0;
   int _graphApplies = 0;
+  int _listTimeoutCount = 0;
 
   /// The `key → id` map a `bd create --graph` pour reports (mirrors
   /// [RecordingBdRunner.graphApplyIds]) — `createMolecule`'s graph-apply pour
@@ -140,6 +147,35 @@ class _FailCreateRunner implements BdRunner {
   }) async {
     calls.add(List<String>.unmodifiable(args));
     final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'list' &&
+        failListsWithTimeout &&
+        args.length > 2 &&
+        (args[2] == GridIssueTypes.molecule.wire ||
+            args[2] == GridIssueTypes.step.wire)) {
+      // The full tree can schedule duplicate readiness checks while the first
+      // dedup probe is in flight. Keep those pending, as a real 15s process
+      // timeout would be, so this regression observes the first terminal park.
+      if (_listTimeoutCount >= 2) return Completer<BdResult>().future;
+      _listTimeoutCount++;
+      throw BdTimeoutException(
+        command: args,
+        timeout: const Duration(seconds: 15),
+      );
+    }
+    if (sub == 'query') {
+      return const BdResult(
+        exitCode: 0,
+        stdout: '{"schema_version":1,"data":[]}',
+        stderr: '',
+      );
+    }
+    if (sub == 'list') {
+      return const BdResult(
+        exitCode: 0,
+        stdout: '{"schema_version":1,"data":[]}',
+        stderr: '',
+      );
+    }
     final isGraphApply =
         sub == 'create' && args.length > 1 && args[1] == '--graph';
     if (isGraphApply) {
@@ -179,11 +215,14 @@ class _FailCreateRunner implements BdRunner {
 /// A [StationServices] whose chokepoint writes through [runner], owning
 /// [stateSubstation] — the same shape [buildFakes] builds, over a caller-
 /// supplied runner so a test asserts against it directly.
-StationServices _ctxOver(BdRunner runner) => StationServices(
+StationServices _ctxOver(
+  BdRunner runner, {
+  BeadProbeReader reader = const EmptyBeadProbeReader(),
+}) => StationServices(
   provider: FakeRuntimeProvider(),
   writer: StationBeadWriter(
     bd: BdCliService(runner),
-    reader: const EmptyBeadProbeReader(),
+    reader: reader,
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   ),
   stateSubstation: stateSubstation,
@@ -373,6 +412,60 @@ void main() {
 
       // INERT: the parked session never inflates the circuit.
       expect(reg.events, isEmpty);
+    });
+
+    test('a timed-out molecule dedup read flares and parks without burning the '
+        'mint budget', () async {
+      final runner = _FailCreateRunner(
+        failCreates: 0,
+        failListsWithTimeout: true,
+      );
+      final reader = CliBeadProbeReader(
+        BdCliService(runner),
+        lifecycleTypes: const {GridIssueTypes.molecule, GridIssueTypes.step},
+      );
+      final ctx = _ctxOver(runner, reader: reader);
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final bridge = StationJoinBridge(
+        work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
+        state: FakeSnapshotSource(_state(const [])),
+      )..start();
+      addTearDown(bridge.dispose);
+
+      final m = _mountFull(
+        joined: bridge.notifier,
+        ctx: ctx,
+        registry: reg,
+        services: ServiceBundle(transport: transport),
+      );
+      addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
+      await _pumpUntil(m.owner, () {
+        final updates = runner.callsFor('update');
+        return [
+          for (var i = 0; i < updates.length; i++) runner.metadataOfUpdate(i),
+        ].any((metadata) => metadata.containsKey('blocks'));
+      });
+
+      expect(transport.named('session.moleculePourFailed'), hasLength(1));
+      expect(
+        runner
+            .callsFor('create')
+            .where((call) => call.length <= 1 || call[1] != '--graph'),
+        hasLength(2),
+      );
+      expect(runner.calls.where((call) => call.contains('--graph')), isEmpty);
+      final stamps = [
+        for (var i = 0; i < runner.callsFor('update').length; i++)
+          if (runner.metadataOfUpdate(i).containsKey('blocks'))
+            runner.metadataOfUpdate(i),
+      ];
+      expect(stamps, hasLength(1));
+      expect(stamps.single['blocks'], 'tgdog-sess1');
+      expect(transport.named('session.mintFailed'), isEmpty);
+      expect(transport.named('session.mintExhausted'), isEmpty);
     });
 
     test(

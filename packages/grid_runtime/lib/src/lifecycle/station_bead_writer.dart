@@ -1164,10 +1164,17 @@ class StationBeadWriter {
   /// [_moleculeAlreadyMinted] and [reapMolecule] both read. Reads the OWN
   /// state store through the targeted reader and propagates read failures.
   Future<List<Bead>> _moleculeBeadsFor({required String sessionId}) async {
-    return _reader.openBeads(
-      types: {GridIssueTypes.molecule, GridIssueTypes.step},
-      metadataAny: {moleculeSessionKey: sessionId, stepSessionKey: sessionId},
-    );
+    final matched = await Future.wait([
+      _reader.openBeads(
+        types: {GridIssueTypes.molecule},
+        metadataAll: {moleculeSessionKey: sessionId},
+      ),
+      _reader.openBeads(
+        types: {GridIssueTypes.step},
+        metadataAll: {stepSessionKey: sessionId},
+      ),
+    ]);
+    return [...matched[0], ...matched[1]];
   }
 
   void _assertOwned(

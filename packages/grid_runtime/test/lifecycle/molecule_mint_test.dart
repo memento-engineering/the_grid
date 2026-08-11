@@ -79,6 +79,31 @@ void main() {
         );
 
         expect(ids, {'root': 'tgdog-mol1', 'root.step-a': 'tgdog-step1'});
+        expect(runner.openBeadCalls, hasLength(2));
+        expect(
+          runner.openBeadCalls,
+          contains(
+            isA<OpenBeadsCall>()
+                .having((call) => call.types, 'types', {
+                  GridIssueTypes.molecule,
+                })
+                .having((call) => call.metadataAll, 'metadataAll', {
+                  StationBeadWriter.moleculeSessionKey: 'tgdog-sess1',
+                })
+                .having((call) => call.metadataAny, 'metadataAny', isEmpty),
+          ),
+        );
+        expect(
+          runner.openBeadCalls,
+          contains(
+            isA<OpenBeadsCall>()
+                .having((call) => call.types, 'types', {GridIssueTypes.step})
+                .having((call) => call.metadataAll, 'metadataAll', {
+                  StationBeadWriter.stepSessionKey: 'tgdog-sess1',
+                })
+                .having((call) => call.metadataAny, 'metadataAny', isEmpty),
+          ),
+        );
 
         // Exactly ONE graph-apply pour — never a per-node create loop.
         expect(runner.graphApplyCalls, hasLength(1));
