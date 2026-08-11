@@ -213,18 +213,35 @@ final class StationCommandHandler implements GridCommandHandler {
     }
 
     final session = current.single;
+    final retiredRounds = sessions
+        .map((candidate) {
+          final reachedVerdict =
+              projectCircuitResults(candidate).isNotEmpty ||
+              state.beads
+                  .where((bead) {
+                    return bead.issueType == GridIssueTypes.step &&
+                        _meta(bead, MoleculeStepKeys.session) == candidate.id;
+                  })
+                  .any((step) => projectCircuitResults(step).isNotEmpty);
+          return (
+            workBeadKey: _meta(candidate, SessionBeadKeys.workBead) ?? '',
+            reachedVerdict: reachedVerdict,
+          );
+        })
+        .toList(growable: false);
     final maxRound = maxReworkRound(
       beadId,
-      sessions.map((bead) => _meta(bead, SessionBeadKeys.workBead)).nonNulls,
+      retiredRounds.map((round) => round.workBeadKey),
     );
-    if (beyondCap && maxRound < kMaxReworkRounds) {
+    final spentRounds = spentReworkRounds(beadId, retiredRounds);
+    if (beyondCap && spentRounds < kMaxReworkRounds) {
       return _refused(
         'beyond_cap_premature',
         '--beyond-cap is only valid at or beyond the rework cap '
-            '($kMaxReworkRounds); "$beadId" has $maxRound rounds.',
+            '($kMaxReworkRounds); "$beadId" has $spentRounds rounds.',
       );
     }
-    if (maxRound >= kMaxReworkRounds && !beyondCap) {
+    if (spentRounds >= kMaxReworkRounds && !beyondCap) {
       return _refused(
         'rework_round_cap',
         '"$beadId" has reached the rework cap of $kMaxReworkRounds.',

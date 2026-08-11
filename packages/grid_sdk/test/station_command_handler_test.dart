@@ -456,9 +456,9 @@ void main() {
       final handler = _handler(
         state: _Source(
           _snapshot([
-            _session('tgdog-r1', workBead: 'tg-1#r1'),
-            _session('tgdog-r2', workBead: 'tg-1#r2'),
-            _session('tgdog-r3', workBead: 'tg-1#r3'),
+            _session('tgdog-r1', workBead: 'tg-1#r1', reachedVerdict: true),
+            _session('tgdog-r2', workBead: 'tg-1#r2', reachedVerdict: true),
+            _session('tgdog-r3', workBead: 'tg-1#r3', reachedVerdict: true),
             _session('tgdog-current'),
           ]),
         ),
@@ -484,6 +484,61 @@ void main() {
       expect(noteWrite.join(' '), contains('BEYOND-CAP by Nico'));
       expect(noteWrite.join(' '), contains('operator approved round four'));
     });
+
+    test('three verdict-less retired rounds do not spend the cap', () async {
+      final stateRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            _session('tgdog-r1', workBead: 'tg-1#r1'),
+            _session('tgdog-r2', workBead: 'tg-1#r2'),
+            _session('tgdog-r3', workBead: 'tg-1#r3'),
+            _session('tgdog-current'),
+          ]),
+        ),
+        work: _Source(_workSnapshot()),
+        stateRunner: stateRunner,
+        workRunner: _RecordingRunner(),
+      );
+
+      expect(
+        await handler(const GridCommandRequest.rework(beadId: 'tg-1')),
+        isA<GridCommandCompleted>(),
+      );
+      expect(
+        stateRunner.calls.expand((call) => call),
+        contains('work_bead=tg-1#r4'),
+      );
+    });
+
+    test(
+      'lenny-749o (tg-9q58): one verdict and two infrastructure losses spend one round',
+      () async {
+        final stateRunner = _RecordingRunner();
+        final handler = _handler(
+          state: _Source(
+            _snapshot([
+              _session('tgdog-r1', workBead: 'tg-1#r1', reachedVerdict: true),
+              _session('tgdog-r2', workBead: 'tg-1#r2'),
+              _session('tgdog-r3', workBead: 'tg-1#r3'),
+              _session('tgdog-current'),
+            ]),
+          ),
+          work: _Source(_workSnapshot()),
+          stateRunner: stateRunner,
+          workRunner: _RecordingRunner(),
+        );
+
+        expect(
+          await handler(const GridCommandRequest.rework(beadId: 'tg-1')),
+          isA<GridCommandCompleted>(),
+        );
+        expect(
+          stateRunner.calls.expand((call) => call),
+          contains('work_bead=tg-1#r4'),
+        );
+      },
+    );
 
     test(
       'grid/gate/resolve normalizes override metadata before close',
@@ -815,9 +870,9 @@ void main() {
       'rework round cap reached',
       () => refused(
         state: _snapshot([
-          _session('tgdog-r1', workBead: 'tg-1#r1'),
-          _session('tgdog-r2', workBead: 'tg-1#r2'),
-          _session('tgdog-r3', workBead: 'tg-1#r3'),
+          _session('tgdog-r1', workBead: 'tg-1#r1', reachedVerdict: true),
+          _session('tgdog-r2', workBead: 'tg-1#r2', reachedVerdict: true),
+          _session('tgdog-r3', workBead: 'tg-1#r3', reachedVerdict: true),
           _session('tgdog-current'),
         ]),
         work: _workSnapshot(),
@@ -1070,11 +1125,18 @@ void main() {
   });
 }
 
-Bead _session(String id, {String workBead = 'tg-1'}) => Bead(
+Bead _session(
+  String id, {
+  String workBead = 'tg-1',
+  bool reachedVerdict = false,
+}) => Bead(
   id: id,
   issueType: GridIssueTypes.session,
   status: BeadStatus.closed,
-  metadata: {'work_bead': workBead},
+  metadata: {
+    'work_bead': workBead,
+    if (reachedVerdict) 'grid.result.route/committee.grade': 'F',
+  },
 );
 
 GraphSnapshot _workSnapshot() => _snapshot([

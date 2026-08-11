@@ -68,7 +68,8 @@ export 'src/molecule/station_process_transport.dart'
 // (grid_cli rework) that must read molecule step state (tg-eli phase 1).
 // In-package readers (wedge sampling) import the codec relatively and do not
 // ride this export.
-export 'src/molecule/molecule_codec.dart' show projectMoleculeCursor;
+export 'src/molecule/molecule_codec.dart'
+    show projectMoleculeCursor, supersedesVerdictCountByPath;
 // The molecule bead-metadata schema (R1) — the durable wire keys a
 // `type=molecule`/`type=step` bead carries. Exported so an out-of-package
 // reader (grid_cli rework's step→session JOIN) names the ONE definition

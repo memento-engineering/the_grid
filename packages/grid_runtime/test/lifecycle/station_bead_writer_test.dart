@@ -591,8 +591,8 @@ void main() {
               'grid.result.tgdog-work/build.grade': 'F',
             },
           ),
-          currentDepth: 1,
-          maxDepth: 3,
+          spentRounds: 1,
+          maxRounds: 3,
         );
 
         expect(id, 'tgdog-step-new');
@@ -655,8 +655,8 @@ void main() {
               StationBeadWriter.stepStateKey: 'complete',
             },
           ),
-          currentDepth: 1,
-          maxDepth: 3,
+          spentRounds: 1,
+          maxRounds: 3,
         );
         final depIndex = runner.calls.indexWhere((c) => c.first == 'dep');
         final updateIndex = runner.calls.indexWhere((c) => c.first == 'update');
@@ -687,8 +687,8 @@ void main() {
       final id = await writer().createStepSuccessor(
         substation: 'tgdog',
         priorStep: _step('tgdog-step-old'),
-        currentDepth: 1,
-        maxDepth: 3,
+        spentRounds: 1,
+        maxRounds: 3,
       );
 
       expect(id, 'tgdog-step-existing');
@@ -697,18 +697,43 @@ void main() {
       expect(runner.callsFor('dep'), isEmpty);
     });
 
-    test('createStepSuccessor refuses at the cap before mutation', () async {
-      await expectLater(
-        writer().createStepSuccessor(
+    test(
+      'createStepSuccessor refuses spent verdict cap before mutation',
+      () async {
+        await expectLater(
+          writer().createStepSuccessor(
+            substation: 'tgdog',
+            priorStep: _step('tgdog-step-old'),
+            spentRounds: 3,
+            maxRounds: 3,
+          ),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'rework verdict cap reached (3/3)',
+            ),
+          ),
+        );
+        expect(runner.calls, isEmpty);
+      },
+    );
+
+    test(
+      'createStepSuccessor allows deep structural history below verdict cap',
+      () async {
+        runner.nextCreatedId = 'tgdog-step-new';
+        final id = await writer().createStepSuccessor(
           substation: 'tgdog',
           priorStep: _step('tgdog-step-old'),
-          currentDepth: 3,
-          maxDepth: 3,
-        ),
-        throwsA(isA<StateError>()),
-      );
-      expect(runner.calls, isEmpty);
-    });
+          spentRounds: 0,
+          maxRounds: 3,
+        );
+        expect(id, 'tgdog-step-new');
+        expect(runner.callsFor('create'), hasLength(1));
+        expect(runner.callsFor('dep'), hasLength(1));
+      },
+    );
 
     test(
       'reapMolecule degrades to per-bead closes when the store refuses batch '

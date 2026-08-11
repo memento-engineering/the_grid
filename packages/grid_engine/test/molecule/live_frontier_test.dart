@@ -563,29 +563,19 @@ void main() {
 
   group('effectiveCursor — the collapse: demote to pending under the cap, '
       'GATE at the cap (derivedEscalation surfaces it instead)', () {
-    test('below kMaxReworkRounds: build + its whole closure demote to '
-        'pending, keyed by supersedes depth', () {
-      final results = _committeeResults([
-        'critic-correctness',
-        'critic-security',
-      ]);
+    test('three verdict-less rounds retain structural wave and spend zero', () {
+      final results = _committeeResults(['critic-correctness']);
       final effective = effectiveCursor(
         _committee,
         _committeeProjected,
         results,
         'tg-1',
         circuitById: _none,
-        supersedesDepthByPath: _depths(1),
+        supersedesDepthByPath: _depths(kMaxReworkRounds),
+        spentReworkRoundsByPath: _depths(0),
       );
-      for (final path in [
-        'tg-1/build',
-        'tg-1/critic-correctness',
-        'tg-1/critic-security',
-        'tg-1/critic-style',
-      ]) {
-        expect(effective[path]!.state, StepState.pending, reason: path);
-        expect(effective[path]!.rewindCount, 1, reason: path);
-      }
+      expect(effective['tg-1/build']!.state, StepState.pending);
+      expect(effective['tg-1/build']!.rewindCount, 0);
       expect(
         derivedEscalation(
           _committee,
@@ -593,96 +583,66 @@ void main() {
           results,
           'tg-1',
           circuitById: _none,
-          supersedesDepthByPath: _depths(1),
+          supersedesDepthByPath: _depths(kMaxReworkRounds),
+          spentReworkRoundsByPath: _depths(0),
         ),
         isNull,
       );
+      expect(
+        liveFrontier(
+          _committee,
+          _committeeProjected,
+          results,
+          'tg-1',
+          circuitById: _none,
+          supersedesDepthByPath: _depths(kMaxReworkRounds),
+          spentReworkRoundsByPath: _depths(0),
+          now: _clock(),
+        ).map((step) => step.stepId),
+        ['build'],
+      );
     });
 
-    test('three first-round critics do not gate at depth 1', () {
-      final results = _committeeResults([
-        'critic-correctness',
-        'critic-security',
-        'critic-style',
-      ]);
+    test('three verdict rounds gate and escalate at the cap', () {
+      final results = _committeeResults(['critic-correctness']);
       final effective = effectiveCursor(
         _committee,
         _committeeProjected,
         results,
         'tg-1',
         circuitById: _none,
-        supersedesDepthByPath: _depths(1),
+        supersedesDepthByPath: _depths(kMaxReworkRounds),
+        spentReworkRoundsByPath: _depths(kMaxReworkRounds),
+      );
+      expect(effective['tg-1/build']!.state, StepState.gated);
+      expect(effective['tg-1/build']!.rewindCount, kMaxReworkRounds);
+      final escalation = derivedEscalation(
+        _committee,
+        _committeeProjected,
+        results,
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: _depths(kMaxReworkRounds),
+        spentReworkRoundsByPath: _depths(kMaxReworkRounds),
+      );
+      expect(escalation?.path, 'tg-1/build');
+      expect(escalation?.reason, 'rework cap reached (3/3)');
+    });
+
+    test('lenny-749o (tg-9q58): mixed history exposes one spent round', () {
+      final results = _committeeResults(['critic-correctness']);
+      final effective = effectiveCursor(
+        _committee,
+        _committeeProjected,
+        results,
+        'tg-1',
+        circuitById: _none,
+        supersedesDepthByPath: _depths(kMaxReworkRounds),
+        spentReworkRoundsByPath: _depths(1),
       );
       expect(effective['tg-1/build']!.state, StepState.pending);
       expect(effective['tg-1/build']!.rewindCount, 1);
-      expect(
-        derivedEscalation(
-          _committee,
-          _committeeProjected,
-          results,
-          'tg-1',
-          circuitById: _none,
-          supersedesDepthByPath: _depths(1),
-        ),
-        isNull,
-      );
     });
-
-    test(
-      'AT kMaxReworkRounds: the node GATES instead of demoting, and '
-      'derivedEscalation surfaces the FIRST such node in declaration order',
-      () {
-        expect(
-          kMaxReworkRounds,
-          3,
-          reason:
-              'this fixture is built for the '
-              'live cap value; if it moves, this test documents the new one',
-        );
-        final results = _committeeResults([
-          'critic-correctness',
-          'critic-security',
-          'critic-style',
-        ]);
-        final effective = effectiveCursor(
-          _committee,
-          _committeeProjected,
-          results,
-          'tg-1',
-          circuitById: _none,
-          supersedesDepthByPath: _depths(kMaxReworkRounds),
-        );
-        expect(effective['tg-1/build']!.state, StepState.gated);
-        expect(effective['tg-1/build']!.rewindCount, kMaxReworkRounds);
-
-        final escalation = derivedEscalation(
-          _committee,
-          _committeeProjected,
-          results,
-          'tg-1',
-          circuitById: _none,
-          supersedesDepthByPath: _depths(kMaxReworkRounds),
-        );
-        expect(escalation, isNotNull);
-        expect(escalation!.path, 'tg-1/build');
-        expect(escalation.reason, contains('rework cap reached (3/3)'));
-
-        // A gated node is withheld from the frontier by the UNCHANGED
-        // frontier.dart runnable-state gate — no edit, no second check.
-        expect(
-          liveFrontier(
-            _committee,
-            _committeeProjected,
-            results,
-            'tg-1',
-            circuitById: _none,
-            supersedesDepthByPath: _depths(kMaxReworkRounds),
-            now: _clock(),
-          ),
-          isEmpty,
-        );
-      },
-    );
   });
 
   group('totality/idempotency on partial or missing stamps (Q4)', () {

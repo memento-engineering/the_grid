@@ -5,7 +5,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/live_frontier.dart';
 import 'package:grid_engine/src/molecule/molecule_codec.dart'
-    show supersedesDepthByPath;
+    show supersedesDepthByPath, supersedesVerdictCountByPath;
 import 'package:grid_engine/src/molecule/molecule_schema.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
@@ -69,7 +69,7 @@ Bead _stepBead({
   },
 );
 
-List<Bead> _moleculeBeads() => [
+List<Bead> _moleculeBeads({Set<int> specifyVerdicts = const {0, 1, 2}}) => [
   _moleculeBead(),
   _stepBead(
     id: 'tgdog-spec-review',
@@ -85,11 +85,13 @@ List<Bead> _moleculeBeads() => [
       capability: 'specify',
       path: specifyPath,
       state: StepState.complete,
-      results: {
-        ResultKeys.keyFor(specifyPath, ResultKeys.grade): 'F',
-        ResultKeys.keyFor(specifyPath, ResultKeys.rationale):
-            'spec generation $generation refused',
-      },
+      results: specifyVerdicts.contains(generation)
+          ? {
+              ResultKeys.keyFor(specifyPath, ResultKeys.grade): 'F',
+              ResultKeys.keyFor(specifyPath, ResultKeys.rationale):
+                  'spec generation $generation refused',
+            }
+          : const {},
     ),
   _stepBead(
     id: 'tgdog-specify-3',
@@ -146,13 +148,14 @@ const _supersedes = [
   ),
 ];
 
-SessionProjection _projection() => SessionProjection(
-  workBeadId: 'tg-lt2a',
-  sessionId: sessionId,
-  isMolecule: true,
-  moleculeBeads: _moleculeBeads(),
-  moleculeDependencies: _supersedes,
-);
+SessionProjection _projection({Set<int> specifyVerdicts = const {0, 1, 2}}) =>
+    SessionProjection(
+      workBeadId: 'tg-lt2a',
+      sessionId: sessionId,
+      isMolecule: true,
+      moleculeBeads: _moleculeBeads(specifyVerdicts: specifyVerdicts),
+      moleculeDependencies: _supersedes,
+    );
 
 JoinedSnapshotNotifier _joined(SessionProjection projection) =>
     JoinedSnapshotNotifier(
@@ -169,10 +172,11 @@ JoinedSnapshotNotifier _joined(SessionProjection projection) =>
 
 ({TreeOwner owner, Fakes fakes}) _mount({
   ServiceBundle services = const ServiceBundle(),
+  Set<int> specifyVerdicts = const {0, 1, 2},
 }) {
   final fakes = buildFakes();
   final owner = TreeOwner();
-  final projection = _projection();
+  final projection = _projection(specifyVerdicts: specifyVerdicts);
   final joined = _joined(projection);
   final registry = RecordingCapabilityRegistry(
     circuits: const {'spec_review': specReviewCircuit},
@@ -208,6 +212,78 @@ Future<void> _drain() async {
 }
 
 void main() {
+  test(
+    'three verdict-less predecessors mint the depth-four successor',
+    () async {
+      final projection = _projection(specifyVerdicts: const {});
+      expect(
+        supersedesDepthByPath(
+          projection.moleculeBeads,
+          projection.moleculeDependencies,
+        )[specifyPath],
+        3,
+      );
+      expect(
+        supersedesVerdictCountByPath(
+          projection.moleculeBeads,
+          projection.moleculeDependencies,
+        )[specifyPath],
+        0,
+      );
+      final mounted = _mount(specifyVerdicts: const {});
+      addTearDown(mounted.owner.dispose);
+      await _drain();
+      expect(
+        mounted.fakes.runner.callsFor('dep').single,
+        containsAllInOrder([
+          'dep',
+          'add',
+          isNot('tgdog-specify-3'),
+          'tgdog-specify-3',
+          '--type',
+          'supersedes',
+        ]),
+      );
+    },
+  );
+
+  test('three verdict predecessors gate and never mint a successor', () async {
+    final mounted = _mount(specifyVerdicts: const {0, 1, 2});
+    addTearDown(mounted.owner.dispose);
+    await _drain();
+    expect(
+      mounted.fakes.runner
+          .callsFor('dep')
+          .where((call) => call.contains('tgdog-specify-3')),
+      isEmpty,
+    );
+    expect(
+      mounted.fakes.runner.callsFor('create').single,
+      containsAllInOrder(['--type', 'gate']),
+    );
+  });
+
+  test(
+    'lenny-749o (tg-9q58) keeps structural generation three but spends one',
+    () {
+      final projection = _projection(specifyVerdicts: const {0});
+      expect(
+        supersedesDepthByPath(
+          projection.moleculeBeads,
+          projection.moleculeDependencies,
+        )[specifyPath],
+        3,
+      );
+      expect(
+        supersedesVerdictCountByPath(
+          projection.moleculeBeads,
+          projection.moleculeDependencies,
+        )[specifyPath],
+        1,
+      );
+    },
+  );
+
   test('a specify cap-out parks at a durable human gate', () async {
     final projection = _projection();
     final projected = projectMoleculeCursor(
@@ -226,6 +302,10 @@ void main() {
         'tg-lt2a',
         circuitById: (id) => id == 'spec_review' ? specReviewCircuit : null,
         supersedesDepthByPath: supersedesDepthByPath(
+          projection.moleculeBeads,
+          projection.moleculeDependencies,
+        ),
+        spentReworkRoundsByPath: supersedesVerdictCountByPath(
           projection.moleculeBeads,
           projection.moleculeDependencies,
         ),

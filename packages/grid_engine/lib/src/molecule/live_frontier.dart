@@ -267,6 +267,7 @@ CircuitCursor effectiveCursor(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
   required Map<String, int> supersedesDepthByPath,
+  Map<String, int>? spentReworkRoundsByPath,
 }) {
   final generations = _generationsByPath(
     circuit,
@@ -279,11 +280,14 @@ CircuitCursor effectiveCursor(
   if (generations.isEmpty) return projected;
   final effective = <String, NodeCursor>{...projected};
   generations.forEach((path, generation) {
+    final spentRounds = spentReworkRoundsByPath == null
+        ? generation
+        : spentReworkRoundsByPath[path] ?? 0;
     effective[path] = cursorNodeAt(projected, path).copyWith(
-      state: generation >= kMaxReworkRounds
+      state: spentRounds >= kMaxReworkRounds
           ? StepState.gated
           : StepState.pending,
-      rewindCount: generation,
+      rewindCount: spentRounds,
     );
   });
   return effective;
@@ -302,6 +306,7 @@ List<CircuitStep> liveFrontier(
   required Circuit? Function(String circuitId) circuitById,
   required DateTime now,
   required Map<String, int> supersedesDepthByPath,
+  Map<String, int>? spentReworkRoundsByPath,
 }) => eligibleSteps(
   circuit,
   effectiveCursor(
@@ -311,6 +316,7 @@ List<CircuitStep> liveFrontier(
     nodePath,
     circuitById: circuitById,
     supersedesDepthByPath: supersedesDepthByPath,
+    spentReworkRoundsByPath: spentReworkRoundsByPath,
   ),
   nodePath,
   circuitById: circuitById,
@@ -353,6 +359,7 @@ Iterable<String> _declarationOrderPaths(
   String nodePath, {
   required Circuit? Function(String circuitId) circuitById,
   required Map<String, int> supersedesDepthByPath,
+  Map<String, int>? spentReworkRoundsByPath,
 }) {
   final generations = _generationsByPath(
     circuit,
@@ -367,11 +374,13 @@ Iterable<String> _declarationOrderPaths(
     nodePath,
     circuitById: circuitById,
   )) {
-    final generation = generations[path] ?? 0;
-    if (generation >= kMaxReworkRounds) {
+    final spentRounds = spentReworkRoundsByPath == null
+        ? generations[path] ?? 0
+        : spentReworkRoundsByPath[path] ?? 0;
+    if (generations.containsKey(path) && spentRounds >= kMaxReworkRounds) {
       return (
         path: path,
-        reason: 'rework cap reached ($generation/$kMaxReworkRounds)',
+        reason: 'rework cap reached ($spentRounds/$kMaxReworkRounds)',
       );
     }
   }
