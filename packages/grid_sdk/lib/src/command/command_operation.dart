@@ -1,4 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 
 part 'command_operation.freezed.dart';
 
@@ -22,6 +23,14 @@ sealed class GridCommandRequest with _$GridCommandRequest {
     @Default(<String, String>{}) Map<String, String> grades,
     String? rationale,
   }) = GridGateResolve;
+
+  /// Writes one prose field on an owned work bead.
+  const factory GridCommandRequest.setBeadText({
+    required String beadId,
+    required OperatorBeadTextField field,
+    required String content,
+    @Default(false) bool append,
+  }) = GridSetBeadText;
 }
 
 /// The typed outcome consumed by the control-surface adapter.

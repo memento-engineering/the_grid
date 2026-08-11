@@ -3,16 +3,22 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 
 import 'station_command_client.dart';
+import 'operator_text_file.dart';
 
 /// Retires one rework round through the resident StationControl door.
 class ReworkCommand extends Command<int> {
   /// Creates the command with an optional injected resident client.
-  ReworkCommand({StationCommandClient? client})
-    : _client = client ?? StationCommandClient() {
+  ReworkCommand({StationCommandClient? client, Stream<List<int>>? input})
+    : _client = client ?? StationCommandClient(),
+      _input = input {
     argParser
       ..addOption(
         'note',
         help: 'An operator finding to append to the work bead.',
+      )
+      ..addOption(
+        'note-file',
+        help: 'Read the operator finding from UTF-8 file or - for stdin.',
       )
       ..addFlag(
         'beyond-cap',
@@ -27,6 +33,7 @@ class ReworkCommand extends Command<int> {
   }
 
   final StationCommandClient _client;
+  final Stream<List<int>>? _input;
 
   @override
   final String name = 'rework';
@@ -57,7 +64,29 @@ class ReworkCommand extends Command<int> {
     }
     final beyondCap = args.flag('beyond-cap');
     final actor = args.option('actor');
-    final note = args.option('note');
+    String? note;
+    try {
+      note = await selectOperatorText(
+        inlineFlag: '--note',
+        fileFlag: '--note-file',
+        inlineValue: args.option('note'),
+        filePath: args.option('note-file'),
+        input: _input,
+      );
+    } on OperatorTextUsage catch (error) {
+      stderr.writeln('grid rework: ${error.message}.');
+      return 64;
+    } on FileSystemException catch (error) {
+      stderr.writeln(
+        'grid rework: cannot read --note-file ${args.option('note-file')}: ${error.message}',
+      );
+      return 64;
+    } on FormatException catch (error) {
+      stderr.writeln(
+        'grid rework: --note-file ${args.option('note-file')} is not valid UTF-8: ${error.message}',
+      );
+      return 64;
+    }
     if (beyondCap && (actor == null || actor.trim().isEmpty)) {
       stderr.writeln(
         'grid rework: --actor is required with --beyond-cap '

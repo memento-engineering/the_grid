@@ -17,6 +17,7 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(WatchCommand())
         ..addCommand(GateCommand())
         ..addCommand(ReworkCommand())
+        ..addCommand(BeadCommand())
         ..addCommand(DemoCommand());
 
   try {
