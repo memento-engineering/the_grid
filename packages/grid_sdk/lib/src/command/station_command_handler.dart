@@ -409,6 +409,8 @@ final class StationCommandHandler implements GridCommandHandler {
       );
     } on OwnershipRefused catch (error) {
       return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
     }
 
     return GridCommandResult.completed(

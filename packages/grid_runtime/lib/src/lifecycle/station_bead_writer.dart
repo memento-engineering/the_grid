@@ -443,25 +443,33 @@ class StationBeadWriter {
         'reason': reason,
       },
     );
-    final session = await _reader.beadById(
-      sessionId,
-      types: {GridIssueTypes.session},
-    );
-    if (session?.isClosed ?? false) {
-      final disposition =
-          session!.metadata['grid.escalation'] != null ||
-              session.metadata['grid.rework_declined'] != null
-          ? GateSweepSessionDisposition.held
-          : session.metadata['grid.outcome'] == 'complete'
-          ? GateSweepSessionDisposition.done
-          : GateSweepSessionDisposition.voided;
-      if (disposition != GateSweepSessionDisposition.held) {
-        await closeOpenGatesForTerminal(
-          sessionId: sessionId,
-          trigger: GateCloseCause.stragglerRoute,
-          disposition: disposition,
-        );
+    try {
+      final session = await _reader.beadById(
+        sessionId,
+        types: {GridIssueTypes.session},
+      );
+      if (session?.isClosed ?? false) {
+        final disposition =
+            session!.metadata['grid.escalation'] != null ||
+                session.metadata['grid.rework_declined'] != null
+            ? GateSweepSessionDisposition.held
+            : session.metadata['grid.outcome'] == 'complete'
+            ? GateSweepSessionDisposition.done
+            : GateSweepSessionDisposition.voided;
+        if (disposition != GateSweepSessionDisposition.held) {
+          await closeOpenGatesForTerminal(
+            sessionId: sessionId,
+            trigger: GateCloseCause.stragglerRoute,
+            disposition: disposition,
+          );
+        }
       }
+    } on Object catch (error) {
+      _flare('gate.autoCloseFailed', {
+        'sessionId': sessionId,
+        'cause': GateCloseCause.stragglerRoute.wireValue,
+        'reason': _truncateGateFlareReason('$error'),
+      });
     }
     return id;
   }
@@ -1149,3 +1157,6 @@ class StationBeadWriter {
     throw refusal;
   }
 }
+
+String _truncateGateFlareReason(String reason) =>
+    reason.length <= 500 ? reason : reason.substring(0, 500);

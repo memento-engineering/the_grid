@@ -465,6 +465,17 @@ void main() {
       expect(runner.calls.every((call) => call.contains('tgdog-gate')), isTrue);
       expect(runner.calls.join(' '), isNot(contains('tgdog-session')));
       expect(runner.calls.join(' '), isNot(contains('grid.result.')));
+      final causeUpdate = runner.calls.singleWhere(
+        (call) => call.join(' ').contains('grid.gate.close_cause=adjudicated'),
+      );
+      expect(
+        causeUpdate,
+        containsAll(<String>['--if-assignee', '--if-status']),
+      );
+      expect(
+        runner.calls.last.join(' '),
+        contains('resolved via grid gate resolve'),
+      );
       expect(
         gateCloseCauseOf(
           const Bead(
@@ -475,6 +486,40 @@ void main() {
         ),
         GateCloseCause.unclassified,
       );
+    });
+
+    test('grid/gate/resolve converts a conditional guard mismatch', () async {
+      final runner = _RecordingRunner(refuseConditionalGateUpdate: true);
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tgdog-gate',
+              issueType: GridIssueTypes.gate,
+              assignee: 'operator',
+              status: BeadStatus.open,
+              metadata: {'rig': 'tgdog'},
+            ),
+          ]),
+        ),
+        work: _Source(_snapshot(const [])),
+        stateRunner: runner,
+        workRunner: _RecordingRunner(),
+      );
+
+      final result = await handler(
+        const GridCommandRequest.resolveGate(gateId: 'tgdog-gate'),
+      );
+
+      expect(
+        result,
+        isA<GridCommandRefused>().having(
+          (value) => value.code,
+          'code',
+          'ownership_refused',
+        ),
+      );
+      expect(runner.calls.where((call) => call.first == 'close'), isEmpty);
     });
 
     test(
@@ -1021,11 +1066,13 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
   _RecordingRunner({
     this.blockFirst = false,
+    this.refuseConditionalGateUpdate = false,
     List<BdResult> results = const [],
     this.exportBeads = const [],
   }) : _results = List.of(results);
 
   final bool blockFirst;
+  bool refuseConditionalGateUpdate;
 
   /// When set, a `batch` invocation throws — the reap-failure shape.
   bool throwOnBatch = false;
@@ -1043,6 +1090,20 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
     String? stdin,
   }) async {
     calls.add(List.unmodifiable(args));
+    if (refuseConditionalGateUpdate &&
+        args.length > 1 &&
+        args[0] == 'update' &&
+        args[1] == 'tgdog-gate' &&
+        args.contains('--if-assignee') &&
+        args.contains('--if-status')) {
+      refuseConditionalGateUpdate = false;
+      return const BdResult(
+        exitCode: 13,
+        stdout:
+            '{"schema_version":1,"data":{"error":"conditional update refused","guard_mismatch":true}}',
+        stderr: '',
+      );
+    }
     if (throwOnBatch && args.isNotEmpty && args.first == 'batch') {
       throw StateError('fake batch refused');
     }

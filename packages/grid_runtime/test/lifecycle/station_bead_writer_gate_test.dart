@@ -24,6 +24,17 @@ void main() {
     onRefusal: refusals.add,
   );
 
+  StationBeadWriter writerWith({
+    required BeadProbeReader reader,
+    required void Function(String, Map<String, String>) onFlare,
+  }) => StationBeadWriter(
+    bd: bd,
+    reader: reader,
+    ownership: predicate(),
+    onRefusal: refusals.add,
+    onFlare: onFlare,
+  );
+
   Bead session(
     String id, {
     bool closed = false,
@@ -312,6 +323,143 @@ void main() {
     expect(runner.callsFor('close'), isEmpty);
   });
 
+  test('post-mint terminal race sweeps the straggler gate', () async {
+    runner.exportBeads = const [
+      Bead(
+        id: 'tgdog-gate1',
+        issueType: GridIssueTypes.gate,
+        metadata: {'rig': 'tgdog', 'blocks': 'tgdog-s', 'node': 'review/route'},
+      ),
+    ];
+    final flares = <({String name, Map<String, String> data})>[];
+    final reader = _SequencedGateReader(
+      runner,
+      beadReads: <Bead?>[
+        session('tgdog-s'),
+        session(
+          'tgdog-s',
+          closed: true,
+          metadata: const {'rig': 'tgdog', 'grid.outcome': 'complete'},
+        ),
+        session(
+          'tgdog-s',
+          closed: true,
+          metadata: const {'rig': 'tgdog', 'grid.outcome': 'complete'},
+        ),
+      ],
+    );
+
+    final id =
+        await writerWith(
+          reader: reader,
+          onFlare: (name, data) => flares.add((name: name, data: data)),
+        ).createGate(
+          substation: 'tgdog',
+          sessionId: 'tgdog-s',
+          nodePath: 'review/route',
+          reason: 'late route',
+        );
+
+    expect(id, 'tgdog-gate1');
+    expect(runner.callsFor('close').single[1], 'tgdog-gate1');
+    expect(
+      runner
+          .callsFor('update')
+          .singleWhere((call) => call.contains('--if-status'))
+          .join(' '),
+      contains('grid.gate.close_cause=straggler-route'),
+    );
+    expect(
+      flares.where((flare) => flare.name == 'gate.autoCloseFailed'),
+      isEmpty,
+    );
+  });
+
+  test(
+    'post-mint cleanup refusal flares but preserves the mint result',
+    () async {
+      runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-gate1',
+          issueType: GridIssueTypes.gate,
+          metadata: {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-s',
+            'node': 'review/route',
+          },
+        ),
+      ];
+      final flares = <({String name, Map<String, String> data})>[];
+      final reader = _SequencedGateReader(
+        runner,
+        beadReads: <Bead?>[
+          session('tgdog-s'),
+          session(
+            'tgdog-s',
+            closed: true,
+            metadata: const {'rig': 'tgdog', 'grid.outcome': 'complete'},
+          ),
+          session('tgdog-s'),
+        ],
+      );
+
+      final id =
+          await writerWith(
+            reader: reader,
+            onFlare: (name, data) => flares.add((name: name, data: data)),
+          ).createGate(
+            substation: 'tgdog',
+            sessionId: 'tgdog-s',
+            nodePath: 'review/route',
+            reason: 'late route',
+          );
+
+      expect(id, 'tgdog-gate1');
+      expect(runner.callsFor('close'), isEmpty);
+      expect(flares, hasLength(1));
+      expect(flares.single.name, 'gate.autoCloseFailed');
+      expect(flares.single.data['sessionId'], 'tgdog-s');
+      expect(
+        flares.single.data['cause'],
+        GateCloseCause.stragglerRoute.wireValue,
+      );
+      expect(flares.single.data['reason'], contains('gate auto-close refused'));
+    },
+  );
+
+  test('post-mint A48 held session deliberately skips cleanup', () async {
+    final flares = <({String name, Map<String, String> data})>[];
+    final reader = _SequencedGateReader(
+      runner,
+      beadReads: <Bead?>[
+        session('tgdog-s'),
+        session(
+          'tgdog-s',
+          closed: true,
+          metadata: const {
+            'rig': 'tgdog',
+            'grid.escalation': 'breaker-exhausted',
+          },
+        ),
+      ],
+    );
+
+    final id =
+        await writerWith(
+          reader: reader,
+          onFlare: (name, data) => flares.add((name: name, data: data)),
+        ).createGate(
+          substation: 'tgdog',
+          sessionId: 'tgdog-s',
+          nodePath: 'review/route',
+          reason: 'late route',
+        );
+
+    expect(id, 'tgdog-gate1');
+    expect(runner.callsFor('close'), isEmpty);
+    expect(flares, isEmpty);
+  });
+
   test('live sweep requires the matching closed work bead', () async {
     runner.exportBeads = [
       session(
@@ -340,4 +488,36 @@ void main() {
     );
     expect(receipts.single.cause, GateCloseCause.workBeadClosed);
   });
+}
+
+final class _SequencedGateReader implements BeadProbeReader {
+  _SequencedGateReader(this.delegate, {required List<Bead?> beadReads})
+    : _beadReads = List<Bead?>.of(beadReads);
+
+  final BeadProbeReader delegate;
+  final List<Bead?> _beadReads;
+  var _openBeadsCalls = 0;
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
+      _beadReads.removeAt(0);
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) {
+    _openBeadsCalls += 1;
+    if (_openBeadsCalls == 1) return Future.value(const <Bead>[]);
+    return delegate.openBeads(
+      types: types,
+      metadataAll: metadataAll,
+      metadataAny: metadataAny,
+    );
+  }
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
+      delegate.openSuperseding(priorIds);
 }
