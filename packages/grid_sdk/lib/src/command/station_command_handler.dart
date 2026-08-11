@@ -392,6 +392,15 @@ final class StationCommandHandler implements GridCommandHandler {
           ),
         );
       }
+      await _stateWriter.update(
+        gateId,
+        metadata: {
+          StationBeadWriter.gateCloseCauseKey:
+              GateCloseCause.adjudicated.wireValue,
+        },
+        ifAssignee: gate.assignee,
+        ifStatus: gate.status,
+      );
       await _stateWriter.close(
         gateId,
         reason: rulings.isEmpty
@@ -399,6 +408,8 @@ final class StationCommandHandler implements GridCommandHandler {
             : 'resolved via grid gate resolve (operator ruling)',
       );
     } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
       return _refused('ownership_refused', error.toString());
     }
 

@@ -168,6 +168,35 @@ class SessionScopeState extends State<SessionScope>
   /// is parked at a durable gate for operator repair and rework.
   static const _moleculePourFailedFlare = 'session.moleculePourFailed';
 
+  GateSweepSessionDisposition _gateSweepDisposition(
+    SessionDisposition disposition,
+  ) => switch (disposition) {
+    LiveSession() || NoSession() => GateSweepSessionDisposition.live,
+    DoneSession() => GateSweepSessionDisposition.done,
+    HeldSession() => GateSweepSessionDisposition.held,
+    VoidedSession() => GateSweepSessionDisposition.voided,
+  };
+
+  Future<void> _closeTerminalGates(
+    String sessionId,
+    GateCloseCause cause,
+    SessionDisposition disposition,
+  ) async {
+    try {
+      await _ctx!.writer.closeOpenGatesForTerminal(
+        sessionId: sessionId,
+        trigger: cause,
+        disposition: _gateSweepDisposition(disposition),
+      );
+    } on Object catch (error) {
+      _flare('gate.autoCloseFailed', {
+        'sessionId': sessionId,
+        'cause': cause.wireValue,
+        'reason': truncateReason('$error'),
+      });
+    }
+  }
+
   StationServices? _ctx;
 
   /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
@@ -475,6 +504,11 @@ class SessionScopeState extends State<SessionScope>
       } on Object {
         // Cleanup is not a precondition for the fresh round.
       }
+      await _closeTerminalGates(
+        retiredId,
+        GateCloseCause.supersededRound,
+        const SessionDisposition.voided(reason: 'retired round'),
+      );
       if (_cancelled || !context.mounted) return;
     }
     if (_requiresFreshMintSnapshot) {
@@ -832,6 +866,11 @@ class SessionScopeState extends State<SessionScope>
     }
     try {
       await ctx.writer.close(id);
+      await _closeTerminalGates(
+        id,
+        GateCloseCause.sessionTerminal,
+        const SessionDisposition.done(),
+      );
     } on Object catch (error) {
       _flare('session.closeFailed', {
         'sessionId': id,

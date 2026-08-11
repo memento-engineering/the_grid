@@ -259,6 +259,23 @@ void main() {
       'when the terminal step completes, the session is closed exactly once',
       () async {
         final f = buildFakes();
+        f.runner.exportBeads = const [
+          Bead(
+            id: 'tgdog-s',
+            issueType: GridIssueTypes.session,
+            status: BeadStatus.closed,
+            metadata: {'rig': 'tgdog', 'grid.outcome': 'complete'},
+          ),
+          Bead(
+            id: 'tgdog-terminal-gate',
+            issueType: GridIssueTypes.gate,
+            metadata: {
+              'rig': 'tgdog',
+              'blocks': 'tgdog-s',
+              'node': 'review/route',
+            },
+          ),
+        ];
         final reg = RecordingCapabilityRegistry(circuits: const {});
         final joined = JoinedSnapshotNotifier(
           _joined(
@@ -311,12 +328,42 @@ void main() {
         );
 
         await _pump();
+        await _pumpUntil(
+          m.owner,
+          () => f.runner
+              .callsFor('close')
+              .any(
+                (call) => call.length > 1 && call[1] == 'tgdog-terminal-gate',
+              ),
+        );
 
         // After the microtask drains, SessionScope closed the session, exactly once
         // (latched).
         expect(
           f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
           hasLength(1),
+        );
+        expect(
+          f.runner.calls
+              .where((call) => call.length > 1)
+              .map((call) => '${call.first}:${call[1]}'),
+          containsAllInOrder(<String>[
+            'close:tgdog-s',
+            'update:tgdog-terminal-gate',
+            'close:tgdog-terminal-gate',
+          ]),
+        );
+        expect(
+          f.runner.calls
+              .singleWhere(
+                (call) =>
+                    call.length > 1 &&
+                    call.first == 'update' &&
+                    call[1] == 'tgdog-terminal-gate' &&
+                    call.contains('--if-status'),
+              )
+              .join(' '),
+          contains('grid.gate.close_cause=session-terminal'),
         );
       },
     );

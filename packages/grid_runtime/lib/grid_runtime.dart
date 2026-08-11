@@ -105,7 +105,11 @@ export 'src/lifecycle/station_bead_writer.dart'
         StationBeadWriter,
         OwnershipRefused,
         OwnershipGuardRefused,
-        SessionClosedRefused;
+        SessionClosedRefused,
+        GateCloseCause,
+        GateSweepSessionDisposition,
+        GateAutoCloseReceipt,
+        gateCloseCauseOf;
 export 'src/lifecycle/runtime_actuator.dart'
     show
         CrashDecision,

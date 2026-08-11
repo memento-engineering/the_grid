@@ -88,6 +88,37 @@ class SessionClosedRefused implements Exception {
       '$reason (fail-closed)';
 }
 
+/// Durable values for `grid.gate.close_cause`.
+enum GateCloseCause {
+  sessionTerminal('session-terminal'),
+  workBeadClosed('work-bead-closed'),
+  supersededRound('superseded-round'),
+  duplicateMint('duplicate-mint'),
+  stragglerRoute('straggler-route'),
+  adjudicated('adjudicated'),
+  unclassified('unclassified');
+
+  const GateCloseCause(this.wireValue);
+  final String wireValue;
+}
+
+/// The A48 session disposition supplied to a terminal gate sweep.
+enum GateSweepSessionDisposition { live, done, held, voided }
+
+/// One newly closed gate.
+typedef GateAutoCloseReceipt = ({
+  String gateId,
+  String sessionId,
+  GateCloseCause cause,
+});
+
+/// Reads a gate's durable close-cause vocabulary.
+GateCloseCause gateCloseCauseOf(Bead gate) => GateCloseCause.values.firstWhere(
+  (value) =>
+      value.wireValue == gate.metadata[StationBeadWriter.gateCloseCauseKey],
+  orElse: () => GateCloseCause.unclassified,
+);
+
 /// The single bd write chokepoint (ADR-0006 Decision 2; ADR-0000 A32) — the
 /// ONLY path through which the_grid's session/lifecycle/recovery beads are
 /// written, wrapping the M2 [BdCliService].
@@ -175,6 +206,7 @@ class StationBeadWriter {
   /// of duplicate gate beads accumulating one-per-cycle.
   static const String gateRegateCountKey = 'regate_count';
   static const String gateRegatedAtKey = 'regated_at';
+  static const String gateCloseCauseKey = 'grid.gate.close_cause';
 
   /// The molecule model's owning-session JOIN keys (`DESIGN-tg-pm6.md` R1/R6)
   /// — string literals here (grid_runtime cannot import grid_engine's
@@ -235,6 +267,73 @@ class StationBeadWriter {
       },
     );
     return id;
+  }
+
+  Future<List<GateAutoCloseReceipt>> closeOpenGatesForTerminal({
+    required String sessionId,
+    required GateCloseCause trigger,
+    required GateSweepSessionDisposition disposition,
+    Bead? terminalWorkBead,
+  }) async {
+    final session = await _reader.beadById(
+      sessionId,
+      types: {GridIssueTypes.session},
+    );
+    final workTerminal =
+        terminalWorkBead != null &&
+        terminalWorkBead.isClosed &&
+        session?.metadata['work_bead'] == terminalWorkBead.id;
+    final sessionHeld =
+        session?.metadata['grid.escalation'] != null ||
+        session?.metadata['grid.rework_declined'] != null;
+    final eligible =
+        !sessionHeld &&
+        switch (disposition) {
+          GateSweepSessionDisposition.done ||
+          GateSweepSessionDisposition.voided => session?.isClosed ?? false,
+          GateSweepSessionDisposition.live => workTerminal,
+          GateSweepSessionDisposition.held => false,
+        };
+    if (!eligible) {
+      throw StateError(
+        sessionHeld || disposition == GateSweepSessionDisposition.held
+            ? 'gate auto-close refused: held session'
+            : 'gate auto-close refused: live session',
+      );
+    }
+    final gates = await _findOpenGates(sessionId: sessionId);
+    final oldestByNode = <String, Bead>{};
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    for (final gate in gates) {
+      final node = gate.metadata['node'] as String? ?? '';
+      final prior = oldestByNode[node];
+      if (prior == null ||
+          (gate.createdAt ?? epoch).isBefore(prior.createdAt ?? epoch)) {
+        oldestByNode[node] = gate;
+      }
+    }
+    final receipts = <GateAutoCloseReceipt>[];
+    for (final gate in gates) {
+      final node = gate.metadata['node'] as String? ?? '';
+      final cause = identical(oldestByNode[node], gate)
+          ? trigger
+          : GateCloseCause.duplicateMint;
+      await update(
+        gate.id,
+        metadata: {gateCloseCauseKey: cause.wireValue},
+        ifAssignee: gate.assignee,
+        ifStatus: gate.status,
+      );
+      await close(gate.id, reason: 'grid auto-close: ${cause.wireValue}');
+      final receipt = (gateId: gate.id, sessionId: sessionId, cause: cause);
+      receipts.add(receipt);
+      _onFlare?.call('gate.autoClosed', {
+        'gateId': gate.id,
+        'sessionId': sessionId,
+        'cause': cause.wireValue,
+      });
+    }
+    return receipts;
   }
 
   /// Mints an owned state-store cross-repository blocking-link receipt.
@@ -344,6 +443,34 @@ class StationBeadWriter {
         'reason': reason,
       },
     );
+    try {
+      final session = await _reader.beadById(
+        sessionId,
+        types: {GridIssueTypes.session},
+      );
+      if (session?.isClosed ?? false) {
+        final disposition =
+            session!.metadata['grid.escalation'] != null ||
+                session.metadata['grid.rework_declined'] != null
+            ? GateSweepSessionDisposition.held
+            : session.metadata['grid.outcome'] == 'complete'
+            ? GateSweepSessionDisposition.done
+            : GateSweepSessionDisposition.voided;
+        if (disposition != GateSweepSessionDisposition.held) {
+          await closeOpenGatesForTerminal(
+            sessionId: sessionId,
+            trigger: GateCloseCause.stragglerRoute,
+            disposition: disposition,
+          );
+        }
+      }
+    } on Object catch (error) {
+      _flare('gate.autoCloseFailed', {
+        'sessionId': sessionId,
+        'cause': GateCloseCause.stragglerRoute.wireValue,
+        'reason': _truncateGateFlareReason('$error'),
+      });
+    }
     return id;
   }
 
@@ -911,13 +1038,21 @@ class StationBeadWriter {
   /// store via the safe snapshot path (never `bd show` on a controller path);
   /// returns null on ANY read error so dedup is best-effort and never blocks a
   /// legitimate gate mint.
+  Future<List<Bead>> _findOpenGates({
+    required String sessionId,
+    String? nodePath,
+  }) => _reader.openBeads(
+    types: {GridIssueTypes.gate},
+    metadataAll: {'blocks': sessionId, if (nodePath != null) 'node': nodePath},
+  );
+
   Future<Bead?> _findOpenGate({
     required String sessionId,
     required String nodePath,
   }) async {
-    final gates = await _reader.openBeads(
-      types: {GridIssueTypes.gate},
-      metadataAll: {'blocks': sessionId, 'node': nodePath},
+    final gates = await _findOpenGates(
+      sessionId: sessionId,
+      nodePath: nodePath,
     );
     return gates.isEmpty ? null : gates.first;
   }
@@ -1022,3 +1157,6 @@ class StationBeadWriter {
     throw refusal;
   }
 }
+
+String _truncateGateFlareReason(String reason) =>
+    reason.length <= 500 ? reason : reason.substring(0, 500);
