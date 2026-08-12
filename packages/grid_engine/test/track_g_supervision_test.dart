@@ -117,6 +117,7 @@ void main() {
     test('an exhausted node → escalation marker written + session closed; a '
         'healthy terminal would just close', () async {
       final f = buildFakes();
+      final transport = RecordingExplorationTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
       // agent failed AND exhausted (restartCount 3 == maxRestarts 3).
       final joined = JoinedSnapshotNotifier(
@@ -155,6 +156,7 @@ void main() {
                 child: Station([
                   SubstationScope(
                     configNotifier: SubstationConfigNotifier(_tgConfig),
+                    services: ServiceBundle(transport: transport),
                     key: const ValueKey('scope.tg'),
                   ),
                 ]),
@@ -174,6 +176,11 @@ void main() {
         f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
         hasLength(1),
       );
+      expect(transport.named('session.closed').single.data, {
+        'sessionId': 'tgdog-s',
+        'disposition': 'held',
+        'reason': 'tg-1/agent: ',
+      });
     });
 
     test('the escalation records grid.escalation_reason (the failing node + its '

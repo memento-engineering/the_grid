@@ -14,6 +14,7 @@ void main() {
   late RecordingBdRunner runner;
   late BdCliService bd;
   late List<String> refusals;
+  late List<({String name, Map<String, String> data})> flares;
 
   BeadOwnershipPredicate predicate() => BeadOwnershipPredicate({'tgdog'});
 
@@ -22,6 +23,7 @@ void main() {
     reader: runner,
     ownership: predicate(),
     onRefusal: refusals.add,
+    onFlare: (name, data) => flares.add((name: name, data: data)),
   );
 
   StationBeadWriter writerWith({
@@ -51,6 +53,7 @@ void main() {
     runner = RecordingBdRunner(createdId: 'tgdog-gate1');
     bd = BdCliService(runner);
     refusals = <String>[];
+    flares = <({String name, Map<String, String> data})>[];
   });
 
   test(
@@ -82,6 +85,15 @@ void main() {
       expect(stamp['blocks'], 'tgdog-s');
       expect(stamp['node'], 'tg-1/review/route');
       expect(stamp['reason'], 'code-validation failed: hard block');
+      expect(flares.single.name, 'gate.opened');
+      expect(flares.single.data, containsPair('gateId', 'tgdog-gate1'));
+      expect(flares.single.data, containsPair('sessionId', 'tgdog-s'));
+      expect(flares.single.data, containsPair('nodePath', 'tg-1/review/route'));
+      expect(
+        flares.single.data,
+        containsPair('reason', 'code-validation failed: hard block'),
+      );
+      expect(flares.single.data, containsPair('reused', 'false'));
 
       // Safety invariants — bd-only, actor-stamped, never `bd show`.
       expect(runner.everyMutationHasActor, isTrue);
@@ -134,6 +146,15 @@ void main() {
       // The re-gate marker: count bumped (1 → 2) + a fresh `regated_at` stamp.
       expect(refresh['regate_count'], '2');
       expect(refresh['regated_at'], isA<String>());
+      expect(flares.single.name, 'gate.opened');
+      expect(flares.single.data, containsPair('gateId', 'tgdog-gopen'));
+      expect(flares.single.data, containsPair('sessionId', 'tgdog-s'));
+      expect(flares.single.data, containsPair('nodePath', 'tg-1/review/route'));
+      expect(
+        flares.single.data,
+        containsPair('reason', 'second gate (re-gate)'),
+      );
+      expect(flares.single.data, containsPair('reused', 'true'));
       // Never `bd show` on a controller path.
       expect(runner.neverCalledShow, isTrue);
       expect(runner.everyMutationHasActor, isTrue);
@@ -416,14 +437,19 @@ void main() {
 
       expect(id, 'tgdog-gate1');
       expect(runner.callsFor('close'), isEmpty);
-      expect(flares, hasLength(1));
-      expect(flares.single.name, 'gate.autoCloseFailed');
-      expect(flares.single.data['sessionId'], 'tgdog-s');
+      final failures = flares
+          .where((flare) => flare.name == 'gate.autoCloseFailed')
+          .toList();
+      expect(failures, hasLength(1));
+      expect(failures.single.data['sessionId'], 'tgdog-s');
       expect(
-        flares.single.data['cause'],
+        failures.single.data['cause'],
         GateCloseCause.stragglerRoute.wireValue,
       );
-      expect(flares.single.data['reason'], contains('gate auto-close refused'));
+      expect(
+        failures.single.data['reason'],
+        contains('gate auto-close refused'),
+      );
     },
   );
 
@@ -457,7 +483,7 @@ void main() {
 
     expect(id, 'tgdog-gate1');
     expect(runner.callsFor('close'), isEmpty);
-    expect(flares, isEmpty);
+    expect(flares.map((flare) => flare.name), ['gate.opened']);
   });
 
   test('live sweep requires the matching closed work bead', () async {

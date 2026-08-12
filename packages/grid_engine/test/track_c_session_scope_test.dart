@@ -259,6 +259,7 @@ void main() {
       'when the terminal step completes, the session is closed exactly once',
       () async {
         final f = buildFakes();
+        final transport = RecordingExplorationTransport();
         f.runner.exportBeads = const [
           Bead(
             id: 'tgdog-s',
@@ -294,6 +295,7 @@ void main() {
           ctx: f.ctx,
           registry: reg,
           rootCircuit: (_) => _code,
+          services: ServiceBundle(transport: transport),
         );
         addTearDown(m.owner.dispose);
 
@@ -343,6 +345,10 @@ void main() {
           f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
           hasLength(1),
         );
+        expect(transport.named('session.closed').single.data, {
+          'sessionId': 'tgdog-s',
+          'disposition': 'done',
+        });
         expect(
           f.runner.calls
               .where((call) => call.length > 1)

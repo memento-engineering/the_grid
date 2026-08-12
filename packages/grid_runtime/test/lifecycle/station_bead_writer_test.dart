@@ -268,6 +268,9 @@ void main() {
       expect(stamped['rig'], 'tgdog');
       expect(stamped['work_bead'], 'tgdog-work1');
       expect(stamped['state'], 'start_pending');
+      expect(flares.single.name, 'session.minted');
+      expect(flares.single.data['sessionId'], 'tgdog-sess1');
+      expect(flares.single.data['workBeadId'], 'tgdog-work1');
 
       // Safety invariants.
       expect(runner.everyMutationHasActor, isTrue);
