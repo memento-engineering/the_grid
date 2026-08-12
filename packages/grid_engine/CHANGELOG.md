@@ -1,3 +1,12 @@
+## 0.3.0-rc.5
+
+- Fixes 0.3.0-rc.4, which DOES NOT COMPILE against its own declared
+  dependencies. rc.4 allowed `grid_runtime: ^0.2.0-rc.1`, but its
+  `SessionScope`/`WorkList` reference `StationBeadWriter.closeOpenGatesForTerminal`,
+  `GateCloseCause` and `GateSweepSessionDisposition`, which first ship in
+  grid_runtime 0.2.0-rc.3. The constraint is tightened to `^0.2.0-rc.3`.
+  Do not use 0.3.0-rc.4.
+
 ## 0.3.0-rc.4
 
 - Breaking: `operatorRulingMetadata` gains a REQUIRED `evidenceSession` named
