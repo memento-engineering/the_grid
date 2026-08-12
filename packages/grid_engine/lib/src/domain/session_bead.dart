@@ -22,6 +22,7 @@ library;
 
 import 'package:beads_dart/beads_dart.dart';
 
+import '../molecule/molecule_schema.dart';
 import 'rework.dart' show voidKeyFor;
 import 'session_projection.dart';
 
@@ -213,7 +214,18 @@ abstract final class ResultKeys {
   /// record of HOW the work left the station (`pr`, `export`, …). Written beside
   /// the method's own receipt keys under `grid.result.<nodePath>.*`.
   static const delivery = 'delivery';
+
+  /// The typed route verdict persisted by the engine router.
+  static const routeVerdict = 'route_verdict';
+
+  /// The session whose round owns this session-level evidence.
+  static const evidenceSession = 'evidence_session';
 }
+
+const String kRouteVerdictAdvance = 'advance';
+const String kRouteVerdictEscalate = 'escalate';
+
+const Set<String> _reviewCapabilityIds = {'spec-critic', 'critic'};
 
 /// The [ResultKeys.transport] provenance an OPERATOR RULING stamps on a lane
 /// result (tg-i08) — the marker distinguishing a human override from an
@@ -232,10 +244,12 @@ Map<String, String> operatorRulingMetadata(
   String nodePath, {
   required String grade,
   required String rationale,
+  required String evidenceSession,
 }) => {
   ResultKeys.keyFor(nodePath, ResultKeys.grade): grade,
   ResultKeys.keyFor(nodePath, ResultKeys.transport): kOperatorRulingTransport,
   ResultKeys.keyFor(nodePath, ResultKeys.rationale): rationale,
+  ResultKeys.keyFor(nodePath, ResultKeys.evidenceSession): evidenceSession,
 };
 
 /// The max persisted length of a capture-only failure/escalation diagnostic
@@ -312,6 +326,52 @@ Map<String, Map<String, String>> projectCircuitResults(Bead sessionBead) {
     (results[nodePath] ??= <String, String>{})[field] = entry.value.toString();
   }
   return results;
+}
+
+typedef ReworkVerdictEvidence = ({bool reachedVerdict, String? freeReason});
+
+/// Classifies the durable evidence owned by one retired rework round.
+ReworkVerdictEvidence reworkVerdictEvidence({
+  required Bead session,
+  required Iterable<Bead> steps,
+}) {
+  final sessionResults = projectCircuitResults(session);
+  final legacySessionGrade =
+      session.metadata[SessionBeadKeys.model] != kSessionModelMolecule &&
+      sessionResults.values.any(
+        (result) =>
+            result.containsKey(ResultKeys.grade) &&
+            result[ResultKeys.transport] != kOperatorRulingTransport,
+      );
+  final currentOperatorRuling = sessionResults.values.any(
+    (result) =>
+        result.containsKey(ResultKeys.grade) &&
+        result[ResultKeys.transport] == kOperatorRulingTransport &&
+        result[ResultKeys.evidenceSession] == session.id,
+  );
+  var reviewGrade = false;
+  var advanced = false;
+  var escalated = false;
+  for (final step in steps) {
+    final results = projectCircuitResults(step).values;
+    if (_reviewCapabilityIds.contains(
+          step.metadata[MoleculeStepKeys.capability],
+        ) &&
+        results.any((result) => result.containsKey(ResultKeys.grade))) {
+      reviewGrade = true;
+    }
+    for (final result in results) {
+      advanced |= result[ResultKeys.routeVerdict] == kRouteVerdictAdvance;
+      escalated |= result[ResultKeys.routeVerdict] == kRouteVerdictEscalate;
+    }
+  }
+  if (legacySessionGrade || currentOperatorRuling || reviewGrade || advanced) {
+    return (reachedVerdict: true, freeReason: null);
+  }
+  if (escalated) {
+    return (reachedVerdict: false, freeReason: 'pre-dispatch route escalation');
+  }
+  return (reachedVerdict: false, freeReason: 'no durable verdict evidence');
 }
 
 /// Overlays explicit session-level operator rulings on molecule step results.

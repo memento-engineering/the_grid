@@ -499,6 +499,7 @@ void main() {
           lane,
           grade: 'A',
           rationale: 'operator inspected the lane',
+          evidenceSession: 'tgdog-session',
         );
         final critic = _stepBead(
           'critic-step',

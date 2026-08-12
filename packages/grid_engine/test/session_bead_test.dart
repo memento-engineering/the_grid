@@ -166,6 +166,7 @@ void main() {
         'tg-1/review/test-coverage',
         grade: 'A',
         rationale: 'critic cd\'d; verdict was A — transport-F false gate',
+        evidenceSession: 'tgdog-9',
       );
       expect(ruling, {
         'grid.result.tg_h1_sreview_stest_hcoverage.grade': 'A',
@@ -173,6 +174,7 @@ void main() {
             'operator-ruling',
         'grid.result.tg_h1_sreview_stest_hcoverage.rationale':
             'critic cd\'d; verdict was A — transport-F false gate',
+        'grid.result.tg_h1_sreview_stest_hcoverage.evidence_session': 'tgdog-9',
       });
       expect(kOperatorRulingTransport, 'operator-ruling');
       // The route re-reads it through projectCircuitResults → resultOf().
@@ -215,6 +217,7 @@ void main() {
           lane,
           grade: 'A',
           rationale: 'operator inspected the lane',
+          evidenceSession: 'tgdog-s',
         ),
       );
       final sessionResults = projectCircuitResults(session);
@@ -224,6 +227,7 @@ void main() {
         ResultKeys.grade: 'A',
         ResultKeys.transport: kOperatorRulingTransport,
         ResultKeys.rationale: 'operator inspected the lane',
+        ResultKeys.evidenceSession: 'tgdog-s',
       });
       expect(merged['tg-1/review/coherence'], {ResultKeys.grade: 'A'});
       expect(stepResults[lane], {
@@ -235,6 +239,7 @@ void main() {
         ResultKeys.grade: 'A',
         ResultKeys.transport: kOperatorRulingTransport,
         ResultKeys.rationale: 'operator inspected the lane',
+        ResultKeys.evidenceSession: 'tgdog-s',
       });
     });
 
@@ -276,6 +281,118 @@ void main() {
       expect(p.pgid, 99);
       expect(p.token, 'fade');
       expect(p.workBeadId, 'genesis-7r9');
+    });
+  });
+
+  group('rework verdict evidence', () {
+    Bead session(String id, {Map<String, String> metadata = const {}}) => Bead(
+      id: id,
+      issueType: GridIssueTypes.session,
+      metadata: {SessionBeadKeys.model: kSessionModelMolecule, ...metadata},
+    );
+
+    Bead step(
+      String capability,
+      Map<String, String> result, {
+      Map<String, String> extra = const {},
+    }) => Bead(
+      id: 'step-$capability',
+      issueType: GridIssueTypes.step,
+      metadata: {
+        MoleculeStepKeys.capability: capability,
+        ...extra,
+        ...nodeResultMetadata('work/review/$capability', result),
+      },
+    );
+
+    test('production review capabilities charge at every grade', () {
+      for (final capability in ['spec-critic', 'critic']) {
+        for (final grade in ['A', 'B', 'C', 'D', 'E', 'F']) {
+          expect(
+            reworkVerdictEvidence(
+              session: session('round'),
+              steps: [
+                step(capability, {ResultKeys.grade: grade}),
+              ],
+            ).reachedVerdict,
+            isTrue,
+            reason: '$capability $grade',
+          );
+        }
+      }
+    });
+
+    test('readiness and discovery escalation are free regardless of grade', () {
+      for (final capability in ['readiness', 'discovery']) {
+        final evidence = reworkVerdictEvidence(
+          session: session('round'),
+          steps: [
+            step(capability, {
+              ResultKeys.grade: 'A',
+              ResultKeys.routeVerdict: kRouteVerdictEscalate,
+            }),
+          ],
+        );
+        expect(evidence.reachedVerdict, isFalse);
+        expect(evidence.freeReason, 'pre-dispatch route escalation');
+      }
+    });
+
+    test(
+      'capability identity, route advance, and ruling ownership classify',
+      () {
+        expect(
+          reworkVerdictEvidence(
+            session: session('round'),
+            steps: [
+              step(
+                'arbitrary',
+                {ResultKeys.grade: 'F'},
+                extra: {MoleculeStepKeys.swarm: 'committee'},
+              ),
+            ],
+          ).reachedVerdict,
+          isFalse,
+        );
+        expect(
+          reworkVerdictEvidence(
+            session: session('round'),
+            steps: [
+              step('route', {ResultKeys.routeVerdict: kRouteVerdictAdvance}),
+            ],
+          ).reachedVerdict,
+          isTrue,
+        );
+        for (final owner in ['round', 'prior', '']) {
+          final ruling = operatorRulingMetadata(
+            'work/review/coherence',
+            grade: 'A',
+            rationale: 'inspected',
+            evidenceSession: owner,
+          );
+          expect(
+            reworkVerdictEvidence(
+              session: session('round', metadata: ruling),
+              steps: const [],
+            ).reachedVerdict,
+            owner == 'round',
+            reason: 'owner=$owner',
+          );
+        }
+      },
+    );
+
+    test('legacy flat session grades remain verdict evidence', () {
+      final legacy = Bead(
+        id: 'legacy',
+        metadata: nodeResultMetadata('work/review/coherence', {
+          ResultKeys.grade: 'F',
+        }),
+      );
+      expect(
+        reworkVerdictEvidence(session: legacy, steps: const []).reachedVerdict,
+        isTrue,
+      );
     });
   });
 }

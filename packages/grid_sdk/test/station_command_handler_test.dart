@@ -540,6 +540,101 @@ void main() {
       },
     );
 
+    test('tg-fqif readiness hold regression', () async {
+      final stateRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            _session('tgdog-fqif-r1', workBead: 'tg-fqif#r1', molecule: true),
+            _resultStep('tgdog-fqif-r1-step', sessionId: 'tgdog-fqif-r1'),
+            _session('tgdog-fqif-r2', workBead: 'tg-fqif#r2', molecule: true),
+            _resultStep(
+              'tgdog-fqif-r2-step',
+              sessionId: 'tgdog-fqif-r2',
+              capability: 'readiness',
+              result: const {
+                ResultKeys.grade: 'E',
+                ResultKeys.routeVerdict: kRouteVerdictEscalate,
+              },
+            ),
+            _session('tgdog-fqif-r3', workBead: 'tg-fqif#r3', molecule: true),
+            _resultStep('tgdog-fqif-r3-step', sessionId: 'tgdog-fqif-r3'),
+            _session('tgdog-fqif-current', workBead: 'tg-fqif', molecule: true),
+          ]),
+        ),
+        work: _Source(_workSnapshot('tg-fqif')),
+        stateRunner: stateRunner,
+        workRunner: _RecordingRunner(),
+      );
+
+      expect(
+        await handler(const GridCommandRequest.rework(beadId: 'tg-fqif')),
+        isA<GridCommandCompleted>(),
+      );
+      expect(
+        stateRunner.calls.expand((call) => call),
+        contains('work_bead=tg-fqif#r4'),
+      );
+    });
+
+    test('tg-8900 transport miss regression', () async {
+      final stateRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            for (final round in [1, 2]) ...[
+              _session(
+                'eight-r$round',
+                workBead: 'tg-8900#r$round',
+                molecule: true,
+              ),
+              _resultStep('eight-r$round-step', sessionId: 'eight-r$round'),
+            ],
+            _session('eight-r3', workBead: 'tg-8900#r3', molecule: true),
+            _resultStep(
+              'eight-r3-step',
+              sessionId: 'eight-r3',
+              capability: 'readiness',
+              result: const {
+                ResultKeys.grade: 'D',
+                ResultKeys.routeVerdict: kRouteVerdictEscalate,
+              },
+            ),
+            _session('eight-r4', workBead: 'tg-8900#r4', molecule: true),
+            _resultStep('eight-r4-step', sessionId: 'eight-r4'),
+            _session('eight-current', workBead: 'tg-8900', molecule: true),
+          ]),
+        ),
+        work: _Source(_workSnapshot('tg-8900')),
+        stateRunner: stateRunner,
+        workRunner: _RecordingRunner(),
+      );
+
+      final result = await handler(
+        const GridCommandRequest.rework(beadId: 'tg-8900'),
+      );
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having(
+              (value) => value.message,
+              'message',
+              contains('4 rounds retired'),
+            )
+            .having(
+              (value) => value.message,
+              'message',
+              contains('3 reached a verdict'),
+            )
+            .having(
+              (value) => value.message,
+              'message',
+              contains('#r3 (pre-dispatch route escalation)'),
+            ),
+      );
+      expect(stateRunner.calls, isEmpty);
+    });
+
     test(
       'grid/gate/resolve normalizes override metadata before close',
       () async {
@@ -1129,18 +1224,40 @@ Bead _session(
   String id, {
   String workBead = 'tg-1',
   bool reachedVerdict = false,
+  bool molecule = false,
 }) => Bead(
   id: id,
   issueType: GridIssueTypes.session,
   status: BeadStatus.closed,
   metadata: {
+    'rig': 'tgdog',
     'work_bead': workBead,
+    if (molecule) SessionBeadKeys.model: kSessionModelMolecule,
     if (reachedVerdict) 'grid.result.route/committee.grade': 'F',
   },
 );
 
-GraphSnapshot _workSnapshot() => _snapshot([
-  const Bead(id: 'tg-1', issueType: IssueType.task, metadata: {'rig': 'tg'}),
+Bead _resultStep(
+  String id, {
+  required String sessionId,
+  String capability = 'spec-critic',
+  Map<String, String> result = const {ResultKeys.grade: 'F'},
+}) => Bead(
+  id: id,
+  issueType: GridIssueTypes.step,
+  status: BeadStatus.closed,
+  metadata: {
+    'rig': 'tgdog',
+    MoleculeStepKeys.session: sessionId,
+    MoleculeStepKeys.path: '$sessionId/review/$capability',
+    MoleculeStepKeys.capability: capability,
+    MoleculeStepKeys.state: StepState.complete.name,
+    ...nodeResultMetadata('$sessionId/review/$capability', result),
+  },
+);
+
+GraphSnapshot _workSnapshot([String id = 'tg-1']) => _snapshot([
+  Bead(id: id, issueType: IssueType.task, metadata: const {'rig': 'tg'}),
 ]);
 
 GraphSnapshot _gateSnapshot() => _snapshot([
