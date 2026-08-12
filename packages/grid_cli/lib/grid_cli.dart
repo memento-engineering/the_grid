@@ -46,6 +46,8 @@ export 'src/state_store_gc.dart'
         kStateStoreGcThresholdBytes;
 export 'src/up_command.dart';
 export 'src/diagnostics_reporter.dart';
+export 'src/composite_exploration_transport.dart';
+export 'src/station_event_log.dart';
 export 'src/down_command.dart';
 export 'src/status_command.dart';
 

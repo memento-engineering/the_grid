@@ -866,6 +866,7 @@ class SessionScopeState extends State<SessionScope>
     }
     try {
       await ctx.writer.close(id);
+      _flare('session.closed', {'sessionId': id, 'disposition': 'done'});
       await _closeTerminalGates(
         id,
         GateCloseCause.sessionTerminal,
@@ -1219,6 +1220,11 @@ class SessionScopeState extends State<SessionScope>
       },
     );
     await ctx.writer.close(id, reason: 'breaker-exhausted');
+    _flare('session.closed', {
+      'sessionId': id,
+      'disposition': 'held',
+      'reason': truncateReason(reason),
+    });
   }
 
   @override

@@ -269,6 +269,7 @@ class StationBeadWriter {
         ...metadata,
       },
     );
+    _flare('session.minted', {'sessionId': id, 'workBeadId': workBeadId});
     return id;
   }
 
@@ -428,6 +429,13 @@ class StationBeadWriter {
         ifAssignee: existing.assignee,
         ifStatus: existing.status,
       );
+      _flare('gate.opened', {
+        'gateId': existing.id,
+        'sessionId': sessionId,
+        'nodePath': nodePath,
+        'reason': reason,
+        'reused': 'true',
+      });
       return existing.id;
     }
     final id = await _bd.create(
@@ -446,6 +454,13 @@ class StationBeadWriter {
         'reason': reason,
       },
     );
+    _flare('gate.opened', {
+      'gateId': id,
+      'sessionId': sessionId,
+      'nodePath': nodePath,
+      'reason': reason,
+      'reused': 'false',
+    });
     try {
       final session = await _reader.beadById(
         sessionId,
