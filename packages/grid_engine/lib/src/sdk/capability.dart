@@ -29,6 +29,7 @@ library;
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import '../domain/mount_eligibility.dart';
 import 'allocation.dart';
 import 'cursor.dart';
 import 'route.dart';
@@ -352,6 +353,7 @@ class ServiceBundle {
     this.trust,
     this.trustFloor = const TrustFloor(TrustLevel.trusted),
     this.transport,
+    this.mountEligibility,
   });
 
   /// Workspace provisioning for this substation's ONE root — the git impl ships
@@ -379,6 +381,10 @@ class ServiceBundle {
   /// Reserved — the outbound exploration sink (no inbound pipeline handle);
   /// null in P1.
   final ExplorationTransport? transport;
+
+  /// This substation's optional per-bead content gate; null preserves the
+  /// engine's existing permissive mount behavior. Implementations ship in assets.
+  final MountEligibilityPredicate? mountEligibility;
 }
 
 /// The first [Service] — WORKSPACE PROVISIONING, abstracted so the engine knows

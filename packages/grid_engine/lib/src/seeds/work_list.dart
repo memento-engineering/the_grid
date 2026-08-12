@@ -7,6 +7,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:state_notifier/state_notifier.dart';
 
 import '../domain/driveable_work.dart';
+import '../domain/mount_eligibility.dart';
 import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
@@ -88,6 +89,7 @@ class _WorkListState extends State<WorkList>
   final Set<String> _gateSweepsScheduled = <String>{};
 
   final Set<String> _trustRefusedReported = <String>{};
+  final Map<String, String> _mountEligibilityRefusals = <String, String>{};
 
   void _scheduleGateSweep(
     StationServices stationServices,
@@ -232,6 +234,18 @@ class _WorkListState extends State<WorkList>
       // narrows further, never widens.
       final driveList = seed.substationConfig.driveList;
       if (driveList.isNotEmpty && !driveList.contains(bead.id)) continue;
+
+      final mountEligibility = services?.mountEligibility;
+      if (mountEligibility != null) {
+        final decision = mountEligibility(bead);
+        switch (decision) {
+          case MountEligible():
+            _restoreMountEligibility(services, bead.id);
+          case MountRefused(:final clause):
+            _refuseMountEligibility(services, bead.id, clause);
+            continue;
+        }
+      }
 
       final trust = services?.trust;
       if (trust != null) {
@@ -429,6 +443,9 @@ class _WorkListState extends State<WorkList>
     );
   }
 
+  /// [IssueTypeDriveability] asks whether this KIND of bead may ever mount;
+  /// [MountEligibilityPredicate] asks whether THIS bead is fit to mount right now.
+  ///
   /// The ALLOW-list: only plain, coding-dispatchable work mounts. `isCore` =
   /// {task, bug, feature, chore, epic, decision, spike, story, milestone} — the
   /// upstream built-in work types; every the_grid custom type (convergence /
@@ -447,6 +464,46 @@ class _WorkListState extends State<WorkList>
   /// the gates themselves).
   static bool _isDispatchableWork(IssueType type, {required bool resident}) =>
       type.isCore && (!resident || type.isDriveable);
+
+  void _refuseMountEligibility(
+    ServiceBundle? services,
+    String beadId,
+    String clause,
+  ) {
+    final formerClause = _mountEligibilityRefusals[beadId];
+    _mountEligibilityRefusals[beadId] = clause;
+    if (formerClause != null) return;
+    _emitMountEligibilityFlare(
+      services,
+      'work.mountEligibilityRefused',
+      beadId,
+      clause,
+    );
+  }
+
+  void _restoreMountEligibility(ServiceBundle? services, String beadId) {
+    final formerClause = _mountEligibilityRefusals.remove(beadId);
+    if (formerClause == null) return;
+    _emitMountEligibilityFlare(
+      services,
+      'work.mountEligibilityRestored',
+      beadId,
+      formerClause,
+    );
+  }
+
+  static void _emitMountEligibilityFlare(
+    ServiceBundle? services,
+    String name,
+    String beadId,
+    String clause,
+  ) {
+    try {
+      services?.transport?.flare(name, {'beadId': beadId, 'clause': clause});
+    } catch (_) {
+      // A throwing transport never breaks mount reconciliation.
+    }
+  }
 
   /// Emits ONE LOUD line (tg-42f) when the concurrency governor holds
   /// [waiting] beads ready-unmounted for lack of a slot — count + which beads
