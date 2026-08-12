@@ -1075,6 +1075,7 @@ class StationBeadWriter {
         id,
         ifAssignee: ifAssignee,
         ifStatus: ifStatus,
+        onGuardDegraded: _flare,
         title: title,
         status: status,
         priority: priority,

@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
 import '../codecs/envelope.dart';
 import '../errors/bd_exception.dart';
 import '../models/bead.dart';
@@ -34,6 +36,16 @@ class BdCliService {
   /// so a huge id set degrades into a handful of spawns, never one-per-id
   /// (ADR-0001 D4: "never spawn bd per issue in a loop").
   static const int idChunkSize = 50;
+
+  static Future<bool>? _guardedWriteSupport;
+  static bool _guardedWriteReceiptEmitted = false;
+
+  /// Clears the process-wide guarded-write negotiation state for isolated tests.
+  @visibleForTesting
+  static void resetGuardedWriteCapabilityForTesting() {
+    _guardedWriteSupport = null;
+    _guardedWriteReceiptEmitted = false;
+  }
 
   final BdRunner _runner;
 
@@ -179,6 +191,9 @@ class BdCliService {
 
     /// Expected current status for bd's conditional-update guard.
     BeadStatus? ifStatus,
+
+    /// Receives the once-per-process receipt when requested guards are unsupported.
+    void Function(String name, Map<String, String> data)? onGuardDegraded,
     String? title,
     BeadStatus? status,
     int? priority,
@@ -240,11 +255,22 @@ class BdCliService {
         await file.writeAsString(design);
         designFile = file.path;
       }
+      final requestedGuard = ifAssignee != null || ifStatus != null;
+      final supportsGuard = !requestedGuard || await _supportsGuardedWrites();
+      if (requestedGuard && !supportsGuard && !_guardedWriteReceiptEmitted) {
+        _guardedWriteReceiptEmitted = true;
+        onGuardDegraded?.call('bd.guardedWriteDegraded', const {
+          'missingCapability': '--if-assignee,--if-status',
+          'safetyDropped': 'compare-and-swap defence in depth',
+          'primarySafety':
+              'StationBeadWriter single-writer chokepoint preserved',
+        });
+      }
       await _runEnvelope(
         updateArgs(
           id,
-          ifAssignee: ifAssignee,
-          ifStatus: ifStatus,
+          ifAssignee: supportsGuard ? ifAssignee : null,
+          ifStatus: supportsGuard ? ifStatus : null,
           title: title,
           status: status,
           priority: priority,
@@ -291,6 +317,29 @@ class BdCliService {
     for (final entry in expected.entries) {
       _verifyRoundTrip(entry.key, entry.value, stored[entry.key]!);
     }
+  }
+
+  Future<bool> _supportsGuardedWrites() async {
+    final cached = _guardedWriteSupport;
+    if (cached != null) return cached;
+    final probe = _probeGuardedWrites();
+    _guardedWriteSupport = probe;
+    return probe;
+  }
+
+  Future<bool> _probeGuardedWrites() async {
+    const args = ['update', '--help'];
+    final result = await _runner.run(args);
+    if (!result.ok) {
+      throw BdException.fromOutput(
+        command: const ['bd', ...args],
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      );
+    }
+    final help = '${result.stdout}\n${result.stderr}';
+    return help.contains('--if-assignee') && help.contains('--if-status');
   }
 
   /// `bd close <id> [--reason …]`.

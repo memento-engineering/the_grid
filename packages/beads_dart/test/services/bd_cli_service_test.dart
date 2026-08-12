@@ -321,7 +321,13 @@ void main() {
     late BdCliService service;
 
     setUp(() {
+      BdCliService.resetGuardedWriteCapabilityForTesting();
       runner = FakeBdRunner()
+        ..stub(
+          (args) =>
+              args.length == 2 && args[0] == 'update' && args[1] == '--help',
+          const BdReply(stdout: '--if-assignee\n--if-status'),
+        )
         // Created-id envelope for create; empty success envelopes otherwise.
         ..stubCommand(
           'create',
@@ -387,10 +393,80 @@ void main() {
         ifStatus: BeadStatus.open,
         status: BeadStatus.inProgress,
       );
-      final argv = runner.calls.single;
+      final argv = runner.calls.last;
       expect(argv, containsAllInOrder(['--if-assignee', '']));
       expect(argv, containsAllInOrder(['--if-status', 'open']));
       expect(argv.indexOf('--if-status'), lessThan(argv.indexOf('--status')));
+    });
+
+    test(
+      'guard capability is probed once and cached across services',
+      () async {
+        await service.update('tg-7', ifAssignee: '', ifStatus: BeadStatus.open);
+        await BdCliService(
+          runner,
+        ).update('tg-8', ifAssignee: 'owner', ifStatus: BeadStatus.inProgress);
+
+        expect(
+          runner.calls.where((call) => call.join(' ') == 'update --help'),
+          hasLength(1),
+        );
+        final updates = runner.calls.where((call) => call.length > 2).toList();
+        expect(updates.every((call) => call.contains('--if-assignee')), isTrue);
+        expect(updates.every((call) => call.contains('--if-status')), isTrue);
+      },
+    );
+
+    test(
+      'missing either guard flag degrades both guards and receipts once',
+      () async {
+        BdCliService.resetGuardedWriteCapabilityForTesting();
+        final unsupported = FakeBdRunner()
+          ..stub(
+            (args) => args.join(' ') == 'update --help',
+            const BdReply(stdout: '--if-assignee'),
+          )
+          ..stubCommand('update', _okEnvelope());
+        final receipts = <String>[];
+
+        for (final id in ['tg-7', 'tg-8']) {
+          await BdCliService(unsupported).update(
+            id,
+            ifAssignee: '',
+            ifStatus: BeadStatus.open,
+            onGuardDegraded: (name, data) => receipts.add(name),
+          );
+        }
+
+        final updates = unsupported.calls
+            .where((call) => call.length > 2 && call[1] != '--help')
+            .toList();
+        expect(
+          updates.every((call) => !call.contains('--if-assignee')),
+          isTrue,
+        );
+        expect(updates.every((call) => !call.contains('--if-status')), isTrue);
+        expect(receipts, ['bd.guardedWriteDegraded']);
+      },
+    );
+
+    test('failed guard probe is classified and performs no mutation', () async {
+      BdCliService.resetGuardedWriteCapabilityForTesting();
+      final failing = FakeBdRunner()
+        ..stub(
+          (args) => args.join(' ') == 'update --help',
+          const BdReply(exitCode: 2, stderr: 'probe failed'),
+        );
+
+      await expectLater(
+        BdCliService(
+          failing,
+        ).update('tg-7', ifAssignee: '', ifStatus: BeadStatus.open),
+        throwsA(isA<BdException>()),
+      );
+      expect(failing.calls, [
+        const ['update', '--help'],
+      ]);
     });
 
     test(
