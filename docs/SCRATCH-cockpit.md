@@ -14,7 +14,7 @@ Nico's only visibility into the running factory today is watching his own Claude
 
 ## 2. Non-goals (v1)
 
-- **No feeding/acting.** Watch-only. No gate-resolve, rework, or frontier-bless from the UI (deferred; the mutation seam is `StationBeadWriter`, coexistence-sensitive).
+- **No feeding/acting.** Watch-only. No gate-resolve, rework, or frontier-approval from the UI (deferred; the mutation seam is `StationBeadWriter`, coexistence-sensitive).
 - **No perception / leonard / DevTools.** Separate surface, separate concern.
 - **No public/internet reach.** LAN only. No genesis `consent` layer yet (a static token stands in — §8).
 - **No metrics export (OTel/VictoriaMetrics).** That's the other half of ADR-0012; the cockpit reads the ledger, it doesn't emit spans.

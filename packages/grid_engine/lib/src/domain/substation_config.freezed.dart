@@ -17,14 +17,14 @@ mixin _$SubstationConfig {
 /// The rig's id (its issue-id prefix and `metadata.rig` marker).
  String get substationId;/// The substation allow-set: the prefixes/markers the_grid owns and may dispatch
 /// against (fail-closed — an empty set owns nothing).
- Set<String> get ownedSubstations;/// The blessed-bead **drive-list** (ADR-0006): when non-empty, ONLY these
+ Set<String> get ownedSubstations;/// The approved-bead **drive-list** (ADR-0006): when non-empty, ONLY these
 /// bead ids mount a work node + spawn an agent (`WorkList` enforces it at the
 /// mount boundary). Empty = no per-bead restriction (dev / dry-run observes
 /// all owned dispatchable work); a LIVE (non-resident) run refuses an
 /// empty drive-list upstream (`SubstationWork`/`StationWork` gating), so
 /// this gate is active whenever armed.
 /// Orthogonal to [ownedSubstations]: ownership says *whose* beads, the
-/// drive-list says *which specific* beads Nico has blessed for this arm.
+/// drive-list says *which specific* beads Nico has approved for this arm.
  Set<String> get driveList;/// Resident all-ready arming (RS-3/D-R4): when true, `WorkList` narrows
 /// the mount boundary to the DRIVEABLE-WORK types (`task`/`bug`/
 /// `feature`/`chore`) ON TOP of the existing A41 `isCore` allow-list — a
@@ -253,23 +253,23 @@ class _SubstationConfig implements SubstationConfig {
   return EqualUnmodifiableSetView(_ownedSubstations);
 }
 
-/// The blessed-bead **drive-list** (ADR-0006): when non-empty, ONLY these
+/// The approved-bead **drive-list** (ADR-0006): when non-empty, ONLY these
 /// bead ids mount a work node + spawn an agent (`WorkList` enforces it at the
 /// mount boundary). Empty = no per-bead restriction (dev / dry-run observes
 /// all owned dispatchable work); a LIVE (non-resident) run refuses an
 /// empty drive-list upstream (`SubstationWork`/`StationWork` gating), so
 /// this gate is active whenever armed.
 /// Orthogonal to [ownedSubstations]: ownership says *whose* beads, the
-/// drive-list says *which specific* beads Nico has blessed for this arm.
+/// drive-list says *which specific* beads Nico has approved for this arm.
  final  Set<String> _driveList;
-/// The blessed-bead **drive-list** (ADR-0006): when non-empty, ONLY these
+/// The approved-bead **drive-list** (ADR-0006): when non-empty, ONLY these
 /// bead ids mount a work node + spawn an agent (`WorkList` enforces it at the
 /// mount boundary). Empty = no per-bead restriction (dev / dry-run observes
 /// all owned dispatchable work); a LIVE (non-resident) run refuses an
 /// empty drive-list upstream (`SubstationWork`/`StationWork` gating), so
 /// this gate is active whenever armed.
 /// Orthogonal to [ownedSubstations]: ownership says *whose* beads, the
-/// drive-list says *which specific* beads Nico has blessed for this arm.
+/// drive-list says *which specific* beads Nico has approved for this arm.
 @override@JsonKey() Set<String> get driveList {
   if (_driveList is EqualUnmodifiableSetView) return _driveList;
   // ignore: implicit_dynamic_type

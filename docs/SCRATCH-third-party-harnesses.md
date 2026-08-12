@@ -4,7 +4,7 @@
 ratification.** Graduation target: **ADR-0008 Decision 10 amendments** (the agent scope — this doc
 extends it; numbering/stamps are Nico's at ratification, never silent). Build: **grid agents, per
 fully-briefed beads (§7) — not hand-written.** Beads are drafted only after ratification and file
-**deferred** (the intake convention: Nico's bless flips them open).
+**deferred** (the intake convention: Nico's approval flips them open).
 
 **Ground truth re-accounted 2026-07-07** against the merged v3 / code-as-config refactor
 (`grid_sdk` `runGrid`+`GridDelegate`, Track F composition assets, RS-8 `CodeRunCommand` deletion,

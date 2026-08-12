@@ -254,7 +254,7 @@ The rigorous argument:
 - **Value boundary:** the seam is a plain freezed `DesiredState`, not a live Branch/TreeContext handle. *(Failure mode B: the snapshot-diff engine or M4b reducer reaches back into the config tree's Branch state → binds engine convergence to a keyed reconcile → also contradicts A30.)*
 - **A test/lint invariant should assert** the config tree imports no observed-bead repository and the reconciler imports no genesis_tree `Branch` type. Two distinct `TreeOwner`s if both authoring and the A31 render inspector adopt genesis.
 
-**Does it amend or sit beside A30/A31?** It **sits beside** them. A30's substance (engine stays snapshot-diff) and A31's substance (genesis at render, M3) are both **unchanged**. The right paperwork is: a new ADR-0000 amendment (the config-authoring axis), and a **one-line cross-ref appended to A30 and A31** noting the new axis sits beside them and does not revise their engine/render scope. genesis already **closed its A7 to "the_grid's own ADRs"** (2026-06-14) — so the genesis side has blessed this; the remaining gate is purely the_grid-side ratification.
+**Does it amend or sit beside A30/A31?** It **sits beside** them. A30's substance (engine stays snapshot-diff) and A31's substance (genesis at render, M3) are both **unchanged**. The right paperwork is: a new ADR-0000 amendment (the config-authoring axis), and a **one-line cross-ref appended to A30 and A31** noting the new axis sits beside them and does not revise their engine/render scope. genesis already **closed its A7 to "the_grid's own ADRs"** (2026-06-14) — so the genesis side has approved this; the remaining gate is purely the_grid-side ratification.
 
 ---
 

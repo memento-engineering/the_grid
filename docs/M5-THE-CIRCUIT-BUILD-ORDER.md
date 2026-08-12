@@ -195,7 +195,7 @@ out-of-band sink leonard already reads — A39/A40), fire-and-forget. Full obser
 Rubrics + agent/critic prompts ship as **`extension/mcp/config.yaml`** resources/prompts
 (the `package:extension_discovery` format; `flutter.dev/go/packaged-ai-assets`):
 files on disk, **mustache-templated** args, `visibility: public|private` (our open/closed
-split), **AI-only packages with no Dart code blessed**. We follow it as a **spec** so our
+split), **AI-only packages with no Dart code approved**. We follow it as a **spec** so our
 systems use it now AND can pivot if the community adopts it (it dovetails with the_grid's
 `extension/` convention + "extension never plugin"). **Dart-first** for the formula +
 capabilities (composed at the existing seam); the **TOML `PackInflater`** (parse a
@@ -203,7 +203,7 @@ factoryskills-style pack) is low-priority — *just* parse + inflate — and **d
 
 ### D-10 — Validation/Implementation plan prerequisite (the verify-first data dependency)
 `code-validation` runs the bead's Validation Plan; spec-adherence grades against its
-Implementation Plan — both the architect's output. **DECIDED (Nico, 2026-06-28): blessed
+Implementation Plan — both the architect's output. **DECIDED (Nico, 2026-06-28): approved
 beads carry a HAND-WRITTEN Validation Plan + Implementation Plan** (the smallest path; no new
 pipeline stage). A minimal `spec` step (discover/architect front-half) is **phase 2**.
 
@@ -260,7 +260,7 @@ pipeline stage). A minimal `spec` step (discover/architect front-half) is **phas
 ## Open sub-decisions
 
 1. ~~**`grid_assets` home** (D-1)~~ — **DECIDED:** in the_grid repo (all grid-asset code), extract later.
-2. ~~**Validation-plan source** (D-10)~~ — **DECIDED:** hand-write on blessed beads.
+2. ~~**Validation-plan source** (D-10)~~ — **DECIDED:** hand-write on approved beads.
 3. ~~**Gate representation** (D-7)~~ — **DECIDED:** a `type=gate` bead in tgdog that
    functionally blocks the_grid's own session (never the foreign work bead), resolved to
    route back. (Full-fidelity primitive — verify-first's happy path doesn't hit it; lands

@@ -61,7 +61,7 @@ an edit to the work.
   Against a live station, ready = armed: a `bd create` is live the moment it commits,
   and a blocker-less create mounts within seconds — before the dep-add lands. The
   deferred-create discipline closes both the half-authored-work race (I-8) and the
-  unblessed-work race (the original intake rule). A positive terminal is the only
+  unapproved-work race (the original intake rule). A positive terminal is the only
   unmount (A40), so a wrongly-mounted session survives its own cause — prevention is
   the whole game.
 

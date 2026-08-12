@@ -610,8 +610,8 @@ void main() {
       expect(_workBead(root, 'gc-9'), isNull);
     });
 
-    test('blessed-bead drive-list (ADR-0006): when non-empty, ONLY listed beads '
-        'mount — owned, ready, core beads not blessed stay dormant', () {
+    test('approved-bead drive-list (ADR-0006): when non-empty, ONLY listed beads '
+        'mount — owned, ready, core beads not approved stay dormant', () {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -633,25 +633,25 @@ void main() {
         ),
       );
 
-      // Only the blessed bead mounted; the other owned/ready/core beads did not.
+      // Only the approved bead mounted; the other owned/ready/core beads did not.
       expect(recorder.events, ['START work(tg-2)']);
       expect(_workBead(root, 'tg-1'), isNull);
       expect(_workBead(root, 'tg-2'), isNotNull);
       expect(_workBead(root, 'tg-3'), isNull);
     });
 
-    test('the drive-list NARROWS, never widens: a blessed bead still fails the '
+    test('the drive-list NARROWS, never widens: an approved bead still fails the '
         'ownership + type gates', () {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [
-            _bead('tg-1'), // owned + core + blessed → mounts
-            _bead('gc-9'), // blessed but UNOWNED → no
+            _bead('tg-1'), // owned + core + approved → mounts
+            _bead('gc-9'), // approved but UNOWNED → no
             _bead(
               'tg-conv',
               type: GridIssueTypes.convergence,
-            ), // blessed but non-core → no
+            ), // approved but non-core → no
           ],
           ready: {'tg-1', 'gc-9', 'tg-conv'},
         ),
@@ -664,7 +664,7 @@ void main() {
             joined: joined,
             resolver: _FakeSessionResolver(recorder),
             substationConfig: SubstationConfigNotifier(
-              // ALL three blessed — the drive-list cannot resurrect a bead the
+              // ALL three approved — the drive-list cannot resurrect a bead the
               // ownership / type gates reject.
               _tgConfig().copyWith(
                 driveList: const {'tg-1', 'gc-9', 'tg-conv'},

@@ -1,6 +1,6 @@
 # SCRATCH — the bd contract re-pin + alignment backlog
 
-**Status:** BLESSED + FILED (Nico, 2026-08-08). Epic **tg-8cuu**; children tg-lea2 (A1),
+**Status:** APPROVED + FILED (Nico, 2026-08-08). Epic **tg-8cuu**; children tg-lea2 (A1),
 tg-7ukf (A2), tg-rnd8 (A3), tg-4rf6 (A4), tg-f9h0 (B5), tg-w1qo (B6), tg-u7b5 (B7),
 tg-5616 (C8), tg-u47r (C9), tg-4wbv (C10), tg-l6r7 (D11), tg-uv69 (D12). The filing script
 in §6 is now a record of what ran, not a pending action.
@@ -115,7 +115,7 @@ transcript.
     DBs, so v1.1.2 cannot write them). The fleet is committed to the HEAD lineage until the
     next upstream tag catches up — the first release-rail gate therefore waits on that tag.
     This is a fact to burn down, not a precedent.
-- **D-R2 — Backlog staged as this SCRATCH first**; filing happens only after Nico blesses,
+- **D-R2 — Backlog staged as this SCRATCH first**; filing happens only after Nico approves,
   via §6 verbatim, `--actor nico`.
 - **D-R3 — Strategic frame:** the_grid keeps moving, deliberately **more inline with bd** —
   consume bd's primitives natively (corpus, CAS, serve), keep policy derived, never
@@ -218,7 +218,7 @@ edges only where real.
 - No gc re-integration of any kind — the RPP bridge exploration (same session) concluded
   unappealing; recorded in the session transcript, not pursued.
 
-## 6. The filing script (run only after Nico blesses this doc)
+## 6. The filing script (run only after Nico approves this doc)
 
 From `~/development/engineering.memento/the_grid`, pinned-bd on PATH. Individual creates —
 **no `bd batch`** (proxied server refuses it). Children hang off the epic with `parent-child`;
@@ -259,5 +259,5 @@ bd dep add "$D12" "$D11" --type blocks --actor "$ACTOR"
 **Arm-awareness note:** under a resident station, *ready = armed*. The `blocks` edges above
 keep B/D dark until their gates clear, but A1 and the C evaluations are born ready. The tg
 ready set already carries open planning beads sitting undriven, so this matches current store
-behavior — but if a resident station is armed against tg before these file, bless the timing
+behavior — but if a resident station is armed against tg before these file, approve the timing
 deliberately.
