@@ -1,3 +1,15 @@
+## 0.5.0-rc.5
+
+- `StationEventLog` + `CompositeExplorationTransport`: a durable, cursored
+  sink over the existing `ExplorationTransport.flare` seam, composed beside
+  `StationDiagnosticsReporter` (tg-fqif).
+- Threshold-gated offline `dolt gc --full` in the up lifecycle (tg-zc6x).
+
+  NOTE: the previous version was published and the package then kept accruing
+  source without a bump, so the hosted archive and the in-repo sources at that
+  version differed. Local builds passed on path overrides while hosted
+  resolves got stale code. This release re-syncs them.
+
 # Changelog
 
 ## 0.5.0-rc.4

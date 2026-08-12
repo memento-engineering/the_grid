@@ -1,7 +1,7 @@
 name: grid_sdk
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.3.0-rc.3
+version: 0.3.0-rc.4
 description: >-
   The public authoring surface of the grid — a station is authored as a Seed:
   compose the SDK's composition types and drive them with `runGrid`.

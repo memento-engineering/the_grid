@@ -1,3 +1,14 @@
+## 0.3.0-rc.4
+
+- Verdict-based rework cap accounting and the readiness-hold exclusion
+  (tg-04tj); `station_command_handler` reads verdict evidence from existing
+  `grid.result.*` metadata.
+
+  NOTE: the previous version was published and the package then kept accruing
+  source without a bump, so the hosted archive and the in-repo sources at that
+  version differed. Local builds passed on path overrides while hosted
+  resolves got stale code. This release re-syncs them.
+
 ## 0.3.0-rc.3
 
 - Breaking (tg-at3r): grid_cli's old `ResidentGridDelegate` contract is
