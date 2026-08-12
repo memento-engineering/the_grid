@@ -213,22 +213,45 @@ final class StationCommandHandler implements GridCommandHandler {
     }
 
     final session = current.single;
-    final retiredRounds = sessions
+    final retiredRoundAccounting = sessions
         .map((candidate) {
-          final reachedVerdict =
-              projectCircuitResults(candidate).isNotEmpty ||
-              state.beads
-                  .where((bead) {
-                    return bead.issueType == GridIssueTypes.step &&
-                        _meta(bead, MoleculeStepKeys.session) == candidate.id;
-                  })
-                  .any((step) => projectCircuitResults(step).isNotEmpty);
+          final steps = state.beads
+              .where((bead) {
+                return bead.issueType == GridIssueTypes.step &&
+                    _meta(bead, MoleculeStepKeys.session) == candidate.id;
+              })
+              .toList(growable: false);
+          final evidence = reworkVerdictEvidence(
+            session: candidate,
+            steps: steps,
+          );
           return (
             workBeadKey: _meta(candidate, SessionBeadKeys.workBead) ?? '',
-            reachedVerdict: reachedVerdict,
+            reachedVerdict: evidence.reachedVerdict,
+            freeReason: evidence.freeReason,
           );
         })
         .toList(growable: false);
+    final retiredRounds = retiredRoundAccounting
+        .map(
+          (round) => (
+            workBeadKey: round.workBeadKey,
+            reachedVerdict: round.reachedVerdict,
+          ),
+        )
+        .toList(growable: false);
+    final retiredForBead =
+        retiredRoundAccounting
+            .map(
+              (round) => (
+                round: reworkRoundOf(beadId, round.workBeadKey),
+                reachedVerdict: round.reachedVerdict,
+                freeReason: round.freeReason,
+              ),
+            )
+            .where((round) => round.round != null)
+            .toList(growable: false)
+          ..sort((left, right) => left.round!.compareTo(right.round!));
     final maxRound = maxReworkRound(
       beadId,
       retiredRounds.map((round) => round.workBeadKey),
@@ -242,9 +265,15 @@ final class StationCommandHandler implements GridCommandHandler {
       );
     }
     if (spentRounds >= kMaxReworkRounds && !beyondCap) {
+      final freeRounds = retiredForBead
+          .where((round) => !round.reachedVerdict)
+          .map((round) => '#r${round.round} (${round.freeReason})')
+          .join(', ');
       return _refused(
         'rework_round_cap',
-        '"$beadId" has reached the rework cap of $kMaxReworkRounds.',
+        '"$beadId" has ${retiredForBead.length} rounds retired; '
+            '$spentRounds reached a verdict; cap $kMaxReworkRounds; '
+            'free rounds: ${freeRounds.isEmpty ? 'none' : freeRounds}.',
       );
     }
     final round = maxRound + 1;
@@ -483,6 +512,7 @@ final class StationCommandHandler implements GridCommandHandler {
             ruling.path,
             grade: ruling.grade,
             rationale: rationale!,
+            evidenceSession: sessionId,
           ),
         );
       }

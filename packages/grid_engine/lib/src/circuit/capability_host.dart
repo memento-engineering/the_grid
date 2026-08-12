@@ -591,6 +591,10 @@ class CapabilityHostState extends State<CapabilityHost>
   /// this unification exists to kill.
   Future<void> _persistAdvance(Map<String, String>? payload) async {
     if (_cancelled || !context.mounted) return;
+    final routePayload = <String, String>{
+      ...?payload,
+      ResultKeys.routeVerdict: kRouteVerdictAdvance,
+    };
     final terminal = isDeliveryTerminal(
       circuit: seed.mount.circuit,
       circuitPath: seed.mount.circuitPath,
@@ -600,7 +604,7 @@ class CapabilityHostState extends State<CapabilityHost>
     final method = _services.delivery;
     if (!terminal || method == null) {
       if (terminal) _emitFlare('deliver.unarmed', const {});
-      await _persistComplete(payload);
+      await _persistComplete(routePayload);
       return;
     }
     // The ambient values, read SYNCHRONOUSLY at entry with the `read<T>()`
@@ -628,7 +632,7 @@ class CapabilityHostState extends State<CapabilityHost>
           sessionId: _sessionId,
           nodePath: _nodePath,
           workspace: workspace,
-          payload: payload ?? const {},
+          payload: routePayload,
         ),
       );
     } on Object catch (e) {
@@ -639,7 +643,7 @@ class CapabilityHostState extends State<CapabilityHost>
     switch (outcome) {
       case Ok(payload: final receipt):
         await _persistComplete({
-          ...?payload,
+          ...routePayload,
           ...?receipt,
           ResultKeys.delivery: method.id,
         });
@@ -672,7 +676,12 @@ class CapabilityHostState extends State<CapabilityHost>
       rewindCount: seed.mount.node.rewindCount,
     ),
     stepBeadId: _stepBeadId,
-    gatedMetadata: _moleculeMetadata(StepState.gated),
+    gatedMetadata: {
+      ..._moleculeMetadata(StepState.gated),
+      ...nodeResultMetadata(_nodePath, const {
+        ResultKeys.routeVerdict: kRouteVerdictEscalate,
+      }),
+    },
     isActive: () => !_cancelled && context.mounted,
     failToSupervision: _persistFailure,
     emitFlare: _emitFlare,

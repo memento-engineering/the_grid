@@ -365,6 +365,7 @@ void main() {
       expect(request.bead.id, 'tg-1');
       expect(request.workspace.branch, 'grid/tg-1');
       expect(request.payload['grade'], 'A');
+      expect(request.payload[ResultKeys.routeVerdict], kRouteVerdictAdvance);
       expect(request.nodePath, 'tg-1/route');
       expect(request.sessionId, 'tgdog-s');
 
@@ -373,6 +374,10 @@ void main() {
       final meta = fakes.runner.metadataOfUpdate(0);
       expect(meta['grid.step.state'], 'complete');
       expect(meta['grid.result.tg_h1_sroute.grade'], 'A');
+      expect(
+        meta['grid.result.tg_h1_sroute.route_verdict'],
+        kRouteVerdictAdvance,
+      );
       expect(
         meta['grid.result.tg_h1_sroute.pr_url'],
         'https://example.test/pr/1',
@@ -386,6 +391,10 @@ void main() {
 
       final meta = fakes.runner.metadataOfUpdate(0);
       expect(meta['grid.step.state'], 'complete');
+      expect(
+        meta['grid.result.tg_h1_sroute.route_verdict'],
+        kRouteVerdictAdvance,
+      );
       for (final write in _allWrites(fakes.runner)) {
         expect(write.contains('.delivery'), isFalse);
         expect(write.contains('failed'), isFalse);
@@ -427,6 +436,7 @@ void main() {
         expect(meta['grid.step.restartCount'], '1');
         for (final write in _allWrites(fakes.runner)) {
           expect(write.contains('complete'), isFalse);
+          expect(write.contains('route_verdict'), isFalse);
         }
       },
     );
@@ -471,6 +481,12 @@ void main() {
       final fakes = await _drive(const FixedRouteCapability(Escalate('x')));
 
       expect(fakes.runner.metadataOfUpdate(0)['grid.step.state'], 'gated');
+      expect(
+        fakes.runner.metadataOfUpdate(
+          0,
+        )['grid.result.tg_h1_sroute.route_verdict'],
+        kRouteVerdictEscalate,
+      );
       final creates = fakes.runner.callsFor('create');
       expect(creates, hasLength(1));
       expect(creates.single, containsAllInOrder(['--type', 'gate']));
