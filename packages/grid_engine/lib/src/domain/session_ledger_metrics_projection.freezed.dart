@@ -188,7 +188,7 @@ return reported(_that.value);case _:
 
 class ResultTransportAbsent implements ResultTransport {
   const ResultTransportAbsent();
-
+  
 
 
 
@@ -220,7 +220,7 @@ String toString() {
 
 class ResultTransportFailClosedDefault implements ResultTransport {
   const ResultTransportFailClosedDefault();
-
+  
 
 
 
@@ -252,7 +252,7 @@ String toString() {
 
 class ResultTransportOperatorRuling implements ResultTransport {
   const ResultTransportOperatorRuling();
-
+  
 
 
 
@@ -284,7 +284,7 @@ String toString() {
 
 class ResultTransportReported implements ResultTransport {
   const ResultTransportReported(this.value);
-
+  
 
  final  String value;
 
@@ -546,7 +546,7 @@ return $default(_that.beadId,_that.sessionId,_that.nodePath,_that.field,_that.wi
 
 class _MetricsDecodeIssue implements MetricsDecodeIssue {
   const _MetricsDecodeIssue({required this.beadId, this.sessionId, this.nodePath, required this.field, required this.wireValue, required this.reason});
-
+  
 
 @override final  String beadId;
 @override final  String? sessionId;
@@ -701,7 +701,7 @@ as List<MetricsDecodeIssue>,
 @override
 @pragma('vm:prefer-inline')
 $ResultTransportCopyWith<$Res> get transport {
-
+  
   return $ResultTransportCopyWith<$Res>(_self.transport, (value) {
     return _then(_self.copyWith(transport: value));
   });
@@ -844,7 +844,7 @@ return $default(_that.beadId,_that.nodePath,_that.lane,_that.grade,_that.transpo
 
 class _LedgerNodeMetrics implements LedgerNodeMetrics {
   const _LedgerNodeMetrics({required this.beadId, required this.nodePath, required this.lane, this.grade, this.transport = const ResultTransport.absent(), this.rationale, this.delivery, this.harness, this.model, this.costUsd, this.tokensIn, this.tokensOut, this.numTurns, this.harnessDurationMs, this.cacheReadInputTokens, this.cacheCreationInputTokens, this.modelLatencyMs, this.transportReliability, this.startedAt, this.finishedAt, this.durationMs, final  Map<String, String> rawFields = const <String, String>{}, final  List<MetricsDecodeIssue> issues = const <MetricsDecodeIssue>[]}): _rawFields = rawFields,_issues = issues;
-
+  
 
 @override final  String beadId;
 @override final  String nodePath;
@@ -963,7 +963,7 @@ as List<MetricsDecodeIssue>,
 @override
 @pragma('vm:prefer-inline')
 $ResultTransportCopyWith<$Res> get transport {
-
+  
   return $ResultTransportCopyWith<$Res>(_self.transport, (value) {
     return _then(_self.copyWith(transport: value));
   });
@@ -1172,7 +1172,7 @@ return $default(_that.sessionId,_that.workBeadId,_that.startedAt,_that.closedAt,
 
 class _LedgerSessionMetrics implements LedgerSessionMetrics {
   const _LedgerSessionMetrics({required this.sessionId, required this.workBeadId, this.startedAt, this.closedAt, final  List<LedgerNodeMetrics> nodes = const <LedgerNodeMetrics>[], final  Map<String, List<LedgerNodeMetrics>> nodesByLane = const <String, List<LedgerNodeMetrics>>{}, final  List<MetricsDecodeIssue> issues = const <MetricsDecodeIssue>[]}): _nodes = nodes,_nodesByLane = nodesByLane,_issues = issues;
-
+  
 
 @override final  String sessionId;
 @override final  String workBeadId;
@@ -1462,7 +1462,7 @@ return $default(_that.total,_that.failClosedDefault,_that.realVerdict,_that.rate
 
 class _FalseFMetrics implements FalseFMetrics {
   const _FalseFMetrics({this.total = 0, this.failClosedDefault = 0, this.realVerdict = 0, this.rate});
-
+  
 
 @override@JsonKey() final  int total;
 @override@JsonKey() final  int failClosedDefault;
@@ -1598,7 +1598,7 @@ as List<MetricsDecodeIssue>,
 @override
 @pragma('vm:prefer-inline')
 $FalseFMetricsCopyWith<$Res> get falseFs {
-
+  
   return $FalseFMetricsCopyWith<$Res>(_self.falseFs, (value) {
     return _then(_self.copyWith(falseFs: value));
   });
@@ -1741,7 +1741,7 @@ return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cach
 
 class _SessionLedgerMetricsProjection implements SessionLedgerMetricsProjection {
   const _SessionLedgerMetricsProjection({final  Map<String, LedgerSessionMetrics> sessionsById = const <String, LedgerSessionMetrics>{}, final  Map<String, List<LedgerSessionMetrics>> sessionsByLane = const <String, List<LedgerSessionMetrics>>{}, this.falseFs = const FalseFMetrics(), this.cacheHitRatio, final  Map<String, int> reworkRoundsByWorkBead = const <String, int>{}, this.costPerLandedDelivery, final  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane = const <String, Map<LedgerGrade, int>>{}, final  List<MetricsDecodeIssue> issues = const <MetricsDecodeIssue>[]}): _sessionsById = sessionsById,_sessionsByLane = sessionsByLane,_reworkRoundsByWorkBead = reworkRoundsByWorkBead,_gradeDistributionByLane = gradeDistributionByLane,_issues = issues;
-
+  
 
  final  Map<String, LedgerSessionMetrics> _sessionsById;
 @override@JsonKey() Map<String, LedgerSessionMetrics> get sessionsById {
@@ -1848,7 +1848,7 @@ as List<MetricsDecodeIssue>,
 @override
 @pragma('vm:prefer-inline')
 $FalseFMetricsCopyWith<$Res> get falseFs {
-
+  
   return $FalseFMetricsCopyWith<$Res>(_self.falseFs, (value) {
     return _then(_self.copyWith(falseFs: value));
   });

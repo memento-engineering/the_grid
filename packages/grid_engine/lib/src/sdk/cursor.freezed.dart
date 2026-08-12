@@ -24,9 +24,11 @@ mixin _$NodeCursor {
 /// null until `SessionStarted`.
  String? get token;/// How many times this node has been supervised-restarted (gates the breaker
 /// predicate — D-5).
- int get restartCount;/// How many times this node has been RE-KEYED BY A ROUTING REWIND
-/// (the `Rewind` verdict — tg-o90). Bumped monotonically per node on every
-/// rewind wave that names it, and part of the node's reconcile key
+ int get restartCount;/// The number of rework incarnations that reached a durable
+/// `grid.result.*` committee or route verdict. Agent death, failed spawn,
+/// station bounce, readiness hold, and every other verdict-less retirement
+/// retain structural history but do not spend this budget. It remains part
+/// of the node's reconcile key
 /// (`CircuitScope`), so a rewound node that is still MOUNTED (a daemon) is
 /// torn down and re-run rather than silently left alive under a stale
 /// incarnation.
@@ -298,9 +300,11 @@ class _NodeCursor extends NodeCursor {
 /// How many times this node has been supervised-restarted (gates the breaker
 /// predicate — D-5).
 @override@JsonKey() final  int restartCount;
-/// How many times this node has been RE-KEYED BY A ROUTING REWIND
-/// (the `Rewind` verdict — tg-o90). Bumped monotonically per node on every
-/// rewind wave that names it, and part of the node's reconcile key
+/// The number of rework incarnations that reached a durable
+/// `grid.result.*` committee or route verdict. Agent death, failed spawn,
+/// station bounce, readiness hold, and every other verdict-less retirement
+/// retain structural history but do not spend this budget. It remains part
+/// of the node's reconcile key
 /// (`CircuitScope`), so a rewound node that is still MOUNTED (a daemon) is
 /// torn down and re-run rather than silently left alive under a stale
 /// incarnation.
