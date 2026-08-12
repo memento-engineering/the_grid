@@ -1,3 +1,13 @@
+## 0.2.0-rc.3
+
+- Guarded-write capability negotiation (`BdGuardMismatch`) and the `notes:`
+  parameter on the update path. Consumed by grid_runtime's `StationBeadWriter`.
+
+  NOTE: the previous version was published and the package then kept accruing
+  source without a bump, so the hosted archive and the in-repo sources at that
+  version differed. Local builds passed on path overrides while hosted
+  resolves got stale code. This release re-syncs them.
+
 ## 0.2.0-rc.2
 
 - The sync FLOOR (tg-zd4v): `GridRuntimeFactory.build` adds a

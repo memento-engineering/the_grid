@@ -1,3 +1,12 @@
+## 0.3.0-rc.2
+
+- Republished to close a version/content divergence (see note below).
+
+  NOTE: the previous version was published and the package then kept accruing
+  source without a bump, so the hosted archive and the in-repo sources at that
+  version differed. Local builds passed on path overrides while hosted
+  resolves got stale code. This release re-syncs them.
+
 ## 0.3.0-rc.1
 
 - Breaking: tracks beads_dart 0.2.0-rc.1 — the `bd export` retirement. No
