@@ -1,3 +1,23 @@
+## 0.3.0-rc.4
+
+- Breaking: `operatorRulingMetadata` gains a REQUIRED `evidenceSession` named
+  parameter. Migration: pass the session id whose artifacts the ruling is
+  evidenced by — `operatorRulingMetadata(nodePath, grade: g, rationale: r,
+  evidenceSession: sessionId)`. Rulings are now scoped to the generation they
+  addressed, so a prior round's ruling can no longer merge into a fresh round's
+  identical node path (tg-04tj).
+- The rework cap counts only rounds that reached a VERDICT: a spec-readiness
+  HOLD, where no specify agent ran and no committee graded, no longer spends
+  budget (tg-04tj, completing tg-9q58).
+- `MountEligibilityPredicate` / `MountEligibilityDecision` (`MountEligible` /
+  `MountRefused`): an injectable predicate consulted at the mount boundary,
+  with edge-triggered `work.mountEligibilityRefused` / `work.mountEligibilityRestored`
+  flares naming the refused clause. `ServiceBundle` gains `mountEligibility`.
+  The engine supplies the SEAM only — concrete clauses come from the composing
+  assets pack (tg-8900).
+- Route verdicts persist through `CapabilityHostState._persistAdvance` /
+  `_persistEscalate` so a round's verdict evidence is durable (tg-04tj).
+
 ## 0.3.0-rc.3
 
 - Breaking: the `kMaxReworkRounds` budget now counts only rounds that reached a
