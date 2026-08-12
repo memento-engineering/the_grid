@@ -8,14 +8,14 @@ snapshot members (D-Z7 is dead) — federation is by WORK ASSIGNMENT (claim-firs
 broadcast-unclaimed → capability-matched claim → lease), designed in the alignment surface. The
 LOCAL content SURVIVES and resumes under that frame: §3 multi-root (tg-7gm, D-M1..M7) and §4's
 local multi-store half (tg-nsj re-scoped to local stores, D-F1..F7) plus §4b's durable pieces
-(absence ≠ deletion, staleness fail-closed, discovered ≠ blessed, membership-as-observed-state).
+(absence ≠ deletion, staleness fail-closed, discovered ≠ approved, membership-as-observed-state).
 §5's OQ-1..6 still want rulings when this pass resumes (alignment ladder AL-2/AL-3).
 
 **Was: discovery surface (2026-07-03), awaiting Nico's rulings.** Refines the two deferred P0
 beads filed at the first live boot — **tg-7gm** (multi-root) and **tg-nsj** (federated work
 sources, dep: tg-7gm). Written from a read-only discovery pass (two seam scouts + operator
 verification against the live stores). Doc-before-code: nothing here is built until the rulings
-land and the beads are blessed. Rulings log in §6.
+land and the beads are approved. Rulings log in §6.
 
 ## 1. The ask
 
@@ -219,7 +219,7 @@ zero-conf can drop behind without reshaping anything.
   store) mounts NO work here — its work is visible (status, future topology views), never driven
   (claim-in-own-store stays with the owning station, per the parked ADR-0011 sketch). This
   dissolves OQ-2's tension: refusal guards the DRIVEN set; observe-only needs no root.
-- **D-Z6 — Discovered ≠ blessed: the trust gate.** Entry from DISCOVERED (a zero-conf answer) to
+- **D-Z6 — Discovered ≠ approved: the trust gate.** Entry from DISCOVERED (a zero-conf answer) to
   OBSERVED (a mounted member) passes a Trust decision — allow-list now (LAN trust, the same
   posture as `Peer.token`), reputation/ledger impls later (ADR-0008's `Trust` seam). Exactly the
   store-hygiene shape: ready=in needed refinement; discovered=in needs a gate. The gate is LOUD both
@@ -249,17 +249,17 @@ zero-conf can drop behind without reshaping anything.
   an observed-not-owned member needs no root, so strictness costs nothing at the federation
   boundary.)*
 - **OQ-3 — The pairing grammar** (`--workspace/--root <substation>=<path>[@head]`, D-M2/D-F4) —
-  bless the shape? (It lands twice by hand: `addStationFlags` + the `up` hand-mirror.)
+  approve the shape? (It lands twice by hand: `addStationFlags` + the `up` hand-mirror.)
 - **OQ-4 — Landing surface for foreign repos.** The land step would open PRs on
   `nicholasspencer/.dashboard` and `nicholasspencer/butane_flutter` (gh auth already spans them?).
   OK, or commit-only (no `--land`) for foreign substations at first?
 - **OQ-5 — The circuit for foreign work.** Same `code` circuit + committee rubrics for dash/butane
-  beads? Refinement must stamp a worktree-relative `validation_plan` on every blessed bead (the I-3
+  beads? Refinement must stamp a worktree-relative `validation_plan` on every approved bead (the I-3
   lesson; OP-1 preflight will enforce once landed).
 - **OQ-6 — Scope of the first build.** tg-7gm alone already unlocks all-of-memento (4 repos, one
   store). tg-nsj adds the two foreign stores. Build strictly in that order (proposed), or demand
   both before the next boot?
-- **OQ-7 — The zero-conf companion.** Bless drafting `SCRATCH-zero-conf-membership.md` (the
+- **OQ-7 — The zero-conf companion.** Approve drafting `SCRATCH-zero-conf-membership.md` (the
   `zero_conf_grid_assets` design surface, feeding the parked ADR-0011: mDNS/DNS-SD service shape,
   what the TXT record carries, the D-Z6 trust-gate default, and the two consuming seams)? Design
   only — build order stays static-first (D-Z8). And confirm the LAN-trust default for the gate:

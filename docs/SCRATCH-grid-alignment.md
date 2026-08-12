@@ -169,7 +169,7 @@ own actor because under D-B1 it IS one — the union of everyone's brokers, not 
 `SCRATCH-multi-root-federation.md` §3 (multi-root, D-M1..M7) and the LOCAL half of §4
 (D-F1..F7 — the personal station hosting tg + dash + butane_flutter stores) **resume under this
 frame** — tg-7gm and tg-nsj as filed, with tg-nsj re-scoped to local stores only. The durable
-§4b pieces (absence ≠ deletion, staleness fail-closed for new work, discovered ≠ blessed trust
+§4b pieces (absence ≠ deletion, staleness fail-closed for new work, discovered ≠ approved trust
 gate, membership-as-observed-state) survive; **D-Z7 is dead** (D-A2). Its OQ-1..6 still want
 rulings when that pass resumes.
 
@@ -192,7 +192,7 @@ rulings when that pass resumes.
 - **OQ-A1 — ANSWERED:** `beads_dart` extraction proceeds now; **publication rides the the_grid
   publish wave** ("we will publish when we publish the rest of the_grid").
 - **OQ-A2 — ANSWERED:** in-process, behind our own abstract broker interface (→ D-B2).
-- **OQ-A3 — ANSWERED:** blessed — and the sequencing is DELEGATED: *"You're in charge of the DAG
+- **OQ-A3 — ANSWERED:** approved — and the sequencing is DELEGATED: *"You're in charge of the DAG
   as far as delivery. I just tell you what I wanted delivered and how, and right now this is one
   unit of work that I want delivered with these technical requirements."* Delivery decomposition
   below is the operator's, held to this surface's requirements.
@@ -222,6 +222,6 @@ undrivable by the resident station.
 - 2026-07-03 — Whiteboard clarified: X = "Station X|Y|Z" (more machines than point-to-point);
   triangle actor = the event bus.
 - 2026-07-03 — OQ-A1..4 answered (see §6): publish-with-the_grid; broker in-process behind our
-  own interface; ladder blessed + **delivery DAG delegated to the operator** ("one unit of work…
+  own interface; ladder approved + **delivery DAG delegated to the operator** ("one unit of work…
   with these technical requirements"); no MQTT in the engine (D-B5), power_station gets its own
   ADR repository (D-B6), ADR-0011 graduates post-proof.

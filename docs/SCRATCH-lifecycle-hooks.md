@@ -6,7 +6,7 @@ assigned by Nico 2026-07-19 (D-P7): ADR-0015**; the self-claimed 0014 went to th
 ADR, which graduates first), cross-referencing **power_station ADR-0001**
 (packaged-AI-asset skill↔command coupling — the contribution/command coupling this generalizes).
 Build: **grid agents, per fully-briefed beads (§8) — not hand-written.** Beads are drafted only
-after ratification and filed **deferred** (the intake convention: Nico's bless flips them open).
+after ratification and filed **deferred** (the intake convention: Nico's approval flips them open).
 
 This doc rests on, and does not re-open, three **already-ratified** control-plane rulings in
 `SCRATCH-resident-station.md`: **D-C1** (the control plane is NOT perception/exploration — that
@@ -247,7 +247,7 @@ map to an exit code (0 proceed / non-zero abort).
 ## 8. Bead backlog (drafted; FILE DEFERRED until ratification)
 
 Not filed (Nico's standing instruction this session + the intake convention). On ratification, file
-**deferred**; Nico's bless flips them open. Homing keeps coupled work in one store where possible;
+**deferred**; Nico's approval flips them open. Homing keeps coupled work in one store where possible;
 the epic lives in **the_grid** (it owns the primitive), the format contribution in **power_station**.
 
 - **Epic (the_grid): "lifecycle-hook dispatch seam."** The resolver + the git producer spine + the
@@ -269,4 +269,4 @@ the epic lives in **the_grid** (it owns the primitive), the format contribution 
 
 Every driveable bead gets a `validation_plan` (space_station beads use the absolute-cd plan; the_grid
 / power_station beads use the relative `cd packages/<pkg> && dart pub get && dart analyze && dart
-test` plan) at refinement, before any bless.
+test` plan) at refinement, before approval.

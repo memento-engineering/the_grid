@@ -42,7 +42,7 @@ Each row: what happened → root cause → the deterministic correction (**CODE*
 - **Root:** nothing checks that a `validation_plan` is actually runnable in the worktree before the
   bead is armed. A plan defect is indistinguishable from a code defect at the gate.
 - **Correction (CODE — LANDED, tg-a76):** an **arming preflight** (`lintValidationPlan` /
-  `preflightValidationPlans`, wired into `validateArming`) lints each blessed bead's
+  `preflightValidationPlans`, wired into `validateArming`) lints each approved bead's
   `validation_plan`: a conservative deny-list refuses (a) a `cd` into a dir absent at / outside the
   worktree root, (b) an empty/whitespace plan, (c) a reference to an absolute path outside the
   worktree — as a `StationRefusal` (exit 64) naming the bead + the offending clause, **before any
@@ -104,7 +104,7 @@ Each row: what happened → root cause → the deterministic correction (**CODE*
   the trigger surface — a create is LIVE the moment it commits, not when the author finishes.
 - **Correction (PROC, effective immediately):** dep-gated beads are **created deferred → deps
   wired → undeferred**, always — the same discipline as the intake rule, now for a second reason
-  (the first: unblessed work; this: half-authored work). A create with `--deps` in one atomic
+  (the first: unapproved work; this: half-authored work). A create with `--deps` in one atomic
   call would also close it (CODE candidate: verify plain `--deps <id>` semantics — the
   `blocks:<id>` form is inverted).
 - **Inference eliminated:** the diagnose-why-did-that-mount pass + orphan cleanup.
@@ -228,10 +228,10 @@ Three things do **not** reduce to a guard, and are the honest Fable-worthy resid
 3. **The keep/kill committee analysis.** Per-lane flip analysis, cost tradeoffs, whether a lane earns
    its ~$1.5 spawn. Analytical, one-shot, high-leverage — the archetypal Fable turn.
 
-## 4. Beads this surfaces (to file, deferred until blessed)
+## 4. Beads this surfaces (to file, deferred until approved)
 
 - **OP-1 — arming validation-plan preflight (CODE, I-3). LANDED (tg-a76).** `validateArming` lints
-  each blessed bead's `validation_plan` (`lintValidationPlan`/`preflightValidationPlans`): rejects a
+  each approved bead's `validation_plan` (`lintValidationPlan`/`preflightValidationPlans`): rejects a
   plan that `cd`s outside/absent-at the worktree / references an absolute path / is empty; LOUD
   `StationRefusal` (exit 64) naming the bead + the offending clause, before any spawn. + the
   worktree-relative-plans authoring rule (now code-enforced). `grid_cli`, offline.

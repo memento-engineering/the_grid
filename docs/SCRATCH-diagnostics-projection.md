@@ -202,7 +202,7 @@ future amendment, not designed here.
 | `tg-0ds.7` | leonard reads the projection headless (proving ground #2) — the `tg-e28`-pattern reactivity test, no leonard-side product code | .5 |
 | `tg-0ds.8` | ADR-0012 amendment — record the decisions, fix perception=JIT | — |
 
-Blessing into the ready frontier is Nico's lever; nothing here is armed.
+Approving into the ready frontier is Nico's lever; nothing here is armed.
 
 ## 10. Follow-ups (outside this epic)
 

@@ -90,7 +90,7 @@ process dies → launchd relaunches → freshness barrier → `RestartReconciler
 today; adopt once tg-9fl lands) → kernel mount. Graceful zero-downtime restart (detach-all →
 reattach-all, ADR-0009 D4) is the ceiling, explicitly **not** in this pass.
 
-**D-R4 — the store is the sole bless surface: when a bead is ready, it's in.**
+**D-R4 — the store is the sole approval surface: when a bead is ready, it's in.**
 (Nico, 2026-07-02: "when the bead enters the system, it's in.") The flow has two dependency
 layers, and both already exist:
 
@@ -139,7 +139,7 @@ runner shell (grid_cli), started by `driveStation` under `up`, disposed on the g
   fall back to a direct read-only store view, clearly labeled `(station: down)`.
 
 **D-C4 — work intake needs NO control plane.** The store **is** the intake: operator bd
-writes (prep/bless/close) wake the resident station through the existing dirty signals within
+writes (prep/approve/close) wake the resident station through the existing dirty signals within
 ~1 s. Net posture: **bd is the only mutation surface, signals are the only lifecycle surface,
 HTTP is read-only observation.** One trigger surface in the whole system: a bead going ready
 in the owned store.
@@ -177,7 +177,7 @@ only arbitration a single-machine dogfood needs.
 ## 5. Supersede/stamp ledger (applied only on ratification, never silent)
 
 - **ADR-0006** — the "live arm requires ≥1 `--bead`" clause and "Disarming = stop `grid run`"
-  get forward stamps: superseded by `up` + store-bless (D-R1/D-R4); `run` transitional →
+  get forward stamps: superseded by `up` + store-approval (D-R1/D-R4); `run` transitional →
   retired (RS-8).
 - **ADR-0012 (reserved)** — untouched. Explicit note at graduation: the control plane is a
   dedicated surface, NOT ADR-0012's exploration transport (D-C1).
@@ -209,7 +209,7 @@ engine-core change.
 ## 8. The bead ladder (filed with full briefs after ratification)
 
 Each bead gets the tg-9fl-grade brief (description / design / acceptance criteria /
-validation_plan in metadata) at filing time. Grid agents build; the operator preps, blesses,
+validation_plan in metadata) at filing time. Grid agents build; the operator preps, approves,
 arms, reviews. All offline-testable except RS-6's runbook proof and RS-8's live gate.
 
 | # | Bead | Scope (pkg) | Depends on |
@@ -224,7 +224,7 @@ arms, reviews. All offline-testable except RS-6's runbook proof and RS-8's live 
 | RS-8 | Retire `run`: delete the verb once the first live `up` arm is proven; dev/testing folds into `up --dry-run`/`--for-seconds` | `grid_cli` + space_station | RS-5 + the live proof |
 
 First proof: `space up --dry-run` under launchd; `space status` attaching over the control
-surface against the **AOT** binary; a bead blessed in-store picked up with no restart;
+surface against the **AOT** binary; a bead approved in-store picked up with no restart;
 `launchctl stop` shutting down clean (no leaked agent groups); `kill -9` + relaunch
 recovering through the barrier; a second `space up` refused LOUD by the lock.
 
@@ -232,16 +232,16 @@ recovering through the barrier; a second `space up` refused LOUD by the lock.
 AOT `space up` resident (lock + 0600 token + controlUrl) · AOT `status` attach over HTTP ·
 second `up` refused exit-64 naming pid+invariant · resident arming = the driveable owned
 frontier (epic excluded at the true mount gate; the `/status mounted` display over-count is
-filed as tg-8p9) · store bless reflected live in ~4s, no restart · `kill -9` under launchd →
+filed as tg-8p9) · store approval reflected live in ~4s, no restart · `kill -9` under launchd →
 unattended relaunch + LOUD stale-lock steal · `space down` = graceful stop, lock released,
 labeled fallback, **no KeepAlive bounce** (`SuccessfulExit=false` composing with RS-1's
 exit-0). The ladder RS-1…RS-7b is fully landed (16 beads, all agent-built). **Remaining at
-the live gate:** the first LIVE `space up` (no drive-list — the blessed frontier IS the
+the live gate:** the first LIVE `space up` (no drive-list — the approved frontier IS the
 drive set), then RS-8 files (retire `run`), then the graduation ADR.
 
 ## 9. Rulings log (Nico, 2026-07-02)
 
-- **OQ-1 (bless surface)** → ready-in-owned-store confirmed: "when the bead enters the
+- **OQ-1 (approval surface)** → ready-in-owned-store confirmed: "when the bead enters the
   system, it's in"; dep order gates the pipeline (discovery closes first). No `grid.armed`
   second key. Plus the renames (§6).
 - **OQ-2 (lock scope)** → per **station** state store (not substation); one grid per machine

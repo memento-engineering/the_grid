@@ -216,7 +216,7 @@ class _WorkListState extends State<WorkList>
       // types excludes convergence (the M2 two-writer axis), `session`
       // (the_grid's own lifecycle), every gc orchestration noun, and infra
       // (agent/rig/role) by construction; an unknown custom type does NOT mount.
-      // (A41 — refines A40's mount-boundary type gate; the live-arm blessed-bead
+      // (A41 — refines A40's mount-boundary type gate; the live-arm approved-bead
       // drive-list remains a SEPARATE gate, ADR-0006.)
       if (!_isDispatchableWork(
         bead.issueType,
@@ -226,8 +226,8 @@ class _WorkListState extends State<WorkList>
       }
       if (!ownership.owns(bead)) continue;
 
-      // Blessed-bead drive-list gate (ADR-0006): when a drive-list is configured
-      // (a live arm blesses specific beads via `--bead`), ONLY those beads mount.
+      // Approved-bead drive-list gate (ADR-0006): when a drive-list is configured
+      // (a live arm approves specific beads via `--bead`), ONLY those beads mount.
       // Empty = no per-bead restriction (dev/dry-run observes all owned work); a
       // live run refuses an empty drive-list upstream, so when armed this gate is
       // always active. Independent of the type/ownership allow-lists above — it

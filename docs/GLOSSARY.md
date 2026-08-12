@@ -107,7 +107,7 @@ in bead data). The agent works here; the landing circuit lands from here.
 
 **Resident station** `ratified · D-R4; qualifier retired R5` — **The only operating model**
 (`grid run` is deleted): a station stays up and treats **the ready frontier of its owned
-substations as the drive set** (D-R4). No `--bead` drive-list exists — you bless work by
+substations as the drive set** (D-R4). No `--bead` drive-list exists — you approve work by
 making it ready in the store. Foreground-resident by design; the supervisor (launchd)
 owns backgrounding. "Resident" stops being special vocabulary — a station simply *is*
 this.
@@ -201,7 +201,7 @@ services in branches except DI; **config = values in the tree, impls = DI**.
 identity, and audit. Everything the grid does is bead-shaped.
 
 **Ready frontier** `ratified · D-R4` — The set of open, unblocked, undeferred, driveable
-beads in owned substations. Under a resident station, **ready = blessed = will be driven**.
+beads in owned substations. Under a resident station, **ready = approved = will be driven**.
 Consequently the intake discipline is **create deferred → wire deps → undefer** (I-8), so
 a bead never surfaces mid-wiring.
 
@@ -632,7 +632,7 @@ diff → typed GraphEvents → StationJoinBridge re-push → tree reconciles →
 step-advances happen as Branch lifecycle.
 
 **F3 · One bead, end to end.** Create **deferred** → wire deps (`bd batch`) → undefer
-(= bless; enters the ready frontier) → WorkList mount boundary (isCore ∧ root registered ∧
+(= approve; enters the ready frontier) → WorkList mount boundary (isCore ∧ root registered ∧
 governor slot) → WorkBead mounts → SessionScope adopt-or-mints the session bead (state
 store) → worktree provisioned at the bead's root (branch `grid/<bead>`) → **code
 circuit**: agent step (harness spawns coder; fence persisted) → committee lanes grade →

@@ -131,7 +131,7 @@ class SubstationWork extends StatelessSeed {
   /// driveable work types (RS-3/D-R4 — a resident station's ready frontier IS
   /// the drive set); [maxConcurrentWork] is the per-substation governor
   /// override (null falls back to the station ceiling); [driveList] is the
-  /// ADR-0006 blessed-bead gate for a NON-resident arm (when non-empty, ONLY
+  /// ADR-0006 approved-bead gate for a NON-resident arm (when non-empty, ONLY
   /// those bead ids mount) — a resident station never sets it (D-R1/D-R4: no
   /// drive-list, ever; the frontier is the drive set). Every fresh session
   /// mints on the molecule model — there is no mint-mode switch (tg-eli
@@ -149,7 +149,7 @@ class SubstationWork extends StatelessSeed {
   /// The per-substation concurrency override (tg-42f); null = station default.
   final int? maxConcurrentWork;
 
-  /// The blessed-bead drive-list (ADR-0006) — empty for a resident station.
+  /// The approved-bead drive-list (ADR-0006) — empty for a resident station.
   final Set<String> driveList;
 
   @override

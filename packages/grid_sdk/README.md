@@ -165,7 +165,7 @@ composition tree, fed by runner-assembled off-tree machinery.
   `StationWork` above — it mounts nothing: the authored tree stands, drives no
   work. Knobs: `resident` (default `true` — a resident station's ready
   frontier IS the drive set; there is no drive-list), `maxConcurrentWork` (the
-  per-substation override), `driveList` (the blessed-bead gate for a
+  per-substation override), `driveList` (the approved-bead gate for a
   NON-resident arm). *(tg-eli, 2026-07-19: `circuitMintMode` /
   `CircuitMintMode` no longer exist — molecule is the only circuit engine,
   unconditionally; there is no mint-mode knob or flat-cursor opt-out.)*

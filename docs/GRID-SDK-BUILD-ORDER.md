@@ -2,7 +2,7 @@
 
 **Status: DRAFT for Nico's shaping (2026-07-06).** Executes the ratified
 `SCRATCH-station-config-model.md` v3 (decision-complete 2026-07-06). Beads are filed
-**deferred** once this order is blessed, then undefer track-by-track (I-8 discipline:
+**deferred** once this order is approved, then undefer track-by-track (I-8 discipline:
 create deferred → wire deps → undefer). **The first LIVE arm of the new runner is the
 human gate**, as always.
 
