@@ -105,6 +105,8 @@ export 'src/domain/wedge.dart';
 // narrowing over IssueType — the_grid's own reading of the generic beads
 // primitives, not part of the pure beads client.
 export 'src/domain/driveable_work.dart';
+// The injectable per-bead content gate; concrete clauses live in assets.
+export 'src/domain/mount_eligibility.dart';
 
 // The station-level ambient services (kernel-provided) a node resolves in one
 // inherited lookup: process transport + the bd chokepoint + the owned state rig
