@@ -1,3 +1,17 @@
+## 0.2.0-rc.3
+
+- `StationBeadWriter.closeOpenGatesForTerminal` plus the `GateCloseCause` and
+  `GateSweepSessionDisposition` enums: the gate auto-close sweep a terminal
+  session runs, returning `GateAutoCloseReceipt`s. Consumed by grid_engine's
+  `SessionScope` and `WorkList` (tg-3eeg).
+- Guarded-write capability negotiation on the bd chokepoint (tg-j0o0 groundwork).
+
+NOTE: 0.2.0-rc.2 was published BEFORE this API landed, and the package kept
+accumulating source without a version bump — so the hosted rc.2 archive and the
+in-repo rc.2 sources differ. grid_engine 0.3.0-rc.4 shipped against the in-repo
+sources and does not compile against hosted rc.2; grid_engine 0.3.0-rc.5 tightens
+its constraint to `^0.2.0-rc.3`.
+
 ## 0.2.0-rc.2
 
 - `StationBeadWriter.parkSessionAtGate` — the session-lifecycle park distinct
