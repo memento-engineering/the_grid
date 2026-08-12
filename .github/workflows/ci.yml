@@ -15,7 +15,14 @@ jobs:
       # so root resolution needs the Flutter SDK even for the Dart-only job.
       - uses: subosito/flutter-action@v2
         with:
+          # PINNED, deliberately. `channel: stable` floats: when it resolved
+          # Flutter 3.47.0 (2026-08-12) the bundled Dart formatter changed and
+          # three already-committed test files became "unformatted", turning the
+          # workspace format gate red on pull requests without a source line
+          # changing. CI must not drift ahead of the toolchain we develop on.
+          # Bump deliberately, together with local SDKs and a reformat.
           channel: stable
+          flutter-version: 3.44.8
       - name: Resolve workspace
         run: flutter pub get
       - name: Format (workspace-wide)
@@ -40,7 +47,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
+          # PINNED, deliberately. `channel: stable` floats: when it resolved
+          # Flutter 3.47.0 (2026-08-12) the bundled Dart formatter changed and
+          # three already-committed test files became "unformatted", turning the
+          # workspace format gate red on pull requests without a source line
+          # changing. CI must not drift ahead of the toolchain we develop on.
+          # Bump deliberately, together with local SDKs and a reformat.
           channel: stable
+          flutter-version: 3.44.8
       - name: Resolve workspace
         run: flutter pub get
       - name: Test Flutter packages
