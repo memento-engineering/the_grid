@@ -1,0 +1,22 @@
+# .pubignore REPLACES .gitignore for `dart pub publish`.
+#
+# It exists so the DevTools extension bundle SHIPS. The root .gitignore excludes
+# packages/*/extension/devtools/build/ (37MB of canvaskit has no business in git
+# history), but pub archives git-tracked files by default — so the bundle was
+# simply absent from the archive and pub rejected the package:
+#
+#   It looks like you are making a devtools extension!
+#   The folder `extension/devtools` should contain both a `config.yaml` file
+#   and a non-empty `build` directory
+#
+# Because this file takes precedence over .gitignore, the build/ directory is
+# included in the published archive while staying untracked in git. Re-run
+# tool/build_devtools_extension.sh before publishing so the shipped bundle is
+# current — it is a build artifact, not a source of truth.
+#
+# Everything below mirrors the root .gitignore EXCEPT the devtools build.
+.dart_tool/
+build/
+!extension/devtools/build/
+.packages
+pubspec.lock
