@@ -170,10 +170,13 @@ void main() {
           h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.state],
           'complete',
         );
-        expect(
-          h.fakes.runner.metadataOfUpdate(0)['grid.result.tg_h1_scritic.grade'],
-          'B',
-        );
+        final resultMetadata = {
+          for (final entry in h.fakes.runner.metadataOfUpdate(0).entries)
+            if (entry.key.startsWith(ResultKeys.prefix)) entry.key: entry.value,
+        };
+        expect(resultMetadata, {
+          ResultKeys.keyFor('tg-1/critic', ResultKeys.grade): 'B',
+        });
       });
 
       test('an arbitrary result envelope persists every field verbatim on the '

@@ -373,16 +373,17 @@ void main() {
       // receipt, and the audit record of HOW the work left — atomically.
       final meta = fakes.runner.metadataOfUpdate(0);
       expect(meta['grid.step.state'], 'complete');
-      expect(meta['grid.result.tg_h1_sroute.grade'], 'A');
-      expect(
-        meta['grid.result.tg_h1_sroute.route_verdict'],
-        kRouteVerdictAdvance,
-      );
-      expect(
-        meta['grid.result.tg_h1_sroute.pr_url'],
-        'https://example.test/pr/1',
-      );
-      expect(meta['grid.result.tg_h1_sroute.delivery'], 'fake-delivery');
+      final resultMetadata = {
+        for (final entry in meta.entries)
+          if (entry.key.startsWith(ResultKeys.prefix)) entry.key: entry.value,
+      };
+      expect(resultMetadata, {
+        ResultKeys.keyFor('tg-1/route', ResultKeys.grade): 'A',
+        ResultKeys.keyFor('tg-1/route', ResultKeys.routeVerdict):
+            kRouteVerdictAdvance,
+        ResultKeys.keyFor('tg-1/route', 'pr_url'): 'https://example.test/pr/1',
+        ResultKeys.keyFor('tg-1/route', ResultKeys.delivery): 'fake-delivery',
+      });
     });
 
     test('COMMIT-ONLY: with NO method bound the terminal advance still '
@@ -480,13 +481,16 @@ void main() {
         'type=gate bead, and no rewind write', () async {
       final fakes = await _drive(const FixedRouteCapability(Escalate('x')));
 
-      expect(fakes.runner.metadataOfUpdate(0)['grid.step.state'], 'gated');
-      expect(
-        fakes.runner.metadataOfUpdate(
-          0,
-        )['grid.result.tg_h1_sroute.route_verdict'],
-        kRouteVerdictEscalate,
-      );
+      final meta = fakes.runner.metadataOfUpdate(0);
+      expect(meta['grid.step.state'], 'gated');
+      final resultMetadata = {
+        for (final entry in meta.entries)
+          if (entry.key.startsWith(ResultKeys.prefix)) entry.key: entry.value,
+      };
+      expect(resultMetadata, {
+        ResultKeys.keyFor('tg-1/route', ResultKeys.routeVerdict):
+            kRouteVerdictEscalate,
+      });
       final creates = fakes.runner.callsFor('create');
       expect(creates, hasLength(1));
       expect(creates.single, containsAllInOrder(['--type', 'gate']));
