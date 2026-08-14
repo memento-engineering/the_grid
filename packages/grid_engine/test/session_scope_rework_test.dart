@@ -159,7 +159,7 @@ void main() {
       addTearDown(m.owner.dispose);
 
       // Adopted synchronously — round 1's gated session, no mint.
-      expect(f.runner.callsFor('create'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
 
       // `grid rework` re-keys round 1's `work_bead` off `tg-1`. The durable
       // `#rN` row authorizes re-mint while the ready bead keeps the branch
@@ -198,7 +198,7 @@ void main() {
         m.owner,
         () =>
             reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-            f.runner.callsFor('create').length >= 2,
+            f.runner.workCreates.length >= 2,
       );
 
       // The retired round-1 session is closed (D-2 fold: no more hand-close).
@@ -208,7 +208,7 @@ void main() {
 
       // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
       // tg-eli phase 2), a NEW id.
-      final creates = f.runner.callsFor('create');
+      final creates = f.runner.workCreates;
       expect(
         creates.where((c) => c.length <= 1 || c[1] != '--graph'),
         hasLength(1),
@@ -292,7 +292,7 @@ void main() {
         m.owner.flush();
         await _pump();
 
-        expect(f.runner.callsFor('create'), isEmpty);
+        expect(f.runner.workCreates, isEmpty);
         expect(transport.named('session.mintRefused'), hasLength(1));
 
         joined.push(
@@ -312,12 +312,9 @@ void main() {
           ),
         );
         m.owner.flush();
-        await _pumpUntil(
-          m.owner,
-          () => f.runner.callsFor('create').length >= 2,
-        );
+        await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
 
-        expect(f.runner.callsFor('create'), hasLength(2));
+        expect(f.runner.workCreates, hasLength(2));
         expect(
           f.runner.callsFor('close').where((call) => call[1] == 'tgdog-round1'),
           hasLength(1),
@@ -369,7 +366,7 @@ void main() {
 
       // No close, no fresh mint — the retired session is marked, not retired.
       expect(f.runner.callsFor('close'), isEmpty);
-      expect(f.runner.callsFor('create'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
       final updates = f.runner.callsFor('update');
       final markers = [
         for (var i = 0; i < updates.length; i++)
@@ -403,12 +400,12 @@ void main() {
       // not treat "never observed" as "vanished".
       await _pumpUntil(
         m.owner,
-        () => reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+        () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
       );
 
       // A fresh mint is a createSession call PLUS its molecule pour (tg-eli
       // phase 2: every fresh mint pours a molecule graph).
-      final creates = f.runner.callsFor('create');
+      final creates = f.runner.workCreates;
       expect(
         creates.where((c) => c.length <= 1 || c[1] != '--graph'),
         hasLength(1),

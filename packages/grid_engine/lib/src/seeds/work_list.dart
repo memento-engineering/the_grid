@@ -11,6 +11,7 @@ import '../domain/mount_eligibility.dart';
 import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/mount_attempt.dart';
 import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
@@ -88,6 +89,12 @@ class _WorkListState extends State<WorkList>
   final Set<String> _heldReported = <String>{};
   final Set<String> _gateSweepsScheduled = <String>{};
 
+  /// `<workBeadId>:<attempt>` pairs already written to the DURABLE remount
+  /// budget (tg-zlfu) — the same rising-edge discipline as the sets above. The
+  /// projection lags the write by a store round-trip, so without this every
+  /// rebuild in that window would re-write the same attempt number.
+  final Set<String> _mountAttemptsScheduled = <String>{};
+
   final Set<String> _trustRefusedReported = <String>{};
   final Map<String, String> _mountEligibilityRefusals = <String, String>{};
 
@@ -114,6 +121,52 @@ class _WorkListState extends State<WorkList>
         services?.transport?.flare('gate.autoCloseFailed', {
           'sessionId': sessionId,
           'cause': cause.wireValue,
+          'reason': truncateReason('$error'),
+        });
+      }
+    });
+  }
+
+  /// Records one DURABLE mount attempt against [workBeadId] (tg-zlfu).
+  ///
+  /// Called at ADMISSION — the transition from `pending` into `mounted`, which
+  /// is exactly "the frontier re-derived this bead and mounted it again". A
+  /// bead that merely STAYS mounted across rebuilds is not a new attempt and
+  /// never reaches here.
+  ///
+  /// Latched per (bead, attempt) so a rebuild storm between the write and the
+  /// next snapshot cannot double-count: the projection only advances when the
+  /// state store round-trips, so without the latch every rebuild in that window
+  /// would re-write the same number and append a duplicate note.
+  ///
+  /// The next count is computed from the PROJECTION, never from a fresh read:
+  /// the writer merges the two budget keys server-side in a row-locked
+  /// transaction, so it preserves every other key on the record and there is no
+  /// whole-map read-modify-write to lose a concurrent edit.
+  void _scheduleMountAttempt(
+    StationServices stationServices,
+    ServiceBundle? services, {
+    required String workBeadId,
+  }) {
+    final prior = _snapshot.mountAttemptsByWorkBead[workBeadId]?.count ?? 0;
+    final attempt = prior + 1;
+    if (!_mountAttemptsScheduled.add('$workBeadId:$attempt')) return;
+    scheduleMicrotask(() async {
+      try {
+        await stationServices.writer.recordMountAttempt(
+          substation: stationServices.stateSubstation,
+          workBeadId: workBeadId,
+          attempt: attempt,
+          note: 'mount attempt $attempt of $kMaxMountAttempts',
+        );
+      } on Object catch (error) {
+        // LOUD, and deliberately non-blocking: a budget that cannot be written
+        // must not also stop the station from working. The flare is how the
+        // degradation stays visible — a silently unrecorded attempt is an
+        // unbounded loop wearing the costume of a bounded one.
+        services?.transport?.flare('work.mountAttemptRecordFailed', {
+          'beadId': workBeadId,
+          'attempt': '$attempt',
           'reason': truncateReason('$error'),
         });
       }
@@ -200,6 +253,13 @@ class _WorkListState extends State<WorkList>
     // terminal-only unmount stays the only unmount trigger). `pending` is
     // freshly ready with no session yet — these are what the slot budget
     // below actually governs.
+    // The content gate the loop below calls once per candidate: the engine's
+    // DURABLE attempt-cap clause, closed over the projection the join already
+    // put in memory (the predicate is synchronous and cannot read the store),
+    // composed with the station's own eligibility predicate when one exists.
+    final mountEligibility = composeMountEligibility([
+      mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
+    ], services?.mountEligibility);
     final mounted = <WorkBead>[];
     // A43's pending bin, unchanged in MEANING (freshly ready, no live session —
     // the only bin the budget gates) and richer by one field: a VOIDED bead
@@ -235,16 +295,20 @@ class _WorkListState extends State<WorkList>
       final driveList = seed.substationConfig.driveList;
       if (driveList.isNotEmpty && !driveList.contains(bead.id)) continue;
 
-      final mountEligibility = services?.mountEligibility;
-      if (mountEligibility != null) {
-        final decision = mountEligibility(bead);
-        switch (decision) {
-          case MountEligible():
-            _restoreMountEligibility(services, bead.id);
-          case MountRefused(:final clause):
-            _refuseMountEligibility(services, bead.id, clause);
-            continue;
-        }
+      // ONE content gate, several clauses (tg-zlfu). The engine's own DURABLE
+      // remount budget composes with whatever eligibility the station itself
+      // composed, so a capped bead is refused through the SAME edge-triggered
+      // refusal/restoration flares as any other clause — a parallel check here
+      // would duplicate that machinery and then drift from it. The composed
+      // predicate is never null: the attempt clause applies even on a station
+      // that composes no eligibility assets at all.
+      final decision = mountEligibility(bead);
+      switch (decision) {
+        case MountEligible():
+          _restoreMountEligibility(services, bead.id);
+        case MountRefused(:final clause):
+          _refuseMountEligibility(services, bead.id, clause);
+          continue;
       }
 
       final trust = services?.trust;
@@ -410,6 +474,17 @@ class _WorkListState extends State<WorkList>
     final waiting = pending.skip(slotsAvailable).toList();
     for (final entry in admitted) {
       _mountedIds.add(entry.bead.id);
+      // ADMISSION is the attempt (tg-zlfu): this bead was re-derived by the
+      // frontier and is being mounted now. A bead that merely stays mounted
+      // across rebuilds never reaches here, so the budget counts remounts
+      // rather than rebuilds.
+      if (stationServices != null) {
+        _scheduleMountAttempt(
+          stationServices,
+          services,
+          workBeadId: entry.bead.id,
+        );
+      }
       // The session rides down even for a freshly-admitted bead: null for a
       // first round, and the DEAD projection for a voided one (I-10) — which is
       // what `SessionScope` retires before it mints. Once admitted, `_mountedIds`

@@ -124,6 +124,14 @@ class _FailCreateRunner implements BdRunner {
   List<List<String>> callsFor(String sub) =>
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
 
+  /// Creates EXCLUDING the durable remount-budget record (tg-zlfu) — mirrors
+  /// `RecordingBdRunner.workCreates`, so these mint assertions keep counting
+  /// only the sessions and molecules they mean to count.
+  List<List<String>> get workCreates => callsFor('create').where((c) {
+    final i = c.indexOf('--type');
+    return i < 0 || i + 1 >= c.length || c[i + 1] != 'mount-attempt';
+  }).toList();
+
   Map<String, dynamic> metadataOfUpdate(int index) {
     final call = callsFor('update')[index];
     final metadata = <String, dynamic>{};
@@ -297,7 +305,7 @@ void main() {
         // BOUNDED: exactly the mint budget of createSession attempts — not one
         // (the old give-up-on-first-failure), not an infinite spin.
         expect(
-          runner.callsFor('create'),
+          runner.workCreates,
           hasLength(5),
           reason: 'the mint is retried a bounded number of times (5), no more',
         );
@@ -387,9 +395,7 @@ void main() {
       );
       // Exactly two plain creates: the session, then the gate bead.
       expect(
-        runner
-            .callsFor('create')
-            .where((c) => c.length <= 1 || c[1] != '--graph'),
+        runner.workCreates.where((c) => c.length <= 1 || c[1] != '--graph'),
         hasLength(2),
       );
       // The gate stamp carries the re-arm linkage + the cause.
@@ -451,9 +457,9 @@ void main() {
 
       expect(transport.named('session.moleculePourFailed'), hasLength(1));
       expect(
-        runner
-            .callsFor('create')
-            .where((call) => call.length <= 1 || call[1] != '--graph'),
+        runner.workCreates.where(
+          (call) => call.length <= 1 || call[1] != '--graph',
+        ),
         hasLength(2),
       );
       expect(runner.calls.where((call) => call.contains('--graph')), isEmpty);
@@ -493,7 +499,7 @@ void main() {
         m.owner.flush();
         await _pumpUntil(
           m.owner,
-          () => reg.events.isNotEmpty && runner.callsFor('create').length >= 3,
+          () => reg.events.isNotEmpty && runner.workCreates.length >= 3,
         );
 
         // RETRIED: attempt #1's `createSession` dropped, attempt #2's
@@ -502,7 +508,7 @@ void main() {
         // phase 2: every fresh mint pours a molecule), so the plain-create
         // count is 2 (the failed + the recovered `createSession`) plus one
         // graph-apply.
-        final creates = runner.callsFor('create');
+        final creates = runner.workCreates;
         expect(creates, hasLength(3));
         expect(
           creates.where((c) => c.length > 1 && c[1] == '--graph'),

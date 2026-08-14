@@ -307,6 +307,35 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
   List<List<String>> callsFor(String sub) =>
       calls.where((c) => c.isNotEmpty && c.first == sub).toList();
 
+  /// Every `create` EXCEPT the durable remount-budget record (tg-zlfu).
+  ///
+  /// `WorkList` writes one `type=mount-attempt` bead per work bead at
+  /// admission, so a test asserting how many SESSIONS or molecules a path mints
+  /// would otherwise count the budget record too — and would then be asserting
+  /// something it does not mean. Filters by the `--type` argument rather than
+  /// by position, so it holds regardless of argv order.
+  List<List<String>> get workCreates {
+    return callsFor('create').where((c) {
+      final i = c.indexOf('--type');
+      return i < 0 || i + 1 >= c.length || c[i + 1] != 'mount-attempt';
+    }).toList();
+  }
+
+  /// Every `update` EXCEPT the durable remount-budget record's own writes
+  /// (tg-zlfu) — the [workCreates] counterpart, for assertions that mean "the
+  /// station wrote nothing to the SESSION". Identified by the `grid.attempt.`
+  /// key namespace, which only the budget record carries.
+  List<List<String>> get workUpdates {
+    return callsFor('update').where((c) {
+      for (var i = 0; i + 1 < c.length; i++) {
+        if (c[i] == '--set-metadata' && c[i + 1].startsWith('grid.attempt.')) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+  }
+
   /// The `bd create --graph <plan-file> …` pours only
   /// (`StationBeadWriter.createMolecule`'s mint) — disjoint from
   /// `callsFor('create')`'s plain single-bead creates, which never carry

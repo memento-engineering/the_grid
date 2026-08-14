@@ -13,6 +13,15 @@ abstract final class GridIssueTypes {
   static const mergeRequest = IssueType('merge-request');
   static const message = IssueType('message');
   static const molecule = IssueType('molecule');
+
+  /// A station's DURABLE remount-attempt budget for ONE work bead (tg-zlfu) —
+  /// state that PREVENTS a mount, never a mechanism that starts one.
+  ///
+  /// Sibling in kind to [link]: a bead that IS a record rather than work. One
+  /// record per work bead, its count merged in place; never one bead per
+  /// attempt, which would make the bound into the storage amplifier it exists
+  /// to stop.
+  static const mountAttempt = IssueType('mount-attempt');
   static const rig = IssueType('rig');
   static const role = IssueType('role');
   static const session = IssueType('session');
@@ -28,6 +37,7 @@ abstract final class GridIssueTypes {
     mergeRequest,
     message,
     molecule,
+    mountAttempt,
     rig,
     role,
     session,

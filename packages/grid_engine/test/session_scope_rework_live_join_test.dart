@@ -226,7 +226,7 @@ void main() {
       await _pump();
 
       // Adopted synchronously — round 1's gated session, no mint.
-      expect(f.runner.callsFor('create'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
 
       // `grid rework tg-1`: re-keys ONLY `work_bead` on the SAME session
       // bead (bd `--metadata` merge — every other key, incl. the stale
@@ -252,7 +252,7 @@ void main() {
         m.owner,
         () =>
             reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-            f.runner.callsFor('create').length >= 2,
+            f.runner.workCreates.length >= 2,
       );
 
       // The retired round-1 session is closed (D-2 fold).
@@ -265,7 +265,7 @@ void main() {
 
       // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
       // tg-eli phase 2), a NEW id — never a reuse of tgdog-round1.
-      final creates = f.runner.callsFor('create');
+      final creates = f.runner.workCreates;
       expect(creates.where((call) => !call.contains('--graph')), hasLength(1));
       expect(creates.where((call) => call.contains('--graph')), hasLength(1));
 
@@ -311,7 +311,7 @@ void main() {
         await _pump();
         m.owner.flush();
         await _pump();
-        expect(f.runner.callsFor('create'), isEmpty);
+        expect(f.runner.workCreates, isEmpty);
 
         // The operator re-keys round 1 (the ONLY store change — state side).
         stateSrc.push(
@@ -326,7 +326,7 @@ void main() {
           m.owner,
           () =>
               reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-              f.runner.callsFor('create').length >= 2,
+              f.runner.workCreates.length >= 2,
         );
 
         expect(
@@ -346,7 +346,7 @@ void main() {
         m.owner.flush();
         await _pump();
 
-        final creates = f.runner.callsFor('create');
+        final creates = f.runner.workCreates;
         expect(
           creates.where((call) => !call.contains('--graph')),
           hasLength(1),
@@ -382,7 +382,7 @@ void main() {
       m.owner.flush();
       await _pump();
 
-      expect(f.runner.callsFor('create'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
 
       stateSrc.push(
         _state([
@@ -402,7 +402,7 @@ void main() {
         m.owner,
         () =>
             reg.events.contains('START agent(tgdog-round2/tg-1/agent)') &&
-            f.runner.callsFor('create').length >= 2,
+            f.runner.workCreates.length >= 2,
       );
 
       final closes = f.runner.callsFor('close');
@@ -412,7 +412,7 @@ void main() {
         contains('reworked'),
       );
 
-      final creates = f.runner.callsFor('create');
+      final creates = f.runner.workCreates;
       expect(creates.where((call) => !call.contains('--graph')), hasLength(1));
       expect(creates.where((call) => call.contains('--graph')), hasLength(1));
       expect(reg.events, contains('START agent(tgdog-round2/tg-1/agent)'));

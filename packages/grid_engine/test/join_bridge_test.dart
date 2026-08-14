@@ -133,11 +133,51 @@ void main() {
       expect(_stateOf(seen!, 'w1', 'w1/agent'), StepState.complete);
     });
 
+    test('the DURABLE remount budget projects into the join (tg-zlfu) — the '
+        'mount predicate is synchronous and cannot read the store, so the '
+        'budget must already be in memory when the frontier evaluates', () {
+      workSrc = FakeSnapshotSource(graphOf([work('w1'), work('w2')]));
+      stateSrc = FakeSnapshotSource(
+        graphOf([
+          session('s1', workBeadId: 'w1'),
+          Bead(
+            id: 'att1',
+            title: 'grid mount-attempt w1',
+            issueType: GridIssueTypes.mountAttempt,
+            status: BeadStatus.open,
+            metadata: const {
+              MountAttemptKeys.workBead: 'w1',
+              MountAttemptKeys.count: '2',
+            },
+          ),
+        ]),
+      );
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
+      addTearDown(bridge.dispose);
+
+      final joined = _read(bridge.notifier);
+      expect(joined.mountAttemptsByWorkBead['w1']?.count, 2);
+      expect(joined.mountAttemptsByWorkBead['w1']?.recordId, 'att1');
+      expect(
+        joined.mountAttemptsByWorkBead['w2'],
+        isNull,
+        reason: 'a never-attempted bead has no record — absence means zero',
+      );
+      expect(
+        joined.sessionsByWorkBead.keys,
+        ['w1'],
+        reason:
+            'an attempt record is NOT a session and must never be '
+            'projected as one',
+      );
+    });
+
     test('with no work baseline, the seed is JoinedSnapshot.empty', () {
       final bridge = StationJoinBridge(work: workSrc, state: stateSrc);
       addTearDown(bridge.dispose);
       expect(_read(bridge.notifier).graph.isEmpty, isTrue);
       expect(_read(bridge.notifier).sessionsByWorkBead, isEmpty);
+      expect(_read(bridge.notifier).mountAttemptsByWorkBead, isEmpty);
     });
 
     test(

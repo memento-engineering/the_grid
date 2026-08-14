@@ -15,6 +15,7 @@ void main() {
         'merge-request',
         'message',
         'molecule',
+        'mount-attempt',
         'rig',
         'role',
         'session',
@@ -28,6 +29,9 @@ void main() {
     expect(GridIssueTypes.role.isGridInfrastructure, isTrue);
     expect(GridIssueTypes.session.isGridInfrastructure, isFalse);
     expect(GridIssueTypes.link.isGridInfrastructure, isFalse);
+    // tg-zlfu: the remount budget is a RECORD, never work and never
+    // infrastructure the `bd list` filter hides.
+    expect(GridIssueTypes.mountAttempt.isGridInfrastructure, isFalse);
     expect(const IssueType('unknown').isGridInfrastructure, isFalse);
   });
 }

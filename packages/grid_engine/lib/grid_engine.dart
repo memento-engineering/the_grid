@@ -106,6 +106,7 @@ export 'src/domain/wedge.dart';
 // primitives, not part of the pure beads client.
 export 'src/domain/driveable_work.dart';
 // The injectable per-bead content gate; concrete clauses live in assets.
+export 'src/domain/mount_attempt.dart';
 export 'src/domain/mount_eligibility.dart';
 
 // The station-level ambient services (kernel-provided) a node resolves in one

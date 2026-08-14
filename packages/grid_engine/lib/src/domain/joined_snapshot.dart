@@ -1,5 +1,6 @@
 import 'package:beads_dart/beads_dart.dart';
 
+import 'mount_attempt.dart';
 import 'session_projection.dart';
 
 /// The single immutable value the tree builds from: the read-workspace work
@@ -18,6 +19,7 @@ class JoinedSnapshot {
   const JoinedSnapshot({
     required this.graph,
     this.sessionsByWorkBead = const {},
+    this.mountAttemptsByWorkBead = const {},
   });
 
   /// An empty baseline — the notifier's seed value before the first refresh
@@ -30,7 +32,8 @@ class JoinedSnapshot {
         readyIds: const [],
         capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
       ),
-      sessionsByWorkBead = const {};
+      sessionsByWorkBead = const {},
+      mountAttemptsByWorkBead = const {};
 
   /// The read-workspace work graph (pristine source — read-only, A37).
   final GraphSnapshot graph;
@@ -46,4 +49,17 @@ class JoinedSnapshot {
   /// projection it already holds, so a molecule session is additive, not a
   /// second parallel join.
   final Map<String, SessionProjection> sessionsByWorkBead;
+
+  /// The DURABLE remount-attempt budget per work bead id (tg-zlfu), projected
+  /// from the state store's `type=mount-attempt` records.
+  ///
+  /// It rides HERE, in the joined value, for one hard reason: the mount
+  /// boundary's [MountEligibilityPredicate] is synchronous and receives only
+  /// the candidate bead, so it cannot read the store. The budget has to already
+  /// be in memory when the predicate runs — the same way owned sessions
+  /// already are — and the concrete clause closes over this map.
+  ///
+  /// Empty for a bead the station has never attempted; absence means zero, so
+  /// no record is written until the first mount.
+  final Map<String, MountAttemptRecord> mountAttemptsByWorkBead;
 }

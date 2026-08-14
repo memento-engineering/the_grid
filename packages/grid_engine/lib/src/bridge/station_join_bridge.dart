@@ -5,6 +5,7 @@ import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
 import '../domain/cross_link.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/mount_attempt.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../molecule/molecule_schema.dart';
@@ -158,6 +159,7 @@ class StationJoinBridge {
       JoinedSnapshot(
         graph: _latest.graph,
         sessionsByWorkBead: _latest.sessionsByWorkBead,
+        mountAttemptsByWorkBead: _latest.mountAttemptsByWorkBead,
       ),
     );
   }
@@ -209,8 +211,17 @@ class StationJoinBridge {
     if (work == null) return JoinedSnapshot.empty();
     var graph = work;
     final sessions = <String, SessionProjection>{};
+    final attempts = <String, MountAttemptRecord>{};
     if (state != null) {
       for (final bead in state.beadsById.values) {
+        // The DURABLE remount budget (tg-zlfu) projects in the SAME pass: the
+        // mount predicate is synchronous and cannot read the store, so the
+        // budget must already be in memory when `WorkList` evaluates.
+        final attempt = projectMountAttempt(bead);
+        if (attempt != null) {
+          attempts[attempt.workBeadId] = attempt;
+          continue;
+        }
         if (bead.issueType != GridIssueTypes.session) continue;
         final projection = projectSession(bead);
         if (projection.workBeadId.isEmpty) continue; // no JOIN key — skip.
@@ -220,7 +231,11 @@ class StationJoinBridge {
       _attachMoleculeBeads(state, sessions);
       graph = _applyCrossLinks(work, state, onUnresolvedCrossLink);
     }
-    return JoinedSnapshot(graph: graph, sessionsByWorkBead: sessions);
+    return JoinedSnapshot(
+      graph: graph,
+      sessionsByWorkBead: sessions,
+      mountAttemptsByWorkBead: attempts,
+    );
   }
 
   /// Re-applies the state store's CROSS-REPO blocking edges over [work]'s ready

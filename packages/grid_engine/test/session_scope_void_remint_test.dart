@@ -171,13 +171,13 @@ void main() {
       m.owner.flush();
       await _pumpUntil(
         m.owner,
-        () => reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+        () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
       );
 
       // MINT: exactly one fresh session, plus its molecule pour (tg-eli
       // phase 2: every fresh mint pours a molecule graph) — the pre-fix
       // behavior was ZERO creates at all (the bead never even mounted).
-      final creates = f.runner.callsFor('create');
+      final creates = f.runner.workCreates;
       expect(creates, hasLength(2));
       expect(
         creates.where((c) => c.length > 1 && c[1] == '--graph'),
@@ -225,9 +225,9 @@ void main() {
       m.owner.flush();
       await _pumpUntil(
         m.owner,
-        () => reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+        () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
       );
-      final creates = f.runner.callsFor('create');
+      final creates = f.runner.workCreates;
       expect(creates, hasLength(2));
       expect(
         creates.where((c) => c.length > 1 && c[1] == '--graph'),
@@ -242,11 +242,7 @@ void main() {
       joined.push(_joined(const {'tg-1': _deadKey}));
       m.owner.flush();
       await _pump();
-      expect(
-        f.runner.callsFor('create'),
-        hasLength(2),
-        reason: 'no second mint',
-      );
+      expect(f.runner.workCreates, hasLength(2), reason: 'no second mint');
       expect(_updatesFor(f.runner, 'tgdog-dead'), hasLength(1), reason: 'once');
       expect(transport.named('session.voided'), hasLength(1));
       expect(
@@ -272,7 +268,7 @@ void main() {
         'START verify(tgdog-sess1/tg-1/verify)',
         'STOP agent(tgdog-sess1/tg-1/agent)',
       ]);
-      expect(f.runner.callsFor('create'), hasLength(2));
+      expect(f.runner.workCreates, hasLength(2));
     });
 
     test(
@@ -295,8 +291,8 @@ void main() {
         await _pump();
         m.owner.flush();
 
-        expect(f.runner.callsFor('create'), isEmpty);
-        expect(f.runner.callsFor('update'), isEmpty);
+        expect(f.runner.workCreates, isEmpty);
+        expect(f.runner.workUpdates, isEmpty);
         expect(
           reg.events,
           isEmpty,
@@ -454,7 +450,7 @@ void main() {
       await _pump();
       m.owner.flush();
 
-      expect(f.runner.callsFor('create'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
       expect(reg.events, ['START agent(tgdog-live/tg-1/agent)']);
       expect(transport.flares, isEmpty);
     });

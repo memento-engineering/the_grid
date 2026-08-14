@@ -164,15 +164,14 @@ void main() {
         expect(reg.events, isEmpty);
         await _pumpUntil(
           m.owner,
-          () =>
-              reg.events.isNotEmpty && f.runner.callsFor('create').length >= 2,
+          () => reg.events.isNotEmpty && f.runner.workCreates.length >= 2,
         );
 
         // Exactly ONE createSession (minted above the fan-out) plus its
         // molecule pour (tg-eli phase 2: every fresh mint pours a molecule
         // graph — a second `create` call, `create --graph`), then the first
         // step inflates under the minted SessionHandle (id = tgdog-sess1).
-        final creates = f.runner.callsFor('create');
+        final creates = f.runner.workCreates;
         expect(creates, hasLength(2));
         expect(
           creates.where((c) => c.length > 1 && c[1] == '--graph'),
@@ -199,14 +198,13 @@ void main() {
         addTearDown(m.owner.dispose);
         await _pumpUntil(
           m.owner,
-          () =>
-              reg.events.length >= 2 && f.runner.callsFor('create').length >= 2,
+          () => reg.events.length >= 2 && f.runner.workCreates.length >= 2,
         );
 
         // ONE mint (+ its molecule pour, tg-eli phase 2), both dep-free leaves
         // mounted under the SAME session id, with DISJOINT paths (disjoint
         // routing) — never two mints / two sessions.
-        final creates = f.runner.callsFor('create');
+        final creates = f.runner.workCreates;
         expect(creates, hasLength(2));
         expect(
           creates.where((c) => c.length > 1 && c[1] == '--graph'),
@@ -249,7 +247,7 @@ void main() {
 
       // Adopted synchronously on mount — no createSession, leaf under the
       // adopted id.
-      expect(f.runner.callsFor('create'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
       expect(reg.events, ['START agent(tgdog-existing/tg-1/agent)']);
     });
   });

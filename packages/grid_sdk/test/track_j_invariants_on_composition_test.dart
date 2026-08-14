@@ -322,9 +322,9 @@ void main() {
       // PREFIX. Mounting proves ownership matched the prefix axis.
       expect(rig.resolver.resolved, ['pow-1']);
       await _pumpUntil(() => rig.fakes.runner.graphApplyCalls.isNotEmpty);
-      final plainCreates = rig.fakes.runner
-          .callsFor('create')
-          .where((c) => !c.contains('--graph'));
+      final plainCreates = rig.fakes.runner.workCreates.where(
+        (c) => !c.contains('--graph'),
+      );
       expect(
         plainCreates,
         hasLength(1),

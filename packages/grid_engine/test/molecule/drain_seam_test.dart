@@ -289,9 +289,9 @@ void main() {
         // `callsFor('create')` INCLUDES graph-apply pours (they share the
         // `create` leading subcommand) — isolate the PLAIN single-bead
         // session create from the graph pour via `graphApplyCalls`.
-        final plainCreates = f.runner
-            .callsFor('create')
-            .where((c) => !c.contains('--graph'));
+        final plainCreates = f.runner.workCreates.where(
+          (c) => !c.contains('--graph'),
+        );
         expect(plainCreates, hasLength(1), reason: 'the session mint');
         final stamp = f.runner.metadataOfUpdate(0);
         expect(stamp[SessionBeadKeys.model], kSessionModelMolecule);
@@ -314,7 +314,7 @@ void main() {
         m.owner.flush();
         await _pump();
         expect(
-          f.runner.callsFor('create').where((c) => !c.contains('--graph')),
+          f.runner.workCreates.where((c) => !c.contains('--graph')),
           hasLength(1),
         );
         expect(f.runner.graphApplyCalls, hasLength(1));
@@ -453,7 +453,7 @@ void main() {
         await _pumpUntil(() => f.runner.graphApplyCalls.isNotEmpty);
 
         expect(
-          f.runner.callsFor('create').where((c) => !c.contains('--graph')),
+          f.runner.workCreates.where((c) => !c.contains('--graph')),
           hasLength(1),
         );
         expect(f.runner.graphApplyCalls, hasLength(1));

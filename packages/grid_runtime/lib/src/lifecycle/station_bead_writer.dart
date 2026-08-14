@@ -231,6 +231,18 @@ class StationBeadWriter {
   static const String stepFailureReasonKey = 'grid.step.failureReason';
   static const String _moleculeCrumbSeparator = '/';
 
+  /// The DURABLE remount-attempt budget's keys (tg-zlfu), carried by ONE
+  /// `type=mount-attempt` bead per work bead in the station's OWN state store.
+  ///
+  /// [mountAttemptWorkBeadKey] is the JOIN key the projection reads; the other
+  /// two are the budget itself. Wire-identical to grid_engine's
+  /// `MountAttemptKeys` — grid_runtime cannot import grid_engine (the
+  /// dependency arc is one-directional), the same split the molecule keys
+  /// above live under.
+  static const String mountAttemptWorkBeadKey = 'grid.attempt.work_bead';
+  static const String mountAttemptCountKey = 'grid.attempt.count';
+  static const String mountAttemptLastAtKey = 'grid.attempt.last_at';
+
   /// Mints a the_grid-owned session bead for work bead [workBeadId] in [substation],
   /// stamped with the owned substation marker from birth, and returns its id.
   ///
@@ -374,6 +386,79 @@ class StationBeadWriter {
       },
     );
     return id;
+  }
+
+  /// Records that the station is about to make mount attempt [attempt] on work
+  /// bead [workBeadId] — the DURABLE half of the remount budget (tg-zlfu).
+  ///
+  /// ONE `type=mount-attempt` bead per work bead, never one per attempt: a bead
+  /// per attempt would make the mechanism that bounds the storage amplifier
+  /// into one, emitting records at exactly the rate it exists to stop. So this
+  /// probes for the existing record by its [mountAttemptWorkBeadKey] join key
+  /// and MERGES the new count in place (the tg-i08 dedup shape [createGate]
+  /// already uses), minting only when no record exists.
+  ///
+  /// [attempt] is supplied by the caller from the in-memory projection rather
+  /// than re-read here: the merge is per-key and row-locked (#4732), so it
+  /// overwrites the two budget keys and preserves every other key on the
+  /// record, and the whole-map replace that would clobber a concurrent write
+  /// never happens. Per-attempt forensics ride [note] as an APPENDED note —
+  /// `--notes` REPLACES and has silently clobbered accrued corpus before.
+  ///
+  /// Fail-closed on ownership exactly like [createGate] and [createSession]:
+  /// the record lives in the station's OWN store, never on the work bead, which
+  /// is frequently foreign and read-only (A37).
+  Future<String> recordMountAttempt({
+    required String substation,
+    required String workBeadId,
+    required int attempt,
+    String? note,
+  }) async {
+    if (!_ownership.ownsTarget(
+      id: '$substation-pending',
+      metadata: {rigKey: substation},
+    )) {
+      _refuse('create', substation, substation);
+    }
+    final budget = <String, String>{
+      mountAttemptCountKey: '$attempt',
+      mountAttemptLastAtKey: _clock().toUtc().toIso8601String(),
+    };
+    final existing = await _findMountAttemptRecord(workBeadId);
+    if (existing != null) {
+      await update(existing.id, metadata: budget, appendNotes: note);
+      return existing.id;
+    }
+    final id = await _bd.create(
+      title: 'grid mount-attempt $workBeadId',
+      type: GridIssueTypes.mountAttempt,
+    );
+    // The join key + the owned-substation marker land in the SAME first merge
+    // as the budget, so the record is owned-and-joinable from its first
+    // persisted state (the [createSession] convention — `bd create` carries no
+    // `--metadata`).
+    await _updateBead(
+      'recordMountAttempt',
+      id,
+      mergeMetadata: {
+        rigKey: substation,
+        mountAttemptWorkBeadKey: workBeadId,
+        ...budget,
+      },
+      appendNotes: note,
+    );
+    return id;
+  }
+
+  /// The OPEN `type=mount-attempt` record for [workBeadId], or null when the
+  /// station has never attempted it. Narrow by construction: the join key is a
+  /// metadata equality, so this never scans the work store.
+  Future<Bead?> _findMountAttemptRecord(String workBeadId) async {
+    final records = await _reader.openBeads(
+      types: {GridIssueTypes.mountAttempt},
+      metadataAll: {mountAttemptWorkBeadKey: workBeadId},
+    );
+    return records.isEmpty ? null : records.first;
   }
 
   /// Mints a the_grid-owned `type=gate` bead in [substation] (the OWN state store)
