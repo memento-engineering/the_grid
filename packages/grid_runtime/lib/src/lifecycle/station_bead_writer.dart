@@ -105,6 +105,36 @@ enum GateCloseCause {
 /// The A48 session disposition supplied to a terminal gate sweep.
 enum GateSweepSessionDisposition { live, done, held, voided }
 
+/// Derives a session's disposition from its OWN metadata alone.
+///
+/// The one rule, extracted so the gate sweep and the boot-time teardown replay
+/// (tg-tlea) share it rather than each carrying a copy that can drift:
+///
+/// * a HUMAN marker (`grid.escalation` / `grid.rework_declined`) ⇒ **held** —
+///   the breaker-exhaustion escalation path deliberately preserves its
+///   worktree for the human, and its molecule is preserved for the same
+///   forensic reason;
+/// * `grid.outcome=complete` ⇒ **done** — the_grid's own close path recorded
+///   that THIS round finished;
+/// * anything else ⇒ **voided** — closed mid-flight with no human marker.
+///
+/// Deliberately metadata-only: it says nothing about whether the bead is open
+/// or closed. The gate sweep asks only about CLOSED sessions; the teardown
+/// replay asks about OPEN ones carrying the completion marker, which is
+/// exactly the "teardown outstanding" state.
+GateSweepSessionDisposition sessionDispositionOfMetadata(
+  Map<String, dynamic> metadata,
+) {
+  if (metadata['grid.escalation'] != null ||
+      metadata['grid.rework_declined'] != null) {
+    return GateSweepSessionDisposition.held;
+  }
+  if (metadata['grid.outcome'] == 'complete') {
+    return GateSweepSessionDisposition.done;
+  }
+  return GateSweepSessionDisposition.voided;
+}
+
 /// One newly closed gate.
 typedef GateAutoCloseReceipt = ({
   String gateId,
@@ -552,13 +582,7 @@ class StationBeadWriter {
         types: {GridIssueTypes.session},
       );
       if (session?.isClosed ?? false) {
-        final disposition =
-            session!.metadata['grid.escalation'] != null ||
-                session.metadata['grid.rework_declined'] != null
-            ? GateSweepSessionDisposition.held
-            : session.metadata['grid.outcome'] == 'complete'
-            ? GateSweepSessionDisposition.done
-            : GateSweepSessionDisposition.voided;
+        final disposition = sessionDispositionOfMetadata(session!.metadata);
         if (disposition != GateSweepSessionDisposition.held) {
           await closeOpenGatesForTerminal(
             sessionId: sessionId,
@@ -847,6 +871,27 @@ class StationBeadWriter {
   /// The unforced close script is ordered with step leaves, including open
   /// successor steps, before molecule roots to satisfy bd close policy. The
   /// proxied-server fallback consumes that identical order per bead.
+  /// Every session whose teardown is OUTSTANDING — open, and already carrying
+  /// `grid.outcome=complete` (tg-tlea).
+  ///
+  /// That conjunction IS the crash window. `_completeAndClose` stamps the
+  /// completion marker FIRST, on purpose, and closes the bead only after the
+  /// molecule reap, the worktree reap and the gate sweep have run; so a bead
+  /// that still carries the marker while open is a station that died partway
+  /// down its own teardown tail.
+  ///
+  /// **The filter is SERVER-SIDE and that is load-bearing** (#192 pushed
+  /// metadata filters into `bd list`). Expressed instead as "list every owned
+  /// session, filter in Dart", this would reintroduce precisely the unbounded
+  /// boot pass `RestartReconciler` documents itself refusing to do — a large
+  /// backlog would then be walked on every boot. [BeadProbeReader.openBeads]
+  /// also excludes closed beads, so the open half of the conjunction costs
+  /// nothing extra.
+  Future<List<Bead>> sessionsAwaitingTeardown() => _reader.openBeads(
+    types: {GridIssueTypes.session},
+    metadataAll: const {'grid.outcome': 'complete'},
+  );
+
   Future<void> reapMolecule({required String sessionId}) async {
     final matched = await _moleculeBeadsFor(sessionId: sessionId);
     if (matched.isEmpty) return;

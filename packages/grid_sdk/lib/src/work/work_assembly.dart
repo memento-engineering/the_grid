@@ -138,6 +138,12 @@ class StationWorkRuntime {
   bool _started = false;
   bool _shutdown = false;
   RestartReport? _lastRestartReport;
+  TeardownReplayReport? _lastTeardownReplay;
+
+  /// The last boot's TEARDOWN REPLAY report (tg-tlea) — null before [start].
+  /// Which sessions were caught mid-teardown and had their positive-terminal
+  /// tail re-run, and which were left alone because a human holds them.
+  TeardownReplayReport? get lastTeardownReplay => _lastTeardownReplay;
 
   /// The last boot's restart-reconcile report — null before [start]. What the
   /// pass skipped / killed / adopted, and which ZOMBIE `running` markers it
@@ -179,6 +185,16 @@ class StationWorkRuntime {
     // (ADR-0008 D3).
     for (final line in droppedReapReports(report)) {
       _onRefusal(line);
+    }
+    // The TEARDOWN REPLAY (tg-tlea) — the session-driven pass beside the
+    // worktree-driven reconcile above. It runs BEFORE the driver starts so a
+    // session caught mid-teardown is finished off before the tree could mount
+    // anything against it, and it is non-fatal by construction: a replay that
+    // throws must never stop a station from booting.
+    try {
+      _lastTeardownReplay = await _restart.replayTeardownTail();
+    } on Object catch (error) {
+      _onRefusal('teardown replay failed (station still booting) — $error');
     }
     _driver.start();
   }

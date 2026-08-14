@@ -110,7 +110,8 @@ export 'src/lifecycle/station_bead_writer.dart'
         GateCloseCause,
         GateSweepSessionDisposition,
         GateAutoCloseReceipt,
-        gateCloseCauseOf;
+        gateCloseCauseOf,
+        sessionDispositionOfMetadata;
 export 'src/lifecycle/runtime_actuator.dart'
     show
         CrashDecision,

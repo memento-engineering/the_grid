@@ -224,6 +224,60 @@ class RestartEntry {
 /// The immutable outcome of one [RestartReconciler.reconcile] pass — lists of
 /// entries bucketed by disposition, enough to assert in a test and to log a
 /// one-line restart summary.
+/// One session the teardown replay considered (tg-tlea).
+class TeardownReplayEntry {
+  /// Records [sessionId]'s disposition and what the replay did about it.
+  const TeardownReplayEntry({
+    required this.sessionId,
+    required this.disposition,
+    required this.replayed,
+    this.workBeadId,
+    this.reapedWorktree = false,
+    this.failures = const [],
+  });
+
+  /// The state-store session bead whose teardown was outstanding.
+  final String sessionId;
+
+  /// Its derived disposition — anything but `done` is left untouched.
+  final GateSweepSessionDisposition disposition;
+
+  /// Whether the tail was re-run (false for a HELD or VOIDED session).
+  final bool replayed;
+
+  /// The work bead the session drove, when its join key survived.
+  final String? workBeadId;
+
+  /// Whether a surviving worktree was found and reaped. False is the W3 shape
+  /// — the window no worktree-driven pass can see.
+  final bool reapedWorktree;
+
+  /// Which replayed steps threw. Non-empty is LOUD but never fatal.
+  final List<String> failures;
+
+  @override
+  String toString() =>
+      'TeardownReplayEntry($sessionId, ${disposition.name}, '
+      'replayed: $replayed, failures: $failures)';
+}
+
+/// What one boot's teardown replay did (tg-tlea).
+class TeardownReplayReport {
+  /// Wraps [entries], one per session whose teardown was outstanding.
+  const TeardownReplayReport(this.entries);
+
+  /// Every session the trigger query returned, replayed or skipped.
+  final List<TeardownReplayEntry> entries;
+
+  /// The sessions whose tail was actually re-run.
+  Iterable<TeardownReplayEntry> get replayed =>
+      entries.where((e) => e.replayed);
+
+  /// The sessions left untouched because a human holds them.
+  Iterable<TeardownReplayEntry> get held =>
+      entries.where((e) => e.disposition == GateSweepSessionDisposition.held);
+}
+
 class RestartReport {
   RestartReport(
     List<RestartEntry> entries, {
@@ -448,6 +502,148 @@ class RestartReconciler {
   ///    ONE process-identity reconciliation (a session's process identity is
   ///    the vendor's `grid.lease.*` breadcrumb on its step beads; the flat
   ///    cursor fence retired, tg-eli phase 2).
+  /// **The TEARDOWN REPLAY** (tg-tlea) — the session-driven boot pass beside
+  /// the worktree-driven [reconcile].
+  ///
+  /// A station killed mid-teardown strands the work its exit path had already
+  /// begun cleaning up. The positive-terminal close is a four-step tail —
+  /// stamp `grid.outcome=complete`, reap the molecule, reap the worktree,
+  /// close (then sweep the terminal gates) — and steps 2 onward are
+  /// LOUD-but-never-fatal, so a crash between any two of them leaves no retry
+  /// anywhere. Worktrees, gates and process leases each already got a
+  /// boot-time retry; molecule collection is the one teardown step that never
+  /// did. That gap is the mechanism behind the pour-timeout cliff: the rework
+  /// exit path shipped without the reap and left 9,389 orphans across 307
+  /// closed sessions.
+  ///
+  /// The trigger set is the marker the exit path ALREADY writes first: a
+  /// session still OPEN while carrying `grid.outcome=complete` is, by
+  /// construction, a teardown that did not finish. No new durable state, no
+  /// schema at mint, no exit path taught anything.
+  ///
+  /// **Complementary to [reconcile], never a replacement.** That walk still
+  /// catches a survivor this query structurally cannot see — a worktree on
+  /// disk with no session record at all. Conversely this catches the window
+  /// that walk cannot: a station that died AFTER the worktree reap but before
+  /// the close leaves an open, complete-marked session with no surviving
+  /// worktree, and a worktree-driven pass has nothing left to find it by. The
+  /// overlap is harmless precisely because every replayed step is idempotent
+  /// (re-verified rather than assumed: [StationBeadWriter.reapMolecule]
+  /// returns immediately on an empty open molecule/step set, the worktree reap
+  /// no-ops on an already-removed tree, and gate close is idempotent).
+  ///
+  /// HELD sessions are excluded. A human marker means the breaker-exhaustion
+  /// escalation, which deliberately preserves its worktree for the human; its
+  /// molecule is preserved for the same forensic reason. The predicate is the
+  /// SHARED [sessionDispositionOfMetadata], never a second copy.
+  ///
+  /// Every step is LOUD and non-fatal: a replay failure must never stop a
+  /// station from booting.
+  Future<TeardownReplayReport> replayTeardownTail() async {
+    final writer = _writer;
+    if (writer == null) return const TeardownReplayReport([]);
+    // The same barrier discipline as [reconcile] — nothing is decided on
+    // stale state.
+    await _freshnessBarrier();
+    final List<Bead> candidates;
+    try {
+      candidates = await writer.sessionsAwaitingTeardown();
+    } on Object catch (error) {
+      _onOrphan(
+        'teardown replay: could not read the outstanding-teardown set — $error',
+      );
+      return const TeardownReplayReport([]);
+    }
+    if (candidates.isEmpty) return const TeardownReplayReport([]);
+    // Reused for the worktree step: a session whose worktree is already gone
+    // (the window nothing else can see) finds nothing here and goes straight
+    // to the close.
+    final worktrees = await _listWorktrees(_workRoot) ?? const <BeadWorktree>[];
+    final worktreeByBeadId = <String, BeadWorktree>{
+      for (final wt in worktrees) wt.beadId: wt,
+    };
+    final entries = <TeardownReplayEntry>[];
+    for (final session in candidates) {
+      final disposition = sessionDispositionOfMetadata(session.metadata);
+      if (disposition != GateSweepSessionDisposition.done) {
+        entries.add(
+          TeardownReplayEntry(
+            sessionId: session.id,
+            disposition: disposition,
+            replayed: false,
+          ),
+        );
+        continue;
+      }
+      entries.add(await _replayOne(writer, session, worktreeByBeadId));
+    }
+    return TeardownReplayReport(entries);
+  }
+
+  /// Re-runs ONE session's teardown tail: reap the molecule, reap the
+  /// worktree, CLOSE, then sweep the terminal gates.
+  ///
+  /// The close precedes the gate sweep because
+  /// [StationBeadWriter.closeOpenGatesForTerminal] REFUSES a `done` sweep
+  /// whose session is not already closed (`gate auto-close refused: live
+  /// session`) — so gates-then-close cannot work on a still-open session,
+  /// whatever order a reading of the tail might suggest.
+  Future<TeardownReplayEntry> _replayOne(
+    StationBeadWriter writer,
+    Bead session,
+    Map<String, BeadWorktree> worktreeByBeadId,
+  ) async {
+    final failures = <String>[];
+    try {
+      await writer.reapMolecule(sessionId: session.id);
+    } on Object catch (error) {
+      failures.add('molecule');
+      _onOrphan('teardown replay ${session.id}: molecule reap failed — $error');
+    }
+    final workBeadId = '${session.metadata['work_bead'] ?? ''}';
+    final worktree = worktreeByBeadId[workBeadId];
+    if (worktree != null) {
+      try {
+        await _reapWorktree(root: _workRoot, worktree: worktree);
+      } on Object catch (error) {
+        failures.add('worktree');
+        _onOrphan(
+          'teardown replay ${session.id}: worktree reap failed — $error',
+        );
+      }
+    }
+    try {
+      await writer.close(session.id);
+    } on Object catch (error) {
+      failures.add('close');
+      _onOrphan('teardown replay ${session.id}: close failed — $error');
+    }
+    try {
+      await writer.closeOpenGatesForTerminal(
+        sessionId: session.id,
+        trigger: GateCloseCause.sessionTerminal,
+        disposition: GateSweepSessionDisposition.done,
+      );
+    } on Object catch (error) {
+      failures.add('gates');
+      _onOrphan('teardown replay ${session.id}: gate sweep failed — $error');
+    }
+    _onOrphan(
+      'teardown replay ${session.id}: replayed the positive-terminal tail '
+      '(work bead ${workBeadId.isEmpty ? 'unknown' : workBeadId}'
+      '${worktree == null ? ', no surviving worktree' : ''})'
+      '${failures.isEmpty ? '' : ' — failed: ${failures.join(', ')}'}',
+    );
+    return TeardownReplayEntry(
+      sessionId: session.id,
+      disposition: GateSweepSessionDisposition.done,
+      replayed: true,
+      workBeadId: workBeadId.isEmpty ? null : workBeadId,
+      reapedWorktree: worktree != null,
+      failures: failures,
+    );
+  }
+
   Future<RestartReport> reconcile() async {
     // 1. The barrier — respawns happen only after this completes.
     await _freshnessBarrier();
