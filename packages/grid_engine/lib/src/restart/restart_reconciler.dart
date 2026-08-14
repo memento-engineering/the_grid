@@ -239,10 +239,12 @@ class TeardownReplayEntry {
   /// The state-store session bead whose teardown was outstanding.
   final String sessionId;
 
-  /// Its derived disposition — anything but `done` is left untouched.
+  /// Its derived disposition. Open sessions are replayed only when `done`;
+  /// closed sessions may be replayed solely to collect live graph children.
   final GateSweepSessionDisposition disposition;
 
-  /// Whether the tail was re-run (false for a HELD or VOIDED session).
+  /// Whether teardown work was replayed, including closed-session molecule
+  /// collection (false for an open HELD or VOIDED session).
   final bool replayed;
 
   /// The work bead the session drove, when its join key survived.
@@ -273,7 +275,8 @@ class TeardownReplayReport {
   Iterable<TeardownReplayEntry> get replayed =>
       entries.where((e) => e.replayed);
 
-  /// The sessions left untouched because a human holds them.
+  /// Sessions carrying a human hold. A closed held session may still be
+  /// replayed solely to collect molecule children while preserving worktrees.
   Iterable<TeardownReplayEntry> get held =>
       entries.where((e) => e.disposition == GateSweepSessionDisposition.held);
 }
@@ -532,10 +535,10 @@ class RestartReconciler {
   /// returns immediately on an empty open molecule/step set, the worktree reap
   /// no-ops on an already-removed tree, and gate close is idempotent).
   ///
-  /// HELD sessions are excluded. A human marker means the breaker-exhaustion
-  /// escalation, which deliberately preserves its worktree for the human; its
-  /// molecule is preserved for the same forensic reason. The predicate is the
-  /// SHARED [sessionDispositionOfMetadata], never a second copy.
+  /// Open HELD sessions are excluded. A closed HELD session retains its
+  /// worktree but no longer owns live molecule/step children. Externally
+  /// closed owners are projected from the post-barrier snapshot and merged
+  /// with the marker-filtered open crash-window query.
   ///
   /// Every step is LOUD and non-fatal: a replay failure must never stop a
   /// station from booting.
@@ -545,27 +548,42 @@ class RestartReconciler {
     // The same barrier discipline as [reconcile] — nothing is decided on
     // stale state.
     await _freshnessBarrier();
-    final List<Bead> candidates;
+    final snapshot = _stateSnapshot();
+    var openCandidates = const <Bead>[];
     try {
-      candidates = await writer.sessionsAwaitingTeardown();
+      openCandidates = await writer.sessionsAwaitingTeardown();
     } on Object catch (error) {
       _onOrphan(
         'teardown replay: could not read the outstanding-teardown set — $error',
       );
-      return const TeardownReplayReport([]);
     }
+    final candidatesById = <String, Bead>{
+      for (final session in openCandidates) session.id: session,
+      for (final session in _closedSessionsWithOpenMolecules(snapshot))
+        session.id: session,
+    };
+    final candidates = candidatesById.values.toList(growable: false);
     if (candidates.isEmpty) return const TeardownReplayReport([]);
     // Reused for the worktree step: a session whose worktree is already gone
     // (the window nothing else can see) finds nothing here and goes straight
     // to the close.
-    final worktrees = await _listWorktrees(_workRoot) ?? const <BeadWorktree>[];
+    final needsWorktreeReplay = candidates.any(
+      (session) =>
+          session.status != BeadStatus.closed &&
+          sessionDispositionOfMetadata(session.metadata) ==
+              GateSweepSessionDisposition.done,
+    );
+    final worktrees = needsWorktreeReplay
+        ? await _listWorktrees(_workRoot) ?? const <BeadWorktree>[]
+        : const <BeadWorktree>[];
     final worktreeByBeadId = <String, BeadWorktree>{
       for (final wt in worktrees) wt.beadId: wt,
     };
     final entries = <TeardownReplayEntry>[];
     for (final session in candidates) {
       final disposition = sessionDispositionOfMetadata(session.metadata);
-      if (disposition != GateSweepSessionDisposition.done) {
+      if (session.status != BeadStatus.closed &&
+          disposition != GateSweepSessionDisposition.done) {
         entries.add(
           TeardownReplayEntry(
             sessionId: session.id,
@@ -593,6 +611,26 @@ class RestartReconciler {
     Bead session,
     Map<String, BeadWorktree> worktreeByBeadId,
   ) async {
+    if (session.status == BeadStatus.closed) {
+      final failures = <String>[];
+      try {
+        await writer.reapMolecule(sessionId: session.id);
+      } on Object catch (error) {
+        failures.add('molecule');
+        _onOrphan(
+          'teardown replay ${session.id}: closed-session molecule reap failed '
+          '(closeReason=externally-closed) — $error',
+        );
+      }
+      final workBeadId = '${session.metadata[SessionBeadKeys.workBead] ?? ''}';
+      return TeardownReplayEntry(
+        sessionId: session.id,
+        disposition: sessionDispositionOfMetadata(session.metadata),
+        replayed: true,
+        workBeadId: workBeadId.isEmpty ? null : workBeadId,
+        failures: failures,
+      );
+    }
     final failures = <String>[];
     try {
       await writer.reapMolecule(sessionId: session.id);
@@ -642,6 +680,28 @@ class RestartReconciler {
       reapedWorktree: worktree != null,
       failures: failures,
     );
+  }
+
+  List<Bead> _closedSessionsWithOpenMolecules(GraphSnapshot snapshot) {
+    final ownerIds = <String>{};
+    for (final bead in snapshot.beadsById.values) {
+      if (bead.status == BeadStatus.closed) continue;
+      final sessionId = switch (bead.issueType) {
+        GridIssueTypes.molecule => bead.metadata['grid.circuit.session'],
+        GridIssueTypes.step => bead.metadata[MoleculeStepKeys.session],
+        _ => null,
+      };
+      if (sessionId is String && sessionId.isNotEmpty) {
+        ownerIds.add(sessionId);
+      }
+    }
+    return [
+      for (final bead in snapshot.beadsById.values)
+        if (bead.issueType == GridIssueTypes.session &&
+            bead.status == BeadStatus.closed &&
+            ownerIds.contains(bead.id))
+          bead,
+    ];
   }
 
   Future<RestartReport> reconcile() async {

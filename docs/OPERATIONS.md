@@ -131,6 +131,33 @@ an edit to the work.
   A compile-failed boot never mints, and a monitor armed on faith polls a ghost. An
   operator-harness pattern, not grid behavior — kept because it recurs.
 
+#### Closed-session molecule backlog
+
+The automatic close-path reap is not retroactive. For an existing backlog,
+construct `<orphans>` from only open `type=step` rows whose
+`grid.step.session` owner is a closed session and open `type=molecule` rows
+whose `grid.circuit.session` owner is a closed session. Keep the session beads as the audit trail.
+Stop the station, regenerate and inspect `<orphans>`, then
+prove the delete cascade adds nothing before applying it:
+
+```sh
+# Stop the station. Produce and inspect <orphans>, then prove the cascade adds zero issues.
+bd -C <grid-home>/.grid delete --from-file <orphans> --dry-run --force
+# Continue only when the dry-run says cascade would pull in 0 additional issues.
+bd -C <grid-home>/.grid delete --from-file <orphans> --force
+```
+
+The 2026-08-13 cleanup removed 5,439 issues, 21,296 dependency links, and
+220,355 events. The live deletion exceeded its earlier dry-run by 17 beads
+(5,439 versus 5,422) because sessions minted between orphan-set generation and
+station shutdown. Stop the station first and regenerate `<orphans>` immediately
+before deletion. Live rows fell from 4,707 to 81 steps and from 779 to 15
+molecules.
+
+Deletion does not reclaim Dolt history or reduce the 11 GB state store; disk GC
+is separate. Re-arm fresh after cleanup and require one molecule pour to complete inside 15 seconds
+before declaring recovery.
+
 ---
 
 ## 3. Where inference stays

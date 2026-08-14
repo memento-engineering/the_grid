@@ -243,11 +243,11 @@ class SessionScopeState extends State<SessionScope>
   /// True once THIS scope's session is known to be molecule-mode — set on
   /// ADOPT (`initState`'s `LiveSession()` arm reads
   /// `seed.existingSession!.isMolecule`) or on a successful [_mint] (every
-  /// fresh mint is molecule); reset by [_scheduleRetiredRework] so round N+1
-  /// re-derives it fresh. False only for an ADOPTED historical flat session,
-  /// which the engine no longer drives. Read by [_completeAndClose]
-  /// (captured-field async use, D-H rule 1) to decide whether the
-  /// positive-terminal close ALSO fires [StationBeadWriter.reapMolecule]
+  /// fresh mint is molecule); retained through rework retirement so the old
+  /// graph is collected before round N+1. False only for an ADOPTED historical flat session,
+  /// which the engine no longer drives. Read by [_reapMoleculeForClose]
+  /// (captured-field async use, D-H rule 1) to decide whether every
+  /// engine-owned close also fires [StationBeadWriter.reapMolecule]
   /// (R6's session-close collection).
   bool _isMolecule = false;
 
@@ -328,6 +328,7 @@ class SessionScopeState extends State<SessionScope>
     if (existing != null &&
         reworkRoundOf(seed.bead.id, existing.workBeadId) != null) {
       _retiredReworkSessionId = existing.sessionId;
+      _isMolecule = existing.isMolecule;
       _requiresFreshMintSnapshot = true;
       unawaited(_mint());
       return;
@@ -499,10 +500,20 @@ class SessionScopeState extends State<SessionScope>
     final retiredId = _retiredReworkSessionId;
     if (retiredId != null) {
       _retiredReworkSessionId = null;
+      await _reapMoleculeForClose(
+        _ctx!,
+        sessionId: retiredId,
+        closeReason: 'reworked',
+      );
       try {
         await _ctx!.writer.close(retiredId, reason: 'reworked');
-      } on Object {
+      } on Object catch (error) {
         // Cleanup is not a precondition for the fresh round.
+        _flare('session.closeFailed', {
+          'sessionId': retiredId,
+          'closeReason': 'reworked',
+          'reason': truncateReason('$error'),
+        });
       }
       await _closeTerminalGates(
         retiredId,
@@ -796,10 +807,10 @@ class SessionScopeState extends State<SessionScope>
   /// dropped marker is LOUD but not fatal (the legacy cursor fallback still reads
   /// a finished round as `done`), so the close ALWAYS runs.
   ///
-  /// On the MOLECULE arm ([_isMolecule], captured — D-H rule 1) this ALSO
-  /// fires [StationBeadWriter.reapMolecule] (R6's session-close collection,
-  /// `DESIGN-tg-pm6.md` §9/§12): a POSITIVE terminal is exactly when the
-  /// molecule's own `type=molecule`/`type=step` beads stop being needed live
+  /// On the MOLECULE arm ([_isMolecule], captured — D-H rule 1) every close
+  /// path fires [StationBeadWriter.reapMolecule] (R6's session-close
+  /// collection, `DESIGN-tg-pm6.md` §9/§12): a terminal session is exactly
+  /// when its own `type=molecule`/`type=step` beads stop being needed live
   /// (`bd purge` reaps only ephemerals, and this pour is deliberately
   /// persistent — item 1). Placed AFTER the outcome stamp so a reader who
   /// sees `grid.outcome=complete` before the reap lands still reads a
@@ -818,16 +829,11 @@ class SessionScopeState extends State<SessionScope>
         'reason': truncateReason('$error'),
       });
     }
-    if (_isMolecule) {
-      try {
-        await ctx.writer.reapMolecule(sessionId: id);
-      } on Object catch (error) {
-        _flare('session.moleculeReapFailed', {
-          'sessionId': id,
-          'reason': truncateReason('$error'),
-        });
-      }
-    }
+    await _reapMoleculeForClose(
+      ctx,
+      sessionId: id,
+      closeReason: 'positive-terminal',
+    );
     final reapWorktree = seed.reapWorktree;
     final workRoot = seed.workRoot;
     final sourceControl = _services.sourceControl;
@@ -1169,7 +1175,6 @@ class SessionScopeState extends State<SessionScope>
     _rearming.clear();
     _mintingSuccessorForPath.clear();
     _mintAttempts = 0;
-    _isMolecule = false;
     _moleculeSessionId = null;
     _requiresFreshMintSnapshot = true;
     scheduleMicrotask(() => unawaited(_mint()));
@@ -1219,12 +1224,37 @@ class SessionScopeState extends State<SessionScope>
         if (reason.isNotEmpty) SessionBeadKeys.escalationReason: reason,
       },
     );
+    await _reapMoleculeForClose(
+      ctx,
+      sessionId: id,
+      closeReason: 'breaker-exhausted',
+    );
     await ctx.writer.close(id, reason: 'breaker-exhausted');
     _flare('session.closed', {
       'sessionId': id,
       'disposition': 'held',
       'reason': truncateReason(reason),
     });
+  }
+
+  /// Collects the durable graph before any engine-owned molecule-session
+  /// close. Failure is loud but non-fatal so terminal lifecycle progress is
+  /// never held hostage by cleanup.
+  Future<void> _reapMoleculeForClose(
+    StationServices ctx, {
+    required String sessionId,
+    required String closeReason,
+  }) async {
+    if (!_isMolecule) return;
+    try {
+      await ctx.writer.reapMolecule(sessionId: sessionId);
+    } on Object catch (error) {
+      _flare('session.moleculeReapFailed', {
+        'sessionId': sessionId,
+        'closeReason': closeReason,
+        'reason': truncateReason('$error'),
+      });
+    }
   }
 
   @override
