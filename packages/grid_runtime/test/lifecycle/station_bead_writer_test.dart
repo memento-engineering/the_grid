@@ -73,7 +73,7 @@ void main() {
 
   group('guarded write capability', () {
     test('unsupported guards are omitted and flared once', () async {
-      runner = RecordingBdRunner(guardedWriteHelp: 'no conditional flags');
+      runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
       bd = BdCliService(runner);
       runner.exportBeads = const [
         Bead(
@@ -112,7 +112,7 @@ void main() {
     });
 
     test('flare sink failure does not block degraded mutation', () async {
-      runner = RecordingBdRunner(guardedWriteHelp: 'unsupported');
+      runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
       bd = BdCliService(runner);
       runner.exportBeads = const [
         Bead(
@@ -480,7 +480,12 @@ void main() {
               .having((error) => error.cause, 'cause', isA<BdGuardMismatch>()),
         ),
       );
-      expect(runner.calls, hasLength(1));
+      expect(runner.calls, hasLength(2));
+      expect(runner.calls.first, ['update', '--help']);
+      expect(
+        runner.calls.last,
+        containsAll(<String>['--if-assignee', '--if-status']),
+      );
       expect(refusals, hasLength(1));
     });
 

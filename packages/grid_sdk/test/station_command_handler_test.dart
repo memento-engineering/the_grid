@@ -9,6 +9,8 @@ import 'package:test/test.dart';
 
 void main() {
   group('resident command dispatch', () {
+    setUp(BdCliService.resetGuardedWriteCapabilityForTesting);
+
     test('grid/bead/set routes an owned description through writer', () async {
       final stateRunner = _RecordingRunner();
       final workRunner = _RecordingRunner();
@@ -676,6 +678,7 @@ void main() {
           'update',
           'update',
           'update',
+          'update',
           'close',
         ]);
         final ruling = runner.calls.first.join(' ');
@@ -731,9 +734,13 @@ void main() {
       expect(runner.calls.map((call) => call.first), [
         'update',
         'update',
+        'update',
         'close',
       ]);
-      expect(runner.calls.every((call) => call.contains('tgdog-gate')), isTrue);
+      expect(
+        runner.calls.skip(1).every((call) => call.contains('tgdog-gate')),
+        isTrue,
+      );
       expect(runner.calls.join(' '), isNot(contains('tgdog-session')));
       expect(runner.calls.join(' '), isNot(contains('grid.result.')));
       final causeUpdate = runner.calls.singleWhere(
