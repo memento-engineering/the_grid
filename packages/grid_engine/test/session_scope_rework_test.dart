@@ -5,6 +5,8 @@
 // covers the guard-principle decline: a session that vanishes WITHOUT ever
 // having been observed gated is never silently abandoned. Zero I/O: fakes +
 // the recording chokepoint.
+import 'dart:async';
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -12,6 +14,7 @@ import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 
 const _code = Circuit(
   id: 'code',
@@ -36,6 +39,24 @@ class _RecordingTransport implements ExplorationTransport {
 
   List<({String name, Map<String, String> data})> named(String name) =>
       flares.where((flare) => flare.name == name).toList();
+}
+
+class _GatedCloseRunner extends RecordingBdRunner {
+  final closeEntered = Completer<void>();
+  final releaseClose = Completer<void>();
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    if (args.isNotEmpty && args.first == 'close') {
+      if (!closeEntered.isCompleted) closeEntered.complete();
+      await releaseClose.future;
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
 }
 
 Future<void> _pump() async {
@@ -128,6 +149,67 @@ const _tgConfig = SubstationConfig(
 
 void main() {
   group('SessionScope rework re-arm (tg-x1j v2) — the gated case re-mints', () {
+    test('disposing after retirement begins emits one reasoned abandonment '
+        'flare and creates no successor', () async {
+      final runner = _GatedCloseRunner();
+      final ctx = StationServices(
+        provider: FakeRuntimeProvider(),
+        writer: StationBeadWriter(
+          bd: BdCliService(runner),
+          reader: runner,
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
+        ),
+        stateSubstation: stateSubstation,
+      );
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime.now().subtract(const Duration(seconds: 1)),
+          sessions: const {
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-round1',
+              cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+            ),
+          },
+        ),
+      );
+      final m = _mountFull(
+        joined: joined,
+        ctx: ctx,
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        rootCircuit: (_) => _code,
+        transport: transport,
+      );
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime.now(),
+          sessions: const {
+            'tg-1#r1': SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+            ),
+          },
+        ),
+      );
+      m.owner.flush();
+      await runner.closeEntered.future;
+      m.owner.dispose();
+      runner.releaseClose.complete();
+      await _pump();
+
+      final flare = transport.named('session.mintAbandoned').single;
+      expect(flare.data['workBeadId'], 'tg-1');
+      expect(flare.data['retiredSessionId'], 'tgdog-round1');
+      expect(flare.data['stage'], 'retired-gates-closed');
+      expect(flare.data['reason'], anyOf('cancelled', 'unmounted'));
+      expect(runner.workCreates, isEmpty);
+    });
+
     test('a GATED round with durable #rN row closes the retired round and '
         'mints round N+1, in place (no restart)', () async {
       final f = buildFakes(createdId: 'tgdog-round2');

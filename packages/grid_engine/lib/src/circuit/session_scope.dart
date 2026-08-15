@@ -158,6 +158,7 @@ class SessionScopeState extends State<SessionScope>
   /// The per-attempt mint-failed flare (tg-6nf) — a mint attempt threw and the
   /// scope is still RETRYING under [_maxMintAttempts].
   static const _mintFailedFlare = 'session.mintFailed';
+  static const _mintAbandonedFlare = 'session.mintAbandoned';
 
   /// The terminal mint-EXHAUSTED flare (tg-6nf) — the [_maxMintAttempts] budget
   /// is spent; the scope escalates LOUD and goes inert (a human must fix the
@@ -520,11 +521,29 @@ class SessionScopeState extends State<SessionScope>
         GateCloseCause.supersededRound,
         const SessionDisposition.voided(reason: 'retired round'),
       );
-      if (_cancelled || !context.mounted) return;
+      if (_stopAbandonedMint(
+        stage: 'retired-gates-closed',
+        retiredSessionId: retiredId,
+      )) {
+        return;
+      }
     }
     if (_requiresFreshMintSnapshot) {
-      if (!await _awaitFreshReadySnapshot()) return;
-      if (_cancelled || !context.mounted) return;
+      final snapshotReady = await _awaitFreshReadySnapshot();
+      if (!snapshotReady) {
+        _stopAbandonedMint(
+          stage: 'fresh-snapshot',
+          retiredSessionId: retiredId,
+          snapshotUnavailable: !_cancelled && context.mounted,
+        );
+        return;
+      }
+      if (_stopAbandonedMint(
+        stage: 'fresh-snapshot-ready',
+        retiredSessionId: retiredId,
+      )) {
+        return;
+      }
       _requiresFreshMintSnapshot = false;
     }
     _mintAttempts++;
@@ -552,7 +571,12 @@ class SessionScopeState extends State<SessionScope>
               reason: _voidReason,
             ),
           );
-          if (_cancelled || !context.mounted) return;
+          if (_stopAbandonedMint(
+            stage: 'void-session-retired',
+            retiredSessionId: retiredId,
+          )) {
+            return;
+          }
         }
         // Retired — a bounded retry must never re-key twice.
         _voidSession = null;
@@ -564,9 +588,14 @@ class SessionScopeState extends State<SessionScope>
       }
       // Every fresh mint — including one over a retired dead key — pours the
       // molecule graph (tg-eli phase 2: molecule is the only circuit engine).
-      await _mintMolecule();
+      await _mintMolecule(retiredSessionId: retiredId);
     } on Object catch (error) {
-      if (_cancelled || !context.mounted) return;
+      if (_stopAbandonedMint(
+        stage: 'mint-catch',
+        retiredSessionId: retiredId,
+      )) {
+        return;
+      }
       _onMintFailed('$error');
     }
   }
@@ -589,14 +618,19 @@ class SessionScopeState extends State<SessionScope>
   /// ambiguity, avoided here rather than merely detected on restart).
   /// `createMolecule` itself is ALSO re-entry-safe (R6's own dedup probe), so
   /// the two guards compose rather than race.
-  Future<void> _mintMolecule() async {
+  Future<void> _mintMolecule({required String? retiredSessionId}) async {
     final id = _moleculeSessionId ??= await _ctx!.writer.createSession(
       substation: _ctx!.stateSubstation,
       title: 'grid session ${seed.bead.id}',
       workBeadId: seed.bead.id,
       metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
     );
-    if (_cancelled || !context.mounted) return;
+    if (_stopAbandonedMint(
+      stage: 'molecule-session-created',
+      retiredSessionId: retiredSessionId,
+    )) {
+      return;
+    }
     final root = BeadPathKey([seed.bead.id, id]);
     final plan = instantiateMolecule(
       seed.circuit,
@@ -613,10 +647,19 @@ class SessionScopeState extends State<SessionScope>
         rootCrumbs: root.crumbs,
       );
     } on Object catch (error) {
-      await _parkFailedMoleculePour(id, error);
+      await _parkFailedMoleculePour(
+        id,
+        error,
+        retiredSessionId: retiredSessionId,
+      );
       return;
     }
-    if (_cancelled || !context.mounted) return;
+    if (_stopAbandonedMint(
+      stage: 'molecule-poured',
+      retiredSessionId: retiredSessionId,
+    )) {
+      return;
+    }
     setState(() {
       _sessionId = id;
       _resolving = false;
@@ -637,7 +680,11 @@ class SessionScopeState extends State<SessionScope>
   /// once without consuming that retry budget. If the fresh-path gate write
   /// itself throws, it propagates to [_mint] and remains under the existing
   /// bounded LOUD retry path, because durable parking did not complete.
-  Future<void> _parkFailedMoleculePour(String sessionId, Object error) async {
+  Future<void> _parkFailedMoleculePour(
+    String sessionId,
+    Object error, {
+    required String? retiredSessionId,
+  }) async {
     final reason = truncateReason('Molecule pour failed: $error');
     _flare(_moleculePourFailedFlare, {
       'sessionId': sessionId,
@@ -653,7 +700,12 @@ class SessionScopeState extends State<SessionScope>
       nodePath: seed.bead.id,
       reason: reason,
     );
-    if (_cancelled || !context.mounted) return;
+    if (_stopAbandonedMint(
+      stage: 'molecule-pour-parked',
+      retiredSessionId: retiredSessionId,
+    )) {
+      return;
+    }
     setState(() {
       _failed = true;
       _resolving = false;
@@ -707,6 +759,28 @@ class SessionScopeState extends State<SessionScope>
     } catch (_) {
       // A throwing transport never breaks the scope's lifecycle — swallow.
     }
+  }
+
+  bool _stopAbandonedMint({
+    required String stage,
+    required String? retiredSessionId,
+    bool snapshotUnavailable = false,
+  }) {
+    final reason = snapshotUnavailable
+        ? 'snapshot-unavailable'
+        : _cancelled
+        ? 'cancelled'
+        : !context.mounted
+        ? 'unmounted'
+        : null;
+    if (reason == null) return false;
+    _flare(_mintAbandonedFlare, {
+      'workBeadId': seed.bead.id,
+      'retiredSessionId': retiredSessionId ?? '',
+      'stage': stage,
+      'reason': reason,
+    });
+    return true;
   }
 
   /// Handles a `createSession` failure (tg-6nf) — LOUD, bounded, never the
@@ -1015,7 +1089,7 @@ class SessionScopeState extends State<SessionScope>
       // Same terminal park as the fresh-mint path: the session bead EXISTS
       // (this scope adopted it), so a thrown pour is made LOUD and durable
       // instead of silently retried against the same cause forever.
-      await _parkFailedMoleculePour(sessionId, error);
+      await _parkFailedMoleculePour(sessionId, error, retiredSessionId: null);
       _resumingOrphanedPour = false;
     }
   }
