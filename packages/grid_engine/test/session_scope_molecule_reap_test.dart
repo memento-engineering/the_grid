@@ -3,6 +3,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 const _circuit = Circuit(
@@ -23,6 +24,47 @@ class _Transport implements ExplorationTransport {
   void flare(String name, Map<String, String> data) =>
       flares.add((name: name, data: data));
 }
+
+class _SelectiveThrowingReader implements BeadProbeReader {
+  const _SelectiveThrowingReader(this.delegate);
+
+  final BeadProbeReader delegate;
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
+      delegate.beadById(id, types: types);
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) {
+    if (types.contains(GridIssueTypes.molecule) ||
+        types.contains(GridIssueTypes.step)) {
+      throw StateError('reap exploded');
+    }
+    return delegate.openBeads(
+      types: types,
+      metadataAll: metadataAll,
+      metadataAny: metadataAny,
+    );
+  }
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
+      delegate.openSuperseding(priorIds);
+}
+
+StationServices _servicesWithFailingReap(Fakes fakes) => StationServices(
+  provider: fakes.provider,
+  writer: StationBeadWriter(
+    bd: BdCliService(fakes.runner),
+    reader: _SelectiveThrowingReader(fakes.runner),
+    ownership: BeadOwnershipPredicate(const {stateSubstation}),
+  ),
+  stateSubstation: stateSubstation,
+);
 
 JoinedSnapshot _joined(SessionProjection projection, {DateTime? capturedAt}) =>
     JoinedSnapshot(
@@ -120,6 +162,22 @@ void _expectChildrenBeforeSession(RecordingBdRunner runner, String sessionId) {
   expect(closed, containsAll([moleculeId, stepId, sessionId]));
   expect(closed.indexOf(stepId), lessThan(closed.indexOf(sessionId)));
   expect(closed.indexOf(moleculeId), lessThan(closed.indexOf(sessionId)));
+}
+
+void _expectLoudNonFatalReapFailure(
+  _Transport transport,
+  RecordingBdRunner runner, {
+  required String sessionId,
+  required String closeReason,
+}) {
+  final flares = transport.flares
+      .where((flare) => flare.name == 'session.moleculeReapFailed')
+      .toList(growable: false);
+  expect(flares, hasLength(1));
+  expect(flares.single.data, containsPair('sessionId', sessionId));
+  expect(flares.single.data, containsPair('closeReason', closeReason));
+  expect(flares.single.data['reason'], contains('reap exploded'));
+  expect(_closedInOrder(runner), contains(sessionId));
 }
 
 void main() {
@@ -254,5 +312,153 @@ void main() {
     );
 
     _expectChildrenBeforeSession(fakes.runner, sessionId);
+  });
+
+  test('positive-terminal reap failure is loud and non-fatal', () async {
+    const sessionId = 'tgdog-positive-failure';
+    final fakes = buildFakes();
+    fakes.runner.exportBeads = [_molecule(sessionId), _step(sessionId)];
+    final joined = JoinedSnapshotNotifier(
+      _joined(
+        const SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: sessionId,
+          isMolecule: true,
+        ),
+      ),
+    );
+    final mounted = _mount(joined, _servicesWithFailingReap(fakes));
+    addTearDown(mounted.owner.dispose);
+
+    joined.push(
+      _joined(
+        SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: sessionId,
+          isMolecule: true,
+          moleculeBeads: [
+            Bead(
+              id: '$sessionId-agent',
+              issueType: GridIssueTypes.step,
+              metadata: const {
+                'grid.step.session': sessionId,
+                'grid.step.path': 'tg-1/agent',
+                'grid.step.state': 'complete',
+              },
+            ),
+            Bead(
+              id: '$sessionId-land',
+              issueType: GridIssueTypes.step,
+              metadata: const {
+                'grid.step.session': sessionId,
+                'grid.step.path': 'tg-1/land',
+                'grid.step.state': 'complete',
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    mounted.owner.flush();
+    await _pumpUntil(
+      mounted.owner,
+      () => _closedInOrder(fakes.runner).contains(sessionId),
+    );
+
+    _expectLoudNonFatalReapFailure(
+      mounted.transport,
+      fakes.runner,
+      sessionId: sessionId,
+      closeReason: 'positive-terminal',
+    );
+  });
+
+  test('breaker-exhaustion reap failure is loud and non-fatal', () async {
+    const sessionId = 'tgdog-broken-failure';
+    final fakes = buildFakes();
+    fakes.runner.exportBeads = [_molecule(sessionId), _step(sessionId)];
+    final joined = JoinedSnapshotNotifier(
+      _joined(
+        SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: sessionId,
+          isMolecule: true,
+          moleculeBeads: [
+            Bead(
+              id: '$sessionId-step',
+              issueType: GridIssueTypes.step,
+              metadata: const {
+                'rig': 'tgdog',
+                'grid.step.session': sessionId,
+                'grid.step.path': 'tg-1/agent',
+                'grid.step.state': 'failed',
+                'grid.step.restartCount': '3',
+                'grid.step.id': 'agent',
+                'grid.step.capability': 'agent',
+                'grid.step.kind': 'job',
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    final mounted = _mount(joined, _servicesWithFailingReap(fakes));
+    addTearDown(mounted.owner.dispose);
+
+    await _pumpUntil(
+      mounted.owner,
+      () => _closedInOrder(fakes.runner).contains(sessionId),
+    );
+
+    _expectLoudNonFatalReapFailure(
+      mounted.transport,
+      fakes.runner,
+      sessionId: sessionId,
+      closeReason: 'breaker-exhausted',
+    );
+  });
+
+  test('rework-retirement reap failure is loud and non-fatal', () async {
+    const sessionId = 'tgdog-retired-failure';
+    final fakes = buildFakes(createdId: 'tgdog-successor');
+    fakes.runner.exportBeads = [_molecule(sessionId), _step(sessionId)];
+    final before = DateTime.now().subtract(const Duration(seconds: 1));
+    final joined = JoinedSnapshotNotifier(
+      _joined(
+        const SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: sessionId,
+          isMolecule: true,
+          cursor: {'tg-1/agent': NodeCursor(state: StepState.gated)},
+        ),
+        capturedAt: before,
+      ),
+    );
+    final mounted = _mount(joined, _servicesWithFailingReap(fakes));
+    addTearDown(mounted.owner.dispose);
+
+    joined.push(
+      _joined(
+        const SessionProjection(
+          workBeadId: 'tg-1#r1',
+          sessionId: sessionId,
+          isMolecule: true,
+          cursor: {'tg-1/agent': NodeCursor(state: StepState.gated)},
+        ),
+        capturedAt: before,
+      ),
+    );
+    mounted.owner.flush();
+    await _pumpUntil(
+      mounted.owner,
+      () => _closedInOrder(fakes.runner).contains(sessionId),
+    );
+
+    _expectLoudNonFatalReapFailure(
+      mounted.transport,
+      fakes.runner,
+      sessionId: sessionId,
+      closeReason: 'reworked',
+    );
   });
 }
