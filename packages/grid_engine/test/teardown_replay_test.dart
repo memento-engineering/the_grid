@@ -64,6 +64,37 @@ class _ThrowingReader implements BeadProbeReader {
   Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
 }
 
+class _SelectiveThrowingReader implements BeadProbeReader {
+  _SelectiveThrowingReader(this.delegate);
+
+  final BeadProbeReader delegate;
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
+      delegate.beadById(id, types: types);
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) {
+    if (types.contains(GridIssueTypes.molecule) ||
+        types.contains(GridIssueTypes.step)) {
+      throw StateError('closed reap exploded');
+    }
+    return delegate.openBeads(
+      types: types,
+      metadataAll: metadataAll,
+      metadataAny: metadataAny,
+    );
+  }
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
+      delegate.openSuperseding(priorIds);
+}
+
 const _workRoot = RootCheckout(
   path: '/workspace/example',
   defaultBranch: 'main',
@@ -266,6 +297,119 @@ void main() {
 
       expect(report.replayed, isEmpty);
       expect(report.held, hasLength(1));
+    });
+  });
+
+  group('externally closed sessions', () {
+    test('externally closed done session collects children', () async {
+      final git = _FakeGit(worktrees: [_wt('tg-1')]);
+      final f = _build(
+        state: [
+          _session('tgdog-sess1', workBead: 'tg-1', closed: true),
+          _molecule('tgdog-mol1', sessionId: 'tgdog-sess1'),
+          _step('tgdog-step1', sessionId: 'tgdog-sess1'),
+        ],
+        git: git,
+      );
+
+      final entry = (await f.reconciler.replayTeardownTail()).replayed.single;
+
+      expect(entry.sessionId, 'tgdog-sess1');
+      expect(_closedIds(f.bd), containsAll(['tgdog-mol1', 'tgdog-step1']));
+      expect(_closedIds(f.bd), isNot(contains('tgdog-sess1')));
+      expect(git.reaped, isEmpty);
+      expect(f.bd.callsFor('update'), isEmpty, reason: 'no gate sweep');
+    });
+
+    test(
+      'externally closed held session collects children but preserves worktree',
+      () async {
+        final git = _FakeGit(worktrees: [_wt('tg-1')]);
+        final f = _build(
+          state: [
+            _session(
+              'tgdog-sess1',
+              workBead: 'tg-1',
+              closed: true,
+              escalation: 'breaker exhausted',
+            ),
+            _molecule('tgdog-mol1', sessionId: 'tgdog-sess1'),
+            _step('tgdog-step1', sessionId: 'tgdog-sess1'),
+          ],
+          git: git,
+        );
+
+        final entry = (await f.reconciler.replayTeardownTail()).replayed.single;
+
+        expect(entry.disposition, GateSweepSessionDisposition.held);
+        expect(_closedIds(f.bd), containsAll(['tgdog-mol1', 'tgdog-step1']));
+        expect(_closedIds(f.bd), isNot(contains('tgdog-sess1')));
+        expect(git.reaped, isEmpty);
+        expect(f.bd.callsFor('update'), isEmpty, reason: 'no gate sweep');
+      },
+    );
+
+    test('externally closed orphan-cleanup result collects children', () async {
+      final f = _build(
+        state: [
+          _session(
+            'tgdog-sess1',
+            workBead: 'tg-closed-work',
+            closed: true,
+            outcome: null,
+          ),
+          _molecule('tgdog-mol1', sessionId: 'tgdog-sess1'),
+          _step('tgdog-step1', sessionId: 'tgdog-sess1'),
+        ],
+      );
+
+      await f.reconciler.replayTeardownTail();
+
+      expect(_closedIds(f.bd), containsAll(['tgdog-mol1', 'tgdog-step1']));
+      expect(_closedIds(f.bd), isNot(contains('tgdog-sess1')));
+      expect(f.bd.callsFor('update'), isEmpty, reason: 'no gate sweep');
+    });
+
+    test('closed-session reap failure is loud and boot continues', () async {
+      final state = [
+        _session('tgdog-sess1', workBead: 'tg-1', closed: true),
+        _molecule('tgdog-mol1', sessionId: 'tgdog-sess1'),
+      ];
+      final bd = RecordingBdRunner()..exportBeads = state;
+      final loud = <String>[];
+      final git = _FakeGit();
+      final reconciler = RestartReconciler(
+        listWorktrees: git.listWorktrees,
+        reapWorktree: git.reapWorktree,
+        workRoot: _workRoot,
+        groups: _FakeGroups(),
+        writer: StationBeadWriter(
+          bd: BdCliService(bd),
+          reader: _SelectiveThrowingReader(bd),
+          ownership: BeadOwnershipPredicate(const {'tgdog'}),
+        ),
+        onOrphan: loud.add,
+        freshnessBarrier: () async {},
+        stateSnapshot: () => GraphSnapshot.fromParts(
+          beads: state,
+          dependencies: const [],
+          readyIds: const [],
+          capturedAt: DateTime(2026, 8, 13),
+        ),
+      );
+
+      final entry = (await reconciler.replayTeardownTail()).replayed.single;
+
+      expect(entry.failures, ['molecule']);
+      expect(
+        loud.single,
+        allOf(
+          contains('tgdog-sess1'),
+          contains('externally-closed'),
+          contains('closed reap exploded'),
+        ),
+      );
+      expect(_closedIds(bd), isNot(contains('tgdog-sess1')));
     });
   });
 
