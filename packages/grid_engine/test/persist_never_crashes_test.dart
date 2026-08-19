@@ -39,6 +39,56 @@ class _DeadStoreBdRunner implements BdRunner {
   }
 }
 
+/// A [BdRunner] whose write of ONE named cursor state throws and whose every
+/// other call succeeds — the `tg-0zq8` shape. The live incident was narrower
+/// than a dead store: the step's own terminal write was refused while writes to
+/// other beads kept landing, so the node re-derived at 1 Hz forever.
+class _SelectiveThrowingBdRunner implements BdRunner {
+  _SelectiveThrowingBdRunner(this.refusedState);
+
+  /// The `grid.step.state` value whose write is refused (`complete`/`escalated`).
+  final String refusedState;
+
+  /// Full argv of every recorded call, in order.
+  final List<List<String>> calls = <List<String>>[];
+
+  /// The `grid.step.state` value of every call that was ALLOWED to land.
+  List<String> get landedStates => [
+    for (final argv in calls)
+      if (_stateOf(argv) case final String state)
+        if (state != refusedState) state,
+  ];
+
+  static String? _stateOf(List<String> argv) {
+    for (final arg in argv) {
+      if (arg.startsWith('${MoleculeStepKeys.state}=')) {
+        return arg.split('=').last;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    calls.add(args);
+    if (_stateOf(args) == refusedState) {
+      throw BdTimeoutException(
+        command: args,
+        timeout: timeout ?? const Duration(seconds: 30),
+      );
+    }
+    return const BdResult(
+      exitCode: 0,
+      stdout: '{"schema_version":1,"data":{"id":"$_stepBeadId"}}',
+      stderr: '',
+    );
+  }
+}
+
 /// Records every LOUD flare the host emits (the emit-only observability sink).
 class _RecordingTransport implements ExplorationTransport {
   final List<({String name, Map<String, String> data})> flares = [];
@@ -54,6 +104,18 @@ class _OkCap extends ServiceCapability {
   @override
   Future<StepOutcome> run(TreeContext context, StepArgs args) async =>
       const Ok({'pr': 'https://example.invalid/pr/1'});
+
+  @override
+  Future<void> teardown(StepArgs args) async {}
+}
+
+/// A [ServiceCapability] that FAILS — the shortest path to the `failure` persist
+/// op, whose write IS `_persistFailure` and must therefore never be "recovered"
+/// by a second `_persistFailure`.
+class _FailingCap extends ServiceCapability {
+  @override
+  Future<StepOutcome> run(TreeContext context, StepArgs args) async =>
+      const Failed('the capability itself failed');
 
   @override
   Future<void> teardown(StepArgs args) async {}
@@ -162,5 +224,152 @@ void main() {
         expect(f.data['error'], contains('imed'), reason: 'carries the cause');
       },
     );
+  });
+
+  group('tg-0zq8 — a dropped persist gets a BOUNDED, DURABLE consequence', () {
+    /// Mounts one [CapabilityHost] under the same five-layer inherited tree the
+    /// tg-7ux fixture uses, with [capability] and [runner] swapped in.
+    TreeOwner mountHost(
+      Capability capability,
+      BdRunner runner,
+      ExplorationTransport transport,
+    ) {
+      final owner = TreeOwner();
+      owner.mountRoot(
+        InheritedSeed<StationServices>(
+          value: StationServices(
+            provider: FakeRuntimeProvider(),
+            writer: StationBeadWriter(
+              bd: BdCliService(runner),
+              reader: const EmptyBeadProbeReader(),
+              ownership: BeadOwnershipPredicate(const {stateSubstation}),
+            ),
+            stateSubstation: stateSubstation,
+          ),
+          child: InheritedSeed<CapabilityRegistry>(
+            value: RecordingCapabilityRegistry(),
+            child: InheritedSeed<ServiceBundle>(
+              value: ServiceBundle(transport: transport),
+              child: InheritedSeed<Workspace>(
+                value: testWorkspace('tg-1'),
+                child: InheritedSeed<InheritedCircuit>(
+                  value: _moleculeCircuit,
+                  child: CapabilityHost(
+                    capability: capability,
+                    mount: _mount(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      return owner;
+    }
+
+    List<({String name, Map<String, String> data})> named(
+      _RecordingTransport t,
+      String name,
+    ) => t.flares.where((f) => f.name == name).toList();
+
+    test('THE BUG: a REFUSED terminal write is routed into the D-5 supervised-'
+        'restart writer — restartCount is bumped and PERSISTED, so the frontier '
+        'cannot re-derive the node forever', () async {
+      final runner = _SelectiveThrowingBdRunner('complete');
+      final transport = _RecordingTransport();
+      addTearDown(mountHost(_OkCap(), runner, transport).dispose);
+
+      await _pump();
+      await _pump();
+
+      final failed = named(transport, 'step.persistFailed');
+      expect(failed, hasLength(1), reason: 'exactly one, not one per turn');
+      expect(failed.single.data['op'], 'complete');
+      expect(failed.single.data['maxRestarts'], '3');
+
+      expect(
+        named(transport, 'step.persistRecoveryFailed'),
+        isEmpty,
+        reason: 'the supervision write itself was allowed to land',
+      );
+
+      // The whole point: the drop left a DURABLE mark. Before the fix the
+      // only write attempted was the refused one and nothing was recorded,
+      // so the node re-ran at 1 Hz — 149,420 commits against one step bead.
+      expect(
+        runner.landedStates,
+        ['failed'],
+        reason:
+            'the refused `complete` must be followed by exactly one landed '
+            '`failed` — the supervised-restart cursor write',
+      );
+      final supervision = runner.calls.last.join(' ');
+      expect(
+        supervision,
+        contains('${MoleculeStepKeys.restartCount}=1'),
+        reason:
+            'restartCount rides the PERSISTED cursor (ADR-0008 D7), so '
+            'the breaker survives a bounce and actually trips',
+      );
+      expect(
+        supervision,
+        contains(MoleculeStepKeys.cooldownUntil),
+        reason: 'a backoff cooldown is what stops the 1 Hz re-derive',
+      );
+      expect(
+        supervision,
+        contains('complete'),
+        reason: 'the failure reason names the op that was dropped',
+      );
+    });
+
+    test(
+      'the `failure` op is NOT recovered — recovering a failed failure-write '
+      'with another failure-write is the loop this bead closes',
+      () async {
+        final runner = _SelectiveThrowingBdRunner('failed');
+        final transport = _RecordingTransport();
+        addTearDown(mountHost(_FailingCap(), runner, transport).dispose);
+
+        await _pump();
+        await _pump();
+
+        final failed = named(transport, 'step.persistFailed');
+        expect(failed, hasLength(1));
+        expect(failed.single.data['op'], 'failure');
+        expect(
+          runner.landedStates,
+          isEmpty,
+          reason: 'no second write may be attempted for the failure op',
+        );
+        expect(named(transport, 'step.persistRecoveryFailed'), isEmpty);
+      },
+    );
+
+    test('a store that is COMPLETELY gone flares twice and stops — two writes '
+        'maximum per report, never a third', () async {
+      final runner = _DeadStoreBdRunner();
+      final transport = _RecordingTransport();
+      addTearDown(mountHost(_OkCap(), runner, transport).dispose);
+
+      await _pump();
+      await _pump();
+
+      expect(named(transport, 'step.persistFailed'), hasLength(1));
+      final recovery = named(transport, 'step.persistRecoveryFailed');
+      expect(
+        recovery,
+        hasLength(1),
+        reason: 'the supervision write failed too — LOUD under its own name',
+      );
+      expect(recovery.single.data['op'], 'complete');
+      expect(
+        runner.calls,
+        2,
+        reason:
+            'the refused write plus ONE supervision attempt — a third would '
+            'be the unbounded loop again',
+      );
+    });
   });
 }
