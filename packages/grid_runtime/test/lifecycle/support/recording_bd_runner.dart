@@ -31,8 +31,12 @@ final class OpenBeadsCall {
 /// id the caller controls so the chokepoint's mint+stamp can be exercised
 /// end-to-end with no real `bd`.
 class RecordingBdRunner implements BdRunner, BeadProbeReader {
-  RecordingBdRunner({String createdId = 'tgdog-sess1'})
-    : _createdId = createdId;
+  RecordingBdRunner({
+    String createdId = 'tgdog-sess1',
+    this.guardedWriteHelp = '--if-assignee --if-status',
+  }) : _createdId = createdId;
+
+  final String guardedWriteHelp;
 
   String _createdId;
 
@@ -121,6 +125,11 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
+    if (args case ['update', '--help']) {
+      return Future<BdResult>.value(
+        BdResult(exitCode: 0, stdout: guardedWriteHelp, stderr: ''),
+      );
+    }
     final sub = args.isNotEmpty ? args.first : '';
     if (sub == 'export') {
       return Future<BdResult>.value(
@@ -178,8 +187,14 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
   /// All calls whose leading subcommand is [sub]. For `'create'`, this
   /// INCLUDES graph-apply pours (`create --graph …`) — use [graphApplyCalls]
   /// to isolate those from a plain single-bead `create`.
-  List<List<String>> callsFor(String sub) =>
-      calls.where((c) => c.isNotEmpty && c.first == sub).toList();
+  List<List<String>> callsFor(String sub) => calls
+      .where(
+        (c) =>
+            c.isNotEmpty &&
+            c.first == sub &&
+            !(c.length == 2 && c[0] == 'update' && c[1] == '--help'),
+      )
+      .toList();
 
   /// The `bd create --graph <plan-file> …` pours only (`StationBeadWriter
   /// .createMolecule`'s mint) — disjoint from [callsFor]`('create')`'s plain
@@ -193,6 +208,7 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
     const mutations = {'create', 'update', 'close', 'delete', 'batch'};
     for (final c in calls) {
       if (c.isEmpty || !mutations.contains(c.first)) continue;
+      if (c.length == 2 && c[0] == 'update' && c[1] == '--help') continue;
       final i = c.indexOf('--actor');
       if (i < 0 || i + 1 >= c.length || c[i + 1] != 'grid-controller') {
         return false;

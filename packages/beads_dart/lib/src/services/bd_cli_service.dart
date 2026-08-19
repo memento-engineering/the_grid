@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
 import '../codecs/envelope.dart';
 import '../errors/bd_exception.dart';
 import '../models/bead.dart';
@@ -11,6 +13,8 @@ import '../models/issue_type.dart';
 import '../ready/ready_work_filter.dart';
 import '../ready/ready_work_sort.dart';
 import 'bd_runner.dart';
+
+enum _GuardedWriteSupport { supported, unsupported, indeterminate }
 
 /// The bd-CLI service tier (predictable-flutter Services: stateless I/O).
 ///
@@ -34,6 +38,22 @@ class BdCliService {
   /// so a huge id set degrades into a handful of spawns, never one-per-id
   /// (ADR-0001 D4: "never spawn bd per issue in a loop").
   static const int idChunkSize = 50;
+
+  static Future<_GuardedWriteSupport>? _guardedWriteSupport;
+  static bool _guardedWriteReceiptEmitted = false;
+
+  static const _guardedWriteDegradedData = <String, String>{
+    'missingCapability': '--if-assignee,--if-status',
+    'safetyDropped': 'compare-and-swap defence in depth',
+    'primarySafety': 'StationBeadWriter single-writer chokepoint preserved',
+  };
+
+  /// Clears the process-wide guarded-write negotiation state for isolated tests.
+  @visibleForTesting
+  static void resetGuardedWriteCapabilityForTesting() {
+    _guardedWriteSupport = null;
+    _guardedWriteReceiptEmitted = false;
+  }
 
   final BdRunner _runner;
 
@@ -179,6 +199,9 @@ class BdCliService {
 
     /// Expected current status for bd's conditional-update guard.
     BeadStatus? ifStatus,
+
+    /// Receives the once-per-process receipt when requested guards are unsupported.
+    void Function(String name, Map<String, String> data)? onGuardDegraded,
     String? title,
     BeadStatus? status,
     int? priority,
@@ -240,26 +263,49 @@ class BdCliService {
         await file.writeAsString(design);
         designFile = file.path;
       }
-      await _runEnvelope(
-        updateArgs(
-          id,
-          ifAssignee: ifAssignee,
-          ifStatus: ifStatus,
-          title: title,
-          status: status,
-          priority: priority,
-          bodyFile: bodyFile,
-          designFile: designFile,
-          acceptanceCriteria: acceptanceCriteria,
-          type: type,
-          assignee: assignee,
-          mergeMetadata: mergeMetadata,
-          unsetMetadata: unsetMetadata,
-          notes: notes,
-          appendNotes: appendNotes,
-        ),
-        stdin: stdinText,
-      );
+      final requestedGuard = ifAssignee != null || ifStatus != null;
+      final capability = requestedGuard
+          ? await _guardedWriteCapability()
+          : _GuardedWriteSupport.supported;
+      final guarded =
+          requestedGuard && capability != _GuardedWriteSupport.unsupported;
+      if (requestedGuard && !guarded) {
+        _emitGuardedWriteDegraded(onGuardDegraded);
+      }
+
+      Future<void> runUpdate({required bool guarded}) async {
+        await _runEnvelope(
+          updateArgs(
+            id,
+            ifAssignee: guarded ? ifAssignee : null,
+            ifStatus: guarded ? ifStatus : null,
+            title: title,
+            status: status,
+            priority: priority,
+            bodyFile: bodyFile,
+            designFile: designFile,
+            acceptanceCriteria: acceptanceCriteria,
+            type: type,
+            assignee: assignee,
+            mergeMetadata: mergeMetadata,
+            unsetMetadata: unsetMetadata,
+            notes: notes,
+            appendNotes: appendNotes,
+          ),
+          stdin: stdinText,
+        );
+      }
+
+      try {
+        await runUpdate(guarded: guarded);
+      } on BdCommandFailed catch (error) {
+        if (!guarded || !_isUnknownGuardFlag(error)) rethrow;
+        _guardedWriteSupport = Future<_GuardedWriteSupport>.value(
+          _GuardedWriteSupport.unsupported,
+        );
+        _emitGuardedWriteDegraded(onGuardDegraded);
+        await runUpdate(guarded: false);
+      }
     } finally {
       if (tempDir != null) {
         try {
@@ -291,6 +337,56 @@ class BdCliService {
     for (final entry in expected.entries) {
       _verifyRoundTrip(entry.key, entry.value, stored[entry.key]!);
     }
+  }
+
+  Future<_GuardedWriteSupport> _guardedWriteCapability() async {
+    final cached = _guardedWriteSupport;
+    if (cached != null) return await cached;
+    final probe = _probeGuardedWrites();
+    _guardedWriteSupport = probe;
+    return await probe;
+  }
+
+  Future<_GuardedWriteSupport> _probeGuardedWrites() async {
+    try {
+      final result = await _runner.run(const ['update', '--help']);
+      if (!result.ok) return _GuardedWriteSupport.indeterminate;
+      return _parseGuardedWriteHelp('${result.stdout}\n${result.stderr}');
+    } on Object {
+      return _GuardedWriteSupport.indeterminate;
+    }
+  }
+
+  _GuardedWriteSupport _parseGuardedWriteHelp(String text) {
+    final lines = text.split('\n');
+    if (!lines.any((line) => line.trim() == 'Flags:')) {
+      return _GuardedWriteSupport.indeterminate;
+    }
+    final longFlag = RegExp(r'^(?:-\w,\s*)?--[a-z0-9][a-z0-9-]*(?:\s|$)');
+    final flagRows = lines
+        .map((line) => line.trimLeft())
+        .where(longFlag.hasMatch)
+        .toList(growable: false);
+    if (flagRows.isEmpty) return _GuardedWriteSupport.indeterminate;
+    final assignee = RegExp(r'^(?:-\w,\s*)?--if-assignee(?:\s|$)');
+    final status = RegExp(r'^(?:-\w,\s*)?--if-status(?:\s|$)');
+    return flagRows.any(assignee.hasMatch) && flagRows.any(status.hasMatch)
+        ? _GuardedWriteSupport.supported
+        : _GuardedWriteSupport.unsupported;
+  }
+
+  void _emitGuardedWriteDegraded(
+    void Function(String, Map<String, String>)? emit,
+  ) {
+    if (_guardedWriteReceiptEmitted || emit == null) return;
+    _guardedWriteReceiptEmitted = true;
+    emit('bd.guardedWriteDegraded', _guardedWriteDegradedData);
+  }
+
+  bool _isUnknownGuardFlag(BdCommandFailed error) {
+    final message = error.message;
+    return message.contains('unknown flag') &&
+        (message.contains('--if-assignee') || message.contains('--if-status'));
   }
 
   /// `bd close <id> [--reason …]`.

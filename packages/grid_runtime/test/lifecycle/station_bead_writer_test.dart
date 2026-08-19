@@ -64,10 +64,72 @@ void main() {
   );
 
   setUp(() {
+    BdCliService.resetGuardedWriteCapabilityForTesting();
     runner = RecordingBdRunner(createdId: 'tgdog-sess1');
     bd = BdCliService(runner);
     refusals = <String>[];
     flares = <({String name, Map<String, String> data})>[];
+  });
+
+  group('guarded write capability', () {
+    test('unsupported guards are omitted and flared once', () async {
+      runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
+      bd = BdCliService(runner);
+      runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-one',
+          status: BeadStatus.open,
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+          },
+        ),
+        Bead(
+          id: 'tgdog-two',
+          status: BeadStatus.open,
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+          },
+        ),
+      ];
+
+      await writer().clearSpecifyAuthoredSpec('tgdog-one');
+      await writer().clearSpecifyAuthoredSpec('tgdog-two');
+
+      final updates = runner
+          .callsFor('update')
+          .where((call) => !call.contains('--help'));
+      expect(updates.every((args) => !args.contains('--if-assignee')), isTrue);
+      expect(updates.every((args) => !args.contains('--if-status')), isTrue);
+      final receipts = flares
+          .where((flare) => flare.name == 'bd.guardedWriteDegraded')
+          .toList();
+      expect(receipts, hasLength(1));
+      expect(receipts.single.data, {
+        'missingCapability': '--if-assignee,--if-status',
+        'safetyDropped': 'compare-and-swap defence in depth',
+        'primarySafety': 'StationBeadWriter single-writer chokepoint preserved',
+      });
+    });
+
+    test('flare sink failure does not block degraded mutation', () async {
+      runner = RecordingBdRunner(guardedWriteHelp: 'Flags:\n  --actor string');
+      bd = BdCliService(runner);
+      runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-one',
+          status: BeadStatus.open,
+          metadata: {
+            StationBeadWriter.specAuthorKey: StationBeadWriter.specifyAuthor,
+          },
+        ),
+      ];
+
+      await writer(
+        onFlare: (_, __) => throw StateError('sink down'),
+      ).clearSpecifyAuthoredSpec('tgdog-one');
+
+      expect(runner.callsFor('update'), hasLength(1));
+    });
   });
 
   group('the fail-closed refusal (the key safety test)', () {
@@ -375,23 +437,23 @@ void main() {
 
       expect(runner.callsFor('export'), isEmpty);
       final updates = runner.callsFor('update');
-      expect(updates, hasLength(1));
-      expect(updates.single, containsAllInOrder(['update', 'tgdog-work1']));
-      expect(updates.single, containsAllInOrder(['--if-assignee', 'specify']));
-      expect(updates.single, containsAllInOrder(['--if-status', 'open']));
-      expect(updates.single, containsAllInOrder(['--design-file', '-']));
-      expect(runner.stdins.single, '');
-      expect(updates.single, containsAllInOrder(['--acceptance', '']));
+      final mutation = updates.singleWhere((call) => !call.contains('--help'));
+      expect(mutation, containsAllInOrder(['update', 'tgdog-work1']));
+      expect(mutation, containsAllInOrder(['--if-assignee', 'specify']));
+      expect(mutation, containsAllInOrder(['--if-status', 'open']));
+      expect(mutation, containsAllInOrder(['--design-file', '-']));
+      expect(runner.stdins.last, '');
+      expect(mutation, containsAllInOrder(['--acceptance', '']));
       expect(
-        updates.single,
+        mutation,
         containsAllInOrder([
           '--unset-metadata',
           StationBeadWriter.specAuthorKey,
         ]),
       );
-      expect(updates.single, isNot(contains('--description')));
-      expect(updates.single, isNot(contains('--notes')));
-      expect(updates.single, isNot(contains('--append-notes')));
+      expect(mutation, isNot(contains('--description')));
+      expect(mutation, isNot(contains('--notes')));
+      expect(mutation, isNot(contains('--append-notes')));
       expect(runner.everyMutationHasActor, isTrue);
       expect(runner.neverCalledShow, isTrue);
       expect(refusals, isEmpty);
@@ -418,7 +480,12 @@ void main() {
               .having((error) => error.cause, 'cause', isA<BdGuardMismatch>()),
         ),
       );
-      expect(runner.calls, hasLength(1));
+      expect(runner.calls, hasLength(2));
+      expect(runner.calls.first, ['update', '--help']);
+      expect(
+        runner.calls.last,
+        containsAll(<String>['--if-assignee', '--if-status']),
+      );
       expect(refusals, hasLength(1));
     });
 

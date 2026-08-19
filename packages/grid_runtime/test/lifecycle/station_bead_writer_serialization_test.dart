@@ -43,6 +43,13 @@ class GatedBdRunner implements BdRunner {
     Duration? timeout,
     String? stdin,
   }) async {
+    if (args case ['update', '--help']) {
+      return const BdResult(
+        exitCode: 0,
+        stdout: '--if-assignee --if-status',
+        stderr: '',
+      );
+    }
     final idx = startedIds.length;
     final id = args.length >= 2 ? args[1] : (args.isNotEmpty ? args.first : '');
     startedIds.add(id);
