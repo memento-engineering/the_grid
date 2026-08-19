@@ -177,10 +177,12 @@ class FakeRuntimeProvider implements RuntimeProvider {
 /// `bd`.
 class RecordingBdRunner implements BdRunner, BeadProbeReader {
   /// Creates the recorder; `create` returns [createdId].
-  RecordingBdRunner({String createdId = 'tgdog-sess1'})
-    : _createdId = createdId;
+  RecordingBdRunner({String createdId = 'tgdog-sess1', List<String>? eventLog})
+    : _createdId = createdId,
+      _eventLog = eventLog;
 
   final String _createdId;
+  final List<String>? _eventLog;
 
   /// Full argv of every recorded `bd` call, in order.
   final List<List<String>> calls = <List<String>>[];
@@ -250,6 +252,7 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
 
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
+    _eventLog?.add('bd:${args.isEmpty ? '' : args.first}');
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
@@ -673,8 +676,9 @@ typedef Fakes = ({
 Fakes buildFakes({
   String createdId = 'tgdog-sess1',
   WorkSignalProbe? workSignal,
+  List<String>? eventLog,
 }) {
-  final runner = RecordingBdRunner(createdId: createdId);
+  final runner = RecordingBdRunner(createdId: createdId, eventLog: eventLog);
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
   final pr = FakePrOpener();
