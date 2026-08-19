@@ -179,8 +179,8 @@ class CapabilityHostState extends State<CapabilityHost>
   /// HISTORICAL flat session, or a mis-composed tree — refuses LOUD (a thrown
   /// [StateError]; [_createAllocationOrFlare] catches it at mount and every
   /// persist call site is itself `async`, so a report-path throw is captured
-  /// as a rejected Future and safely contained by [_firePersist]'s
-  /// `catchError`). So a legacy flat session never spawns and never writes —
+  /// as a rejected Future and safely contained by [_runPersist]'s
+  /// `try`/`catch`). So a legacy flat session never spawns and never writes —
   /// it flares. Same for a MOUNTED circuit missing its own node in
   /// [InheritedCircuit.beadIdByNodePath] (a join/mint mis-composition).
   String get _stepBeadId {
@@ -300,6 +300,7 @@ class CapabilityHostState extends State<CapabilityHost>
       _firePersist(
         'allocation',
         () => _persistFailure('allocation failed: $e'),
+        recoverable: false,
       );
       return null;
     }
@@ -378,7 +379,11 @@ class CapabilityHostState extends State<CapabilityHost>
             'error': truncateReason(reason),
           });
         }
-        _firePersist('failure', () => _persistFailure(reason));
+        _firePersist(
+          'failure',
+          () => _persistFailure(reason),
+          recoverable: false,
+        );
       case AllocationAdvanced(:final payload):
         if (_completed) return;
         _completed = true;
@@ -404,23 +409,76 @@ class CapabilityHostState extends State<CapabilityHost>
   /// died with the power, an open circuit breaker. Unguarded, ONE substation's
   /// flaky store takes down every OTHER substation's in-flight agents.
   ///
-  /// So the failure is contained to its own node: the cursor is left where it
-  /// is, and the throw is flared as `step.persistFailed`. A stuck node is
-  /// recoverable — the governor sees it and reworks it; a dead station is not.
-  /// LOUD, not silent, and never fatal.
+  /// So the failure is contained to its own node and flared as
+  /// `step.persistFailed`. LOUD, not silent, and never fatal.
   ///
-  /// NOT a retry: a timed-out write is AMBIGUOUS (it may well have landed), and
-  /// blindly re-issuing `createGate` would mint duplicate gates — the mint-dedup
-  /// race is a known hazard. Retry is a separate decision from not-crashing.
-  void _firePersist(String op, Future<void> Function() persist) {
-    unawaited(
-      persist().catchError((Object e) {
-        _emitFlare('step.persistFailed', {
-          'op': op,
-          'error': truncateReason('$e'),
-        });
-      }),
-    );
+  /// STILL NOT A RETRY of the write itself (`tg-7ux`'s original reasoning holds):
+  /// a timed-out write is AMBIGUOUS — it may well have landed — and blindly
+  /// re-issuing `createGate` would mint duplicate gates, a known mint-dedup
+  /// hazard.
+  ///
+  /// But dropping the write and doing NOTHING ELSE is what cost this station 17
+  /// GB (`tg-0zq8`). An unrecorded step is exactly what the frontier re-derives,
+  /// so the node re-ran, failed to persist again, and closed the loop — 149,420
+  /// dolt commits against ONE step bead at 1 Hz, with no bound and no gate. A
+  /// retry loop built out of a decision not to retry.
+  ///
+  /// So a dropped write now gets a BOUNDED, DURABLE consequence through the
+  /// mechanism that already owns exactly this job: [_persistFailure], the D-5
+  /// supervised-restart writer (ADR-0008 Decision 7). It bumps the PERSISTED
+  /// `restartCount`, sets a backoff `cooldownUntil` so the predicate cannot
+  /// re-key until it expires, and at exhaustion writes no cooldown so the node
+  /// is circuit-broken and `SessionScope` escalates to a gate a human sees.
+  /// Because the count rides the cursor it survives a bounce — the breaker
+  /// actually trips (ADR-0008 D7), and no side-channel ledger is introduced
+  /// (ADR-0013 clause 5). The precedent is the allocation catch above, which has
+  /// always routed its failure here.
+  ///
+  /// [recoverable] is false at the call sites whose [persist] IS
+  /// [_persistFailure] — recovering a failed failure-write with another
+  /// failure-write is the loop this bead exists to close. At most TWO writes
+  /// leave this method per report, never a third.
+  void _firePersist(
+    String op,
+    Future<void> Function() persist, {
+    bool recoverable = true,
+  }) => unawaited(_runPersist(op, persist, recoverable: recoverable));
+
+  /// [_firePersist]'s awaited body — `try`/`await`/`catch`, never the `Future`
+  /// error-callback form the house rule bans (the `Future` API is limited to its
+  /// statics, and that exact construct hid `tg-6e4j` here before).
+  Future<void> _runPersist(
+    String op,
+    Future<void> Function() persist, {
+    required bool recoverable,
+  }) async {
+    try {
+      await persist();
+    } on Object catch (error) {
+      _emitFlare('step.persistFailed', {
+        'op': op,
+        'error': truncateReason('$error'),
+        'restartCount': '${seed.mount.node.restartCount}',
+        'maxRestarts': '${seed.mount.maxRestarts}',
+      });
+      if (!recoverable) return;
+      await _superviseFailedPersist(op, error);
+    }
+  }
+
+  /// Routes a dropped persist into the D-5 supervised-restart writer so the
+  /// failure lands somewhere durable and bounded. A throw HERE is the genuinely
+  /// unrecoverable case — the store is gone, nothing can be recorded — so it
+  /// flares under its own name and stops. No third write, no recursion.
+  Future<void> _superviseFailedPersist(String op, Object error) async {
+    try {
+      await _persistFailure('persist "$op" failed: $error');
+    } on Object catch (e) {
+      _emitFlare('step.persistRecoveryFailed', {
+        'op': op,
+        'error': truncateReason('$e'),
+      });
+    }
   }
 
   /// Test affordance: deliver [event] directly into the process allocation's
