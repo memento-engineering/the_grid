@@ -454,6 +454,89 @@ void main() {
       expect(recorder.events, isEmpty);
     });
 
+    test('a durable retired round remounts after mounted membership was '
+        'cleared, even when no fresh-work budget remains', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_bead('tg-1')],
+          ready: {'tg-1'},
+          sessions: const {
+            'tg-1': SessionProjection(workBeadId: 'tg-1', isTerminal: false),
+          },
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+            stationServices: StationServices(
+              provider: FakeRuntimeProvider(),
+              writer: StationBeadWriter(
+                bd: BdCliService(RecordingBdRunner()),
+                reader: RecordingBdRunner(),
+                ownership: BeadOwnershipPredicate(const {'tg'}),
+              ),
+              stateSubstation: 'tg',
+              maxConcurrentWork: 0,
+            ),
+          ),
+        ),
+      );
+      expect(recorder.events, ['START work(tg-1)']);
+
+      joined.push(
+        _joined(
+          beads: [_bead('tg-1')],
+          ready: const {},
+          sessions: const {
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              isTerminal: true,
+              completed: true,
+            ),
+          },
+        ),
+      );
+      owner.flush();
+      recorder.events.clear();
+
+      final retiredSnapshot = _joined(
+        beads: [_bead('tg-1')],
+        ready: {'tg-1'},
+        sessions: const {
+          'tg-1#r1': SessionProjection(workBeadId: 'tg-1#r1', isTerminal: true),
+        },
+      );
+      joined.push(retiredSnapshot);
+      owner.flush();
+
+      expect(recorder.events, ['START work(tg-1)']);
+      expect(
+        transport.flares.where(
+          (flare) =>
+              flare.name == 'work.throttled' &&
+              flare.data['beadIds']!.split(',').contains('tg-1'),
+        ),
+        isEmpty,
+      );
+      recorder.events.clear();
+      joined.push(retiredSnapshot);
+      owner.flush();
+      expect(recorder.events, isEmpty);
+    });
+
     test('the station-wide cap is a TOTAL across substations — a busy '
         'substation starves a quiet sibling of slots even though the '
         "sibling's own substation cap is untouched", () {

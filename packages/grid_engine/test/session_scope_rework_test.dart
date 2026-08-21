@@ -5,6 +5,8 @@
 // covers the guard-principle decline: a session that vanishes WITHOUT ever
 // having been observed gated is never silently abandoned. Zero I/O: fakes +
 // the recording chokepoint.
+import 'dart:async';
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -12,6 +14,7 @@ import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 
 const _code = Circuit(
   id: 'code',
@@ -38,9 +41,110 @@ class _RecordingTransport implements ExplorationTransport {
       flares.where((flare) => flare.name == name).toList();
 }
 
+class _GatedCloseRunner extends RecordingBdRunner {
+  final closeEntered = Completer<void>();
+  final releaseClose = Completer<void>();
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    if (args.isNotEmpty && args.first == 'close') {
+      if (!closeEntered.isCompleted) closeEntered.complete();
+      await releaseClose.future;
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
+enum _AbandonmentStage {
+  voidSessionRetired('void-session-retired'),
+  mintCatch('mint-catch'),
+  moleculeSessionCreated('molecule-session-created'),
+  moleculePoured('molecule-poured'),
+  moleculePourParked('molecule-pour-parked');
+
+  const _AbandonmentStage(this.wireName);
+  final String wireName;
+}
+
+typedef _AbandonmentCase = ({
+  _AbandonmentStage stage,
+  bool Function(List<String> args) gateCall,
+  bool throwAfterRelease,
+});
+
+class _StageGatedRunner extends RecordingBdRunner {
+  _StageGatedRunner({
+    required this.gateCall,
+    this.throwAfterRelease = false,
+    super.createdId = 'tgdog-round2',
+  });
+
+  final bool Function(List<String> args) gateCall;
+  final bool throwAfterRelease;
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  var _gated = false;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    if (!_gated && gateCall(args)) {
+      _gated = true;
+      entered.complete();
+      await release.future;
+      if (throwAfterRelease) {
+        throw StateError('controlled bd failure');
+      }
+    }
+    return super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
+bool _isPlainCreateOf(List<String> args, String type) {
+  final typeIndex = args.indexOf('--type');
+  return args.isNotEmpty &&
+      args.first == 'create' &&
+      (args.length < 2 || args[1] != '--graph') &&
+      typeIndex >= 0 &&
+      typeIndex + 1 < args.length &&
+      args[typeIndex + 1] == type;
+}
+
+bool _setsMetadata(List<String> args, String key) =>
+    args.isNotEmpty &&
+    args.first == 'update' &&
+    args.any((arg) => arg.contains(key));
+
+void _expectAbandonment(
+  _RecordingTransport transport, {
+  required String retiredSessionId,
+  required String stage,
+  Object reason = const TypeMatcher<String>(),
+}) {
+  final flares = transport.named('session.mintAbandoned');
+  expect(flares, hasLength(1));
+  expect(flares.single.data['workBeadId'], 'tg-1');
+  expect(flares.single.data['retiredSessionId'], retiredSessionId);
+  expect(flares.single.data['stage'], stage);
+  expect(flares.single.data['reason'], reason);
+}
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
+  }
+}
+
+Future<void> _waitUntil(bool Function() condition) async {
+  for (var i = 0; i < 500 && !condition(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
   }
 }
 
@@ -92,6 +196,30 @@ const _tgConfig = SubstationConfig(
   driveList: {'tg-1'},
 );
 
+const _voidedSession = SessionProjection(
+  workBeadId: 'tg-1',
+  sessionId: 'tgdog-void',
+  isTerminal: true,
+  cursor: {
+    'tg-1/agent': NodeCursor(
+      state: StepState.running,
+      pgid: 42,
+      pid: 43,
+      token: 'stale',
+    ),
+  },
+);
+
+StationServices _servicesFor(RecordingBdRunner runner) => StationServices(
+  provider: FakeRuntimeProvider(),
+  writer: StationBeadWriter(
+    bd: BdCliService(runner),
+    reader: runner,
+    ownership: BeadOwnershipPredicate(const {stateSubstation}),
+  ),
+  stateSubstation: stateSubstation,
+);
+
 ({TreeOwner owner, Branch root}) _mountFull({
   required JoinedSnapshotNotifier joined,
   required StationServices ctx,
@@ -128,6 +256,324 @@ const _tgConfig = SubstationConfig(
 
 void main() {
   group('SessionScope rework re-arm (tg-x1j v2) — the gated case re-mints', () {
+    test('disposing after retirement begins emits one reasoned abandonment '
+        'flare and creates no successor', () async {
+      final runner = _GatedCloseRunner();
+      final ctx = StationServices(
+        provider: FakeRuntimeProvider(),
+        writer: StationBeadWriter(
+          bd: BdCliService(runner),
+          reader: runner,
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
+        ),
+        stateSubstation: stateSubstation,
+      );
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime.now().subtract(const Duration(seconds: 1)),
+          sessions: const {
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-round1',
+              cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+            ),
+          },
+        ),
+      );
+      final m = _mountFull(
+        joined: joined,
+        ctx: ctx,
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        rootCircuit: (_) => _code,
+        transport: transport,
+      );
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime.now(),
+          sessions: const {
+            'tg-1#r1': SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+            ),
+          },
+        ),
+      );
+      m.owner.flush();
+      await runner.closeEntered.future;
+      m.owner.dispose();
+      runner.releaseClose.complete();
+      await _pump();
+
+      final flare = transport.named('session.mintAbandoned').single;
+      expect(flare.data['workBeadId'], 'tg-1');
+      expect(flare.data['retiredSessionId'], 'tgdog-round1');
+      expect(flare.data['stage'], 'retired-gates-closed');
+      expect(flare.data['reason'], anyOf('cancelled', 'unmounted'));
+      expect(runner.workCreates, isEmpty);
+    });
+
+    test('disposing while the fresh-snapshot barrier is pending emits one '
+        'reasoned abandonment flare', () async {
+      final originalGrace = SessionScopeState.freshMintSnapshotGrace;
+      addTearDown(() {
+        SessionScopeState.freshMintSnapshotGrace = originalGrace;
+      });
+      SessionScopeState.freshMintSnapshotGrace = Duration.zero;
+      final runner = RecordingBdRunner(createdId: 'tgdog-round2');
+      final transport = _RecordingTransport();
+      final beforeDecision = DateTime.now().subtract(const Duration(days: 1));
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: beforeDecision,
+          sessions: const {
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-round1',
+              cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+            ),
+          },
+        ),
+      );
+      final m = _mountFull(
+        joined: joined,
+        ctx: _servicesFor(runner),
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        rootCircuit: (_) => _code,
+        transport: transport,
+      );
+
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {},
+          capturedAt: beforeDecision,
+          sessions: const {
+            'tg-1#r1': SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+            ),
+          },
+        ),
+      );
+      m.owner.flush();
+      await _pumpUntil(
+        m.owner,
+        () => transport.named('session.mintRefused').isNotEmpty,
+      );
+      expect(runner.workCreates, isEmpty);
+      expect(transport.named('session.mintRefused'), hasLength(1));
+
+      m.owner.dispose();
+      await _pump();
+
+      _expectAbandonment(
+        transport,
+        retiredSessionId: 'tgdog-round1',
+        stage: 'fresh-snapshot',
+        reason: anyOf('cancelled', 'unmounted'),
+      );
+      expect(
+        transport.named('session.mintAbandoned').single.data['reason'],
+        anyOf('cancelled', 'unmounted'),
+      );
+      expect(runner.workCreates, isEmpty);
+    });
+
+    test('disposing after the fresh snapshot releases the barrier emits the '
+        'fresh-snapshot-ready stage', () async {
+      final originalGrace = SessionScopeState.freshMintSnapshotGrace;
+      addTearDown(() {
+        SessionScopeState.freshMintSnapshotGrace = originalGrace;
+      });
+      SessionScopeState.freshMintSnapshotGrace = const Duration(days: 1);
+      final runner = RecordingBdRunner(createdId: 'tgdog-round2');
+      final transport = _RecordingTransport();
+      final beforeDecision = DateTime.now().subtract(const Duration(days: 1));
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: beforeDecision,
+          sessions: const {
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-round1',
+              cursor: {'tg-1/route': NodeCursor(state: StepState.gated)},
+            ),
+          },
+        ),
+      );
+      final m = _mountFull(
+        joined: joined,
+        ctx: _servicesFor(runner),
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        rootCircuit: (_) => _code,
+        transport: transport,
+      );
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: beforeDecision,
+          sessions: const {
+            'tg-1#r1': SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+            ),
+          },
+        ),
+      );
+      m.owner.flush();
+      await _pumpUntil(m.owner, () => runner.callsFor('close').isNotEmpty);
+
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          capturedAt: DateTime.now().add(const Duration(days: 1)),
+          sessions: const {
+            'tg-1#r1': SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-round1',
+            ),
+          },
+        ),
+      );
+      m.owner.flush();
+      m.owner.dispose();
+      await _pump();
+
+      _expectAbandonment(
+        transport,
+        retiredSessionId: 'tgdog-round1',
+        stage: 'fresh-snapshot-ready',
+        reason: anyOf('cancelled', 'unmounted'),
+      );
+      expect(runner.workCreates, isEmpty);
+    });
+
+    final abandonmentCases = <_AbandonmentCase>[
+      (
+        stage: _AbandonmentStage.voidSessionRetired,
+        gateCall: (args) => _setsMetadata(args, 'grid.voided_reason'),
+        throwAfterRelease: false,
+      ),
+      (
+        stage: _AbandonmentStage.mintCatch,
+        gateCall: (args) => _isPlainCreateOf(args, 'session'),
+        throwAfterRelease: true,
+      ),
+      (
+        stage: _AbandonmentStage.moleculeSessionCreated,
+        gateCall: (args) => _isPlainCreateOf(args, 'session'),
+        throwAfterRelease: false,
+      ),
+      (
+        stage: _AbandonmentStage.moleculePoured,
+        gateCall: (args) =>
+            args.length > 1 && args[0] == 'create' && args[1] == '--graph',
+        throwAfterRelease: false,
+      ),
+      (
+        stage: _AbandonmentStage.moleculePourParked,
+        gateCall: (args) =>
+            args.length > 1 && args[0] == 'create' && args[1] == '--graph',
+        throwAfterRelease: true,
+      ),
+    ];
+
+    for (final abandonmentCase in abandonmentCases) {
+      test('disposing at ${abandonmentCase.stage.wireName} emits its literal '
+          'abandonment stage and stops the lifecycle', () async {
+        final runner = _StageGatedRunner(
+          gateCall: abandonmentCase.gateCall,
+          throwAfterRelease: abandonmentCase.throwAfterRelease,
+          createdId: 'tgdog-round2',
+        );
+        final transport = _RecordingTransport();
+        final isVoid =
+            abandonmentCase.stage == _AbandonmentStage.voidSessionRetired;
+        final now = DateTime.now();
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            capturedAt: now.add(const Duration(seconds: 1)),
+            sessions: isVoid
+                ? const {'tg-1': _voidedSession}
+                : const {
+                    'tg-1': SessionProjection(
+                      workBeadId: 'tg-1',
+                      sessionId: 'tgdog-round1',
+                      cursor: {
+                        'tg-1/route': NodeCursor(state: StepState.gated),
+                      },
+                    ),
+                  },
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: _servicesFor(runner),
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          rootCircuit: (_) => _code,
+          transport: transport,
+        );
+        if (!isVoid) {
+          joined.push(
+            _joined(
+              beads: [_task('tg-1')],
+              ready: {'tg-1'},
+              capturedAt: now.add(const Duration(days: 1)),
+              sessions: const {
+                'tg-1#r1': SessionProjection(
+                  workBeadId: 'tg-1#r1',
+                  sessionId: 'tgdog-round1',
+                ),
+              },
+            ),
+          );
+          m.owner.flush();
+        }
+
+        await runner.entered.future;
+        m.owner.dispose();
+        runner.release.complete();
+        await _waitUntil(
+          () => transport.named('session.mintAbandoned').isNotEmpty,
+        );
+
+        _expectAbandonment(
+          transport,
+          retiredSessionId: isVoid ? '' : 'tgdog-round1',
+          stage: abandonmentCase.stage.wireName,
+          reason: anyOf('cancelled', 'unmounted'),
+        );
+        switch (abandonmentCase.stage) {
+          case _AbandonmentStage.voidSessionRetired:
+          case _AbandonmentStage.mintCatch:
+            expect(runner.graphApplyCalls, isEmpty);
+          case _AbandonmentStage.moleculeSessionCreated:
+            expect(runner.graphApplyCalls, isEmpty);
+          case _AbandonmentStage.moleculePoured:
+          case _AbandonmentStage.moleculePourParked:
+            expect(
+              runner.workCreates.where(
+                (call) => _isPlainCreateOf(call, 'session'),
+              ),
+              hasLength(1),
+            );
+        }
+      });
+    }
+
     test('a GATED round with durable #rN row closes the retired round and '
         'mints round N+1, in place (no restart)', () async {
       final f = buildFakes(createdId: 'tgdog-round2');

@@ -27,6 +27,17 @@ const _code = Circuit(
   ],
 );
 
+class _RecordingTransport implements ExplorationTransport {
+  final List<({String name, Map<String, String> data})> flares = [];
+
+  @override
+  void flare(String name, Map<String, String> data) =>
+      flares.add((name: name, data: data));
+
+  List<({String name, Map<String, String> data})> named(String name) =>
+      flares.where((flare) => flare.name == name).toList();
+}
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -162,6 +173,7 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
   required StationServices ctx,
   required CapabilityRegistry registry,
   required RootCircuitFor rootCircuit,
+  ExplorationTransport? transport,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -182,6 +194,7 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
                       ownedSubstations: {'tg'},
                     ),
                   ),
+                  services: ServiceBundle(transport: transport),
                   key: const ValueKey('scope.tg'),
                 ),
               ]),
@@ -289,6 +302,7 @@ void main() {
         );
         final f = buildFakes(createdId: 'tgdog-round2');
         final reg = RecordingCapabilityRegistry(circuits: const {});
+        final transport = _RecordingTransport();
 
         // The work snapshot is OLD (tick 0) and will NEVER republish — the
         // exact quiet-board shape: an unchanged store's floor refresh
@@ -306,6 +320,7 @@ void main() {
           ctx: f.ctx,
           registry: reg,
           rootCircuit: (_) => _code,
+          transport: transport,
         );
         addTearDown(m.owner.dispose);
         await _pump();
@@ -336,6 +351,19 @@ void main() {
               'the joined view already shows tg-1 ready + sessionless — '
               'the mint must not wait for a publish that never comes',
         );
+        expect(
+          f.runner.workCreates.where((call) => !call.contains('--graph')),
+          hasLength(1),
+        );
+        expect(
+          stateSrc.current!.beads.where(
+            (bead) =>
+                bead.issueType == GridIssueTypes.session &&
+                bead.metadata[SessionBeadKeys.workBead] == 'tg-1#r1',
+          ),
+          hasLength(1),
+        );
+        expect(transport.named('session.mintAbandoned'), isEmpty);
 
         stateSrc.push(
           _state([

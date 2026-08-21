@@ -407,7 +407,9 @@ class _WorkListState extends State<WorkList>
       // `mounted` and hand it to the budget gate below — evicting the very
       // SessionScope that would have closed the retired session and minted
       // the fresh round, wedging the retired session open forever.
-      final staysMounted = liveSession || _mountedIds.contains(bead.id);
+      final hasRetiredRound = retiredSession != null;
+      final staysMounted =
+          liveSession || hasRetiredRound || _mountedIds.contains(bead.id);
       // Mount if freshly ready OR still carrying/keeping a live session (the
       // latter is what keeps a transiently-unready bead's agent mounted).
       if (!inReady && !staysMounted) continue;
