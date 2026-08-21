@@ -109,12 +109,15 @@ void main() {
     const trust = _Trust();
     const trustFloor = TrustFloor(TrustLevel.self);
     final transport = RecordingExplorationTransport();
+    MountEligibilityDecision mountEligibility(Bead bead) =>
+        const MountEligibilityDecision.eligible();
     final existingBundle = ServiceBundle(
       sourceControl: sourceControl,
       delivery: delivery,
       escalation: escalation,
       trust: trust,
       trustFloor: trustFloor,
+      mountEligibility: mountEligibility,
     );
 
     final seen = _mount(existingBundle: existingBundle, transport: transport);
@@ -125,6 +128,19 @@ void main() {
     expect(seen.escalation, same(escalation));
     expect(seen.trust, same(trust));
     expect(seen.trustFloor, trustFloor);
+    // The 2026-08-21 incident, pinned at the CONSUMER position: the seat
+    // composed a mount predicate and THIS wrapper (the nearest bundle above
+    // WorkList) hand-copied every field EXCEPT the newest, so the gate tested
+    // green one level up while an unapproved, plan-less bead mounted in 2s.
+    // A new ServiceBundle field that is not threaded through the transport
+    // re-provision never reaches WorkList — this assertion is the tripwire.
+    expect(
+      seen.mountEligibility,
+      same(mountEligibility),
+      reason:
+          'the transport overlay must DERIVE, never drop — a dropped '
+          'field silently disarms whatever the seat composed',
+    );
   });
 
   test(

@@ -173,6 +173,13 @@ class SubstationWork extends StatelessSeed {
       key: ValueKey<String>('worklist:${scope.name}'),
     );
     if (transport == null) return workList;
+    // Re-provision = DERIVATION: every ambient field rides forward, only
+    // [transport] is overridden. Hand-copying a value type's fields is how the
+    // mount gate died in the live arm (the seat composed
+    // ServiceBundle.mountEligibility and THIS wrapper — the nearest bundle
+    // above WorkList — silently dropped it, so an unapproved, plan-less bead
+    // mounted in 2s while the gate tested green one level up). A new
+    // ServiceBundle field MUST be threaded here or it never reaches WorkList.
     return Provider<ServiceBundle>.value(
       ServiceBundle(
         sourceControl: inherited.sourceControl,
@@ -181,6 +188,7 @@ class SubstationWork extends StatelessSeed {
         trust: inherited.trust,
         trustFloor: inherited.trustFloor,
         transport: transport,
+        mountEligibility: inherited.mountEligibility,
       ),
       child: workList,
     );
