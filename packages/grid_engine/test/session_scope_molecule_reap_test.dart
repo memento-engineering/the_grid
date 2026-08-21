@@ -235,6 +235,89 @@ void main() {
     _expectChildrenBeforeSession(fakes.runner, sessionId);
   });
 
+  test('positive-terminal dependency cycle is loud and non-fatal', () async {
+    const sessionId = 'tgdog-positive-cycle';
+    final fakes = buildFakes();
+    final graphIds = {
+      '$sessionId-molecule',
+      '$sessionId-step-a',
+      '$sessionId-step-b',
+    };
+    fakes.runner
+      ..exportBeads = [
+        _molecule(sessionId),
+        for (final suffix in ['a', 'b'])
+          Bead(
+            id: '$sessionId-step-$suffix',
+            issueType: GridIssueTypes.step,
+            status: BeadStatus.open,
+            metadata: const {'rig': 'tgdog', 'grid.step.session': sessionId},
+          ),
+      ]
+      ..exportDependencies = const [
+        BeadDependency(
+          issueId: '$sessionId-step-a',
+          dependsOnId: '$sessionId-step-b',
+          type: DependencyType.blocks,
+        ),
+        BeadDependency(
+          issueId: '$sessionId-step-b',
+          dependsOnId: '$sessionId-step-a',
+          type: DependencyType.blocks,
+        ),
+      ];
+    final joined = JoinedSnapshotNotifier(
+      _joined(
+        const SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: sessionId,
+          isMolecule: true,
+        ),
+      ),
+    );
+    final mounted = _mount(joined, fakes.ctx);
+    addTearDown(mounted.owner.dispose);
+
+    joined.push(
+      _joined(
+        SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: sessionId,
+          isMolecule: true,
+          moleculeBeads: [
+            for (final stepId in ['agent', 'land'])
+              Bead(
+                id: '$sessionId-$stepId',
+                issueType: GridIssueTypes.step,
+                metadata: {
+                  'grid.step.session': sessionId,
+                  'grid.step.path': 'tg-1/$stepId',
+                  'grid.step.state': 'complete',
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+    mounted.owner.flush();
+    await _pumpUntil(
+      mounted.owner,
+      () => _closedInOrder(fakes.runner).contains(sessionId),
+    );
+
+    final failure = mounted.transport.flares.singleWhere(
+      (flare) => flare.name == 'session.moleculeReapFailed',
+    );
+    expect(failure.data, containsPair('sessionId', sessionId));
+    expect(failure.data, containsPair('closeReason', 'positive-terminal'));
+    expect(failure.data['reason'], contains('molecule reap dependency cycle:'));
+    expect(failure.data['reason'], contains('$sessionId-step-a'));
+    expect(failure.data['reason'], contains('$sessionId-step-b'));
+    expect(_closedInOrder(fakes.runner), contains(sessionId));
+    expect(_closedInOrder(fakes.runner), everyElement(isNot(isIn(graphIds))));
+    expect(fakes.runner.callsFor('batch'), isEmpty);
+  });
+
   test('breaker-exhaustion close collects molecule graph first', () async {
     const sessionId = 'tgdog-broken';
     final fakes = buildFakes();

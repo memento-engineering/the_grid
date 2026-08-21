@@ -925,9 +925,9 @@ class StationBeadWriter {
   /// debt cannot accumulate invisibly. An empty match set — a flat-mode
   /// session, or a molecule already reaped — is a no-op.
   ///
-  /// The unforced close script is ordered with step leaves, including open
-  /// successor steps, before molecule roots to satisfy bd close policy. The
-  /// proxied-server fallback consumes that identical order per bead.
+  /// The unforced close script is dependency-ordered across blocking,
+  /// parent-child, and supersedes edges. The proxied-server fallback consumes
+  /// that identical order per bead. A cycle refuses the reap before any write.
   /// Every session whose teardown is OUTSTANDING — open, and already carrying
   /// `grid.outcome=complete` (tg-tlea).
   ///
@@ -956,13 +956,8 @@ class StationBeadWriter {
     final beads = {
       for (final bead in [...matched, ...chain]) bead.id: bead,
     };
-    final orderedBeads = beads.values.toList(growable: false)
-      ..sort((left, right) {
-        final rank = _moleculeReapRank(
-          left,
-        ).compareTo(_moleculeReapRank(right));
-        return rank != 0 ? rank : left.id.compareTo(right.id);
-      });
+    final dependencies = await _bd.depList(beads.keys.toList(growable: false));
+    final orderedBeads = _moleculeReapOrder(beads, dependencies);
     try {
       await batch([
         for (final bead in orderedBeads)
@@ -1365,6 +1360,68 @@ class StationBeadWriter {
       'reapMolecule collected unsupported type ${bead.issueType}',
     ),
   };
+
+  static List<Bead> _moleculeReapOrder(
+    Map<String, Bead> beads,
+    List<BeadDependency> dependencies,
+  ) {
+    final outgoing = {for (final id in beads.keys) id: <String>{}};
+    final indegree = {for (final id in beads.keys) id: 0};
+    for (final dependency in dependencies) {
+      if (!beads.containsKey(dependency.issueId) ||
+          !beads.containsKey(dependency.dependsOnId)) {
+        continue;
+      }
+      final (before, after) = dependency.type == DependencyType.parentChild
+          ? (dependency.issueId, dependency.dependsOnId)
+          : dependency.type.isBlockingEdge ||
+                dependency.type == DependencyType.supersedes
+          ? (dependency.dependsOnId, dependency.issueId)
+          : (null, null);
+      if (before == null || after == null || !outgoing[before]!.add(after)) {
+        continue;
+      }
+      indegree[after] = indegree[after]! + 1;
+    }
+
+    final ready =
+        indegree.entries
+            .where((entry) => entry.value == 0)
+            .map((entry) => beads[entry.key]!)
+            .toList()
+          ..sort(_moleculeReadyCompare);
+    final ordered = <Bead>[];
+    while (ready.isNotEmpty) {
+      final bead = ready.removeAt(0);
+      ordered.add(bead);
+      final dependents = outgoing[bead.id]!.toList()..sort();
+      for (final dependent in dependents) {
+        final next = indegree[dependent]! - 1;
+        indegree[dependent] = next;
+        if (next == 0) {
+          ready.add(beads[dependent]!);
+          ready.sort(_moleculeReadyCompare);
+        }
+      }
+    }
+    if (ordered.length != beads.length) {
+      final remaining =
+          indegree.entries
+              .where((entry) => entry.value > 0)
+              .map((entry) => entry.key)
+              .toList()
+            ..sort();
+      throw StateError(
+        'molecule reap dependency cycle: ${remaining.join(', ')}',
+      );
+    }
+    return ordered;
+  }
+
+  static int _moleculeReadyCompare(Bead left, Bead right) {
+    final byKind = _moleculeReapRank(left).compareTo(_moleculeReapRank(right));
+    return byKind != 0 ? byKind : left.id.compareTo(right.id);
+  }
 
   /// The OPEN molecule/step beads stamped with [sessionId] — the shared scan
   /// [_moleculeAlreadyMinted] and [reapMolecule] both read. Reads the OWN

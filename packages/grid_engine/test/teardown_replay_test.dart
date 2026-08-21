@@ -149,10 +149,13 @@ Bead _step(String id, {required String sessionId}) => Bead(
 ({RestartReconciler reconciler, RecordingBdRunner bd, List<String> loud})
 _build({
   required List<Bead> state,
+  List<BeadDependency> dependencies = const [],
   _FakeGit? git,
   Future<void> Function()? freshnessBarrier,
 }) {
-  final bd = RecordingBdRunner()..exportBeads = state;
+  final bd = RecordingBdRunner()
+    ..exportBeads = state
+    ..exportDependencies = dependencies;
   final loud = <String>[];
   final fakeGit = git ?? _FakeGit();
   return (
@@ -170,7 +173,7 @@ _build({
       freshnessBarrier: freshnessBarrier ?? () async {},
       stateSnapshot: () => GraphSnapshot.fromParts(
         beads: state,
-        dependencies: const [],
+        dependencies: dependencies,
         readyIds: const [],
         capturedAt: DateTime(2026, 8, 13),
       ),
@@ -410,6 +413,61 @@ void main() {
         ),
       );
       expect(_closedIds(bd), isNot(contains('tgdog-sess1')));
+    });
+
+    test('dependency cycle is loud and boot continues', () async {
+      const firstSessionId = 'tgdog-cycle';
+      const secondSessionId = 'tgdog-acyclic';
+      final firstGraphIds = {
+        'tgdog-cycle-molecule',
+        'tgdog-cycle-step-a',
+        'tgdog-cycle-step-b',
+      };
+      final secondGraphIds = {'tgdog-acyclic-molecule', 'tgdog-acyclic-step'};
+      final f = _build(
+        state: [
+          _session(firstSessionId, workBead: 'tg-1', closed: true),
+          _molecule('tgdog-cycle-molecule', sessionId: firstSessionId),
+          _step('tgdog-cycle-step-a', sessionId: firstSessionId),
+          _step('tgdog-cycle-step-b', sessionId: firstSessionId),
+          _session(secondSessionId, workBead: 'tg-2', closed: true),
+          _molecule('tgdog-acyclic-molecule', sessionId: secondSessionId),
+          _step('tgdog-acyclic-step', sessionId: secondSessionId),
+        ],
+        dependencies: const [
+          BeadDependency(
+            issueId: 'tgdog-cycle-step-a',
+            dependsOnId: 'tgdog-cycle-step-b',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-cycle-step-b',
+            dependsOnId: 'tgdog-cycle-step-a',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-acyclic-step',
+            dependsOnId: 'tgdog-acyclic-molecule',
+            type: DependencyType.parentChild,
+          ),
+        ],
+      );
+
+      final report = await f.reconciler.replayTeardownTail();
+
+      final first = report.entries.singleWhere(
+        (entry) => entry.sessionId == firstSessionId,
+      );
+      expect(first.failures, ['molecule']);
+      expect(
+        f.loud.single,
+        allOf(
+          contains(firstSessionId),
+          contains('molecule reap dependency cycle:'),
+        ),
+      );
+      expect(_closedIds(f.bd), everyElement(isNot(isIn(firstGraphIds))));
+      expect(_closedIds(f.bd), containsAll(secondGraphIds));
     });
   });
 
