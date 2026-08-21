@@ -6,7 +6,7 @@ import 'package:args/command_runner.dart';
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_exploration/grid_exploration.dart' show armDevMode;
 import 'package:grid_runtime/grid_runtime.dart'
-    show PrimaryCheckoutFreshness, PrimaryCheckoutState;
+    show GridIssueTypes, PrimaryCheckoutFreshness, PrimaryCheckoutState;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -110,6 +110,8 @@ final class _Harness {
     required this.includeMissingCoded,
     required this.checkoutFreshness,
     required this.vendsViews,
+    required this.typesEnvelope,
+    required this.typesError,
   });
 
   static Future<_Harness> create({
@@ -121,6 +123,8 @@ final class _Harness {
     bool includeMissingCoded = false,
     bool seedWorkStore = true,
     bool vendsViews = true,
+    Map<String, dynamic>? typesEnvelope,
+    Object? typesError,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -143,6 +147,8 @@ final class _Harness {
       includeMissingCoded: includeMissingCoded,
       checkoutFreshness: checkoutFreshness,
       vendsViews: vendsViews,
+      typesEnvelope: typesEnvelope,
+      typesError: typesError,
     );
   }
 
@@ -158,6 +164,8 @@ final class _Harness {
   final bool includeMissingCoded;
   final Map<String, PrimaryCheckoutFreshness> checkoutFreshness;
   final bool vendsViews;
+  final Map<String, dynamic>? typesEnvelope;
+  final Object? typesError;
   final events = <String>[];
   final _stdout = _ByteConsumer();
   final _stderr = _ByteConsumer();
@@ -307,6 +315,17 @@ final class _Harness {
           return;
         }
         _throwIf('gc');
+      },
+      readStateStoreTypes: ({required gridHome}) async {
+        expect(gridHome, p.canonicalize(home));
+        events.add('types');
+        if (typesError case final error?) throw error;
+        return typesEnvelope ??
+            <String, dynamic>{
+              'custom_types': [
+                for (final type in GridIssueTypes.customTypes) type.wire,
+              ],
+            };
       },
       waitForShutdown: () async {
         events.add('signal');
@@ -599,6 +618,70 @@ void main() {
   });
 
   group('UpCommand assembly', () {
+    test(
+      'incomplete types.custom warns once in banner and boots anyway',
+      () async {
+        final all = [for (final type in GridIssueTypes.customTypes) type.wire];
+        final missing = <String>[all[1], all[all.length - 2]];
+        final h = await _Harness.create(
+          typesEnvelope: <String, dynamic>{
+            'custom_types': <Object>[
+              for (var index = 0; index < all.length; index++)
+                if (!missing.contains(all[index]))
+                  index.isEven ? all[index] : {'name': all[index]},
+            ],
+          },
+        );
+        addTearDown(h.dispose);
+
+        expect(await h.run(extra: const ['--no-dry-run']), 0);
+        final lines = h.stdoutText.split('\n');
+        final warning = lines.where((line) => line.contains('types.custom'));
+        expect(warning, hasLength(1));
+        expect(
+          warning.single,
+          'WARNING: types.custom is missing GridIssueTypes.customTypes: '
+          '${missing.join(', ')} — station may be unable to mint its own beads; '
+          'booting anyway.',
+        );
+        final warningIndex = lines.indexOf(warning.single);
+        expect(lines[warningIndex - 1], startsWith('stores:'));
+        expect(lines[warningIndex + 1], startsWith('control:'));
+        expect(
+          h.events,
+          containsAllInOrder(<String>[
+            'gc',
+            'types',
+            'lock',
+            'delegate.boot',
+            'runGrid',
+            'control',
+          ]),
+        );
+      },
+    );
+
+    test('complete types.custom boots without vocabulary noise', () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      expect(await h.run(), 0);
+      expect(h.stdoutText, isNot(contains('types.custom')));
+      expect(h.events, containsAllInOrder(<String>['types', 'runGrid']));
+    });
+
+    test('types probe failure warns once and boots anyway', () async {
+      final h = await _Harness.create(typesError: StateError('probe boom'));
+      addTearDown(h.dispose);
+      expect(await h.run(), 0);
+      final warnings = h.stdoutText
+          .split('\n')
+          .where((line) => line.contains('WARNING'));
+      expect(warnings, hasLength(1));
+      expect(warnings.single, contains('probe boom'));
+      expect(warnings.single, contains('booting anyway'));
+      expect(h.events, containsAllInOrder(<String>['types', 'runGrid']));
+    });
+
     test('oversized live state store runs maintenance before lock', () async {
       final h = await _Harness.create();
       addTearDown(h.dispose);
@@ -667,6 +750,7 @@ void main() {
       expect(await h.run(), 0);
       expect(h.events, <String>[
         'inspect:earth',
+        'types',
         'lock',
         'delegate.boot',
         'runGrid',
@@ -698,7 +782,12 @@ void main() {
       expect(h.stdoutText, contains('lunar up: skipping coded substation'));
       expect(
         h.events,
-        containsAllInOrder(<String>['inspect:earth', 'lock', 'delegate.boot']),
+        containsAllInOrder(<String>[
+          'inspect:earth',
+          'types',
+          'lock',
+          'delegate.boot',
+        ]),
       );
     });
 
@@ -742,7 +831,12 @@ void main() {
       final h = await _Harness.create(failAt: 'lock');
       addTearDown(h.dispose);
       expect(await h.run(), 64);
-      expect(h.events, <String>['inspect:earth', 'lock', 'delegate.dispose']);
+      expect(h.events, <String>[
+        'inspect:earth',
+        'types',
+        'lock',
+        'delegate.dispose',
+      ]);
       expect(h.stderrText, startsWith('lunar up:'));
     });
 
@@ -756,7 +850,12 @@ void main() {
         expect(await h.run(extra: <String>['--substation', 'moon=$moon']), 0);
         expect(
           h.events,
-          containsAllInOrder(<String>['inspect:earth', 'inspect:moon', 'lock']),
+          containsAllInOrder(<String>[
+            'inspect:earth',
+            'inspect:moon',
+            'types',
+            'lock',
+          ]),
         );
         expect(
           h.stdoutText,
@@ -856,7 +955,10 @@ void main() {
             .where((line) => line.contains('WARNING'));
         expect(warnings, hasLength(1));
         expect(warnings.single, contains('{earth: ${stale.verdict}}'));
-        expect(h.events, containsAllInOrder(<String>['inspect:earth', 'lock']));
+        expect(
+          h.events,
+          containsAllInOrder(<String>['inspect:earth', 'types', 'lock']),
+        );
       },
     );
 
@@ -880,6 +982,7 @@ void main() {
         64,
         [
           'inspect:earth',
+          'types',
           'lock',
           'delegate.boot',
           'delegate.dispose',
@@ -891,6 +994,7 @@ void main() {
         64,
         [
           'inspect:earth',
+          'types',
           'lock',
           'delegate.boot',
           'runGrid',
@@ -903,6 +1007,7 @@ void main() {
         1,
         [
           'inspect:earth',
+          'types',
           'lock',
           'delegate.boot',
           'runGrid',
@@ -918,6 +1023,7 @@ void main() {
         1,
         [
           'inspect:earth',
+          'types',
           'lock',
           'delegate.boot',
           'runGrid',
@@ -983,6 +1089,7 @@ void main() {
       );
       expect(h.events, [
         'inspect:earth',
+        'types',
         'lock',
         'delegate.dispose',
         'lock.release',
@@ -999,6 +1106,7 @@ void main() {
       expect(await h.run(), 1);
       expect(h.events, <String>[
         'inspect:earth',
+        'types',
         'lock',
         'delegate.boot',
         'runGrid',
@@ -1023,6 +1131,7 @@ void main() {
       expect(await h.run(), 1);
       expect(h.events, <String>[
         'inspect:earth',
+        'types',
         'lock',
         'delegate.boot',
         'runGrid',

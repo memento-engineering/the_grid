@@ -402,33 +402,14 @@ Future<({CliBeadProbeReader reader, Set<IssueType> types})> _probeReader(
   BdCliService bd,
 ) async {
   final data = await bd.types();
-  final types = <IssueType>{};
-  for (final key in const ['core_types', 'custom_types']) {
-    final raw = data[key];
-    // `bd types --json` OMITS an empty group: a store with no custom types
-    // carries no `custom_types` key at all, not an empty list. Absent means
-    // NONE, not malformed — only a present-but-wrong-shape value is a parse
-    // error. The `types.isEmpty` check below still catches a store that
-    // discovered nothing at all.
-    if (raw == null) continue;
-    if (raw is! List) {
-      throw BdParseException('bd type discovery field "$key" was not a list');
-    }
-    for (final value in raw) {
-      final name = value is String
-          ? value
-          : value is Map<String, dynamic>
-          ? value['name']
-          : null;
-      if (name is! String || name.isEmpty) {
-        throw BdParseException('bd type discovery field "$key" had no name');
-      }
-      types.add(IssueType(name));
-    }
-  }
-  if (types.isEmpty) {
+  final names = configuredBdTypeNames(
+    data,
+    fields: const <String>['core_types', 'custom_types'],
+  );
+  if (names.isEmpty) {
     throw const BdParseException('bd type discovery was empty');
   }
+  final types = {for (final name in names) IssueType(name)};
   return (reader: CliBeadProbeReader(bd, lifecycleTypes: types), types: types);
 }
 

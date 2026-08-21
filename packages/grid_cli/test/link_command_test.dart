@@ -433,6 +433,29 @@ void main() {
     );
   });
 
+  test('link discovery accepts string and name-map type entries', () async {
+    state.customTypes = <Object>[
+      'session',
+      {'name': 'link'},
+    ];
+    final lines = <String>[];
+    expect(
+      await runLink(
+        arguments: _linkArgs(['ls', '--grid-root', temp.path]),
+        stateStorePrefix: 'houston',
+        endpoints: endpoints,
+        bdFactory: factory,
+        out: lines.add,
+      ),
+      0,
+    );
+    expect(lines, isEmpty);
+    expect(
+      state.calls.where((call) => call.first == 'list' && call[2] == 'link'),
+      hasLength(1),
+    );
+  });
+
   test(
     'unlink by pair on a store without the link type finds nothing',
     () async {
@@ -552,7 +575,7 @@ class _FakeStore implements BdRunner {
   });
 
   final List<Bead> beads;
-  List<String> customTypes;
+  List<Object> customTypes;
   final String createdId;
   String? createdIdOverride;
   final List<List<String>> calls = [];
