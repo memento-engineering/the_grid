@@ -534,7 +534,6 @@ class SessionScopeState extends State<SessionScope>
         _stopAbandonedMint(
           stage: 'fresh-snapshot',
           retiredSessionId: retiredId,
-          snapshotUnavailable: !_cancelled && context.mounted,
         );
         return;
       }
@@ -764,11 +763,8 @@ class SessionScopeState extends State<SessionScope>
   bool _stopAbandonedMint({
     required String stage,
     required String? retiredSessionId,
-    bool snapshotUnavailable = false,
   }) {
-    final reason = snapshotUnavailable
-        ? 'snapshot-unavailable'
-        : _cancelled
+    final reason = _cancelled
         ? 'cancelled'
         : !context.mounted
         ? 'unmounted'
@@ -1335,6 +1331,7 @@ class SessionScopeState extends State<SessionScope>
   void dispose() {
     final mintReadiness = _mintReadiness;
     if (mintReadiness != null && !mintReadiness.isCompleted) {
+      // Null completion means disposal; there is no other producer.
       mintReadiness.complete(null);
     }
     _mintReadiness = null;

@@ -379,13 +379,9 @@ void main() {
         stage: 'fresh-snapshot',
         reason: anyOf('cancelled', 'unmounted'),
       );
-      // `_awaitFreshReadySnapshot` has exactly one null-completion path:
-      // `dispose`, which sets `_cancelled` before this continuation runs.
-      // This direct receipt proves `snapshot-unavailable` is unreachable while
-      // the round-one production ordering stands.
       expect(
         transport.named('session.mintAbandoned').single.data['reason'],
-        isNot('snapshot-unavailable'),
+        anyOf('cancelled', 'unmounted'),
       );
       expect(runner.workCreates, isEmpty);
     });
