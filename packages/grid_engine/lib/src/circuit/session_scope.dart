@@ -155,6 +155,11 @@ class SessionScopeState extends State<SessionScope>
   /// blip, and its EXHAUSTION is the escalation trigger.
   static const _maxMintAttempts = 5;
 
+  /// The bounded successor-mint retry budget. Unlike [_maxMintAttempts], this
+  /// budget is per node path because one live session can mint successors for
+  /// several independently-invalidated nodes.
+  static const _maxStepSuccessorMintAttempts = 5;
+
   /// The per-attempt mint-failed flare (tg-6nf) — a mint attempt threw and the
   /// scope is still RETRYING under [_maxMintAttempts].
   static const _mintFailedFlare = 'session.mintFailed';
@@ -163,6 +168,11 @@ class SessionScopeState extends State<SessionScope>
   /// is spent; the scope escalates LOUD and goes inert (a human must fix the
   /// store — the exact FIRST-LIVE-ARM incident).
   static const _mintExhaustedFlare = 'session.mintExhausted';
+
+  /// A successor mint spent its full retry budget and the live session is
+  /// being parked durably for operator repair.
+  static const _stepSuccessorMintExhaustedFlare =
+      'session.stepSuccessorMintExhausted';
 
   /// A session exists, but its molecule graph could not be poured. The session
   /// is parked at a durable gate for operator repair and rework.
@@ -292,6 +302,7 @@ class SessionScopeState extends State<SessionScope>
   ///   bounce). LOUD or GONE (ADR-0008 D3).
   final Set<String> _rearming = {};
   final Set<String> _mintingSuccessorForPath = {};
+  final Map<String, int> _stepSuccessorMintAttemptsByPath = {};
 
   /// Whether `seed.existingSession` has EVER matched [_sessionId] — retained
   /// only as a fresh-mint join-lag guard. It never authorizes a re-mint:
@@ -1054,6 +1065,8 @@ class SessionScopeState extends State<SessionScope>
       _mintingSuccessorForPath.remove(nodePath);
       return;
     }
+    final attempt = (_stepSuccessorMintAttemptsByPath[nodePath] ?? 0) + 1;
+    _stepSuccessorMintAttemptsByPath[nodePath] = attempt;
     try {
       if (spentRounds >= kMaxReworkRounds) {
         throw StateError(
@@ -1067,11 +1080,52 @@ class SessionScopeState extends State<SessionScope>
         spentRounds: spentRounds,
         maxRounds: kMaxReworkRounds,
       );
+      _stepSuccessorMintAttemptsByPath.remove(nodePath);
     } on Object catch (error) {
+      final reason = truncateReason('$error');
       _flare('session.stepSuccessorMintFailed', {
         'sessionId': sessionId,
         'nodePath': nodePath,
-        'reason': truncateReason('$error'),
+        'attempt': '$attempt',
+        'maxAttempts': '$_maxStepSuccessorMintAttempts',
+        'reason': reason,
+      });
+      if (attempt < _maxStepSuccessorMintAttempts) {
+        // Retry off the current write/build turn through the existing
+        // same-path dedup seam. The scheduled callback runs after [finally]
+        // clears the in-flight guard.
+        scheduleMicrotask(() {
+          if (_cancelled || !context.mounted) return;
+          _scheduleStepSuccessorMint(
+            sessionId: sessionId,
+            nodePath: nodePath,
+            priorStep: priorStep,
+            currentDepth: currentDepth,
+            spentRounds: spentRounds,
+          );
+        });
+        return;
+      }
+      _flare(_stepSuccessorMintExhaustedFlare, {
+        'sessionId': sessionId,
+        'nodePath': nodePath,
+        'attempt': '$attempt',
+        'maxAttempts': '$_maxStepSuccessorMintAttempts',
+        'reason': reason,
+      });
+      // SessionScope is outside the one router where EscalationHandler is
+      // ambient. This is the same durable chokepoint HumanGate resolves to,
+      // reused at a successor-write site the handler seam does not reach.
+      await ctx.writer.parkSessionAtGate(
+        substation: ctx.stateSubstation,
+        sessionId: sessionId,
+        nodePath: nodePath,
+        reason: reason,
+      );
+      if (_cancelled || !context.mounted) return;
+      setState(() {
+        _failed = true;
+        _resolving = false;
       });
     } finally {
       _mintingSuccessorForPath.remove(nodePath);
@@ -1174,6 +1228,7 @@ class SessionScopeState extends State<SessionScope>
     _terminalScheduled = false;
     _rearming.clear();
     _mintingSuccessorForPath.clear();
+    _stepSuccessorMintAttemptsByPath.clear();
     _mintAttempts = 0;
     _moleculeSessionId = null;
     _requiresFreshMintSnapshot = true;
