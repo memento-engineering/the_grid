@@ -45,6 +45,10 @@ abstract class SessionProjection with _$SessionProjection {
     /// falls back to the cursor shape there.
     @Default(false) bool completed,
 
+    /// Diagnostic cause when completion was forced by terminal work beneath
+    /// a still-live session. This never implies [completed] by itself.
+    String? workTerminalReason,
+
     /// True when the session carries a HUMAN marker (`grid.escalation` from
     /// breaker exhaustion, or `grid.rework_declined`) — a human owns this round.
     /// The grid never re-drives it: an auto re-mint would loop

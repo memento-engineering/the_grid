@@ -4,6 +4,33 @@ import 'package:test/test.dart';
 
 void main() {
   group('projectSession (the read half of the contract)', () {
+    test('work-terminal composed metadata projects completion and reason', () {
+      final projection = projectSession(
+        Bead(
+          id: 'tgdog-work-terminal',
+          issueType: GridIssueTypes.session,
+          metadata: sessionWorkTerminalMetadata(),
+        ),
+      );
+      expect(projection.completed, isTrue);
+      expect(projection.workTerminalReason, kWorkTerminalReasonWorkBeadClosed);
+    });
+
+    test('work-terminal reason alone is diagnostic, not completion', () {
+      final projection = projectSession(
+        Bead(
+          id: 'tgdog-work-terminal-reason-only',
+          issueType: GridIssueTypes.session,
+          metadata: const {
+            SessionBeadKeys.workTerminalReason:
+                kWorkTerminalReasonWorkBeadClosed,
+          },
+        ),
+      );
+      expect(projection.completed, isFalse);
+      expect(projection.workTerminalReason, kWorkTerminalReasonWorkBeadClosed);
+    });
+
     test('projects work-bead linkage, identity, terminal; a legacy '
         'grid.cursor.* key is inert (tg-eli phase 2: the flat cursor '
         'projection retired — cursor stays empty)', () {

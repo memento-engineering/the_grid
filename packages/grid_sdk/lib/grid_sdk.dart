@@ -177,6 +177,7 @@ export 'package:grid_engine/grid_engine.dart'
         TreeProjector,
         RestartReconciler,
         RestartReport,
+        WorkTerminalSettlementReport,
         SessionLedgerMetricsProjection,
         SessionResolver,
         Stalling,

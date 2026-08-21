@@ -23,6 +23,33 @@ void _seedStore(String dir, {required String database}) {
 }
 
 void main() {
+  test('work-terminal failures are reported with durable cause', () {
+    final report = RestartReport(
+      const [],
+      workTerminalSettlements: const [
+        (
+          sessionId: 'tgdog-session',
+          workBeadId: 'foreign-work',
+          terminalReason: 'work-bead-closed-under-live-session',
+          failure: 'bd unavailable',
+        ),
+        (
+          sessionId: 'tgdog-landed',
+          workBeadId: 'foreign-landed',
+          terminalReason: 'work-bead-closed-under-live-session',
+          failure: null,
+        ),
+      ],
+    );
+
+    final lines = droppedWorkTerminalSettlementReports(report);
+    expect(lines, hasLength(1));
+    expect(lines.single, contains('tgdog-session/foreign-work'));
+    expect(lines.single, contains('work-bead-closed-under-live-session'));
+    expect(lines.single, contains('bd unavailable'));
+    expect(lines.single, isNot(contains('tgdog-landed')));
+  });
+
   group('droppedReapReports — the LOUD contract', () {
     test(
       'a DROPPED reap yields exactly one line naming the session, the node, the '

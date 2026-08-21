@@ -98,11 +98,11 @@ void main() {
       final workRunner = RecordingBdRunner();
       f.runner.exportBeads = [
         const Bead(
-          id: 'live-session',
+          id: 'tgdog-live-session',
           issueType: GridIssueTypes.session,
           metadata: {'rig': 'tgdog', 'work_bead': 'tg-1'},
         ),
-        _gate('tgdog-closed-work-gate', 'live-session'),
+        _gate('tgdog-closed-work-gate', 'tgdog-live-session'),
       ];
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -114,7 +114,7 @@ void main() {
           ),
           session: const SessionProjection(
             workBeadId: 'tg-1',
-            sessionId: 'live-session',
+            sessionId: 'tgdog-live-session',
           ),
         ),
       );

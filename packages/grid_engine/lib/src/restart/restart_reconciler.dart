@@ -286,9 +286,11 @@ class RestartReport {
     List<RestartEntry> entries, {
     List<ZombieReap> reaped = const [],
     List<SweptLeaseGroup> sweptLeases = const [],
+    List<WorkTerminalSettlementReport> workTerminalSettlements = const [],
   }) : entries = List.unmodifiable(entries),
        reaped = List.unmodifiable(reaped),
        sweptLeases = List.unmodifiable(sweptLeases),
+       workTerminalSettlements = List.unmodifiable(workTerminalSettlements),
        skipped = List.unmodifiable(
          entries.where((e) => e.disposition == RestartDisposition.skipped),
        ),
@@ -342,6 +344,8 @@ class RestartReport {
   /// reported LOUD by the sweep itself; this list is the assertable record.
   final List<SweptLeaseGroup> sweptLeases;
 
+  final List<WorkTerminalSettlementReport> workTerminalSettlements;
+
   /// The total number of beads the tree must respawn on re-mount: everything
   /// except the skipped (done) beads AND the adopted (reattached) survivors.
   /// [refusedUnsafe] is included.
@@ -354,6 +358,13 @@ class RestartReport {
       'respawnPending: ${respawnPending.length}, reaped: ${reaped.length}, '
       'sweptLeases: ${sweptLeases.length}, respawnCount: $respawnCount)';
 }
+
+typedef WorkTerminalSettlementReport = ({
+  String sessionId,
+  String workBeadId,
+  String terminalReason,
+  String? failure,
+});
 
 /// One process group a flat-model fence sweep walked: the node that recorded
 /// it, its `pgid` + leader `pid`, and the guarded [terminateGroup] outcome.
@@ -423,26 +434,32 @@ class RestartReconciler {
   RestartReconciler({
     required ListBeadWorktrees listWorktrees,
     required ReapWorktree reapWorktree,
-    required RootCheckout workRoot,
+    RootCheckout? workRoot,
+    List<RootCheckout> workRoots = const <RootCheckout>[],
     required ProcessGroupController groups,
     required Future<void> Function() freshnessBarrier,
     required GraphSnapshot Function() stateSnapshot,
+    GraphSnapshot Function()? workSnapshot,
     StationBeadWriter? writer,
     ProcessLeaseVendor? leaseVendor,
     void Function(String message)? onOrphan,
-  }) : _listWorktrees = listWorktrees,
+  }) : assert(workRoot != null || workRoots.isNotEmpty),
+       _listWorktrees = listWorktrees,
        _reapWorktree = reapWorktree,
-       _workRoot = workRoot,
+       _workRoots = List<RootCheckout>.unmodifiable(
+         workRoots.isEmpty ? <RootCheckout>[workRoot!] : workRoots,
+       ),
        _groups = groups,
        _writer = writer,
        _freshnessBarrier = freshnessBarrier,
        _stateSnapshot = stateSnapshot,
+       _workSnapshot = workSnapshot ?? _emptySnapshot,
        _leaseVendor = leaseVendor,
        _onOrphan = onOrphan ?? _reportOnlyOrphanSink;
 
   final ListBeadWorktrees _listWorktrees;
   final ReapWorktree _reapWorktree;
-  final RootCheckout _workRoot;
+  final List<RootCheckout> _workRoots;
   final ProcessGroupController _groups;
 
   /// The SINGLE bd write chokepoint (invariant 2) — OPTIONAL for the same
@@ -450,8 +467,8 @@ class RestartReconciler {
   /// guardrail suites construct this reconciler with no writer, and a
   /// required param would darken them with a compile error). Since tg-eli
   /// phase 2 retired the zombie-cursor reap this pass issues no writes of its
-  /// own; the param + [hasChokepoint] survive so a composition can still
-  /// prove the chokepoint reached the boot pass.
+  /// own except work-terminal survivor settlement; [hasChokepoint] proves the
+  /// chokepoint reached the boot pass.
   final StationBeadWriter? _writer;
 
   /// The molecule model's process-lease vendor — the ONLY `grid.lease.*`
@@ -491,6 +508,14 @@ class RestartReconciler {
   /// The state-store snapshot reader (the owned `session` beads), read AFTER the
   /// barrier completes so the projected cursors reflect the post-barrier state.
   final GraphSnapshot Function() _stateSnapshot;
+  final GraphSnapshot Function() _workSnapshot;
+
+  static GraphSnapshot _emptySnapshot() => GraphSnapshot.fromParts(
+    beads: const <Bead>[],
+    dependencies: const <BeadDependency>[],
+    readyIds: const <String>[],
+    capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
+  );
 
   /// Walks the restart survivors and produces the respawn-or-skip plan.
   ///
@@ -567,15 +592,23 @@ class RestartReconciler {
     // Reused for the worktree step: a session whose worktree is already gone
     // (the window nothing else can see) finds nothing here and goes straight
     // to the close.
+    // Rebase reconciliation: main's lazy-scan guard (skip the worktree walk
+    // when no candidate needs replay) over this branch's multi-root shape
+    // (worktreesByRoot rides into _replayOne).
     final needsWorktreeReplay = candidates.any(
       (session) =>
           session.status != BeadStatus.closed &&
           sessionDispositionOfMetadata(session.metadata) ==
               GateSweepSessionDisposition.done,
     );
-    final worktrees = needsWorktreeReplay
-        ? await _listWorktrees(_workRoot) ?? const <BeadWorktree>[]
-        : const <BeadWorktree>[];
+    final worktreesByRoot = <RootCheckout, List<BeadWorktree>>{};
+    if (needsWorktreeReplay) {
+      for (final root in _workRoots) {
+        worktreesByRoot[root] =
+            await _listWorktrees(root) ?? const <BeadWorktree>[];
+      }
+    }
+    final worktrees = [for (final trees in worktreesByRoot.values) ...trees];
     final worktreeByBeadId = <String, BeadWorktree>{
       for (final wt in worktrees) wt.beadId: wt,
     };
@@ -593,7 +626,9 @@ class RestartReconciler {
         );
         continue;
       }
-      entries.add(await _replayOne(writer, session, worktreeByBeadId));
+      entries.add(
+        await _replayOne(writer, session, worktreeByBeadId, worktreesByRoot),
+      );
     }
     return TeardownReplayReport(entries);
   }
@@ -610,6 +645,7 @@ class RestartReconciler {
     StationBeadWriter writer,
     Bead session,
     Map<String, BeadWorktree> worktreeByBeadId,
+    Map<RootCheckout, List<BeadWorktree>> worktreesByRoot,
   ) async {
     if (session.status == BeadStatus.closed) {
       final failures = <String>[];
@@ -642,7 +678,10 @@ class RestartReconciler {
     final worktree = worktreeByBeadId[workBeadId];
     if (worktree != null) {
       try {
-        await _reapWorktree(root: _workRoot, worktree: worktree);
+        final root = worktreesByRoot.entries
+            .firstWhere((entry) => entry.value.contains(worktree))
+            .key;
+        await _reapWorktree(root: root, worktree: worktree);
       } on Object catch (error) {
         failures.add('worktree');
         _onOrphan(
@@ -709,11 +748,18 @@ class RestartReconciler {
     await _freshnessBarrier();
 
     // 2. List survivors. Fail closed on a probe error (do NOT assume "none").
-    final worktrees = await _listWorktrees(_workRoot) ?? const [];
+    final rootedWorktrees = <({RootCheckout root, BeadWorktree worktree})>[];
+    for (final root in _workRoots) {
+      final worktrees = await _listWorktrees(root) ?? const <BeadWorktree>[];
+      rootedWorktrees.addAll([
+        for (final worktree in worktrees) (root: root, worktree: worktree),
+      ]);
+    }
 
     // 3. Build the session lookup from the OWNED state store, AFTER the
     //    barrier.
     final sessionByWorkBead = _projectOwnedSessions();
+    final workBeads = _workSnapshot().beadsById;
 
     // 4. Reconcile each surviving worktree, collecting the sessions that BACK
     //    one. Only these are swept below: a session with no surviving worktree
@@ -721,18 +767,73 @@ class RestartReconciler {
     //    state store would turn a large backlog into an unbounded boot pass.
     final entries = <RestartEntry>[];
     final backed = <SessionProjection>[];
-    for (final wt in worktrees) {
+    final terminalBacked = <String>{};
+    final terminalPairs = <({SessionProjection session, Bead workBead})>[];
+    for (final rooted in rootedWorktrees) {
+      final wt = rooted.worktree;
       final session = sessionByWorkBead[wt.beadId];
-      if (session != null) backed.add(session);
-      entries.add(await _reconcileWorktree(wt, session));
+      var workTerminal = false;
+      if (session != null) {
+        backed.add(session);
+        final workBead = workBeads[wt.beadId];
+        if (!session.isTerminal && workBead != null && workBead.isClosed) {
+          workTerminal = true;
+          final sessionId = session.sessionId;
+          if (sessionId != null && terminalBacked.add(sessionId)) {
+            terminalPairs.add((session: session, workBead: workBead));
+          }
+        }
+      }
+      entries.add(
+        await _reconcileWorktree(
+          rooted.root,
+          wt,
+          workTerminal ? session!.copyWith(isTerminal: true) : session,
+        ),
+      );
     }
 
     // 5. SWEEP the molecule survivors' leased groups (tg-eli phase 1): the
     //    vendor owns every lease-key read and every clearing write; this pass
     //    only projects the candidates and binds the SAME guarded terminate
     //    path.
-    final sweptLeases = await _sweepMoleculeLeases(backed);
-    return RestartReport(entries, sweptLeases: sweptLeases);
+    final sweptLeases = await _sweepMoleculeLeases(
+      backed,
+      noRemountSessionIds: terminalBacked,
+    );
+    final settlements = <WorkTerminalSettlementReport>[];
+    for (final pair in terminalPairs) {
+      final sessionId = pair.session.sessionId!;
+      String? failure;
+      try {
+        final writer = _writer;
+        if (writer == null) {
+          throw StateError('no station bead writer is wired');
+        }
+        await writer.settleSessionForTerminalWork(
+          sessionId: sessionId,
+          terminalWorkBead: pair.workBead,
+        );
+      } on Object catch (error) {
+        failure = '$error';
+        _onOrphan(
+          'restart work-terminal settlement $sessionId/${pair.workBead.id} '
+          '(${StationBeadWriter.workTerminalReasonWorkBeadClosed}) failed — '
+          '$error',
+        );
+      }
+      settlements.add((
+        sessionId: sessionId,
+        workBeadId: pair.workBead.id,
+        terminalReason: StationBeadWriter.workTerminalReasonWorkBeadClosed,
+        failure: failure,
+      ));
+    }
+    return RestartReport(
+      entries,
+      sweptLeases: sweptLeases,
+      workTerminalSettlements: settlements,
+    );
   }
 
   /// **The MOLECULE crash-recovery pass** (tg-eli phase 1 — since phase 2 the
@@ -761,8 +862,9 @@ class RestartReconciler {
   /// orphan, kills through the bound [terminateGroup] (the guard is never
   /// bypassed), clears its own breadcrumbs, and reports each kill LOUD.
   Future<List<SweptLeaseGroup>> _sweepMoleculeLeases(
-    Iterable<SessionProjection> sessions,
-  ) async {
+    Iterable<SessionProjection> sessions, {
+    Set<String> noRemountSessionIds = const <String>{},
+  }) async {
     final vendor = _leaseVendor;
     if (vendor == null) return const [];
     // Every MOLECULE session backing a surviving worktree, mapped to whether a
@@ -771,7 +873,8 @@ class RestartReconciler {
     for (final session in sessions) {
       final id = session.sessionId;
       if (id == null || !session.isMolecule) continue;
-      remountBySession[id] = !session.isTerminal;
+      remountBySession[id] =
+          !session.isTerminal && !noRemountSessionIds.contains(id);
     }
     if (remountBySession.isEmpty) return const [];
 
@@ -950,6 +1053,7 @@ class RestartReconciler {
   /// Reconciles a single [wt] against its OWNED [session] (null when the
   /// work bead has no session in the state store).
   Future<RestartEntry> _reconcileWorktree(
+    RootCheckout root,
     BeadWorktree wt,
     SessionProjection? session,
   ) async {
@@ -961,7 +1065,7 @@ class RestartReconciler {
     // keyed by pgid, not by the directory just removed; a HISTORICAL flat
     // session's recorded groups are inert metadata this pass never parses.
     if (session != null && session.isTerminal) {
-      final outcome = await _reapWorktree(root: _workRoot, worktree: wt);
+      final outcome = await _reapWorktree(root: root, worktree: wt);
       return RestartEntry(
         worktree: wt,
         disposition: RestartDisposition.skipped,

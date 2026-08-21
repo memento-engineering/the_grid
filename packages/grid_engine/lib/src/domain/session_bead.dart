@@ -63,6 +63,10 @@ abstract final class SessionBeadKeys {
   /// boundary has — the retired flat cursor can no longer corroborate.
   static const outcome = 'grid.outcome';
 
+  /// Diagnostic cause for completion forced by terminal underlying work.
+  /// [outcome] remains the sole positive-terminal evidence.
+  static const workTerminalReason = 'grid.work_terminal_reason';
+
   /// The human-escalation marker `SessionScope` writes on breaker exhaustion
   /// (D-5) — a human picks the session up. Was a private literal in
   /// `SessionScope`; the read projection needs it now, so it lives with the rest
@@ -111,6 +115,9 @@ const String kSessionModelFlat = 'flat';
 /// stamped once at `createSession` time by a later rung (R5) in the SAME
 /// write as [SessionBeadKeys.workBead].
 const String kSessionModelMolecule = 'molecule';
+
+const String kWorkTerminalReasonWorkBeadClosed =
+    'work-bead-closed-under-live-session';
 
 /// Encodes [nodePath] for use inside a bd metadata KEY (tg-6e4j).
 ///
@@ -273,6 +280,11 @@ Map<String, String> sessionCompleteMetadata() => <String, String>{
   SessionBeadKeys.outcome: kSessionOutcomeComplete,
 };
 
+Map<String, String> sessionWorkTerminalMetadata() => <String, String>{
+  ...sessionCompleteMetadata(),
+  SessionBeadKeys.workTerminalReason: kWorkTerminalReasonWorkBeadClosed,
+};
+
 /// The metadata payload that RETIRES a VOIDED session's dead JOIN key (I-10) —
 /// the mechanized form of the operator's hand re-key (`work_bead=tg-1di#void-i8`),
 /// and the FOURTH (engine-automatic) member of A47's re-run taxonomy.
@@ -424,6 +436,7 @@ SessionProjection projectSession(Bead sessionBead) {
     // what the mount boundary's disposition reads (never re-derived from the
     // circuit, which the mount boundary does not have).
     completed: metadata[SessionBeadKeys.outcome] == kSessionOutcomeComplete,
+    workTerminalReason: metadata[SessionBeadKeys.workTerminalReason] as String?,
     humanHeld:
         metadata.containsKey(SessionBeadKeys.escalation) ||
         metadata.containsKey(SessionBeadKeys.reworkDeclined),
