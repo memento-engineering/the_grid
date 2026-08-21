@@ -117,6 +117,37 @@ List<BlockEdge> crossLinkEdges(Iterable<CrossLink> links) => <BlockEdge>[
     BlockEdge(from: link.from, to: link.to, origin: 'link bead ${link.beadId}'),
 ];
 
+/// Returns the configured bd type names in [typesEnvelope].
+///
+/// bd omits an empty group. Present groups must be lists whose entries are
+/// non-empty strings or maps with a non-empty string `name`.
+Set<String> configuredBdTypeNames(
+  Map<String, dynamic> typesEnvelope, {
+  Iterable<String> fields = const <String>['custom_types'],
+}) {
+  final names = <String>{};
+  for (final field in fields) {
+    final raw = typesEnvelope[field];
+    if (raw == null) continue;
+    if (raw is! List) {
+      throw BdParseException('bd type discovery field "$field" was not a list');
+    }
+    for (final entry in raw) {
+      final name = switch (entry) {
+        final String value => value,
+        final Map<Object?, Object?> value when value['name'] is String =>
+          value['name'] as String,
+        _ => null,
+      };
+      if (name == null || name.isEmpty) {
+        throw BdParseException('bd type discovery field "$field" had no name');
+      }
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 /// The LOUD arming refusal for a state store that has not registered the `link`
 /// custom type, or `null` when it has.
 ///
@@ -139,15 +170,7 @@ String? crossLinkTypeRefusal(
   Map<String, dynamic> typesEnvelope, {
   required String store,
 }) {
-  final custom = typesEnvelope['custom_types'];
-  final names = <String>{
-    if (custom is List)
-      for (final entry in custom)
-        if (entry is String)
-          entry
-        else if (entry is Map && entry['name'] is String)
-          entry['name'] as String,
-  };
+  final names = configuredBdTypeNames(typesEnvelope);
   if (names.contains(GridIssueTypes.link.wire)) return null;
   return 'grid: the state store "$store" has not registered the '
       '"${GridIssueTypes.link.wire}" issue type, so a cross-repo link bead cannot '

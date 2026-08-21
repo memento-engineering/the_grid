@@ -5,11 +5,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-import 'package:beads_dart/beads_dart.dart' show GraphSnapshot;
+import 'package:beads_dart/beads_dart.dart'
+    show BdCliService, BeadsWorkspace, GraphSnapshot, ProcessBdRunner;
+import 'package:grid_engine/grid_engine.dart' show configuredBdTypeNames;
 import 'package:grid_exploration/grid_exploration.dart'
     show DevModeSeat, armDevMode, stationVmServiceUri;
 import 'package:grid_runtime/grid_runtime.dart'
-    show GitOps, PrimaryCheckoutFreshness, SystemGitRunner;
+    show GitOps, GridIssueTypes, PrimaryCheckoutFreshness, SystemGitRunner;
 import 'package:grid_sdk/grid_sdk.dart'
     show
         GridCommandHandler,
@@ -18,6 +20,7 @@ import 'package:grid_sdk/grid_sdk.dart'
         GridDelegate,
         GridHandle,
         GridHookError,
+        GridStateStore,
         ReassembleReport,
         StalenessClear,
         StalenessRefused,
@@ -34,6 +37,7 @@ import 'package:path/path.dart' as p;
 import 'station_control.dart';
 import 'station_flags.dart';
 import 'station_lock.dart';
+import 'station_stores.dart';
 import 'state_store_gc.dart';
 
 /// Builds the station-authored delegate from parsed boot configuration ALONE
@@ -134,6 +138,17 @@ typedef PrimaryCheckoutInspector =
     Future<PrimaryCheckoutFreshness> Function(SubstationWorkSpec substation);
 typedef StateStoreMaintainer =
     Future<void> Function({required String gridHome});
+typedef StateStoreTypesReader =
+    Future<Map<String, dynamic>> Function({required String gridHome});
+
+Future<Map<String, dynamic>> _defaultReadStateStoreTypes({
+  required String gridHome,
+}) {
+  final BeadsWorkspace workspace = openStateStore(
+    GridStateStore.forGridRoot(gridHome),
+  );
+  return BdCliService(ProcessBdRunner(workspaceRoot: workspace.root)).types();
+}
 
 /// Boots a foreground resident station over `runGrid`.
 ///
@@ -163,6 +178,7 @@ class UpCommand extends Command<int> {
     ShutdownWaiter? waitForShutdown,
     PrimaryCheckoutInspector? inspectPrimaryCheckout,
     StateStoreMaintainer? maintainStateStore,
+    StateStoreTypesReader? readStateStoreTypes,
   }) : _delegateFactory = delegateFactory,
        _codedRoster = codedRoster,
        _harnessAllowList = Set.unmodifiable(harnessAllowList),
@@ -176,6 +192,8 @@ class UpCommand extends Command<int> {
        _inspectPrimaryCheckout =
            inspectPrimaryCheckout ?? _defaultInspectPrimaryCheckout,
        _maintainStateStore = maintainStateStore ?? _defaultMaintainStateStore,
+       _readStateStoreTypes =
+           readStateStoreTypes ?? _defaultReadStateStoreTypes,
        _waitForShutdown = waitForShutdown ?? _waitForTerminationSignal {
     if (_harnessAllowList.isEmpty) {
       throw ArgumentError.value(harnessAllowList, 'harnessAllowList');
@@ -201,6 +219,7 @@ class UpCommand extends Command<int> {
   final VmServiceReader _readVmServiceUri;
   final PrimaryCheckoutInspector _inspectPrimaryCheckout;
   final StateStoreMaintainer _maintainStateStore;
+  final StateStoreTypesReader _readStateStoreTypes;
   final ShutdownWaiter _waitForShutdown;
 
   static Future<PrimaryCheckoutFreshness> _defaultInspectPrimaryCheckout(
@@ -363,6 +382,26 @@ class UpCommand extends Command<int> {
       }
     }
 
+    String? typesCustomWarning;
+    try {
+      final configured = configuredBdTypeNames(
+        await _readStateStoreTypes(gridHome: config.gridHome),
+      );
+      final missing = <String>[
+        for (final type in GridIssueTypes.customTypes)
+          if (!configured.contains(type.wire)) type.wire,
+      ];
+      if (missing.isNotEmpty) {
+        typesCustomWarning =
+            'WARNING: types.custom is missing GridIssueTypes.customTypes: '
+            '${missing.join(', ')} — station may be unable to mint its own beads; '
+            'booting anyway.';
+      }
+    } on Object catch (error) {
+      typesCustomWarning =
+          'WARNING: types.custom probe FAILED: $error — booting anyway.';
+    }
+
     final startedAt = DateTime.now();
     final LockResource stationLock;
     try {
@@ -520,6 +559,7 @@ class UpCommand extends Command<int> {
             : 'stores: read-path {${view.readPathName}}  ·  state partition: '
                   '${view.stateSubstation}',
       )
+      ..writeAll([if (typesCustomWarning != null) '$typesCustomWarning\n'])
       ..writeln(
         'control: ${control.url}  ·  token: (see ${stationLock.path}, 0600)',
       );

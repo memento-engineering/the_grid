@@ -280,6 +280,32 @@ void main() {
   });
 
   group('the LOUD-not-assume seeded-type refusal', () {
+    test('configured type names accept omitted and mixed entry shapes', () {
+      expect(configuredBdTypeNames(const <String, dynamic>{}), isEmpty);
+      expect(
+        configuredBdTypeNames(const <String, dynamic>{
+          'custom_types': [
+            'agent',
+            {'name': 'step'},
+          ],
+        }),
+        {'agent', 'step'},
+      );
+    });
+
+    test('configured type names refuse malformed present groups', () {
+      expect(
+        () => configuredBdTypeNames(const {'custom_types': 'agent'}),
+        throwsA(isA<BdParseException>()),
+      );
+      expect(
+        () => configuredBdTypeNames(const {
+          'custom_types': [<String, dynamic>{}],
+        }),
+        throwsA(isA<BdParseException>()),
+      );
+    });
+
     test('a store WITH the type seeded is accepted (the pinned `bd types` '
         'shape: custom_types is a list of plain strings)', () {
       expect(
