@@ -34,16 +34,18 @@ class _SourceControl implements SourceControl {
 }
 
 class _RecordingReap {
-  _RecordingReap(this.outcome, {this.error});
+  _RecordingReap(this.outcome, {this.error, this.eventLog});
 
   final ReapOutcome outcome;
   final Object? error;
+  final List<String>? eventLog;
   final List<BeadWorktree> calls = [];
 
   Future<ReapOutcome> call({
     required RootCheckout root,
     required BeadWorktree worktree,
   }) async {
+    eventLog?.add('reap');
     calls.add(worktree);
     if (error case final error?) throw error;
     return outcome;
@@ -67,10 +69,14 @@ SessionProjection _projection(bool complete) => SessionProjection(
 );
 
 ({TreeOwner owner, Fakes fakes, RecordingExplorationTransport transport})
-_mount({required _RecordingReap reap, bool terminal = true}) {
+_mount({
+  required _RecordingReap reap,
+  bool terminal = true,
+  List<String>? eventLog,
+}) {
   const beadId = 'tg-work';
   const sessionId = 'tgdog-session';
-  final fakes = buildFakes(createdId: sessionId);
+  final fakes = buildFakes(createdId: sessionId, eventLog: eventLog);
   final transport = RecordingExplorationTransport();
   final owner = TreeOwner();
   final session = _projection(false);
@@ -142,8 +148,9 @@ _mount({required _RecordingReap reap, bool terminal = true}) {
 
 void main() {
   test('positive terminal reaps before close', () async {
-    final reap = _RecordingReap(ReapOutcome.removed());
-    final mounted = _mount(reap: reap);
+    final events = <String>[];
+    final reap = _RecordingReap(ReapOutcome.removed(), eventLog: events);
+    final mounted = _mount(reap: reap, eventLog: events);
     addTearDown(mounted.owner.dispose);
 
     await _pump(mounted.owner);
@@ -151,8 +158,12 @@ void main() {
     expect(reap.calls, hasLength(1));
     expect(reap.calls.single.branch, 'grid/tg-work');
     expect(mounted.transport.named('session.worktreeReaped'), hasLength(1));
-    final commands = mounted.fakes.runner.calls.map((call) => call.first);
-    expect(commands, containsAllInOrder(<String>['update', 'close']));
+    expect(events.where((event) => event == 'reap'), hasLength(1));
+    final reapIndex = events.indexOf('reap');
+    final closeIndex = events.indexOf('bd:close');
+    expect(reapIndex, isNonNegative);
+    expect(closeIndex, isNonNegative);
+    expect(reapIndex, lessThan(closeIndex));
   });
 
   test('refused reap names all three gates', () async {

@@ -267,6 +267,35 @@ void main() {
       expect(work.git, isA<DryStationGitService>());
     });
 
+    test('assembleStationWork binds CircuitResolver reap seam', () async {
+      final gridRoot = '${tmp.path}/home';
+      final workRoot = '${tmp.path}/proj';
+      _seedStore(workRoot, database: 'pow');
+      _seedStore('$gridRoot/.grid', database: 'tgstate');
+      engine.Circuit rootCircuitFor(Bead bead) =>
+          throw StateError('resolver policy is not invoked by assembly');
+      final supplied = engine.CircuitResolver(rootCircuitFor);
+
+      final work = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot(gridRoot),
+        substations: [
+          SubstationWorkSpec(name: 'proj', root: workRoot, head: 'main'),
+        ],
+        resolver: supplied,
+        dryRun: true,
+      );
+      addTearDown(work.shutdown);
+
+      final rebound = work.wiring.resolver as engine.CircuitResolver;
+      expect(rebound, isNot(same(supplied)));
+      expect(rebound.rootCircuitFor, same(rootCircuitFor));
+      expect(rebound.reapWorktree, equals(work.git.reap));
+      expect(rebound.workRoot, isNotNull);
+      expect(rebound.workRoot!.path, p.normalize(workRoot));
+      expect(rebound.workRoot!.defaultBranch, 'main');
+      expect(rebound.workRoot!.substation, 'proj');
+    });
+
     test('dryRun: false selects the REAL subprocess provider and live git '
         'service', () async {
       _seedStore('${tmp.path}/proj', database: 'pow');
