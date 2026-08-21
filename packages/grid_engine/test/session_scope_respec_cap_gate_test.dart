@@ -8,6 +8,7 @@ import 'package:grid_engine/src/molecule/molecule_codec.dart'
     show supersedesDepthByPath, supersedesVerdictCountByPath;
 import 'package:grid_engine/src/molecule/molecule_schema.dart';
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
 
@@ -29,6 +30,29 @@ const specReviewCircuit = Circuit(
     ),
   ],
   terminalStepId: 'route',
+);
+
+const discoveryCircuit = Circuit(
+  id: 'discovery',
+  steps: [
+    CapabilityStep(stepId: 'anchors', capabilityId: 'anchors'),
+    CapabilityStep(
+      stepId: 'discovery-route',
+      capabilityId: 'route',
+      dependsOn: {'anchors'},
+      params: {kValidatesParam: 'anchors'},
+    ),
+  ],
+  terminalStepId: 'discovery-route',
+);
+
+const retryRootCircuit = Circuit(
+  id: 'retry-root',
+  steps: [
+    SubCircuitStep(stepId: 'spec_review', circuitId: 'spec_review'),
+    SubCircuitStep(stepId: 'discovery', circuitId: 'discovery'),
+  ],
+  terminalStepId: 'spec_review',
 );
 
 const sessionId = 'tgdog-session';
@@ -55,6 +79,7 @@ Bead _stepBead({
   Map<String, String> results = const {},
 }) => Bead(
   id: id,
+  title: stepId,
   issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
@@ -170,31 +195,143 @@ JoinedSnapshotNotifier _joined(SessionProjection projection) =>
       ),
     );
 
+SessionProjection _persistedInvalidationProjection({
+  required String sourceCircuit,
+}) {
+  final isSpec = sourceCircuit == 'spec_review';
+  final targetStep = isSpec ? 'specify' : 'anchors';
+  final sourceStep = isSpec ? 'route' : 'discovery-route';
+  final targetPath = 'tg-lt2a/$sourceCircuit/$targetStep';
+  final sourcePath = 'tg-lt2a/$sourceCircuit/$sourceStep';
+  return SessionProjection(
+    workBeadId: 'tg-lt2a',
+    sessionId: sessionId,
+    isMolecule: true,
+    moleculeBeads: [
+      _moleculeBead(),
+      _stepBead(
+        id: 'tgdog-$sourceCircuit-root',
+        stepId: sourceCircuit,
+        capability: sourceCircuit,
+        path: 'tg-lt2a/$sourceCircuit',
+        state: StepState.pending,
+      ),
+      _stepBead(
+        id: 'tgdog-$sourceCircuit-target',
+        stepId: targetStep,
+        capability: targetStep,
+        path: targetPath,
+        state: StepState.complete,
+      ),
+      _stepBead(
+        id: 'tgdog-$sourceCircuit-source',
+        stepId: sourceStep,
+        capability: 'route',
+        path: sourcePath,
+        state: StepState.complete,
+        results: {ResultKeys.keyFor(sourcePath, ResultKeys.grade): 'F'},
+      ),
+    ],
+    moleculeDependencies: const [],
+  );
+}
+
+SessionProjection _interleavedProjection() {
+  final spec = _persistedInvalidationProjection(sourceCircuit: 'spec_review');
+  final discovery = _persistedInvalidationProjection(
+    sourceCircuit: 'discovery',
+  );
+  return SessionProjection(
+    workBeadId: 'tg-lt2a',
+    sessionId: sessionId,
+    isMolecule: true,
+    moleculeBeads: [
+      spec.moleculeBeads.first,
+      ...spec.moleculeBeads.skip(1),
+      ...discovery.moleculeBeads.skip(1),
+    ],
+    moleculeDependencies: const [],
+  );
+}
+
+final class _RefusingSuccessorRunner extends RecordingBdRunner {
+  _RefusingSuccessorRunner(this.failuresByTitle);
+
+  final Map<String, int> failuresByTitle;
+  final Map<String, int> refusedByTitle = {};
+
+  static const message =
+      'Error: invalid issue type "agent" '
+      '(valid: bug, feature, task, epic, chore, decision, session, molecule, '
+      'step, link, mount-attempt)';
+
+  String? _titleOf(List<String> args) {
+    final index = args.indexOf('--title');
+    return index < 0 ? null : args[index + 1];
+  }
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final title = _titleOf(args);
+    final isStepCreate =
+        args.isNotEmpty &&
+        args.first == 'create' &&
+        args.contains('--type') &&
+        args.contains(GridIssueTypes.step.wire);
+    final refused = title == null ? 0 : refusedByTitle[title] ?? 0;
+    final limit = title == null ? 0 : failuresByTitle[title] ?? 0;
+    if (isStepCreate && title != null && refused < limit) {
+      calls.add(List<String>.unmodifiable(args));
+      stdins.add(stdin);
+      refusedByTitle[title] = refused + 1;
+      throw BdCommandFailed(command: args, exitCode: 1, message: message);
+    }
+    return await super.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
+StationServices _ctxOver(RecordingBdRunner runner) => StationServices(
+  provider: FakeRuntimeProvider(),
+  writer: StationBeadWriter(
+    bd: BdCliService(runner),
+    reader: runner,
+    ownership: BeadOwnershipPredicate(const {stateSubstation}),
+  ),
+  stateSubstation: stateSubstation,
+);
+
 ({TreeOwner owner, Fakes fakes}) _mount({
   ServiceBundle services = const ServiceBundle(),
   Set<int> specifyVerdicts = const {0, 1, 2},
+  SessionProjection? projection,
+  RecordingBdRunner? runner,
+  Circuit circuit = rootCircuit,
+  Map<String, Circuit> circuits = const {'spec_review': specReviewCircuit},
 }) {
   final fakes = buildFakes();
   final owner = TreeOwner();
-  final projection = _projection(specifyVerdicts: specifyVerdicts);
-  final joined = _joined(projection);
-  final registry = RecordingCapabilityRegistry(
-    circuits: const {'spec_review': specReviewCircuit},
-  );
+  final effectiveProjection =
+      projection ?? _projection(specifyVerdicts: specifyVerdicts);
+  final joined = _joined(effectiveProjection);
+  final registry = RecordingCapabilityRegistry(circuits: circuits);
   owner.mountRoot(
     ProviderScope(
       child: InheritedSeed<JoinedSnapshotNotifier>(
         value: joined,
         child: InheritedSeed<StationServices>(
-          value: fakes.ctx,
+          value: runner == null ? fakes.ctx : _ctxOver(runner),
           child: InheritedSeed<ServiceBundle>(
             value: services,
             child: InheritedSeed<CapabilityRegistry>(
               value: registry,
               child: SessionScope(
                 bead: bead('tg-lt2a'),
-                circuit: rootCircuit,
-                existingSession: projection,
+                circuit: circuit,
+                existingSession: effectiveProjection,
               ),
             ),
           ),
@@ -208,6 +345,17 @@ JoinedSnapshotNotifier _joined(SessionProjection projection) =>
 Future<void> _drain() async {
   for (var i = 0; i < 8; i++) {
     await Future<void>.delayed(Duration.zero);
+  }
+}
+
+Future<void> _pumpUntil(
+  TreeOwner owner,
+  bool Function() condition, {
+  int maxRounds = 500,
+}) async {
+  for (var i = 0; i < maxRounds && !condition(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    owner.flush();
   }
 }
 
@@ -363,5 +511,166 @@ void main() {
     expect(handler.requests.single.nodePath, specifyPath);
     expect(handler.requests.single.rewindCount, 3);
     expect(handler.requests.single.reason, 'rework cap reached (3/3)');
+  });
+
+  for (final sourceCircuit in ['spec_review', 'discovery']) {
+    test(
+      '$sourceCircuit persistent refusal retries five times and gates',
+      () async {
+        final targetTitle = sourceCircuit == 'spec_review'
+            ? 'specify'
+            : 'anchors';
+        final targetPath = 'tg-lt2a/$sourceCircuit/$targetTitle';
+        final projection = _persistedInvalidationProjection(
+          sourceCircuit: sourceCircuit,
+        );
+        final runner = _RefusingSuccessorRunner({targetTitle: 100});
+        final transport = RecordingExplorationTransport();
+        final mounted = _mount(
+          projection: projection,
+          runner: runner,
+          circuit: retryRootCircuit,
+          circuits: const {
+            'spec_review': specReviewCircuit,
+            'discovery': discoveryCircuit,
+          },
+          services: ServiceBundle(transport: transport),
+        );
+        addTearDown(mounted.owner.dispose);
+
+        await _pumpUntil(
+          mounted.owner,
+          () =>
+              (runner.refusedByTitle[targetTitle] ?? 0) == 5 &&
+              runner
+                  .callsFor('create')
+                  .any(
+                    (call) => call.contains('--type') && call.contains('gate'),
+                  ),
+        );
+
+        expect(runner.refusedByTitle[targetTitle], 5);
+        final gateCreates = runner
+            .callsFor('create')
+            .where((call) => call.contains('--type') && call.contains('gate'));
+        expect(gateCreates, hasLength(1));
+        final failed = transport
+            .named('session.stepSuccessorMintFailed')
+            .toList();
+        expect(failed, hasLength(5));
+        expect(failed.last.data['reason'], contains('invalid issue type'));
+        expect(failed.last.data['attempt'], '5');
+        expect(
+          transport.named('session.stepSuccessorMintExhausted'),
+          hasLength(1),
+        );
+        final updates = runner.callsFor('update');
+        final gateUpdate = List<int>.generate(updates.length, (index) => index)
+            .firstWhere(
+              (index) => runner.metadataOfUpdate(index)['blocks'] == sessionId,
+            );
+        expect(runner.metadataOfUpdate(gateUpdate)['node'], targetPath);
+        expect(
+          runner.metadataOfUpdate(gateUpdate)['reason'],
+          failed.last.data['reason'],
+        );
+      },
+    );
+  }
+
+  test('a transient successor refusal recovers on attempt three', () async {
+    final runner = _RefusingSuccessorRunner({'specify': 2});
+    final transport = RecordingExplorationTransport();
+    final mounted = _mount(
+      projection: _persistedInvalidationProjection(
+        sourceCircuit: 'spec_review',
+      ),
+      runner: runner,
+      services: ServiceBundle(transport: transport),
+    );
+    addTearDown(mounted.owner.dispose);
+
+    await _pumpUntil(
+      mounted.owner,
+      () => runner
+          .callsFor('dep')
+          .any(
+            (call) =>
+                call.length > 2 &&
+                call[0] == 'dep' &&
+                call[1] == 'add' &&
+                call.contains('tgdog-spec_review-target'),
+          ),
+    );
+
+    expect(runner.refusedByTitle['specify'], 2);
+    final specifyCreates = runner
+        .callsFor('create')
+        .where((call) => call.contains('--title') && call.contains('specify'));
+    expect(specifyCreates, hasLength(3));
+    expect(
+      runner
+          .callsFor('create')
+          .where((call) => call.contains('--type') && call.contains('gate')),
+      isEmpty,
+    );
+    expect(transport.named('session.stepSuccessorMintFailed'), hasLength(2));
+    expect(transport.named('session.stepSuccessorMintExhausted'), isEmpty);
+  });
+
+  test('interleaved successor budgets are isolated per node path', () async {
+    final runner = _RefusingSuccessorRunner({'specify': 2, 'anchors': 100});
+    final transport = RecordingExplorationTransport();
+    final mounted = _mount(
+      projection: _interleavedProjection(),
+      runner: runner,
+      circuit: retryRootCircuit,
+      circuits: const {
+        'spec_review': specReviewCircuit,
+        'discovery': discoveryCircuit,
+      },
+      services: ServiceBundle(transport: transport),
+    );
+    addTearDown(mounted.owner.dispose);
+
+    await _pumpUntil(
+      mounted.owner,
+      () =>
+          (runner.refusedByTitle['anchors'] ?? 0) == 5 &&
+          runner
+              .callsFor('create')
+              .any((call) => call.contains('--type') && call.contains('gate')),
+    );
+
+    final stepCreates = runner
+        .callsFor('create')
+        .where(
+          (call) =>
+              call.contains('--type') &&
+              call.contains(GridIssueTypes.step.wire),
+        );
+    expect(stepCreates.where((call) => call.contains('specify')), hasLength(3));
+    expect(stepCreates.where((call) => call.contains('anchors')), hasLength(5));
+    expect(runner.refusedByTitle['specify'], 2);
+    expect(runner.refusedByTitle['anchors'], 5);
+    final gateCreates = runner
+        .callsFor('create')
+        .where((call) => call.contains('--type') && call.contains('gate'));
+    expect(gateCreates, hasLength(1));
+    final updates = runner.callsFor('update');
+    final gateUpdate = List<int>.generate(updates.length, (index) => index)
+        .firstWhere(
+          (index) => runner.metadataOfUpdate(index)['blocks'] == sessionId,
+        );
+    expect(
+      runner.metadataOfUpdate(gateUpdate)['node'],
+      'tg-lt2a/discovery/anchors',
+    );
+    expect(
+      transport
+          .named('session.stepSuccessorMintFailed')
+          .where((flare) => flare.data['nodePath'] == specifyPath),
+      hasLength(2),
+    );
   });
 }
