@@ -355,6 +355,11 @@ class _WorkListState extends State<WorkList>
             disposition is LiveSession &&
             liveSessionId.isNotEmpty &&
             stationServices != null) {
+          // ADR-0008 D-2 gives SessionScope the formula-positive and breaker
+          // endings. This is a third ending: the parent frontier observes the
+          // closed work bead and removes the keyed scope without rebuilding
+          // it. The existing workBeadClosed sweep therefore owns durable
+          // session settlement before it closes the gates.
           _scheduleGateSweep(
             stationServices,
             services,

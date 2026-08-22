@@ -186,6 +186,9 @@ class StationWorkRuntime {
     for (final line in droppedReapReports(report)) {
       _onRefusal(line);
     }
+    for (final line in droppedWorkTerminalSettlementReports(report)) {
+      _onRefusal(line);
+    }
     // The TEARDOWN REPLAY (tg-tlea) — the session-driven pass beside the
     // worktree-driven reconcile above. It runs BEFORE the driver starts so a
     // session caught mid-teardown is finished off before the tree could mount
@@ -245,6 +248,14 @@ List<String> droppedReapReports(RestartReport report) => [
       'grid: restart reap of ${r.sessionId}/${r.nodePath} was DROPPED '
           '(${r.failure}) — that cursor node still reads `running` over a dead '
           'pid ${r.pid ?? '<unrecorded>'}',
+];
+
+List<String> droppedWorkTerminalSettlementReports(RestartReport report) => [
+  for (final settlement in report.workTerminalSettlements)
+    if (settlement.failure case final failure?)
+      'grid: restart work-terminal settlement of '
+          '${settlement.sessionId}/${settlement.workBeadId} was DROPPED '
+          '($failure) — terminal reason ${settlement.terminalReason}',
 ];
 
 bool _sameCanonicalRoot(String left, String right) =>
@@ -562,10 +573,7 @@ Future<StationWorkRuntime> assembleStationWork({
       );
     }
   }
-  // THE single-root consumer's root (RestartReconciler; the D-M6 restart
-  // fan-out across N substations stays deferred): the FIRST substation's.
   final workRoot = rootsByName[substations.first.name]!;
-
   final groups = groupsOverride ?? const SystemProcessGroupController();
   final orphanSink = onOrphan ?? (String m) => stdout.writeln(m);
 
@@ -603,7 +611,7 @@ Future<StationWorkRuntime> assembleStationWork({
   final restart = RestartReconciler(
     listWorktrees: git.listBeadWorktrees,
     reapWorktree: git.reap,
-    workRoot: workRoot,
+    workRoots: List<RootCheckout>.unmodifiable(rootsByName.values),
     groups: groups,
     // The ONE bd chokepoint — the zombie-running reap re-mounts a dead
     // generation's corpse through it, on the_grid's OWN session bead, BEFORE the
@@ -612,6 +620,7 @@ Future<StationWorkRuntime> assembleStationWork({
     writer: writer,
     freshnessBarrier: freshnessBarrier,
     stateSnapshot: () => stateSource.current ?? _emptyGraphSnapshot(),
+    workSnapshot: () => work.current ?? _emptyGraphSnapshot(),
     // The MOLECULE lease sweep (tg-eli phase 1): the vendor is the only
     // grid.lease.* touchpoint (the reconciler stays lease-schema-ignorant);
     // `restart.hasLeaseSweep` proves it reached here. Its KILL GATE is NOT

@@ -142,6 +142,12 @@ typedef GateAutoCloseReceipt = ({
   GateCloseCause cause,
 });
 
+typedef WorkTerminalSettlementReceipt = ({
+  String sessionId,
+  String workBeadId,
+  String terminalReason,
+});
+
 /// Reads a gate's durable close-cause vocabulary.
 GateCloseCause gateCloseCauseOf(Bead gate) => GateCloseCause.values.firstWhere(
   (value) =>
@@ -216,6 +222,11 @@ class StationBeadWriter {
   /// wire-identical to it. Session-level, disjoint from the `grid.cursor.*` codec.
   static const String startedAtKey = 'started_at';
   static const String closedAtKey = 'closed_at';
+  static const String outcomeKey = 'grid.outcome';
+  static const String outcomeComplete = 'complete';
+  static const String workTerminalReasonKey = 'grid.work_terminal_reason';
+  static const String workTerminalReasonWorkBeadClosed =
+      'work-bead-closed-under-live-session';
 
   /// The per-target-id serialization chain (D-1). `_tail[id]` completes when the
   /// last-queued write on `id` settles (success OR failure — it never rejects,
@@ -347,6 +358,12 @@ class StationBeadWriter {
             : 'gate auto-close refused: live session',
       );
     }
+    if (disposition == GateSweepSessionDisposition.live) {
+      await settleSessionForTerminalWork(
+        sessionId: sessionId,
+        terminalWorkBead: terminalWorkBead!,
+      );
+    }
     final gates = await _findOpenGates(sessionId: sessionId);
     final oldestByNode = <String, Bead>{};
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
@@ -380,6 +397,46 @@ class StationBeadWriter {
       });
     }
     return receipts;
+  }
+
+  Future<WorkTerminalSettlementReceipt> settleSessionForTerminalWork({
+    required String sessionId,
+    required Bead terminalWorkBead,
+  }) async {
+    final session = await _reader.beadById(
+      sessionId,
+      types: {GridIssueTypes.session},
+    );
+    if (session == null ||
+        session.isClosed ||
+        !terminalWorkBead.isClosed ||
+        session.metadata['work_bead'] != terminalWorkBead.id) {
+      throw StateError(
+        'work-terminal settlement refused: session/work terminal mismatch',
+      );
+    }
+    await update(
+      sessionId,
+      metadata: const {
+        outcomeKey: outcomeComplete,
+        workTerminalReasonKey: workTerminalReasonWorkBeadClosed,
+      },
+    );
+    await reapMolecule(sessionId: sessionId);
+    await close(
+      sessionId,
+      reason: 'grid settle: $workTerminalReasonWorkBeadClosed',
+    );
+    _flare('session.workTerminal', {
+      'sessionId': sessionId,
+      'workBeadId': terminalWorkBead.id,
+      'reason': workTerminalReasonWorkBeadClosed,
+    });
+    return (
+      sessionId: sessionId,
+      workBeadId: terminalWorkBead.id,
+      terminalReason: workTerminalReasonWorkBeadClosed,
+    );
   }
 
   /// Mints an owned state-store cross-repository blocking-link receipt.

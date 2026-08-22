@@ -15,7 +15,9 @@
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -94,6 +96,39 @@ class FakeProcessGroupController implements ProcessGroupController {
   @override
   int currentGroupId() => ownGroupId;
 }
+
+class VanishedBetweenProbeController implements ProcessGroupController {
+  int probes = 0;
+  final List<(int, ProcessSignal)> signals = [];
+
+  @override
+  int currentGroupId() => 999;
+
+  @override
+  bool processAlive(int pid) => probes++ == 0;
+
+  @override
+  Future<int?> resolvePgid(int pid) async => null;
+
+  @override
+  bool signalGroup(int pgid, ProcessSignal signal) {
+    signals.add((pgid, signal));
+    return true;
+  }
+}
+
+Future<ProcessHandle> _neverSpawn(
+  ProcessLeaseRequest request,
+  TreeContext context,
+  StepArgs args,
+) => Future.error(StateError('spawn must not be called'));
+
+Future<StepOutcome> _neverDispatch(
+  ProcessHandle handle,
+  ProcessLeaseRequest request,
+  TreeContext context,
+  StepArgs args,
+) => Future.error(StateError('dispatch must not be called'));
 
 /// The recording bd chokepoint over the OWNED state substation (`tgdog`) —
 /// wired so `hasChokepoint` reads true; post phase 2 the pass issues NO writes
@@ -194,6 +229,112 @@ RestartReconciler _reconciler({
 );
 
 void main() {
+  test('closed foreign work bead is settled from a non-first root', () async {
+    const first = RootCheckout(
+      path: '/workspace/first',
+      defaultBranch: 'main',
+      substation: 'first',
+    );
+    const second = RootCheckout(
+      path: '/workspace/second',
+      defaultBranch: 'main',
+      substation: 'second',
+    );
+    final log = <String>[];
+    final reapedRoots = <String>[];
+    final bd = RecordingBdRunner();
+    const sessionId = 'tgdog-survivor';
+    const workId = 'foreign-closed';
+    final stateBeads = <Bead>[
+      _session(
+        id: sessionId,
+        workBead: workId,
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      ),
+      const Bead(
+        id: 'tgdog-molecule-survivor',
+        issueType: GridIssueTypes.molecule,
+        metadata: {'grid.circuit.session': sessionId},
+      ),
+      Bead(
+        id: 'tgdog-dead-running-step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'rig': 'tgdog',
+          MoleculeStepKeys.session: sessionId,
+          MoleculeStepKeys.state: StepState.running.name,
+          MoleculeStepKeys.kind: StepKind.job.name,
+          ...leaseBreadcrumb(
+            const ProcessHandle(pgid: 4242, pid: 4243, token: 'dead'),
+          ),
+        },
+      ),
+    ];
+    bd.exportBeads = stateBeads;
+    final writer = StationBeadWriter(
+      bd: BdCliService(bd),
+      reader: bd,
+      ownership: BeadOwnershipPredicate(const {'tgdog'}),
+    );
+    final groups = VanishedBetweenProbeController();
+    final vendor = StationProcessLeaseVendor(
+      writer: writer,
+      spawn: _neverSpawn,
+      dispatch: _neverDispatch,
+      metadataOf: (id) async => {
+        for (final entry
+            in stateBeads.singleWhere((bead) => bead.id == id).metadata.entries)
+          if (entry.value != null) entry.key: '${entry.value}',
+      },
+      liveness: (_) => false,
+    );
+    final state = _stateSnapshotOf(stateBeads);
+    final work = _stateSnapshotOf([
+      const Bead(id: workId, status: BeadStatus.closed),
+    ]);
+    final reconciler = RestartReconciler(
+      listWorktrees: (root) async {
+        log.add('list:${root.substation}');
+        return root == second ? [_wt(workId)] : const <BeadWorktree>[];
+      },
+      reapWorktree: ({required root, required worktree}) async {
+        reapedRoots.add(root.substation);
+        return ReapOutcome.removed();
+      },
+      workRoots: const [first, second],
+      groups: groups,
+      writer: writer,
+      freshnessBarrier: () async => log.add('barrier'),
+      stateSnapshot: () => state,
+      workSnapshot: () => work,
+      leaseVendor: vendor,
+    );
+
+    final report = await reconciler.reconcile();
+
+    expect(log, ['barrier', 'list:first', 'list:second']);
+    expect(reapedRoots, ['second']);
+    expect(groups.signals, isEmpty);
+    expect(
+      report.sweptLeases.single.terminateResult,
+      GroupTerminateResult.alreadyGone,
+    );
+    expect(report.workTerminalSettlements.single.failure, isNull);
+    expect(
+      report.workTerminalSettlements.single.terminalReason,
+      kWorkTerminalReasonWorkBeadClosed,
+    );
+    expect(
+      bd.callsFor('update').map((call) => call.join(' ')).join('\n'),
+      allOf(
+        contains('tgdog-dead-running-step'),
+        contains('grid.outcome=complete'),
+        contains('grid.work_terminal_reason='),
+      ),
+    );
+    expect(bd.callsFor('close').map((call) => call[1]), contains(sessionId));
+  });
+
   group('RestartReconciler — respawn-or-skip (the surviving contract)', () {
     test('a FOREIGN work bead with a TERMINAL owned session ⇒ SKIPPED '
         '(reaped, never signalled, marked skipped)', () async {

@@ -7,6 +7,7 @@
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
@@ -250,6 +251,127 @@ void main() {
       expect(f.runner.workCreates, isEmpty);
       expect(reg.events, ['START agent(tgdog-existing/tg-1/agent)']);
     });
+  });
+
+  test('closed work bead settles live molecule session', () async {
+    final f = buildFakes();
+    final transport = RecordingExplorationTransport();
+    const sessionId = 'tgdog-live';
+    f.runner.exportBeads = const [
+      Bead(
+        id: sessionId,
+        issueType: GridIssueTypes.session,
+        metadata: {
+          'rig': 'tgdog',
+          SessionBeadKeys.workBead: 'tg-closed',
+          SessionBeadKeys.model: kSessionModelMolecule,
+        },
+      ),
+      Bead(
+        id: 'tgdog-molecule',
+        issueType: GridIssueTypes.molecule,
+        metadata: {'grid.circuit.session': sessionId},
+      ),
+      Bead(
+        id: 'tgdog-running-step',
+        issueType: GridIssueTypes.step,
+        metadata: {
+          'grid.step.session': sessionId,
+          'grid.step.state': 'running',
+        },
+      ),
+      Bead(
+        id: 'tgdog-live-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'rig': 'tgdog',
+          'blocks': sessionId,
+          'node': 'review/pin-diff',
+        },
+      ),
+    ];
+    final writer = StationBeadWriter(
+      bd: BdCliService(f.runner),
+      reader: f.runner,
+      ownership: BeadOwnershipPredicate(const {'tgdog'}),
+      onFlare: transport.flare,
+    );
+    final joined = JoinedSnapshotNotifier(
+      _joined(
+        beads: [_task('tg-closed')],
+        ready: {'tg-closed'},
+        sessions: {
+          'tg-closed': const SessionProjection(
+            workBeadId: 'tg-closed',
+            sessionId: sessionId,
+          ),
+        },
+      ),
+    );
+    final registry = RecordingCapabilityRegistry();
+    final mounted = _mountFull(
+      joined: joined,
+      ctx: StationServices(
+        provider: f.provider,
+        writer: writer,
+        stateSubstation: 'tgdog',
+      ),
+      registry: registry,
+      rootCircuit: (_) => _code,
+      services: ServiceBundle(transport: transport),
+    );
+    addTearDown(mounted.owner.dispose);
+    expect(registry.events, ['START agent($sessionId/tg-closed/agent)']);
+
+    joined.push(
+      _joined(
+        beads: [_task('tg-closed', status: BeadStatus.closed)],
+        ready: const {},
+        sessions: {
+          'tg-closed': const SessionProjection(
+            workBeadId: 'tg-closed',
+            sessionId: sessionId,
+          ),
+        },
+      ),
+    );
+    mounted.owner.flush();
+    await _pumpUntil(
+      mounted.owner,
+      () => f.runner.callsFor('close').any((call) => call[1] == sessionId),
+    );
+
+    final sessionUpdate = f.runner
+        .callsFor('update')
+        .firstWhere(
+          (call) =>
+              call[1] == sessionId && call.join(' ').contains('grid.outcome'),
+        );
+    expect(sessionUpdate.join(' '), contains('grid.outcome=complete'));
+    expect(
+      sessionUpdate.join(' '),
+      contains('grid.work_terminal_reason=work-bead-closed-under-live-session'),
+    );
+    expect(
+      f.runner.stdins.whereType<String>().join('\n'),
+      allOf(
+        contains('close tgdog-running-step'),
+        contains('close tgdog-molecule'),
+      ),
+    );
+    expect(
+      f.runner.callsFor('close').map((call) => call[1]),
+      containsAll([sessionId, 'tgdog-live-gate']),
+    );
+    expect(transport.named('session.workTerminal').single.data, const {
+      'sessionId': sessionId,
+      'workBeadId': 'tg-closed',
+      'reason': kWorkTerminalReasonWorkBeadClosed,
+    });
+    expect(registry.events, [
+      'START agent($sessionId/tg-closed/agent)',
+      'STOP agent($sessionId/tg-closed/agent)',
+    ]);
   });
 
   group('Track C — SessionScope owns the positive-terminal close (D-2)', () {

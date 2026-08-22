@@ -8,7 +8,12 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart' as engine;
 import 'package:grid_runtime/grid_runtime.dart'
-    show OwnershipRefused, StationGitService, SubprocessProvider;
+    show
+        BeadWorktree,
+        OwnershipRefused,
+        RootCheckout,
+        StationGitService,
+        SubprocessProvider;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -37,6 +42,16 @@ final class _RecordingBdRunner implements BdRunner {
       stdout: '{"schema_version":1,"data":{"id":"$id"}}',
       stderr: '',
     );
+  }
+}
+
+final class _RecordingDryGit extends DryStationGitService {
+  final List<String> listedRoots = [];
+
+  @override
+  Future<List<BeadWorktree>?> listBeadWorktrees(RootCheckout root) async {
+    listedRoots.add(p.canonicalize(root.path));
+    return const <BeadWorktree>[];
   }
 }
 
@@ -75,6 +90,32 @@ void main() {
 
     test('an empty substation list refuses (no default substation)', () {
       expect(() => build(substations: []), throwsA(isA<ArgumentError>()));
+    });
+
+    test('every substation root reaches restart reconciliation', () async {
+      _seedStore('${tmp.path}/first', database: 'first');
+      _seedStore('${tmp.path}/second', database: 'second');
+      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      final git = _RecordingDryGit();
+      final work = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+        substations: [
+          SubstationWorkSpec(name: 'first', root: '${tmp.path}/first'),
+          SubstationWorkSpec(name: 'second', root: '${tmp.path}/second'),
+        ],
+        resolver: const _NullResolver(),
+        dryRun: true,
+        gitOverride: git,
+      );
+      addTearDown(work.shutdown);
+
+      await work.start();
+
+      expect(git.listedRoots, [
+        p.canonicalize('${tmp.path}/first'),
+        p.canonicalize('${tmp.path}/second'),
+      ]);
+      expect(work.lastRestartReport, isNotNull);
     });
 
     test('a duplicate substation name refuses (two WorkLists would race)', () {
