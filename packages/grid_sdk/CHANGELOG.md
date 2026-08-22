@@ -1,3 +1,13 @@
+## 0.3.0-rc.5
+
+- `SubstationWork`'s transport overlay is a total derivation:
+  `ServiceBundle.mountEligibility` now reaches `WorkList`, so a composed
+  mount gate actually enforces (#212). Previously the overlay hand-copied
+  six fields and silently dropped the predicate — the gate tested green in
+  the seat and did nothing in the live arm.
+- Floors tightened for train coherence: `grid_engine ^0.3.0-rc.6`,
+  `grid_runtime ^0.2.0-rc.4`, `beads_dart ^0.2.0-rc.4`.
+
 ## 0.3.0-rc.4
 
 - Verdict-based rework cap accounting and the readiness-hold exclusion

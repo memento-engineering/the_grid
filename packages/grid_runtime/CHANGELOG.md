@@ -1,3 +1,13 @@
+## 0.2.0-rc.4
+
+- Guarded write capability negotiation with graceful, LOUD fallback (#205) —
+  pairs with `beads_dart 0.2.0-rc.4` (floor tightened; the rc.3 archive did
+  not compile against any published beads_dart).
+- Boot replays the positive-terminal teardown tail, so sessions completed
+  under a dead arm settle instead of stranding (tg-tlea).
+- Durable per-bead remount budget: a `mount-attempt` record is written at
+  admission and consulted before remounting (tg-zlfu).
+
 ## 0.2.0-rc.3
 
 - `StationBeadWriter.closeOpenGatesForTerminal` plus the `GateCloseCause` and

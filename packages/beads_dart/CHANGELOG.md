@@ -1,3 +1,16 @@
+## 0.2.0-rc.4
+
+- Breaking: guarded conditional updates ride a NEGOTIATED capability (#205).
+  The probe is tri-state and fail-closed (an indeterminate `bd` keeps the
+  guards); a conditional mismatch surfaces as `BdGuardMismatch` instead of a
+  generic failure, and there is no unguarded retry after a mismatch. The
+  pre-negotiation conditional parameters on update are gone. Migration:
+  depend on the negotiated path and catch `BdGuardMismatch` where CAS
+  conflicts were previously inferred from generic errors.
+- Coherence note: this is the floor `grid_runtime 0.2.0-rc.4` requires — the
+  rc.3 pair was published incoherently (the runtime archive referenced
+  guarded-write symbols no published beads_dart carried).
+
 ## 0.2.0-rc.3
 
 - Guarded-write capability negotiation (`BdGuardMismatch`) and the `notes:`

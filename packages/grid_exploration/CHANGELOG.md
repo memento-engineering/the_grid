@@ -1,3 +1,9 @@
+## 0.3.0-rc.3
+
+- Fix: the published archive ships the DevTools extension bundle again — the
+  rc.2 archive dropped it via an over-broad ignore (tg-tzf0, #203). No API
+  changes.
+
 ## 0.3.0-rc.2
 
 - Republished to close a version/content divergence (see note below).

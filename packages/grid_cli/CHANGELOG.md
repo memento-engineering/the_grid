@@ -1,3 +1,12 @@
+## 0.5.0-rc.6
+
+- `up` performs boot-time `types.custom` validation and prints the exact
+  missing set beside the banner (#211).
+- Floors tightened for train coherence across the rc train:
+  `grid_sdk ^0.3.0-rc.5`, `grid_engine ^0.3.0-rc.6`,
+  `grid_runtime ^0.2.0-rc.4`, `grid_exploration ^0.3.0-rc.3`,
+  `beads_dart ^0.2.0-rc.4`.
+
 ## 0.5.0-rc.5
 
 - `StationEventLog` + `CompositeExplorationTransport`: a durable, cursored
