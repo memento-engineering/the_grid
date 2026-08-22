@@ -269,68 +269,123 @@ void main() {
       );
     });
 
-    test(
-      'grid/rework REAPS the retired round\'s molecule (tg-ehht): every '
-      'open step/molecule bead of the retired session is batch-closed',
-      () async {
-        final stateRunner = _RecordingRunner()
-          ..openBeadsResult = const [
-            Bead(
-              id: 'tgdog-step-a',
-              issueType: GridIssueTypes.step,
-              metadata: {'grid.step.session': 'tgdog-session', 'rig': 'tgdog'},
-            ),
-            Bead(
-              id: 'tgdog-step-b',
-              issueType: GridIssueTypes.step,
-              metadata: {'grid.step.session': 'tgdog-session', 'rig': 'tgdog'},
-            ),
-            Bead(
-              id: 'tgdog-step-other',
-              issueType: GridIssueTypes.step,
-              metadata: {'grid.step.session': 'tgdog-OTHER', 'rig': 'tgdog'},
-            ),
-          ];
-        final workRunner = _RecordingRunner();
-        final handler = _handler(
-          state: _Source(
-            _snapshot([
-              const Bead(
-                id: 'tgdog-session',
-                issueType: GridIssueTypes.session,
-                status: BeadStatus.closed,
-                metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
-              ),
-            ]),
+    test('grid/rework reverse-topological REAPS the retired round\'s molecule '
+        '(tg-ehht): every open step/molecule bead of the retired session is '
+        'batch-closed', () async {
+      final stateRunner = _RecordingRunner()
+        ..openBeadsResult = const [
+          Bead(
+            id: 'tgdog-molecule',
+            issueType: GridIssueTypes.molecule,
+            metadata: {
+              StationBeadWriter.moleculeSessionKey: 'tgdog-session',
+              'rig': 'tgdog',
+            },
           ),
-          work: _Source(
-            _snapshot([
-              const Bead(
-                id: 'tg-1',
-                issueType: IssueType.task,
-                metadata: {'rig': 'tg'},
-              ),
-            ]),
+          Bead(
+            id: 'tgdog-code',
+            issueType: GridIssueTypes.step,
+            metadata: {
+              StationBeadWriter.stepSessionKey: 'tgdog-session',
+              'rig': 'tgdog',
+            },
           ),
-          stateRunner: stateRunner,
-          workRunner: workRunner,
-        );
+          Bead(
+            id: 'tgdog-decision',
+            issueType: GridIssueTypes.step,
+            metadata: {
+              StationBeadWriter.stepSessionKey: 'tgdog-session',
+              'rig': 'tgdog',
+            },
+          ),
+          Bead(
+            id: 'tgdog-route',
+            issueType: GridIssueTypes.step,
+            metadata: {
+              StationBeadWriter.stepSessionKey: 'tgdog-session',
+              'rig': 'tgdog',
+            },
+          ),
+        ]
+        ..exportDependencies = const [
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-code',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-decision',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-code',
+            dependsOnId: 'tgdog-molecule',
+            type: DependencyType.parentChild,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-decision',
+            dependsOnId: 'tgdog-molecule',
+            type: DependencyType.parentChild,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-molecule',
+            type: DependencyType.parentChild,
+          ),
+        ];
+      final workRunner = _RecordingRunner();
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tgdog-session',
+              issueType: GridIssueTypes.session,
+              status: BeadStatus.closed,
+              metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
+            ),
+          ]),
+        ),
+        work: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tg-1',
+              issueType: IssueType.task,
+              metadata: {'rig': 'tg'},
+            ),
+          ]),
+        ),
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+      );
 
-        final result = await handler(
-          const GridCommandRequest.rework(beadId: 'tg-1', note: 'retry'),
-        );
+      final result = await handler(
+        const GridCommandRequest.rework(beadId: 'tg-1', note: 'retry'),
+      );
 
-        expect(result, isA<GridCommandCompleted>());
-        final batch = stateRunner.calls.where((c) => c.first == 'batch');
-        expect(
-          batch,
-          hasLength(1),
-          reason:
-              'the retire must collect the retired round\'s graph — the '
-              'rework exit left 9,389 orphaned step beads by 2026-08-07',
-        );
-      },
-    );
+      expect(result, isA<GridCommandCompleted>());
+      expect(
+        stateRunner.calls.where(
+          (call) => call.length > 1 && call[0] == 'dep' && call[1] == 'list',
+        ),
+        hasLength(1),
+      );
+      final batch = stateRunner.calls.singleWhere(
+        (call) => call.first == 'batch',
+      );
+      final script = stateRunner.stdins[stateRunner.calls.indexOf(batch)]!;
+      expect(
+        script.split('\n'),
+        orderedEquals([
+          'close tgdog-code',
+          'close tgdog-decision',
+          'close tgdog-route',
+          'close tgdog-molecule',
+        ]),
+      );
+      expect(batch, isNot(contains('--force')));
+      expect(script, isNot(contains('--force')));
+    });
 
     test(
       'grid/rework accepts a POUR-PARKED session: no steps at all, an open '
@@ -1407,7 +1462,9 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
   bool throwOnBatch = false;
   final List<BdResult> _results;
   final List<Bead> exportBeads;
+  List<BeadDependency> exportDependencies = const <BeadDependency>[];
   final calls = <List<String>>[];
+  final stdins = <String?>[];
   Completer<void>? _blocked;
 
   void release() => _blocked?.complete();
@@ -1419,6 +1476,20 @@ final class _RecordingRunner implements BdRunner, BeadProbeReader {
     String? stdin,
   }) async {
     calls.add(List.unmodifiable(args));
+    stdins.add(stdin);
+    final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'dep' && args.length > 1 && args[1] == 'list') {
+      return BdResult(
+        exitCode: 0,
+        stdout: jsonEncode({
+          'schema_version': 1,
+          'data': [
+            for (final dependency in exportDependencies) dependency.toJson(),
+          ],
+        }),
+        stderr: '',
+      );
+    }
     if (refuseConditionalGateUpdate &&
         args.length > 1 &&
         args[0] == 'update' &&
