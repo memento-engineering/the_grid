@@ -1,3 +1,18 @@
+## 0.3.0-rc.6
+
+- A dropped state-persist now gets a bounded, durable consequence: the failure
+  routes into the supervised-restart writer (persisted restartCount + backoff
+  cooldown; circuit-break + escalation at exhaustion). Kills the unbounded
+  1 Hz re-derive that grew one store by gigabytes (#207).
+- Molecule step graphs are collected before session close, and externally
+  closed sessions replay their teardown at boot (#206, #208).
+- An exhausted successor mint parks a gate instead of abandoning the molecule
+  (#209); every post-retire abandoned mint flares, LOUD or GONE (#210).
+- `up` warns at boot when the state store's `types.custom` is missing engine
+  types — the misconfiguration that silently stranded three molecules (#211).
+- Floors tightened for train coherence: `grid_runtime ^0.2.0-rc.4`,
+  `beads_dart ^0.2.0-rc.4`.
+
 ## 0.3.0-rc.5
 
 - Fixes 0.3.0-rc.4, which DOES NOT COMPILE against its own declared
