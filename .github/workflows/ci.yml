@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Merge-queue validation: without this trigger, required checks never run on
+  # queued merge groups and every enqueued PR hangs forever.
+  merge_group:
 
 jobs:
   dart:
