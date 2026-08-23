@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:grid_cli/grid_cli.dart';
 import 'package:test/test.dart';
+import 'package:vm_service/vm_service.dart';
 
 /// A fake VM session (Fakes, not mocks): records the calls, in order.
 class _FakeSession implements StationVmSession {
@@ -41,6 +42,45 @@ class _FakeSession implements StationVmSession {
   Future<void> close() async => calls.add('close');
 }
 
+class _FakeVmService extends VmService {
+  _FakeVmService({required this.vm, required this.isolates})
+    : super(const Stream<dynamic>.empty(), (_) {});
+
+  final VM vm;
+  final Map<String, Isolate> isolates;
+  final List<String> requestedIsolateIds = <String>[];
+
+  @override
+  Future<VM> getVM() async => vm;
+
+  @override
+  Future<Isolate> getIsolate(String isolateId) async {
+    requestedIsolateIds.add(isolateId);
+    return isolates[isolateId]!;
+  }
+}
+
+Future<({StationVmSession session, _FakeVmService service})> connectPayload({
+  required List<IsolateRef> isolateRefs,
+  required Map<String, Isolate> isolates,
+}) async {
+  final service = _FakeVmService(
+    vm: VM(isolates: isolateRefs),
+    isolates: isolates,
+  );
+  final session = await VmServiceSession.connect(
+    Uri.parse('http://127.0.0.1:1234/token=/'),
+    connectService: (_) async => service,
+  );
+  return (session: session, service: service);
+}
+
+Isolate isolatePayload(String id, {String? rootUri}) => Isolate(
+  id: id,
+  name: 'lunar',
+  rootLib: rootUri == null ? null : LibraryRef(id: 'libraries/1', uri: rootUri),
+);
+
 void main() {
   late Directory home;
   setUp(() => home = Directory.systemTemp.createTempSync('station-reload-'));
@@ -60,6 +100,91 @@ void main() {
       ),
     );
   }
+
+  test('probe refuses a snapshot root reported by the live VM', () async {
+    final payload = await connectPayload(
+      isolateRefs: <IsolateRef>[IsolateRef(id: 'isolates/user')],
+      isolates: <String, Isolate>{
+        'isolates/user': isolatePayload(
+          'isolates/user',
+          rootUri: 'file:///tmp/lunar.dart.snapshot',
+        ),
+      },
+    );
+    addTearDown(payload.session.close);
+
+    final capability = await payload.session.probeReloadCapability();
+
+    expect(capability, isA<ReloadUnsupported>());
+    expect(
+      (capability as ReloadUnsupported).reason,
+      contains('has no incremental compiler'),
+    );
+  });
+
+  test(
+    'probe supports a source root reported by a snapshot-launched resident',
+    () async {
+      final payload = await connectPayload(
+        isolateRefs: <IsolateRef>[IsolateRef(id: 'isolates/user')],
+        isolates: <String, Isolate>{
+          'isolates/user': isolatePayload(
+            'isolates/user',
+            rootUri: 'package:lunar/lunar.dart',
+          ),
+        },
+      );
+      addTearDown(payload.session.close);
+
+      expect(
+        await payload.session.probeReloadCapability(),
+        isA<ReloadSupported>(),
+      );
+    },
+  );
+
+  for (final rootUri in <String?>[null, '']) {
+    test('probe fails closed for root URI ${rootUri ?? 'null'}', () async {
+      final payload = await connectPayload(
+        isolateRefs: <IsolateRef>[IsolateRef(id: 'isolates/user')],
+        isolates: <String, Isolate>{
+          'isolates/user': isolatePayload('isolates/user', rootUri: rootUri),
+        },
+      );
+      addTearDown(payload.session.close);
+
+      final capability = await payload.session.probeReloadCapability();
+
+      expect(capability, isA<ReloadUnsupported>());
+      expect(
+        (capability as ReloadUnsupported).reason,
+        contains('reload capability cannot be established'),
+      );
+    });
+  }
+
+  test('connect skips leading system and id-less isolates', () async {
+    final payload = await connectPayload(
+      isolateRefs: <IsolateRef>[
+        IsolateRef(id: 'isolates/system', isSystemIsolate: true),
+        IsolateRef(name: 'id-less'),
+        IsolateRef(id: 'isolates/user', isSystemIsolate: false),
+      ],
+      isolates: <String, Isolate>{
+        'isolates/user': isolatePayload(
+          'isolates/user',
+          rootUri: 'package:lunar/lunar.dart',
+        ),
+      },
+    );
+    addTearDown(payload.session.close);
+
+    expect(
+      await payload.session.probeReloadCapability(),
+      isA<ReloadSupported>(),
+    );
+    expect(payload.service.requestedIsolateIds, <String>['isolates/user']);
+  });
 
   test('reload swaps sources FIRST, then re-composes', () async {
     writeLock(vmServiceUri: 'http://127.0.0.1:1234/tok=/');
