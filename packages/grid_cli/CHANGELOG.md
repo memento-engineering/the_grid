@@ -1,3 +1,8 @@
+## 0.5.0-rc.7
+
+- `reload` probes the resident's reload capability before sending any reload request and refuses with `ReloadUnsupportedLaunchShape` instead of crashing a non-reloadable resident's kernel service (#219).
+- `/status` derives wedge and work visibility from ONE captured snapshot (`wedge.live == work.liveSessions` by construction) and populates per-substation ready/mounted/live rows for every armed store (#221).
+
 ## 0.5.0-rc.6
 
 - `up` performs boot-time `types.custom` validation and prints the exact
