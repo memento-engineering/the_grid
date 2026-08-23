@@ -10,6 +10,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
 
@@ -36,6 +37,44 @@ class _RecordingTransport implements ExplorationTransport {
 
   List<({String name, Map<String, String> data})> named(String name) =>
       flares.where((flare) => flare.name == name).toList();
+}
+
+final class _ThrowingGateUpdateRunner extends RecordingBdRunner {
+  _ThrowingGateUpdateRunner() : super(createdId: 'tgdog-round2');
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (args.length > 1 && args.first == 'update' && args[1] == 'gate-1') {
+      throw StateError('controlled gate update failure');
+    }
+    return result;
+  }
+}
+
+Fakes _fakesOver(RecordingBdRunner runner) {
+  final provider = FakeRuntimeProvider();
+  final git = RecordingGitRunner();
+  final pr = FakePrOpener();
+  return (
+    ctx: StationServices(
+      provider: provider,
+      writer: StationBeadWriter(
+        bd: BdCliService(runner),
+        reader: runner,
+        ownership: BeadOwnershipPredicate(const {stateSubstation, 'gate'}),
+      ),
+      stateSubstation: stateSubstation,
+    ),
+    runner: runner,
+    provider: provider,
+    git: git,
+    pr: pr,
+  );
 }
 
 Future<void> _pump() async {
@@ -209,6 +248,119 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
 
 void main() {
   group('SessionScope rework re-arm through the REAL StationJoinBridge', () {
+    Future<void> runStaleGateRework({
+      required RecordingBdRunner runner,
+      required _RecordingTransport transport,
+    }) async {
+      final f = _fakesOver(runner);
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final original = _round1Session('tgdog-round1', workBead: 'tg-1');
+      final gate = _openGate('gate-1', sessionId: 'tgdog-round1');
+      final steps = _round1Steps('tgdog-round1');
+      runner.exportBeads = [original, ...steps, gate];
+      final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+      final stateSrc = FakeSnapshotSource(_state([original, ...steps, gate]));
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
+      addTearDown(bridge.dispose);
+      final m = _mountFull(
+        joined: bridge.notifier,
+        ctx: f.ctx,
+        registry: reg,
+        rootCircuit: (_) => _code,
+        transport: transport,
+      );
+      addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
+      await _pump();
+
+      stateSrc.push(
+        _state([
+          _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
+          ...steps,
+          gate,
+        ], tick: 1),
+      );
+      workSrc.push(
+        _work(
+          [bead('tg-1')],
+          {'tg-1'},
+          tick: DateTime.now()
+              .add(const Duration(seconds: 1))
+              .millisecondsSinceEpoch,
+        ),
+      );
+      await _pumpUntil(m.owner, () => runner.workCreates.length >= 2);
+    }
+
+    test(
+      'stale session reader preserves causal close and fresh mint',
+      () async {
+        final runner = RecordingBdRunner(createdId: 'tgdog-round2');
+        final transport = _RecordingTransport();
+        await runStaleGateRework(runner: runner, transport: transport);
+
+        expect(
+          runner.callsFor('close').map((call) => call[1]),
+          containsAllInOrder(['tgdog-round1', 'gate-1']),
+          reason: '${transport.flares}',
+        );
+        expect(
+          runner
+              .callsFor('update')
+              .singleWhere(
+                (call) =>
+                    call.length > 1 &&
+                    call[1] == 'gate-1' &&
+                    call
+                        .join(' ')
+                        .contains(StationBeadWriter.gateCloseCauseKey),
+              )
+              .join(' '),
+          contains('${StationBeadWriter.gateCloseCauseKey}=superseded-round'),
+        );
+        expect(transport.named('gate.autoCloseFailed'), isEmpty);
+        expect(
+          runner.workCreates.where((call) => !call.contains('--graph')),
+          hasLength(1),
+        );
+        expect(
+          runner.workCreates.where((call) => call.contains('--graph')),
+          hasLength(1),
+        );
+      },
+    );
+
+    test('failed retired gate cleanup cannot consume the fresh mint', () async {
+      final runner = _ThrowingGateUpdateRunner();
+      final transport = _RecordingTransport();
+      await runStaleGateRework(runner: runner, transport: transport);
+
+      final sessionClose = runner.calls.indexWhere(
+        (call) => call.first == 'close' && call[1] == 'tgdog-round1',
+      );
+      final gateUpdate = runner.calls.indexWhere(
+        (call) => call.first == 'update' && call[1] == 'gate-1',
+      );
+      expect(sessionClose, lessThan(gateUpdate));
+      final failed = transport.named('gate.autoCloseFailed');
+      expect(failed, hasLength(1));
+      expect(failed.single.data, containsPair('sessionId', 'tgdog-round1'));
+      expect(
+        failed.single.data,
+        containsPair('cause', GateCloseCause.supersededRound.wireValue),
+      );
+      expect(
+        runner.workCreates.where((call) => !call.contains('--graph')),
+        hasLength(1),
+        reason: 'calls=${runner.calls} flares=${transport.flares}',
+      );
+      expect(
+        runner.workCreates.where((call) => call.contains('--graph')),
+        hasLength(1),
+      );
+    });
+
     test('a GATED round re-keyed by `grid rework` (leaving its gate bead OPEN, '
         'exactly as the CLI does) still closes the retired round and mints '
         'round N+1 — proving the join itself is not where the live deviation '
