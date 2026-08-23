@@ -300,6 +300,14 @@ void main() {
                 },
               ),
               Bead(
+                id: 'tgdog-prereq',
+                issueType: GridIssueTypes.molecule,
+                metadata: {
+                  StationBeadWriter.moleculeSessionKey: 'tgdog-session',
+                  'rig': 'tgdog',
+                },
+              ),
+              Bead(
                 id: 'tgdog-code',
                 issueType: GridIssueTypes.step,
                 metadata: {
@@ -325,6 +333,11 @@ void main() {
               ),
             ]
             ..exportDependencies = const [
+              BeadDependency(
+                issueId: 'tgdog-code',
+                dependsOnId: 'tgdog-prereq',
+                type: DependencyType.blocks,
+              ),
               BeadDependency(
                 issueId: 'tgdog-route',
                 dependsOnId: 'tgdog-code',
@@ -395,8 +408,9 @@ void main() {
         script.split('\n'),
         orderedEquals([
           'close tgdog-att1',
-          'close tgdog-code',
           'close tgdog-decision',
+          'close tgdog-prereq',
+          'close tgdog-code',
           'close tgdog-route',
           'close tgdog-molecule',
         ]),
