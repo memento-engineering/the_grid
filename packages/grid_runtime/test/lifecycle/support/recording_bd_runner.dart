@@ -131,6 +131,20 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
       );
     }
     final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'batch' && stdin != null) {
+      final closedIds = stdin
+          .split('\n')
+          .where((line) => line.startsWith('close '))
+          .map((line) => line.substring('close '.length))
+          .toSet();
+      exportBeads = [
+        for (final bead in exportBeads)
+          if (closedIds.contains(bead.id))
+            bead.copyWith(status: BeadStatus.closed)
+          else
+            bead,
+      ];
+    }
     if (sub == 'dep' && args.length > 1 && args[1] == 'list') {
       return Future<BdResult>.value(
         BdResult(

@@ -44,6 +44,24 @@ Bead _molecule(String id, {String sessionId = 'tgdog-sess1'}) => Bead(
   },
 );
 
+Bead _session(String id, {String workBeadId = 'tg-1'}) => Bead(
+  id: id,
+  issueType: GridIssueTypes.session,
+  status: BeadStatus.open,
+  metadata: {StationBeadWriter.rigKey: 'tgdog', 'work_bead': workBeadId},
+);
+
+Bead _attempt(String id, {String workBeadId = 'tg-1'}) => Bead(
+  id: id,
+  issueType: GridIssueTypes.mountAttempt,
+  status: BeadStatus.open,
+  metadata: {
+    StationBeadWriter.rigKey: 'tgdog',
+    StationBeadWriter.mountAttemptWorkBeadKey: workBeadId,
+    StationBeadWriter.mountAttemptCountKey: '1',
+  },
+);
+
 void main() {
   late RecordingBdRunner runner;
   late BdCliService bd;
@@ -809,6 +827,8 @@ void main() {
       'reapMolecule orders sibling blockers before their route join and root',
       () async {
         runner.exportBeads = [
+          _session('tgdog-sess1'),
+          _attempt('tgdog-att1'),
           _molecule('tgdog-mol'),
           _step('tgdog-code'),
           _step('tgdog-decision'),
@@ -849,12 +869,14 @@ void main() {
         expect(
           script.split('\n'),
           orderedEquals([
+            'close tgdog-att1',
             'close tgdog-code',
             'close tgdog-decision',
             'close tgdog-route',
             'close tgdog-mol',
           ]),
         );
+        expect(runner.callsFor('dep'), hasLength(1));
       },
     );
 
@@ -864,6 +886,8 @@ void main() {
       () async {
         final proxied = _ProxiedBatchRunner(createdId: 'tgdog-sess1');
         proxied.exportBeads = [
+          _session('tgdog-sess1'),
+          _attempt('tgdog-att1'),
           _molecule('tgdog-mol'),
           _step('tgdog-code'),
           _step('tgdog-decision'),
@@ -912,6 +936,7 @@ void main() {
         expect(
           closes,
           orderedEquals([
+            'tgdog-att1',
             'tgdog-code',
             'tgdog-decision',
             'tgdog-route',
@@ -926,6 +951,8 @@ void main() {
 
     test('reapMolecule refuses a dependency cycle before mutation', () async {
       runner.exportBeads = [
+        _session('tgdog-sess1'),
+        _attempt('tgdog-att1'),
         _molecule('tgdog-mol'),
         _step('tgdog-step-a'),
         _step('tgdog-step-b'),

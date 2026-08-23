@@ -950,11 +950,20 @@ class StationBeadWriter {
   );
 
   Future<void> reapMolecule({required String sessionId}) async {
+    final session = await _reader.beadById(
+      sessionId,
+      types: {GridIssueTypes.session},
+    );
+    final workBeadId = session?.metadata['work_bead'] as String?;
+    final attempt = workBeadId == null
+        ? null
+        : await _findMountAttemptRecord(workBeadId);
     final matched = await _moleculeBeadsFor(sessionId: sessionId);
-    if (matched.isEmpty) return;
+    final roots = <Bead>[...matched, if (attempt != null) attempt];
+    if (roots.isEmpty) return;
     final chain = await _supersedesChainFor(matched);
     final beads = {
-      for (final bead in [...matched, ...chain]) bead.id: bead,
+      for (final bead in [...roots, ...chain]) bead.id: bead,
     };
     final dependencies = await _bd.depList(beads.keys.toList(growable: false));
     final orderedBeads = _moleculeReapOrder(beads, dependencies);
@@ -1354,8 +1363,9 @@ class StationBeadWriter {
   }
 
   static int _moleculeReapRank(Bead bead) => switch (bead.issueType) {
-    GridIssueTypes.step => 0,
-    GridIssueTypes.molecule => 1,
+    GridIssueTypes.mountAttempt => 0,
+    GridIssueTypes.step => 1,
+    GridIssueTypes.molecule => 2,
     _ => throw StateError(
       'reapMolecule collected unsupported type ${bead.issueType}',
     ),
