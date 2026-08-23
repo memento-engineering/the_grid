@@ -356,6 +356,40 @@ class ServiceBundle {
     this.mountEligibility,
   });
 
+  const ServiceBundle._derived({
+    required this.sourceControl,
+    required this.delivery,
+    required this.escalation,
+    required this.trust,
+    required this.trustFloor,
+    required this.transport,
+    required this.mountEligibility,
+  });
+
+  /// Derives a bundle from [base], replacing only non-null collaborators.
+  ///
+  /// Every field is forwarded through the all-required private constructor so
+  /// adding a field produces a compile error until this single derivation site
+  /// handles it.
+  factory ServiceBundle.derive(
+    ServiceBundle base, {
+    SourceControl? sourceControl,
+    DeliveryMethod? delivery,
+    EscalationHandler? escalation,
+    Trust? trust,
+    TrustFloor? trustFloor,
+    ExplorationTransport? transport,
+    MountEligibilityPredicate? mountEligibility,
+  }) => ServiceBundle._derived(
+    sourceControl: sourceControl ?? base.sourceControl,
+    delivery: delivery ?? base.delivery,
+    escalation: escalation ?? base.escalation,
+    trust: trust ?? base.trust,
+    trustFloor: trustFloor ?? base.trustFloor,
+    transport: transport ?? base.transport,
+    mountEligibility: mountEligibility ?? base.mountEligibility,
+  );
+
   /// Workspace provisioning for this substation's ONE root — the git impl ships
   /// in the asset.
   final SourceControl? sourceControl;
