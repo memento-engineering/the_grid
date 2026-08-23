@@ -90,15 +90,21 @@ abstract interface class StationVmSession {
 typedef VmSessionConnector =
     Future<StationVmSession> Function(Uri vmServiceUri);
 
+/// Opens a VM-service connection for [VmServiceSession.connect].
+typedef VmServiceConnector = Future<VmService> Function(String uri);
+
 /// The REAL session over `package:vm_service`.
 class VmServiceSession implements StationVmSession {
   VmServiceSession._(this._service, this._isolateId);
 
   /// Connects to [vmServiceUri] (the http:// URI the station advertised) and
   /// binds the station's main isolate.
-  static Future<StationVmSession> connect(Uri vmServiceUri) async {
+  static Future<StationVmSession> connect(
+    Uri vmServiceUri, {
+    VmServiceConnector connectService = vmServiceConnectUri,
+  }) async {
     final ws = convertToWebSocketUrl(serviceProtocolUrl: vmServiceUri);
-    final service = await vmServiceConnectUri(ws.toString());
+    final service = await connectService(ws.toString());
     final vm = await service.getVM();
     final isolates = (vm.isolates ?? const <IsolateRef>[]).where(
       (isolate) => isolate.isSystemIsolate != true && isolate.id != null,
