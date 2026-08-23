@@ -337,6 +337,29 @@ Future<StepOutcome> stationProcessDispatcher(
         }
       }
       if (args.cancel.isCancelled) return const Ok();
+      if (request.capability.completionContract ==
+          CompletionContract.artifactDurability) {
+        var artifact = GateOutcome.probeError;
+        try {
+          artifact = await request.capability.probeCompletionArtifact(
+            context,
+            args,
+          );
+        } on Object {
+          // The fail-closed default remains probeError.
+        }
+        if (args.cancel.isCancelled) return const Ok();
+        switch (artifact) {
+          case GateOutcome.clear:
+            break;
+          case GateOutcome.present:
+            return const Failed(
+              'unresolved: declared completion artifact is not durable',
+            );
+          case GateOutcome.probeError:
+            return const Failed('unresolved: completion artifact probe failed');
+        }
+      }
       try {
         return Ok(await request.capability.result(context, args));
       } on Object catch (e) {
@@ -353,9 +376,11 @@ bool _mustFenceLeasedCompletion(
   ProcessCapability capability,
   RuntimeEvent event,
 ) {
-  if (capability.completionContract != CompletionContract.committedWorkspace) {
-    return false;
-  }
+  final committedWorkspace = switch (capability.completionContract) {
+    CompletionContract.none || CompletionContract.artifactDurability => false,
+    CompletionContract.committedWorkspace => true,
+  };
+  if (!committedWorkspace) return false;
   return event is Exited && event.inferred;
 }
 
