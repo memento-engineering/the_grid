@@ -208,6 +208,22 @@ class SessionScopeState extends State<SessionScope>
     }
   }
 
+  Future<void> _closeRetiredReworkSession(String sessionId) async {
+    try {
+      await _ctx!.writer.closeSessionAndOpenGatesForTerminal(
+        sessionId: sessionId,
+        closeReason: 'reworked',
+        trigger: GateCloseCause.supersededRound,
+      );
+    } on Object catch (error) {
+      _flare('gate.autoCloseFailed', {
+        'sessionId': sessionId,
+        'cause': GateCloseCause.supersededRound.wireValue,
+        'reason': truncateReason('$error'),
+      });
+    }
+  }
+
   StationServices? _ctx;
 
   /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
@@ -517,21 +533,7 @@ class SessionScopeState extends State<SessionScope>
         sessionId: retiredId,
         closeReason: 'reworked',
       );
-      try {
-        await _ctx!.writer.close(retiredId, reason: 'reworked');
-      } on Object catch (error) {
-        // Cleanup is not a precondition for the fresh round.
-        _flare('session.closeFailed', {
-          'sessionId': retiredId,
-          'closeReason': 'reworked',
-          'reason': truncateReason('$error'),
-        });
-      }
-      await _closeTerminalGates(
-        retiredId,
-        GateCloseCause.supersededRound,
-        const SessionDisposition.voided(reason: 'retired round'),
-      );
+      await _closeRetiredReworkSession(retiredId);
       if (_stopAbandonedMint(
         stage: 'retired-gates-closed',
         retiredSessionId: retiredId,

@@ -344,6 +344,81 @@ void main() {
     expect(runner.callsFor('close'), isEmpty);
   });
 
+  test(
+    'session close authorizes its gate sweep despite a stale reader',
+    () async {
+      runner.exportBeads = [
+        session('tgdog-s'),
+        const Bead(
+          id: 'tgdog-gate',
+          issueType: GridIssueTypes.gate,
+          metadata: {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-s',
+            'node': 'review/route',
+          },
+        ),
+      ];
+      final receipts = await writer().closeSessionAndOpenGatesForTerminal(
+        sessionId: 'tgdog-s',
+        closeReason: 'reworked',
+        trigger: GateCloseCause.supersededRound,
+      );
+      expect(receipts.single.cause, GateCloseCause.supersededRound);
+      expect(runner.calls.map((call) => call.first), [
+        'update',
+        'close',
+        'update',
+        'update',
+        'close',
+      ]);
+      expect(runner.callsFor('close').map((call) => call[1]), [
+        'tgdog-s',
+        'tgdog-gate',
+      ]);
+    },
+  );
+
+  test('session close still refuses an A48 held gate sweep', () async {
+    runner.exportBeads = [
+      session(
+        'tgdog-held',
+        metadata: const {
+          'rig': 'tgdog',
+          'grid.escalation': 'breaker-exhausted',
+        },
+      ),
+      const Bead(
+        id: 'tgdog-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {
+          'rig': 'tgdog',
+          'blocks': 'tgdog-held',
+          'node': 'review/route',
+        },
+      ),
+    ];
+    await expectLater(
+      writer().closeSessionAndOpenGatesForTerminal(
+        sessionId: 'tgdog-held',
+        closeReason: 'reworked',
+        trigger: GateCloseCause.supersededRound,
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (error) => '$error',
+          'message',
+          contains('held session'),
+        ),
+      ),
+    );
+    expect(runner.callsFor('close').map((call) => call[1]), ['tgdog-held']);
+    expect(
+      runner.callsFor('update').where((call) => call[1] == 'tgdog-gate'),
+      isEmpty,
+    );
+  });
+
   test('post-mint terminal race sweeps the straggler gate', () async {
     runner.exportBeads = const [
       Bead(

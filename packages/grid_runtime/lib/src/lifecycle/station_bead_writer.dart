@@ -326,11 +326,40 @@ class StationBeadWriter {
     return id;
   }
 
+  /// Closes [sessionId] and then runs the guarded terminal gate sweep as one
+  /// causally ordered transition.
+  Future<List<GateAutoCloseReceipt>> closeSessionAndOpenGatesForTerminal({
+    required String sessionId,
+    required String closeReason,
+    required GateCloseCause trigger,
+  }) async {
+    await close(sessionId, reason: closeReason);
+    return _closeOpenGatesForTerminal(
+      sessionId: sessionId,
+      trigger: trigger,
+      disposition: GateSweepSessionDisposition.voided,
+      sessionClosedByWriter: true,
+    );
+  }
+
   Future<List<GateAutoCloseReceipt>> closeOpenGatesForTerminal({
     required String sessionId,
     required GateCloseCause trigger,
     required GateSweepSessionDisposition disposition,
     Bead? terminalWorkBead,
+  }) async => _closeOpenGatesForTerminal(
+    sessionId: sessionId,
+    trigger: trigger,
+    disposition: disposition,
+    terminalWorkBead: terminalWorkBead,
+  );
+
+  Future<List<GateAutoCloseReceipt>> _closeOpenGatesForTerminal({
+    required String sessionId,
+    required GateCloseCause trigger,
+    required GateSweepSessionDisposition disposition,
+    Bead? terminalWorkBead,
+    bool sessionClosedByWriter = false,
   }) async {
     final session = await _reader.beadById(
       sessionId,
@@ -347,7 +376,8 @@ class StationBeadWriter {
         !sessionHeld &&
         switch (disposition) {
           GateSweepSessionDisposition.done ||
-          GateSweepSessionDisposition.voided => session?.isClosed ?? false,
+          GateSweepSessionDisposition.voided =>
+            sessionClosedByWriter || (session?.isClosed ?? false),
           GateSweepSessionDisposition.live => workTerminal,
           GateSweepSessionDisposition.held => false,
         };
@@ -364,6 +394,13 @@ class StationBeadWriter {
         terminalWorkBead: terminalWorkBead!,
       );
     }
+    return _closeEligibleOpenGates(sessionId: sessionId, trigger: trigger);
+  }
+
+  Future<List<GateAutoCloseReceipt>> _closeEligibleOpenGates({
+    required String sessionId,
+    required GateCloseCause trigger,
+  }) async {
     final gates = await _findOpenGates(sessionId: sessionId);
     final oldestByNode = <String, Bead>{};
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
