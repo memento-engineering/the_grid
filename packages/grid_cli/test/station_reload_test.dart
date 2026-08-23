@@ -8,9 +8,19 @@ import 'package:test/test.dart';
 
 /// A fake VM session (Fakes, not mocks): records the calls, in order.
 class _FakeSession implements StationVmSession {
-  _FakeSession({this.swap = const SourcesSwapped()});
+  _FakeSession({
+    this.capability = const ReloadSupported(),
+    this.swap = const SourcesSwapped(),
+  });
+  final ReloadCapability capability;
   final SourceReload swap;
   final List<String> calls = <String>[];
+
+  @override
+  Future<ReloadCapability> probeReloadCapability() async {
+    calls.add('probeReloadCapability');
+    return capability;
+  }
 
   @override
   Future<SourceReload> reloadSources() async {
@@ -59,10 +69,39 @@ void main() {
       isPidAlive: (_) => true,
     ).reload(gridHome: home.path);
 
-    expect(session.calls, ['reloadSources', 'invokeReload:reload', 'close']);
+    expect(session.calls, [
+      'probeReloadCapability',
+      'reloadSources',
+      'invokeReload:reload',
+      'close',
+    ]);
     expect(result, isA<Reloaded>());
     expect((result as Reloaded).generation, 1);
     expect(result.rebuiltBranches, 3);
+  });
+
+  test('snapshot launch is refused before any reload request', () async {
+    writeLock(vmServiceUri: 'http://127.0.0.1:1234/tok=/');
+    const probeReason =
+        'root library is lunar.dart.snapshot; a pub App-JIT snapshot has no '
+        'incremental compiler';
+    final session = _FakeSession(
+      capability: const ReloadUnsupported(probeReason),
+    );
+
+    final result = await StationReload(
+      connect: (_) async => session,
+      isPidAlive: (_) => true,
+    ).reload(gridHome: home.path);
+
+    expect(result, isA<ReloadUnsupportedLaunchShape>());
+    expect((result as ReloadUnsupportedLaunchShape).reason, probeReason);
+    expect(session.calls, ['probeReloadCapability', 'close']);
+    expect(session.calls, isNot(contains('reloadSources')));
+    expect(
+      session.calls.where((call) => call.startsWith('invokeReload:')),
+      isEmpty,
+    );
   });
 
   test('--restart invokes the restart mode', () async {
@@ -89,7 +128,7 @@ void main() {
     expect(result, isA<ReloadRefused>());
     expect((result as ReloadRefused).reason, contains('expected ;'));
     // The tree was NEVER re-composed on un-compilable code.
-    expect(session.calls, ['reloadSources', 'close']);
+    expect(session.calls, ['probeReloadCapability', 'reloadSources', 'close']);
   });
 
   test('no lock → StationDown; a dead pid → StationDown', () async {
@@ -157,6 +196,10 @@ void main() {
 /// registered, so the invoke throws — and the connection is still CLOSED.
 class _ThrowingSession implements StationVmSession {
   bool closed = false;
+
+  @override
+  Future<ReloadCapability> probeReloadCapability() async =>
+      const ReloadSupported();
 
   @override
   Future<SourceReload> reloadSources() async => const SourcesSwapped();

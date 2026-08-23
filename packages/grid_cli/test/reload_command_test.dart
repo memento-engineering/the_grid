@@ -9,6 +9,13 @@ import 'package:test/test.dart';
 
 /// A fake VM session — the station answers a reload cleanly.
 class _FakeSession implements StationVmSession {
+  _FakeSession({this.capability = const ReloadSupported()});
+
+  final ReloadCapability capability;
+
+  @override
+  Future<ReloadCapability> probeReloadCapability() async => capability;
+
   @override
   Future<SourceReload> reloadSources() async => const SourcesSwapped();
 
@@ -68,6 +75,22 @@ void main() {
       ),
     );
     expect(code, 0);
+  });
+
+  test('an unsupported snapshot launch exits 1', () async {
+    writeLock(vmServiceUri: 'http://127.0.0.1:1234/tok=/');
+    final code = await _run(
+      home,
+      StationReload(
+        connect: (_) async => _FakeSession(
+          capability: const ReloadUnsupported(
+            'root library is lunar.dart.snapshot',
+          ),
+        ),
+        isPidAlive: (_) => true,
+      ),
+    );
+    expect(code, 1);
   });
 
   test(
