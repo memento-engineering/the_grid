@@ -755,7 +755,7 @@ class ProcessAllocation extends Allocation {
   /// [CompletionContract] (never off [StepKind]: "one-shot" is not a promise, and
   /// most one-shots leave uncommitted artifacts by design).
   bool get _fenced => switch (capability.completionContract) {
-    CompletionContract.none => false,
+    CompletionContract.none || CompletionContract.artifactDurability => false,
     CompletionContract.committedWorkspace => true,
   };
 
@@ -851,6 +851,39 @@ class ProcessAllocation extends Allocation {
     // Guard BEFORE the read too: a dispose racing the terminal event must not
     // let `result` touch an unmounted tree context (which throws).
     if (context.args.cancel.isCancelled) return;
+    if (capability.completionContract ==
+        CompletionContract.artifactDurability) {
+      var artifact = GateOutcome.probeError;
+      try {
+        artifact = await capability.probeCompletionArtifact(
+          context.treeContext,
+          context.args,
+        );
+      } on Object {
+        // The fail-closed default remains probeError.
+      }
+      if (context.args.cancel.isCancelled) return;
+      switch (artifact) {
+        case GateOutcome.clear:
+          break;
+        case GateOutcome.present:
+          state = AllocationState.gone;
+          context.sink(
+            const AllocationFailed(
+              'unresolved: declared completion artifact is not durable',
+            ),
+          );
+          return;
+        case GateOutcome.probeError:
+          state = AllocationState.gone;
+          context.sink(
+            const AllocationFailed(
+              'unresolved: completion artifact probe failed',
+            ),
+          );
+          return;
+      }
+    }
     // A THROWING result hook routes to supervision as a failure, exactly like
     // a throwing spawn/run (the completion is real, but an unreadable result
     // must not leave the node silently STUCK — review finding 2026-07-02).
