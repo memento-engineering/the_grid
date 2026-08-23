@@ -96,6 +96,24 @@ Bead _step(String sessionId) => Bead(
   },
 );
 
+Bead _session(String sessionId, String workBeadId) => Bead(
+  id: sessionId,
+  issueType: GridIssueTypes.session,
+  status: BeadStatus.open,
+  metadata: {'rig': 'tgdog', 'work_bead': workBeadId},
+);
+
+Bead _attempt(String id, String workBeadId) => Bead(
+  id: id,
+  issueType: GridIssueTypes.mountAttempt,
+  status: BeadStatus.open,
+  metadata: {
+    'rig': 'tgdog',
+    StationBeadWriter.mountAttemptWorkBeadKey: workBeadId,
+    StationBeadWriter.mountAttemptCountKey: '1',
+  },
+);
+
 ({TreeOwner owner, _Transport transport}) _mount(
   JoinedSnapshotNotifier joined,
   StationServices services,
@@ -164,6 +182,17 @@ void _expectChildrenBeforeSession(RecordingBdRunner runner, String sessionId) {
   expect(closed.indexOf(moleculeId), lessThan(closed.indexOf(sessionId)));
 }
 
+void _expectChildrenAndAttemptBeforeSession(
+  RecordingBdRunner runner,
+  String sessionId,
+  String attemptId,
+) {
+  final closed = _closedInOrder(runner);
+  expect(closed.where((id) => id == attemptId), hasLength(1));
+  expect(closed.indexOf(attemptId), lessThan(closed.indexOf(sessionId)));
+  _expectChildrenBeforeSession(runner, sessionId);
+}
+
 void _expectLoudNonFatalReapFailure(
   _Transport transport,
   RecordingBdRunner runner, {
@@ -181,10 +210,15 @@ void _expectLoudNonFatalReapFailure(
 }
 
 void main() {
-  test('positive-terminal close collects molecule graph first', () async {
+  test('positive-terminal close retires mount attempt', () async {
     const sessionId = 'tgdog-positive';
     final fakes = buildFakes();
-    fakes.runner.exportBeads = [_molecule(sessionId), _step(sessionId)];
+    fakes.runner.exportBeads = [
+      _session(sessionId, 'tg-1'),
+      _attempt('tgdog-att-positive', 'tg-1'),
+      _molecule(sessionId),
+      _step(sessionId),
+    ];
     final joined = JoinedSnapshotNotifier(
       _joined(
         const SessionProjection(
@@ -232,7 +266,11 @@ void main() {
       () => _closedInOrder(fakes.runner).contains(sessionId),
     );
 
-    _expectChildrenBeforeSession(fakes.runner, sessionId);
+    _expectChildrenAndAttemptBeforeSession(
+      fakes.runner,
+      sessionId,
+      'tgdog-att-positive',
+    );
   });
 
   test('positive-terminal dependency cycle is loud and non-fatal', () async {
@@ -318,10 +356,15 @@ void main() {
     expect(fakes.runner.callsFor('batch'), isEmpty);
   });
 
-  test('breaker-exhaustion close collects molecule graph first', () async {
+  test('breaker-exhaustion close retires mount attempt', () async {
     const sessionId = 'tgdog-broken';
     final fakes = buildFakes();
-    fakes.runner.exportBeads = [_molecule(sessionId), _step(sessionId)];
+    fakes.runner.exportBeads = [
+      _session(sessionId, 'tg-1'),
+      _attempt('tgdog-att-broken', 'tg-1'),
+      _molecule(sessionId),
+      _step(sessionId),
+    ];
     final joined = JoinedSnapshotNotifier(
       _joined(
         SessionProjection(
@@ -355,7 +398,11 @@ void main() {
       () => _closedInOrder(fakes.runner).contains(sessionId),
     );
 
-    _expectChildrenBeforeSession(fakes.runner, sessionId);
+    _expectChildrenAndAttemptBeforeSession(
+      fakes.runner,
+      sessionId,
+      'tgdog-att-broken',
+    );
   });
 
   test('rework retirement collects molecule graph before close', () async {

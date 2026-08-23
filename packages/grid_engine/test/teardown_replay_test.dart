@@ -146,6 +146,17 @@ Bead _step(String id, {required String sessionId}) => Bead(
   metadata: <String, dynamic>{'rig': 'tgdog', 'grid.step.session': sessionId},
 );
 
+Bead _attempt(String id, String workBeadId) => Bead(
+  id: id,
+  issueType: GridIssueTypes.mountAttempt,
+  status: BeadStatus.open,
+  metadata: {
+    'rig': 'tgdog',
+    StationBeadWriter.mountAttemptWorkBeadKey: workBeadId,
+    StationBeadWriter.mountAttemptCountKey: '1',
+  },
+);
+
 ({RestartReconciler reconciler, RecordingBdRunner bd, List<String> loud})
 _build({
   required List<Bead> state,
@@ -304,11 +315,12 @@ void main() {
   });
 
   group('externally closed sessions', () {
-    test('externally closed done session collects children', () async {
+    test('externally/operator-closed session retires mount attempt', () async {
       final git = _FakeGit(worktrees: [_wt('tg-1')]);
       final f = _build(
         state: [
           _session('tgdog-sess1', workBead: 'tg-1', closed: true),
+          _attempt('tgdog-att1', 'tg-1'),
           _molecule('tgdog-mol1', sessionId: 'tgdog-sess1'),
           _step('tgdog-step1', sessionId: 'tgdog-sess1'),
         ],
@@ -318,7 +330,11 @@ void main() {
       final entry = (await f.reconciler.replayTeardownTail()).replayed.single;
 
       expect(entry.sessionId, 'tgdog-sess1');
-      expect(_closedIds(f.bd), containsAll(['tgdog-mol1', 'tgdog-step1']));
+      expect(
+        _closedIds(f.bd),
+        containsAll(['tgdog-att1', 'tgdog-mol1', 'tgdog-step1']),
+      );
+      expect(_closedIds(f.bd).where((id) => id == 'tgdog-att1'), hasLength(1));
       expect(_closedIds(f.bd), isNot(contains('tgdog-sess1')));
       expect(git.reaped, isEmpty);
       expect(f.bd.callsFor('update'), isEmpty, reason: 'no gate sweep');

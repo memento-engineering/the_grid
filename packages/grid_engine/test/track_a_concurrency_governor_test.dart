@@ -66,6 +66,7 @@ JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
   Map<String, SessionProjection> sessions = const {},
+  Map<String, MountAttemptRecord> mountAttempts = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
@@ -74,6 +75,7 @@ JoinedSnapshot _joined({
     capturedAt: DateTime(2026),
   ),
   sessionsByWorkBead: sessions,
+  mountAttemptsByWorkBead: mountAttempts,
 );
 
 Seed _root({
@@ -173,6 +175,51 @@ void main() {
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
       expect(transport.flares, hasLength(1));
       expect(transport.flares.single.name, 'work.throttled');
+      expect(transport.flares.single.data, {
+        'count': '2',
+        'beadIds': 'tg-3,tg-4',
+      });
+    });
+
+    test('mount-attempt records do not consume capacity or narrow the ready '
+        'frontier', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final attempts = <String, MountAttemptRecord>{
+        for (var i = 1; i <= 9; i++)
+          'tg-$i': MountAttemptRecord(
+            recordId: 'tgdog-att-$i',
+            workBeadId: 'tg-$i',
+            count: 1,
+          ),
+      };
+      final snapshot = _joined(
+        beads: [_bead('tg-1'), _bead('tg-2'), _bead('tg-3'), _bead('tg-4')],
+        ready: {'tg-1', 'tg-2', 'tg-3', 'tg-4'},
+        mountAttempts: attempts,
+      );
+      final joined = JoinedSnapshotNotifier(snapshot);
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 2,
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+          ),
+        ),
+      );
+
+      expect(snapshot.graph.readyIds, {'tg-1', 'tg-2', 'tg-3', 'tg-4'});
+      expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
       expect(transport.flares.single.data, {
         'count': '2',
         'beadIds': 'tg-3,tg-4',

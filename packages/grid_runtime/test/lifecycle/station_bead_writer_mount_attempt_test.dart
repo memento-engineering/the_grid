@@ -42,6 +42,13 @@ void main() {
     },
   );
 
+  Bead session(String id, {String workBead = 'tg-1'}) => Bead(
+    id: id,
+    issueType: GridIssueTypes.session,
+    status: BeadStatus.open,
+    metadata: {StationBeadWriter.rigKey: 'tgdog', 'work_bead': workBead},
+  );
+
   Map<String, String> setMetadataOf(List<String> call) {
     final metadata = <String, String>{};
     for (var i = 0; i + 1 < call.length; i++) {
@@ -186,48 +193,50 @@ void main() {
     expect(runner.callsFor('create'), hasLength(1));
   });
 
-  test('COLLECTION LEAVES THE RECORD ALONE — a molecule reap that sweeps the '
-      "session's whole step graph never touches the attempt budget", () async {
-    // The hard requirement behind this: a sweep that removed attempt records
-    // would silently re-arm every crash loop it touched. Asserted explicitly
-    // rather than relying on the observation that nothing collects this type
-    // today — that is a fact about today's sweep, not a guarantee about
-    // tomorrow's.
+  test('positive-terminal settlement retires mount attempt and leaves no '
+      'open record', () async {
     runner.exportBeads = [
-      Bead(
-        id: 'tgdog-mol1',
-        issueType: GridIssueTypes.molecule,
-        status: BeadStatus.open,
-        metadata: const {
-          StationBeadWriter.rigKey: 'tgdog',
-          StationBeadWriter.moleculeSessionKey: 'tgdog-sess1',
-        },
-      ),
-      Bead(
-        id: 'tgdog-step1',
-        issueType: GridIssueTypes.step,
-        status: BeadStatus.open,
-        metadata: const {
-          StationBeadWriter.rigKey: 'tgdog',
-          StationBeadWriter.stepSessionKey: 'tgdog-sess1',
-        },
-      ),
-      record('tgdog-att1', workBead: 'tg-1', count: '2'),
+      session('tgdog-sess1'),
+      const Bead(id: 'tg-1', status: BeadStatus.closed),
+      record('tgdog-att1'),
     ];
-
-    await writer().reapMolecule(sessionId: 'tgdog-sess1');
-
-    final batches = runner.callsFor('batch');
-    expect(batches, hasLength(1));
-    final closed = runner.stdins[runner.calls.indexOf(batches.single)]!;
-    expect(closed, contains('tgdog-mol1'));
-    expect(closed, contains('tgdog-step1'));
+    await writer().settleSessionForTerminalWork(
+      sessionId: 'tgdog-sess1',
+      terminalWorkBead: const Bead(id: 'tg-1', status: BeadStatus.closed),
+    );
+    final batch = runner.callsFor('batch').single;
+    expect(runner.stdins[runner.calls.indexOf(batch)]!.split('\n'), [
+      'close tgdog-att1',
+    ]);
     expect(
-      closed,
-      isNot(contains('tgdog-att1')),
-      reason: 'collecting the budget would silently re-arm the crash loop',
+      await runner.openBeads(
+        types: {GridIssueTypes.mountAttempt},
+        metadataAll: const {StationBeadWriter.mountAttemptWorkBeadKey: 'tg-1'},
+      ),
+      isEmpty,
     );
   });
+
+  test(
+    'a closed prior record gives a re-drive a fresh count-one budget',
+    () async {
+      runner.exportBeads = [record('tgdog-att-old', count: '3', closed: true)];
+      runner.nextCreatedId = 'tgdog-att-new';
+      final id = await writer().recordMountAttempt(
+        substation: 'tgdog',
+        workBeadId: 'tg-1',
+        attempt: 1,
+      );
+      expect(id, 'tgdog-att-new');
+      expect(runner.callsFor('create'), hasLength(1));
+      final update = runner.callsFor('update').single;
+      expect(update, isNot(contains('tgdog-att-old')));
+      expect(
+        setMetadataOf(update),
+        containsPair(StationBeadWriter.mountAttemptCountKey, '1'),
+      );
+    },
+  );
 
   test('a FOREIGN substation is refused before any bd call — the record lives '
       'in the station OWN store, never on the work bead (A37)', () async {

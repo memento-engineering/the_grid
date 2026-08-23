@@ -269,71 +269,88 @@ void main() {
       );
     });
 
-    test('grid/rework reverse-topological REAPS the retired round\'s molecule '
-        '(tg-ehht): every open step/molecule bead of the retired session is '
-        'batch-closed', () async {
-      final stateRunner = _RecordingRunner()
-        ..openBeadsResult = const [
-          Bead(
-            id: 'tgdog-molecule',
-            issueType: GridIssueTypes.molecule,
-            metadata: {
-              StationBeadWriter.moleculeSessionKey: 'tgdog-session',
-              'rig': 'tgdog',
-            },
-          ),
-          Bead(
-            id: 'tgdog-code',
-            issueType: GridIssueTypes.step,
-            metadata: {
-              StationBeadWriter.stepSessionKey: 'tgdog-session',
-              'rig': 'tgdog',
-            },
-          ),
-          Bead(
-            id: 'tgdog-decision',
-            issueType: GridIssueTypes.step,
-            metadata: {
-              StationBeadWriter.stepSessionKey: 'tgdog-session',
-              'rig': 'tgdog',
-            },
-          ),
-          Bead(
-            id: 'tgdog-route',
-            issueType: GridIssueTypes.step,
-            metadata: {
-              StationBeadWriter.stepSessionKey: 'tgdog-session',
-              'rig': 'tgdog',
-            },
-          ),
-        ]
-        ..exportDependencies = const [
-          BeadDependency(
-            issueId: 'tgdog-route',
-            dependsOnId: 'tgdog-code',
-            type: DependencyType.blocks,
-          ),
-          BeadDependency(
-            issueId: 'tgdog-route',
-            dependsOnId: 'tgdog-decision',
-            type: DependencyType.blocks,
-          ),
-          BeadDependency(
-            issueId: 'tgdog-code',
-            dependsOnId: 'tgdog-molecule',
-            type: DependencyType.parentChild,
-          ),
-          BeadDependency(
-            issueId: 'tgdog-decision',
-            dependsOnId: 'tgdog-molecule',
-            type: DependencyType.parentChild,
-          ),
-          BeadDependency(
-            issueId: 'tgdog-route',
-            dependsOnId: 'tgdog-molecule',
-            type: DependencyType.parentChild,
-          ),
-        ];
+    test('grid/rework retirement retires mount attempt in reverse-topological '
+        'reap', () async {
+      final stateRunner =
+          _RecordingRunner(
+              exportBeads: const [
+                Bead(
+                  id: 'tgdog-session',
+                  issueType: GridIssueTypes.session,
+                  metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
+                ),
+              ],
+            )
+            ..openBeadsResult = const [
+              Bead(
+                id: 'tgdog-att1',
+                issueType: GridIssueTypes.mountAttempt,
+                metadata: {
+                  StationBeadWriter.mountAttemptWorkBeadKey: 'tg-1',
+                  StationBeadWriter.mountAttemptCountKey: '1',
+                  'rig': 'tgdog',
+                },
+              ),
+              Bead(
+                id: 'tgdog-molecule',
+                issueType: GridIssueTypes.molecule,
+                metadata: {
+                  StationBeadWriter.moleculeSessionKey: 'tgdog-session',
+                  'rig': 'tgdog',
+                },
+              ),
+              Bead(
+                id: 'tgdog-code',
+                issueType: GridIssueTypes.step,
+                metadata: {
+                  StationBeadWriter.stepSessionKey: 'tgdog-session',
+                  'rig': 'tgdog',
+                },
+              ),
+              Bead(
+                id: 'tgdog-decision',
+                issueType: GridIssueTypes.step,
+                metadata: {
+                  StationBeadWriter.stepSessionKey: 'tgdog-session',
+                  'rig': 'tgdog',
+                },
+              ),
+              Bead(
+                id: 'tgdog-route',
+                issueType: GridIssueTypes.step,
+                metadata: {
+                  StationBeadWriter.stepSessionKey: 'tgdog-session',
+                  'rig': 'tgdog',
+                },
+              ),
+            ]
+            ..exportDependencies = const [
+              BeadDependency(
+                issueId: 'tgdog-route',
+                dependsOnId: 'tgdog-code',
+                type: DependencyType.blocks,
+              ),
+              BeadDependency(
+                issueId: 'tgdog-route',
+                dependsOnId: 'tgdog-decision',
+                type: DependencyType.blocks,
+              ),
+              BeadDependency(
+                issueId: 'tgdog-code',
+                dependsOnId: 'tgdog-molecule',
+                type: DependencyType.parentChild,
+              ),
+              BeadDependency(
+                issueId: 'tgdog-decision',
+                dependsOnId: 'tgdog-molecule',
+                type: DependencyType.parentChild,
+              ),
+              BeadDependency(
+                issueId: 'tgdog-route',
+                dependsOnId: 'tgdog-molecule',
+                type: DependencyType.parentChild,
+              ),
+            ];
       final workRunner = _RecordingRunner();
       final handler = _handler(
         state: _Source(
@@ -377,11 +394,16 @@ void main() {
       expect(
         script.split('\n'),
         orderedEquals([
+          'close tgdog-att1',
           'close tgdog-code',
           'close tgdog-decision',
           'close tgdog-route',
           'close tgdog-molecule',
         ]),
+      );
+      expect(
+        script.split('\n').where((line) => line == 'close tgdog-att1'),
+        hasLength(1),
       );
       expect(batch, isNot(contains('--force')));
       expect(script, isNot(contains('--force')));

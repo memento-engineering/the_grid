@@ -156,6 +156,8 @@ void main() {
       addTearDown(bridge.dispose);
 
       final joined = _read(bridge.notifier);
+      expect(joined.graph.readyIds, {'w1', 'w2'});
+      expect(joined.mountAttemptsByWorkBead.keys, ['w1']);
       expect(joined.mountAttemptsByWorkBead['w1']?.count, 2);
       expect(joined.mountAttemptsByWorkBead['w1']?.recordId, 'att1');
       expect(
