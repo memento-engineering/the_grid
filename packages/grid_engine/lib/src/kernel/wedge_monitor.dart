@@ -81,8 +81,14 @@ class WedgeMonitor {
   /// this one are mutually exclusive by construction).
   void poll() {
     if (_disposed) return;
+    pollSnapshot(_latest());
+  }
+
+  /// Samples [snapshot], advances the sustain latch, and returns the new state.
+  WedgeState pollSnapshot(JoinedSnapshot snapshot) {
+    if (_disposed) return _state;
     final now = _clock();
-    final sample = sampleWedge(_latest(), now: now);
+    final sample = sampleWedge(snapshot, now: now);
 
     if (!sample.isStalled) {
       final wasWedged = _state.isWedged;
@@ -91,7 +97,7 @@ class WedgeMonitor {
       _cancelTimer();
       // The FALLING edge, once: a station that was never wedged says nothing.
       if (wasWedged) _flare(kUnwedgedFlare, since: null, sample: sample);
-      return;
+      return _state;
     }
 
     // The latch: an explicit null-check, never a `??=`-cache of a dependency
@@ -106,13 +112,14 @@ class WedgeMonitor {
     _armIfIdle();
     if (now.difference(since) < threshold) {
       _state = Stalling(since: since, sample: sample);
-      return;
+      return _state;
     }
     final wasWedged = _state.isWedged;
     _state = Wedged(since: since, sample: sample);
     // The RISING EDGE only: a wedged station polled 20 more times flares ONCE,
     // not 20 times (LOUD, never spammy — the whole point of tg-jwh).
     if (!wasWedged) _flare(kWedgedFlare, since: since, sample: sample);
+    return _state;
   }
 
   /// Emits the fire-and-continue flare (D9) through the emit-only transport. A

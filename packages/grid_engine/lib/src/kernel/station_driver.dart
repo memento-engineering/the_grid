@@ -4,6 +4,7 @@ import '../bridge/station_join_bridge.dart';
 import '../circuit/capability_registry.dart';
 import '../circuit/circuit_resolver.dart';
 import '../circuit/unclaimed_frontier.dart';
+import '../domain/joined_snapshot.dart';
 import '../domain/wedge.dart';
 import '../sdk/capability.dart';
 import '../sdk/capability_facts.dart';
@@ -88,6 +89,9 @@ class StationDriver {
   /// The station's current WEDGE signal — the single source of truth a watcher
   /// reads instead of re-deriving "is the grid stuck?" from raw sessions (RS-4).
   WedgeState get wedge => _wedge.state;
+
+  /// Samples [snapshot] through the owned sustain latch and returns one truth.
+  WedgeState wedgeFor(JoinedSnapshot snapshot) => _wedge.pollSnapshot(snapshot);
 
   /// Starts the bridge and runs the baseline scans (a restart that adopts a
   /// cooled-down session — D-5/F1 — plus the baseline unclaimed-frontier
