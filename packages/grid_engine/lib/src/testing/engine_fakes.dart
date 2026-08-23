@@ -256,6 +256,20 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
     final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'dep' && args.length > 1 && args[1] == 'list') {
+      return Future<BdResult>.value(
+        BdResult(
+          exitCode: 0,
+          stdout: jsonEncode({
+            'schema_version': 1,
+            'data': [
+              for (final dependency in exportDependencies) dependency.toJson(),
+            ],
+          }),
+          stderr: '',
+        ),
+      );
+    }
     if (sub == 'export') {
       // Legacy tripwire payload retained for tests that deliberately exercise
       // an unsupported command; production readers never reach this branch.

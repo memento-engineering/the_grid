@@ -806,11 +806,96 @@ void main() {
     );
 
     test(
+      'reapMolecule orders sibling blockers before their route join and root',
+      () async {
+        runner.exportBeads = [
+          _molecule('tgdog-mol'),
+          _step('tgdog-code'),
+          _step('tgdog-decision'),
+          _step('tgdog-route'),
+        ];
+        runner.exportDependencies = const [
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-code',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-decision',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-code',
+            dependsOnId: 'tgdog-mol',
+            type: DependencyType.parentChild,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-decision',
+            dependsOnId: 'tgdog-mol',
+            type: DependencyType.parentChild,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-mol',
+            type: DependencyType.parentChild,
+          ),
+        ];
+
+        await writer().reapMolecule(sessionId: 'tgdog-sess1');
+
+        final batch = runner.callsFor('batch').single;
+        final script = runner.stdins[runner.calls.indexOf(batch)]!;
+        expect(
+          script.split('\n'),
+          orderedEquals([
+            'close tgdog-code',
+            'close tgdog-decision',
+            'close tgdog-route',
+            'close tgdog-mol',
+          ]),
+        );
+      },
+    );
+
+    test(
       'reapMolecule degrades to per-bead closes when the store refuses batch '
       '(proxied-server mode) — the tg-ehht 9,389-orphan mechanism',
       () async {
         final proxied = _ProxiedBatchRunner(createdId: 'tgdog-sess1');
-        proxied.exportBeads = [_molecule('tgdog-mol'), _step('tgdog-step-a')];
+        proxied.exportBeads = [
+          _molecule('tgdog-mol'),
+          _step('tgdog-code'),
+          _step('tgdog-decision'),
+          _step('tgdog-route'),
+        ];
+        proxied.exportDependencies = const [
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-code',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-decision',
+            type: DependencyType.blocks,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-code',
+            dependsOnId: 'tgdog-mol',
+            type: DependencyType.parentChild,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-decision',
+            dependsOnId: 'tgdog-mol',
+            type: DependencyType.parentChild,
+          ),
+          BeadDependency(
+            issueId: 'tgdog-route',
+            dependsOnId: 'tgdog-mol',
+            type: DependencyType.parentChild,
+          ),
+        ];
         final w = StationBeadWriter(
           bd: BdCliService(proxied),
           reader: proxied,
@@ -826,13 +911,62 @@ void main() {
             .toList(growable: false);
         expect(
           closes,
-          orderedEquals(['tgdog-step-a', 'tgdog-mol']),
+          orderedEquals([
+            'tgdog-code',
+            'tgdog-decision',
+            'tgdog-route',
+            'tgdog-mol',
+          ]),
           reason:
               'the proxied fallback must satisfy close policy by closing '
               'step leaves before the molecule root',
         );
       },
     );
+
+    test('reapMolecule refuses a dependency cycle before mutation', () async {
+      runner.exportBeads = [
+        _molecule('tgdog-mol'),
+        _step('tgdog-step-a'),
+        _step('tgdog-step-b'),
+      ];
+      runner.exportDependencies = const [
+        BeadDependency(
+          issueId: 'tgdog-step-a',
+          dependsOnId: 'tgdog-step-b',
+          type: DependencyType.blocks,
+        ),
+        BeadDependency(
+          issueId: 'tgdog-step-b',
+          dependsOnId: 'tgdog-step-a',
+          type: DependencyType.blocks,
+        ),
+      ];
+
+      await expectLater(
+        writer().reapMolecule(sessionId: 'tgdog-sess1'),
+        throwsA(
+          isA<StateError>()
+              .having(
+                (error) => error.message,
+                'message',
+                startsWith('molecule reap dependency cycle:'),
+              )
+              .having(
+                (error) => error.message,
+                'step a',
+                contains('tgdog-step-a'),
+              )
+              .having(
+                (error) => error.message,
+                'step b',
+                contains('tgdog-step-b'),
+              ),
+        ),
+      );
+      expect(runner.callsFor('batch'), isEmpty);
+      expect(runner.callsFor('close'), isEmpty);
+    });
 
     test(
       'reapMolecule batches root beads plus open successor chain closes',
