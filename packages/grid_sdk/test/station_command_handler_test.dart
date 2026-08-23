@@ -852,6 +852,17 @@ void main() {
           'ownership_refused',
         ),
       );
+      expect(runner.calls.map((call) => call.first), ['update', 'update']);
+      expect(runner.calls.first, ['update', '--help']);
+      expect(
+        runner.calls.skip(1).every((call) => call.contains('tgdog-gate')),
+        isTrue,
+      );
+      final guardedUpdate = runner.calls.skip(1).single;
+      expect(
+        guardedUpdate,
+        containsAll(<String>['--if-assignee', '--if-status']),
+      );
       expect(runner.calls.where((call) => call.first == 'close'), isEmpty);
     });
 
