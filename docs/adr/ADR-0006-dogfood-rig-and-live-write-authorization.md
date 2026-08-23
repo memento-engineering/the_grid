@@ -237,3 +237,21 @@ memento-engineering org):
   axis, rig prefix choice, worktree layout, token source) are recorded as **pending ADR-0000
   amendments (A32+)** until Nico ratifies this ADR and confirms the open decisions; nothing here is
   baked into a ratified ADR.
+
+---
+
+## Amendment (2026-08-23, grade-gated landing policy tg-o5z0) — **RATIFIED (Nico directive 2026-07-10; reaffirmed 2026-08-21)**
+
+### Decision 3 amendment — grade-gated landing
+
+This amendment supersedes only Decision 3's absolute **"never auto-merge"** and **"Nothing auto-merges to lenny main"** clauses. Decision 3's branch-per-bead isolation, push-to-PR flow, lifecycle recording, and fail-closed cleanup remain in force.
+
+Nico's 2026-07-10 directive, reaffirmed 2026-08-21, is **grades-good means merge**. The directive is ratified on arrival and belongs in this numbered ADR, never in `docs/adr/ADR-0000-ai-decision-register.md`, per power_station ADR-0004's Consequences. It is further grounded by power_station ADR-0004 D2 ("A ready P0 or P1 never waits on a human when the station is halted") and ratified by power_station ADR-0005 D1–D3.
+
+Landing is a per-seat composed `DeliveryMethod` policy with three postures:
+
+- `pr-no-merge` remains the default: push the bead branch, open and record the PR, and leave it unmerged.
+- `pr-auto-merge` may merge only after the delivery command returns `rc == 0` and every committee grade is B or better (no committee grade below B). A non-zero return code, a grade below B, or a missing/incomplete grade set refuses auto-merge.
+- `direct-merge` is an explicit composed posture, never the default.
+
+The shipped power_station #121 / pow-eji surface realizes these postures as `GitHubDeliveryPolicy`, `GitHubAutoMergeDelivery`, `GitHubDirectMergeDelivery`, and `GitHubMergeRunner`. This the_grid amendment records the governing decision only; it adds no delivery implementation and does not alter the AI decision register.
