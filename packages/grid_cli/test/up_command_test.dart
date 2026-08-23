@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
+import 'package:beads_dart/beads_dart.dart'
+    show Bead, BeadStatus, GraphSnapshot;
 import 'package:grid_cli/grid_cli.dart';
-import 'package:grid_engine/grid_engine.dart' show WedgeMonitor;
+import 'package:grid_engine/grid_engine.dart'
+    show MoleculeStepKeys, SessionProjection, StepState, WedgeMonitor;
 import 'package:grid_exploration/grid_exploration.dart' show armDevMode;
 import 'package:grid_runtime/grid_runtime.dart'
     show GridIssueTypes, PrimaryCheckoutFreshness, PrimaryCheckoutState;
@@ -50,11 +53,15 @@ final class _Delegate extends GridDelegate {
     this.failAt,
     this.label = 'earth',
     this.vendsViews = true,
+    this.snapshot,
+    this.monitor,
   });
 
   final List<String> events;
   final String? failAt;
   final String label;
+  final JoinedSnapshot? snapshot;
+  final WedgeMonitor? monitor;
 
   /// False = the ABSENCE posture: this station vends neither a status view
   /// nor a command handler (the unified base's null defaults, tg-at3r), and
@@ -79,7 +86,7 @@ final class _Delegate extends GridDelegate {
     if (_disposed) {
       throw StateError('stationView read on disposed delegate "$label"');
     }
-    return _View(label);
+    return _View(label, snapshot: snapshot, monitor: monitor);
   }
 
   @override
@@ -120,6 +127,8 @@ final class _Harness {
     required this.vendsViews,
     required this.typesEnvelope,
     required this.typesError,
+    required this.snapshot,
+    required this.monitor,
   });
 
   static Future<_Harness> create({
@@ -133,6 +142,8 @@ final class _Harness {
     bool vendsViews = true,
     Map<String, dynamic>? typesEnvelope,
     Object? typesError,
+    JoinedSnapshot? snapshot,
+    WedgeMonitor? monitor,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -157,6 +168,8 @@ final class _Harness {
       vendsViews: vendsViews,
       typesEnvelope: typesEnvelope,
       typesError: typesError,
+      snapshot: snapshot,
+      monitor: monitor,
     );
   }
 
@@ -174,6 +187,8 @@ final class _Harness {
   final bool vendsViews;
   final Map<String, dynamic>? typesEnvelope;
   final Object? typesError;
+  final JoinedSnapshot? snapshot;
+  final WedgeMonitor? monitor;
   final events = <String>[];
   final _stdout = _ByteConsumer();
   final _stderr = _ByteConsumer();
@@ -228,6 +243,8 @@ final class _Harness {
           failAt: generation == 0 ? failAt : (restartBootFails ? 'boot' : null),
           label: generation == 0 ? 'earth' : 'gen$generation',
           vendsViews: vendsViews,
+          snapshot: snapshot,
+          monitor: monitor,
         );
         built.add(delegate);
         return delegate;
@@ -559,7 +576,156 @@ void _seedStore(String root) {
   ).writeAsStringSync('{"dolt_mode":"embedded"}');
 }
 
+JoinedSnapshot _statusSnapshot({
+  required Set<String> readyIds,
+  required Map<String, SessionProjection> sessions,
+}) => JoinedSnapshot(
+  graph: GraphSnapshot.fromParts(
+    beads: const [],
+    dependencies: const [],
+    readyIds: readyIds,
+    capturedAt: DateTime.utc(2026, 8, 21),
+  ),
+  sessionsByWorkBead: sessions,
+);
+
+SessionProjection _statusSession(String id, StepState state) =>
+    SessionProjection(
+      workBeadId: id,
+      sessionId: 'tgdog-$id',
+      isMolecule: true,
+      moleculeBeads: [
+        Bead(
+          id: 'tgdog-$id-step',
+          issueType: GridIssueTypes.step,
+          status: BeadStatus.open,
+          metadata: {
+            MoleculeStepKeys.path: '$id/build',
+            MoleculeStepKeys.state: state.name,
+          },
+        ),
+      ],
+    );
+
 void main() {
+  test('status projection uses one snapshot', () async {
+    final fixtures = <({JoinedSnapshot snapshot, int gated, bool ripens})>[
+      (
+        snapshot: _statusSnapshot(readyIds: {}, sessions: {}),
+        gated: 0,
+        ripens: false,
+      ),
+      (
+        snapshot: _statusSnapshot(
+          readyIds: {},
+          sessions: {
+            'earth-running': _statusSession('earth-running', StepState.running),
+          },
+        ),
+        gated: 0,
+        ripens: false,
+      ),
+      (
+        snapshot: _statusSnapshot(
+          readyIds: {},
+          sessions: {
+            for (final id in ['earth-a', 'earth-b', 'earth-c'])
+              id: _statusSession(id, StepState.gated),
+          },
+        ),
+        gated: 3,
+        ripens: true,
+      ),
+    ];
+
+    for (final fixture in fixtures) {
+      var now = DateTime.utc(2026, 8, 21);
+      final monitor = WedgeMonitor(
+        latest: () => fixture.snapshot,
+        threshold: const Duration(minutes: 10),
+        clock: () => now,
+      );
+      addTearDown(monitor.dispose);
+      final h = await _Harness.create(
+        holdOpen: true,
+        snapshot: fixture.snapshot,
+        monitor: monitor,
+      );
+      addTearDown(h.dispose);
+      final run = h.run(untimed: true);
+      await h.stationUp.future;
+
+      var body = h.statusView!().toJson();
+      var wedge = body['wedge'] as Map<String, Object?>;
+      final work = body['work'] as Map<String, Object?>;
+      expect(wedge['live'], work['liveSessions']);
+      expect(wedge['gated'], fixture.gated);
+
+      if (fixture.ripens) {
+        now = now.add(const Duration(minutes: 10));
+        body = h.statusView!().toJson();
+        wedge = body['wedge'] as Map<String, Object?>;
+        expect(
+          wedge['live'],
+          (body['work'] as Map<String, Object?>)['liveSessions'],
+        );
+        expect(wedge['gated'], fixture.gated);
+        expect(wedge['wedged'], isTrue);
+        expect(wedge['since'], isNotNull);
+        expect(wedge['reason'], contains('parked at a gate'));
+      }
+
+      h.release.complete();
+      expect(await run, 0);
+    }
+  });
+
+  test('status projection populates every armed substation', () async {
+    final snapshot = _statusSnapshot(
+      readyIds: {'earth-ready'},
+      sessions: {'earth-live': _statusSession('earth-live', StepState.running)},
+    );
+    final monitor = WedgeMonitor(latest: () => snapshot);
+    addTearDown(monitor.dispose);
+    final h = await _Harness.create(
+      includeMissingCoded: true,
+      holdOpen: true,
+      snapshot: snapshot,
+      monitor: monitor,
+    );
+    addTearDown(h.dispose);
+    _seedStore(h.missingRoot);
+    final run = h.run(untimed: true);
+    await h.stationUp.future;
+
+    final status = h.statusView!();
+    final rows = {for (final row in status.perSubstation) row.substation: row};
+    expect(rows.keys, {'earth', 'dark'});
+    expect(rows['earth']!.root, h.workRoot);
+    expect(rows['earth']!.ready, 1);
+    expect(rows['earth']!.live, 1);
+    expect(rows['earth']!.mounted, 2);
+    expect(rows['dark']!.root, h.missingRoot);
+    expect(rows['dark']!.ready, 0);
+    expect(rows['dark']!.live, 0);
+    expect(rows['dark']!.mounted, 0);
+    expect(status.ready, 1);
+    expect(status.liveSessions, 1);
+    expect(status.mounted, 2);
+    final wireWork = status.toJson()['work'] as Map<String, Object?>;
+    final wireRows = wireWork['perSubstation'] as List<Object?>;
+    expect(wireRows, hasLength(2));
+    expect(
+      wireRows.cast<Map<String, Object?>>().singleWhere(
+        (row) => row['substation'] == 'dark',
+      )['live'],
+      0,
+    );
+
+    h.release.complete();
+    expect(await run, 0);
+  });
+
   test('harness validation precedes store and delegate work', () async {
     final home = Directory.systemTemp.createTempSync('resident-up-');
     addTearDown(() => home.deleteSync(recursive: true));
