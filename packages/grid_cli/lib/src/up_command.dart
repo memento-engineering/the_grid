@@ -7,11 +7,17 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart'
     show BdCliService, BeadsWorkspace, GraphSnapshot, ProcessBdRunner;
-import 'package:grid_engine/grid_engine.dart' show configuredBdTypeNames;
+import 'package:grid_engine/grid_engine.dart'
+    show SessionProjection, configuredBdTypeNames;
 import 'package:grid_exploration/grid_exploration.dart'
     show DevModeSeat, armDevMode, stationVmServiceUri;
 import 'package:grid_runtime/grid_runtime.dart'
-    show GitOps, GridIssueTypes, PrimaryCheckoutFreshness, SystemGitRunner;
+    show
+        BeadOwnershipPredicate,
+        GitOps,
+        GridIssueTypes,
+        PrimaryCheckoutFreshness,
+        SystemGitRunner;
 import 'package:grid_sdk/grid_sdk.dart'
     show
         GridCommandHandler,
@@ -605,11 +611,40 @@ class UpCommand extends Command<int> {
     StationView? view,
   ) {
     final latest = view?.latest;
-    final liveSessions =
-        latest?.sessionsByWorkBead.values
-            .where((session) => !session.isTerminal)
-            .length ??
-        0;
+    final liveEntries =
+        latest?.sessionsByWorkBead.entries
+            .where((entry) => !entry.value.isTerminal)
+            .toList(growable: false) ??
+        const <MapEntry<String, SessionProjection>>[];
+    final mountedIds = <String>{
+      ...?latest?.graph.readyIds,
+      for (final entry in liveEntries) entry.key,
+    };
+    final wedge = latest == null ? kNotWedged : view!.wedgeFor(latest);
+    final prefixes = armed.map((seat) => seat.prefix).toSet();
+    String? ownerOf(String id) =>
+        BeadOwnershipPredicate.ownedPrefixOf(id, prefixes);
+    final perSubstation = <SubstationStatus>[
+      for (final seat in armed)
+        () {
+          final readyIds =
+              latest?.graph.readyIds
+                  .where((id) => ownerOf(id) == seat.prefix)
+                  .toSet() ??
+              <String>{};
+          final liveIds = <String>{
+            for (final entry in liveEntries)
+              if (ownerOf(entry.key) == seat.prefix) entry.key,
+          };
+          return SubstationStatus(
+            substation: seat.name,
+            root: seat.root,
+            ready: readyIds.length,
+            mounted: <String>{...readyIds, ...liveIds}.length,
+            live: liveIds.length,
+          );
+        }(),
+    ];
     final capturedAt = latest?.graph.capturedAt;
     return StationStatus(
       substation: armed.map((seat) => seat.name).join(','),
@@ -620,12 +655,13 @@ class UpCommand extends Command<int> {
       startedAt: startedAt,
       version: Platform.version,
       ready: latest?.graph.readyIds.length ?? 0,
-      mounted: liveSessions,
-      liveSessions: liveSessions,
+      mounted: mountedIds.length,
+      liveSessions: liveEntries.length,
       lastSyncAt: capturedAt == null || capturedAt.millisecondsSinceEpoch == 0
           ? null
           : capturedAt,
-      wedge: view?.wedge ?? kNotWedged,
+      perSubstation: perSubstation,
+      wedge: wedge,
       sync: view?.syncStatus() ?? const <String, Object?>{},
     );
   }

@@ -73,6 +73,7 @@ class SubstationStatus {
     required this.root,
     required this.ready,
     required this.mounted,
+    required this.live,
   });
 
   /// The owned substation id (an `args.substations` member).
@@ -87,12 +88,16 @@ class SubstationStatus {
   /// This substation's slice of [StationStatus.mounted] (same narrowing).
   final int mounted;
 
+  /// This substation's live non-terminal session count.
+  final int live;
+
   /// Serializes to the wire shape.
   Map<String, Object?> toJson() => <String, Object?>{
     'substation': substation,
     'root': root,
     'ready': ready,
     'mounted': mounted,
+    'live': live,
   };
 }
 

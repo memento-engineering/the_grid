@@ -16,6 +16,9 @@ abstract interface class StationView {
   /// The station's wedge signal — one truth for "is the grid stuck?".
   WedgeState get wedge;
 
+  /// Samples the wedge latch from [snapshot], captured by one status request.
+  WedgeState wedgeFor(JoinedSnapshot snapshot);
+
   /// The JSON-shaped sync-loop observability payload for `/status` (tg-zd4v):
   /// per-store `GraphSyncStats` under `stats`, the federation's per-member
   /// freshness vector under `freshness`. Empty when the assembly exposes none.

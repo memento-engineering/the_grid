@@ -166,6 +166,9 @@ class StationWorkRuntime {
   /// stuck?" from raw sessions. A plain derived VALUE, read fresh per request.
   WedgeState get wedge => _driver.wedge;
 
+  /// Samples [snapshot] through the owned wedge latch for one status request.
+  WedgeState wedgeFor(JoinedSnapshot snapshot) => _driver.wedgeFor(snapshot);
+
   /// Brings the off-tree machinery up in the pinned ordering (ADR-0007 §4):
   /// controllers start → the freshness barrier completes → the restart
   /// reconciler reconciles survivors (respawn-or-skip, BEFORE any tree could

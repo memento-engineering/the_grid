@@ -41,6 +41,15 @@ void main() {
     mounted: sessions.length,
     liveSessions: sessions.length,
     lastSyncAt: null,
+    perSubstation: [
+      SubstationStatus(
+        substation: 'tg',
+        root: '/work/tg',
+        ready: 0,
+        mounted: sessions.length,
+        live: sessions.length,
+      ),
+    ],
     // The station's OWN truth — never re-derived on the watcher side.
     wedge: wedge ?? monitor.state,
   );
@@ -161,6 +170,10 @@ void main() {
         isFalse,
         reason: 'the wedge is first-class, not smuggled into the work block',
       );
+      final perSubstation =
+          (body['work']! as Map<String, Object?>)['perSubstation']!
+              as List<Object?>;
+      expect((perSubstation.single! as Map<String, Object?>)['live'], 3);
     },
   );
 

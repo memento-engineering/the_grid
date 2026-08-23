@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/grid_cli.dart';
+import 'package:grid_engine/grid_engine.dart' show WedgeMonitor;
 import 'package:grid_exploration/grid_exploration.dart' show armDevMode;
 import 'package:grid_runtime/grid_runtime.dart'
     show GridIssueTypes, PrimaryCheckoutFreshness, PrimaryCheckoutState;
@@ -12,16 +13,23 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 final class _View implements StationView {
-  const _View(this._label);
+  _View(this._label, {JoinedSnapshot? snapshot, WedgeMonitor? monitor})
+    : snapshot = snapshot ?? JoinedSnapshot.empty(),
+      monitor = monitor ?? WedgeMonitor(latest: JoinedSnapshot.empty);
   final String _label;
+  final JoinedSnapshot snapshot;
+  final WedgeMonitor monitor;
   @override
   String get stateSubstation => 'lunar-state';
   @override
   String get readPathName => _label;
   @override
-  JoinedSnapshot get latest => JoinedSnapshot.empty();
+  JoinedSnapshot get latest => snapshot;
   @override
-  WedgeState get wedge => kNotWedged;
+  WedgeState get wedge => monitor.state;
+  @override
+  WedgeState wedgeFor(JoinedSnapshot snapshot) =>
+      monitor.pollSnapshot(snapshot);
   @override
   Map<String, Object?> syncStatus() => const <String, Object?>{};
 }

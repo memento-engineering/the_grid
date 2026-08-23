@@ -145,6 +145,35 @@ void main() {
       expect(transport.flares, isEmpty, reason: 'a fresh stall is not a wedge');
     });
 
+    test('pollSnapshot samples one captured join across flow states', () {
+      final empty = monitor.pollSnapshot(_join({}));
+      expect(empty, isA<Flowing>());
+      expect(empty.sample.live, 0);
+      expect(empty.sample.gated, 0);
+
+      final running = monitor.pollSnapshot(_join({'tg-1': _running()}));
+      expect(running, isA<Flowing>());
+      expect(running.sample.live, 1);
+      expect(running.sample.gated, 0);
+
+      final stalling = monitor.pollSnapshot(
+        _join({'tg-1': _gated(), 'tg-2': _gated()}),
+      );
+      expect(stalling, isA<Stalling>());
+      expect(stalling.sample.live, 2);
+      expect(stalling.sample.gated, 2);
+      expect((stalling as Stalling).since, t0);
+
+      clock.advance(const Duration(minutes: 10));
+      final wedged = monitor.pollSnapshot(
+        _join({'tg-1': _gated(), 'tg-2': _gated()}),
+      );
+      expect(wedged, isA<Wedged>());
+      expect(wedged.sample.live, 2);
+      expect(wedged.sample.gated, 2);
+      expect((wedged as Wedged).since, t0);
+    });
+
     test(
       'a FLOWING station arms NO timer at all — the wall clock is only watched '
       'while a stall could ripen (and a cooling node is never stalled, so the '
