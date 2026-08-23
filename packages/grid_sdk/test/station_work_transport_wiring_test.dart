@@ -132,8 +132,8 @@ void main() {
     // composed a mount predicate and THIS wrapper (the nearest bundle above
     // WorkList) hand-copied every field EXCEPT the newest, so the gate tested
     // green one level up while an unapproved, plan-less bead mounted in 2s.
-    // A new ServiceBundle field that is not threaded through the transport
-    // re-provision never reaches WorkList — this assertion is the tripwire.
+    // The overlay now calls ServiceBundle.derive; its all-required private
+    // constructor makes a new field a compile error at the one forwarding site.
     expect(
       seen.mountEligibility,
       same(mountEligibility),
