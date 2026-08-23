@@ -1,3 +1,9 @@
+## 0.3.0-rc.7
+
+- `ServiceBundle.derive()`: a total derivation factory with an all-required private constructor — adding a bundle field is now a compile error at every derivation site instead of a silently dropped field (#217).
+- `WedgeMonitor.pollSnapshot` exposes the wedge classification over one captured join for coherent status projection (#221).
+- Live sessions settle when their work bead closes (#215); molecule reap participates in topological ordering (#216).
+
 ## 0.3.0-rc.6
 
 - A dropped state-persist now gets a bounded, durable consequence: the failure

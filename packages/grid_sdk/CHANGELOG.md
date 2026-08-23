@@ -1,3 +1,9 @@
+## 0.3.0-rc.6
+
+- The station work transport overlay derives its ServiceBundle via `ServiceBundle.derive()` — new bundle fields can no longer be dropped by the hand-copied overlay (#217).
+- `StationView`/`StationWorkRuntime` gain `wedgeFor`, backing the one-snapshot status projection (#221).
+- Session settlement on work-bead close (#215).
+
 ## 0.3.0-rc.5
 
 - `SubstationWork`'s transport overlay is a total derivation:

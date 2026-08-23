@@ -1,3 +1,9 @@
+## 0.2.0-rc.5
+
+- Live sessions settle when their work bead closes (#215).
+- Molecule reap orders topologically, so dependents retire before dependencies (#216).
+- Session reap also retires the session's open mount-attempt record, un-sticking the remount budget (#220).
+
 ## 0.2.0-rc.4
 
 - Guarded write capability negotiation with graceful, LOUD fallback (#205) —
