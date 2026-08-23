@@ -76,6 +76,11 @@ class ReloadCommand extends Command<int> {
         '`dart bin/<runner>.dart up ... --enable-vm-service`, or pass '
         '--vm-service-uri.',
       ),
+      ReloadUnsupportedLaunchShape(:final reason) => _refuse(
+        'reload: unsupported launch shape — $reason. A resident running from '
+        'a pub App-JIT snapshot is not reloadable; bounce the station to '
+        'activate landed code.',
+      ),
       ReloadRefused(:final reason) => _refuse('reload: REFUSED — $reason'),
     };
   }

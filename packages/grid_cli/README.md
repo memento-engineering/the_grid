@@ -16,6 +16,17 @@ Run long-lived commands under `dart run --enable-vm-service` so exploration
 tools (DevTools, `exploration_cli`, leonard) can attach over
 `ext.leonard.*`.
 
+### Reloading a resident
+
+A resident started through `dart run` may execute
+`.dart_tool/pub/bin/.../*.snapshot`. That pub App-JIT snapshot is not reloadable
+because it has no incremental compiler, even when its VM service is enabled.
+`reload` refuses before sending a source-load request; bounce the station
+(down, then up) to activate landed code.
+
+A source-launched resident (for example, `dart --enable-vm-service
+bin/<runner>.dart up ...`) remains hot-reloadable.
+
 **Stores are addressed at their roots — never cwd discovery.** A substation's
 work store lives at `<root>/.beads/` (a positional root or `--note-root`); the
 grid's OWN state store — session and gate beads — lives at

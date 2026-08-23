@@ -8,10 +8,12 @@
 /// compile error in the landed code) REFUSES — the reload tool is never invoked,
 /// so a broken tree is never composed and the running agents keep running.
 ///
-/// This client never touches the read-only [StationControl] HTTP surface (which
-/// stays GET-only) and never signals the process (`up`/`down` remain the signal
-/// lifecycle). It is DEV-MODE only: an AOT station has no VM service and is
-/// classified [ReloadNotDevMode].
+/// Before that ordered mutation, the client reads isolate metadata and refuses
+/// launch shapes that have no incremental compiler. It never touches the
+/// read-only [StationControl] HTTP surface (which stays GET-only) and never
+/// signals the process (`up`/`down` remain the signal lifecycle). It is
+/// DEV-MODE only: an AOT station has no VM service and is classified
+/// [ReloadNotDevMode].
 library;
 
 import 'dart:convert';
@@ -48,9 +50,32 @@ class SourcesRejected extends SourceReload {
   final String details;
 }
 
+/// The read-only VM-service verdict on whether source reload is safe.
+sealed class ReloadCapability {
+  const ReloadCapability();
+}
+
+/// The bound isolate has a source root and can receive `reloadSources`.
+class ReloadSupported extends ReloadCapability {
+  /// Const-constructible — carries no data.
+  const ReloadSupported();
+}
+
+/// The bound isolate cannot safely receive `reloadSources`.
+class ReloadUnsupported extends ReloadCapability {
+  /// Creates an unsupported verdict carrying the observed VM metadata.
+  const ReloadUnsupported(this.reason);
+
+  /// The read-only probe result shown to the operator.
+  final String reason;
+}
+
 /// One connected VM-service session against the running station — the seam the
 /// offline suite fakes (Fakes, not mocks).
 abstract interface class StationVmSession {
+  /// Reads VM/isolate metadata without sending a reload or load request.
+  Future<ReloadCapability> probeReloadCapability();
+
   /// Swaps changed sources into the running isolate.
   Future<SourceReload> reloadSources();
 
@@ -75,16 +100,40 @@ class VmServiceSession implements StationVmSession {
     final ws = convertToWebSocketUrl(serviceProtocolUrl: vmServiceUri);
     final service = await vmServiceConnectUri(ws.toString());
     final vm = await service.getVM();
-    final isolates = vm.isolates ?? const <IsolateRef>[];
+    final isolates = (vm.isolates ?? const <IsolateRef>[]).where(
+      (isolate) => isolate.isSystemIsolate != true && isolate.id != null,
+    );
     if (isolates.isEmpty) {
       await service.dispose();
-      throw StateError('the VM service at $vmServiceUri reports no isolates');
+      throw StateError(
+        'the VM service at $vmServiceUri reports no user isolate',
+      );
     }
     return VmServiceSession._(service, isolates.first.id!);
   }
 
   final VmService _service;
   final String _isolateId;
+
+  @override
+  Future<ReloadCapability> probeReloadCapability() async {
+    final isolate = await _service.getIsolate(_isolateId);
+    final rootUri = isolate.rootLib?.uri;
+    if (rootUri == null || rootUri.isEmpty) {
+      return ReloadUnsupported(
+        'isolate ${isolate.name ?? _isolateId} reports no root-library URI; '
+        'reload capability cannot be established',
+      );
+    }
+    final root = Uri.tryParse(rootUri);
+    if (root?.path.endsWith('.snapshot') ?? rootUri.endsWith('.snapshot')) {
+      return ReloadUnsupported(
+        'isolate ${isolate.name ?? _isolateId} root library is $rootUri; '
+        'a pub App-JIT snapshot has no incremental compiler',
+      );
+    }
+    return const ReloadSupported();
+  }
 
   @override
   Future<SourceReload> reloadSources() async {
@@ -156,6 +205,15 @@ class ReloadNotDevMode extends ReloadResult {
   final int pid;
 }
 
+/// The live station uses a launch shape that cannot safely hot-reload.
+class ReloadUnsupportedLaunchShape extends ReloadResult {
+  /// Creates the refusal carrying the read-only probe [reason].
+  const ReloadUnsupportedLaunchShape(this.reason);
+
+  /// The VM/isolate metadata that made reload unsafe.
+  final String reason;
+}
+
 /// The reload was REFUSED — the VM rejected the sources (a compile error), the
 /// tool is absent (a station that composed no [ReassembleTool]), or the
 /// station's re-composition itself threw. LOUD: [reason] is surfaced verbatim.
@@ -200,7 +258,15 @@ class StationReload {
 
     final session = await _connect(target);
     try {
-      // 1. The sources FIRST. A rejected swap never reaches the tree.
+      // 1. Prove that a source swap is safe without sending one.
+      final capability = await session.probeReloadCapability();
+      switch (capability) {
+        case ReloadUnsupported(:final reason):
+          return ReloadUnsupportedLaunchShape(reason);
+        case ReloadSupported():
+          break;
+      }
+      // 2. The sources FIRST. A rejected swap never reaches the tree.
       final swap = await session.reloadSources();
       switch (swap) {
         case SourcesRejected(:final details):
@@ -208,7 +274,7 @@ class StationReload {
         case SourcesSwapped():
           break;
       }
-      // 2. Then the re-composition, inside the station.
+      // 3. Then the re-composition, inside the station.
       final mode = restart ? ReassembleTool.modes[1] : ReassembleTool.modes[0];
       final body = await session.invokeReload(mode);
       if (body['ok'] != true) {
