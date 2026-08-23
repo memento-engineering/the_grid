@@ -645,6 +645,7 @@ class StationBeadWriter {
         'reason': reason,
         'reused': 'true',
       });
+      await _sweepStragglerGateIfSessionTerminal(sessionId);
       return existing.id;
     }
     final id = await _bd.create(
@@ -670,6 +671,11 @@ class StationBeadWriter {
       'reason': reason,
       'reused': 'false',
     });
+    await _sweepStragglerGateIfSessionTerminal(sessionId);
+    return id;
+  }
+
+  Future<void> _sweepStragglerGateIfSessionTerminal(String sessionId) async {
     try {
       final session = await _reader.beadById(
         sessionId,
@@ -692,7 +698,6 @@ class StationBeadWriter {
         'reason': _truncateGateFlareReason('$error'),
       });
     }
-    return id;
   }
 
   /// Parks an EXISTING session at a durable human gate for a SESSION-LIFECYCLE
