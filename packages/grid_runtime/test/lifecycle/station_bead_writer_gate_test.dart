@@ -471,6 +471,73 @@ void main() {
     );
   });
 
+  test('post-refresh terminal race sweeps the reused straggler gate', () async {
+    const existingGate = Bead(
+      id: 'tgdog-gate-existing',
+      issueType: GridIssueTypes.gate,
+      status: BeadStatus.open,
+      assignee: 'specify',
+      metadata: {
+        'rig': 'tgdog',
+        'blocks': 'tgdog-s',
+        'node': 'review/route',
+        'reason': 'prior gate',
+      },
+    );
+    runner.exportBeads = const [existingGate];
+    final flares = <({String name, Map<String, String> data})>[];
+    final reader = _SequencedGateReader(
+      runner,
+      beadReads: <Bead?>[
+        session('tgdog-s'),
+        session(
+          'tgdog-s',
+          closed: true,
+          metadata: const {'rig': 'tgdog', 'grid.outcome': 'complete'},
+        ),
+        session(
+          'tgdog-s',
+          closed: true,
+          metadata: const {'rig': 'tgdog', 'grid.outcome': 'complete'},
+        ),
+      ],
+      firstOpenBeads: const [existingGate],
+    );
+
+    final id =
+        await writerWith(
+          reader: reader,
+          onFlare: (name, data) => flares.add((name: name, data: data)),
+        ).createGate(
+          substation: 'tgdog',
+          sessionId: 'tgdog-s',
+          nodePath: 'review/route',
+          reason: 'stale route resumed after rework retirement',
+        );
+
+    expect(id, 'tgdog-gate-existing');
+    expect(runner.callsFor('create'), isEmpty);
+    expect(runner.callsFor('update'), hasLength(3));
+    expect(runner.callsFor('close').single[1], 'tgdog-gate-existing');
+    expect(
+      runner
+          .callsFor('update')
+          .singleWhere(
+            (call) => call.join(' ').contains('grid.gate.close_cause='),
+          )
+          .join(' '),
+      contains('grid.gate.close_cause=straggler-route'),
+    );
+    expect(
+      flares.where((flare) => flare.name == 'gate.autoClosed'),
+      hasLength(1),
+    );
+    expect(
+      flares.where((flare) => flare.name == 'gate.autoCloseFailed'),
+      isEmpty,
+    );
+  });
+
   test(
     'post-mint cleanup refusal flares but preserves the mint result',
     () async {
@@ -592,11 +659,16 @@ void main() {
 }
 
 final class _SequencedGateReader implements BeadProbeReader {
-  _SequencedGateReader(this.delegate, {required List<Bead?> beadReads})
-    : _beadReads = List<Bead?>.of(beadReads);
+  _SequencedGateReader(
+    this.delegate, {
+    required List<Bead?> beadReads,
+    List<Bead> firstOpenBeads = const <Bead>[],
+  }) : _beadReads = List<Bead?>.of(beadReads),
+       _firstOpenBeads = List<Bead>.of(firstOpenBeads);
 
   final BeadProbeReader delegate;
   final List<Bead?> _beadReads;
+  final List<Bead> _firstOpenBeads;
   var _openBeadsCalls = 0;
 
   @override
@@ -610,7 +682,7 @@ final class _SequencedGateReader implements BeadProbeReader {
     Map<String, String> metadataAny = const {},
   }) {
     _openBeadsCalls += 1;
-    if (_openBeadsCalls == 1) return Future.value(const <Bead>[]);
+    if (_openBeadsCalls == 1) return Future.value(_firstOpenBeads);
     return delegate.openBeads(
       types: types,
       metadataAll: metadataAll,
