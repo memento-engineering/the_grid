@@ -830,11 +830,17 @@ void main() {
           _session('tgdog-sess1'),
           _attempt('tgdog-att1'),
           _molecule('tgdog-mol'),
+          _molecule('tgdog-prereq'),
           _step('tgdog-code'),
           _step('tgdog-decision'),
           _step('tgdog-route'),
         ];
         runner.exportDependencies = const [
+          BeadDependency(
+            issueId: 'tgdog-code',
+            dependsOnId: 'tgdog-prereq',
+            type: DependencyType.blocks,
+          ),
           BeadDependency(
             issueId: 'tgdog-route',
             dependsOnId: 'tgdog-code',
@@ -870,8 +876,9 @@ void main() {
           script.split('\n'),
           orderedEquals([
             'close tgdog-att1',
-            'close tgdog-code',
             'close tgdog-decision',
+            'close tgdog-prereq',
+            'close tgdog-code',
             'close tgdog-route',
             'close tgdog-mol',
           ]),
@@ -889,11 +896,17 @@ void main() {
           _session('tgdog-sess1'),
           _attempt('tgdog-att1'),
           _molecule('tgdog-mol'),
+          _molecule('tgdog-prereq'),
           _step('tgdog-code'),
           _step('tgdog-decision'),
           _step('tgdog-route'),
         ];
         proxied.exportDependencies = const [
+          BeadDependency(
+            issueId: 'tgdog-code',
+            dependsOnId: 'tgdog-prereq',
+            type: DependencyType.blocks,
+          ),
           BeadDependency(
             issueId: 'tgdog-route',
             dependsOnId: 'tgdog-code',
@@ -937,14 +950,15 @@ void main() {
           closes,
           orderedEquals([
             'tgdog-att1',
-            'tgdog-code',
             'tgdog-decision',
+            'tgdog-prereq',
+            'tgdog-code',
             'tgdog-route',
             'tgdog-mol',
           ]),
           reason:
-              'the proxied fallback must satisfy close policy by closing '
-              'step leaves before the molecule root',
+              'the proxied fallback must preserve the dependency-aware order, '
+              'including a molecule-ranked blocker before a step-ranked issue',
         );
       },
     );
