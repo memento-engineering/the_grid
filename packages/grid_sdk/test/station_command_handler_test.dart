@@ -903,35 +903,37 @@ void main() {
     });
 
     test(
-      'grid/rework refresh callbacks supply snapshots before dispatch reads',
+      'grid/rework refreshes state and work after the durable retire',
       () async {
         final state = _Source(null);
         final work = _Source(null);
         final stateRunner = _RecordingRunner();
         final workRunner = _RecordingRunner();
+        var stateRefreshes = 0;
+        var workRefreshes = 0;
         final handler = _handler(
           state: state,
           work: work,
           stateRunner: stateRunner,
           workRunner: workRunner,
           refreshState: () async {
-            state.current = _snapshot([
-              const Bead(
-                id: 'tgdog-session',
-                issueType: GridIssueTypes.session,
-                status: BeadStatus.closed,
-                metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
-              ),
-            ]);
+            stateRefreshes++;
+            if (stateRefreshes == 1) {
+              state.current = _snapshot([_session('tgdog-session')]);
+            } else {
+              expect(_reworkUpdates(stateRunner), hasLength(1));
+              state.current = _snapshot([
+                _session('tgdog-session', workBead: 'tg-1#r1'),
+              ]);
+            }
           },
           refreshWork: () async {
-            work.current = _snapshot([
-              const Bead(
-                id: 'tg-1',
-                issueType: IssueType.task,
-                metadata: {'rig': 'tg'},
-              ),
-            ]);
+            workRefreshes++;
+            if (workRefreshes == 1) {
+              work.current = _workSnapshot();
+            } else {
+              expect(_reworkUpdates(stateRunner), hasLength(1));
+            }
           },
         );
 
@@ -940,8 +942,9 @@ void main() {
         );
 
         expect(result, isA<GridCommandCompleted>());
-        expect(stateRunner.calls, hasLength(1));
-        expect(workRunner.calls, isEmpty);
+        expect(stateRefreshes, 2);
+        expect(workRefreshes, 2);
+        expect(_reworkUpdates(stateRunner), hasLength(1));
       },
     );
 

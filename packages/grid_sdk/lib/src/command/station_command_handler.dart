@@ -354,10 +354,10 @@ final class StationCommandHandler implements GridCommandHandler {
     }
 
     // A resident-internal caller can issue this command inside the current
-    // projection/flush turn. Publish the durable retire now so the join sees
-    // the session under beadId#rN and schedules the successor without waiting
-    // for an unrelated dirty-source edge.
-    await _refreshState();
+    // projection/flush turn. Publish both durable mutation rails now: the
+    // state re-key lets the join retire beadId#rN, while the work refresh
+    // supplies the post-decision ready snapshot required to mint its successor.
+    await Future.wait(<Future<void>>[_refreshState(), workStore.refresh()]);
 
     return GridCommandResult.completed(
       message: reapFailure == null
