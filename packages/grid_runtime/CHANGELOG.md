@@ -1,3 +1,8 @@
+## 0.2.0-rc.6
+
+- `createGate`'s reuse/refresh branch now runs the same terminal sweep as the fresh-mint branch — a reused gate targeting a just-retired session is swept instead of dangling (#228).
+- The gate-close path refactor preserves both held-session protections (disposition eligibility and the escalation-marker re-read) while supersession is applied before auto-close (#227).
+
 ## 0.2.0-rc.5
 
 - Live sessions settle when their work bead closes (#215).
