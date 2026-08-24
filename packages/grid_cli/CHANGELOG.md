@@ -1,3 +1,7 @@
+## 0.5.0-rc.8
+
+- `VmServiceSession.connect` gains an injectable `VmServiceConnector` seam (defaulting to the existing connector), enabling direct tests of reload-capability classification and isolate selection (#225).
+
 ## 0.5.0-rc.7
 
 - `reload` probes the resident's reload capability before sending any reload request and refuses with `ReloadUnsupportedLaunchShape` instead of crashing a non-reloadable resident's kernel service (#219).

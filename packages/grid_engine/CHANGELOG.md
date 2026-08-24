@@ -1,3 +1,8 @@
+## 0.3.0-rc.8
+
+- `CompletionContract.artifactDurability`: a capability declaring it is not complete — cached, leased, or live — until its artifact is durably present; an artifactless completion is UNRESOLVED, never 'finished' (#226).
+- Rework's replacement mint is decoupled from gate cleanup: supersession is applied before the superseded round's gate auto-close, and a failed close flares without eating the fresh round (#227).
+
 ## 0.3.0-rc.7
 
 - `ServiceBundle.derive()`: a total derivation factory with an all-required private constructor — adding a bundle field is now a compile error at every derivation site instead of a silently dropped field (#217).
