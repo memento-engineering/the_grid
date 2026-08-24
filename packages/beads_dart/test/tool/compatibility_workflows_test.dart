@@ -204,11 +204,14 @@ done
       expect(source, contains('repos/gastownhall/beads/releases/latest'));
       expect(source, contains('[\$floor,\$latest]|unique'));
       expect(yaml['jobs']['publish']['needs'], ['parse', 'bd-compatibility']);
-      expect(source, contains("matrix.bd_ref != 'none'"));
+      // The bd-compatibility job gates at the JOB level (a declared action that
+      // fails to resolve kills a job at setup regardless of step-level ifs), and
+      // the publish job must tolerate the resulting skip for non-beads_dart tags.
       expect(
-        source,
-        contains('bd compatibility not required for this package'),
+        yaml['jobs']['bd-compatibility']['if'],
+        contains("needs.parse.outputs.package == 'beads_dart'"),
       );
+      expect(source, contains("needs.bd-compatibility.result == 'skipped'"));
     });
   });
 
