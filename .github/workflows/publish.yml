@@ -49,6 +49,12 @@ jobs:
           echo "bd_refs=$(jq -cn --arg floor "$floor" --arg latest "$latest" '[$floor,$latest]|unique')" >> "$GITHUB_OUTPUT"
 
   bd-compatibility:
+    # Runs ONLY for beads_dart. A job-level `if` is required (not step-level):
+    # GitHub resolves every DECLARED action at job setup regardless of step
+    # ifs, so an unresolvable action (dolthub/setup-dolt went missing
+    # 2026-08) failed EVERY publish run, for every package, before any
+    # step-if applied.
+    if: needs.parse.outputs.package == 'beads_dart'
     needs: parse
     runs-on: ubuntu-latest
     strategy:
@@ -57,36 +63,32 @@ jobs:
         bd_ref: ${{ fromJSON(needs.parse.outputs.bd_refs) }}
     steps:
       - uses: actions/checkout@v4
-        if: matrix.bd_ref != 'none'
       - uses: actions/checkout@v4
-        if: matrix.bd_ref != 'none'
         with:
           repository: gastownhall/beads
           ref: ${{ matrix.bd_ref }}
           path: ${{ runner.temp }}/beads
       - uses: subosito/flutter-action@v2
-        if: matrix.bd_ref != 'none'
         with:
           channel: stable
       - uses: actions/setup-go@v5
-        if: matrix.bd_ref != 'none'
         with:
           go-version-file: ${{ runner.temp }}/beads/go.mod
+      # TODO(beads_dart): dolthub/setup-dolt@v1 no longer resolves — replace
+      # with a maintained install path before the next beads_dart release.
       - uses: dolthub/setup-dolt@v1
-        if: matrix.bd_ref != 'none'
       - name: Build bd
-        if: matrix.bd_ref != 'none'
         run: |
           mkdir -p "${{ runner.temp }}/bin"
           (cd "${{ runner.temp }}/beads" && CGO_ENABLED=0 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
       - name: Run compatibility suite
-        if: matrix.bd_ref != 'none'
         run: tool/bd_compatibility/run.sh "${{ runner.temp }}/beads" "${{ runner.temp }}/bin/bd"
-      - if: matrix.bd_ref == 'none'
-        run: echo 'bd compatibility not required for this package'
 
   publish:
     needs: [parse, bd-compatibility]
+    # bd-compatibility SKIPS for every package except beads_dart; a skipped
+    # need must not skip the publish.
+    if: ${{ !cancelled() && needs.parse.result == 'success' && (needs.bd-compatibility.result == 'success' || needs.bd-compatibility.result == 'skipped') }}
     permissions:
       id-token: write # pub.dev OIDC trusted publishing
     uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
