@@ -162,7 +162,37 @@ void main() {
           expect(dead.completed, isFalse);
           expect(dead.humanHeld, isFalse);
           expect(dead.cursor, isEmpty);
-          expect(sessionDispositionOf(dead), isA<VoidedSession>());
+          final deadDisposition = sessionDispositionOf(dead);
+          expect(deadDisposition, isA<VoidedSession>());
+          expect(deadDisposition.blocksMount, isFalse);
+
+          for (final cursor in <Map<String, NodeCursor>>[
+            const {},
+            const {'tg-1/verify': NodeCursor(state: StepState.running)},
+          ]) {
+            final legacy = projectSession(
+              sessionBead(
+                id: 'tgdog-legacy',
+                workBeadId: 'tg-1',
+                closed: true,
+                metadata: const {
+                  SessionBeadKeys.outcome: kSessionOutcomeLegacy,
+                },
+              ),
+            ).copyWith(cursor: cursor);
+            final disposition = sessionDispositionOf(legacy);
+            expect(disposition, isA<DoneSession>());
+            expect(disposition.blocksMount, isTrue);
+          }
+
+          final openLegacy = projectSession(
+            sessionBead(
+              id: 'tgdog-open-legacy',
+              workBeadId: 'tg-1',
+              metadata: const {SessionBeadKeys.outcome: kSessionOutcomeLegacy},
+            ),
+          );
+          expect(sessionDispositionOf(openLegacy), isA<LiveSession>());
         },
       );
 

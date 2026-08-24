@@ -273,6 +273,13 @@ String truncateReason(String reason) => reason.length <= kMaxReasonChars
 /// The [SessionBeadKeys.outcome] value a POSITIVE-TERMINAL close stamps (I-10).
 const String kSessionOutcomeComplete = 'complete';
 
+/// The [SessionBeadKeys.outcome] value stamped by the one-time A59 backfill.
+///
+/// Unlike [kSessionOutcomeComplete], this value records era, not an engine
+/// close result. Both are durable evidence that a closed historical row blocks
+/// mount; open rows remain live because disposition checks terminality first.
+const String kSessionOutcomeLegacy = 'legacy';
+
 /// The metadata payload the positive-terminal close writes through the
 /// chokepoint IMMEDIATELY BEFORE `bd close` (I-10) — the durable "this round
 /// finished" evidence the mount boundary reads. Merge-safe (one disjoint key).
@@ -428,6 +435,7 @@ DateTime? _parseDate(Object? wire) =>
 /// projections populate it directly).
 SessionProjection projectSession(Bead sessionBead) {
   final metadata = sessionBead.metadata;
+  final outcome = metadata[SessionBeadKeys.outcome];
   return SessionProjection(
     workBeadId: (metadata[SessionBeadKeys.workBead] as String?) ?? '',
     sessionId: sessionBead.id,
@@ -435,7 +443,8 @@ SessionProjection projectSession(Bead sessionBead) {
     // I-10: the engine's own close-outcome evidence + the human-held markers —
     // what the mount boundary's disposition reads (never re-derived from the
     // circuit, which the mount boundary does not have).
-    completed: metadata[SessionBeadKeys.outcome] == kSessionOutcomeComplete,
+    completed:
+        outcome == kSessionOutcomeComplete || outcome == kSessionOutcomeLegacy,
     workTerminalReason: metadata[SessionBeadKeys.workTerminalReason] as String?,
     humanHeld:
         metadata.containsKey(SessionBeadKeys.escalation) ||
