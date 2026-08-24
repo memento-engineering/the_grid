@@ -1,7 +1,10 @@
 import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
+import 'package:mysql_client/exception.dart';
 import 'package:test/test.dart';
+
+import '../support/schema_probe_rows.dart';
 
 void main() {
   const allStatuses =
@@ -81,6 +84,70 @@ void main() {
     expect(derivedIds, hasLength(120));
     expect(derivedIds, containsAll(['tg-0', 'tg-119']));
   });
+
+  const endpoint = DoltEndpoint(
+    host: '127.0.0.1',
+    port: 34947,
+    database: 'tg',
+    user: 'root',
+    password: 'fake',
+  );
+
+  test('SQL snapshot absorbs a reaped connection below the reader', () async {
+    var opened = 0;
+    final dolt = DoltQueryService(
+      endpoint,
+      poolSize: 1,
+      connectionFactory: (_) async {
+        opened++;
+        return _SnapshotDoltConnection(
+          failOnQuery: opened == 1 ? 3 : null,
+          failure: const MySQLClientException(
+            'Can not execute query: connection closed',
+          ),
+          closeOnFailure: true,
+        );
+      },
+    );
+    addTearDown(dolt.close);
+    await dolt.connect();
+    final runner = _SnapshotRunner()..empty = true;
+
+    final snapshot = await SqlSnapshotReader(
+      dolt: dolt,
+      bd: BdCliService(runner),
+    ).read();
+
+    expect(snapshot.beadsById, isEmpty);
+    expect(opened, 2);
+    expect(runner.calls, [
+      ['ready', '--json', '--limit', '0'],
+    ]);
+  });
+
+  test(
+    'SQL snapshot propagates a persistent error without CLI degrade',
+    () async {
+      final persistentError = StateError('persistent SQL failure');
+      final dolt = DoltQueryService(
+        endpoint,
+        connectionFactory: (_) async => _SnapshotDoltConnection(
+          failOnQuery: 3,
+          failure: persistentError,
+          closeOnFailure: false,
+        ),
+      );
+      addTearDown(dolt.close);
+      await dolt.connect();
+      final runner = _SnapshotRunner()..empty = true;
+
+      await expectLater(
+        SqlSnapshotReader(dolt: dolt, bd: BdCliService(runner)).read(),
+        throwsA(same(persistentError)),
+      );
+      expect(runner.calls, isEmpty);
+    },
+  );
 }
 
 class _SnapshotRunner implements BdRunner {
@@ -139,4 +206,42 @@ class _SnapshotRunner implements BdRunner {
     stdout: jsonEncode({'schema_version': 1, 'data': data}),
     stderr: '',
   );
+}
+
+class _SnapshotDoltConnection implements DoltConnection {
+  _SnapshotDoltConnection({
+    required this.failOnQuery,
+    required this.failure,
+    required this.closeOnFailure,
+  });
+
+  final int? failOnQuery;
+  final Object failure;
+  final bool closeOnFailure;
+  var _open = true;
+  var _queryCount = 0;
+
+  @override
+  bool get connected => _open;
+
+  @override
+  Future<List<Map<String, Object?>>> query(String sql) async {
+    _queryCount++;
+    if (_queryCount == failOnQuery) {
+      if (closeOnFailure) _open = false;
+      throw failure;
+    }
+    if (sql == 'SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations') {
+      return const [
+        {'v': 53},
+      ];
+    }
+    if (sql == DoltSchemaShape.probeSql) return kV53ProbeRows;
+    return const [];
+  }
+
+  @override
+  Future<void> close() async {
+    _open = false;
+  }
 }
