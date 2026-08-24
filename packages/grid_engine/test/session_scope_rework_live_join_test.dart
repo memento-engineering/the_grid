@@ -367,6 +367,7 @@ void main() {
         'comes from', () async {
       final f = buildFakes(createdId: 'tgdog-round2');
       final reg = RecordingCapabilityRegistry(circuits: const {});
+      final transport = _RecordingTransport();
 
       final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
       final stateSrc = FakeSnapshotSource(
@@ -384,6 +385,7 @@ void main() {
         ctx: f.ctx,
         registry: reg,
         rootCircuit: (_) => _code,
+        transport: transport,
       );
       addTearDown(m.owner.dispose);
       await _pump();
@@ -397,6 +399,7 @@ void main() {
       // bead (bd `--metadata` merge — every other key, incl. the stale
       // `route` cursor, survives byte-identical) and leaves the gate bead
       // it never touches OPEN, exactly like the resident command rework path.
+      final reworkDecisionAt = DateTime.now();
       stateSrc.push(
         _state([
           _round1Session('tgdog-round1', workBead: 'tg-1#r1'),
@@ -408,7 +411,7 @@ void main() {
         _work(
           [bead('tg-1')],
           {'tg-1'},
-          tick: DateTime.now()
+          tick: reworkDecisionAt
               .add(const Duration(seconds: 1))
               .millisecondsSinceEpoch,
         ),
@@ -431,6 +434,11 @@ void main() {
       // Round 2 minted fresh — a SECOND createSession (+ its molecule pour,
       // tg-eli phase 2), a NEW id — never a reuse of tgdog-round1.
       final creates = f.runner.workCreates;
+      expect(
+        SessionScopeState.freshMintSnapshotGrace,
+        const Duration(seconds: 90),
+      );
+      expect(transport.named('session.mintAbandoned'), isEmpty);
       expect(creates.where((call) => !call.contains('--graph')), hasLength(1));
       expect(creates.where((call) => call.contains('--graph')), hasLength(1));
 
