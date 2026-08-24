@@ -632,4 +632,4 @@ Two modes, both re-composing through the EXISTING configuration scope (the tree'
 
 **Affects (if promoted).** `packages/grid_engine/lib/src/domain/session_disposition.dart` (legacy-outcome arm), `session_bead.dart` (legacy constant), a one-time backfill migration tool, and disposition tests covering the currently-untested no-marker empty/stray-cursor case.
 
-**Status:** Pending — Nico promotes or rejects.
+**Status:** Promoted — Nico, 2026-08-24 ("i approve that decision", in-session).
