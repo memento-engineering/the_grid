@@ -18,36 +18,39 @@ void main() {
       });
     }
 
-    test('server mode resolves an endpoint from the dolt pack config', () {
-      // Lay down a city root with the gc dolt-config.yaml.
-      final cityRoot = Directory(p.join(tmp.path, 'city'))..createSync();
-      final packDir = Directory(
-        p.join(cityRoot.path, '.gc', 'runtime', 'packs', 'dolt'),
-      )..createSync(recursive: true);
-      File(p.join(packDir.path, 'dolt-config.yaml')).writeAsStringSync('''
-listener:
-  port: 34947
-  host: 0.0.0.0
-''');
-      writeBeads({
-        'metadata.json':
-            '{"dolt_mode":"server","dolt_database":"tg","backend":"dolt"}',
-        '.env': 'GT_ROOT=${cityRoot.path}\n',
-      });
+    test(
+      'passes workspace-scoped context to an injected endpoint resolver',
+      () {
+        writeBeads({
+          'metadata.json':
+              '{"dolt_mode":"server","dolt_database":"rezi","backend":"dolt"}',
+        });
+        const endpoint = DoltEndpoint(
+          host: 'store.internal',
+          port: 4407,
+          database: 'rezi',
+          user: 'reader',
+          password: 'secret',
+        );
+        final resolver = _FakeEndpointResolver(
+          const EndpointResolution.resolved(endpoint),
+        );
 
-      final ws = BeadsWorkspace.discover(
-        start: tmp.path,
-        env: {'GC_DOLT_PASSWORD': 'secret', 'GC_DOLT_USER': 'grid'},
-      );
-      expect(ws, isNotNull);
-      expect(ws!.mode, DoltMode.server);
-      expect(ws.database, 'tg');
-      expect(ws.endpoint, isNotNull);
-      expect(ws.endpoint!.host, '127.0.0.1'); // 0.0.0.0 → loopback for clients
-      expect(ws.endpoint!.port, 34947);
-      expect(ws.endpoint!.user, 'grid');
-      expect(ws.endpoint!.hasCredential, isTrue);
-    });
+        final ws = BeadsWorkspace.discover(
+          start: tmp.path,
+          endpointResolver: resolver,
+        );
+
+        expect(ws, isNotNull);
+        expect(ws!.mode, DoltMode.unknown);
+        expect(ws.endpoint, same(endpoint));
+        expect(ws.endpointDiagnostic, isNull);
+        expect(resolver.lastRequest!.root, tmp.absolute.path);
+        expect(resolver.lastRequest!.beadsDir, p.join(tmp.path, '.beads'));
+        expect(resolver.lastRequest!.doltMode, 'server');
+        expect(resolver.lastRequest!.database, 'rezi');
+      },
+    );
 
     test('proxied-server mode resolves the PROXY endpoint from proxy.pid + '
         'the beads_dart secret', () {
@@ -64,7 +67,7 @@ listener:
         p.join(doltDir.path, 'beads_dart.secret'),
       ).writeAsStringSync('s3cret\n');
 
-      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
+      final ws = BeadsWorkspace.discover(start: tmp.path);
       expect(ws, isNotNull);
       expect(ws!.mode, DoltMode.proxiedServer);
       expect(ws.database, 'tranquility');
@@ -94,7 +97,7 @@ listener:
         p.join(proxyRoot.path, 'beads_dart.secret'),
       ).writeAsStringSync('tgsecret');
 
-      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
+      final ws = BeadsWorkspace.discover(start: tmp.path);
       expect(ws!.mode, DoltMode.proxiedServer);
       expect(ws.endpoint, isNotNull);
       expect(ws.endpoint!.port, 50001);
@@ -118,73 +121,72 @@ listener:
         p.join(mainRoot.path, 'beads_dart.secret'),
       ).writeAsStringSync('wsecret');
 
-      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
+      final ws = BeadsWorkspace.discover(start: tmp.path);
       expect(ws!.endpoint, isNotNull);
       expect(ws.endpoint!.port, 50002);
       expect(ws.endpoint!.password, 'wsecret');
     });
 
-    test('proxied-server mode without the secret yields a null endpoint '
-        '(CLI fallback; live SQL never rides an empty password)', () {
+    for (final secretCase in <String, String?>{
+      'missing': null,
+      'empty': '\n',
+    }.entries) {
+      test('proxied-server ${secretCase.key} secret is observable', () {
+        final doltDir = Directory(p.join(tmp.path, '.beads', 'dolt'))
+          ..createSync(recursive: true);
+        File(p.join(tmp.path, '.beads', 'metadata.json')).writeAsStringSync(
+          '{"dolt_mode":"proxied-server","dolt_database":"tranquility"}',
+        );
+        File(
+          p.join(doltDir.path, 'proxy.pid'),
+        ).writeAsStringSync('{"pid":1,"port":65101}');
+        final secret = secretCase.value;
+        if (secret != null) {
+          File(
+            p.join(doltDir.path, 'beads_dart.secret'),
+          ).writeAsStringSync(secret);
+        }
+
+        final ws = BeadsWorkspace.discover(start: tmp.path)!;
+        expect(ws.endpoint, isNull);
+        expect(ws.endpointDiagnostic, contains('beads_dart.secret'));
+        expect(ws.endpointDiagnostic, contains('0600'));
+      });
+    }
+
+    test('malformed proxy.pid exposes a path-specific diagnostic', () {
       final doltDir = Directory(p.join(tmp.path, '.beads', 'dolt'))
         ..createSync(recursive: true);
       File(p.join(tmp.path, '.beads', 'metadata.json')).writeAsStringSync(
         '{"dolt_mode":"proxied-server","dolt_database":"tranquility"}',
       );
-      File(
-        p.join(doltDir.path, 'proxy.pid'),
-      ).writeAsStringSync('{"pid":1,"port":65101}');
-
-      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
-      expect(ws!.mode, DoltMode.proxiedServer);
-      expect(ws.endpoint, isNull);
-    });
-
-    test('proxied-server mode with a malformed proxy.pid yields a null '
-        'endpoint instead of throwing', () {
-      final doltDir = Directory(p.join(tmp.path, '.beads', 'dolt'))
-        ..createSync(recursive: true);
-      File(p.join(tmp.path, '.beads', 'metadata.json')).writeAsStringSync(
-        '{"dolt_mode":"proxied-server","dolt_database":"tranquility"}',
-      );
-      File(p.join(doltDir.path, 'proxy.pid')).writeAsStringSync('not json');
+      final pidFile = File(p.join(doltDir.path, 'proxy.pid'))
+        ..writeAsStringSync('not json');
       File(p.join(doltDir.path, 'beads_dart.secret')).writeAsStringSync('x');
 
-      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
-      expect(ws!.mode, DoltMode.proxiedServer);
+      final ws = BeadsWorkspace.discover(start: tmp.path)!;
       expect(ws.endpoint, isNull);
+      expect(ws.endpointDiagnostic, contains(pidFile.path));
+      expect(ws.endpointDiagnostic, contains('readable JSON'));
     });
 
-    test('direct mode yields a null endpoint (bd CLI fallback)', () {
-      writeBeads({
-        'metadata.json': '{"dolt_mode":"direct","dolt_database":"tg"}',
-      });
-      final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
-      expect(ws, isNotNull);
-      expect(ws!.mode, DoltMode.direct);
-      expect(ws.endpoint, isNull);
-    });
-
-    test(
-      'missing credential resolves an endpoint with hasCredential false',
-      () {
-        final cityRoot = Directory(p.join(tmp.path, 'city'))..createSync();
-        final packDir = Directory(
-          p.join(cityRoot.path, '.gc', 'runtime', 'packs', 'dolt'),
-        )..createSync(recursive: true);
-        File(
-          p.join(packDir.path, 'dolt-config.yaml'),
-        ).writeAsStringSync('listener:\n  port: 34947\n  host: 0.0.0.0\n');
+    for (final modeCase in <String, DoltMode>{
+      'direct': DoltMode.direct,
+      'shared-server': DoltMode.unknown,
+    }.entries) {
+      test('${modeCase.key} mode exposes its CLI-fallback diagnostic', () {
         writeBeads({
-          'metadata.json': '{"dolt_mode":"server","dolt_database":"tg"}',
-          '.env': 'GT_ROOT=${cityRoot.path}\n',
+          'metadata.json':
+              '{"dolt_mode":"${modeCase.key}","dolt_database":"tg"}',
         });
-        final ws = BeadsWorkspace.discover(start: tmp.path, env: const {});
-        expect(ws!.endpoint, isNotNull);
-        expect(ws.endpoint!.user, 'root');
-        expect(ws.endpoint!.hasCredential, isFalse);
-      },
-    );
+
+        final ws = BeadsWorkspace.discover(start: tmp.path)!;
+        expect(ws.mode, modeCase.value);
+        expect(ws.endpoint, isNull);
+        expect(ws.endpointDiagnostic, contains(modeCase.key));
+        expect(ws.endpointDiagnostic, contains('bd CLI read path'));
+      });
+    }
 
     test('returns null when no .beads/ exists anywhere up-tree', () {
       final isolated = Directory.systemTemp.createTempSync('grid_none_');
@@ -192,4 +194,17 @@ listener:
       expect(BeadsWorkspace.discover(start: isolated.path), isNull);
     });
   });
+}
+
+final class _FakeEndpointResolver implements EndpointResolver {
+  _FakeEndpointResolver(this.resolution);
+
+  final EndpointResolution resolution;
+  EndpointResolutionRequest? lastRequest;
+
+  @override
+  EndpointResolution resolve(EndpointResolutionRequest request) {
+    lastRequest = request;
+    return resolution;
+  }
 }

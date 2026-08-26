@@ -39,10 +39,9 @@ class GridRuntimeBundle {
 /// choosing the read path and dirty-signal sources from the workspace's mode
 /// and credentials (ADR-0001 Decisions 4 & 5):
 ///
-/// * **SQL path** when the workspace is server-mode with a resolvable endpoint
-///   *and* a credential, and the pool connects (drift guard passes): pooled
-///   Dolt reads + a `@@<db>_working` probe source, with the CLI reader as the
-///   per-refresh fallback.
+/// * **SQL path** when the workspace resolver supplies an endpoint with a
+///   credential and the pool connects (drift guard passes): pooled Dolt reads
+///   plus a `@@<db>_working` probe, with CLI fallback per refresh.
 /// * **CLI path** otherwise: scoped-list composition + a polling backstop.
 ///
 /// Both paths always include the `.beads/` workspace watcher for sub-second
@@ -76,15 +75,7 @@ class GridRuntimeFactory {
     );
 
     final endpoint = workspace.endpoint;
-    // Proxied-server mode is server-shaped for reads; SQL stays primary and a
-    // failed connection assembles the explicitly-scoped CLI implementation.
-    final serverShaped =
-        workspace.mode == DoltMode.server ||
-        workspace.mode == DoltMode.proxiedServer;
-    if (preferSql &&
-        serverShaped &&
-        endpoint != null &&
-        endpoint.hasCredential) {
+    if (preferSql && endpoint != null && endpoint.hasCredential) {
       final candidate = DoltQueryService(endpoint);
       try {
         await candidate.connect(); // runs the schema-drift guard

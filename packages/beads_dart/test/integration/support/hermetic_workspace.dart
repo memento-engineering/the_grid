@@ -61,7 +61,7 @@ class HermeticWorkspace {
     }
     // Hermetic guard: embedded init must NOT resolve a server endpoint, or we
     // could be writing into the real tg database.
-    if (workspace.mode == DoltMode.server || workspace.endpoint != null) {
+    if (workspace.endpoint != null) {
       await resolved.delete(recursive: true);
       fail(
         'hermetic workspace unexpectedly resolved a server endpoint '
