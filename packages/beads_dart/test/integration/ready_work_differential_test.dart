@@ -302,10 +302,8 @@ void main() {
   // -------------------------------------------------------------------------
   // Half 2: live SQL-port == bd-ready differential (self-skips w/o creds).
   // -------------------------------------------------------------------------
-  group(
-    'SQL-port == bd-ready differential '
-    '(live, requires a credentialed endpoint)',
-    () {
+  group('SQL-port == bd-ready differential '
+      '(live, requires a credentialed endpoint)', () {
     test(
       'the SQL port agrees with bd ready over the live graph, every policy',
       () async {
