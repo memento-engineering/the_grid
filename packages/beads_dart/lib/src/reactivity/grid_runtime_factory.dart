@@ -1,7 +1,10 @@
+import 'package:meta/meta.dart';
+
 import '../services/bd_cli_service.dart';
 import '../services/bd_runner.dart';
 import '../services/beads_workspace.dart';
 import '../services/bead_probe_reader.dart';
+import '../services/dolt_endpoint.dart';
 import '../services/dolt_query_service.dart';
 import '../models/issue_type.dart';
 import 'dirty_signal.dart';
@@ -55,6 +58,8 @@ class GridRuntimeFactory {
     Duration pollInterval = const Duration(seconds: 5),
     Duration syncFloorInterval = const Duration(seconds: 45),
     BdRunner? runner,
+    @visibleForTesting
+    DoltQueryService Function(DoltEndpoint endpoint)? doltQueryServiceFactory,
     Set<IssueType> lifecycleTypes = const {},
     void Function(String source)? onDirtySourceClosed,
   }) async {
@@ -76,7 +81,8 @@ class GridRuntimeFactory {
 
     final endpoint = workspace.endpoint;
     if (preferSql && endpoint != null && endpoint.hasCredential) {
-      final candidate = DoltQueryService(endpoint);
+      final candidate =
+          doltQueryServiceFactory?.call(endpoint) ?? DoltQueryService(endpoint);
       try {
         await candidate.connect(); // runs the schema-drift guard
         dolt = candidate;

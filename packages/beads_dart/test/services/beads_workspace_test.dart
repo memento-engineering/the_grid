@@ -127,6 +127,91 @@ void main() {
       expect(ws.endpoint!.password, 'wsecret');
     });
 
+    group('proxied-server endpoint failures are observable', () {
+      for (final sidecarCase in <String, ({String payload, String diagnostic})>{
+        'malformed JSON': (
+          payload: 'not json',
+          diagnostic: 'is not readable JSON (FormatException).',
+        ),
+        'non-object JSON': (
+          payload: '[]',
+          diagnostic: 'must contain a JSON object.',
+        ),
+        'non-string root_path': (
+          payload: '{"root_path":42}',
+          diagnostic: 'root_path must be a string.',
+        ),
+      }.entries) {
+        test('sidecar ${sidecarCase.key} has a distinct diagnostic', () {
+          writeBeads({
+            'metadata.json':
+                '{"dolt_mode":"proxied-server","dolt_database":"tg"}',
+            'proxied_server_client_info.json': sidecarCase.value.payload,
+          });
+          final sidecar = File(
+            p.join(tmp.path, '.beads', 'proxied_server_client_info.json'),
+          );
+
+          final ws = BeadsWorkspace.discover(start: tmp.path)!;
+
+          expect(ws.endpoint, isNull);
+          expect(
+            ws.endpointDiagnostic,
+            'Cannot resolve proxied-server SQL endpoint: ${sidecar.path} '
+            '${sidecarCase.value.diagnostic}',
+          );
+        });
+      }
+
+      test('missing proxy.pid has a distinct diagnostic', () {
+        writeBeads({
+          'metadata.json':
+              '{"dolt_mode":"proxied-server","dolt_database":"tg"}',
+        });
+        final pidFile = File(p.join(tmp.path, '.beads', 'dolt', 'proxy.pid'));
+
+        final ws = BeadsWorkspace.discover(start: tmp.path)!;
+
+        expect(ws.endpoint, isNull);
+        expect(
+          ws.endpointDiagnostic,
+          'Cannot resolve proxied-server SQL endpoint: ${pidFile.path} is '
+          "missing; start bd's proxy for this workspace.",
+        );
+      });
+
+      for (final pidCase in <String, ({String payload, String diagnostic})>{
+        'non-object JSON': (
+          payload: '[]',
+          diagnostic: 'must contain a JSON object.',
+        ),
+        'out-of-range port': (
+          payload: '{"pid":1,"port":65536}',
+          diagnostic: 'has no TCP port between 1 and 65535.',
+        ),
+      }.entries) {
+        test('proxy.pid ${pidCase.key} has a distinct diagnostic', () {
+          writeBeads({
+            'metadata.json':
+                '{"dolt_mode":"proxied-server","dolt_database":"tg"}',
+          });
+          final doltDir = Directory(p.join(tmp.path, '.beads', 'dolt'))
+            ..createSync();
+          final pidFile = File(p.join(doltDir.path, 'proxy.pid'))
+            ..writeAsStringSync(pidCase.value.payload);
+
+          final ws = BeadsWorkspace.discover(start: tmp.path)!;
+
+          expect(ws.endpoint, isNull);
+          expect(
+            ws.endpointDiagnostic,
+            'Cannot resolve proxied-server SQL endpoint: ${pidFile.path} '
+            '${pidCase.value.diagnostic}',
+          );
+        });
+      }
+    });
+
     for (final secretCase in <String, String?>{
       'missing': null,
       'empty': '\n',
