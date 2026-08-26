@@ -9,12 +9,8 @@ import 'package:test/test.dart';
 
 /// Criterion 2 (PDR §6.2): the cross-workspace change probe.
 ///
-/// OPTIONAL / skip-guarded — only meaningful against a live gc-managed Dolt
-/// server, so it SELF-SKIPs without `GC_DOLT_PASSWORD` (like the live SQL
-/// test). It does NOT — and must not — write into the real `tg` database; it
-/// is a read-only witness that the `SELECT @@<db>_working` probe is the
-/// authoritative change signal (ADR-0001 Decision 5, ADR-0003 Decision 6
-/// coexistence safety: anything against live convergence traffic is read-only).
+/// OPTIONAL / skip-guarded — only meaningful against a live credentialed Dolt
+/// endpoint. It does not write the discovered database.
 ///
 /// Intent (documented for the integrator): a cross-workspace mutation routed
 /// into `tg` flips the working-set hash, which the [WorkingSetProbeSource]
@@ -28,16 +24,15 @@ import 'package:test/test.dart';
 ///   reconnect case).
 void main() {
   test(
-    'the working-set probe is the authoritative, stable change signal (live, '
-    'requires GC_DOLT_PASSWORD)',
+    'the working-set probe is the authoritative, stable change signal '
+    '(live, requires a credentialed endpoint)',
     () async {
       final ws = BeadsWorkspace.discover();
       final endpoint = ws?.endpoint;
       if (ws == null || endpoint == null || !endpoint.hasCredential) {
         markTestSkipped(
-          'no live Dolt endpoint with credentials (GC_DOLT_PASSWORD unset) — '
-          'cross-workspace probe not exercised. Intent: a cross-workspace '
-          'write into tg flips SELECT @@tg_working within ≤2s (ADR-0001 D5).',
+          'no live Dolt endpoint with credentials — cross-workspace probe not '
+          'exercised; inspect BeadsWorkspace.endpointDiagnostic',
         );
         return;
       }

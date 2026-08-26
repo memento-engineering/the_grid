@@ -13,10 +13,10 @@ import 'package:test/test.dart';
 
 /// Criterion 4 (PDR §6.4): the SQL-vs-CLI equivalence canary.
 ///
-/// WHEN `GC_DOLT_PASSWORD` is set and a server endpoint is discoverable, this
-/// composes the bead set over the SAME live workspace twice — once via the
-/// pooled [DoltQueryService] SQL read path, once via [CliSnapshotReader]'s
-/// complete scoped type/status composition —
+/// WHEN a credentialed endpoint is discoverable, this composes the bead set
+/// over the SAME live workspace twice.
+/// It compares the pooled [DoltQueryService] SQL read path with
+/// [CliSnapshotReader]'s complete scoped type/status composition —
 /// and asserts the two bead sets are identical (sorted-label parity holds,
 /// ADR-0000 A11). The per-field equivalence is already unit-proven in
 /// `dolt_row_mapper_test.dart`; this is the end-to-end drift canary the
@@ -36,14 +36,14 @@ import 'package:test/test.dart';
 /// present — exactly like `services/dolt_query_service_live_test.dart` — so the
 /// offline suite is unaffected.
 void main() {
-  test('SQL and CLI snapshot reads agree on the bead set (live, requires '
-      'GC_DOLT_PASSWORD)', () async {
+  test('SQL and CLI snapshot reads agree on the bead set '
+      '(live, requires a credentialed endpoint)', () async {
     final ws = BeadsWorkspace.discover();
     final endpoint = ws?.endpoint;
     if (ws == null || endpoint == null || !endpoint.hasCredential) {
       markTestSkipped(
-        'no live Dolt endpoint with credentials (GC_DOLT_PASSWORD unset) — '
-        'SQL-vs-CLI equivalence canary not exercised',
+        'no live Dolt endpoint with credentials — SQL-vs-CLI equivalence canary '
+        'not exercised; inspect BeadsWorkspace.endpointDiagnostic',
       );
       return;
     }

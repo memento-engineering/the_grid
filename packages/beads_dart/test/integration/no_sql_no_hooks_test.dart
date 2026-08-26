@@ -34,9 +34,9 @@ void main() {
       final ws = await HermeticWorkspace.create(prefix: 'grid_it_nosql_');
       addTearDown(ws.dispose);
 
-      // The factory chooses the read path from the workspace mode. Embedded
-      // (direct) mode → CLI path, no Dolt pool, so there is no SQL connection
-      // at all — writes-over-SQL is structurally impossible here.
+      // The factory chooses the SQL read path from the resolved endpoint. Embedded
+      // mode's default resolution is unavailable, so this workspace uses the CLI
+      // path and opens no Dolt pool.
       final bundle = await GridRuntimeFactory.build(workspace: ws.workspace);
       addTearDown(bundle.shutdown);
       expect(
