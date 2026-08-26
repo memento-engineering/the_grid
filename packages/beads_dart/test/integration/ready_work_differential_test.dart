@@ -30,10 +30,8 @@ import 'support/hermetic_workspace.dart';
 /// A hermetic workspace is embedded Dolt (no MySQL endpoint), so the SQL port
 /// itself cannot run here — that is Half 2.
 ///
-/// **Half 2 — live SQL-port == bd-ready differential (self-skips without
-/// `GC_DOLT_PASSWORD`).** Against the real gc-managed tg server, runs
-/// [ReadyWorkDifferential.assertAgreement] for each sort policy over the live
-/// graph AS-IS. Pure reads — coexistence-safe (no live mutations; CLAUDE.md).
+/// **Half 2 — live SQL-port == bd-ready differential (self-skips without a
+/// credentialed endpoint).** Runs over the discovered live graph AS-IS.
 /// Self-skips exactly like `services/dolt_query_service_live_test.dart`. This
 /// half proves the port against production-scale data but only covers whatever
 /// shapes the live graph happens to carry — it does **not** guarantee any named
@@ -304,7 +302,8 @@ void main() {
   // -------------------------------------------------------------------------
   // Half 2: live SQL-port == bd-ready differential (self-skips w/o creds).
   // -------------------------------------------------------------------------
-  group('SQL-port == bd-ready differential (live, requires GC_DOLT_PASSWORD)', () {
+  group('SQL-port == bd-ready differential '
+      '(live, requires a credentialed endpoint)', () {
     test(
       'the SQL port agrees with bd ready over the live graph, every policy',
       () async {
@@ -312,8 +311,8 @@ void main() {
         final endpoint = ws?.endpoint;
         if (ws == null || endpoint == null || !endpoint.hasCredential) {
           markTestSkipped(
-            'no live Dolt endpoint with credentials (GC_DOLT_PASSWORD unset) — '
-            'the SQL-port differential is not exercised',
+            'no live Dolt endpoint with credentials — the SQL-port differential is '
+            'not exercised; inspect BeadsWorkspace.endpointDiagnostic',
           );
           return;
         }

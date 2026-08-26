@@ -384,17 +384,17 @@ void main() {
   });
 
   // ------------------------------------------------------------------------
-  // Live test: self-skips without GC_DOLT_PASSWORD; runs read-only against the
-  // real gc-managed Dolt server when creds are present (ADR-0000 A8).
+  // Live test: self-skips without a credentialed workspace endpoint and runs
+  // read-only when one is available.
   // ------------------------------------------------------------------------
-  group('DoltQueryService (live, requires GC_DOLT_PASSWORD)', () {
+  group('DoltQueryService (live, requires a credentialed endpoint)', () {
     test('probe is stable when idle; snapshotParts returns beads', () async {
       final ws = BeadsWorkspace.discover();
       final endpoint = ws?.endpoint;
       if (endpoint == null || !endpoint.hasCredential) {
         markTestSkipped(
-          'no live Dolt endpoint with credentials '
-          '(GC_DOLT_PASSWORD unset) — SQL read path not exercised',
+          'no live Dolt endpoint with credentials — SQL read path not exercised; '
+          'inspect BeadsWorkspace.endpointDiagnostic',
         );
         return;
       }

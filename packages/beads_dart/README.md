@@ -33,9 +33,10 @@ consumers build their notifiers/providers on top.
   only — never SQL — and carry `--actor grid-controller`; multi-id reads are
   chunked so a large id set never becomes one spawn per id.
 - **`BeadsWorkspace`** (`src/services/beads_workspace.dart`) — discovers a
-  workspace: locates `.beads/`, reads `metadata.json` (mode + database) and
-  `.env`, and resolves a `DoltEndpoint` in server mode (null in
-  direct/embedded mode — consumers fall back to the CLI).
+  workspace, reads bd's `metadata.json`, and passes a workspace-scoped
+  `EndpointResolutionRequest` to an injected `EndpointResolver`. The default
+  resolves only bd's proxied-server artifacts; `endpointDiagnostic` explains
+  every null endpoint before consumers use the CLI read path.
 - **`diffSnapshots` / `GraphEvent`** (`src/diff/`) — structural diff of two
   `GraphSnapshot`s into a sealed, exhaustively-matchable event hierarchy
   (`BeadCreated`/`Updated`/`Closed`/`Reopened`, `DependencyAdded`/`Removed`,
@@ -46,6 +47,23 @@ consumers build their notifiers/providers on top.
   authoritative `CliSnapshotReader`'s `bd export --all` + `bd ready` on any
   SQL failure), fed by merged `DirtySignalSource`s (workspace watcher,
   working-set probe, polling ticker) through the `GraphSyncInteractor`.
+
+### Proxied-server SQL endpoint
+
+The built-in resolver is per workspace: it reads
+`.beads/proxied_server_client_info.json`, then `<proxy root>/proxy.pid`, and
+connects to that proxy's loopback port. SQL also requires an operator-managed,
+dedicated read-only `beads_dart` user with a non-empty password stored at
+`<proxy root>/beads_dart.secret` with mode `0600`. The resolver never creates
+that user or secret.
+
+If an artifact is missing, malformed, or empty, `workspace.endpoint` is null
+and the runtime uses the bd CLI. Inspect `workspace.endpointDiagnostic` (or the
+full `workspace.endpointResolution`) for the exact path and remedy. A consumer
+with another server topology injects its own `EndpointResolver` into
+`BeadsWorkspace.discover`; the request is keyed by that workspace's root, raw
+`dolt_mode`, and database, so multi-store processes do not share one ambient
+endpoint.
 
 `src/ready/` additionally ports beads' ready-work predicate to SELECT-only SQL
 (`ReadyWorkQuery`/`ReadyWorkFilter`) with `ReadyWorkDifferential` diffing it

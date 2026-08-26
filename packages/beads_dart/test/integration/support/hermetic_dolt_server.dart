@@ -9,7 +9,7 @@ import 'package:test/test.dart';
 /// to it — the only configuration in which **both** the SQL port
 /// ([ReadyWorkQuery] over a [DoltQueryService]) and the `bd ready` oracle read
 /// the *same* store, so the ADR-0003 Decision 5 differential can be run
-/// runs-everywhere (no live `GC_DOLT_PASSWORD`) over seeded fixtures.
+/// runs-everywhere over seeded fixtures without any operator credential.
 ///
 /// **Why a server, not the embedded [HermeticWorkspace].** `bd init` produces an
 /// embedded Dolt store the SQL port cannot reach (no MySQL endpoint), and a

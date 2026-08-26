@@ -56,9 +56,8 @@ abstract interface class BdRunner {
 ///
 /// - Working directory is the [BeadsWorkspace.root] (so `.beads/` is found and
 ///   `bd` writes land in the right store).
-/// - `BD_JSON_ENVELOPE=1` and `BD_NON_INTERACTIVE=1` are merged over
-///   [Platform.environment] (ADR-0001 D4; SCRATCH-bd-repin §2 and §4 A4);
-///   the inherited environment carries `GT_ROOT`, `GC_DOLT_*`, `PATH`, etc.
+/// - The base process environment is caller-supplied or inherited from
+///   [Platform.environment]; this runner adds only the two bd control flags.
 /// - Default timeout 15s (ADR-0001 D4); on timeout the process tree is killed
 ///   ([ProcessSignal.sigkill]) and [BdTimeoutException] is thrown.
 /// - Concurrency is capped by an internal counting semaphore (default 4,

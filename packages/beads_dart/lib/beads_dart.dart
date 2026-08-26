@@ -2,7 +2,8 @@
 ///
 /// The M1 kernel of the_grid, wearing its ecosystem name (D-A6): `Bead`/
 /// `GraphSnapshot` models, the envelope codec, the `bd` CLI wrapper, workspace
-/// discovery (server/embedded), the Dolt SQL read path + `@@<db>_working`
+/// discovery (proxied-server/direct plus an injected endpoint resolver), the
+/// Dolt SQL read path + `@@<db>_working`
 /// probe, watchers, and structural diff. It knows beads facts only — the_grid's
 /// own opinions layered on top (ownership predicates, driveability narrowing,
 /// session-bead semantics) live in `grid_engine`, not here.
