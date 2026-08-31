@@ -45,7 +45,8 @@ export 'src/runtime_scaffold.dart';
 // Track 2 — the runtime seam + the subprocess provider.
 export 'src/runtime/env_allowlist.dart'
     show AgentEnvAllowlist, systemEnvironment;
-export 'src/runtime/incarnation_env.dart' show IncarnationEnv, newInstanceToken;
+export 'src/runtime/incarnation_env.dart'
+    show IncarnationEnv, newAttemptId, newInstanceToken;
 export 'src/runtime/process_group.dart'
     show
         GroupTerminateResult,

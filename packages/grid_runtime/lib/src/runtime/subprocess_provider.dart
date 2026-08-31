@@ -289,6 +289,12 @@ class SubprocessProvider implements RuntimeProvider {
         pgid: session.pgid,
         beadId: config.env['GRID_BEAD_ID'] ?? '',
         deadline: effectiveDeadline,
+        // Read off the SAME env the child receives, exactly like [beadId]
+        // above — never minted here. The caller's `config.env` layers LAST in
+        // [_buildChildEnv], so this is the engine's attempt id (the one on the
+        // `grid.lease.*` breadcrumb), not a value this provider invented
+        // (stage1-wiring §2.1).
+        attemptId: config.env['GRID_ATTEMPT_ID'] ?? '',
       ),
     );
 

@@ -338,7 +338,44 @@ void main() {
         expect(started.config.env['GRID_SESSION_ID'], 'tgdog-s');
         expect(started.config.env['GRID_STEP_PATH'], 'tg-1/agent');
         expect(started.config.env['GRID_INSTANCE_TOKEN'], isNotEmpty);
+        // stage1-wiring §2.1: the attempt id rides the SAME env block as the
+        // token — dual-export, the token is NOT displaced (its retirement is a
+        // cut change).
+        expect(started.config.env['GRID_ATTEMPT_ID'], hasLength(26));
         expect(log.first, startsWith('spawn(tg-1@'));
+      },
+    );
+
+    test(
+      'GRID_ATTEMPT_ID is minted PER MOUNT — two mounts of the same step are '
+      'two attempts (stage1-wiring §2.1: one incarnation, one attempt)',
+      () async {
+        final first = _host(_RecordingProcessCap([]));
+        addTearDown(() {
+          first.owner.dispose();
+          unawaited(first.fakes.provider.close());
+        });
+        await _pump();
+        final second = _host(_RecordingProcessCap([]));
+        addTearDown(() {
+          second.owner.dispose();
+          unawaited(second.fakes.provider.close());
+        });
+        await _pump();
+
+        final firstEnv = first.fakes.provider.started.single.config.env;
+        final secondEnv = second.fakes.provider.started.single.config.env;
+        expect(firstEnv['GRID_ATTEMPT_ID'], hasLength(26));
+        expect(
+          firstEnv['GRID_ATTEMPT_ID'],
+          isNot(secondEnv['GRID_ATTEMPT_ID']),
+        );
+        // And it moves WITH the token, never independently of it: both are
+        // minted once in initState and neither is re-minted afterwards.
+        expect(
+          firstEnv['GRID_INSTANCE_TOKEN'],
+          isNot(secondEnv['GRID_INSTANCE_TOKEN']),
+        );
       },
     );
 

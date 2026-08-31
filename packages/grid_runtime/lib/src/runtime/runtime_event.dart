@@ -31,6 +31,20 @@ sealed class RuntimeEvent with _$RuntimeEvent {
     /// The effective deadline armed for this session, after provider defaults
     /// are applied. Null means no watchdog is armed for this process.
     Duration? deadline,
+
+    /// The trajectory log's name for THIS process incarnation (stage1-wiring
+    /// §2.1) — read off the spawn's `GRID_ATTEMPT_ID` env var, which is the
+    /// SAME value the engine persisted to the step bead's
+    /// `grid.lease.attempt_id` breadcrumb. The observation join:
+    /// `attempt.process.started` derives from this event, so its attempt id is
+    /// breadcrumb-backed rather than invented at the observation site (the
+    /// recorder holds no identity it cannot recover).
+    ///
+    /// Empty when the spawn carried no attempt id — a provider driven outside
+    /// the engine's allocation path, or a pre-Stage-1 caller. Additive and
+    /// defaulted: every existing construction site keeps compiling and every
+    /// existing consumer keeps its shape.
+    @Default('') String attemptId,
   }) = SessionStarted;
 
   /// The session's process exited with [exitCode] (negative for signal-killed,

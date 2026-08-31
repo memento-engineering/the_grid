@@ -37,4 +37,26 @@ void main() {
       expect(token, matches(RegExp(r'^[0-9a-f]{32}$')));
     });
   });
+
+  group('newAttemptId — the trajectory name for one incarnation (§2.1)', () {
+    test('is a CHAR(26) Crockford ULID, the schema attempt_id shape', () {
+      expect(newAttemptId(), matches(RegExp(r'^[0-9A-HJKMNP-TV-Z]{26}$')));
+    });
+
+    test('is fresh every call — one incarnation, one attempt', () {
+      final ids = {for (var i = 0; i < 64; i++) newAttemptId()};
+      expect(ids, hasLength(64));
+    });
+
+    test('is time-ordered — a later mint sorts after an earlier one', () async {
+      final first = newAttemptId();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(newAttemptId().compareTo(first), isPositive);
+    });
+
+    test('does not displace the instance token — two separate mints of two '
+        'separate shapes (Stage 1 dual-exports both)', () {
+      expect(newAttemptId(), isNot(matches(RegExp(r'^[0-9a-f]{32}$'))));
+    });
+  });
 }

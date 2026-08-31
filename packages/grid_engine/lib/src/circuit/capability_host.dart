@@ -138,6 +138,20 @@ class CapabilityHostState extends State<CapabilityHost>
   Allocation? _allocation;
   StepArgs? _args;
   String _token = '';
+
+  /// This incarnation's `attempt_id` — the trajectory log's durable name for
+  /// the one process this mount will spawn (stage1-wiring §2.1). Minted with
+  /// [_token] in [initState] and exported beside it on the allocation env, so
+  /// the spawner stamps it onto the [ProcessHandle], the lease vendor persists
+  /// it on the `grid.lease.*` breadcrumb, and the child sees it as
+  /// `GRID_ATTEMPT_ID`.
+  ///
+  /// Per MOUNT, exactly like [_token]: a supervised restart re-keys the node
+  /// (`circuit_scope.dart`'s `restartCount` ValueKey), which mounts a fresh
+  /// host — a fresh incarnation, a fresh token, a fresh attempt. An ADOPTING
+  /// mount spawns nothing, so this value is never persisted and never reaches
+  /// a process: the survivor keeps the attempt its breadcrumb already carries.
+  String _attemptId = '';
   bool _cancelled = false;
   bool _completed = false;
 
@@ -205,6 +219,9 @@ class CapabilityHostState extends State<CapabilityHost>
   @override
   void initState() {
     _token = newInstanceToken();
+    // Minted with the token, at the same instant and for the same lifetime —
+    // one incarnation, one attempt (schema §3). Never re-minted after this.
+    _attemptId = newAttemptId();
     // One StepArgs per incarnation: its CancelToken is the effect's cooperative
     // unmount signal (the allocation cancels it in dispose).
     _args = StepArgs(
@@ -330,6 +347,13 @@ class CapabilityHostState extends State<CapabilityHost>
         'GRID_SESSION_ID': _sessionId,
         'GRID_INSTANCE_TOKEN': _token,
         'GRID_STEP_PATH': _nodePath,
+        // The trajectory's name for this incarnation (stage1-wiring §2.1).
+        // It rides THIS map — the allocation env — because that is the one
+        // block layered LAST over the provider's own allowlist+IncarnationEnv
+        // base, so the host's value is the one the child and the
+        // `sessionStarted` observation both see. `GRID_INSTANCE_TOKEN` stays:
+        // Stage 1 dual-exports, and retiring the token is a cut change.
+        'GRID_ATTEMPT_ID': _attemptId,
       },
       sink: _onReport,
       // The prior incarnation's identity for an adopt-freshness proof (D4);

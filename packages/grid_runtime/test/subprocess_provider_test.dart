@@ -262,10 +262,60 @@ void main() {
       expect(started.pid, 31337);
       expect(started.pgid, 31337); // identity resolvePgid in the fake
       expect(started.beadId, 'tgdog-9');
+      expect(
+        started.attemptId,
+        isEmpty,
+        reason:
+            'a spawn with no GRID_ATTEMPT_ID reports none — the provider '
+            'never invents one (stage1-wiring §2.1)',
+      );
 
       await sub.cancel();
       await provider.dispose();
     });
+
+    test(
+      'SessionStarted carries the ENGINE attempt id — read off the same '
+      'config.env the child receives, never minted here (stage1-wiring §2.1)',
+      () async {
+        const attempt = '01JQZ0000000000000ATTEMPT1';
+        final spawner = FakeSpawner();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: AliveGroupController(),
+          parentEnvironment: const {'PATH': '/usr/bin'},
+        );
+
+        final events = <RuntimeEvent>[];
+        final sub = provider.events.listen(events.add);
+
+        await provider.start(
+          'sess',
+          const RuntimeConfig(
+            workDir: '/tmp',
+            command: 'claude',
+            env: {'GRID_BEAD_ID': 'tgdog-9', 'GRID_ATTEMPT_ID': attempt},
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        // The observation join: the event's attempt id is the one the engine
+        // also wrote to the step bead's grid.lease.attempt_id breadcrumb.
+        expect(events.whereType<SessionStarted>().single.attemptId, attempt);
+        // And the CHILD sees it: config.env layers LAST over the allowlist +
+        // the freshly minted IncarnationEnv, so the host's value wins — while
+        // GRID_INSTANCE_TOKEN keeps being exported alongside it (Stage 1 is a
+        // dual export; the token retires at the cut).
+        expect(spawner.lastEnv!['GRID_ATTEMPT_ID'], attempt);
+        expect(
+          spawner.lastEnv!['GRID_INSTANCE_TOKEN'],
+          matches(RegExp(r'^[0-9a-f]{32}$')),
+        );
+
+        await sub.cancel();
+        await provider.dispose();
+      },
+    );
   });
 
   group('SubprocessProvider — whole-tree kill (REAL stub, never claude)', () {

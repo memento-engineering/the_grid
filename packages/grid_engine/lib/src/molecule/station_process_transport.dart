@@ -61,10 +61,21 @@ Future<ProcessHandle> stationProcessSpawner(
   final ctx = request.allocation;
   final name = ctx.address.providerName;
   final token = ctx.env['GRID_INSTANCE_TOKEN'] ?? '';
+  // The incarnation's trajectory name, read off the SAME env overlay as the
+  // freshness token (stage1-wiring §2.1): the host mints both once per mount,
+  // this spawn carries them onto the handle, and the breadcrumb persists them
+  // together. A FRESH spawn is the only mint site — adoption never reaches
+  // here, so the attempt an adopted survivor already owns is never overwritten.
+  final attemptId = ctx.env['GRID_ATTEMPT_ID'] ?? '';
   final tap = ProcessEventTap.open(ctx.transport.events, name);
   final started = Completer<ProcessHandle>();
-  ProcessHandle mint({required int pid, int? pgid}) =>
-      ProcessHandle(pgid: pgid ?? pid, pid: pid, token: token, events: tap);
+  ProcessHandle mint({required int pid, int? pgid}) => ProcessHandle(
+    pgid: pgid ?? pid,
+    pid: pid,
+    token: token,
+    attemptId: attemptId,
+    events: tap,
+  );
   final sub = ctx.transport.events.where((e) => e.name == name).listen((e) {
     if (started.isCompleted) return;
     switch (e) {
