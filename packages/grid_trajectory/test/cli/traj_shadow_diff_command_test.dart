@@ -189,6 +189,9 @@ void main() {
           ),
         ),
         compare: compare,
+        // A clean round needs BOTH statements: the comparison agreed AND no
+        // append went missing (§3). The accounting is the second one.
+        accounting: const ShadowRunAccounting(dropped: 0),
         sessions: const ['tranquility-5xk'],
         round: 3,
         out: out.add,
@@ -251,6 +254,7 @@ void main() {
           TrajectoryOpened(ScriptedReader([_note('tranquility-5xk', 1)])),
         ),
         compare: compare,
+        accounting: const ShadowRunAccounting(dropped: 0),
         out: out.add,
         err: out.add,
       );
@@ -300,6 +304,7 @@ void main() {
             _AgreeingLegacy('tranquility-5xk', 'tg-9abc'),
           );
         },
+        accounting: const ShadowRunAccounting(dropped: 0),
         out: out.add,
         err: out.add,
       );

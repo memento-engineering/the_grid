@@ -38,9 +38,11 @@ export 'src/tick/tick_appender.dart'; // the narrow appender seam the tick runs 
 export 'src/tick/tick_telemetry.dart'; // per-pass telemetry + the fixpoint result
 export 'src/tick/trajectory_tick.dart'; // the interval loop, fence skip, runToFixpoint
 
-// SECTION: cli — the traj verbs (traj show / traj shadow-diff).
+// SECTION: cli — the traj verbs (traj show / traj shadow-diff / traj provision).
+export 'src/cli/shadow_accounting.dart'; // per-round append accounting + its disqualification rule
 export 'src/cli/traj_command.dart'; // the `traj` group; runners compose it explicitly
 export 'src/cli/traj_flags.dart'; // the shared exact-root grid-home flag
+export 'src/cli/traj_provision_command.dart'; // runbook §4 step 2: database + DDL + scoped user
 export 'src/cli/traj_render.dart'; // typed row rendering (opaque rows stay opaque)
 export 'src/cli/traj_shadow_diff_command.dart'; // §9 comparator + injectable strategy
 export 'src/cli/traj_show_command.dart'; // per-subject history
@@ -63,3 +65,10 @@ export 'src/fold/step_cursor_row.dart'; // the proj_step_cursor row image + two-
 // SECTION: shadow — the §9 comparator over the injected legacy read seam.
 export 'src/shadow/attempt_lifecycle_shadow.dart'; // the real Family-1 ShadowCompare + allow-list seam
 export 'src/shadow/legacy_session_reader.dart'; // dependency-free legacy session view + reader interface
+
+// SECTION: shadow, Stage 1 — the step + mount-ordinal lanes (stage1-wiring W8).
+export 'src/shadow/composite_shadow.dart'; // lane composition behind one ShadowCompare
+export 'src/shadow/legacy_mount_attempt_reader.dart'; // the grid.attempt.count read seam
+export 'src/shadow/legacy_step_reader.dart'; // dependency-free legacy step view + reader interface
+export 'src/shadow/mount_ordinal_shadow.dart'; // the legacy_attempt_count join (§2.2)
+export 'src/shadow/step_transition_shadow.dart'; // the Family-5 step-fact lane + named-gap classifier

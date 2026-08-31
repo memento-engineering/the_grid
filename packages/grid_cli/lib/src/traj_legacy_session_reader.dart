@@ -1,26 +1,40 @@
-/// grid_cli's side of the §9 shadow seam: the [LegacySessionReader]
-/// implemented over beads_dart's session-bead read surface, plus the
-/// [ShadowCompareFactory] `bin/grid.dart` hands `TrajCommand`.
+/// grid_cli's side of the §9 shadow seam: the [LegacySessionReader],
+/// [LegacyStepReader], and [LegacyMountAttemptReader] implemented over
+/// beads_dart's read surface, plus the [ShadowCompareFactory]
+/// `bin/grid.dart` hands `TrajCommand`.
 ///
 /// grid_trajectory is a leaf (zero grid_* deps) and defines only the
-/// interface; the beads_dart/grid_engine knowledge — `projectSession`'s
-/// marker semantics and `rework.dart`'s `#rN` / `#void-` key shapes — lives
-/// HERE, reusing the exact read path the resident verbs use
-/// (`resolveStateWorkspace` → exact-root state store → `bd show` through
-/// [BdCliService], never a walk-up, never a raw SQL read of the ledger).
+/// interfaces; the beads_dart/grid_engine knowledge — `projectSession`'s
+/// marker semantics, `rework.dart`'s `#rN` / `#void-` key shapes,
+/// `MoleculeStepKeys`' step vocabulary, and `projectMountAttempt`'s ordinal —
+/// lives HERE, reusing the exact read path the resident verbs use
+/// (`resolveStateWorkspace` → exact-root state store → [BdCliService], never
+/// a walk-up, never a raw SQL read of the ledger).
 library;
 
 import 'package:beads_dart/beads_dart.dart'
-    show Bead, BdCliService, BdException, ProcessBdRunner;
+    show Bead, BdCliService, BdException, BeadStatus, ProcessBdRunner;
 import 'package:grid_engine/grid_engine.dart'
-    show SessionBeadKeys, projectSession;
+    show
+        GridIssueTypes,
+        MoleculeStepKeys,
+        MountAttemptKeys,
+        SessionBeadKeys,
+        projectMountAttempt,
+        projectSession;
 import 'package:grid_trajectory/grid_trajectory.dart'
     show
         AttemptLifecycleShadow,
+        CompositeShadow,
+        LegacyMountAttemptReader,
         LegacySessionReader,
         LegacySessionView,
+        LegacyStepReader,
+        LegacyStepView,
+        MountOrdinalShadow,
         ShadowCompare,
         ShadowCompareResult,
+        StepTransitionShadow,
         SubjectRecords;
 
 import 'state_workspace.dart';
@@ -28,6 +42,12 @@ import 'state_workspace.dart';
 /// Fetches session beads by id — [BdCliService.show]'s shape, injected so
 /// tests script beads without spawning `bd`.
 typedef SessionBeadFetch = Future<List<Bead>> Function(List<String> ids);
+
+/// Fetches one session's `type=step` beads, injected for the same reason.
+typedef StepBeadFetch = Future<List<Bead>> Function(String sessionId);
+
+/// Fetches one work bead's `type=mount-attempt` beads (at most one exists).
+typedef MountAttemptFetch = Future<List<Bead>> Function(String workBeadId);
 
 /// Reads one session bead and projects it to the shadow-comparable view.
 class BdLegacySessionReader implements LegacySessionReader {
@@ -87,6 +107,73 @@ LegacySessionView legacySessionViewOf(Bead bead) {
   );
 }
 
+/// Reads one session's step beads and projects them to the step-lane view.
+class BdLegacyStepReader implements LegacyStepReader {
+  BdLegacyStepReader(this._fetch);
+
+  final StepBeadFetch _fetch;
+
+  @override
+  Future<List<LegacyStepView>> stepViews(String sessionId) async {
+    try {
+      return [
+        for (final bead in await _fetch(sessionId))
+          if (legacyStepViewOf(bead) case final LegacyStepView view) view,
+      ];
+    } on BdException {
+      // "The ledger cannot answer" is not "the ledger says no steps": an
+      // empty list is the reaped/absent case the lane treats as nothing to
+      // compare, and a read failure must not be laundered into it. The lane
+      // sees the same empty list either way, so the honest difference is
+      // reported by the run's own bd failure, not invented here.
+      return const [];
+    }
+  }
+}
+
+/// Pure projection of one `type=step` [bead] to the shadow view — the key
+/// vocabulary is `MoleculeStepKeys`' (grid_engine owns that schema). Null for
+/// a bead carrying no node path: without the path there is nothing to join on.
+LegacyStepView? legacyStepViewOf(Bead bead) {
+  final metadata = bead.metadata;
+  final stepPath = '${metadata[MoleculeStepKeys.path] ?? ''}';
+  if (stepPath.isEmpty) return null;
+  final state = metadata[MoleculeStepKeys.state];
+  final cooldown = metadata[MoleculeStepKeys.cooldownUntil];
+  return LegacyStepView(
+    stepPath: stepPath,
+    // Absent means "no fine state yet" — honest, and the lane compares
+    // nothing rather than reading bd's coarse open/closed axis as if it were
+    // the six-valued one.
+    state: state == null ? null : '$state',
+    cooldownUntil: cooldown == null ? null : DateTime.tryParse('$cooldown'),
+  );
+}
+
+/// Reads one work bead's durable remount ordinal (`grid.attempt.count`).
+class BdLegacyMountAttemptReader implements LegacyMountAttemptReader {
+  BdLegacyMountAttemptReader(this._fetch);
+
+  final MountAttemptFetch _fetch;
+
+  @override
+  Future<int?> attemptCount(String workBeadId) async {
+    final List<Bead> beads;
+    try {
+      beads = await _fetch(workBeadId);
+    } on BdException {
+      return null;
+    }
+    int? highest;
+    for (final bead in beads) {
+      final record = projectMountAttempt(bead);
+      if (record == null || record.workBeadId != workBeadId) continue;
+      if (highest == null || record.count > highest) highest = record.count;
+    }
+    return highest;
+  }
+}
+
 /// A grid home whose LEGACY ledger could not be opened: the §9 window has no
 /// oracle there, and the verb must say so instead of minting a clean run.
 class LegacyStoreUnavailableShadow implements ShadowCompare {
@@ -110,7 +197,7 @@ class LegacyStoreUnavailableShadow implements ShadowCompare {
 
 /// The [ShadowCompareFactory] `bin/grid.dart` composes into `TrajCommand`:
 /// opens the grid home's state store on the resident verbs' exact-root rule
-/// and returns the REAL Family-1 comparator — or, when the home carries no
+/// and returns the REAL Stage-1 lane set — or, when the home carries no
 /// readable ledger, a strategy that degrades gracefully with the refusal as
 /// its reason.
 Future<ShadowCompare> legacyShadowCompareFor(String gridHome) async {
@@ -124,6 +211,56 @@ Future<ShadowCompare> legacyShadowCompareFor(String gridHome) async {
       return LegacyStoreUnavailableShadow(message);
     case StateWorkspaceFound(:final workspace):
       final bd = BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
-      return AttemptLifecycleShadow(BdLegacySessionReader(bd.show));
+      return CompositeShadow([
+        AttemptLifecycleShadow(BdLegacySessionReader(bd.show)),
+        StepTransitionShadow(BdLegacyStepReader((id) => _stepBeads(bd, id))),
+        MountOrdinalShadow(
+          BdLegacyMountAttemptReader((id) => _mountAttemptBeads(bd, id)),
+        ),
+      ]);
   }
+}
+
+/// One session's step beads, OPEN AND CLOSED. `bd list -t step` is
+/// status-scoped, and a terminal step is exactly the one the step lane most
+/// needs to compare — reading only the open half would silently shrink the
+/// comparable set to steps still running.
+Future<List<Bead>> _stepBeads(BdCliService bd, String sessionId) async {
+  final fields = {MoleculeStepKeys.session: sessionId};
+  final open = await bd.listScope(
+    type: GridIssueTypes.step,
+    metadataFields: fields,
+  );
+  final closed = await bd.listScope(
+    type: GridIssueTypes.step,
+    status: BeadStatus.closed,
+    metadataFields: fields,
+  );
+  final byId = <String, Bead>{
+    for (final bead in [...open.beads, ...closed.beads]) bead.id: bead,
+  };
+  return byId.values.toList(growable: false);
+}
+
+/// One work bead's mount-attempt record. The bead is a RECORD rather than
+/// work and is never closed by the engine, but the closed scope is read too
+/// so an operator-closed record cannot make the ordinal vanish mid-window.
+Future<List<Bead>> _mountAttemptBeads(
+  BdCliService bd,
+  String workBeadId,
+) async {
+  final fields = {MountAttemptKeys.workBead: workBeadId};
+  final open = await bd.listScope(
+    type: GridIssueTypes.mountAttempt,
+    metadataFields: fields,
+  );
+  final closed = await bd.listScope(
+    type: GridIssueTypes.mountAttempt,
+    status: BeadStatus.closed,
+    metadataFields: fields,
+  );
+  final byId = <String, Bead>{
+    for (final bead in [...open.beads, ...closed.beads]) bead.id: bead,
+  };
+  return byId.values.toList(growable: false);
 }
