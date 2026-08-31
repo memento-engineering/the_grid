@@ -51,6 +51,15 @@ export 'src/fold/session_head_delta.dart'; // THE delta fn + its two appliers (S
 export 'src/fold/session_head_fold.dart'; // replay: fold a stream, truncate + rewrite, proj_meta
 export 'src/fold/session_head_row.dart'; // the proj_session_head row image
 
+// SECTION: fold, Stage 1 — the P2 + P6 incremental folds (stage1-wiring W6).
+export 'src/fold/process_identity_delta.dart'; // P6 delta fn + its two appliers (SQL / in-memory)
+export 'src/fold/process_identity_fold.dart'; // P6 replay: fold, truncate + rewrite, proj_meta
+export 'src/fold/process_identity_row.dart'; // the proj_process_identity row image
+export 'src/fold/stage1_folds.dart'; // kStage1FoldDeltas — the appender step-5 registration set
+export 'src/fold/step_cursor_delta.dart'; // P2 delta fn + its two appliers (SQL / in-memory)
+export 'src/fold/step_cursor_fold.dart'; // P2 replay: fold, truncate + rewrite, proj_meta
+export 'src/fold/step_cursor_row.dart'; // the proj_step_cursor row image + two-ladder key
+
 // SECTION: shadow — the §9 comparator over the injected legacy read seam.
 export 'src/shadow/attempt_lifecycle_shadow.dart'; // the real Family-1 ShadowCompare + allow-list seam
 export 'src/shadow/legacy_session_reader.dart'; // dependency-free legacy session view + reader interface
