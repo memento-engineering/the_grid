@@ -465,12 +465,24 @@ class SubprocessProvider implements RuntimeProvider {
     // watchdog would report the hang it caught as a clean completion.
     final RuntimeEvent terminal;
     final killed = session.deadlineReason;
+    // The pid this terminal belongs to, carried so a consumer joining the exit
+    // back to the start it observed can prove the two are the SAME process
+    // (the session name is a slot, and a stop racing a respawn can refill it).
+    final pid = session.pid;
     if (killed != null) {
-      terminal = RuntimeEvent.died(name: session.name, reason: killed);
+      terminal = RuntimeEvent.died(
+        name: session.name,
+        reason: killed,
+        pid: pid,
+      );
     } else {
       final code = session.observedExitCode;
       if (code != null) {
-        terminal = RuntimeEvent.exited(name: session.name, exitCode: code);
+        terminal = RuntimeEvent.exited(
+          name: session.name,
+          exitCode: code,
+          pid: pid,
+        );
       } else if (session.lifecycle == Lifecycle.oneTurn) {
         // A run-once agent that disappears has COMPLETED its single turn. The
         // detached spawn gives no readable exit code, so we cannot prove `0` —
@@ -488,12 +500,14 @@ class SubprocessProvider implements RuntimeProvider {
           name: session.name,
           exitCode: 0,
           inferred: true,
+          pid: pid,
         );
       } else {
         // A longLived agent that vanishes really did die unexpectedly → crash.
         terminal = RuntimeEvent.died(
           name: session.name,
           reason: 'process vanished',
+          pid: pid,
         );
       }
     }

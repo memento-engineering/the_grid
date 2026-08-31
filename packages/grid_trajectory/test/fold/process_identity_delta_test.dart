@@ -37,12 +37,24 @@ void main() {
     },
   );
 
-  TrajectoryEnvelope provisioned({int seq = 1, String? sessionId}) => envelope(
+  TrajectoryEnvelope provisioned({
+    int seq = 1,
+    String? sessionId,
+    String attemptId = _attempt,
+    int? round,
+    String? stepPath,
+    int? stepRound,
+    int? incarnation,
+  }) => envelope(
     recordType: 'worktree.provisioned',
     family: TrajectoryFamily.attempt,
     seq: seq,
     sessionId: sessionId,
-    attemptId: _attempt,
+    attemptId: attemptId,
+    round: round,
+    stepPath: stepPath,
+    stepRound: stepRound,
+    incarnation: incarnation,
     worktree: '/tmp/wt/tg-9abc',
     branch: 'grid/tg-9abc',
     commitSha: 'a' * 40,
@@ -344,6 +356,87 @@ void main() {
       expect(row.worktree, '/tmp/wt/tg-9abc', reason: 'worktree facts kept');
       expect(row.worktreeState, 'live');
       expect(row.lastSeq, 2);
+    });
+
+    test('the PRODUCTION order (a provision ALWAYS precedes its spawn) leaves '
+        "a row WorktreeReapedBackfillObligation's `WHERE p.worktree IS NOT "
+        'NULL` can match — and UnknownTerminalSettlementObligation a pid and '
+        'a worktree to probe', () {
+      // The recorder seeds the SPAWN's ladder onto the provisioned record, so
+      // the provisional row is born at the position the `.started` claims.
+      final rows = <String, ProcessIdentityRow>{};
+      applyProcessIdentityDelta(
+        rows,
+        processIdentityDeltaFor(
+          provisioned(
+            sessionId: 'tranquility-1',
+            round: 1,
+            stepPath: 'work.build',
+            stepRound: 0,
+            incarnation: 0,
+          ),
+        )!,
+        lastSeq: 1,
+      );
+      expect(
+        rows[_attempt],
+        isNotNull,
+        reason:
+            'the BIRTH arm — a session-less provisioned record can only '
+            'UPDATE, and there is nothing yet to update',
+      );
+      expect(
+        rows[_attempt]!.ladder,
+        ('tranquility-1', 1, 'work.build', 0, 0),
+        reason: 'born at the spawn ladder, not the (0, \'\', 0, 0) default',
+      );
+
+      applyProcessIdentityDelta(
+        rows,
+        processIdentityDeltaFor(processStarted(seq: 2))!,
+        lastSeq: 2,
+      );
+      expect(
+        rows,
+        hasLength(1),
+        reason:
+            'corrected in place, never a second '
+            'row beside the provisional one',
+      );
+      final row = rows[_attempt]!;
+      expect(
+        (row.worktree, row.branch, row.baseSha, row.worktreeState),
+        ('/tmp/wt/tg-9abc', 'grid/tg-9abc', 'a' * 40, 'live'),
+      );
+      expect(row.pid, 42, reason: 'the settlement obligation probes p.pid');
+    });
+
+    test('two attempts of ONE session that both provision before their spawns '
+        'stay two rows — the seeded ladder is what keeps them off each '
+        "other's uq_incarnation slot", () {
+      const sibling = '01J8ATTEMPT000000000000009';
+      final rows = <String, ProcessIdentityRow>{};
+      for (final (attemptId, path, seq) in [
+        (_attempt, 'work.build', 1),
+        (sibling, 'work.review', 2),
+      ]) {
+        applyProcessIdentityDelta(
+          rows,
+          processIdentityDeltaFor(
+            provisioned(
+              seq: seq,
+              sessionId: 'tranquility-1',
+              attemptId: attemptId,
+              round: 1,
+              stepPath: path,
+              stepRound: 0,
+              incarnation: 0,
+            ),
+          )!,
+          lastSeq: seq,
+        );
+      }
+      expect(rows.keys, unorderedEquals([_attempt, sibling]));
     });
 
     test('the uq_incarnation arm: an insert colliding on the ladder advances '

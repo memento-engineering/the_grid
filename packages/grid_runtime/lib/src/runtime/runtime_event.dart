@@ -56,6 +56,16 @@ sealed class RuntimeEvent with _$RuntimeEvent {
     required String name,
     required int exitCode,
 
+    /// The OS pid that exited, when the emitter still knew it. The session
+    /// NAME is a slot, not an identity — a stop that races a respawn can put
+    /// a second process behind the same name — so a consumer joining an exit
+    /// back to the start it observed ([SessionStarted.pid]) must be able to
+    /// check that the two are the same process. Null where the emitter never
+    /// learned a pid (a session that died before it had one); a consumer
+    /// treats null as "cannot check", never as a mismatch. Additive and
+    /// defaulted: every existing construction site and consumer is unchanged.
+    int? pid,
+
     /// Whether [exitCode] was INFERRED rather than READ. A DETACHED one-shot
     /// exposes no readable exit code, so its vanish is reported as a clean
     /// `Exited(0)` by intent — but a MURDERED process vanishes EXACTLY like a
@@ -73,6 +83,11 @@ sealed class RuntimeEvent with _$RuntimeEvent {
   const factory RuntimeEvent.died({
     required String name,
     @Default('') String reason,
+
+    /// The OS pid that died, when the emitter still knew it — the same
+    /// exit-join discriminator [RuntimeEvent.exited] carries, for the same
+    /// reason.
+    int? pid,
   }) = Died;
 
   /// The session was restarted in a new incarnation; [epoch] is the new runtime

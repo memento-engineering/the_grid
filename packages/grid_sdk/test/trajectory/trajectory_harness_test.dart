@@ -28,6 +28,11 @@ final class _FakeDb implements TrajectoryDb {
   bool closed = false;
   bool closeThrows = false;
 
+  /// Runs INSIDE [close]'s await — the reconnect's connection-swap window,
+  /// which is the only place a test can observe what the serial lane sees
+  /// while the dead session is being retired.
+  Future<void> Function()? onClose;
+
   @override
   Future<SqlResult> execute(String sql, [Map<String, dynamic>? params]) async {
     statements.add(sql);
@@ -43,8 +48,24 @@ final class _FakeDb implements TrajectoryDb {
   @override
   Future<void> close() async {
     if (closeThrows) throw StateError('close refused');
+    await onClose?.call();
     closed = true;
   }
+}
+
+/// A trivial obligation: one SELECT on the harness's serial read lane, no
+/// repairs. It exists to put a TICK QUERY on that lane at a chosen instant.
+final class _ProbeQuery extends ObligationQuery {
+  @override
+  String get name => 'probe';
+
+  @override
+  String get sql => 'SELECT 1 AS one';
+
+  @override
+  Future<List<ObligationAppend>> repair(
+    List<Map<String, String?>> rows,
+  ) async => const [];
 }
 
 /// A scriptable appender: the harness drives THIS seam; the real §5 SQL path
@@ -189,6 +210,7 @@ void main() {
       mode: TrajectoryConfigMode.required,
     ),
     Stream<RuntimeEvent>? runtimeEvents,
+    List<ObligationQuery>? tickQueries,
   }) => TrajectoryHarness.build(
     config: config,
     gridHome: tmp.path,
@@ -196,6 +218,7 @@ void main() {
     seatPrefixes: const {'tg', 'the_grid', 'tranquility'},
     onFlare: (name, data) => flares.add((name, data)),
     runtimeEvents: runtimeEvents,
+    tickQueries: tickQueries,
     connect: () async {
       final error = connectError;
       if (error != null) throw error; // ignore: only_throw_errors
@@ -536,6 +559,44 @@ void main() {
         expect(h.status.appended, 1);
       },
     );
+
+    test('a resumed reconnect PUBLISHES the fresh session before retiring the '
+        'dead one: a tick query landing in the swap window never sees a '
+        'closed connection', () async {
+      final probe = _ProbeQuery();
+      final h = await harness(tickQueries: [probe]);
+      await h.start();
+      // The swap window is exactly the dead session's `close()`. Run a tick
+      // pass from inside it — the same serial lane the tick's reads ride, so
+      // this is the real interleaving, not a simulated one.
+      TrajectoryTickPass? windowPass;
+      connected.single.onClose = () async {
+        windowPass = await h.tick!.runPass();
+      };
+      appender.appendOutcomes.add(
+        AppendInternalError(cause: StateError('socket died')),
+      );
+      h.enqueue(_note(1)); // consumes the error → needsReconnect
+      h.enqueue(_note(2)); // the eager reconnect, and the swap
+      await h.runToFixpoint();
+
+      expect(connected, hasLength(2), reason: 'sanity: the reconnect dialled');
+      expect(windowPass, isNotNull, reason: 'sanity: the window was entered');
+      expect(
+        windowPass!.refusals,
+        isEmpty,
+        reason:
+            'ordering the close FIRST nulls _db across an await, and the '
+            'lane reads it: the pass refused with "trajectory connection is '
+            'closed" against a harness that had just reconnected fine',
+      );
+      expect(windowPass!.queriesRun, 1);
+      expect(h.mode, TrajectoryHarnessMode.live);
+      expect(h.status.appended, 1);
+      // The dead session was still retired — publishing first is a reorder,
+      // never a leak.
+      expect(connected.first.closed, isTrue);
+    });
   });
 
   group('guarded shutdown (§1.2)', () {
@@ -778,6 +839,120 @@ void main() {
         events.hasListener,
         isFalse,
         reason: 'the harness\'s subscription died at shutdown',
+      );
+    });
+
+    test(
+      'an exit whose pid does NOT match the start held under that name is '
+      'refused, not mis-joined — dropped, counted, and flared once',
+      () async {
+        final h = await live();
+        events.add(
+          const RuntimeEvent.sessionStarted(
+            name: name,
+            pid: 41,
+            pgid: 42,
+            attemptId: attempt,
+          ),
+        );
+        await pumpEventQueue();
+        // The session NAME is a slot: a stop racing a respawn can put a second
+        // process behind it. Attributing THIS exit to the attempt above would
+        // write a false `attempt.process.exited` for a process still running.
+        events.add(
+          const RuntimeEvent.exited(name: name, exitCode: 0, pid: 999),
+        );
+        await pumpEventQueue();
+        expect(
+          appender.records.whereType<AttemptProcessExited>(),
+          isEmpty,
+          reason:
+              'a refused join derives NOTHING — the tick\'s '
+              'unknown-terminal settlement owns the row it leaves',
+        );
+        expect(h.status.exitJoinGaps, 1);
+        final gaps = flares.where(
+          (flare) => flare.$1 == 'trajectory.exitJoinGap',
+        );
+        expect(gaps, hasLength(1), reason: 'rate-limited: one per 30 s bucket');
+        expect(gaps.single.$2['reason'], 'pid-mismatch');
+        expect(
+          (gaps.single.$2['expectedPid'], gaps.single.$2['observedPid']),
+          ('41', '999'),
+        );
+        // The entry SURVIVES the refusal: the process it names may still be
+        // alive, and dropping it would turn one refused join into two.
+        events.add(const RuntimeEvent.exited(name: name, exitCode: 3, pid: 41));
+        await pumpEventQueue();
+        final record = appender.records.last as AttemptProcessExited;
+        expect(
+          (record.attemptId, record.pid, record.exitCode),
+          (attempt, 41, 3),
+        );
+        expect(h.status.exitJoinGaps, 1, reason: 'the real exit is no gap');
+      },
+    );
+
+    test('an exit carrying NO pid still joins — a missing discriminator is '
+        '"cannot check", never evidence of a mismatch', () async {
+      final h = await live();
+      events.add(
+        const RuntimeEvent.sessionStarted(
+          name: name,
+          pid: 41,
+          pgid: 42,
+          attemptId: attempt,
+        ),
+      );
+      await pumpEventQueue();
+      events.add(const RuntimeEvent.died(name: name, reason: 'vanished'));
+      await pumpEventQueue();
+      final record = appender.records.last as AttemptProcessExited;
+      expect((record.attemptId, record.pid), (attempt, 41));
+      expect(h.status.exitJoinGaps, 0);
+    });
+
+    test('a SessionStarted overwriting a LIVE un-exited entry counts the '
+        'orphaned start — the stop-races-spawn named gap', () async {
+      final h = await live();
+      const successor = 'BBBBBBBBBBBBBBBBBBBBBBBBBB';
+      events.add(
+        const RuntimeEvent.sessionStarted(
+          name: name,
+          pid: 41,
+          pgid: 42,
+          attemptId: attempt,
+        ),
+      );
+      await pumpEventQueue();
+      // No exit for pid 41 ever arrived; the name is refilled.
+      events.add(
+        const RuntimeEvent.sessionStarted(
+          name: name,
+          pid: 77,
+          pgid: 78,
+          attemptId: successor,
+        ),
+      );
+      await pumpEventQueue();
+      expect(h.status.exitJoinGaps, 1);
+      expect(
+        flares.where((flare) => flare.$1 == 'trajectory.exitJoinGap').single.$2,
+        containsPair('reason', 'overwrite'),
+      );
+      // Both starts still derived; only the JOIN was lost.
+      expect(
+        appender.records.whereType<AttemptProcessStarted>().map(
+          (r) => r.attemptId,
+        ),
+        [attempt, successor],
+      );
+      // The name now belongs to the successor, and its exit joins there.
+      events.add(const RuntimeEvent.exited(name: name, exitCode: 0, pid: 77));
+      await pumpEventQueue();
+      expect(
+        (appender.records.last as AttemptProcessExited).attemptId,
+        successor,
       );
     });
 

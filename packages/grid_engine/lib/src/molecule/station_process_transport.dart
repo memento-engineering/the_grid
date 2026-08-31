@@ -118,9 +118,24 @@ Future<ProcessHandle> stationProcessSpawner(
       // the host minted it in `initState` and exported it on the allocation
       // env this spawner already read at line one. Appends nothing; a no-op
       // under the disabled recorder.
-      trajectoryRecorderOf(
-        context,
-      ).provisioningAttempt(workBeadId: args.beadId, attemptId: attemptId);
+      //
+      // The SESSION rides along, and it is what makes there be a row to
+      // correct (B2's tail): P6's insert arm needs a NOT NULL `session_id`,
+      // and a provision ALWAYS precedes its spawn, so a session-less
+      // provisioned record degrades to an update matching zero rows and the
+      // worktree/branch/base_sha facts are lost — leaving the tick's
+      // `worktree.reaped` backfill (`WHERE p.worktree IS NOT NULL`) with
+      // nothing to match, forever. It comes off the SAME allocation address
+      // the harness's runtime-event subscriber parses out of `providerName`;
+      // reading the fields directly beats re-splitting the joined string.
+      // The remaining correlation (step round, incarnation) resolves inside
+      // the recorder from the mount's own `attemptSpawning` seed.
+      trajectoryRecorderOf(context).provisioningAttempt(
+        workBeadId: args.beadId,
+        attemptId: attemptId,
+        sessionId: ctx.address.sessionId,
+        stepPath: ctx.address.nodePath,
+      );
       await sc.provisionWorkspace(
         beadId: args.beadId,
         workspaceDir: workspace.workspaceDir,

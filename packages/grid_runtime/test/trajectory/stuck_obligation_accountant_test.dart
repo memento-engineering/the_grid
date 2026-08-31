@@ -76,7 +76,6 @@ void main() {
     final note = sink.enqueued.single as AttemptNote;
     expect(note.channel, kObligationStuckChannel);
     expect(note.sessionId, stationNoteSubject('tranquility'));
-    expect(note.noteOrdinal, 1);
     expect(note.body, contains('liveness-detector'));
     expect(note.body, contains('5 consecutive ticks'));
     expect(note.body, contains('connection closed'));
@@ -96,9 +95,16 @@ void main() {
 
     expect(sink.enqueued, hasLength(2));
     // The ordinal is service-minted per subject and never repeats — the
-    // note's idem key is `note:<subject>:<ordinal>`.
-    expect((sink.enqueued[0] as AttemptNote).noteOrdinal, 1);
-    expect((sink.enqueued[1] as AttemptNote).noteOrdinal, 2);
+    // note's idem key is `note:<subject>:<ordinal>`, so a repeat would be a
+    // SILENT dedupe. The values themselves are the recorder's to choose (a
+    // cold cache mints from epoch-µs rather than restarting at 1, so a
+    // capped entry can never re-mint a key the log already holds); what this
+    // suite pins is that the second note is a second key, and later.
+    final ordinals = [
+      for (final note in sink.enqueued) (note as AttemptNote).noteOrdinal,
+    ];
+    expect(ordinals[1], ordinals[0] + 1);
+    expect(ordinals.toSet(), hasLength(2));
   });
 
   test('a clean pass RESETS the streak — consecutive means consecutive', () {

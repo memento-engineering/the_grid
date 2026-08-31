@@ -101,13 +101,37 @@ const String kTickReapedBackfillBasis = 'tick-reaped-backfill';
 /// an `unknown` terminal healed from a process/worktree probe.
 const String kTickUnknownSettlementBasis = 'tick-unknown-settlement';
 
-/// The FIFO bound on every warm cache the recorder keeps (§2.1's
-/// recoverability rule makes eviction safe: every entry is recoverable from
-/// the breadcrumbs plus the log, so evicting one costs at worst a marked
-/// re-mint or a skipped succession — never durable state). Epoch-truncate by
+/// The FIFO bound on every warm cache the recorder keeps. Epoch-truncate by
 /// insertion order: Dart maps and sets iterate oldest-first, so dropping
 /// `keys.first` retires the coldest entries. Sized generously against the
 /// station's real storm (a handful of concurrent sessions).
+///
+/// §2.1's recoverability rule makes eviction SAFE, but "safe" is not "free",
+/// and it does not mean the same thing in every cache. What an eviction
+/// actually costs, per cache:
+///
+///   * `_sessionAttempts` / `_workBeadAttempts` / `_provisionAttempts` — the
+///     next record for that key mints a fresh attempt id and PAYLOAD-MARKS it
+///     (`attempt_id_basis`). The row is outside the shadow's comparable set;
+///     nothing durable is lost and nothing is silently wrong.
+///   * `_rounds` — the round ladder restarts at 0 for that session until the
+///     next `#rN` sighting or seed. A comparative column, never a key.
+///   * `_mountSequences` — the next mint evaluation opens a fresh
+///     `mount_attempt_id`, so one mint sequence reads as two.
+///   * `_leaseAttemptByStep` / `_predecessorByAttempt` — a succession goes
+///     unobserved; the log's last attempt row per session+step path is the
+///     authority and still carries it.
+///   * `_attemptSpawns` — the spawn's correlation facts degrade (incarnation
+///     to 0, step path/round to absent); identity is unaffected.
+///   * `_noteOrdinals` — the ONE cache whose naive miss was not benign: the
+///     ordinal is the note's idem key (`note:<session>:<n>`), so restarting a
+///     live session's counter at 1 re-mints a key the log already holds and
+///     the append DEDUPES the note away, silently. The note builder therefore
+///     does NOT restart at 1 on a miss — see
+///     `StationTrajectoryRecorder.buildObligationStuckNote`.
+///
+/// No cache holds state that only it holds; none of the above loses a durable
+/// fact.
 const int kRecorderCacheBound = 1024;
 
 /// The mount-attempt bead's durable counter key — wire-identical to
@@ -117,6 +141,16 @@ const int kRecorderCacheBound = 1024;
 /// shadow-comparable ordinal `traj shadow-diff` joins against the legacy bead
 /// (§2.2, r2 major 8).
 const String kLegacyAttemptCountKey = 'grid.attempt.count';
+
+/// The provision join's seed: the spawn's attempt id plus the correlation
+/// facts `provisionWorktree` (which holds only the work bead) cannot know.
+typedef _ProvisionSeed = ({
+  String attemptId,
+  String? sessionId,
+  String? stepPath,
+  int? stepRound,
+  int? incarnation,
+});
 
 /// One constructed record plus the seat its envelope must carry — what a
 /// BUILDER hands back to a caller that owns its own append.
@@ -205,16 +239,27 @@ class StationTrajectoryRecorder {
   /// that follows, which carries the spawn's id, never the session-scope one.
   final Map<String, String> _workBeadAttempts = <String, String>{};
 
-  /// ORIGINAL work bead id → the attempt id of the spawn CURRENTLY
-  /// provisioning that bead's worktree — seeded by [provisioningAttempt] (the
-  /// spawner, synchronously before `provisionWorkspace` runs) and read by
-  /// [worktreeProvisioned]. This is what makes the provisioned record carry
-  /// the SAME attempt_id the spawn's `attempt.process.started` will carry, so
-  /// P6's provisional row is corrected in place rather than orphaned beside a
-  /// second row. A warm cache of the mount's env export
-  /// (`GRID_ATTEMPT_ID`), which the acquire persists to the breadcrumb —
-  /// recoverable, never invented (§2.1).
-  final Map<String, String> _provisionAttempts = <String, String>{};
+  /// ORIGINAL work bead id → the spawn CURRENTLY provisioning that bead's
+  /// worktree: its attempt id AND the correlation the provisioning site has
+  /// no way to know — seeded by [provisioningAttempt] (the spawner,
+  /// synchronously before `provisionWorkspace` runs) and read by
+  /// [worktreeProvisioned].
+  ///
+  /// The attempt id is what makes the provisioned record carry the SAME
+  /// attempt_id the spawn's `attempt.process.started` will carry, so P6's
+  /// provisional row is corrected in place rather than orphaned beside a
+  /// second row. The SESSION id is what makes there be a row at all
+  /// (fidelity B2's tail): `processIdentityDeltaFor`'s `worktree.provisioned`
+  /// arm can only take the birth (upsert) arm when the envelope carries a
+  /// session — `proj_process_identity.session_id` is NOT NULL, so a
+  /// session-less provisioned record degrades to an update that, arriving
+  /// BEFORE the spawn as it always does in production, matches zero rows and
+  /// loses worktree/branch/base_sha entirely.
+  ///
+  /// A warm cache of the mount's env export (`GRID_ATTEMPT_ID`) plus the
+  /// allocation address — recoverable, never invented (§2.1).
+  final Map<String, _ProvisionSeed> _provisionAttempts =
+      <String, _ProvisionSeed>{};
 
   /// attempt id → the spawn-time correlation facts the runtime-event
   /// subscriber cannot read off a `SessionStarted` event (incarnation = the
@@ -244,6 +289,13 @@ class StationTrajectoryRecorder {
 
   /// session id → last minted `attempt.note` ordinal (service-minted, §2.3).
   final Map<String, int> _noteOrdinals = <String, int>{};
+
+  /// The largest note ordinal this process has minted, in ANY session — the
+  /// floor under [buildObligationStuckNote]'s cache-miss fallback, so the
+  /// fallback is strictly increasing even when the clock cannot separate two
+  /// misses (a coarse timer, a frozen test clock). Not a cache: one int, no
+  /// eviction, nothing recoverable to lose.
+  int _maxNoteOrdinal = 0;
 
   /// step bead id → the attempt id its `grid.lease.*` breadcrumb currently
   /// names — the boot-local view of the durable carrier (§2.1). Seeded by
@@ -328,20 +380,43 @@ class StationTrajectoryRecorder {
     _cap(_attemptSpawns);
   }
 
-  /// Seeds the provision join for [workBeadId] with the SPAWN's [attemptId] —
-  /// called by the spawner synchronously before `provisionWorkspace` runs, so
-  /// the `worktree.provisioned` observation inside `provisionWorktree` (which
-  /// has only the work bead in hand) resolves the SAME attempt the spawn's
-  /// `.started` will carry, and P6's provisional row is corrected in place
-  /// (fidelity B2). Appends nothing. The live call order guarantees the id
-  /// exists here: `CapabilityHost.initState` mints it, the allocation env
-  /// exports it, and the spawner reads it off that env BEFORE provisioning.
+  /// Seeds the provision join for [workBeadId] with the SPAWN's [attemptId]
+  /// AND its correlation — called by the spawner synchronously before
+  /// `provisionWorkspace` runs, so the `worktree.provisioned` observation
+  /// inside `provisionWorktree` (which has only the work bead in hand)
+  /// resolves the SAME attempt the spawn's `.started` will carry, and P6's
+  /// provisional row is BORN here and corrected in place (fidelity B2).
+  /// Appends nothing. The live call order guarantees the id exists here:
+  /// `CapabilityHost.initState` mints it, the allocation env exports it, and
+  /// the spawner reads it off that env BEFORE provisioning.
+  ///
+  /// [sessionId] is the load-bearing addition (fidelity B2's TAIL): without a
+  /// session on the record the fold cannot insert — `session_id` is NOT NULL
+  /// — so the delta degrades to an update against a row the spawn has not
+  /// written yet, matches nothing, and the worktree/branch/base_sha facts
+  /// never land. The spawner reads it off the [AllocationAddress] (which is
+  /// also where the harness's runtime-event subscriber reads it: the first
+  /// '/' of `providerName`).
+  ///
+  /// Every omitted fact falls back to the mount's own [attemptSpawning] seed
+  /// for the same attempt — one seed, two readers, no second source of truth.
   void provisioningAttempt({
     required String workBeadId,
     required String attemptId,
+    String? sessionId,
+    String? stepPath,
+    int? stepRound,
+    int? incarnation,
   }) {
     if (attemptId.isEmpty) return;
-    _provisionAttempts[parseLegacyWorkKey(workBeadId).workBeadId] = attemptId;
+    final spawn = _attemptSpawns[attemptId];
+    _provisionAttempts[parseLegacyWorkKey(workBeadId).workBeadId] = (
+      attemptId: attemptId,
+      sessionId: sessionId ?? spawn?.sessionId,
+      stepPath: stepPath ?? spawn?.stepPath,
+      stepRound: stepRound ?? spawn?.stepRound,
+      incarnation: incarnation ?? spawn?.incarnation,
+    );
     _cap(_provisionAttempts);
   }
 
@@ -1077,15 +1152,18 @@ class StationTrajectoryRecorder {
   /// sha + branch to required envelope columns — all three are required here
   /// so the site cannot under-fill the record.
   ///
-  /// The site has only the WORK bead in hand, so the attempt id joins through
-  /// the SPAWN's provision seed ([provisioningAttempt], stamped by the spawner
-  /// right before it provisions — the id `attempt.process.started` will also
-  /// carry, so P6's provisional row is corrected in place, fidelity B2); an
-  /// explicit [attemptId] or [sessionId] wins when the caller has one, and the
-  /// session-scope work-bead cache is the last recoverable resort. Only when
-  /// EVERY join fails (a provision outside the engine's spawn path) does the
-  /// recorder mint — and then it SAYS SO with an `attempt_id_basis` payload
-  /// marker, never silently (§2.1's recoverability rule).
+  /// The site has only the WORK bead in hand, so BOTH the attempt id and the
+  /// session join through the SPAWN's provision seed ([provisioningAttempt],
+  /// stamped by the spawner right before it provisions). The attempt id is
+  /// the one `attempt.process.started` will also carry, so P6's provisional
+  /// row is corrected in place; the session is what lets that row be BORN at
+  /// all, because the fold's insert arm needs a NOT NULL `session_id` and a
+  /// provision always precedes its spawn (fidelity B2 and its tail). An
+  /// explicit [attemptId] or [sessionId] wins when the caller has one, and
+  /// the session-scope work-bead cache is the last recoverable resort. Only
+  /// when EVERY join fails (a provision outside the engine's spawn path) does
+  /// the recorder mint — and then it SAYS SO with an `attempt_id_basis`
+  /// payload marker, never silently (§2.1's recoverability rule).
   void worktreeProvisioned({
     required String workBeadId,
     required String worktree,
@@ -1098,9 +1176,10 @@ class StationTrajectoryRecorder {
   }) {
     _observe('worktreeProvisioned', () {
       final parsed = parseLegacyWorkKey(workBeadId);
+      final seeded = _provisionAttempts[parsed.workBeadId];
       var resolved =
           attemptId ??
-          _provisionAttempts[parsed.workBeadId] ??
+          seeded?.attemptId ??
           (sessionId == null ? null : _sessionAttempts[sessionId]) ??
           _workBeadAttempts[parsed.workBeadId];
       String? basis;
@@ -1109,13 +1188,36 @@ class StationTrajectoryRecorder {
         basis = kRecorderMintedAttemptBasis;
         // Cache the marked mint so a repeat provision of the same bead does
         // not birth a second phantom P6 row.
-        _provisionAttempts[parsed.workBeadId] = resolved;
+        _provisionAttempts[parsed.workBeadId] = (
+          attemptId: resolved,
+          sessionId: sessionId,
+          stepPath: null,
+          stepRound: null,
+          incarnation: null,
+        );
         _cap(_provisionAttempts);
       }
+      // The correlation for the attempt actually resolved: the provision seed
+      // when it named THIS attempt, else the mount's own spawn seed. An
+      // explicit attemptId that disagrees with the seed must not borrow the
+      // seed's session — that would stamp one spawn's ladder onto another's.
+      final correlation = seeded != null && seeded.attemptId == resolved
+          ? seeded
+          : null;
+      final spawn = _attemptSpawns[resolved];
+      final session = sessionId ?? correlation?.sessionId ?? spawn?.sessionId;
       _enqueue(
         WorktreeProvisioned(
           attemptId: resolved,
-          sessionId: sessionId,
+          sessionId: session,
+          // The provisional ladder, seeded to the SAME position the spawn's
+          // `.started` will claim, so the two never race `uq_incarnation`.
+          // The round ladder is the recorder's own (§2.2), exactly as
+          // [processStarted] reads it.
+          round: session == null ? null : _rounds[session],
+          stepPath: correlation?.stepPath ?? spawn?.stepPath,
+          stepRound: correlation?.stepRound ?? spawn?.stepRound,
+          incarnation: correlation?.incarnation ?? spawn?.incarnation,
           worktree: worktree,
           branch: branch,
           baseSha: baseSha,
@@ -1227,12 +1329,38 @@ class StationTrajectoryRecorder {
   /// The stuck-obligation note (§2.4 obligation 4 / schema §5's N-failure
   /// rule). The ordinal is service-minted HERE for both paths, so the two
   /// never mint the same `note:<session>:<ordinal>` key.
+  ///
+  /// **A cache MISS never restarts at 1.** The ordinal IS the note's idem key
+  /// (`note:<session>:<n>`), and `_noteOrdinals` is FIFO-bounded like every
+  /// other warm cache ([kRecorderCacheBound]) — so a busy station that
+  /// evicted a still-live session's entry would re-mint `…:1`, `…:2`, … keys
+  /// the log already holds, and the appender would DEDUPE the new notes away
+  /// SILENTLY (a dedupe is a success outcome; the loss would surface
+  /// nowhere). On a miss the ordinal therefore falls back to
+  /// **epoch-microseconds**, floored above every ordinal this process has
+  /// already minted ([_maxNoteOrdinal]) so two misses the clock cannot
+  /// separate still get different values. µs since 1970 is ~1.8e15 against
+  /// single-digit note counters, so the fallback cannot collide with a small
+  /// ordinal from a previous boot either.
+  ///
+  /// What that costs, EXACTLY: strict per-session ordinal DENSITY degrades —
+  /// a session's ordinals are no longer 1, 2, 3…, and the numeric gap across
+  /// an eviction counts nothing. What does NOT degrade: ordinals stay
+  /// strictly increasing per session (the fallback is above every prior
+  /// value, and later notes increment from it), so every reader that treats
+  /// them as an ORDER is still right; and DURABILITY is untouched — every
+  /// note lands, which is the whole point of not restarting at 1.
   DerivedRecord buildObligationStuckNote({
     required String sessionId,
     required String body,
   }) {
-    final ordinal = (_noteOrdinals[sessionId] ?? 0) + 1;
+    final last = _noteOrdinals[sessionId];
+    final micros = _clock().toUtc().microsecondsSinceEpoch;
+    final ordinal = last != null
+        ? last + 1
+        : (micros > _maxNoteOrdinal ? micros : _maxNoteOrdinal + 1);
     _noteOrdinals[sessionId] = ordinal;
+    if (ordinal > _maxNoteOrdinal) _maxNoteOrdinal = ordinal;
     _cap(_noteOrdinals);
     return DerivedRecord(
       AttemptNote(

@@ -746,6 +746,10 @@ final class WorktreeProvisioned extends AttemptRecord {
     required this.baseSha,
     required this.adoptedExisting,
     this.sessionId,
+    this.round,
+    this.stepPath,
+    this.stepRound,
+    this.incarnation,
     this.attemptIdBasis,
   });
 
@@ -755,6 +759,10 @@ final class WorktreeProvisioned extends AttemptRecord {
   ) => WorktreeProvisioned(
     attemptId: _envReq(envelope, 'attempt_id', envelope.attemptId),
     sessionId: envelope.sessionId,
+    round: envelope.round,
+    stepPath: envelope.stepPath,
+    stepRound: envelope.stepRound,
+    incarnation: envelope.incarnation,
     worktree: _envReq(envelope, 'worktree', envelope.worktree),
     branch: _envReq(envelope, 'branch', envelope.branch),
     baseSha: _envReq(envelope, 'commit_sha', envelope.commitSha),
@@ -764,6 +772,23 @@ final class WorktreeProvisioned extends AttemptRecord {
 
   final String attemptId;
   final String? sessionId;
+
+  /// The SPAWN's ladder position, carried when the observation site could
+  /// resolve it from the spawner's provision seed (stage1-wiring §2.2's
+  /// worktree row, fidelity B2). P6's provisional row is then born AT that
+  /// position instead of at the session-scoped `(0, '', 0, 0)` default — so
+  /// two attempts of one session that both provision before their spawns
+  /// cannot collide on `uq_incarnation` and absorb into each other's row.
+  /// Absent (a provision outside the engine's spawn path) the provisional
+  /// ladder stays the default and the `.started` corrects it in place.
+  ///
+  /// Additive under §2.6 rule 1: an omitted field leaves the v1 wire shape
+  /// byte-identical, and the fold has read these envelope columns since
+  /// Stage 1's first cut.
+  final int? round;
+  final String? stepPath;
+  final int? stepRound;
+  final int? incarnation;
   final String worktree;
   final String branch;
 
@@ -792,6 +817,10 @@ final class WorktreeProvisioned extends AttemptRecord {
   Map<String, Object?> correlationToJson() => {
     'attempt_id': attemptId,
     if (sessionId != null) 'session_id': sessionId,
+    if (round != null) 'round': round,
+    if (stepPath != null) 'step_path': stepPath,
+    if (stepRound != null) 'step_round': stepRound,
+    if (incarnation != null) 'incarnation': incarnation,
     'worktree': worktree,
     'branch': branch,
     'commit_sha': baseSha,

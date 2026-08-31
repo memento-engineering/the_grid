@@ -131,6 +131,7 @@ final class TrajectoryHarnessStatus {
     required this.dropped,
     required this.suppressed,
     required this.queueDepth,
+    this.exitJoinGaps = 0,
   });
 
   final TrajectoryHarnessMode mode;
@@ -154,12 +155,20 @@ final class TrajectoryHarnessStatus {
 
   final int queueDepth;
 
+  /// Runtime-event exit joins the subscriber REFUSED rather than derived a
+  /// wrong record from: a pid mismatch under a reused session name, or a
+  /// start that overwrote a live entry whose exit never arrived. Zero is the
+  /// healthy read; a non-zero one names the stop-races-spawn gap class, whose
+  /// terminals the tick's unknown-terminal settlement settles.
+  final int exitJoinGaps;
+
   @override
   String toString() =>
       'TrajectoryHarnessStatus(${mode.name}'
       '${cause == null ? '' : ' ($cause)'}, epoch: $epoch, '
       'appended: $appended, deduped: $deduped, dropped: $dropped, '
-      'suppressed: $suppressed, queue: $queueDepth)';
+      'suppressed: $suppressed, queue: $queueDepth'
+      '${exitJoinGaps == 0 ? '' : ', exitJoinGaps: $exitJoinGaps'})';
 }
 
 /// The fenced service's station-side owner (stage1-wiring §1.1).
@@ -334,13 +343,28 @@ class TrajectoryHarness {
   StreamSubscription<RuntimeEvent>? _eventsSub;
 
   /// session name → the identity its `SessionStarted` carried, held so the
-  /// exit events (which carry only the name) can join (§2.1: "exit events
-  /// join by session name"). A warm cache; entries retire on exit, and the
-  /// FIFO bound covers names whose exit was never observed.
+  /// exit events can join (§2.1: "exit events join by session name"). A warm
+  /// cache; an entry retires on the exit that JOINS it, and the FIFO bound
+  /// covers names whose exit was never observed or never matched.
+  ///
+  /// The NAME is a slot, not an identity: a stop that races a respawn can put
+  /// a second process behind it, so a name-only join can attribute one
+  /// process's exit to another process's attempt. The stored `pid` is the
+  /// discriminator — [_onRuntimeEvent] requires the exit event's pid to match
+  /// when the emitter carried one, and refuses the join rather than deriving
+  /// a wrong `attempt.process.exited` when it does not.
   final Map<String, ({String attemptId, int pid})> _liveProcesses =
       <String, ({String attemptId, int pid})>{};
 
   static const int _kLiveProcessBound = 4096;
+
+  /// Exit joins the subscriber REFUSED (§2.1's named-gap class): a pid
+  /// mismatch between an exit and the start held under its name, plus a
+  /// `SessionStarted` that overwrote a live entry whose exit was never
+  /// observed. A plain `/status` counter — nothing here changes what the
+  /// station does, and the tick's unknown-terminal settlement owns the rows
+  /// these gaps leave behind.
+  int _exitJoinGaps = 0;
 
   final Queue<TrajectoryAppendRequest> _queue =
       Queue<TrajectoryAppendRequest>();
@@ -371,6 +395,7 @@ class TrajectoryHarness {
     dropped: _dropped,
     suppressed: _suppressed,
     queueDepth: _queue.length,
+    exitJoinGaps: _exitJoinGaps,
   );
 
   /// The tick, for a status surface's `lastPass` — null until live.
@@ -497,6 +522,13 @@ class TrajectoryHarness {
           // path (or pre-Stage-1): the record READS the attempt id, it never
           // invents one (§2.1) — no record, and no exit join either.
           if (attemptId.isEmpty) return;
+          // A start overwriting a LIVE entry means the previous process
+          // behind this name never had its exit observed — the
+          // stop-races-spawn gap. The entry is orphaned either way (the name
+          // is the only key the exit events carry), so count it rather than
+          // let it vanish: the tick's unknown-terminal settlement is what
+          // closes the row it leaves behind.
+          if (_liveProcesses.containsKey(name)) _countExitJoinGap('overwrite');
           _liveProcesses[name] = (attemptId: attemptId, pid: pid);
           while (_liveProcesses.length > _kLiveProcessBound) {
             _liveProcesses.remove(_liveProcesses.keys.first);
@@ -514,11 +546,8 @@ class TrajectoryHarness {
             pid: pid,
             pgid: pgid ?? pid,
           );
-        case Exited(:final name, :final exitCode, :final inferred):
-          final proc = _liveProcesses.remove(name);
-          // No `.started` observed this boot under this subscriber (a prior
-          // boot's process, or an unattributed spawn) — no attempt to key a
-          // record on; the tick's unknown-terminal settlement owns that class.
+        case Exited(:final name, :final exitCode, :final inferred, :final pid):
+          final proc = _joinExit(name, pid);
           if (proc == null) return;
           recorder.processExited(
             attemptId: proc.attemptId,
@@ -530,8 +559,8 @@ class TrajectoryHarness {
             sessionId: _sessionIdOf(name),
             exitCode: exitCode,
           );
-        case Died(:final name, :final reason):
-          final proc = _liveProcesses.remove(name);
+        case Died(:final name, :final reason, :final pid):
+          final proc = _joinExit(name, pid);
           if (proc == null) return;
           recorder.processExited(
             attemptId: proc.attemptId,
@@ -552,6 +581,44 @@ class TrajectoryHarness {
         'reason': '$error',
       });
     }
+  }
+
+  /// Resolves the start an exit event joins back to, and REFUSES the join
+  /// rather than deriving a wrong record.
+  ///
+  /// The session name is a slot: `_liveProcesses` is keyed by it, but a stop
+  /// that races a respawn can put a second process behind the same name, so
+  /// the name alone does not prove the exit belongs to the start held under
+  /// it. [eventPid] is the discriminator when the emitter carried one —
+  /// mismatched, the join is dropped, counted, and flared once per window;
+  /// null (an emitter that never learned a pid) means "cannot check", which
+  /// is not evidence of a mismatch and joins as before.
+  ///
+  /// A null return is not an error in either shape: with no `.started`
+  /// observed this boot (a prior boot's process, an unattributed spawn) there
+  /// is no attempt to key a record on, and the tick's unknown-terminal
+  /// settlement owns every terminal these gaps leave unwritten.
+  ({String attemptId, int pid})? _joinExit(String name, int? eventPid) {
+    final proc = _liveProcesses[name];
+    if (proc == null) return null;
+    if (eventPid != null && eventPid != proc.pid) {
+      // NOT removed: the entry belongs to a process whose own exit may still
+      // be coming, and dropping it here would turn one refused join into two.
+      _countExitJoinGap('pid-mismatch', expected: proc.pid, observed: eventPid);
+      return null;
+    }
+    _liveProcesses.remove(name);
+    return proc;
+  }
+
+  void _countExitJoinGap(String reason, {int? expected, int? observed}) {
+    _exitJoinGaps += 1;
+    _flareLimited('trajectory.exitJoinGap', {
+      'reason': reason,
+      'gaps': '$_exitJoinGaps',
+      if (expected != null) 'expectedPid': '$expected',
+      if (observed != null) 'observedPid': '$observed',
+    });
   }
 
   static String _sessionIdOf(String providerName) {
@@ -711,9 +778,19 @@ class TrajectoryHarness {
       final outcome = await _serialize(() => _appender!.reconnect(fresh));
       switch (outcome) {
         case ReconnectResumed():
-          await _closeDbQuietly(); // the dead session
+          // PUBLISH FIRST, then retire the dead session. `_closeDbQuietly`
+          // nulls `_db` and then AWAITS the close, and the tick's read path
+          // (`_SerializedDb`) rides the same serial lane this method just
+          // yielded — so with the close first, a tick query landing inside
+          // that window reads a null `_db` and throws
+          // `trajectory connection is closed` against a harness that is in
+          // fact healthy. Assigning the fresh handle first leaves no instant
+          // where the lane can observe no connection; the close stays
+          // guarded, so a refusing dead session still cannot throw here.
+          final dead = _db;
           _db = fresh;
           _needsReconnect = false;
+          if (dead != null) await _closeQuietly(dead);
           _lastReconnectAttemptAt = null; // a NEW failure retries eagerly
           return true;
         case ReconnectInert(:final staleEpoch, :final liveEpoch):

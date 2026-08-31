@@ -146,6 +146,25 @@ void main() {
     return expectSchemaClean(sink.captured.single);
   }
 
+  /// Applies a capture's P6 delta to in-memory rows through the REAL fold
+  /// (`processIdentityDeltaFor` + the replay applier, whose semantics mirror
+  /// the appender's SQL arm statement for statement). This is what closes
+  /// fidelity B2's tail as a TEST: a derivation that looks right in isolation
+  /// but cannot birth a row is exactly the failure that shipped, and only
+  /// folding the record catches it.
+  void foldInto(
+    Map<String, ProcessIdentityRow> rows,
+    _Capture capture,
+    int lastSeq,
+  ) {
+    final delta = processIdentityDeltaFor(
+      envelopeOf(capture),
+      decoded: capture.record,
+    );
+    if (delta == null) return;
+    applyProcessIdentityDelta(rows, delta, lastSeq: lastSeq);
+  }
+
   group('parseLegacyWorkKey (§2.2 work_bead_id row)', () {
     test('plain id passes through', () {
       expect(StationTrajectoryRecorder.parseLegacyWorkKey('tg-9xk2'), (
@@ -673,7 +692,8 @@ void main() {
       expect(crossings, [LivenessCrossing.lost, LivenessCrossing.regained]);
     });
 
-    test('note ordinals are service-minted per session', () {
+    test('note ordinals are service-minted per session, strictly increasing '
+        'within one and independent across two', () {
       recorder.obligationStuckNoted(sessionId: 's1', body: 'stuck x5');
       recorder.obligationStuckNoted(sessionId: 's1', body: 'still stuck');
       recorder.obligationStuckNoted(sessionId: 's2', body: 'other');
@@ -681,12 +701,60 @@ void main() {
         for (final c in sink.captured)
           expectSchemaClean(c).record as AttemptNote,
       ];
-      expect([for (final n in notes) n.noteOrdinal], [1, 2, 1]);
+      expect(
+        notes[1].noteOrdinal,
+        notes[0].noteOrdinal + 1,
+        reason: 'a HIT increments — the counter is the per-session ordering',
+      );
+      expect(
+        notes[2].sessionId,
+        's2',
+        reason: 'the counter is per session, never global',
+      );
+      // Whatever the ordinals are, the three idem keys are three keys — the
+      // property the appender's dedupe actually reads.
+      const context = IdemContext(station: 'tranquility', bootEpoch: 3);
+      expect({for (final n in notes) n.idemKeyText(context)}, hasLength(3));
       expect(
         notes.every((n) => n.channel == kObligationStuckChannel),
         isTrue,
         reason: 'Stage 1 arms ONLY the obligation-stuck channel (§2.3)',
       );
+    });
+
+    test('an EVICTED ordinal entry appends a fresh note — it never re-mints a '
+        'small ordinal the log already holds and dedupes it away', () {
+      // Fill the counter past a value an eviction could hand back.
+      recorder.obligationStuckNoted(sessionId: 's1', body: 'first');
+      recorder.obligationStuckNoted(sessionId: 's1', body: 'second');
+      final before = [
+        for (final c in sink.captured) (c.record as AttemptNote).noteOrdinal,
+      ];
+      // Evict s1's entry the only way the bound ever does: push
+      // kRecorderCacheBound OTHER sessions through the same FIFO cache.
+      for (var i = 0; i <= kRecorderCacheBound; i += 1) {
+        recorder.obligationStuckNoted(sessionId: 'filler-$i', body: 'x');
+      }
+      sink.captured.clear();
+      recorder.obligationStuckNoted(sessionId: 's1', body: 'after eviction');
+      final after =
+          expectSchemaClean(sink.captured.single).record as AttemptNote;
+      expect(
+        before,
+        isNot(contains(after.noteOrdinal)),
+        reason: 'a reused ordinal is a reused idem key: a SILENT dedupe',
+      );
+      expect(
+        after.noteOrdinal,
+        greaterThan(before.last),
+        reason:
+            'the epoch-µs fallback is above any counter value, so the '
+            'per-session ordering still reads correctly',
+      );
+      // The next note after the fallback resumes plain increment.
+      recorder.obligationStuckNoted(sessionId: 's1', body: 'and again');
+      final next = sink.captured.last.record as AttemptNote;
+      expect(next.noteOrdinal, after.noteOrdinal + 1);
     });
   });
 
@@ -766,6 +834,196 @@ void main() {
       final terminal =
           expectSchemaClean(sink.captured.last).record as AttemptTerminal;
       expect(provisioned.attemptId, isNot(terminal.attemptId));
+    });
+
+    test('PRODUCTION ORDER (provision BEFORE spawn, no session at the '
+        'observation site): the seeded correlation BIRTHS the P6 row, so the '
+        'reaped-backfill obligation\'s "WHERE p.worktree IS NOT NULL" has a '
+        'row shape to match — fidelity B2\'s tail', () {
+      final attempt = 'A' * 26;
+      // The engine's live order, exactly:
+      //   1. the host mints the session and seeds the spawn's facts;
+      //   2. the SPAWNER seeds the provision join off the allocation address
+      //      (`sessionId` + `nodePath`) right before it provisions;
+      //   3. `provisionWorktree` observes with ONLY the work bead in hand —
+      //      no sessionId, no attemptId at the call site;
+      //   4. the runtime event's `.started` arrives LAST.
+      recorder.sessionMinted(
+        sessionId: 'tranquility-s1',
+        workBeadId: 'tg-1',
+        rig: 'the_grid',
+        model: 'm',
+      );
+      recorder.attemptSpawning(
+        attemptId: attempt,
+        sessionId: 'tranquility-s1',
+        stepPath: 'tg-1/agent',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      recorder.provisioningAttempt(
+        workBeadId: 'tg-1',
+        attemptId: attempt,
+        sessionId: 'tranquility-s1',
+        stepPath: 'tg-1/agent',
+      );
+      recorder.worktreeProvisioned(
+        workBeadId: 'tg-1',
+        worktree: '/wt/tg-1',
+        branch: 'grid/tg-1',
+        baseSha: 'a' * 40,
+        adoptedExisting: false,
+      );
+      final provisioned =
+          expectSchemaClean(sink.captured[1]).record as WorktreeProvisioned;
+      expect(
+        provisioned.sessionId,
+        'tranquility-s1',
+        reason:
+            'the record MUST carry a session: P6.session_id is NOT NULL, '
+            'so a session-less provisioned record can only ever UPDATE — and '
+            'a provision always precedes its spawn, so it matches 0 rows',
+      );
+      expect(provisioned.stepPath, 'tg-1/agent');
+
+      // Fold BOTH records, in the order the log carries them.
+      final rows = <String, ProcessIdentityRow>{};
+      foldInto(rows, sink.captured[1], 1);
+      expect(
+        rows[attempt],
+        isNotNull,
+        reason:
+            'the provisioned record BIRTHS the row — the update-only arm '
+            'is what neutered the backfill obligation',
+      );
+      expect(rows[attempt]!.worktree, '/wt/tg-1');
+      expect(rows[attempt]!.branch, 'grid/tg-1');
+      expect(rows[attempt]!.baseSha, 'a' * 40);
+      expect(rows[attempt]!.worktreeState, 'live');
+
+      recorder.processStarted(
+        attemptId: attempt,
+        sessionId: 'tranquility-s1',
+        pid: 41,
+        pgid: 42,
+      );
+      foldInto(rows, sink.captured[2], 2);
+      expect(
+        rows,
+        hasLength(1),
+        reason:
+            'corrected IN PLACE, never a second '
+            'row beside the provisional one',
+      );
+      final row = rows[attempt]!;
+      // The completed shape both downstream consumers read.
+      expect((row.pid, row.pgid), (41, 42));
+      expect(
+        row.worktree,
+        '/wt/tg-1',
+        reason:
+            'the worktree facts survived '
+            'the .started upsert — WorktreeReapedBackfillObligation\'s '
+            "`p.worktree IS NOT NULL AND p.worktree_state = 'live'` matches",
+      );
+      expect(row.branch, 'grid/tg-1');
+      expect(row.baseSha, 'a' * 40);
+      expect(row.sessionId, 'tranquility-s1');
+      expect(row.lastSeq, 2);
+      // And the unknown-terminal settlement's probe (`p.pid`, `p.worktree`)
+      // now has both columns to read off the same row.
+      expect((row.pid, row.worktree), (41, '/wt/tg-1'));
+    });
+
+    test(
+      'the provisional row is born at the SPAWN\'s ladder, so the '
+      '.started upsert hits the same PK AND the same uq_incarnation slot',
+      () {
+        final attempt = 'A' * 26;
+        recorder.sessionMinted(
+          sessionId: 'tranquility-s1',
+          workBeadId: 'tg-1#r2',
+          rig: 'the_grid',
+          model: 'm',
+        );
+        recorder.attemptSpawning(
+          attemptId: attempt,
+          sessionId: 'tranquility-s1',
+          stepPath: 'tg-1/agent',
+          stepRound: 3,
+          incarnation: 1,
+        );
+        // The spawner passes only what the ADDRESS carries; step round and
+        // incarnation resolve from the mount's own attemptSpawning seed.
+        recorder.provisioningAttempt(
+          workBeadId: 'tg-1',
+          attemptId: attempt,
+          sessionId: 'tranquility-s1',
+          stepPath: 'tg-1/agent',
+        );
+        recorder.worktreeProvisioned(
+          workBeadId: 'tg-1',
+          worktree: '/wt/tg-1',
+          branch: 'grid/tg-1',
+          baseSha: 'a' * 40,
+          adoptedExisting: false,
+        );
+        recorder.processStarted(
+          attemptId: attempt,
+          sessionId: 'tranquility-s1',
+          pid: 41,
+          pgid: 42,
+        );
+        final provisioned =
+            expectSchemaClean(sink.captured[1]).record as WorktreeProvisioned;
+        final started =
+            expectSchemaClean(sink.captured[2]).record as AttemptProcessStarted;
+        expect(
+          (
+            provisioned.round,
+            provisioned.stepPath,
+            provisioned.stepRound,
+            provisioned.incarnation,
+          ),
+          (
+            started.round,
+            started.stepPath,
+            started.stepRound,
+            started.incarnation,
+          ),
+          reason:
+              'a provisional row parked at the default (0, \'\', 0, 0) is a '
+              'uq_incarnation slot two sibling attempts would share',
+        );
+        expect(provisioned.round, 2, reason: 'the #rN the mint seeded');
+      },
+    );
+
+    test('provisioningAttempt WITHOUT a session falls back to the mount\'s '
+        'own attemptSpawning seed — one seed, two readers', () {
+      final attempt = 'B' * 26;
+      recorder.attemptSpawning(
+        attemptId: attempt,
+        sessionId: 'tranquility-s9',
+        stepPath: 'tg-9/agent',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      recorder.provisioningAttempt(workBeadId: 'tg-9', attemptId: attempt);
+      recorder.worktreeProvisioned(
+        workBeadId: 'tg-9',
+        worktree: '/wt/tg-9',
+        branch: 'grid/tg-9',
+        baseSha: 'b' * 40,
+        adoptedExisting: false,
+      );
+      final record =
+          expectSchemaClean(sink.captured.single).record as WorktreeProvisioned;
+      expect(record.sessionId, 'tranquility-s9');
+      expect(record.stepPath, 'tg-9/agent');
+      final rows = <String, ProcessIdentityRow>{};
+      foldInto(rows, sink.captured.single, 1);
+      expect(rows[attempt]?.worktree, '/wt/tg-9');
     });
 
     test('a provision NO join can resolve mints AND MARKS — never silently '

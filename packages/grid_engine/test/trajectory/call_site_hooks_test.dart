@@ -373,12 +373,13 @@ _Vended _vendor({
   required TrajectoryRecordSink sink,
   Map<String, String>? existing,
   AllocationLiveness liveness = neverLive,
+  ProcessHandle? spawned,
 }) {
   final fakes = buildFakes();
   final vendor = StationProcessLeaseVendor(
     writer: fakes.ctx.writer,
     spawn: (request, context, args) async =>
-        throw UnimplementedError('no spawn is driven here'),
+        spawned ?? (throw UnimplementedError('no spawn is driven here')),
     dispatch: (handle, request, context, args) async => const Ok(),
     metadataOf: (id) async => existing,
     liveness: liveness,
@@ -666,6 +667,48 @@ void main() {
       );
       // The legacy clear still happened — adoption never regresses.
       expect(_updateArgv(b.fakes), hasLength(1));
+    });
+
+    test('acquire appends lease.acquired AFTER the breadcrumb write — and a '
+        'pre-Stage-1 handle (no attempt id) appends nothing, the same guard '
+        'release already had', () async {
+      for (final (attemptId, expected) in [(_attemptA, 1), ('', 0)]) {
+        final sink = _CapturingSink();
+        final b = _vendor(
+          sink: sink,
+          spawned: ProcessHandle(
+            pgid: 10,
+            pid: 10,
+            token: 't',
+            attemptId: attemptId,
+          ),
+        );
+        final resolution = await b.lease.acquire(
+          _NullTreeContext(),
+          StepArgs(
+            params: const {},
+            nodePath: 'tg-1/agent',
+            cancel: CancelToken(),
+          ),
+        );
+        expect(resolution, isA<LeaseBound<ProcessHandle>>());
+        // `_persistBreadcrumb` is deliberately UNawaited (tg-uad D3), so the
+        // record it derives lands a turn later.
+        await _pump();
+        expect(
+          sink.facts('attempt.lease.acquired'),
+          hasLength(expected),
+          reason: attemptId.isEmpty
+              ? 'the record READS the attempt id, it never invents one'
+              : 'a wired spawn appends exactly one acquired record',
+        );
+        // The LEGACY breadcrumb write ran either way — adoption and the
+        // orphan sweep never regress for the trajectory's sake.
+        expect(
+          _updateArgv(b.fakes).single,
+          contains('${LeaseKeys.attemptId}='),
+        );
+      }
     });
 
     test('proveFresh appends adopt.proved on BOTH outcomes', () async {
