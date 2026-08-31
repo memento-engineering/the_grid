@@ -1,0 +1,17 @@
+{
+  "record_type": "gate.closed",
+  "type_version": 1,
+  "family": "step",
+  "envelope": {
+    "gate_id": "tg-gate-77",
+    "session_id": "tranquility-5xk"
+  },
+  "payload": {
+    "close_cause": "adjudicated",
+    "cycle": 1,
+    "actor": "nico",
+    "open_duration_ms": 5400000
+  },
+  "idem_key_text": "gate:tg-gate-77:closed:1",
+  "idem_key": "544bb287aa04621998d07a254ded06eaec9c102fcdc1bf5e1403c4cb6e2e0bc9"
+}

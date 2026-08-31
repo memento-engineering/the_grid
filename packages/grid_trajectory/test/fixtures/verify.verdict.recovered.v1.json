@@ -1,0 +1,22 @@
+{
+  "record_type": "verify.verdict.recovered",
+  "type_version": 1,
+  "family": "verification",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 0,
+    "step_path": "root.verify",
+    "step_round": 0
+  },
+  "payload": {
+    "lane": "adr-alignment",
+    "rubric_version": "v3",
+    "grade": "C",
+    "rationale": "recovered from envelope after artifact loss",
+    "transport": "envelope",
+    "pinned_head_sha": "b4a0d2e3f5c6b7a89988776655443322aabbccdd",
+    "sha_drift": true
+  },
+  "idem_key_text": "verdict-recovered:tranquility-5xk:0:root.verify:0:adr-alignment",
+  "idem_key": "4d104697bbb3fdfeacc73926eea2f560446ecb6e81aeff9fcfc8a410ce14d08f"
+}

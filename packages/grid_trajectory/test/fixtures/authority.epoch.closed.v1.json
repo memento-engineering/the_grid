@@ -1,0 +1,15 @@
+{
+  "record_type": "authority.epoch.closed",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {},
+  "payload": {
+    "epoch": 7,
+    "pid": 4200,
+    "pgid": 4200,
+    "cause": "down",
+    "outstanding_obligations": 0
+  },
+  "idem_key_text": "epoch:lunar:7:closed",
+  "idem_key": "8e571dc6beb994189e78b0d7ac5cee6ca9c93c0a88ce51ca7e236fa084a22ddd"
+}

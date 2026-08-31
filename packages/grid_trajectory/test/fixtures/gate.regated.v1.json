@@ -1,0 +1,16 @@
+{
+  "record_type": "gate.regated",
+  "type_version": 1,
+  "family": "step",
+  "envelope": {
+    "gate_id": "tg-gate-77",
+    "session_id": "tranquility-5xk"
+  },
+  "payload": {
+    "regate_cycle": 1,
+    "node": "root.verify",
+    "reason": "second F after rework round"
+  },
+  "idem_key_text": "gate:tg-gate-77:regate:1",
+  "idem_key": "f2a8f98ea2a6f831fa9a63b3ceb84029b4dfe2d002fbaf41ce860db823d59b01"
+}

@@ -1,0 +1,27 @@
+{
+  "record_type": "admission.grant.issued",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {
+    "grant_id": "01J8GRANT00000000000000001",
+    "work_bead_id": "tg-9abc",
+    "mount_attempt_id": "01J8MOUNT00000000000000001",
+    "fencing_token": 30064771113,
+    "expires_at": "2026-08-31T12:30:00.000Z"
+  },
+  "payload": {
+    "basis": {
+      "bead_rev": "r12",
+      "approved_label_rev": "r11",
+      "validation_plan_digest": "d41d8cd98f00b204e9800998ecf8427e",
+      "issue_type": "task",
+      "dep_revs": {
+        "tg-1aaa": "r4"
+      },
+      "drive_list_member": true,
+      "snapshot_captured_at": "2026-08-31T11:59:00.000000Z"
+    }
+  },
+  "idem_key_text": "grant:01J8GRANT00000000000000001:issued",
+  "idem_key": "ac9488312547a6c30cdc4b8aab7d45e954ffd67a7eb6f45815c41ad0ed344fd5"
+}

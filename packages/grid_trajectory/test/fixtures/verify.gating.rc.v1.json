@@ -1,0 +1,21 @@
+{
+  "record_type": "verify.gating.rc",
+  "type_version": 1,
+  "family": "verification",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 0,
+    "step_path": "root.verify",
+    "step_round": 0,
+    "incarnation": 0,
+    "commit_sha": "b4a0d2e3f5c6b7a89988776655443322aabbccdd"
+  },
+  "payload": {
+    "rc": 0,
+    "duration_ms": 412345,
+    "plan_digest": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+    "head_sha_at_exec": "b4a0d2e3f5c6b7a89988776655443322aabbccdd"
+  },
+  "idem_key_text": "gating:tranquility-5xk:0:root.verify:0:0",
+  "idem_key": "7cbebf49fd7d80a39a64df39a285755229d31c3f00eedb2796c15d9184b571ae"
+}

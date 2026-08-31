@@ -1,0 +1,19 @@
+{
+  "record_type": "gate.opened",
+  "type_version": 1,
+  "family": "step",
+  "envelope": {
+    "gate_id": "tg-gate-77",
+    "session_id": "tranquility-5xk",
+    "work_bead_id": "tg-9abc",
+    "step_path": "root.verify",
+    "step_round": 1,
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "node": "root.verify",
+    "reason": "critic graded F: consumer coverage missing"
+  },
+  "idem_key_text": "gate:tg-gate-77:opened",
+  "idem_key": "ea74dd24bdde1960c819a655cadac17d8398675381c0cc46599508099c946411"
+}

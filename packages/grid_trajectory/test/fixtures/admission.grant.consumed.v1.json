@@ -1,0 +1,13 @@
+{
+  "record_type": "admission.grant.consumed",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {
+    "grant_id": "01J8GRANT00000000000000001",
+    "session_id": "tranquility-5xk",
+    "work_bead_id": "tg-9abc"
+  },
+  "payload": {},
+  "idem_key_text": "grant:01J8GRANT00000000000000001:consumed",
+  "idem_key": "c31fd8e74ec3c2c2e9030b84207bbd75920a625410c229a4e08437425b062a5e"
+}

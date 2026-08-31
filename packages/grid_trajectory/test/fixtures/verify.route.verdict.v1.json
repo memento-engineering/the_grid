@@ -1,0 +1,31 @@
+{
+  "record_type": "verify.route.verdict",
+  "type_version": 1,
+  "family": "verification",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 0,
+    "step_path": "root.verify",
+    "step_round": 0,
+    "incarnation": 0
+  },
+  "payload": {
+    "verdict": "advance",
+    "rule": "decent-grades",
+    "spread": 1.0,
+    "grades": {
+      "adr-alignment": {
+        "grade": "B",
+        "source_record_id": "01J8VERDICT000000000000001",
+        "sha_drift": false
+      },
+      "critic": {
+        "grade": "F",
+        "source_record_id": null,
+        "sha_drift": null
+      }
+    }
+  },
+  "idem_key_text": "route:tranquility-5xk:0:root.verify:0:0",
+  "idem_key": "b1d99f6937ca04bdfc811e480e46e419d04c56536a57dbe095bfc7915db5a753"
+}

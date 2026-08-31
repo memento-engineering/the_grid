@@ -14,6 +14,9 @@ workspace:
   # The public authoring surface over the private grid_engine (ADR-0008 D2 /
   # ADR-0002; consumers never import the engine). Born in tg-4ab (Track A).
   - packages/grid_sdk
+  # Trajectory substrate (tg-zfek Stage 0) — a LEAF below the whole chain,
+  # like beads_dart: zero grid_* deps (decision: grid-trajectory-leaf-package).
+  - packages/grid_trajectory
 
 # genesis_tree is the M4 engine (ADR-0007). It is now consumed from pub.dev at
 # the `^0.2.0` pin — the genesis ADR-0001 D8 stabilization

@@ -1,0 +1,14 @@
+{
+  "record_type": "attempt.rework_declined",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 1
+  },
+  "payload": {
+    "reason": "operator declined the readiness-hold rework"
+  },
+  "idem_key_text": "rework-declined:tranquility-5xk:1",
+  "idem_key": "02e275c509ee22ee0825ec2c4f9f884952fb3af376b17236f9a7607402a0614a"
+}

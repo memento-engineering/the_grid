@@ -1,0 +1,14 @@
+{
+  "record_type": "admission.grant.expired",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {
+    "grant_id": "01J8GRANT00000000000000001",
+    "work_bead_id": "tg-9abc"
+  },
+  "payload": {
+    "cause": "expired"
+  },
+  "idem_key_text": "grant:01J8GRANT00000000000000001:expired",
+  "idem_key": "8da3aa3fbc540da95aa248433dfb120a785c16a5fcff1ec7eade6d9652665999"
+}

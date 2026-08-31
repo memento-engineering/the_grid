@@ -1,0 +1,14 @@
+{
+  "record_type": "effect.command.received",
+  "type_version": 1,
+  "family": "effect",
+  "envelope": {},
+  "payload": {
+    "wire_key": "cmd-rework-tg-9abc-r1",
+    "command": "/rework tg-9abc",
+    "fence": 30064771113,
+    "fingerprint": "fp-8c1a2b3c"
+  },
+  "idem_key_text": "cmd:cmd-rework-tg-9abc-r1:fp-8c1a2b3c",
+  "idem_key": "74c046e56da46c42228f524f551ab29d81d82781c1170ea699c71f2d4997894f"
+}

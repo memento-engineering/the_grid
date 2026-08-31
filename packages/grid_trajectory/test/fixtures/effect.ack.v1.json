@@ -1,0 +1,19 @@
+{
+  "record_type": "effect.ack",
+  "type_version": 1,
+  "family": "effect",
+  "envelope": {
+    "effect_id": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+    "outcome": "succeeded",
+    "receipt": "pr:memento-engineering/the_grid#241"
+  },
+  "payload": {
+    "kind": "pr_open",
+    "ack_ordinal": 0,
+    "pr_number": 241,
+    "pr_url": "https://github.com/memento-engineering/the_grid/pull/241",
+    "reused": false
+  },
+  "idem_key_text": "effect:5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03:ack:0",
+  "idem_key": "b5c59c85efda9df3c27ec9e7451521b37b91ba07c503f4c804609c09869a49ea"
+}

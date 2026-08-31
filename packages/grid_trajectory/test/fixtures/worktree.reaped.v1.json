@@ -1,0 +1,17 @@
+{
+  "record_type": "worktree.reaped",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "worktree": ".grid/worktrees/tg/tg-9abc",
+    "branch": "grid/tg-9abc"
+  },
+  "payload": {
+    "uncommitted": 0,
+    "unpushed": 0,
+    "stashes": 0
+  },
+  "idem_key_text": "wt-reaped:tranquility-5xk:.grid/worktrees/tg/tg-9abc",
+  "idem_key": "33a5743f1f5718fe02042142e7762ee35aecd5a60610cb4f3ae10a2251d778ee"
+}

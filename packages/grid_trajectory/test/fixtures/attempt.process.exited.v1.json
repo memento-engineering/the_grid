@@ -1,0 +1,18 @@
+{
+  "record_type": "attempt.process.exited",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002",
+    "session_id": "tranquility-5xk"
+  },
+  "payload": {
+    "pid": 4242,
+    "exit_code": 0,
+    "exit_kind": "exited",
+    "inferred": false,
+    "reason": "clean exit"
+  },
+  "idem_key_text": "proc-exited:01J8ATTEMPT000000000000002",
+  "idem_key": "42a4482d7cc3def7c2402accc7672a83a279cc6a49c8fc7efd6a4c6e468a3f2d"
+}

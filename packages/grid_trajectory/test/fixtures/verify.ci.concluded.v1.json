@@ -1,0 +1,18 @@
+{
+  "record_type": "verify.ci.concluded",
+  "type_version": 1,
+  "family": "verification",
+  "envelope": {
+    "receipt": "obs:obs-20260831-0007",
+    "commit_sha": "b4a0d2e3f5c6b7a89988776655443322aabbccdd",
+    "work_bead_id": "tg-9abc",
+    "session_id": "tranquility-5xk"
+  },
+  "payload": {
+    "repo": "memento-engineering/the_grid",
+    "check_name": "analyze + test (pure Dart)",
+    "conclusion": "success"
+  },
+  "idem_key_text": "ci:obs-20260831-0007",
+  "idem_key": "899c019ab2595b2a5782c7c2684fafe72022f785f7f4dc662a4f3a418e423e91"
+}

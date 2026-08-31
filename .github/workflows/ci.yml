@@ -37,7 +37,7 @@ jobs:
         # and carries a documented bd-HEAD ready-sort divergence (tg-nx0o).
         # Hermeticizing it for CI is tracked as a follow-up bead.
         run: |
-          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_sdk grid_cli; do
+          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_sdk grid_cli grid_trajectory; do
             echo "::group::$pkg"
             (cd packages/$pkg && dart test)
             echo "::endgroup::"

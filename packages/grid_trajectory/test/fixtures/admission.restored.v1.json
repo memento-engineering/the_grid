@@ -1,0 +1,15 @@
+{
+  "record_type": "admission.restored",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {
+    "work_bead_id": "tg-9abc",
+    "resolves_record_id": "01J8REFUSAL000000000000001"
+  },
+  "payload": {
+    "clause": "attempt-cap",
+    "actor": "nico"
+  },
+  "idem_key_text": "restored:tg-9abc:attempt-cap:01J8REFUSAL000000000000001",
+  "idem_key": "221fce29975097b41f0f7b084d1b89e069eb4d0840449fb1b46670e5fd9cb99c"
+}

@@ -1,0 +1,23 @@
+{
+  "record_type": "verify.scope.pinned",
+  "type_version": 1,
+  "family": "verification",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 0,
+    "step_path": "root.verify",
+    "step_round": 0,
+    "incarnation": 0,
+    "commit_sha": "b4a0d2e3f5c6b7a89988776655443322aabbccdd"
+  },
+  "payload": {
+    "base_sha": "a3f9c1d2e4b5a6978877665544332211ffeeddcc",
+    "head_sha": "b4a0d2e3f5c6b7a89988776655443322aabbccdd",
+    "branch": "grid/tg-9abc",
+    "commit_count": 4,
+    "diff_digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "diff_bytes": 20480
+  },
+  "idem_key_text": "pin:tranquility-5xk:0:root.verify:0:0",
+  "idem_key": "b89313d64fbe72676e4b9e3737c2ce1cc437e1b3c1743b7d5b94b40b542239a4"
+}

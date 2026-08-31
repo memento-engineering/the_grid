@@ -1,0 +1,21 @@
+{
+  "record_type": "admission.refused",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {
+    "work_bead_id": "tg-9abc",
+    "mount_attempt_id": "01J8MOUNT00000000000000002"
+  },
+  "payload": {
+    "clause": "worktree-outstanding",
+    "snapshot_rev": "r12",
+    "detail": {
+      "dead_session": "tranquility-5xk",
+      "pgids": [
+        4242
+      ]
+    }
+  },
+  "idem_key_text": "refused:tg-9abc:worktree-outstanding:r12",
+  "idem_key": "baa0d84bb8dc7a61a27f50bd46c3cb55339555f17c78f5e84633252e79097a1d"
+}

@@ -1,0 +1,19 @@
+{
+  "record_type": "step.superseded",
+  "type_version": 1,
+  "family": "step",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 0,
+    "step_path": "root.implement",
+    "step_round": 1
+  },
+  "payload": {
+    "cause": "restart-budget",
+    "budget_remaining": 1,
+    "old_step_round": 0,
+    "new_step_round": 1
+  },
+  "idem_key_text": "supersede:tranquility-5xk:0:root.implement:0",
+  "idem_key": "6c0036816bd8c0c8c879060f3797a0a6338005f69dce7a8c99999f8d7ef0ab13"
+}

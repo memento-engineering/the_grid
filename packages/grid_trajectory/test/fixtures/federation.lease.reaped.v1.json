@@ -1,0 +1,16 @@
+{
+  "record_type": "federation.lease.reaped",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {
+    "receipt": "lease-butane-01",
+    "fencing_token": 30064771127,
+    "expires_at": "2026-08-31T12:30:00.000Z"
+  },
+  "payload": {
+    "kind": "substation",
+    "lessee": "butane_flutter"
+  },
+  "idem_key_text": "flease:lease-butane-01:reaped",
+  "idem_key": "e6b7e176568985908378ca1c293ecf3afedaf0a0c5f890cbc52729c89a7d0781"
+}

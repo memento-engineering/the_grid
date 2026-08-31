@@ -1,0 +1,16 @@
+{
+  "record_type": "effect.ci.rework.commanded",
+  "type_version": 1,
+  "family": "effect",
+  "envelope": {
+    "work_bead_id": "tg-9abc",
+    "round": 1,
+    "receipt": "obs:obs-20260831-0008"
+  },
+  "payload": {
+    "check_name": "analyze + test (pure Dart)",
+    "note_digest": "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7"
+  },
+  "idem_key_text": "github-ci:tg-9abc:r1:analyze + test (pure Dart):obs-20260831-0008",
+  "idem_key": "d23365e0c32d38b26ebcfad3e9b6ea9cfce74c354ffdb8880f075f60aca0136e"
+}

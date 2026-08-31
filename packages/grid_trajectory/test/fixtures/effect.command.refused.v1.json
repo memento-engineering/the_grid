@@ -1,0 +1,14 @@
+{
+  "record_type": "effect.command.refused",
+  "type_version": 1,
+  "family": "effect",
+  "envelope": {},
+  "payload": {
+    "wire_key": "cmd-rework-tg-9abc-r1",
+    "reason": "fingerprint-mismatch",
+    "fingerprint": "fp-9d2b3c4d",
+    "prior_fingerprint": "fp-8c1a2b3c"
+  },
+  "idem_key_text": "cmd-refused:cmd-rework-tg-9abc-r1:fp-9d2b3c4d",
+  "idem_key": "1ce694e41fbe07ededbaf4531728ffe4f3a2646cfb87c7ea18d12c4d40d2c5fe"
+}

@@ -1,0 +1,22 @@
+{
+  "record_type": "step.transition",
+  "type_version": 1,
+  "family": "step",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 0,
+    "step_path": "root.implement",
+    "step_round": 0,
+    "incarnation": 0,
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "state": "failed",
+    "cause": "allocation",
+    "restart_budget": 2,
+    "failure_reason": "store unavailable during allocation",
+    "failure_class": "store_unavailable"
+  },
+  "idem_key_text": "step:tranquility-5xk:0:root.implement:0:0:failed",
+  "idem_key": "019659ef0b09b1ea9ab7345e26a630a9a269464044d64ea0d7320b068b5c389c"
+}
