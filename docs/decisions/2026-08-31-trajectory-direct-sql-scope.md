@@ -63,3 +63,8 @@ constraints, all load-bearing:
 Consequence: `grid_trajectory` documents this exception loudly at its write
 path so a future reviewer does not "fix" it back to read-only or reroute it
 through bd.
+
+## Review log
+
+* 2026-08-31 — authored by **agent** (governor seat, autonomous overnight mandate); force-from-write per decisions#0001 clause 3.
+* 2026-08-31 — reviewed by **nico** (human, operator): **ratified as-is** (interview; the weight was questioned in discussion and the insurance argument accepted).

@@ -134,3 +134,9 @@ the trajectory's sole appender, not as hardening of the mutable shape. The
 decision is falsified if the fold cannot serve today's frontier/status
 queries from projections, or if append-only lifecycle fails to retire the
 reap and the stranded-board class it exists to clean.
+
+## Review log
+
+* 2026-08-30 — proposed by **agent** (governor seat) from the direct-mode design conversation; decision-makers nico + agent.
+* 2026-08-30 — reviewed by **nico** (human, operator): **ratified** ("#238 is approved"); status flipped to accepted, merged via PR #238.
+* 2026-08-31 — storage-clause overturn (per the spike, tg-hnlt) reviewed by **nico**: **ratified** ("the storage deviation read appropriate"); amendment merged via PR #239.

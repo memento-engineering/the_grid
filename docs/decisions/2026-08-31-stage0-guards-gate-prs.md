@@ -46,3 +46,8 @@ runs `dart test -t integration` for `grid_trajectory` on every PR. The
 seven guards must run — a skipped guard is a failed guard for stage-cut
 purposes. The general self-skip pattern elsewhere in the repo is untouched;
 this entry governs the trajectory guards only.
+
+## Review log
+
+* 2026-08-31 — authored by **agent** (governor seat, autonomous overnight mandate); force-from-write per decisions#0001 clause 3.
+* 2026-08-31 — reviewed by **nico** (human, operator): **ratified as-is** (interview; three green CI runs of the guards job on record by review time).
