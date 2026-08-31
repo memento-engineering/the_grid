@@ -1,0 +1,20 @@
+{
+  "record_type": "verify.usage.telemetry",
+  "type_version": 2,
+  "family": "verification",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002",
+    "session_id": "tranquility-5xk"
+  },
+  "payload": {
+    "gen_ai.request.model": "molecule",
+    "gen_ai.usage.input_tokens": 182000,
+    "gen_ai.usage.output_tokens": 24000,
+    "cost_usd": 3.1275,
+    "premium_requests": 2,
+    "num_turns": 41,
+    "duration_ms": 1834000
+  },
+  "idem_key_text": "usage:01J8ATTEMPT000000000000002",
+  "idem_key": "97fc237378029850fb881cddaada80e4dac9c8d8033c40efa51353838b1b5ffd"
+}

@@ -41,6 +41,15 @@
 /// COMMIT succeeded the append IS [Appended], and a cadence failure is its
 /// own non-fatal [TrajectoryServiceEventKind.cadenceFailure] signal (retried
 /// at the next cadence), never a rewrite of the append's disposition.
+///
+/// EXTRACTION BOUNDARY (decision: grid-trajectory-leaf-package, "Long-term
+/// direction"): this file is MECHANICS. It knows `TrajectoryRecord`,
+/// `TrajectoryEnvelope`, the promoted envelope columns, and the interface
+/// properties on the sealed base — `isTerminal`, `isSettling`,
+/// `forcesDoltCommitBoundary`, `grantBeltIssuerType`. It names no concrete
+/// record class and no `record_type` literal, in Dart or in SQL: the
+/// vocabulary is handed in. `test/architecture/extraction_boundary_test.dart`
+/// enforces it, so a new special case belongs on the base class, not here.
 library;
 
 import 'dart:convert';
@@ -54,15 +63,6 @@ import '../connect/trajectory_db.dart';
 import 'append_outcome.dart';
 import 'service_event.dart';
 import 'ulid.dart';
-
-/// Record types that force a dolt commit at the next allowed opportunity —
-/// §5's exact boundary set: epoch advance, `attempt.terminal`,
-/// `attempt.round.retired`.
-const Set<String> doltCommitBoundaryTypes = {
-  'authority.epoch.advanced',
-  'attempt.terminal',
-  'attempt.round.retired',
-};
 
 /// Guarded-reconnect disposition (§5): a stale epoch goes inert WITHOUT
 /// touching the fence cell.
@@ -375,7 +375,10 @@ class TrajectoryAppender {
           );
         }
       }
-      final grantBelt = await _assertGrantBelt(envelope);
+      final grantBelt = await _assertGrantBelt(
+        envelope,
+        issuerType: record.grantBeltIssuerType,
+      );
       if (grantBelt != null) return grantBelt;
 
       // Step 3 — the row. seq is dolt-assigned; epoch_seq is ours, in the
@@ -402,8 +405,20 @@ class TrajectoryAppender {
       }
 
       // Step 4 — the terminal guard: unsettled terminals INSERT (a second
-      // independent terminal dies on the PK); a settling one UPDATEs.
-      if (record is AttemptTerminal) {
+      // independent terminal dies on the PK); a settling one UPDATEs. The
+      // subject is the PROMOTED `attempt_id` column, and the two branches are
+      // interface properties on the sealed base — the mechanics never name
+      // the terminal record type.
+      if (record.isTerminal) {
+        final attemptId = envelope.attemptId;
+        if (attemptId == null) {
+          // Structurally unreachable: the guard's subject is exactly what
+          // makes a record terminal. Fail closed rather than guess a key.
+          return _haltInTransaction(
+            'terminal guard: ${envelope.recordType} declares isTerminal but '
+            'carries no attempt_id — the guard row has no subject',
+          );
+        }
         if (record.isSettling) {
           await _db.execute(
             'UPDATE traj_terminal_guard SET seq = :seq, '
@@ -411,14 +426,14 @@ class TrajectoryAppender {
             {
               'seq': seq,
               'settled_by': envelope.recordId,
-              'attempt_id': record.attemptId,
+              'attempt_id': attemptId,
             },
           );
         } else {
           await _db.execute(
             'INSERT INTO traj_terminal_guard (attempt_id, seq, settled_by) '
             'VALUES (:attempt_id, :seq, NULL)',
-            {'attempt_id': record.attemptId, 'seq': seq},
+            {'attempt_id': attemptId, 'seq': seq},
           );
         }
       }
@@ -434,10 +449,9 @@ class TrajectoryAppender {
       await _db.execute('COMMIT');
 
       _epochSeq = candidateEpochSeq;
-      _noteCommitted(
-        seq,
-        boundary: doltCommitBoundaryTypes.contains(record.recordType),
-      );
+      // §5's boundary set is a property of the record type, declared on the
+      // vocabulary side; the cadence only asks.
+      _noteCommitted(seq, boundary: record.forcesDoltCommitBoundary);
       return Appended(
         recordId: envelope.recordId,
         seq: seq,
@@ -615,16 +629,24 @@ class TrajectoryAppender {
   /// (rolled back, service live): §5 scopes the corruption-halt class to the
   /// two out-of-order predicates only. Issuing/closing records are exempt —
   /// expiry is exactly what `.expired` reports.
-  Future<AppendOutcome?> _assertGrantBelt(TrajectoryEnvelope envelope) async {
-    const consuming = {'admission.grant.consumed', 'attempt.session.started'};
-    if (!consuming.contains(envelope.recordType)) return null;
+  ///
+  /// [issuerType] IS the exemption, and it arrives from the record
+  /// ([TrajectoryRecord.grantBeltIssuerType]): null means "this record
+  /// consumes no grant", and a non-null value names the row to match against.
+  /// The belt therefore enforces the predicates without knowing which record
+  /// types they belong to (the extraction boundary).
+  Future<AppendOutcome?> _assertGrantBelt(
+    TrajectoryEnvelope envelope, {
+    required String? issuerType,
+  }) async {
+    if (issuerType == null) return null;
     final grantId = envelope.grantId;
     if (grantId == null) return null;
     final grant = await _db.execute(
       'SELECT expires_at, fencing_token, NOW(6) AS server_now FROM trajectory '
-      "WHERE record_type = 'admission.grant.issued' AND grant_id = :grant_id "
+      'WHERE record_type = :issuer_type AND grant_id = :grant_id '
       'ORDER BY seq DESC LIMIT 1',
-      {'grant_id': grantId},
+      {'issuer_type': issuerType, 'grant_id': grantId},
     );
     if (grant.rows.isEmpty) return null;
     final row = grant.rows.first;

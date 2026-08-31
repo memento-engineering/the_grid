@@ -283,7 +283,7 @@ stateDiagram-v2
 | `verify.gating.rc` | rc✓, duration_ms✓, plan_digest✓, head_sha_at_exec✓ (env commit_sha) | The sh wrapper (`committee.dart:1404-1405`) is amended to stamp `git rev-parse HEAD` **at exec start** — a named tg-zfek code change. |
 | `verify.completion.fence` | outcome:enum(clear,present,probe_error)✓; env commit_sha = HEAD at probe | Digest capture point #2. |
 | `verify.route.verdict` | verdict:enum(advance,escalate)✓, rule✓, spread, grades:JSON✓ = per-lane `{grade, source_record_id, sha_drift}` | Fail-closed missing-grade→F preserved and visible (NULL source_record_id). Operator-override vehicle: `transport='operator'` variant appended on adjudication (Q3). |
-| `verify.usage.telemetry` | model✓, tokens_in/out, cost_usd, premium_requests, num_turns, duration_ms | FT-2 capture-only. |
+| `verify.usage.telemetry` | `gen_ai.request.model`✓, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, cost_usd, premium_requests, num_turns, duration_ms **(gen_ai-aligned, type_version 2)** | FT-2 capture-only. The three keys OTel's GenAI conventions already name are spelled their way (§15); the other four have no `gen_ai.*` counterpart and stay grid-local, unchanged. The rename was breaking, so §2.6 rule 2 ran: v2 is a NEW registry entry and the v1 decoder (`model`, `tokens_in`, `tokens_out`) is kept forever, decoding pre-alignment rows into the same class. Idem grammar unchanged (`usage:<attempt_id>` keys the attempt, not the payload). |
 | `verify.ci.concluded` | repo✓, check_name✓, conclusion✓; env commit_sha✓, receipt=`obs:<id>`✓ | CI conclusions bind to what was verified; the head SHA is no longer dropped at `github_reconciler.dart:186`. **P5 placement rule (audit round 2):** a CI conclusion lands at the `(session, round, step_path, step_round)` of the `grid/<bead>` branch's latest `verify.scope.pinned` **at conclusion time** — the PINNED step_round, never "current": a supersede postdating the pin does not move the fact. Its `lane` is `ci:<check_name>`. **No-pin fallback (cert round):** a conclusion on a branch with no `verify.scope.pinned` (or whose pin predates Stage 4's digest capture) appends with bead-only correlation and folds into the receipt surface (row 25), never into P5's lane matrix — a pin is what makes CI evidence step-addressable. |
 | *(merged/dropped)* | | `verify.result.persisted` — not a record (P5 re-aggregates). `verify.ci.landing_ready` — retired (Q14). `verify.operator.ruling` — a ledger act (gate bead: adjudication metadata + close_cause='adjudicated') with the companion `verify.route.verdict(transport='operator')` appended **first**; the record is authoritative on disagreement; the dead `gate resolve` path (tg-j0o0) is deleted. |
 
@@ -1899,3 +1899,50 @@ Q19's cursor-file path discrepancy (`file_cursor_store.dart` doc comment vs the 
 `github_reconciler_binding_assets.dart` path) names files that live in the power_station repo,
 not this one — its fix lands with the power_station side of the migration, cited here so the
 Stage-0 checklist item does not read as skipped.
+
+---
+
+# 15 OTel `gen_ai.*` name alignment
+
+Adopted from the landscape memo's I1/I2 (`docs/design/trajectory/landscape.md` §3). Everything in
+this section is a **naming** decision. Nothing in it changes a contract, a column, or the append
+path.
+
+| OTel GenAI attribute | Where it lands here | Kind |
+|---|---|---|
+| `gen_ai.conversation.id` | ≈ envelope `session_id` (§1) | echo — the column keeps its own name |
+| `gen_ai.agent.name` | ≈ `rig` on `attempt.session.started` (§2 F1) | echo — the payload key keeps its own name |
+| `gen_ai.operation.name` | derived at export, never stored | derived — a function of `record_type` + `step_path` |
+| `gen_ai.request.model` | `verify.usage.telemetry` v2 payload key | **adopted verbatim** |
+| `gen_ai.usage.input_tokens` | `verify.usage.telemetry` v2 payload key | **adopted verbatim** |
+| `gen_ai.usage.output_tokens` | `verify.usage.telemetry` v2 payload key | **adopted verbatim** |
+
+Only the bottom three are real renames, and they cost one `type_version` bump under §2.6 rule 2
+(v2 minted, the v1 decoder kept forever, the idem grammar untouched — §2 F3). The rest of that
+record's payload — `cost_usd`, `premium_requests`, `num_turns`, `duration_ms` — has no `gen_ai.*`
+counterpart and stays grid-local, verbatim.
+
+**Rule 1 — envelope columns are NEVER renamed for OTel.** The promoted columns of §4 are this
+store's identity: they carry the CHECK constraints, the unique keys, the fold joins, and the
+bd-side correlation (`work_bead_id` / `session_id` / `step_path`). A `≈` in the table above is a
+reader's aid for someone fluent in `gen_ai.*`, not a rename and not an alias column. `session_id`
+is `session_id`. Renaming a promoted column to chase an external vocabulary would trade a
+constraint the store enforces for a name someone else may change.
+
+**Rule 2 — alignment is by NAMING only, never by contract.** Every `gen_ai.*` attribute, span,
+metric, and event is stability level **"Development"** as of OTel v1.42.0 (2026-06-12) — none
+Stable, no published stabilization timeline, and the namespace was just spun into its own repo for
+a faster cadence (landscape.md §1). So: no dependency, no library, no conformance claim, and no
+guarantee imported. Borrowing three key spellings binds nothing and can be re-spelled by another
+`type_version` bump if OTel moves. The moment an OTel name would force a schema concession, a
+nullability concession, or the sampling/truncation the GenAI spec explicitly permits, the answer
+is no — the whole value of this store is guarantees, and a "Development" convention has none to
+lend (landscape.md I6).
+
+**Read side, designed and unbuilt.** The OTLP exporter seam (landscape.md I3) — a cursored,
+restartable reader that turns committed rows into `invoke_agent` / `execute_tool`-shaped spans —
+is **designed, not built**, and may never be built: Dart has no OTel SDK under OTel governance
+(community#2718 is still open) and no `gen_ai` conventions at all. It is recorded here only to fix
+the architectural rule while stating it is free: **export is strictly downstream**. An exporter
+consumes committed rows by `seq` and may never enter the append transaction. An exporter that can
+fail an append destroys the thing it was built to make legible.

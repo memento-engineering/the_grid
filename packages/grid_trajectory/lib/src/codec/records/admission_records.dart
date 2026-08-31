@@ -61,6 +61,12 @@ enum FederationLeasePhase {
   String get wire => name;
 }
 
+/// The record type a §5 step-2 grant belt matches a consuming append against.
+/// Named once, here, so the issuer and its consumers cannot drift — and so
+/// the belt in `src/append/` receives it as a value instead of spelling it
+/// (the extraction boundary; see [TrajectoryRecord.grantBeltIssuerType]).
+const String grantIssuedRecordType = 'admission.grant.issued';
+
 /// `admission.grant.issued` — the tg-y4fd grant. `ck_grant` promotes grant_id,
 /// expiry, and the fencing token to required envelope columns; `basis` stays
 /// JSON deliberately (a snapshot document, not a join surface).
@@ -101,7 +107,7 @@ final class AdmissionGrantIssued extends AdmissionRecord {
   final Map<String, Object?> basis;
 
   @override
-  String get recordType => 'admission.grant.issued';
+  String get recordType => grantIssuedRecordType;
 
   @override
   Map<String, Object?> payloadToJson() => {'basis': basis};
@@ -141,6 +147,11 @@ final class AdmissionGrantConsumed extends AdmissionRecord {
 
   @override
   String get recordType => 'admission.grant.consumed';
+
+  /// Grant-consuming: the belt must find the issuing row unexpired and
+  /// token-matched before this append lands (§5 step 2).
+  @override
+  String? get grantBeltIssuerType => grantIssuedRecordType;
 
   @override
   Map<String, Object?> payloadToJson() => const {};
@@ -389,6 +400,11 @@ final class AuthorityEpochTransition extends AdmissionRecord {
 
   @override
   String get recordType => 'authority.epoch.${phase.wire}';
+
+  /// `.advanced` is one of §5's three dolt-commit boundaries; `.closed` is
+  /// not — the clean down commits on its own path, after fixpoint.
+  @override
+  bool get forcesDoltCommitBoundary => phase == EpochPhase.advanced;
 
   @override
   Map<String, Object?> payloadToJson() => {

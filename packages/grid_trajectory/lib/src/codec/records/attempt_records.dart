@@ -114,6 +114,11 @@ final class AttemptSessionStarted extends AttemptRecord {
   @override
   String get recordType => 'attempt.session.started';
 
+  /// Grant-consuming: mounting the session is what spends the grant, so the
+  /// belt checks the issuing row's token and expiry first (§5 step 2).
+  @override
+  String? get grantBeltIssuerType => grantIssuedRecordType;
+
   @override
   Map<String, Object?> payloadToJson() => {'rig': rig, 'model': model};
 
@@ -445,7 +450,18 @@ final class AttemptTerminal extends AttemptRecord {
   final String? resolvesRecordId;
   final String? reason;
 
+  /// The §5 terminal guard keys on this: `traj_terminal_guard` takes one row
+  /// per attempt, so an unsettled terminal INSERTs and a second independent
+  /// one dies on the PK.
+  @override
+  bool get isTerminal => true;
+
+  @override
   bool get isSettling => resolvesRecordId != null;
+
+  /// One of §5's three dolt-commit boundaries.
+  @override
+  bool get forcesDoltCommitBoundary => true;
 
   @override
   String get recordType => 'attempt.terminal';
@@ -498,6 +514,10 @@ final class AttemptRoundRetired extends AttemptRecord {
 
   @override
   String get recordType => 'attempt.round.retired';
+
+  /// One of §5's three dolt-commit boundaries.
+  @override
+  bool get forcesDoltCommitBoundary => true;
 
   @override
   Map<String, Object?> payloadToJson() => {

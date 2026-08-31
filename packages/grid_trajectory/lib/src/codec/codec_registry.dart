@@ -56,7 +56,11 @@ abstract final class TrajectoryCodec {
     ('verify.gating.rc', 1): VerifyGatingRc.fromJson,
     ('verify.completion.fence', 1): VerifyCompletionFence.fromJson,
     ('verify.route.verdict', 1): VerifyRouteVerdict.fromJson,
-    ('verify.usage.telemetry', 1): VerifyUsageTelemetry.fromJson,
+    // Two live versions, the rule-2 shape in the flesh: the I1 gen_ai rename
+    // (§15) minted v2 and the v1 decoder stays FOREVER — same class, old key
+    // names — so pre-alignment rows never migrate and never go opaque.
+    ('verify.usage.telemetry', 1): VerifyUsageTelemetry.fromJsonV1,
+    ('verify.usage.telemetry', 2): VerifyUsageTelemetry.fromJson,
     ('verify.ci.concluded', 1): VerifyCiConcluded.fromJson,
     // Family 4 — effect intent / acknowledgement.
     ('effect.intent', 1): EffectIntent.fromJson,

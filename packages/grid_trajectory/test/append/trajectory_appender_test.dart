@@ -7,6 +7,7 @@ import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:mysql_client/exception.dart';
 import 'package:test/test.dart';
 
+import '../support/fixture_support.dart';
 import '../support/scripted_db.dart';
 
 const _serialization = MySQLServerException('serialization failure', 1213);
@@ -497,8 +498,11 @@ void main() {
       final h = _Harness()
         ..scriptClaimReads()
         ..scriptFenceHeld();
+      // The belt no longer spells the issuer type: the record hands it in as
+      // `:issuer_type` (the extraction boundary), so the script matches the
+      // parameterised predicate and asserts the bound value below.
       h.db.on(
-        "record_type = 'admission.grant.issued'",
+        'record_type = :issuer_type',
         result: SqlResult(
           rows: [
             {
@@ -511,6 +515,18 @@ void main() {
       );
       return h;
     }
+
+    test('the belt queries the grant-issuing row the RECORD names', () async {
+      final h = grantHarness(expiresAt: '2026-08-31 13:00:00.000000')
+        ..scriptInsertSeq(100);
+      await h.claim();
+
+      await h.appender.append(const AdmissionGrantConsumed(grantId: 'G1'));
+
+      final belt = h.db.matching('record_type = :issuer_type').single;
+      expect(belt.params!['issuer_type'], grantIssuedRecordType);
+      expect(belt.params!['grant_id'], 'G1');
+    });
 
     test('an expired grant REFUSES the consuming append — rolled back, '
         'typed, service stays live', () async {
@@ -744,8 +760,18 @@ void main() {
   });
 
   group('dolt-commit cadence', () {
-    test('the boundary set is exactly §5\'s three', () {
-      expect(doltCommitBoundaryTypes, {
+    // The boundary set is no longer a string set in the appender — it is
+    // `forcesDoltCommitBoundary` on the sealed base. Sweeping one instance of
+    // EVERY §2 record type is a stronger pin than the old literal set: a new
+    // type that quietly declared itself a boundary would fail here, and
+    // `authority.epoch.closed` proves the property discriminates within a
+    // class.
+    test('exactly §5\'s three record types force a dolt-commit boundary', () {
+      final boundaries = sampleRecords()
+          .where((record) => record.forcesDoltCommitBoundary)
+          .map((record) => record.recordType)
+          .toSet();
+      expect(boundaries, {
         'authority.epoch.advanced',
         'attempt.terminal',
         'attempt.round.retired',
