@@ -20,8 +20,8 @@ import 'package:grid_trajectory/grid_trajectory.dart'
         LegacySessionReader,
         LegacySessionView,
         ShadowCompare,
-        ShadowMismatch,
-        TrajectoryEnvelope;
+        ShadowCompareResult,
+        SubjectRecords;
 
 import 'state_workspace.dart';
 
@@ -101,11 +101,11 @@ class LegacyStoreUnavailableShadow implements ShadowCompare {
   String get unavailableReason => reason;
 
   @override
-  Future<List<ShadowMismatch>> compare({
+  Future<ShadowCompareResult> compare({
     required String sessionId,
-    required List<TrajectoryEnvelope> records,
+    required SubjectRecords records,
     int? round,
-  }) async => const [];
+  }) async => const ShadowCompareResult([]);
 }
 
 /// The [ShadowCompareFactory] `bin/grid.dart` composes into `TrajCommand`:
@@ -123,9 +123,7 @@ Future<ShadowCompare> legacyShadowCompareFor(String gridHome) async {
     case StateWorkspaceRefusal(:final message):
       return LegacyStoreUnavailableShadow(message);
     case StateWorkspaceFound(:final workspace):
-      final bd = BdCliService(
-        ProcessBdRunner(workspaceRoot: workspace.root),
-      );
+      final bd = BdCliService(ProcessBdRunner(workspaceRoot: workspace.root));
       return AttemptLifecycleShadow(BdLegacySessionReader(bd.show));
   }
 }

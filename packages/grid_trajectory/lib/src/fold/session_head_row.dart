@@ -69,7 +69,9 @@ class SessionHeadRow {
 
   /// §7's ledger-side fence seed. Stage 0 stamps the minting record's
   /// `boot_epoch`; the Stage-1 bd head-stamp obligation advances it on every
-  /// successful read-back (§5).
+  /// successful read-back (§5). That seeding is PROVISIONAL — the value is a
+  /// FLOOR (the head is no older than the minting epoch), never the ledger's
+  /// real head epoch, until the head-stamp obligation ships.
   final int headEpoch;
   final int lastSeq;
 
@@ -77,7 +79,10 @@ class SessionHeadRow {
   /// value means SET NULL (absent keys are untouched), mirroring the
   /// incremental `UPDATE ... SET` exactly. Unknown column names throw: a
   /// delta naming a column this row cannot hold is a fold bug, never data.
-  SessionHeadRow applying(Map<String, Object?> columns, {required int lastSeq}) {
+  SessionHeadRow applying(
+    Map<String, Object?> columns, {
+    required int lastSeq,
+  }) {
     var round = this.round;
     var status = this.status;
     var outcome = this.outcome;

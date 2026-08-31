@@ -25,13 +25,21 @@ class _ScriptedCompare implements ShadowCompare {
   String? get unavailableReason => null;
 
   @override
-  Future<List<ShadowMismatch>> compare({
+  Future<ShadowCompareResult> compare({
     required String sessionId,
-    required List<TrajectoryEnvelope> records,
+    required SubjectRecords records,
     int? round,
   }) async {
-    compared.add('$sessionId/${records.length}/${round ?? '-'}');
-    return mismatches.where((row) => row.sessionId == sessionId).toList();
+    compared.add(
+      '$sessionId/${records.records.length}/${round ?? '-'}'
+      '${records.isComplete ? '' : '/CUT'}',
+    );
+    if (!records.isComplete) {
+      return const ShadowCompareResult.incomplete('the stream was cut');
+    }
+    return ShadowCompareResult(
+      mismatches.where((row) => row.sessionId == sessionId).toList(),
+    );
   }
 }
 
@@ -319,6 +327,34 @@ void main() {
       final text = out.join('\n');
       expect(text, contains('work_bead_id'));
       expect(text, contains('BLOCKED'));
+    });
+
+    test('a truncated read is reported INCOMPLETE and does not count as a '
+        'clean run', () async {
+      final out = <String>[];
+      final code = await runTrajShadowDiff(
+        gridHome: '/grid/home',
+        open: openerFor(
+          TrajectoryOpened(
+            ScriptedReader(
+              lifecycle('tranquility-5xk'),
+              truncateCompleteReadsAt: 1,
+            ),
+          ),
+        ),
+        compareFor: (_) async => AttemptLifecycleShadow(
+          _AgreeingLegacy('tranquility-5xk', 'tg-9abc'),
+        ),
+        out: out.add,
+        err: out.add,
+      );
+      final text = out.join('\n');
+      // Not a mismatch — so not a blocked cut — but emphatically not the
+      // clean run the old code would have minted off a folded prefix.
+      expect(code, 0);
+      expect(text, contains('INCOMPLETE: tranquility-5xk'));
+      expect(text, contains('does NOT count toward the 3-clean-round'));
+      expect(text, isNot(contains('one clean run')));
     });
 
     test('a factory degrade (no ledger beside the log) stays a clean '

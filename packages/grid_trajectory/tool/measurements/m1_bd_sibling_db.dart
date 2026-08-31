@@ -32,13 +32,17 @@ import 'package:path/path.dart' as p;
 
 import 'support.dart';
 
-/// The real store M1b COPIES — the reference deployment's `.beads` dir. Read
-/// with `cp` only; its running server, pid, lock, and proxy files are never
-/// opened by this harness. `GRID_TRAJECTORY_REAL_STORE` points it elsewhere;
-/// an absent path skips M1b rather than failing.
-String get realStoreBeadsDir =>
-    Platform.environment['GRID_TRAJECTORY_REAL_STORE'] ??
-    '/Users/nico/development/com.nicospencer/lunar_station/.grid/.beads';
+/// The real store M1b COPIES — a `.beads` dir named by
+/// `GRID_TRAJECTORY_REAL_STORE`, read with `cp` only; its running server, pid,
+/// lock, and proxy files are never opened by this harness.
+///
+/// There is NO default, deliberately: the store this half wants is one
+/// operator's live deployment, and a hardcoded absolute path would be both a
+/// personal path in a shared tree and a harness that silently measures
+/// nothing (or the wrong store) on anyone else's machine. Unset ⇒ M1b is
+/// skipped and says so; M1a is unaffected.
+String? get realStoreBeadsDir =>
+    Platform.environment['GRID_TRAJECTORY_REAL_STORE'];
 
 const String bootstrapUser = 'gridboot';
 const String bootstrapPassword = 'gridbootpw';
@@ -296,15 +300,23 @@ Future<void> _freshStoreHalf(String root) async {
 // ── M1b ─────────────────────────────────────────────────────────────────────
 
 Future<void> _copyOfRealHalf(String root) async {
-  final source = Directory(realStoreBeadsDir);
+  final configured = realStoreBeadsDir;
+  if (configured == null) {
+    say(
+      'GRID_TRAJECTORY_REAL_STORE is unset — M1b not run (it needs a real '
+      '.beads dir to copy; export the path to run this half)',
+    );
+    return;
+  }
+  final source = Directory(configured);
   if (!source.existsSync()) {
-    say('real store absent at $realStoreBeadsDir — M1b not run');
+    say('real store absent at $configured — M1b not run');
     return;
   }
   Directory(root).createSync(recursive: true);
   final destination = p.join(root, '.beads');
 
-  say('copying $realStoreBeadsDir → $destination (source is READ-ONLY here)');
+  say('copying $configured → $destination (source is READ-ONLY here)');
   final watch = Stopwatch()..start();
   // -c asks APFS for clonefile: near-instant, near-zero extra space, and
   // copy-on-write so nothing this harness does can reach the source blocks.

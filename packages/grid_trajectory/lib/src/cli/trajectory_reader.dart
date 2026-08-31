@@ -20,6 +20,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:meta/meta.dart';
 import 'package:mysql_client/exception.dart';
 
 import '../codec/envelope.dart';
@@ -33,11 +34,25 @@ const String trajectoryDatabaseName = 'trajectory';
 
 /// Rows the `traj` verbs read, decoded to §1 envelopes.
 abstract interface class TrajectoryLogReader {
-  /// Every row whose `work_bead_id`, `session_id`, or `attempt_id` is
-  /// [subject], in `seq` order.
+  /// A WINDOW of rows whose `work_bead_id`, `session_id`, or `attempt_id` is
+  /// [subject], in `seq` order. Forensics reads a bounded window on purpose;
+  /// anything that FOLDS the stream must use [allRecordsForSubject] instead.
   Future<List<TrajectoryEnvelope>> rowsForSubject(
     String subject, {
     int limit = defaultReadLimit,
+  });
+
+  /// The COMPLETE record stream for [subject], in `seq` order — the read a
+  /// FOLD requires, and deliberately not the `--limit` window above: folding
+  /// a truncated stream produces a head the log does not support, and a
+  /// comparator over it can report zero mismatches it never earned.
+  ///
+  /// [ceiling] exists only so an unbounded SELECT cannot pin the process.
+  /// Reaching it is REPORTED (`SubjectRecords.truncatedAt`), never folded as
+  /// if the stream were whole.
+  Future<SubjectRecords> allRecordsForSubject(
+    String subject, {
+    int ceiling = completeReadCeiling,
   });
 
   /// Distinct `session_id`s present in the log, oldest first.
@@ -69,6 +84,29 @@ class FoldStaleness {
 /// Rows read per verb invocation unless `--limit` says otherwise. A forensics
 /// verb reads a bounded window; the log is unbounded by design.
 const int defaultReadLimit = 500;
+
+/// The ceiling on a COMPLETE subject read. It is not a window: a read that
+/// reaches it comes back marked truncated so the caller can refuse to fold it.
+/// One session's whole Family-1 lifecycle is orders of magnitude smaller than
+/// this, so reaching it means something is wrong, not that the window is tight.
+const int completeReadCeiling = 100000;
+
+/// One subject's record stream as a FOLD must see it: the whole stream, or an
+/// explicit statement that the reader could not hand the whole stream over.
+@immutable
+class SubjectRecords {
+  const SubjectRecords({required this.records, this.truncatedAt});
+
+  /// The rows, `seq`-ordered.
+  final List<TrajectoryEnvelope> records;
+
+  /// Non-null when the read was CUT SHORT — the number of rows handed back.
+  /// A fold over a cut stream is not a clean run and must never be counted as
+  /// one; the §9 comparator turns this into its `incomplete` outcome.
+  final int? truncatedAt;
+
+  bool get isComplete => truncatedAt == null;
+}
 
 /// The disposition of opening the log for reading.
 sealed class TrajectoryOpen {
@@ -187,6 +225,28 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
       'limit': limit,
     });
     return [for (final row in result.rows) envelopeFromRow(row)];
+  }
+
+  @override
+  Future<SubjectRecords> allRecordsForSubject(
+    String subject, {
+    int ceiling = completeReadCeiling,
+  }) async {
+    // ceiling + 1: reading ONE row past the ceiling is how a complete read
+    // proves it was complete instead of assuming it — a result of exactly
+    // `ceiling` rows is otherwise indistinguishable from a cut stream.
+    final result = await _db.execute(subjectSql, {
+      'id': subject,
+      'limit': ceiling + 1,
+    });
+    final rows = [for (final row in result.rows) envelopeFromRow(row)];
+    if (rows.length > ceiling) {
+      return SubjectRecords(
+        records: rows.sublist(0, ceiling),
+        truncatedAt: ceiling,
+      );
+    }
+    return SubjectRecords(records: rows);
   }
 
   @override

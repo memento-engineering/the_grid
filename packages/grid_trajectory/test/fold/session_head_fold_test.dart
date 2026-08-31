@@ -17,7 +17,8 @@ void main() {
     required int baseSeq,
     TerminalOutcome outcome = TerminalOutcome.succeeded,
   }) {
-    final attempt = '01J8ATTEMPT0000000000${baseSeq.toString().padLeft(5, '0')}';
+    final attempt =
+        '01J8ATTEMPT0000000000${baseSeq.toString().padLeft(5, '0')}';
     return [
       envelope(
         recordType: 'attempt.session.started',
@@ -53,8 +54,9 @@ void main() {
         sessionId: sessionId,
         attemptId: attempt,
         outcome: outcome,
-        unknownReason:
-            outcome == TerminalOutcome.unknown ? 'write_timeout' : null,
+        unknownReason: outcome == TerminalOutcome.unknown
+            ? 'write_timeout'
+            : null,
         occurredAt: DateTime.utc(2026, 8, 31, 12),
       ),
     ];
@@ -94,47 +96,45 @@ void main() {
       expect(second.skipped, first.skipped);
     });
 
-    test(
-      'out-of-order RECONSTRUCTED rows fold by occurred_at (§8 Q18) — the '
-      'terminal appended before the start still closes the session',
-      () {
-        // A backfill import appended the terminal FIRST (lower epoch_seq)
-        // and the session start SECOND; occurred_at carries the true order.
-        final reconstructedTerminal = envelope(
-          recordType: 'attempt.terminal',
-          family: TrajectoryFamily.attempt,
-          seq: 1,
-          sessionId: 'sr',
-          attemptId: '01J8ATTEMPT000000000000009',
-          outcome: TerminalOutcome.lost,
-          occurredAt: DateTime.utc(2026, 8, 30, 23),
-          provenance: TrajectoryProvenance.reconstructed,
-        );
-        final reconstructedStart = envelope(
-          recordType: 'attempt.session.started',
-          family: TrajectoryFamily.attempt,
-          seq: 2,
-          sessionId: 'sr',
-          workBeadId: 'tg-sr',
-          grantId: '01J8GRANT00000000000000001',
-          occurredAt: DateTime.utc(2026, 8, 30, 20),
-          provenance: TrajectoryProvenance.reconstructed,
-          payload: const {'rig': 'operator', 'model': 'molecule'},
-        );
-        final result = foldSessionHeads([
-          reconstructedTerminal,
-          reconstructedStart,
-        ]);
-        final row = result.rows['sr']!;
-        expect(
-          row.status,
-          SessionHeadStatus.closed,
-          reason: 'append order would have dropped the terminal on a '
-              'missing row; occurred_at order must win for reconstructed',
-        );
-        expect(row.outcome, TerminalOutcome.lost);
-      },
-    );
+    test('out-of-order RECONSTRUCTED rows fold by occurred_at (§8 Q18) — the '
+        'terminal appended before the start still closes the session', () {
+      // A backfill import appended the terminal FIRST (lower epoch_seq)
+      // and the session start SECOND; occurred_at carries the true order.
+      final reconstructedTerminal = envelope(
+        recordType: 'attempt.terminal',
+        family: TrajectoryFamily.attempt,
+        seq: 1,
+        sessionId: 'sr',
+        attemptId: '01J8ATTEMPT000000000000009',
+        outcome: TerminalOutcome.lost,
+        occurredAt: DateTime.utc(2026, 8, 30, 23),
+        provenance: TrajectoryProvenance.reconstructed,
+      );
+      final reconstructedStart = envelope(
+        recordType: 'attempt.session.started',
+        family: TrajectoryFamily.attempt,
+        seq: 2,
+        sessionId: 'sr',
+        workBeadId: 'tg-sr',
+        grantId: '01J8GRANT00000000000000001',
+        occurredAt: DateTime.utc(2026, 8, 30, 20),
+        provenance: TrajectoryProvenance.reconstructed,
+        payload: const {'rig': 'operator', 'model': 'molecule'},
+      );
+      final result = foldSessionHeads([
+        reconstructedTerminal,
+        reconstructedStart,
+      ]);
+      final row = result.rows['sr']!;
+      expect(
+        row.status,
+        SessionHeadStatus.closed,
+        reason:
+            'append order would have dropped the terminal on a '
+            'missing row; occurred_at order must win for reconstructed',
+      );
+      expect(row.outcome, TerminalOutcome.lost);
+    });
 
     test('observed rows keep (boot_epoch, epoch_seq) order regardless of '
         'occurred_at testimony', () {
@@ -205,49 +205,51 @@ void main() {
   });
 
   group('replaySessionHeads', () {
-    test('truncates, rewrites, and drives proj_meta in one transaction',
-        () async {
-      final db = ScriptedDb();
-      final scanned = [
-        ...lifecycle('s1', baseSeq: 1),
-        ...lifecycle('s2', baseSeq: 10),
-      ];
-      db.on(
-        'SELECT * FROM trajectory',
-        respond: (_) => SqlResult(
-          rows: [
-            for (final record in scanned)
-              {
-                for (final entry in record.toJson().entries)
-                  entry.key: entry.key == 'payload'
-                      ? jsonEncode(entry.value)
-                      : entry.value?.toString(),
-              },
-          ],
-        ),
-      );
-      final result = await replaySessionHeads(
-        db,
-        clock: () => DateTime.utc(2026, 8, 31, 16),
-      );
-      expect(result.rows.keys, unorderedEquals(['s1', 's2']));
+    test(
+      'truncates, rewrites, and drives proj_meta in one transaction',
+      () async {
+        final db = ScriptedDb();
+        final scanned = [
+          ...lifecycle('s1', baseSeq: 1),
+          ...lifecycle('s2', baseSeq: 10),
+        ];
+        db.on(
+          'SELECT * FROM trajectory',
+          respond: (_) => SqlResult(
+            rows: [
+              for (final record in scanned)
+                {
+                  for (final entry in record.toJson().entries)
+                    entry.key: entry.key == 'payload'
+                        ? jsonEncode(entry.value)
+                        : entry.value?.toString(),
+                },
+            ],
+          ),
+        );
+        final result = await replaySessionHeads(
+          db,
+          clock: () => DateTime.utc(2026, 8, 31, 16),
+        );
+        expect(result.rows.keys, unorderedEquals(['s1', 's2']));
 
-      final sql = [for (final call in db.log) call.sql];
-      final begin = sql.indexOf('START TRANSACTION');
-      final commit = sql.indexOf('COMMIT');
-      expect(begin, isNot(-1));
-      expect(commit, greaterThan(begin));
-      expect(
-        sql.indexWhere((s) => s.contains('DELETE FROM proj_session_head')),
-        inInclusiveRange(begin, commit),
-      );
-      expect(db.matching('INSERT INTO proj_session_head'), hasLength(2));
-      final meta = db.matching('INSERT INTO proj_meta').single;
-      expect(meta.params!['fold_version'], sessionHeadFoldVersion);
-      expect(meta.params!['applied_seq'], 13);
-      expect(meta.params!['skipped'], isNull);
-      expect(meta.params!['rebuilt_at'], '2026-08-31 16:00:00.000000');
-    });
+        final sql = [for (final call in db.log) call.sql];
+        final begin = sql.indexOf('START TRANSACTION');
+        final commit = sql.indexOf('COMMIT');
+        expect(begin, isNot(-1));
+        expect(commit, greaterThan(begin));
+        expect(
+          sql.indexWhere((s) => s.contains('DELETE FROM proj_session_head')),
+          inInclusiveRange(begin, commit),
+        );
+        expect(db.matching('INSERT INTO proj_session_head'), hasLength(2));
+        final meta = db.matching('INSERT INTO proj_meta').single;
+        expect(meta.params!['fold_version'], sessionHeadFoldVersion);
+        expect(meta.params!['applied_seq'], 13);
+        expect(meta.params!['skipped'], isNull);
+        expect(meta.params!['rebuilt_at'], '2026-08-31 16:00:00.000000');
+      },
+    );
 
     test('a failed write rolls back and rethrows', () async {
       final db = ScriptedDb();
@@ -266,10 +268,7 @@ void main() {
         ),
       );
       db.on('INSERT INTO proj_session_head', throwing: StateError('boom'));
-      await expectLater(
-        replaySessionHeads(db),
-        throwsA(isA<StateError>()),
-      );
+      await expectLater(replaySessionHeads(db), throwsA(isA<StateError>()));
       expect(db.matching('ROLLBACK'), hasLength(1));
       expect(db.matching('COMMIT'), isEmpty);
     });

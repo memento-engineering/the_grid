@@ -11,9 +11,13 @@
 /// and adjudicated once by the operator, never silently dropped.
 library;
 
+import 'package:meta/meta.dart';
+
 import '../cli/traj_shadow_diff_command.dart';
+import '../cli/trajectory_reader.dart';
 import '../codec/envelope.dart';
 import '../fold/session_head_fold.dart';
+import '../fold/session_head_row.dart';
 import 'legacy_session_reader.dart';
 
 /// §9's unshadowable facts as mismatch-field names: these MUST NEVER appear
@@ -42,6 +46,12 @@ typedef ShadowMismatchClassifier =
 /// between the legacy write and the trajectory append leaves behind. The
 /// reverse direction (the fold ahead of the ledger) is never that crash and
 /// stays unexplained.
+///
+/// The `held` arm is narrow ON PURPOSE. It classifies a fold that genuinely
+/// LOST a hold record, and nothing else: the escalated class no longer
+/// reaches it at all, because escalation is folded into the comparator's
+/// comparable-held projection ([AttemptLifecycleShadow._comparableHeld])
+/// rather than being waved through here as a crash it never was.
 ShadowMismatchClass nonAtomicCrashClassifier(
   String field,
   String? legacyValue,
@@ -86,51 +96,102 @@ class AttemptLifecycleShadow implements ShadowCompare {
   @override
   String? get unavailableReason => null;
 
-  @override
-  Future<List<ShadowMismatch>> compare({
+  /// Builds one mismatch, refusing §9's unshadowable fields AT EMIT: a
+  /// comparator producing one is broken, and §9's ratification gate must
+  /// never be fed one.
+  ///
+  /// A method rather than a closure inside [compare] so the refusal is
+  /// EXERCISABLE — a subclass (or a future comparator sharing this base) can
+  /// be driven into it, and a guard that cannot be reached is a guard nobody
+  /// has checked.
+  @protected
+  @visibleForTesting
+  ShadowMismatch buildMismatch({
     required String sessionId,
-    required List<TrajectoryEnvelope> records,
-    int? round,
-  }) async {
-    final fold = foldSessionHeads(records);
-    final row = fold.rows[sessionId];
-    final legacy = await _legacy.sessionView(sessionId);
-    if (round != null && row?.round != round && legacy?.round != round) {
-      // Operator-scoped run: this session never touched the named round.
-      return const [];
-    }
-
-    final mismatches = <ShadowMismatch>[];
-    void mismatch(String field, String? legacyValue, String? foldValue) {
-      if (unshadowableMismatchFields.contains(field)) {
-        // A comparator emitting an unshadowable field is a comparator bug —
-        // §9's ratification gate must never be fed one.
-        throw StateError(
-          'shadow comparator produced a mismatch on unshadowable field '
-          '"$field" — §9 excludes it from the window',
-        );
-      }
-      mismatches.add(
-        ShadowMismatch(
-          sessionId: sessionId,
-          field: field,
-          legacyValue: legacyValue,
-          foldValue: foldValue,
-          seq: row?.lastSeq,
-          classification: _classify(field, legacyValue, foldValue),
-        ),
+    required String field,
+    required String? legacyValue,
+    required String? foldValue,
+    required int? seq,
+  }) {
+    if (unshadowableMismatchFields.contains(field)) {
+      throw StateError(
+        'shadow comparator produced a mismatch on unshadowable field '
+        '"$field" — §9 excludes it from the window',
       );
     }
+    return ShadowMismatch(
+      sessionId: sessionId,
+      field: field,
+      legacyValue: legacyValue,
+      foldValue: foldValue,
+      seq: seq,
+      classification: _classify(field, legacyValue, foldValue),
+    );
+  }
 
+  /// The fold side's HELD, projected onto the legacy model's single axis.
+  ///
+  /// §6 row 4 keeps `outcome` and `held` separate on P1, and P1 must stay
+  /// that way — `held` there is `attempt.rework_declined` and nothing else.
+  /// The LEGACY model does not have two axes: `humanHeld` is escalation OR
+  /// rework-declined (grid_engine `session_projection.dart`, the `humanHeld`
+  /// field). So the disjunction is re-derived HERE, on the comparator's
+  /// fold-side projection, where it is a statement about the oracle's shape
+  /// and not a widening of the projection under test.
+  static bool _comparableHeld(SessionHeadRow row) =>
+      row.held || row.outcome == TerminalOutcome.escalated;
+
+  @override
+  Future<ShadowCompareResult> compare({
+    required String sessionId,
+    required SubjectRecords records,
+    int? round,
+  }) async {
+    if (records.truncatedAt case final int at) {
+      // A fold over a cut stream is not a comparison: the head it produces is
+      // the head of a PREFIX, so both its agreement and its divergence are
+      // unearned. Say so instead of reporting zero mismatches (§9: a run
+      // counts only if it actually compared).
+      return ShadowCompareResult.incomplete(
+        'the reader could not hand over the whole record stream (cut at '
+        '$at rows) — the fold would be a fold of a prefix, so this session '
+        'was NOT compared',
+      );
+    }
+    final fold = foldSessionHeads(records.records);
+    final row = fold.rows[sessionId];
+    final legacy = await _legacy.sessionView(sessionId);
+
+    final mismatches = <ShadowMismatch>[];
+    void mismatch(String field, String? legacyValue, String? foldValue) =>
+        mismatches.add(
+          buildMismatch(
+            sessionId: sessionId,
+            field: field,
+            legacyValue: legacyValue,
+            foldValue: foldValue,
+            seq: row?.lastSeq,
+          ),
+        );
+
+    // PRESENCE FIRST, and outside the round scope. A session one side has
+    // never seen carries no round on that side, so a `--round` filter would
+    // silently hide exactly the divergence the operator most needs to see —
+    // the round guard governs the field-by-field compare below, never this.
     if (row == null || legacy == null) {
-      if (row == null && legacy == null) return const [];
+      if (row == null && legacy == null) return const ShadowCompareResult([]);
       // One side is blind: presence is the only comparable fact.
       mismatch(
         'presence',
         legacy == null ? null : 'present',
         row == null ? null : 'present',
       );
-      return mismatches;
+      return ShadowCompareResult(mismatches);
+    }
+
+    if (round != null && row.round != round && legacy.round != round) {
+      // Operator-scoped run: this session never touched the named round.
+      return const ShadowCompareResult([]);
     }
 
     // work_bead: the legacy key is compared BASE-stripped (the fold's key is
@@ -170,10 +231,15 @@ class AttemptLifecycleShadow implements ShadowCompare {
       mismatch('round', '${legacy.round}', '${row.round}');
     }
 
-    if (legacy.held != row.held) {
-      mismatch('held', '${legacy.held}', '${row.held}');
+    // held — compared against the fold's COMPARABLE-held (see
+    // [_comparableHeld]), never P1's raw `held`: an escalated session is
+    // human-held on the legacy side by construction, and comparing the raw
+    // axis would manufacture a mismatch for every escalation.
+    final foldHeld = _comparableHeld(row);
+    if (legacy.held != foldHeld) {
+      mismatch('held', '${legacy.held}', '$foldHeld');
     }
 
-    return mismatches;
+    return ShadowCompareResult(mismatches);
   }
 }

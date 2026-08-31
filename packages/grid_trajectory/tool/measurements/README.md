@@ -38,7 +38,7 @@ Two environment variables, both optional:
 | variable | effect |
 |---|---|
 | `GRID_TRAJECTORY_SCRATCH` | root for every temp data dir (default: `$TMPDIR/grid_trajectory_measurements`) |
-| `GRID_TRAJECTORY_REAL_STORE` | the `.beads` dir M1b copies (default: the reference deployment's; an absent path skips M1b) |
+| `GRID_TRAJECTORY_REAL_STORE` | the `.beads` dir M1b copies. **No default** — unset (or absent) skips M1b and says so; M1a is unaffected |
 
 ## Rules these scripts hold
 
@@ -52,4 +52,7 @@ Two environment variables, both optional:
 - **`dolt` must be on `PATH`.** Absence fails the run rather than skipping it,
   matching the guard suite's fail-closed contract.
 - **They print, they do not assert.** A result that contradicts the design
-  still exits 0 and says so; the verdict is a human's, in the report.
+  still exits 0 and says so; the verdict is a human's, in the report. The one
+  exception is `m7_ci_guard_pin.dart`, which RUNS the guard suite and
+  propagates its exit code — that suite is an assertion already, and a script
+  that swallowed its red would be reporting a pass nobody earned.

@@ -57,13 +57,13 @@ void main() {
       final db = ScriptedDb();
       final reader = SqlTrajectoryLogReader(db);
       await reader.rowsForSubject('tg-9abc');
+      await reader.allRecordsForSubject('tg-9abc');
       await reader.sessions();
       await reader.foldStaleness();
       for (final call in db.log) {
         expect(call.sql, startsWith('SELECT '));
       }
     });
-
     test(
       'foldStaleness reads the log head against the fold frontier',
       () async {
@@ -118,6 +118,47 @@ void main() {
       final db = ScriptedDb();
       await SqlTrajectoryLogReader(db).close();
       expect(db.closed, isTrue);
+    });
+  });
+
+  group("the COMPLETE subject read (the §9 comparator's stream)", () {
+    SqlResult rowsOf(int count) => SqlResult(
+      rows: [
+        for (var i = 0; i < count; i++) _row(overrides: {'seq': '${i + 1}'}),
+      ],
+    );
+
+    test('asks for ONE row past the ceiling — completeness is proved, not '
+        'assumed', () async {
+      final db = ScriptedDb()..on('FROM trajectory', result: rowsOf(3));
+      final read = await SqlTrajectoryLogReader(
+        db,
+      ).allRecordsForSubject('tg-9abc', ceiling: 10);
+      expect(db.log.single.params, {'id': 'tg-9abc', 'limit': 11});
+      expect(read.isComplete, isTrue);
+      expect(read.truncatedAt, isNull);
+      expect(read.records, hasLength(3));
+    });
+
+    test('exactly the ceiling is still COMPLETE — the extra row is what a '
+        'cut stream would have shown', () async {
+      final db = ScriptedDb()..on('FROM trajectory', result: rowsOf(4));
+      final read = await SqlTrajectoryLogReader(
+        db,
+      ).allRecordsForSubject('tg-9abc', ceiling: 4);
+      expect(read.isComplete, isTrue);
+      expect(read.records, hasLength(4));
+    });
+
+    test('one row past the ceiling reports a CUT stream, trimmed to the '
+        'ceiling', () async {
+      final db = ScriptedDb()..on('FROM trajectory', result: rowsOf(5));
+      final read = await SqlTrajectoryLogReader(
+        db,
+      ).allRecordsForSubject('tg-9abc', ceiling: 4);
+      expect(read.isComplete, isFalse);
+      expect(read.truncatedAt, 4);
+      expect(read.records, hasLength(4));
     });
   });
 

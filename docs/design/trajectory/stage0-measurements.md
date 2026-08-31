@@ -21,8 +21,16 @@ dart run tool/measurements/m7_ci_guard_pin.dart
 
 Each script picks its own temp data dirs under `$TMPDIR`;
 `GRID_TRAJECTORY_SCRATCH` pins them elsewhere (the recorded run used a
-session-local scratchpad) and `GRID_TRAJECTORY_REAL_STORE` names the `.beads`
-directory M1b copies — an absent path skips M1b rather than failing.
+session-local scratchpad). `GRID_TRAJECTORY_REAL_STORE` names the `.beads`
+directory M1b copies and has **no default** — M1b runs only when it is set,
+and skips (saying so) when it is not. The recorded M1b numbers below came from
+a run with it pointed at the reference deployment's store:
+
+```bash
+GRID_TRAJECTORY_REAL_STORE=/path/to/<station>/.grid/.beads \
+  dart run tool/measurements/m1_bd_sibling_db.dart
+```
+
 `dolt` must be on `PATH`: its absence fails a run rather than skipping it,
 matching the guard suite's fail-closed contract.
 
@@ -42,9 +50,9 @@ exception — M1b's copy of the live tranquility store — reads the source with
 | M1 | bd sibling-db tolerance | bd wholly unaffected by a sibling `trajectory` database, on a fresh store AND on an 18 GB copy of the live one — **and bd's own commit is `-a`-shaped** | Separate-db safety gate **PASSES**. Same-db flip condition 2 **FAILS PERMANENTLY** — the flip can never fire |
 | M2 | online gc, shared server | `CALL DOLT_GC()` on `trajectory`: ~120 ms, reclaims ~98%, **zero** connection kills, **zero** ledger or append failures | Separate-**store** flip condition 1 does **NOT** fire. gc runs online on a steady cadence; no quiesced window needed |
 | M3 | append latency, full synchronous set | **62.3 appends/s** (mean 16.05 ms) with `proj_meta` + P1, under concurrent ledger load | 2.2× above the top of §5's 22–28/s band. Retreat **not authorized**. §6's "plausibly 35–45 ms" is **refuted** |
-| M4 | fence across a mid-transaction bounce | Typed `AppendInternalError` in 17–20 ms, no hang, **no double append**, guarded reconnect resumes or goes inert correctly | Contract **HOLDS**, with one recorded gap (a raw throwable escapes while the server is down) |
+| M4 | fence across a mid-transaction bounce | Typed `AppendInternalError` in 17–20 ms, no hang, **no double append**, guarded reconnect resumes or goes inert correctly | Contract **HOLDS**. One recorded gap — a raw throwable escaped while the server was down — **closed in this change** |
 | M5 | rebuild duration | 100k records replayed in **3.9 s** (25,458 rows/s), linear from 25k | **7%** of the stated 60 s recovery budget. Epoch-boundary snapshot contingency **not triggered** |
-| M6 | two-database restore drill | Paired snapshot/restore works; mandatory replay, staleness warning, liveness-unknown and head re-stamp repair all behave as written | Contract **HOLDS**; one wording amendment needed (snapshot vs backup restore) |
+| M6 | two-database restore drill | Paired snapshot/restore works; mandatory replay, staleness warning and liveness-unknown all behave as written. The head re-stamp was drilled **in the harness, against a table the harness invents** — the shipped repair does not exist yet | Contract **HOLDS** for everything shipped; one wording amendment needed (snapshot vs backup restore); the re-stamp repair is specified, not delivered |
 | M7 | CI guard pin | CI pins dolt 2.2.2, local is 2.2.2 (**no skew**); 23 guards green on this tree in 10.7 s; PR #241's job is SUCCESS | Pin is **real and gating** |
 
 **Net:** the ratified storage call — a separate `trajectory` database on bd's
@@ -146,10 +154,25 @@ database. Sweep before → after:
 |---|---|---|---|
 | `list --limit 50` | exit 0, 159 ms | exit 0, 190 ms | unchanged |
 | `list --json` | exit 0, 206 ms | exit 0, 216 ms | unchanged |
-| `ready` | exit 0, 323 ms | exit 0, 188 ms | unchanged |
+| `ready` | exit 0, 323 ms | exit 0, 188 ms | **warm-up, not a sibling effect** — see below |
 | `count` | exit 0, 132 ms | exit 0, 132 ms | unchanged |
 | `create` | exit 0, 178 ms | exit 0, 169 ms | unchanged |
 | `stats` | exit 0, 146 ms | exit 0, 144 ms | unchanged |
+
+**Read the verdict column exactly as the harness computes it:** `_bdSweep`'s
+comparison is **exit-code equality** — "unchanged" means bd still worked, not
+that the timing held. The timings are informational, and one of them did move.
+
+`ready` is the only operation whose time changed materially, and it moved the
+wrong way for a regression: 323 → 188 ms, **faster** after the sibling
+appeared. That is a **warm-up delta, not a sibling effect**. `ready` is bd's
+heaviest read shape (dependency-aware readiness over 7,258 issues) and the
+"before" number is its first invocation on a just-started server over a
+freshly cloned 18 GB store; the "after" number is the same query on a warm
+one. Calling it "unchanged" would be wrong in both directions — it is not
+unchanged, and it is not evidence about the sibling. The sweep is one
+before/after pair per operation with no repeats: enough to catch a
+sibling-sized regression, not enough to characterize a 135 ms delta.
 
 ### Verdict
 
@@ -330,9 +353,18 @@ model that does not hold on this engine.
 
 ### Implications
 
-1. **§6 can take its full projection set synchronously without a throughput
-   argument.** The design question for P2–P8 is correctness and fold
-   complexity, not append cost. Delete the latency caveat from §6's framing.
+1. **The projection set's cost is bounded by the transaction, not by the
+   statements in it — as far as a statement-count proxy can show.** What was
+   measured is P1 for real, and then the P1 statement run seven times. That
+   buys the right number of in-transaction round trips and writes and
+   **nothing about P2–P8's actual row shapes**: a projection with wider rows,
+   more indexes, or a read-modify-write inside the transaction is not this
+   measurement. So the honest form of the implication is conditional — §6's
+   full set is expected to ride nearly free *if* its statements resemble
+   P1's, and the ~16 ms transaction floor leaves 2× headroom to absorb a fair
+   amount of divergence. The latency caveat in §6's framing should be
+   re-based on this number rather than deleted outright, and the real set
+   re-measured with this harness once P2–P8's shapes exist.
 2. **The throughput lever is transactions, not statements.** If a future storm
    ever needs more than ~60 appends/s, the only lever that moves is batching
    several records into one transaction — and that trades away the per-record
@@ -401,16 +433,19 @@ emits the `reconnectInert` service event, and every subsequent append is
 
 ### Implications
 
-1. **RECORDED GAP — one path escapes the sealed hierarchy.** An append
-   attempted while the server is still down throws a raw
-   `MySQLClientException` instead of returning a typed outcome. The cause is
-   structural: `append()` calls `_assertBranchPin()` **before** entering its
-   try/catch, so a dead socket surfaces there as an unclassified throwable.
-   §5's error contract says "no raw throwable escapes the sealed hierarchy";
-   today that is true of `_appendInTransaction` but not of `append`. Stage 1
-   should either move the branch-pin assertion inside the guarded region or
-   wrap it, returning `AppendInternalError`. This is a small, contained fix
-   and a good candidate for a guard test.
+1. **RECORDED GAP — one path escaped the sealed hierarchy. CLOSED in this
+   change.** An append attempted while the server was still down threw a raw
+   `MySQLClientException` instead of returning a typed outcome. The cause was
+   structural: `append()` called `_assertBranchPin()` **before** entering its
+   try/catch, so a dead socket surfaced there as an unclassified throwable,
+   and §5's error contract ("no raw throwable escapes the sealed hierarchy")
+   held for `_appendInTransaction` but not for `append`. The assertion now
+   runs inside `append()`'s classification boundary: a dead connection returns
+   `AppendInternalError`, an off-main session returns `AppendCorruptionHalt`
+   (the pin still halts first, so fail-closed is unchanged), and a DIRECT
+   `doltCommitIfDue()` still throws — that path has no outcome to carry, and
+   guard 5 pins it. Pinned by unit guards in
+   `test/append/trajectory_appender_test.dart`.
 2. **The 20 ms failure is the honest bounce cost.** There is no hang risk to
    design around: the client sees the dead socket immediately. The §10.1
    "reconnect-with-fence-recheck" path can be driven eagerly.
@@ -555,8 +590,19 @@ lag 0, and at lag 700 (> the 512 bound) it warns with the applied/head numbers
 and **still renders the log**, because the log is the truth and the projections
 are derived. `traj_pulse` came back empty from a history-only restore and
 stayed empty after the rebuild — unrebuildable by design, so liveness reads
-`unknown` until the next beat. The head re-stamp repair fired exactly where it
-should and nowhere else.
+`unknown` until the next beat.
+
+**The head re-stamp is the one clause this drill did NOT verify in the
+product.** There is no shipped repair pass to run: `grid_head` is a table
+`m6_restore_drill.dart` **invents** (`CREATE TABLE IF NOT EXISTS grid_head`)
+and the "repair" is the harness's own `UPDATE grid_head SET last_seq = <log
+head>`. So what M6/M6c establish is that the *divergence* is real and
+detectable — a ledger head pointer can outrun a rolled-back trajectory, the
+condition is a one-query comparison, and clamping it to the log head is
+sufficient — and nothing at all about a shipped implementation. The real
+repair arrives with the Stage-1 head-stamp obligations that create and
+maintain the pointer in the first place; this measurement is its
+specification, not its receipt.
 
 ### Implications
 
@@ -575,10 +621,14 @@ should and nowhere else.
    nothing breaks — but a restored store carries a fence cell for an epoch
    whose process is long dead, and the first claim after a restore is what
    corrects it. Worth a sentence in the operational contract.
-3. **The head re-stamp repair only ever fires on an unpaired restore.** Keep
-   the repair pass — M6c shows it is necessary and sufficient — but the
-   contract should note that a correctly-paired restore never needs it. The
-   pass is a recovery tool for partial recovery, not a routine step.
+3. **The head re-stamp repair only ever fires on an unpaired restore — and it
+   is still unbuilt.** M6c shows the condition is real and the clamp is
+   sufficient, but on a table the harness invented, so this is a
+   specification for the Stage-1 head-stamp obligation to satisfy, not
+   evidence that anything ships today. Two things to carry forward: the
+   contract should note that a correctly-paired restore never needs the pass
+   (it is a partial-recovery tool, not a routine step), and the Stage-1
+   obligation owes the pass itself plus a guard over it.
 4. **The whole drill takes about eleven seconds.** Snapshot 15 ms, restore
    ~20 ms, replay 84 ms at this size. There is no reason for the restore
    procedure to be feared or deferred; it should be rehearsed on a schedule.
@@ -634,7 +684,11 @@ dolt (decision: stage0-guards-gate-prs), so it cannot silently no-op.
 | service pinned to `main`, fail-closed on branch change (the T3 branch-vanish finding) | guard 5 |
 | `@@dolt_force_transaction_commit` refused on a live session (T6f) | guard 6 |
 | 1213 vs 1062 arbitration, steal interleavings, `uq_idem` dedupe, terminal guard, `proj_meta` | `stage0_guards_integration_test.dart` |
-| 100k-scale fold + read coherence | `fold_replay_integration_test.dart` |
+| fold + read coherence at **1,000** records through the real fenced appender (100 sessions × 10) | `fold_replay_integration_test.dart` |
+
+The CI guard's scale is 1,000 records, not 100k: 100k-scale is **M5's
+harness** (`m5_rebuild_duration.dart`, bulk-INSERT seeded), which is not a test
+and does not run in CI. The guard proves coherence; M5 proves the curve.
 
 ### Verdict
 
@@ -685,13 +739,18 @@ throughput has 2× headroom (M3), the fence survives a bounce (M4), rebuild is
    provisioning window: bd's server has only `root@localhost`, which cannot
    authenticate over TCP and has no socket, so the trajectory credential must
    be seeded offline with the server stopped (M1).
-5. **Schema §6** — drop the "plausibly 35–45 ms/append" cost framing. Measured
-   marginal cost of the P1 delta is 0.02 ms and of seven statements 0.26 ms;
-   the ~16 ms is the transaction's fixed cost (M3).
-6. **Schema §5 error contract** — close the gap M4 found: `append()`'s
-   pre-transaction branch-pin assertion is outside the guarded region, so a
-   dead connection escapes as a raw `MySQLClientException` rather than a
-   sealed `AppendInternalError`. Fix and pin with a guard.
+5. **Schema §6** — re-base the "plausibly 35–45 ms/append" cost framing on the
+   measured floor. Marginal cost of the P1 delta is 0.02 ms and of seven
+   P1-shaped statements 0.26 ms; the ~16 ms is the transaction's fixed cost
+   (M3). The seven-statement figure is a statement-count proxy, so the
+   re-based framing should say the cost model is transaction-bound and name
+   P2–P8's real shapes as still unmeasured.
+6. **Schema §5 error contract** — the gap M4 found is **already closed**:
+   `append()`'s branch-pin assertion now runs inside the classification
+   boundary, so a dead connection returns a sealed `AppendInternalError` and
+   an off-main session an `AppendCorruptionHalt`. §5's clause needs no change
+   beyond noting that the typed-outcome guarantee covers the whole verb, not
+   only its transaction.
 
 **Not to be built:** the epoch-boundary snapshot contingency (M5 — 7% of
 budget, linear, ~14× headroom) and the service-quiesced gc window (M2 — gc

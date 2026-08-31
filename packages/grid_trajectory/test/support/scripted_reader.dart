@@ -5,28 +5,50 @@ library;
 import 'package:grid_trajectory/grid_trajectory.dart';
 
 class ScriptedReader implements TrajectoryLogReader {
-  ScriptedReader(this.rows, {this.staleness});
+  ScriptedReader(this.rows, {this.staleness, this.truncateCompleteReadsAt});
 
   final List<TrajectoryEnvelope> rows;
   final FoldStaleness? staleness;
+
+  /// Forces [allRecordsForSubject] to report a CUT stream at this many rows —
+  /// the reader-side truncation the §9 comparator must refuse to fold.
+  final int? truncateCompleteReadsAt;
+
   bool closed = false;
 
   @override
   Future<FoldStaleness?> foldStaleness() async => staleness;
 
-  @override
-  Future<List<TrajectoryEnvelope>> rowsForSubject(
-    String subject, {
-    int limit = defaultReadLimit,
-  }) async => rows
+  List<TrajectoryEnvelope> _forSubject(String subject) => rows
       .where(
         (row) =>
             row.workBeadId == subject ||
             row.sessionId == subject ||
             row.attemptId == subject,
       )
-      .take(limit)
       .toList();
+
+  @override
+  Future<List<TrajectoryEnvelope>> rowsForSubject(
+    String subject, {
+    int limit = defaultReadLimit,
+  }) async => _forSubject(subject).take(limit).toList();
+
+  @override
+  Future<SubjectRecords> allRecordsForSubject(
+    String subject, {
+    int ceiling = completeReadCeiling,
+  }) async {
+    final matched = _forSubject(subject);
+    final cut = truncateCompleteReadsAt ?? ceiling;
+    if (matched.length > cut) {
+      return SubjectRecords(
+        records: matched.take(cut).toList(),
+        truncatedAt: cut,
+      );
+    }
+    return SubjectRecords(records: matched);
+  }
 
   @override
   Future<List<String>> sessions({int limit = defaultReadLimit}) async => {
@@ -86,8 +108,9 @@ TrajectoryEnvelope envelope({
   authorityId: 'lunar/$bootEpoch',
   bootEpoch: bootEpoch,
   provenance: provenance,
-  provenanceBasis:
-      provenance == TrajectoryProvenance.observed ? null : 'test-basis',
+  provenanceBasis: provenance == TrajectoryProvenance.observed
+      ? null
+      : 'test-basis',
   source: 'test',
   resolvesRecordId: resolvesRecordId,
   workBeadId: workBeadId,

@@ -17,7 +17,6 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:meta/meta.dart';
 
-import '../codec/envelope.dart';
 import 'traj_flags.dart';
 import 'trajectory_reader.dart';
 
@@ -59,6 +58,31 @@ class ShadowMismatch {
   final ShadowMismatchClass classification;
 }
 
+/// One session's comparison outcome. `incomplete` is a THIRD state, not a
+/// clean run with zero mismatches: the fold could not see the session's whole
+/// record stream, so its head is not the head the log supports and neither
+/// agreement nor divergence was established. A run carrying one cannot count
+/// toward the §9 cut criterion.
+@immutable
+class ShadowCompareResult {
+  /// A comparison that actually happened — [mismatches] is the whole story.
+  const ShadowCompareResult(this.mismatches) : incompleteReason = null;
+
+  /// A comparison that could NOT happen: [reason] says what was missing.
+  /// Never carries mismatches — an unearned zero and an unearned divergence
+  /// are the same lie.
+  const ShadowCompareResult.incomplete(String reason)
+    : incompleteReason = reason,
+      mismatches = const [];
+
+  final List<ShadowMismatch> mismatches;
+
+  /// Why this session was not comparable — null on a real comparison.
+  final String? incompleteReason;
+
+  bool get isIncomplete => incompleteReason != null;
+}
+
 /// The legacy-vs-fold comparison, injected so a composing runner fills it in
 /// without touching the verb.
 abstract interface class ShadowCompare {
@@ -70,11 +94,13 @@ abstract interface class ShadowCompare {
   /// Why nothing can be compared — null once [comparableFields] is non-empty.
   String? get unavailableReason;
 
-  /// Mismatches for one session's [records] (already `seq`-ordered), scoped to
-  /// [round] when the operator named one.
-  Future<List<ShadowMismatch>> compare({
+  /// The outcome for one session's [records] — the COMPLETE `seq`-ordered
+  /// stream, or a stream the reader marked truncated, which a strategy that
+  /// folds must refuse as [ShadowCompareResult.incomplete]. Scoped to [round]
+  /// when the operator named one.
+  Future<ShadowCompareResult> compare({
     required String sessionId,
-    required List<TrajectoryEnvelope> records,
+    required SubjectRecords records,
     int? round,
   });
 }
@@ -95,11 +121,11 @@ class UncomparableShadow implements ShadowCompare {
       'shared field has an oracle to compare against';
 
   @override
-  Future<List<ShadowMismatch>> compare({
+  Future<ShadowCompareResult> compare({
     required String sessionId,
-    required List<TrajectoryEnvelope> records,
+    required SubjectRecords records,
     int? round,
-  }) async => const [];
+  }) async => const ShadowCompareResult([]);
 }
 
 /// §9's stated non-shadowable facts, printed so a clean run is not overread.
@@ -136,7 +162,10 @@ class TrajShadowDiffCommand extends Command<int> {
       ..addOption('round', help: 'Restrict the comparison to one round.')
       ..addOption(
         'limit',
-        help: 'Maximum rows read per session (default $defaultReadLimit).',
+        help:
+            'Ceiling on the COMPLETE per-session read (default '
+            '$completeReadCeiling). Not a window: a session whose stream '
+            'reaches it is reported incomplete, never folded.',
       );
   }
 
@@ -168,7 +197,7 @@ class TrajShadowDiffCommand extends Command<int> {
       'limit',
       stderr.writeln,
       'shadow-diff',
-      fallback: defaultReadLimit,
+      fallback: completeReadCeiling,
     );
     if (limit == null) return 64;
     int? round;
@@ -198,9 +227,11 @@ class TrajShadowDiffCommand extends Command<int> {
 /// Runs the comparator and prints the §9 report.
 ///
 /// Exits 1 only on an UNEXPLAINED mismatch (the stage cut is blocked) or an
-/// unreachable server. An unbootstrapped grid home, an empty log, and "nothing
-/// is comparable yet" are all clean runs that simply do not count toward the
-/// cut criterion.
+/// unreachable server. An unbootstrapped grid home, an empty log, "nothing is
+/// comparable yet", and a session the reader could not hand over WHOLE are all
+/// exit-0 runs that do not count toward the cut criterion — the last of those
+/// is printed as `INCOMPLETE` and is the reason a zero-mismatch run can still
+/// be non-counting.
 Future<int> runTrajShadowDiff({
   required String gridHome,
   required TrajectoryOpener open,
@@ -208,7 +239,7 @@ Future<int> runTrajShadowDiff({
   ShadowCompareFactory? compareFor,
   List<String> sessions = const [],
   int? round,
-  int limit = defaultReadLimit,
+  int limit = completeReadCeiling,
   void Function(String)? out,
   void Function(String)? err,
 }) async {
@@ -245,15 +276,24 @@ Future<int> runTrajShadowDiff({
         _writeLimits(write, compare);
 
         final mismatches = <ShadowMismatch>[];
+        final incomplete = <String>[];
         for (final sessionId in scope) {
-          final records = await reader.rowsForSubject(sessionId, limit: limit);
-          mismatches.addAll(
-            await compare.compare(
-              sessionId: sessionId,
-              records: records,
-              round: round,
-            ),
+          // The COMPLETE stream, never the `traj show` window: the strategy
+          // folds what it is handed, so handing it a cut stream would buy a
+          // clean report the log does not support.
+          final records = await reader.allRecordsForSubject(
+            sessionId,
+            ceiling: limit,
           );
+          final result = await compare.compare(
+            sessionId: sessionId,
+            records: records,
+            round: round,
+          );
+          mismatches.addAll(result.mismatches);
+          if (result.incompleteReason case final String reason) {
+            incomplete.add('$sessionId — $reason');
+          }
         }
 
         if (compare.comparableFields.isEmpty) {
@@ -263,25 +303,38 @@ Future<int> runTrajShadowDiff({
           );
           return 0;
         }
+        for (final session in incomplete) {
+          write('  INCOMPLETE: $session');
+        }
         final unexplained = mismatches
             .where(
               (row) => row.classification == ShadowMismatchClass.unexplained,
             )
             .length;
-        if (mismatches.isEmpty) {
-          write(
-            '  result: 0 mismatches over ${scope.length} session'
-            '${scope.length == 1 ? '' : 's'} — one clean run toward the '
-            'criterion of 3 consecutive.',
-          );
-          return 0;
-        }
-        _writeMismatches(write, mismatches);
-        write(
-          '  result: ${mismatches.length} mismatch'
-          '${mismatches.length == 1 ? '' : 'es'}, $unexplained unexplained'
-          '${unexplained == 0 ? ' — allow-listed only; the operator adjudicates.' : ' — the stage cut is BLOCKED; the fold is presumed wrong until shown otherwise.'}',
-        );
+        if (mismatches.isNotEmpty) _writeMismatches(write, mismatches);
+        // An incomplete session poisons the RUN, not just itself: the cut
+        // criterion is "N consecutive clean runs", and a run that could not
+        // read a session whole never established that session clean.
+        final counts = incomplete.isEmpty;
+        final tally = mismatches.isEmpty
+            ? '0 mismatches over ${scope.length} session'
+                  '${scope.length == 1 ? '' : 's'}'
+            : '${mismatches.length} mismatch'
+                  '${mismatches.length == 1 ? '' : 'es'}, $unexplained '
+                  'unexplained';
+        final verdict = switch ((counts, mismatches.isEmpty, unexplained)) {
+          (true, true, _) =>
+            ' — one clean run toward the criterion of 3 consecutive.',
+          (false, _, 0) =>
+            ' — ${incomplete.length} session'
+                '${incomplete.length == 1 ? '' : 's'} read INCOMPLETE; this '
+                'run does NOT count toward the 3-clean-round cut criterion.',
+          (_, _, 0) => ' — allow-listed only; the operator adjudicates.',
+          _ =>
+            ' — the stage cut is BLOCKED; the fold is presumed wrong until '
+                'shown otherwise.',
+        };
+        write('  result: $tally$verdict');
         return unexplained == 0 ? 0 : 1;
       } finally {
         await reader.close();

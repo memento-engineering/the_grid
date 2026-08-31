@@ -113,6 +113,15 @@ SessionHeadDelta? sessionHeadDeltaFor(
         model: record.model,
         seat: envelope.seat,
         startedAt: envelope.occurredAt,
+        // CONSTRAINT — mint-time seeding is PROVISIONAL. `head_epoch` is a
+        // LEDGER-side fact (§7): the authority epoch the ledger head was last
+        // stamped under, maintained by the Stage-1 bd head-stamp obligation
+        // on every successful read-back (§5). The fold cannot know it; all it
+        // can honestly assert is that the head is no OLDER than the epoch
+        // that minted the session. So this value is a FLOOR, not the truth,
+        // and nothing may read it as the truth until the head-stamp
+        // obligation ships. Do not "fix" the floor by inventing a fold-side
+        // advance — the fold has no evidence to advance it with.
         headEpoch: envelope.bootEpoch,
       );
     case AttemptTerminal(:final sessionId?):
@@ -178,7 +187,9 @@ SessionHeadDelta? sessionHeadDeltaFor(
       return null;
     // Non-attempt families carry TrajectoryFamily.attempt never; the guard at
     // the top already returned. The exhaustive switch still needs the arms:
-    case AdmissionRecord() || VerificationRecord() || EffectRecord() ||
+    case AdmissionRecord() ||
+        VerificationRecord() ||
+        EffectRecord() ||
         StepRecord():
       return null;
   }

@@ -9,7 +9,7 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart' show Bead, BeadStatus, IssueType;
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
-    show AttemptLifecycleShadow, ShadowCompare;
+    show AttemptLifecycleShadow, ShadowCompare, SubjectRecords;
 import 'package:test/test.dart';
 
 Bead sessionBead({
@@ -105,32 +105,40 @@ void main() {
   });
 
   group('legacyShadowCompareFor', () {
-    test('a home with no ledger degrades: nothing comparable, with a reason',
-        () async {
-      final home = Directory.systemTemp.createTempSync('traj_legacy_');
-      addTearDown(() => home.deleteSync(recursive: true));
-      final ShadowCompare shadow = await legacyShadowCompareFor(home.path);
-      expect(shadow, isA<LegacyStoreUnavailableShadow>());
-      expect(shadow.comparableFields, isEmpty);
-      expect(shadow.unavailableReason, contains('no grid state store'));
-      expect(
-        await shadow.compare(sessionId: 's', records: const []),
-        isEmpty,
-      );
-    });
+    test(
+      'a home with no ledger degrades: nothing comparable, with a reason',
+      () async {
+        final home = Directory.systemTemp.createTempSync('traj_legacy_');
+        addTearDown(() => home.deleteSync(recursive: true));
+        final ShadowCompare shadow = await legacyShadowCompareFor(home.path);
+        expect(shadow, isA<LegacyStoreUnavailableShadow>());
+        expect(shadow.comparableFields, isEmpty);
+        expect(shadow.unavailableReason, contains('no grid state store'));
+        final result = await shadow.compare(
+          sessionId: 's',
+          records: const SubjectRecords(records: []),
+        );
+        expect(result.mismatches, isEmpty);
+        // A degrade is not an incomplete READ — it is "no oracle here at all",
+        // which the verb reports through unavailableReason instead.
+        expect(result.isIncomplete, isFalse);
+      },
+    );
 
-    test('a seeded state-store layout arms the real Family-1 comparator',
-        () async {
-      final home = Directory.systemTemp.createTempSync('traj_legacy_');
-      addTearDown(() => home.deleteSync(recursive: true));
-      // The exact-root layout the resident verbs open: <home>/.grid/.beads,
-      // with the store metadata that makes it a well-formed workspace.
-      Directory('${home.path}/.grid/.beads').createSync(recursive: true);
-      File(
-        '${home.path}/.grid/.beads/metadata.json',
-      ).writeAsStringSync('{"dolt_mode": "direct"}');
-      final shadow = await legacyShadowCompareFor(home.path);
-      expect(shadow, isA<AttemptLifecycleShadow>());
-    });
+    test(
+      'a seeded state-store layout arms the real Family-1 comparator',
+      () async {
+        final home = Directory.systemTemp.createTempSync('traj_legacy_');
+        addTearDown(() => home.deleteSync(recursive: true));
+        // The exact-root layout the resident verbs open: <home>/.grid/.beads,
+        // with the store metadata that makes it a well-formed workspace.
+        Directory('${home.path}/.grid/.beads').createSync(recursive: true);
+        File(
+          '${home.path}/.grid/.beads/metadata.json',
+        ).writeAsStringSync('{"dolt_mode": "direct"}');
+        final shadow = await legacyShadowCompareFor(home.path);
+        expect(shadow, isA<AttemptLifecycleShadow>());
+      },
+    );
   });
 }

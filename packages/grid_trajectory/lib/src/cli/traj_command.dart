@@ -21,7 +21,11 @@ class TrajCommand extends Command<int> {
   }) {
     addSubcommand(TrajShowCommand(open: open));
     addSubcommand(
-      TrajShadowDiffCommand(open: open, compare: compare, compareFor: compareFor),
+      TrajShadowDiffCommand(
+        open: open,
+        compare: compare,
+        compareFor: compareFor,
+      ),
     );
   }
 

@@ -160,86 +160,83 @@ void main() {
       expect(update.guardAttemptId, '01J8ATTEMPT000000000000002');
     });
 
-    test(
-      'worktree/lease/liveness/adopt/mint/note produce NO P1 delta — the '
-      'DDL is the letter (their fields are P6/P3\'s)',
-      () {
-        final noOps = [
-          envelope(
-            recordType: 'worktree.provisioned',
-            family: TrajectoryFamily.attempt,
-            sessionId: 'tranquility-1',
-            attemptId: '01J8ATTEMPT000000000000002',
-            worktree: '/tmp/wt',
-            branch: 'grid/tg-9abc',
-            commitSha: 'a' * 40,
-            payload: const {'adopted_existing': false},
-          ),
-          envelope(
-            recordType: 'worktree.reaped',
-            family: TrajectoryFamily.attempt,
-            sessionId: 'tranquility-1',
-            worktree: '/tmp/wt',
-            payload: const {},
-          ),
-          envelope(
-            recordType: 'worktree.held',
-            family: TrajectoryFamily.attempt,
-            sessionId: 'tranquility-1',
-            worktree: '/tmp/wt',
-            payload: const {'uncommitted': 3},
-          ),
-          envelope(
-            recordType: 'attempt.lease.acquired',
-            family: TrajectoryFamily.attempt,
-            attemptId: '01J8ATTEMPT000000000000002',
-            payload: const {'token': '01J8ATTEMPT000000000000002'},
-          ),
-          envelope(
-            recordType: 'attempt.liveness.lost',
-            family: TrajectoryFamily.attempt,
-            attemptId: '01J8ATTEMPT000000000000002',
-            payload: {
-              'last_beat_at': DateTime.utc(2026).toIso8601String(),
-              'threshold_ms': 90000,
-            },
-          ),
-          envelope(
-            recordType: 'attempt.adopt.proved',
-            family: TrajectoryFamily.attempt,
-            attemptId: '01J8ATTEMPT000000000000002',
-            payload: const {'outcome': 'adopted'},
-          ),
-          envelope(
-            recordType: 'attempt.mint.outcome',
-            family: TrajectoryFamily.attempt,
-            workBeadId: 'tg-9abc',
-            mountAttemptId: '01J8MOUNT00000000000000001',
-            payload: const {'phase': 'failed', 'mint_attempt': 1},
-          ),
-          envelope(
-            recordType: 'attempt.note',
-            family: TrajectoryFamily.attempt,
-            sessionId: 'tranquility-1',
-            payload: const {'body': 'b', 'channel': 'c', 'note_ordinal': 1},
-          ),
-        ];
-        for (final record in noOps) {
-          // Each envelope decodes to its REAL typed record (never an opaque
-          // fallback) — the null delta is a modelled fact, not a decode miss.
-          expect(
-            TrajectoryCodec.decode(record),
-            isNot(isA<OpaqueRecord>()),
-            reason: '${record.recordType} must decode',
-          );
-          expect(
-            sessionHeadDeltaFor(record),
-            isNull,
-            reason: '${record.recordType} must not touch P1',
-          );
-        }
-      },
-    );
+    test('worktree/lease/liveness/adopt/mint/note produce NO P1 delta — the '
+        'DDL is the letter (their fields are P6/P3\'s)', () {
+      final noOps = [
+        envelope(
+          recordType: 'worktree.provisioned',
+          family: TrajectoryFamily.attempt,
+          sessionId: 'tranquility-1',
+          attemptId: '01J8ATTEMPT000000000000002',
+          worktree: '/tmp/wt',
+          branch: 'grid/tg-9abc',
+          commitSha: 'a' * 40,
+          payload: const {'adopted_existing': false},
+        ),
+        envelope(
+          recordType: 'worktree.reaped',
+          family: TrajectoryFamily.attempt,
+          sessionId: 'tranquility-1',
+          worktree: '/tmp/wt',
+          payload: const {},
+        ),
+        envelope(
+          recordType: 'worktree.held',
+          family: TrajectoryFamily.attempt,
+          sessionId: 'tranquility-1',
+          worktree: '/tmp/wt',
+          payload: const {'uncommitted': 3},
+        ),
+        envelope(
+          recordType: 'attempt.lease.acquired',
+          family: TrajectoryFamily.attempt,
+          attemptId: '01J8ATTEMPT000000000000002',
+          payload: const {'token': '01J8ATTEMPT000000000000002'},
+        ),
+        envelope(
+          recordType: 'attempt.liveness.lost',
+          family: TrajectoryFamily.attempt,
+          attemptId: '01J8ATTEMPT000000000000002',
+          payload: {
+            'last_beat_at': DateTime.utc(2026).toIso8601String(),
+            'threshold_ms': 90000,
+          },
+        ),
+        envelope(
+          recordType: 'attempt.adopt.proved',
+          family: TrajectoryFamily.attempt,
+          attemptId: '01J8ATTEMPT000000000000002',
+          payload: const {'outcome': 'adopted'},
+        ),
+        envelope(
+          recordType: 'attempt.mint.outcome',
+          family: TrajectoryFamily.attempt,
+          workBeadId: 'tg-9abc',
+          mountAttemptId: '01J8MOUNT00000000000000001',
+          payload: const {'phase': 'failed', 'mint_attempt': 1},
+        ),
+        envelope(
+          recordType: 'attempt.note',
+          family: TrajectoryFamily.attempt,
+          sessionId: 'tranquility-1',
+          payload: const {'body': 'b', 'channel': 'c', 'note_ordinal': 1},
+        ),
+      ];
+      for (final record in noOps) {
+        // Each envelope decodes to its REAL typed record (never an opaque
+        // fallback) — the null delta is a modelled fact, not a decode miss.
+        expect(
+          TrajectoryCodec.decode(record),
+          isNot(isA<OpaqueRecord>()),
+          reason: '${record.recordType} must decode',
+        );
+        expect(
+          sessionHeadDeltaFor(record),
+          isNull,
+          reason: '${record.recordType} must not touch P1',
+        );
+      }
+    });
 
     test('non-attempt families are refused at the door', () {
       expect(
@@ -257,25 +254,26 @@ void main() {
   });
 
   group('sessionHeadSqlFor (the incremental mode)', () {
-    test('insert renders the UPSERT whose duplicate arm bumps last_seq only',
-        () {
-      final delta = sessionHeadDeltaFor(started())! as SessionHeadInsert;
-      final statement = sessionHeadSqlFor(delta, lastSeq: 9);
-      expect(statement.sql, startsWith('INSERT INTO proj_session_head'));
-      expect(
-        statement.sql,
-        endsWith('ON DUPLICATE KEY UPDATE last_seq = :last_seq'),
-      );
-      expect(statement.params['session_id'], 'tranquility-1');
-      expect(statement.params['work_bead_id'], 'tg-9abc');
-      expect(statement.params['status'], 'open');
-      expect(statement.params['held'], 0);
-      expect(statement.params['last_seq'], 9);
-      expect(statement.params['started_at'], '2026-08-31 10:00:00.000000');
-    });
+    test(
+      'insert renders the UPSERT whose duplicate arm bumps last_seq only',
+      () {
+        final delta = sessionHeadDeltaFor(started())! as SessionHeadInsert;
+        final statement = sessionHeadSqlFor(delta, lastSeq: 9);
+        expect(statement.sql, startsWith('INSERT INTO proj_session_head'));
+        expect(
+          statement.sql,
+          endsWith('ON DUPLICATE KEY UPDATE last_seq = :last_seq'),
+        );
+        expect(statement.params['session_id'], 'tranquility-1');
+        expect(statement.params['work_bead_id'], 'tg-9abc');
+        expect(statement.params['status'], 'open');
+        expect(statement.params['held'], 0);
+        expect(statement.params['last_seq'], 9);
+        expect(statement.params['started_at'], '2026-08-31 10:00:00.000000');
+      },
+    );
 
-    test('update renders exactly the delta columns + last_seq + the guard',
-        () {
+    test('update renders exactly the delta columns + last_seq + the guard', () {
       final delta = SessionHeadUpdate(
         sessionId: 'tranquility-1',
         columns: const {'pid': null, 'pgid': null},
@@ -315,10 +313,7 @@ void main() {
       final rows = <String, SessionHeadRow>{};
       applySessionHeadDelta(
         rows,
-        const SessionHeadUpdate(
-          sessionId: 'ghost',
-          columns: {'round': 1},
-        ),
+        const SessionHeadUpdate(sessionId: 'ghost', columns: {'round': 1}),
         lastSeq: 5,
       );
       expect(rows, isEmpty);
@@ -326,11 +321,7 @@ void main() {
 
     test('guarded clear skips when a successor already owns the head', () {
       final rows = <String, SessionHeadRow>{};
-      applySessionHeadDelta(
-        rows,
-        sessionHeadDeltaFor(started())!,
-        lastSeq: 1,
-      );
+      applySessionHeadDelta(rows, sessionHeadDeltaFor(started())!, lastSeq: 1);
       applySessionHeadDelta(
         rows,
         const SessionHeadUpdate(
@@ -353,23 +344,25 @@ void main() {
       expect(row.lastSeq, 2, reason: '0 matched rows bumps nothing');
     });
 
-    test('re-applied insert (the at-least-once dedupe) bumps last_seq only',
-        () {
-      final rows = <String, SessionHeadRow>{};
-      final insert = sessionHeadDeltaFor(started())!;
-      applySessionHeadDelta(rows, insert, lastSeq: 1);
-      applySessionHeadDelta(
-        rows,
-        const SessionHeadUpdate(
-          sessionId: 'tranquility-1',
-          columns: {'round': 2},
-        ),
-        lastSeq: 2,
-      );
-      applySessionHeadDelta(rows, insert, lastSeq: 3);
-      final row = rows['tranquility-1']!;
-      expect(row.round, 2, reason: 'the duplicate arm must not reset state');
-      expect(row.lastSeq, 3);
-    });
+    test(
+      're-applied insert (the at-least-once dedupe) bumps last_seq only',
+      () {
+        final rows = <String, SessionHeadRow>{};
+        final insert = sessionHeadDeltaFor(started())!;
+        applySessionHeadDelta(rows, insert, lastSeq: 1);
+        applySessionHeadDelta(
+          rows,
+          const SessionHeadUpdate(
+            sessionId: 'tranquility-1',
+            columns: {'round': 2},
+          ),
+          lastSeq: 2,
+        );
+        applySessionHeadDelta(rows, insert, lastSeq: 3);
+        final row = rows['tranquility-1']!;
+        expect(row.round, 2, reason: 'the duplicate arm must not reset state');
+        expect(row.lastSeq, 3);
+      },
+    );
   });
 }

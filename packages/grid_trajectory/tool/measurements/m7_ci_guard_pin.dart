@@ -117,5 +117,8 @@ Future<void> main() async {
   for (final entry in testDir.listSync().whereType<File>()) {
     say('guard file: ${p.basename(entry.path)}');
   }
-  exit(code == 0 ? 0 : 0);
+  // The guard suite's exit code is the ONE result in this harness that is a
+  // pass/fail rather than a number: M7 asks whether the guards still pass
+  // here, so a red suite must leave a red script behind it.
+  exit(code);
 }
