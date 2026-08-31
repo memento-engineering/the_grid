@@ -8,7 +8,9 @@ relational's structure winning, one log table with a JSON payload plus promoted 
 envelope columns. Nothing the red-team's holds list certifies has been weakened; every change is
 logged in §14 with the defect it answers.
 
-Storage shape under design: **a separate `trajectory` database, sibling of `tranquility`, on the
+Storage shape under design: **a separate `trajectory` database, sibling of the ledger database
+(bd's state store — the human-tempo work ledger; `tranquility` on the measured deployment, a
+private station's month-old state store), on the
 same bd-owned dolt sql-server** (§10 — the storage call, imported). The draft's `⚠same-db` flags
 are resolved, not carried.
 
@@ -23,6 +25,72 @@ refuse at write time, by name; §4 now ships **seven** — `ck_grant_link` and `
 probe, and stage 0 pins them), and a JSON payload for everything type-specific. Payload shape is governed by the
 codec registry (§2.6).
 
+*The core versioned tables plus the two working-set tables. `trajectory`'s envelope is shown
+ABRIDGED — identity/order, the provenance trio, and the promoted correlation keys only; the full
+column list is the table below and the DDL in §4. `traj_fence` and `traj_pulse` are `dolt_ignore`'d
+working-set state, joined by convention (station, subject_id) rather than by a declared key.*
+
+```mermaid
+erDiagram
+    traj_epoch {
+        VARCHAR station PK
+        BIGINT epoch PK
+        INT pid
+        INT pgid
+        ENUM cause "boot or steal"
+        DATETIME advanced_at
+    }
+    traj_fence {
+        VARCHAR station PK
+        BIGINT fence_state "epoch high bits, appender counter low bits"
+    }
+    trajectory {
+        BIGINT seq PK "physical order, monotone not gapless"
+        BIGINT boot_epoch "non-decreasing over seq"
+        BIGINT epoch_seq "unique with station and boot_epoch"
+        CHAR record_id UK
+        CHAR idem_key UK "SHA-256 of the canonical grammar string"
+        VARCHAR station "scopes epoch, fence, uq_epoch_seq"
+        ENUM family "attempt admission verification effect step"
+        VARCHAR record_type
+        ENUM provenance "observed inferred reconstructed"
+        VARCHAR provenance_basis "required when provenance is not observed"
+        VARCHAR source "emitting observer surface"
+        CHAR resolves_record_id "settlement link"
+        VARCHAR work_bead_id
+        VARCHAR session_id
+        INT round
+        VARCHAR step_path
+        INT step_round
+        INT incarnation
+        CHAR attempt_id
+        CHAR mount_attempt_id
+        CHAR grant_id
+        CHAR effect_id
+        VARCHAR gate_id
+        CHAR commit_sha
+        VARCHAR receipt
+        JSON payload "codec-validated, type-specific"
+    }
+    traj_terminal_guard {
+        CHAR attempt_id PK
+        BIGINT seq "the latest terminal in the chain"
+        CHAR settled_by "record_id of the resolving terminal"
+    }
+    traj_pulse {
+        VARCHAR subject_id PK "attempt_id or lease id"
+        ENUM kind PK "attempt or lease"
+        BIGINT boot_epoch "the epoch this beat was observed under"
+        DATETIME beat_at
+        ENUM observed_via "runtime worktree-mtime vm-service wire"
+    }
+    traj_epoch ||--o{ trajectory : "boot_epoch, per station"
+    traj_fence ||..o{ trajectory : "counter-CAS on every append"
+    traj_terminal_guard ||--o{ trajectory : "attempt_id, seq of attempt.terminal"
+    trajectory ||..o| traj_pulse : "attempt_id equals subject_id"
+    traj_epoch ||..|| traj_fence : "one cell per station"
+```
+
 | Field | Type | Req | Notes |
 |---|---|---|---|
 | `seq` | BIGINT AUTO_INCREMENT PK | ✓ | **Physical order.** Sole appender ⇒ one monotonic sequence, assigned inside the append transaction. **Monotone, NOT gapless** (probe T5): a failed/rolled-back append burns a seq; dolt never reuses one across restart or delete-then-restart. Consumers must never read a gap as a missing record — only `(boot_epoch, epoch_seq)` is contiguous. |
@@ -36,9 +104,9 @@ codec registry (§2.6).
 | `type_version` | SMALLINT | ✓ | Per-type payload schema version; codec-governed (§2.6). |
 | `occurred_at` | DATETIME(6) | ✓ | When the observed fact happened. Advisory testimony — never an ordering source, **except** for `reconstructed` rows, which the fold orders by `occurred_at`. |
 | `recorded_at` | DATETIME(6) | ✓ | When appended. |
-| `station` | VARCHAR(64) | ✓ | `lunar`. **Scopes the epoch, the fence, and `uq_epoch_seq`** — a second station over the same database gets its own epoch line and fence cell instead of permanently starving the first (major: traj_epoch scope). **This scoping is DEFENSIVE, read-side only** (audit round 2): it makes a second station's writes loud — refused or detected — instead of silent; it is NOT license for a second live appender, which remains the condition that reopens the whole storage shape (§10 flip conditions, §12 — unchanged). Cross-station replay order is out of scope until that reopening. |
+| `station` | VARCHAR(64) | ✓ | The composing station's name. **Scopes the epoch, the fence, and `uq_epoch_seq`** — a second station over the same database gets its own epoch line and fence cell instead of permanently starving the first (major: traj_epoch scope). **This scoping is DEFENSIVE, read-side only** (audit round 2): it makes a second station's writes loud — refused or detected — instead of silent; it is NOT license for a second live appender, which remains the condition that reopens the whole storage shape (§10 flip conditions, §12 — unchanged). Cross-station replay order is out of scope until that reopening. |
 | `seat` | VARCHAR(64) | – | Substation/seat identity. **Derived at append time by the service from the work bead's store prefix** — no writer supplies it, so no writer can forget it; enforced by `ck_seat`: `work_bead_id IS NULL OR seat IS NOT NULL`. Part of the §2.6 envelope-construction rules. |
-| `authority_id` | VARCHAR(64) | ✓ | tg-y4fd authority identity (`lunar/<epoch>`). |
+| `authority_id` | VARCHAR(64) | ✓ | tg-y4fd authority identity (`<station>/<epoch>`). |
 | `fencing_token` | BIGINT | – | **Promoted and indexed** (was buried in grant/lease JSON — the single most load-bearing tg-y4fd value, checked on every grant-scoped append and every federation wire request; a JSON extract on the hottest path was indefensible). `(epoch << 32) \| per-epoch counter` — see §5 for why 32 low bits, not the draft's 20. |
 | `provenance` | ENUM('observed','inferred','reconstructed') | ✓ | Q18 (§8). Default `observed`. |
 | `provenance_basis` | VARCHAR(128) | – | Required (CHECK) when provenance ≠ observed. |
@@ -75,13 +143,71 @@ record classes plus the envelope CHECKs in §4.
 Five families. Every catalog row dispositioned **T** or **B** is covered; merges and drops are
 named. Changes from the draft are marked with the defect they answer.
 
+*The `family` ENUM to the `record_type` vocabulary that exists in V2, families 1–2. Types retired,
+merged, or dispositioned R/L are omitted — each family table's last row names them. Slash-joined
+leaves are the sibling types the tables list together.*
+
+```mermaid
+flowchart LR
+    F1["family = attempt"]
+    F2["family = admission"]
+    F1 --> t101["attempt.session.started"]
+    F1 --> t102["attempt.process.started"]
+    F1 --> t103["attempt.process.exited"]
+    F1 --> t104["attempt.liveness.lost / .regained"]
+    F1 --> t105["attempt.lease.acquired / .released / .swept"]
+    F1 --> t106["attempt.adopt.proved"]
+    F1 --> t107["attempt.terminal"]
+    F1 --> t108["attempt.round.retired"]
+    F1 --> t109["attempt.rework_declined"]
+    F1 --> t110["attempt.mint.outcome"]
+    F1 --> t111["attempt.note"]
+    F1 --> t112["worktree.provisioned / .reaped / .held"]
+    F2 --> t201["admission.grant.issued"]
+    F2 --> t202["admission.grant.consumed"]
+    F2 --> t203["admission.grant.expired / .released"]
+    F2 --> t204["admission.refused"]
+    F2 --> t205["admission.restored"]
+    F2 --> t206["admission.drive.approved"]
+    F2 --> t207["authority.epoch.advanced / .closed"]
+    F2 --> t208["federation.lease.granted / .reaped / .expired"]
+```
+
+*The same map for families 3–5.*
+
+```mermaid
+flowchart LR
+    F3["family = verification"]
+    F4["family = effect"]
+    F5["family = step"]
+    F3 --> t301["verify.scope.pinned"]
+    F3 --> t302["verify.verdict.recorded"]
+    F3 --> t303["verify.verdict.recovered"]
+    F3 --> t304["verify.gating.rc"]
+    F3 --> t305["verify.completion.fence"]
+    F3 --> t306["verify.route.verdict"]
+    F3 --> t307["verify.usage.telemetry"]
+    F3 --> t308["verify.ci.concluded"]
+    F4 --> t401["effect.intent"]
+    F4 --> t402["effect.ack"]
+    F4 --> t403["effect.unarmed"]
+    F4 --> t404["effect.observation.claimed"]
+    F4 --> t405["effect.command.received"]
+    F4 --> t406["effect.command.refused"]
+    F4 --> t407["effect.ci.rework.commanded"]
+    F5 --> t501["molecule.poured"]
+    F5 --> t502["step.transition"]
+    F5 --> t503["step.superseded"]
+    F5 --> t504["gate.opened / gate.regated / gate.closed"]
+```
+
 ## Family 1 — attempt lifecycle
 
 | record_type | Payload fields (✓=required at construction) | Covers / notes |
 |---|---|---|
 | `attempt.session.started` | rig✓, model✓ ('molecule'); env grant_id✓ | `attempt.started` (B: the service also creates the slim head, §7). The grant link is the envelope `grant_id`, nothing else (minor fix). |
-| `attempt.process.started` | pid✓, pgid✓; env attempt_id✓, incarnation✓, worktree, branch | Merges the dead `attempt.identity.stamped` path. `GRID_INSTANCE_TOKEN` retires in favor of `attempt_id` exported into the process env. |
-| `attempt.process.exited` | pid✓, exit_code, exit_kind:enum(exited,died,**respawned**)✓, inferred:bool✓, reason, predecessor_attempt_id | **A respawn ENDS the attempt** (minor fix): `exit_kind='respawned'` is that attempt's terminal shape; the successor attempt carries `incarnation+1` and its `attempt.process.started` payload names `predecessor_attempt_id`, so the chain is walkable in both directions. The draft's `respawn_epoch` is dropped in favor of the successor's incarnation. `inferred=true` ⇒ envelope `provenance='inferred'`. |
+| `attempt.process.started` | pid✓, pgid✓, predecessor_attempt_id; env attempt_id✓, incarnation✓, worktree, branch | Merges the dead `attempt.identity.stamped` path. `GRID_INSTANCE_TOKEN` retires in favor of `attempt_id` exported into the process env. |
+| `attempt.process.exited` | pid✓, exit_code, exit_kind:enum(exited,died,**respawned**)✓, inferred:bool✓, reason | **A respawn ENDS the attempt** (minor fix): `exit_kind='respawned'` is that attempt's terminal shape; the successor attempt carries `incarnation+1` and its `attempt.process.started` payload names `predecessor_attempt_id`, so the chain is walkable in both directions. The draft's `respawn_epoch` is dropped in favor of the successor's incarnation. `inferred=true` ⇒ envelope `provenance='inferred'`. |
 | `attempt.liveness.lost` / `.regained` | last_beat_at✓, threshold_ms✓ | Raw beats are **not records** — they ride `traj_pulse` (working-set, dolt_ignore'd); only threshold *transitions* append, **keyed on the observed crossing** (`liveness:<attempt_id>:<last_beat_at µs>:<lost\|regained>` — deterministic per observation, idempotent under retry of that observation; a five-flap attempt records five losses, major fix). **The detector honours `unknown`** (major fix): it may emit `lost` only for an attempt whose beat it has itself observed **within the current epoch** — an empty pulse table after any of the five `unknown` paths (restore, rebuild, epoch advance, branch switch, `--force` trap recovery — §10/§13) yields `unknown`, never `lost`, so a restore cannot mint terminals for live attempts. `traj_pulse` is truncated at epoch advance; rows prune on attempt terminal (§4). |
 | `attempt.lease.acquired` / `.released` / `.swept` | token✓ (= attempt_id), disposition:enum(held,released,killed,refused_unsafe,left_adoptable), terminate_result, clear_failure | The in-place breadcrumb overwrite becomes append history. |
 | `attempt.adopt.proved` | outcome:enum(adopted,respawned)✓, fence_pgid, fence_pid | Adopted-vs-respawned durable for the first time. |
@@ -92,6 +218,46 @@ named. Changes from the draft are marked with the defect they answer.
 | `worktree.provisioned` / `.reaped` / `.held` | adopted_existing:bool✓, uncommitted, unpushed, stashes; env commit_sha=base_sha (✓ on provisioned via CHECK), branch✓, worktree✓ | Worktrees are attempt-scoped. Recording is **not** the fix for the stale-adopt scar class — the barrier is (major fix): admission **refuses `clause='worktree-outstanding'`** while P6 shows a live worktree under a terminal session for the bead (§5 obligations). The record makes the wound auditable; the barrier makes the repair's lateness harmless. |
 | `attempt.note` | body✓, channel✓, note_ordinal✓ | Q5 destination-declared journaling. The ordinal is **service-minted** (major fix — free text has no natural key); notes are accepted as at-most-once. |
 | *(retired)* | | `attempt.teardown.replayed` — **R** per the falsifier. `attempt.heartbeat` as a record — see `.liveness.*`. |
+
+*One attempt, from session start to a terminal outcome. The `outcome` enum is shown in full,
+verbatim; the record types driving each edge are the labels. Lease, adopt, mint, note, worktree,
+round-retire and rework-decline records are attempt- or session-scoped but not lifecycle states —
+they are omitted here, and listed in the table above.*
+
+```mermaid
+stateDiagram-v2
+    [*] --> session_started: attempt.session.started
+    session_started --> process_started: attempt.process.started
+    process_started --> running: pid, pgid, incarnation stamped
+    running --> running: attempt.liveness.lost and .regained — threshold transitions only
+    running --> respawn_exit: attempt.process.exited, exit_kind = respawned
+    running --> plain_exit: attempt.process.exited, exit_kind = exited or died
+    respawn_exit --> [*]: a respawn ENDS the attempt
+    plain_exit --> terminal: attempt.terminal
+    terminal --> succeeded
+    terminal --> failed
+    terminal --> cancelled
+    terminal --> lost
+    terminal --> escalated
+    terminal --> settled
+    terminal --> unknown
+    unknown --> settled: second attempt.terminal, resolves_record_id to the unknown one
+    succeeded --> [*]
+    failed --> [*]
+    cancelled --> [*]
+    lost --> [*]
+    escalated --> [*]
+    settled --> [*]
+    note right of respawn_exit
+        successor attempt at incarnation plus 1
+        its attempt.process.started names predecessor_attempt_id
+    end note
+    note right of unknown
+        unknown_reason required by ck_unknown
+        traj_terminal_guard permits this settlement chain
+        while refusing two independent terminals
+    end note
+```
 
 ## Family 2 — admission grants and authority
 
@@ -136,6 +302,40 @@ Per-effect intent/ack pairs (Q9); `kind` discriminates. `effect_id` keys the **l
 | `effect.command.refused` | reason:enum(fingerprint-mismatch,fence-stale)✓, fingerprint✓, prior_fingerprint✓ | **NEW.** Appended when P8 already holds the wire key with a different fingerprint — the detected conflict row 33 requires is now a record, not an unreachable column. P8 keys on the wire key alone and surfaces the conflict (§4). |
 | `effect.ci.rework.commanded` | check_name✓, note_digest; env receipt=`obs:<id>`✓ | Outbound half; dedupe rides P8. |
 | *(L / R)* | | `effect.poll.cursor` stays a cursor file; `effect.intake.upserted`, `effect.ci.capgate.minted` stay **L**; `effect.pr.body` **R**; `effect.terminal.receipt` — a P5 aggregate; `effect.failed` splits into `step.transition(failed)` vs `effect.ack(failed)` — the tg-7ux conflation dies at the source. |
+
+*One outward effect: intent durable before the call, ack per outcome, and the reconciler's
+probe-and-settle chain. The six `kind` values are named once on the mutation; per-kind ack receipts
+are in the table above.*
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as fenced transition service
+    participant T as trajectory log
+    participant G as GitHub
+    participant R as boot / tick reconciler
+    S->>T: effect.intent — keyed on effect_id, durable BEFORE the call
+    T-->>S: committed — proj_effects row, ack_seq NULL
+    S->>G: outward mutation — commit, push, pr_open, automerge, direct_merge, ci_rework_command
+    alt outcome observed
+        G-->>S: receipt
+        S->>T: effect.ack — outcome succeeded or failed, per-kind receipt
+    else outcome not observable
+        S->>T: effect.ack — outcome unknown plus unknown_reason
+    else crash between the call and the ack
+        Note over S,T: the crash window — proj_effects.ack_seq stays NULL
+    end
+    Note over R,G: at boot and on the 30 s tick
+    R->>T: proj_effects WHERE ack_seq IS NULL
+    R->>G: probe on the effect target — repo, branch, receipt
+    alt probe matches exactly one outstanding intent
+        G-->>R: observed state
+        R->>T: settling effect.ack — resolves_record_id, provenance inferred, basis github-probe
+    else probe would match more than one outstanding intent
+        R->>T: settles none, appends nothing
+        R->>R: flare for operator adjudication
+    end
+```
 
 ## Family 5 — step and molecule transitions
 
@@ -189,6 +389,34 @@ work_bead_id                                   — bd, immutable forever (no #rN
                           — enforced as uq_incarnation on proj_process_identity (§4)
 ```
 
+*The same ladder as a graph. The two round ladders are the shaded nodes — `round` is the session
+rework ladder, `step_round` the per-path chain ladder; neither ever writes the other's counter.*
+
+```mermaid
+flowchart TD
+    wb["work_bead_id — bd, immutable forever"]
+    ma["mount_attempt_id : CHAR(26) ULID — pre-session admission ladder"]
+    sid["session_id : bd bead id"]
+    rnd["round : INT — session REWORK ladder"]
+    sp["step_path — successors KEEP the path"]
+    sr["step_round : INT — chain ladder per path"]
+    aid["attempt_id : CHAR(26) — one process incarnation"]
+    inc["incarnation : INT — respawn ordinal"]
+    uq["uq_incarnation on proj_process_identity"]
+    wb -->|"minted per admission evaluation, grant OR refusal"| ma
+    ma --> sid
+    sid -->|"bumped by attempt.round.retired"| rnd
+    rnd --> sp
+    sp -->|"bumped by step.superseded OR gate-cleared rearm"| sr
+    sr --> aid
+    aid --- inc
+    aid -. "UNIQUE over session_id, round, step_path, step_round, incarnation" .-> uq
+    classDef ladder fill:#e8e2ff,stroke:#5b4bbf,stroke-width:2px,color:#111;
+    classDef note fill:#f4f4f4,stroke:#999999,color:#111;
+    class rnd,sr ladder;
+    class uq note;
+```
+
 * `attempt_id` **is** the lease token, is exported into the child process env (replacing
   `GRID_INSTANCE_TOKEN`), and reduces the ValueKey `'$path#$restartCount#g$round'` to a render key.
   Fences reference it directly, per the decision's consequence clause.
@@ -208,7 +436,7 @@ work_bead_id                                   — bd, immutable forever (no #rN
 Dolt/MySQL dialect, **verified verbatim-accepted by dolt 2.2.2 (probe T1)** — including the ENUMs,
 JSON NOT NULL, DATETIME(6), named CHECKs, and index set. **`dolt_ignore` registration is the first
 DDL statement executed** (red-team hold: correctly sequenced; probe T3 validates the semantics).
-All of this lives in the **`trajectory` database**, a sibling of `tranquility` on the same server
+All of this lives in the **`trajectory` database**, a sibling of the ledger database on the same server
 (§10) — `USE trajectory` precedes everything below.
 
 ```sql
@@ -529,7 +757,47 @@ CREATE TABLE proj_telemetry (             -- P7 — the ONE deliberately trailin
 );  -- nothing in it is a decision input; folded async.
 ```
 
-**Forensics view:** the `lunar traj show <bead|session|attempt>` verb renders
+*The projection layer: every table above with its PK, and the contract rows (§6) that read it.
+Row numbers are the §6 mapping, not columns. P7 is the one deliberately trailing projection;
+everything else folds inside the append transaction.*
+
+```mermaid
+flowchart LR
+    LOG[("trajectory — the log")]
+    FOLD{{"fold delta, in the append transaction"}}
+    ROWS[["the 35 contract rows (§6)"]]
+    LOG --> FOLD
+    FOLD --> P1["P1 proj_session_head — PK session_id"]
+    FOLD --> P2["P2 proj_step_cursor — PK session_id, round, step_path, step_round"]
+    FOLD --> PE["proj_step_edges — PK session_id, round, from_path, to_path, kind"]
+    FOLD --> P3a["P3 proj_admission — PK work_bead_id"]
+    FOLD --> P3b["P3 proj_admission_clause — PK work_bead_id, clause"]
+    FOLD --> P4["P4 proj_gate — PK gate_id"]
+    FOLD --> P4c["P4-cycles proj_gate_cycles — PK gate_id, cycle"]
+    FOLD --> P5["P5 proj_verification — PK session_id, round, step_path, step_round, lane"]
+    FOLD --> P6["P6 proj_process_identity — PK attempt_id"]
+    FOLD --> PF["proj_effects — PK effect_id"]
+    FOLD --> P8["P8 proj_command_dedupe — PK wire_key"]
+    FOLD --> P9["P9 proj_leases — PK lease_id"]
+    FOLD -. "async" .-> P7["P7 proj_telemetry — PK session_id, round, step_path, step_round"]
+    FOLD -. "applied_seq, fold_version" .-> PM["proj_meta — PK projection"]
+    P1 -->|"rows 1-8, 10, 24, 29"| ROWS
+    P2 -->|"rows 1, 3, 5, 7, 8, 10, 14, 15, 16"| ROWS
+    PE -->|"row 15"| ROWS
+    P3a -->|"rows 2, 6, 17, 18"| ROWS
+    P3b -->|"row 2"| ROWS
+    P4 -->|"rows 1, 3, 8, 9"| ROWS
+    P4c -->|"row 9"| ROWS
+    P5 -->|"rows 3, 8, 9, 11, 15, 19-23, 25"| ROWS
+    P6 -->|"rows 1, 3, 10, 13, 32"| ROWS
+    PF -->|"row 25"| ROWS
+    P8 -->|"row 33"| ROWS
+    P9 -->|"row 31"| ROWS
+    P7 -->|"row 11"| ROWS
+    PM -. "readers refuse past 512 records or 60 s" .-> ROWS
+```
+
+**Forensics view:** the station runner's `traj show <bead|session|attempt>` verb renders
 `SELECT … FROM trajectory WHERE work_bead_id=? ORDER BY seq` with **its own typed payload
 formatting** — probe T8 corrected the draft's assumption: dolt renders a one-key JSON change as the
 entire row twice (whole payload on each side), so `traj show` never delegates rendering to
@@ -574,6 +842,46 @@ entire row twice (whole payload on each side), so `traj show` never delegates re
 5. **Apply the fold delta to every synchronous projection in the same transaction.** Visibility
    rides the SQL commit, not the dolt commit.
 
+*One append through the fenced service, steps 1–5 in one SQL transaction, with the three error
+classes as branches. Bit-shift arithmetic is elided — the CAS statement is quoted in full in step 1
+of the prose above, and the belt predicates in step 2.*
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as caller
+    participant S as fenced transition service
+    participant D as dolt, one SQL transaction
+    C->>S: request_id, fencing_token, boot_epoch, records
+    S->>D: BEGIN
+    S->>D: step 1 fence — counter-CAS UPDATE on traj_fence, low-bits increment, matching this station and boot_epoch
+    alt 0 rows matched
+        S-->>C: fenced out, definitive — appends nothing, not even its refusal, stdout plus flare, goes inert
+    else 1 row matched — never proof of holding the fence
+        S->>D: step 2 belt — boot_epoch non-decreasing over seq, grant fencing_token and expires_at
+        opt belt violation, or seq disagrees with epoch_seq
+            S-->>C: corruption-halt — no further appends, flare, wait for the operator
+        end
+        S->>D: step 3 INSERT trajectory — seq and epoch_seq assigned at commit
+        S->>D: step 4 INSERT or UPDATE traj_terminal_guard for terminals
+        S->>D: step 5 fold delta into every synchronous projection
+        S->>D: COMMIT
+        alt 1213 serialization failure
+            D-->>S: 1213
+            S-->>C: fenced out — goes inert, the successor appends the settlements
+        else 1105 naming uq_idem
+            D-->>S: 1105 uq_idem
+            S-->>C: designed at-least-once dedupe — returns the original record_id, no error
+        else 1105 naming uq_epoch_seq
+            D-->>S: 1105 uq_epoch_seq
+            S-->>C: detect-and-halt — the belt caught an interleave the fence missed
+        else committed
+            D-->>S: ok
+            S-->>C: record_id — visibility rides the SQL commit, not the dolt commit
+        end
+    end
+```
+
 **Error contract (probe T6c/T6f, plus the belt's alarm class — three distinct classes, never
 conflated):** `1213` = serialization failure — on the epoch-claim path: re-read MAX(epoch), retry
 or refuse; on the append path: **fenced out** — go inert (below). A **0-row fence-CAS match** is
@@ -617,6 +925,40 @@ absolute counter value carries no meaning beyond same-cell contention, so a rest
 trap-recovery losing it is harmless, and the status-clean CI guard (§9 Stage 0) holds because
 the cell is never staged.
 
+*The epoch/fence lifecycle: boot claim, the concurrent loser, the steal, and the two ways a stale
+process is refused. Authority B plays the boot rival and then, later, the successor that steals —
+the notes mark the phase change. Fence-state arithmetic is shown as "new epoch in the high bits".*
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as authority A
+    participant B as authority B — boot rival, later successor
+    participant L as station lock
+    participant D as trajectory database
+    A->>L: exclusive-create
+    L-->>A: held
+    A->>D: INSERT traj_epoch — epoch = MAX plus 1, cause boot
+    D-->>A: inserted — this is A's boot_epoch
+    A->>D: UPSERT traj_fence — fence_state = new epoch in the high bits
+    Note over A,D: the claim path also SEEDS the cell on a fresh grid home or after trap recovery
+    B->>D: concurrent INSERT traj_epoch — epoch = MAX plus 1
+    D-->>B: 1213 serialization failure, not 1062
+    B->>B: re-read MAX epoch, then retry or refuse
+    Note over A,B: later — A is stale, B takes the authority
+    B->>L: steal the lock, exclusive-create
+    B->>D: INSERT traj_epoch — cause steal, steal_reason stale or corrupt
+    B->>D: UPSERT traj_fence — fence_state = new epoch in the high bits
+    B->>D: authority.epoch.advanced plus settlements for what it finds outstanding
+    A->>D: append — counter-CAS at A's stale boot_epoch
+    D-->>A: 0 rows matched
+    A->>A: fenced out — appends nothing, abandons in-flight effects unacked, goes inert
+    Note over A,D: guarded reconnect
+    A->>D: re-read MAX traj_epoch.epoch for this station
+    D-->>A: MAX no longer equals A's boot_epoch
+    A->>A: INERT without touching the fence cell
+```
+
 **The service tick (major fix — the undefined "next service tick" is now defined).**
 * **Owner:** the fenced transition service itself — the durable arm of the
   `StationAdmissionAuthority`, mounted as a first-class seed in the tree (not a side loop; the
@@ -630,7 +972,7 @@ the cell is never staged.
   §2 F2) — one tick, one owner, one fence. **Each obligation arms with its record family's stage**
   (audit round 2, §9): at Stage 1 the tick runs ONLY the attempt/step-family queries; the
   eligibility re-evaluation and the grant/admission queries join at Stage 3 with their family.
-* **Clean down, defined:** `lunar down` runs the tick to fixpoint **before** appending
+* **Clean down, defined:** the station's `down` verb runs the tick to fixpoint **before** appending
   `authority.epoch.closed`; the `.closed` record is the receipt that no obligation was left open.
   A down that cannot reach fixpoint (bd unreachable, GitHub unreachable) appends `.closed` with the
   outstanding-obligation count in its payload and flares — the successor boot's tick inherits the
@@ -771,6 +1113,37 @@ budget.
 Projections P1–P9 as specified in §4 — **all with real DDL now** (major fix; P9 = proj_leases,
 audit round 2). All synchronous (in the append transaction) except P7. Mapping against all 35
 contract rows:
+
+*The data flow, with the row numbers indexing the table below. Everything left of the consumers is
+one SQL transaction — except P7, folded async, and `traj_pulse`, which is never folded at all: the
+liveness read reaches around the fold and reads `unknown` when no beat was observed in the current
+epoch.*
+
+```mermaid
+flowchart LR
+    LOG[("trajectory log")]
+    FOLD{{"fold delta, same SQL transaction"}}
+    SYNC["synchronous projections: P1-P6, P8, P9, proj_effects, proj_step_edges"]
+    P7["P7 proj_telemetry"]
+    PULSE[("traj_pulse — never folded")]
+    STATUS["frontier / status suite — rows 3, 5, 6, 14, 15, 16"]
+    ADM["admission and the mount gate — rows 2, 17, 29"]
+    ROUTE["route and gate adjudication — rows 9, 19"]
+    DELIV["verification, CI and delivery receipts — rows 21, 22, 25"]
+    ROUNDS["spent rounds and false-F rollups — rows 8, 11"]
+    LOG --> FOLD
+    FOLD --> SYNC
+    FOLD -. "async, no decision input" .-> P7
+    SYNC --> STATUS
+    SYNC --> ADM
+    SYNC --> ROUTE
+    SYNC --> DELIV
+    SYNC --> ROUNDS
+    P7 -.-> ROUNDS
+    PULSE -. "liveness read, outside the fold" .-> STATUS
+    classDef async fill:#fff4e0,stroke:#c98a1b,stroke-width:2px,color:#111;
+    class P7,PULSE async;
+```
 
 | # | Served by | Key fields / notes |
 |---|---|---|
@@ -928,7 +1301,7 @@ only for the `#rN` string synthesis, which is genuinely a projection. (P1's `las
 `outcome` therefore never need synthetic legacy values — legacy rows are simply not in P1.)
 
 **The shadow comparator is a deliverable, not a posture (major fix):**
-* **Verb:** `lunar traj shadow-diff`, run per round by the operator (and by the stage checklist —
+* **Verb:** the runner's `traj shadow-diff`, run per round by the operator (and by the stage checklist —
   a stage cut without N clean runs on record cannot proceed).
 * **Output:** a typed mismatch report keyed `(session, field, legacy_value, fold_value, seq)`.
 * **Cut criterion:** zero unexplained mismatches over 3 consecutive rounds, with a named allow-list
@@ -944,7 +1317,7 @@ only for the `#rN` string synthesis, which is genuinely a projection. (P1's `las
 
 **Cutover order:**
 
-* **Stage 0 — substrate + measurements.** `CREATE DATABASE trajectory` beside `tranquility` (§10);
+* **Stage 0 — substrate + measurements.** `CREATE DATABASE trajectory` beside the ledger database (§10);
   `dolt_ignore` registration first; `traj_epoch`/`traj_fence`/`trajectory`/guard/pulse/proj_meta
   **and all P1–P9 DDL** (§4); the codec package with fixtures; the fenced service with the T6i
   fence, the full error contract (1213 / 1105 / corruption-halt, §5), the session-variable ban,
@@ -988,15 +1361,50 @@ only for the `#rN` string synthesis, which is genuinely a projection. (P1's `las
   namespace fenced off from operator hard-delete tooling. Whole-era import stays rejected;
   pre-cutover forensics stays dolt archaeology (row 26).
 
+*The stage ladder with the record-type groups cutting whole at their stages. Each stage's contents
+are the bullets above — only the group and the boundary are drawn here. The Stage 4 → 5 hop carries
+no stated quiesced boundary, so none is drawn.*
+
+```mermaid
+flowchart TD
+    S0["Stage 0 — substrate + measurements"]
+    B1{{"quiesced epoch boundary"}}
+    S1["Stage 1 — terminal tail + step-state churn"]
+    B2{{"quiesced epoch boundary"}}
+    S2["Stage 2 — pour + successors"]
+    B3{{"quiesced epoch boundary"}}
+    S3["Stage 3 — admission"]
+    B4{{"quiesced epoch boundary"}}
+    S4["Stage 4 — verification + effects"]
+    S5["Stage 5 optional — backfill, open sessions only"]
+    G1["G1 — attempt lifecycle + step.transition"]
+    G2["G2 — the graph shape: molecule.poured + step.superseded"]
+    G3["G3 — admission / grants"]
+    G4["G4 — verification + effects"]
+    GATE["every boundary: shadow-compare window, then zero unexplained mismatches over 3 consecutive rounds, then zero open sessions on the outgoing discipline, refused at boot"]
+    DRAIN["dual-read — read P1, on miss fall through to the legacy bead reader — the fallback count reaching zero is the drain signal and the cut criterion"]
+    S0 --> B1 --> S1 --> B2 --> S2 --> B3 --> S3 --> B4 --> S4 --> S5
+    G1 -->|"cuts whole at"| S1
+    G2 -->|"cuts whole at"| S2
+    G3 -->|"cuts whole at"| S3
+    G4 -->|"cuts whole at"| S4
+    DRAIN -.-> GATE
+    GATE -.-> B1
+    GATE -.-> B2
+    GATE -.-> B3
+    GATE -.-> B4
+```
+
 ---
 
 # 10 Storage: the separate-database shape
 
 **The call (03-storage-call.md, imported; supersedes the decision's same-db default pending
-operator ratification): a separate `trajectory` database, sibling of `tranquility`, under the same
-bd-owned dolt sql-server data dir (`.grid/.beads/dolt/trajectory/`).** The fenced transition
+operator ratification): a separate `trajectory` database, sibling of the ledger database, under the same
+bd-owned dolt sql-server data dir (`.grid/.beads/dolt/trajectory/`, beside
+`.grid/.beads/dolt/<state-db>/`).** The fenced transition
 service connects to the same server bd proxies through, `USE trajectory`, and never touches
-`tranquility` over SQL. A fully separate store (own server process) is rejected. Everything in
+the ledger database over SQL. A fully separate store (own server process) is rejected. Everything in
 §4–§5 carries over verbatim — nothing in the design depended on cohabiting bd's database, and the
 probe ran on exactly this engine.
 
@@ -1024,7 +1432,7 @@ benefit is thinner than assumed: the operational boundary is the server data dir
   grows ~22–24 KB per append regardless of payload size — ~1 MB/s at measured storm tempo; ~99%
   gc-reclaimable). `CALL DOLT_GC()` targets the `trajectory` database on a cadence set by stage-0
   measurement 2 — steady interval if online gc proves non-disruptive to bd on the shared server,
-  service-quiesced windows if not. `tranquility`'s gc cadence is untouched; trajectory workload
+  service-quiesced windows if not. The ledger database's gc cadence is untouched; trajectory workload
   adds zero journal to bd's files. CLI gc runs inside `dolt/trajectory/` with `--doltcfg-dir`
   discipline.
 * **Backup.** One snapshot procedure over `.beads/dolt/` (quiesced), or two `dolt backup` remotes —
@@ -1043,7 +1451,7 @@ benefit is thinner than assumed: the operational boundary is the server data dir
   interval**), staging `trajectory`, `traj_epoch`, `traj_terminal_guard` by name. Growth relief:
   epoch-ranged archive tables become a **third sibling database on the same server** when
   triggered.
-* **bd coexistence.** bd never connects to `trajectory`; the service never writes `tranquility`
+* **bd coexistence.** bd never connects to `trajectory`; the service never writes the ledger database
   over SQL — every bd-side effect rides bd's own surface as an epoch-stamped, read-back
   derived-obligation repair (§5). `dolt add --force` banned in all grid tooling. One grid per
   machine stands. The service holds persistent connections with the `@@dolt_force_transaction_commit`
@@ -1060,7 +1468,7 @@ replacing the ~6k-bead pour.
 **What stage 0 must still measure** (the probe ran solo on throwaway databases): (1) bd's actual
 commit behavior and its tolerance of `CREATE DATABASE trajectory` under its data dir; (2) online gc
 semantics on a shared multi-db server (does gc on `trajectory` kill connections serving
-`tranquility`; does bd's proxy auto-recover); (3) append latency under concurrent bd load with the
+the ledger database; does bd's proxy auto-recover); (3) append latency under concurrent bd load with the
 full synchronous projection set, against §5's ~22–28 appends/s need; (4) fence behavior across a
 server bounce mid-transaction; (5) rebuild duration at ≥100 k rows; (6) the two-database restore
 drill end-to-end; (7) the CI guard tests (§9 Stage 0).
@@ -1068,7 +1476,7 @@ drill end-to-end; (7) the CI guard tests (§9 Stage 0).
 **Flip conditions.** *Back to same-db* (all three required): stage 0 finds bd's stack cannot
 tolerate the sibling database; **and** bd's commit style is verified never `-a`-shaped, pinned by a
 test, re-checked per bd upgrade; **and** a real requirement materializes for trajectory to ride
-`tranquility`'s exact remote/sync stream atomically. *Forward to a separate store (own server)*:
+the ledger database's exact remote/sync stream atomically. *Forward to a separate store (own server)*:
 online gc measurably disrupts bd with no acceptable scheduling window; **or** the tg-y4fd soak
 shows shared-server process contention degrading append latency below the full-projection-set
 need; **or** federation requires trajectory served under its own auth/remote lifecycle. *Reopen the
@@ -1327,7 +1735,7 @@ No defect is rebutted — all 26 are accepted; three suggested fixes were replac
     interface (P1, fall through to the one existing disposition rule); fallback count is the drain
     signal and cut criterion; a view survives only for `#rN` string synthesis (§9).
 19. **Shadow compare has no owner, bar, or comparable surface** → Specified as a deliverable:
-    `lunar traj shadow-diff` verb, typed mismatch report `(session, field, legacy, fold, seq)`,
+    `traj shadow-diff` verb, typed mismatch report `(session, field, legacy, fold, seq)`,
     cut criterion (zero unexplained over 3 rounds + crash-class allow-list), action on mismatch
     (cut blocked, fold presumed wrong), and the unshadowable-facts list stated (§9).
 20. **35/35 claim breaks on four projections with no DDL** → P3 (proj_admission +

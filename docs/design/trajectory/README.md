@@ -5,6 +5,43 @@
 admission-authority boundary (tg-y4fd). All five deliverables are design artifacts;
 tg-zfek implements against them.
 
+*The two planes and the one bridge between them. Abridged: of the 35 contract rows, 29 are fold-served, 5 stay on their contracted substrate (bd / lock file / live streams — only the bd ones are drawn) and 1 retires; record types and projections are named in full in `trajectory-schema.md`.*
+
+```mermaid
+flowchart TB
+    eng["engine transitions, machine tempo"]
+    svc["fenced transition service — the sole appender"]
+
+    subgraph LEDGER["WORK LEDGER plane — bd, human tempo"]
+        wb["work beads: notes and spec fields"]
+        gb["gate beads"]
+        ap["human approval facts: approved_label_rev, validation_plan_digest, issue_type"]
+        hd["session bead, slimmed: eight-field head summary"]
+        rt1["RETIRED: step and molecule bead types, the ~6k-bead pour"]
+    end
+
+    subgraph TRAJ["TRAJECTORY plane — append-only, machine tempo"]
+        log["the log: typed envelope, ~40 record types, five families"]
+        fold["the fold"]
+        proj["projections P1-P9"]
+        rt2["RETIRED: the reap, the boot teardown-replay"]
+    end
+
+    rd["the 35-query read contract"]
+
+    eng --> svc
+    svc -->|"append, counter-CAS fence"| log
+    log --> fold
+    fold --> proj
+    proj -->|"29 rows fold-served"| rd
+    LEDGER -->|"the bd-substrate rows"| rd
+    svc -->|"head stamp"| hd
+    svc -->|"gate-bead close and re-mint"| gb
+    ap -.->|"consumed into grant basis"| log
+    log -.->|"one molecule.poured record replaces it"| rt1
+    proj -.->|"derived obligations, repaired on the service tick"| rt2
+```
+
 ## The five deliverables
 
 1. **The trajectory record schema** — `trajectory-schema.md` (§1–§5): one append-only
@@ -22,9 +59,11 @@ tg-zfek implements against them.
    Every restart-lossy in-memory latch is owned durably. Terminals are one record with no
    tail; the former teardown tail becomes derived obligations repaired idempotently by a
    defined service tick — the reap and the boot teardown-replay retire (falsifier clause 2).
-3. **Session-bead slimming** — schema §7: the session bead survives as a seven-field head
+3. **Session-bead slimming** — schema §7: the session bead survives as an eight-field head
    summary written only by the fenced service; hand-edits are detected and repaired, not
-   load-bearing (the `tranquility-8krit` 149k-commit class dissolves).
+   load-bearing (the `tranquility-8krit` 149k-commit class dissolves — every specimen id and
+   store measurement in these documents is from the reference deployment, a private station's
+   month-old state store, the dolt database `tranquility`).
 4. **Migration** — schema §9: record-type groups G1–G4 cut whole behind quiesced epoch
    boundaries (zero open sessions on the outgoing discipline, boot-enforced, with a
    pre-stated drain fallback); legacy reads are a counted code-level dual-read (fallback
