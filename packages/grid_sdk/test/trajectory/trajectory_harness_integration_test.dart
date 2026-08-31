@@ -48,8 +48,7 @@ void main() {
     ),
   );
 
-  test('boot → claim → append → drain → down, then a successor epoch',
-      () async {
+  test('boot → claim → append → drain → down, then a successor epoch', () async {
     final flares = <String>[];
     final harness = await TrajectoryHarness.build(
       // `auto` on a provisioned home arms — the artifact IS the switch (§1.3).
@@ -67,8 +66,10 @@ void main() {
     expect(harness.status.epoch, 1);
     expect(await scalar('SELECT MAX(epoch) FROM traj_epoch'), '1');
     expect(
-      await scalar('SELECT fence_state >> 32 FROM traj_fence '
-          "WHERE station = 'it-station'"),
+      await scalar(
+        'SELECT fence_state >> 32 FROM traj_fence '
+        "WHERE station = 'it-station'",
+      ),
       '1',
     );
 
@@ -83,13 +84,17 @@ void main() {
     expect(harness.status.deduped, 1);
     expect(harness.status.dropped, 0);
     expect(
-      await scalar('SELECT COUNT(*) FROM trajectory '
-          "WHERE station = 'it-station'"),
+      await scalar(
+        'SELECT COUNT(*) FROM trajectory '
+        "WHERE station = 'it-station'",
+      ),
       '2',
     );
     expect(
-      await scalar('SELECT MAX(epoch_seq) FROM trajectory '
-          "WHERE station = 'it-station' AND boot_epoch = 1"),
+      await scalar(
+        'SELECT MAX(epoch_seq) FROM trajectory '
+        "WHERE station = 'it-station' AND boot_epoch = 1",
+      ),
       '2',
       reason: 'the serialized per-epoch stream',
     );

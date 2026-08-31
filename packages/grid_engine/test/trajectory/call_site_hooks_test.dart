@@ -72,7 +72,8 @@ final class _CapturingSink implements TrajectoryRecordSink {
   /// exactly as well.
   List<Map<String, Object?>> facts(String recordType) => [
     for (final r in records)
-      if (r.recordType == recordType) {...r.correlationToJson(), ...r.payloadToJson()},
+      if (r.recordType == recordType)
+        {...r.correlationToJson(), ...r.payloadToJson()},
   ];
 
   Map<String, Object?> fact(String recordType) {
@@ -472,11 +473,7 @@ void main() {
         // the `failed` it is about to write means "the store dropped it",
         // not "the work failed". Both land as `state=failed` on the bead;
         // only the record separates them.
-        final h = _host(
-          _ServiceCap(const Ok()),
-          sink: sink,
-          failUpdates: 1,
-        );
+        final h = _host(_ServiceCap(const Ok()), sink: sink, failUpdates: 1);
         addTearDown(h.owner.dispose);
         await _pump();
 
@@ -661,7 +658,10 @@ void main() {
     });
 
     test('proveFresh appends adopt.proved on BOTH outcomes', () async {
-      for (final (live, expected) in [(true, 'adopted'), (false, 'respawned')]) {
+      for (final (live, expected) in [
+        (true, 'adopted'),
+        (false, 'respawned'),
+      ]) {
         final sink = _CapturingSink();
         final b = _vendor(sink: sink, liveness: (_) => live);
         final fresh = await b.lease.proveFresh(
@@ -684,9 +684,7 @@ void main() {
     test(
       'NON-FATAL: a refusing/throwing recorder still clears the breadcrumb',
       () async {
-        final expected = _updateArgv(
-          (await _released(_CapturingSink())).fakes,
-        );
+        final expected = _updateArgv((await _released(_CapturingSink())).fakes);
         expect(expected, hasLength(1), reason: 'sanity: the clear ran');
         for (final posture in _failingPostures()) {
           expect(
@@ -798,10 +796,7 @@ void main() {
         ),
       );
       owner.flush();
-      await _pumpUntil(
-        owner,
-        () => fakes.runner.callsFor('close').isNotEmpty,
-      );
+      await _pumpUntil(owner, () => fakes.runner.callsFor('close').isNotEmpty);
 
       final terminal = sink.fact('attempt.terminal');
       expect(terminal['outcome'], 'succeeded');
@@ -985,5 +980,4 @@ void main() {
       },
     );
   });
-
 }

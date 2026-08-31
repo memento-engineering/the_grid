@@ -714,37 +714,34 @@ void main() {
       expect(record.result, {'grid.result.grade': 'A'});
     });
 
-    test(
-      'failed splits the tg-7ux conflation: work vs store_unavailable',
-      () {
-        recorder.stepFailed(
-          sessionId: 's1',
-          stepPath: 'tg-1/build',
-          stepRound: 0,
-          incarnation: 1,
-          storeUnavailable: false,
-          failureReason: 'the agent exited 1',
-          restartBudget: 2,
-        );
-        recorder.stepFailed(
-          sessionId: 's1',
-          stepPath: 'tg-1/build',
-          stepRound: 0,
-          incarnation: 2,
-          storeUnavailable: true,
-          failureReason: 'persist "complete" failed: bd timeout',
-          restartBudget: 1,
-        );
-        final classes = sink.captured
-            .map((c) => expectSchemaClean(c).record as StepTransition)
-            .map((r) => r.failureClass)
-            .toList();
-        expect(classes, [
-          StepFailureClass.work,
-          StepFailureClass.storeUnavailable,
-        ]);
-      },
-    );
+    test('failed splits the tg-7ux conflation: work vs store_unavailable', () {
+      recorder.stepFailed(
+        sessionId: 's1',
+        stepPath: 'tg-1/build',
+        stepRound: 0,
+        incarnation: 1,
+        storeUnavailable: false,
+        failureReason: 'the agent exited 1',
+        restartBudget: 2,
+      );
+      recorder.stepFailed(
+        sessionId: 's1',
+        stepPath: 'tg-1/build',
+        stepRound: 0,
+        incarnation: 2,
+        storeUnavailable: true,
+        failureReason: 'persist "complete" failed: bd timeout',
+        restartBudget: 1,
+      );
+      final classes = sink.captured
+          .map((c) => expectSchemaClean(c).record as StepTransition)
+          .map((r) => r.failureClass)
+          .toList();
+      expect(classes, [
+        StepFailureClass.work,
+        StepFailureClass.storeUnavailable,
+      ]);
+    });
 
     test('the failed record names the BUMPED incarnation (succession)', () {
       // The persisted restartCount the D-5 write just bumped IS the durable
@@ -772,7 +769,9 @@ void main() {
       expect(record.cause, StepCause.route);
       expect(record.failureReason, 'needs a human');
       // G1 carries no gate family at Stage 1.
-      expect(sink.captured.map((c) => c.record.recordType), ['step.transition']);
+      expect(sink.captured.map((c) => c.record.recordType), [
+        'step.transition',
+      ]);
     });
 
     test('rearm bumps step_round and names cause=gate_cleared', () {
@@ -854,10 +853,7 @@ void main() {
     });
 
     test('a KILLED sweep clears it; a LEFT one does not', () {
-      recorder.leaseObserved(
-        stepBeadId: 'killed-step',
-        attemptId: first,
-      );
+      recorder.leaseObserved(stepBeadId: 'killed-step', attemptId: first);
       recorder.leaseSwept(
         attemptId: first,
         token: 't1',

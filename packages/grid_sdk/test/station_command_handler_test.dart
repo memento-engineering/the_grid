@@ -1391,7 +1391,6 @@ void main() {
       await rework(_ThrowingSink());
     });
   });
-
 }
 
 Bead _session(

@@ -239,12 +239,13 @@ void main() {
 
       expect(cursorFold.rows, hasLength(sessions * 2));
       for (final row in cursorRows.rows) {
-        final folded = cursorFold.rows[(
-          sessionId: row['session_id']!,
-          round: int.parse(row['round']!),
-          stepPath: row['step_path']!,
-          stepRound: int.parse(row['step_round']!),
-        )];
+        final folded =
+            cursorFold.rows[(
+              sessionId: row['session_id']!,
+              round: int.parse(row['round']!),
+              stepPath: row['step_path']!,
+              stepRound: int.parse(row['step_round']!),
+            )];
         expect(folded, isNotNull, reason: 'incremental row missing in replay');
         expect(folded!.state, row['state']);
         expect(

@@ -114,11 +114,7 @@ void main() {
           ),
         );
         final update = delta! as ProcessIdentityUpdate;
-        expect(
-          update.columns,
-          {'lease_state': expected},
-          reason: recordType,
-        );
+        expect(update.columns, {'lease_state': expected}, reason: recordType);
       });
     });
 
@@ -386,7 +382,9 @@ void main() {
             payload: const {'token': _attempt},
           ),
         )!,
-        processIdentityDeltaFor(provisioned(seq: 3, sessionId: 'tranquility-1'))!,
+        processIdentityDeltaFor(
+          provisioned(seq: 3, sessionId: 'tranquility-1'),
+        )!,
         processIdentityDeltaFor(
           envelope(
             recordType: 'attempt.lease.released',

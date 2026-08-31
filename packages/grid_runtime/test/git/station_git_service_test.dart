@@ -100,36 +100,35 @@ void main() {
       );
 
   group('W4 — worktree.provisioned is captured IN the service', () {
-    test('a fresh mint records the base sha, the branch, and adopted=false',
-        () async {
-      final sink = _CapturingSink();
-      final seeded = await seedOriginAndClone();
-      final svc = serviceRecording(sink);
-      final root = await svc.registerRootCheckout(
-        path: seeded.root,
-        substation: 'tgdog',
-      );
+    test(
+      'a fresh mint records the base sha, the branch, and adopted=false',
+      () async {
+        final sink = _CapturingSink();
+        final seeded = await seedOriginAndClone();
+        final svc = serviceRecording(sink);
+        final root = await svc.registerRootCheckout(
+          path: seeded.root,
+          substation: 'tgdog',
+        );
 
-      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-1');
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-1');
 
-      final record = sink.single();
-      expect(record.recordType, 'worktree.provisioned');
-      final fact = {
-        ...record.correlationToJson(),
-        ...record.payloadToJson(),
-      };
-      expect(fact['worktree'], wt.path);
-      expect(fact['branch'], 'grid/lenny-1');
-      expect(fact['adopted_existing'], isFalse);
-      // The base sha is the commit the NEW worktree actually starts on —
-      // read back from git itself, never assumed.
-      final head = await runner.run(
-        workingDirectory: wt.path,
-        args: const <String>['rev-parse', 'HEAD'],
-      );
-      expect(fact['commit_sha'], head.output.trim());
-      expect((fact['commit_sha']! as String), hasLength(40));
-    });
+        final record = sink.single();
+        expect(record.recordType, 'worktree.provisioned');
+        final fact = {...record.correlationToJson(), ...record.payloadToJson()};
+        expect(fact['worktree'], wt.path);
+        expect(fact['branch'], 'grid/lenny-1');
+        expect(fact['adopted_existing'], isFalse);
+        // The base sha is the commit the NEW worktree actually starts on —
+        // read back from git itself, never assumed.
+        final head = await runner.run(
+          workingDirectory: wt.path,
+          args: const <String>['rev-parse', 'HEAD'],
+        );
+        expect(fact['commit_sha'], head.output.trim());
+        expect((fact['commit_sha']! as String), hasLength(40));
+      },
+    );
 
     test('an ADOPTED branch records adopted_existing=true', () async {
       final sink = _CapturingSink();
@@ -148,36 +147,40 @@ void main() {
       expect(sink.single().payloadToJson()['adopted_existing'], isTrue);
     });
 
-    test('NON-FATAL: a throwing recorder still provisions the worktree',
-        () async {
-      final seeded = await seedOriginAndClone();
-      final svc = StationGitService(
-        runner: runner,
-        prOpener: _FakePrOpener(),
-        recorder: StationTrajectoryRecorder(sink: _ThrowingSink()),
-      );
-      final root = await svc.registerRootCheckout(
-        path: seeded.root,
-        substation: 'tgdog',
-      );
-      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-2');
-      expect(Directory(wt.path).existsSync(), isTrue);
-      expect(wt.branch, 'grid/lenny-2');
-    });
-
-    test('an unrecorded service provisions identically (the default)',
-        () async {
-      final seeded = await seedOriginAndClone();
-      final svc = serviceWith(_FakePrOpener());
-      final wt = await svc.provisionWorktree(
-        root: await svc.registerRootCheckout(
+    test(
+      'NON-FATAL: a throwing recorder still provisions the worktree',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final svc = StationGitService(
+          runner: runner,
+          prOpener: _FakePrOpener(),
+          recorder: StationTrajectoryRecorder(sink: _ThrowingSink()),
+        );
+        final root = await svc.registerRootCheckout(
           path: seeded.root,
           substation: 'tgdog',
-        ),
-        beadId: 'lenny-3',
-      );
-      expect(Directory(wt.path).existsSync(), isTrue);
-    });
+        );
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-2');
+        expect(Directory(wt.path).existsSync(), isTrue);
+        expect(wt.branch, 'grid/lenny-2');
+      },
+    );
+
+    test(
+      'an unrecorded service provisions identically (the default)',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final svc = serviceWith(_FakePrOpener());
+        final wt = await svc.provisionWorktree(
+          root: await svc.registerRootCheckout(
+            path: seeded.root,
+            substation: 'tgdog',
+          ),
+          beadId: 'lenny-3',
+        );
+        expect(Directory(wt.path).existsSync(), isTrue);
+      },
+    );
   });
 
   test(

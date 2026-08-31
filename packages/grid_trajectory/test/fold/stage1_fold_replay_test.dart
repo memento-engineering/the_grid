@@ -64,9 +64,14 @@ void main() {
       step(2, 'running'),
       step(3, 'gated'),
       step(4, 'pending', stepRound: 1, cause: 'gate_cleared'),
-      step(5, 'complete', stepRound: 1, extra: {
-        'result': {'rc': 0},
-      }),
+      step(
+        5,
+        'complete',
+        stepRound: 1,
+        extra: {
+          'result': {'rc': 0},
+        },
+      ),
       envelope(
         recordType: 'attempt.process.exited',
         family: TrajectoryFamily.attempt,
@@ -91,20 +96,22 @@ void main() {
         'linked, successor complete', () {
       final result = foldStepCursors(storm('s1', baseSeq: 1));
       expect(result.rows, hasLength(2));
-      final predecessor = result.rows[(
-        sessionId: 's1',
-        round: 0,
-        stepPath: 'work.build',
-        stepRound: 0,
-      )]!;
+      final predecessor =
+          result.rows[(
+            sessionId: 's1',
+            round: 0,
+            stepPath: 'work.build',
+            stepRound: 0,
+          )]!;
       expect(predecessor.state, 'gated');
       expect(predecessor.supersededByStepRound, 1);
-      final successor = result.rows[(
-        sessionId: 's1',
-        round: 0,
-        stepPath: 'work.build',
-        stepRound: 1,
-      )]!;
+      final successor =
+          result.rows[(
+            sessionId: 's1',
+            round: 0,
+            stepPath: 'work.build',
+            stepRound: 1,
+          )]!;
       expect(successor.state, 'complete');
       expect(successor.result, {'rc': 0});
       expect(result.appliedSeq, 8);
@@ -113,10 +120,7 @@ void main() {
 
     test('same stream twice folds to IDENTICAL rows, and the §5 replay rule '
         'restores a shuffled input (replay determinism)', () {
-      final stream = [
-        ...storm('s1', baseSeq: 1),
-        ...storm('s2', baseSeq: 10),
-      ];
+      final stream = [...storm('s1', baseSeq: 1), ...storm('s2', baseSeq: 10)];
       final first = foldStepCursors(stream);
       final second = foldStepCursors(stream);
       expect(second.rows, first.rows);
@@ -224,10 +228,7 @@ void main() {
         clock: () => DateTime.utc(2026, 8, 31, 16),
       );
       expect(result.rows, hasLength(1));
-      expect(
-        db.matching('DELETE FROM proj_process_identity'),
-        hasLength(1),
-      );
+      expect(db.matching('DELETE FROM proj_process_identity'), hasLength(1));
       expect(db.matching('INSERT INTO proj_process_identity'), hasLength(1));
       final meta = db.matching('INSERT INTO proj_meta').single;
       expect(meta.params!['projection'], processIdentityProjection);

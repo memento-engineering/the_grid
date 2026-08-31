@@ -157,7 +157,9 @@ class StepCursorRow {
     'incarnation': incarnation,
     'attempt_id': attemptId,
     'superseded_by_step_round': supersededByStepRound,
-    'cooldown_until': cooldownUntil == null ? null : sqlDateTime6(cooldownUntil!),
+    'cooldown_until': cooldownUntil == null
+        ? null
+        : sqlDateTime6(cooldownUntil!),
     'restart_budget': restartBudget,
     'started_at': startedAt == null ? null : sqlDateTime6(startedAt!),
     'ready_at': readyAt == null ? null : sqlDateTime6(readyAt!),

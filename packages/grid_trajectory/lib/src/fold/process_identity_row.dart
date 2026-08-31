@@ -60,13 +60,8 @@ class ProcessIdentityRow {
 
   /// The `uq_incarnation` ladder tuple — what the in-memory applier mirrors
   /// the SQL upsert's unique-conflict arm against.
-  (String, int, String, int, int) get ladder => (
-    sessionId,
-    round,
-    stepPath,
-    stepRound,
-    incarnation,
-  );
+  (String, int, String, int, int) get ladder =>
+      (sessionId, round, stepPath, stepRound, incarnation);
 
   /// The row with [columns] applied — DDL column names, an EXPLICIT null
   /// value means SET NULL (absent keys are untouched), mirroring the

@@ -196,8 +196,10 @@ class StationWorkRuntime {
     try {
       await trajectory.start();
     } on Object catch (error) {
-      _onRefusal('trajectory start failed (station booting legacy-only) — '
-          '$error');
+      _onRefusal(
+        'trajectory start failed (station booting legacy-only) — '
+        '$error',
+      );
     }
     await _freshnessBarrier();
     final report = await _restart.reconcile();
@@ -262,8 +264,10 @@ class StationWorkRuntime {
     try {
       await trajectory.shutdown();
     } on Object catch (error) {
-      _onRefusal('trajectory shutdown failed (sources still stopping) — '
-          '$error');
+      _onRefusal(
+        'trajectory shutdown failed (sources still stopping) — '
+        '$error',
+      );
     }
     await _sourcesShutdown();
   }

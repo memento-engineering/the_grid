@@ -61,8 +61,7 @@ void main() {
     trajectoryOverride: trajectoryOverride,
   );
 
-  test(
-      'dry-run FORCES disabled — even a required config claims no epoch and '
+  test('dry-run FORCES disabled — even a required config claims no epoch and '
       'writes nothing (§1.3)', () async {
     final work = await assemble(
       trajectoryConfig: const TrajectoryConfig(
@@ -75,17 +74,21 @@ void main() {
     await work.shutdown();
   });
 
-  test('the default auto posture on an unprovisioned home is a quiet no-op',
-      () async {
-    final work = await assemble();
-    expect(work.trajectory.mode, TrajectoryHarnessMode.disabled,
-        reason: 'dry-run forced; the config default (auto) never reaches IO');
-    await work.start();
-    await work.shutdown();
-  });
-
   test(
-      'the runtime lifecycles the harness: start() brings it up, shutdown() '
+    'the default auto posture on an unprovisioned home is a quiet no-op',
+    () async {
+      final work = await assemble();
+      expect(
+        work.trajectory.mode,
+        TrajectoryHarnessMode.disabled,
+        reason: 'dry-run forced; the config default (auto) never reaches IO',
+      );
+      await work.start();
+      await work.shutdown();
+    },
+  );
+
+  test('the runtime lifecycles the harness: start() brings it up, shutdown() '
       'settles it before the sources (§1.2)', () async {
     final flares = <String>[];
     final db = _FakeDb();
@@ -106,14 +109,23 @@ void main() {
     expect(harness.mode, TrajectoryHarnessMode.down);
 
     await work.start();
-    expect(harness.mode, isNot(TrajectoryHarnessMode.down),
-        reason: 'StationWorkRuntime.start() drove TrajectoryHarness.start()');
-    expect(work.lastRestartReport, isNotNull,
-        reason: 'the boot continued past the trajectory — never blocked');
+    expect(
+      harness.mode,
+      isNot(TrajectoryHarnessMode.down),
+      reason: 'StationWorkRuntime.start() drove TrajectoryHarness.start()',
+    );
+    expect(
+      work.lastRestartReport,
+      isNotNull,
+      reason: 'the boot continued past the trajectory — never blocked',
+    );
 
     await work.shutdown();
-    expect(db.closed, isTrue,
-        reason: 'shutdown() settled the harness (connection closed)');
+    expect(
+      db.closed,
+      isTrue,
+      reason: 'shutdown() settled the harness (connection closed)',
+    );
   });
 
   group('W4/W5 — the recorder reaches every observation site (§1.1)', () {

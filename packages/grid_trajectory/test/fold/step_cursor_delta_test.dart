@@ -252,7 +252,11 @@ void main() {
         'chain write at the same seq', () {
       final delta =
           stepCursorDeltaFor(
-                transition(state: 'pending', stepRound: 2, cause: 'gate_cleared'),
+                transition(
+                  state: 'pending',
+                  stepRound: 2,
+                  cause: 'gate_cleared',
+                ),
               )!
               as StepCursorUpsert;
       final statements = stepCursorSqlFor(delta, lastSeq: 12);
@@ -309,12 +313,13 @@ void main() {
         lastSeq: 3,
       );
       expect(rows, hasLength(2), reason: 'one row per step_round');
-      final predecessor = rows[(
-        sessionId: 'tranquility-1',
-        round: 1,
-        stepPath: 'work.build',
-        stepRound: 0,
-      )]!;
+      final predecessor =
+          rows[(
+            sessionId: 'tranquility-1',
+            round: 1,
+            stepPath: 'work.build',
+            stepRound: 0,
+          )]!;
       expect(predecessor.state, 'gated', reason: 'history is never rewritten');
       expect(
         predecessor.supersededByStepRound,
@@ -322,12 +327,13 @@ void main() {
         reason: 'the rearm chain-link landed on the predecessor',
       );
       expect(predecessor.lastSeq, 3);
-      final successor = rows[(
-        sessionId: 'tranquility-1',
-        round: 1,
-        stepPath: 'work.build',
-        stepRound: 1,
-      )]!;
+      final successor =
+          rows[(
+            sessionId: 'tranquility-1',
+            round: 1,
+            stepPath: 'work.build',
+            stepRound: 1,
+          )]!;
       expect(successor.state, 'pending');
       expect(successor.supersededByStepRound, isNull);
     });

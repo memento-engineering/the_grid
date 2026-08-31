@@ -74,7 +74,9 @@ void main() {
     expect(calls, ['first:attempt.note:41', 'second:attempt.note:41']);
 
     final sql = [for (final call in h.db.log) call.sql];
-    final insert = sql.indexWhere((s) => s.startsWith('INSERT INTO trajectory'));
+    final insert = sql.indexWhere(
+      (s) => s.startsWith('INSERT INTO trajectory'),
+    );
     final fold = sql.indexWhere((s) => s.contains('fake_projection_one'));
     final meta = sql.indexWhere((s) => s.contains('INSERT INTO proj_meta'));
     final commit = sql.lastIndexOf('COMMIT');
