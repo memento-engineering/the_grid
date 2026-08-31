@@ -17,9 +17,16 @@ class TrajCommand extends Command<int> {
   TrajCommand({
     TrajectoryOpener? open,
     ShadowCompare compare = const UncomparableShadow(),
+    ShadowCompareFactory? compareFor,
   }) {
     addSubcommand(TrajShowCommand(open: open));
-    addSubcommand(TrajShadowDiffCommand(open: open, compare: compare));
+    addSubcommand(
+      TrajShadowDiffCommand(
+        open: open,
+        compare: compare,
+        compareFor: compareFor,
+      ),
+    );
   }
 
   @override

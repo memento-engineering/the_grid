@@ -844,8 +844,8 @@ void main() {
       expect(h.appender.pendingRows, 0);
     });
 
-    test('a branch change fails closed on the append path — before any '
-        'transaction opens', () async {
+    test('a branch change fails closed on the append path — a TYPED halt, '
+        'before any transaction opens', () async {
       final h = _Harness()
         ..scriptClaimReads()
         ..scriptFenceHeld();
@@ -859,12 +859,56 @@ void main() {
       );
       await h.claim();
 
-      await expectLater(h.appender.append(_note(1)), throwsStateError);
+      final outcome = await h.appender.append(_note(1));
+
+      // Fail-closed, but INSIDE the sealed hierarchy: §5 lets no raw
+      // throwable escape append(), and the pin's own refusal is the
+      // corruption halt it has already latched.
+      expect(outcome, isA<AppendCorruptionHalt>());
+      expect((outcome as AppendCorruptionHalt).reason, contains('scratch'));
       expect(h.appender.isHalted, isTrue);
       // The pin refused before the transaction — no CAS, no insert.
       expect(h.db.matching('START TRANSACTION'), hasLength(1)); // the claim's
       expect(h.db.matching('UPDATE traj_fence'), isEmpty);
       expect(h.eventKinds, contains(TrajectoryServiceEventKind.corruptionHalt));
+
+      // The latch holds: every later append refuses with the same outcome.
+      expect(await h.appender.append(_note(2)), isA<AppendCorruptionHalt>());
+    });
+
+    test('M4\'s recorded gap: a DEAD connection at the branch pin is a sealed '
+        'AppendInternalError, never a raw client exception', () async {
+      final h = _Harness()
+        ..scriptClaimReads()
+        ..scriptFenceHeld();
+      // The socket is dead by the time the append runs — M4's S1/S2 shape,
+      // where the branch-pin SELECT is the first statement to find it.
+      // Registered before claim() so it outranks the harness's main-branch
+      // rule (earlier registrations win); the claim path never asks.
+      h.db.on(
+        'active_branch()',
+        throwing: const MySQLClientException('socket has been closed'),
+      );
+      await h.claim();
+
+      final outcome = await h.appender.append(_note(1));
+
+      expect(outcome, isA<AppendInternalError>());
+      expect(
+        (outcome as AppendInternalError).cause,
+        isA<MySQLClientException>(),
+      );
+      // A transport failure is NOT the pin's fail-closed refusal: the appender
+      // is neither halted nor inert, and the guarded reconnect owns recovery.
+      expect(h.appender.isHalted, isFalse);
+      expect(h.appender.isInert, isFalse);
+      expect(
+        h.eventKinds,
+        isNot(contains(TrajectoryServiceEventKind.corruptionHalt)),
+      );
+      // Nothing was opened, so nothing is left open.
+      expect(h.db.matching('START TRANSACTION'), hasLength(1)); // the claim's
+      expect(h.db.matching('UPDATE traj_fence'), isEmpty);
     });
 
     test('a post-COMMIT cadence failure NEVER rewrites the append outcome — '

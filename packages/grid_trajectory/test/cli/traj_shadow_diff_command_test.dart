@@ -25,13 +25,21 @@ class _ScriptedCompare implements ShadowCompare {
   String? get unavailableReason => null;
 
   @override
-  Future<List<ShadowMismatch>> compare({
+  Future<ShadowCompareResult> compare({
     required String sessionId,
-    required List<TrajectoryEnvelope> records,
+    required SubjectRecords records,
     int? round,
   }) async {
-    compared.add('$sessionId/${records.length}/${round ?? '-'}');
-    return mismatches.where((row) => row.sessionId == sessionId).toList();
+    compared.add(
+      '$sessionId/${records.records.length}/${round ?? '-'}'
+      '${records.isComplete ? '' : '/CUT'}',
+    );
+    if (!records.isComplete) {
+      return const ShadowCompareResult.incomplete('the stream was cut');
+    }
+    return ShadowCompareResult(
+      mismatches.where((row) => row.sessionId == sessionId).toList(),
+    );
   }
 }
 
@@ -254,4 +262,134 @@ void main() {
       expect(text, contains('operator adjudicates'));
     });
   });
+
+  group('with a strategy FACTORY (the grid_cli composition seam)', () {
+    List<TrajectoryEnvelope> lifecycle(String sessionId) => [
+      envelope(
+        recordType: 'attempt.session.started',
+        family: TrajectoryFamily.attempt,
+        seq: 1,
+        sessionId: sessionId,
+        workBeadId: 'tg-9abc',
+        grantId: '01J8GRANT00000000000000001',
+        payload: const {'rig': 'operator', 'model': 'molecule'},
+      ),
+      envelope(
+        recordType: 'attempt.terminal',
+        family: TrajectoryFamily.attempt,
+        seq: 2,
+        sessionId: sessionId,
+        attemptId: '01J8ATTEMPT000000000000002',
+        outcome: TerminalOutcome.succeeded,
+      ),
+    ];
+
+    test('the factory sees the parsed grid home and outranks the fixed '
+        'strategy', () async {
+      final homes = <String>[];
+      final out = <String>[];
+      final code = await runTrajShadowDiff(
+        gridHome: '/grid/home',
+        open: openerFor(
+          TrajectoryOpened(ScriptedReader(lifecycle('tranquility-5xk'))),
+        ),
+        compare: _ScriptedCompare([]),
+        compareFor: (gridHome) async {
+          homes.add(gridHome);
+          return AttemptLifecycleShadow(
+            _AgreeingLegacy('tranquility-5xk', 'tg-9abc'),
+          );
+        },
+        out: out.add,
+        err: out.add,
+      );
+      expect(code, 0);
+      expect(homes, ['/grid/home']);
+      final text = out.join('\n');
+      expect(text, contains('strategy: AttemptLifecycleShadow'));
+      expect(text, contains('one clean run toward the criterion'));
+    });
+
+    test('a real divergence through the factory blocks the cut', () async {
+      final out = <String>[];
+      final code = await runTrajShadowDiff(
+        gridHome: '/grid/home',
+        open: openerFor(
+          TrajectoryOpened(ScriptedReader(lifecycle('tranquility-5xk'))),
+        ),
+        compareFor: (_) async => AttemptLifecycleShadow(
+          _AgreeingLegacy('tranquility-5xk', 'tg-OTHER'),
+        ),
+        out: out.add,
+        err: out.add,
+      );
+      expect(code, 1);
+      final text = out.join('\n');
+      expect(text, contains('work_bead_id'));
+      expect(text, contains('BLOCKED'));
+    });
+
+    test('a truncated read is reported INCOMPLETE and does not count as a '
+        'clean run', () async {
+      final out = <String>[];
+      final code = await runTrajShadowDiff(
+        gridHome: '/grid/home',
+        open: openerFor(
+          TrajectoryOpened(
+            ScriptedReader(
+              lifecycle('tranquility-5xk'),
+              truncateCompleteReadsAt: 1,
+            ),
+          ),
+        ),
+        compareFor: (_) async => AttemptLifecycleShadow(
+          _AgreeingLegacy('tranquility-5xk', 'tg-9abc'),
+        ),
+        out: out.add,
+        err: out.add,
+      );
+      final text = out.join('\n');
+      // Not a mismatch — so not a blocked cut — but emphatically not the
+      // clean run the old code would have minted off a folded prefix.
+      expect(code, 0);
+      expect(text, contains('INCOMPLETE: tranquility-5xk'));
+      expect(text, contains('does NOT count toward the 3-clean-round'));
+      expect(text, isNot(contains('one clean run')));
+    });
+
+    test('a factory degrade (no ledger beside the log) stays a clean '
+        'non-counting run', () async {
+      final out = <String>[];
+      final code = await runTrajShadowDiff(
+        gridHome: '/grid/home',
+        open: openerFor(
+          TrajectoryOpened(ScriptedReader(lifecycle('tranquility-5xk'))),
+        ),
+        compareFor: (_) async => const UncomparableShadow(),
+        out: out.add,
+        err: out.add,
+      );
+      expect(code, 0);
+      expect(out.join('\n'), contains('nothing compared'));
+    });
+  });
+}
+
+/// A legacy reader that agrees with the folded lifecycle except for the work
+/// bead it is scripted with.
+class _AgreeingLegacy implements LegacySessionReader {
+  _AgreeingLegacy(this.sessionId, this.workBeadId);
+
+  final String sessionId;
+  final String workBeadId;
+
+  @override
+  Future<LegacySessionView?> sessionView(String id) async => id == sessionId
+      ? LegacySessionView(
+          sessionId: sessionId,
+          workBeadId: workBeadId,
+          closed: true,
+          completed: true,
+        )
+      : null;
 }

@@ -31,6 +31,11 @@
 /// appends nothing further, not even its refusal. Any non-classified
 /// throwable rolls the transaction back and surfaces as [AppendInternalError]
 /// — no open transaction and no raw throwable escapes the sealed hierarchy.
+/// That holds for the WHOLE of [append], not merely its transaction: the
+/// pre-transaction branch pin is inside the classification boundary too, so a
+/// dead connection is an [AppendInternalError] and an off-main session is an
+/// [AppendCorruptionHalt] (M4's recorded gap, closed). A DIRECT
+/// [doltCommitIfDue] call still throws — that path has no outcome to carry.
 ///
 /// The dolt-commit cadence runs AFTER the append's outcome is decided: once
 /// COMMIT succeeded the append IS [Appended], and a cadence failure is its
@@ -274,7 +279,22 @@ class TrajectoryAppender {
     // §5's branch pin holds on the append path too, not only at cadence
     // time: asserted before the transaction so an off-main session surfaces
     // as the named fail-closed refusal, not a missing-table crash (T3).
-    await _assertBranchPin();
+    //
+    // It runs INSIDE append()'s classification boundary (M4's recorded gap):
+    // the assertion itself talks to the server, so with the connection dead
+    // it used to throw a raw MySQLClientException past the sealed hierarchy —
+    // exactly what §5's error contract forbids. Nothing here rethrows.
+    try {
+      await _assertBranchPin();
+    } on Object catch (error) {
+      // _assertBranchPin HALTS before it throws, so `_halted` is what tells
+      // the pin's own fail-closed refusal apart from a transport failure on
+      // the way to it. Fail-closed is preserved either way — the halt latch
+      // is already set and every later append refuses.
+      return _halted
+          ? AppendCorruptionHalt(reason: '$error')
+          : AppendInternalError(cause: error);
+    }
 
     final now = _clock().toUtc();
     final context = IdemContext(station: station, bootEpoch: epoch);
