@@ -133,3 +133,20 @@ export 'src/lifecycle/session_state.dart'
 // GraphEvent stream + readyBeads, alongside M2's ConvergenceSource).
 export 'src/dispatch/ready_work_source.dart'
     show GridReadyWorkSource, ReadyWorkSource;
+
+// Stage 1 (tg-zfek) — the trajectory derivation layer: the ONLY code that
+// names concrete Stage-1 record classes; enqueue-only into the harness's
+// single writer (stage1-wiring §2).
+export 'src/trajectory/station_trajectory_recorder.dart'
+    show
+        StationTrajectoryRecorder,
+        TrajectoryRecordSink,
+        TrajectoryRecorderFlare,
+        TrajectoryRecorderStats,
+        kLegacyAttemptCountKey,
+        kObligationStuckChannel,
+        kPreStage3GrantBasis,
+        kReconcilerMintedAttemptBasis,
+        kRecorderMintedAttemptBasis,
+        kUnownedSeat,
+        kUnownedSeatBasis;

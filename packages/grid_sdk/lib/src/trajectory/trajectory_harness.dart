@@ -33,6 +33,8 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io' as io;
 
+import 'package:grid_runtime/grid_runtime.dart'
+    show StationTrajectoryRecorder, TrajectoryRecordSink;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 
@@ -231,8 +233,21 @@ class TrajectoryHarness {
   final TrajectoryConfig config;
 
   /// The seat-derivation input (§2.2's seat row) — carried for the derivation
-  /// layer (chunk W3); the harness itself never derives a seat.
+  /// layer; the harness itself never derives a seat.
   final Set<String> seatPrefixes;
+
+  /// The derivation layer (§2) — one of the five things the harness owns
+  /// (§1.1). Its sink is THIS harness's bounded queue, so every derived
+  /// record rides the single writer loop; under any non-accepting posture
+  /// (disabled / unprovisioned / degraded / latched) the recorder is a
+  /// counting no-op and no call site ever branches on "is the trajectory up".
+  late final StationTrajectoryRecorder recorder = StationTrajectoryRecorder(
+    sink: _HarnessRecordSink(this),
+    seatPrefixes: seatPrefixes,
+    clock: _clock,
+    // Derivation-failure flares ride the harness's standing 30 s bucket.
+    onFlare: _flareLimited,
+  );
 
   final String _gridHome;
   final String _station;
@@ -259,7 +274,8 @@ class TrajectoryHarness {
   Timer? _gcTimer;
   bool _needsReconnect = false;
 
-  final Queue<TrajectoryAppendRequest> _queue = Queue<TrajectoryAppendRequest>();
+  final Queue<TrajectoryAppendRequest> _queue =
+      Queue<TrajectoryAppendRequest>();
   bool _writerActive = false;
   Future<void> _writerDone = Future<void>.value();
 
@@ -631,6 +647,9 @@ class TrajectoryHarness {
     db: db,
     station: _station,
     commitCadence: config.commitCadence,
+    // §5 step 5's Stage-1 registration (stage1-wiring §2.4 / W6): the
+    // P1+P2+P6 incremental fold deltas ride every append's transaction.
+    folds: kStage1FoldDeltas,
     // The Stage-0 notification seam rides the same flare transport as every
     // other engine LOUD signal, rate-limited under the standing 30 s bucket.
     onEvent: (event) => _flareLimited('trajectory.service.${event.kind.wire}', {
@@ -746,6 +765,42 @@ final class _SerializedTickAppender implements TickAppender {
   @override
   Future<void> doltCommitIfDue() =>
       _harness._serialize(_appender.doltCommitIfDue);
+}
+
+/// The recorder's enqueue-only handle to the harness's queue (§2.5): the
+/// derivation layer holds THIS, never the appender, so the sole-appender and
+/// never-await invariants hold by construction.
+final class _HarnessRecordSink implements TrajectoryRecordSink {
+  _HarnessRecordSink(this._harness);
+
+  final TrajectoryHarness _harness;
+
+  /// Mirrors [TrajectoryHarness.enqueue]'s accepting postures — `down` counts
+  /// as accepting because records enqueued before the claim drain after it
+  /// (§1.2 step 2's `_pump()`).
+  @override
+  bool get accepting => switch (_harness._mode) {
+    TrajectoryHarnessMode.down ||
+    TrajectoryHarnessMode.live => !_harness._isShutdown,
+    _ => false,
+  };
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? seat,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => _harness.enqueue(
+    TrajectoryAppendRequest(
+      record,
+      occurredAt: occurredAt,
+      seat: seat,
+      provenance: provenance,
+      provenanceBasis: provenanceBasis,
+    ),
+  );
 }
 
 /// The tick's read path, serialized on the same lane — and resolved through

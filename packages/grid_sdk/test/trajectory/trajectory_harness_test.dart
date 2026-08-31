@@ -199,21 +199,23 @@ void main() {
   );
 
   group('config postures (§1.3)', () {
-    test('disabled: no connection, no claim, enqueue is a SILENT no-op',
-        () async {
-      final h = await harness(
-        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
-      );
-      expect(h.mode, TrajectoryHarnessMode.disabled);
-      await h.start();
-      h.enqueue(_note(1));
-      await h.shutdown();
-      expect(connected, isEmpty);
-      expect(appender.calls, isEmpty);
-      expect(h.status.suppressed, 0);
-      expect(h.status.queueDepth, 0);
-      expect(flares, isEmpty, reason: 'a station chose legacy-only: silence');
-    });
+    test(
+      'disabled: no connection, no claim, enqueue is a SILENT no-op',
+      () async {
+        final h = await harness(
+          config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+        );
+        expect(h.mode, TrajectoryHarnessMode.disabled);
+        await h.start();
+        h.enqueue(_note(1));
+        await h.shutdown();
+        expect(connected, isEmpty);
+        expect(appender.calls, isEmpty);
+        expect(h.status.suppressed, 0);
+        expect(h.status.queueDepth, 0);
+        expect(flares, isEmpty, reason: 'a station chose legacy-only: silence');
+      },
+    );
 
     test('auto without the provisioning artifact boots legacy-only', () async {
       final h = await harness(
@@ -240,18 +242,20 @@ void main() {
       expect(h.mode, TrajectoryHarnessMode.live);
     });
 
-    test('required with a refused connect degrades LOUD — never throws',
-        () async {
-      connectError = StateError('connection refused');
-      final h = await harness();
-      await h.start();
-      expect(h.mode, TrajectoryHarnessMode.degraded);
-      expect(h.status.cause, contains('connection refused'));
-      expect(flareNames(), contains('trajectory.degraded'));
-      // Work is never blocked: enqueue keeps short-circuiting to a count.
-      h.enqueue(_note(1));
-      expect(h.status.suppressed, 1);
-    });
+    test(
+      'required with a refused connect degrades LOUD — never throws',
+      () async {
+        connectError = StateError('connection refused');
+        final h = await harness();
+        await h.start();
+        expect(h.mode, TrajectoryHarnessMode.degraded);
+        expect(h.status.cause, contains('connection refused'));
+        expect(flareNames(), contains('trajectory.degraded'));
+        // Work is never blocked: enqueue keeps short-circuiting to a count.
+        h.enqueue(_note(1));
+        expect(h.status.suppressed, 1);
+      },
+    );
   });
 
   group('boot (§1.2 step 2)', () {
@@ -276,8 +280,7 @@ void main() {
       );
     });
 
-    test(
-        'a halted belt verify means NO claim, no fence advance, flare, '
+    test('a halted belt verify means NO claim, no fence advance, flare, '
         'legacy-only boot', () async {
       appender.verifyResult = const AppendCorruptionHalt(
         reason: 'belt full-scan: out of order',
@@ -291,15 +294,17 @@ void main() {
       expect(h.tick, isNull);
     });
 
-    test('a refused claim degrades to legacy-only, never a boot failure',
-        () async {
-      appender.claimResult = const EpochClaimRefused(attempts: 3);
-      final h = await harness();
-      await h.start();
-      expect(h.mode, TrajectoryHarnessMode.degraded);
-      expect(h.status.cause, contains('refused after 3 attempts'));
-      expect(connected.single.closed, isTrue);
-    });
+    test(
+      'a refused claim degrades to legacy-only, never a boot failure',
+      () async {
+        appender.claimResult = const EpochClaimRefused(attempts: 3);
+        final h = await harness();
+        await h.start();
+        expect(h.mode, TrajectoryHarnessMode.degraded);
+        expect(h.status.cause, contains('refused after 3 attempts'));
+        expect(connected.single.closed, isTrue);
+      },
+    );
 
     test('records enqueued before the claim drain once live', () async {
       final h = await harness();
@@ -360,8 +365,7 @@ void main() {
   });
 
   group('sealed-outcome mapping (§3)', () {
-    test(
-        'AppendInternalError: drop + rate-limited flare + eager guarded '
+    test('AppendInternalError: drop + rate-limited flare + eager guarded '
         'reconnect on the next append', () async {
       appender.appendOutcomes.add(
         AppendInternalError(cause: StateError('socket died')),
@@ -383,28 +387,29 @@ void main() {
       expect(h.mode, TrajectoryHarnessMode.live);
     });
 
-    test('the appendDropped flare re-fires once the 30 s bucket rolls',
-        () async {
-      appender.appendOutcomes.addAll([
-        AppendInternalError(cause: StateError('one')),
-        AppendInternalError(cause: StateError('two')),
-      ]);
-      final h = await harness();
-      await h.start();
-      h.enqueue(_note(1));
-      await h.runToFixpoint();
-      now = now.add(const Duration(seconds: 31));
-      h.enqueue(_note(2));
-      await h.runToFixpoint();
-      expect(
-        flareNames().where((name) => name == 'trajectory.appendDropped'),
-        hasLength(2),
-      );
-      expect(h.status.dropped, 2);
-    });
-
     test(
-        'fenced out latches QUIET: one flare, queue suppressed, later '
+      'the appendDropped flare re-fires once the 30 s bucket rolls',
+      () async {
+        appender.appendOutcomes.addAll([
+          AppendInternalError(cause: StateError('one')),
+          AppendInternalError(cause: StateError('two')),
+        ]);
+        final h = await harness();
+        await h.start();
+        h.enqueue(_note(1));
+        await h.runToFixpoint();
+        now = now.add(const Duration(seconds: 31));
+        h.enqueue(_note(2));
+        await h.runToFixpoint();
+        expect(
+          flareNames().where((name) => name == 'trajectory.appendDropped'),
+          hasLength(2),
+        );
+        expect(h.status.dropped, 2);
+      },
+    );
+
+    test('fenced out latches QUIET: one flare, queue suppressed, later '
         'derivations short-circuit to a count', () async {
       appender.appendOutcomes.add(const AppendFencedOut(reason: 'cas-zero'));
       final h = await harness();
@@ -453,59 +458,65 @@ void main() {
       expect(h.status.cause, 'stale epoch 1 (live 2)');
     });
 
-    test('a failed reconnect drops the append and stays live for the next',
-        () async {
-      appender.appendOutcomes.add(
-        AppendInternalError(cause: StateError('socket died')),
-      );
-      final h = await harness();
-      await h.start();
-      h.enqueue(_note(1));
-      await h.runToFixpoint();
-      connectError = StateError('listener gone');
-      h.enqueue(_note(2));
-      await h.runToFixpoint();
-      expect(h.status.dropped, 2);
-      expect(h.mode, TrajectoryHarnessMode.live);
-      // The listener resolves again once bd rewrites the port (§4).
-      connectError = null;
-      h.enqueue(_note(3));
-      await h.runToFixpoint();
-      expect(h.status.appended, 1);
-    });
+    test(
+      'a failed reconnect drops the append and stays live for the next',
+      () async {
+        appender.appendOutcomes.add(
+          AppendInternalError(cause: StateError('socket died')),
+        );
+        final h = await harness();
+        await h.start();
+        h.enqueue(_note(1));
+        await h.runToFixpoint();
+        connectError = StateError('listener gone');
+        h.enqueue(_note(2));
+        await h.runToFixpoint();
+        expect(h.status.dropped, 2);
+        expect(h.mode, TrajectoryHarnessMode.live);
+        // The listener resolves again once bd rewrites the port (§4).
+        connectError = null;
+        h.enqueue(_note(3));
+        await h.runToFixpoint();
+        expect(h.status.appended, 1);
+      },
+    );
   });
 
   group('guarded shutdown (§1.2)', () {
-    test('drain → fixpoint → boundary commit → dispose → close, receipted',
-        () async {
-      final h = await harness();
-      await h.start();
-      h.enqueue(_note(1));
-      await h.shutdown();
-      expect(h.status.appended, 1, reason: 'the queue drained first');
-      expect(appender.calls.last, 'commit', reason: 'the boundary flush');
-      expect(h.tick!.isArmed, isFalse, reason: 'tick disposed');
-      expect(connected.single.closed, isTrue);
-      final (name, data) = flares.single;
-      expect(name, 'trajectory.shutdown');
-      expect(data['appended'], '1');
-      expect(data['fixpointReached'], 'true');
-      expect(data['outstanding'], '0');
-      // Idempotent: a second shutdown neither throws nor re-flares.
-      await h.shutdown();
-      expect(flares, hasLength(1));
-    });
+    test(
+      'drain → fixpoint → boundary commit → dispose → close, receipted',
+      () async {
+        final h = await harness();
+        await h.start();
+        h.enqueue(_note(1));
+        await h.shutdown();
+        expect(h.status.appended, 1, reason: 'the queue drained first');
+        expect(appender.calls.last, 'commit', reason: 'the boundary flush');
+        expect(h.tick!.isArmed, isFalse, reason: 'tick disposed');
+        expect(connected.single.closed, isTrue);
+        final (name, data) = flares.single;
+        expect(name, 'trajectory.shutdown');
+        expect(data['appended'], '1');
+        expect(data['fixpointReached'], 'true');
+        expect(data['outstanding'], '0');
+        // Idempotent: a second shutdown neither throws nor re-flares.
+        await h.shutdown();
+        expect(flares, hasLength(1));
+      },
+    );
 
-    test('a throwing boundary commit is the cadence-failure signal, caught',
-        () async {
-      appender.commitError = StateError('branch pin');
-      final h = await harness();
-      await h.start();
-      await h.shutdown();
-      expect(flareNames(), contains('trajectory.cadenceFailure'));
-      expect(flareNames(), contains('trajectory.shutdown'));
-      expect(connected.single.closed, isTrue, reason: 'close still reached');
-    });
+    test(
+      'a throwing boundary commit is the cadence-failure signal, caught',
+      () async {
+        appender.commitError = StateError('branch pin');
+        final h = await harness();
+        await h.start();
+        await h.shutdown();
+        expect(flareNames(), contains('trajectory.cadenceFailure'));
+        expect(flareNames(), contains('trajectory.shutdown'));
+        expect(connected.single.closed, isTrue, reason: 'close still reached');
+      },
+    );
 
     test('shutdown NEVER throws — even when every step does', () async {
       appender.commitError = StateError('commit refused');
@@ -571,5 +582,84 @@ void main() {
         reason: 'still re-armed',
       );
     });
+  });
+
+  group('recorder wiring (W3 — §2 handoff to the queue)', () {
+    test(
+      'a recorder derivation rides the single writer into the appender',
+      () async {
+        final h = await harness();
+        await h.start();
+        h.recorder.sessionMinted(
+          sessionId: 'tranquility-s1',
+          workBeadId: 'tg-9xk2#r1',
+          rig: 'the_grid',
+          model: 'claude-fable-5',
+        );
+        await pumpEventQueue();
+        expect(appender.calls, contains('append:attempt.session.started'));
+        expect(h.status.appended, 1);
+        expect(h.recorder.stats.derived, 1);
+      },
+    );
+
+    test(
+      'records derived BEFORE the claim drain after it (down accepts)',
+      () async {
+        final h = await harness();
+        h.recorder.processExited(
+          attemptId: 'A' * 26,
+          pid: 41,
+          exitKind: ExitKind.exited,
+          inferred: false,
+        );
+        expect(h.status.queueDepth, 1);
+        await h.start();
+        await pumpEventQueue();
+        expect(appender.calls, contains('append:attempt.process.exited'));
+      },
+    );
+
+    test('disabled harness: the recorder is a counting no-op — no call site '
+        'ever branches on "is the trajectory up"', () async {
+      final h = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+      );
+      await h.start();
+      h.recorder.sessionMinted(
+        sessionId: 's1',
+        workBeadId: 'tg-1',
+        rig: 'r',
+        model: 'm',
+      );
+      expect(appender.calls, isEmpty);
+      expect(h.recorder.stats.skipped, 1);
+      expect(h.recorder.stats.derived, 0);
+    });
+
+    test(
+      'a latch stops derivation at the recorder too (§3 counting no-op)',
+      () async {
+        final h = await harness();
+        await h.start();
+        appender.appendOutcomes.add(
+          const AppendCorruptionHalt(reason: 'belt order violation'),
+        );
+        h.recorder.sessionMinted(
+          sessionId: 's1',
+          workBeadId: 'tg-1',
+          rig: 'r',
+          model: 'm',
+        );
+        await pumpEventQueue();
+        expect(h.mode, TrajectoryHarnessMode.halted);
+        h.recorder.roundRetired(
+          sessionId: 's1',
+          cause: RoundRetireCause.rework,
+        );
+        expect(h.recorder.stats.skipped, 1, reason: 'no record even built');
+        expect(h.status.queueDepth, 0);
+      },
+    );
   });
 }

@@ -89,6 +89,9 @@ final class AttemptSessionStarted extends AttemptRecord {
     required this.model,
     this.workBeadId,
     this.mountAttemptId,
+    this.grantBasis,
+    this.legacyAttemptCount,
+    this.seatBasis,
   });
 
   factory AttemptSessionStarted.fromJson(
@@ -102,6 +105,9 @@ final class AttemptSessionStarted extends AttemptRecord {
     mountAttemptId: envelope.mountAttemptId,
     rig: _req<String>(payload, 'rig'),
     model: _req<String>(payload, 'model'),
+    grantBasis: _opt<String>(payload, 'grant_basis'),
+    legacyAttemptCount: _opt<int>(payload, 'legacy_attempt_count'),
+    seatBasis: _opt<String>(payload, 'seat_basis'),
   );
 
   final String sessionId;
@@ -110,6 +116,22 @@ final class AttemptSessionStarted extends AttemptRecord {
   final String? mountAttemptId;
   final String rig;
   final String model;
+
+  /// Stage-1 pre-grant marker (stage1-wiring §2.2): no grants exist before
+  /// Stage 3, so the recorder mints a placeholder id and marks it
+  /// `'pre-stage3'`; the real `admission.grant.issued` takes over the slot at
+  /// Stage 3. Additive within type_version 1 (§2.6 rule 1).
+  final String? grantBasis;
+
+  /// The legacy mount-attempt bead's `grid.attempt.count` — the
+  /// shadow-comparable ordinal `traj shadow-diff` joins against the legacy
+  /// bead (stage1-wiring §2.2, r2 major 8). The mount_attempt_id ULID keys
+  /// the record; this ordinal is what joins.
+  final int? legacyAttemptCount;
+
+  /// Set when the envelope seat is the deterministic unowned fallback rather
+  /// than an owned-prefix derivation (stage1-wiring §2.2, r2 minor 12).
+  final String? seatBasis;
 
   @override
   String get recordType => 'attempt.session.started';
@@ -120,7 +142,13 @@ final class AttemptSessionStarted extends AttemptRecord {
   String? get grantBeltIssuerType => grantIssuedRecordType;
 
   @override
-  Map<String, Object?> payloadToJson() => {'rig': rig, 'model': model};
+  Map<String, Object?> payloadToJson() => {
+    'rig': rig,
+    'model': model,
+    if (grantBasis != null) 'grant_basis': grantBasis,
+    if (legacyAttemptCount != null) 'legacy_attempt_count': legacyAttemptCount,
+    if (seatBasis != null) 'seat_basis': seatBasis,
+  };
 
   @override
   Map<String, Object?> correlationToJson() => {
@@ -420,6 +448,8 @@ final class AttemptTerminal extends AttemptRecord {
     this.unknownReason,
     this.resolvesRecordId,
     this.reason,
+    this.attemptIdBasis,
+    this.seatBasis,
   }) {
     if (outcome == TerminalOutcome.unknown && unknownReason == null) {
       _refuse(recordType, 'outcome unknown requires unknown_reason');
@@ -438,6 +468,8 @@ final class AttemptTerminal extends AttemptRecord {
     unknownReason: envelope.unknownReason,
     resolvesRecordId: envelope.resolvesRecordId,
     reason: _opt<String>(payload, 'reason'),
+    attemptIdBasis: _opt<String>(payload, 'attempt_id_basis'),
+    seatBasis: _opt<String>(payload, 'seat_basis'),
   );
 
   final String attemptId;
@@ -449,6 +481,16 @@ final class AttemptTerminal extends AttemptRecord {
   /// Set on a SETTLING terminal, pointing at the unknown one it heals.
   final String? resolvesRecordId;
   final String? reason;
+
+  /// Set when [attemptId] was MINTED rather than recovered — a settlement
+  /// for a session with no attempt breadcrumb (stage1-wiring §2.1's bounce
+  /// rule, `'reconciler-minted'`); such rows sit outside the shadow's
+  /// comparable set. Additive within type_version 1 (§2.6 rule 1).
+  final String? attemptIdBasis;
+
+  /// Set when the envelope seat is the deterministic unowned fallback
+  /// (stage1-wiring §2.2, r2 minor 12).
+  final String? seatBasis;
 
   /// The §5 terminal guard keys on this: `traj_terminal_guard` takes one row
   /// per attempt, so an unsettled terminal INSERTs and a second independent
@@ -469,6 +511,8 @@ final class AttemptTerminal extends AttemptRecord {
   @override
   Map<String, Object?> payloadToJson() => {
     if (reason != null) 'reason': reason,
+    if (attemptIdBasis != null) 'attempt_id_basis': attemptIdBasis,
+    if (seatBasis != null) 'seat_basis': seatBasis,
   };
 
   @override
@@ -585,6 +629,8 @@ final class AttemptMintOutcome extends AttemptRecord {
     this.maxAttempts,
     this.stage,
     this.reason,
+    this.legacyAttemptCount,
+    this.seatBasis,
   });
 
   factory AttemptMintOutcome.fromJson(
@@ -602,6 +648,8 @@ final class AttemptMintOutcome extends AttemptRecord {
     maxAttempts: _opt<int>(payload, 'max_attempts'),
     stage: _opt<String>(payload, 'stage'),
     reason: _opt<String>(payload, 'reason'),
+    legacyAttemptCount: _opt<int>(payload, 'legacy_attempt_count'),
+    seatBasis: _opt<String>(payload, 'seat_basis'),
   );
 
   final String workBeadId;
@@ -611,6 +659,15 @@ final class AttemptMintOutcome extends AttemptRecord {
   final int? maxAttempts;
   final String? stage;
   final String? reason;
+
+  /// The legacy mount-attempt bead's `grid.attempt.count` — the
+  /// shadow-comparable ordinal (stage1-wiring §2.2, r2 major 8). Additive
+  /// within type_version 1 (§2.6 rule 1).
+  final int? legacyAttemptCount;
+
+  /// Set when the envelope seat is the deterministic unowned fallback
+  /// (stage1-wiring §2.2, r2 minor 12).
+  final String? seatBasis;
 
   @override
   String get recordType => 'attempt.mint.outcome';
@@ -622,6 +679,8 @@ final class AttemptMintOutcome extends AttemptRecord {
     if (maxAttempts != null) 'max_attempts': maxAttempts,
     if (stage != null) 'stage': stage,
     if (reason != null) 'reason': reason,
+    if (legacyAttemptCount != null) 'legacy_attempt_count': legacyAttemptCount,
+    if (seatBasis != null) 'seat_basis': seatBasis,
   };
 
   @override
