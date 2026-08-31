@@ -162,6 +162,7 @@ export 'package:grid_trajectory/grid_trajectory.dart'
 // single writer (stage1-wiring §2).
 export 'src/trajectory/station_trajectory_recorder.dart'
     show
+        DerivedRecord,
         StationTrajectoryRecorder,
         TrajectoryRecordSink,
         TrajectoryRecorderFlare,
@@ -171,5 +172,36 @@ export 'src/trajectory/station_trajectory_recorder.dart'
         kPreStage3GrantBasis,
         kReconcilerMintedAttemptBasis,
         kRecorderMintedAttemptBasis,
+        kTickReapedBackfillBasis,
+        kTickUnknownSettlementBasis,
         kUnownedSeat,
         kUnownedSeatBasis;
+// Stage 1 (tg-zfek, chunk W7) — the tick's shadow-posture obligation set and
+// its two real liveness surfaces. The harness composes these; nothing here
+// writes bd or the filesystem (stage1-wiring §2.4).
+export 'src/trajectory/stage1_obligations.dart'
+    show
+        LastActivityPoll,
+        LivenessDetectorObligation,
+        UnknownTerminalSettlementObligation,
+        WorktreeReapedBackfillObligation,
+        buildStage1ObligationQueries,
+        kDefaultLivenessThreshold,
+        kDefaultPulseCoalesce,
+        kLivenessDetectorObligation,
+        kObligationBatchSize,
+        kPulseViaRuntime,
+        kPulseViaWorktreeMtime,
+        kUnknownTerminalSettlementObligation,
+        kWorktreeReapedBackfillObligation;
+export 'src/trajectory/stuck_obligation_accountant.dart'
+    show
+        StuckObligationAccountant,
+        kStuckObligationThreshold,
+        stationNoteSubject;
+export 'src/trajectory/worktree_pulse_scanner.dart'
+    show
+        WorktreePulseScanner,
+        WorktreeScan,
+        WorktreeScanCost,
+        kWorktreeStateDirName;

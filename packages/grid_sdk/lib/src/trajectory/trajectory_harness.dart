@@ -34,7 +34,12 @@ import 'dart:collection';
 import 'dart:io' as io;
 
 import 'package:grid_runtime/grid_runtime.dart'
-    show StationTrajectoryRecorder, TrajectoryRecordSink;
+    show
+        LastActivityPoll,
+        StationTrajectoryRecorder,
+        StuckObligationAccountant,
+        TrajectoryRecordSink,
+        buildStage1ObligationQueries;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 
@@ -155,7 +160,8 @@ class TrajectoryHarness {
     required TrajectoryFlare? onFlare,
     required Future<TrajectoryDb> Function()? connect,
     required TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
-    required List<ObligationQuery> tickQueries,
+    required List<ObligationQuery>? tickQueries,
+    required LastActivityPoll? lastActivity,
     required Timer Function(Duration, void Function()) scheduleTimer,
     required DateTime Function() clock,
     required ({int pid, int pgid}) identity,
@@ -167,6 +173,7 @@ class TrajectoryHarness {
        _connect = connect,
        _appenderFactory = appenderFactory,
        _tickQueries = tickQueries,
+       _lastActivity = lastActivity,
        _scheduleTimer = scheduleTimer,
        _clock = clock,
        _identity = identity,
@@ -189,7 +196,8 @@ class TrajectoryHarness {
     TrajectoryFlare? onFlare,
     Future<TrajectoryDb> Function()? connect,
     TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
-    List<ObligationQuery> tickQueries = kStage0ObligationQueries,
+    List<ObligationQuery>? tickQueries,
+    LastActivityPoll? lastActivity,
     Timer Function(Duration, void Function())? scheduleTimer,
     DateTime Function()? clock,
     ({int pid, int pgid})? identity,
@@ -220,6 +228,7 @@ class TrajectoryHarness {
       connect: connect,
       appenderFactory: appenderFactory,
       tickQueries: tickQueries,
+      lastActivity: lastActivity,
       scheduleTimer: scheduleTimer ?? Timer.new,
       clock: clock ?? DateTime.now,
       // the_grid runs in its own process group; pid ≈ pgid here (the
@@ -249,6 +258,14 @@ class TrajectoryHarness {
     onFlare: _flareLimited,
   );
 
+  /// Schema §5's stuck-obligation accountant (§2.4 obligation 4), fed by the
+  /// tick's per-pass telemetry.
+  late final StuckObligationAccountant _accountant = StuckObligationAccountant(
+    recorder: recorder,
+    station: _station,
+    onFlare: _flareLimited,
+  );
+
   final String _gridHome;
   final String _station;
   final TrajectoryFlare? _onFlare;
@@ -257,7 +274,16 @@ class TrajectoryHarness {
   /// path in [_openConnection].
   final Future<TrajectoryDb> Function()? _connect;
   final TrajectoryAppender Function(TrajectoryDb db)? _appenderFactory;
-  final List<ObligationQuery> _tickQueries;
+
+  /// An EXPLICIT obligation set (tests, and a station that wants Stage 0's
+  /// empty one); null composes the Stage-1 set at [start], once the epoch the
+  /// detector's unknown rule keys on has actually been claimed (§2.4).
+  final List<ObligationQuery>? _tickQueries;
+
+  /// `RuntimeProvider.lastActivity` — liveness surface (b) of §2.3. Null (no
+  /// provider wired, e.g. a dry arm) leaves the worktree mtime scanner
+  /// answering alone.
+  final LastActivityPoll? _lastActivity;
   final Timer Function(Duration, void Function()) _scheduleTimer;
   final DateTime Function() _clock;
   final ({int pid, int pgid}) _identity;
@@ -308,6 +334,10 @@ class TrajectoryHarness {
   /// The tick, for a status surface's `lastPass` — null until live.
   TrajectoryTick? get tick => _tick;
 
+  /// Obligations currently refusing tick after tick, and how far into schema
+  /// §5's N (§2.4 obligation 4) — a plain derived `/status` read.
+  Map<String, int> get stuckObligations => _accountant.streaks;
+
   // ── boot (§1.2 step 2) ───────────────────────────────────────────────────
 
   /// Trajectory up: connect as `trajectory` user → `verifyBeltAtBoot()`
@@ -352,10 +382,16 @@ class TrajectoryHarness {
       _tick = TrajectoryTick(
         appender: _SerializedTickAppender(this, appender),
         db: _SerializedDb(this),
-        queries: _tickQueries,
+        // §2.4: the Stage-1 set is built HERE, after the claim — the liveness
+        // detector's unknown rule keys on the epoch this process holds, and
+        // there is no such epoch before `claimEpoch` returned.
+        queries: _tickQueries ?? _stage1Obligations(),
         interval: config.tickInterval,
         clock: _clock,
         scheduleTimer: _scheduleTimer,
+        // Schema §5's N-consecutive-failure accounting reads the pass
+        // telemetry; the note it files rides the queue, not the pass.
+        onPass: _accountant.observe,
       );
       _mode = TrajectoryHarnessMode.live;
       _cause = null;
@@ -370,6 +406,26 @@ class TrajectoryHarness {
       await _closeDbQuietly();
     }
   }
+
+  /// §2.4's shadow-posture set: unknown-terminal settlement, worktree.reaped
+  /// backfill, and the liveness detector. Nothing in it writes bd or the
+  /// filesystem — Stage 1 changes NOTHING about what mounts.
+  List<ObligationQuery> _stage1Obligations() => buildStage1ObligationQueries(
+    recorder: recorder,
+    // The tick's own read path: serialized on the harness's one lane and
+    // resolved through the harness, so a reconnect's fresh session is picked
+    // up rather than a stale captured one.
+    db: _SerializedDb(this),
+    station: _station,
+    // Read per pass, never captured: the epoch is claimed before this list is
+    // ever consulted, and a successor claim leaves this process fenced out
+    // (the tick skips) rather than reading a stale value.
+    bootEpoch: () => _epoch ?? 0,
+    lastActivity: _lastActivity,
+    livenessThreshold: config.livenessThreshold,
+    pulseCoalesce: config.pulseCoalesce,
+    clock: _clock,
+  );
 
   // ── the append queue + single writer (§2.5) ──────────────────────────────
 
@@ -752,11 +808,13 @@ final class _SerializedTickAppender implements TickAppender {
   @override
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
+    String? seat,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => _harness._serialize(
     () => _appender.append(
       record,
+      seat: seat,
       provenance: provenance,
       provenanceBasis: provenanceBasis,
     ),

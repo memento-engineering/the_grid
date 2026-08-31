@@ -7,6 +7,8 @@
 /// `assembleStationWork`.
 library;
 
+import 'package:grid_runtime/grid_runtime.dart'
+    show kDefaultLivenessThreshold, kDefaultPulseCoalesce;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 
@@ -45,6 +47,8 @@ final class TrajectoryConfig {
     this.gcInterval = kDefaultTrajectoryGcInterval,
     this.commitCadence = const Duration(seconds: 30),
     this.queueBound = kDefaultTrajectoryQueueBound,
+    this.livenessThreshold = kDefaultLivenessThreshold,
+    this.pulseCoalesce = kDefaultPulseCoalesce,
   });
 
   final TrajectoryConfigMode mode;
@@ -62,6 +66,15 @@ final class TrajectoryConfig {
   /// The bounded append queue's capacity (§2.5).
   final int queueBound;
 
+  /// How stale a subject's last beat must be before the tick's liveness
+  /// detector calls it lost (§2.4 obligation 3). The unknown rule is NOT a
+  /// knob: no beat observed under the current epoch always reads `unknown`.
+  final Duration livenessThreshold;
+
+  /// The per-subject beat coalescing window (schema §4: `traj_pulse` is
+  /// `≥30s per subject`).
+  final Duration pulseCoalesce;
+
   /// The same config with [mode] forced to [TrajectoryConfigMode.disabled] —
   /// how dry-run forces the no-write posture (§1.3: a dry arm must not claim
   /// an epoch or write anything).
@@ -71,5 +84,7 @@ final class TrajectoryConfig {
     gcInterval: gcInterval,
     commitCadence: commitCadence,
     queueBound: queueBound,
+    livenessThreshold: livenessThreshold,
+    pulseCoalesce: pulseCoalesce,
   );
 }

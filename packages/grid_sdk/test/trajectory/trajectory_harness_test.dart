@@ -14,6 +14,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
@@ -661,5 +662,94 @@ void main() {
         expect(h.status.queueDepth, 0);
       },
     );
+  });
+
+  group('Stage-1 obligations (W7 — §2.4)', () {
+    test('the DEFAULT tick set is the shadow-posture one, composed after the '
+        'claim so the detector has an epoch to key on', () async {
+      final h = await harness();
+      await h.start();
+
+      expect(h.tick!.queries.map((query) => query.name), [
+        kUnknownTerminalSettlementObligation,
+        kWorktreeReapedBackfillObligation,
+        kLivenessDetectorObligation,
+      ]);
+      // The boot pass ran them: three SELECTs on the harness's own serial
+      // lane, plus the detector's pulse prune.
+      final passStatements = connected.single.statements;
+      expect(
+        passStatements.where((sql) => sql.startsWith('SELECT')),
+        hasLength(3),
+      );
+      expect(h.tick!.lastPass!.disposition, TickPassDisposition.ran);
+      expect(h.tick!.lastPass!.queriesRun, 3);
+      expect(h.tick!.lastPass!.refusals, isEmpty);
+    });
+
+    test('an EXPLICIT query list still wins — Stage 0\'s empty set is a '
+        'station\'s prerogative', () async {
+      final h = await TrajectoryHarness.build(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.required),
+        gridHome: tmp.path,
+        station: 'tranquility',
+        onFlare: (name, data) => flares.add((name, data)),
+        connect: () async {
+          final db = _FakeDb(onExecute: dbScript);
+          connected.add(db);
+          return db;
+        },
+        appenderFactory: (_) => appender,
+        tickQueries: kStage0ObligationQueries,
+        scheduleTimer: (duration, callback) {
+          final timer = _FakeTimer();
+          timers.add((duration, callback, timer));
+          return timer;
+        },
+        clock: () => now,
+      );
+      await h.start();
+
+      expect(h.tick!.queries, isEmpty);
+      expect(connected.single.statements, isEmpty);
+    });
+
+    test('a refusing obligation files the stuck note after schema §5\'s N '
+        'consecutive passes, and the note rides the QUEUE', () async {
+      // Every SELECT the obligation set issues fails: the store is unreachable
+      // for reads while the appender is fine — the shape the accounting is for.
+      dbScript = (sql) =>
+          sql.startsWith('SELECT') ? StateError('store unavailable') : null;
+      final h = await harness();
+      await h.start(); // pass 1 (the boot pass)
+      for (var i = 0; i < kStuckObligationThreshold - 1; i++) {
+        await h.tick!.runPass();
+      }
+      await pumpEventQueue();
+
+      expect(h.stuckObligations, isEmpty, reason: 'streaks reset on filing');
+      expect(
+        appender.calls.where((call) => call == 'append:attempt.note'),
+        // One note per refusing obligation that reached N.
+        hasLength(3),
+      );
+      expect(flareNames(), contains('trajectory.obligationStuck'));
+    });
+
+    test('a fenced-out pass is no evidence: the streak holds rather than '
+        'resetting or firing', () async {
+      dbScript = (sql) =>
+          sql.startsWith('SELECT') ? StateError('store unavailable') : null;
+      final h = await harness();
+      await h.start();
+      appender.fakeInert = true;
+      for (var i = 0; i < 10; i++) {
+        await h.tick!.runPass();
+      }
+      await pumpEventQueue();
+
+      expect(h.stuckObligations.values, everyElement(1));
+      expect(appender.calls, isNot(contains('append:attempt.note')));
+    });
   });
 }

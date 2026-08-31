@@ -24,6 +24,7 @@ abstract interface class TickAppender {
 
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
+    String? seat,
     TrajectoryProvenance provenance,
     String? provenanceBasis,
   });
@@ -53,10 +54,12 @@ final class AppenderTickPort implements TickAppender {
   @override
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
+    String? seat,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) async => _appender.append(
     record,
+    seat: seat,
     provenance: provenance,
     provenanceBasis: provenanceBasis,
   );

@@ -522,6 +522,13 @@ Future<StationWorkRuntime> assembleStationWork({
     onRefusal: refusalSink,
   );
 
+  // --- the runtime provider (ONE dry/live posture, per-seam override = a
+  // test). Built HERE rather than with the other transports below because the
+  // trajectory harness takes its `lastActivity` poll — liveness surface (b) of
+  // stage1-wiring §2.3 — and the constructor itself starts nothing.
+  final provider =
+      providerOverride ?? (dryRun ? DryRunProvider() : SubprocessProvider());
+
   // --- the trajectory harness (stage1-wiring §1.1), built beside the state
   // writer — the one place that knows everything the fenced service needs:
   // the grid home, the state partition, the seat allow-set, and the flare
@@ -536,6 +543,10 @@ Future<StationWorkRuntime> assembleStationWork({
         station: stateSubstation,
         seatPrefixes: allowSet,
         onFlare: transport?.flare,
+        // The tick's liveness detector polls the provider (§2.4 obligation
+        // 3); the worktree `.grid` mtime scan is the other surface and needs
+        // nothing wired — it reads the paths P6 already carries.
+        lastActivity: provider.lastActivity,
       );
   // The harness's ONE derivation layer (stage1-wiring §2), threaded from here
   // to every observation site the design names: ambient over the work subtree
@@ -601,8 +612,8 @@ Future<StationWorkRuntime> assembleStationWork({
   );
 
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
-  final provider =
-      providerOverride ?? (dryRun ? DryRunProvider() : SubprocessProvider());
+  // The provider itself is built above, beside the trajectory harness that
+  // polls it.
   final git =
       gitOverride ??
       (dryRun

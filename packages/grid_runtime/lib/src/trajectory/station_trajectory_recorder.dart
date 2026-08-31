@@ -29,6 +29,7 @@
 library;
 
 import 'package:grid_trajectory/grid_trajectory.dart';
+import 'package:meta/meta.dart';
 
 import '../lifecycle/bead_ownership.dart';
 
@@ -91,6 +92,15 @@ const String kRecorderMintedAttemptBasis = 'recorder-minted';
 /// content-split for agent journaling is deferred.
 const String kObligationStuckChannel = 'obligation-stuck';
 
+/// `provenance_basis` for the tick's `worktree.reaped` backfill (§2.4
+/// obligation 2): the legacy reap already ran, the record never landed — the
+/// named non-atomic crash class, healed record-only.
+const String kTickReapedBackfillBasis = 'tick-reaped-backfill';
+
+/// `provenance_basis` for the tick's settling terminal (§2.4 obligation 1):
+/// an `unknown` terminal healed from a process/worktree probe.
+const String kTickUnknownSettlementBasis = 'tick-unknown-settlement';
+
 /// The mount-attempt bead's durable counter key — wire-identical to
 /// grid_engine's `MountAttemptKeys.count`, duplicated because grid_runtime
 /// cannot import grid_engine (the same split the molecule join keys live
@@ -98,6 +108,25 @@ const String kObligationStuckChannel = 'obligation-stuck';
 /// shadow-comparable ordinal `traj shadow-diff` joins against the legacy bead
 /// (§2.2, r2 major 8).
 const String kLegacyAttemptCountKey = 'grid.attempt.count';
+
+/// One constructed record plus the seat its envelope must carry — what a
+/// BUILDER hands back to a caller that owns its own append.
+///
+/// The queue path ([StationTrajectoryRecorder]'s observation methods) enqueues
+/// these itself; the TICK path (stage1-wiring §2.4's obligations) appends them
+/// through the fenced appender instead — schema §5: "the tick, never the query,
+/// owns the fenced append". Both paths build through the same builders, which
+/// is what keeps the concrete record vocabulary in this one library (§2).
+@immutable
+final class DerivedRecord {
+  const DerivedRecord(this.record, {this.seat});
+
+  final TrajectoryRecord record;
+
+  /// §2.2's seat row, or null when the record carries no `work_bead_id` (and
+  /// `ck_seat` therefore demands nothing).
+  final String? seat;
+}
 
 /// A recorder status read — plain counters for the `/status` trajectory block.
 final class TrajectoryRecorderStats {
@@ -725,15 +754,8 @@ class StationTrajectoryRecorder {
     DateTime? occurredAt,
   }) {
     _observe('obligationStuckNoted', () {
-      final ordinal = (_noteOrdinals[sessionId] ?? 0) + 1;
-      _noteOrdinals[sessionId] = ordinal;
       _enqueue(
-        AttemptNote(
-          sessionId: sessionId,
-          body: body,
-          channel: kObligationStuckChannel,
-          noteOrdinal: ordinal,
-        ),
+        buildObligationStuckNote(sessionId: sessionId, body: body).record,
         occurredAt: occurredAt,
       );
     });
@@ -987,21 +1009,104 @@ class StationTrajectoryRecorder {
   }) {
     _observe('worktreeReaped', () {
       _enqueue(
-        WorktreeReaped(
+        buildWorktreeReaped(
           sessionId: sessionId,
           worktree: worktree,
           branch: branch,
           uncommitted: uncommitted,
           unpushed: unpushed,
           stashes: stashes,
-        ),
+        ).record,
         occurredAt: occurredAt,
         provenance: inferred
             ? TrajectoryProvenance.inferred
             : TrajectoryProvenance.observed,
-        provenanceBasis: inferred ? 'tick-reaped-backfill' : null,
+        provenanceBasis: inferred ? kTickReapedBackfillBasis : null,
       );
     });
+  }
+
+  // ── tick-side builders (§2.4's obligations) ──────────────────────────────
+  //
+  // The tick owns its own fenced append (schema §5), so these RETURN the
+  // record instead of enqueuing it — but they are the SAME constructors the
+  // observation methods above ride, which is the whole point: one library
+  // names the concrete record classes, whichever path appends them.
+
+  /// The SETTLING `attempt.terminal` an unknown terminal's obligation appends
+  /// (§2.4 obligation 1): outcome `settled`, `resolves_record_id` pointing at
+  /// the unknown terminal it heals, identity recovered from the log row rather
+  /// than from any warm cache.
+  DerivedRecord buildSettledTerminal({
+    required String sessionId,
+    required String attemptId,
+    required String resolvesRecordId,
+    String? workBeadId,
+    String? reason,
+  }) => _buildTerminal(
+    sessionId: sessionId,
+    attemptId: attemptId,
+    outcome: TerminalOutcome.settled,
+    workBeadId: workBeadId,
+    reason: reason,
+    resolvesRecordId: resolvesRecordId,
+  );
+
+  /// The `worktree.reaped` record — the observation method's builder, and the
+  /// backfill obligation's (§2.4 obligation 2).
+  DerivedRecord buildWorktreeReaped({
+    required String sessionId,
+    required String worktree,
+    String? branch,
+    int? uncommitted,
+    int? unpushed,
+    int? stashes,
+  }) => DerivedRecord(
+    WorktreeReaped(
+      sessionId: sessionId,
+      worktree: worktree,
+      branch: branch,
+      uncommitted: uncommitted,
+      unpushed: unpushed,
+      stashes: stashes,
+    ),
+  );
+
+  /// One `attempt.liveness.*` threshold crossing (§2.4 obligation 3). The
+  /// DETECTOR decides when a crossing happened — including the unknown rule
+  /// (no beat observed in the current epoch ⇒ no record at all); this only
+  /// builds the record for a crossing it was handed.
+  DerivedRecord buildLivenessTransition({
+    required String attemptId,
+    required LivenessCrossing crossing,
+    required DateTime lastBeatAt,
+    required int thresholdMs,
+  }) => DerivedRecord(
+    AttemptLivenessTransition(
+      attemptId: attemptId,
+      crossing: crossing,
+      lastBeatAt: lastBeatAt,
+      thresholdMs: thresholdMs,
+    ),
+  );
+
+  /// The stuck-obligation note (§2.4 obligation 4 / schema §5's N-failure
+  /// rule). The ordinal is service-minted HERE for both paths, so the two
+  /// never mint the same `note:<session>:<ordinal>` key.
+  DerivedRecord buildObligationStuckNote({
+    required String sessionId,
+    required String body,
+  }) {
+    final ordinal = (_noteOrdinals[sessionId] ?? 0) + 1;
+    _noteOrdinals[sessionId] = ordinal;
+    return DerivedRecord(
+      AttemptNote(
+        sessionId: sessionId,
+        body: body,
+        channel: kObligationStuckChannel,
+        noteOrdinal: ordinal,
+      ),
+    );
   }
 
   /// `worktree.held` — the reap refused to delete (uncommitted/unpushed
@@ -1082,35 +1187,58 @@ class StationTrajectoryRecorder {
     DateTime? occurredAt,
   }) {
     _observe(site, () {
-      final parsed = workBeadId == null ? null : parseLegacyWorkKey(workBeadId);
-      String? attemptIdBasis;
-      var resolved = attemptId ?? _sessionAttempts[sessionId];
-      if (resolved == null) {
-        // No breadcrumb, no cached mint, no seed: mint and SAY SO rather
-        // than refuse — such rows are outside the shadow's comparable set
-        // (§2.1).
-        resolved = _mintUlid();
-        _sessionAttempts[sessionId] = resolved;
-        attemptIdBasis = mintedAttemptBasis;
-      }
-      final seat = parsed == null ? null : _seatOf(parsed.workBeadId);
+      final derived = _buildTerminal(
+        sessionId: sessionId,
+        outcome: outcome,
+        workBeadId: workBeadId,
+        attemptId: attemptId,
+        reason: reason,
+        resolvesRecordId: resolvesRecordId,
+        mintedAttemptBasis: mintedAttemptBasis,
+      );
       _enqueue(
-        AttemptTerminal(
-          attemptId: resolved,
-          sessionId: sessionId,
-          workBeadId: parsed?.workBeadId,
-          outcome: outcome,
-          reason: reason,
-          resolvesRecordId: resolvesRecordId,
-          attemptIdBasis: attemptIdBasis,
-          seatBasis: seat?.basis,
-        ),
-        seat: seat?.seat,
+        derived.record,
+        seat: derived.seat,
         occurredAt: occurredAt,
         provenance: provenance,
         provenanceBasis: provenanceBasis,
       );
     });
+  }
+
+  DerivedRecord _buildTerminal({
+    required String sessionId,
+    required TerminalOutcome outcome,
+    String? workBeadId,
+    String? attemptId,
+    String? reason,
+    String? resolvesRecordId,
+    String mintedAttemptBasis = kRecorderMintedAttemptBasis,
+  }) {
+    final parsed = workBeadId == null ? null : parseLegacyWorkKey(workBeadId);
+    String? attemptIdBasis;
+    var resolved = attemptId ?? _sessionAttempts[sessionId];
+    if (resolved == null) {
+      // No breadcrumb, no cached mint, no seed: mint and SAY SO rather than
+      // refuse — such rows are outside the shadow's comparable set (§2.1).
+      resolved = _mintUlid();
+      _sessionAttempts[sessionId] = resolved;
+      attemptIdBasis = mintedAttemptBasis;
+    }
+    final seat = parsed == null ? null : _seatOf(parsed.workBeadId);
+    return DerivedRecord(
+      AttemptTerminal(
+        attemptId: resolved,
+        sessionId: sessionId,
+        workBeadId: parsed?.workBeadId,
+        outcome: outcome,
+        reason: reason,
+        resolvesRecordId: resolvesRecordId,
+        attemptIdBasis: attemptIdBasis,
+        seatBasis: seat?.basis,
+      ),
+      seat: seat?.seat,
+    );
   }
 
   void _lease({
@@ -1199,12 +1327,12 @@ class StationTrajectoryRecorder {
   }) {
     _observe(site, () {
       _enqueue(
-        AttemptLivenessTransition(
+        buildLivenessTransition(
           attemptId: attemptId,
           crossing: crossing,
           lastBeatAt: lastBeatAt,
           thresholdMs: thresholdMs,
-        ),
+        ).record,
         occurredAt: occurredAt,
       );
     });
