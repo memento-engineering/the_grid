@@ -15,8 +15,8 @@ flowchart TB
     subgraph LEDGER["WORK LEDGER plane — bd, human tempo"]
         wb["work beads: notes and spec fields"]
         gb["gate beads"]
-        ap["human approval facts: grid.approved, validation_plan, type"]
-        hd["session bead, slimmed: seven-field head summary"]
+        ap["human approval facts: approved_label_rev, validation_plan_digest, issue_type"]
+        hd["session bead, slimmed: eight-field head summary"]
         rt1["RETIRED: step and molecule bead types, the ~6k-bead pour"]
     end
 
@@ -59,9 +59,11 @@ flowchart TB
    Every restart-lossy in-memory latch is owned durably. Terminals are one record with no
    tail; the former teardown tail becomes derived obligations repaired idempotently by a
    defined service tick — the reap and the boot teardown-replay retire (falsifier clause 2).
-3. **Session-bead slimming** — schema §7: the session bead survives as a seven-field head
+3. **Session-bead slimming** — schema §7: the session bead survives as an eight-field head
    summary written only by the fenced service; hand-edits are detected and repaired, not
-   load-bearing (the `tranquility-8krit` 149k-commit class dissolves).
+   load-bearing (the `tranquility-8krit` 149k-commit class dissolves — every specimen id and
+   store measurement in these documents is from the reference deployment, a private station's
+   month-old state store, the dolt database `tranquility`).
 4. **Migration** — schema §9: record-type groups G1–G4 cut whole behind quiesced epoch
    boundaries (zero open sessions on the outgoing discipline, boot-enforced, with a
    pre-stated drain fallback); legacy reads are a counted code-level dual-read (fallback
