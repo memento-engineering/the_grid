@@ -100,7 +100,12 @@ That is the defect.
   retire.
 * **Storage default:** grid-owned tables in the same dolt database
   (append-affinity, one backup and sync domain), confirmed or overturned by
-  the companion spike (tg-hnlt).
+  the companion spike (tg-hnlt). **Spike outcome (2026-08-31): OVERTURNED** —
+  a separate `trajectory` database on the same bd-owned dolt sql-server, on
+  measured growth arithmetic (~14.6 KB of gc-unreclaimable history per dolt
+  commit lands in bd's clone/backup domain), commit-log attribution, and the
+  mandatory-gc hazard; ratified by the operator. Rationale, flip conditions,
+  and the operational contract: `docs/design/trajectory/storage-call.md`.
 
 A is rejected on the operational record above. C is rejected for now: bd's
 issue model is the correct shape for human-tempo work, is how its maintainers
