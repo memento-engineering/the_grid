@@ -1,0 +1,17 @@
+{
+  "record_type": "worktree.held",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "worktree": ".grid/worktrees/tg/tg-9abc",
+    "branch": "grid/tg-9abc"
+  },
+  "payload": {
+    "uncommitted": 3,
+    "unpushed": 1,
+    "stashes": 0
+  },
+  "idem_key_text": "wt-held:tranquility-5xk:.grid/worktrees/tg/tg-9abc:7",
+  "idem_key": "0050abcf79a91109bbf727678fb4c2171e1a8006d634ee50da511d6a7581719f"
+}

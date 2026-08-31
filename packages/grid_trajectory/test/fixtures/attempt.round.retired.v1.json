@@ -1,0 +1,16 @@
+{
+  "record_type": "attempt.round.retired",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 1
+  },
+  "payload": {
+    "old_round": 0,
+    "new_round": 1,
+    "cause": "rework"
+  },
+  "idem_key_text": "round-retired:tranquility-5xk:0",
+  "idem_key": "7d6011949c3465680d7fcdc603cc86c679f14eb8a530f8bfca28b15310d3a41d"
+}

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:grid_cli/grid_cli.dart';
+import 'package:grid_trajectory/grid_trajectory.dart' show TrajCommand;
 
 // The MINIMAL generic bin — only the asset-agnostic driving commands. the_grid
 // is a framework, not a turnkey tool (the Dart runner model — see
@@ -18,7 +19,10 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(GateCommand())
         ..addCommand(ReworkCommand())
         ..addCommand(BeadCommand())
-        ..addCommand(DemoCommand());
+        ..addCommand(DemoCommand())
+        // Stage 0's forensics verbs. Composed here for local measurement; a
+        // station runner needs its own explicit ..addCommand(TrajCommand()).
+        ..addCommand(TrajCommand());
 
   try {
     final code = await runner.run(arguments);

@@ -1,0 +1,17 @@
+{
+  "record_type": "worktree.provisioned",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002",
+    "session_id": "tranquility-5xk",
+    "worktree": ".grid/worktrees/tg/tg-9abc",
+    "branch": "grid/tg-9abc",
+    "commit_sha": "a3f9c1d2e4b5a6978877665544332211ffeeddcc"
+  },
+  "payload": {
+    "adopted_existing": false
+  },
+  "idem_key_text": "wt-provisioned:01J8ATTEMPT000000000000002",
+  "idem_key": "69eb503191ebbb1ef2e7e50eda364b60660907f7f4bc5074630690f56f2660a0"
+}

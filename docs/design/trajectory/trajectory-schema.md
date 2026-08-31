@@ -899,6 +899,15 @@ belt's honest scope (T6e): two appenders writing *different* rows do not conflic
 itself — the belt catches same-`epoch_seq` collisions only, which is exactly why the counter-CAS is
 primary and the belt is a belt.
 
+**Statement-time 1062 (measured, stage-0 build):** dolt 2.2 surfaces a `uq_idem` duplicate that is
+already visible in the session's snapshot at STATEMENT time as **error 1062 naming the duplicate
+VALUE** — not at COMMIT as a constraint-named 1105; the concurrent-commit shape remains 1105 naming
+the constraint, and both are handled. The 1062 message does not say which unique key fired, so the
+appender arbitrates by probe: a 1062 whose idem-key probe finds our own key in the log is the
+DESIGNED at-least-once dedupe (return the original `record_id`); a 1062 with no matching row is the
+belt's `epoch_seq`/`record_id` class — **corruption-halt**. 1062 is never caught on the epoch-claim
+path (the PK is not the arbiter there; seeing it means something is structurally wrong).
+
 **Fenced-out behavior (major fix — the draft's self-contradiction deleted).** A fenced-out appender
 **appends nothing** — not even its own refusal; its next append fails the identical fence,
 recursively, which is the same physics as the losing booter (§2 F2, held). The honest contract:
@@ -1882,3 +1891,11 @@ proj_process_identity; **(6)** the CHECK-refusal pin added to Stage 0's CI guard
 `uq_epoch_seq` = detect-and-halt); **(8)** the CI placement rule gains its no-pin fallback
 (bead-only correlation, receipt surface, never P5); **(9)** §2 F1's liveness-unknown list
 aligned to the five paths; **(10)** the §14 fatal-1 entry marked superseded at its own site.
+
+Stage-0 build amendments (operator-adjudicated review round, 2026-08-31): the §5 error contract
+gains the measured statement-time 1062 paragraph — same-snapshot `uq_idem` duplicates die at
+statement time as 1062 naming the value, arbitrated by idem-key probe (measured, stage-0 build).
+Q19's cursor-file path discrepancy (`file_cursor_store.dart` doc comment vs the actual
+`github_reconciler_binding_assets.dart` path) names files that live in the power_station repo,
+not this one — its fix lands with the power_station side of the migration, cited here so the
+Stage-0 checklist item does not read as skipped.

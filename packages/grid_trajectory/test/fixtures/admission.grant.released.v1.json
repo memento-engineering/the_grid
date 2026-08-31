@@ -1,0 +1,14 @@
+{
+  "record_type": "admission.grant.released",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {
+    "grant_id": "01J8GRANT00000000000000001",
+    "work_bead_id": "tg-9abc"
+  },
+  "payload": {
+    "cause": "superseded"
+  },
+  "idem_key_text": "grant:01J8GRANT00000000000000001:released",
+  "idem_key": "e39563198204a20b0a1930bf5c3b2078009a10c66270fec211396bb4c5850f3a"
+}

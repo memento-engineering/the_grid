@@ -1,0 +1,15 @@
+{
+  "record_type": "attempt.adopt.proved",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "outcome": "adopted",
+    "fence_pgid": 4242,
+    "fence_pid": 4242
+  },
+  "idem_key_text": "adopt:01J8ATTEMPT000000000000002",
+  "idem_key": "2d6b11ccbd10b925e93529c1de39816df53d22c5177f369f9754d89457839845"
+}

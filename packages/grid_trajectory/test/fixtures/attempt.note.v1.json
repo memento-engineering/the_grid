@@ -1,0 +1,15 @@
+{
+  "record_type": "attempt.note",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "session_id": "tranquility-5xk"
+  },
+  "payload": {
+    "body": "obligation stuck: bd close failed read-back 5 ticks",
+    "channel": "obligation-stuck",
+    "note_ordinal": 2
+  },
+  "idem_key_text": "note:tranquility-5xk:2",
+  "idem_key": "acbb3727899545369d069d434a865b47427c5aab4454e914875ba18ddad3b0ae"
+}

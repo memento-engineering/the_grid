@@ -1,0 +1,14 @@
+{
+  "record_type": "attempt.liveness.lost",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "last_beat_at": "2026-08-31T11:58:03.000250Z",
+    "threshold_ms": 90000
+  },
+  "idem_key_text": "liveness:01J8ATTEMPT000000000000002:1788177483000250:lost",
+  "idem_key": "47544ce885673141033ecf56b39551cd209a9aef906c3b5c986d0a684f3c80a4"
+}

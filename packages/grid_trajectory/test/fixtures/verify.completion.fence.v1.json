@@ -1,0 +1,14 @@
+{
+  "record_type": "verify.completion.fence",
+  "type_version": 1,
+  "family": "verification",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002",
+    "commit_sha": "b4a0d2e3f5c6b7a89988776655443322aabbccdd"
+  },
+  "payload": {
+    "outcome": "clear"
+  },
+  "idem_key_text": "fence-probe:01J8ATTEMPT000000000000002",
+  "idem_key": "39b88499fac1e29c60e4cf689c2a8777a68c0ec43035415c49c936b43ffc2ae1"
+}

@@ -52,6 +52,7 @@ asset-agnostic verbs only.
 | `grid_cli` | The CLI SDK a composed runner assembles: the generic verbs (`watch`/`gate`/`rework`/`demo`), the dev-mode `reload` command a runner binds, and the resident-station lock/control/attach pieces. Ships the minimal generic `grid` bin |
 | `grid_exploration` | Exploration-protocol host: registers `ext.leonard.*` over the Dart VM service so exploration clients (lenny) can observe and drive a running station; carries the hot-reload `ReassembleTool` |
 | `grid_devtools` | DevTools extension (the only Flutter package — test it with `flutter test`, not `dart test`) — attaches over the exploration protocol only, no direct `beads_dart` dependency |
+| `grid_trajectory` | The trajectory-log substrate (`docs/design/trajectory/`): the sealed record codec + golden fixtures, the fenced append client writing its own `trajectory` database over direct SQL, the service tick, and the `traj` verbs. A LEAF like `beads_dart` — zero `grid_*` dependencies; a runner composes `TrajCommand` explicitly |
 
 ## Quickstart
 

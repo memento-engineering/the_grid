@@ -1,0 +1,27 @@
+{
+  "record_type": "effect.intent",
+  "type_version": 1,
+  "family": "effect",
+  "envelope": {
+    "effect_id": "d87e6a139323f09554b1cdc3c5d4d90d4fb1ed26ad21c4642e8c38930e8e60bc",
+    "session_id": "tranquility-5xk",
+    "round": 0,
+    "step_path": "root.deliver",
+    "step_round": 0,
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "kind": "pr_open",
+    "target": {
+      "repo": "memento-engineering/the_grid",
+      "branch": "grid/tg-9abc",
+      "base": "main"
+    },
+    "posture": {
+      "delivery_method": "pr",
+      "policy_version": "v2"
+    }
+  },
+  "idem_key_text": "effect:d87e6a139323f09554b1cdc3c5d4d90d4fb1ed26ad21c4642e8c38930e8e60bc:intent",
+  "idem_key": "21a17069e18ca4b9ab0ed631ba87680fb463f49217454cec2e567d59a4297421"
+}

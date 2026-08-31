@@ -1,0 +1,17 @@
+{
+  "record_type": "attempt.session.started",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "grant_id": "01J8GRANT00000000000000001",
+    "work_bead_id": "tg-9abc",
+    "mount_attempt_id": "01J8MOUNT00000000000000001"
+  },
+  "payload": {
+    "rig": "operator",
+    "model": "molecule"
+  },
+  "idem_key_text": "session-started:tranquility-5xk",
+  "idem_key": "47d4008aa0ed57b295c6a19278164aea0037a84874ec2117adb595236a3c9d84"
+}

@@ -1,0 +1,22 @@
+{
+  "record_type": "attempt.process.started",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002",
+    "session_id": "tranquility-5xk",
+    "incarnation": 1,
+    "round": 0,
+    "step_path": "root.implement",
+    "step_round": 0,
+    "worktree": ".grid/worktrees/tg/tg-9abc",
+    "branch": "grid/tg-9abc"
+  },
+  "payload": {
+    "pid": 4242,
+    "pgid": 4242,
+    "predecessor_attempt_id": "01J8ATTEMPT000000000000001"
+  },
+  "idem_key_text": "proc-started:01J8ATTEMPT000000000000002",
+  "idem_key": "e6f54ed5376f5ccaf368c20cf628cbb285d9272d0d2008d102a3361f4d0592ce"
+}

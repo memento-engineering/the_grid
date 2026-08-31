@@ -1,0 +1,35 @@
+{
+  "record_type": "molecule.poured",
+  "type_version": 1,
+  "family": "step",
+  "envelope": {
+    "session_id": "tranquility-5xk",
+    "round": 0
+  },
+  "payload": {
+    "formula": "implement-verify-deliver",
+    "graph": {
+      "nodes": [
+        "root.implement",
+        "root.verify",
+        "root.deliver"
+      ],
+      "edges": [
+        {
+          "from": "root.implement",
+          "to": "root.verify",
+          "kind": "blocks"
+        },
+        {
+          "from": "root.verify",
+          "to": "root.deliver",
+          "kind": "blocks"
+        }
+      ]
+    },
+    "node_count": 3,
+    "graph_digest": "3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855e"
+  },
+  "idem_key_text": "pour:tranquility-5xk:0",
+  "idem_key": "7b3b6dc4a6ea8d7fe57d60020d812571ec84205280ff53731089a8531c513d4d"
+}

@@ -1,0 +1,18 @@
+{
+  "record_type": "attempt.mint.outcome",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "work_bead_id": "tg-9abc",
+    "mount_attempt_id": "01J8MOUNT00000000000000001"
+  },
+  "payload": {
+    "phase": "exhausted",
+    "mint_attempt": 3,
+    "max_attempts": 3,
+    "stage": "pour",
+    "reason": "graph-apply timeout"
+  },
+  "idem_key_text": "mint:tg-9abc:01J8MOUNT00000000000000001:exhausted",
+  "idem_key": "b8bbfbb3224ba070f806d528dcf7db891fb8f820a6cad3d3ae43608e63b9b29f"
+}

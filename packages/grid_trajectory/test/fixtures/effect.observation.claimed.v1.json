@@ -1,0 +1,13 @@
+{
+  "record_type": "effect.observation.claimed",
+  "type_version": 1,
+  "family": "effect",
+  "envelope": {
+    "receipt": "obs:obs-20260831-0007"
+  },
+  "payload": {
+    "claim_order": "deliver_then_claim"
+  },
+  "idem_key_text": "obs:obs-20260831-0007",
+  "idem_key": "cf0fa970915accc64404360f16b76a92f25c76a16d7ee6b66738594017b5145e"
+}

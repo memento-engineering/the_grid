@@ -1,0 +1,17 @@
+{
+  "record_type": "attempt.terminal",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002",
+    "session_id": "tranquility-5xk",
+    "work_bead_id": "tg-9abc",
+    "outcome": "unknown",
+    "unknown_reason": "write_timeout"
+  },
+  "payload": {
+    "reason": "report write timed out"
+  },
+  "idem_key_text": "terminal:01J8ATTEMPT000000000000002",
+  "idem_key": "0962fb8218385ab36b333680b748e6be4d85677f270cfe214d1501742bc3dd5b"
+}

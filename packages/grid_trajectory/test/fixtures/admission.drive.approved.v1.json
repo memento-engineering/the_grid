@@ -1,0 +1,14 @@
+{
+  "record_type": "admission.drive.approved",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {},
+  "payload": {
+    "approved_beads": [
+      "tg-9abc",
+      "tg-1aaa"
+    ]
+  },
+  "idem_key_text": "drive:lunar:7",
+  "idem_key": "e9f3dfd2c2098874ff3d814f844f5fed699d6838185968d37e7205b37aef05ec"
+}

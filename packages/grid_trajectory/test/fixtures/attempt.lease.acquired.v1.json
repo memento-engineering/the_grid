@@ -1,0 +1,14 @@
+{
+  "record_type": "attempt.lease.acquired",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "token": "01J8ATTEMPT000000000000002",
+    "disposition": "held"
+  },
+  "idem_key_text": "lease:01J8ATTEMPT000000000000002:acquired",
+  "idem_key": "2a696295aeb240726094f4e223be5de8a1ab6950470bd178052dc81bc7dec374"
+}

@@ -42,6 +42,45 @@ jobs:
             (cd packages/$pkg && dart test)
             echo "::endgroup::"
           done
+          # grid_trajectory's integration tag is the Stage-0 guard suite. It
+          # FAILS rather than skips without dolt (decision:
+          # stage0-guards-gate-prs), and this job installs none — the guards
+          # run in trajectory-guards below.
+          echo "::group::grid_trajectory"
+          (cd packages/grid_trajectory && dart test -x integration)
+          echo "::endgroup::"
+
+  trajectory-guards:
+    name: Stage-0 trajectory guards (dolt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # PINNED, and pinned independently of the Dart toolchain: these guards
+      # assert dolt's own observed behavior (1213 arbitration, dolt_ignore
+      # suppression, the force-add trap), so a floating dolt would turn a
+      # server-side change into an unexplained red PR. dolthub/setup-dolt@v1
+      # stopped resolving (2026-08), so install from the release tarball.
+      - name: Install dolt
+        env:
+          DOLT_VERSION: 2.2.2
+        run: |
+          curl -fsSL -o /tmp/dolt.tar.gz \
+            "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/dolt-linux-amd64.tar.gz"
+          tar -xzf /tmp/dolt.tar.gz -C /tmp
+          sudo install "$(find /tmp/dolt-linux-amd64 -type f -name dolt | head -n1)" /usr/local/bin/dolt
+          dolt version
+      # The workspace includes Flutter members, so root resolution needs the
+      # Flutter SDK even for this Dart-only job.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.8
+      - name: Resolve workspace
+        run: flutter pub get
+      - name: Run the seven guards
+        run: |
+          cd packages/grid_trajectory
+          dart test -t integration
 
   flutter:
     name: analyze + test (Flutter packages)

@@ -1,0 +1,16 @@
+{
+  "record_type": "effect.unarmed",
+  "type_version": 1,
+  "family": "effect",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "posture": {
+      "delivery_method": "commit-only",
+      "policy_version": "v2"
+    }
+  },
+  "idem_key_text": "unarmed:01J8ATTEMPT000000000000002",
+  "idem_key": "5cfffb542b21f503062fe2fa52b1bf8b3c9e4eb642c651abe9c4d223a4ef7468"
+}

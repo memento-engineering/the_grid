@@ -1,0 +1,22 @@
+name: grid_trajectory
+version: 0.1.0
+description: >-
+  Trajectory log substrate — record codec, fenced append client, service tick,
+  and traj verbs (docs/design/trajectory/trajectory-schema.md). A leaf package:
+  zero grid_* dependencies, by decision (grid-trajectory-leaf-package).
+repository: https://github.com/memento-engineering/the_grid
+resolution: workspace
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  args: ^2.6.0
+  crypto: ^3.0.6
+  meta: ^1.16.0
+  mysql_client: ^0.0.27
+  path: ^1.9.0
+
+dev_dependencies:
+  lints: ^5.1.0
+  test: ^1.25.0

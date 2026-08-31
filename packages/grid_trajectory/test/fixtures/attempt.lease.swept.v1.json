@@ -1,0 +1,15 @@
+{
+  "record_type": "attempt.lease.swept",
+  "type_version": 1,
+  "family": "attempt",
+  "envelope": {
+    "attempt_id": "01J8ATTEMPT000000000000002"
+  },
+  "payload": {
+    "token": "01J8ATTEMPT000000000000002",
+    "disposition": "killed",
+    "terminate_result": "SIGKILL delivered to pgid 4242"
+  },
+  "idem_key_text": "lease-swept:01J8ATTEMPT000000000000002:7",
+  "idem_key": "35789db22635f8ddadd1768ac6ff7d38eee7278bd5a61e73843140adf3bb3110"
+}

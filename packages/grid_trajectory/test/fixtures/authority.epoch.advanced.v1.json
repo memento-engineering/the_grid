@@ -1,0 +1,17 @@
+{
+  "record_type": "authority.epoch.advanced",
+  "type_version": 1,
+  "family": "admission",
+  "envelope": {},
+  "payload": {
+    "epoch": 7,
+    "pid": 4200,
+    "pgid": 4200,
+    "cause": "steal",
+    "prior_epoch": 6,
+    "prior_pid": 3999,
+    "steal_reason": "stale"
+  },
+  "idem_key_text": "epoch:lunar:7:advanced",
+  "idem_key": "07f62bd260407e403c91dcb8c8df4d117793c2eb1fa582b3c8526e18b64b46f5"
+}
