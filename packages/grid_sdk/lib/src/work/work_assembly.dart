@@ -9,6 +9,8 @@ import 'package:path/path.dart' as p;
 import '../command/command_operation.dart';
 import '../command/station_command_handler.dart';
 import '../stores/stores.dart';
+import '../trajectory/trajectory_config.dart';
+import '../trajectory/trajectory_harness.dart';
 import 'station_work.dart';
 
 /// One substation's assembly identity — mirrors the `Substation` the author
@@ -67,6 +69,7 @@ class StationWorkRuntime {
     required this.wiring,
     required this.commands,
     required this.git,
+    required this.trajectory,
     required this.stateSubstation,
     required this.readPathName,
     required StationDriver driver,
@@ -100,6 +103,14 @@ class StationWorkRuntime {
   /// its substations' `GitGridAssets` so the tree's source control and THIS
   /// runtime's restart sweep share one service.
   final StationGitService git;
+
+  /// The trajectory harness (stage1-wiring §1.1) — the fenced service's
+  /// station-side owner, built beside the state writer. Always present:
+  /// disabled or degraded it is a counting no-op, and a runner reads its
+  /// [TrajectoryHarness.status] for the banner/`/status` block. Lifecycle is
+  /// THIS runtime's: up inside [start] (after the sources), down inside
+  /// [shutdown] (before them) — never blocking either.
+  final TrajectoryHarness trajectory;
 
   /// The owned state partition sessions are minted into — re-sourced from the
   /// grid's own state store identity (its `dolt_database`), never a flag
@@ -178,6 +189,16 @@ class StationWorkRuntime {
     if (_started || _shutdown) return;
     _started = true;
     await _sourcesStart();
+    // Trajectory up — §1.2 step 2 of stage1-wiring: connect → belt verify →
+    // epoch claim → tick, all inside the harness, which never throws and
+    // never fails the boot (the trajectory can degrade; work cannot, §3).
+    // The catch is the binding rule's last line of defense, not a live path.
+    try {
+      await trajectory.start();
+    } on Object catch (error) {
+      _onRefusal('trajectory start failed (station booting legacy-only) — '
+          '$error');
+    }
     await _freshnessBarrier();
     final report = await _restart.reconcile();
     _lastRestartReport = report;
@@ -233,6 +254,17 @@ class StationWorkRuntime {
     if (_shutdown) return;
     _shutdown = true;
     _driver.dispose();
+    // Trajectory down BEFORE the stores it reads (§1.2 shutdown order) —
+    // guarded so it NEVER blocks sources shutdown (r2, major 9): the harness
+    // settles every step internally (queue drain → fixpoint → boundary
+    // commit → dispose) and never throws; the catch is insurance, so
+    // _sourcesShutdown() below is unconditionally reached.
+    try {
+      await trajectory.shutdown();
+    } on Object catch (error) {
+      _onRefusal('trajectory shutdown failed (sources still stopping) — '
+          '$error');
+    }
     await _sourcesShutdown();
   }
 }
@@ -318,6 +350,8 @@ Future<StationWorkRuntime> assembleStationWork({
   Duration wedgeThreshold = kDefaultWedgeThreshold,
   Duration wedgePollInterval = kDefaultWedgePollInterval,
   Duration syncFloorInterval = kDefaultSyncFloorInterval,
+  TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
+  TrajectoryHarness? trajectoryOverride,
 }) async {
   if (registry != null && registryBuilder != null) {
     throw ArgumentError(
@@ -487,6 +521,22 @@ Future<StationWorkRuntime> assembleStationWork({
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
   );
+
+  // --- the trajectory harness (stage1-wiring §1.1), built beside the state
+  // writer — the one place that knows everything the fenced service needs:
+  // the grid home, the state partition, the seat allow-set, and the flare
+  // transport. Dry-run forces `disabled` (§1.3): a dry arm must not claim an
+  // epoch or write anything — same physics as the recording no-op bd.
+  // [trajectoryOverride] is a TEST seam, like every other per-seam override.
+  final trajectory =
+      trajectoryOverride ??
+      await TrajectoryHarness.build(
+        config: dryRun ? trajectoryConfig.asDisabled : trajectoryConfig,
+        gridHome: stateStore.gridRoot,
+        station: stateSubstation,
+        seatPrefixes: allowSet,
+        onFlare: transport?.flare,
+      );
   final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
@@ -680,6 +730,7 @@ Future<StationWorkRuntime> assembleStationWork({
     ),
     commands: commands,
     git: git,
+    trajectory: trajectory,
     stateSubstation: stateSubstation,
     readPathName: readPathName,
     driver: driver,

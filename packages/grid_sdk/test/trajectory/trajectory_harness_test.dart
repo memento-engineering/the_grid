@@ -1,0 +1,575 @@
+// W1 (tg-zfek Stage 1) — the trajectory harness's lifecycle and failure
+// branches, offline, with fakes at the appender/connection seams:
+//
+//   * config postures (§1.3): disabled / auto-unprovisioned / auto-provisioned
+//     / required, and that no posture can fail a boot;
+//   * verify-before-claim boot order (§1.2, r2 minor 17) and the claim;
+//   * the bounded append queue + single writer loop (§2.5): FIFO, overflow
+//     drop-and-count, the enqueue-never-awaits contract;
+//   * the sealed-outcome mapping (§3): dedupe counts, internal errors drop +
+//     reconnect eagerly, fenced-out latches quiet ONCE, corruption halts loud;
+//   * guarded shutdown (§1.2): drain → fixpoint → boundary commit → dispose,
+//     each settled, never thrown, sources never blocked;
+//   * the gc cadence (M2) as its own non-fatal loop.
+import 'dart:async';
+import 'dart:io';
+
+import 'package:grid_sdk/grid_sdk.dart';
+import 'package:grid_trajectory/grid_trajectory.dart';
+import 'package:test/test.dart';
+
+/// A scriptable [TrajectoryDb]: records statements, optionally throws.
+final class _FakeDb implements TrajectoryDb {
+  _FakeDb({this.onExecute});
+
+  final List<String> statements = [];
+  final Object? Function(String sql)? onExecute;
+  bool closed = false;
+  bool closeThrows = false;
+
+  @override
+  Future<SqlResult> execute(String sql, [Map<String, dynamic>? params]) async {
+    statements.add(sql);
+    final scripted = onExecute?.call(sql);
+    if (scripted is Object && scripted is! SqlResult) {
+      // Anything non-result scripted for this statement is thrown.
+      // ignore: only_throw_errors
+      throw scripted;
+    }
+    return scripted is SqlResult ? scripted : const SqlResult();
+  }
+
+  @override
+  Future<void> close() async {
+    if (closeThrows) throw StateError('close refused');
+    closed = true;
+  }
+}
+
+/// A scriptable appender: the harness drives THIS seam; the real §5 SQL path
+/// is Stage-0-tested in grid_trajectory.
+final class _FakeAppender extends TrajectoryAppender {
+  _FakeAppender(_FakeDb db) : super(db: db, station: 'fake');
+
+  /// Ordered call log — `verify`, `claim:<cause>`, `append:<type>`,
+  /// `commit`, `reconnect`.
+  final List<String> calls = [];
+
+  AppendCorruptionHalt? verifyResult;
+  EpochClaimOutcome claimResult = const EpochClaimed(epoch: 1);
+  int? claimedPid;
+  int? claimedPgid;
+
+  /// Consumed FIFO; empty falls back to a fresh [Appended].
+  final List<AppendOutcome> appendOutcomes = [];
+  ReconnectOutcome reconnectResult = const ReconnectResumed(epoch: 1);
+  Object? commitError;
+  bool fakeInert = false;
+  bool fakeHalted = false;
+  int _seq = 0;
+
+  @override
+  bool get isInert => fakeInert;
+
+  @override
+  bool get isHalted => fakeHalted;
+
+  @override
+  Future<AppendCorruptionHalt?> verifyBeltAtBoot() async {
+    calls.add('verify');
+    return verifyResult;
+  }
+
+  @override
+  Future<EpochClaimOutcome> claimEpoch({
+    required int pid,
+    required int pgid,
+    String cause = 'boot',
+    int maxAttempts = 3,
+  }) async {
+    calls.add('claim:$cause');
+    claimedPid = pid;
+    claimedPgid = pgid;
+    return claimResult;
+  }
+
+  @override
+  Future<AppendOutcome> append(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? seat,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    String? source,
+    int? fencingToken,
+  }) async {
+    calls.add('append:${record.recordType}');
+    if (appendOutcomes.isNotEmpty) return appendOutcomes.removeAt(0);
+    _seq += 1;
+    return Appended(recordId: 'r$_seq', seq: _seq, epochSeq: _seq);
+  }
+
+  @override
+  Future<void> doltCommitIfDue() async {
+    calls.add('commit');
+    final error = commitError;
+    if (error != null) throw error;
+  }
+
+  @override
+  Future<ReconnectOutcome> reconnect(TrajectoryDb db) async {
+    calls.add('reconnect');
+    return reconnectResult;
+  }
+}
+
+final class _FakeTimer implements Timer {
+  bool cancelled = false;
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  bool get isActive => !cancelled;
+
+  @override
+  int get tick => 0;
+}
+
+TrajectoryAppendRequest _note(int ordinal, {String session = 's-1'}) =>
+    TrajectoryAppendRequest(
+      AttemptNote(
+        sessionId: session,
+        body: 'note $ordinal',
+        channel: 'test',
+        noteOrdinal: ordinal,
+      ),
+    );
+
+void main() {
+  late Directory tmp;
+  late List<(String, Map<String, String>)> flares;
+  late List<(Duration, void Function(), _FakeTimer)> timers;
+  late List<_FakeDb> connected;
+  late _FakeAppender appender;
+  DateTime now = DateTime.utc(2026, 8, 31, 12);
+  Object? connectError;
+  Object? Function(String sql)? dbScript;
+
+  setUp(() {
+    tmp = Directory.systemTemp.createTempSync('tg-zfek-w1-');
+    flares = [];
+    timers = [];
+    connected = [];
+    appender = _FakeAppender(_FakeDb());
+    connectError = null;
+    dbScript = null;
+    now = DateTime.utc(2026, 8, 31, 12);
+  });
+
+  tearDown(() => tmp.deleteSync(recursive: true));
+
+  List<String> flareNames() => [for (final (name, _) in flares) name];
+
+  Future<TrajectoryHarness> harness({
+    TrajectoryConfig config = const TrajectoryConfig(
+      mode: TrajectoryConfigMode.required,
+    ),
+  }) => TrajectoryHarness.build(
+    config: config,
+    gridHome: tmp.path,
+    station: 'tranquility',
+    seatPrefixes: const {'tg', 'the_grid', 'tranquility'},
+    onFlare: (name, data) => flares.add((name, data)),
+    connect: () async {
+      final error = connectError;
+      if (error != null) throw error; // ignore: only_throw_errors
+      final db = _FakeDb(onExecute: dbScript);
+      connected.add(db);
+      return db;
+    },
+    appenderFactory: (_) => appender,
+    scheduleTimer: (duration, callback) {
+      final timer = _FakeTimer();
+      timers.add((duration, callback, timer));
+      return timer;
+    },
+    clock: () => now,
+    identity: (pid: 41, pgid: 42),
+  );
+
+  group('config postures (§1.3)', () {
+    test('disabled: no connection, no claim, enqueue is a SILENT no-op',
+        () async {
+      final h = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+      );
+      expect(h.mode, TrajectoryHarnessMode.disabled);
+      await h.start();
+      h.enqueue(_note(1));
+      await h.shutdown();
+      expect(connected, isEmpty);
+      expect(appender.calls, isEmpty);
+      expect(h.status.suppressed, 0);
+      expect(h.status.queueDepth, 0);
+      expect(flares, isEmpty, reason: 'a station chose legacy-only: silence');
+    });
+
+    test('auto without the provisioning artifact boots legacy-only', () async {
+      final h = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.auto),
+      );
+      expect(h.mode, TrajectoryHarnessMode.unprovisioned);
+      expect(h.status.cause, contains('trajectory.secret'));
+      await h.start();
+      h.enqueue(_note(1));
+      await h.shutdown();
+      expect(connected, isEmpty);
+      expect(flares, isEmpty, reason: 'a one-line notice, not a warning storm');
+    });
+
+    test('auto with the artifact present arms', () async {
+      File(trajectorySecretPath(tmp.path))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('secret');
+      final h = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.auto),
+      );
+      expect(h.mode, TrajectoryHarnessMode.down);
+      await h.start();
+      expect(h.mode, TrajectoryHarnessMode.live);
+    });
+
+    test('required with a refused connect degrades LOUD — never throws',
+        () async {
+      connectError = StateError('connection refused');
+      final h = await harness();
+      await h.start();
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.cause, contains('connection refused'));
+      expect(flareNames(), contains('trajectory.degraded'));
+      // Work is never blocked: enqueue keeps short-circuiting to a count.
+      h.enqueue(_note(1));
+      expect(h.status.suppressed, 1);
+    });
+  });
+
+  group('boot (§1.2 step 2)', () {
+    test('verify-before-claim: order pinned, identity threaded', () async {
+      final h = await harness();
+      await h.start();
+      expect(appender.calls.sublist(0, 2), ['verify', 'claim:boot']);
+      expect(appender.claimedPid, 41);
+      expect(appender.claimedPgid, 42);
+      expect(h.mode, TrajectoryHarnessMode.live);
+      expect(h.status.epoch, 1);
+      // Tick armed (boot pass ran + interval scheduled) and gc scheduled.
+      expect(h.tick, isNotNull);
+      expect(h.tick!.isArmed, isTrue);
+      expect(h.tick!.lastPass, isNotNull);
+      expect(
+        [for (final (duration, _, _) in timers) duration],
+        containsAll([
+          const TrajectoryConfig().tickInterval,
+          kDefaultTrajectoryGcInterval,
+        ]),
+      );
+    });
+
+    test(
+        'a halted belt verify means NO claim, no fence advance, flare, '
+        'legacy-only boot', () async {
+      appender.verifyResult = const AppendCorruptionHalt(
+        reason: 'belt full-scan: out of order',
+      );
+      final h = await harness();
+      await h.start();
+      expect(appender.calls, ['verify'], reason: 'claimEpoch never ran');
+      expect(h.mode, TrajectoryHarnessMode.halted);
+      expect(flareNames(), contains('trajectory.halted'));
+      expect(connected.single.closed, isTrue);
+      expect(h.tick, isNull);
+    });
+
+    test('a refused claim degrades to legacy-only, never a boot failure',
+        () async {
+      appender.claimResult = const EpochClaimRefused(attempts: 3);
+      final h = await harness();
+      await h.start();
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.cause, contains('refused after 3 attempts'));
+      expect(connected.single.closed, isTrue);
+    });
+
+    test('records enqueued before the claim drain once live', () async {
+      final h = await harness();
+      h.enqueue(_note(1));
+      h.enqueue(_note(2));
+      expect(h.status.queueDepth, 2, reason: 'queued, not lost, not appended');
+      await h.start();
+      await h.runToFixpoint();
+      expect(h.status.appended, 2);
+    });
+  });
+
+  group('the append queue + single writer (§2.5)', () {
+    test('enqueue returns synchronously and the writer drains FIFO', () async {
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      h.enqueue(_note(2));
+      h.enqueue(_note(3));
+      await h.runToFixpoint();
+      expect(
+        appender.calls.where((call) => call.startsWith('append:')).length,
+        3,
+      );
+      expect(h.status.appended, 3);
+      expect(h.status.queueDepth, 0);
+    });
+
+    test('overflow drops the INCOMING append, counts, and flares', () async {
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          queueBound: 2,
+        ),
+      );
+      await h.start();
+      // #1 goes in-flight immediately; #2/#3 fill the bound; #4 overflows.
+      h.enqueue(_note(1));
+      h.enqueue(_note(2));
+      h.enqueue(_note(3));
+      h.enqueue(_note(4));
+      expect(h.status.dropped, 1);
+      expect(flareNames(), contains('trajectory.queueOverflow'));
+      await h.runToFixpoint();
+      expect(h.status.appended, 3, reason: 'the queued three still land');
+    });
+
+    test('a dedupe is success, counted separately', () async {
+      appender.appendOutcomes.add(const AppendDeduped(recordId: 'orig'));
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      await h.runToFixpoint();
+      expect(h.status.deduped, 1);
+      expect(h.status.dropped, 0);
+      expect(flares, isEmpty);
+    });
+  });
+
+  group('sealed-outcome mapping (§3)', () {
+    test(
+        'AppendInternalError: drop + rate-limited flare + eager guarded '
+        'reconnect on the next append', () async {
+      appender.appendOutcomes.add(
+        AppendInternalError(cause: StateError('socket died')),
+      );
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      h.enqueue(_note(2));
+      await h.runToFixpoint();
+      expect(h.status.dropped, 1);
+      expect(h.status.appended, 1, reason: 'the loop kept draining');
+      expect(appender.calls, contains('reconnect'));
+      expect(connected, hasLength(2), reason: 'the listener was re-dialed');
+      expect(
+        flareNames().where((name) => name == 'trajectory.appendDropped'),
+        hasLength(1),
+        reason: '30 s bucket: one flare per name',
+      );
+      expect(h.mode, TrajectoryHarnessMode.live);
+    });
+
+    test('the appendDropped flare re-fires once the 30 s bucket rolls',
+        () async {
+      appender.appendOutcomes.addAll([
+        AppendInternalError(cause: StateError('one')),
+        AppendInternalError(cause: StateError('two')),
+      ]);
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      await h.runToFixpoint();
+      now = now.add(const Duration(seconds: 31));
+      h.enqueue(_note(2));
+      await h.runToFixpoint();
+      expect(
+        flareNames().where((name) => name == 'trajectory.appendDropped'),
+        hasLength(2),
+      );
+      expect(h.status.dropped, 2);
+    });
+
+    test(
+        'fenced out latches QUIET: one flare, queue suppressed, later '
+        'derivations short-circuit to a count', () async {
+      appender.appendOutcomes.add(const AppendFencedOut(reason: 'cas-zero'));
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      h.enqueue(_note(2));
+      await h.runToFixpoint();
+      expect(h.mode, TrajectoryHarnessMode.fencedOut);
+      expect(h.status.suppressed, 1, reason: 'the queued #2 was suppressed');
+      h.enqueue(_note(3));
+      expect(h.status.suppressed, 2);
+      expect(
+        flareNames().where((name) => name == 'trajectory.fencedOut'),
+        hasLength(1),
+        reason: 'ONCE — this process should be going down anyway',
+      );
+    });
+
+    test('a corruption halt latches LOUD and stops the writer', () async {
+      appender.appendOutcomes.add(
+        const AppendCorruptionHalt(reason: 'uq_epoch_seq violation'),
+      );
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      await h.runToFixpoint();
+      expect(h.mode, TrajectoryHarnessMode.halted);
+      expect(h.status.cause, contains('uq_epoch_seq'));
+      expect(flareNames(), contains('trajectory.halted'));
+    });
+
+    test('an inert reconnect latches fenced out', () async {
+      appender.appendOutcomes.add(
+        AppendInternalError(cause: StateError('socket died')),
+      );
+      appender.reconnectResult = const ReconnectInert(
+        staleEpoch: 1,
+        liveEpoch: 2,
+      );
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      h.enqueue(_note(2));
+      await h.runToFixpoint();
+      expect(h.mode, TrajectoryHarnessMode.fencedOut);
+      expect(h.status.cause, 'stale epoch 1 (live 2)');
+    });
+
+    test('a failed reconnect drops the append and stays live for the next',
+        () async {
+      appender.appendOutcomes.add(
+        AppendInternalError(cause: StateError('socket died')),
+      );
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      await h.runToFixpoint();
+      connectError = StateError('listener gone');
+      h.enqueue(_note(2));
+      await h.runToFixpoint();
+      expect(h.status.dropped, 2);
+      expect(h.mode, TrajectoryHarnessMode.live);
+      // The listener resolves again once bd rewrites the port (§4).
+      connectError = null;
+      h.enqueue(_note(3));
+      await h.runToFixpoint();
+      expect(h.status.appended, 1);
+    });
+  });
+
+  group('guarded shutdown (§1.2)', () {
+    test('drain → fixpoint → boundary commit → dispose → close, receipted',
+        () async {
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      await h.shutdown();
+      expect(h.status.appended, 1, reason: 'the queue drained first');
+      expect(appender.calls.last, 'commit', reason: 'the boundary flush');
+      expect(h.tick!.isArmed, isFalse, reason: 'tick disposed');
+      expect(connected.single.closed, isTrue);
+      final (name, data) = flares.single;
+      expect(name, 'trajectory.shutdown');
+      expect(data['appended'], '1');
+      expect(data['fixpointReached'], 'true');
+      expect(data['outstanding'], '0');
+      // Idempotent: a second shutdown neither throws nor re-flares.
+      await h.shutdown();
+      expect(flares, hasLength(1));
+    });
+
+    test('a throwing boundary commit is the cadence-failure signal, caught',
+        () async {
+      appender.commitError = StateError('branch pin');
+      final h = await harness();
+      await h.start();
+      await h.shutdown();
+      expect(flareNames(), contains('trajectory.cadenceFailure'));
+      expect(flareNames(), contains('trajectory.shutdown'));
+      expect(connected.single.closed, isTrue, reason: 'close still reached');
+    });
+
+    test('shutdown NEVER throws — even when every step does', () async {
+      appender.commitError = StateError('commit refused');
+      final h = await harness();
+      await h.start();
+      connected.single.closeThrows = true;
+      await h.shutdown(); // completing at all is the assertion
+      expect(flareNames(), contains('trajectory.shutdown'));
+    });
+
+    test('gc cadence cancels at shutdown', () async {
+      final h = await harness();
+      await h.start();
+      final gc = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      await h.shutdown();
+      expect(gc.$3.cancelled, isTrue);
+    });
+
+    test('enqueue after shutdown short-circuits to a count', () async {
+      final h = await harness();
+      await h.start();
+      await h.shutdown();
+      h.enqueue(_note(1));
+      expect(h.status.suppressed, 1);
+    });
+  });
+
+  group('the gc cadence (M2)', () {
+    test('fires CALL DOLT_GC() on the interval and re-arms', () async {
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+      expect(connected.single.statements, contains('CALL DOLT_GC()'));
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(2),
+        reason: 're-armed',
+      );
+      expect(h.mode, TrajectoryHarnessMode.live);
+    });
+
+    test('a gc failure flares and stays non-fatal', () async {
+      dbScript = (sql) =>
+          sql == 'CALL DOLT_GC()' ? StateError('gc refused') : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+      expect(flareNames(), contains('trajectory.gcFailed'));
+      expect(h.mode, TrajectoryHarnessMode.live, reason: 'non-fatal');
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(2),
+        reason: 'still re-armed',
+      );
+    });
+  });
+}

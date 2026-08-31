@@ -116,6 +116,23 @@ export 'src/run/substation_config.dart';
 export 'src/stores/stores.dart';
 export 'src/stores/substation_init.dart';
 
+// ── The trajectory harness (Stage 1 — tg-zfek, stage1-wiring §1) ────────────
+// The fenced transition service's station-side owner, built by
+// `assembleStationWork` beside the state writer and lifecycled by
+// `StationWorkRuntime` (up after the sources, down before them — never
+// blocking either). `TrajectoryConfig` is the one new assembly parameter; a
+// runner surfaces it as `--trajectory`/`--no-trajectory` (a space_station
+// edit, stage1-wiring §1.1).
+export 'package:grid_trajectory/grid_trajectory.dart'
+    show
+        TrajectoryProvenance,
+        TrajectoryRecord,
+        TrajectoryTick,
+        TrajectoryTickFixpoint,
+        TrajectoryTickPass;
+export 'src/trajectory/trajectory_config.dart';
+export 'src/trajectory/trajectory_harness.dart';
+
 // ── Station command extension ───────────────────────────────────────────────
 // The SDK supplies the typed extension seam and the implementation a running
 // station dispatches to; the station composes it, while its control-surface
