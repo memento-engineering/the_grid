@@ -46,6 +46,36 @@ sealed class TrajectoryRecord {
 
   /// SHA-256 hex of [idemKeyText] — the `idem_key` column.
   String idemKey(IdemContext context) => sha256Hex(idemKeyText(context));
+
+  // ── the extraction-boundary interface ────────────────────────────────────
+  //
+  // The append mechanics (`src/append/`, `src/connect/`) must never name a
+  // concrete record class or a `record_type` literal — the vocabulary lives
+  // here and the mechanics see only `TrajectoryRecord`, `TrajectoryEnvelope`,
+  // and these properties (decision: grid-trajectory-leaf-package, "Long-term
+  // direction"; pinned by test/architecture/extraction_boundary_test.dart).
+  // Each getter below is a fact ABOUT a record type, so it is declared where
+  // record types are declared, and the append path reads it off the base.
+
+  /// True for the record type the §5 terminal guard keys. A terminal always
+  /// carries the promoted `attempt_id` column — that is what the guard's
+  /// `traj_terminal_guard` row is keyed on.
+  bool get isTerminal => false;
+
+  /// True for a SETTLING record: it heals an earlier `unknown` through
+  /// `resolves_record_id`, so the terminal guard UPDATEs the existing row
+  /// rather than inserting a second one.
+  bool get isSettling => false;
+
+  /// True for §5's dolt-commit boundary set — the records after which the
+  /// cadence must commit at the next allowed opportunity.
+  bool get forcesDoltCommitBoundary => false;
+
+  /// The `record_type` whose row the §5 step-2 grant belt matches this
+  /// record's envelope `grant_id` against, or null when this record consumes
+  /// no grant. Handing the name IN is what keeps the belt's SQL free of the
+  /// vocabulary.
+  String? get grantBeltIssuerType => null;
 }
 
 // Family bases — one per §2 family, so subclasses carry their fold-dispatch

@@ -4,6 +4,12 @@
 /// file) instead of rewriting an existing one (§2.6 rules 2/4).
 ///
 /// Run from the package root: `dart run tool/regenerate_fixtures.dart`.
+///
+/// It writes one file per SAMPLE record, at that record's CURRENT
+/// `type_version`, and therefore never touches a superseded version's
+/// fixture — `verify.usage.telemetry.v1.json` survives every regeneration by
+/// construction, which is exactly rule 2's "old decoders are kept forever"
+/// expressed in the golden suite. A kept fixture is edited by nobody.
 library;
 
 import 'dart:convert';

@@ -478,6 +478,22 @@ final class VerifyRouteVerdict extends VerificationRecord {
 
 /// `verify.usage.telemetry` — FT-2 capture-only; nothing in it is a decision
 /// input (P7 folds async).
+///
+/// **`type_version` 2 — the I1 gen_ai alignment (§15).** The three payload
+/// keys OpenTelemetry's GenAI conventions already name are spelled THEIR way:
+/// `gen_ai.request.model`, `gen_ai.usage.input_tokens`,
+/// `gen_ai.usage.output_tokens`. `cost_usd`, `premium_requests`, `num_turns`
+/// and `duration_ms` have no `gen_ai.*` counterpart and stay grid-local,
+/// verbatim. The alignment is by NAMING only, never by contract — every
+/// `gen_ai.*` attribute is stability level "Development"
+/// (`docs/design/trajectory/landscape.md` §1), so nothing here depends on it,
+/// and envelope columns are never renamed for OTel (§15 rule 1).
+///
+/// The rename was breaking, so §2.6 rule 2 applies: v2 is a NEW registry
+/// entry beside v1 and [VerifyUsageTelemetry.fromJsonV1] is KEPT FOREVER —
+/// pre-alignment rows decode into THIS class, which is what "the log is never
+/// migrated" means for a reader. The idem grammar is unchanged across the
+/// bump: `usage:<attempt_id>` keys the attempt, never the payload.
 final class VerifyUsageTelemetry extends VerificationRecord {
   const VerifyUsageTelemetry({
     required this.attemptId,
@@ -492,6 +508,25 @@ final class VerifyUsageTelemetry extends VerificationRecord {
   });
 
   factory VerifyUsageTelemetry.fromJson(
+    TrajectoryEnvelope envelope,
+    Map<String, Object?> payload,
+  ) => VerifyUsageTelemetry(
+    attemptId: _envReq(envelope, 'attempt_id', envelope.attemptId),
+    sessionId: envelope.sessionId,
+    model: _req<String>(payload, 'gen_ai.request.model'),
+    tokensIn: _opt<int>(payload, 'gen_ai.usage.input_tokens'),
+    tokensOut: _opt<int>(payload, 'gen_ai.usage.output_tokens'),
+    costUsd: _opt<num>(payload, 'cost_usd')?.toDouble(),
+    premiumRequests: _opt<int>(payload, 'premium_requests'),
+    numTurns: _opt<int>(payload, 'num_turns'),
+    durationMs: _opt<int>(payload, 'duration_ms'),
+  );
+
+  /// The v1 decoder — pre-I1 rows spell the three aligned keys `model`,
+  /// `tokens_in`, `tokens_out`. Registered at `(type, 1)` forever (§2.6 rule
+  /// 2); it builds the same class, so a v1 row re-encodes as a v2 payload and
+  /// the fold sees ONE shape.
+  factory VerifyUsageTelemetry.fromJsonV1(
     TrajectoryEnvelope envelope,
     Map<String, Object?> payload,
   ) => VerifyUsageTelemetry(
@@ -519,11 +554,15 @@ final class VerifyUsageTelemetry extends VerificationRecord {
   @override
   String get recordType => 'verify.usage.telemetry';
 
+  /// Bumped by the I1 rename (§15); v1 keeps its own decoder.
+  @override
+  int get typeVersion => 2;
+
   @override
   Map<String, Object?> payloadToJson() => {
-    'model': model,
-    if (tokensIn != null) 'tokens_in': tokensIn,
-    if (tokensOut != null) 'tokens_out': tokensOut,
+    'gen_ai.request.model': model,
+    if (tokensIn != null) 'gen_ai.usage.input_tokens': tokensIn,
+    if (tokensOut != null) 'gen_ai.usage.output_tokens': tokensOut,
     if (costUsd != null) 'cost_usd': costUsd,
     if (premiumRequests != null) 'premium_requests': premiumRequests,
     if (numTurns != null) 'num_turns': numTurns,
