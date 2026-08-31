@@ -23,6 +23,72 @@ refuse at write time, by name; §4 now ships **seven** — `ck_grant_link` and `
 probe, and stage 0 pins them), and a JSON payload for everything type-specific. Payload shape is governed by the
 codec registry (§2.6).
 
+*The core versioned tables plus the two working-set tables. `trajectory`'s envelope is shown
+ABRIDGED — identity/order, the provenance trio, and the promoted correlation keys only; the full
+column list is the table below and the DDL in §4. `traj_fence` and `traj_pulse` are `dolt_ignore`'d
+working-set state, joined by convention (station, subject_id) rather than by a declared key.*
+
+```mermaid
+erDiagram
+    traj_epoch {
+        VARCHAR station PK
+        BIGINT epoch PK
+        INT pid
+        INT pgid
+        ENUM cause "boot or steal"
+        DATETIME advanced_at
+    }
+    traj_fence {
+        VARCHAR station PK
+        BIGINT fence_state "epoch high bits, appender counter low bits"
+    }
+    trajectory {
+        BIGINT seq PK "physical order, monotone not gapless"
+        BIGINT boot_epoch "non-decreasing over seq"
+        BIGINT epoch_seq "unique with station and boot_epoch"
+        CHAR record_id UK
+        CHAR idem_key UK "SHA-256 of the canonical grammar string"
+        VARCHAR station "scopes epoch, fence, uq_epoch_seq"
+        ENUM family "attempt admission verification effect step"
+        VARCHAR record_type
+        ENUM provenance "observed inferred reconstructed"
+        VARCHAR provenance_basis "required when provenance is not observed"
+        VARCHAR source "emitting observer surface"
+        CHAR resolves_record_id "settlement link"
+        VARCHAR work_bead_id
+        VARCHAR session_id
+        INT round
+        VARCHAR step_path
+        INT step_round
+        INT incarnation
+        CHAR attempt_id
+        CHAR mount_attempt_id
+        CHAR grant_id
+        CHAR effect_id
+        VARCHAR gate_id
+        CHAR commit_sha
+        VARCHAR receipt
+        JSON payload "codec-validated, type-specific"
+    }
+    traj_terminal_guard {
+        CHAR attempt_id PK
+        BIGINT seq "the latest terminal in the chain"
+        CHAR settled_by "record_id of the resolving terminal"
+    }
+    traj_pulse {
+        VARCHAR subject_id PK "attempt_id or lease id"
+        ENUM kind PK "attempt or lease"
+        BIGINT boot_epoch "the epoch this beat was observed under"
+        DATETIME beat_at
+        ENUM observed_via "runtime worktree-mtime vm-service wire"
+    }
+    traj_epoch ||--o{ trajectory : "boot_epoch, per station"
+    traj_fence ||--o{ trajectory : "counter-CAS on every append"
+    traj_terminal_guard ||--o{ trajectory : "attempt_id, seq of attempt.terminal"
+    trajectory ||..o| traj_pulse : "attempt_id equals subject_id"
+    traj_epoch ||..|| traj_fence : "one cell per station"
+```
+
 | Field | Type | Req | Notes |
 |---|---|---|---|
 | `seq` | BIGINT AUTO_INCREMENT PK | ✓ | **Physical order.** Sole appender ⇒ one monotonic sequence, assigned inside the append transaction. **Monotone, NOT gapless** (probe T5): a failed/rolled-back append burns a seq; dolt never reuses one across restart or delete-then-restart. Consumers must never read a gap as a missing record — only `(boot_epoch, epoch_seq)` is contiguous. |
@@ -74,6 +140,64 @@ record classes plus the envelope CHECKs in §4.
 
 Five families. Every catalog row dispositioned **T** or **B** is covered; merges and drops are
 named. Changes from the draft are marked with the defect they answer.
+
+*The `family` ENUM to the `record_type` vocabulary that exists in V2, families 1–2. Types retired,
+merged, or dispositioned R/L are omitted — each family table's last row names them. Slash-joined
+leaves are the sibling types the tables list together.*
+
+```mermaid
+flowchart LR
+    F1["family = attempt"]
+    F2["family = admission"]
+    F1 --> t101["attempt.session.started"]
+    F1 --> t102["attempt.process.started"]
+    F1 --> t103["attempt.process.exited"]
+    F1 --> t104["attempt.liveness.lost / .regained"]
+    F1 --> t105["attempt.lease.acquired / .released / .swept"]
+    F1 --> t106["attempt.adopt.proved"]
+    F1 --> t107["attempt.terminal"]
+    F1 --> t108["attempt.round.retired"]
+    F1 --> t109["attempt.rework_declined"]
+    F1 --> t110["attempt.mint.outcome"]
+    F1 --> t111["attempt.note"]
+    F1 --> t112["worktree.provisioned / .reaped / .held"]
+    F2 --> t201["admission.grant.issued"]
+    F2 --> t202["admission.grant.consumed"]
+    F2 --> t203["admission.grant.expired / .released"]
+    F2 --> t204["admission.refused"]
+    F2 --> t205["admission.restored"]
+    F2 --> t206["admission.drive.approved"]
+    F2 --> t207["authority.epoch.advanced / .closed"]
+    F2 --> t208["federation.lease.granted / .reaped / .expired"]
+```
+
+*The same map for families 3–5.*
+
+```mermaid
+flowchart LR
+    F3["family = verification"]
+    F4["family = effect"]
+    F5["family = step"]
+    F3 --> t301["verify.scope.pinned"]
+    F3 --> t302["verify.verdict.recorded"]
+    F3 --> t303["verify.verdict.recovered"]
+    F3 --> t304["verify.gating.rc"]
+    F3 --> t305["verify.completion.fence"]
+    F3 --> t306["verify.route.verdict"]
+    F3 --> t307["verify.usage.telemetry"]
+    F3 --> t308["verify.ci.concluded"]
+    F4 --> t401["effect.intent"]
+    F4 --> t402["effect.ack"]
+    F4 --> t403["effect.unarmed"]
+    F4 --> t404["effect.observation.claimed"]
+    F4 --> t405["effect.command.received"]
+    F4 --> t406["effect.command.refused"]
+    F4 --> t407["effect.ci.rework.commanded"]
+    F5 --> t501["molecule.poured"]
+    F5 --> t502["step.transition"]
+    F5 --> t503["step.superseded"]
+    F5 --> t504["gate.opened / gate.regated / gate.closed"]
+```
 
 ## Family 1 — attempt lifecycle
 
@@ -187,6 +311,34 @@ work_bead_id                                   — bd, immutable forever (no #rN
                      └─ attempt_id : CHAR(26)  — one process incarnation
                         UNIQUE (session_id, round, step_path, step_round, incarnation)
                           — enforced as uq_incarnation on proj_process_identity (§4)
+```
+
+*The same ladder as a graph. The two round ladders are the shaded nodes — `round` is the session
+rework ladder, `step_round` the per-path chain ladder; neither ever writes the other's counter.*
+
+```mermaid
+flowchart TD
+    wb["work_bead_id — bd, immutable forever"]
+    ma["mount_attempt_id : CHAR(26) ULID — pre-session admission ladder"]
+    sid["session_id : bd bead id"]
+    rnd["round : INT — session REWORK ladder"]
+    sp["step_path — successors KEEP the path"]
+    sr["step_round : INT — chain ladder per path"]
+    aid["attempt_id : CHAR(26) — one process incarnation"]
+    inc["incarnation : INT — respawn ordinal"]
+    uq["uq_incarnation on proj_process_identity"]
+    wb -->|"minted per admission evaluation, grant OR refusal"| ma
+    ma --> sid
+    sid -->|"bumped by attempt.round.retired"| rnd
+    rnd --> sp
+    sp -->|"bumped by step.superseded OR gate-cleared rearm"| sr
+    sr --> aid
+    aid --- inc
+    aid -. "UNIQUE over session_id, round, step_path, step_round, incarnation" .-> uq
+    classDef ladder fill:#e8e2ff,stroke:#5b4bbf,stroke-width:2px;
+    classDef note fill:#f4f4f4,stroke:#999,stroke-dasharray:3 3;
+    class rnd,sr ladder;
+    class uq note;
 ```
 
 * `attempt_id` **is** the lease token, is exported into the child process env (replacing
@@ -527,6 +679,46 @@ CREATE TABLE proj_telemetry (             -- P7 — the ONE deliberately trailin
   last_seq BIGINT NOT NULL,
   PRIMARY KEY (session_id, round, step_path, step_round)
 );  -- nothing in it is a decision input; folded async.
+```
+
+*The projection layer: every table above with its PK, and the contract rows (§6) that read it.
+Row numbers are the §6 mapping, not columns. P7 is the one deliberately trailing projection;
+everything else folds inside the append transaction.*
+
+```mermaid
+flowchart LR
+    LOG[("trajectory — the log")]
+    FOLD{{"fold delta, in the append transaction"}}
+    ROWS[["the 35 contract rows (§6)"]]
+    LOG --> FOLD
+    FOLD --> P1["P1 proj_session_head — PK session_id"]
+    FOLD --> P2["P2 proj_step_cursor — PK session_id, round, step_path, step_round"]
+    FOLD --> PE["proj_step_edges — PK session_id, round, from_path, to_path, kind"]
+    FOLD --> P3a["P3 proj_admission — PK work_bead_id"]
+    FOLD --> P3b["P3 proj_admission_clause — PK work_bead_id, clause"]
+    FOLD --> P4["P4 proj_gate — PK gate_id"]
+    FOLD --> P4c["P4-cycles proj_gate_cycles — PK gate_id, cycle"]
+    FOLD --> P5["P5 proj_verification — PK session_id, round, step_path, step_round, lane"]
+    FOLD --> P6["P6 proj_process_identity — PK attempt_id"]
+    FOLD --> PF["proj_effects — PK effect_id"]
+    FOLD --> P8["P8 proj_command_dedupe — PK wire_key"]
+    FOLD --> P9["P9 proj_leases — PK lease_id"]
+    FOLD -. "async" .-> P7["P7 proj_telemetry — PK session_id, round, step_path, step_round"]
+    FOLD -. "applied_seq, fold_version" .-> PM["proj_meta — PK projection"]
+    P1 -->|"rows 1-8, 10, 24, 29"| ROWS
+    P2 -->|"rows 1, 3, 5, 7, 8, 10, 14, 15, 16"| ROWS
+    PE -->|"row 15"| ROWS
+    P3a -->|"rows 2, 6, 17, 18"| ROWS
+    P3b -->|"row 2"| ROWS
+    P4 -->|"rows 1, 3, 8, 9"| ROWS
+    P4c -->|"row 9"| ROWS
+    P5 -->|"rows 3, 8, 9, 11, 19-23, 25"| ROWS
+    P6 -->|"rows 1, 3, 10, 13, 32"| ROWS
+    PF -->|"row 25"| ROWS
+    P8 -->|"row 33"| ROWS
+    P9 -->|"row 31"| ROWS
+    P7 -->|"row 11"| ROWS
+    PM -. "readers refuse past 512 records or 60 s" .-> ROWS
 ```
 
 **Forensics view:** the `lunar traj show <bead|session|attempt>` verb renders

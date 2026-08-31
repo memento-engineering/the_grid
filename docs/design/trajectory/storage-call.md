@@ -9,6 +9,40 @@
 
 **Separate database on the same dolt sql-server.** The decision's default — grid-owned trajectory tables inside the `tranquility` bd database — is **overturned** by the probe's storage arithmetic, not by any failure of the mechanisms designed for coexistence. Concretely: a `trajectory` database created as a sibling of `tranquility` under the same server data dir (`.grid/.beads/dolt/trajectory/`), served by the one bd-owned sql-server process, holding all `traj_*` tables, the `trajectory` log, and the dolt_ignore'd `proj_*` / `traj_pulse` working-set tables. The fenced transition service connects to the same server bd proxies through, `USE trajectory`, and never touches `tranquility` over SQL. A fully separate store (own server process) is rejected. The schema draft's §4 DDL, §5 append discipline, dolt-commit policy, and the T6i counter-CAS fence carry over **verbatim** — nothing in the draft's design depended on cohabiting bd's database, and the probe ran every test on exactly the engine this database will run on.
 
+*The ratified topology. Table lists are abridged — `tranquility`'s tables are bd's; the committed and `dolt_ignore`'d trajectory sets are enumerated in schema §4's DDL.*
+
+```mermaid
+flowchart LR
+    bd["bd"]
+    proxy["bd proxy"]
+    svc["fenced transition service"]
+
+    subgraph DIR["one bd-owned dolt sql-server — data dir .grid/.beads/dolt/ — paired backup boundary"]
+        subgraph TQ["database: tranquility"]
+            tqt["bd work-ledger tables"]
+            tql["dolt log: bd commits"]
+            tqg["gc: existing gentle cadence, untouched"]
+        end
+        subgraph TJ["database: trajectory"]
+            tjt["committed and staged by name: trajectory, traj_epoch, traj_terminal_guard"]
+            tjl["dolt log: traj seq A..B epoch E"]
+            tjg["gc: CALL DOLT_GC on trajectory, mandatory and scheduled"]
+        end
+    end
+
+    ws["working set, dolt_ignore registered: proj_*, traj_pulse, traj_fence"]
+
+    bound["BOUNDARY: the service never writes tranquility over SQL. bd never connects to trajectory."]
+
+    bd --> proxy
+    proxy -->|"proxied SQL"| tqt
+    svc -->|"direct SQL, USE trajectory"| tjt
+    svc -->|"head stamps and gate-bead closes ride bd's own surface"| bd
+    TJ ---|"outside versioned history, in no backup"| ws
+    TQ --- bound
+    bound --- TJ
+```
+
 ## Justification
 
 **The same-db option did not fail on its own terms — the probe largely vindicated it.** Honesty first, because the flip must be argued against the option's best measured self, not a strawman. T4 is the strongest same-db result in the probe: selective staging (`DOLT_ADD('trajectory')` + commit) committed only the trajectory tables while a deliberately dirtied stand-in bd table stayed unstaged through ~8,000 further appends and multiple commits. The service can hold its own commit cadence on a shared database indefinitely, at ~4% overhead (T7 B), without ever capturing bd's in-flight writes and without bd's dirtiness blocking a trajectory commit. §10.2's cadence axis (b), as the service's own concern, is measured to be a non-issue. T1 proved the DDL lands verbatim; T2 proved the CHECKs refuse at write time; T3 proved dolt_ignore keeps projections out of versioned history through commits, resets, and `checkout .`. If the call rested on write mechanics, same-db would stand.
