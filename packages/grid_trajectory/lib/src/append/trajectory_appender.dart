@@ -11,9 +11,12 @@
 ///      fenced-out signal (definitive; refuse immediately); 1 row is NEVER
 ///      proof of holding the fence — 1213 at COMMIT arbitrates the contended
 ///      interleavings;
-///   2. the belt: `boot_epoch` non-decreasing over `seq`; grant expiry on
-///      grant-consuming appends — a belt violation is the corruption-halt
-///      alarm class;
+///   2. the belt: `boot_epoch` non-decreasing over `seq` and seq order
+///      agreeing with `(boot_epoch, epoch_seq)` order — the corruption-halt
+///      alarm class, §5's exact scope: both predicates can only fail if
+///      something already committed out of order. Grant-scoped appends also
+///      match the grant row's `fencing_token` and `expires_at > NOW(6)` —
+///      a failed grant predicate is a per-append REFUSAL, never a halt;
 ///   3. INSERT the `trajectory` row (`epoch_seq` service-assigned in the
 ///      serialized stream);
 ///   4. `traj_terminal_guard` insert/update for terminals;
@@ -23,9 +26,16 @@
 /// Error contract, exactly §5's three classes: 1213 → fenced out, inert;
 /// 1105 branched on the constraint NAMED in the message (`uq_idem` → the
 /// designed dedupe, return the original record_id; `uq_epoch_seq` →
-/// corruption halt); belt violation → corruption halt. A halted appender
-/// refuses every further append until recreated; an inert one appends
-/// nothing further, not even its refusal.
+/// corruption halt); belt order violation → corruption halt. A halted
+/// appender refuses every further append until recreated; an inert one
+/// appends nothing further, not even its refusal. Any non-classified
+/// throwable rolls the transaction back and surfaces as [AppendInternalError]
+/// — no open transaction and no raw throwable escapes the sealed hierarchy.
+///
+/// The dolt-commit cadence runs AFTER the append's outcome is decided: once
+/// COMMIT succeeded the append IS [Appended], and a cadence failure is its
+/// own non-fatal [TrajectoryServiceEventKind.cadenceFailure] signal (retried
+/// at the next cadence), never a rewrite of the append's disposition.
 library;
 
 import 'dart:convert';
@@ -37,13 +47,14 @@ import '../codec/idem_key.dart';
 import '../codec/trajectory_record.dart';
 import '../connect/trajectory_db.dart';
 import 'append_outcome.dart';
+import 'service_event.dart';
 import 'ulid.dart';
 
-/// Record types that force a dolt commit at the next allowed opportunity
-/// (§5 boundary events).
+/// Record types that force a dolt commit at the next allowed opportunity —
+/// §5's exact boundary set: epoch advance, `attempt.terminal`,
+/// `attempt.round.retired`.
 const Set<String> doltCommitBoundaryTypes = {
   'authority.epoch.advanced',
-  'authority.epoch.closed',
   'attempt.terminal',
   'attempt.round.retired',
 };
@@ -76,11 +87,13 @@ class TrajectoryAppender {
     Duration commitCadence = const Duration(seconds: 30),
     Duration commitMinInterval = const Duration(seconds: 10),
     int commitRowThreshold = 512,
+    TrajectoryEventSink onEvent = stdoutTrajectoryEventSink,
   }) : _db = db,
        _clock = clock ?? DateTime.now,
        _commitCadence = commitCadence,
        _commitMinInterval = commitMinInterval,
-       _commitRowThreshold = commitRowThreshold;
+       _commitRowThreshold = commitRowThreshold,
+       _onEvent = onEvent;
 
   TrajectoryDb _db;
   final String station;
@@ -89,6 +102,7 @@ class TrajectoryAppender {
   final Duration _commitCadence;
   final Duration _commitMinInterval;
   final int _commitRowThreshold;
+  final TrajectoryEventSink _onEvent;
 
   int? _bootEpoch;
   int _epochSeq = 0;
@@ -117,11 +131,13 @@ class TrajectoryAppender {
   /// the lock supplies mutual exclusion, the epoch row supplies history, the
   /// fence cell supplies enforcement.
   ///
-  /// The INSERT computes MAX+1 server-side so a cross-process race lands as
-  /// 1213 (dolt's write-write conflict arbitrates — probe T6c), which is
-  /// re-read and retried up to [maxAttempts]. 1062 is deliberately NOT
-  /// caught: the PK is not the arbiter, and seeing it means something is
-  /// structurally wrong.
+  /// The INSERT computes MAX+1 server-side and the claim adopts its OWN row:
+  /// the epoch is read back inside the same transaction snapshot, where a
+  /// rival claim landing after our INSERT is invisible and surfaces as 1213
+  /// at COMMIT (dolt's write-write conflict arbitrates — probe T6c) — never
+  /// as a re-read of another authority's MAX. 1213 is re-read and retried up
+  /// to [maxAttempts]. 1062 is deliberately NOT caught: the PK is not the
+  /// arbiter, and seeing it means something is structurally wrong.
   Future<EpochClaimOutcome> claimEpoch({
     required int pid,
     required int pgid,
@@ -129,7 +145,9 @@ class TrajectoryAppender {
     int maxAttempts = 3,
   }) async {
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      final int epoch;
       try {
+        await _db.execute('START TRANSACTION');
         await _db.execute(
           'INSERT INTO traj_epoch (station, epoch, pid, pgid, cause, '
           'advanced_at) '
@@ -143,17 +161,22 @@ class TrajectoryAppender {
             'now': _sqlDate(_clock().toUtc()),
           },
         );
+        // Same-transaction snapshot: this is the row WE inserted.
+        epoch = await _readLiveEpoch();
+        await _db.execute('COMMIT');
       } on MySQLServerException catch (error) {
+        await _rollbackQuietly();
         if (!isSerializationFailure(error)) rethrow;
         // Re-read, then retry or refuse — never treat the race as fatal.
         await _readLiveEpoch();
         continue;
       }
-      final epoch = await _readLiveEpoch();
       // Fence-cell UPSERT: the claim path is also what SEEDS the row on a
       // fresh grid home or after trap recovery (§5, cert round).
       await _seedFence(epoch);
       _bootEpoch = epoch;
+      // The epoch_seq stream is in-memory, serialized, and tied to THIS
+      // claim — it restarts at 0 with the epoch.
       _epochSeq = 0;
       _inert = false;
       // Anchors the cadence: the first dolt commit lands no sooner than the
@@ -175,6 +198,10 @@ class TrajectoryAppender {
     final live = await _readLiveEpoch();
     if (live != own) {
       _inert = true;
+      _emit(
+        TrajectoryServiceEventKind.reconnectInert,
+        'stale epoch $own (live $live) — inert without touching the fence',
+      );
       return ReconnectInert(staleEpoch: own, liveEpoch: live);
     }
     await _seedFence(own);
@@ -188,8 +215,46 @@ class TrajectoryAppender {
     return ReconnectResumed(epoch: own);
   }
 
+  // ── belt full-scan (§1: "full-scanned at boot") ──────────────────────────
+
+  /// The boot-time belt: full-scans this station's log in `seq` order and
+  /// verifies what the per-append belt asserts incrementally — `boot_epoch`
+  /// non-decreasing over `seq`, and `seq` order agreeing with
+  /// `(boot_epoch, epoch_seq)` order. A violation is the corruption-halt
+  /// alarm class (something already committed out of order): the appender
+  /// halts and the returned outcome names the offending pair. Null = clean.
+  Future<AppendCorruptionHalt?> verifyBeltAtBoot() async {
+    final result = await _db.execute(
+      'SELECT seq, boot_epoch, epoch_seq FROM trajectory '
+      'WHERE station = :station ORDER BY seq',
+      {'station': station},
+    );
+    int? prevSeq;
+    var prevEpoch = 0;
+    var prevEpochSeq = 0;
+    for (final row in result.rows) {
+      final seq = int.parse(row['seq']!);
+      final epoch = int.parse(row['boot_epoch']!);
+      final epochSeq = int.parse(row['epoch_seq']!);
+      if (prevSeq != null &&
+          !_ordered(prevEpoch, prevEpochSeq, epoch, epochSeq)) {
+        return _haltNow(
+          'belt full-scan: seq $prevSeq ($prevEpoch/$prevEpochSeq) then '
+          'seq $seq ($epoch/$epochSeq) — seq order disagrees with '
+          '(boot_epoch, epoch_seq) order',
+        );
+      }
+      prevSeq = seq;
+      prevEpoch = epoch;
+      prevEpochSeq = epochSeq;
+    }
+    return null;
+  }
+
   // ── append (§5 steps 1–5) ────────────────────────────────────────────────
 
+  /// [fencingToken] rides grant-scoped appends: the belt matches it against
+  /// the grant row's `fencing_token` (§5 step 2).
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
     DateTime? occurredAt,
@@ -197,6 +262,7 @@ class TrajectoryAppender {
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     String? source,
+    int? fencingToken,
   }) async {
     if (_halted) {
       return const AppendCorruptionHalt(
@@ -205,6 +271,10 @@ class TrajectoryAppender {
     }
     if (_inert) return const AppendFencedOut(reason: 'inert');
     final epoch = _requireEpoch();
+    // §5's branch pin holds on the append path too, not only at cadence
+    // time: asserted before the transaction so an off-main session surfaces
+    // as the named fail-closed refusal, not a missing-table crash (T3).
+    await _assertBranchPin();
 
     final now = _clock().toUtc();
     final context = IdemContext(station: station, bootEpoch: epoch);
@@ -217,9 +287,33 @@ class TrajectoryAppender {
       provenance: provenance,
       provenanceBasis: provenanceBasis,
       source: source ?? this.source,
+      fencingToken: fencingToken,
     );
-    final candidateEpochSeq = _epochSeq + 1;
 
+    final outcome = await _appendInTransaction(record, envelope);
+    if (outcome is Appended) {
+      // Post-COMMIT the row IS durable: a cadence failure is its own
+      // non-fatal signal, retried at the next cadence — it never rewrites
+      // the append's disposition and never loses the Appended result.
+      try {
+        await doltCommitIfDue();
+      } on Object catch (error) {
+        _emit(
+          TrajectoryServiceEventKind.cadenceFailure,
+          'dolt cadence commit failed after seq ${outcome.seq} '
+          '(retried next cadence): $error',
+        );
+      }
+    }
+    return outcome;
+  }
+
+  Future<AppendOutcome> _appendInTransaction(
+    TrajectoryRecord record,
+    TrajectoryEnvelope envelope,
+  ) async {
+    final epoch = _requireEpoch();
+    final candidateEpochSeq = _epochSeq + 1;
     try {
       await _db.execute('START TRANSACTION');
 
@@ -232,25 +326,36 @@ class TrajectoryAppender {
       if (cas.affectedRows == 0) {
         await _rollbackQuietly();
         _inert = true;
+        _emit(
+          TrajectoryServiceEventKind.fencedOut,
+          'fence CAS matched 0 rows at epoch $epoch — a successor holds the '
+          'authority; going inert',
+        );
         return const AppendFencedOut(reason: 'cas-zero-rows');
       }
 
-      // Step 2 — the belt.
+      // Step 2 — the belt. The previous row anchors both order predicates.
       final previous = await _db.execute(
-        'SELECT boot_epoch FROM trajectory WHERE station = :station '
-        'ORDER BY seq DESC LIMIT 1',
+        'SELECT seq, boot_epoch, epoch_seq FROM trajectory '
+        'WHERE station = :station ORDER BY seq DESC LIMIT 1',
         {'station': station},
       );
+      int? prevSeq;
+      var prevEpoch = 0;
+      var prevEpochSeq = 0;
       if (previous.rows.isNotEmpty) {
-        final previousEpoch = int.parse(previous.rows.first['boot_epoch']!);
-        if (previousEpoch > epoch) {
+        final row = previous.rows.first;
+        prevSeq = int.parse(row['seq']!);
+        prevEpoch = int.parse(row['boot_epoch']!);
+        prevEpochSeq = int.parse(row['epoch_seq']!);
+        if (prevEpoch > epoch) {
           return _haltInTransaction(
             'belt: boot_epoch would decrease over seq '
-            '($previousEpoch then $epoch) — a higher epoch already committed',
+            '($prevEpoch then $epoch) — a higher epoch already committed',
           );
         }
       }
-      final grantBelt = await _assertGrantBelt(envelope, now);
+      final grantBelt = await _assertGrantBelt(envelope);
       if (grantBelt != null) return grantBelt;
 
       // Step 3 — the row. seq is dolt-assigned; epoch_seq is ours, in the
@@ -263,6 +368,18 @@ class TrajectoryAppender {
         row,
       );
       final seq = insert.lastInsertId;
+
+      // Step 2's second predicate, checkable only once seq exists: the §5
+      // alarm — seq order must agree with (boot_epoch, epoch_seq) order.
+      if (prevSeq != null &&
+          (seq <= prevSeq ||
+              !_ordered(prevEpoch, prevEpochSeq, epoch, candidateEpochSeq))) {
+        return _haltInTransaction(
+          'belt: seq $prevSeq ($prevEpoch/$prevEpochSeq) then seq $seq '
+          '($epoch/$candidateEpochSeq) — seq order disagrees with '
+          '(boot_epoch, epoch_seq) order',
+        );
+      }
 
       // Step 4 — the terminal guard: unsettled terminals INSERT (a second
       // independent terminal dies on the PK); a settling one UPDATEs.
@@ -301,7 +418,6 @@ class TrajectoryAppender {
         seq,
         boundary: doltCommitBoundaryTypes.contains(record.recordType),
       );
-      await doltCommitIfDue();
       return Appended(
         recordId: envelope.recordId,
         seq: seq,
@@ -313,6 +429,10 @@ class TrajectoryAppender {
         // 1213 at COMMIT arbitrates the contended interleavings: on the
         // append path this IS the fenced-out signal.
         _inert = true;
+        _emit(
+          TrajectoryServiceEventKind.fencedOut,
+          '1213 at commit — a successor won the interleaving; going inert',
+        );
         return const AppendFencedOut(reason: 'commit-1213');
       }
       if (isUniqueViolationOn(error, 'uq_idem')) {
@@ -320,21 +440,20 @@ class TrajectoryAppender {
         return _dedupeOriginal(envelope);
       }
       if (isUniqueViolationOn(error, 'uq_epoch_seq')) {
-        _halted = true;
-        return AppendCorruptionHalt(
-          reason:
-              'uq_epoch_seq violation at commit — the belt caught an '
-              'interleave the fence missed: $error',
+        return _haltNow(
+          'uq_epoch_seq violation at commit — the belt caught an '
+          'interleave the fence missed: $error',
         );
       }
       if (isDuplicateEntry(error)) {
-        // Measured on dolt 2.2 (stage-0 cert): a duplicate already visible in
-        // the session snapshot dies at STATEMENT time as 1062 naming the
-        // duplicate VALUE, not at COMMIT as a constraint-named 1105 — 1105
-        // remains the concurrent-commit shape. The value doesn't say which
-        // unique key fired, so the log arbitrates: an existing row under our
-        // idem_key is the designed dedupe; anything else is the belt's
-        // epoch_seq/record_id class — halt.
+        // Measured on dolt 2.2 (stage-0 cert; §5 error-contract amendment):
+        // a duplicate already visible in the session snapshot dies at
+        // STATEMENT time as 1062 naming the duplicate VALUE, not at COMMIT
+        // as a constraint-named 1105 — 1105 remains the concurrent-commit
+        // shape. The value doesn't say which unique key fired, so the log
+        // arbitrates: an existing row under our idem_key is the designed
+        // dedupe; anything else is the belt's epoch_seq/record_id class —
+        // halt.
         final original = await _db.execute(
           'SELECT record_id FROM trajectory WHERE idem_key = :idem_key',
           {'idem_key': envelope.idemKey},
@@ -342,14 +461,18 @@ class TrajectoryAppender {
         if (original.rows.isNotEmpty) {
           return AppendDeduped(recordId: original.rows.first['record_id']!);
         }
-        _halted = true;
-        return AppendCorruptionHalt(
-          reason:
-              'duplicate key on append with no matching idem_key — '
-              'epoch_seq/record_id collision: $error',
+        return _haltNow(
+          'duplicate key on append with no matching idem_key — '
+          'epoch_seq/record_id collision: $error',
         );
       }
-      rethrow;
+      // Non-classified server error: still typed, still rolled back — the
+      // sealed hierarchy is the whole surface (§5 error contract).
+      return AppendInternalError(cause: error);
+    } on Object catch (error) {
+      // Catch-all: no throwable may escape with the transaction open.
+      await _rollbackQuietly();
+      return AppendInternalError(cause: error);
     }
   }
 
@@ -361,7 +484,11 @@ class TrajectoryAppender {
   /// (probe T7b: commit COUNT, not row count, is the storage lever).
   ///
   /// The tick calls this on its 30s interval so cadence commits fire even
-  /// with no new appends; [append] calls it after every landed row.
+  /// with no new appends; [append] calls it after every landed row and
+  /// downgrades a failure here to a [TrajectoryServiceEventKind
+  /// .cadenceFailure] signal — the committed row's outcome is already
+  /// decided. A branch-pin violation throws out of a DIRECT call,
+  /// deliberately: fail closed.
   Future<void> doltCommitIfDue() async {
     if (_pendingRows == 0) return;
     final now = _clock().toUtc();
@@ -374,17 +501,7 @@ class TrajectoryAppender {
         now.difference(last) >= _commitCadence;
     if (!due) return;
 
-    // Branch pin, fail closed (probe T3): committing off main would target a
-    // different working set entirely.
-    final branch = await _db.execute('SELECT active_branch() AS b');
-    final active = branch.rows.isEmpty ? null : branch.rows.first['b'];
-    if (active != 'main') {
-      _halted = true;
-      throw StateError(
-        'session branch changed to ${active ?? 'unknown'} — the service pins '
-        'main and fails closed',
-      );
-    }
+    await _assertBranchPin();
 
     final before = await _doltLogCount();
     await _db.execute(
@@ -412,6 +529,37 @@ class TrajectoryAppender {
   }
 
   // ── internals ────────────────────────────────────────────────────────────
+
+  /// Lexicographic (boot_epoch, epoch_seq) order — must be strictly
+  /// increasing wherever seq increases (§5's alarm predicate).
+  static bool _ordered(
+    int prevEpoch,
+    int prevEpochSeq,
+    int epoch,
+    int epochSeq,
+  ) => epoch > prevEpoch || (epoch == prevEpoch && epochSeq > prevEpochSeq);
+
+  /// Branch pin, fail closed (probe T3): committing — or appending — off
+  /// main would target a different working set entirely.
+  Future<void> _assertBranchPin() async {
+    final branch = await _db.execute('SELECT active_branch() AS b');
+    final active = branch.rows.isEmpty ? null : branch.rows.first['b'];
+    if (active != 'main') {
+      _halted = true;
+      _emit(
+        TrajectoryServiceEventKind.corruptionHalt,
+        'session branch changed to ${active ?? 'unknown'} — the service pins '
+        'main and fails closed',
+      );
+      throw StateError(
+        'session branch changed to ${active ?? 'unknown'} — the service pins '
+        'main and fails closed',
+      );
+    }
+  }
+
+  void _emit(TrajectoryServiceEventKind kind, String reason) =>
+      _onEvent(TrajectoryServiceEvent(kind, reason));
 
   int _requireEpoch() {
     final epoch = _bootEpoch;
@@ -441,34 +589,62 @@ class TrajectoryAppender {
     );
   }
 
-  Future<AppendOutcome?> _assertGrantBelt(
-    TrajectoryEnvelope envelope,
-    DateTime now,
-  ) async {
-    // Grant-scoped belt (§5 step 2): a consuming append must find its grant
-    // unexpired. Issuing/closing records are exempt — expiry is exactly what
-    // .expired reports.
+  /// Grant-scoped belt (§5 step 2): a consuming append must match the grant
+  /// row's `fencing_token` and find it unexpired against the SERVER's NOW(6)
+  /// — never the client clock. A failed predicate is a per-append REFUSAL
+  /// (rolled back, service live): §5 scopes the corruption-halt class to the
+  /// two out-of-order predicates only. Issuing/closing records are exempt —
+  /// expiry is exactly what `.expired` reports.
+  Future<AppendOutcome?> _assertGrantBelt(TrajectoryEnvelope envelope) async {
     const consuming = {'admission.grant.consumed', 'attempt.session.started'};
     if (!consuming.contains(envelope.recordType)) return null;
     final grantId = envelope.grantId;
     if (grantId == null) return null;
     final grant = await _db.execute(
-      'SELECT expires_at FROM trajectory '
+      'SELECT expires_at, fencing_token, NOW(6) AS server_now FROM trajectory '
       "WHERE record_type = 'admission.grant.issued' AND grant_id = :grant_id "
       'ORDER BY seq DESC LIMIT 1',
       {'grant_id': grantId},
     );
     if (grant.rows.isEmpty) return null;
-    final expiresAt = DateTime.parse(
-      '${grant.rows.first['expires_at']!.replaceFirst(' ', 'T')}Z',
-    );
-    if (!expiresAt.isAfter(now)) {
-      return _haltInTransaction(
-        'belt: grant $grantId expired at $expiresAt — '
-        '${envelope.recordType} refused',
+    final row = grant.rows.first;
+    final grantToken = row['fencing_token'];
+    if (grantToken != null && '${envelope.fencingToken}' != grantToken) {
+      return _refuseGrant(
+        grantId: grantId,
+        predicate: 'fencing_token',
+        reason:
+            'belt: grant $grantId fencing_token $grantToken does not match '
+            'the append\'s ${envelope.fencingToken} — '
+            '${envelope.recordType} refused',
+      );
+    }
+    final expiresAt = _parseServerInstant(row['expires_at']!);
+    final serverNow = _parseServerInstant(row['server_now']!);
+    if (!expiresAt.isAfter(serverNow)) {
+      return _refuseGrant(
+        grantId: grantId,
+        predicate: 'expires_at',
+        reason:
+            'belt: grant $grantId expired at $expiresAt (server now '
+            '$serverNow) — ${envelope.recordType} refused',
       );
     }
     return null;
+  }
+
+  Future<AppendOutcome> _refuseGrant({
+    required String grantId,
+    required String predicate,
+    required String reason,
+  }) async {
+    await _rollbackQuietly();
+    _emit(TrajectoryServiceEventKind.grantRefused, reason);
+    return AppendGrantRefused(
+      grantId: grantId,
+      predicate: predicate,
+      reason: reason,
+    );
   }
 
   Future<AppendOutcome> _dedupeOriginal(TrajectoryEnvelope envelope) async {
@@ -487,7 +663,12 @@ class TrajectoryAppender {
 
   Future<AppendOutcome> _haltInTransaction(String reason) async {
     await _rollbackQuietly();
+    return _haltNow(reason);
+  }
+
+  AppendCorruptionHalt _haltNow(String reason) {
     _halted = true;
+    _emit(TrajectoryServiceEventKind.corruptionHalt, reason);
     return AppendCorruptionHalt(reason: reason);
   }
 
@@ -511,6 +692,10 @@ class TrajectoryAppender {
     return int.parse(result.rows.first['c'] ?? '0');
   }
 
+  /// DATETIME(6) text (no zone) → UTC instant — the appender writes UTC.
+  static DateTime _parseServerInstant(String value) =>
+      DateTime.parse('${value.replaceFirst(' ', 'T')}Z');
+
   TrajectoryEnvelope _buildEnvelope(
     TrajectoryRecord record, {
     required IdemContext context,
@@ -520,6 +705,7 @@ class TrajectoryAppender {
     required TrajectoryProvenance provenance,
     required String? provenanceBasis,
     required String source,
+    required int? fencingToken,
   }) {
     final correlation = record.correlationToJson();
     final json = <String, Object?>{
@@ -540,6 +726,9 @@ class TrajectoryAppender {
       'payload': record.payloadToJson(),
       ...correlation,
     };
+    // The caller's grant token never clobbers a record-carried one (issuing
+    // records stamp their own).
+    if (fencingToken != null) json['fencing_token'] ??= fencingToken;
     // §2.6 rule 7: seat is service-derived from the bead's store prefix —
     // no caller supplies it, so no caller can forget it (ck_seat).
     final workBeadId = json['work_bead_id'] as String?;

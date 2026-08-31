@@ -23,10 +23,15 @@ import 'trajectory_reader.dart';
 /// non-atomic-crash class (a crash between the legacy write and the trajectory
 /// append) is adjudicated once by the operator.
 enum ShadowMismatchClass {
-  unexplained,
-  nonAtomicCrash;
+  unexplained('unexplained'),
+  nonAtomicCrash('non_atomic_crash');
 
-  String get wire => name;
+  const ShadowMismatchClass(this.wire);
+
+  /// Snake_case on the wire, matching the DDL's vocabulary — the report is
+  /// the artifact a stage cut is adjudicated on, and a Stage-1 comparator
+  /// parses it.
+  final String wire;
 }
 
 /// One typed mismatch, keyed exactly as §9 orders the report.

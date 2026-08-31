@@ -21,12 +21,22 @@ AttemptNote _note(int ordinal) => AttemptNote(
 
 class _Harness {
   _Harness() {
-    appender = TrajectoryAppender(db: db, station: 'lunar', clock: () => now);
+    appender = TrajectoryAppender(
+      db: db,
+      station: 'lunar',
+      clock: () => now,
+      onEvent: events.add,
+    );
   }
 
   final db = ScriptedDb();
+  final events = <TrajectoryServiceEvent>[];
   DateTime now = DateTime.utc(2026, 8, 31, 12);
   late final TrajectoryAppender appender;
+
+  List<TrajectoryServiceEventKind> get eventKinds => [
+    for (final event in events) event.kind,
+  ];
 
   void scriptClaimReads({int epoch = 1}) {
     db.on(
@@ -49,6 +59,17 @@ class _Harness {
   );
 
   Future<void> claim() async {
+    // The append path re-asserts the branch pin; a test that wants a
+    // different branch registers its own rule BEFORE claim() (earlier
+    // registrations win).
+    db.on(
+      'SELECT active_branch()',
+      result: const SqlResult(
+        rows: [
+          {'b': 'main'},
+        ],
+      ),
+    );
     final outcome = await appender.claimEpoch(pid: 11, pgid: 12);
     expect(outcome, isA<EpochClaimed>());
   }
@@ -56,8 +77,9 @@ class _Harness {
 
 void main() {
   group('epoch claim', () {
-    test('single INSERT of server-side MAX+1, then the fence-cell UPSERT '
-        'seeded to epoch<<32', () async {
+    test('single INSERT of server-side MAX+1, adopted from the claim\'s OWN '
+        'transaction snapshot, then the fence-cell UPSERT seeded to '
+        'epoch<<32', () async {
       final h = _Harness()..scriptClaimReads(epoch: 3);
       final outcome = await h.appender.claimEpoch(pid: 11, pgid: 12);
 
@@ -68,6 +90,19 @@ void main() {
       final insert = h.db.matching('INSERT INTO traj_epoch').single;
       expect(insert.sql, contains('COALESCE(MAX(epoch), 0) + 1'));
       expect(insert.params!['cause'], 'boot');
+
+      // The epoch is read back INSIDE the claim transaction — the snapshot
+      // makes it our own row, never a rival's re-read MAX.
+      final sql = h.db.log.map((call) => call.sql).toList();
+      final order = [
+        sql.indexWhere((s) => s == 'START TRANSACTION'),
+        sql.indexWhere((s) => s.contains('INSERT INTO traj_epoch')),
+        sql.indexWhere((s) => s.contains('AS e FROM traj_epoch')),
+        sql.indexWhere((s) => s == 'COMMIT'),
+        sql.indexWhere((s) => s.contains('INSERT INTO traj_fence')),
+      ];
+      expect(order, everyElement(greaterThanOrEqualTo(0)));
+      expect(order, orderedEquals(List.of(order)..sort()));
 
       final seed = h.db.matching('INSERT INTO traj_fence').single;
       expect(seed.sql, contains('ON DUPLICATE KEY UPDATE'));
@@ -126,13 +161,17 @@ void main() {
       expect(appended.epochSeq, 1);
 
       final sql = h.db.log.map((call) => call.sql).toList();
+      // The claim owns the FIRST transaction pair; the append's is the last.
       final order = [
-        sql.indexWhere((s) => s == 'START TRANSACTION'),
+        sql.lastIndexWhere((s) => s == 'START TRANSACTION'),
         sql.indexWhere((s) => s.contains('UPDATE traj_fence')),
-        sql.indexWhere((s) => s.contains('SELECT boot_epoch FROM trajectory')),
+        sql.indexWhere(
+          (s) =>
+              s.contains('SELECT seq, boot_epoch, epoch_seq FROM trajectory'),
+        ),
         sql.indexWhere((s) => s.contains('INSERT INTO trajectory (')),
         sql.indexWhere((s) => s.contains('INSERT INTO proj_meta')),
-        sql.indexWhere((s) => s == 'COMMIT'),
+        sql.lastIndexWhere((s) => s == 'COMMIT'),
       ];
       expect(order, everyElement(greaterThanOrEqualTo(0)));
       expect(order, orderedEquals(List.of(order)..sort()));
@@ -224,13 +263,15 @@ void main() {
           ..scriptClaimReads()
           ..scriptFenceHeld()
           ..scriptInsertSeq(101);
-        h.db.on('COMMIT', throwing: _serialization);
         await h.claim();
+        // Registered after the claim so the claim's own transaction commits.
+        h.db.on('COMMIT', throwing: _serialization);
 
         final outcome = await h.appender.append(_note(1));
 
         expect((outcome as AppendFencedOut).reason, 'commit-1213');
         expect(h.appender.isInert, isTrue);
+        expect(h.eventKinds, [TrajectoryServiceEventKind.fencedOut]);
       },
     );
   });
@@ -360,10 +401,10 @@ void main() {
           ..scriptClaimReads()
           ..scriptFenceHeld();
         h.db.on(
-          'SELECT boot_epoch FROM trajectory',
+          'boot_epoch, epoch_seq FROM trajectory',
           result: const SqlResult(
             rows: [
-              {'boot_epoch': '9'},
+              {'seq': '900', 'boot_epoch': '9', 'epoch_seq': '3'},
             ],
           ),
         );
@@ -379,29 +420,160 @@ void main() {
         expect(h.appender.isHalted, isTrue);
         expect(h.db.matching('INSERT INTO trajectory ('), isEmpty);
         expect(h.db.matching('ROLLBACK'), hasLength(1));
+        expect(
+          h.eventKinds,
+          contains(TrajectoryServiceEventKind.corruptionHalt),
+        );
       },
     );
 
-    test('an expired grant refuses the consuming append', () async {
+    test(
+      'a seq/epoch_seq disagreement is the §5 alarm — corruption-halt',
+      () async {
+        final h = _Harness()
+          ..scriptClaimReads()
+          ..scriptFenceHeld()
+          ..scriptInsertSeq(901);
+        // Same epoch, but the previous row already sits at epoch_seq 41 while
+        // this append's serialized stream would write 1: unique, out of order.
+        h.db.on(
+          'boot_epoch, epoch_seq FROM trajectory',
+          result: const SqlResult(
+            rows: [
+              {'seq': '900', 'boot_epoch': '1', 'epoch_seq': '41'},
+            ],
+          ),
+        );
+        await h.claim();
+
+        final outcome = await h.appender.append(_note(1));
+
+        expect(outcome, isA<AppendCorruptionHalt>());
+        expect((outcome as AppendCorruptionHalt).reason, contains('disagrees'));
+        expect(h.appender.isHalted, isTrue);
+        expect(h.db.matching('ROLLBACK'), hasLength(1));
+      },
+    );
+
+    test('verifyBeltAtBoot passes a clean log and halts on a seq order that '
+        'disagrees with (boot_epoch, epoch_seq)', () async {
+      final h = _Harness()..scriptClaimReads();
+      h.db.on(
+        'ORDER BY seq',
+        result: const SqlResult(
+          rows: [
+            {'seq': '1', 'boot_epoch': '1', 'epoch_seq': '1'},
+            {'seq': '2', 'boot_epoch': '1', 'epoch_seq': '2'},
+            {'seq': '3', 'boot_epoch': '2', 'epoch_seq': '1'},
+          ],
+        ),
+        once: true,
+      );
+      await h.claim();
+      expect(await h.appender.verifyBeltAtBoot(), isNull);
+      expect(h.appender.isHalted, isFalse);
+
+      h.db.on(
+        'ORDER BY seq',
+        result: const SqlResult(
+          rows: [
+            {'seq': '1', 'boot_epoch': '2', 'epoch_seq': '5'},
+            {'seq': '2', 'boot_epoch': '1', 'epoch_seq': '9'},
+          ],
+        ),
+      );
+      final halt = await h.appender.verifyBeltAtBoot();
+      expect(halt, isA<AppendCorruptionHalt>());
+      expect(h.appender.isHalted, isTrue);
+    });
+  });
+
+  group('the grant belt — per-append refusals, never a halt', () {
+    _Harness grantHarness({
+      required String expiresAt,
+      String serverNow = '2026-08-31 12:00:00.000000',
+      String? grantToken,
+    }) {
       final h = _Harness()
         ..scriptClaimReads()
         ..scriptFenceHeld();
       h.db.on(
         "record_type = 'admission.grant.issued'",
-        result: const SqlResult(
+        result: SqlResult(
           rows: [
-            {'expires_at': '2026-08-31 11:00:00.000000'},
+            {
+              'expires_at': expiresAt,
+              'fencing_token': grantToken,
+              'server_now': serverNow,
+            },
           ],
         ),
       );
+      return h;
+    }
+
+    test('an expired grant REFUSES the consuming append — rolled back, '
+        'typed, service stays live', () async {
+      final h = grantHarness(expiresAt: '2026-08-31 11:00:00.000000')
+        ..scriptInsertSeq(101);
       await h.claim();
 
       final outcome = await h.appender.append(
         const AdmissionGrantConsumed(grantId: 'G1'),
       );
 
-      expect(outcome, isA<AppendCorruptionHalt>());
-      expect((outcome as AppendCorruptionHalt).reason, contains('expired'));
+      expect(outcome, isA<AppendGrantRefused>());
+      final refused = outcome as AppendGrantRefused;
+      expect(refused.grantId, 'G1');
+      expect(refused.predicate, 'expires_at');
+      expect(h.appender.isHalted, isFalse);
+      expect(h.appender.isInert, isFalse);
+      expect(h.db.matching('INSERT INTO trajectory ('), isEmpty);
+      expect(h.db.matching('ROLLBACK'), hasLength(1));
+      expect(h.eventKinds, [TrajectoryServiceEventKind.grantRefused]);
+
+      // Live after the refusal: the next append lands.
+      final next = await h.appender.append(_note(2));
+      expect(next, isA<Appended>());
+    });
+
+    test('expiry is judged against the SERVER\'s NOW(6), not the client '
+        'clock', () async {
+      // Client clock says 12:00; the server says 10:00 and the grant runs to
+      // 11:00 — live by server time, so the append proceeds.
+      final h = grantHarness(
+        expiresAt: '2026-08-31 11:00:00.000000',
+        serverNow: '2026-08-31 10:00:00.000000',
+      )..scriptInsertSeq(101);
+      await h.claim();
+
+      final outcome = await h.appender.append(
+        const AdmissionGrantConsumed(grantId: 'G1'),
+      );
+
+      expect(outcome, isA<Appended>());
+    });
+
+    test('a fencing_token mismatch refuses; a matching token passes', () async {
+      final h = grantHarness(
+        expiresAt: '2026-08-31 13:00:00.000000',
+        grantToken: '77',
+      )..scriptInsertSeq(101);
+      await h.claim();
+
+      final refused = await h.appender.append(
+        const AdmissionGrantConsumed(grantId: 'G1'),
+        fencingToken: 66,
+      );
+      expect(refused, isA<AppendGrantRefused>());
+      expect((refused as AppendGrantRefused).predicate, 'fencing_token');
+      expect(h.appender.isHalted, isFalse);
+
+      final passed = await h.appender.append(
+        const AdmissionGrantConsumed(grantId: 'G1'),
+        fencingToken: 77,
+      );
+      expect(passed, isA<Appended>());
     });
   });
 
@@ -475,6 +647,14 @@ void main() {
         'INSERT INTO trajectory (',
         respond: (_) => const SqlResult(affectedRows: 1, lastInsertId: 900),
       );
+      fresh.on(
+        'SELECT active_branch()',
+        result: const SqlResult(
+          rows: [
+            {'b': 'main'},
+          ],
+        ),
+      );
 
       final outcome = await h.appender.reconnect(fresh);
 
@@ -513,7 +693,65 @@ void main() {
     });
   });
 
+  group('the catch-all — no throwable escapes with a transaction open', () {
+    test(
+      'an unclassified server error rolls back and surfaces typed',
+      () async {
+        final h = _Harness()
+          ..scriptClaimReads()
+          ..scriptFenceHeld();
+        h.db.on(
+          'INSERT INTO trajectory (',
+          throwing: const MySQLServerException('table not found', 1146),
+          once: true,
+        );
+        await h.claim();
+
+        final outcome = await h.appender.append(_note(1));
+
+        expect(outcome, isA<AppendInternalError>());
+        expect(h.db.matching('ROLLBACK'), hasLength(1));
+        expect(h.appender.isHalted, isFalse);
+        expect(h.appender.isInert, isFalse);
+
+        // Not a latch: the next append runs normally.
+        h.scriptInsertSeq(101);
+        expect(await h.appender.append(_note(2)), isA<Appended>());
+      },
+    );
+
+    test('a non-server throwable (malformed belt read) rolls back and '
+        'surfaces typed', () async {
+      final h = _Harness()
+        ..scriptClaimReads()
+        ..scriptFenceHeld();
+      h.db.on(
+        'boot_epoch, epoch_seq FROM trajectory',
+        result: const SqlResult(
+          rows: [
+            {'seq': '1', 'boot_epoch': 'garbage', 'epoch_seq': '1'},
+          ],
+        ),
+      );
+      await h.claim();
+
+      final outcome = await h.appender.append(_note(1));
+
+      expect(outcome, isA<AppendInternalError>());
+      expect((outcome as AppendInternalError).cause, isA<FormatException>());
+      expect(h.db.matching('ROLLBACK'), hasLength(1));
+    });
+  });
+
   group('dolt-commit cadence', () {
+    test('the boundary set is exactly §5\'s three', () {
+      expect(doltCommitBoundaryTypes, {
+        'authority.epoch.advanced',
+        'attempt.terminal',
+        'attempt.round.retired',
+      });
+    });
+
     _Harness cadenceHarness() {
       final h = _Harness()
         ..scriptClaimReads()
@@ -606,14 +844,11 @@ void main() {
       expect(h.appender.pendingRows, 0);
     });
 
-    test('a branch change fails closed', () async {
+    test('a branch change fails closed on the append path — before any '
+        'transaction opens', () async {
       final h = _Harness()
         ..scriptClaimReads()
         ..scriptFenceHeld();
-      h.db.on(
-        'INSERT INTO trajectory (',
-        respond: (_) => const SqlResult(affectedRows: 1, lastInsertId: 500),
-      );
       h.db.on(
         'active_branch()',
         result: const SqlResult(
@@ -623,10 +858,40 @@ void main() {
         ),
       );
       await h.claim();
-      h.now = h.now.add(const Duration(seconds: 40));
 
       await expectLater(h.appender.append(_note(1)), throwsStateError);
       expect(h.appender.isHalted, isTrue);
+      // The pin refused before the transaction — no CAS, no insert.
+      expect(h.db.matching('START TRANSACTION'), hasLength(1)); // the claim's
+      expect(h.db.matching('UPDATE traj_fence'), isEmpty);
+      expect(h.eventKinds, contains(TrajectoryServiceEventKind.corruptionHalt));
+    });
+
+    test('a post-COMMIT cadence failure NEVER rewrites the append outcome — '
+        'it surfaces as its own non-fatal signal', () async {
+      final h = cadenceHarness();
+      await h.claim();
+      h.now = h.now.add(const Duration(seconds: 40)); // cadence due
+      // The cadence path dies on its dolt_log read AFTER the row committed.
+      h.db.on('FROM dolt_log', throwing: _serialization, once: true);
+
+      final outcome = await h.appender.append(_note(1));
+
+      expect(outcome, isA<Appended>());
+      expect((outcome as Appended).seq, 500);
+      expect(h.appender.isInert, isFalse);
+      expect(h.appender.isHalted, isFalse);
+      expect(h.eventKinds, [TrajectoryServiceEventKind.cadenceFailure]);
+      // The batch stays pending — retried at the next cadence.
+      expect(h.appender.pendingRows, 1);
+
+      // And the next due call, with the fault cleared, commits it.
+      scriptLogCount(h, 5);
+      scriptLogCount(h, 6);
+      h.now = h.now.add(const Duration(seconds: 11));
+      await h.appender.doltCommitIfDue();
+      expect(h.appender.verifiedDoltCommits, 1);
+      expect(h.appender.pendingRows, 0);
     });
   });
 }

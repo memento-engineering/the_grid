@@ -5,10 +5,14 @@ library;
 import 'package:grid_trajectory/grid_trajectory.dart';
 
 class ScriptedReader implements TrajectoryLogReader {
-  ScriptedReader(this.rows);
+  ScriptedReader(this.rows, {this.staleness});
 
   final List<TrajectoryEnvelope> rows;
+  final FoldStaleness? staleness;
   bool closed = false;
+
+  @override
+  Future<FoldStaleness?> foldStaleness() async => staleness;
 
   @override
   Future<List<TrajectoryEnvelope>> rowsForSubject(

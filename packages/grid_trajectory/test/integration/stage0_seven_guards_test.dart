@@ -154,6 +154,28 @@ void main() {
         isNot(contains('dolt add -f')),
         reason: '${file.path} force-adds under the short flag',
       );
+      // A `-f` anywhere in a CLI add's argument list, not only adjacent.
+      expect(
+        RegExp(
+          r'dolt\s+add\b[^\n]*\s-f\b',
+          caseSensitive: false,
+        ).hasMatch(code),
+        isFalse,
+        reason: '${file.path} force-adds via -f in dolt add args',
+      );
+      // The SQL procedure form — the spelling this package actually uses.
+      for (final call in RegExp(
+        r'DOLT_ADD\s*\(([^)]*)',
+        caseSensitive: false,
+      ).allMatches(code)) {
+        expect(
+          RegExp(r'''['"]\s*(--force|-f)\b''').hasMatch(call.group(1) ?? ''),
+          isFalse,
+          reason:
+              '${file.path} calls DOLT_ADD with a force argument — banned in '
+              'all grid tooling (T3)',
+        );
+      }
     }
 
     // (b) The trap, sprung on a scratch database: force-adding an ignored

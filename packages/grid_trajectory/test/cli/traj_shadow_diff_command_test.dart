@@ -248,7 +248,8 @@ void main() {
       );
       final text = out.join('\n');
       expect(code, 0);
-      expect(text, contains('[nonAtomicCrash]'));
+      // The wire token is snake_case, matching the DDL vocabulary.
+      expect(text, contains('[non_atomic_crash]'));
       expect(text, contains('0 unexplained'));
       expect(text, contains('operator adjudicates'));
     });

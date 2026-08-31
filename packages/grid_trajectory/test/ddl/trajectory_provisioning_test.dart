@@ -41,17 +41,43 @@ void main() {
     }
   });
 
-  test('an existing secret is reused, never re-minted', () async {
-    final first = await provisionTrajectoryUser(
-      ScriptedDb(),
-      gridHome: home.path,
-    );
-    final second = await provisionTrajectoryUser(
-      ScriptedDb(),
-      gridHome: home.path,
-    );
-    expect(second.password, first.password);
-  });
+  test(
+    'an existing secret is reused, never re-minted — and never ALTERed',
+    () async {
+      final first = await provisionTrajectoryUser(
+        ScriptedDb(),
+        gridHome: home.path,
+      );
+      final reuse = ScriptedDb();
+      final second = await provisionTrajectoryUser(reuse, gridHome: home.path);
+      expect(second.password, first.password);
+      expect(reuse.matching('ALTER USER'), isEmpty);
+    },
+  );
+
+  test(
+    'a LOST secret is repaired: the fresh mint is pushed server-side via '
+    'ALTER USER (CREATE USER IF NOT EXISTS never updates a password)',
+    () async {
+      final first = await provisionTrajectoryUser(
+        ScriptedDb(),
+        gridHome: home.path,
+      );
+      File(first.secretPath).deleteSync();
+
+      final db = ScriptedDb();
+      final second = await provisionTrajectoryUser(db, gridHome: home.path);
+
+      expect(second.password, isNot(first.password));
+      final alter = db.matching('ALTER USER').single;
+      expect(alter.sql, contains("'trajectory'@'%'"));
+      expect(alter.sql, contains(second.password));
+      expect(File(second.secretPath).readAsStringSync(), second.password);
+      if (!Platform.isWindows) {
+        expect(File(second.secretPath).statSync().mode & 0x1FF, 0x180);
+      }
+    },
+  );
 
   test('a grid home resolving under .beads is refused', () async {
     await expectLater(

@@ -14,6 +14,11 @@ import 'traj_render.dart';
 import 'trajectory_reader.dart';
 
 /// The verb: parse argv, render; every read lives in [TrajectoryLogReader].
+///
+/// Staleness (§5): when `proj_meta.applied_seq` lags `MAX(seq)` by more than
+/// [staleLagLimit] records the verb WARNS rather than refusing — Stage 0 has
+/// no real projection readers yet; the strict refusal bound arms with them
+/// at Stage 1.
 class TrajShowCommand extends Command<int> {
   /// Creates the show verb with an optional injected opener (tests script the
   /// log without a socket).
@@ -90,6 +95,15 @@ Future<int> runTrajShow({
       return 1;
     case TrajectoryOpened(:final reader):
       try {
+        final staleness = await reader.foldStaleness();
+        if (staleness != null && staleness.lag > staleLagLimit) {
+          write(
+            'traj show: warning — the fold lags the log by ${staleness.lag} '
+            'records (applied_seq ${staleness.appliedSeq}, head '
+            '${staleness.maxSeq}); §5 bounds staleness at $staleLagLimit. '
+            'Stage-1 projection readers refuse here.',
+          );
+        }
         final rows = await reader.rowsForSubject(subject, limit: limit);
         if (rows.isEmpty) {
           write('traj show $subject — no trajectory records.');

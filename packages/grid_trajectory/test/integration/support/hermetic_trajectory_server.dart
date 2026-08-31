@@ -80,8 +80,8 @@ class HermeticTrajectoryServer {
     final server = await _start();
     if (server == null) {
       fail(
-        'no dolt binary on PATH (or /opt/homebrew/bin) — the Stage-0 guards '
-        'fail closed rather than skip: install dolt to run them',
+        'no dolt binary on PATH — the Stage-0 guards fail closed rather '
+        'than skip: install dolt to run them',
       );
     }
     return server;
@@ -116,27 +116,41 @@ class HermeticTrajectoryServer {
         fail('offline CREATE USER failed: ${createUser.stderr}');
       }
 
-      final port = await _freePort();
-      server = await Process.start(dolt, [
-        'sql-server',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        '$port',
-        '--data-dir',
-        dataDir.path,
-      ], workingDirectory: dataDir.path);
-      unawaited(server.stdout.drain<void>());
-      unawaited(server.stderr.drain<void>());
-      await _awaitPort('127.0.0.1', port);
-
-      return HermeticTrajectoryServer._(
-        host: '127.0.0.1',
-        port: port,
-        doltBinary: dolt,
-        server: server,
-        dataDir: dataDir,
-      );
+      // The ephemeral port is picked-then-released, so another process can
+      // steal it before dolt binds (TOCTOU — the two integration files run
+      // concurrently). Bounded retries on a fresh port each time, killing
+      // the losing child, keep the race from reddening a run.
+      const bindAttempts = 3;
+      for (var attempt = 1; ; attempt++) {
+        final port = await _freePort();
+        server = await Process.start(dolt, [
+          'sql-server',
+          '--host',
+          '127.0.0.1',
+          '--port',
+          '$port',
+          '--data-dir',
+          dataDir.path,
+        ], workingDirectory: dataDir.path);
+        unawaited(server.stdout.drain<void>());
+        unawaited(server.stderr.drain<void>());
+        if (await _awaitPort('127.0.0.1', port)) {
+          return HermeticTrajectoryServer._(
+            host: '127.0.0.1',
+            port: port,
+            doltBinary: dolt,
+            server: server,
+            dataDir: dataDir,
+          );
+        }
+        server.kill(ProcessSignal.sigkill);
+        if (attempt >= bindAttempts) {
+          fail(
+            'hermetic dolt sql-server never accepted connections '
+            '($bindAttempts bind attempts on fresh ephemeral ports)',
+          );
+        }
+      }
     } on Object {
       server?.kill(ProcessSignal.sigkill);
       await _deleteQuietly(dataDir);
@@ -154,14 +168,16 @@ class HermeticTrajectoryServer {
     await _deleteQuietly(_dataDir);
   }
 
+  /// PATH only, deliberately: a hardcoded install-location fallback would
+  /// defeat both the fail-closed contract (no dolt = a RED run, observable)
+  /// and CI's pinned dolt version. Absence fails the guard loudly.
   static String? _doltBinary() {
     try {
       if (Process.runSync('which', ['dolt']).exitCode == 0) return 'dolt';
     } on Object {
-      // fall through to the homebrew path
+      // No `which` at all — same disposition as no dolt.
     }
-    const homebrew = '/opt/homebrew/bin/dolt';
-    return File(homebrew).existsSync() ? homebrew : null;
+    return null;
   }
 
   static Future<int> _freePort() async {
@@ -171,7 +187,7 @@ class HermeticTrajectoryServer {
     return port;
   }
 
-  static Future<void> _awaitPort(String host, int port) async {
+  static Future<bool> _awaitPort(String host, int port) async {
     for (var i = 0; i < 80; i++) {
       try {
         final socket = await Socket.connect(
@@ -180,12 +196,12 @@ class HermeticTrajectoryServer {
           timeout: const Duration(milliseconds: 250),
         );
         await socket.close();
-        return;
+        return true;
       } on Object {
         await Future<void>.delayed(const Duration(milliseconds: 125));
       }
     }
-    fail('hermetic dolt sql-server did not accept connections on $host:$port');
+    return false;
   }
 
   static Future<void> _deleteQuietly(Directory dir) async {

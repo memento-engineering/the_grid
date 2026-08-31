@@ -28,6 +28,7 @@ export 'src/ddl/trajectory_schema.dart'; // §4 verbatim DDL, dolt_ignore-first,
 
 // SECTION: append — the fenced append client (§5 write path).
 export 'src/append/append_outcome.dart'; // sealed append/claim dispositions
+export 'src/append/service_event.dart'; // the stdout+flare notification seam (§5 clause c)
 export 'src/append/trajectory_appender.dart'; // the fenced service core: epoch claim, CAS, error contract
 export 'src/append/ulid.dart'; // CHAR(26) identity minting
 

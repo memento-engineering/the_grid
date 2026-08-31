@@ -60,6 +60,7 @@ Future<TrajectoryCredential> provisionTrajectoryUser(
   }
 
   final String password;
+  var minted = false;
   if (secretFile.existsSync()) {
     password = secretFile.readAsStringSync().trim();
     if (password.isEmpty) {
@@ -67,6 +68,7 @@ Future<TrajectoryCredential> provisionTrajectoryUser(
     }
   } else {
     password = _mintPassword();
+    minted = true;
     Directory(secretDir).createSync(recursive: true);
     secretFile.writeAsStringSync(password, flush: true);
     await _chmod600(secretFile.path);
@@ -77,6 +79,16 @@ Future<TrajectoryCredential> provisionTrajectoryUser(
   await serverConn.execute(
     "CREATE USER IF NOT EXISTS '$user'@'%' IDENTIFIED BY '$password'",
   );
+  // A lost secret must be repairable: CREATE USER IF NOT EXISTS never
+  // updates an existing user's password (measured on dolt 2.2), so a
+  // re-minted secret would otherwise strand the station behind 1045 forever.
+  // ALTER USER re-aligns the server to the fresh secret; on the fresh-user
+  // path it is a same-value no-op.
+  if (minted) {
+    await serverConn.execute(
+      "ALTER USER '$user'@'%' IDENTIFIED BY '$password'",
+    );
+  }
   // trajectory.* only — the scope IS the decision; widening it to *.* would
   // hand this credential the ledger database.
   await serverConn.execute(

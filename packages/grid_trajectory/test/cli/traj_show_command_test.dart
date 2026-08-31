@@ -217,6 +217,48 @@ void main() {
     });
   });
 
+  group('fold staleness (§5, stage-0 shape)', () {
+    Future<List<String>> showWith(FoldStaleness? staleness) async {
+      final out = <String>[];
+      final code = await runTrajShow(
+        gridHome: '/grid',
+        subject: 'tranquility-5xk',
+        open: openerFor(
+          TrajectoryOpened(
+            ScriptedReader([
+              envelope(
+                recordType: 'attempt.note',
+                family: TrajectoryFamily.attempt,
+                sessionId: 'tranquility-5xk',
+              ),
+            ], staleness: staleness),
+          ),
+        ),
+        out: out.add,
+        err: out.add,
+      );
+      expect(code, 0);
+      return out;
+    }
+
+    test('warns — never refuses — when applied_seq lags MAX(seq) beyond '
+        '512', () async {
+      final text = (await showWith(
+        const FoldStaleness(maxSeq: 1000, appliedSeq: 100),
+      )).join('\n');
+      expect(text, contains('warning'));
+      expect(text, contains('900'));
+      expect(text, contains('512'));
+    });
+
+    test('stays quiet at or under the bound', () async {
+      final text = (await showWith(
+        const FoldStaleness(maxSeq: 1000, appliedSeq: 600),
+      )).join('\n');
+      expect(text, isNot(contains('warning')));
+    });
+  });
+
   group('graceful absence', () {
     test('an unbootstrapped grid home is reported and exits 0', () async {
       final out = <String>[];

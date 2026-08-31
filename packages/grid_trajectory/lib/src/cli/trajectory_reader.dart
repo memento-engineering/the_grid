@@ -1,7 +1,13 @@
 /// The READ seam the `traj` verbs run over.
 ///
-/// Read-only by construction here: the verbs SELECT and nothing else — the
-/// write path belongs to the fenced appender alone (§5's sole-appender
+/// Read-only by CONVENTION, not by construction: the seam wraps the
+/// write-capable [TrajectoryDb] and connects as the `trajectory` credential
+/// (ALL PRIVILEGES on `trajectory.*`), so nothing structural stops a write —
+/// the verbs issue SELECT and nothing else, and a test pins exactly that.
+/// A session-level `SET SESSION TRANSACTION READ ONLY` was probed on dolt
+/// 2.2: parsed but silently ignored (`@@transaction_read_only` stays 0 — the
+/// same class as §5's measured-dead `FOR UPDATE`), so no code claims it.
+/// The write path belongs to the fenced appender alone (§5's sole-appender
 /// invariant), and a forensics verb that could write would break it.
 ///
 /// Opening is a sealed RESULT, not an exception, because "stage 0 was never
@@ -37,7 +43,27 @@ abstract interface class TrajectoryLogReader {
   /// Distinct `session_id`s present in the log, oldest first.
   Future<List<String>> sessions({int limit = defaultReadLimit});
 
+  /// The fold frontier vs the log's head — null when the log is empty.
+  Future<FoldStaleness?> foldStaleness();
+
   Future<void> close();
+}
+
+/// §5's reader-staleness bound: readers refuse a fold lagging `MAX(seq)` by
+/// more than this. In Stage 0 `traj show` WARNS at the bound rather than
+/// refusing — no projection reader exists yet, so the strict refusal arms
+/// with the real Stage-1 readers.
+const int staleLagLimit = 512;
+
+/// Where the Stage-0 fold frontier (`proj_meta.applied_seq`) stands relative
+/// to the log head (`MAX(seq)`).
+class FoldStaleness {
+  const FoldStaleness({required this.maxSeq, required this.appliedSeq});
+
+  final int maxSeq;
+  final int appliedSeq;
+
+  int get lag => maxSeq - appliedSeq;
 }
 
 /// Rows read per verb invocation unless `--limit` says otherwise. A forensics
@@ -146,6 +172,11 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
       'WHERE session_id IS NOT NULL '
       'GROUP BY session_id ORDER BY first_seq LIMIT :limit';
 
+  static const String stalenessSql =
+      'SELECT (SELECT MAX(seq) FROM trajectory) AS max_seq, '
+      '(SELECT applied_seq FROM proj_meta '
+      "WHERE projection = 'fold') AS applied_seq";
+
   @override
   Future<List<TrajectoryEnvelope>> rowsForSubject(
     String subject, {
@@ -165,6 +196,20 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
       for (final row in result.rows)
         if (row['session_id'] case final String id) id,
     ];
+  }
+
+  @override
+  Future<FoldStaleness?> foldStaleness() async {
+    final result = await _db.execute(stalenessSql);
+    if (result.rows.isEmpty) return null;
+    final row = result.rows.first;
+    final maxSeq = row['max_seq'];
+    if (maxSeq == null) return null;
+    final applied = row['applied_seq'];
+    return FoldStaleness(
+      maxSeq: int.parse(maxSeq),
+      appliedSeq: applied == null ? 0 : int.parse(applied),
+    );
   }
 
   @override

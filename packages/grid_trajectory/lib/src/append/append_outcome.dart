@@ -46,14 +46,46 @@ final class AppendFencedOut extends AppendOutcome {
   final String reason;
 }
 
-/// The corruption-halt alarm class (§5): a belt violation
-/// (non-decreasing-epoch, grant fencing/expiry) or `1105` naming
-/// `uq_epoch_seq`. The service HALTS — every further append refuses with this
-/// same outcome until the appender is recreated by the operator.
+/// The grant belt refused this append (§5 step 2): the grant row's
+/// `fencing_token` did not match, or `expires_at` was not after the server's
+/// NOW(6). A per-append REFUSAL, not corruption — the transaction is rolled
+/// back and the service stays live: §5 scopes the corruption-halt class to
+/// its two out-of-order predicates only.
+final class AppendGrantRefused extends AppendOutcome {
+  const AppendGrantRefused({
+    required this.grantId,
+    required this.predicate,
+    required this.reason,
+  });
+
+  final String grantId;
+
+  /// Which belt predicate failed: `fencing_token` or `expires_at`.
+  final String predicate;
+  final String reason;
+}
+
+/// The corruption-halt alarm class — §5's exact scope: a non-decreasing
+/// `boot_epoch` violation or a seq/epoch_seq order disagreement (including
+/// `1105` naming `uq_epoch_seq`, and a statement-time 1062 with no matching
+/// idem_key). Both can only fail if something already committed out of
+/// order. The service HALTS — every further append refuses with this same
+/// outcome until the appender is recreated by the operator.
 final class AppendCorruptionHalt extends AppendOutcome {
   const AppendCorruptionHalt({required this.reason});
 
   final String reason;
+}
+
+/// A non-classified failure inside the append transaction (a client/protocol
+/// error, a malformed read, anything outside §5's named classes): the
+/// transaction is rolled back and the failure surfaces typed — no raw
+/// throwable escapes with a transaction open. Not a latch: the next append
+/// runs normally.
+final class AppendInternalError extends AppendOutcome {
+  const AppendInternalError({required this.cause});
+
+  final Object cause;
 }
 
 /// One epoch claim's disposition.

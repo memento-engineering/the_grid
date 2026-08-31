@@ -53,6 +53,438 @@ TrajectoryEnvelope envelopeFor(Map<String, Object?> fixture) {
 final _beat = DateTime.utc(2026, 8, 31, 11, 58, 3, 0, 250);
 final _expiry = DateTime.utc(2026, 8, 31, 12, 30);
 
+// ── maximum-width variants (§5: "a stage-0 test constructs a
+// maximum-length key of every type") ──────────────────────────────────────
+
+/// Every interpolated identity field at its §4 DDL width; free-width payload
+/// identities (observation/wire/lease keys) at a generous 128.
+final String _xSession = 's' * 40; // session_id VARCHAR(40)
+final String _xBead = 'b' * 40; // work_bead_id VARCHAR(40)
+final String _xUlid = 'A' * 26; // CHAR(26) ids
+final String _xPath = 'p' * 255; // step_path/worktree VARCHAR(255)
+final String _xGate = 'g' * 64; // gate_id VARCHAR(64)
+final String _xBranch = 'r' * 160; // branch VARCHAR(160)
+final String _xSha = 'a' * 40; // CHAR(40)
+final String _xHex64 = 'f' * 64; // effect_id / digests CHAR(64)
+final String _xFree = 'k' * 128; // free-width payload identities
+const int _xInt = 2147483647;
+
+/// The service-stamped holes at their widest: station VARCHAR(64), a 64-bit
+/// boot epoch.
+final maxLengthContext = IdemContext(
+  station: 'x' * 64,
+  bootEpoch: 9223372036854775807,
+);
+
+/// One maximum-width record per §2 record type — the same 50 as
+/// [sampleRecords], with every grammar interpolation at its column bound.
+List<TrajectoryRecord> maxLengthSampleRecords() => [
+  // Family 1 — attempt lifecycle.
+  AttemptSessionStarted(
+    sessionId: _xSession,
+    grantId: _xUlid,
+    workBeadId: _xBead,
+    mountAttemptId: _xUlid,
+    rig: 'operator',
+    model: 'molecule',
+  ),
+  AttemptProcessStarted(
+    attemptId: _xUlid,
+    sessionId: _xSession,
+    incarnation: _xInt,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    worktree: _xPath,
+    branch: _xBranch,
+    pid: _xInt,
+    pgid: _xInt,
+    predecessorAttemptId: _xUlid,
+  ),
+  AttemptProcessExited(
+    attemptId: _xUlid,
+    sessionId: _xSession,
+    pid: _xInt,
+    exitCode: 255,
+    exitKind: ExitKind.exited,
+    inferred: false,
+    reason: 'clean exit',
+  ),
+  AttemptLivenessTransition(
+    attemptId: _xUlid,
+    crossing: LivenessCrossing.lost,
+    lastBeatAt: _beat,
+    thresholdMs: _xInt,
+  ),
+  AttemptLivenessTransition(
+    attemptId: _xUlid,
+    crossing: LivenessCrossing.regained,
+    lastBeatAt: _beat.add(const Duration(seconds: 120)),
+    thresholdMs: _xInt,
+  ),
+  AttemptLeaseTransition(
+    attemptId: _xUlid,
+    phase: LeasePhase.acquired,
+    token: _xUlid,
+    disposition: LeaseDisposition.held,
+  ),
+  AttemptLeaseTransition(
+    attemptId: _xUlid,
+    phase: LeasePhase.released,
+    token: _xUlid,
+    disposition: LeaseDisposition.released,
+  ),
+  AttemptLeaseTransition(
+    attemptId: _xUlid,
+    phase: LeasePhase.swept,
+    token: _xUlid,
+    disposition: LeaseDisposition.killed,
+    terminateResult: 'SIGKILL delivered',
+  ),
+  AttemptAdoptProved(
+    attemptId: _xUlid,
+    outcome: AdoptOutcome.adopted,
+    fencePgid: _xInt,
+    fencePid: _xInt,
+  ),
+  AttemptTerminal(
+    attemptId: _xUlid,
+    sessionId: _xSession,
+    workBeadId: _xBead,
+    outcome: TerminalOutcome.settled,
+    resolvesRecordId: _xUlid,
+  ),
+  AttemptRoundRetired(
+    sessionId: _xSession,
+    oldRound: _xInt,
+    newRound: _xInt,
+    cause: RoundRetireCause.rework,
+  ),
+  AttemptReworkDeclined(
+    sessionId: _xSession,
+    round: _xInt,
+    reason: 'operator declined',
+  ),
+  AttemptMintOutcome(
+    workBeadId: _xBead,
+    mountAttemptId: _xUlid,
+    phase: MintPhase.exhausted,
+    mintAttempt: _xInt,
+    maxAttempts: _xInt,
+    stage: 'pour',
+    reason: 'graph-apply timeout',
+  ),
+  AttemptNote(
+    sessionId: _xSession,
+    body: 'note body',
+    channel: 'obligation-stuck',
+    noteOrdinal: _xInt,
+  ),
+  WorktreeProvisioned(
+    attemptId: _xUlid,
+    sessionId: _xSession,
+    worktree: _xPath,
+    branch: _xBranch,
+    baseSha: _xSha,
+    adoptedExisting: false,
+  ),
+  WorktreeReaped(
+    sessionId: _xSession,
+    worktree: _xPath,
+    branch: _xBranch,
+    uncommitted: 0,
+    unpushed: 0,
+    stashes: 0,
+  ),
+  WorktreeHeld(
+    sessionId: _xSession,
+    worktree: _xPath,
+    branch: _xBranch,
+    uncommitted: _xInt,
+    unpushed: _xInt,
+    stashes: _xInt,
+  ),
+  // Family 2 — admission grants and authority.
+  AdmissionGrantIssued(
+    grantId: _xUlid,
+    workBeadId: _xBead,
+    mountAttemptId: _xUlid,
+    fencingToken: 9223372036854775807,
+    expiresAt: _expiry,
+    basis: const {'bead_rev': 'r12'},
+  ),
+  AdmissionGrantConsumed(
+    grantId: _xUlid,
+    sessionId: _xSession,
+    workBeadId: _xBead,
+  ),
+  AdmissionGrantClosed(
+    grantId: _xUlid,
+    closure: GrantClosure.expired,
+    cause: GrantCloseCause.expired,
+    workBeadId: _xBead,
+  ),
+  AdmissionGrantClosed(
+    grantId: _xUlid,
+    closure: GrantClosure.released,
+    cause: GrantCloseCause.superseded,
+    workBeadId: _xBead,
+  ),
+  AdmissionRefused(
+    workBeadId: _xBead,
+    mountAttemptId: _xUlid,
+    clause: 'c' * 48,
+    snapshotRev: 'v' * 64,
+    detail: const {'k': 'v'},
+  ),
+  AdmissionRestored(
+    workBeadId: _xBead,
+    clause: 'c' * 48,
+    refusalRecordId: _xUlid,
+    actor: 'nico',
+  ),
+  AdmissionDriveApproved(approvedBeads: [_xBead]),
+  const AuthorityEpochTransition(
+    phase: EpochPhase.advanced,
+    epoch: 9223372036854775807,
+    pid: _xInt,
+    pgid: _xInt,
+    cause: EpochCause.steal,
+    priorEpoch: 9223372036854775806,
+    priorPid: _xInt,
+    stealReason: StealReason.stale,
+  ),
+  const AuthorityEpochTransition(
+    phase: EpochPhase.closed,
+    epoch: 9223372036854775807,
+    pid: _xInt,
+    pgid: _xInt,
+    cause: EpochCause.down,
+    outstandingObligations: _xInt,
+  ),
+  FederationLeaseTransition(
+    phase: FederationLeasePhase.granted,
+    leaseId: _xFree,
+    kind: 'substation',
+    lessee: _xBead,
+    fencingToken: 9223372036854775807,
+    expiresAt: _expiry,
+    ttlS: _xInt,
+  ),
+  FederationLeaseTransition(
+    phase: FederationLeasePhase.reaped,
+    leaseId: _xFree,
+    kind: 'substation',
+    lessee: _xBead,
+    fencingToken: 9223372036854775807,
+    expiresAt: _expiry,
+  ),
+  FederationLeaseTransition(
+    phase: FederationLeasePhase.expired,
+    leaseId: _xFree,
+    kind: 'substation',
+    lessee: _xBead,
+    fencingToken: 9223372036854775807,
+    expiresAt: _expiry,
+  ),
+  // Family 3 — verification bindings.
+  VerifyScopePinned(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    incarnation: _xInt,
+    baseSha: _xSha,
+    headSha: _xSha,
+    branch: _xBranch,
+    commitCount: _xInt,
+    diffDigest: _xHex64,
+    diffBytes: _xInt,
+  ),
+  VerifyVerdictRecorded(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    incarnation: _xInt,
+    headShaAtRecord: _xSha,
+    lane: 'l' * 64,
+    rubricVersion: 'v3',
+    grade: 'B',
+    rationale: 'rationale',
+    transport: VerdictTransport.artifact,
+    pinnedHeadSha: _xSha,
+    shaDrift: false,
+  ),
+  VerifyVerdictRecovered(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    lane: 'l' * 64,
+    rubricVersion: 'v3',
+    grade: 'C',
+    rationale: 'recovered',
+    pinnedHeadSha: _xSha,
+    shaDrift: true,
+  ),
+  VerifyGatingRc(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    incarnation: _xInt,
+    rc: 255,
+    durationMs: _xInt,
+    planDigest: _xHex64,
+    headShaAtExec: _xSha,
+  ),
+  VerifyCompletionFence(
+    attemptId: _xUlid,
+    outcome: FenceProbeOutcome.clear,
+    headShaAtProbe: _xSha,
+  ),
+  VerifyRouteVerdict(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    incarnation: _xInt,
+    verdict: RouteVerdictKind.advance,
+    rule: 'decent-grades',
+    spread: 1.0,
+    grades: const {
+      'critic': {'grade': 'B', 'source_record_id': null, 'sha_drift': null},
+    },
+  ),
+  VerifyUsageTelemetry(
+    attemptId: _xUlid,
+    sessionId: _xSession,
+    model: 'molecule',
+    tokensIn: _xInt,
+    tokensOut: _xInt,
+    costUsd: 999999.99,
+    premiumRequests: _xInt,
+    numTurns: _xInt,
+    durationMs: _xInt,
+  ),
+  VerifyCiConcluded(
+    observationId: _xFree,
+    headSha: _xSha,
+    workBeadId: _xBead,
+    sessionId: _xSession,
+    repo: 'memento-engineering/the_grid',
+    checkName: 'n' * 128,
+    conclusion: 'success',
+  ),
+  // Family 4 — effect intent / acknowledgement.
+  EffectIntent(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    kind: EffectKind.prOpen,
+    targetRepo: 'o' * 128,
+    targetBranch: _xBranch,
+    targetBase: _xBranch,
+    posture: const {'delivery_method': 'pr', 'policy_version': 'v2'},
+    attemptId: _xUlid,
+  ),
+  EffectAck(
+    effectId: _xHex64,
+    kind: EffectKind.prOpen,
+    ackOrdinal: _xInt,
+    outcome: TerminalOutcome.succeeded,
+    receipt: 'e' * 255,
+    prNumber: _xInt,
+    prUrl: 'https://github.com/${'u' * 200}',
+    reused: false,
+  ),
+  EffectUnarmed(
+    attemptId: _xUlid,
+    posture: const {'delivery_method': 'commit-only', 'policy_version': 'v2'},
+  ),
+  EffectObservationClaimed(
+    observationId: _xFree,
+    claimOrder: ClaimOrder.deliverThenClaim,
+  ),
+  EffectCommandReceived(
+    wireKey: _xFree,
+    command: '/rework',
+    fence: 9223372036854775807,
+    fingerprint: _xHex64,
+  ),
+  EffectCommandRefused(
+    wireKey: _xFree,
+    reason: CommandRefusalReason.fingerprintMismatch,
+    fingerprint: _xHex64,
+    priorFingerprint: _xHex64,
+  ),
+  EffectCiReworkCommanded(
+    workBeadId: _xBead,
+    round: _xInt,
+    observationId: _xFree,
+    checkName: 'n' * 128,
+    noteDigest: _xHex64,
+  ),
+  // Family 5 — step and molecule transitions.
+  MoleculePoured(
+    sessionId: _xSession,
+    round: _xInt,
+    formula: 'implement-verify-deliver',
+    graph: const {'nodes': [], 'edges': []},
+    nodeCount: _xInt,
+    graphDigest: _xHex64,
+  ),
+  StepTransition(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    incarnation: _xInt,
+    attemptId: _xUlid,
+    state: StepState.failed,
+    cause: StepCause.allocation,
+    restartBudget: _xInt,
+    failureReason: 'store unavailable',
+    failureClass: StepFailureClass.storeUnavailable,
+  ),
+  StepSuperseded(
+    sessionId: _xSession,
+    round: _xInt,
+    stepPath: _xPath,
+    cause: 'restart-budget',
+    budgetRemaining: _xInt,
+    oldStepRound: _xInt - 1,
+    newStepRound: _xInt,
+  ),
+  GateOpened(
+    gateId: _xGate,
+    sessionId: _xSession,
+    workBeadId: _xBead,
+    stepPath: _xPath,
+    stepRound: _xInt,
+    attemptId: _xUlid,
+    node: _xPath,
+    reason: 'critic graded F',
+  ),
+  GateRegated(
+    gateId: _xGate,
+    sessionId: _xSession,
+    regateCycle: _xInt,
+    node: _xPath,
+    reason: 'second F',
+  ),
+  GateClosed(
+    gateId: _xGate,
+    sessionId: _xSession,
+    closeCause: GateCloseCause.adjudicated,
+    cycle: _xInt,
+    actor: 'nico',
+    openDurationMs: _xInt,
+  ),
+];
+
 /// One constructed sample per §2 record type — 50 in all; the generator turns
 /// these into the golden files.
 List<TrajectoryRecord> sampleRecords() => [

@@ -58,9 +58,42 @@ void main() {
       final reader = SqlTrajectoryLogReader(db);
       await reader.rowsForSubject('tg-9abc');
       await reader.sessions();
+      await reader.foldStaleness();
       for (final call in db.log) {
         expect(call.sql, startsWith('SELECT '));
       }
+    });
+
+    test(
+      'foldStaleness reads the log head against the fold frontier',
+      () async {
+        final db = ScriptedDb()
+          ..on(
+            'AS max_seq',
+            result: const SqlResult(
+              rows: [
+                {'max_seq': '900', 'applied_seq': '300'},
+              ],
+            ),
+          );
+        final staleness = await SqlTrajectoryLogReader(db).foldStaleness();
+        expect(staleness!.maxSeq, 900);
+        expect(staleness.appliedSeq, 300);
+        expect(staleness.lag, 600);
+      },
+    );
+
+    test('foldStaleness is null on an empty log', () async {
+      final db = ScriptedDb()
+        ..on(
+          'AS max_seq',
+          result: const SqlResult(
+            rows: [
+              {'max_seq': null, 'applied_seq': null},
+            ],
+          ),
+        );
+      expect(await SqlTrajectoryLogReader(db).foldStaleness(), isNull);
     });
 
     test('sessions are distinct and ordered by first appearance', () async {

@@ -29,20 +29,30 @@ void main() {
     }
   });
 
-  test('the widest grammar row stays inside VARCHAR(512) at column bounds', () {
-    // step.transition carries the longest interpolation set: session (40) +
-    // path (255) at their DDL widths.
-    final record = StepTransition(
-      sessionId: 's' * 40,
-      round: 2147483647,
-      stepPath: 'p' * 255,
-      stepRound: 2147483647,
-      incarnation: 2147483647,
-      state: StepState.complete,
+  test('EVERY grammar row stays inside VARCHAR(512)/CHAR(64) at column '
+      'bounds — a maximum-length key per record type (§5)', () {
+    final maxed = maxLengthSampleRecords();
+    // The max set covers exactly the record types the grammar table names.
+    expect(
+      maxed.map((record) => record.recordType).toSet(),
+      sampleRecords().map((record) => record.recordType).toSet(),
     );
-    final text = record.idemKeyText(fixtureContext);
-    expect(text.length, lessThanOrEqualTo(512));
-    expect(record.idemKey(fixtureContext).length, 64);
+    for (final record in maxed) {
+      final text = record.idemKeyText(maxLengthContext);
+      expect(text, isNotEmpty, reason: record.recordType);
+      expect(
+        text.length,
+        lessThanOrEqualTo(512),
+        reason:
+            '${record.recordType}: ${text.length} chars overflows '
+            'idem_key_text VARCHAR(512)',
+      );
+      expect(
+        record.idemKey(maxLengthContext),
+        matches(RegExp(r'^[0-9a-f]{64}$')),
+        reason: record.recordType,
+      );
+    }
   });
 
   test('effect identity keys the logical mutation, not the attempt', () {

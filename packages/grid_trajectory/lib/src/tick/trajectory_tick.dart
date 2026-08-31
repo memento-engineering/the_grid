@@ -223,6 +223,26 @@ class TrajectoryTick {
               ),
             );
             break obligations;
+          // Per-append dispositions, not authority changes: the pass keeps
+          // draining the remaining obligations.
+          case AppendGrantRefused(:final reason):
+            refusals.add(
+              TickRefusal(
+                kind: TickRefusalKind.queryFailed,
+                query: query.name,
+                reason: reason,
+                recordType: repair.record.recordType,
+              ),
+            );
+          case AppendInternalError(:final cause):
+            refusals.add(
+              TickRefusal(
+                kind: TickRefusalKind.queryFailed,
+                query: query.name,
+                reason: '$cause',
+                recordType: repair.record.recordType,
+              ),
+            );
         }
       }
     }
