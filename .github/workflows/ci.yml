@@ -37,7 +37,7 @@ jobs:
         # and carries a documented bd-HEAD ready-sort divergence (tg-nx0o).
         # Hermeticizing it for CI is tracked as a follow-up bead.
         run: |
-          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_sdk grid_cli; do
+          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_cli; do
             echo "::group::$pkg"
             (cd packages/$pkg && dart test)
             echo "::endgroup::"
@@ -48,6 +48,13 @@ jobs:
           # run in trajectory-guards below.
           echo "::group::grid_trajectory"
           (cd packages/grid_trajectory && dart test -x integration)
+          echo "::endgroup::"
+          # grid_sdk carries the Stage-1 harness integration test, which is
+          # trajectory-guard-class: it FAILS rather than skips without dolt
+          # (decision: stage0-guards-gate-prs). Unit tier here; integration
+          # tier in trajectory-guards below.
+          echo "::group::grid_sdk"
+          (cd packages/grid_sdk && dart test -x integration)
           echo "::endgroup::"
 
   trajectory-guards:
@@ -80,6 +87,8 @@ jobs:
       - name: Run the tagged guard suite
         run: |
           cd packages/grid_trajectory
+          dart test -t integration
+          cd ../grid_sdk
           dart test -t integration
       # FAIL-CLOSED naming pin. The step above selects by TAG, so a guard file
       # that loses its `@Tags(['integration'])` annotation silently stops
