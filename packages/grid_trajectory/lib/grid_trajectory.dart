@@ -32,6 +32,10 @@ export 'src/append/trajectory_appender.dart'; // the fenced service core: epoch 
 export 'src/append/ulid.dart'; // CHAR(26) identity minting
 
 // SECTION: tick — the service tick skeleton (§5).
+export 'src/tick/obligation_query.dart'; // the obligation seam + Stage 0's empty set
+export 'src/tick/tick_appender.dart'; // the narrow appender seam the tick runs over
+export 'src/tick/tick_telemetry.dart'; // per-pass telemetry + the fixpoint result
+export 'src/tick/trajectory_tick.dart'; // the interval loop, fence skip, runToFixpoint
 
 // SECTION: cli — the traj verbs (traj show / traj shadow-diff).
 export 'src/cli/traj_command.dart'; // the `traj` group; runners compose it explicitly
