@@ -537,6 +537,15 @@ Future<StationWorkRuntime> assembleStationWork({
         seatPrefixes: allowSet,
         onFlare: transport?.flare,
       );
+  // The harness's ONE derivation layer (stage1-wiring §2), threaded from here
+  // to every observation site the design names: ambient over the work subtree
+  // via `StationWorkWiring.trajectory`, and by constructor into the four
+  // OFF-TREE collaborators built below (the git service, the lease vendor, the
+  // command handler, the restart reconciler) — they are built beside the
+  // harness rather than mounted under it, so an ambient value would never
+  // reach them. One recorder, one queue, one appender: the sole-appender
+  // invariant is threading, not convention.
+  final recorder = trajectory.recorder;
   final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
@@ -586,6 +595,9 @@ Future<StationWorkRuntime> assembleStationWork({
     stateWriter: writer,
     stateOwnership: BeadOwnershipPredicate(allowSet),
     workStoresByIdentity: workCommandStores,
+    // `grid rework`'s re-key is one of `attempt.round.retired`'s two
+    // observation sites (stage1-wiring §2.3).
+    recorder: recorder,
   );
 
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
@@ -598,6 +610,10 @@ Future<StationWorkRuntime> assembleStationWork({
           : StationGitService(
               runner: SystemGitRunner(),
               prOpener: GhPrOpener(ghRunner),
+              // `worktree.provisioned` is captured INSIDE provisionWorktree
+              // (stage1-wiring §2.3, r2 blocker 3) — the only place that holds
+              // `preexisting`, the branch, and the base sha at one instant.
+              recorder: recorder,
             ));
 
   // --- the registered roots. Dry-run registers nothing (the inert service
@@ -659,7 +675,7 @@ Future<StationWorkRuntime> assembleStationWork({
   // restart reconciler's molecule lease sweep resolve the SAME vendor over the
   // SAME services — so the breadcrumb a mount wrote is the breadcrumb the
   // sweep interprets.
-  final leaseVendor = defaultProcessLeaseVendor(services);
+  final leaseVendor = defaultProcessLeaseVendor(services, recorder: recorder);
 
   final restart = RestartReconciler(
     listWorktrees: git.listBeadWorktrees,
@@ -685,6 +701,9 @@ Future<StationWorkRuntime> assembleStationWork({
     // it).
     leaseVendor: leaseVendor,
     onOrphan: orphanSink,
+    // The INFERRED half of `attempt.terminal(settled)` (stage1-wiring §2.3):
+    // this pass settles a prior boot's sessions from evidence on disk.
+    recorder: recorder,
     // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
   );
@@ -727,6 +746,8 @@ Future<StationWorkRuntime> assembleStationWork({
       // The SAME instance the restart reconciler sweeps with (tg-eli phase 1).
       processLeaseVendor: leaseVendor,
       transport: transport,
+      // Stage 1's ONE new ambient value (stage1-wiring §1.1).
+      trajectory: TrajectoryRecorderScope(recorder),
     ),
     commands: commands,
     git: git,

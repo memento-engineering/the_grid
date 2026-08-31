@@ -621,6 +621,7 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
     required this.dispatch,
     required this.metadataOf,
     this.liveness = neverLive,
+    this.recorder,
   });
 
   /// The single bd write chokepoint — the sole writer (and clearer) of
@@ -639,6 +640,15 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
   /// The pgid-alive half of no-adopt-on-faith for [LeaseCapability.proveFresh].
   final AllocationLiveness liveness;
 
+  /// The Stage-1 derivation layer (stage1-wiring §2.3's three lease rows plus
+  /// the adopt row). This vendor is the sole writer of `grid.lease.*`, which
+  /// makes it the only honest observer of the lease's phases — and, since the
+  /// breadcrumb now CARRIES `attempt_id` (§2.1), the only place the succession
+  /// a spawn-under-existing-breadcrumb implies can be read before it is
+  /// overwritten. Null (the default, and every offline fixture) is a counting
+  /// no-op.
+  final StationTrajectoryRecorder? recorder;
+
   @override
   LeaseCapability<ProcessHandle> leaseFor(ProcessLeaseRequest request) =>
       _VendedProcessLease(
@@ -648,6 +658,7 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
         dispatch: dispatch,
         metadataOf: metadataOf,
         liveness: liveness,
+        recorder: recorder,
       );
 
   /// The real sweep. **Adopt-window safety:** the reconciler runs this BEFORE
@@ -746,6 +757,11 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
             disposition: LeaseSweepDisposition.leftAdoptable,
           ),
         );
+        _recordSwept(
+          candidate.stepBeadId,
+          handle,
+          LeaseDisposition.leftAdoptable,
+        );
         continue;
       }
 
@@ -789,6 +805,13 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
               clearFailure: clearFailure,
             ),
           );
+          _recordSwept(
+            candidate.stepBeadId,
+            handle,
+            LeaseDisposition.killed,
+            terminateResult: result.name,
+            clearFailure: clearFailure,
+          );
         case GroupTerminateResult.refusedUnsafe:
           // The guard is NEVER bypassed — and the breadcrumb is NOT cleared:
           // it is the only record an operator has of a group that may still
@@ -807,9 +830,38 @@ class StationProcessLeaseVendor implements ProcessLeaseVendor {
               terminateResult: result,
             ),
           );
+          _recordSwept(
+            candidate.stepBeadId,
+            handle,
+            LeaseDisposition.refusedUnsafe,
+            terminateResult: result.name,
+          );
       }
     }
     return swept;
+  }
+
+  /// `attempt.lease.swept` for ONE disposition (§2.3), derived after the
+  /// sweep's decision landed — the kill, the refusal, or the deliberate
+  /// preservation. A pre-Stage-1 breadcrumb names no attempt, so there is
+  /// nothing to key a record on: it is skipped rather than given an invented
+  /// name (§2.1 — the record reads the attempt id, never invents it).
+  void _recordSwept(
+    String stepBeadId,
+    ProcessHandle handle,
+    LeaseDisposition disposition, {
+    String? terminateResult,
+    String? clearFailure,
+  }) {
+    if (handle.attemptId.isEmpty) return;
+    recorder?.leaseSwept(
+      attemptId: handle.attemptId,
+      token: handle.token,
+      stepBeadId: stepBeadId,
+      disposition: disposition,
+      terminateResult: terminateResult,
+      clearFailure: clearFailure,
+    );
   }
 }
 
@@ -836,6 +888,7 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     required this.dispatch,
     required this.metadataOf,
     required this.liveness,
+    this.recorder,
   });
 
   final ProcessLeaseRequest request;
@@ -844,6 +897,7 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
   final ProcessDispatcher dispatch;
   final StepMetadataReader metadataOf;
   final AllocationLiveness liveness;
+  final StationTrajectoryRecorder? recorder;
 
   String get stepBeadId => request.stepBeadId;
 
@@ -858,6 +912,14 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     final metadata = await metadataOf(stepBeadId);
     if (metadata == null) return null;
     final handle = leaseBreadcrumbOf(metadata);
+    // A READ, not a transition — so it appends nothing (§2.3 derives records
+    // at writes). It only seeds the recorder's view of what this step's
+    // breadcrumb currently names, which is what lets a later spawn over this
+    // same bead report the attempt it displaced (§2.1 / the succession row).
+    recorder?.leaseObserved(
+      stepBeadId: stepBeadId,
+      attemptId: handle?.attemptId ?? '',
+    );
     return handle == null ? null : LeaseBound(handle);
   }
 
@@ -873,9 +935,28 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     ProcessHandle handle,
     TreeContext context,
     StepArgs args,
-  ) async => liveness(
-    AdoptFence(pgid: handle.pgid, pid: handle.pid, token: handle.token),
-  );
+  ) async {
+    final fence = AdoptFence(
+      pgid: handle.pgid,
+      pid: handle.pid,
+      token: handle.token,
+    );
+    final fresh = liveness(fence);
+    // §2.3's `attempt.adopt.proved` row: adopted-vs-respawned, durable at
+    // last. THIS is the decision — `adoptable` only found a breadcrumb — and
+    // the attempt id is the breadcrumb's, CONTINUED (§2.1: no fresh mint on
+    // adopt, so one process incarnation keeps one attempt across boots). A
+    // refuted proof means the mount respawns, and the record says so.
+    if (handle.attemptId.isNotEmpty) {
+      recorder?.adoptProved(
+        attemptId: handle.attemptId,
+        outcome: fresh ? AdoptOutcome.adopted : AdoptOutcome.respawned,
+        fencePgid: handle.pgid,
+        fencePid: handle.pid,
+      );
+    }
+    return fresh;
+  }
 
   /// Spawns fresh + writes the breadcrumb — the ONLY write of `grid.lease.*`
   /// this lease issues (adopt never re-persists; it reattaches what is already
@@ -933,6 +1014,21 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
       if (tap != null && tap.isClosed) return;
       try {
         await writer.update(stepBeadId, metadata: leaseBreadcrumb(handle));
+        // §2.3's `attempt.lease.acquired` row — AFTER the breadcrumb write
+        // landed, which is what makes the record's attempt id one the log can
+        // recover rather than one this process merely remembers. Passing the
+        // step bead id is what makes the SUCCESSION observable: this write
+        // just overwrote whatever the bead's breadcrumb named, so a prior
+        // attempt standing there is this one's predecessor (§2.3's
+        // incarnation-succession row — never `RuntimeEvent.respawned`, which
+        // has no production emitter). Enqueue-only: the retry loop below is
+        // unchanged, and the synchronous check-then-enqueue gate above is not
+        // perturbed (§2.5).
+        recorder?.leaseAcquired(
+          attemptId: handle.attemptId,
+          token: handle.token,
+          stepBeadId: stepBeadId,
+        );
         return;
       } on Object {
         // This attempt dropped — decide whether the retry is still owed.
@@ -973,6 +1069,19 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
       // Best-effort: an unreachable/already-stopped group never breaks release.
     }
     await writer.update(stepBeadId, metadata: kClearedLeaseKeys);
+    // §2.3's `attempt.lease.released` row — after the clearing write landed.
+    // The step bead id drops the recorder's cached attempt for this lease:
+    // the breadcrumb now names nothing, so the NEXT spawn here succeeds no
+    // one. A spawn that finds a breadcrumb still standing is the genuinely
+    // different case, and that is the one the succession reports.
+    if (handle.attemptId.isNotEmpty) {
+      recorder?.leaseReleased(
+        attemptId: handle.attemptId,
+        token: handle.token,
+        stepBeadId: stepBeadId,
+        disposition: LeaseDisposition.released,
+      );
+    }
   }
 }
 

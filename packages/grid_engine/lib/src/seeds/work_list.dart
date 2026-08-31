@@ -18,6 +18,7 @@ import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/substation_config.dart';
 import '../kernel/station_services.dart';
+import '../kernel/trajectory_scope.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import '../sdk/capability.dart';
 import 'work_bead.dart';
@@ -98,6 +99,11 @@ class _WorkListState extends State<WorkList>
   final Set<String> _trustRefusedReported = <String>{};
   final Map<String, String> _mountEligibilityRefusals = <String, String>{};
 
+  /// The Stage-1 derivation layer (stage1-wiring §2), resolved off the ambient
+  /// scope on each build. Absent it is a counting no-op.
+  StationTrajectoryRecorder _recorder =
+      TrajectoryRecorderScope.disabled.recorder;
+
   void _scheduleGateSweep(
     StationServices stationServices,
     ServiceBundle? services, {
@@ -109,6 +115,10 @@ class _WorkListState extends State<WorkList>
   }) {
     final latch = '$sessionId:${cause.wireValue}';
     if (!_gateSweepsScheduled.add(latch)) return;
+    // Captured at SCHEDULE time: the microtask below outlives this build, and
+    // reaching back into the tree from it is exactly the async-gap mistake the
+    // captured-field discipline (D-H rule 1) exists to prevent.
+    final recorder = _recorder;
     scheduleMicrotask(() async {
       try {
         await stationServices.writer.closeOpenGatesForTerminal(
@@ -117,6 +127,23 @@ class _WorkListState extends State<WorkList>
           disposition: disposition,
           terminalWorkBead: terminalWorkBead,
         );
+        // §2.3's `attempt.terminal(settled)` row, at the OBSERVED of
+        // `settleSessionForTerminalWork`'s two callers (r2 major 6's
+        // outcome-bearing-caller rule). ONLY the `live` disposition settles:
+        // that is the arm where the sweep routes through the settlement
+        // because the WORK bead went terminal under a still-open session.
+        // Every other disposition sweeps gates over an already-terminal
+        // session and settles nothing, so a record there would shadow a write
+        // that never happened.
+        if (disposition == GateSweepSessionDisposition.live &&
+            terminalWorkBead != null) {
+          recorder.sessionSettled(
+            sessionId: sessionId,
+            workBeadId: terminalWorkBead.id,
+            workTerminalReason:
+                StationBeadWriter.workTerminalReasonWorkBeadClosed,
+          );
+        }
       } on Object catch (error) {
         services?.transport?.flare('gate.autoCloseFailed', {
           'sessionId': sessionId,
@@ -241,6 +268,11 @@ class _WorkListState extends State<WorkList>
     // config-axis dependency (never notifies once mounted), not the snapshot
     // pipeline — derailment-invariant 1 stays about the JOINED SNAPSHOT axis.
     final services = context.watch<ServiceBundle>();
+    // The Stage-1 derivation layer, resolved with the effect verb (see
+    // `trajectoryRecorderOf`): station-lifetime, so there is nothing here to
+    // rebuild on. Re-read every build rather than cached at mount, the same
+    // discipline as every other reference above.
+    _recorder = trajectoryRecorderOf(context);
     // The concurrency governor's ambient station default/ceiling (tg-42f) —
     // a config-axis lookup exactly like `ServiceBundle` above: a stable,
     // fixed-at-mount value that never notifies, so this new dependency stays

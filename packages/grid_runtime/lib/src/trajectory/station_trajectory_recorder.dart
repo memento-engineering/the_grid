@@ -176,6 +176,23 @@ class StationTrajectoryRecorder {
   /// session id → last minted `attempt.note` ordinal (service-minted, §2.3).
   final Map<String, int> _noteOrdinals = <String, int>{};
 
+  /// step bead id → the attempt id its `grid.lease.*` breadcrumb currently
+  /// names — the boot-local view of the durable carrier (§2.1). Seeded by
+  /// every observed breadcrumb (acquire, and [leaseObserved]'s read-only
+  /// seam), dropped when the breadcrumb is cleared (release, and a sweep that
+  /// killed rather than left the group). It exists for ONE derivation: the
+  /// spawn-under-existing-breadcrumb succession below.
+  final Map<String, String> _leaseAttemptByStep = <String, String>{};
+
+  /// attempt id → the attempt it succeeded (§2.3's *incarnation succession*
+  /// row). Written when a fresh spawn's acquire overwrites a breadcrumb that
+  /// still named a PRIOR attempt — the outgoing attempt is the successor's
+  /// `predecessor_attempt_id`. Read back by the `attempt.process.started`
+  /// derivation through [predecessorAttemptIdOf]; a warm cache of a fact the
+  /// log also carries (the last attempt row per session+step path), never the
+  /// only copy.
+  final Map<String, String> _predecessorByAttempt = <String, String>{};
+
   int _derived = 0;
   int _skipped = 0;
   int _deriveFailures = 0;
@@ -200,6 +217,29 @@ class StationTrajectoryRecorder {
   void seedRound(String sessionId, int round) {
     _rounds[sessionId] = round;
   }
+
+  /// Seeds [_leaseAttemptByStep] from a breadcrumb the engine READ but did not
+  /// write — the adopt probe and the boot sweep's projection (§2.1: identity
+  /// is recovered from the breadcrumb, never invented). Appends nothing: a
+  /// read is not a transition. A blank [attemptId] (a pre-Stage-1 breadcrumb,
+  /// or the cleared sentinel) forgets the step instead of recording an empty
+  /// predecessor.
+  void leaseObserved({required String stepBeadId, required String attemptId}) {
+    if (attemptId.isEmpty) {
+      _leaseAttemptByStep.remove(stepBeadId);
+      return;
+    }
+    _leaseAttemptByStep[stepBeadId] = attemptId;
+  }
+
+  /// The attempt [attemptId] succeeded, when a spawn-under-existing-breadcrumb
+  /// transition observed one (§2.3's incarnation-succession row) — the
+  /// `predecessor_attempt_id` the `attempt.process.started` derivation stamps.
+  /// Null means no succession was observed in this process: the caller falls
+  /// back to the log's last attempt row for the session+step path, which is
+  /// the authority (this map is a warm cache of it).
+  String? predecessorAttemptIdOf(String attemptId) =>
+      _predecessorByAttempt[attemptId];
 
   // ── legacy-string normalization (§2.2 work_bead_id row) ──────────────────
 
@@ -518,9 +558,17 @@ class StationTrajectoryRecorder {
   /// breadcrumb now CARRIES the attempt id (§2.1) — the record reads it,
   /// never invents it, and the [token] rides beside it through the window
   /// (`GRID_INSTANCE_TOKEN` retirement is a cut change).
+  ///
+  /// [stepBeadId] is the lease ADDRESS, and supplying it is what makes the
+  /// spawn-under-existing-breadcrumb SUCCESSION observable (§2.3's
+  /// incarnation-succession row): this write overwrites whatever the step's
+  /// breadcrumb named, so a prior attempt standing there is the incoming
+  /// attempt's predecessor. Omitting it costs the succession, never the
+  /// record.
   void leaseAcquired({
     required String attemptId,
     required String token,
+    String? stepBeadId,
     DateTime? occurredAt,
   }) {
     _lease(
@@ -529,13 +577,26 @@ class StationTrajectoryRecorder {
       phase: LeasePhase.acquired,
       token: token,
       occurredAt: occurredAt,
+      before: () {
+        if (stepBeadId == null) return;
+        final prior = _leaseAttemptByStep[stepBeadId];
+        // A re-persist of the SAME attempt (the retry loop) is not a
+        // succession — only an attempt displacing a DIFFERENT one is.
+        if (prior != null && prior.isNotEmpty && prior != attemptId) {
+          _predecessorByAttempt[attemptId] = prior;
+        }
+        if (attemptId.isNotEmpty) _leaseAttemptByStep[stepBeadId] = attemptId;
+      },
     );
   }
 
   /// `attempt.lease.released` — after the release clears the breadcrumb.
+  /// [stepBeadId] drops the step's cached attempt: a cleared breadcrumb names
+  /// nothing, so the next spawn there succeeds no one.
   void leaseReleased({
     required String attemptId,
     required String token,
+    String? stepBeadId,
     LeaseDisposition? disposition,
     String? terminateResult,
     String? clearFailure,
@@ -550,13 +611,23 @@ class StationTrajectoryRecorder {
       terminateResult: terminateResult,
       clearFailure: clearFailure,
       occurredAt: occurredAt,
+      before: () {
+        if (stepBeadId != null) _leaseAttemptByStep.remove(stepBeadId);
+      },
     );
   }
 
   /// `attempt.lease.swept` — after the boot sweep's per-lease disposition.
+  ///
+  /// The sweep's dispositions differ in what they leave on the bead, and the
+  /// cache follows the BEAD: a killed lease had its breadcrumb cleared (the
+  /// step forgets its attempt), while [LeaseDisposition.leftAdoptable] and
+  /// [LeaseDisposition.refusedUnsafe] deliberately LEAVE it standing — so a
+  /// later spawn over either one is a real succession.
   void leaseSwept({
     required String attemptId,
     required String token,
+    String? stepBeadId,
     LeaseDisposition? disposition,
     String? terminateResult,
     String? clearFailure,
@@ -571,6 +642,18 @@ class StationTrajectoryRecorder {
       terminateResult: terminateResult,
       clearFailure: clearFailure,
       occurredAt: occurredAt,
+      before: () {
+        if (stepBeadId == null) return;
+        // A DROPPED clear (clearFailure) means the breadcrumb is still there,
+        // whatever the kill did — follow the bead, not the intent.
+        final cleared =
+            disposition == LeaseDisposition.killed && clearFailure == null;
+        if (cleared) {
+          _leaseAttemptByStep.remove(stepBeadId);
+        } else if (attemptId.isNotEmpty) {
+          _leaseAttemptByStep[stepBeadId] = attemptId;
+        }
+      },
     );
   }
 
@@ -654,6 +737,197 @@ class StationTrajectoryRecorder {
         occurredAt: occurredAt,
       );
     });
+  }
+
+  // ── step family builders (§2.3's four `step.transition` rows) ────────────
+  //
+  // Every one of these is INTENT-named rather than state-parameterized, and
+  // that is a boundary decision, not a style one: `StepState` exists in BOTH
+  // `grid_engine` (the cursor's) and `grid_trajectory` (the record's). A
+  // state-taking API would force the engine's persist sites to name the
+  // record vocabulary, which means a third inbound edge to the leaf package
+  // and a colliding import at every call site. Naming the transitions instead
+  // keeps the record vocabulary entirely on this side of the seam — the same
+  // reason the whole recorder exists (§2's "the ONLY code that names concrete
+  // record classes").
+
+  /// `step.transition(running)` — after `_persistStarted`'s step-bead write.
+  /// Non-terminal: it carries the kick instant and nothing else.
+  void stepRunning({
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+    String? attemptId,
+    DateTime? startedAt,
+    DateTime? occurredAt,
+  }) {
+    _step(
+      site: 'stepRunning',
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+      attemptId: attemptId,
+      state: StepState.running,
+      startedAt: startedAt,
+      occurredAt: occurredAt,
+    );
+  }
+
+  /// `step.transition(ready)` — a daemon's positive terminal that does NOT
+  /// latch (OQ-5); [result] is the rendezvous payload written in the same
+  /// legacy update.
+  void stepReady({
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+    String? attemptId,
+    DateTime? startedAt,
+    DateTime? readyAt,
+    Map<String, String>? result,
+    DateTime? occurredAt,
+  }) {
+    _step(
+      site: 'stepReady',
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+      attemptId: attemptId,
+      state: StepState.ready,
+      startedAt: startedAt,
+      readyAt: readyAt,
+      result: result,
+      occurredAt: occurredAt,
+    );
+  }
+
+  /// `step.transition(complete)` — the clean completion; the grade/pr_url the
+  /// legacy write merged atomically ride the record's `result` (§2.3: "result
+  /// keys on complete ride the payload").
+  void stepComplete({
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+    String? attemptId,
+    DateTime? startedAt,
+    DateTime? completedAt,
+    Map<String, String>? result,
+    DateTime? occurredAt,
+  }) {
+    _step(
+      site: 'stepComplete',
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+      attemptId: attemptId,
+      state: StepState.complete,
+      startedAt: startedAt,
+      completedAt: completedAt,
+      result: result,
+      occurredAt: occurredAt,
+    );
+  }
+
+  /// `step.transition(failed)` — the D-5 supervised-restart write, whose
+  /// [incarnation] is the BUMPED persisted `restartCount`: that bump is the
+  /// durable succession signal (§2.3's incarnation-succession row), so the
+  /// log carries it without any event to key on.
+  ///
+  /// [storeUnavailable] splits the tg-7ux CONFLATION the legacy bead cannot
+  /// express: a step whose own work failed and a step whose failure write was
+  /// a dropped PERSIST both land as `state=failed` on the bead, and only the
+  /// caller knows which. `failure_class` is where they separate.
+  void stepFailed({
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+    required bool storeUnavailable,
+    String? attemptId,
+    String? failureReason,
+    int? restartBudget,
+    DateTime? startedAt,
+    DateTime? cooldownUntil,
+    DateTime? occurredAt,
+  }) {
+    _step(
+      site: 'stepFailed',
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+      attemptId: attemptId,
+      state: StepState.failed,
+      startedAt: startedAt,
+      cooldownUntil: cooldownUntil,
+      restartBudget: restartBudget,
+      failureReason: failureReason,
+      failureClass: storeUnavailable
+          ? StepFailureClass.storeUnavailable
+          : StepFailureClass.work,
+      occurredAt: occurredAt,
+    );
+  }
+
+  /// `step.transition(gated)` — the STEP half of the park (§2.3): the gate
+  /// BEAD's mint stays wholly legacy at Stage 1, so nothing here appends a
+  /// `gate.opened`. Fired by the one shared escalation persist, which is why
+  /// the route-declined park and its derived twin produce the same record.
+  void stepGated({
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+    String? attemptId,
+    String? reason,
+    DateTime? startedAt,
+    DateTime? occurredAt,
+  }) {
+    _step(
+      site: 'stepGated',
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+      attemptId: attemptId,
+      state: StepState.gated,
+      startedAt: startedAt,
+      cause: StepCause.route,
+      failureReason: reason,
+      occurredAt: occurredAt,
+    );
+  }
+
+  /// `step.transition(pending, cause=gate_cleared)` — the re-arm (§2.3's last
+  /// row). [fromStepRound] is the supersedes-chain depth OBSERVED at the
+  /// re-arm; the record carries `fromStepRound + 1`, because a gate-cleared
+  /// re-arm is exactly what bumps `step_round`. That bump is the record which
+  /// kills the I-14 stale-join loop at the cut; during the shadow window it
+  /// only shadows the legacy `gated → pending` flip.
+  void stepRearmed({
+    required String sessionId,
+    required String stepPath,
+    required int fromStepRound,
+    required int incarnation,
+    String? attemptId,
+    DateTime? occurredAt,
+  }) {
+    _step(
+      site: 'stepRearmed',
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: fromStepRound + 1,
+      incarnation: incarnation,
+      attemptId: attemptId,
+      state: StepState.pending,
+      cause: StepCause.gateCleared,
+      occurredAt: occurredAt,
+    );
   }
 
   // ── worktree builders (§2.3 worktree rows) ───────────────────────────────
@@ -848,8 +1122,13 @@ class StationTrajectoryRecorder {
     String? terminateResult,
     String? clearFailure,
     DateTime? occurredAt,
+    void Function()? before,
   }) {
     _observe(site, () {
+      // The breadcrumb-cache bookkeeping rides INSIDE the guarded derivation:
+      // it is the same warm cache the record is built from, so a throw counts
+      // and flares here exactly like any other derivation failure.
+      before?.call();
       _enqueue(
         AttemptLeaseTransition(
           attemptId: attemptId,
@@ -858,6 +1137,52 @@ class StationTrajectoryRecorder {
           disposition: disposition,
           terminateResult: terminateResult,
           clearFailure: clearFailure,
+        ),
+        occurredAt: occurredAt,
+      );
+    });
+  }
+
+  void _step({
+    required String site,
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+    required StepState state,
+    String? attemptId,
+    StepCause? cause,
+    DateTime? startedAt,
+    DateTime? readyAt,
+    DateTime? completedAt,
+    DateTime? cooldownUntil,
+    int? restartBudget,
+    String? failureReason,
+    StepFailureClass? failureClass,
+    Map<String, String>? result,
+    DateTime? occurredAt,
+  }) {
+    _observe(site, () {
+      _enqueue(
+        StepTransition(
+          sessionId: sessionId,
+          // The round ladder is the recorder's (§2.2) — a step transition
+          // observes it, never advances it; only round-retired bumps.
+          round: _rounds[sessionId] ?? 0,
+          stepPath: stepPath,
+          stepRound: stepRound,
+          incarnation: incarnation,
+          attemptId: attemptId == null || attemptId.isEmpty ? null : attemptId,
+          state: state,
+          cause: cause,
+          startedAt: startedAt,
+          readyAt: readyAt,
+          completedAt: completedAt,
+          cooldownUntil: cooldownUntil,
+          restartBudget: restartBudget,
+          failureReason: failureReason,
+          failureClass: failureClass,
+          result: result,
         ),
         occurredAt: occurredAt,
       );

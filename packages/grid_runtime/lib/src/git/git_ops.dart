@@ -389,6 +389,20 @@ class GitOps {
     return _run(rootRepo, <String>['worktree', 'add', path, branch]);
   }
 
+  /// The resolved commit [workDir]'s HEAD points at — the BASE SHA the
+  /// trajectory's `worktree.provisioned` record carries (stage1-wiring §2.2's
+  /// `commit_sha` row; `ck_provision` promotes it to a required envelope
+  /// column). Read from the freshly-added worktree, so it names the commit
+  /// that worktree actually starts on whether its branch was minted off the
+  /// root's mainline or adopted at its own tip. Null on any probe error —
+  /// [GitRunner] never throws, and no caller fails a provision over telemetry.
+  Future<String?> headSha(String workDir) async {
+    final r = await _run(workDir, const <String>['rev-parse', 'HEAD']);
+    if (!r.ok) return null;
+    final sha = r.output.trim();
+    return sha.isEmpty ? null : sha;
+  }
+
   /// Force-deletes a LOCAL branch, run from [rootRepo] once its worktree is
   /// gone. `-D` (not `-d`): the three-gate reap that calls this already proved
   /// the branch carries no commits unreachable from a remote, so a merge-check

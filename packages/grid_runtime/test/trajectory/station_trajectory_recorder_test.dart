@@ -680,6 +680,272 @@ void main() {
     });
   });
 
+  group('the step.transition family (W5 — §2.3\'s four step rows)', () {
+    test('running carries the kick instant and no terminal fields', () {
+      recorder.stepRunning(
+        sessionId: 'tranquility-s1',
+        stepPath: 'tg-9xk2/build',
+        stepRound: 0,
+        incarnation: 0,
+        attemptId: 'A' * 26,
+        startedAt: clockNow,
+      );
+      final record = single().record as StepTransition;
+      expect(record.state, StepState.running);
+      expect(record.startedAt, clockNow);
+      expect(record.completedAt, isNull);
+      expect(record.failureClass, isNull);
+      expect(record.attemptId, 'A' * 26);
+    });
+
+    test('complete carries the result keys the legacy write merged', () {
+      recorder.stepComplete(
+        sessionId: 'tranquility-s1',
+        stepPath: 'tg-9xk2/verify',
+        stepRound: 1,
+        incarnation: 2,
+        completedAt: clockNow,
+        result: const {'grid.result.grade': 'A'},
+      );
+      final record = single().record as StepTransition;
+      expect(record.state, StepState.complete);
+      expect(record.stepRound, 1);
+      expect(record.incarnation, 2);
+      expect(record.result, {'grid.result.grade': 'A'});
+    });
+
+    test(
+      'failed splits the tg-7ux conflation: work vs store_unavailable',
+      () {
+        recorder.stepFailed(
+          sessionId: 's1',
+          stepPath: 'tg-1/build',
+          stepRound: 0,
+          incarnation: 1,
+          storeUnavailable: false,
+          failureReason: 'the agent exited 1',
+          restartBudget: 2,
+        );
+        recorder.stepFailed(
+          sessionId: 's1',
+          stepPath: 'tg-1/build',
+          stepRound: 0,
+          incarnation: 2,
+          storeUnavailable: true,
+          failureReason: 'persist "complete" failed: bd timeout',
+          restartBudget: 1,
+        );
+        final classes = sink.captured
+            .map((c) => expectSchemaClean(c).record as StepTransition)
+            .map((r) => r.failureClass)
+            .toList();
+        expect(classes, [
+          StepFailureClass.work,
+          StepFailureClass.storeUnavailable,
+        ]);
+      },
+    );
+
+    test('the failed record names the BUMPED incarnation (succession)', () {
+      // The persisted restartCount the D-5 write just bumped IS the durable
+      // succession signal — the successor mounts at incarnation+1.
+      recorder.stepFailed(
+        sessionId: 's1',
+        stepPath: 'tg-1/build',
+        stepRound: 0,
+        incarnation: 3,
+        storeUnavailable: false,
+      );
+      expect((single().record as StepTransition).incarnation, 3);
+    });
+
+    test('gated is the STEP half only — no gate record is ever built', () {
+      recorder.stepGated(
+        sessionId: 's1',
+        stepPath: 'tg-1/route',
+        stepRound: 0,
+        incarnation: 0,
+        reason: 'needs a human',
+      );
+      final record = single().record as StepTransition;
+      expect(record.state, StepState.gated);
+      expect(record.cause, StepCause.route);
+      expect(record.failureReason, 'needs a human');
+      // G1 carries no gate family at Stage 1.
+      expect(sink.captured.map((c) => c.record.recordType), ['step.transition']);
+    });
+
+    test('rearm bumps step_round and names cause=gate_cleared', () {
+      recorder.stepRearmed(
+        sessionId: 's1',
+        stepPath: 'tg-1/route',
+        fromStepRound: 2,
+        incarnation: 0,
+      );
+      final record = single().record as StepTransition;
+      expect(record.state, StepState.pending);
+      expect(record.cause, StepCause.gateCleared);
+      expect(record.stepRound, 3, reason: 'the gate-cleared rearm bumps it');
+    });
+
+    test('a step transition OBSERVES the round ladder, never advances it', () {
+      recorder.sessionMinted(
+        sessionId: 's1',
+        workBeadId: 'tg-1#r4',
+        rig: 'r',
+        model: 'm',
+      );
+      sink.captured.clear();
+      recorder.stepRunning(
+        sessionId: 's1',
+        stepPath: 'tg-1/build',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      expect((single().record as StepTransition).round, 4);
+      sink.captured.clear();
+      recorder.stepComplete(
+        sessionId: 's1',
+        stepPath: 'tg-1/build',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      expect((single().record as StepTransition).round, 4);
+    });
+  });
+
+  group('incarnation succession (§2.3 — never the dead Respawned event)', () {
+    final first = 'A' * 26;
+    final second = 'B' * 26;
+
+    test('a spawn OVER a standing breadcrumb names its predecessor', () {
+      recorder.leaseAcquired(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'tranquility-step-1',
+      );
+      recorder.leaseAcquired(
+        attemptId: second,
+        token: 't2',
+        stepBeadId: 'tranquility-step-1',
+      );
+      expect(recorder.predecessorAttemptIdOf(second), first);
+      expect(recorder.predecessorAttemptIdOf(first), isNull);
+    });
+
+    test('a RELEASED lease clears the breadcrumb — no succession after', () {
+      recorder.leaseAcquired(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'tranquility-step-1',
+      );
+      recorder.leaseReleased(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'tranquility-step-1',
+        disposition: LeaseDisposition.released,
+      );
+      recorder.leaseAcquired(
+        attemptId: second,
+        token: 't2',
+        stepBeadId: 'tranquility-step-1',
+      );
+      expect(recorder.predecessorAttemptIdOf(second), isNull);
+    });
+
+    test('a KILLED sweep clears it; a LEFT one does not', () {
+      recorder.leaseObserved(
+        stepBeadId: 'killed-step',
+        attemptId: first,
+      );
+      recorder.leaseSwept(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'killed-step',
+        disposition: LeaseDisposition.killed,
+        terminateResult: 'exitedOnTerm',
+      );
+      recorder.leaseAcquired(
+        attemptId: second,
+        token: 't2',
+        stepBeadId: 'killed-step',
+      );
+      expect(recorder.predecessorAttemptIdOf(second), isNull);
+
+      recorder.leaseObserved(stepBeadId: 'left-step', attemptId: first);
+      recorder.leaseSwept(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'left-step',
+        disposition: LeaseDisposition.leftAdoptable,
+      );
+      recorder.leaseAcquired(
+        attemptId: second,
+        token: 't2',
+        stepBeadId: 'left-step',
+      );
+      expect(recorder.predecessorAttemptIdOf(second), first);
+    });
+
+    test('a kill whose CLEAR was dropped leaves the breadcrumb standing', () {
+      recorder.leaseObserved(stepBeadId: 'step-1', attemptId: first);
+      recorder.leaseSwept(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'step-1',
+        disposition: LeaseDisposition.killed,
+        terminateResult: 'killed',
+        clearFailure: 'bd timeout',
+      );
+      recorder.leaseAcquired(
+        attemptId: second,
+        token: 't2',
+        stepBeadId: 'step-1',
+      );
+      expect(
+        recorder.predecessorAttemptIdOf(second),
+        first,
+        reason: 'the cache follows the BEAD, not the kill\'s intent',
+      );
+    });
+
+    test('a re-persist of the SAME attempt is not a succession', () {
+      recorder.leaseAcquired(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'step-1',
+      );
+      recorder.leaseAcquired(
+        attemptId: first,
+        token: 't1',
+        stepBeadId: 'step-1',
+      );
+      expect(recorder.predecessorAttemptIdOf(first), isNull);
+    });
+
+    test('leaseObserved seeds from a READ and appends nothing', () {
+      recorder.leaseObserved(stepBeadId: 'step-1', attemptId: first);
+      expect(sink.captured, isEmpty);
+      recorder.leaseAcquired(
+        attemptId: second,
+        token: 't2',
+        stepBeadId: 'step-1',
+      );
+      expect(recorder.predecessorAttemptIdOf(second), first);
+    });
+
+    test('a pre-Stage-1 breadcrumb (blank id) forgets rather than chains', () {
+      recorder.leaseObserved(stepBeadId: 'step-1', attemptId: first);
+      recorder.leaseObserved(stepBeadId: 'step-1', attemptId: '');
+      recorder.leaseAcquired(
+        attemptId: second,
+        token: 't2',
+        stepBeadId: 'step-1',
+      );
+      expect(recorder.predecessorAttemptIdOf(second), isNull);
+    });
+  });
+
   group('failure posture (§3) — the trajectory can degrade; work cannot', () {
     test('a non-accepting sink short-circuits to a count', () {
       sink.accepting = false;

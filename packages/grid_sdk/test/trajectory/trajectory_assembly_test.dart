@@ -115,4 +115,45 @@ void main() {
     expect(db.closed, isTrue,
         reason: 'shutdown() settled the harness (connection closed)');
   });
+
+  group('W4/W5 — the recorder reaches every observation site (§1.1)', () {
+    test(
+      'ONE recorder is threaded ambient AND into the off-tree collaborators',
+      () async {
+        final work = await assemble();
+        addTearDown(work.shutdown);
+        final recorder = work.trajectory.recorder;
+
+        // The ambient value the in-tree sites (SessionScope, CapabilityHost,
+        // WorkList) resolve — provided by `StationWork`, so it must be the
+        // harness's own recorder and not a second one.
+        expect(work.wiring.trajectory, isNotNull);
+        expect(identical(work.wiring.trajectory!.recorder, recorder), isTrue);
+
+        // Sole appender by THREADING (§1.1): a second recorder would mean a
+        // second view of the round ladder, the mount sequences, and the lease
+        // succession cache — identity is the invariant, not "a recorder is
+        // present".
+        expect(
+          identical(work.trajectory.recorder, recorder),
+          isTrue,
+          reason: 'the harness vends ONE recorder, memoized',
+        );
+      },
+    );
+
+    test('a DISABLED harness still vends a counting no-op recorder', () async {
+      // §1.1: no call site ever branches on "is the trajectory up", so the
+      // recorder must exist even when the trajectory does not. Dry-run forces
+      // disabled, which is exactly that posture.
+      final work = await assemble();
+      addTearDown(work.shutdown);
+      expect(work.trajectory.mode, TrajectoryHarnessMode.disabled);
+      final recorder = work.trajectory.recorder;
+      recorder.sessionCompleted(sessionId: 's1', workBeadId: 'proj-1');
+      expect(recorder.stats.skipped, 1);
+      expect(recorder.stats.derived, 0);
+      expect(work.trajectory.status.appended, 0);
+    });
+  });
 }

@@ -422,11 +422,19 @@ Future<GateOutcome> _probeLeasedWorkSignal(
 /// this seam: its kill gate is the caller-bound [LeaseGroupLiveness] the
 /// reconciler binds to its own real controller, so leaving adoption unarmed
 /// never blinds the sweep.
-StationProcessLeaseVendor defaultProcessLeaseVendor(StationServices services) =>
-    StationProcessLeaseVendor(
-      writer: services.writer,
-      spawn: stationProcessSpawner,
-      dispatch: stationProcessDispatcher,
-      metadataOf: services.writer.metadataOf,
-      liveness: services.liveness ?? neverLive,
-    );
+///
+/// [recorder] is the Stage-1 derivation layer (stage1-wiring §2.3's lease
+/// rows), threaded in by the assembly that owns the harness. Absent — the
+/// kernel-root provision, `StationWork`'s null-wiring fallback, every offline
+/// fixture — the vendor observes into a counting no-op.
+StationProcessLeaseVendor defaultProcessLeaseVendor(
+  StationServices services, {
+  StationTrajectoryRecorder? recorder,
+}) => StationProcessLeaseVendor(
+  writer: services.writer,
+  spawn: stationProcessSpawner,
+  dispatch: stationProcessDispatcher,
+  metadataOf: services.writer.metadataOf,
+  liveness: services.liveness ?? neverLive,
+  recorder: recorder,
+);

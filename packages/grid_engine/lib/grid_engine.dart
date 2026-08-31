@@ -115,6 +115,12 @@ export 'src/domain/mount_eligibility.dart';
 // workspace/branch layout) live on the SubstationScope's ServiceBundle, not here.
 export 'src/kernel/station_services.dart';
 
+// Stage 1 (tg-zfek) — the ONE new ambient value (stage1-wiring §1.1): the
+// harness's derivation layer, handed to the in-tree observation sites. The
+// composer mounts it beside the other work-axis values; nothing branches on
+// its absence, because absent is the counting no-op.
+export 'src/kernel/trajectory_scope.dart';
+
 // The OPINIONS (agent/verify/land + the `code` circuit + the git
 // `SourceControl`) live in the `grid_assets` package, NEVER in the engine
 // (ADR-0007 §1: the opinion-free kernel — a structural fence keeps them out).
