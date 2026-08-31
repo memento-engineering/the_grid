@@ -101,6 +101,15 @@ const String kTickReapedBackfillBasis = 'tick-reaped-backfill';
 /// an `unknown` terminal healed from a process/worktree probe.
 const String kTickUnknownSettlementBasis = 'tick-unknown-settlement';
 
+/// The FIFO bound on every warm cache the recorder keeps (§2.1's
+/// recoverability rule makes eviction safe: every entry is recoverable from
+/// the breadcrumbs plus the log, so evicting one costs at worst a marked
+/// re-mint or a skipped succession — never durable state). Epoch-truncate by
+/// insertion order: Dart maps and sets iterate oldest-first, so dropping
+/// `keys.first` retires the coldest entries. Sized generously against the
+/// station's real storm (a handful of concurrent sessions).
+const int kRecorderCacheBound = 1024;
+
 /// The mount-attempt bead's durable counter key — wire-identical to
 /// grid_engine's `MountAttemptKeys.count`, duplicated because grid_runtime
 /// cannot import grid_engine (the same split the molecule join keys live
@@ -188,10 +197,41 @@ class StationTrajectoryRecorder {
   /// from the log's last session-scoped attempt row after a bounce).
   final Map<String, String> _sessionAttempts = <String, String>{};
 
-  /// ORIGINAL work bead id → the same session-scope attempt id — the join
-  /// `worktree.provisioned` uses, since `provisionWorktree` has only the work
-  /// bead in hand (§2.2 worktree row).
+  /// ORIGINAL work bead id → the same session-scope attempt id (stamped at
+  /// session mint). A LAST-RESORT join only: `worktree.provisioned` prefers
+  /// [_provisionAttempts] (the SPAWN's attempt, seeded by the spawner right
+  /// before it provisions — §2.2 worktree row), because P6's provisional row
+  /// is keyed by attempt_id and must be corrected in place by the `.started`
+  /// that follows, which carries the spawn's id, never the session-scope one.
   final Map<String, String> _workBeadAttempts = <String, String>{};
+
+  /// ORIGINAL work bead id → the attempt id of the spawn CURRENTLY
+  /// provisioning that bead's worktree — seeded by [provisioningAttempt] (the
+  /// spawner, synchronously before `provisionWorkspace` runs) and read by
+  /// [worktreeProvisioned]. This is what makes the provisioned record carry
+  /// the SAME attempt_id the spawn's `attempt.process.started` will carry, so
+  /// P6's provisional row is corrected in place rather than orphaned beside a
+  /// second row. A warm cache of the mount's env export
+  /// (`GRID_ATTEMPT_ID`), which the acquire persists to the breadcrumb —
+  /// recoverable, never invented (§2.1).
+  final Map<String, String> _provisionAttempts = <String, String>{};
+
+  /// attempt id → the spawn-time correlation facts the runtime-event
+  /// subscriber cannot read off a `SessionStarted` event (incarnation = the
+  /// persisted restartCount; step path/round at the mount). Seeded by
+  /// [attemptSpawning] (the CapabilityHost, before it kicks the allocation);
+  /// read by [processStarted]. A warm cache of persisted step-bead state
+  /// (§2.1) — losing it degrades the record's incarnation to 0, never loses
+  /// identity.
+  final Map<
+    String,
+    ({String sessionId, String stepPath, int stepRound, int incarnation})
+  >
+  _attemptSpawns =
+      <
+        String,
+        ({String sessionId, String stepPath, int stepRound, int incarnation})
+      >{};
 
   /// session id → current round: seeded by parsing the `#rN` shape at first
   /// sight, bumped ONLY by the round-retired observation (§2.2).
@@ -232,6 +272,21 @@ class StationTrajectoryRecorder {
     deriveFailures: _deriveFailures,
   );
 
+  /// Whether the sink currently accepts records. Exposed for ONE purpose: a
+  /// call site may skip a COSTLY evidence probe (a git subprocess, a stat
+  /// storm) whose only consumer is a record that would be skipped anyway.
+  /// Never use it to branch legacy behavior — the "no call site ever branches
+  /// on 'is the trajectory up'" rule (§1.1) is about the legacy path, and this
+  /// getter must never reach one.
+  bool get accepting => _sink.accepting;
+
+  /// FIFO epoch-truncate for a warm cache (see [kRecorderCacheBound]).
+  static void _cap<K, V>(Map<K, V> cache) {
+    while (cache.length > kRecorderCacheBound) {
+      cache.remove(cache.keys.first);
+    }
+  }
+
   // ── boot-time cache seeding (§2.1) ───────────────────────────────────────
 
   /// Re-seeds the session-scope attempt id for [sessionId] — called by boot
@@ -240,11 +295,54 @@ class StationTrajectoryRecorder {
   /// must itself be recoverable.
   void seedSessionAttempt(String sessionId, String attemptId) {
     _sessionAttempts[sessionId] = attemptId;
+    _cap(_sessionAttempts);
   }
 
   /// Re-seeds the round counter for [sessionId] from the log after a bounce.
   void seedRound(String sessionId, int round) {
     _rounds[sessionId] = round;
+    _cap(_rounds);
+  }
+
+  /// Seeds the spawn-info cache for the mount that is about to spawn
+  /// [attemptId] — called by the host BEFORE it kicks the allocation, with the
+  /// correlation facts only the mount has in hand (§2.2): the persisted
+  /// `restartCount` as [incarnation], and the step path/round. Appends
+  /// nothing: a seed is not a transition. The runtime-event subscriber's
+  /// `attempt.process.started` derivation reads these back through
+  /// [processStarted], because a `SessionStarted` event carries none of them.
+  void attemptSpawning({
+    required String attemptId,
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+  }) {
+    if (attemptId.isEmpty) return;
+    _attemptSpawns[attemptId] = (
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+    );
+    _cap(_attemptSpawns);
+  }
+
+  /// Seeds the provision join for [workBeadId] with the SPAWN's [attemptId] —
+  /// called by the spawner synchronously before `provisionWorkspace` runs, so
+  /// the `worktree.provisioned` observation inside `provisionWorktree` (which
+  /// has only the work bead in hand) resolves the SAME attempt the spawn's
+  /// `.started` will carry, and P6's provisional row is corrected in place
+  /// (fidelity B2). Appends nothing. The live call order guarantees the id
+  /// exists here: `CapabilityHost.initState` mints it, the allocation env
+  /// exports it, and the spawner reads it off that env BEFORE provisioning.
+  void provisioningAttempt({
+    required String workBeadId,
+    required String attemptId,
+  }) {
+    if (attemptId.isEmpty) return;
+    _provisionAttempts[parseLegacyWorkKey(workBeadId).workBeadId] = attemptId;
+    _cap(_provisionAttempts);
   }
 
   /// Seeds [_leaseAttemptByStep] from a breadcrumb the engine READ but did not
@@ -259,6 +357,7 @@ class StationTrajectoryRecorder {
       return;
     }
     _leaseAttemptByStep[stepBeadId] = attemptId;
+    _cap(_leaseAttemptByStep);
   }
 
   /// The attempt [attemptId] succeeded, when a spawn-under-existing-breadcrumb
@@ -308,8 +407,11 @@ class StationTrajectoryRecorder {
     _observe('sessionMinted', () {
       final parsed = parseLegacyWorkKey(workBeadId);
       _rounds.putIfAbsent(sessionId, () => parsed.round ?? 0);
+      _cap(_rounds);
       final attemptId = _sessionAttempts[sessionId] ??= _mintUlid();
+      _cap(_sessionAttempts);
       _workBeadAttempts[parsed.workBeadId] = attemptId;
+      _cap(_workBeadAttempts);
       // A successful mint CONSUMES the mount sequence (§2.2): the next mint
       // sequence for this work bead gets a fresh ULID.
       final mountAttemptId =
@@ -338,14 +440,21 @@ class StationTrajectoryRecorder {
 
   /// `attempt.process.started` — from the `SessionStarted` runtime event; the
   /// attempt id is the event's breadcrumb-backed field (§2.1), and
-  /// [predecessorAttemptId] is the outgoing breadcrumb's id on a succession,
-  /// recovered by the caller from breadcrumb/log — not from memory alone.
+  /// [predecessorAttemptId] is the outgoing breadcrumb's id on a succession —
+  /// omitted, it falls back to [predecessorAttemptIdOf]'s warm cache of the
+  /// spawn-under-existing-breadcrumb observation.
+  ///
+  /// [incarnation]/[stepPath]/[stepRound], when omitted, resolve from the
+  /// spawn-info cache [attemptSpawning] seeded at the mount — the event
+  /// carries none of them. A cache miss (a spawner outside the engine's
+  /// allocation path) degrades incarnation to 0: a restart ladder only the
+  /// engine's supervised-restart writer climbs, so an unseeded spawn has none.
   void processStarted({
     required String attemptId,
     required String sessionId,
-    required int incarnation,
     required int pid,
     required int pgid,
+    int? incarnation,
     String? predecessorAttemptId,
     String? stepPath,
     int? stepRound,
@@ -354,19 +463,21 @@ class StationTrajectoryRecorder {
     DateTime? occurredAt,
   }) {
     _observe('processStarted', () {
+      final seeded = _attemptSpawns[attemptId];
       _enqueue(
         AttemptProcessStarted(
           attemptId: attemptId,
           sessionId: sessionId,
-          incarnation: incarnation,
+          incarnation: incarnation ?? seeded?.incarnation ?? 0,
           round: _rounds[sessionId],
-          stepPath: stepPath,
-          stepRound: stepRound,
+          stepPath: stepPath ?? seeded?.stepPath,
+          stepRound: stepRound ?? seeded?.stepRound,
           worktree: worktree,
           branch: branch,
           pid: pid,
           pgid: pgid,
-          predecessorAttemptId: predecessorAttemptId,
+          predecessorAttemptId:
+              predecessorAttemptId ?? predecessorAttemptIdOf(attemptId),
         ),
         occurredAt: occurredAt,
       );
@@ -561,6 +672,7 @@ class StationTrajectoryRecorder {
         parsed.workBeadId,
         _mintUlid,
       );
+      _cap(_mountSequences);
       if (phase == MintPhase.exhausted || phase == MintPhase.abandoned) {
         _mountSequences.remove(parsed.workBeadId);
       }
@@ -613,8 +725,12 @@ class StationTrajectoryRecorder {
         // succession — only an attempt displacing a DIFFERENT one is.
         if (prior != null && prior.isNotEmpty && prior != attemptId) {
           _predecessorByAttempt[attemptId] = prior;
+          _cap(_predecessorByAttempt);
         }
-        if (attemptId.isNotEmpty) _leaseAttemptByStep[stepBeadId] = attemptId;
+        if (attemptId.isNotEmpty) {
+          _leaseAttemptByStep[stepBeadId] = attemptId;
+          _cap(_leaseAttemptByStep);
+        }
       },
     );
   }
@@ -681,6 +797,7 @@ class StationTrajectoryRecorder {
           _leaseAttemptByStep.remove(stepBeadId);
         } else if (attemptId.isNotEmpty) {
           _leaseAttemptByStep[stepBeadId] = attemptId;
+          _cap(_leaseAttemptByStep);
         }
       },
     );
@@ -961,8 +1078,14 @@ class StationTrajectoryRecorder {
   /// so the site cannot under-fill the record.
   ///
   /// The site has only the WORK bead in hand, so the attempt id joins through
-  /// the recorder's work-bead cache (stamped at session mint); an explicit
-  /// [attemptId] or [sessionId] wins when the caller has one.
+  /// the SPAWN's provision seed ([provisioningAttempt], stamped by the spawner
+  /// right before it provisions — the id `attempt.process.started` will also
+  /// carry, so P6's provisional row is corrected in place, fidelity B2); an
+  /// explicit [attemptId] or [sessionId] wins when the caller has one, and the
+  /// session-scope work-bead cache is the last recoverable resort. Only when
+  /// EVERY join fails (a provision outside the engine's spawn path) does the
+  /// recorder mint — and then it SAYS SO with an `attempt_id_basis` payload
+  /// marker, never silently (§2.1's recoverability rule).
   void worktreeProvisioned({
     required String workBeadId,
     required String worktree,
@@ -975,10 +1098,20 @@ class StationTrajectoryRecorder {
   }) {
     _observe('worktreeProvisioned', () {
       final parsed = parseLegacyWorkKey(workBeadId);
-      final resolved =
+      var resolved =
           attemptId ??
+          _provisionAttempts[parsed.workBeadId] ??
           (sessionId == null ? null : _sessionAttempts[sessionId]) ??
-          (_workBeadAttempts[parsed.workBeadId] ??= _mintUlid());
+          _workBeadAttempts[parsed.workBeadId];
+      String? basis;
+      if (resolved == null) {
+        resolved = _mintUlid();
+        basis = kRecorderMintedAttemptBasis;
+        // Cache the marked mint so a repeat provision of the same bead does
+        // not birth a second phantom P6 row.
+        _provisionAttempts[parsed.workBeadId] = resolved;
+        _cap(_provisionAttempts);
+      }
       _enqueue(
         WorktreeProvisioned(
           attemptId: resolved,
@@ -987,6 +1120,7 @@ class StationTrajectoryRecorder {
           branch: branch,
           baseSha: baseSha,
           adoptedExisting: adoptedExisting,
+          attemptIdBasis: basis,
         ),
         occurredAt: occurredAt,
       );
@@ -1099,6 +1233,7 @@ class StationTrajectoryRecorder {
   }) {
     final ordinal = (_noteOrdinals[sessionId] ?? 0) + 1;
     _noteOrdinals[sessionId] = ordinal;
+    _cap(_noteOrdinals);
     return DerivedRecord(
       AttemptNote(
         sessionId: sessionId,
@@ -1223,6 +1358,7 @@ class StationTrajectoryRecorder {
       // refuse — such rows are outside the shadow's comparable set (§2.1).
       resolved = _mintUlid();
       _sessionAttempts[sessionId] = resolved;
+      _cap(_sessionAttempts);
       attemptIdBasis = mintedAttemptBasis;
     }
     final seat = parsed == null ? null : _seatOf(parsed.workBeadId);

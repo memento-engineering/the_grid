@@ -171,6 +171,7 @@ export 'src/trajectory/station_trajectory_recorder.dart'
         kObligationStuckChannel,
         kPreStage3GrantBasis,
         kReconcilerMintedAttemptBasis,
+        kRecorderCacheBound,
         kRecorderMintedAttemptBasis,
         kTickReapedBackfillBasis,
         kTickUnknownSettlementBasis,

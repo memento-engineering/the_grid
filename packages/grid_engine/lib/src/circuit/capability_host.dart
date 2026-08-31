@@ -46,11 +46,12 @@ import '../kernel/trajectory_scope.dart';
 import '../molecule/inherited_circuit.dart' show InheritedCircuit;
 import '../molecule/molecule_codec.dart' show stepBeadMetadata;
 import '../molecule/process_lease_vendor.dart'
-    show ProcessLeaseRequest, requireProcessLeaseVendor;
+    show ProcessHandle, ProcessLeaseRequest, requireProcessLeaseVendor;
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
 import '../sdk/cursor.dart';
+import '../sdk/lease.dart' show LeaseAllocation;
 import '../sdk/route.dart';
 import 'capability_registry.dart';
 
@@ -95,6 +96,10 @@ class CapabilityHost extends StatefulSeed with GridDiagnosticable {
 /// the design names cannot drift into two different records. The GATE BEAD's
 /// mint below stays wholly legacy: `gate.opened` is a P4 record and appends
 /// nothing at Stage 1.
+///
+/// [stepRound]/[incarnation] are REQUIRED (no silent-0 default): every caller
+/// provably has both in hand, and a defaulted 0 on the field the design says
+/// kills the I-14 stale-join loop would compile clean and record wrong.
 Future<void> persistRaisedEscalation({
   required StationServices station,
   required ServiceBundle services,
@@ -104,9 +109,9 @@ Future<void> persistRaisedEscalation({
   required bool Function() isActive,
   required Future<void> Function(String reason) failToSupervision,
   required void Function(String name, Map<String, String> data) emitFlare,
+  required int stepRound,
+  required int incarnation,
   StationTrajectoryRecorder? recorder,
-  int stepRound = 0,
-  int incarnation = 0,
   String? attemptId,
 }) async {
   if (!isActive()) return;
@@ -292,6 +297,18 @@ class CapabilityHostState extends State<CapabilityHost>
       // the kick (off-build, injected clock) — the terminal write derives
       // `durationMs` from it. Set once, before the async kick.
       _startedAt = _now();
+      // Seed the recorder's spawn-info cache BEFORE the kick (stage1-wiring
+      // §2.2): the runtime-event subscriber derives `attempt.process.started`
+      // from a `SessionStarted` event that carries none of these correlation
+      // facts, and this mount is the only site that has them all in hand.
+      // Appends nothing; a no-op under the disabled recorder.
+      _recorder.attemptSpawning(
+        attemptId: _attemptId,
+        sessionId: _sessionId,
+        stepPath: _nodePath,
+        stepRound: _stepRound,
+        incarnation: seed.mount.node.restartCount,
+      );
       // FIRST call: mint the Allocation HERE (synchronously, before the async
       // kick) so `dispose → allocation.dispose` (teardown) is guaranteed on
       // EVERY exit path — even a dispose that races the kick before it spawns
@@ -420,6 +437,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// daemon `ready` does not latch).
   void _onReport(AllocationReport report) {
     if (_cancelled || !context.mounted) return;
+    _reconcileAdoptedAttempt();
     switch (report) {
       case AllocationStarted():
         // The report's pid/pgid are NOT persisted here: process identity is
@@ -459,6 +477,30 @@ class CapabilityHostState extends State<CapabilityHost>
         _completed = true;
         _firePersist('rewind', () => _persistRewindReport(stepIds, reason));
     }
+  }
+
+  /// The adopt-continues rule, enforced (stage1-wiring §2.1: "Adoption
+  /// CONTINUES the attempt… no fresh mint on adopt"). Every mount mints an
+  /// attempt in [initState] — it has to, before the allocation has decided
+  /// spawn-vs-adopt — but an ADOPTING lease reattaches a survivor whose
+  /// breadcrumb already names its attempt, and every record this host stamps
+  /// must carry THAT id, never the discarded mint. The recovered id rides the
+  /// same `adoptable` parse the adopt decision itself rode
+  /// (`leaseBreadcrumbOf` → `LeaseAllocation.handle`), so no identity is
+  /// invented here. A pre-Stage-1 breadcrumb names no attempt (empty) — the
+  /// mount's mint stands, which is exactly the tolerant-parse posture §2.1
+  /// specifies for adoption.
+  ///
+  /// Runs at every report entry (idempotent, latching on first difference):
+  /// the adopt decision lands inside the fire-and-forget `startOrAdopt`, and
+  /// the first report a host handles is always after `_adopted`/`_bind` were
+  /// set synchronously before the adopt path's `AllocationReady` sink.
+  void _reconcileAdoptedAttempt() {
+    final alloc = _allocation;
+    if (alloc is! LeaseAllocation<ProcessHandle> || !alloc.adopted) return;
+    final adopted = alloc.handle?.attemptId ?? '';
+    if (adopted.isEmpty || adopted == _attemptId) return;
+    _attemptId = adopted;
   }
 
   /// Fires a persist path that must NEVER take the station down (bead `tg-7ux`).
@@ -537,7 +579,10 @@ class CapabilityHostState extends State<CapabilityHost>
       // The ONE site that knows this `failed` is a dropped STORE WRITE rather
       // than failed work — the tg-7ux conflation the record's `failure_class`
       // splits (§2.3).
-      await _persistFailure('persist "$op" failed: $error', true);
+      await _persistFailureClassed(
+        'persist "$op" failed: $error',
+        storeUnavailable: true,
+      );
     } on Object catch (e) {
       _emitFlare('step.persistRecoveryFailed', {
         'op': op,
@@ -718,10 +763,21 @@ class CapabilityHostState extends State<CapabilityHost>
   /// [reason] is the `AllocationFailed.reason` — persisted capture-only (FT-1)
   /// as the truncated `failureReason`, merged into the SAME write; an empty
   /// reason (e.g. a bare process death carrying no diagnostic) omits the key.
-  Future<void> _persistFailure([
-    String reason = '',
+  ///
+  /// [storeUnavailable] is NAMED (the codebase names its flags — `terminal:`,
+  /// `restartCount:`, `inferred:`): the positional shape read as nothing at
+  /// its one true call site. The optional-positional [reason] survives so the
+  /// `Future<void> Function(String)` tear-off at [_persistEscalate] still
+  /// satisfies its seam.
+  Future<void> _persistFailure([String reason = '']) =>
+      _persistFailureClassed(reason);
+
+  /// [_persistFailure]'s full-signature body — the one site that knows a
+  /// `failed` is a dropped STORE WRITE passes `storeUnavailable: true`.
+  Future<void> _persistFailureClassed(
+    String reason, {
     bool storeUnavailable = false,
-  ]) async {
+  }) async {
     if (_cancelled || !context.mounted) return;
     final next = seed.mount.node.restartCount + 1;
     final exhausted = next >= seed.mount.maxRestarts;

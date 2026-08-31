@@ -181,6 +181,33 @@ void main() {
         expect(Directory(wt.path).existsSync(), isTrue);
       },
     );
+
+    test('a non-accepting recorder SKIPS the base-sha probe — no extra git '
+        'subprocess when the observation would be skipped anyway', () async {
+      final seeded = await seedOriginAndClone();
+      final calls = <List<String>>[];
+      final svc = StationGitService(
+        runner: _RecordingGitRunner(runner, calls),
+        prOpener: _FakePrOpener(),
+        // The default recorder: StationTrajectoryRecorder.disabled().
+      );
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      calls.clear();
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-4');
+      expect(Directory(wt.path).existsSync(), isTrue, reason: 'unchanged');
+      expect(
+        calls.where((args) => args.join(' ') == 'rev-parse HEAD'),
+        isEmpty,
+        reason:
+            'the rev-parse\'s ONLY consumer is the record; a dry station, '
+            'an unprovisioned home, and every provisioning test pay nothing',
+      );
+      // The positive control lives above: the recording service DOES probe
+      // (the fresh-mint test reads commit_sha off the record).
+    });
   });
 
   test(
@@ -719,4 +746,22 @@ final class _ThrowingSink implements TrajectoryRecordSink {
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => throw StateError('sink refused');
+}
+
+/// Delegates to the real runner while logging every argv — how the suite
+/// proves a probe was (or was not) issued.
+final class _RecordingGitRunner implements GitRunner {
+  _RecordingGitRunner(this._inner, this.calls);
+
+  final GitRunner _inner;
+  final List<List<String>> calls;
+
+  @override
+  Future<GitRunResult> run({
+    required String workingDirectory,
+    required List<String> args,
+  }) {
+    calls.add(List<String>.unmodifiable(args));
+    return _inner.run(workingDirectory: workingDirectory, args: args);
+  }
 }

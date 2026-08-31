@@ -374,15 +374,23 @@ class StationGitService {
     // probe cannot throw (`GitRunner` returns a failure result) and the
     // recorder swallows its own derivation failures — so a provision never
     // fails, and never fails DIFFERENTLY, for the trajectory's sake.
-    final baseSha = await _ops.headSha(path);
-    if (baseSha != null) {
-      _recorder.worktreeProvisioned(
-        workBeadId: beadId,
-        worktree: path,
-        branch: branch,
-        baseSha: baseSha,
-        adoptedExisting: preexisting,
-      );
+    //
+    // Gated on `accepting`: the rev-parse is a real git subprocess whose ONLY
+    // consumer is the record, so a disabled/latched recorder skips the probe
+    // too — a dry station, an unprovisioned home, and every provisioning test
+    // pay nothing. This gates the EVIDENCE PROBE, never the legacy provision
+    // above (§1.1's no-branching rule is about the legacy path).
+    if (_recorder.accepting) {
+      final baseSha = await _ops.headSha(path);
+      if (baseSha != null) {
+        _recorder.worktreeProvisioned(
+          workBeadId: beadId,
+          worktree: path,
+          branch: branch,
+          baseSha: baseSha,
+          adoptedExisting: preexisting,
+        );
+      }
     }
     return BeadWorktree(beadId: beadId, path: path, branch: branch);
   }

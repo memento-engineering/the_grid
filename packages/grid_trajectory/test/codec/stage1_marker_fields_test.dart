@@ -126,4 +126,32 @@ void main() {
       expect(typed.payloadToJson(), record.payloadToJson());
     });
   });
+
+  group('worktree.provisioned markers (adjudicated: the marked mint)', () {
+    test('unset attempt_id_basis keeps the v1 payload shape exactly', () {
+      const record = WorktreeProvisioned(
+        attemptId: '01J8ATTEMPT000000000000001',
+        worktree: '/wt/tg-1',
+        branch: 'grid/tg-1',
+        baseSha: 'f5baf0e0f5baf0e0f5baf0e0f5baf0e0f5baf0e0',
+        adoptedExisting: false,
+      );
+      expect(record.payloadToJson(), {'adopted_existing': false});
+    });
+
+    test('a recorder-minted provision round-trips its basis marker', () {
+      const record = WorktreeProvisioned(
+        attemptId: '01J8ATTEMPT000000000000001',
+        worktree: '/wt/tg-1',
+        branch: 'grid/tg-1',
+        baseSha: 'f5baf0e0f5baf0e0f5baf0e0f5baf0e0f5baf0e0',
+        adoptedExisting: true,
+        attemptIdBasis: 'recorder-minted',
+      );
+      final typed =
+          TrajectoryCodec.decode(_envelope(record)) as WorktreeProvisioned;
+      expect(typed.attemptIdBasis, 'recorder-minted');
+      expect(typed.payloadToJson(), record.payloadToJson());
+    });
+  });
 }

@@ -178,8 +178,12 @@ class _EscalatingRoute extends RouteCapability {
       const Escalate('needs a human');
 }
 
-StepMount _mount({int restartCount = 0, int circuitRound = 0}) => StepMount(
-  step: const CapabilityStep(stepId: 'agent', capabilityId: 'agent'),
+StepMount _mount({
+  int restartCount = 0,
+  int circuitRound = 0,
+  StepKind kind = StepKind.job,
+}) => StepMount(
+  step: CapabilityStep(stepId: 'agent', capabilityId: 'agent', kind: kind),
   nodePath: 'tg-1/agent',
   circuit: _circuit,
   circuitPath: 'tg-1',
@@ -224,6 +228,7 @@ class _DroppingUpdateRunner implements BdRunner {
   required TrajectoryRecordSink sink,
   StepMount? mount,
   int failUpdates = 0,
+  ProcessLeaseVendor Function(Fakes fakes)? vendor,
 }) {
   var fakes = buildFakes();
   if (failUpdates > 0) {
@@ -247,6 +252,18 @@ class _DroppingUpdateRunner implements BdRunner {
   }
   final owner = TreeOwner();
   final stepMount = mount ?? _mount();
+  Seed inner = InheritedSeed<InheritedCircuit>(
+    value: InheritedCircuit(
+      root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
+      beadIdByNodePath: {stepMount.nodePath: _stepBeadId},
+      cursor: const {},
+    ),
+    child: CapabilityHost(capability: cap, mount: stepMount),
+  );
+  final leaseVendor = vendor?.call(fakes);
+  if (leaseVendor != null) {
+    inner = InheritedSeed<ProcessLeaseVendor>(value: leaseVendor, child: inner);
+  }
   owner.mountRoot(
     InheritedSeed<StationServices>(
       value: fakes.ctx,
@@ -258,14 +275,7 @@ class _DroppingUpdateRunner implements BdRunner {
             value: const ServiceBundle(),
             child: InheritedSeed<Workspace>(
               value: testWorkspace('tg-1'),
-              child: InheritedSeed<InheritedCircuit>(
-                value: InheritedCircuit(
-                  root: BeadPathKey(const ['tg-1', 'tgdog-s', _stepBeadId]),
-                  beadIdByNodePath: {stepMount.nodePath: _stepBeadId},
-                  cursor: const {},
-                ),
-                child: CapabilityHost(capability: cap, mount: stepMount),
-              ),
+              child: inner,
             ),
           ),
         ),
@@ -312,6 +322,7 @@ TreeOwner _mountFull({
   required StationServices ctx,
   required TrajectoryRecordSink sink,
   ServiceBundle services = const ServiceBundle(),
+  StationTrajectoryRecorder? recorder,
 }) {
   final owner = TreeOwner();
   owner.mountRoot(
@@ -323,7 +334,7 @@ TreeOwner _mountFull({
           child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(circuits: const {}),
             child: InheritedSeed<TrajectoryRecorderScope>(
-              value: TrajectoryRecorderScope(_recorderOver(sink)),
+              value: TrajectoryRecorderScope(recorder ?? _recorderOver(sink)),
               child: InheritedSeed<SessionResolver>(
                 value: CircuitResolver((_) => _codeCircuit),
                 child: Station([
@@ -979,5 +990,183 @@ void main() {
         expect(sink.provenances.last, TrajectoryProvenance.observed);
       },
     );
+  });
+
+  group('adjudicated fixes (2026-08-31)', () {
+    test(
+      'ADOPT CONTINUES the attempt (§2.1): an adopted daemon\'s step records '
+      'carry the breadcrumb\'s attempt id — the mount\'s fresh mint is '
+      'discarded, and incarnation continuity holds',
+      () async {
+        final sink = _CapturingSink();
+        final h = _host(
+          const _NullProcessCap(),
+          sink: sink,
+          // Incarnation 2 persisted: the survivor keeps its restart ladder.
+          mount: _mount(kind: StepKind.daemon, restartCount: 2),
+          vendor: (fakes) => StationProcessLeaseVendor(
+            writer: fakes.ctx.writer,
+            spawn: (request, context, args) async =>
+                throw StateError('an ADOPTING mount must never spawn'),
+            dispatch: (handle, request, context, args) async =>
+                throw StateError('adopt never dispatches'),
+            // The breadcrumb the prior boot's spawn persisted — the SAME
+            // parse the adopt decision rides (`adoptable` →
+            // `leaseBreadcrumbOf`).
+            metadataOf: (_) async => {
+              MoleculeStepKeys.state: 'ready',
+              LeaseKeys.pgid: '77',
+              LeaseKeys.pid: '77',
+              LeaseKeys.token: 'tok',
+              LeaseKeys.attemptId: _attemptB,
+            },
+            liveness: (_) => true,
+            recorder: _recorderOver(sink),
+          ),
+        );
+        addTearDown(h.owner.dispose);
+        await _pump();
+
+        // The adopt decision was recorded off the breadcrumb...
+        final proved = sink.fact('attempt.adopt.proved');
+        expect(proved['outcome'], 'adopted');
+        expect(proved['attempt_id'], _attemptB);
+        // ...and every step record the ADOPTED mount stamps carries the SAME
+        // continued attempt — never the phantom the mount minted in
+        // initState (which named nothing that ever appended).
+        final step = sink.fact('step.transition');
+        expect(step['state'], 'ready');
+        expect(
+          step['attempt_id'],
+          _attemptB,
+          reason: 'no fresh mint on adopt — §2.1\'s binding rule',
+        );
+        // Incarnation continuity: the persisted restartCount, unchanged.
+        expect(step['incarnation'], 2);
+        // Nothing spawned and nothing failed: the throwing spawn/dispatch
+        // seams were never reached.
+        expect(
+          sink.facts('step.transition').map((s) => s['state']),
+          isNot(contains('failed')),
+        );
+      },
+    );
+
+    test('a VOID retire derives old_round from recoverable state (§2.1), never '
+        'a bare 0 default', () async {
+      final sink = _CapturingSink();
+      final fakes = buildFakes();
+      final recorder = _recorderOver(sink);
+      // The recoverable state: this boot observed the dead session's round
+      // (the recorder\'s round ladder — seeded at mint, or by boot
+      // recovery from the log).
+      recorder.seedRound('tgdog-dead', 2);
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [bead('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            // Closed mid-flight, no marker, empty cursor — a DEAD KEY.
+            'tg-1': const SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-dead',
+              isTerminal: true,
+            ),
+          },
+        ),
+      );
+      final owner = _mountFull(
+        joined: joined,
+        ctx: fakes.ctx,
+        sink: sink,
+        recorder: recorder,
+      );
+      addTearDown(owner.dispose);
+      await _pumpUntil(
+        owner,
+        () => sink.facts('attempt.round.retired').isNotEmpty,
+      );
+
+      final retired = sink.fact('attempt.round.retired');
+      expect(retired['cause'], 'void');
+      expect(
+        retired['old_round'],
+        2,
+        reason: 'the round the recorder recovered, not a silent 0',
+      );
+      expect(retired['new_round'], 3);
+      // The dead key's terminal rode the same site, intact keys.
+      final lost = sink.facts('attempt.terminal').single;
+      expect(lost['outcome'], 'lost');
+      expect(lost['work_bead_id'], 'tg-1');
+    });
+
+    test('per-evaluation mint refusals DEDUPE per bead per window — a publish '
+        'storm cannot overflow the queue (§2.5\'s amended note)', () async {
+      final originalGrace = SessionScopeState.freshMintSnapshotGrace;
+      addTearDown(() {
+        SessionScopeState.freshMintSnapshotGrace = originalGrace;
+      });
+      SessionScopeState.freshMintSnapshotGrace = Duration.zero;
+      final sink = _CapturingSink();
+      final fakes = buildFakes();
+      fakes.runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-s',
+          issueType: GridIssueTypes.session,
+          metadata: {'rig': 'tgdog', SessionBeadKeys.workBead: 'tg-1'},
+        ),
+      ];
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [bead('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1': const SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-s',
+            ),
+          },
+        ),
+      );
+      final owner = _mountFull(joined: joined, ctx: fakes.ctx, sink: sink);
+      addTearDown(owner.dispose);
+
+      // The operator re-keys the round; the fresh mint then waits at the
+      // fresh-snapshot barrier because the bead LEFT the ready frontier.
+      JoinedSnapshot refusedSnapshot() => _joined(
+        beads: [bead('tg-1')],
+        ready: const {},
+        sessions: {
+          'tg-1#r1': const SessionProjection(
+            workBeadId: 'tg-1#r1',
+            sessionId: 'tgdog-s',
+          ),
+        },
+      );
+      joined.push(refusedSnapshot());
+      owner.flush();
+      await _pumpUntil(
+        owner,
+        () => sink
+            .facts('attempt.mint.outcome')
+            .any((f) => f['phase'] == 'refused'),
+      );
+      // A publish storm: repeated identical evaluations inside the window.
+      for (var i = 0; i < 5; i++) {
+        joined.push(refusedSnapshot());
+        owner.flush();
+        await _pump();
+      }
+      expect(
+        sink
+            .facts('attempt.mint.outcome')
+            .where((f) => f['phase'] == 'refused'),
+        hasLength(1),
+        reason:
+            'identical-reason refusals inside the 30 s window dedupe; the '
+            'noisiest record class can no longer race the queue bound',
+      );
+    });
   });
 }

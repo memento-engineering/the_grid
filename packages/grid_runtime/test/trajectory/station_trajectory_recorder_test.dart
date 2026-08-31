@@ -522,6 +522,70 @@ void main() {
       expect(record.worktree, '/wt/tg-1');
     });
 
+    test('processStarted fills incarnation/stepPath/stepRound from the '
+        'spawn-info seed (the SessionStarted event carries none of them) and '
+        'the predecessor from the succession cache', () {
+      recorder.attemptSpawning(
+        attemptId: 'A' * 26,
+        sessionId: 's1',
+        stepPath: 'tg-1/agent',
+        stepRound: 3,
+        incarnation: 2,
+      );
+      // The succession the acquire observed: A displaced B on the same bead.
+      recorder.leaseObserved(stepBeadId: 'step-1', attemptId: 'B' * 26);
+      recorder.leaseAcquired(
+        attemptId: 'A' * 26,
+        token: 'tok',
+        stepBeadId: 'step-1',
+      );
+      recorder.processStarted(
+        attemptId: 'A' * 26,
+        sessionId: 's1',
+        pid: 41,
+        pgid: 42,
+      );
+      final record =
+          expectSchemaClean(sink.captured.last).record as AttemptProcessStarted;
+      expect(record.incarnation, 2);
+      expect(record.stepPath, 'tg-1/agent');
+      expect(record.stepRound, 3);
+      expect(record.predecessorAttemptId, 'B' * 26);
+    });
+
+    test('an UNSEEDED processStarted degrades incarnation to 0 — a spawner '
+        'outside the engine has no restart ladder', () {
+      recorder.processStarted(
+        attemptId: 'C' * 26,
+        sessionId: 's9',
+        pid: 7,
+        pgid: 7,
+      );
+      final record = single().record as AttemptProcessStarted;
+      expect(record.incarnation, 0);
+      expect(record.stepPath, isNull);
+    });
+
+    test('warm caches are FIFO-bounded (kRecorderCacheBound) — an evicted '
+        'round degrades to the recoverable floor, never grows forever', () {
+      recorder.seedRound('s-old', 7);
+      for (var i = 0; i < kRecorderCacheBound; i++) {
+        recorder.seedRound('s-filler-$i', 1);
+      }
+      // 's-old' was evicted (oldest-first): the retire falls back to the
+      // recoverable floor.
+      recorder.roundRetired(sessionId: 's-old', cause: RoundRetireCause.voided);
+      final evicted = sink.captured.removeLast().record as AttemptRoundRetired;
+      expect(evicted.oldRound, 0, reason: 'evicted: the floor answers');
+      // A survivor inside the bound still answers from the cache.
+      recorder.roundRetired(
+        sessionId: 's-filler-0',
+        cause: RoundRetireCause.voided,
+      );
+      final kept = sink.captured.removeLast().record as AttemptRoundRetired;
+      expect(kept.oldRound, 1);
+    });
+
     test('an inferred exit stamps inferred provenance (ck_prov basis)', () {
       recorder.processExited(
         attemptId: 'A' * 26,
@@ -652,6 +716,83 @@ void main() {
       final terminal =
           expectSchemaClean(sink.captured.last).record as AttemptTerminal;
       expect(record.attemptId, terminal.attemptId);
+    });
+
+    test('provision + spawn share ONE attempt id — the spawner seed wins, so '
+        'P6\'s provisional row is corrected in place (fidelity B2)', () {
+      // The engine's live order: the host mints + seeds the session-scope
+      // cache at mint, the SPAWNER seeds the provision join with ITS attempt
+      // right before provisioning, and the started event carries the same id.
+      recorder.sessionMinted(
+        sessionId: 's1',
+        workBeadId: 'tg-1',
+        rig: 'r',
+        model: 'm',
+      );
+      recorder.provisioningAttempt(workBeadId: 'tg-1', attemptId: 'A' * 26);
+      recorder.worktreeProvisioned(
+        workBeadId: 'tg-1',
+        worktree: '/wt/tg-1',
+        branch: 'grid/tg-1',
+        baseSha: 'f5baf0e',
+        adoptedExisting: false,
+      );
+      recorder.processStarted(
+        attemptId: 'A' * 26,
+        sessionId: 's1',
+        pid: 41,
+        pgid: 42,
+      );
+      final provisioned =
+          expectSchemaClean(sink.captured[1]).record as WorktreeProvisioned;
+      final started =
+          expectSchemaClean(sink.captured[2]).record as AttemptProcessStarted;
+      expect(
+        provisioned.attemptId,
+        started.attemptId,
+        reason: 'the provisional P6 row and the .started must share the key',
+      );
+      expect(provisioned.attemptId, 'A' * 26);
+      expect(
+        provisioned.attemptIdBasis,
+        isNull,
+        reason: 'a joined id is never marked as a mint',
+      );
+      // The spawn seed OUTRANKS the session-scope work-bead join: the
+      // session-scope attempt (which the terminal carries) is a DIFFERENT
+      // identity family, and stamping it here would orphan the provisional
+      // row beside the spawn's.
+      recorder.sessionCompleted(sessionId: 's1', workBeadId: 'tg-1');
+      final terminal =
+          expectSchemaClean(sink.captured.last).record as AttemptTerminal;
+      expect(provisioned.attemptId, isNot(terminal.attemptId));
+    });
+
+    test('a provision NO join can resolve mints AND MARKS — never silently '
+        '(§2.1 recoverability)', () {
+      recorder.worktreeProvisioned(
+        workBeadId: 'tg-orphan',
+        worktree: '/wt/tg-orphan',
+        branch: 'grid/tg-orphan',
+        baseSha: 'abc1234',
+        adoptedExisting: false,
+      );
+      final first =
+          expectSchemaClean(sink.captured.single).record as WorktreeProvisioned;
+      expect(first.attemptId, isUlid);
+      expect(first.attemptIdBasis, kRecorderMintedAttemptBasis);
+      // A repeat provision of the same bead reuses the marked mint — one
+      // phantom P6 row at most, never one per provision.
+      recorder.worktreeProvisioned(
+        workBeadId: 'tg-orphan',
+        worktree: '/wt/tg-orphan',
+        branch: 'grid/tg-orphan',
+        baseSha: 'abc1234',
+        adoptedExisting: true,
+      );
+      final second =
+          expectSchemaClean(sink.captured.last).record as WorktreeProvisioned;
+      expect(second.attemptId, first.attemptId);
     });
 
     test('a tick reaped-backfill is inferred (§2.4 obligation 2)', () {

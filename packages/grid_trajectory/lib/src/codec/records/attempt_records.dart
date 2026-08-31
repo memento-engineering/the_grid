@@ -746,6 +746,7 @@ final class WorktreeProvisioned extends AttemptRecord {
     required this.baseSha,
     required this.adoptedExisting,
     this.sessionId,
+    this.attemptIdBasis,
   });
 
   factory WorktreeProvisioned.fromJson(
@@ -758,6 +759,7 @@ final class WorktreeProvisioned extends AttemptRecord {
     branch: _envReq(envelope, 'branch', envelope.branch),
     baseSha: _envReq(envelope, 'commit_sha', envelope.commitSha),
     adoptedExisting: _req<bool>(payload, 'adopted_existing'),
+    attemptIdBasis: _opt<String>(payload, 'attempt_id_basis'),
   );
 
   final String attemptId;
@@ -769,11 +771,22 @@ final class WorktreeProvisioned extends AttemptRecord {
   final String baseSha;
   final bool adoptedExisting;
 
+  /// Stage-1 payload marker (stage1-wiring §2.1, additive under §2.6 rule 1):
+  /// set ONLY when the observation site could not recover the spawn's attempt
+  /// id and the recorder minted one — a name that joins no `.started` and is
+  /// outside the shadow's comparable set. Unset (the wired-engine path, where
+  /// the spawner seeds the provision join) keeps the v1 wire shape
+  /// byte-identical.
+  final String? attemptIdBasis;
+
   @override
   String get recordType => 'worktree.provisioned';
 
   @override
-  Map<String, Object?> payloadToJson() => {'adopted_existing': adoptedExisting};
+  Map<String, Object?> payloadToJson() => {
+    'adopted_existing': adoptedExisting,
+    if (attemptIdBasis != null) 'attempt_id_basis': attemptIdBasis,
+  };
 
   @override
   Map<String, Object?> correlationToJson() => {

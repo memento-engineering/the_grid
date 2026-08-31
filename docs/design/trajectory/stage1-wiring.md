@@ -422,6 +422,25 @@ The design decision "non-fatal" left "non-blocking" open. Closed as follows:
 - **Accounting stays honest un-awaited.** Outcome accounting (`Appended`/`dropped`/
   latches, §3) happens in the writer loop, which is the only appender caller — the
   counters gate the cut criterion and never race the engine.
+- **Refusal-record volume vs. the disqualification rule (build amendment,
+  2026-08-31 — the r2-minor-14 interaction, stated honestly).** The
+  per-evaluation mint-refusal record (§2.3's `attempt.mint.outcome` row) fires
+  from a site that runs on EVERY joined-snapshot publish, so a
+  persistently-refused bead under a publish storm would append the noisiest,
+  least informative record type without bound — racing the very `queueBound`
+  whose overflow disqualifies the round from the §3 clean-round criterion (a
+  self-inflicted path to a permanently unreachable cut). The build therefore
+  dedupes refusal records **per bead per 30 s window** (the tick's own
+  granularity): an identical-reason refusal inside the window is not
+  re-appended; a reason CHANGE records immediately; every fresh mint decision
+  opens a fresh window. Consequence for the shadow-diff: refusal counts in the
+  log are a floor at tick granularity, not a per-evaluation census — refusal
+  *pressure* stays measurable (first refusal, every reason transition, every
+  window boundary) while the disqualification counter can no longer be
+  overflowed by the refusal class itself. The undercount r2 minor 14 was
+  written against was the FLARE latch (one line per whole mint sequence,
+  reason changes invisible); the window keeps both properties that fix wanted
+  without the queue-overflow interaction.
 
 **Latency claims (r2, major 5).** The previous draft extrapolated M3's headroom to the
 P2/P6 fold shapes. Withdrawn: M3 is a *statement-count proxy* over P1-shaped rows
@@ -600,7 +619,14 @@ runbook's one destructive step has a citable artifact:
   **release train is a cut deliverable**: grid package tags (the `grid_runtime` minor
   for the public `RuntimeEvent` field, the `grid_sdk` minor for `assembleStationWork`'s
   parameter, `grid_trajectory` as landed) → `space_station_assets` 0.2.1 → lunar's
-  version bump.
+  version bump. **Ordering constraint (build amendment, 2026-08-31):**
+  `grid_runtime` and `grid_sdk` now carry `grid_trajectory: ^0.1.0` — the SAME
+  hosted-caret-under-`resolution: workspace` form every other in-repo edge
+  uses (`grid_sdk → grid_engine ^0.3.0-rc.7`, `grid_cli → grid_trajectory
+  ^0.1.0` pre-dating this window) — so the cut's tag wave must cut
+  `grid_trajectory-v0.1.0` FIRST, before the `grid_runtime`/`grid_sdk` tags
+  that constrain on it. Inside the window the dev overrides carry it, as they
+  carry everything else.
 - **No operator-surface change on the incumbent.** The state writer's `onFlare` hole
   stays open through the window (§3); closing it is a cut-adjacent bead.
 - **The cut is a separate, operator-ratified change**: quiesced boundary, drain

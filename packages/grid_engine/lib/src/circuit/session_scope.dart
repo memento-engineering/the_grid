@@ -485,6 +485,10 @@ class SessionScopeState extends State<SessionScope>
     final completer = Completer<JoinedSnapshot?>();
     _mintDecisionAt = DateTime.now();
     _mintBlockedReported = false;
+    // A fresh mint decision opens a fresh refusal window: its FIRST refusal
+    // always records, whatever the previous sequence's tail looked like.
+    _lastMintRefusalAt = null;
+    _lastMintRefusalReason = null;
     _mintGraceLapsed = false;
     _mintReadiness = completer;
     _considerMintReadiness();
@@ -580,17 +584,43 @@ class SessionScopeState extends State<SessionScope>
         : <String, dynamic>{kLegacyAttemptCountKey: count};
   }
 
-  /// `attempt.mint.outcome(refused)` — one per REFUSED evaluation of the
-  /// fresh-snapshot barrier (§2.3), deliberately not throttled.
-  void _recordMintRefused(String reason) => _recorder.mintOutcome(
-    workBeadId: seed.bead.id,
-    phase: MintPhase.refused,
-    mintAttempt: _mintAttempts,
-    maxAttempts: _maxMintAttempts,
-    stage: 'fresh-snapshot',
-    reason: reason,
-    mountAttemptMetadata: _mountAttemptMetadata,
-  );
+  /// The per-bead-per-window dedupe on refusal records (§2.5's amended note):
+  /// `_considerMintReadiness` runs on EVERY joined-snapshot publish, so a
+  /// publish storm against a persistently-refused bead would append one
+  /// refusal per publish, indefinitely — the noisiest record type racing the
+  /// 4096-entry queue whose overflow disqualifies the round. An IDENTICAL
+  /// (same-reason) refusal within the window dedupes; a reason CHANGE records
+  /// immediately, and each fresh mint decision resets the window
+  /// ([_awaitFreshReadySnapshot]), so refusal pressure stays countable at the
+  /// tick's own granularity without being per-publish.
+  static const _mintRefusalDedupeWindow = Duration(seconds: 30);
+
+  DateTime? _lastMintRefusalAt;
+  String? _lastMintRefusalReason;
+
+  /// `attempt.mint.outcome(refused)` — per REFUSED evaluation of the
+  /// fresh-snapshot barrier (§2.3), above the flare latch, deduped per bead
+  /// per [_mintRefusalDedupeWindow] (see its doc).
+  void _recordMintRefused(String reason) {
+    final now = DateTime.now();
+    final last = _lastMintRefusalAt;
+    if (last != null &&
+        reason == _lastMintRefusalReason &&
+        now.difference(last) < _mintRefusalDedupeWindow) {
+      return;
+    }
+    _lastMintRefusalAt = now;
+    _lastMintRefusalReason = reason;
+    _recorder.mintOutcome(
+      workBeadId: seed.bead.id,
+      phase: MintPhase.refused,
+      mintAttempt: _mintAttempts,
+      maxAttempts: _maxMintAttempts,
+      stage: 'fresh-snapshot',
+      reason: reason,
+      mountAttemptMetadata: _mountAttemptMetadata,
+    );
+  }
 
   Future<void> _mint() async {
     // Yield so didChangeDependencies captures _ctx (genesis runs initState then
@@ -664,9 +694,20 @@ class SessionScopeState extends State<SessionScope>
             workBeadId: seed.bead.id,
             reason: _voidReason,
           );
+          // The retired round is DERIVED, never a bare 0 default (§2.1's
+          // recoverable-only rule): the dead projection's own work_bead key
+          // carries the `#rN` shape when the void landed on a reworked round
+          // (parsed here), and the recorder's round counter — seeded at the
+          // mint that this boot observed, or by boot recovery — decides
+          // otherwise. Only a session no recoverable state names at all
+          // retires as round 0, which is then the honest answer, not a
+          // fallback that shadows a real round.
           _recorder.roundRetired(
             sessionId: deadId,
             cause: RoundRetireCause.voided,
+            oldRound: StationTrajectoryRecorder.parseLegacyWorkKey(
+              dead.workBeadId,
+            ).round,
           );
           if (_stopAbandonedMint(
             stage: 'void-session-retired',
@@ -1201,13 +1242,15 @@ class SessionScopeState extends State<SessionScope>
   /// re-arm record needs (§2.2): the supersedes-chain depth and the persisted
   /// `restartCount` at THIS node, both of which `build` has in hand and the
   /// off-build write does not. Captured at schedule time, exactly like
-  /// [moleculeTarget].
+  /// [moleculeTarget] — and REQUIRED: a second caller that forgot them would
+  /// compile clean and append `step_round: 0`, the exact silent-0 the field
+  /// exists to kill.
   void _scheduleRearm(
     String id,
     String nodePath, {
+    required int stepRound,
+    required int incarnation,
     String? moleculeTarget,
-    int stepRound = 0,
-    int incarnation = 0,
   }) {
     if (_rearming.contains(nodePath)) return;
     _rearming.add(nodePath);
@@ -1401,8 +1444,8 @@ class SessionScopeState extends State<SessionScope>
     String id,
     String nodePath,
     String? moleculeTarget, {
-    int stepRound = 0,
-    int incarnation = 0,
+    required int stepRound,
+    required int incarnation,
   }) async {
     final ctx = _ctx;
     if (ctx == null) {

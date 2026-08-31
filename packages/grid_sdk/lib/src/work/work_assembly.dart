@@ -551,6 +551,11 @@ Future<StationWorkRuntime> assembleStationWork({
         // 3); the worktree `.grid` mtime scan is the other surface and needs
         // nothing wired — it reads the paths P6 already carries.
         lastActivity: provider.lastActivity,
+        // §1.1's runtime-event subscriber (harness-internal, over
+        // `provider.events`): the observation surface for
+        // `attempt.process.started`/`.exited` (§2.3 rows 2–3). The harness
+        // subscribes only once LIVE, so a dry arm (disabled) never listens.
+        runtimeEvents: provider.events,
       );
   // The harness's ONE derivation layer (stage1-wiring §2), threaded from here
   // to every observation site the design names: ambient over the work subtree

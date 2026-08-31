@@ -67,6 +67,15 @@ final class _FakeAppender extends TrajectoryAppender {
   Object? commitError;
   bool fakeInert = false;
   bool fakeHalted = false;
+
+  /// Every record handed to [append], with its provenance — the subscriber
+  /// tests read derived envelopes off these.
+  final List<TrajectoryRecord> records = [];
+  final List<TrajectoryProvenance> provenances = [];
+
+  /// True wedges [append] forever (a dead socket that neither errors nor
+  /// returns) — the shutdown-timeout test's writer.
+  bool appendNeverCompletes = false;
   int _seq = 0;
 
   @override
@@ -105,6 +114,9 @@ final class _FakeAppender extends TrajectoryAppender {
     int? fencingToken,
   }) async {
     calls.add('append:${record.recordType}');
+    records.add(record);
+    provenances.add(provenance);
+    if (appendNeverCompletes) return Completer<AppendOutcome>().future;
     if (appendOutcomes.isNotEmpty) return appendOutcomes.removeAt(0);
     _seq += 1;
     return Appended(recordId: 'r$_seq', seq: _seq, epochSeq: _seq);
@@ -176,12 +188,14 @@ void main() {
     TrajectoryConfig config = const TrajectoryConfig(
       mode: TrajectoryConfigMode.required,
     ),
+    Stream<RuntimeEvent>? runtimeEvents,
   }) => TrajectoryHarness.build(
     config: config,
     gridHome: tmp.path,
     station: 'tranquility',
     seatPrefixes: const {'tg', 'the_grid', 'tranquility'},
     onFlare: (name, data) => flares.add((name, data)),
+    runtimeEvents: runtimeEvents,
     connect: () async {
       final error = connectError;
       if (error != null) throw error; // ignore: only_throw_errors
@@ -474,10 +488,51 @@ void main() {
         await h.runToFixpoint();
         expect(h.status.dropped, 2);
         expect(h.mode, TrajectoryHarnessMode.live);
-        // The listener resolves again once bd rewrites the port (§4).
+        // The listener resolves again once bd rewrites the port (§4) — after
+        // the debounce window (quality M3), which floors reconnect attempts
+        // at one per [kReconnectDebounce].
+        connectError = null;
+        now = now.add(kReconnectDebounce);
+        h.enqueue(_note(3));
+        await h.runToFixpoint();
+        expect(h.status.appended, 1);
+      },
+    );
+
+    test(
+      'reconnect is DEBOUNCED (quality M3): inside the window no dial is even '
+      'attempted — one resolve+connect per window, never one per record',
+      () async {
+        appender.appendOutcomes.add(
+          AppendInternalError(cause: StateError('socket died')),
+        );
+        final h = await harness();
+        await h.start();
+        h.enqueue(_note(1)); // consumes the internal error → needsReconnect
+        await h.runToFixpoint();
+        connectError = StateError('listener gone');
+        h.enqueue(_note(2)); // the eager attempt: dials, fails
+        await h.runToFixpoint();
+        expect(h.status.dropped, 2);
+        expect(connected, hasLength(1), reason: 'boot dial only');
+        // The server comes BACK immediately — but the window has not lapsed,
+        // so the next append still drops WITHOUT dialing (the whole point:
+        // no per-record resolve+connect storm on the drain).
         connectError = null;
         h.enqueue(_note(3));
         await h.runToFixpoint();
+        expect(h.status.dropped, 3);
+        expect(
+          connected,
+          hasLength(1),
+          reason: 'debounced: no dial inside the window',
+        );
+        expect(h.mode, TrajectoryHarnessMode.live);
+        // The window lapses: the next append dials once and resumes.
+        now = now.add(kReconnectDebounce);
+        h.enqueue(_note(4));
+        await h.runToFixpoint();
+        expect(connected, hasLength(2), reason: 'exactly one reconnect dial');
         expect(h.status.appended, 1);
       },
     );
@@ -544,6 +599,196 @@ void main() {
       await h.shutdown();
       h.enqueue(_note(1));
       expect(h.status.suppressed, 1);
+    });
+
+    test(
+      'a WEDGED writer cannot hang shutdown (quality M2): the drain is '
+      'bounded, the remainder counted + flared, dispose still reached',
+      () async {
+        final h = await harness(
+          config: const TrajectoryConfig(
+            mode: TrajectoryConfigMode.required,
+            shutdownDrainTimeout: Duration(milliseconds: 200),
+          ),
+        );
+        await h.start();
+        // The dead-socket shape the guarantee exists for: an append that
+        // neither returns nor throws.
+        appender.appendNeverCompletes = true;
+        h.enqueue(_note(1));
+        h.enqueue(_note(2));
+        final commitsBefore = appender.calls.where((c) => c == 'commit').length;
+        final watch = Stopwatch()..start();
+        await h.shutdown();
+        watch.stop();
+        expect(
+          watch.elapsed,
+          lessThan(const Duration(seconds: 5)),
+          reason: 'the guarantee covers hangs, not just throws',
+        );
+        expect(flareNames(), contains('trajectory.shutdownDrainTimeout'));
+        expect(flareNames(), contains('trajectory.shutdown'));
+        // The queued remainder is COUNTED as lost — §2.5's crash-loss class,
+        // attributed by the successor boot's shadow-diff.
+        expect(h.status.dropped, greaterThanOrEqualTo(1));
+        // The serial lane is wedged, so shutdown's boundary commit is
+        // SKIPPED rather than spent behind the wedge (the boot tick pass's
+        // own commit predates the wedge and is not this step's).
+        expect(
+          appender.calls.where((c) => c == 'commit').length,
+          commitsBefore,
+        );
+        expect(h.tick!.isArmed, isFalse, reason: 'dispose still reached');
+      },
+    );
+  });
+
+  group('the runtime-event subscriber (§1.1 — fidelity B1)', () {
+    late StreamController<RuntimeEvent> events;
+    setUp(() => events = StreamController<RuntimeEvent>.broadcast());
+    tearDown(() => events.close());
+
+    const attempt = 'AAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const name = 'tranquility-s1/tg-1/agent';
+
+    Future<TrajectoryHarness> live() async {
+      final h = await harness(runtimeEvents: events.stream);
+      await h.start();
+      return h;
+    }
+
+    test('SessionStarted derives attempt.process.started: the event\'s '
+        'breadcrumb-backed attempt id, the name parsed to session/step, the '
+        'mount-seeded correlation facts', () async {
+      final h = await live();
+      h.recorder.attemptSpawning(
+        attemptId: attempt,
+        sessionId: 'tranquility-s1',
+        stepPath: 'tg-1/agent',
+        stepRound: 1,
+        incarnation: 2,
+      );
+      events.add(
+        const RuntimeEvent.sessionStarted(
+          name: name,
+          pid: 41,
+          pgid: 42,
+          attemptId: attempt,
+        ),
+      );
+      await pumpEventQueue();
+      expect(appender.calls, contains('append:attempt.process.started'));
+      final record = appender.records.single as AttemptProcessStarted;
+      expect(record.attemptId, attempt);
+      expect(record.sessionId, 'tranquility-s1');
+      expect(record.stepPath, 'tg-1/agent');
+      expect((record.pid, record.pgid), (41, 42));
+      expect(record.incarnation, 2);
+      expect(record.stepRound, 1);
+    });
+
+    test('Exited(inferred) derives attempt.process.exited with '
+        'provenance=inferred — the §2.3 mapping', () async {
+      final h = await live();
+      events.add(
+        const RuntimeEvent.sessionStarted(
+          name: name,
+          pid: 41,
+          pgid: 42,
+          attemptId: attempt,
+        ),
+      );
+      await pumpEventQueue();
+      events.add(
+        const RuntimeEvent.exited(name: name, exitCode: 0, inferred: true),
+      );
+      await pumpEventQueue();
+      final record = appender.records.last as AttemptProcessExited;
+      expect(record.attemptId, attempt, reason: 'joined by session name');
+      expect(record.exitKind, ExitKind.exited);
+      expect(record.exitCode, 0);
+      expect(record.inferred, isTrue);
+      expect(record.pid, 41);
+      expect(appender.provenances.last, TrajectoryProvenance.inferred);
+      expect(h.status.appended, 2);
+    });
+
+    test('Died derives exitKind=died, observed, with the reason', () async {
+      await live();
+      events.add(
+        const RuntimeEvent.sessionStarted(
+          name: name,
+          pid: 41,
+          pgid: 42,
+          attemptId: attempt,
+        ),
+      );
+      await pumpEventQueue();
+      events.add(const RuntimeEvent.died(name: name, reason: 'watchdog'));
+      await pumpEventQueue();
+      final record = appender.records.last as AttemptProcessExited;
+      expect(record.exitKind, ExitKind.died);
+      expect(record.reason, 'watchdog');
+      expect(record.inferred, isFalse);
+      expect(appender.provenances.last, TrajectoryProvenance.observed);
+    });
+
+    test('an EMPTY attempt id derives nothing — the record reads identity, it '
+        'never invents one (§2.1); and an exit with no observed start derives '
+        'nothing either', () async {
+      await live();
+      events.add(
+        const RuntimeEvent.sessionStarted(name: name, pid: 41, pgid: 42),
+      );
+      events.add(const RuntimeEvent.exited(name: 'other/step', exitCode: 1));
+      await pumpEventQueue();
+      expect(appender.records, isEmpty);
+    });
+
+    test('a failing append never reaches the provider stream, and shutdown '
+        'UNSUBSCRIBES the harness', () async {
+      final h = await live();
+      final seen = <RuntimeEvent>[];
+      final other = events.stream.listen(seen.add);
+      appender.appendOutcomes.add(
+        AppendInternalError(cause: StateError('socket died')),
+      );
+      events.add(
+        const RuntimeEvent.sessionStarted(
+          name: name,
+          pid: 41,
+          pgid: 42,
+          attemptId: attempt,
+        ),
+      );
+      events.add(const RuntimeEvent.exited(name: name, exitCode: 3));
+      // This pump completing WITHOUT an unhandled async error is itself
+      // the non-fatality proof (the test harness fails on any).
+      await pumpEventQueue();
+      expect(seen, hasLength(2), reason: 'the co-listener saw every event');
+      expect(h.mode, TrajectoryHarnessMode.live);
+      await h.shutdown();
+      expect(
+        events.hasListener,
+        isTrue,
+        reason: 'only the harness unsubscribed; the co-listener remains',
+      );
+      await other.cancel();
+      expect(
+        events.hasListener,
+        isFalse,
+        reason: 'the harness\'s subscription died at shutdown',
+      );
+    });
+
+    test('a disabled harness never subscribes at all', () async {
+      final h = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+        runtimeEvents: events.stream,
+      );
+      await h.start();
+      expect(events.hasListener, isFalse);
+      await h.shutdown();
     });
   });
 

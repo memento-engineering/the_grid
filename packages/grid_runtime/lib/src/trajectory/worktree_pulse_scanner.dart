@@ -71,6 +71,16 @@ final class WorktreeScan {
 }
 
 /// Walks each live worktree's `.grid` and reports the newest file mtime.
+///
+/// **Async, deliberately** (quality M4): the scan runs inside the 30 s tick
+/// pass on the station's SINGLE isolate, beside every engine build and every
+/// bd write — a synchronous `listSync(recursive:)`/`statSync` walk stalls all
+/// of them for the whole walk. `Directory.list` + `FileStat.stat` yield to the
+/// event loop at every entry, so the per-entry stall is one syscall, never the
+/// tree; the axis that matters is the isolate stall the scan imposes, not its
+/// wall-clock share of the tick period. The worktree set itself is bounded by
+/// the liveness query's batch (stage1-wiring §2.4's bounded-pass rule), which
+/// bounds one tick pass's scan.
 class WorktreePulseScanner {
   /// The scanner reads ONLY the paths it is handed — they come from P6's
   /// `worktree` column, which the station itself wrote — so it needs no root
@@ -79,7 +89,7 @@ class WorktreePulseScanner {
 
   /// Scans [worktrees] (duplicates collapse) and returns the newest `.grid`
   /// mtime per path.
-  WorktreeScan scan(Iterable<String> worktrees) {
+  Future<WorktreeScan> scan(Iterable<String> worktrees) async {
     final watch = Stopwatch()..start();
     final unique = <String>{...worktrees};
     final beats = <String, DateTime>{};
@@ -87,28 +97,34 @@ class WorktreePulseScanner {
     var entries = 0;
     for (final worktree in unique) {
       final directory = io.Directory(p.join(worktree, kWorktreeStateDirName));
-      final List<io.FileSystemEntity> listing;
+      var sawDir = false;
+      DateTime? newest;
       try {
-        if (!directory.existsSync()) continue;
-        listing = directory.listSync(recursive: true, followLinks: false);
+        await for (final entry in directory.list(
+          recursive: true,
+          followLinks: false,
+        )) {
+          sawDir = true;
+          entries += 1;
+          if (entry is! io.File) continue;
+          final io.FileStat stat;
+          try {
+            stat = await entry.stat();
+          } on io.FileSystemException {
+            continue;
+          }
+          if (stat.type == io.FileSystemEntityType.notFound) continue;
+          final modified = stat.modified;
+          if (newest == null || modified.isAfter(newest)) newest = modified;
+        }
+        // An existing-but-empty `.grid` still counts as scanned.
+        sawDir = sawDir || await directory.exists();
       } on io.FileSystemException {
         // A worktree reaped mid-scan is the ordinary case, not an error: no
         // beat, and the detector's unknown rule takes it from there.
         continue;
       }
-      scanned += 1;
-      DateTime? newest;
-      for (final entry in listing) {
-        entries += 1;
-        if (entry is! io.File) continue;
-        final DateTime modified;
-        try {
-          modified = entry.statSync().modified;
-        } on io.FileSystemException {
-          continue;
-        }
-        if (newest == null || modified.isAfter(newest)) newest = modified;
-      }
+      if (sawDir) scanned += 1;
       if (newest != null) beats[worktree] = newest.toUtc();
     }
     watch.stop();

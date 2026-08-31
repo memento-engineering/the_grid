@@ -97,6 +97,7 @@ List<ObligationQuery> buildStage1ObligationQueries({
   LivenessDetectorObligation(
     recorder: recorder,
     db: db,
+    station: station,
     bootEpoch: bootEpoch,
     lastActivity: lastActivity,
     scanner: scanner,
@@ -279,21 +280,30 @@ final class LivenessDetectorObligation extends ObligationQuery {
   LivenessDetectorObligation({
     required StationTrajectoryRecorder recorder,
     required TrajectoryDb db,
+    required String station,
     required int Function() bootEpoch,
     required DateTime Function() clock,
     this.lastActivity,
     this.scanner = const WorktreePulseScanner(),
     this.threshold = kDefaultLivenessThreshold,
     this.coalesce = kDefaultPulseCoalesce,
+    this.batch = kObligationBatchSize,
   }) : _recorder = recorder,
        _db = db,
+       _station = station,
        _bootEpoch = bootEpoch,
        _clock = clock;
 
   final StationTrajectoryRecorder _recorder;
   final TrajectoryDb _db;
+  final String _station;
   final int Function() _bootEpoch;
   final DateTime Function() _clock;
+
+  /// Rows per pass — the doc-comment invariant at the top of this file, which
+  /// this query previously opted out of silently. Bounding the subject window
+  /// also bounds the pass's worktree scan and per-row pulse round-trips.
+  final int batch;
 
   /// Liveness surface (b). Null leaves the scanner answering alone.
   final LastActivityPoll? lastActivity;
@@ -308,8 +318,13 @@ final class LivenessDetectorObligation extends ObligationQuery {
   /// per boot, and legitimately so: the record's idem key is the observed
   /// crossing (`liveness:<attempt>:<beat µs>:<lost|regained>`), so a restart
   /// that re-emits the same crossing dedupes at the appender rather than
-  /// double-counting a flap.
+  /// double-counting a flap. FIFO-bounded ([_kLostBound]) so a long-lived
+  /// resident cannot accrete it forever: a session's attempts stop appearing
+  /// in the query once it closes, and an evicted entry costs at worst one
+  /// re-emitted crossing the appender dedupes.
   final Set<String> _lost = <String>{};
+
+  static const int _kLostBound = 4096;
 
   /// The last pass's scan cost — the in-budget number an operator (and the W7
   /// measurement test) reads.
@@ -322,10 +337,16 @@ final class LivenessDetectorObligation extends ObligationQuery {
   @override
   String get name => kLivenessDetectorObligation;
 
-  /// Every attempt of an OPEN session whose lease is not released/swept, with
-  /// its CURRENT-EPOCH pulse row if it has one. The epoch predicate is the
-  /// unknown rule in SQL: a beat stamped by a prior epoch does not join, so it
-  /// reads exactly like no beat at all.
+  /// Every attempt of an OPEN session of THIS station whose lease is not
+  /// released/swept, with its CURRENT-EPOCH pulse row if it has one. The epoch
+  /// predicate is the unknown rule in SQL: a beat stamped by a prior epoch
+  /// does not join, so it reads exactly like no beat at all.
+  ///
+  /// Scoped + bounded like its two siblings: `h.rig` is the station name the
+  /// mint stamped (§2.2's rig source is `stateSubstation`), so a head row born
+  /// without a `.started` (rig NULL) drops out — conservative, since with no
+  /// P1 mint the detector could only ever read it `unknown` anyway. `LIMIT` is
+  /// the standing per-pass batch bound.
   @override
   String get sql =>
       'SELECT p.attempt_id AS attempt_id, p.session_id AS session_id, '
@@ -335,18 +356,21 @@ final class LivenessDetectorObligation extends ObligationQuery {
       'JOIN proj_session_head h ON h.session_id = p.session_id '
       'LEFT JOIN traj_pulse u ON u.subject_id = p.attempt_id '
       "AND u.kind = 'attempt' AND u.boot_epoch = :boot_epoch "
-      "WHERE h.status = 'open' "
+      "WHERE h.status = 'open' AND h.rig = :station "
       "AND (p.lease_state IS NULL OR p.lease_state = 'held') "
-      'ORDER BY p.attempt_id';
+      'ORDER BY p.attempt_id LIMIT $batch';
 
   @override
-  Map<String, Object?> get parameters => {'boot_epoch': _bootEpoch()};
+  Map<String, Object?> get parameters => {
+    'boot_epoch': _bootEpoch(),
+    'station': _station,
+  };
 
   @override
   Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
     final now = _clock().toUtc();
     final epoch = _bootEpoch();
-    final scan = scanner.scan([
+    final scan = await scanner.scan([
       for (final row in rows)
         if (row['worktree'] != null) row['worktree']!,
     ]);
@@ -404,6 +428,9 @@ final class LivenessDetectorObligation extends ObligationQuery {
       }
 
       final stale = now.difference(beat) > threshold;
+      while (_lost.length > _kLostBound) {
+        _lost.remove(_lost.first);
+      }
       if (stale && _lost.add(attemptId)) {
         appends.add(
           ObligationAppend(

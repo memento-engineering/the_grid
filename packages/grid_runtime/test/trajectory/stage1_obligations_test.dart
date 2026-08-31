@@ -323,6 +323,7 @@ void main() {
     }) => LivenessDetectorObligation(
       recorder: _recorder(),
       db: db,
+      station: 'tranquility',
       bootEpoch: () => epoch,
       clock: clock.call,
       lastActivity: lastActivity,
@@ -350,10 +351,19 @@ void main() {
 
         expect(query.sql, contains('u.boot_epoch = :boot_epoch'));
         expect(query.sql, contains("u.kind = 'attempt'"));
-        expect(query.parameters, {'boot_epoch': 12});
+        expect(query.parameters, {'boot_epoch': 12, 'station': 'tranquility'});
         expect(query.sql, contains("h.status = 'open'"));
       },
     );
+
+    test('is scoped and bounded like its two siblings: a station predicate '
+        'and the standing per-pass LIMIT', () {
+      final query = build();
+
+      expect(query.sql, contains('h.rig = :station'));
+      expect(query.sql, contains('LIMIT $kObligationBatchSize'));
+      expect(query.parameters['station'], 'tranquility');
+    });
 
     test('UNKNOWN: a subject with no observable beat emits NOTHING and writes '
         'no pulse — a restored log can never mint a loss', () async {

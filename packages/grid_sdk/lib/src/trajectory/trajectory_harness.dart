@@ -35,7 +35,11 @@ import 'dart:io' as io;
 
 import 'package:grid_runtime/grid_runtime.dart'
     show
+        Died,
+        Exited,
         LastActivityPoll,
+        RuntimeEvent,
+        SessionStarted,
         StationTrajectoryRecorder,
         StuckObligationAccountant,
         TrajectoryRecordSink,
@@ -51,6 +55,14 @@ typedef TrajectoryFlare = void Function(String name, Map<String, String> data);
 /// The one database the harness dials — `CREATE DATABASE trajectory` beside
 /// the ledger database (runbook step 2).
 const String kTrajectoryDatabase = 'trajectory';
+
+/// The floor between eager-reconnect ATTEMPTS (§3's `AppendInternalError`
+/// row, hardened): the reconnect stays eager — the first append after a
+/// failure tries — but with the server down and a filled queue, retrying the
+/// whole resolve+dial per queued record would storm the filesystem and the
+/// dead listener up to `queueBound` times per drain. Appends inside the
+/// window drop-and-count exactly like a failed reconnect.
+const Duration kReconnectDebounce = Duration(seconds: 5);
 
 /// One derived record awaiting the single writer (§2.5). Constructed by the
 /// engine-side derivation layer, never by the harness — the extraction
@@ -162,6 +174,7 @@ class TrajectoryHarness {
     required TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
     required List<ObligationQuery>? tickQueries,
     required LastActivityPoll? lastActivity,
+    required Stream<RuntimeEvent>? runtimeEvents,
     required Timer Function(Duration, void Function()) scheduleTimer,
     required DateTime Function() clock,
     required ({int pid, int pgid}) identity,
@@ -174,6 +187,7 @@ class TrajectoryHarness {
        _appenderFactory = appenderFactory,
        _tickQueries = tickQueries,
        _lastActivity = lastActivity,
+       _runtimeEvents = runtimeEvents,
        _scheduleTimer = scheduleTimer,
        _clock = clock,
        _identity = identity,
@@ -198,6 +212,7 @@ class TrajectoryHarness {
     TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
     List<ObligationQuery>? tickQueries,
     LastActivityPoll? lastActivity,
+    Stream<RuntimeEvent>? runtimeEvents,
     Timer Function(Duration, void Function())? scheduleTimer,
     DateTime Function()? clock,
     ({int pid, int pgid})? identity,
@@ -229,6 +244,7 @@ class TrajectoryHarness {
       appenderFactory: appenderFactory,
       tickQueries: tickQueries,
       lastActivity: lastActivity,
+      runtimeEvents: runtimeEvents,
       scheduleTimer: scheduleTimer ?? Timer.new,
       clock: clock ?? DateTime.now,
       // the_grid runs in its own process group; pid ≈ pgid here (the
@@ -284,6 +300,13 @@ class TrajectoryHarness {
   /// provider wired, e.g. a dry arm) leaves the worktree mtime scanner
   /// answering alone.
   final LastActivityPoll? _lastActivity;
+
+  /// `RuntimeProvider.events` — §1.1's runtime-event subscriber (harness-
+  /// internal): the observation surface for §2.3's `attempt.process.started`
+  /// (`SessionStarted`, whose `attemptId` is the breadcrumb-backed field) and
+  /// `attempt.process.exited` (`_emitExit`'s two shapes — `Exited`, inferred
+  /// or read, and `Died`). Null (no provider wired) derives neither.
+  final Stream<RuntimeEvent>? _runtimeEvents;
   final Timer Function(Duration, void Function()) _scheduleTimer;
   final DateTime Function() _clock;
   final ({int pid, int pgid}) _identity;
@@ -299,6 +322,25 @@ class TrajectoryHarness {
   TrajectoryTick? _tick;
   Timer? _gcTimer;
   bool _needsReconnect = false;
+
+  /// The last eager-reconnect ATTEMPT instant — the debounce anchor
+  /// ([kReconnectDebounce]): with the server down and a filled queue, one
+  /// resolve+dial per drained record would be a reconnect storm; one per
+  /// window is the whole point of "eager" without the storm.
+  DateTime? _lastReconnectAttemptAt;
+
+  /// §1.1's runtime-event subscription — opened at [start] once live,
+  /// cancelled FIRST in [shutdown].
+  StreamSubscription<RuntimeEvent>? _eventsSub;
+
+  /// session name → the identity its `SessionStarted` carried, held so the
+  /// exit events (which carry only the name) can join (§2.1: "exit events
+  /// join by session name"). A warm cache; entries retire on exit, and the
+  /// FIFO bound covers names whose exit was never observed.
+  final Map<String, ({String attemptId, int pid})> _liveProcesses =
+      <String, ({String attemptId, int pid})>{};
+
+  static const int _kLiveProcessBound = 4096;
 
   final Queue<TrajectoryAppendRequest> _queue =
       Queue<TrajectoryAppendRequest>();
@@ -395,6 +437,11 @@ class TrajectoryHarness {
       );
       _mode = TrajectoryHarnessMode.live;
       _cause = null;
+      // §1.1's runtime-event subscriber — armed only once live (a disabled/
+      // unprovisioned/degraded harness derives nothing), torn down FIRST at
+      // shutdown. Fully guarded: a derivation throw is counted + flared and
+      // NEVER reaches the provider's stream (fidelity B1).
+      _eventsSub = _runtimeEvents?.listen(_onRuntimeEvent);
       // Boot pass + interval arm (§1.2 step 2). start() cannot throw past the
       // tick's own telemetry swallow, but the enclosing catch holds anyway.
       await _tick!.start();
@@ -426,6 +473,91 @@ class TrajectoryHarness {
     pulseCoalesce: config.pulseCoalesce,
     clock: _clock,
   );
+
+  // ── the runtime-event subscriber (§1.1 / §2.3 rows 2–3) ──────────────────
+
+  /// Derives `attempt.process.started` / `attempt.process.exited` from the
+  /// provider's event stream — the harness-internal subscriber §1.1 names.
+  ///
+  /// Wholly guarded (fidelity B1's law): the recorder's own `_observe` wrap
+  /// already contains derivation throws, and this outer catch contains the
+  /// subscriber's OWN parsing, so nothing can ever propagate an error into
+  /// the provider's broadcast stream (an unhandled listener error would be a
+  /// zone error out of the engine's spawn path).
+  void _onRuntimeEvent(RuntimeEvent event) {
+    try {
+      switch (event) {
+        case SessionStarted(
+          :final name,
+          :final pid,
+          :final pgid,
+          :final attemptId,
+        ):
+          // An empty attempt id is a spawn outside the engine's allocation
+          // path (or pre-Stage-1): the record READS the attempt id, it never
+          // invents one (§2.1) — no record, and no exit join either.
+          if (attemptId.isEmpty) return;
+          _liveProcesses[name] = (attemptId: attemptId, pid: pid);
+          while (_liveProcesses.length > _kLiveProcessBound) {
+            _liveProcesses.remove(_liveProcesses.keys.first);
+          }
+          // The provider name is `<sessionId>/<nodePath>`
+          // (`AllocationAddress.providerName`) — split at the FIRST slash;
+          // the step path itself may contain more.
+          final slash = name.indexOf('/');
+          // `pgid ?? pid` mirrors the spawner's own handle mint
+          // (`station_process_transport.dart`: `pgid: pgid ?? pid`).
+          recorder.processStarted(
+            attemptId: attemptId,
+            sessionId: slash <= 0 ? name : name.substring(0, slash),
+            stepPath: slash <= 0 ? null : name.substring(slash + 1),
+            pid: pid,
+            pgid: pgid ?? pid,
+          );
+        case Exited(:final name, :final exitCode, :final inferred):
+          final proc = _liveProcesses.remove(name);
+          // No `.started` observed this boot under this subscriber (a prior
+          // boot's process, or an unattributed spawn) — no attempt to key a
+          // record on; the tick's unknown-terminal settlement owns that class.
+          if (proc == null) return;
+          recorder.processExited(
+            attemptId: proc.attemptId,
+            pid: proc.pid,
+            exitKind: ExitKind.exited,
+            // `inferred` (the oneTurn vanish) maps to envelope
+            // `provenance='inferred'` inside the recorder (§2.3 row 3).
+            inferred: inferred,
+            sessionId: _sessionIdOf(name),
+            exitCode: exitCode,
+          );
+        case Died(:final name, :final reason):
+          final proc = _liveProcesses.remove(name);
+          if (proc == null) return;
+          recorder.processExited(
+            attemptId: proc.attemptId,
+            pid: proc.pid,
+            exitKind: ExitKind.died,
+            inferred: false,
+            sessionId: _sessionIdOf(name),
+            reason: reason.isEmpty ? null : reason,
+          );
+        default:
+          // `Respawned` has zero production emitters (r2 major 7) and
+          // `ActivityChanged` rides the liveness poll, not the log.
+          break;
+      }
+    } on Object catch (error) {
+      _flareLimited('trajectory.deriveFailed', {
+        'site': 'runtime-events',
+        'reason': '$error',
+      });
+    }
+  }
+
+  static String _sessionIdOf(String providerName) {
+    final slash = providerName.indexOf('/');
+    return slash <= 0 ? providerName : providerName.substring(0, slash);
+  }
 
   // ── the append queue + single writer (§2.5) ──────────────────────────────
 
@@ -489,14 +621,25 @@ class TrajectoryHarness {
 
   Future<void> _appendOne(TrajectoryAppendRequest request) async {
     try {
-      if (_needsReconnect && !await _reconnect()) {
-        _dropped += 1;
-        _flareLimited('trajectory.appendDropped', {
-          'reason': 'reconnect failed; listener re-resolved next append',
-          'recordType': request.record.recordType,
-          'dropped': '$_dropped',
-        });
-        return;
+      if (_needsReconnect) {
+        // Debounced (quality M3): eager on the first append after the
+        // failure, then at most one resolve+dial per [kReconnectDebounce]
+        // window — never one per queued record. Appends inside the window
+        // drop-and-count like any reconnect failure.
+        final last = _lastReconnectAttemptAt;
+        final debounced =
+            last != null && _clock().difference(last) < kReconnectDebounce;
+        if (debounced || !await _reconnect()) {
+          _dropped += 1;
+          _flareLimited('trajectory.appendDropped', {
+            'reason': debounced
+                ? 'reconnect debounced (retry within ${kReconnectDebounce.inSeconds}s)'
+                : 'reconnect failed; listener re-resolved next attempt',
+            'recordType': request.record.recordType,
+            'dropped': '$_dropped',
+          });
+          return;
+        }
       }
       final outcome = await _serialize(
         () => _appender!.append(
@@ -553,8 +696,11 @@ class TrajectoryHarness {
 
   /// Guarded reconnect: RE-RESOLVES the listener first (§4's reconnect rule —
   /// bd rewrites the child server's port on its own terms), dials fresh, and
-  /// lets the appender's own guard decide resumed vs inert.
+  /// lets the appender's own guard decide resumed vs inert. Runs only in the
+  /// writer loop's async context — [_openConnection] suspends before any
+  /// filesystem read, so no engine enqueue path ever pays the resolve.
   Future<bool> _reconnect() async {
+    _lastReconnectAttemptAt = _clock();
     final TrajectoryDb fresh;
     try {
       fresh = await _openConnection();
@@ -568,6 +714,7 @@ class TrajectoryHarness {
           await _closeDbQuietly(); // the dead session
           _db = fresh;
           _needsReconnect = false;
+          _lastReconnectAttemptAt = null; // a NEW failure retries eagerly
           return true;
         case ReconnectInert(:final staleEpoch, :final liveEpoch):
           await _closeQuietly(fresh);
@@ -597,43 +744,77 @@ class TrajectoryHarness {
   }
 
   /// Trajectory down, before the stores it reads — with the hard ordering
-  /// guarantee (r2, major 9): NEVER throws, so it can never block sources
-  /// shutdown. Every step is individually guarded in the settle style; a
-  /// throw is caught, counted, and flared as the Stage-0 non-fatal signal
-  /// class.
+  /// guarantee (r2, major 9): NEVER throws AND never hangs, so it can never
+  /// block sources shutdown. Every step is individually guarded in the settle
+  /// style, and every step that awaits SQL is BOUNDED by
+  /// [TrajectoryConfig.shutdownDrainTimeout] — the guarantee covers a wedged
+  /// socket, not just a throwing one (quality M2). A throw or an expiry is
+  /// caught, counted, and flared as the Stage-0 non-fatal signal class.
   Future<void> shutdown() async {
     if (_isShutdown) return;
     _isShutdown = true;
     _gcTimer?.cancel();
     _gcTimer = null;
-    final neverCameUp = _appender == null;
-    // 1 (guarded) — drain the queue, then the fixpoint (§1.2 step 1). A
-    // fixpoint not reached rides the outstanding count in the final status
-    // flare; the successor boot's tick inherits the remainder.
-    TrajectoryTickFixpoint? fixpoint;
+    // 0 — the runtime-event subscriber dies first: no new derivations enter
+    // the queue while it drains.
     try {
-      fixpoint = await runToFixpoint();
+      await _eventsSub?.cancel();
+    } on Object {
+      // A closed provider stream cancels trivially; belt and braces.
+    }
+    _eventsSub = null;
+    final neverCameUp = _appender == null;
+    // 1 (guarded, BOUNDED) — drain the queue, then the fixpoint (§1.2 step
+    // 1). A fixpoint not reached rides the outstanding count in the final
+    // status flare; the successor boot's tick inherits the remainder. On
+    // expiry the queue remainder is counted as dropped (crash-loss physics,
+    // §2.5), flared, and shutdown PROCEEDS to dispose — a wedged writer can
+    // delay `down` by the timeout, never hold it.
+    TrajectoryTickFixpoint? fixpoint;
+    var drainTimedOut = false;
+    try {
+      fixpoint = await runToFixpoint().timeout(config.shutdownDrainTimeout);
+    } on TimeoutException {
+      drainTimedOut = true;
+      _dropped += _queue.length;
+      _flare('trajectory.shutdownDrainTimeout', {
+        'timeoutMs': '${config.shutdownDrainTimeout.inMilliseconds}',
+        'unflushed': '${_queue.length}',
+        'dropped': '$_dropped',
+      });
+      _queue.clear();
     } on Object catch (error) {
       _flare('trajectory.shutdownDrainFailed', {'reason': '$error'});
     }
     // 2 — NO authority.epoch.closed record at Stage 1 (§1.2 step 2): the
     // clean-down receipt is the fixpoint telemetry plus the boundary commit.
-    // 3 (guarded) — force a boundary dolt commit; a throw here is the
-    // cadence-failure signal: caught, counted, flared — never propagated.
-    try {
-      final appender = _appender;
-      if (appender != null) {
-        await _serialize(appender.doltCommitIfDue);
+    // 3 (guarded, BOUNDED) — force a boundary dolt commit; a throw here is
+    // the cadence-failure signal: caught, counted, flared — never propagated.
+    // SKIPPED after a drain timeout: the serial lane is wedged, so the commit
+    // would queue behind the wedge and only spend a second timeout.
+    if (!drainTimedOut) {
+      try {
+        final appender = _appender;
+        if (appender != null) {
+          await _serialize(
+            appender.doltCommitIfDue,
+          ).timeout(config.shutdownDrainTimeout);
+        }
+      } on Object catch (error) {
+        _flare('trajectory.cadenceFailure', {'reason': '$error'});
       }
-    } on Object catch (error) {
-      _flare('trajectory.cadenceFailure', {'reason': '$error'});
     }
     try {
       _tick?.dispose();
     } on Object catch (error) {
       _flare('trajectory.shutdownDisposeFailed', {'reason': '$error'});
     }
-    await _closeDbQuietly();
+    // Bounded too: closing a half-open socket can itself hang on the wire.
+    try {
+      await _closeDbQuietly().timeout(config.shutdownDrainTimeout);
+    } on TimeoutException {
+      _db = null; // abandoned; the process exit reaps the socket.
+    }
     // The final status flare — the §1.2 receipt (skipped when the harness
     // was a silent no-op all along).
     if (neverCameUp && _mode != TrajectoryHarnessMode.degraded) return;
@@ -678,13 +859,20 @@ class TrajectoryHarness {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  Future<TrajectoryDb> _openConnection() {
+  Future<TrajectoryDb> _openConnection() async {
     final connect = _connect;
     if (connect != null) return connect();
+    // Suspend BEFORE any filesystem read (quality M3): this method is reached
+    // from the writer loop's reconnect (and from boot), and the loop's first
+    // iteration runs synchronously on the enqueue caller's stack — an engine
+    // hot path. The yield moves the listener re-resolution and the secret
+    // read into the writer loop's async context, so no enqueue path ever
+    // performs filesystem I/O synchronously (§2.5's non-blocking rule).
+    await null;
     // Resolved FRESH on every call — boot and reconnect alike (§4).
     final listener = resolveDoltServerListener(_gridHome);
     final secretFile = io.File(trajectorySecretPath(_gridHome));
-    final secret = secretFile.readAsStringSync().trim();
+    final secret = (await secretFile.readAsString()).trim();
     if (secret.isEmpty) {
       throw StateError('empty trajectory secret: ${secretFile.path}');
     }

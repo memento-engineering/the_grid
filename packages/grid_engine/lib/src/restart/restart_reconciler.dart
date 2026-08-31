@@ -819,6 +819,7 @@ class RestartReconciler {
     for (final pair in terminalPairs) {
       final sessionId = pair.session.sessionId!;
       String? failure;
+      var settled = false;
       try {
         final writer = _writer;
         if (writer == null) {
@@ -828,15 +829,35 @@ class RestartReconciler {
           sessionId: sessionId,
           terminalWorkBead: pair.workBead,
         );
-        // §2.3's `attempt.terminal(settled)` row at its INFERRED caller. The
-        // attempt id is RECOVERED from the session's own `grid.lease.*`
-        // breadcrumb (§2.1's bounce rule), so the record joins the P1 attempt
-        // row a prior boot's `.started` genuinely appended and its
-        // `terminal:<attempt_id>` idem key dedupes against it. A session that
-        // predates Stage 1 carries no such key: it settles under a
-        // reconciler-minted id, payload-marked, and sits outside the shadow
-        // window's comparable set by construction.
-        final recovered = _recoverSessionAttemptId(sessionId);
+        settled = true;
+      } on Object catch (error) {
+        failure = '$error';
+        _onOrphan(
+          'restart work-terminal settlement $sessionId/${pair.workBead.id} '
+          '(${StationBeadWriter.workTerminalReasonWorkBeadClosed}) failed — '
+          '$error',
+        );
+      }
+      if (settled) {
+        // §2.3's `attempt.terminal(settled)` row at its INFERRED caller —
+        // OUTSIDE the legacy settle's try, under its own guard: the binding
+        // constraint says an append failure NEVER fails the legacy path, and
+        // a derivation throw inside that try would report a settlement that
+        // already COMMITTED as an orphan failure. The attempt id is RECOVERED
+        // from the session's own `grid.lease.*` breadcrumb (§2.1's bounce
+        // rule), so the record joins the P1 attempt row a prior boot's
+        // `.started` genuinely appended and its `terminal:<attempt_id>` idem
+        // key dedupes against it. A session that predates Stage 1 carries no
+        // such key: it settles under a reconciler-minted id, payload-marked,
+        // and sits outside the shadow window's comparable set by
+        // construction. A recovery throw degrades to exactly that marked
+        // mint — never to a reported failure.
+        String? recovered;
+        try {
+          recovered = _recoverSessionAttemptId(sessionId);
+        } on Object {
+          recovered = null;
+        }
         _recorder.sessionSettled(
           sessionId: sessionId,
           workBeadId: pair.workBead.id,
@@ -844,13 +865,6 @@ class RestartReconciler {
           workTerminalReason:
               StationBeadWriter.workTerminalReasonWorkBeadClosed,
           reconcilerOriginated: true,
-        );
-      } on Object catch (error) {
-        failure = '$error';
-        _onOrphan(
-          'restart work-terminal settlement $sessionId/${pair.workBead.id} '
-          '(${StationBeadWriter.workTerminalReasonWorkBeadClosed}) failed — '
-          '$error',
         );
       }
       settlements.add((

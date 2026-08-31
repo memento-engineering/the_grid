@@ -1023,12 +1023,17 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
         // incarnation-succession row — never `RuntimeEvent.respawned`, which
         // has no production emitter). Enqueue-only: the retry loop below is
         // unchanged, and the synchronous check-then-enqueue gate above is not
-        // perturbed (§2.5).
-        recorder?.leaseAcquired(
-          attemptId: handle.attemptId,
-          token: handle.token,
-          stepBeadId: stepBeadId,
-        );
+        // perturbed (§2.5). Empty-guarded like its release/sweep siblings
+        // (§2.1: the record READS the attempt id, it never invents one — a
+        // handle spawned outside the engine's env path names no attempt, so
+        // there is nothing to key a record on).
+        if (handle.attemptId.isNotEmpty) {
+          recorder?.leaseAcquired(
+            attemptId: handle.attemptId,
+            token: handle.token,
+            stepBeadId: stepBeadId,
+          );
+        }
         return;
       } on Object {
         // This attempt dropped — decide whether the retry is still owed.

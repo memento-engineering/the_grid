@@ -335,6 +335,71 @@ void main() {
     expect(bd.callsFor('close').map((call) => call[1]), contains(sessionId));
   });
 
+  test('the settle derivation sits OUTSIDE the legacy try (adjudicated item '
+      '4): a derivation throw can never turn a succeeded settle into a '
+      'reported failure', () async {
+    final log = <String>[];
+    final bd = RecordingBdRunner();
+    const sessionId = 'tgdog-derive';
+    const workId = 'genesis-closed';
+    final stateBeads = <Bead>[_session(id: sessionId, workBead: workId)];
+    bd.exportBeads = stateBeads;
+    // Flip once the settle's own writes land, so the state snapshot THROWS
+    // exactly when `_recoverSessionAttemptId` reads it — after legacy
+    // success, never before (the pre-settle reads must still work).
+    var settleLanded = false;
+    final flipping = _FlippingRunner(
+      bd,
+      onUpdate: (argv) {
+        if (argv.any((a) => a.contains('grid.work_terminal_reason'))) {
+          settleLanded = true;
+        }
+      },
+    );
+    final writer = StationBeadWriter(
+      bd: BdCliService(flipping),
+      reader: bd,
+      ownership: BeadOwnershipPredicate(const {'tgdog'}),
+    );
+    final sink = _CaptureSink();
+    final state = _stateSnapshotOf(stateBeads);
+    final work = _stateSnapshotOf([
+      const Bead(id: workId, status: BeadStatus.closed),
+    ]);
+    final reconciler = RestartReconciler(
+      listWorktrees: (_) async => [_wt(workId)],
+      reapWorktree: ({required root, required worktree}) async =>
+          ReapOutcome.removed(),
+      workRoot: _workRoot,
+      groups: FakeProcessGroupController(ownGroupId: 999, log: log),
+      writer: writer,
+      freshnessBarrier: () async {},
+      stateSnapshot: () {
+        if (settleLanded) {
+          throw StateError('post-settle snapshot read blew up');
+        }
+        return state;
+      },
+      workSnapshot: () => work,
+      recorder: StationTrajectoryRecorder(sink: sink),
+    );
+
+    final report = await reconciler.reconcile();
+
+    // THE PIN: the settle COMMITTED, so it must report success — the
+    // recovery throw above must never surface as an orphan failure (binding
+    // rule: an append failure NEVER fails the legacy path).
+    expect(report.workTerminalSettlements.single.failure, isNull);
+    // The derivation degraded honestly: no recoverable attempt id, so the
+    // record settles under a reconciler-minted, payload-marked identity.
+    final settled = sink.records
+        .where((r) => r.recordType == 'attempt.terminal')
+        .single;
+    final fact = {...settled.correlationToJson(), ...settled.payloadToJson()};
+    expect(fact['outcome'], 'settled');
+    expect(fact['attempt_id_basis'], kReconcilerMintedAttemptBasis);
+  });
+
   group('RestartReconciler — respawn-or-skip (the surviving contract)', () {
     test('a FOREIGN work bead with a TERMINAL owned session ⇒ SKIPPED '
         '(reaped, never signalled, marked skipped)', () async {
@@ -661,4 +726,36 @@ void main() {
       });
     },
   );
+}
+
+/// Delegates every bd call and reports each `update` argv — how the settle
+/// pin above detects the exact moment the legacy settle landed.
+class _FlippingRunner implements BdRunner {
+  _FlippingRunner(this._inner, {required this.onUpdate});
+
+  final RecordingBdRunner _inner;
+  final void Function(List<String> argv) onUpdate;
+
+  @override
+  Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
+    if (args.isNotEmpty && args.first == 'update') onUpdate(args);
+    return _inner.run(args, timeout: timeout, stdin: stdin);
+  }
+}
+
+/// A minimal capturing sink for the reconciler's derivation assertions.
+final class _CaptureSink implements TrajectoryRecordSink {
+  final List<TrajectoryRecord> records = [];
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? seat,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => records.add(record);
 }

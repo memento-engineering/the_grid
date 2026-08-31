@@ -26,6 +26,7 @@ import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../kernel/station_services.dart';
+import '../kernel/trajectory_scope.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import 'process_lease_vendor.dart';
@@ -108,6 +109,18 @@ Future<ProcessHandle> stationProcessSpawner(
     final workspace = context.read<Workspace>();
     final sc = services.sourceControl;
     if (sc != null && workspace != null) {
+      // Seed the recorder's provision join SYNCHRONOUSLY before provisioning
+      // (stage1-wiring §2.2's worktree row, fidelity B2): the
+      // `worktree.provisioned` observation fires INSIDE `provisionWorktree`
+      // with only the work bead in hand, and the attempt it must name is THIS
+      // spawn's — the id `attempt.process.started` will carry, so P6's
+      // provisional row is corrected in place. The id provably exists here:
+      // the host minted it in `initState` and exported it on the allocation
+      // env this spawner already read at line one. Appends nothing; a no-op
+      // under the disabled recorder.
+      trajectoryRecorderOf(
+        context,
+      ).provisioningAttempt(workBeadId: args.beadId, attemptId: attemptId);
       await sc.provisionWorkspace(
         beadId: args.beadId,
         workspaceDir: workspace.workspaceDir,

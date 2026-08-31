@@ -38,6 +38,14 @@ const Duration kDefaultTrajectoryGcInterval = Duration(minutes: 5);
 /// counted, never blocked on.
 const int kDefaultTrajectoryQueueBound = 4096;
 
+/// The bound on the clean-down drain (r2 major 9, hardened): "trajectory
+/// shutdown NEVER blocks sources shutdown" covers hangs as well as throws — a
+/// dead/half-open dolt socket can wedge the drain's SQL awaits forever, and an
+/// unbounded `await` there would hold `down` hostage. On expiry the remainder
+/// is counted + flared and shutdown proceeds to dispose; the successor boot's
+/// shadow-diff attributes the loss as the named non-atomic class.
+const Duration kDefaultShutdownDrainTimeout = Duration(seconds: 30);
+
 /// The one parameter `assembleStationWork` gains at Stage 1 (§1.3).
 @immutable
 final class TrajectoryConfig {
@@ -49,6 +57,7 @@ final class TrajectoryConfig {
     this.queueBound = kDefaultTrajectoryQueueBound,
     this.livenessThreshold = kDefaultLivenessThreshold,
     this.pulseCoalesce = kDefaultPulseCoalesce,
+    this.shutdownDrainTimeout = kDefaultShutdownDrainTimeout,
   });
 
   final TrajectoryConfigMode mode;
@@ -75,6 +84,10 @@ final class TrajectoryConfig {
   /// `≥30s per subject`).
   final Duration pulseCoalesce;
 
+  /// The bound on shutdown's drain-to-fixpoint (and each subsequent guarded
+  /// teardown step) — see [kDefaultShutdownDrainTimeout].
+  final Duration shutdownDrainTimeout;
+
   /// The same config with [mode] forced to [TrajectoryConfigMode.disabled] —
   /// how dry-run forces the no-write posture (§1.3: a dry arm must not claim
   /// an epoch or write anything).
@@ -86,5 +99,6 @@ final class TrajectoryConfig {
     queueBound: queueBound,
     livenessThreshold: livenessThreshold,
     pulseCoalesce: pulseCoalesce,
+    shutdownDrainTimeout: shutdownDrainTimeout,
   );
 }
