@@ -2,12 +2,14 @@
 ///
 /// The comparator is a DELIVERABLE, not a posture: it runs per round, emits a
 /// typed mismatch report keyed `(session, field, legacy_value, fold_value,
-/// seq)`, and a stage cut without N clean runs on record cannot proceed. What
-/// it compares against — the legacy bead reader's disposition rule — does not
-/// exist as a second write yet: the dual-read arms with Stage 1's cut. So
-/// Stage 0 ships the skeleton, the report shape, and an injectable
-/// [ShadowCompare] strategy; the Stage-0 default compares NOTHING and says so
-/// rather than reporting a clean run it did not earn.
+/// seq)`, and a stage cut without N clean runs on record cannot proceed.
+///
+/// The strategy is injected two ways: a fixed [ShadowCompare], or a
+/// [ShadowCompareFactory] that sees the parsed grid home and opens the LEGACY
+/// ledger beside the trajectory store (grid_cli composes the real Family-1
+/// comparator, `AttemptLifecycleShadow`, this way). With neither, the
+/// [UncomparableShadow] default compares NOTHING and says so rather than
+/// reporting a clean run it did not earn.
 library;
 
 import 'dart:io';
@@ -57,8 +59,8 @@ class ShadowMismatch {
   final ShadowMismatchClass classification;
 }
 
-/// The legacy-vs-fold comparison, injected so Stage 1 fills it in without
-/// touching the verb.
+/// The legacy-vs-fold comparison, injected so a composing runner fills it in
+/// without touching the verb.
 abstract interface class ShadowCompare {
   /// The shared fields this strategy compares. EMPTY means there is no oracle
   /// yet and the verb must report [unavailableReason] instead of claiming a
@@ -105,6 +107,13 @@ const String unshadowableFacts =
     'attempt_id, commit digests, per-effect intent/ack ordering, provenance '
     'markers, incarnation identity';
 
+/// Builds the strategy FOR a grid home — the seam a composing runner
+/// (grid_cli) uses to open the legacy ledger beside the trajectory store at
+/// run time, after `--state-workspace` is parsed. A home without a readable
+/// ledger must yield a strategy with empty [ShadowCompare.comparableFields]
+/// and a reason, never a throw: degrading gracefully is the verb's contract.
+typedef ShadowCompareFactory = Future<ShadowCompare> Function(String gridHome);
+
 /// The verb.
 class TrajShadowDiffCommand extends Command<int> {
   /// Creates the comparator verb with an optional injected opener and
@@ -112,8 +121,10 @@ class TrajShadowDiffCommand extends Command<int> {
   TrajShadowDiffCommand({
     TrajectoryOpener? open,
     ShadowCompare compare = const UncomparableShadow(),
+    ShadowCompareFactory? compareFor,
   }) : _open = open ?? openTrajectoryReader,
-       _compare = compare {
+       _compare = compare,
+       _compareFor = compareFor {
     addGridHomeOption(argParser);
     argParser
       ..addMultiOption(
@@ -131,6 +142,7 @@ class TrajShadowDiffCommand extends Command<int> {
 
   final TrajectoryOpener _open;
   final ShadowCompare _compare;
+  final ShadowCompareFactory? _compareFor;
 
   @override
   final String name = 'shadow-diff';
@@ -175,6 +187,7 @@ class TrajShadowDiffCommand extends Command<int> {
       gridHome: gridHome,
       open: _open,
       compare: _compare,
+      compareFor: _compareFor,
       sessions: argResults!.multiOption('session'),
       round: round,
       limit: limit,
@@ -192,6 +205,7 @@ Future<int> runTrajShadowDiff({
   required String gridHome,
   required TrajectoryOpener open,
   ShadowCompare compare = const UncomparableShadow(),
+  ShadowCompareFactory? compareFor,
   List<String> sessions = const [],
   int? round,
   int limit = defaultReadLimit,
@@ -201,6 +215,10 @@ Future<int> runTrajShadowDiff({
   final void Function(String) write = out ?? stdout.writeln;
   final void Function(String) writeErr = err ?? stderr.writeln;
   write('traj shadow-diff — legacy/fold comparator (schema §9)');
+  // The factory outranks the fixed strategy: it sees the parsed grid home,
+  // so it can open the LEGACY ledger beside the trajectory store — the real
+  // compare when both exist, a reasoned degrade when the ledger is absent.
+  if (compareFor != null) compare = await compareFor(gridHome);
 
   final opened = await open(gridHome);
   switch (opened) {

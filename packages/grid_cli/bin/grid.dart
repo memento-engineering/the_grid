@@ -22,7 +22,10 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(DemoCommand())
         // Stage 0's forensics verbs. Composed here for local measurement; a
         // station runner needs its own explicit ..addCommand(TrajCommand()).
-        ..addCommand(TrajCommand());
+        // The factory arms the REAL §9 comparator: shadow-diff opens the grid
+        // home's ledger beside the trajectory store and degrades gracefully
+        // when the home carries only one of them.
+        ..addCommand(TrajCommand(compareFor: legacyShadowCompareFor));
 
   try {
     final code = await runner.run(arguments);

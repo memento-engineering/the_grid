@@ -45,3 +45,12 @@ export 'src/cli/traj_render.dart'; // typed row rendering (opaque rows stay opaq
 export 'src/cli/traj_shadow_diff_command.dart'; // §9 comparator + injectable strategy
 export 'src/cli/traj_show_command.dart'; // per-subject history
 export 'src/cli/trajectory_reader.dart'; // read-only log seam + sealed open result
+
+// SECTION: fold — the Family-1 P1 fold (§6 row 1 / §7 head summary).
+export 'src/fold/session_head_delta.dart'; // THE delta fn + its two appliers (SQL / in-memory)
+export 'src/fold/session_head_fold.dart'; // replay: fold a stream, truncate + rewrite, proj_meta
+export 'src/fold/session_head_row.dart'; // the proj_session_head row image
+
+// SECTION: shadow — the §9 comparator over the injected legacy read seam.
+export 'src/shadow/attempt_lifecycle_shadow.dart'; // the real Family-1 ShadowCompare + allow-list seam
+export 'src/shadow/legacy_session_reader.dart'; // dependency-free legacy session view + reader interface

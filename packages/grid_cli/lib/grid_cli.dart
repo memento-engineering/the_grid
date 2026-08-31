@@ -60,3 +60,7 @@ export 'src/bead_command.dart';
 export 'src/demo_command.dart';
 export 'src/link_command.dart'
     show LinkCommand, LinkEndpointStore, UnlinkCommand, runLink, runUnlink;
+// The §9 shadow seam's ledger side: the LegacySessionReader over beads_dart's
+// session-bead read surface + the ShadowCompareFactory a runner hands
+// grid_trajectory's TrajCommand.
+export 'src/traj_legacy_session_reader.dart';
