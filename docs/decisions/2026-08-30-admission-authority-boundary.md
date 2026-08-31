@@ -103,3 +103,7 @@ explicit terminal/lost state; bounded recovery; convergent replay; and a
 correlated durable event for every decision. **Tripwire:** if passing
 requires reconstructing `WorkList`/`SessionScope` state outside the tree,
 option B has become an accidental option C and this decision reopens.
+
+## Review log
+
+* 2026-08-30 — decided by **nico** + **agent** (governor seat) in direct-mode design; recorded accepted, bead tg-y4fd closed binding-on-write.

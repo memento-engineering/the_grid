@@ -109,3 +109,9 @@ Two constraints on the day it happens, both from the memo:
   already match our round ladder and provenance enum. It documents no
   idempotency key, no fence, and no digest-bound verification, so it is a
   serialization we emit downstream — never the thing we append.
+
+## Review log
+
+* 2026-08-31 — authored by **agent** (governor seat, autonomous overnight mandate); force-from-write per decisions#0001 clause 3.
+* 2026-08-31 — amended by **agent** after discussion with **nico**: beads_dart analogy corrected to dependency-direction-only; long-term standalone direction added (operator-ratified in discussion).
+* 2026-08-31 — reviewed by **nico** (human, operator): **ratified as amended** (interview).
