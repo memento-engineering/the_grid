@@ -1,0 +1,15 @@
+# grid_trajectory test configuration.
+#
+# The offline unit suite (everything NOT tagged `integration`) runs with no
+# dolt, no server, and no credentials — `dart test` runs it by default.
+#
+# The `integration` tag is the Stage-0 guard suite, and it departs from the
+# house self-skip convention: these tests FAIL when dolt is absent rather than
+# skipping (decision: stage0-guards-gate-prs — a skipped guard proves nothing
+# at a stage cut). The PR-gating `trajectory-guards` CI job installs dolt and
+# runs exactly this tag; the general Dart job runs `dart test -x integration`.
+tags:
+  integration:
+    description: >-
+      Drives a hermetic dolt sql-server on an ephemeral port in a temp data dir
+      — never a real .beads/.grid store. FAILS CLOSED without dolt on PATH.
