@@ -68,6 +68,7 @@ import '../domain/session_projection.dart';
 import '../domain/rework.dart' show kMaxReworkRounds, reworkRoundOf;
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
+import '../kernel/trajectory_scope.dart';
 import '../molecule/bead_path_key.dart';
 import '../molecule/inherited_circuit.dart';
 import '../molecule/live_frontier.dart'
@@ -215,6 +216,19 @@ class SessionScopeState extends State<SessionScope>
         closeReason: 'reworked',
         trigger: GateCloseCause.supersededRound,
       );
+      // §2.3's `attempt.round.retired` row, second observation site: the
+      // command handler saw the re-key, this scope sees the retired round
+      // CLOSE. One retire, two observers, ONE record — the idem key is
+      // `round-retired:<session>:<oldRound>`, so whichever lands first wins
+      // and the other dedupes. `_retiredReworkRound` is the NEW round the
+      // `#rN` key names, so the round being retired is one below it.
+      if (_retiredReworkRound case final round?) {
+        _recorder.roundRetired(
+          sessionId: sessionId,
+          cause: RoundRetireCause.rework,
+          oldRound: round - 1,
+        );
+      }
     } on Object catch (error) {
       _flare('gate.autoCloseFailed', {
         'sessionId': sessionId,
@@ -225,6 +239,16 @@ class SessionScopeState extends State<SessionScope>
   }
 
   StationServices? _ctx;
+
+  /// The Stage-1 derivation layer (stage1-wiring §2), re-resolved on every
+  /// `didChangeDependencies` like every other captured reference (D-H rule 1)
+  /// and held for the off-build observation sites — every write this scope
+  /// makes is scheduled off `build`, so every record it derives is too.
+  ///
+  /// Absent it is a counting no-op ([TrajectoryRecorderScope.disabled]), which
+  /// is why nothing below ever asks whether the trajectory is up.
+  StationTrajectoryRecorder _recorder =
+      TrajectoryRecorderScope.disabled.recorder;
 
   /// The ambient [ServiceBundle] captured off `build` (D-H rule 1: re-read on
   /// every `didChangeDependencies`, never `??=`-cached) — held so the off-build
@@ -330,6 +354,12 @@ class SessionScopeState extends State<SessionScope>
   /// transient effect payload, never an eligibility cursor.
   String? _retiredReworkSessionId;
 
+  /// The round number the retiring `#rN` key names — captured beside
+  /// [_retiredReworkSessionId] purely so the `attempt.round.retired` record
+  /// can state the round it retires (§2.2's round row). Null when this scope
+  /// mounted on a bead with no retired round.
+  int? _retiredReworkRound;
+
   @override
   void didChangeDependencies() {
     // ALWAYS re-read (D-H rule 1) — the captured field exists for async-gap use
@@ -347,15 +377,21 @@ class SessionScopeState extends State<SessionScope>
     // (a molecule mint's sub-circuit resolution).
     _registry = context.watch<CapabilityRegistry>();
     _joinedSnapshot = context.watch<JoinedSnapshot>();
+    // Snapshot lookup, not a binding one (see `trajectoryRecorderOf`): the
+    // recorder is station-lifetime, so there is nothing here to rebuild on.
+    _recorder = trajectoryRecorderOf(context);
     _considerMintReadiness();
   }
 
   @override
   void initState() {
     final existing = seed.existingSession;
-    if (existing != null &&
-        reworkRoundOf(seed.bead.id, existing.workBeadId) != null) {
+    final mountedRound = existing == null
+        ? null
+        : reworkRoundOf(seed.bead.id, existing.workBeadId);
+    if (existing != null && mountedRound != null) {
       _retiredReworkSessionId = existing.sessionId;
+      _retiredReworkRound = mountedRound;
       _isMolecule = existing.isMolecule;
       _requiresFreshMintSnapshot = true;
       unawaited(_mint());
@@ -449,6 +485,10 @@ class SessionScopeState extends State<SessionScope>
     final completer = Completer<JoinedSnapshot?>();
     _mintDecisionAt = DateTime.now();
     _mintBlockedReported = false;
+    // A fresh mint decision opens a fresh refusal window: its FIRST refusal
+    // always records, whatever the previous sequence's tail looked like.
+    _lastMintRefusalAt = null;
+    _lastMintRefusalReason = null;
     _mintGraceLapsed = false;
     _mintReadiness = completer;
     _considerMintReadiness();
@@ -470,6 +510,12 @@ class SessionScopeState extends State<SessionScope>
       return;
     }
     if (snapshot == null) {
+      // The record sits ABOVE the `_mintBlockedReported` latch (§2.3, r2
+      // minor 14): the latch throttles the FLARE — one line per mint sequence
+      // — while every refused EVALUATION appends. Reading refusal pressure off
+      // the throttled flare undercounts it, which is exactly what the record
+      // is for.
+      _recordMintRefused('fresh joined snapshot is unavailable');
       if (!_mintBlockedReported) {
         _mintBlockedReported = true;
         _flare('session.mintRefused', {
@@ -505,6 +551,8 @@ class SessionScopeState extends State<SessionScope>
       if (joined != null && !joined.isTerminal) return;
     }
     if (!snapshot.graph.readyIds.contains(seed.bead.id)) {
+      // Per-evaluation again, above the same latch (§2.3).
+      _recordMintRefused('work bead is absent from the fresh ready frontier');
       if (!_mintBlockedReported) {
         _mintBlockedReported = true;
         _flare('session.mintRefused', {
@@ -518,6 +566,60 @@ class SessionScopeState extends State<SessionScope>
       return;
     }
     completer.complete(snapshot);
+  }
+
+  /// The legacy mount-attempt bead's durable ordinal (`grid.attempt.count`),
+  /// as the recorder's `legacy_attempt_count` join column (§2.2, r2 major 8).
+  ///
+  /// The ULID mount_attempt_id keys the RECORD; this ordinal is what
+  /// `traj shadow-diff` joins against the legacy bead, which is why an
+  /// unshadowable identity does not cost the mint its comparable fact. Read
+  /// off the SAME projection `WorkList` writes the budget from; absent (the
+  /// bead has not been minted yet, or the projection lags the write) it is
+  /// simply omitted — the column is comparative telemetry, never load-bearing.
+  Map<String, dynamic> get _mountAttemptMetadata {
+    final count = _joinedSnapshot?.mountAttemptsByWorkBead[seed.bead.id]?.count;
+    return count == null
+        ? const <String, dynamic>{}
+        : <String, dynamic>{kLegacyAttemptCountKey: count};
+  }
+
+  /// The per-bead-per-window dedupe on refusal records (§2.5's amended note):
+  /// `_considerMintReadiness` runs on EVERY joined-snapshot publish, so a
+  /// publish storm against a persistently-refused bead would append one
+  /// refusal per publish, indefinitely — the noisiest record type racing the
+  /// 4096-entry queue whose overflow disqualifies the round. An IDENTICAL
+  /// (same-reason) refusal within the window dedupes; a reason CHANGE records
+  /// immediately, and each fresh mint decision resets the window
+  /// ([_awaitFreshReadySnapshot]), so refusal pressure stays countable at the
+  /// tick's own granularity without being per-publish.
+  static const _mintRefusalDedupeWindow = Duration(seconds: 30);
+
+  DateTime? _lastMintRefusalAt;
+  String? _lastMintRefusalReason;
+
+  /// `attempt.mint.outcome(refused)` — per REFUSED evaluation of the
+  /// fresh-snapshot barrier (§2.3), above the flare latch, deduped per bead
+  /// per [_mintRefusalDedupeWindow] (see its doc).
+  void _recordMintRefused(String reason) {
+    final now = DateTime.now();
+    final last = _lastMintRefusalAt;
+    if (last != null &&
+        reason == _lastMintRefusalReason &&
+        now.difference(last) < _mintRefusalDedupeWindow) {
+      return;
+    }
+    _lastMintRefusalAt = now;
+    _lastMintRefusalReason = reason;
+    _recorder.mintOutcome(
+      workBeadId: seed.bead.id,
+      phase: MintPhase.refused,
+      mintAttempt: _mintAttempts,
+      maxAttempts: _maxMintAttempts,
+      stage: 'fresh-snapshot',
+      reason: reason,
+      mountAttemptMetadata: _mountAttemptMetadata,
+    );
   }
 
   Future<void> _mint() async {
@@ -583,6 +685,30 @@ class SessionScopeState extends State<SessionScope>
               reason: _voidReason,
             ),
           );
+          // §2.3's `attempt.terminal(lost)` row: the DEAD KEY's terminal, and
+          // the round it retires. The record carries the ORIGINAL work bead id
+          // while the legacy write is re-keying the dead session onto
+          // `#void-<sessionId>` — intact keys are the whole point of the row.
+          _recorder.sessionVoided(
+            sessionId: deadId,
+            workBeadId: seed.bead.id,
+            reason: _voidReason,
+          );
+          // The retired round is DERIVED, never a bare 0 default (§2.1's
+          // recoverable-only rule): the dead projection's own work_bead key
+          // carries the `#rN` shape when the void landed on a reworked round
+          // (parsed here), and the recorder's round counter — seeded at the
+          // mint that this boot observed, or by boot recovery — decides
+          // otherwise. Only a session no recoverable state names at all
+          // retires as round 0, which is then the honest answer, not a
+          // fallback that shadows a real round.
+          _recorder.roundRetired(
+            sessionId: deadId,
+            cause: RoundRetireCause.voided,
+            oldRound: StationTrajectoryRecorder.parseLegacyWorkKey(
+              dead.workBeadId,
+            ).round,
+          );
           if (_stopAbandonedMint(
             stage: 'void-session-retired',
             retiredSessionId: retiredId,
@@ -631,12 +757,29 @@ class SessionScopeState extends State<SessionScope>
   /// `createMolecule` itself is ALSO re-entry-safe (R6's own dedup probe), so
   /// the two guards compose rather than race.
   Future<void> _mintMolecule({required String? retiredSessionId}) async {
-    final id = _moleculeSessionId ??= await _ctx!.writer.createSession(
-      substation: _ctx!.stateSubstation,
-      title: 'grid session ${seed.bead.id}',
-      workBeadId: seed.bead.id,
-      metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
-    );
+    var id = _moleculeSessionId;
+    if (id == null) {
+      id = await _ctx!.writer.createSession(
+        substation: _ctx!.stateSubstation,
+        title: 'grid session ${seed.bead.id}',
+        workBeadId: seed.bead.id,
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      );
+      _moleculeSessionId = id;
+      // §2.3's `attempt.session.started` row, derived at `createSession`'s SOLE
+      // caller: rig and model are the same two values the birth-stamping merge
+      // just wrote. Inside the null check on purpose — a retry that reuses the
+      // FIRST attempt's session id re-enters this method without a second
+      // `createSession`, and a record with no legacy write behind it is exactly
+      // the shadow leading the incumbent.
+      _recorder.sessionMinted(
+        sessionId: id,
+        workBeadId: seed.bead.id,
+        rig: _ctx!.stateSubstation,
+        model: kSessionModelMolecule,
+        mountAttemptMetadata: _mountAttemptMetadata,
+      );
+    }
     if (_stopAbandonedMint(
       stage: 'molecule-session-created',
       retiredSessionId: retiredSessionId,
@@ -783,6 +926,17 @@ class SessionScopeState extends State<SessionScope>
         ? 'unmounted'
         : null;
     if (reason == null) return false;
+    // §2.3's mint row: `abandoned` ENDS the mount sequence, so the next mint
+    // sequence for this work bead gets a fresh mount_attempt_id.
+    _recorder.mintOutcome(
+      workBeadId: seed.bead.id,
+      phase: MintPhase.abandoned,
+      mintAttempt: _mintAttempts,
+      maxAttempts: _maxMintAttempts,
+      stage: stage,
+      reason: reason,
+      mountAttemptMetadata: _mountAttemptMetadata,
+    );
     _flare(_mintAbandonedFlare, {
       'workBeadId': seed.bead.id,
       'retiredSessionId': retiredSessionId ?? '',
@@ -837,7 +991,23 @@ class SessionScopeState extends State<SessionScope>
   /// budget so an observer can COUNT which scopes are dead-minting (the
   /// visibility that replaces a silent `mounted=0`). A throwing/absent transport
   /// never re-breaks the mint microtask.
+  ///
+  /// The trajectory record rides HERE rather than at the two call sites so the
+  /// flare and the append can never disagree about which mint outcome just
+  /// happened: [name] is the discriminator both read.
   void _flareMint(String name, String reason) {
+    _recorder.mintOutcome(
+      workBeadId: seed.bead.id,
+      // `exhausted` ends the mount sequence (the budget is spent and the scope
+      // goes inert); `failed` leaves it open for the next bounded retry.
+      phase: name == _mintExhaustedFlare
+          ? MintPhase.exhausted
+          : MintPhase.failed,
+      mintAttempt: _mintAttempts,
+      maxAttempts: _maxMintAttempts,
+      reason: reason,
+      mountAttemptMetadata: _mountAttemptMetadata,
+    );
     try {
       _services.transport?.flare(name, {
         'workBeadId': seed.bead.id,
@@ -931,11 +1101,24 @@ class SessionScopeState extends State<SessionScope>
           ),
         );
         if (outcome.removed) {
+          // §2.3's worktree rows: the record carries the path + branch the
+          // flares below omit — the two facts an operator has to reconstruct
+          // by hand today.
+          _recorder.worktreeReaped(
+            sessionId: id,
+            worktree: sourceControl.workspaceFor(seed.bead.id),
+            branch: sourceControl.branchFor(seed.bead.id),
+          );
           _flare('session.worktreeReaped', {
             'sessionId': id,
             'workBeadId': seed.bead.id,
           });
         } else {
+          _recorder.worktreeHeld(
+            sessionId: id,
+            worktree: sourceControl.workspaceFor(seed.bead.id),
+            branch: sourceControl.branchFor(seed.bead.id),
+          );
           _flare('session.worktreeReapHeld', {
             'sessionId': id,
             'workBeadId': seed.bead.id,
@@ -955,6 +1138,13 @@ class SessionScopeState extends State<SessionScope>
     }
     try {
       await ctx.writer.close(id);
+      // §2.3's `attempt.terminal(succeeded)` row — derived at the
+      // OUTCOME-BEARING caller (r2 major 6). The bare `writer.close` is the
+      // shared close for every disposition and carries no outcome, so it is
+      // deliberately not a derivation site; this method is the one that knows
+      // the close means "done". ONE record, no tail: the four-step terminal
+      // tail stays legacy for the whole shadow window.
+      _recorder.sessionCompleted(sessionId: id, workBeadId: seed.bead.id);
       _flare('session.closed', {'sessionId': id, 'disposition': 'done'});
       await _closeTerminalGates(
         id,
@@ -985,6 +1175,7 @@ class SessionScopeState extends State<SessionScope>
     required String stepBeadId,
     required String reason,
     required NodeCursor node,
+    required int stepRound,
   }) {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
@@ -996,6 +1187,7 @@ class SessionScopeState extends State<SessionScope>
           stepBeadId: stepBeadId,
           reason: reason,
           node: node,
+          stepRound: stepRound,
         ),
       ),
     );
@@ -1007,10 +1199,16 @@ class SessionScopeState extends State<SessionScope>
     required String stepBeadId,
     required String reason,
     required NodeCursor node,
+    required int stepRound,
   }) async {
     final station = _ctx;
     if (station == null) return;
     await persistRaisedEscalation(
+      // The derived TWIN of `CapabilityHost`'s park (§2.3's gated row) — same
+      // shared persist, so the same `step.transition(gated)` record.
+      recorder: _recorder,
+      stepRound: stepRound,
+      incarnation: node.restartCount,
       station: station,
       services: _services,
       request: EscalationRequest(
@@ -1040,10 +1238,33 @@ class SessionScopeState extends State<SessionScope>
   /// flat session's cursor is empty, so no gated node ever schedules) and is
   /// refused LOUD in [_rearm] rather than falling back to a session-bead
   /// write the flat model used to make.
-  void _scheduleRearm(String id, String nodePath, {String? moleculeTarget}) {
+  /// [stepRound] and [incarnation] are the correlation facts the trajectory's
+  /// re-arm record needs (§2.2): the supersedes-chain depth and the persisted
+  /// `restartCount` at THIS node, both of which `build` has in hand and the
+  /// off-build write does not. Captured at schedule time, exactly like
+  /// [moleculeTarget] — and REQUIRED: a second caller that forgot them would
+  /// compile clean and append `step_round: 0`, the exact silent-0 the field
+  /// exists to kill.
+  void _scheduleRearm(
+    String id,
+    String nodePath, {
+    required int stepRound,
+    required int incarnation,
+    String? moleculeTarget,
+  }) {
     if (_rearming.contains(nodePath)) return;
     _rearming.add(nodePath);
-    scheduleMicrotask(() => unawaited(_rearm(id, nodePath, moleculeTarget)));
+    scheduleMicrotask(
+      () => unawaited(
+        _rearm(
+          id,
+          nodePath,
+          moleculeTarget,
+          stepRound: stepRound,
+          incarnation: incarnation,
+        ),
+      ),
+    );
   }
 
   /// In-flight guard for [_resumeOrphanedPour] — a build can fire many times
@@ -1222,8 +1443,10 @@ class SessionScopeState extends State<SessionScope>
   Future<void> _rearm(
     String id,
     String nodePath,
-    String? moleculeTarget,
-  ) async {
+    String? moleculeTarget, {
+    required int stepRound,
+    required int incarnation,
+  }) async {
     final ctx = _ctx;
     if (ctx == null) {
       // Impossible for a mounted scope (`didChangeDependencies` captures `_ctx`
@@ -1261,6 +1484,16 @@ class SessionScopeState extends State<SessionScope>
         moleculeTarget,
         metadata: {MoleculeStepKeys.state: StepState.pending.name},
       );
+      // §2.3's re-arm row: `cause='gate_cleared'` with `step_round` BUMPED —
+      // the record that kills the I-14 stale-join loop at the cut. During the
+      // shadow window it only shadows the legacy single-key flip above, which
+      // stays exactly as it is (nothing about what mounts changes).
+      _recorder.stepRearmed(
+        sessionId: id,
+        stepPath: nodePath,
+        fromStepRound: stepRound,
+        incarnation: incarnation,
+      );
       // Settled OK: clear the guard. The store's `gated`→`pending` flip stops
       // D-7 from re-firing (and frees a future gate cycle to re-arm).
       _rearming.remove(nodePath);
@@ -1295,6 +1528,12 @@ class SessionScopeState extends State<SessionScope>
   void _scheduleRetiredRework(SessionProjection retired) {
     if (_resolving || _failed || retired.sessionId != _sessionId) return;
     _retiredReworkSessionId = retired.sessionId;
+    // The `#rN` key names the round being MINTED; the retired-round close
+    // derives its `attempt.round.retired` from it (§2.2's round row). Set here
+    // as well as in `initState`: this is the LIVE path — a mounted scope
+    // observing the operator's re-key — while that one covers a scope that
+    // MOUNTS on an already-retired round.
+    _retiredReworkRound = reworkRoundOf(seed.bead.id, retired.workBeadId);
     _sessionId = null;
     _resolving = true;
     _terminalScheduled = false;
@@ -1318,6 +1557,13 @@ class SessionScopeState extends State<SessionScope>
     scheduleMicrotask(() => unawaited(_declineRework(retiredId)));
   }
 
+  /// The durable decline reason — one string, written to the bead and carried
+  /// into the record, so the two can never drift.
+  static const _reworkDeclinedReason =
+      'session retired (work_bead re-keyed) while this scope never '
+      'observed it parked at a gate — refusing to abandon a possibly-'
+      'live round; a human must investigate';
+
   Future<void> _declineRework(String retiredId) async {
     final ctx = _ctx;
     if (ctx == null) return;
@@ -1325,11 +1571,13 @@ class SessionScopeState extends State<SessionScope>
       retiredId,
       metadata: {
         SessionBeadKeys.reworkDeclined: 'true',
-        SessionBeadKeys.reworkDeclinedReason:
-            'session retired (work_bead re-keyed) while this scope never '
-            'observed it parked at a gate — refusing to abandon a possibly-'
-            'live round; a human must investigate',
+        SessionBeadKeys.reworkDeclinedReason: _reworkDeclinedReason,
       },
+    );
+    // §2.3's `attempt.rework_declined` row: after the HELD merge landed.
+    _recorder.reworkDeclined(
+      sessionId: retiredId,
+      reason: _reworkDeclinedReason,
     );
     if (_cancelled || !context.mounted) return;
     setState(() {
@@ -1357,6 +1605,13 @@ class SessionScopeState extends State<SessionScope>
       closeReason: 'breaker-exhausted',
     );
     await ctx.writer.close(id, reason: 'breaker-exhausted');
+    // §2.3's `attempt.terminal(escalated)` row — the reason is the same
+    // `grid.escalation_reason` the marker write above carried.
+    _recorder.sessionEscalated(
+      sessionId: id,
+      workBeadId: seed.bead.id,
+      reason: reason.isEmpty ? null : reason,
+    );
     _flare('session.closed', {
       'sessionId': id,
       'disposition': 'held',
@@ -1595,6 +1850,11 @@ class SessionScopeState extends State<SessionScope>
           id,
           nodePath,
           moleculeTarget: beadIdByNodePath[nodePath],
+          // §2.2: `step_round` is the supersedes-chain depth as the engine
+          // computes it today, captured at the observation; `incarnation` is
+          // the persisted restartCount. Both are build-time facts.
+          stepRound: structuralDepthByPath[nodePath] ?? 0,
+          incarnation: node.restartCount,
         );
       }
     });
@@ -1632,6 +1892,7 @@ class SessionScopeState extends State<SessionScope>
             stepBeadId: stepBeadId,
             reason: derived.reason,
             node: node,
+            stepRound: structuralDepthByPath[derived.path] ?? 0,
           );
         } else {
           final broken = firstBrokenNode(

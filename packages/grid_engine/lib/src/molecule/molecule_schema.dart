@@ -128,6 +128,18 @@ abstract final class LeaseKeys {
   static const pgid = 'grid.lease.pgid';
   static const pid = 'grid.lease.pid';
   static const token = 'grid.lease.token';
+
+  /// The trajectory log's CHAR(26) name for the leased incarnation
+  /// (stage1-wiring §2.1). It rides THIS namespace — not a new one — because
+  /// the durable carrier problem is already solved here: `grid.lease.*` has
+  /// exactly one writer, it is written at the same instant as the freshness
+  /// token, and it is read back by the SAME parse adoption already runs. That
+  /// is what makes attempt identity RECOVERABLE (the recorder holds no
+  /// identity it cannot rebuild from the breadcrumbs plus the log).
+  ///
+  /// Tolerated absent: a breadcrumb written before Stage 1 carries pgid/pid/
+  /// token and no attempt id, and must still parse and still adopt.
+  static const attemptId = 'grid.lease.attempt_id';
 }
 
 /// The declarative params convention naming a critic→build-target VALIDATES

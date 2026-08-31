@@ -34,16 +34,24 @@ final class StationCommandHandler implements GridCommandHandler {
     required StationBeadWriter stateWriter,
     required BeadOwnershipPredicate stateOwnership,
     required Map<String, WorkCommandStore> workStoresByIdentity,
+    StationTrajectoryRecorder? recorder,
   }) : _stateSource = stateSource,
        _refreshState = refreshState,
        _stateWriter = stateWriter,
        _stateOwnership = stateOwnership,
+       _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _workStoresByIdentity = Map.unmodifiable(workStoresByIdentity);
 
   final SnapshotSource _stateSource;
   final Future<void> Function() _refreshState;
   final StationBeadWriter _stateWriter;
   final BeadOwnershipPredicate _stateOwnership;
+
+  /// The Stage-1 derivation layer (stage1-wiring §2.3's `attempt.round.retired`
+  /// row). `grid rework` is where an operator RETIRES a round, and this
+  /// handler is the code that makes the re-key — so it is one of that record's
+  /// two observation sites. Absent it is a counting no-op.
+  final StationTrajectoryRecorder _recorder;
   final Map<String, WorkCommandStore> _workStoresByIdentity;
   Future<void> _tail = Future<void>.value();
 
@@ -320,6 +328,17 @@ final class StationCommandHandler implements GridCommandHandler {
       await _stateWriter.update(
         session.id,
         metadata: {SessionBeadKeys.workBead: reworkKeyFor(beadId, round)},
+      );
+      // §2.3's `attempt.round.retired` row, after the re-key landed. [round]
+      // is the round being MINTED, so the one retired is `round - 1` — the
+      // same `old_round` `SessionScope`'s retired-round close derives from the
+      // `#rN` key it later observes. Two observers, ONE record: the idem key
+      // is `round-retired:<session>:<oldRound>`, so whichever lands first
+      // wins and the other dedupes.
+      _recorder.roundRetired(
+        sessionId: session.id,
+        cause: RoundRetireCause.rework,
+        oldRound: round - 1,
       );
       // The operator finding lands BEFORE collection housekeeping: the note
       // is what the fresh round's architect reads, and losing it to a reap

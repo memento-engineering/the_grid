@@ -31,6 +31,20 @@ sealed class RuntimeEvent with _$RuntimeEvent {
     /// The effective deadline armed for this session, after provider defaults
     /// are applied. Null means no watchdog is armed for this process.
     Duration? deadline,
+
+    /// The trajectory log's name for THIS process incarnation (stage1-wiring
+    /// §2.1) — read off the spawn's `GRID_ATTEMPT_ID` env var, which is the
+    /// SAME value the engine persisted to the step bead's
+    /// `grid.lease.attempt_id` breadcrumb. The observation join:
+    /// `attempt.process.started` derives from this event, so its attempt id is
+    /// breadcrumb-backed rather than invented at the observation site (the
+    /// recorder holds no identity it cannot recover).
+    ///
+    /// Empty when the spawn carried no attempt id — a provider driven outside
+    /// the engine's allocation path, or a pre-Stage-1 caller. Additive and
+    /// defaulted: every existing construction site keeps compiling and every
+    /// existing consumer keeps its shape.
+    @Default('') String attemptId,
   }) = SessionStarted;
 
   /// The session's process exited with [exitCode] (negative for signal-killed,
@@ -41,6 +55,16 @@ sealed class RuntimeEvent with _$RuntimeEvent {
   const factory RuntimeEvent.exited({
     required String name,
     required int exitCode,
+
+    /// The OS pid that exited, when the emitter still knew it. The session
+    /// NAME is a slot, not an identity — a stop that races a respawn can put
+    /// a second process behind the same name — so a consumer joining an exit
+    /// back to the start it observed ([SessionStarted.pid]) must be able to
+    /// check that the two are the same process. Null where the emitter never
+    /// learned a pid (a session that died before it had one); a consumer
+    /// treats null as "cannot check", never as a mismatch. Additive and
+    /// defaulted: every existing construction site and consumer is unchanged.
+    int? pid,
 
     /// Whether [exitCode] was INFERRED rather than READ. A DETACHED one-shot
     /// exposes no readable exit code, so its vanish is reported as a clean
@@ -59,6 +83,11 @@ sealed class RuntimeEvent with _$RuntimeEvent {
   const factory RuntimeEvent.died({
     required String name,
     @Default('') String reason,
+
+    /// The OS pid that died, when the emitter still knew it — the same
+    /// exit-join discriminator [RuntimeEvent.exited] carries, for the same
+    /// reason.
+    int? pid,
   }) = Died;
 
   /// The session was restarted in a new incarnation; [epoch] is the new runtime

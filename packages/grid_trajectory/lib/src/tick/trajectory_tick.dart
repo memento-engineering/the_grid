@@ -180,8 +180,10 @@ class TrajectoryTick {
         repairs = await query.repair(result.rows);
       } on Object catch (error) {
         // One obligation's failure never ends the pass: the query is keyed on
-        // external state, so it stays open and the next tick retries it
-        // (§5's N-consecutive-failure accounting arrives with Stage 1).
+        // external state, so it stays open and the next tick retries it. §5's
+        // N-consecutive-failure accounting reads these refusals off the pass
+        // (Stage 1's `StuckObligationAccountant`, engine-side) — the tick
+        // counts, it does not adjudicate.
         refusals.add(
           TickRefusal(
             kind: TickRefusalKind.queryFailed,
@@ -195,6 +197,7 @@ class TrajectoryTick {
       for (final repair in repairs) {
         final outcome = await _appender.append(
           repair.record,
+          seat: repair.seat,
           provenance: repair.provenance,
           provenanceBasis: repair.provenanceBasis,
         );

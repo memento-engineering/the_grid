@@ -9,7 +9,13 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart' show Bead, BeadStatus, IssueType;
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
-    show AttemptLifecycleShadow, ShadowCompare, SubjectRecords;
+    show
+        AttemptLifecycleShadow,
+        CompositeShadow,
+        MountOrdinalShadow,
+        ShadowCompare,
+        StepTransitionShadow,
+        SubjectRecords;
 import 'package:test/test.dart';
 
 Bead sessionBead({
@@ -22,6 +28,28 @@ Bead sessionBead({
   issueType: const IssueType('session'),
   status: status,
   metadata: {'work_bead': workBead, ...metadata},
+);
+
+Bead stepBead({
+  String id = 'tranquility-step-1',
+  BeadStatus status = BeadStatus.open,
+  Map<String, dynamic> metadata = const {},
+}) => Bead(
+  id: id,
+  issueType: const IssueType('step'),
+  status: status,
+  metadata: metadata,
+);
+
+Bead mountAttemptBead({
+  String id = 'tranquility-attempt-1',
+  required String workBead,
+  required String count,
+}) => Bead(
+  id: id,
+  issueType: const IssueType('mount-attempt'),
+  status: BeadStatus.open,
+  metadata: {'grid.attempt.work_bead': workBead, 'grid.attempt.count': count},
 );
 
 void main() {
@@ -137,8 +165,94 @@ void main() {
           '${home.path}/.grid/.beads/metadata.json',
         ).writeAsStringSync('{"dolt_mode": "direct"}');
         final shadow = await legacyShadowCompareFor(home.path);
-        expect(shadow, isA<AttemptLifecycleShadow>());
+        // Stage 1 shadows three lanes over three different oracles; the verb
+        // takes one strategy, so they arrive composed.
+        expect(shadow, isA<CompositeShadow>());
+        final lanes = (shadow as CompositeShadow).lanes;
+        expect(lanes.map((lane) => lane.runtimeType), [
+          AttemptLifecycleShadow,
+          StepTransitionShadow,
+          MountOrdinalShadow,
+        ]);
+        expect(
+          shadow.comparableFields,
+          containsAll(<String>['status', 'step_state', 'legacy_attempt_count']),
+        );
       },
     );
+  });
+
+  group('legacyStepViewOf', () {
+    test('projects the path, the fine state, and the cooldown', () {
+      final view = legacyStepViewOf(
+        stepBead(
+          metadata: const {
+            'grid.step.path': 'build',
+            'grid.step.state': 'failed',
+            'grid.step.cooldownUntil': '2026-08-31T10:15:30.000Z',
+          },
+        ),
+      );
+      expect(view!.stepPath, 'build');
+      expect(view.state, 'failed');
+      expect(view.cooldownUntil, DateTime.utc(2026, 8, 31, 10, 15, 30));
+    });
+
+    test("a step with no fine state carries null — never bd's coarse "
+        'axis', () {
+      final view = legacyStepViewOf(
+        stepBead(metadata: const {'grid.step.path': 'build'}),
+      );
+      expect(view!.state, isNull);
+      expect(view.cooldownUntil, isNull);
+    });
+
+    test('a bead with no node path is not projectable — nothing to join '
+        'on', () {
+      expect(legacyStepViewOf(stepBead()), isNull);
+    });
+  });
+
+  group('BdLegacyStepReader', () {
+    test('projects every step bead the fetch yields', () async {
+      final reader = BdLegacyStepReader(
+        (session) async => [
+          stepBead(
+            metadata: {
+              'grid.step.session': session,
+              'grid.step.path': 'build',
+              'grid.step.state': 'running',
+            },
+          ),
+          stepBead(metadata: const {'grid.step.state': 'running'}),
+        ],
+      );
+      final views = await reader.stepViews('tranquility-1');
+      // The path-less bead is dropped, not guessed at.
+      expect(views.map((view) => view.stepPath), ['build']);
+    });
+  });
+
+  group('BdLegacyMountAttemptReader', () {
+    test('reads grid.attempt.count for the joined work bead', () async {
+      final reader = BdLegacyMountAttemptReader(
+        (workBeadId) async => [
+          mountAttemptBead(workBead: workBeadId, count: '2'),
+        ],
+      );
+      expect(await reader.attemptCount('tg-9abc'), 2);
+    });
+
+    test('a record for ANOTHER work bead never answers this join', () async {
+      final reader = BdLegacyMountAttemptReader(
+        (_) async => [mountAttemptBead(workBead: 'tg-OTHER', count: '9')],
+      );
+      expect(await reader.attemptCount('tg-9abc'), isNull);
+    });
+
+    test('no record is null — a first-try mount, not a zero', () async {
+      final reader = BdLegacyMountAttemptReader((_) async => const []);
+      expect(await reader.attemptCount('tg-9abc'), isNull);
+    });
   });
 }

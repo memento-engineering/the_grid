@@ -45,7 +45,8 @@ export 'src/runtime_scaffold.dart';
 // Track 2 — the runtime seam + the subprocess provider.
 export 'src/runtime/env_allowlist.dart'
     show AgentEnvAllowlist, systemEnvironment;
-export 'src/runtime/incarnation_env.dart' show IncarnationEnv, newInstanceToken;
+export 'src/runtime/incarnation_env.dart'
+    show IncarnationEnv, newAttemptId, newInstanceToken;
 export 'src/runtime/process_group.dart'
     show
         GroupTerminateResult,
@@ -132,3 +133,76 @@ export 'src/lifecycle/session_state.dart'
 // GraphEvent stream + readyBeads, alongside M2's ConvergenceSource).
 export 'src/dispatch/ready_work_source.dart'
     show GridReadyWorkSource, ReadyWorkSource;
+
+// Stage 1 (tg-zfek) — the slice of the record VOCABULARY the engine's
+// derivation call sites have to name when they hand the recorder an
+// observation (§2.3's cause/phase/disposition discriminators). Re-exported
+// HERE so grid_engine reaches it over the edge it already has (grid_engine →
+// grid_runtime, ADR-0002 D1) instead of growing a third inbound edge to the
+// leaf package — the design allows exactly two (grid_runtime, grid_sdk).
+//
+// `StepState` is DELIBERATELY absent: grid_engine has one of its own, and a
+// re-export would collide at every engine import site. That is exactly why
+// the step family's recorder API is intent-named (`stepRunning`, `stepFailed`,
+// …) instead of state-parameterized.
+// `TrajectoryRecord` and `TrajectoryProvenance` are here for a second reason:
+// they appear in `TrajectoryRecordSink`'s own method signature, so exporting
+// the interface without them would ship an implementable-in-name-only API —
+// no consumer outside this package could write the `enqueue` override.
+export 'package:grid_trajectory/grid_trajectory.dart'
+    show
+        AdoptOutcome,
+        LeaseDisposition,
+        MintPhase,
+        RoundRetireCause,
+        TrajectoryProvenance,
+        TrajectoryRecord;
+// Stage 1 (tg-zfek) — the trajectory derivation layer: the ONLY code that
+// names concrete Stage-1 record classes; enqueue-only into the harness's
+// single writer (stage1-wiring §2).
+export 'src/trajectory/station_trajectory_recorder.dart'
+    show
+        DerivedRecord,
+        StationTrajectoryRecorder,
+        TrajectoryRecordSink,
+        TrajectoryRecorderFlare,
+        TrajectoryRecorderStats,
+        kLegacyAttemptCountKey,
+        kObligationStuckChannel,
+        kPreStage3GrantBasis,
+        kReconcilerMintedAttemptBasis,
+        kRecorderCacheBound,
+        kRecorderMintedAttemptBasis,
+        kTickReapedBackfillBasis,
+        kTickUnknownSettlementBasis,
+        kUnownedSeat,
+        kUnownedSeatBasis;
+// Stage 1 (tg-zfek, chunk W7) — the tick's shadow-posture obligation set and
+// its two real liveness surfaces. The harness composes these; nothing here
+// writes bd or the filesystem (stage1-wiring §2.4).
+export 'src/trajectory/stage1_obligations.dart'
+    show
+        LastActivityPoll,
+        LivenessDetectorObligation,
+        UnknownTerminalSettlementObligation,
+        WorktreeReapedBackfillObligation,
+        buildStage1ObligationQueries,
+        kDefaultLivenessThreshold,
+        kDefaultPulseCoalesce,
+        kLivenessDetectorObligation,
+        kObligationBatchSize,
+        kPulseViaRuntime,
+        kPulseViaWorktreeMtime,
+        kUnknownTerminalSettlementObligation,
+        kWorktreeReapedBackfillObligation;
+export 'src/trajectory/stuck_obligation_accountant.dart'
+    show
+        StuckObligationAccountant,
+        kStuckObligationThreshold,
+        stationNoteSubject;
+export 'src/trajectory/worktree_pulse_scanner.dart'
+    show
+        WorktreePulseScanner,
+        WorktreeScan,
+        WorktreeScanCost,
+        kWorktreeStateDirName;

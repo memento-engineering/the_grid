@@ -1330,6 +1330,67 @@ void main() {
       ),
     );
   });
+  group('W4 — attempt.round.retired at the rework re-key (§2.3)', () {
+    /// Runs one `grid rework` under [sink] and asserts the LEGACY re-key
+    /// landed — the fact every posture below must preserve.
+    Future<void> rework(TrajectoryRecordSink sink) async {
+      final stateRunner = _RecordingRunner();
+      const workBead = Bead(
+        id: 'tg-1',
+        issueType: IssueType.task,
+        metadata: {'rig': 'tg'},
+      );
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tgdog-session',
+              issueType: GridIssueTypes.session,
+              status: BeadStatus.closed,
+              metadata: {'work_bead': 'tg-1', 'rig': 'tgdog'},
+            ),
+          ]),
+        ),
+        work: _Source(_snapshot(const [workBead])),
+        stateRunner: stateRunner,
+        workRunner: _RecordingRunner(exportBeads: const [workBead]),
+        recorder: StationTrajectoryRecorder(sink: sink),
+      );
+      expect(
+        await handler(const GridCommandRequest.rework(beadId: 'tg-1')),
+        isA<GridCommandCompleted>(),
+      );
+      // The record shadows this write; it never leads it.
+      expect(stateRunner.calls.single.join(' '), contains('tg-1#r1'));
+    }
+
+    test(
+      'the record names the round being RETIRED, not the fresh one',
+      () async {
+        final sink = _CapturingSink();
+        await rework(sink);
+        expect(sink.records.map((r) => r.recordType), [
+          'attempt.round.retired',
+        ]);
+        final fact = {
+          ...sink.records.single.correlationToJson(),
+          ...sink.records.single.payloadToJson(),
+        };
+        expect(fact['session_id'], 'tgdog-session');
+        // `#r1` is the round being MINTED, so round 0 is the one retired —
+        // the same `old_round` SessionScope derives from the `#rN` key it
+        // later observes, which is what makes the two sites dedupe to ONE
+        // record on the shared `round-retired:<session>:<oldRound>` key.
+        expect(fact['old_round'], 0);
+        expect(fact['new_round'], 1);
+        expect(fact['cause'], 'rework');
+      },
+    );
+
+    test('NON-FATAL: a throwing recorder still retires the round', () async {
+      await rework(_ThrowingSink());
+    });
+  });
 }
 
 Bead _session(
@@ -1417,6 +1478,7 @@ StationCommandHandler _handler({
   Set<String> stateWriterOwnership = const {'tg', 'tgdog'},
   Set<String> workWriterOwnership = const {'tg'},
   String workIdentity = 'tg',
+  StationTrajectoryRecorder? recorder,
 }) => StationCommandHandler(
   stateSource: state,
   refreshState: refreshState ?? () async {},
@@ -1426,6 +1488,7 @@ StationCommandHandler _handler({
     ownership: BeadOwnershipPredicate(stateWriterOwnership),
   ),
   stateOwnership: BeadOwnershipPredicate(stateOwnership),
+  recorder: recorder,
   workStoresByIdentity: {
     workIdentity: WorkCommandStore(
       source: work,
@@ -1438,6 +1501,41 @@ StationCommandHandler _handler({
     ),
   },
 );
+
+/// Captures the observations `grid rework` derives (stage1-wiring §2.3's
+/// `attempt.round.retired` row) — the command handler is one of that record's
+/// two observation sites; `SessionScope`'s retired-round close is the other,
+/// and the shared idem key is what merges them into ONE record.
+final class _CapturingSink implements TrajectoryRecordSink {
+  final List<TrajectoryRecord> records = [];
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? seat,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => records.add(record);
+}
+
+/// The §3 worst case: an accepting sink that throws inside the enqueue.
+final class _ThrowingSink implements TrajectoryRecordSink {
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? seat,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => throw StateError('sink refused');
+}
 
 GraphSnapshot _snapshot(Iterable<Bead> beads) => GraphSnapshot.fromParts(
   beads: beads,

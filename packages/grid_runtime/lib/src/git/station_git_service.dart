@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../trajectory/station_trajectory_recorder.dart';
 import 'git_ops.dart';
 import 'git_runner.dart';
 import 'pr_opener.dart';
@@ -231,12 +232,24 @@ String _canonical(String path) {
 /// open PR via the injectable [PrOpener] → return the [PullRequestRef] for the
 /// caller to record on the lifecycle bead. NEVER auto-merges.
 class StationGitService {
-  StationGitService({required GitRunner runner, required PrOpener prOpener})
-    : _ops = GitOps(runner),
-      _prOpener = prOpener;
+  StationGitService({
+    required GitRunner runner,
+    required PrOpener prOpener,
+    StationTrajectoryRecorder? recorder,
+  }) : _ops = GitOps(runner),
+       _prOpener = prOpener,
+       _recorder = recorder ?? StationTrajectoryRecorder.disabled();
 
   final GitOps _ops;
   final PrOpener _prOpener;
+
+  /// The Stage-1 derivation layer (stage1-wiring §2.3's `worktree.provisioned`
+  /// row). The observation is made INSIDE [provisionWorktree] — r2 blocker 3
+  /// re-sited it here from power_station, because this is where `preexisting`
+  /// and the branch are locally in hand and one `git rev-parse HEAD` names the
+  /// base commit at the same instant. Absent (the default) it is a counting
+  /// no-op: no call site branches on "is the trajectory up".
+  final StationTrajectoryRecorder _recorder;
 
   /// **Layer 1 — register the root checkout.** Records [path] (an
   /// already-present clone) + the default branch per-bead worktrees branch off.
@@ -353,6 +366,31 @@ class StationGitService {
         '"$branch" ${preexisting ? 'already existed (adopt attempted, no -b)' : 'did not exist yet (minted fresh)'}, '
         'target path "$path": ${result.output.trim()}',
       );
+    }
+    // The trajectory observation (stage1-wiring §2.3), AFTER the legacy
+    // `git worktree add` succeeded and never before it: `preexisting` is the
+    // `adopted_existing` fact, and one `rev-parse HEAD` in the worktree just
+    // added names the commit it starts on. Non-fatal by construction — the
+    // probe cannot throw (`GitRunner` returns a failure result) and the
+    // recorder swallows its own derivation failures — so a provision never
+    // fails, and never fails DIFFERENTLY, for the trajectory's sake.
+    //
+    // Gated on `accepting`: the rev-parse is a real git subprocess whose ONLY
+    // consumer is the record, so a disabled/latched recorder skips the probe
+    // too — a dry station, an unprovisioned home, and every provisioning test
+    // pay nothing. This gates the EVIDENCE PROBE, never the legacy provision
+    // above (§1.1's no-branching rule is about the legacy path).
+    if (_recorder.accepting) {
+      final baseSha = await _ops.headSha(path);
+      if (baseSha != null) {
+        _recorder.worktreeProvisioned(
+          workBeadId: beadId,
+          worktree: path,
+          branch: branch,
+          baseSha: baseSha,
+          adoptedExisting: preexisting,
+        );
+      }
     }
     return BeadWorktree(beadId: beadId, path: path, branch: branch);
   }

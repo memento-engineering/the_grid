@@ -42,14 +42,16 @@ import '../diagnostics/diagnosable.dart';
 import '../domain/session_bead.dart';
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
+import '../kernel/trajectory_scope.dart';
 import '../molecule/inherited_circuit.dart' show InheritedCircuit;
 import '../molecule/molecule_codec.dart' show stepBeadMetadata;
 import '../molecule/process_lease_vendor.dart'
-    show ProcessLeaseRequest, requireProcessLeaseVendor;
+    show ProcessHandle, ProcessLeaseRequest, requireProcessLeaseVendor;
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
 import '../sdk/cursor.dart';
+import '../sdk/lease.dart' show LeaseAllocation;
 import '../sdk/route.dart';
 import 'capability_registry.dart';
 
@@ -87,6 +89,17 @@ class CapabilityHost extends StatefulSeed with GridDiagnosticable {
   State<CapabilityHost> createState() => CapabilityHostState();
 }
 
+/// [recorder] + [stepRound] / [incarnation] carry the trajectory's step half
+/// of the park (stage1-wiring §2.3's `step.transition (gated)` row). The
+/// record rides HERE, in the one persist both the route-declined park and
+/// `SessionScope`'s derived twin already share, so the two observation sites
+/// the design names cannot drift into two different records. The GATE BEAD's
+/// mint below stays wholly legacy: `gate.opened` is a P4 record and appends
+/// nothing at Stage 1.
+///
+/// [stepRound]/[incarnation] are REQUIRED (no silent-0 default): every caller
+/// provably has both in hand, and a defaulted 0 on the field the design says
+/// kills the I-14 stale-join loop would compile clean and record wrong.
 Future<void> persistRaisedEscalation({
   required StationServices station,
   required ServiceBundle services,
@@ -96,6 +109,10 @@ Future<void> persistRaisedEscalation({
   required bool Function() isActive,
   required Future<void> Function(String reason) failToSupervision,
   required void Function(String name, Map<String, String> data) emitFlare,
+  required int stepRound,
+  required int incarnation,
+  StationTrajectoryRecorder? recorder,
+  String? attemptId,
 }) async {
   if (!isActive()) return;
   final handler = services.escalation ?? const HumanGate();
@@ -114,6 +131,14 @@ Future<void> persistRaisedEscalation({
   switch (decision) {
     case ParkAtGate(reason: final parkReason):
       await station.writer.update(stepBeadId, metadata: gatedMetadata);
+      recorder?.stepGated(
+        sessionId: request.sessionId,
+        stepPath: request.nodePath,
+        stepRound: stepRound,
+        incarnation: incarnation,
+        attemptId: attemptId,
+        reason: parkReason,
+      );
       if (!isActive()) return;
       await station.writer.createGate(
         substation: station.stateSubstation,
@@ -134,10 +159,31 @@ class CapabilityHostState extends State<CapabilityHost>
     with Diagnosticable, GridDiagnosticable {
   StationServices? _ctx;
   ServiceBundle _services = const ServiceBundle();
+
+  /// The Stage-1 derivation layer (stage1-wiring §2), re-resolved on every
+  /// `didChangeDependencies` and held for the persist paths — which all run
+  /// off `build`, which is exactly where the records belong. Absent it is a
+  /// counting no-op, so no persist site asks whether the trajectory is up.
+  StationTrajectoryRecorder _recorder =
+      TrajectoryRecorderScope.disabled.recorder;
   CapabilityRegistry? _registry;
   Allocation? _allocation;
   StepArgs? _args;
   String _token = '';
+
+  /// This incarnation's `attempt_id` — the trajectory log's durable name for
+  /// the one process this mount will spawn (stage1-wiring §2.1). Minted with
+  /// [_token] in [initState] and exported beside it on the allocation env, so
+  /// the spawner stamps it onto the [ProcessHandle], the lease vendor persists
+  /// it on the `grid.lease.*` breadcrumb, and the child sees it as
+  /// `GRID_ATTEMPT_ID`.
+  ///
+  /// Per MOUNT, exactly like [_token]: a supervised restart re-keys the node
+  /// (`circuit_scope.dart`'s `restartCount` ValueKey), which mounts a fresh
+  /// host — a fresh incarnation, a fresh token, a fresh attempt. An ADOPTING
+  /// mount spawns nothing, so this value is never persisted and never reaches
+  /// a process: the survivor keeps the attempt its breadcrumb already carries.
+  String _attemptId = '';
   bool _cancelled = false;
   bool _completed = false;
 
@@ -159,6 +205,12 @@ class CapabilityHostState extends State<CapabilityHost>
 
   String get _sessionId => seed.mount.session.sessionId;
   String get _nodePath => seed.mount.nodePath;
+
+  /// The trajectory's `step_round` (stage1-wiring §2.2): the supersedes-chain
+  /// depth as the engine already computes it — [StepMount.circuitRound],
+  /// which `SessionScope` fills from `supersedesDepthByPath`. Captured at the
+  /// observation, never invented here.
+  int get _stepRound => seed.mount.circuitRound;
 
   /// The work bead id — the root segment of the nodePath (the root circuit's
   /// nodePath IS the bead id, so every step path is `beadId/...`).
@@ -205,6 +257,9 @@ class CapabilityHostState extends State<CapabilityHost>
   @override
   void initState() {
     _token = newInstanceToken();
+    // Minted with the token, at the same instant and for the same lifetime —
+    // one incarnation, one attempt (schema §3). Never re-minted after this.
+    _attemptId = newAttemptId();
     // One StepArgs per incarnation: its CancelToken is the effect's cooperative
     // unmount signal (the allocation cancels it in dispose).
     _args = StepArgs(
@@ -230,6 +285,11 @@ class CapabilityHostState extends State<CapabilityHost>
     _ctx = ctx;
     _services = context.watch<ServiceBundle>() ?? const ServiceBundle();
     _registry = context.watch<CapabilityRegistry>();
+    // Snapshot lookup, not a binding one (see `trajectoryRecorderOf`): the
+    // recorder is station-lifetime, and coupling a live process's host to the
+    // harness's object identity is the same footgun `requireProcessLeaseVendor`
+    // documents one file over.
+    _recorder = trajectoryRecorderOf(context);
 
     final existing = _allocation;
     if (existing == null) {
@@ -237,6 +297,18 @@ class CapabilityHostState extends State<CapabilityHost>
       // the kick (off-build, injected clock) — the terminal write derives
       // `durationMs` from it. Set once, before the async kick.
       _startedAt = _now();
+      // Seed the recorder's spawn-info cache BEFORE the kick (stage1-wiring
+      // §2.2): the runtime-event subscriber derives `attempt.process.started`
+      // from a `SessionStarted` event that carries none of these correlation
+      // facts, and this mount is the only site that has them all in hand.
+      // Appends nothing; a no-op under the disabled recorder.
+      _recorder.attemptSpawning(
+        attemptId: _attemptId,
+        sessionId: _sessionId,
+        stepPath: _nodePath,
+        stepRound: _stepRound,
+        incarnation: seed.mount.node.restartCount,
+      );
       // FIRST call: mint the Allocation HERE (synchronously, before the async
       // kick) so `dispose → allocation.dispose` (teardown) is guaranteed on
       // EVERY exit path — even a dispose that races the kick before it spawns
@@ -330,6 +402,13 @@ class CapabilityHostState extends State<CapabilityHost>
         'GRID_SESSION_ID': _sessionId,
         'GRID_INSTANCE_TOKEN': _token,
         'GRID_STEP_PATH': _nodePath,
+        // The trajectory's name for this incarnation (stage1-wiring §2.1).
+        // It rides THIS map — the allocation env — because that is the one
+        // block layered LAST over the provider's own allowlist+IncarnationEnv
+        // base, so the host's value is the one the child and the
+        // `sessionStarted` observation both see. `GRID_INSTANCE_TOKEN` stays:
+        // Stage 1 dual-exports, and retiring the token is a cut change.
+        'GRID_ATTEMPT_ID': _attemptId,
       },
       sink: _onReport,
       // The prior incarnation's identity for an adopt-freshness proof (D4);
@@ -358,6 +437,7 @@ class CapabilityHostState extends State<CapabilityHost>
   /// daemon `ready` does not latch).
   void _onReport(AllocationReport report) {
     if (_cancelled || !context.mounted) return;
+    _reconcileAdoptedAttempt();
     switch (report) {
       case AllocationStarted():
         // The report's pid/pgid are NOT persisted here: process identity is
@@ -397,6 +477,30 @@ class CapabilityHostState extends State<CapabilityHost>
         _completed = true;
         _firePersist('rewind', () => _persistRewindReport(stepIds, reason));
     }
+  }
+
+  /// The adopt-continues rule, enforced (stage1-wiring §2.1: "Adoption
+  /// CONTINUES the attempt… no fresh mint on adopt"). Every mount mints an
+  /// attempt in [initState] — it has to, before the allocation has decided
+  /// spawn-vs-adopt — but an ADOPTING lease reattaches a survivor whose
+  /// breadcrumb already names its attempt, and every record this host stamps
+  /// must carry THAT id, never the discarded mint. The recovered id rides the
+  /// same `adoptable` parse the adopt decision itself rode
+  /// (`leaseBreadcrumbOf` → `LeaseAllocation.handle`), so no identity is
+  /// invented here. A pre-Stage-1 breadcrumb names no attempt (empty) — the
+  /// mount's mint stands, which is exactly the tolerant-parse posture §2.1
+  /// specifies for adoption.
+  ///
+  /// Runs at every report entry (idempotent, latching on first difference):
+  /// the adopt decision lands inside the fire-and-forget `startOrAdopt`, and
+  /// the first report a host handles is always after `_adopted`/`_bind` were
+  /// set synchronously before the adopt path's `AllocationReady` sink.
+  void _reconcileAdoptedAttempt() {
+    final alloc = _allocation;
+    if (alloc is! LeaseAllocation<ProcessHandle> || !alloc.adopted) return;
+    final adopted = alloc.handle?.attemptId ?? '';
+    if (adopted.isEmpty || adopted == _attemptId) return;
+    _attemptId = adopted;
   }
 
   /// Fires a persist path that must NEVER take the station down (bead `tg-7ux`).
@@ -472,7 +576,13 @@ class CapabilityHostState extends State<CapabilityHost>
   /// flares under its own name and stops. No third write, no recursion.
   Future<void> _superviseFailedPersist(String op, Object error) async {
     try {
-      await _persistFailure('persist "$op" failed: $error');
+      // The ONE site that knows this `failed` is a dropped STORE WRITE rather
+      // than failed work — the tg-7ux conflation the record's `failure_class`
+      // splits (§2.3).
+      await _persistFailureClassed(
+        'persist "$op" failed: $error',
+        storeUnavailable: true,
+      );
     } on Object catch (e) {
       _emitFlare('step.persistRecoveryFailed', {
         'op': op,
@@ -527,14 +637,20 @@ class CapabilityHostState extends State<CapabilityHost>
   /// merged into the same chokepoint write); the non-terminal `running`
   /// transition ([_persistStarted]) passes `terminal: false` and carries only
   /// the kick instant [_startedAt].
+  ///
+  /// [timing] lets a terminal caller derive the triple ONCE and hand it in —
+  /// the trajectory record and the legacy bead must carry the SAME instants,
+  /// or the shadow window's own timestamps become a mismatch source (§2.2:
+  /// `occurred_at` is the observation instant, not a re-stamp).
   Map<String, String> _moleculeMetadata(
     StepState state, {
     int? restartCount,
     DateTime? cooldownUntil,
     String? failureReason,
     bool terminal = true,
+    ({DateTime? startedAt, DateTime finishedAt, int? durationMs})? timing,
   }) {
-    final timing = terminal ? _terminalTiming() : null;
+    timing ??= terminal ? _terminalTiming() : null;
     return stepBeadMetadata(
       NodeCursor(
         state: state,
@@ -565,6 +681,17 @@ class CapabilityHostState extends State<CapabilityHost>
       // `grid.lease.*`, never the step bead's cursor keys.
       metadata: _moleculeMetadata(StepState.running, terminal: false),
     );
+    // §2.3's `step.transition (running)` row — after the step-bead mutation
+    // returned, enqueued, never awaited (§2.5: no persist path pays append
+    // latency).
+    _recorder.stepRunning(
+      sessionId: _sessionId,
+      stepPath: _nodePath,
+      stepRound: _stepRound,
+      incarnation: seed.mount.node.restartCount,
+      attemptId: _attemptId,
+      startedAt: _startedAt,
+    );
   }
 
   /// A daemon's `ready` — a POSITIVE TERMINAL that does NOT latch (the daemon
@@ -576,14 +703,25 @@ class CapabilityHostState extends State<CapabilityHost>
   /// keys — a plain up-signal, today's behavior).
   Future<void> _persistReady([Map<String, String>? payload]) async {
     if (_cancelled || !context.mounted) return;
+    final timing = _terminalTiming();
     await _ctx!.writer.update(
       _stepBeadId,
       metadata: {
-        ..._moleculeMetadata(StepState.ready),
+        ..._moleculeMetadata(StepState.ready, timing: timing),
         // ResultKeys is reused VERBATIM on the step bead (R1) — only its
         // host bead moved.
         ...nodeResultMetadata(_nodePath, payload),
       },
+    );
+    _recorder.stepReady(
+      sessionId: _sessionId,
+      stepPath: _nodePath,
+      stepRound: _stepRound,
+      incarnation: seed.mount.node.restartCount,
+      attemptId: _attemptId,
+      startedAt: timing.startedAt,
+      readyAt: timing.finishedAt,
+      result: payload,
     );
     _emitFlare('step.ready', const {});
   }
@@ -593,12 +731,25 @@ class CapabilityHostState extends State<CapabilityHost>
   /// atomically alongside the cursor advance — A1/D-5).
   Future<void> _persistComplete(Map<String, String>? payload) async {
     if (_cancelled || !context.mounted) return;
+    final timing = _terminalTiming();
     await _ctx!.writer.update(
       _stepBeadId,
       metadata: {
-        ..._moleculeMetadata(StepState.complete),
+        ..._moleculeMetadata(StepState.complete, timing: timing),
         ...nodeResultMetadata(_nodePath, payload),
       },
+    );
+    // The result keys the legacy write merged atomically ride the record's
+    // payload (§2.3) — the grade/pr_url a shadow-diff compares field by field.
+    _recorder.stepComplete(
+      sessionId: _sessionId,
+      stepPath: _nodePath,
+      stepRound: _stepRound,
+      incarnation: seed.mount.node.restartCount,
+      attemptId: _attemptId,
+      startedAt: timing.startedAt,
+      completedAt: timing.finishedAt,
+      result: payload,
     );
     _emitFlare('step.complete', const {});
   }
@@ -612,7 +763,21 @@ class CapabilityHostState extends State<CapabilityHost>
   /// [reason] is the `AllocationFailed.reason` — persisted capture-only (FT-1)
   /// as the truncated `failureReason`, merged into the SAME write; an empty
   /// reason (e.g. a bare process death carrying no diagnostic) omits the key.
-  Future<void> _persistFailure([String reason = '']) async {
+  ///
+  /// [storeUnavailable] is NAMED (the codebase names its flags — `terminal:`,
+  /// `restartCount:`, `inferred:`): the positional shape read as nothing at
+  /// its one true call site. The optional-positional [reason] survives so the
+  /// `Future<void> Function(String)` tear-off at [_persistEscalate] still
+  /// satisfies its seam.
+  Future<void> _persistFailure([String reason = '']) =>
+      _persistFailureClassed(reason);
+
+  /// [_persistFailure]'s full-signature body — the one site that knows a
+  /// `failed` is a dropped STORE WRITE passes `storeUnavailable: true`.
+  Future<void> _persistFailureClassed(
+    String reason, {
+    bool storeUnavailable = false,
+  }) async {
     if (_cancelled || !context.mounted) return;
     final next = seed.mount.node.restartCount + 1;
     final exhausted = next >= seed.mount.maxRestarts;
@@ -620,6 +785,7 @@ class CapabilityHostState extends State<CapabilityHost>
         ? null
         : _now().add(seed.mount.backoff.delayFor(next));
     final failureReason = reason.isEmpty ? null : reason;
+    final timing = _terminalTiming();
     await _ctx!.writer.update(
       _stepBeadId,
       metadata: _moleculeMetadata(
@@ -627,7 +793,31 @@ class CapabilityHostState extends State<CapabilityHost>
         restartCount: next,
         cooldownUntil: cooldown,
         failureReason: failureReason,
+        timing: timing,
       ),
+    );
+    // §2.3's `step.transition (failed)` row, carrying two facts the bead
+    // cannot express:
+    //
+    //  * `incarnation` is the BUMPED restartCount this write just persisted —
+    //    the successor the ValueKey re-key is about to mount is incarnation
+    //    `next`, so the log records the succession with no event to key on
+    //    (`RuntimeEvent.respawned` has zero production emitters, r2 major 7);
+    //  * `failure_class` splits the tg-7ux CONFLATION. The bead says `failed`
+    //    for a step whose WORK failed and for a step whose failure is a
+    //    DROPPED PERSIST recovered through this same writer — one state, two
+    //    causes, indistinguishable in the incumbent and separated here.
+    _recorder.stepFailed(
+      sessionId: _sessionId,
+      stepPath: _nodePath,
+      stepRound: _stepRound,
+      incarnation: next,
+      storeUnavailable: storeUnavailable,
+      attemptId: _attemptId,
+      failureReason: failureReason,
+      restartBudget: seed.mount.maxRestarts - next,
+      startedAt: timing.startedAt,
+      cooldownUntil: cooldown,
     );
     _emitFlare('step.failed', const {});
   }
@@ -743,6 +933,10 @@ class CapabilityHostState extends State<CapabilityHost>
     isActive: () => !_cancelled && context.mounted,
     failToSupervision: _persistFailure,
     emitFlare: _emitFlare,
+    recorder: _recorder,
+    stepRound: _stepRound,
+    incarnation: seed.mount.node.restartCount,
+    attemptId: _attemptId,
   );
 
   /// The [AllocationRewound] report's dispatch — a REFUSAL, always (Decided

@@ -85,6 +85,131 @@ void main() {
   StationGitService serviceWith(PrOpener opener) =>
       StationGitService(runner: runner, prOpener: opener);
 
+  // ---------------------------------------------------------------------
+  // W4 (tg-zfek Stage 1) — the `worktree.provisioned` observation, re-sited
+  // INTO the service by stage1-wiring r2 blocker 3: this is the only place
+  // that holds `preexisting` (the adopted-vs-minted fact) and the base sha at
+  // the same instant, and it removes power_station from Stage 1's scope.
+  // ---------------------------------------------------------------------
+
+  StationGitService serviceRecording(TrajectoryRecordSink sink) =>
+      StationGitService(
+        runner: runner,
+        prOpener: _FakePrOpener(),
+        recorder: StationTrajectoryRecorder(sink: sink),
+      );
+
+  group('W4 — worktree.provisioned is captured IN the service', () {
+    test(
+      'a fresh mint records the base sha, the branch, and adopted=false',
+      () async {
+        final sink = _CapturingSink();
+        final seeded = await seedOriginAndClone();
+        final svc = serviceRecording(sink);
+        final root = await svc.registerRootCheckout(
+          path: seeded.root,
+          substation: 'tgdog',
+        );
+
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-1');
+
+        final record = sink.single();
+        expect(record.recordType, 'worktree.provisioned');
+        final fact = {...record.correlationToJson(), ...record.payloadToJson()};
+        expect(fact['worktree'], wt.path);
+        expect(fact['branch'], 'grid/lenny-1');
+        expect(fact['adopted_existing'], isFalse);
+        // The base sha is the commit the NEW worktree actually starts on —
+        // read back from git itself, never assumed.
+        final head = await runner.run(
+          workingDirectory: wt.path,
+          args: const <String>['rev-parse', 'HEAD'],
+        );
+        expect(fact['commit_sha'], head.output.trim());
+        expect((fact['commit_sha']! as String), hasLength(40));
+      },
+    );
+
+    test('an ADOPTED branch records adopted_existing=true', () async {
+      final sink = _CapturingSink();
+      final seeded = await seedOriginAndClone();
+      final svc = serviceRecording(sink);
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      final wt = await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
+      // The tg-e0p wedge: the worktree goes, the branch survives.
+      await git(seeded.root, <String>['worktree', 'remove', wt.path]);
+      sink.records.clear();
+
+      await svc.provisionWorktree(root: root, beadId: 'tg-wedge');
+      expect(sink.single().payloadToJson()['adopted_existing'], isTrue);
+    });
+
+    test(
+      'NON-FATAL: a throwing recorder still provisions the worktree',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final svc = StationGitService(
+          runner: runner,
+          prOpener: _FakePrOpener(),
+          recorder: StationTrajectoryRecorder(sink: _ThrowingSink()),
+        );
+        final root = await svc.registerRootCheckout(
+          path: seeded.root,
+          substation: 'tgdog',
+        );
+        final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-2');
+        expect(Directory(wt.path).existsSync(), isTrue);
+        expect(wt.branch, 'grid/lenny-2');
+      },
+    );
+
+    test(
+      'an unrecorded service provisions identically (the default)',
+      () async {
+        final seeded = await seedOriginAndClone();
+        final svc = serviceWith(_FakePrOpener());
+        final wt = await svc.provisionWorktree(
+          root: await svc.registerRootCheckout(
+            path: seeded.root,
+            substation: 'tgdog',
+          ),
+          beadId: 'lenny-3',
+        );
+        expect(Directory(wt.path).existsSync(), isTrue);
+      },
+    );
+
+    test('a non-accepting recorder SKIPS the base-sha probe — no extra git '
+        'subprocess when the observation would be skipped anyway', () async {
+      final seeded = await seedOriginAndClone();
+      final calls = <List<String>>[];
+      final svc = StationGitService(
+        runner: _RecordingGitRunner(runner, calls),
+        prOpener: _FakePrOpener(),
+        // The default recorder: StationTrajectoryRecorder.disabled().
+      );
+      final root = await svc.registerRootCheckout(
+        path: seeded.root,
+        substation: 'tgdog',
+      );
+      calls.clear();
+      final wt = await svc.provisionWorktree(root: root, beadId: 'lenny-4');
+      expect(Directory(wt.path).existsSync(), isTrue, reason: 'unchanged');
+      expect(
+        calls.where((args) => args.join(' ') == 'rev-parse HEAD'),
+        isEmpty,
+        reason:
+            'the rev-parse\'s ONLY consumer is the record; a dry station, '
+            'an unprovisioned home, and every provisioning test pay nothing',
+      );
+      // The positive control lives above: the recording service DOES probe
+      // (the fresh-mint test reads commit_sha off the record).
+    });
+  });
+
   test(
     'Layer 1: register probes the default branch from origin/HEAD',
     () async {
@@ -581,5 +706,62 @@ class _FakePrOpener implements PrOpener {
         number: 1,
       ),
     );
+  }
+}
+
+/// Captures what the service handed the single writer — the observation, not
+/// the append (the harness's queue is grid_sdk's).
+final class _CapturingSink implements TrajectoryRecordSink {
+  final List<TrajectoryRecord> records = [];
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? seat,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => records.add(record);
+
+  TrajectoryRecord single() {
+    expect(records, hasLength(1));
+    return records.single;
+  }
+}
+
+/// The §3 worst case: an accepting sink that throws. Provisioning is a legacy
+/// path — it must not notice.
+final class _ThrowingSink implements TrajectoryRecordSink {
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? seat,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => throw StateError('sink refused');
+}
+
+/// Delegates to the real runner while logging every argv — how the suite
+/// proves a probe was (or was not) issued.
+final class _RecordingGitRunner implements GitRunner {
+  _RecordingGitRunner(this._inner, this.calls);
+
+  final GitRunner _inner;
+  final List<List<String>> calls;
+
+  @override
+  Future<GitRunResult> run({
+    required String workingDirectory,
+    required List<String> args,
+  }) {
+    calls.add(List<String>.unmodifiable(args));
+    return _inner.run(workingDirectory: workingDirectory, args: args);
   }
 }

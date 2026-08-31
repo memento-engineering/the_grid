@@ -64,6 +64,20 @@ import 'append_outcome.dart';
 import 'service_event.dart';
 import 'ulid.dart';
 
+/// One registered synchronous fold delta — §5 step 5's registration seam
+/// (stage1-wiring §2.4/W6). The composition hands these IN fully constructed
+/// (the vocabulary side dispatches on record types; `kStage1FoldDeltas` is
+/// the Stage-1 set); the mechanics run the returned statements inside the
+/// append transaction — after the row INSERT assigns `seq`, before COMMIT —
+/// and never know which projection they maintain. An empty list means "this
+/// record touches none of my rows".
+typedef TrajectoryFoldDelta =
+    List<({String sql, Map<String, Object?> params})> Function(
+      TrajectoryEnvelope envelope,
+      TrajectoryRecord record, {
+      required int seq,
+    });
+
 /// Guarded-reconnect disposition (§5): a stale epoch goes inert WITHOUT
 /// touching the fence cell.
 sealed class ReconnectOutcome {
@@ -93,12 +107,14 @@ class TrajectoryAppender {
     Duration commitMinInterval = const Duration(seconds: 10),
     int commitRowThreshold = 512,
     TrajectoryEventSink onEvent = stdoutTrajectoryEventSink,
+    List<TrajectoryFoldDelta> folds = const [],
   }) : _db = db,
        _clock = clock ?? DateTime.now,
        _commitCadence = commitCadence,
        _commitMinInterval = commitMinInterval,
        _commitRowThreshold = commitRowThreshold,
-       _onEvent = onEvent;
+       _onEvent = onEvent,
+       _folds = folds;
 
   TrajectoryDb _db;
   final String station;
@@ -108,6 +124,9 @@ class TrajectoryAppender {
   final Duration _commitMinInterval;
   final int _commitRowThreshold;
   final TrajectoryEventSink _onEvent;
+
+  /// §5 step 5's registered synchronous folds, in registration order.
+  final List<TrajectoryFoldDelta> _folds;
 
   int? _bootEpoch;
   int _epochSeq = 0;
@@ -438,7 +457,15 @@ class TrajectoryAppender {
         }
       }
 
-      // Step 5 — Stage 0's only synchronous fold delta.
+      // Step 5 — the synchronous fold deltas: the registered projections
+      // first (Stage 1 hands in the P1+P2+P6 set), then the applied_seq
+      // cursor. A registered fold's statements ride the SAME transaction and
+      // the same error contract — a failure rolls the append back whole.
+      for (final fold in _folds) {
+        for (final statement in fold(envelope, record, seq: seq)) {
+          await _db.execute(statement.sql, statement.params);
+        }
+      }
       await _db.execute(
         'INSERT INTO proj_meta (projection, fold_version, applied_seq) '
         "VALUES ('fold', 1, :seq) "

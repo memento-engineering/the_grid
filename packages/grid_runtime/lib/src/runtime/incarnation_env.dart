@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:grid_trajectory/grid_trajectory.dart';
+
 /// The per-incarnation environment a live agent session receives from the
 /// controller — the_grid's `GRID_*` analog of gc's `session.RuntimeEnv`
 /// (`gascity/internal/session/lifecycle.go:30-67`), trimmed to the four vars
@@ -85,6 +87,22 @@ String newInstanceToken([Random? random]) {
   final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
   return const HexEncoder().convert(bytes);
 }
+
+/// Mints an `attempt_id` — the trajectory log's CHAR(26) name for ONE process
+/// incarnation (stage1-wiring §2.1; schema §3's one-attempt-one-incarnation).
+///
+/// Minted beside [newInstanceToken] at the SAME moment and with the same
+/// lifetime: a fresh mount mints both, a re-key mints both again, and adoption
+/// mints NEITHER (it continues what the `grid.lease.*` breadcrumb already
+/// carries). The two are 1:1 — the token is the freshness fence a live
+/// process echoes back, the attempt id is the trajectory's durable name for
+/// the same incarnation.
+///
+/// Lives here rather than in the engine because `grid_trajectory` is a LEAF
+/// (zero `grid_*` deps): `grid_runtime → grid_trajectory` is one of the two
+/// dep edges Stage 1 adds, and the engine reaches the minter THROUGH this
+/// package rather than growing a third edge of its own.
+String newAttemptId() => mintUlid();
 
 /// Minimal lowercase-hex encoder (avoids a `convert` dependency surface beyond
 /// `dart:convert`'s `Codec`).

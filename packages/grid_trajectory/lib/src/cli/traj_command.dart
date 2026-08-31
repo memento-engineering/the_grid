@@ -7,6 +7,8 @@ library;
 
 import 'package:args/command_runner.dart';
 
+import 'shadow_accounting.dart';
+import 'traj_provision_command.dart';
 import 'traj_shadow_diff_command.dart';
 import 'traj_show_command.dart';
 import 'trajectory_reader.dart';
@@ -18,6 +20,8 @@ class TrajCommand extends Command<int> {
     TrajectoryOpener? open,
     ShadowCompare compare = const UncomparableShadow(),
     ShadowCompareFactory? compareFor,
+    ShadowAccountingSource? accountingFor,
+    ProvisionConnect? connect,
   }) {
     addSubcommand(TrajShowCommand(open: open));
     addSubcommand(
@@ -25,8 +29,14 @@ class TrajCommand extends Command<int> {
         open: open,
         compare: compare,
         compareFor: compareFor,
+        accountingFor: accountingFor,
       ),
     );
+    // `provision` is the one WRITING verb in the group — the runbook's step 2
+    // (§4). It is composed here rather than in a separate group because an
+    // operator who knows `traj show` should not have to learn a second noun
+    // to bootstrap the thing it reads.
+    addSubcommand(TrajProvisionCommand(connect: connect));
   }
 
   @override
@@ -35,7 +45,7 @@ class TrajCommand extends Command<int> {
   @override
   final String description =
       'Read the trajectory log: per-subject history and the shadow '
-      'comparator.';
+      'comparator; provision it on a fresh grid home.';
 
   @override
   Future<int> run() async {

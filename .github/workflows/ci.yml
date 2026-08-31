@@ -37,7 +37,7 @@ jobs:
         # and carries a documented bd-HEAD ready-sort divergence (tg-nx0o).
         # Hermeticizing it for CI is tracked as a follow-up bead.
         run: |
-          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_sdk grid_cli; do
+          for pkg in grid_diagnostics_contract grid_runtime grid_exploration grid_engine grid_cli; do
             echo "::group::$pkg"
             (cd packages/$pkg && dart test)
             echo "::endgroup::"
@@ -49,9 +49,16 @@ jobs:
           echo "::group::grid_trajectory"
           (cd packages/grid_trajectory && dart test -x integration)
           echo "::endgroup::"
+          # grid_sdk carries the Stage-1 harness integration test, which is
+          # trajectory-guard-class: it FAILS rather than skips without dolt
+          # (decision: stage0-guards-gate-prs). Unit tier here; integration
+          # tier in trajectory-guards below.
+          echo "::group::grid_sdk"
+          (cd packages/grid_sdk && dart test -x integration)
+          echo "::endgroup::"
 
   trajectory-guards:
-    name: Stage-0 trajectory guards (dolt)
+    name: Trajectory guards (dolt) — Stage-0 seven + Stage-1
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,10 +84,34 @@ jobs:
           flutter-version: 3.44.8
       - name: Resolve workspace
         run: flutter pub get
-      - name: Run the seven guards
+      - name: Run the tagged guard suite
         run: |
           cd packages/grid_trajectory
           dart test -t integration
+          cd ../grid_sdk
+          dart test -t integration
+      # FAIL-CLOSED naming pin. The step above selects by TAG, so a guard file
+      # that loses its `@Tags(['integration'])` annotation silently stops
+      # gating PRs while this job stays green. Naming the Stage-1 guards by
+      # PATH turns that into a red run instead: an untagged, renamed, or
+      # deleted file selects zero tests here and `dart test` exits non-zero.
+      - name: Stage-1 guard pin — provision verb + fold measurement
+        run: |
+          cd packages/grid_trajectory
+          dart test -t integration \
+            test/integration/traj_provision_integration_test.dart \
+            test/integration/stage1_fold_measurement_test.dart
+      # The shadow window's own tooling is pure-Dart and also runs in the
+      # `dart` job's wildcard — but a §9 stage cut is adjudicated on exactly
+      # what these produce, so they are named rather than left to a wildcard,
+      # for the same fail-closed reason as above.
+      - name: Stage-1 guard pin — shadow lanes + round-disqualification gating
+        run: |
+          cd packages/grid_trajectory
+          dart test \
+            test/shadow \
+            test/cli/traj_shadow_diff_command_test.dart \
+            test/cli/traj_shadow_diff_accounting_test.dart
 
   flutter:
     name: analyze + test (Flutter packages)

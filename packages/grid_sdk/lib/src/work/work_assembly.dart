@@ -9,6 +9,8 @@ import 'package:path/path.dart' as p;
 import '../command/command_operation.dart';
 import '../command/station_command_handler.dart';
 import '../stores/stores.dart';
+import '../trajectory/trajectory_config.dart';
+import '../trajectory/trajectory_harness.dart';
 import 'station_work.dart';
 
 /// One substation's assembly identity — mirrors the `Substation` the author
@@ -67,6 +69,7 @@ class StationWorkRuntime {
     required this.wiring,
     required this.commands,
     required this.git,
+    required this.trajectory,
     required this.stateSubstation,
     required this.readPathName,
     required StationDriver driver,
@@ -100,6 +103,14 @@ class StationWorkRuntime {
   /// its substations' `GitGridAssets` so the tree's source control and THIS
   /// runtime's restart sweep share one service.
   final StationGitService git;
+
+  /// The trajectory harness (stage1-wiring §1.1) — the fenced service's
+  /// station-side owner, built beside the state writer. Always present:
+  /// disabled or degraded it is a counting no-op, and a runner reads its
+  /// [TrajectoryHarness.status] for the banner/`/status` block. Lifecycle is
+  /// THIS runtime's: up inside [start] (after the sources), down inside
+  /// [shutdown] (before them) — never blocking either.
+  final TrajectoryHarness trajectory;
 
   /// The owned state partition sessions are minted into — re-sourced from the
   /// grid's own state store identity (its `dolt_database`), never a flag
@@ -178,6 +189,18 @@ class StationWorkRuntime {
     if (_started || _shutdown) return;
     _started = true;
     await _sourcesStart();
+    // Trajectory up — §1.2 step 2 of stage1-wiring: connect → belt verify →
+    // epoch claim → tick, all inside the harness, which never throws and
+    // never fails the boot (the trajectory can degrade; work cannot, §3).
+    // The catch is the binding rule's last line of defense, not a live path.
+    try {
+      await trajectory.start();
+    } on Object catch (error) {
+      _onRefusal(
+        'trajectory start failed (station booting legacy-only) — '
+        '$error',
+      );
+    }
     await _freshnessBarrier();
     final report = await _restart.reconcile();
     _lastRestartReport = report;
@@ -233,6 +256,19 @@ class StationWorkRuntime {
     if (_shutdown) return;
     _shutdown = true;
     _driver.dispose();
+    // Trajectory down BEFORE the stores it reads (§1.2 shutdown order) —
+    // guarded so it NEVER blocks sources shutdown (r2, major 9): the harness
+    // settles every step internally (queue drain → fixpoint → boundary
+    // commit → dispose) and never throws; the catch is insurance, so
+    // _sourcesShutdown() below is unconditionally reached.
+    try {
+      await trajectory.shutdown();
+    } on Object catch (error) {
+      _onRefusal(
+        'trajectory shutdown failed (sources still stopping) — '
+        '$error',
+      );
+    }
     await _sourcesShutdown();
   }
 }
@@ -318,6 +354,8 @@ Future<StationWorkRuntime> assembleStationWork({
   Duration wedgeThreshold = kDefaultWedgeThreshold,
   Duration wedgePollInterval = kDefaultWedgePollInterval,
   Duration syncFloorInterval = kDefaultSyncFloorInterval,
+  TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
+  TrajectoryHarness? trajectoryOverride,
 }) async {
   if (registry != null && registryBuilder != null) {
     throw ArgumentError(
@@ -487,6 +525,47 @@ Future<StationWorkRuntime> assembleStationWork({
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
   );
+
+  // --- the runtime provider (ONE dry/live posture, per-seam override = a
+  // test). Built HERE rather than with the other transports below because the
+  // trajectory harness takes its `lastActivity` poll — liveness surface (b) of
+  // stage1-wiring §2.3 — and the constructor itself starts nothing.
+  final provider =
+      providerOverride ?? (dryRun ? DryRunProvider() : SubprocessProvider());
+
+  // --- the trajectory harness (stage1-wiring §1.1), built beside the state
+  // writer — the one place that knows everything the fenced service needs:
+  // the grid home, the state partition, the seat allow-set, and the flare
+  // transport. Dry-run forces `disabled` (§1.3): a dry arm must not claim an
+  // epoch or write anything — same physics as the recording no-op bd.
+  // [trajectoryOverride] is a TEST seam, like every other per-seam override.
+  final trajectory =
+      trajectoryOverride ??
+      await TrajectoryHarness.build(
+        config: dryRun ? trajectoryConfig.asDisabled : trajectoryConfig,
+        gridHome: stateStore.gridRoot,
+        station: stateSubstation,
+        seatPrefixes: allowSet,
+        onFlare: transport?.flare,
+        // The tick's liveness detector polls the provider (§2.4 obligation
+        // 3); the worktree `.grid` mtime scan is the other surface and needs
+        // nothing wired — it reads the paths P6 already carries.
+        lastActivity: provider.lastActivity,
+        // §1.1's runtime-event subscriber (harness-internal, over
+        // `provider.events`): the observation surface for
+        // `attempt.process.started`/`.exited` (§2.3 rows 2–3). The harness
+        // subscribes only once LIVE, so a dry arm (disabled) never listens.
+        runtimeEvents: provider.events,
+      );
+  // The harness's ONE derivation layer (stage1-wiring §2), threaded from here
+  // to every observation site the design names: ambient over the work subtree
+  // via `StationWorkWiring.trajectory`, and by constructor into the four
+  // OFF-TREE collaborators built below (the git service, the lease vendor, the
+  // command handler, the restart reconciler) — they are built beside the
+  // harness rather than mounted under it, so an ambient value would never
+  // reach them. One recorder, one queue, one appender: the sole-appender
+  // invariant is threading, not convention.
+  final recorder = trajectory.recorder;
   final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
@@ -536,11 +615,14 @@ Future<StationWorkRuntime> assembleStationWork({
     stateWriter: writer,
     stateOwnership: BeadOwnershipPredicate(allowSet),
     workStoresByIdentity: workCommandStores,
+    // `grid rework`'s re-key is one of `attempt.round.retired`'s two
+    // observation sites (stage1-wiring §2.3).
+    recorder: recorder,
   );
 
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
-  final provider =
-      providerOverride ?? (dryRun ? DryRunProvider() : SubprocessProvider());
+  // The provider itself is built above, beside the trajectory harness that
+  // polls it.
   final git =
       gitOverride ??
       (dryRun
@@ -548,6 +630,10 @@ Future<StationWorkRuntime> assembleStationWork({
           : StationGitService(
               runner: SystemGitRunner(),
               prOpener: GhPrOpener(ghRunner),
+              // `worktree.provisioned` is captured INSIDE provisionWorktree
+              // (stage1-wiring §2.3, r2 blocker 3) — the only place that holds
+              // `preexisting`, the branch, and the base sha at one instant.
+              recorder: recorder,
             ));
 
   // --- the registered roots. Dry-run registers nothing (the inert service
@@ -609,7 +695,7 @@ Future<StationWorkRuntime> assembleStationWork({
   // restart reconciler's molecule lease sweep resolve the SAME vendor over the
   // SAME services — so the breadcrumb a mount wrote is the breadcrumb the
   // sweep interprets.
-  final leaseVendor = defaultProcessLeaseVendor(services);
+  final leaseVendor = defaultProcessLeaseVendor(services, recorder: recorder);
 
   final restart = RestartReconciler(
     listWorktrees: git.listBeadWorktrees,
@@ -635,6 +721,9 @@ Future<StationWorkRuntime> assembleStationWork({
     // it).
     leaseVendor: leaseVendor,
     onOrphan: orphanSink,
+    // The INFERRED half of `attempt.terminal(settled)` (stage1-wiring §2.3):
+    // this pass settles a prior boot's sessions from evidence on disk.
+    recorder: recorder,
     // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
   );
@@ -677,9 +766,12 @@ Future<StationWorkRuntime> assembleStationWork({
       // The SAME instance the restart reconciler sweeps with (tg-eli phase 1).
       processLeaseVendor: leaseVendor,
       transport: transport,
+      // Stage 1's ONE new ambient value (stage1-wiring §1.1).
+      trajectory: TrajectoryRecorderScope(recorder),
     ),
     commands: commands,
     git: git,
+    trajectory: trajectory,
     stateSubstation: stateSubstation,
     readPathName: readPathName,
     driver: driver,

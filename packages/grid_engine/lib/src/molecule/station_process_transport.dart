@@ -26,6 +26,7 @@ import '../seeds/provider.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../kernel/station_services.dart';
+import '../kernel/trajectory_scope.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import 'process_lease_vendor.dart';
@@ -61,10 +62,21 @@ Future<ProcessHandle> stationProcessSpawner(
   final ctx = request.allocation;
   final name = ctx.address.providerName;
   final token = ctx.env['GRID_INSTANCE_TOKEN'] ?? '';
+  // The incarnation's trajectory name, read off the SAME env overlay as the
+  // freshness token (stage1-wiring §2.1): the host mints both once per mount,
+  // this spawn carries them onto the handle, and the breadcrumb persists them
+  // together. A FRESH spawn is the only mint site — adoption never reaches
+  // here, so the attempt an adopted survivor already owns is never overwritten.
+  final attemptId = ctx.env['GRID_ATTEMPT_ID'] ?? '';
   final tap = ProcessEventTap.open(ctx.transport.events, name);
   final started = Completer<ProcessHandle>();
-  ProcessHandle mint({required int pid, int? pgid}) =>
-      ProcessHandle(pgid: pgid ?? pid, pid: pid, token: token, events: tap);
+  ProcessHandle mint({required int pid, int? pgid}) => ProcessHandle(
+    pgid: pgid ?? pid,
+    pid: pid,
+    token: token,
+    attemptId: attemptId,
+    events: tap,
+  );
   final sub = ctx.transport.events.where((e) => e.name == name).listen((e) {
     if (started.isCompleted) return;
     switch (e) {
@@ -97,6 +109,33 @@ Future<ProcessHandle> stationProcessSpawner(
     final workspace = context.read<Workspace>();
     final sc = services.sourceControl;
     if (sc != null && workspace != null) {
+      // Seed the recorder's provision join SYNCHRONOUSLY before provisioning
+      // (stage1-wiring §2.2's worktree row, fidelity B2): the
+      // `worktree.provisioned` observation fires INSIDE `provisionWorktree`
+      // with only the work bead in hand, and the attempt it must name is THIS
+      // spawn's — the id `attempt.process.started` will carry, so P6's
+      // provisional row is corrected in place. The id provably exists here:
+      // the host minted it in `initState` and exported it on the allocation
+      // env this spawner already read at line one. Appends nothing; a no-op
+      // under the disabled recorder.
+      //
+      // The SESSION rides along, and it is what makes there be a row to
+      // correct (B2's tail): P6's insert arm needs a NOT NULL `session_id`,
+      // and a provision ALWAYS precedes its spawn, so a session-less
+      // provisioned record degrades to an update matching zero rows and the
+      // worktree/branch/base_sha facts are lost — leaving the tick's
+      // `worktree.reaped` backfill (`WHERE p.worktree IS NOT NULL`) with
+      // nothing to match, forever. It comes off the SAME allocation address
+      // the harness's runtime-event subscriber parses out of `providerName`;
+      // reading the fields directly beats re-splitting the joined string.
+      // The remaining correlation (step round, incarnation) resolves inside
+      // the recorder from the mount's own `attemptSpawning` seed.
+      trajectoryRecorderOf(context).provisioningAttempt(
+        workBeadId: args.beadId,
+        attemptId: attemptId,
+        sessionId: ctx.address.sessionId,
+        stepPath: ctx.address.nodePath,
+      );
       await sc.provisionWorkspace(
         beadId: args.beadId,
         workspaceDir: workspace.workspaceDir,
@@ -411,11 +450,19 @@ Future<GateOutcome> _probeLeasedWorkSignal(
 /// this seam: its kill gate is the caller-bound [LeaseGroupLiveness] the
 /// reconciler binds to its own real controller, so leaving adoption unarmed
 /// never blinds the sweep.
-StationProcessLeaseVendor defaultProcessLeaseVendor(StationServices services) =>
-    StationProcessLeaseVendor(
-      writer: services.writer,
-      spawn: stationProcessSpawner,
-      dispatch: stationProcessDispatcher,
-      metadataOf: services.writer.metadataOf,
-      liveness: services.liveness ?? neverLive,
-    );
+///
+/// [recorder] is the Stage-1 derivation layer (stage1-wiring §2.3's lease
+/// rows), threaded in by the assembly that owns the harness. Absent — the
+/// kernel-root provision, `StationWork`'s null-wiring fallback, every offline
+/// fixture — the vendor observes into a counting no-op.
+StationProcessLeaseVendor defaultProcessLeaseVendor(
+  StationServices services, {
+  StationTrajectoryRecorder? recorder,
+}) => StationProcessLeaseVendor(
+  writer: services.writer,
+  spawn: stationProcessSpawner,
+  dispatch: stationProcessDispatcher,
+  metadataOf: services.writer.metadataOf,
+  liveness: services.liveness ?? neverLive,
+  recorder: recorder,
+);

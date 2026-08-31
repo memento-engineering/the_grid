@@ -20,7 +20,7 @@ import '../composition/scopes.dart';
 /// provided value — a branch holds config values and effect handles, never
 /// builds a service.
 class StationWorkWiring {
-  /// Bundles the four ambient work-axis values.
+  /// Bundles the ambient work-axis values.
   const StationWorkWiring({
     required this.notifier,
     required this.services,
@@ -28,6 +28,7 @@ class StationWorkWiring {
     this.registry,
     this.processLeaseVendor,
     this.transport,
+    this.trajectory,
   });
 
   /// The work-axis notifier the substations' `WorkList`s observe — driven by
@@ -54,6 +55,15 @@ class StationWorkWiring {
 
   /// The emit-only observability sink assembled by the runner.
   final ExplorationTransport? transport;
+
+  /// The Stage-1 trajectory derivation layer (stage1-wiring §1.1's ONE new
+  /// ambient value): the harness's single [StationTrajectoryRecorder], wrapped
+  /// for provision. Null — a station armed without the trajectory, or any
+  /// composition that builds no harness — falls back to
+  /// [TrajectoryRecorderScope.disabled] at the provider below, so every
+  /// observation site downstream sees a recorder and none of them branches on
+  /// whether the trajectory is up.
+  final TrajectoryRecorderScope? trajectory;
 }
 
 /// The STATION-scoped work asset (tg-yl8): provides the engine's ambient
@@ -99,7 +109,18 @@ class StationWork extends SingleChildStatelessSeed {
         Provider<SessionResolver>.value(wiring.resolver),
         Provider<ProcessLeaseVendor>.value(
           wiring.processLeaseVendor ??
-              defaultProcessLeaseVendor(wiring.services),
+              defaultProcessLeaseVendor(
+                wiring.services,
+                recorder: wiring.trajectory?.recorder,
+              ),
+        ),
+        // Stage 1 (stage1-wiring §1.1): the derivation layer, ambient over
+        // every observation site in the work subtree. Always provided — the
+        // null object stands in when the trajectory is disabled, degraded, or
+        // simply not built, which is what keeps "is the trajectory up" out of
+        // every call site below.
+        Provider<TrajectoryRecorderScope>.value(
+          wiring.trajectory ?? TrajectoryRecorderScope.disabled,
         ),
         if (registry != null) Provider<CapabilityRegistry>.value(registry),
       ],

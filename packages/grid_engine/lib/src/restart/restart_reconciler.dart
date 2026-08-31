@@ -73,7 +73,12 @@ import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
 import '../molecule/process_lease_vendor.dart'
-    show LeaseSweepCandidate, ProcessLeaseVendor, SweptLeaseGroup;
+    show
+        AttemptIdBasis,
+        LeaseSweepCandidate,
+        ProcessLeaseVendor,
+        SweptLeaseGroup,
+        recoverAttemptId;
 
 /// The no-sink default for the boot pass's molecule lease sweep — NOT a
 /// silent swallow: every swept group still rides [RestartReport.sweptLeases]
@@ -443,7 +448,9 @@ class RestartReconciler {
     StationBeadWriter? writer,
     ProcessLeaseVendor? leaseVendor,
     void Function(String message)? onOrphan,
+    StationTrajectoryRecorder? recorder,
   }) : assert(workRoot != null || workRoots.isNotEmpty),
+       _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _listWorktrees = listWorktrees,
        _reapWorktree = reapWorktree,
        _workRoots = List<RootCheckout>.unmodifiable(
@@ -486,6 +493,13 @@ class RestartReconciler {
   /// groups still ride [RestartReport.sweptLeases] for the caller to report;
   /// the live assembly (`assembleStationWork`) always wires it.
   final void Function(String message) _onOrphan;
+
+  /// The Stage-1 derivation layer (stage1-wiring §2.3's settled-terminal row).
+  /// Every record this pass derives is `provenance='inferred'`: the pass
+  /// settles a PRIOR boot's sessions from evidence on disk, and it was never
+  /// there to observe the transition it is recording. Absent (the default) it
+  /// is a counting no-op.
+  final StationTrajectoryRecorder _recorder;
 
   /// Whether the ONE bd chokepoint reached this pass — a wiring proof for the
   /// composition (the assembly's own test asserts it). A capability query on
@@ -805,6 +819,7 @@ class RestartReconciler {
     for (final pair in terminalPairs) {
       final sessionId = pair.session.sessionId!;
       String? failure;
+      var settled = false;
       try {
         final writer = _writer;
         if (writer == null) {
@@ -814,12 +829,42 @@ class RestartReconciler {
           sessionId: sessionId,
           terminalWorkBead: pair.workBead,
         );
+        settled = true;
       } on Object catch (error) {
         failure = '$error';
         _onOrphan(
           'restart work-terminal settlement $sessionId/${pair.workBead.id} '
           '(${StationBeadWriter.workTerminalReasonWorkBeadClosed}) failed — '
           '$error',
+        );
+      }
+      if (settled) {
+        // §2.3's `attempt.terminal(settled)` row at its INFERRED caller —
+        // OUTSIDE the legacy settle's try, under its own guard: the binding
+        // constraint says an append failure NEVER fails the legacy path, and
+        // a derivation throw inside that try would report a settlement that
+        // already COMMITTED as an orphan failure. The attempt id is RECOVERED
+        // from the session's own `grid.lease.*` breadcrumb (§2.1's bounce
+        // rule), so the record joins the P1 attempt row a prior boot's
+        // `.started` genuinely appended and its `terminal:<attempt_id>` idem
+        // key dedupes against it. A session that predates Stage 1 carries no
+        // such key: it settles under a reconciler-minted id, payload-marked,
+        // and sits outside the shadow window's comparable set by
+        // construction. A recovery throw degrades to exactly that marked
+        // mint — never to a reported failure.
+        String? recovered;
+        try {
+          recovered = _recoverSessionAttemptId(sessionId);
+        } on Object {
+          recovered = null;
+        }
+        _recorder.sessionSettled(
+          sessionId: sessionId,
+          workBeadId: pair.workBead.id,
+          attemptId: recovered,
+          workTerminalReason:
+              StationBeadWriter.workTerminalReasonWorkBeadClosed,
+          reconcilerOriginated: true,
         );
       }
       settlements.add((
@@ -861,6 +906,36 @@ class RestartReconciler {
   /// lease key — the vendor decides completed-skip / dead-skip / adoptable /
   /// orphan, kills through the bound [terminateGroup] (the guard is never
   /// bypassed), clears its own breadcrumbs, and reports each kill LOUD.
+  /// The attempt id a prior boot left on [sessionId]'s step beads (§2.1's
+  /// bounce rule), read off the SAME post-barrier state snapshot everything
+  /// else in this pass projects from — no new bd query, no subscription (A39).
+  ///
+  /// The recovery rides the VENDOR's `recoverAttemptId`, handed whole step-bead
+  /// metadata — this pass stays lease-schema-ignorant (Nico's 2026-07-19
+  /// ruling, structurally pinned): it names no breadcrumb key, and reads the
+  /// answer off the returned BASIS instead. That helper takes the key directly
+  /// rather than through the adopt parse, because settling needs the attempt's
+  /// NAME, not a re-addressable identity: a breadcrumb whose pgid was lost
+  /// still names a real attempt row.
+  ///
+  /// Null when no step bead of this session carries one at all — the caller
+  /// then lets the recorder mint and MARK it, which is the honest account for
+  /// a session that predates Stage 1.
+  String? _recoverSessionAttemptId(String sessionId) {
+    for (final bead in _stateSnapshot().beadsById.values) {
+      if (bead.issueType != GridIssueTypes.step) continue;
+      if (bead.metadata[MoleculeStepKeys.session] != sessionId) continue;
+      final recovered = recoverAttemptId({
+        for (final entry in bead.metadata.entries)
+          if (entry.value != null) entry.key: '${entry.value}',
+      });
+      if (recovered.basis == AttemptIdBasis.breadcrumb) {
+        return recovered.attemptId;
+      }
+    }
+    return null;
+  }
+
   Future<List<SweptLeaseGroup>> _sweepMoleculeLeases(
     Iterable<SessionProjection> sessions, {
     Set<String> noRemountSessionIds = const <String>{},

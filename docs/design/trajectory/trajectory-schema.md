@@ -1001,7 +1001,7 @@ obligation open, and both directions must exist for gates):
 | **bd gate beads open whose P4 row is closed** (`ledger_ack_seq < last_seq`) | retry the bd close; the reverse-direction query the draft lacked |
 | open `step.gated` in P2 without an open bd gate bead | idempotent gate-bead re-mint (not ordering luck) |
 | terminal session with a live worktree in P6 | reap + append `worktree.reaped` |
-| **any bead whose P6 shows a live worktree under a terminal session** | **admission refuses `clause='worktree-outstanding'`** — the barrier that makes repair lateness harmless (major fix). **Barrier timing (audit round 2):** the barrier LOGIC arms at Stage 1 as an eligibility clause in the legacy mount-gate path reading P6 (flare-only refusal, like today's clauses); it becomes a trajectory-recorded refusal at Stage 3 with its family (§9) |
+| **any bead whose P6 shows a live worktree under a terminal session** | **admission refuses `clause='worktree-outstanding'`** — the barrier that makes repair lateness harmless (major fix). **Barrier timing — SUPERSEDED (stage1-wiring §2.4, r2 blocker 1):** audit round 2 staged the barrier LOGIC at Stage 1 as an eligibility clause in the legacy mount-gate path reading P6. It does not arm there. Under strict dual-write the legacy inline reap keeps running, so the stale-adopt window the barrier closes only OPENS when that reap retires — at the CUT. The barrier, its P6-snapshot machinery, and its refusal record therefore arm together at the cut, and **Stage 1's shadow window changes nothing about what mounts** |
 | P1 head fields diverging from the bd head bead, or `head_epoch` stale | re-stamp head from P1 (§7) |
 | `effect.intent` with `ack_seq NULL` in proj_effects | probe GitHub, append settling `effect.ack` |
 | open grant past `expires_at` | append `admission.grant.expired` |
@@ -1346,13 +1346,28 @@ only for the `#rN` string synthesis, which is genuinely a projection. (P1's `las
   the attempt/step-family obligation queries** (audit round 2 — the coexistence rule applies to
   the tick's writers too: the authority's eligibility re-evaluation and its
   `admission.refused`/`admission.restored` records move to Stage 3 with their family, as do the
-  grant obligations, which have no grants to read before then). **The Stage-1/2 worktree barrier
-  is enforced by the LEGACY admission path instead:** a new eligibility clause in the existing
-  mount-gate code reading P6 (`worktree-outstanding` — a flare-only refusal, like today's
-  clauses); it becomes a trajectory-recorded refusal at Stage 3. This closes the barrier-timing
-  gap: the barrier LOGIC arms here, its trajectory record arrives with its family. Teardown
-  replay deletes here — falsifier clause 2's first checkpoint. The reap survives this stage (pour
-  still mints beads).
+  grant obligations, which have no grants to read before then).
+
+  **AMENDED (stage1-wiring §2.4, r2 blocker 1 — landed with the Stage-1 build).** Audit round 2
+  staged the worktree barrier here: "the barrier LOGIC arms at Stage 1 as an eligibility clause in
+  the legacy mount-gate path reading P6 (flare-only refusal), trajectory-recorded from Stage 3."
+  That staging is **superseded**. Under strict dual-write the legacy inline reap keeps running, so
+  the stale-adopt window the barrier exists to close only OPENS when the inline reap retires —
+  which happens at the CUT, not in the shadow window. Arming it inside the window would spend real
+  machinery (a second read path into the trajectory db from the synchronous, bead-only
+  `MountEligibilityPredicate`, plus a snapshot-staleness posture) guarding a window that is not yet
+  open, and it would be the ONE place Stage 1 changed what mounts. **The barrier LOGIC, its
+  P6-snapshot machinery, and its refusal record now arm TOGETHER at the cut**, alongside the
+  inline-reap retirement. So do the head re-stamp obligation (M6c) and the live worktree reap
+  under a terminal session — every tick obligation that would fight a live legacy writer.
+
+  Stage 1 also splits in two halves, and the split governs every "here" in this bullet: a
+  **shadow window** (strictly additive dual-write, legacy writes stay, appends add — designed in
+  `stage1-wiring.md`) and then the **cut** (quiesced boundary, legacy-writer retirement, dual-read
+  drain, release train — a separate, operator-ratified change). Teardown replay deletes at the
+  CUT half — falsifier clause 2's first checkpoint — not in the shadow window, where
+  `replayTeardownTail` runs at every boot. The reap survives this stage entirely (pour still mints
+  beads).
 * **Stage 2 — pour + successors**, quiesced boundary again. `molecule.poured` + `step.superseded`
   replace bead creates; step/molecule bead types stop existing; **then** `reapMolecule` deletes,
   with a one-shot legacy reap at first post-cut boot for the residue class. **Falsifier clause 1
@@ -1853,9 +1868,11 @@ Staging and structure:
 
 5. **Stage-1 admission half-cutover** → the Stage-1 tick runs ONLY attempt/step-family queries;
    eligibility re-evaluation and `admission.refused`/`.restored` move to Stage 3 with their
-   family. The Stage-1/2 worktree barrier is a new eligibility clause in the LEGACY mount-gate
-   path reading P6 (flare-only), trajectory-recorded from Stage 3 — which also closes the
-   barrier-timing residual of major 12 (§5 tick, §9 Stages 1/3).
+   family. ~~The Stage-1/2 worktree barrier is a new eligibility clause in the LEGACY mount-gate
+   path reading P6 (flare-only), trajectory-recorded from Stage 3~~ — **superseded by
+   stage1-wiring §2.4 (r2 blocker 1): the barrier and its refusal record arm TOGETHER at the cut,
+   with the inline-reap retirement that opens the window they close. The shadow window arms no
+   admission behavior of any family** (§5 tick, §9 Stages 1/3).
 6. **Rearm holes the supersedes chain** → the chain rule generalized: EVERY step_round bump
    (step.superseded AND gate-cleared rearm) writes the predecessor's `superseded_by_step_round`,
    cause on the new row; the rearm keeps its bump (it kills the I-14 stale-join class)
@@ -1891,6 +1908,17 @@ proj_process_identity; **(6)** the CHECK-refusal pin added to Stage 0's CI guard
 `uq_epoch_seq` = detect-and-halt); **(8)** the CI placement rule gains its no-pin fallback
 (bead-only correlation, receipt surface, never P5); **(9)** §2 F1's liveness-unknown list
 aligned to the five paths; **(10)** the §14 fatal-1 entry marked superseded at its own site.
+
+**Stage-1 build amendment (landed with the Stage-1 shadow-window branch, 2026-08-31).** The
+cert-round staging of the **worktree-outstanding barrier** at Stage 1 — "the barrier LOGIC arms at
+Stage 1 as an eligibility clause in the legacy mount-gate path reading P6 (flare-only refusal);
+it becomes a trajectory-recorded refusal at Stage 3" — is **superseded** at all three sites it
+appeared (§5's obligation table, §9's Stage-1 bullet, audit-round-2 item 5). The barrier's LOGIC
+and its refusal RECORD now arm together at the **cut**, with the inline-reap retirement that opens
+the window they close; the head re-stamp obligation and the live worktree reap move with them.
+The rationale and the resulting headline — **Stage 1's shadow window changes NOTHING about what
+mounts** — are designed in `stage1-wiring.md` §2.4 (r2, blocker 1), which is also where the
+shadow window's own runbook (§4) and its per-chunk build plan live.
 
 Stage-0 build amendments (operator-adjudicated review round, 2026-08-31): the §5 error contract
 gains the measured statement-time 1062 paragraph — same-snapshot `uq_idem` duplicates die at

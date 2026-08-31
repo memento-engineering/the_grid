@@ -86,6 +86,10 @@ class FakeTickAppender implements TickAppender {
   List<AppendOutcome> outcomes;
 
   final List<TrajectoryRecord> appended = [];
+
+  /// The seat each append carried, in order — the repair's derived seat rides
+  /// through the tick untouched.
+  final List<String?> seats = [];
   int doltCommits = 0;
 
   /// Thrown out of [doltCommitIfDue] — the branch-pin fail-closed shape.
@@ -94,10 +98,12 @@ class FakeTickAppender implements TickAppender {
   @override
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
+    String? seat,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) async {
     appended.add(record);
+    seats.add(seat);
     if (outcomes.isEmpty) {
       return Appended(
         recordId: 'r${appended.length}',
