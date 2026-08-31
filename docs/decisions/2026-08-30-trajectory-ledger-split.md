@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-30
 decision-makers: [nico, agent]
 consulted: [external-architecture-auditor]
@@ -73,7 +73,7 @@ That is the defect.
 * **C — full event-sourcing.** Work beads become events too; bd becomes a
   projection.
 
-## Decision Outcome (proposed)
+## Decision Outcome
 
 **Option B.**
 
