@@ -17,9 +17,19 @@ export 'src/codec/envelope.dart'; // the §1 row image + envelope enums
 export 'src/codec/idem_key.dart'; // SHA-256 idem/effect identity builders
 export 'src/codec/trajectory_record.dart'; // sealed TrajectoryRecord + all §2 types
 
+// SECTION: connect — the write-capable SQL seam to the underlying server.
+export 'src/connect/server_config.dart'; // dolt sql-server listener resolution (never bd's proxy)
+export 'src/connect/trajectory_connection.dart'; // real session + connect-time guards (force-commit ban, branch pin)
+export 'src/connect/trajectory_db.dart'; // TrajectoryDb seam + §5 error-code classification
+
 // SECTION: ddl — schema DDL + database bootstrap.
+export 'src/ddl/trajectory_provisioning.dart'; // write-capable SQL user, secret under .grid/trajectory/
+export 'src/ddl/trajectory_schema.dart'; // §4 verbatim DDL, dolt_ignore-first, idempotent
 
 // SECTION: append — the fenced append client (§5 write path).
+export 'src/append/append_outcome.dart'; // sealed append/claim dispositions
+export 'src/append/trajectory_appender.dart'; // the fenced service core: epoch claim, CAS, error contract
+export 'src/append/ulid.dart'; // CHAR(26) identity minting
 
 // SECTION: tick — the service tick skeleton (§5).
 
