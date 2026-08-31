@@ -1,11 +1,15 @@
-/// Stage-0 guards against a real hermetic dolt sql-server: the §4 DDL lands
-/// verbatim, all seven CHECKs refuse by name, the T6i fence refuses a stale
-/// appender in both interleavings, the epoch-claim race loses with 1213, the
-/// connect-time bans hold, and the write credential is scoped to
-/// trajectory.* only.
+/// Stage-0 conformance against a real hermetic dolt sql-server: the §4 DDL
+/// lands verbatim, the T6i fence refuses a stale appender in both
+/// interleavings, the epoch-claim race loses with 1213, the write credential
+/// is scoped to trajectory.* only, and the appender's end-to-end path holds.
 ///
-/// These are the PR-gating guards (decision: stage0-guards-gate-prs) — the
-/// CI job installs dolt, so a skip there is a failed guard.
+/// The seven guards §9 names as stage-cut evidence live next door in
+/// `stage0_seven_guards_test.dart` — including the CHECK-refusal pin and the
+/// connect-time bans, which are asserted there and deliberately not repeated
+/// here.
+///
+/// PR-gating, and fail-closed on a missing dolt (decision:
+/// stage0-guards-gate-prs): a skipped guard is a failed guard.
 @Tags(['integration'])
 @Timeout(Duration(minutes: 3))
 library;
@@ -19,7 +23,7 @@ import 'package:test/test.dart';
 import 'support/hermetic_trajectory_server.dart';
 
 void main() {
-  HermeticTrajectoryServer? server;
+  late HermeticTrajectoryServer server;
   late TrajectoryConnection admin; // server-level session, no database
   late TrajectoryConnection db; // USE trajectory
 
@@ -27,23 +31,18 @@ void main() {
   var keyOrdinal = 0;
 
   setUpAll(() async {
-    server = await HermeticTrajectoryServer.tryCreate();
-    if (server == null) {
-      markTestSkipped('dolt not available — guard suite cannot run');
-      return;
-    }
-    admin = await TrajectoryConnection.connect(server!.serverEndpoint);
+    server = await HermeticTrajectoryServer.create();
+    admin = await TrajectoryConnection.connect(server.serverEndpoint);
     await createTrajectoryDatabase(admin);
-    db = await TrajectoryConnection.connect(server!.endpointFor('trajectory'));
+    db = await TrajectoryConnection.connect(server.endpointFor('trajectory'));
     await applyTrajectorySchema(db);
     await applyTrajectorySchema(db); // idempotency is part of the contract
   });
 
   tearDownAll(() async {
-    if (server == null) return;
     await admin.close();
     await db.close();
-    await server!.dispose();
+    await server.dispose();
   });
 
   /// A minimally-valid trajectory row; [overrides] inject the violation.
@@ -91,7 +90,6 @@ void main() {
     test(
       'applies verbatim and idempotently: all 19 tables, 3 ignore rows',
       () async {
-        if (server == null) return;
         final tables = await db.execute('SHOW TABLES');
         final names = {for (final row in tables.rows) row.values.first};
         expect(
@@ -128,45 +126,20 @@ void main() {
       },
     );
 
+    // The CHECK-refusal pin (all seven constraints) is guard 7, next door.
     test('a valid row inserts', () async {
-      if (server == null) return;
       await insertRow(const {});
     });
-
-    for (final (constraint, overrides) in <(String, Map<String, Object?>)>[
-      ('ck_prov', {'provenance': 'inferred'}),
-      ('ck_terminal', {'record_type': 'attempt.terminal'}),
-      ('ck_unknown', {'outcome': 'unknown'}),
-      ('ck_provision', {'record_type': 'worktree.provisioned'}),
-      ('ck_grant', {'record_type': 'admission.grant.issued'}),
-      ('ck_grant_link', {'record_type': 'admission.grant.consumed'}),
-      ('ck_seat', {'work_bead_id': 'tg-zfek'}),
-    ]) {
-      test('$constraint refuses at write time, by name', () async {
-        if (server == null) return;
-        await expectLater(
-          insertRow(overrides),
-          throwsA(
-            isA<MySQLServerException>().having(
-              (e) => e.message,
-              'message',
-              contains(constraint),
-            ),
-          ),
-        );
-      });
-    }
   });
 
   group('the fence (T6i)', () {
     test('a stale appender is refused: 0-row CAS after a steal, and it goes '
         'inert', () async {
-      if (server == null) return;
       final connA = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       final connB = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       addTearDown(() async {
         await connA.close();
@@ -227,13 +200,12 @@ void main() {
 
     test('interleaving 1: the steal commits mid-append — the appender COMMIT '
         'dies with 1213 and lands nothing', () async {
-      if (server == null) return;
       await seedFenceLine('ilv1', 1);
       final appender = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       final advancer = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       addTearDown(() async {
         await appender.close();
@@ -281,13 +253,12 @@ void main() {
 
     test('interleaving 2: the append commits first — the advancer COMMIT dies '
         'with 1213 instead', () async {
-      if (server == null) return;
       await seedFenceLine('ilv2', 1);
       final appender = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       final advancer = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       addTearDown(() async {
         await appender.close();
@@ -322,12 +293,11 @@ void main() {
 
   group('epoch claim', () {
     test('the race loser sees 1213, not 1062', () async {
-      if (server == null) return;
       final connA = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       final connB = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       addTearDown(() async {
         await connA.close();
@@ -360,42 +330,13 @@ void main() {
     });
   });
 
-  group('connect-time bans', () {
-    test(
-      '@@dolt_force_transaction_commit set globally refuses the connect',
-      () async {
-        if (server == null) return;
-        await admin.execute('SET @@GLOBAL.dolt_force_transaction_commit = 1');
-        try {
-          await expectLater(
-            TrajectoryConnection.connect(server!.endpointFor('trajectory')),
-            throwsA(isA<TrajectoryConnectionException>()),
-          );
-        } finally {
-          await admin.execute('SET @@GLOBAL.dolt_force_transaction_commit = 0');
-        }
-      },
-    );
-
-    test('a branch change fails closed on the pin re-assert', () async {
-      if (server == null) return;
-      final conn = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
-      );
-      addTearDown(conn.close);
-      await conn.execute("CALL DOLT_CHECKOUT('-b', 'scratch')");
-      await expectLater(
-        conn.assertMainBranch(),
-        throwsA(isA<TrajectoryConnectionException>()),
-      );
-    });
-  });
+  // The connect-time bans — the session-variable ban and the branch pin —
+  // are guards 5 and 6, next door.
 
   group('provisioning', () {
     test(
       'the trajectory credential writes trajectory.* and nothing else',
       () async {
-        if (server == null) return;
         final home = await Directory.systemTemp.createTemp('traj_it_home_');
         addTearDown(() => home.delete(recursive: true));
 
@@ -407,8 +348,8 @@ void main() {
 
         final scoped = await TrajectoryConnection.connect(
           TrajectoryEndpoint(
-            host: server!.host,
-            port: server!.port,
+            host: server.host,
+            port: server.port,
             user: credential.user,
             password: credential.password,
             database: 'trajectory',
@@ -432,9 +373,8 @@ void main() {
   group('appender end-to-end', () {
     test('append, dedupe on the real uq_idem, terminal guard, proj_meta '
         'frontier, verified dolt commits, clean status', () async {
-      if (server == null) return;
       final conn = await TrajectoryConnection.connect(
-        server!.endpointFor('trajectory'),
+        server.endpointFor('trajectory'),
       );
       addTearDown(conn.close);
       final appender = TrajectoryAppender(

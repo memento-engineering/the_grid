@@ -7,8 +7,9 @@
 ///
 ///   * `@@dolt_force_transaction_commit` is BANNED (§5): dolt's own 1105 text
 ///     advertises it as the way to commit anyway, and setting it silently
-///     disables the belt (probe T6f). Connect throws if it reads set, and
-///     pins the session's own value to 0.
+///     disables the belt (probe T6f). Connect throws if it reads set, pins the
+///     session's own value to 0, and stays re-assertable
+///     ([assertForceCommitUnset]) for a session someone sets it on later.
 ///   * the session is PINNED to branch `main` (probe T3: an in-server
 ///     checkout makes every dolt_ignore'd table vanish). Asserted at connect
 ///     and re-assertable ([assertMainBranch]) — fail closed on any change.
@@ -68,7 +69,7 @@ class TrajectoryConnection implements TrajectoryDb {
     await raw.connect();
     final conn = TrajectoryConnection._(raw);
     try {
-      await conn._assertForceCommitUnset();
+      await conn.assertForceCommitUnset();
       if (endpoint.database != null) await conn.assertMainBranch();
     } on Object {
       await conn.close();
@@ -77,7 +78,12 @@ class TrajectoryConnection implements TrajectoryDb {
     return conn;
   }
 
-  Future<void> _assertForceCommitUnset() async {
+  /// Fail-closed session-variable ban: throws if
+  /// `@@dolt_force_transaction_commit` reads set, and pins the session's own
+  /// value to 0. Asserted at connect and re-assertable on a live session —
+  /// anything that sets it mid-life (an operator, a stray `SET`) is refused,
+  /// never tolerated.
+  Future<void> assertForceCommitUnset() async {
     final result = await execute('SELECT @@dolt_force_transaction_commit AS v');
     final value = result.rows.isEmpty ? null : result.rows.first['v'];
     if (value != null && value != '0' && value.toLowerCase() != 'false') {
