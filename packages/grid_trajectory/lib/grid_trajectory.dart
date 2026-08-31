@@ -34,3 +34,9 @@ export 'src/append/ulid.dart'; // CHAR(26) identity minting
 // SECTION: tick — the service tick skeleton (§5).
 
 // SECTION: cli — the traj verbs (traj show / traj shadow-diff).
+export 'src/cli/traj_command.dart'; // the `traj` group; runners compose it explicitly
+export 'src/cli/traj_flags.dart'; // the shared exact-root grid-home flag
+export 'src/cli/traj_render.dart'; // typed row rendering (opaque rows stay opaque)
+export 'src/cli/traj_shadow_diff_command.dart'; // §9 comparator + injectable strategy
+export 'src/cli/traj_show_command.dart'; // per-subject history
+export 'src/cli/trajectory_reader.dart'; // read-only log seam + sealed open result

@@ -25,6 +25,9 @@ dependencies:
   grid_exploration: ^0.3.0-rc.3
   grid_runtime: ^0.2.0-rc.6
   grid_sdk: ^0.3.0-rc.6
+  # The dev bin composes `traj`. grid_trajectory is a leaf below the whole
+  # chain, so this edge adds no cycle (decision: grid-trajectory-leaf-package).
+  grid_trajectory: ^0.1.0
   meta: ^1.15.0
   path: ^1.9.0
   # The VM-service client `reload` drives: reloadSources + the

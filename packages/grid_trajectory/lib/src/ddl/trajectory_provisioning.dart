@@ -15,6 +15,14 @@ import 'package:path/path.dart' as p;
 
 import '../connect/trajectory_db.dart';
 
+/// The SQL user this package provisions and connects as.
+const String trajectoryUser = 'trajectory';
+
+/// Where [provisionTrajectoryUser] persists the secret. The read path resolves
+/// the same file, so the two can never drift onto different conventions.
+String trajectorySecretPath(String gridHome) =>
+    p.join(gridHome, '.grid', 'trajectory', 'trajectory.secret');
+
 /// The provisioned identity plus where its secret persists.
 @immutable
 class TrajectoryCredential {
@@ -39,9 +47,10 @@ class TrajectoryCredential {
 Future<TrajectoryCredential> provisionTrajectoryUser(
   TrajectoryDb serverConn, {
   required String gridHome,
-  String user = 'trajectory',
+  String user = trajectoryUser,
 }) async {
-  final secretDir = p.join(gridHome, '.grid', 'trajectory');
+  final secretFile = File(trajectorySecretPath(gridHome));
+  final secretDir = p.dirname(secretFile.path);
   if (p.split(secretDir).contains('.beads')) {
     throw ArgumentError.value(
       gridHome,
@@ -49,7 +58,6 @@ Future<TrajectoryCredential> provisionTrajectoryUser(
       'the trajectory secret must never live under .beads',
     );
   }
-  final secretFile = File(p.join(secretDir, 'trajectory.secret'));
 
   final String password;
   if (secretFile.existsSync()) {

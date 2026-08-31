@@ -23,6 +23,10 @@ const int sqlErrUnknownError = 1105;
 /// `dolt_ignore` seed tolerates it.
 const int sqlErrDuplicateEntry = 1062;
 
+/// `1049` — unknown database. On the read path this is the ordinary "stage 0
+/// was never bootstrapped on this grid home" answer, not a failure.
+const int sqlErrUnknownDatabase = 1049;
+
 bool _isServerError(Object error, int code) =>
     error is MySQLServerException && error.errorCode == code;
 
@@ -31,6 +35,9 @@ bool isSerializationFailure(Object error) =>
 
 bool isDuplicateEntry(Object error) =>
     _isServerError(error, sqlErrDuplicateEntry);
+
+bool isUnknownDatabase(Object error) =>
+    _isServerError(error, sqlErrUnknownDatabase);
 
 /// True when [error] is a 1105 whose message names [constraint]
 /// (e.g. `uq_idem`, `uq_epoch_seq`).
