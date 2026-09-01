@@ -43,7 +43,6 @@ class StepMount {
     required this.node,
     required this.key,
     this.circuitRound = 0,
-    this.isGateResume = false,
     this.backoff = Backoff.standard,
     this.maxRestarts = 3,
   });
@@ -82,13 +81,8 @@ class StepMount {
   final Key key;
 
   /// The session circuit incarnation for this step, derived from the active
-  /// step bead's supersedes-chain depth plus durable closed-gate history.
+  /// step bead's supersedes-chain depth.
   final int circuitRound;
-
-  /// True when [circuitRound] includes durable closed-gate history. A route
-  /// resumed after operator repair uses this to persist its running transition
-  /// before the in-process route body executes.
-  final bool isGateResume;
 
   /// The owning circuit's backoff schedule (D-5) — the host computes the
   /// cooldown for the next restart attempt from it on failure.

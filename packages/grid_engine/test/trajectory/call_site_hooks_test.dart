@@ -444,11 +444,12 @@ void main() {
       addTearDown(h.owner.dispose);
       await _pump();
 
-      final step = sink.fact('step.transition');
-      expect(step['state'], 'complete');
-      expect(step['step_path'], 'tg-1/agent');
-      expect(step['session_id'], 'tgdog-s');
-      expect((step['result']! as Map)['grade'], 'A');
+      final steps = sink.facts('step.transition');
+      expect(steps.map((step) => step['state']), ['running', 'complete']);
+      final complete = steps.last;
+      expect(complete['step_path'], 'tg-1/agent');
+      expect(complete['session_id'], 'tgdog-s');
+      expect((complete['result']! as Map)['grade'], 'A');
       // AFTER the legacy write: the update carrying `complete` already ran.
       expect(_updateArgv(h.fakes).last, contains('grid.step.state=complete'));
     });
@@ -527,7 +528,10 @@ void main() {
       );
       addTearDown(h.owner.dispose);
       await _pump();
-      expect(sink.fact('step.transition')['step_round'], 4);
+      expect(
+        sink.facts('step.transition').map((step) => step['step_round']).toSet(),
+        {4},
+      );
     });
 
     test(

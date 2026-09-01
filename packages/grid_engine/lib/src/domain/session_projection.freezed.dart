@@ -61,9 +61,10 @@ mixin _$SessionProjection {
 /// scanned from the state snapshot by the join bridge, not from this session
 /// bead. A node leaves this set when its gate bead closes, which re-arms the
 /// parked node (`SessionScope` flips it back to `pending`).
- Set<String> get openGateNodes;/// The number of CLOSED `type=gate` beads for each nodePath in this
-/// session. The join derives this from persisted gate beads on every
-/// snapshot; it is history-as-state, never an in-memory round counter.
+ Set<String> get openGateNodes;/// The number of CLOSED `type=gate` beads for each structural step
+/// incarnation in this session. Keys are produced by [closedGateCountKey].
+/// The join derives this history from the watched state snapshot; this is
+/// never an in-memory orchestration counter.
  Map<String, int> get closedGateCountByNodePath;/// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the wall-clock
 /// instant the session bead was minted (its `started_at` metadata, stamped
 /// once at first spawn through the chokepoint); null for a legacy bead minted
@@ -401,13 +402,15 @@ class _SessionProjection implements SessionProjection {
   return EqualUnmodifiableSetView(_openGateNodes);
 }
 
-/// The number of CLOSED `type=gate` beads for each nodePath in this
-/// session. The join derives this from persisted gate beads on every
-/// snapshot; it is history-as-state, never an in-memory round counter.
+/// The number of CLOSED `type=gate` beads for each structural step
+/// incarnation in this session. Keys are produced by [closedGateCountKey].
+/// The join derives this history from the watched state snapshot; this is
+/// never an in-memory orchestration counter.
  final  Map<String, int> _closedGateCountByNodePath;
-/// The number of CLOSED `type=gate` beads for each nodePath in this
-/// session. The join derives this from persisted gate beads on every
-/// snapshot; it is history-as-state, never an in-memory round counter.
+/// The number of CLOSED `type=gate` beads for each structural step
+/// incarnation in this session. Keys are produced by [closedGateCountKey].
+/// The join derives this history from the watched state snapshot; this is
+/// never an in-memory orchestration counter.
 @override@JsonKey() Map<String, int> get closedGateCountByNodePath {
   if (_closedGateCountByNodePath is EqualUnmodifiableMapView) return _closedGateCountByNodePath;
   // ignore: implicit_dynamic_type

@@ -1705,10 +1705,6 @@ class SessionScopeState extends State<SessionScope>
     final joined = matchesJoin ? seed.existingSession : null;
     final closedGateCountByNodePath =
         joined?.closedGateCountByNodePath ?? const <String, int>{};
-    final gateResumePaths = {
-      for (final entry in closedGateCountByNodePath.entries)
-        if (entry.value > 0) entry.key,
-    };
 
     // The reentrant capability/circuit resolution seam — read ONCE, ambient;
     // the flat broken/complete check below needs it to resolve a
@@ -1775,7 +1771,13 @@ class SessionScopeState extends State<SessionScope>
       );
       circuitRoundsByPath = {
         for (final entry in structuralDepthByPath.entries)
-          entry.key: entry.value + (closedGateCountByNodePath[entry.key] ?? 0),
+          entry.key:
+              entry.value +
+              (closedGateCountByNodePath[closedGateCountKey(
+                    entry.key,
+                    entry.value,
+                  )] ??
+                  0),
       };
       final activeByPath = activeStepBeadsByPath(
         joined.moleculeBeads,
@@ -1855,8 +1857,15 @@ class SessionScopeState extends State<SessionScope>
       if (node.state == StepState.gated &&
           !openGates.contains(nodePath) &&
           !invalidated.contains(nodePath)) {
-        final resumedStepRound = circuitRoundsByPath[nodePath] ?? 0;
-        final closedGateCount = closedGateCountByNodePath[nodePath] ?? 0;
+        final structuralRound = structuralDepthByPath[nodePath] ?? 0;
+        final resumedStepRound =
+            circuitRoundsByPath[nodePath] ?? structuralRound;
+        final closedGateCount =
+            closedGateCountByNodePath[closedGateCountKey(
+              nodePath,
+              structuralRound,
+            )] ??
+            0;
         _scheduleRearm(
           id,
           nodePath,
@@ -1964,7 +1973,6 @@ class SessionScopeState extends State<SessionScope>
       cursor: cursor,
       nodePath: seed.bead.id,
       circuitRoundsByPath: circuitRoundsByPath,
-      gateResumePaths: gateResumePaths,
     );
     return Nest(
       children: [

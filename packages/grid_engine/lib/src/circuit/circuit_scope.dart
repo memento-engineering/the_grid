@@ -45,7 +45,6 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
     required this.cursor,
     required this.nodePath,
     this.circuitRoundsByPath = const {},
-    this.gateResumePaths = const {},
     super.key,
   });
 
@@ -62,9 +61,6 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
 
   /// Session circuit incarnation by full step node path.
   final Map<String, int> circuitRoundsByPath;
-
-  /// Step paths whose circuit round includes at least one closed gate cycle.
-  final Set<String> gateResumePaths;
 
   @override
   void debugFillProperties(DiagnosticsBuilder properties) {
@@ -154,7 +150,6 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
                 session: session,
                 node: node,
                 circuitRound: circuitRoundsByPath[path] ?? 0,
-                isGateResume: gateResumePaths.contains(path),
                 // tg-q3q0 (deep): the circuit round is part of the key. The
                 // host freezes StepArgs (grid.round included) at initState
                 // and NEVER re-keys on seed change, so a round that flips
@@ -181,7 +176,6 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
                 cursor: cursor,
                 nodePath: path,
                 circuitRoundsByPath: circuitRoundsByPath,
-                gateResumePaths: gateResumePaths,
                 key: ValueKey('$path/scope'),
               );
             }

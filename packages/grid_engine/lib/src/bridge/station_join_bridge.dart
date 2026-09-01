@@ -8,10 +8,13 @@ import '../domain/joined_snapshot.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
+import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import 'block_guard.dart';
 import 'snapshot_source.dart';
+
+typedef _JoinedStepIncarnation = ({Bead bead, int ordinal});
 
 /// The JOIN bridge — the **only** subscription into the snapshot pipelines
 /// (A39 / derailment-invariant 1).
@@ -227,8 +230,8 @@ class StationJoinBridge {
         if (projection.workBeadId.isEmpty) continue; // no JOIN key — skip.
         sessions[projection.workBeadId] = projection;
       }
-      _attachGateState(state, sessions);
       _attachMoleculeBeads(state, sessions);
+      _attachGateState(state, sessions);
       graph = _applyCrossLinks(work, state, onUnresolvedCrossLink);
     }
     return JoinedSnapshot(
@@ -300,6 +303,35 @@ class StationJoinBridge {
     return byId;
   }
 
+  static _JoinedStepIncarnation? _incarnationForGate(
+    Bead gate,
+    List<_JoinedStepIncarnation> candidates,
+  ) {
+    if (candidates.isEmpty) return null;
+    final gateCreatedAt = gate.createdAt;
+    if (gateCreatedAt == null) {
+      return candidates.length == 1 ? candidates.single : null;
+    }
+    _JoinedStepIncarnation? selected;
+    for (final candidate in candidates) {
+      final stepCreatedAt = candidate.bead.createdAt;
+      if (stepCreatedAt == null || stepCreatedAt.isAfter(gateCreatedAt)) {
+        continue;
+      }
+      if (selected == null) {
+        selected = candidate;
+        continue;
+      }
+      final selectedCreatedAt = selected.bead.createdAt!;
+      if (stepCreatedAt.isAfter(selectedCreatedAt) ||
+          (stepCreatedAt.isAtSameMomentAs(selectedCreatedAt) &&
+              candidate.ordinal > selected.ordinal)) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  }
+
   /// Scans [state] for `type=gate` beads (D-7), folding open blockers and
   /// durable closed-gate history into each matching session projection. The
   /// open set is the re-arm signal `SessionScope` reads; the closed counts are
@@ -315,6 +347,26 @@ class StationJoinBridge {
     Map<String, SessionProjection> sessions,
   ) {
     final workBeadBySessionId = _workBeadIdBySessionId(sessions);
+    final incarnations = <String, Map<String, List<_JoinedStepIncarnation>>>{};
+    for (final entry in sessions.entries) {
+      final projection = entry.value;
+      final depths = supersedesDepthByStepId(
+        projection.moleculeBeads,
+        projection.moleculeDependencies,
+      );
+      final byPath = incarnations[entry.key] ??=
+          <String, List<_JoinedStepIncarnation>>{};
+      for (final bead in projection.moleculeBeads) {
+        if (bead.issueType != GridIssueTypes.step) continue;
+        final nodePath = bead.metadata[MoleculeStepKeys.path];
+        if (nodePath is! String || nodePath.isEmpty) continue;
+        (byPath[nodePath] ??= <_JoinedStepIncarnation>[]).add((
+          bead: bead,
+          ordinal: depths[bead.id] ?? 0,
+        ));
+      }
+    }
+
     final openByWorkBead = <String, Set<String>>{};
     final closedByWorkBead = <String, Map<String, int>>{};
     for (final bead in state.beadsById.values) {
@@ -324,12 +376,18 @@ class StationJoinBridge {
       if (blocks == null || nodePath == null) continue;
       final workBeadId = workBeadBySessionId[blocks];
       if (workBeadId == null) continue;
-      if (bead.isClosed) {
-        final counts = closedByWorkBead[workBeadId] ??= <String, int>{};
-        counts[nodePath] = (counts[nodePath] ?? 0) + 1;
-      } else {
+      if (!bead.isClosed) {
         (openByWorkBead[workBeadId] ??= <String>{}).add(nodePath);
+        continue;
       }
+      final owner = _incarnationForGate(
+        bead,
+        incarnations[workBeadId]?[nodePath] ?? const <_JoinedStepIncarnation>[],
+      );
+      if (owner == null) continue;
+      final counts = closedByWorkBead[workBeadId] ??= <String, int>{};
+      final key = closedGateCountKey(nodePath, owner.ordinal);
+      counts[key] = (counts[key] ?? 0) + 1;
     }
     for (final entry in sessions.entries.toList()) {
       sessions[entry.key] = entry.value.copyWith(

@@ -288,14 +288,14 @@ exactly one writer").
 | `work_bead_id` | the ORIGINAL immutable id. The recorder strips `#rN`/`#void-` when deriving from legacy strings; the record never carries a mutated key |
 | `round` | recorder-held per-session counter, seeded by parsing the `#rN` shape at first sight (and re-seedable from the log after a bounce), bumped only by the round-retired observation (§2.3) |
 | `step_path` | nodePath at the observation site |
-| `step_round` | supersedes-chain depth plus the count of CLOSED `type=gate` beads for the same session/node. `StationJoinBridge` derives the durable gate count from every watched state snapshot; `SessionScope` combines it with `supersedesDepthByPath` and threads the value through `CircuitScope` into `StepMount.circuitRound`. A gate-cleared rearm records the successor round and the resumed host observes that same round |
+| `step_round` | supersedes-chain depth plus the count of CLOSED `type=gate` beads attributed to the same structural step incarnation. `StationJoinBridge` derives the durable count from every watched state snapshot and keys it with `closedGateCountKey(nodePath, structuralIncarnation)`. A timed gate belongs to the newest step incarnation present when the gate was created; an untimed gate is accepted only when the path has one possible incarnation, and ambiguous untimed history fails closed. `SessionScope` consumes that watched joined value, combines the active incarnation's count with `supersedesDepthByPath`, and threads the result through the unchanged `CircuitScope`/`StepMount.circuitRound` surface. A gate-cleared rearm records the successor round and the resumed host observes that same round |
 | `incarnation` | persisted restartCount (§2.1) |
 | `attempt_id` | §2.1 — breadcrumb-carried |
 | `mount_attempt_id` | recorder-minted ULID spanning ONE `SessionScope` mint sequence (the in-memory `_maxMintAttempts` = 5 budget, `session_scope.dart:156`) — **plus (r2, major 8) the payload carries the legacy mount-attempt bead's `grid.attempt.count`** (`mount_attempt.dart:49`, merged in place per `:70-80`, durable cap `kMaxMountAttempts` = 3 at `:69`) **as `legacy_attempt_count`, the shadow-comparable ordinal.** The ULID keys the record; the ordinal is what `traj shadow-diff` joins against the legacy bead |
 | `grant_id` | **Stage-1 placeholder** (design call): `ck_grant_link` requires `grant_id` on `attempt.session.started`, but no grants exist before Stage 3. The recorder mints a fresh ULID per mount as a pre-grant id, payload-marked `grant_basis:'pre-stage3'`. At Stage 3 the real `admission.grant.issued` takes over the same slot |
 | `seat` | derived by the recorder via `BeadOwnershipPredicate.ownedPrefixOf(id, knownPrefixes)` (`grid_runtime/lib/src/lifecycle/bead_ownership.dart:69` — static, TWO arguments, longest-prefix match over the allowSet, **nullable**). r2 (minor 12): on a null return (no known prefix owns the id) the recorder stamps the literal `seat='unowned'` with a payload marker — deterministic, never CHECK-refused, so `ck_seat`'s presence rule cannot turn an unowned id into a permanent clean-round blocker. Note the allowSet carries both identity axes (name and prefix, `work_assembly.dart:470-473`); longest-match is deterministic but the resolved seat may be either axis |
 | `worktree`/`branch`/`commit_sha` | captured **inside `StationGitService.provisionWorktree`** (§2.3): `preexisting` is computed locally at `station_git_service.dart:335-336`, and the base sha is one `git rev-parse HEAD` at the same instant — the_grid-only, no power_station edit |
-| `occurred_at` | the observation instant; `provenance` defaults `observed`, `inferred` only where stated (exit inference, reconciler settlement, reconciler-minted attempt ids) |
+| `occurred_at` | the observation instant; `provenance` defaults `observed`, `inferred` only where stated (exit inference, reconciler settlement, reconciler-minted attempt ids, and the `step-complete-implies-running` reconstruction whose complete observation proves its running predecessor) |
 
 ### 2.3 The record map — every Stage-1 type, its observation site, its trigger
 
@@ -327,12 +327,16 @@ named class).
 | `step.transition` (running/ready/complete/failed) | `capability_host.dart` persist sites via `_firePersist` (`:366` started, `:369` ready, `:373` complete, `:384` failure; failure_class splits store_unavailable vs work per the tg-7ux conflation) | after each step-bead mutation returns; result keys on complete ride the payload |
 | `step.transition` (gated) | `capability_host.dart:90-130` (step half at `:116`) + derived twin `session_scope.dart:1004-1030` | state=gated; the GATE BEAD mint stays wholly legacy — `gate.opened/.closed` records are NOT in G1 and do not append at Stage 1 |
 | `step.transition` (rearm) | `session_scope.dart:1222-1274` (`_rearm`, single-key write `:1260-1263`) | cause='gate_cleared', **step_round bumped** — this is the record that kills the I-14 stale-join loop at the cut; during the window it shadows the bump |
-| `step.transition` (gate-close re-arm resume) | the existing `CapabilityHost._firePersist` running/complete sites, reached after the closed-gate snapshot re-keys the host with the incremented `StepMount.circuitRound` | the resumed run mints a fresh host `attempt_id`; its running and complete transitions carry that one identity and the same successor `step_round` as the rearm row |
+| `step.transition` (gate-close re-arm resume) | the incremented round re-keys the existing host, and the complete persist site carries the fresh host `attempt_id`; `StationTrajectoryRecorder.stepComplete` enqueues an idempotent running predecessor only when no running row was observed for that same session/path/round/incarnation correlation | the inferred running and observed complete carry one fresh host `attempt_id` and the same successor `step_round` as the rearm row. Completion proves rather than directly witnesses its predecessor, so the running row carries `provenance='inferred'` and `provenance_basis='step-complete-implies-running'`; the complete row remains `provenance='observed'` with no basis |
 
 **Not in this table, deliberately:** `molecule.poured`, `step.superseded` (G2, Stage 2),
 all admission/grant/authority records (G3) — **including the worktree-outstanding
 refusal** (§2.4) — all verification/effect records (G4), `gate.*` records (arrive with
 P4's writers).
+
+`CapabilityHost` routing, `requireProcessLeaseVendor`, `StepMount`, and
+`CircuitScope` are unchanged. Gate-resume coverage is observation-only: it adds
+no route-specific execution branch and weakens no guard.
 
 **Known, counted gaps.** When a teardown deregisters a session while the spawner is
 suspended, the provider kills the process and returns with no `sessionStarted` and no

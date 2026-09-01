@@ -309,6 +309,24 @@ void main() {
       expect(running.attemptId, isNotEmpty);
       expect(complete.attemptId, running.attemptId);
 
+      final legacyRunningWrites = <Map<String, dynamic>>[
+        for (
+          var index = 0;
+          index < runner.callsFor('update').length;
+          index += 1
+        )
+          if (runner.metadataOfUpdate(index)[MoleculeStepKeys.state] ==
+              engine.StepState.running.name)
+            runner.metadataOfUpdate(index),
+      ];
+      expect(
+        legacyRunningWrites,
+        isEmpty,
+        reason:
+            'the recorder observes the in-process run without a new legacy '
+            'write',
+      );
+
       final envelopes = <TrajectoryEnvelope>[
         for (var index = 0; index < transitions.length; index += 1)
           _envelope(transitions[index], index + 1),

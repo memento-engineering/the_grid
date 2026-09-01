@@ -1103,14 +1103,29 @@ void main() {
         stepPath: 'tg-9xk2/verify',
         stepRound: 1,
         incarnation: 2,
+        attemptId: 'A' * 26,
+        startedAt: clockNow,
         completedAt: clockNow,
         result: const {'grid.result.grade': 'A'},
       );
-      final record = single().record as StepTransition;
-      expect(record.state, StepState.complete);
-      expect(record.stepRound, 1);
-      expect(record.incarnation, 2);
-      expect(record.result, {'grid.result.grade': 'A'});
+      final records = [
+        for (final capture in sink.captured) capture.record as StepTransition,
+      ];
+      expect(sink.captured.first.provenance, TrajectoryProvenance.inferred);
+      expect(
+        sink.captured.first.provenanceBasis,
+        'step-complete-implies-running',
+      );
+      expect(sink.captured.last.provenance, TrajectoryProvenance.observed);
+      expect(sink.captured.last.provenanceBasis, isNull);
+      expect(records.map((record) => record.state), [
+        StepState.running,
+        StepState.complete,
+      ]);
+      expect(records.map((record) => record.attemptId).toSet(), {'A' * 26});
+      expect(records.map((record) => record.stepRound).toSet(), {1});
+      expect(records.map((record) => record.incarnation).toSet(), {2});
+      expect(records.last.result, {'grid.result.grade': 'A'});
     });
 
     test('failed splits the tg-7ux conflation: work vs store_unavailable', () {
