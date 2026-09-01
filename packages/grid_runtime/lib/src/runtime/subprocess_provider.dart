@@ -272,25 +272,33 @@ class SubprocessProvider implements RuntimeProvider {
 
     session.pid = spawned.pid;
     session.bind(spawned);
-    if (config.lifecycle == Lifecycle.oneTurn) {
-      // CLOSE argv-only one-turn stdin before the next asynchronous operation.
-      // An open, never-written pipe means input is still pending: `codex exec`
-      // waits for EOF before opening its thread, leaving the session hung with
-      // no transcript or terminal event when the close is delayed.
-      await session.closeInput();
-    }
-    session.pgid = await _groups.resolvePgid(spawned.pid);
-    session.startedAt = DateTime.now();
-    session.lastActivity = session.startedAt;
+    var stopRacedSpawn = false;
+    try {
+      if (config.lifecycle == Lifecycle.oneTurn) {
+        // CLOSE argv-only one-turn stdin before the next asynchronous operation.
+        // An open, never-written pipe means input is still pending: `codex exec`
+        // waits for EOF before opening its thread, leaving the session hung with
+        // no transcript or terminal event when the close is delayed.
+        await session.closeInput();
+      }
+    } finally {
+      session.pgid = await _groups.resolvePgid(spawned.pid);
+      session.startedAt = DateTime.now();
+      session.lastActivity = session.startedAt;
 
-    // A `stop` raced this spawn (a teardown walked the tree while we were
-    // suspended in the spawner). It found no pid to kill and deregistered us, so
-    // NOTHING else will ever reap this process — kill it HERE, through the same
-    // guarded path `stop` uses. No `sessionStarted` is emitted and no
-    // supervision is armed: the tree that asked for this agent is already gone.
-    if (session.stopping || !identical(_sessions[name], session)) {
-      await _terminateSession(session);
-      session.close();
+      // A `stop` raced this spawn (a teardown walked the tree while we were
+      // suspended in the spawner). It found no pid to kill and deregistered us,
+      // so NOTHING else will ever reap this process — kill it HERE, through the
+      // same guarded path `stop` uses. This `finally` keeps the hand-off live
+      // even when one-turn stdin closure throws.
+      stopRacedSpawn =
+          session.stopping || !identical(_sessions[name], session);
+      if (stopRacedSpawn) {
+        await _terminateSession(session);
+        session.close();
+      }
+    }
+    if (stopRacedSpawn) {
       return;
     }
 
