@@ -12,7 +12,6 @@ library;
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 import 'package:test/test.dart';
 
 // ── fakes ────────────────────────────────────────────────────────────────
@@ -497,8 +496,42 @@ void main() {
       expect(flares, isEmpty);
     });
 
-    test('a stepLag past the grace escalates ONCE to an axis-tagged '
-        'divergence naming the probable cause', () {
+    test('retired rework rounds never enter the step comparator', () {
+      var now = DateTime.utc(2026, 9, 1, 15, 46);
+      final o = observer(mode: DualReadMode.observe, clock: () => now);
+      final sessions = <String, SessionProjection>{
+        'tg-9abc#r1': _session(
+          sessionId: 'retired',
+          workBeadId: 'tg-9abc#r1',
+          steps: [
+            _stepBead('a', state: StepState.complete, sessionId: 'retired'),
+          ],
+        ),
+        'tg-9abc': _session(
+          sessionId: 'current',
+          workBeadId: 'tg-9abc',
+          steps: [
+            _stepBead('a', state: StepState.running, sessionId: 'current'),
+          ],
+        ),
+      };
+      final snapshot = _StepSnapshot([
+        _Row(sessionId: 'retired', stepPath: 'a', stepState: 'running'),
+        _Row(sessionId: 'current', stepPath: 'a', stepState: 'running'),
+      ]);
+
+      o.observe(sessions, snapshot);
+      now = now.add(const Duration(minutes: 5));
+      o.observe(sessions, snapshot);
+
+      expect(o.accounting.stepHits, 1);
+      expect(o.accounting.openStepLag, 0);
+      expect(o.accounting.stepLagEscalations, 0);
+      expect(o.accounting.stepDivergences, 0);
+      expect(flares, isEmpty);
+    });
+
+    test('step lag divergence is unexplained and durable', () {
       var now = DateTime.utc(2026, 8, 31, 10);
       final o = observer(mode: DualReadMode.primary, clock: () => now);
       final sessions = {
@@ -524,10 +557,16 @@ void main() {
       expect(divergences.single['axis'], 'step');
       expect(divergences.single['step_path'], 'a');
       expect(divergences.single['field'], 'stepLag');
-      expect(
-        divergences.single['probable_cause'],
-        contains('dropped step.transition'),
-      );
+      expect(divergences.single['cause'], 'unexplained');
+      expect(o.accounting.stepUnexplainedDivergences, 1);
+      expect(o.accounting.stepOperatorStoreEditDivergences, 0);
+      final detail = o.accounting.divergenceDetails.single;
+      expect(detail.axis, 'step');
+      expect(detail.activeStepPath, 'a');
+      expect(detail.field, 'stepLag');
+      expect(detail.legacyValue, 'complete');
+      expect(detail.foldValue, 'running');
+      expect(detail.cause, DualReadDivergenceCause.unexplained);
       expect(o.accounting.maxStepLagMs, greaterThan(0));
     });
 

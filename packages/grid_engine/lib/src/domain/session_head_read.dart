@@ -69,6 +69,60 @@ const Duration kRetirementLagGrace = Duration(seconds: 90);
 /// The `attempt.note` channel the durable round evidence rides (§0.4).
 const String kDualReadRoundSummaryChannel = 'dual-read-round-summary';
 
+/// Semantics for every counter emitted by [DualReadAccounting.toJson].
+const Map<String, String> kDualReadCounterSemantics = <String, String>{
+  'snapshot_version': 'cumulative',
+  'snapshot_rows': 'gauge',
+  'passes': 'cumulative',
+  'hits': 'gauge',
+  'miss_post_epoch': 'gauge',
+  'miss_legacy_era': 'gauge',
+  'null_started_at': 'gauge',
+  'fallbacks': 'gauge',
+  'p1_orphan': 'gauge',
+  'overlays_applied': 'gauge',
+  'overlays_served': 'gauge',
+  'overlays_suppressed': 'gauge',
+  'divergences': 'cumulative',
+  'divergences_by_field': 'cumulative',
+  'operator_store_edit_divergences': 'cumulative',
+  'unexplained_divergences': 'cumulative',
+  'terminal_lag': 'cumulative',
+  'terminal_lag_open': 'gauge',
+  'terminal_lag_max_ms': 'cumulative',
+  'retirement_lag': 'cumulative',
+  'retirement_lag_open': 'gauge',
+  'retirement_lag_max_ms': 'cumulative',
+  'incumbent_adjudications': 'cumulative',
+  'reconstructed_terminals': 'cumulative',
+  'reconstructed_terminal_skipped': 'cumulative',
+  'teardown_replay_appends': 'cumulative',
+  'cardinality_breaches': 'cumulative',
+  'heals_appended': 'cumulative',
+  'heals_skipped': 'cumulative',
+  'heals_failed': 'cumulative',
+  'heal_escalations': 'cumulative',
+  'step_passes': 'cumulative',
+  'step_hits': 'gauge',
+  'step_fallbacks': 'gauge',
+  'step_cursors_served': 'gauge',
+  'p2_miss': 'gauge',
+  'p2_orphan': 'gauge',
+  'step_divergences': 'cumulative',
+  'step_operator_store_edit_divergences': 'cumulative',
+  'step_unexplained_divergences': 'cumulative',
+  'step_lag': 'cumulative',
+  'step_lag_open': 'gauge',
+  'step_lag_max_ms': 'cumulative',
+  'step_lag_escalations': 'cumulative',
+  'appends': 'cumulative',
+  'append_dedupes': 'cumulative',
+  'append_drops': 'cumulative',
+  'append_suppressed': 'cumulative',
+  'append_refused_testimony': 'cumulative',
+  'append_queue_depth': 'gauge',
+};
+
 /// The flare a served-tuple mismatch raises. Axis-tagged, because C4 adds a
 /// step axis under the same name.
 const String kDualReadDivergenceFlare = 'trajectory.dualReadDivergence';
@@ -345,6 +399,72 @@ final class DualReadFieldMismatch {
   String toString() => '$field(fold=$foldValue, legacy=$legacyValue)';
 }
 
+/// The mechanical evidence available when a divergence is first counted.
+enum DualReadDivergenceCause {
+  /// The legacy value changed while the session's trajectory append cursor did
+  /// not advance during the compare window.
+  operatorStoreEdit('operator-store-edit'),
+
+  /// No append-absence proof exists; operator adjudication uses the detail.
+  unexplained('unexplained');
+
+  const DualReadDivergenceCause(this.wire);
+
+  /// Stable round-summary and flare spelling.
+  final String wire;
+}
+
+/// One first-counted field divergence, retained for the boot's summaries.
+@immutable
+final class DualReadDivergenceDetail {
+  const DualReadDivergenceDetail({
+    required this.axis,
+    required this.sessionId,
+    required this.field,
+    required this.legacyValue,
+    required this.foldValue,
+    required this.occurredAt,
+    required this.activeStepPath,
+    required this.cause,
+  });
+
+  /// Comparator axis (`session` or `step`).
+  final String axis;
+
+  /// Identity of the compared session.
+  final String sessionId;
+
+  /// Exact field whose values differed.
+  final String field;
+
+  /// Legacy store value at first observation.
+  final String legacyValue;
+
+  /// Fold value at first observation.
+  final String foldValue;
+
+  /// Wall-clock instant at which the divergence was first counted.
+  final DateTime occurredAt;
+
+  /// Active legacy step, or null when no step was running.
+  final String? activeStepPath;
+
+  /// Mechanical count-time classification.
+  final DualReadDivergenceCause cause;
+
+  /// JSON shape embedded in every durable dual-read round summary.
+  Map<String, Object?> toJson() => <String, Object?>{
+    'axis': axis,
+    'session_id': sessionId,
+    'field': field,
+    'legacy_value': legacyValue,
+    'fold_value': foldValue,
+    'occurred_at': occurredAt.toUtc().toIso8601String(),
+    'active_step_path': activeStepPath,
+    'cause': cause.wire,
+  };
+}
+
 /// The result of comparing one legacy projection against its identity-matched
 /// P1 head.
 @immutable
@@ -518,13 +638,16 @@ typedef DualReadAppendStats = ({
 /// ACCUMULATORS deduped by `(sessionId, field)`, so a divergence that persists
 /// across a hundred passes counts, and flares, exactly once.
 class DualReadAccounting {
-  DualReadAccounting({this.eventKeyBound = 4096});
+  DualReadAccounting({this.eventKeyBound = 4096, DateTime Function()? clock})
+    : _clock = clock ?? DateTime.now;
 
   /// The bound on the dedupe key set — a busy boot must not grow it forever.
   /// Past it the oldest keys are evicted, so a long-lived divergence may flare
   /// a second time; that is the correct failure direction (louder, never
   /// quieter).
   final int eventKeyBound;
+
+  final DateTime Function() _clock;
 
   /// Comparator passes run this boot.
   int passes = 0;
@@ -583,6 +706,8 @@ class DualReadAccounting {
 
   // Accumulators — deduped events across the boot.
   int divergences = 0;
+  int operatorStoreEditDivergences = 0;
+  int unexplainedDivergences = 0;
   int terminalLagObserved = 0;
   int retirementLagObserved = 0;
   int incumbentAdjudications = 0;
@@ -636,8 +761,12 @@ class DualReadAccounting {
   int stepLagObserved = 0;
   int stepLagEscalations = 0;
   int stepDivergences = 0;
+  int stepOperatorStoreEditDivergences = 0;
+  int stepUnexplainedDivergences = 0;
 
   final Map<String, int> divergencesByField = <String, int>{};
+  final List<DualReadDivergenceDetail> divergenceDetails =
+      <DualReadDivergenceDetail>[];
 
   /// Health transitions witnessed (`live→compromised`, a refused seed, …) —
   /// §0.4's "health transitions" field.
@@ -688,22 +817,16 @@ class DualReadAccounting {
 
   /// Folds one comparison into the counters, returning true when this was a
   /// FIRST observation of an event class (the flare signal).
-  bool record(DualReadComparison comparison) {
+  bool record(
+    DualReadComparison comparison, {
+    DualReadDivergenceCause cause = DualReadDivergenceCause.unexplained,
+    String? activeStepPath,
+  }) {
     switch (comparison.classification) {
       case DualReadClass.match:
         return false;
       case DualReadClass.divergence:
-        var first = false;
-        for (final mismatch in comparison.mismatches) {
-          final key = 'divergence:${comparison.sessionId}:${mismatch.field}';
-          if (noteEvent(key)) {
-            first = true;
-            divergences += 1;
-            divergencesByField[mismatch.field] =
-                (divergencesByField[mismatch.field] ?? 0) + 1;
-          }
-        }
-        return first;
+        return _recordSessionDivergence(comparison, cause, activeStepPath);
       case DualReadClass.terminalLag:
         openTerminalLag += 1;
         if (noteEvent('terminalLag:${comparison.sessionId}')) {
@@ -738,6 +861,74 @@ class DualReadAccounting {
         }
         return false;
     }
+  }
+
+  bool _recordSessionDivergence(
+    DualReadComparison comparison,
+    DualReadDivergenceCause cause,
+    String? activeStepPath,
+  ) {
+    var first = false;
+    final occurredAt = _clock().toUtc();
+    for (final mismatch in comparison.mismatches) {
+      final key = 'divergence:${comparison.sessionId}:${mismatch.field}';
+      if (!noteEvent(key)) continue;
+      first = true;
+      divergences += 1;
+      divergencesByField[mismatch.field] =
+          (divergencesByField[mismatch.field] ?? 0) + 1;
+      switch (cause) {
+        case DualReadDivergenceCause.operatorStoreEdit:
+          operatorStoreEditDivergences += 1;
+        case DualReadDivergenceCause.unexplained:
+          unexplainedDivergences += 1;
+      }
+      divergenceDetails.add(
+        DualReadDivergenceDetail(
+          axis: 'session',
+          sessionId: comparison.sessionId,
+          field: mismatch.field,
+          legacyValue: mismatch.legacyValue,
+          foldValue: mismatch.foldValue,
+          occurredAt: occurredAt,
+          activeStepPath: activeStepPath,
+          cause: cause,
+        ),
+      );
+    }
+    return first;
+  }
+
+  /// Counts and records one step-axis divergence exactly once per session/path.
+  bool recordStepDivergence({
+    required String sessionId,
+    required String stepPath,
+    required String field,
+    required String legacyValue,
+    required String foldValue,
+    required DualReadDivergenceCause cause,
+  }) {
+    if (!noteEvent('stepDivergence:$sessionId:$stepPath')) return false;
+    stepDivergences += 1;
+    switch (cause) {
+      case DualReadDivergenceCause.operatorStoreEdit:
+        stepOperatorStoreEditDivergences += 1;
+      case DualReadDivergenceCause.unexplained:
+        stepUnexplainedDivergences += 1;
+    }
+    divergenceDetails.add(
+      DualReadDivergenceDetail(
+        axis: 'step',
+        sessionId: sessionId,
+        field: field,
+        legacyValue: legacyValue,
+        foldValue: foldValue,
+        occurredAt: _clock().toUtc(),
+        activeStepPath: stepPath,
+        cause: cause,
+      ),
+    );
+    return true;
   }
 
   /// Every LAG class's live population — §0.3's gate (b), "all lag classes
@@ -794,6 +985,8 @@ class DualReadAccounting {
     'overlays_suppressed': overlaysSuppressed,
     'divergences': divergences,
     'divergences_by_field': Map<String, int>.from(divergencesByField),
+    'operator_store_edit_divergences': operatorStoreEditDivergences,
+    'unexplained_divergences': unexplainedDivergences,
     'terminal_lag': terminalLagObserved,
     'terminal_lag_open': openTerminalLag,
     'terminal_lag_max_ms': maxTerminalLagMs,
@@ -822,6 +1015,8 @@ class DualReadAccounting {
     'p2_miss': p2Miss,
     'p2_orphan': p2Orphan,
     'step_divergences': stepDivergences,
+    'step_operator_store_edit_divergences': stepOperatorStoreEditDivergences,
+    'step_unexplained_divergences': stepUnexplainedDivergences,
     'step_lag': stepLagObserved,
     'step_lag_open': openStepLag,
     'step_lag_max_ms': maxStepLagMs,
@@ -838,6 +1033,10 @@ class DualReadAccounting {
       'append_refused_testimony': appendStats.refusedTestimony,
       'append_queue_depth': appendStats.queueDepth,
     },
+    'divergence_details': [
+      for (final detail in divergenceDetails) detail.toJson(),
+    ],
+    'counter_semantics': Map<String, String>.from(kDualReadCounterSemantics),
   };
 
   /// The note body — the JSON above, encoded. Deterministic key order (the

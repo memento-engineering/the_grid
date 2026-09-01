@@ -52,6 +52,16 @@ typedef StepSnapshotSubscribe =
       void Function(TrajectoryStepSnapshot snapshot) listener,
     );
 
+final class _StepCompareWindow {
+  const _StepCompareWindow({
+    required this.legacyState,
+    required this.foldLastSeq,
+  });
+
+  final String? legacyState;
+  final int? foldLastSeq;
+}
+
 /// Runs the step-axis comparator and owns everything it accumulates.
 ///
 /// One instance per boot, held by the bridge. `observe` is called once per
@@ -67,7 +77,7 @@ class DualReadStepObserver {
   }) : _mode = mode,
        _clock = clock ?? DateTime.now,
        _onFlare = onFlare,
-       accounting = accounting ?? DualReadAccounting();
+       accounting = accounting ?? DualReadAccounting(clock: clock);
 
   final DualReadMode _mode;
   final DateTime Function() _clock;
@@ -79,6 +89,9 @@ class DualReadStepObserver {
   final DualReadAccounting accounting;
 
   final StepLagTracker _stepLag = StepLagTracker();
+  final Map<String, _StepCompareWindow> _compareWindowByNode =
+      <String, _StepCompareWindow>{};
+  final Set<String> _operatorEditedNodes = <String>{};
 
   /// THE POSTURE, as a served fact: `primary` AND the boot has not disengaged.
   /// The disengage latch lives on the shared accounting, so a boot whose P1
@@ -113,17 +126,21 @@ class DualReadStepObserver {
       accounting.overlayDisengaged = true;
       accounting.stepFallbacks += sessions.length;
       _stepLag.retainOnly(const <String>{});
+      _compareWindowByNode.clear();
+      _operatorEditedNodes.clear();
       return const <String, StepCursorOverlay>{};
     }
     final engaged = stepAxisEngaged;
     final now = _clock();
     final lagging = <String>{};
+    final comparedNodes = <String>{};
     final cursors = <String, StepCursorOverlay>{};
 
     for (final entry in sessions.entries) {
       final legacy = entry.value;
       final sessionId = legacy.sessionId;
       if (sessionId == null || sessionId.isEmpty) continue;
+      if (isRetiredWorkBeadKey(legacy.workBeadId)) continue;
       // A terminal session has nothing left to mount and no cursor a decision
       // reads; comparing it would count its whole node set as lag forever
       // after the last transition record folded.
@@ -151,6 +168,7 @@ class DualReadStepObserver {
         collapsed: collapsed,
       );
       for (final node in merge.nodes) {
+        _observeCompareWindow(node, collapsed[node.stepPath], comparedNodes);
         _recordNode(node, snapshot, now: now, lagging: lagging);
       }
       if (engaged) {
@@ -169,8 +187,39 @@ class DualReadStepObserver {
     }
 
     _stepLag.retainOnly(lagging);
+    _compareWindowByNode.removeWhere((key, _) => !comparedNodes.contains(key));
+    _operatorEditedNodes.retainAll(comparedNodes);
     return cursors;
   }
+
+  void _observeCompareWindow(
+    StepNodeComparison node,
+    StepCursorView? row,
+    Set<String> comparedNodes,
+  ) {
+    final key = StepLagTracker.keyFor(node.sessionId, node.stepPath);
+    comparedNodes.add(key);
+    final current = _StepCompareWindow(
+      legacyState: node.legacyState,
+      foldLastSeq: row?.lastSeq,
+    );
+    final previous = _compareWindowByNode[key];
+    if (previous != null) {
+      if (current.foldLastSeq != previous.foldLastSeq) {
+        _operatorEditedNodes.remove(key);
+      } else if (current.legacyState != previous.legacyState) {
+        _operatorEditedNodes.add(key);
+      }
+    }
+    _compareWindowByNode[key] = current;
+  }
+
+  DualReadDivergenceCause _causeFor(StepNodeComparison node) =>
+      _operatorEditedNodes.contains(
+        StepLagTracker.keyFor(node.sessionId, node.stepPath),
+      )
+      ? DualReadDivergenceCause.operatorStoreEdit
+      : DualReadDivergenceCause.unexplained;
 
   void _recordNode(
     StepNodeComparison node,
@@ -195,11 +244,16 @@ class DualReadStepObserver {
         // axis either — but counted, like a `p1Orphan` head.
         accounting.p2Orphan += 1;
       case StepNodeClass.divergence:
-        _flareStepDivergence(node, snapshot, field: 'state');
-        if (accounting.noteEvent(
-          'stepDivergence:${node.sessionId}:${node.stepPath}',
+        final cause = _causeFor(node);
+        if (accounting.recordStepDivergence(
+          sessionId: node.sessionId,
+          stepPath: node.stepPath,
+          field: 'state',
+          legacyValue: node.legacyState ?? '<no step bead>',
+          foldValue: node.foldState ?? '<no P2 row>',
+          cause: cause,
         )) {
-          accounting.stepDivergences += 1;
+          _flareStepDivergence(node, snapshot, field: 'state', cause: cause);
         }
     }
   }
@@ -224,18 +278,24 @@ class DualReadStepObserver {
     // window, it is a transition append that never landed. It becomes a
     // divergence and is counted as one.
     accounting.stepLagEscalations += 1;
-    if (accounting.noteEvent(
-      'stepDivergence:${node.sessionId}:${node.stepPath}',
+    final cause = _causeFor(node);
+    if (accounting.recordStepDivergence(
+      sessionId: node.sessionId,
+      stepPath: node.stepPath,
+      field: 'stepLag',
+      legacyValue: node.legacyState ?? '<no step bead>',
+      foldValue: node.foldState ?? '<no P2 row>',
+      cause: cause,
     )) {
-      accounting.stepDivergences += 1;
+      _flareStepDivergence(node, snapshot, field: 'stepLag', cause: cause);
     }
-    _flareStepDivergence(node, snapshot, field: 'stepLag');
   }
 
   void _flareStepDivergence(
     StepNodeComparison node,
     TrajectoryStepSnapshot snapshot, {
     required String field,
+    required DualReadDivergenceCause cause,
   }) {
     final sink = _onFlare;
     if (sink == null) return;
@@ -250,8 +310,7 @@ class DualReadStepObserver {
         if (node.stepRound != null) 'step_round': '${node.stepRound}',
         if (node.round != null) 'round': '${node.round}',
         'snapshot_version': '${snapshot.version}',
-        if (field == 'stepLag')
-          'probable_cause': 'a dropped step.transition append',
+        'cause': cause.wire,
       });
     } on Object {
       // Emit-only, the flare convention.

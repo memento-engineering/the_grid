@@ -22,7 +22,9 @@ library;
 
 import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
+import '../domain/step_cursor_read.dart' show legacyStepCursorOf;
 import '../domain/trajectory_views.dart';
+import '../sdk/circuit.dart' show StepState;
 
 /// The emit-only flare sink shape the engine already uses everywhere else.
 typedef DualReadFlareSink =
@@ -46,6 +48,16 @@ typedef HeadSnapshotSubscribe =
     void Function() Function(
       void Function(TrajectoryHeadSnapshot snapshot) listener,
     );
+
+final class _SessionCompareWindow {
+  const _SessionCompareWindow({
+    required this.legacy,
+    required this.foldLastSeq,
+  });
+
+  final SessionHeadFacts legacy;
+  final int foldLastSeq;
+}
 
 /// Runs the session-axis comparator and owns everything it accumulates.
 ///
@@ -72,7 +84,7 @@ class DualReadSessionObserver {
        _onRoundSummary = onRoundSummary,
        _appendStats = appendStats,
        _stepAxisEngaged = stepAxisEngaged,
-       accounting = accounting ?? DualReadAccounting();
+       accounting = accounting ?? DualReadAccounting(clock: clock);
 
   static bool _neverQueued(String _) => false;
 
@@ -106,6 +118,9 @@ class DualReadSessionObserver {
 
   final TerminalLagTracker _terminalLag = TerminalLagTracker();
   final RetirementLagTracker _retirementLag = RetirementLagTracker();
+  final Map<String, _SessionCompareWindow> _compareWindowBySession =
+      <String, _SessionCompareWindow>{};
+  final Set<String> _operatorEditedSessions = <String>{};
 
   /// Sessions already seen terminal — the transition edge the per-terminal
   /// round summary rides. A set, not a counter: the join recomputes on every
@@ -164,6 +179,8 @@ class DualReadSessionObserver {
       accounting.fallbacks += sessions.length;
       _terminalLag.retainOnly(const <String>{});
       _retirementLag.retainOnly(const <String>{});
+      _compareWindowBySession.clear();
+      _operatorEditedSessions.clear();
       _emitTerminalSummaries(sessions, snapshot);
       return const <String, SessionProjection>{};
     }
@@ -199,6 +216,9 @@ class DualReadSessionObserver {
       matchedSessionIds.add(sessionId);
       accounting.hits += 1;
       beadsToSentinel.add(head.workBeadId);
+      _observeCompareWindow(legacy, head);
+      final cause = _causeFor(sessionId);
+      final activeStepPath = _activeStepPathOf(legacy);
 
       // THE OVERLAY (C3), resolved for EVERY identity-matched head before any
       // classification branch — the two suppressors live inside
@@ -264,6 +284,8 @@ class DualReadSessionObserver {
               ],
             ),
             snapshot,
+            cause: cause,
+            activeStepPath: activeStepPath,
           );
         } else {
           accounting.record(
@@ -272,6 +294,8 @@ class DualReadSessionObserver {
               workBeadId: head.workBeadId,
               classification: DualReadClass.retirementLag,
             ),
+            cause: cause,
+            activeStepPath: activeStepPath,
           );
         }
         continue;
@@ -280,10 +304,22 @@ class DualReadSessionObserver {
       final comparison = compareHeadToProjection(legacy, head);
       if (comparison.classification == DualReadClass.terminalLag) {
         laggingTerminals.add(sessionId);
-        _handleTerminalLag(comparison, head, snapshot, now);
+        _handleTerminalLag(
+          comparison,
+          head,
+          snapshot,
+          now,
+          cause: cause,
+          activeStepPath: activeStepPath,
+        );
         continue;
       }
-      _recordAndFlare(comparison, snapshot);
+      _recordAndFlare(
+        comparison,
+        snapshot,
+        cause: cause,
+        activeStepPath: activeStepPath,
+      );
     }
 
     // The CARDINALITY SENTINEL rides `byWorkBead` — the classification view,
@@ -335,6 +371,10 @@ class DualReadSessionObserver {
 
     _terminalLag.retainOnly(laggingTerminals);
     _retirementLag.retainOnly(laggingRetirements);
+    _compareWindowBySession.removeWhere(
+      (sessionId, _) => !matchedSessionIds.contains(sessionId),
+    );
+    _operatorEditedSessions.retainAll(matchedSessionIds);
     // THE NOTES RIDE THE END OF THE PASS, not its start (C3): `beginPass`
     // zeroes the GAUGES, and the gauges are half of what a gate reads —
     // `terminal_lag_open`, `miss_post_epoch`, `overlays_served`. A note
@@ -364,13 +404,15 @@ class DualReadSessionObserver {
     DualReadComparison comparison,
     SessionHeadView head,
     TrajectoryHeadSnapshot snapshot,
-    DateTime now,
-  ) {
+    DateTime now, {
+    required DualReadDivergenceCause cause,
+    required String? activeStepPath,
+  }) {
     final sessionId = comparison.sessionId;
     final attemptId = head.attemptId;
     final age = _terminalLag.ageOf(sessionId, now).inMilliseconds;
     if (age > accounting.maxTerminalLagMs) accounting.maxTerminalLagMs = age;
-    accounting.record(comparison);
+    accounting.record(comparison, cause: cause, activeStepPath: activeStepPath);
     final action = _terminalLag.observe(
       sessionId,
       now: now,
@@ -380,6 +422,20 @@ class DualReadSessionObserver {
       case TerminalLagAction.watch:
         return;
       case TerminalLagAction.heal:
+        if (cause == DualReadDivergenceCause.operatorStoreEdit) {
+          _recordAndFlare(
+            DualReadComparison(
+              sessionId: comparison.sessionId,
+              workBeadId: comparison.workBeadId,
+              classification: DualReadClass.divergence,
+              mismatches: comparison.mismatches,
+            ),
+            snapshot,
+            cause: cause,
+            activeStepPath: activeStepPath,
+          );
+          return;
+        }
         if (attemptId == null) {
           // The head predates process start: `AttemptTerminal.attemptId` is
           // REQUIRED and no id is ever minted here. SKIP and count.
@@ -432,6 +488,8 @@ class DualReadSessionObserver {
             ],
           ),
           snapshot,
+          cause: cause,
+          activeStepPath: activeStepPath,
         );
     }
   }
@@ -469,11 +527,55 @@ class DualReadSessionObserver {
     return false;
   }
 
+  void _observeCompareWindow(SessionProjection legacy, SessionHeadView head) {
+    final sessionId = head.sessionId;
+    final current = legacyFactsOf(legacy);
+    final previous = _compareWindowBySession[sessionId];
+    final attemptId = head.attemptId;
+    final appendQueued = attemptId != null && _appendQueuedFor(attemptId);
+    if (previous != null) {
+      if (head.lastSeq != previous.foldLastSeq || appendQueued) {
+        _operatorEditedSessions.remove(sessionId);
+      } else if (_sessionFactsDiffer(previous.legacy, current)) {
+        _operatorEditedSessions.add(sessionId);
+      }
+    }
+    _compareWindowBySession[sessionId] = _SessionCompareWindow(
+      legacy: current,
+      foldLastSeq: head.lastSeq,
+    );
+  }
+
+  bool _sessionFactsDiffer(SessionHeadFacts left, SessionHeadFacts right) =>
+      left.isTerminal != right.isTerminal ||
+      left.completed != right.completed ||
+      left.humanHeld != right.humanHeld ||
+      left.closedAt != right.closedAt;
+
+  DualReadDivergenceCause _causeFor(String sessionId) =>
+      _operatorEditedSessions.contains(sessionId)
+      ? DualReadDivergenceCause.operatorStoreEdit
+      : DualReadDivergenceCause.unexplained;
+
+  String? _activeStepPathOf(SessionProjection legacy) {
+    final running = <String>[
+      for (final entry in legacyStepCursorOf(legacy).entries)
+        if (entry.value.state == StepState.running) entry.key,
+    ]..sort();
+    return running.isEmpty ? null : running.first;
+  }
+
   void _recordAndFlare(
     DualReadComparison comparison,
-    TrajectoryHeadSnapshot snapshot,
-  ) {
-    final first = accounting.record(comparison);
+    TrajectoryHeadSnapshot snapshot, {
+    DualReadDivergenceCause cause = DualReadDivergenceCause.unexplained,
+    String? activeStepPath,
+  }) {
+    final first = accounting.record(
+      comparison,
+      cause: cause,
+      activeStepPath: activeStepPath,
+    );
     // A cardinality breach flares under the SAME name with `field:'cardinality'`
     // (§0.2 partition case 2) — it is its own accounting class only because the
     // gate arithmetic wants it separable, not because it is quieter.
@@ -490,6 +592,7 @@ class DualReadSessionObserver {
         'fold_value': mismatch.foldValue,
         'legacy_value': mismatch.legacyValue,
         'snapshot_version': '${snapshot.version}',
+        'cause': cause.wire,
       });
     }
   }
