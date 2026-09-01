@@ -90,6 +90,10 @@ class _ChannelProcessCap extends _FakeProcessCap {
   _ChannelProcessCap(this.session);
 
   final ProcessSession session;
+  int createSessionCount = 0;
+  String? createdName;
+  String? createdAttemptId;
+  String? createdInstanceFence;
 
   @override
   ProcessSession createSession({
@@ -99,7 +103,13 @@ class _ChannelProcessCap extends _FakeProcessCap {
     required String instanceFence,
     required TreeContext context,
     required StepArgs args,
-  }) => session;
+  }) {
+    createSessionCount += 1;
+    createdName = name;
+    createdAttemptId = attemptId;
+    createdInstanceFence = instanceFence;
+    return session;
+  }
 }
 
 class _ProvisionSourceControl implements SourceControl {
@@ -268,6 +278,74 @@ void main() {
       });
     },
   );
+
+  test('StationProcessLeaseVendor leaseFor dispatches createSession with the '
+      'lease handle fences and bypasses the legacy dispatcher', () async {
+    final fakes = buildFakes();
+    final reports = <AllocationReport>[];
+    final runtime = FakeRuntimeProvider();
+    addTearDown(runtime.close);
+    final session = _ImmediateSession();
+    final capability = _ChannelProcessCap(session);
+    var spawns = 0;
+    var legacyDispatches = 0;
+    const handle = ProcessHandle(
+      pgid: 41,
+      pid: 42,
+      token: 'fence-production',
+      attemptId: 'attempt-production',
+    );
+    final request = ProcessLeaseRequest(
+      stepBeadId: 'tgdog-step-channel-production',
+      capability: capability,
+      allocation: AllocationContext(
+        treeContext: FakeTreeContext(),
+        args: stepArgs('tg-1/lease'),
+        transport: runtime,
+        address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
+        env: const {
+          'GRID_ATTEMPT_ID': 'request-attempt-is-not-authoritative',
+          'GRID_INSTANCE_TOKEN': 'request-fence-is-not-authoritative',
+        },
+        sink: reports.add,
+      ),
+    );
+    final vendor = StationProcessLeaseVendor(
+      writer: fakes.ctx.writer,
+      spawn: (request, context, args) async {
+        spawns += 1;
+        return handle;
+      },
+      dispatch: (handle, request, context, args) async {
+        legacyDispatches += 1;
+        return const Failed('legacy dispatcher must not run');
+      },
+      metadataOf: (stepBeadId) async => null,
+      liveness: (fence) => false,
+    );
+    final allocation = _alloc(
+      vendor.leaseFor(request),
+      sink: reports.add,
+      kind: StepKind.job,
+    );
+
+    await allocation.startOrAdopt();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(spawns, 1);
+    expect(legacyDispatches, 0);
+    expect(capability.createSessionCount, 1);
+    expect(capability.createdName, 'tgdog-s/tg-1/lease');
+    expect(capability.createdAttemptId, 'attempt-production');
+    expect(capability.createdInstanceFence, 'fence-production');
+    expect(session.closed, isTrue);
+    expect(reports.whereType<AllocationCompleted>(), hasLength(1));
+    expect(reports.whereType<AllocationCompleted>().single.payload, {
+      'structured': 'yes',
+    });
+    expect(fakes.runner.callsFor('update'), hasLength(1));
+    expect(fakes.runner.metadataOfUpdate(0), leaseBreadcrumb(handle));
+  });
 
   group('stationProcessSpawner — provisioned workspace checkout guard', () {
     test('sourceless provision fails before start', () async {
