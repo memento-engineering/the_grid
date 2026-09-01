@@ -544,5 +544,58 @@ void main() {
       );
       expect(observed.sql, isNot(contains('outcome IS NULL')));
     });
+
+    // THE ROLLBACK SHAPE (cut-wiring, r13): `DualReadMode.off` registers
+    // `kPreCutFoldDeltas`, which renders P1 without the two columns the wave-1
+    // reshape added. An existing home that upgraded WITHOUT running the
+    // quiesced `traj replay` must keep appending rather than die on an unknown
+    // column — which is what lets the harness skip the boot reshape probe.
+    test('cutShape: false drops the wave-1 columns from the UPDATE — the '
+        'pre-cut home keeps appending', () {
+      final statement = sessionHeadSqlFor(
+        sessionHeadDeltaFor(
+          terminal(
+            outcome: TerminalOutcome.unknown,
+            unknownReason: 'teardown-replay',
+            provenance: TrajectoryProvenance.reconstructed,
+          ),
+        )!,
+        lastSeq: 9,
+        cutShape: false,
+      );
+      for (final column in projSessionHeadCutColumns) {
+        expect(statement.sql, isNot(contains(column)), reason: column);
+        expect(statement.params.containsKey(column), isFalse, reason: column);
+      }
+      // Everything the pre-cut shape DOES carry still rides.
+      expect(statement.sql, contains('status = :status'));
+      expect(statement.sql, contains('outcome = :outcome'));
+      expect(statement.sql, contains('closed_at = :closed_at'));
+    });
+
+    test('cutShape: false drops them from the INSERT column list too', () {
+      final statement = sessionHeadSqlFor(
+        sessionHeadDeltaFor(started(seq: 7))!,
+        lastSeq: 7,
+        cutShape: false,
+      );
+      for (final column in projSessionHeadCutColumns) {
+        expect(statement.sql, isNot(contains(column)), reason: column);
+        expect(statement.params.containsKey(column), isFalse, reason: column);
+      }
+      expect(statement.sql, contains('INSERT INTO proj_session_head'));
+      expect(statement.params['session_id'], 'tranquility-1');
+    });
+
+    test('cutShape: true (the default) still writes them — the armed posture '
+        'is unchanged', () {
+      final statement = sessionHeadSqlFor(
+        sessionHeadDeltaFor(started(seq: 7))!,
+        lastSeq: 7,
+      );
+      for (final column in projSessionHeadCutColumns) {
+        expect(statement.sql, contains(column), reason: column);
+      }
+    });
   });
 }

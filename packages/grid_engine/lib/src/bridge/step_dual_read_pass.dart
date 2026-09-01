@@ -59,7 +59,8 @@ typedef StepSnapshotSubscribe =
 /// compares against the projections a decision would actually read.
 class DualReadStepObserver {
   DualReadStepObserver({
-    DualReadMode mode = DualReadMode.observe,
+    // OFF BY DEFAULT (r13) — the session axis's twin rule.
+    DualReadMode mode = DualReadMode.off,
     DateTime Function()? clock,
     DualReadFlareSink? onFlare,
     DualReadAccounting? accounting,

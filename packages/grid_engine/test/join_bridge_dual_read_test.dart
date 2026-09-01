@@ -139,7 +139,7 @@ void main() {
     );
     final legacyOnly = StationJoinBridge(work: work, state: state);
     // A head that DISAGREES loudly — closed and done while legacy says live.
-    final observer = DualReadSessionObserver();
+    final observer = DualReadSessionObserver(mode: DualReadMode.observe);
     final dual = StationJoinBridge(
       work: work,
       state: state,
@@ -170,7 +170,7 @@ void main() {
     final state = _Source(
       _graph([_sessionBead('tgdog-s1', workBeadId: 'tg-1')]),
     );
-    final observer = DualReadSessionObserver();
+    final observer = DualReadSessionObserver(mode: DualReadMode.observe);
     final bridge = StationJoinBridge(
       work: work,
       state: state,
@@ -192,7 +192,7 @@ void main() {
       _Head(sessionId: 'tgdog-s1', workBeadId: 'tg-1'),
     ]);
     void Function(TrajectoryHeadSnapshot)? listener;
-    final observer = DualReadSessionObserver();
+    final observer = DualReadSessionObserver(mode: DualReadMode.observe);
     final bridge = StationJoinBridge(
       work: work,
       state: state,
@@ -280,6 +280,7 @@ void main() {
       onHeadChanges: (_) =>
           () => removed = true,
       dualRead: DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onRoundSummary: (sessionId, body) => notes.add((sessionId, body)),
       ),
     )..start();

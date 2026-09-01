@@ -21,12 +21,17 @@ AttemptNote _note(int ordinal) => AttemptNote(
 );
 
 class _Harness {
-  _Harness() {
+  /// [resolveTerminals] defaults to the ARMED posture here — this suite is
+  /// mostly about the cut's own contract. The ROLLBACK posture
+  /// (`DualReadMode.off`, where the pre-read does not run at all) has its own
+  /// group at the bottom of the file.
+  _Harness({bool resolveTerminals = true}) {
     appender = TrajectoryAppender(
       db: db,
       station: 'lunar',
       clock: () => now,
       onEvent: events.add,
+      resolveTerminals: resolveTerminals,
     );
   }
 
@@ -1363,6 +1368,94 @@ void main() {
       await h.appender.doltCommitIfDue();
       expect(h.appender.verifiedDoltCommits, 1);
       expect(h.appender.pendingRows, 0);
+    });
+  });
+
+  // THE ROLLBACK POSTURE (cut-wiring, r13): `DualReadMode.off` composes the
+  // appender with `resolveTerminals: false`, and a terminal append must then
+  // behave exactly as it did on pre-cut mainline — no in-transaction guard
+  // read on the serialized writer lane, no conversion, and a guard-PK
+  // collision answered by §5's ordinary duplicate contract.
+  group('resolving pre-read UNARMED (dualRead: off)', () {
+    AttemptTerminal terminal() => AttemptTerminal(
+      attemptId: '01ATTEMPT000000000000000AA',
+      sessionId: 'tranquility-1',
+      outcome: TerminalOutcome.succeeded,
+    );
+
+    void scriptExistingReconstructed(_Harness h) => h.db.on(
+      'FROM traj_terminal_guard g JOIN trajectory t',
+      result: const SqlResult(
+        rows: [
+          {
+            'record_id': '01RECONSTRUCTED0000000001',
+            'provenance': 'reconstructed',
+            'settled_by': null,
+            'resolves_record_id': null,
+          },
+        ],
+      ),
+    );
+
+    test('NO guard SELECT rides the append transaction — the added round trip '
+        'is the posture\'s, not the appender\'s', () async {
+      final h = _Harness(resolveTerminals: false)
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(301);
+      await h.claim();
+
+      final outcome = await h.appender.append(terminal());
+
+      expect(outcome, isA<Appended>());
+      expect(
+        h.db.matching('FROM traj_terminal_guard g JOIN trajectory t'),
+        isEmpty,
+        reason: 'the pre-read is what `off` does not pay for',
+      );
+      expect(h.db.matching('INSERT INTO traj_terminal_guard'), hasLength(1));
+    });
+
+    test('an existing RECONSTRUCTED terminal converts NOTHING — the record is '
+        'authored in its ordinary non-settling shape', () async {
+      final h = _Harness(resolveTerminals: false)
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(302);
+      scriptExistingReconstructed(h);
+      await h.claim();
+
+      final outcome = await h.appender.append(terminal());
+
+      final appended = outcome as Appended;
+      expect(appended.envelope.resolvesRecordId, isNull);
+      // The UNMOVED idem key: a conversion re-authors the record and moves the
+      // key to `terminal-resolve:…`, which is exactly what does not happen.
+      final row = h.db.matching('INSERT INTO trajectory (').single;
+      expect(
+        row.params!['idem_key_text'],
+        'terminal:01ATTEMPT000000000000000AA',
+      );
+      expect(h.db.matching('UPDATE traj_terminal_guard'), isEmpty);
+      expect(h.db.matching('INSERT INTO traj_terminal_guard'), hasLength(1));
+    });
+
+    test('a guard PK collision falls to §5\'s ordinary duplicate contract — '
+        'the pre-cut halt, not the pre-read\'s narrated one', () async {
+      final h = _Harness(resolveTerminals: false)
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(303);
+      h.db.on('INSERT INTO traj_terminal_guard', throwing: _duplicate);
+      await h.claim();
+
+      final outcome = await h.appender.append(terminal());
+
+      final reason = (outcome as AppendCorruptionHalt).reason;
+      expect(reason, contains('epoch_seq/record_id collision'));
+      expect(reason, isNot(contains('two independent terminals')));
+      expect(reason, isNot(contains('single-writer')));
+      expect(h.appender.isHalted, isTrue);
     });
   });
 }

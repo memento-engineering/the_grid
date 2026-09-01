@@ -46,6 +46,7 @@ import 'package:grid_runtime/grid_runtime.dart'
         buildStage1ObligationQueries;
 import 'package:grid_engine/grid_engine.dart'
     show
+        DualReadMode,
         TerminalReconcileOutcome,
         TerminalReconcileRequest,
         TrajectoryHeadSnapshot,
@@ -283,6 +284,18 @@ class TrajectoryHarness {
   }
 
   final TrajectoryConfig config;
+
+  /// THE POSTURE, THREADED (cut-wiring, r13). The dual read is a whole-station
+  /// posture, not a bridge-local one: under [DualReadMode.off] this harness
+  /// must be byte-equivalent to pre-cut mainline, which means the FOLD-SIDE
+  /// machinery has to be off too — no mirror seed, no generation re-read, no
+  /// post-ACK apply, no boot reshape probe, and no resolving pre-read in the
+  /// appender. Gating only the comparator would leave every new SELECT and
+  /// every new subscription armed on a station that asked for none of it.
+  ///
+  /// Read it as ONE predicate everywhere so the arms can never drift apart:
+  /// a mirror that seeds but never applies is worse than either posture.
+  bool get _dualReadArmed => config.dualRead != DualReadMode.off;
 
   /// The seat-derivation input (§2.2's seat row) — carried for the derivation
   /// layer; the harness itself never derives a seat.
@@ -531,7 +544,15 @@ class TrajectoryHarness {
       // So: fail CLOSED and LOUD. The harness refuses the live arm, the
       // station runs legacy-only exactly as it does for any other degraded
       // boot, and the cause names the operator action.
-      if (await sessionHeadProjectionNeedsReshape(db)) {
+      //
+      // POSTURE-GATED (r13). The refusal exists to protect the FOLD, and at
+      // `off` there is no fold to protect: no mirror seeds, nothing reads
+      // `proj_session_head`, and the terminal branch of the delta writes the
+      // cut columns only when the projection carries them. Probing anyway
+      // would make `off` refuse to arm on every home provisioned before this
+      // cut — which is the exact population the rollback is FOR. An existing
+      // home upgrading with `off` arms exactly as it does on main.
+      if (_dualReadArmed && await sessionHeadProjectionNeedsReshape(db)) {
         _degrade(
           'proj_session_head predates the wave-1 cut shape (missing '
           '${projSessionHeadCutColumns.join(', ')}) — the trajectory refuses '
@@ -577,7 +598,13 @@ class TrajectoryHarness {
       // delta can ever race ahead of the rows it applies to. Guarded like
       // everything else here: a failed seed refuses the snapshot, it never
       // fails the boot.
-      await _seedSessionHeads();
+      //
+      // POSTURE-GATED (r13): at `off` nothing reads the mirrors, so seeding
+      // them would be five boot SELECTs (`readFoldLag`,
+      // `readProjectionGenerations`, both scans, and the epoch-era read) spent
+      // on state no consumer is wired to. The snapshots stay at their
+      // never-seeded `refused` health, which is the honest reading.
+      if (_dualReadArmed) await _seedSessionHeads();
       _mode = TrajectoryHarnessMode.live;
       _cause = null;
       // §1.1's runtime-event subscriber — armed only once live (a disabled/
@@ -653,7 +680,12 @@ class TrajectoryHarness {
     if (_mode != TrajectoryHarnessMode.live || _isShutdown) {
       // Nothing may be appended and nothing was: report a skip rather than a
       // failure, so a down/degraded harness never manufactures an escalation.
-      request.report(TerminalReconcileOutcome.skippedGuard);
+      //
+      // THE TRANSIENT MEMBER (r13), not `skippedGuard`: no guard row was read
+      // here, and this says nothing about the entry — only about the harness
+      // at this instant. Reporting it as a guard fact latched the tracker and
+      // silently forwent the repair for the rest of the boot.
+      request.report(TerminalReconcileOutcome.skippedUnavailable);
       return;
     }
     unawaited(_reconcileTerminal(request));
@@ -781,6 +813,10 @@ class TrajectoryHarness {
   /// tick's loop.
   void _onTickPass(TrajectoryTickPass pass) {
     _accountant.observe(pass);
+    // POSTURE FIRST (r13): at `off` the mirrors were never seeded and nothing
+    // reads them, so the tick keeps exactly its pre-cut shape — no generation
+    // SELECT per interval, no eviction scan, no health latch.
+    if (!_dualReadArmed) return;
     // The mode latch (§0.2's wave-1 health): a harness that has left `live`
     // freezes the mirror, and a frozen fold must not keep reading `live`.
     if (_mode != TrajectoryHarnessMode.live) {
@@ -862,6 +898,9 @@ class TrajectoryHarness {
   /// the lost record would have touched is exactly what the harness cannot
   /// know. One station, one health.
   void _latchMirrorCompromised(String reason) {
+    // Nothing to compromise at `off`: no mirror was seeded and no reader is
+    // wired, so the flare would report a health nobody consults (r13).
+    if (!_dualReadArmed) return;
     final head = _sessionHeads.latchCompromised();
     final step = _stepCursors.latchCompromised();
     if (!head && !step) return;
@@ -1131,15 +1170,22 @@ class TrajectoryHarness {
           // the pre-conversion record. Folding that pair would apply the
           // non-settling branch to a settling row — so on any mismatch the
           // envelope decodes itself.
-          final converted =
-              request.record.isSettling != (envelope.resolvesRecordId != null);
-          final decoded = converted ? null : request.record;
-          _sessionHeads.applyAppended(envelope, seq: seq, decoded: decoded);
-          // The step delta rides the SAME acked envelope at the SAME ordinal.
-          // It is a second pure fold over one record, never a second write:
-          // `stepCursorDeltaFor` returns null for every non-step family, so a
-          // session record costs one family check here.
-          _stepCursors.applyAppended(envelope, seq: seq, decoded: decoded);
+          //
+          // POSTURE-GATED (r13): at `off` the mirrors were never seeded, so
+          // applying a delta to them would be maintaining a fold nobody reads
+          // — one more per-append cost the rollback posture must not pay.
+          if (_dualReadArmed) {
+            final converted =
+                request.record.isSettling !=
+                (envelope.resolvesRecordId != null);
+            final decoded = converted ? null : request.record;
+            _sessionHeads.applyAppended(envelope, seq: seq, decoded: decoded);
+            // The step delta rides the SAME acked envelope at the SAME
+            // ordinal. It is a second pure fold over one record, never a
+            // second write: `stepCursorDeltaFor` returns null for every
+            // non-step family, so a session record costs one family check.
+            _stepCursors.applyAppended(envelope, seq: seq, decoded: decoded);
+          }
         case AppendDeduped():
           // Applies NOTHING: the original row either landed this boot (already
           // applied) or predates it and rode the seed.
@@ -1418,8 +1464,17 @@ class TrajectoryHarness {
     station: _station,
     commitCadence: config.commitCadence,
     // §5 step 5's Stage-1 registration (stage1-wiring §2.4 / W6): the
-    // P1+P2+P6 incremental fold deltas ride every append's transaction.
-    folds: kStage1FoldDeltas,
+    // P1+P2+P6 incremental fold deltas ride every append's transaction. At
+    // `off` the P1 entry renders the PRE-CUT column shape, so a home that
+    // never ran the quiesced reshape appends exactly as it did on main (r13).
+    folds: _dualReadArmed ? kStage1FoldDeltas : kPreCutFoldDeltas,
+    // THE RESOLVING PRE-READ IS THE POSTURE'S TOO (r13): it exists to convert
+    // a reconstructed terminal into its settling form, and reconstructed
+    // terminals are appended only when the dual read is armed. At `off` it
+    // would be a pure added in-transaction SELECT on the serialized writer
+    // lane, per session terminal, whose answer is structurally always null —
+    // so `off` takes the pre-Stage-1 collision semantics instead.
+    resolveTerminals: _dualReadArmed,
     // The Stage-0 notification seam rides the same flare transport as every
     // other engine LOUD signal, rate-limited under the standing 30 s bucket.
     onEvent: (event) => _flareLimited('trajectory.service.${event.kind.wire}', {

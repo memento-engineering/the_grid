@@ -116,13 +116,15 @@ class TrajectoryAppender {
     int commitRowThreshold = 512,
     TrajectoryEventSink onEvent = stdoutTrajectoryEventSink,
     List<TrajectoryFoldDelta> folds = const [],
+    bool resolveTerminals = false,
   }) : _db = db,
        _clock = clock ?? DateTime.now,
        _commitCadence = commitCadence,
        _commitMinInterval = commitMinInterval,
        _commitRowThreshold = commitRowThreshold,
        _onEvent = onEvent,
-       _folds = folds;
+       _folds = folds,
+       _resolveTerminals = resolveTerminals;
 
   TrajectoryDb _db;
   final String station;
@@ -132,6 +134,23 @@ class TrajectoryAppender {
   final Duration _commitMinInterval;
   final int _commitRowThreshold;
   final TrajectoryEventSink _onEvent;
+
+  /// THE RESOLVING PRE-READ'S POSTURE (cut-wiring §0.3, gated r13).
+  ///
+  /// The pre-read exists to convert a terminal landing on an already-present
+  /// RECONSTRUCTED terminal into its settling form, and reconstructed
+  /// terminals are appended only where the dual read is armed. Default FALSE
+  /// — off is the rollback and the pre-Stage-1 semantics: no in-transaction
+  /// `traj_terminal_guard` SELECT per terminal on the serialized writer lane,
+  /// and a guard-PK collision propagates to §5's ordinary duplicate contract
+  /// exactly as it did on mainline.
+  ///
+  /// The ONE caveat, documented on `TrajectoryConfig.dualRead`: downgrading a
+  /// home to `off` AFTER an observe-era soak left reconstructed rows means a
+  /// late REAL terminal for such an attempt is no longer converted, so it
+  /// halts loudly on the guard PK instead. Bounce back to `observe` once to
+  /// convert those rows.
+  final bool _resolveTerminals;
 
   /// §5 step 5's registered synchronous folds, in registration order.
   final List<TrajectoryFoldDelta> _folds;
@@ -457,8 +476,14 @@ class TrajectoryAppender {
       // arm answers it as the dedupe-shaped no-op it is, without an insert.
       // Falling through instead is what turned an ordinary retry into a
       // guard-PK corruption halt that suppressed every later append.
+      //
+      // AND IT IS POSTURE-GATED (r13): under `DualReadMode.off` nothing
+      // appends a reconstructed terminal, so the answer here is structurally
+      // always null and the read is a pure round trip on the serialized
+      // writer lane. `off` takes the pre-Stage-1 collision semantics instead
+      // — see [_resolveTerminals].
       _TerminalGuardState? preRead;
-      if (record.isTerminal && !record.isSettling) {
+      if (_resolveTerminals && record.isTerminal && !record.isSettling) {
         final subject = envelope.attemptId;
         final existing = subject == null
             ? null
@@ -582,6 +607,11 @@ class TrajectoryAppender {
             );
           } on MySQLServerException catch (error) {
             if (!isDuplicateEntry(error)) rethrow;
+            // PRE-STAGE-1 SEMANTICS AT `off` (r13): with no resolving
+            // pre-read there is no evidence to name a shape with, so the
+            // duplicate propagates to §5's ordinary 1062 contract below —
+            // byte-identical to mainline, which never caught it here.
+            if (!_resolveTerminals) rethrow;
             // TWO CORRUPTION SHAPES, and the halt reason is the operator's
             // only evidence — so it must name the one that actually happened
             // (r12). The pre-read above ran in THIS serialized transaction:

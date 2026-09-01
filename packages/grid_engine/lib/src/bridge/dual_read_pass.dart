@@ -53,7 +53,9 @@ typedef HeadSnapshotSubscribe =
 /// join; `finish` once at the clean-down fixpoint.
 class DualReadSessionObserver {
   DualReadSessionObserver({
-    DualReadMode mode = DualReadMode.observe,
+    // OFF BY DEFAULT (r13): a composition that does not name a posture gets
+    // the pre-cut station. The soak posture is armed explicitly.
+    DualReadMode mode = DualReadMode.off,
     DateTime Function()? clock,
     bool Function(String attemptId)? appendQueuedFor,
     TerminalReconcileHealer? healer,
@@ -441,6 +443,10 @@ class DualReadSessionObserver {
       case TerminalReconcileOutcome.skippedGuard:
       case TerminalReconcileOutcome.skippedNoAttemptId:
       case TerminalReconcileOutcome.skippedNoHealer:
+      // Counted like any other skip — the round summary reports that no repair
+      // was made. What differs is the TRACKER's treatment: this one does not
+      // latch, so a later pass asks again (r13).
+      case TerminalReconcileOutcome.skippedUnavailable:
         accounting.healsSkipped += 1;
       case TerminalReconcileOutcome.failed:
         accounting.healsFailed += 1;

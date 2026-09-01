@@ -453,7 +453,7 @@ class RestartReconciler {
     StationTrajectoryRecorder? recorder,
     TrajectoryHeadSnapshot Function()? headSnapshot,
     DualReadAccounting? dualReadAccounting,
-    DualReadMode dualReadMode = DualReadMode.observe,
+    DualReadMode dualReadMode = DualReadMode.off,
     void Function(String name, Map<String, String> data)? onFlare,
   }) : assert(workRoot != null || workRoots.isNotEmpty),
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),

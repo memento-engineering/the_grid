@@ -255,7 +255,7 @@ final class WorktreeReapedBackfillObligation extends ObligationQuery {
       final sessionId = row['session_id'];
       final worktree = row['worktree'];
       if (sessionId == null || worktree == null) continue;
-      if (!seen.add('$sessionId $worktree')) continue;
+      if (!seen.add('$sessionId\u0000$worktree')) continue;
       if (io.Directory(worktree).existsSync()) continue;
       appends.add(
         ObligationAppend(

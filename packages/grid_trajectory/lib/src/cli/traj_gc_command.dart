@@ -121,11 +121,12 @@ Future<int> runTrajGc({
     }
   } on Object catch (error) {
     // A one-shot operator verb decorating its error line with the remedy —
-    // the HINT predicate, deliberately not the latching classification (see
-    // `readsAsPrivilegeDenial`): a wrong guess here costs one sentence.
+    // the SAME classification the harness's gc latch keys on, so the sentence
+    // an operator reads and the posture the cadence takes can never disagree
+    // about what a denial is.
     writeErr(
       'traj gc: $error'
-      '${readsAsPrivilegeDenial(error) ? ' — the gridboot credential is '
+      '${isPrivilegeDenied(error) ? ' — the gridboot credential is '
                 'missing GRANT ALL ON *.*; re-seed it per §4 step 1b' : ''}',
     );
     return 1;

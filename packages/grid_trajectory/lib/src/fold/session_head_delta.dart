@@ -29,6 +29,7 @@ import 'package:meta/meta.dart';
 import '../codec/codec_registry.dart';
 import '../codec/envelope.dart';
 import '../codec/trajectory_record.dart';
+import '../ddl/trajectory_schema.dart' show projSessionHeadCutColumns;
 import 'session_head_row.dart';
 
 /// One record's effect on P1. Sealed: an insert carries the full mint-time
@@ -268,20 +269,51 @@ const List<String> _insertColumns = [
 /// * An update touches exactly the delta's columns plus `last_seq`, guarded
 ///   by `attempt_id` when the delta says so — 0 matched rows is a fine
 ///   outcome (out-of-order fact, or a guard miss), never an error.
-SqlStatement sessionHeadSqlFor(SessionHeadDelta delta, {required int lastSeq}) {
+///
+/// [cutShape] IS THE POSTURE (cut-wiring, r13). The wave-1 cut widened
+/// `proj_session_head` by [projSessionHeadCutColumns], and the migration is a
+/// named quiesced step. A station arming `DualReadMode.off` is the ROLLBACK:
+/// it must write the PRE-CUT column set, so an existing home that upgraded
+/// this code without running `traj replay` appends exactly as it did on main
+/// rather than dying on an unknown column. Pass `false` there — the harness
+/// registers [kPreCutFoldDeltas] for exactly that reason — and the cut
+/// columns are dropped from both the insert list and the update's SET clause.
+SqlStatement sessionHeadSqlFor(
+  SessionHeadDelta delta, {
+  required int lastSeq,
+  bool cutShape = true,
+}) {
   switch (delta) {
     case SessionHeadInsert():
-      final params = delta.rowAt(lastSeq).toSqlParams();
+      final columns = cutShape
+          ? _insertColumns
+          : [
+              for (final column in _insertColumns)
+                if (!projSessionHeadCutColumns.contains(column)) column,
+            ];
+      final row = delta.rowAt(lastSeq).toSqlParams();
+      final params = cutShape
+          ? row
+          : <String, Object?>{
+              for (final entry in row.entries)
+                if (!projSessionHeadCutColumns.contains(entry.key))
+                  entry.key: entry.value,
+            };
       return (
         sql:
-            'INSERT INTO proj_session_head (${_insertColumns.join(', ')}) '
-            'VALUES (${_insertColumns.map((c) => ':$c').join(', ')}) '
+            'INSERT INTO proj_session_head (${columns.join(', ')}) '
+            'VALUES (${columns.map((c) => ':$c').join(', ')}) '
             'ON DUPLICATE KEY UPDATE last_seq = :last_seq',
         params: params,
       );
     case SessionHeadUpdate():
-      final params = <String, Object?>{
+      final written = <String, Object?>{
         for (final entry in delta.columns.entries)
+          if (cutShape || !projSessionHeadCutColumns.contains(entry.key))
+            entry.key: entry.value,
+      };
+      final params = <String, Object?>{
+        for (final entry in written.entries)
           entry.key: switch (entry.value) {
             final DateTime instant => sqlDateTime6(instant),
             final other => other,
@@ -290,7 +322,7 @@ SqlStatement sessionHeadSqlFor(SessionHeadDelta delta, {required int lastSeq}) {
         'session_id': delta.sessionId,
       };
       final sets = [
-        for (final column in delta.columns.keys) '$column = :$column',
+        for (final column in written.keys) '$column = :$column',
         'last_seq = :last_seq',
       ];
       var sql =

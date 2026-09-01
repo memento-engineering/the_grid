@@ -890,10 +890,14 @@ enum TerminalLagAction {
 ///
 /// THE ESCALATION SPLIT lives on this enum: only a heal ATTEMPT that reached
 /// the log — [appended] or [failed] — arms the one-further-pass escalation.
-/// Every `skipped*` member is a COUNTED ADJUDICATION STATE: the entry stays
-/// permanently lag-classed and never becomes a divergence, because no heal was
-/// attempted and a skip is evidence about the WORLD, not about a repair that
-/// failed.
+/// A `skipped*` member is a COUNTED ADJUDICATION STATE: the entry stays
+/// lag-classed and never becomes a divergence, because no heal was attempted
+/// and a skip is evidence about the WORLD, not about a repair that failed.
+///
+/// THE SECOND SPLIT (r13) is between the skips: all but one report an
+/// UNCHANGING world fact and therefore latch the entry for the boot;
+/// [skippedUnavailable] reports a transient fact about the HARNESS and
+/// deliberately does not, so the heal is re-requested rather than forgone.
 enum TerminalReconcileOutcome {
   /// The reconstructed close landed.
   appended,
@@ -915,6 +919,19 @@ enum TerminalReconcileOutcome {
   /// ever read. Its OWN member rather than [skippedGuard]: the durable round
   /// evidence must not assert a guard fact nobody observed.
   skippedNoHealer,
+
+  /// THE TRANSIENT SKIP (r13): the healer is wired and the entry is healable,
+  /// but the harness was momentarily not accepting — not `live`, or already
+  /// shutting down — so no guard was read and nothing was appended.
+  ///
+  /// The ONLY `skipped*` member that does NOT latch the entry. Every other one
+  /// reports an unchanging fact about the WORLD (a guard row is there; no
+  /// attempt id will ever appear; no healer is wired this boot), so re-asking
+  /// could only re-derive the same answer. This one reports a fact about the
+  /// HARNESS at one instant, and reporting it as a guard fact forgave the
+  /// repair for the rest of the boot: the entry stayed permanently lag-classed
+  /// and never re-requested the heal once the harness returned to `live`.
+  skippedUnavailable,
 
   /// The append itself failed.
   failed,
@@ -1050,6 +1067,13 @@ class TerminalLagTracker {
       case TerminalReconcileOutcome.skippedNoAttemptId:
       case TerminalReconcileOutcome.skippedNoHealer:
         entry.healSkipped = true;
+      case TerminalReconcileOutcome.skippedUnavailable:
+        // DELIBERATELY NO LATCH (r13): the harness was transiently not
+        // accepting, which is a fact about this instant and not about the
+        // entry. Leaving `healAttempted`/`healSkipped` alone lets the very
+        // next pass re-request the heal once the harness is live again — the
+        // repair C2 exists to perform is deferred, never forgone.
+        break;
     }
   }
 

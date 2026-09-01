@@ -66,8 +66,9 @@ void main() {
     expect(work.trajectory.hasQueuedAppendFor('A' * 26), isFalse);
   });
 
-  test('the posture defaults to OBSERVE — decisions stay legacy in wave 1', () {
-    expect(const TrajectoryConfig().dualRead, DualReadMode.observe);
+  test('the posture defaults to OFF (r13) — wave 1 lands on main as INERT '
+      'plumbing, and the soak posture is armed explicitly by the runner', () {
+    expect(const TrajectoryConfig().dualRead, DualReadMode.off);
   });
 
   group('the composition seams (textual — these construction sites are only '
@@ -82,7 +83,7 @@ void main() {
         'reconciler', () {
       expect(
         RegExp(
-          r'final dualReadAccounting = DualReadAccounting\(\)',
+          r'final dualReadAccounting = dualReadArmed \? DualReadAccounting\(\)',
         ).allMatches(source).length,
         1,
       );
@@ -100,21 +101,41 @@ void main() {
 
     test('the durable round summary reaches the recorder — silence on this '
         'channel would read as a passing gate', () {
-      expect(source, contains('recorder.dualReadRoundSummaryNoted'));
+      expect(source, contains('.dualReadRoundSummaryNoted('));
     });
 
-    test('the bridge takes the snapshot AND the headChanges re-join seam', () {
-      expect(source, contains('headSnapshot: () => trajectory.sessionHeads'));
-      expect(source, contains('trajectory.onSessionHeadsChanged(listener'));
+    test('the bridge takes the snapshot AND the headChanges re-join seam — '
+        'BOTH gated on the posture (r13)', () {
+      expect(
+        source,
+        contains('headSnapshot: dualReadArmed ? () => trajectory.sessionHeads'),
+      );
+      expect(source, contains('trajectory.onSessionHeadsChanged('));
+      expect(
+        source,
+        contains('onHeadChanges: !dualReadArmed'),
+        reason: 'no acked-envelope handback subscription at `off`',
+      );
     });
 
-    test('the reconciler takes the same snapshot getter', () {
+    test('the reconciler takes the same snapshot getter, under the same '
+        'posture gate', () {
       expect(
         RegExp(
-          r'headSnapshot: \(\) => trajectory\.sessionHeads',
+          r'headSnapshot: dualReadArmed \? \(\) => trajectory\.sessionHeads',
         ).allMatches(source).length,
         2,
         reason: 'the bridge AND the restart reconciler',
+      );
+    });
+
+    test('THE POSTURE IS ONE PREDICATE, read from the config (r13) — the '
+        'fold-side machinery and the comparator can never drift apart', () {
+      expect(
+        source,
+        contains(
+          'final dualReadArmed = trajectoryConfig.dualRead != DualReadMode.off',
+        ),
       );
     });
 
@@ -135,7 +156,7 @@ void main() {
     });
   });
 
-  group('C3 — the flip is a CONFIG line, and the default is still observe', () {
+  group('C3 — the flip is a CONFIG line, and the default is OFF', () {
     test('primary is expressible without disturbing any other field', () {
       const config = TrajectoryConfig(dualRead: DualReadMode.primary);
       expect(config.dualRead, DualReadMode.primary);
@@ -147,9 +168,9 @@ void main() {
       expect(config.asDisabled.mode, TrajectoryConfigMode.disabled);
     });
 
-    test('the PR default stays observe — the flip is a separable one-line '
-        "commit attached to C2's gate evidence", () {
-      expect(const TrajectoryConfig().dualRead, DualReadMode.observe);
+    test('the PR default stays OFF — neither the soak posture nor the flip is '
+        'ever inherited; both are runner-armed, one line apart', () {
+      expect(const TrajectoryConfig().dualRead, DualReadMode.off);
     });
   });
 }

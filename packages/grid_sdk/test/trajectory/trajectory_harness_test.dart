@@ -287,9 +287,14 @@ void main() {
 
   List<String> flareNames() => [for (final (name, _) in flares) name];
 
+  /// The default config ARMS the dual read (`observe`). Production defaults to
+  /// `off` (r13) and this file's `dualRead: off` group pins that posture
+  /// explicitly; every other test here is about the cut's own machinery, which
+  /// only exists when the posture asks for it.
   Future<TrajectoryHarness> harness({
     TrajectoryConfig config = const TrajectoryConfig(
       mode: TrajectoryConfigMode.required,
+      dualRead: DualReadMode.observe,
     ),
     Stream<RuntimeEvent>? runtimeEvents,
     List<ObligationQuery>? tickQueries,
@@ -482,6 +487,95 @@ void main() {
       expect(statements.first, contains(':table'));
     });
 
+    // ── THE ROLLBACK POSTURE (r13) ───────────────────────────────────────
+    //
+    // `DualReadMode.off` is the DEFAULT and must be byte-equivalent to pre-cut
+    // mainline. It is not enough for the comparator to be inert: the FOLD-SIDE
+    // machinery has to be off too, or an existing home that upgraded without
+    // running the quiesced `traj replay` refuses to arm — the exact population
+    // the rollback is for.
+    test('dualRead: off does NOT probe the projection shape — a PRE-CUT home '
+        'arms exactly as it does on mainline', () async {
+      dbScript = (sql) => _isShapeProbe(sql)
+          ? const SqlResult(
+              rows: [
+                {'name': 'session_id'},
+                {'name': 'status'},
+              ],
+            )
+          : null;
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.off,
+        ),
+      );
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live);
+      expect(
+        connected.single.statements.where(_isShapeProbe),
+        isEmpty,
+        reason: 'no reshape probe at the rollback posture',
+      );
+    });
+
+    test('dualRead: off seeds NEITHER mirror and re-reads no generation set — '
+        'the boot pays for no fold nobody reads', () async {
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.off,
+        ),
+      );
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live);
+      // The seed's five reads, by shape. (The Stage-1 obligation queries also
+      // name `proj_session_head`; they are pre-cut and unrelated.)
+      final statements = connected.single.statements;
+      for (final seedRead in [
+        'SELECT * FROM proj_session_head',
+        'SELECT * FROM proj_step_cursor',
+        'FROM proj_meta',
+        'MIN(advanced_at)',
+      ]) {
+        expect(
+          statements.where((s) => s.contains(seedRead)),
+          isEmpty,
+          reason: seedRead,
+        );
+      }
+      expect(
+        h.sessionHeads.health,
+        TrajectorySnapshotHealth.refused,
+        reason: 'never seeded is never live',
+      );
+      expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), isEmpty);
+    });
+
+    test('dualRead: off keeps the mirrors out of the append path, and a '
+        'dropped append raises no dualReadCompromised', () async {
+      appender.appendOutcomes.add(const AppendInternalError(cause: 'socket'));
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.off,
+        ),
+      );
+      await h.start();
+      h.enqueue(_note(1));
+      await h.runToFixpoint();
+
+      expect(h.status.dropped, 1);
+      expect(
+        flareNames(),
+        isNot(contains('trajectory.dualReadCompromised')),
+        reason: 'no mirror is being maintained to compromise',
+      );
+    });
+
     test('records enqueued before the claim drain once live', () async {
       final h = await harness();
       h.enqueue(_note(1));
@@ -513,6 +607,7 @@ void main() {
       final h = await harness(
         config: const TrajectoryConfig(
           mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
           queueBound: 2,
         ),
       );
@@ -807,6 +902,7 @@ void main() {
         final h = await harness(
           config: const TrajectoryConfig(
             mode: TrajectoryConfigMode.required,
+            dualRead: DualReadMode.observe,
             shutdownDrainTimeout: Duration(milliseconds: 200),
           ),
         );
@@ -1148,15 +1244,17 @@ void main() {
     // POSTURE, so the cadence disables itself instead of denying once a
     // cycle forever, and reclamation moves to the operator's `traj gc`.
     //
-    // r12: the latch keys on the ACCESS-DENIED CODES only. A predicate that
-    // disables a cadence for the process lifetime may not be decided by a
-    // message substring — see the 1105 test below.
+    // r13: the latch keys on the ACCESS-DENIED CODES **and** on dolt's own
+    // 1105 denied-CALL shape — which is the only shape a scoped grant is ever
+    // refused with, and the one cut-wiring C0 names normatively. What it does
+    // NOT key on is the bare word "denied" in an arbitrary 1105 (the r12
+    // major, kept in its narrow form) — see the test below.
     test('a PRIVILEGE-denied gc disables the cadence after ONE flare and '
         'never re-arms', () async {
       dbScript = (sql) => sql == 'CALL DOLT_GC()'
           ? MySQLServerException(
-              "Access denied for user 'trajectory'@'%'",
-              1045,
+              "command denied to user 'trajectory'@'%'",
+              1105,
             )
           : null;
       final h = await harness();
@@ -1217,37 +1315,40 @@ void main() {
       );
     });
 
-    test('a 1105 whose MESSAGE reads as a denial does NOT latch (r12) — it '
-        'keeps flaring and re-arming', () async {
-      // dolt answers a denied CALL on its unknown-error code, the SAME code it
-      // answers a commit-time unique violation on. The old predicate matched
-      // the bare word "denied" inside a 1105 and permanently disabled
-      // reclamation on any 1105 that happened to contain it. Retrying a
-      // genuinely refused CALL costs a round trip; latching off a
-      // misclassified one costs the database, so the cadence retries.
-      dbScript = (sql) => sql == 'CALL DOLT_GC()'
-          ? MySQLServerException(
-              "command denied to user 'trajectory'@'%'",
-              1105,
-            )
-          : null;
-      final h = await harness();
-      await h.start();
-      final (_, fire, _) = timers.firstWhere(
-        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
-      );
-      fire();
-      await pumpEventQueue();
+    test(
+      'a 1105 that merely CONTAINS the word "denied" does NOT latch (the '
+      'r12 major, in its narrow form) — it keeps flaring and re-arming',
+      () async {
+        // dolt answers a denied CALL on its unknown-error code, the SAME code it
+        // answers a commit-time unique violation on. Matching the bare word
+        // "denied" anywhere in a 1105 permanently disabled reclamation on any
+        // 1105 that happened to contain it; the cure is the server's own
+        // phrasing (`command denied to user`), which this message is not.
+        dbScript = (sql) => sql == 'CALL DOLT_GC()'
+            ? MySQLServerException(
+                'runtime error: access to table trajectory was denied by a '
+                'policy',
+                1105,
+              )
+            : null;
+        final h = await harness();
+        await h.start();
+        final (_, fire, _) = timers.firstWhere(
+          (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+        );
+        fire();
+        await pumpEventQueue();
 
-      expect(flareNames(), contains('trajectory.gcFailed'));
-      expect(flareNames(), isNot(contains('trajectory.gcDisabled')));
-      expect(
-        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
-        hasLength(2),
-        reason: 'still re-armed',
-      );
-      expect(h.mode, TrajectoryHarnessMode.live);
-    });
+        expect(flareNames(), contains('trajectory.gcFailed'));
+        expect(flareNames(), isNot(contains('trajectory.gcDisabled')));
+        expect(
+          timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+          hasLength(2),
+          reason: 'still re-armed',
+        );
+        expect(h.mode, TrajectoryHarnessMode.live);
+      },
+    );
 
     test('a non-privilege gc error is untouched by the latch — it keeps '
         'flaring and re-arming', () async {
@@ -1385,7 +1486,10 @@ void main() {
     test('an EXPLICIT query list still wins — Stage 0\'s empty set is a '
         'station\'s prerogative', () async {
       final h = await TrajectoryHarness.build(
-        config: const TrajectoryConfig(mode: TrajectoryConfigMode.required),
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
+        ),
         gridHome: tmp.path,
         station: 'tranquility',
         onFlare: (name, data) => flares.add((name, data)),
@@ -2125,13 +2229,16 @@ void main() {
         h.requestTerminalReconcile(request(reported));
         await pumpEventQueue();
 
-        expect(reported, [TerminalReconcileOutcome.skippedGuard]);
+        // THE TRANSIENT MEMBER (r13): no guard row was read, and the entry
+        // must stay healable so a later pass re-asks once the harness is live.
+        expect(reported, [TerminalReconcileOutcome.skippedUnavailable]);
         expect(flares, isEmpty);
       },
     );
 
-    test('the config carries the posture and defaults to OBSERVE', () {
-      expect(const TrajectoryConfig().dualRead, DualReadMode.observe);
+    test('the config carries the posture and defaults to OFF (r13) — the '
+        'soak posture is armed explicitly by the runner', () {
+      expect(const TrajectoryConfig().dualRead, DualReadMode.off);
       expect(
         const TrajectoryConfig(
           dualRead: DualReadMode.primary,

@@ -32,6 +32,12 @@ const int sqlErrUnknownDatabase = 1049;
 /// uses these must land in the same class.
 const Set<int> sqlErrAccessDenied = {1044, 1045, 1142, 1143, 1370};
 
+/// The SHAPE dolt's own denied `CALL` carries inside [sqlErrUnknownError]:
+/// `command denied to user '<user>'@'<host>'`. This is the server's own
+/// phrasing for a privilege refusal — NOT the bare word "denied", which any
+/// catch-all 1105 may happen to contain.
+const String sqlDeniedCallMarker = 'command denied to user';
+
 bool _isServerError(Object error, int code) =>
     error is MySQLServerException && error.errorCode == code;
 
@@ -52,44 +58,31 @@ bool isUniqueViolationOn(Object error, String constraint) =>
 
 /// True when [error] is the server refusing on PRIVILEGE (tg-3o6b).
 ///
-/// **CODES ONLY — the message is deliberately NOT part of the predicate
-/// (r12).** A denial answer LATCHES at its one caller: the gc cadence stops
-/// for the whole process lifetime on a single match. A predicate that can
-/// latch must be decidable from the error CODE, because a message is not a
-/// contract — dolt carries both a denied `CALL` and a commit-time unique
-/// violation on [sqlErrUnknownError], so matching the bare word "denied"
-/// inside a 1105 let any unrelated 1105 whose text happened to contain it
-/// disable reclamation forever, the working set then growing unbounded until
-/// an operator noticed.
+/// **THE CLASS IS `codes ∪ the 1105 DENIED-CALL SHAPE` (cut-wiring C0's
+/// normative rule, restored r13).** The design states it in as many words —
+/// "1105 privilege-denied ⇒ flare `trajectory.gcDisabled` once, never re-arm
+/// this process; other errors keep flare-and-rearm" — and 1105 is the ONLY
+/// code dolt actually answers a denied `CALL` with, so a codes-only predicate
+/// makes disable-on-deny unreachable on every scoped-grant home: the cadence
+/// then flares `gcFailed` and re-arms forever, which is the posture the design
+/// exists to replace.
 ///
-/// The cost is stated rather than hidden: dolt's own denied-`CALL` shape is a
-/// 1105 and therefore no longer lands in this class. It falls to the ordinary
-/// flare-and-rearm loop instead — a rate-limited `gcFailed` per cadence rather
-/// than one `gcDisabled` — which is the SAFE direction for a wrong answer
-/// (retrying a refused CALL costs a round trip; latching off a misclassified
-/// one costs the database).
+/// The r12 correction this restores is kept in its narrow form: the predicate
+/// LATCHES at its one caller (the gc cadence stops for the process lifetime on
+/// a single match), so the 1105 arm matches [sqlDeniedCallMarker] — the
+/// server's own denial phrasing — and NOT the bare word "denied". dolt carries
+/// commit-time unique violations on [sqlErrUnknownError] too, and an unrelated
+/// 1105 whose text merely mentions a denial must never disable reclamation.
 ///
 /// This is a POSTURE, not a failure: the scoped service credential is granted
 /// `trajectory.*` only, by ratified design, and a caller that sees this stops
 /// asking rather than retrying.
-bool isPrivilegeDenied(Object error) =>
-    error is MySQLServerException &&
-    sqlErrAccessDenied.contains(error.errorCode);
-
-/// A HINT, not a classification: does [error] READ like a privilege denial?
-///
-/// The message heuristic [isPrivilegeDenied] refuses to carry lives here
-/// instead, where it can only decorate a one-shot operator verb's error line
-/// with the remedy — the observed dolt shape is a 1105 saying
-/// `command denied to user '<user>'@'%'`, and telling an operator about the
-/// missing GRANT is worth a guess. NEVER latch a cadence, disable a
-/// capability, or branch a control flow on this: guessing wrong here costs one
-/// misleading sentence, and guessing wrong there costs the database.
-bool readsAsPrivilegeDenial(Object error) =>
-    isPrivilegeDenied(error) ||
-    (error is MySQLServerException &&
-        error.errorCode == sqlErrUnknownError &&
-        error.message.toLowerCase().contains('command denied'));
+bool isPrivilegeDenied(Object error) {
+  if (error is! MySQLServerException) return false;
+  if (sqlErrAccessDenied.contains(error.errorCode)) return true;
+  return error.errorCode == sqlErrUnknownError &&
+      error.message.toLowerCase().contains(sqlDeniedCallMarker);
+}
 
 /// One statement's outcome, decoupled from the driver so unit tests can
 /// script every §5 branch without a socket.

@@ -256,7 +256,10 @@ void main() {
           outcome: SessionHeadOutcome.succeeded,
         ),
       ]);
-      final observing = bridgeWith(DualReadSessionObserver(), snapshot);
+      final observing = bridgeWith(
+        DualReadSessionObserver(mode: DualReadMode.observe),
+        snapshot,
+      );
       final serving = bridgeWith(
         DualReadSessionObserver(mode: DualReadMode.primary),
         snapshot,
@@ -295,7 +298,10 @@ void main() {
       final snapshot = _Snapshot([
         _Head(sessionId: 'tgdog-s1', workBeadId: 'tg-1'),
       ]);
-      final observing = bridgeWith(DualReadSessionObserver(), snapshot);
+      final observing = bridgeWith(
+        DualReadSessionObserver(mode: DualReadMode.observe),
+        snapshot,
+      );
       final serving = bridgeWith(
         DualReadSessionObserver(mode: DualReadMode.primary),
         snapshot,

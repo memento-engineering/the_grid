@@ -422,7 +422,7 @@ void main() {
         ),
       ]);
 
-      final observing = DualReadSessionObserver();
+      final observing = DualReadSessionObserver(mode: DualReadMode.observe);
       expect(observing.observe(_map([legacy]), snapshot), isEmpty);
       expect(observing.overlayEngaged, isFalse);
 

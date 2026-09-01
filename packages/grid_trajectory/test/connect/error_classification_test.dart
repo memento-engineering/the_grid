@@ -8,23 +8,19 @@ import 'package:test/test.dart';
 
 void main() {
   group('isPrivilegeDenied', () {
-    test('CODES ONLY: a 1105 is NOT the latching class, however its message '
-        'reads (r12)', () {
+    test('THE 1105 DENIED-CALL SHAPE IS THE CLASS — cut-wiring C0\'s rule, '
+        'restored (r13)', () {
       // Observed on lunar's first Stage-1 arm (tg-3o6b): dolt carries a denied
-      // CALL on its unknown-error code — the SAME code it carries a
-      // commit-time unique violation on. The gc cadence LATCHES on this
-      // predicate for the whole process lifetime, so it may not be decided by
-      // a message substring: one misclassified 1105 would disable reclamation
-      // forever. A denied CALL falls to the ordinary flare-and-rearm loop
-      // instead, which is the safe direction for a wrong answer.
+      // CALL on its unknown-error code, and that is the ONLY code a scoped
+      // grant is ever refused with. The design names it normatively — "1105
+      // privilege-denied ⇒ flare `trajectory.gcDisabled` once, never re-arm
+      // this process" — so a codes-only predicate makes disable-on-deny
+      // unreachable on exactly the homes it was written for.
       final deniedCall = MySQLServerException(
         "command denied to user 'trajectory'@'%'",
         1105,
       );
-      expect(isPrivilegeDenied(deniedCall), isFalse);
-      // The operator-facing HINT still reads it — it only decorates a one-shot
-      // verb's error line, and it never latches anything.
-      expect(readsAsPrivilegeDenial(deniedCall), isTrue);
+      expect(isPrivilegeDenied(deniedCall), isTrue);
     });
 
     test('the classic access-denied codes land in the same class', () {
@@ -46,15 +42,16 @@ void main() {
         1105,
       );
       expect(isPrivilegeDenied(unique), isFalse);
-      expect(readsAsPrivilegeDenial(unique), isFalse);
       expect(isUniqueViolationOn(unique, 'uq_idem'), isTrue);
     });
 
-    test('the word "denied" inside an unrelated 1105 no longer latches the '
-        'cadence off (r12 — the regression this predicate caused)', () {
-      // The old predicate matched the bare word anywhere in a 1105's text, so
-      // ANY dolt catch-all error mentioning a denial permanently disabled gc
-      // and the working set then grew unbounded.
+    test('the bare word "denied" inside an unrelated 1105 does NOT latch the '
+        'cadence off (r12 kept, in its narrow form)', () {
+      // The predicate the r12 major reported matched the bare word anywhere
+      // in a 1105's text, so ANY dolt catch-all error mentioning a denial
+      // permanently disabled gc and the working set then grew unbounded. The
+      // cure is the SERVER'S OWN PHRASING (`sqlDeniedCallMarker`), not
+      // dropping 1105 from the class.
       final unrelated = MySQLServerException(
         'runtime error: access to table trajectory was denied by a policy',
         1105,

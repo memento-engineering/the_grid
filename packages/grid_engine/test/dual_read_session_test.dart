@@ -448,7 +448,10 @@ void main() {
   group('DualReadSessionObserver — the pass', () {
     test('a planted mismatch flares ONCE with the full payload', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onFlare: sinks.flare);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+      );
       final sessions = _map([_legacy()]);
       final snapshot = _Snapshot([
         _Head(
@@ -479,7 +482,10 @@ void main() {
     test('an ESCALATED session produces ZERO divergences (the B-B4 trap the '
         'C2 gate would otherwise be unable to satisfy)', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onFlare: sinks.flare);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+      );
       observer.observe(
         _map([_legacy(isTerminal: true, humanHeld: true)]),
         _Snapshot([
@@ -498,7 +504,10 @@ void main() {
 
     test('a SNAPSHOT-ABSENT boot is all-fallback with zero flares', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onFlare: sinks.flare);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+      );
       observer.observe(
         _map([_legacy(), _legacy(sessionId: 's2', workBeadId: 'tg-2')]),
         _Snapshot(const [], health: TrajectorySnapshotHealth.refused),
@@ -512,7 +521,10 @@ void main() {
     test('a P1 MISS is a fallback classified by era — never a sibling row '
         'spliced on (J9-B1, the OVERLAY IDENTITY RULE)', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onFlare: sinks.flare);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+      );
       // The live session has NO row; a TERMINAL SIBLING sits on the same bead.
       observer.observe(
         _map([_legacy(startedAt: DateTime.utc(2026, 8, 31, 13))]),
@@ -536,7 +548,10 @@ void main() {
     test('a genuine two-CURRENT-open plant breaches cardinality and serves no '
         'row', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onFlare: sinks.flare);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+      );
       observer.observe(
         _map([_legacy()]),
         _Snapshot([_Head(sessionId: 's1'), _Head(sessionId: 's2')]),
@@ -549,7 +564,10 @@ void main() {
 
     test('two current-open rows on DIFFERENT beads are not a breach', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onFlare: sinks.flare);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+      );
       observer.observe(
         _map([_legacy(), _legacy(sessionId: 's2', workBeadId: 'tg-other')]),
         _Snapshot([
@@ -567,6 +585,7 @@ void main() {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
       );
@@ -605,6 +624,7 @@ void main() {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
       );
@@ -636,6 +656,7 @@ void main() {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -676,6 +697,7 @@ void main() {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -696,6 +718,7 @@ void main() {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -719,6 +742,7 @@ void main() {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -742,6 +766,7 @@ void main() {
       final sinks = _Sinks()..healOutcome = TerminalReconcileOutcome.failed;
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -762,6 +787,7 @@ void main() {
         ..healOutcome = TerminalReconcileOutcome.skippedGuard;
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -791,11 +817,50 @@ void main() {
       );
     });
 
+    test('a TRANSIENTLY UNAVAILABLE harness does NOT latch the entry — the '
+        'heal is deferred, never forgone (r13)', () {
+      // The harness reports `skippedUnavailable` when it is momentarily not
+      // `live` (or shutting down). That is a fact about the HARNESS at one
+      // instant, not about the entry, so unlike every other `skipped*` it must
+      // leave the tracker alone: the next pass asks again once the harness is
+      // back. Reported as `skippedGuard` — a WORLD fact — it latched the entry
+      // and the repair C2 exists to perform was silently forgone for the boot.
+      final sinks = _Sinks()
+        ..healOutcome = TerminalReconcileOutcome.skippedUnavailable;
+      var now = DateTime.utc(2026, 8, 31, 14);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+        clock: () => now,
+        healer: sinks.heal,
+      );
+      final sessions = _map([_legacy(isTerminal: true, completed: true)]);
+      final snapshot = _Snapshot([_Head(sessionId: 's1', attemptId: 'att-1')]);
+      observer.observe(sessions, snapshot);
+      now = now.add(const Duration(seconds: 91));
+      observer.observe(sessions, snapshot); // asked; harness was not live
+      expect(sinks.heals, hasLength(1));
+      expect(observer.accounting.healsSkipped, 1);
+
+      // The harness comes back; the very next pass RE-REQUESTS.
+      sinks.healOutcome = TerminalReconcileOutcome.appended;
+      now = now.add(const Duration(seconds: 60));
+      observer.observe(sessions, snapshot);
+      expect(sinks.heals, hasLength(2), reason: 'deferred, not forgone');
+      expect(observer.accounting.healsAppended, 1);
+      // And from there the ordinary escalation rule resumes: the landed heal
+      // earns exactly one further pass.
+      expect(sinks.divergences(), isEmpty);
+      observer.observe(sessions, snapshot);
+      expect(sinks.divergences().single['field'], 'terminalLag');
+    });
+
     test('a head with NO attempt_id SKIPS the heal, counts it, and flares '
         'reconstructedTerminalSkipped — no id is ever minted', () {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -821,6 +886,7 @@ void main() {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
         onFlare: sinks.flare,
         clock: () => now,
         healer: sinks.heal,
@@ -941,7 +1007,10 @@ void main() {
   group('the durable round evidence (§0.4)', () {
     test('one note per session TERMINAL, on the transition edge', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onRoundSummary: sinks.note);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onRoundSummary: sinks.note,
+      );
       final live = _map([_legacy()]);
       final snapshot = _Snapshot([_Head(sessionId: 's1')]);
       observer.observe(live, snapshot);
@@ -977,7 +1046,10 @@ void main() {
     test('the boot-final note rides the LAST terminal session; an idle boot '
         'appends none', () {
       final sinks = _Sinks();
-      final observer = DualReadSessionObserver(onRoundSummary: sinks.note);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onRoundSummary: sinks.note,
+      );
       final snapshot = _Snapshot(const []);
       observer
         ..observe(
@@ -992,7 +1064,10 @@ void main() {
       expect(sinks.notes.last.$2, contains('"scope":"boot-final"'));
 
       final idleSinks = _Sinks();
-      DualReadSessionObserver(onRoundSummary: idleSinks.note)
+      DualReadSessionObserver(
+          mode: DualReadMode.observe,
+          onRoundSummary: idleSinks.note,
+        )
         ..observe(_map([_legacy()]), snapshot)
         ..finish(snapshot);
       expect(idleSinks.notes, isEmpty);

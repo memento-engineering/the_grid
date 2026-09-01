@@ -36,7 +36,7 @@ final class StationCommandHandler implements GridCommandHandler {
     required Map<String, WorkCommandStore> workStoresByIdentity,
     StationTrajectoryRecorder? recorder,
     TrajectoryStepSnapshot Function()? stepSnapshot,
-    DualReadMode dualReadMode = DualReadMode.observe,
+    DualReadMode dualReadMode = DualReadMode.off,
     DualReadAccounting? dualReadAccounting,
   }) : _stateSource = stateSource,
        _refreshState = refreshState,
