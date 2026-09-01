@@ -1,3 +1,10 @@
+## 0.3.0-rc.9
+
+- The trajectory dual-read surfaces (tg-zfek, cut-wiring C1–C4): `trajectory_views` declares the fold READ interfaces and the winner rule in the engine's own domain layer — grid_sdk implements them over grid_trajectory's row types, so the engine gains no dependency and no SQL client enters its transitive set. Adds the session-axis pass (`dual_read_pass`: the overlay and its monotone guard, the comparator, lag/adjudication, the one escalation rule) and the step-axis pass (`step_dual_read_pass`: the collapse rule, the shared `effectiveStepCursor`, the three step-axis protections), plus the `trajectory_scope` ambient value (#245, #250).
+- `ProcessSession`: a protocol-neutral session contract over lease-produced allocations, so a supervised long-lived process is driven by bytes and its outcome derived from structured updates; the legacy dispatcher is retained for one-turn capabilities (#246).
+- Gate-rearm observation: successor step rounds are derived from durable closed-gate history and scoped to their structural step incarnation, and a missing running transition is reconstructed when successful completion proves the in-process attempt ran (#247).
+- Historical sessions are fenced with an explicit legacy outcome on the completed-disposition latch; unmarked dead-key recovery is preserved (#232).
+
 ## 0.3.0-rc.8
 
 - `CompletionContract.artifactDurability`: a capability declaring it is not complete — cached, leased, or live — until its artifact is durably present; an artifactless completion is UNRESOLVED, never 'finished' (#226).

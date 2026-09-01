@@ -1,3 +1,8 @@
+## 0.2.0-rc.7
+
+- Supervised process sessions: `RuntimeProvider` gains `write(name, bytes)` and `interactionOutput(name)`, so a long-lived process keeps stdin open and exposes a raw byte tap. Only long-lived stdout is routed through that tap — one-turn transcripts no longer accumulate unread chunks (#246).
+- Stage-1 trajectory obligations (tg-zfek): the tick's shadow-posture obligation set, the stuck-obligation accountant (`attempt.note(channel='obligation-stuck')` plus an operator flare, leaving the obligation open), and the record-keyed settlement exclusion — a settlement whose session predates Stage 1 has no `attempt_id_basis` and is excluded rather than guessed (#245).
+
 ## 0.2.0-rc.6
 
 - `createGate`'s reuse/refresh branch now runs the same terminal sweep as the fresh-mint branch — a reused gate targeting a just-retired session is swept instead of dangling (#228).

@@ -1,7 +1,7 @@
 name: grid_engine
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.3.0-rc.8
+version: 0.3.0-rc.9
 description: >-
   Tree engine for the_grid — genesis_tree reconciles the running system:
   build(observed), mount = spawn, unmount = kill.
@@ -19,7 +19,7 @@ dependencies:
   # the_grid is its triggering 2nd consumer (ADR-0007 / A34 precedent). A
   # workspace-root dependency_overrides path dep supplies it during dev.
   genesis_tree: ^0.2.0
-  grid_runtime: ^0.2.0-rc.6
+  grid_runtime: ^0.2.0-rc.7
   json_annotation: ^4.9.0
   meta: ^1.16.0
   path: ^1.9.0

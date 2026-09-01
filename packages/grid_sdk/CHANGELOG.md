@@ -1,3 +1,12 @@
+## 0.3.0-rc.7
+
+- The trajectory harness's dual-read posture (tg-zfek, cut-wiring C1–C4): `TrajectoryConfig.dualRead` selects `DualReadMode.off` (THE DEFAULT and the rollback — byte-identical to no harness), `observe`, or `primary`. The harness implements grid_engine's fold read interfaces over grid_trajectory's rows (#245, #250).
+- The P1/P2 mirrors (`SessionHeadMirror`, `StepCursorMirror`): versioned in-memory read surfaces so each dual-read is served from pre-fetched state rather than a synchronous query on the join path (#250).
+- Terminal-reconcile heal: a session the ledger closed with no terminal record gets one appended, reporting `appended` / `skippedGuard` / `skippedUnavailable` / `failed` rather than failing the caller (#250).
+- gc disables itself on a privilege denial — the latch is checked at arm AND at fire, and the transition flares `trajectory.gcDisabled` (#250).
+- Boot refuses to start when dual-read is armed and the session-head projection needs a reshape, naming the fix instead of seeding clean and reading `live` from an un-reshaped home (#250).
+- `grid rework` publishes both resident mutation rails after the durable session re-key, so the joined engine sees a fresh ready snapshot and mints the successor before the command completes (#231).
+
 ## 0.3.0-rc.6
 
 - The station work transport overlay derives its ServiceBundle via `ServiceBundle.derive()` — new bundle fields can no longer be dropped by the hand-copied overlay (#217).
