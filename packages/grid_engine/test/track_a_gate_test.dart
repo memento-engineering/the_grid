@@ -46,10 +46,13 @@ Future<void> _pump() async {
   }
 }
 
-GraphSnapshot _graph(List<Bead> beads) => GraphSnapshot.fromParts(
+GraphSnapshot _graph(
+  List<Bead> beads, {
+  List<BeadDependency> dependencies = const [],
+}) => GraphSnapshot.fromParts(
   beads: beads,
-  dependencies: const [],
-  readyIds: {for (final b in beads) b.id},
+  dependencies: dependencies,
+  readyIds: {for (final bead in beads) bead.id},
   capturedAt: DateTime(2026),
 );
 
@@ -58,10 +61,12 @@ Bead _gate({
   required String blocks,
   required String node,
   bool closed = false,
+  DateTime? createdAt,
 }) => Bead(
   id: id,
   issueType: GridIssueTypes.gate,
   status: closed ? BeadStatus.closed : BeadStatus.open,
+  createdAt: createdAt,
   metadata: {'rig': stateSubstation, 'blocks': blocks, 'node': node},
 );
 
@@ -75,10 +80,12 @@ Bead _stepBead(
   required String sessionId,
   required String path,
   StepState? state,
+  DateTime? createdAt,
 }) => Bead(
   id: id,
   issueType: GridIssueTypes.step,
   status: BeadStatus.open,
+  createdAt: createdAt,
   metadata: {
     'rig': stateSubstation,
     MoleculeStepKeys.stepId: path.split('/').last,
@@ -199,11 +206,17 @@ void main() {
         'the set', () {
       final work = FakeSnapshotSource(_graph([bead('tg-1')]));
       final sessionRow = sessionBead(id: 'tgdog-s', workBeadId: 'tg-1');
+      final routeStep = _stepBead(
+        _stepBeadId,
+        sessionId: 'tgdog-s',
+        path: 'tg-1/route',
+      );
 
       // OPEN gate → the node is parked.
       final openState = FakeSnapshotSource(
         _graph([
           sessionRow,
+          routeStep,
           _gate(id: 'tgdog-g1', blocks: 'tgdog-s', node: 'tg-1/route'),
         ]),
       );
@@ -212,11 +225,16 @@ void main() {
       expect(openBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes, {
         'tg-1/route',
       });
+      expect(
+        openBridge.latest.sessionsByWorkBead['tg-1']!.closedGateCountByNodePath,
+        isEmpty,
+      );
 
       // CLOSED gate (resolved) → no open gate node (the re-arm signal).
       final closedState = FakeSnapshotSource(
         _graph([
           sessionRow,
+          routeStep,
           _gate(
             id: 'tgdog-g1',
             blocks: 'tgdog-s',
@@ -231,11 +249,50 @@ void main() {
         closedBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
         isEmpty,
       );
+      expect(
+        closedBridge
+            .latest
+            .sessionsByWorkBead['tg-1']!
+            .closedGateCountByNodePath,
+        {closedGateCountKey('tg-1/route', 0): 1},
+      );
+
+      final twiceClosedState = FakeSnapshotSource(
+        _graph([
+          sessionRow,
+          routeStep,
+          _gate(
+            id: 'tgdog-g1',
+            blocks: 'tgdog-s',
+            node: 'tg-1/route',
+            closed: true,
+          ),
+          _gate(
+            id: 'tgdog-g2',
+            blocks: 'tgdog-s',
+            node: 'tg-1/route',
+            closed: true,
+          ),
+        ]),
+      );
+      final twiceClosedBridge = StationJoinBridge(
+        work: work,
+        state: twiceClosedState,
+      );
+      addTearDown(twiceClosedBridge.dispose);
+      expect(
+        twiceClosedBridge
+            .latest
+            .sessionsByWorkBead['tg-1']!
+            .closedGateCountByNodePath,
+        {closedGateCountKey('tg-1/route', 0): 2},
+      );
 
       // Positive control: a gate blocking an UNKNOWN session is ignored.
       final strayState = FakeSnapshotSource(
         _graph([
           sessionRow,
+          routeStep,
           _gate(id: 'tgdog-g2', blocks: 'tgdog-other', node: 'tg-1/route'),
         ]),
       );
@@ -243,6 +300,102 @@ void main() {
       addTearDown(strayBridge.dispose);
       expect(
         strayBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
+        isEmpty,
+      );
+      expect(
+        strayBridge
+            .latest
+            .sessionsByWorkBead['tg-1']!
+            .closedGateCountByNodePath,
+        isEmpty,
+      );
+
+      // A predecessor gate cannot shift the successor incarnation.
+      final prior = _stepBead(
+        'tgdog-step-prior',
+        sessionId: 'tgdog-s',
+        path: 'tg-1/route',
+        createdAt: DateTime.utc(2026, 8, 31, 10),
+      );
+      final successor = _stepBead(
+        'tgdog-step-successor',
+        sessionId: 'tgdog-s',
+        path: 'tg-1/route',
+        createdAt: DateTime.utc(2026, 8, 31, 12),
+      );
+      final reusedState = FakeSnapshotSource(
+        _graph(
+          [
+            sessionRow,
+            prior,
+            successor,
+            _gate(
+              id: 'tgdog-g-old',
+              blocks: 'tgdog-s',
+              node: 'tg-1/route',
+              closed: true,
+              createdAt: DateTime.utc(2026, 8, 31, 11),
+            ),
+          ],
+          dependencies: [
+            BeadDependency(
+              issueId: successor.id,
+              dependsOnId: prior.id,
+              type: DependencyType.supersedes,
+            ),
+          ],
+        ),
+      );
+      final reusedBridge = StationJoinBridge(work: work, state: reusedState);
+      addTearDown(reusedBridge.dispose);
+      final reusedCounts = reusedBridge
+          .latest
+          .sessionsByWorkBead['tg-1']!
+          .closedGateCountByNodePath;
+      expect(reusedCounts, {closedGateCountKey('tg-1/route', 0): 1});
+      expect(reusedCounts[closedGateCountKey('tg-1/route', 1)] ?? 0, 0);
+
+      // Untimed history with two possible owners fails closed.
+      final ambiguousState = FakeSnapshotSource(
+        _graph(
+          [
+            sessionRow,
+            _stepBead(
+              'tgdog-step-untimed-prior',
+              sessionId: 'tgdog-s',
+              path: 'tg-1/route',
+            ),
+            _stepBead(
+              'tgdog-step-untimed-successor',
+              sessionId: 'tgdog-s',
+              path: 'tg-1/route',
+            ),
+            _gate(
+              id: 'tgdog-g-untimed',
+              blocks: 'tgdog-s',
+              node: 'tg-1/route',
+              closed: true,
+            ),
+          ],
+          dependencies: const [
+            BeadDependency(
+              issueId: 'tgdog-step-untimed-successor',
+              dependsOnId: 'tgdog-step-untimed-prior',
+              type: DependencyType.supersedes,
+            ),
+          ],
+        ),
+      );
+      final ambiguousBridge = StationJoinBridge(
+        work: work,
+        state: ambiguousState,
+      );
+      addTearDown(ambiguousBridge.dispose);
+      expect(
+        ambiguousBridge
+            .latest
+            .sessionsByWorkBead['tg-1']!
+            .closedGateCountByNodePath,
         isEmpty,
       );
     });

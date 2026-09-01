@@ -38,6 +38,13 @@ import '../lifecycle/bead_ownership.dart';
 typedef TrajectoryRecorderFlare =
     void Function(String name, Map<String, String> data);
 
+typedef _StepObservationKey = ({
+  String sessionId,
+  String stepPath,
+  int stepRound,
+  int incarnation,
+});
+
 /// The enqueue-only handle to the harness's bounded append queue (§2.5).
 ///
 /// The derivation layer holds THIS, never the appender: the sink preserves the
@@ -101,6 +108,8 @@ const String kTickReapedBackfillBasis = 'tick-reaped-backfill';
 /// an `unknown` terminal healed from a process/worktree probe.
 const String kTickUnknownSettlementBasis = 'tick-unknown-settlement';
 
+const String _stepCompleteImpliesRunningBasis = 'step-complete-implies-running';
+
 /// The FIFO bound on every warm cache the recorder keeps. Epoch-truncate by
 /// insertion order: Dart maps and sets iterate oldest-first, so dropping
 /// `keys.first` retires the coldest entries. Sized generously against the
@@ -123,6 +132,10 @@ const String kTickUnknownSettlementBasis = 'tick-unknown-settlement';
 ///     authority and still carries it.
 ///   * `_attemptSpawns` — the spawn's correlation facts degrade (incarnation
 ///     to 0, step path/round to absent); identity is unaffected.
+///   * `_runningStepTransitions` — a later complete observation re-enqueues
+///     the same inferred running identity with the same
+///     `step-complete-implies-running` basis; the sole appender's existing
+///     idempotency key deduplicates it.
 ///   * `_noteOrdinals` — the ONE cache whose naive miss was not benign: the
 ///     ordinal is the note's idem key (`note:<session>:<n>`), so restarting a
 ///     live session's counter at 1 re-mints a key the log already holds and
@@ -314,6 +327,9 @@ class StationTrajectoryRecorder {
   /// only copy.
   final Map<String, String> _predecessorByAttempt = <String, String>{};
 
+  final Map<_StepObservationKey, bool> _runningStepTransitions =
+      <_StepObservationKey, bool>{};
+
   int _derived = 0;
   int _skipped = 0;
   int _deriveFailures = 0;
@@ -337,6 +353,23 @@ class StationTrajectoryRecorder {
     while (cache.length > kRecorderCacheBound) {
       cache.remove(cache.keys.first);
     }
+  }
+
+  _StepObservationKey _stepObservationKey({
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+  }) => (
+    sessionId: sessionId,
+    stepPath: stepPath,
+    stepRound: stepRound,
+    incarnation: incarnation,
+  );
+
+  void _rememberRunning(_StepObservationKey key) {
+    _runningStepTransitions[key] = true;
+    _cap(_runningStepTransitions);
   }
 
   // ── boot-time cache seeding (§2.1) ───────────────────────────────────────
@@ -976,6 +1009,12 @@ class StationTrajectoryRecorder {
     DateTime? startedAt,
     DateTime? occurredAt,
   }) {
+    final key = _stepObservationKey(
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+    );
     _step(
       site: 'stepRunning',
       sessionId: sessionId,
@@ -986,6 +1025,7 @@ class StationTrajectoryRecorder {
       state: StepState.running,
       startedAt: startedAt,
       occurredAt: occurredAt,
+      afterEnqueue: () => _rememberRunning(key),
     );
   }
 
@@ -1032,6 +1072,28 @@ class StationTrajectoryRecorder {
     Map<String, String>? result,
     DateTime? occurredAt,
   }) {
+    final key = _stepObservationKey(
+      sessionId: sessionId,
+      stepPath: stepPath,
+      stepRound: stepRound,
+      incarnation: incarnation,
+    );
+    if (!_runningStepTransitions.containsKey(key)) {
+      _step(
+        site: 'stepRunningBeforeComplete',
+        sessionId: sessionId,
+        stepPath: stepPath,
+        stepRound: stepRound,
+        incarnation: incarnation,
+        attemptId: attemptId,
+        state: StepState.running,
+        startedAt: startedAt,
+        occurredAt: startedAt ?? occurredAt,
+        provenance: TrajectoryProvenance.inferred,
+        provenanceBasis: _stepCompleteImpliesRunningBasis,
+        afterEnqueue: () => _rememberRunning(key),
+      );
+    }
     _step(
       site: 'stepComplete',
       sessionId: sessionId,
@@ -1553,6 +1615,9 @@ class StationTrajectoryRecorder {
     StepFailureClass? failureClass,
     Map<String, String>? result,
     DateTime? occurredAt,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    void Function()? afterEnqueue,
   }) {
     _observe(site, () {
       _enqueue(
@@ -1577,7 +1642,10 @@ class StationTrajectoryRecorder {
           result: result,
         ),
         occurredAt: occurredAt,
+        provenance: provenance,
+        provenanceBasis: provenanceBasis,
       );
+      afterEnqueue?.call();
     });
   }
 

@@ -5,6 +5,15 @@ import '../sdk/cursor.dart';
 
 part 'session_projection.freezed.dart';
 
+/// Encodes one node path plus its supersedes-chain incarnation ordinal.
+///
+/// [structuralIncarnation] is the depth returned by
+/// `supersedesDepthByStepId` for the step bead that owned the gate. A later
+/// successor at the same path therefore has a different key and begins with
+/// zero gate cycles.
+String closedGateCountKey(String nodePath, int structuralIncarnation) =>
+    '$nodePath#$structuralIncarnation';
+
 /// The_grid's projection of ONE work bead's owned session/lifecycle bead — the
 /// JOIN row A40 reconciles against.
 ///
@@ -91,6 +100,12 @@ abstract class SessionProjection with _$SessionProjection {
     /// bead. A node leaves this set when its gate bead closes, which re-arms the
     /// parked node (`SessionScope` flips it back to `pending`).
     @Default(<String>{}) Set<String> openGateNodes,
+
+    /// The number of CLOSED `type=gate` beads for each structural step
+    /// incarnation in this session. Keys are produced by [closedGateCountKey].
+    /// The join derives this history from the watched state snapshot; this is
+    /// never an in-memory orchestration counter.
+    @Default(<String, int>{}) Map<String, int> closedGateCountByNodePath,
 
     /// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the wall-clock
     /// instant the session bead was minted (its `started_at` metadata, stamped

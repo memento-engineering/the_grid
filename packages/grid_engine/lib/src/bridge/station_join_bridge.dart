@@ -8,10 +8,13 @@ import '../domain/joined_snapshot.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
+import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import 'block_guard.dart';
 import 'snapshot_source.dart';
+
+typedef _JoinedStepIncarnation = ({Bead bead, int ordinal});
 
 /// The JOIN bridge — the **only** subscription into the snapshot pipelines
 /// (A39 / derailment-invariant 1).
@@ -227,8 +230,8 @@ class StationJoinBridge {
         if (projection.workBeadId.isEmpty) continue; // no JOIN key — skip.
         sessions[projection.workBeadId] = projection;
       }
-      _attachOpenGates(state, sessions);
       _attachMoleculeBeads(state, sessions);
+      _attachGateState(state, sessions);
       graph = _applyCrossLinks(work, state, onUnresolvedCrossLink);
     }
     return JoinedSnapshot(
@@ -245,7 +248,7 @@ class StationJoinBridge {
   /// (`grid.link.from`/`to`/`type` — [CrossLinkKeys]), never as a dependency
   /// row, so no store holds a dangling reference for `bd doctor --fix` to
   /// classify orphaned and sever, and no work store is written to at all. This
-  /// is the same shape [_attachOpenGates] already uses one level down: an OPEN
+  /// is the same shape [_attachGateState] already uses one level down: an OPEN
   /// state bead narrows what the tree sees; a CLOSED one retires the narrowing.
   ///
   /// The ENFORCEMENT is [applyBlockGuard]'s, shared with the federated union's
@@ -285,7 +288,7 @@ class StationJoinBridge {
     );
   }
 
-  /// sessionId → workBeadId, shared by [_attachOpenGates] and
+  /// sessionId → workBeadId, shared by [_attachGateState] and
   /// [_attachMoleculeBeads] — both resolve a foreign bead's own `blocks`/
   /// `session` stamp (a sessionId) back to the [sessions] map's workBeadId
   /// keying.
@@ -300,41 +303,99 @@ class StationJoinBridge {
     return byId;
   }
 
-  /// Scans [state] for OPEN `type=gate` beads (D-7) and folds each one's blocked
-  /// node into the matching session projection's `openGateNodes` — the re-arm
-  /// signal `SessionScope` reads (a node leaves the set when its gate closes).
+  static _JoinedStepIncarnation? _incarnationForGate(
+    Bead gate,
+    List<_JoinedStepIncarnation> candidates,
+  ) {
+    if (candidates.isEmpty) return null;
+    final gateCreatedAt = gate.createdAt;
+    if (gateCreatedAt == null) {
+      return candidates.length == 1 ? candidates.single : null;
+    }
+    _JoinedStepIncarnation? selected;
+    for (final candidate in candidates) {
+      final stepCreatedAt = candidate.bead.createdAt;
+      if (stepCreatedAt == null || stepCreatedAt.isAfter(gateCreatedAt)) {
+        continue;
+      }
+      if (selected == null) {
+        selected = candidate;
+        continue;
+      }
+      final selectedCreatedAt = selected.bead.createdAt!;
+      if (stepCreatedAt.isAfter(selectedCreatedAt) ||
+          (stepCreatedAt.isAtSameMomentAs(selectedCreatedAt) &&
+              candidate.ordinal > selected.ordinal)) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  }
+
+  /// Scans [state] for `type=gate` beads (D-7), folding open blockers and
+  /// durable closed-gate history into each matching session projection. The
+  /// open set is the re-arm signal `SessionScope` reads; the closed counts are
+  /// the history-as-state source for gate-resume circuit rounds.
   ///
   /// A gate bead carries `metadata.blocks` (a sessionId) + `metadata.node` (a
-  /// nodePath). Mutates [sessions] in place, rebuilding the touched projection
-  /// with `copyWith`. A gate whose `blocks` matches no known session — or that
-  /// is CLOSED (resolved) — is ignored, so `openGateNodes` reflects only live
-  /// gates. Like the session scan, this is the JOIN's job (`projectSession`
-  /// stays pure — a session bead never names its own gate).
-  static void _attachOpenGates(
+  /// nodePath). Mutates [sessions] in place, rebuilding every projection with
+  /// `copyWith`. A gate whose `blocks` matches no known session is ignored.
+  /// Like the session scan, this is the JOIN's job (`projectSession` stays pure
+  /// — a session bead never names its own gate).
+  static void _attachGateState(
     GraphSnapshot state,
     Map<String, SessionProjection> sessions,
   ) {
-    // sessionId → workBeadId, so a gate's `blocks` (a sessionId) finds its
-    // projection (keyed by workBeadId).
     final workBeadBySessionId = _workBeadIdBySessionId(sessions);
-    final gateNodesByWorkBead = <String, Set<String>>{};
+    final incarnations = <String, Map<String, List<_JoinedStepIncarnation>>>{};
+    for (final entry in sessions.entries) {
+      final projection = entry.value;
+      final depths = supersedesDepthByStepId(
+        projection.moleculeBeads,
+        projection.moleculeDependencies,
+      );
+      final byPath = incarnations[entry.key] ??=
+          <String, List<_JoinedStepIncarnation>>{};
+      for (final bead in projection.moleculeBeads) {
+        if (bead.issueType != GridIssueTypes.step) continue;
+        final nodePath = bead.metadata[MoleculeStepKeys.path];
+        if (nodePath is! String || nodePath.isEmpty) continue;
+        (byPath[nodePath] ??= <_JoinedStepIncarnation>[]).add((
+          bead: bead,
+          ordinal: depths[bead.id] ?? 0,
+        ));
+      }
+    }
+
+    final openByWorkBead = <String, Set<String>>{};
+    final closedByWorkBead = <String, Map<String, int>>{};
     for (final bead in state.beadsById.values) {
       if (bead.issueType != GridIssueTypes.gate) continue;
-      if (bead.isClosed) continue; // a resolved gate re-arms — drop it.
       final blocks = bead.metadata['blocks'] as String?;
-      if (blocks == null) continue;
+      final nodePath = bead.metadata['node'] as String?;
+      if (blocks == null || nodePath == null) continue;
       final workBeadId = workBeadBySessionId[blocks];
-      if (workBeadId == null) continue; // blocks an unknown session — ignore.
-      final node = bead.metadata['node'] as String?;
-      if (node == null) continue;
-      (gateNodesByWorkBead[workBeadId] ??= <String>{}).add(node);
-    }
-    gateNodesByWorkBead.forEach((workBeadId, nodes) {
-      final projection = sessions[workBeadId];
-      if (projection != null) {
-        sessions[workBeadId] = projection.copyWith(openGateNodes: nodes);
+      if (workBeadId == null) continue;
+      if (!bead.isClosed) {
+        (openByWorkBead[workBeadId] ??= <String>{}).add(nodePath);
+        continue;
       }
-    });
+      final owner = _incarnationForGate(
+        bead,
+        incarnations[workBeadId]?[nodePath] ?? const <_JoinedStepIncarnation>[],
+      );
+      if (owner == null) continue;
+      final counts = closedByWorkBead[workBeadId] ??= <String, int>{};
+      final key = closedGateCountKey(nodePath, owner.ordinal);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    for (final entry in sessions.entries.toList()) {
+      sessions[entry.key] = entry.value.copyWith(
+        openGateNodes: openByWorkBead[entry.key] ?? const <String>{},
+        closedGateCountByNodePath:
+            closedByWorkBead[entry.key] ?? const <String, int>{},
+      );
+    }
   }
 
   /// Scans [state] for `type=molecule`/`type=step` beads (R1's molecule
@@ -345,7 +406,7 @@ class StationJoinBridge {
   /// A molecule bead carries its owning session id under
   /// [MoleculeCircuitKeys.session]; a step bead under
   /// [MoleculeStepKeys.session]. Mutates [sessions] in place, rebuilding the
-  /// touched projection with `copyWith`, exactly like [_attachOpenGates]. A
+  /// touched projection with `copyWith`, exactly like [_attachGateState]. A
   /// bead with no session stamp, or one stamped for a session this join does
   /// not know about, is skipped fail-closed — it never leaks into any
   /// session's bucket, and (being `type=molecule`/`type=step`, both non-core

@@ -305,6 +305,47 @@ void main() {
     expect(result.mismatches, isEmpty);
   });
 
+  test('a banked gate-resume predecessor-after-successor stream is the '
+      'uninstrumented-resume class', () async {
+    final result =
+        await _lane([
+          const LegacyStepView(stepPath: 'build', state: 'complete'),
+        ]).compare(
+          sessionId: _session,
+          records: _records([
+            _transition(
+              seq: 1,
+              stepPath: 'build',
+              state: 'gated',
+              attemptId: '01J8ATTEMPT000000000000001',
+            ),
+            _transition(
+              seq: 2,
+              stepPath: 'build',
+              stepRound: 1,
+              state: 'pending',
+              cause: 'gate_cleared',
+            ),
+            _transition(
+              seq: 3,
+              stepPath: 'build',
+              state: 'complete',
+              attemptId: '01J8ATTEMPT000000000000002',
+            ),
+          ]),
+        );
+
+    expect(result.mismatches, hasLength(2));
+    expect(result.mismatches.map((row) => row.field).toSet(), {
+      'step_state',
+      'step_attempt',
+    });
+    expect(result.mismatches.map((row) => row.seq).toSet(), {2});
+    expect(result.mismatches.map((row) => row.classification).toSet(), {
+      ShadowMismatchClass.uninstrumentedResume,
+    });
+  });
+
   test('--round scopes the comparable rows', () async {
     final rows = [
       _transition(
