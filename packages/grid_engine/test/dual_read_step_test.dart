@@ -86,11 +86,12 @@ final class _StepSnapshot implements TrajectoryStepSnapshot {
 Bead _stepBead(
   String nodePath, {
   required StepState state,
+  String? beadId,
   int restartCount = 0,
   DateTime? cooldownUntil,
   String sessionId = 'tgdog-1',
 }) => Bead(
-  id: 'tgdog-step-${nodePath.replaceAll('/', '-')}',
+  id: beadId ?? 'tgdog-step-${nodePath.replaceAll('/', '-')}',
   issueType: GridIssueTypes.step,
   status: BeadStatus.open,
   metadata: {
@@ -517,6 +518,44 @@ void main() {
       };
       final snapshot = _StepSnapshot([
         _Row(sessionId: 'retired', stepPath: 'a', stepState: 'running'),
+        _Row(sessionId: 'current', stepPath: 'a', stepState: 'running'),
+      ]);
+
+      o.observe(sessions, snapshot);
+      now = now.add(const Duration(minutes: 5));
+      o.observe(sessions, snapshot);
+
+      expect(o.accounting.stepHits, 1);
+      expect(o.accounting.openStepLag, 0);
+      expect(o.accounting.stepLagEscalations, 0);
+      expect(o.accounting.stepDivergences, 0);
+      expect(flares, isEmpty);
+    });
+
+    test('retired step beads inside a current projection never enter the '
+        'comparator', () {
+      var now = DateTime.utc(2026, 9, 1, 15, 46);
+      final o = observer(mode: DualReadMode.observe, clock: () => now);
+      final sessions = <String, SessionProjection>{
+        'tg-9abc': _session(
+          sessionId: 'current',
+          steps: [
+            _stepBead(
+              'a',
+              beadId: 'retired-a',
+              state: StepState.complete,
+              sessionId: 'retired',
+            ),
+            _stepBead(
+              'a',
+              beadId: 'current-a',
+              state: StepState.running,
+              sessionId: 'current',
+            ),
+          ],
+        ),
+      };
+      final snapshot = _StepSnapshot([
         _Row(sessionId: 'current', stepPath: 'a', stepState: 'running'),
       ]);
 

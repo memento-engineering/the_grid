@@ -24,6 +24,7 @@ import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
 import '../domain/step_cursor_read.dart';
 import '../domain/trajectory_views.dart';
+import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
 import '../sdk/cursor.dart';
 import 'dual_read_pass.dart' show DualReadFlareSink;
 
@@ -105,6 +106,19 @@ class DualReadStepObserver {
   /// even subscribe to the P2 mirror. See [DualReadMode.off].
   bool get armed => _mode != DualReadMode.off;
 
+  SessionProjection _winningLegacyRoundOf(
+    SessionProjection legacy,
+    String sessionId,
+  ) {
+    if (!legacy.isMolecule) return legacy;
+    return legacy.copyWith(
+      moleculeBeads: [
+        for (final bead in legacy.moleculeBeads)
+          if (bead.metadata[MoleculeStepKeys.session] == sessionId) bead,
+      ],
+    );
+  }
+
   /// ONE comparator pass over [sessions] against [snapshot].
   ///
   /// Returns the step overlay entries the join should splice, keyed by the
@@ -150,7 +164,9 @@ class DualReadStepObserver {
       // same-session rows takes the P2-miss rule per node — the LEGACY BEAD —
       // and never a sibling's rows.
       final rows = snapshot.byP2SessionId(sessionId).toList(growable: false);
-      final beadCursor = legacyStepCursorOf(legacy);
+      final beadCursor = legacyStepCursorOf(
+        _winningLegacyRoundOf(legacy, sessionId),
+      );
       if (rows.isEmpty) {
         // No P2 at all for this session: every node is a miss, which is the
         // per-node rule applied wholesale. Counted, never a divergence, and

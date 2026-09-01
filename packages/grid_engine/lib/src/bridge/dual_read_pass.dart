@@ -434,7 +434,6 @@ class DualReadSessionObserver {
             cause: cause,
             activeStepPath: activeStepPath,
           );
-          return;
         }
         if (attemptId == null) {
           // The head predates process start: `AttemptTerminal.attemptId` is

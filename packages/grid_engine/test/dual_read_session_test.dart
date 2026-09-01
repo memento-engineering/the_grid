@@ -480,6 +480,10 @@ void main() {
     });
 
     test('manual bd close is operator-store-edit', () {
+      expect(DualReadDivergenceCause.values, const [
+        DualReadDivergenceCause.operatorStoreEdit,
+        DualReadDivergenceCause.unexplained,
+      ]);
       var now = DateTime.utc(2026, 9, 1, 16);
       final observer = DualReadSessionObserver(
         mode: DualReadMode.observe,
@@ -729,6 +733,86 @@ void main() {
   });
 
   group('MONOTONIC TERMINALITY — the ONE escalation rule (§0.3, r8)', () {
+    test('classification affects counting only: append race still heals every '
+        'cause', () {
+      final healPayloads = <(String, String, String)>[];
+
+      for (final foldAdvanced in <bool>[false, true]) {
+        final sinks = _Sinks();
+        var now = DateTime.utc(2026, 9, 1, 16);
+        var appendQueued = false;
+        final observer = DualReadSessionObserver(
+          mode: DualReadMode.observe,
+          clock: () => now,
+          appendQueuedFor: (_) => appendQueued,
+          healer: sinks.heal,
+        );
+        final initialSnapshot = _Snapshot([
+          _Head(sessionId: 's1', attemptId: 'att-1', lastSeq: 12),
+        ]);
+        observer.observe(_map([_legacy()]), initialSnapshot);
+
+        // The append queues and completes entirely between comparator passes.
+        appendQueued = true;
+        appendQueued = false;
+        final terminal = _map([
+          _legacy(
+            isTerminal: true,
+            completed: true,
+            closedAt: DateTime.utc(2026, 9, 1, 16, 0, 1),
+          ),
+        ]);
+        final postRaceSnapshot = _Snapshot([
+          _Head(
+            sessionId: 's1',
+            attemptId: 'att-1',
+            lastSeq: foldAdvanced ? 13 : 12,
+          ),
+        ]);
+        observer.observe(terminal, postRaceSnapshot);
+
+        now = now.add(const Duration(seconds: 91));
+        observer.observe(terminal, postRaceSnapshot);
+        expect(sinks.heals, hasLength(1), reason: 'foldAdvanced=$foldAdvanced');
+        final request = sinks.heals.single;
+        healPayloads.add((
+          request.sessionId,
+          request.attemptId,
+          request.workBeadId,
+        ));
+
+        // A still-open mirror after the reported heal records the chosen cause.
+        observer.observe(terminal, postRaceSnapshot);
+        expect(sinks.heals, hasLength(1));
+        final expectedCause = foldAdvanced
+            ? DualReadDivergenceCause.unexplained
+            : DualReadDivergenceCause.operatorStoreEdit;
+        expect(observer.accounting.divergenceDetails, isNotEmpty);
+        expect(
+          observer.accounting.divergenceDetails
+              .map((detail) => detail.cause)
+              .toSet(),
+          {expectedCause},
+        );
+        switch (expectedCause) {
+          case DualReadDivergenceCause.operatorStoreEdit:
+            expect(
+              observer.accounting.operatorStoreEditDivergences,
+              greaterThan(0),
+            );
+            expect(observer.accounting.unexplainedDivergences, 0);
+          case DualReadDivergenceCause.unexplained:
+            expect(observer.accounting.unexplainedDivergences, greaterThan(0));
+            expect(observer.accounting.operatorStoreEditDivergences, 0);
+        }
+      }
+
+      expect(healPayloads, [
+        ('s1', 'att-1', 'tg-9abc'),
+        ('s1', 'att-1', 'tg-9abc'),
+      ]);
+    });
+
     test('RACE REGRESSION (V2-B1): a NORMAL terminal transiting the window '
         'triggers NO heal and NO flare', () {
       final sinks = _Sinks();
