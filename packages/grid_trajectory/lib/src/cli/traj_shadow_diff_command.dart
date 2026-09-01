@@ -151,6 +151,31 @@ abstract interface class ShadowCompare {
   });
 }
 
+/// Whether one log session belongs in `shadow-diff`'s implicit scope.
+enum ShadowDefaultSessionDisposition {
+  /// Compare this session. This includes a missing legacy row so presence
+  /// divergence remains visible.
+  compare,
+
+  /// The legacy session is still open and its fold can still change.
+  inFlight,
+
+  /// The legacy session was retired under the `#void-` dead-key shape and did
+  /// not establish a completed round.
+  voided,
+}
+
+/// Optional capability used only when `--session` is omitted.
+///
+/// Comparators without a legacy liveness oracle do not implement this seam;
+/// their current all-log-session scope remains unchanged.
+abstract interface class ShadowDefaultScope {
+  /// Classifies [sessionId] for the implicit scope.
+  Future<ShadowDefaultSessionDisposition> defaultDispositionFor(
+    String sessionId,
+  );
+}
+
 /// Stage 0's strategy: the legacy path is still the sole writer, so there is
 /// no second value to compare against.
 @immutable
@@ -205,7 +230,8 @@ class TrajShadowDiffCommand extends Command<int> {
         'session',
         help:
             'A session id to compare; repeatable. Omitted scopes the run to '
-            'every session present in the log.',
+            'completed sessions present in the log; open and voided legacy '
+            'sessions are counted and skipped.',
       )
       ..addOption('round', help: 'Restrict the comparison to one round.')
       ..addOption(
@@ -372,13 +398,45 @@ Future<int> runTrajShadowDiff({
       return 0;
     case TrajectoryOpened(:final reader):
       try {
-        final scope = sessions.isEmpty
+        final loggedSessions = sessions.isEmpty
             ? await reader.sessions(limit: limit)
             : sessions;
-        write(
-          '  scope: ${scope.isEmpty ? 'no sessions in the log' : scope.join(', ')}'
-          '${round == null ? '' : ' · round $round'}',
-        );
+        final scope = <String>[];
+        var skippedInFlight = 0;
+        var skippedVoided = 0;
+        if (sessions.isNotEmpty || compare is! ShadowDefaultScope) {
+          scope.addAll(loggedSessions);
+        } else {
+          final defaultScope = compare as ShadowDefaultScope;
+          for (final sessionId in loggedSessions) {
+            switch (await defaultScope.defaultDispositionFor(sessionId)) {
+              case ShadowDefaultSessionDisposition.compare:
+                scope.add(sessionId);
+              case ShadowDefaultSessionDisposition.inFlight:
+                skippedInFlight++;
+              case ShadowDefaultSessionDisposition.voided:
+                skippedVoided++;
+            }
+          }
+        }
+        final scopeLabel = switch ((scope.isEmpty, loggedSessions.isEmpty)) {
+          (false, _) => scope.join(', '),
+          (true, true) => 'no sessions in the log',
+          (true, false) => 'no completed sessions',
+        };
+        write('  scope: $scopeLabel${round == null ? '' : ' · round $round'}');
+        if (skippedInFlight > 0) {
+          write(
+            '  skipped in-flight: $skippedInFlight session'
+            '${skippedInFlight == 1 ? '' : 's'}',
+          );
+        }
+        if (skippedVoided > 0) {
+          write(
+            '  skipped voided: $skippedVoided session'
+            '${skippedVoided == 1 ? '' : 's'}',
+          );
+        }
         _writeLimits(write, compare);
         _writeAccounting(write, accounting);
 
@@ -430,6 +488,12 @@ Future<int> runTrajShadowDiff({
           if (incomplete.isNotEmpty)
             '${incomplete.length} session'
                 '${incomplete.length == 1 ? '' : 's'} read INCOMPLETE',
+          if (skippedInFlight > 0)
+            '$skippedInFlight in-flight session'
+                '${skippedInFlight == 1 ? '' : 's'} skipped',
+          if (skippedVoided > 0)
+            '$skippedVoided voided session'
+                '${skippedVoided == 1 ? '' : 's'} skipped',
           // Short here on purpose: the accounting LINE above already carries
           // the full instruction, and repeating it verbatim in the verdict
           // buries the other disqualifiers beside it.

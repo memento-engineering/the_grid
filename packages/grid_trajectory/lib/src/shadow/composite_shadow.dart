@@ -28,7 +28,7 @@ import '../cli/trajectory_reader.dart';
 
 /// The lane composition. Order is preserved into the report so a mismatch
 /// list reads family by family.
-class CompositeShadow implements ShadowCompare {
+class CompositeShadow implements ShadowCompare, ShadowDefaultScope {
   CompositeShadow(this.lanes);
 
   final List<ShadowCompare> lanes;
@@ -51,6 +51,28 @@ class CompositeShadow implements ShadowCompare {
     if (reasons.isEmpty) return null;
     if (comparableFields.isEmpty) return reasons.join('; ');
     return 'some lanes are dark — ${reasons.join('; ')}';
+  }
+
+  /// Combines the optional implicit-scope decisions supplied by the lanes.
+  @override
+  Future<ShadowDefaultSessionDisposition> defaultDispositionFor(
+    String sessionId,
+  ) async {
+    for (final lane in lanes) {
+      if (lane is! ShadowDefaultScope) continue;
+      final defaultScope = lane as ShadowDefaultScope;
+      final selected = switch (await defaultScope.defaultDispositionFor(
+        sessionId,
+      )) {
+        ShadowDefaultSessionDisposition.compare => null,
+        ShadowDefaultSessionDisposition.inFlight =>
+          ShadowDefaultSessionDisposition.inFlight,
+        ShadowDefaultSessionDisposition.voided =>
+          ShadowDefaultSessionDisposition.voided,
+      };
+      if (selected != null) return selected;
+    }
+    return ShadowDefaultSessionDisposition.compare;
   }
 
   @override
