@@ -136,7 +136,11 @@ void main() {
     test('a STALE seed refuses for the boot — loud, never boot-blocking, and '
         'the rows are still held (they are simply not trusted)', () {
       final mirror = SessionHeadMirror()
-        ..seed(rows: [_row(sessionId: 's-1')], seededAt: _boot, stale: true);
+        ..seed(
+          rows: [_row(sessionId: 's-1')],
+          seededAt: _boot,
+          stale: true,
+        );
       expect(mirror.snapshot.health, TrajectorySnapshotHealth.refused);
       expect(mirror.snapshot.bySessionId('s-1'), isNotNull);
     });
@@ -376,15 +380,12 @@ void main() {
       var ordinal = 0;
       for (final record in storm()) {
         ordinal += 1;
-        mirror.applyAppended(
-          _envelope(record),
-          seq: ordinal,
-          decoded: record,
-        );
+        mirror.applyAppended(_envelope(record), seq: ordinal, decoded: record);
         expect(
           mirror.snapshot.byWorkBead('tg-9abc'),
           isNot(isA<SessionHeadCardinalityBreach>()),
-          reason: 'a rework is never a double-mount (after ${record.recordType})',
+          reason:
+              'a rework is never a double-mount (after ${record.recordType})',
         );
       }
       // The retired row's `round` equals the round its `#rN` key would name.

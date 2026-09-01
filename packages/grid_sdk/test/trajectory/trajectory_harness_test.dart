@@ -1563,20 +1563,22 @@ void main() {
       );
     });
 
-    test('an UNCHANGED generation set reseeds nothing and flares nothing',
-        () async {
-      dbScript = seedScript(rows: [headRow(sessionId: 'tranquility-1')]);
-      final h = await harness();
-      await h.start();
-      final seeded = h.sessionHeads.version;
+    test(
+      'an UNCHANGED generation set reseeds nothing and flares nothing',
+      () async {
+        dbScript = seedScript(rows: [headRow(sessionId: 'tranquility-1')]);
+        final h = await harness();
+        await h.start();
+        final seeded = h.sessionHeads.version;
 
-      now = now.add(const Duration(minutes: 1));
-      await h.tick!.runPass();
-      await pumpEventQueue();
+        now = now.add(const Duration(minutes: 1));
+        await h.tick!.runPass();
+        await pumpEventQueue();
 
-      expect(h.sessionHeads.version, seeded);
-      expect(flareNames(), isNot(contains('trajectory.mirrorReseeded')));
-    });
+        expect(h.sessionHeads.version, seeded);
+        expect(flareNames(), isNot(contains('trajectory.mirrorReseeded')));
+      },
+    );
 
     test('REFUSED TESTIMONY is counted on its own axis — not a drop, not a '
         'dedupe, and no health consequence', () async {
@@ -1692,28 +1694,30 @@ void main() {
       'last_seq': '4',
     };
 
-    test('the boot seed reads P2 on the SAME lane, under the same verdict',
-        () async {
-      dbScript = seedScript(
-        heads: [headRow(sessionId: 'tranquility-1')],
-        steps: [
-          stepRow(sessionId: 'tranquility-1'),
-          stepRow(sessionId: 'tranquility-1', stepPath: 'review'),
-          stepRow(sessionId: 'tranquility-2'),
-        ],
-      );
-      final h = await harness();
-      await h.start();
+    test(
+      'the boot seed reads P2 on the SAME lane, under the same verdict',
+      () async {
+        dbScript = seedScript(
+          heads: [headRow(sessionId: 'tranquility-1')],
+          steps: [
+            stepRow(sessionId: 'tranquility-1'),
+            stepRow(sessionId: 'tranquility-1', stepPath: 'review'),
+            stepRow(sessionId: 'tranquility-2'),
+          ],
+        );
+        final h = await harness();
+        await h.start();
 
-      expect(h.stepCursors.health, TrajectorySnapshotHealth.live);
-      expect(h.stepCursors.seededAt, now);
-      expect(h.stepCursors.firstEpochClaimedAt, DateTime.utc(2026, 8, 1, 9));
-      expect(h.stepCursors.byP2SessionId('tranquility-1'), hasLength(2));
-      expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
-      // The two mirrors seed from ONE read pass, so a step row can never
-      // describe a session the head seed missed.
-      expect(h.sessionHeads.seededAt, h.stepCursors.seededAt);
-    });
+        expect(h.stepCursors.health, TrajectorySnapshotHealth.live);
+        expect(h.stepCursors.seededAt, now);
+        expect(h.stepCursors.firstEpochClaimedAt, DateTime.utc(2026, 8, 1, 9));
+        expect(h.stepCursors.byP2SessionId('tranquility-1'), hasLength(2));
+        expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
+        // The two mirrors seed from ONE read pass, so a step row can never
+        // describe a session the head seed missed.
+        expect(h.sessionHeads.seededAt, h.stepCursors.seededAt);
+      },
+    );
 
     test('a STALE fold refuses BOTH mirrors — one verdict, one boot', () async {
       dbScript = seedScript(
@@ -1748,32 +1752,34 @@ void main() {
       expect(rows.single.stepState, 'running');
     });
 
-    test('a DROPPED append latches BOTH mirrors compromised, and flares ONCE',
-        () async {
-      dbScript = seedScript();
-      final h = await harness();
-      await h.start();
-      appender.appendOutcomes.add(
-        const AppendInternalError(cause: 'socket died'),
-      );
+    test(
+      'a DROPPED append latches BOTH mirrors compromised, and flares ONCE',
+      () async {
+        dbScript = seedScript();
+        final h = await harness();
+        await h.start();
+        appender.appendOutcomes.add(
+          const AppendInternalError(cause: 'socket died'),
+        );
 
-      h.recorder.stepRunning(
-        sessionId: 'tranquility-9',
-        stepPath: 'build',
-        stepRound: 0,
-        incarnation: 0,
-      );
-      await pumpEventQueue();
+        h.recorder.stepRunning(
+          sessionId: 'tranquility-9',
+          stepPath: 'build',
+          stepRound: 0,
+          incarnation: 0,
+        );
+        await pumpEventQueue();
 
-      expect(h.stepCursors.byP2SessionId('tranquility-9'), isEmpty);
-      expect(h.stepCursors.health, TrajectorySnapshotHealth.compromised);
-      expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
-      expect(
-        flareNames().where((n) => n == 'trajectory.dualReadCompromised'),
-        hasLength(1),
-        reason: 'one station, one health, one flare',
-      );
-    });
+        expect(h.stepCursors.byP2SessionId('tranquility-9'), isEmpty);
+        expect(h.stepCursors.health, TrajectorySnapshotHealth.compromised);
+        expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+        expect(
+          flareNames().where((n) => n == 'trajectory.dualReadCompromised'),
+          hasLength(1),
+          reason: 'one station, one health, one flare',
+        );
+      },
+    );
 
     test('a moved generation triple RESEEDS P2 alongside P1', () async {
       dbScript = seedScript();
@@ -1842,15 +1848,17 @@ void main() {
       expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
     });
 
-    test('a harness that never connected serves a REFUSED P2 snapshot',
-        () async {
-      connectError = StateError('listener unreachable');
-      final h = await harness();
-      await h.start();
+    test(
+      'a harness that never connected serves a REFUSED P2 snapshot',
+      () async {
+        connectError = StateError('listener unreachable');
+        final h = await harness();
+        await h.start();
 
-      expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
-      expect(h.stepCursors.byP2SessionId('tranquility-1'), isEmpty);
-    });
+        expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
+        expect(h.stepCursors.byP2SessionId('tranquility-1'), isEmpty);
+      },
+    );
 
     test('the change seam publishes and the remover works', () async {
       dbScript = seedScript();
@@ -1946,10 +1954,9 @@ void main() {
       await pumpEventQueue();
 
       expect(reported, [TerminalReconcileOutcome.skippedGuard]);
-      expect(
-        [for (final r in appender.records) r.recordType],
-        isNot(contains('attempt.terminal')),
-      );
+      expect([
+        for (final r in appender.records) r.recordType,
+      ], isNot(contains('attempt.terminal')));
     });
 
     test('with no guard row the heal appends the reconstructed close under '
@@ -1962,16 +1969,12 @@ void main() {
       await pumpEventQueue();
 
       expect(reported, [TerminalReconcileOutcome.appended]);
-      final terminal =
-          appender.records.whereType<AttemptTerminal>().single;
+      final terminal = appender.records.whereType<AttemptTerminal>().single;
       expect(terminal.outcome, TerminalOutcome.unknown);
       expect(terminal.unknownReason, 'external-close');
       expect(terminal.attemptId, '01J8ATTEMPT000000000000009');
       expect(terminal.attemptIdBasis, isNull, reason: 'never minted');
-      expect(
-        appender.provenances.last,
-        TrajectoryProvenance.reconstructed,
-      );
+      expect(appender.provenances.last, TrajectoryProvenance.reconstructed);
     });
 
     test('a heal whose guard read THROWS reports failed and flares — the '
@@ -1990,26 +1993,30 @@ void main() {
       expect(flareNames(), contains('trajectory.terminalReconcileFailed'));
     });
 
-    test('a DOWN or degraded harness reports a SKIP, never a failure: a '
-        'harness that cannot append never manufactures an escalation', () async {
-      final h = await harness(
-        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
-      );
-      await h.start();
-      final reported = <TerminalReconcileOutcome>[];
+    test(
+      'a DOWN or degraded harness reports a SKIP, never a failure: a '
+      'harness that cannot append never manufactures an escalation',
+      () async {
+        final h = await harness(
+          config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+        );
+        await h.start();
+        final reported = <TerminalReconcileOutcome>[];
 
-      h.requestTerminalReconcile(request(reported));
-      await pumpEventQueue();
+        h.requestTerminalReconcile(request(reported));
+        await pumpEventQueue();
 
-      expect(reported, [TerminalReconcileOutcome.skippedGuard]);
-      expect(flares, isEmpty);
-    });
+        expect(reported, [TerminalReconcileOutcome.skippedGuard]);
+        expect(flares, isEmpty);
+      },
+    );
 
     test('the config carries the posture and defaults to OBSERVE', () {
       expect(const TrajectoryConfig().dualRead, DualReadMode.observe);
       expect(
-        const TrajectoryConfig(dualRead: DualReadMode.primary).asDisabled
-            .dualRead,
+        const TrajectoryConfig(
+          dualRead: DualReadMode.primary,
+        ).asDisabled.dualRead,
         DualReadMode.primary,
         reason: 'dry-run forces the WRITE posture, never the read one',
       );

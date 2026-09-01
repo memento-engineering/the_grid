@@ -240,7 +240,8 @@ void main() {
           outcome: SessionHeadOutcome.succeeded,
         ),
       ]),
-      onHeadChanges: (_) => () => removed = true,
+      onHeadChanges: (_) =>
+          () => removed = true,
       dualRead: DualReadSessionObserver(
         onRoundSummary: (sessionId, body) => notes.add((sessionId, body)),
       ),

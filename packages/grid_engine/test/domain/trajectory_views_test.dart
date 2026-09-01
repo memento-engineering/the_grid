@@ -181,14 +181,14 @@ void main() {
       final states = <(String, List<SessionHeadView>)>[
         ('mounted', [retired]),
         ('retired', [_Head(sessionId: 's-1', round: 1)]),
-        ('successor minted', [
-          _Head(sessionId: 's-1', round: 1),
-          _Head(sessionId: 's-2'),
-        ]),
-        ('successor closed', [
-          _Head(sessionId: 's-1', round: 1),
-          _closed('s-2', lastSeq: 30),
-        ]),
+        (
+          'successor minted',
+          [_Head(sessionId: 's-1', round: 1), _Head(sessionId: 's-2')],
+        ),
+        (
+          'successor closed',
+          [_Head(sessionId: 's-1', round: 1), _closed('s-2', lastSeq: 30)],
+        ),
       ];
       for (final (label, rows) in states) {
         expect(

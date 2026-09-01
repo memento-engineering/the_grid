@@ -217,10 +217,7 @@ Bead _molecule(String id, {required String sessionId}) => Bead(
   List<(String, Map<String, String>)> flares,
   List<String> loud,
 })
-_build({
-  required List<Bead> state,
-  TrajectoryHeadSnapshot? snapshot,
-}) {
+_build({required List<Bead> state, TrajectoryHeadSnapshot? snapshot}) {
   final bd = RecordingBdRunner()..exportBeads = state;
   final sink = _CapturingSink();
   final accounting = DualReadAccounting();
@@ -285,10 +282,7 @@ void main() {
       expect(terminal['resolves_record_id'], isNull);
       // NOT minted: `attempt_id_basis` is the marker a mint would leave.
       expect(terminal['attempt_id_basis'], isNull);
-      expect(
-        f.sink.provenances.single,
-        TrajectoryProvenance.reconstructed,
-      );
+      expect(f.sink.provenances.single, TrajectoryProvenance.reconstructed);
       expect(f.sink.bases.single, kRestartReconcilerBasis);
       expect(f.accounting.teardownReplayAppends, 1);
     });
@@ -435,21 +429,24 @@ void main() {
       expect(f.loud.join('\n'), contains('incumbent adjudication'));
     });
 
-    test('a non-live snapshot disengages the compare and counts fallbacks', () async {
-      final f = _build(
-        state: [_session('tgdog-sess1', workBead: 'tg-1', outcome: null)],
-        snapshot: _Snapshot(
-          const [],
-          health: TrajectorySnapshotHealth.compromised,
-        ),
-      );
+    test(
+      'a non-live snapshot disengages the compare and counts fallbacks',
+      () async {
+        final f = _build(
+          state: [_session('tgdog-sess1', workBead: 'tg-1', outcome: null)],
+          snapshot: _Snapshot(
+            const [],
+            health: TrajectorySnapshotHealth.compromised,
+          ),
+        );
 
-      await f.reconciler.reconcile();
+        await f.reconciler.reconcile();
 
-      expect(f.accounting.hits, isZero);
-      expect(f.accounting.fallbacks, greaterThanOrEqualTo(1));
-      expect(f.flares, isEmpty);
-    });
+        expect(f.accounting.hits, isZero);
+        expect(f.accounting.fallbacks, greaterThanOrEqualTo(1));
+        expect(f.flares, isEmpty);
+      },
+    );
 
     test('with NO snapshot wired the pass is byte-identical to before: no '
         'counters move and nothing flares', () async {

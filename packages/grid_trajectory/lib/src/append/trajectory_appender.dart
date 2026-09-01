@@ -343,7 +343,11 @@ class TrajectoryAppender {
     );
     final envelope = build(record);
 
-    final outcome = await _appendInTransaction(record, envelope, rebuild: build);
+    final outcome = await _appendInTransaction(
+      record,
+      envelope,
+      rebuild: build,
+    );
     if (outcome is Appended) {
       // Post-COMMIT the row IS durable: a cadence failure is its own
       // non-fatal signal, retried at the next cadence — it never rewrites

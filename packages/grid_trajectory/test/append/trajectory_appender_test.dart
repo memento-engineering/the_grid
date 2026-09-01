@@ -745,8 +745,9 @@ void main() {
       expect(
         appended.envelope.idemKeyText,
         isNot(
-          terminal().idemKeyText(const IdemContext(station: 'lunar',
-              bootEpoch: 1)),
+          terminal().idemKeyText(
+            const IdemContext(station: 'lunar', bootEpoch: 1),
+          ),
         ),
         reason: 'a settling record can never dedupe against the real one',
       );
@@ -808,34 +809,39 @@ void main() {
       expect(h.db.matching('INSERT INTO trajectory ('), isEmpty);
     });
 
-    test('two independent OBSERVED terminals stay the corruption class — the '
-        'pre-read converts nothing and the guard PK is the local belt',
-        () async {
-      final h = _Harness()
-        ..scriptClaimReads()
-        ..scriptFenceHeld()
-        ..scriptInsertSeq(207);
-      scriptExistingTerminal(
-        h,
-        provenance: TrajectoryProvenance.observed,
-        recordId: '01OBSERVEDTERMINAL00000001',
-      );
-      h.db.on('INSERT INTO traj_terminal_guard', throwing: _duplicate);
-      await h.claim();
+    test(
+      'two independent OBSERVED terminals stay the corruption class — the '
+      'pre-read converts nothing and the guard PK is the local belt',
+      () async {
+        final h = _Harness()
+          ..scriptClaimReads()
+          ..scriptFenceHeld()
+          ..scriptInsertSeq(207);
+        scriptExistingTerminal(
+          h,
+          provenance: TrajectoryProvenance.observed,
+          recordId: '01OBSERVEDTERMINAL00000001',
+        );
+        h.db.on('INSERT INTO traj_terminal_guard', throwing: _duplicate);
+        await h.claim();
 
-      final outcome = await h.appender.append(terminal());
+        final outcome = await h.appender.append(terminal());
 
-      expect(outcome, isA<AppendCorruptionHalt>());
-      expect(
-        (outcome as AppendCorruptionHalt).reason,
-        contains('PK collision'),
-      );
-      expect(h.appender.isHalted, isTrue);
-      expect(h.eventKinds, contains(TrajectoryServiceEventKind.corruptionHalt));
-      // The LOCAL belt caught it: no idem_key arbitration, transaction rolled
-      // back.
-      expect(h.db.matching('WHERE idem_key = :idem_key'), isEmpty);
-    });
+        expect(outcome, isA<AppendCorruptionHalt>());
+        expect(
+          (outcome as AppendCorruptionHalt).reason,
+          contains('PK collision'),
+        );
+        expect(h.appender.isHalted, isTrue);
+        expect(
+          h.eventKinds,
+          contains(TrajectoryServiceEventKind.corruptionHalt),
+        );
+        // The LOCAL belt caught it: no idem_key arbitration, transaction rolled
+        // back.
+        expect(h.db.matching('WHERE idem_key = :idem_key'), isEmpty);
+      },
+    );
 
     test('a NON-terminal append never runs the pre-read at all', () async {
       final h = _Harness()

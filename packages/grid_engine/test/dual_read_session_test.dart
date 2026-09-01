@@ -115,8 +115,7 @@ final class _Sinks {
   /// What the next heal reports back. Default: it landed.
   TerminalReconcileOutcome healOutcome = TerminalReconcileOutcome.appended;
 
-  void flare(String name, Map<String, String> data) =>
-      flares.add((name, data));
+  void flare(String name, Map<String, String> data) => flares.add((name, data));
 
   void note(String sessionId, String body) => notes.add((sessionId, body));
 
@@ -208,10 +207,7 @@ void main() {
     test('MONOTONE GUARD (F-B4): a P1 value that would demote a legacy '
         'terminal fact applies NO overrides at all', () {
       final legacy = _legacy(isTerminal: true, completed: true);
-      final overlaid = sessionProjectionOverlay(
-        legacy,
-        _Head(sessionId: 's1'),
-      );
+      final overlaid = sessionProjectionOverlay(legacy, _Head(sessionId: 's1'));
       expect(overlaid, same(legacy));
       expect(overlaid.isTerminal, isTrue);
       expect(overlaid.completed, isTrue);
@@ -273,11 +269,7 @@ void main() {
         // inferred exit. An overlaid null here would yield ZERO fences, pass
         // the deadness proof vacuously, and authorize spawning over a
         // possibly-live process group.
-        _Head(
-          sessionId: 's1',
-          isOpen: false,
-          outcome: SessionHeadOutcome.lost,
-        ),
+        _Head(sessionId: 's1', isOpen: false, outcome: SessionHeadOutcome.lost),
       );
       expect(sessionDispositionOf(overlaid), isA<VoidedSession>());
       expect(overlaid.pgid, 4242);
@@ -355,24 +347,27 @@ void main() {
       expect(comparison.legacyWorkTerminalReason, isNull);
     });
 
-    test('the pgid/pid PRESENCE pair is observed and reported, never served', () {
-      // P1 SET-NULLs pid/pgid on `attempt.process.exited` while legacy's
-      // scalar fence is stamped at SessionStarted and never cleared, so the
-      // pair disagreeing is EXPECTED after an exit — which is exactly why
-      // neither field is served.
-      final afterExit = compareHeadToProjection(
-        _legacy(pgid: 1, pid: 2),
-        _Head(sessionId: 's1'),
-      );
-      expect(afterExit.pgidPresenceAgrees, isFalse);
-      // …and it does not make the pair a divergence.
-      expect(afterExit.classification, DualReadClass.match);
-      final live = compareHeadToProjection(
-        _legacy(pgid: 1, pid: 2),
-        _Head(sessionId: 's1', pgid: 1, pid: 2),
-      );
-      expect(live.pgidPresenceAgrees, isTrue);
-    });
+    test(
+      'the pgid/pid PRESENCE pair is observed and reported, never served',
+      () {
+        // P1 SET-NULLs pid/pgid on `attempt.process.exited` while legacy's
+        // scalar fence is stamped at SessionStarted and never cleared, so the
+        // pair disagreeing is EXPECTED after an exit — which is exactly why
+        // neither field is served.
+        final afterExit = compareHeadToProjection(
+          _legacy(pgid: 1, pid: 2),
+          _Head(sessionId: 's1'),
+        );
+        expect(afterExit.pgidPresenceAgrees, isFalse);
+        // …and it does not make the pair a divergence.
+        expect(afterExit.classification, DualReadClass.match);
+        final live = compareHeadToProjection(
+          _legacy(pgid: 1, pid: 2),
+          _Head(sessionId: 's1', pgid: 1, pid: 2),
+        );
+        expect(live.pgidPresenceAgrees, isTrue);
+      },
+    );
 
     test('a real tuple mismatch is a divergence naming the field', () {
       final comparison = compareHeadToProjection(
@@ -472,7 +467,10 @@ void main() {
       expect(flares.first['work_bead'], 'tg-9abc');
       expect(flares.first['session_id'], 's1');
       expect(flares.first['snapshot_version'], '7');
-      expect(flares.map((f) => f['field']), containsAll(['isTerminal', 'completed']));
+      expect(
+        flares.map((f) => f['field']),
+        containsAll(['isTerminal', 'completed']),
+      );
       // Deduped by (session, field): a persistent divergence counts once.
       expect(observer.accounting.divergences, 2);
       expect(observer.accounting.passes, 3);
@@ -518,17 +516,14 @@ void main() {
       // The live session has NO row; a TERMINAL SIBLING sits on the same bead.
       observer.observe(
         _map([_legacy(startedAt: DateTime.utc(2026, 8, 31, 13))]),
-        _Snapshot(
-          [
-            _Head(
-              sessionId: 'sibling',
-              isOpen: false,
-              outcome: SessionHeadOutcome.succeeded,
-              lastSeq: 99,
-            ),
-          ],
-          firstEpochClaimedAt: DateTime.utc(2026, 8, 31, 12),
-        ),
+        _Snapshot([
+          _Head(
+            sessionId: 'sibling',
+            isOpen: false,
+            outcome: SessionHeadOutcome.succeeded,
+            lastSeq: 99,
+          ),
+        ], firstEpochClaimedAt: DateTime.utc(2026, 8, 31, 12)),
       );
       expect(observer.accounting.fallbacks, 1);
       expect(observer.accounting.missPostEpoch, 1);
@@ -544,10 +539,7 @@ void main() {
       final observer = DualReadSessionObserver(onFlare: sinks.flare);
       observer.observe(
         _map([_legacy()]),
-        _Snapshot([
-          _Head(sessionId: 's1'),
-          _Head(sessionId: 's2'),
-        ]),
+        _Snapshot([_Head(sessionId: 's1'), _Head(sessionId: 's2')]),
       );
       expect(observer.accounting.cardinalityBreaches, 1);
       final flare = sinks.divergences().single;
@@ -597,10 +589,7 @@ void main() {
       //    successor is minted. Both sides agree again.
       now = now.add(const Duration(seconds: 5));
       observer.observe(
-        _map([
-          retiredLegacy,
-          _legacy(sessionId: 's2'),
-        ]),
+        _map([retiredLegacy, _legacy(sessionId: 's2')]),
         _Snapshot([
           _Head(sessionId: 's1', round: 1, isOpen: true),
           _Head(sessionId: 's2'),
@@ -803,10 +792,7 @@ void main() {
       observer.observe(sessions, snapshot);
       expect(sinks.heals, isEmpty);
       expect(observer.accounting.healsSkipped, 1);
-      expect(
-        sinks.flares.single.$1,
-        kReconstructedTerminalSkippedFlare,
-      );
+      expect(sinks.flares.single.$1, kReconstructedTerminalSkippedFlare);
       expect(sinks.flares.single.$2['basis'], 'terminal-reconcile');
     });
   });
