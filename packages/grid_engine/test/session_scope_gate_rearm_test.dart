@@ -560,8 +560,10 @@ void main() {
         await _pump();
 
         expect(log, ['$lane:A:$kOperatorRulingTransport']);
-        expect(runner.callsFor('update'), hasLength(2));
-        final completion = runner.metadataOfUpdate(1);
+        expect(runner.callsFor('update'), hasLength(3));
+        final running = runner.metadataOfUpdate(1);
+        expect(running[MoleculeStepKeys.state], StepState.running.name);
+        final completion = runner.metadataOfUpdate(2);
         expect(completion[MoleculeStepKeys.state], StepState.complete.name);
         expect(
           completion.keys.where((key) => key.startsWith('grid.rework.')),

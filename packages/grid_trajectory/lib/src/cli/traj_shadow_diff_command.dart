@@ -46,7 +46,12 @@ enum ShadowMismatchClass {
   /// records — and with no attempt row there is no obligation, so the tick
   /// will never notice either. Counted and named here rather than left as an
   /// unexplained mismatch it would otherwise masquerade as.
-  stopRacesSpawn('stop_races_spawn');
+  stopRacesSpawn('stop_races_spawn'),
+
+  /// A gate-cleared successor row was appended, but later re-run transitions
+  /// were correlated to its superseded predecessor. Fixed rounds compare
+  /// clean; this class identifies banked pre-fix shadow-window evidence.
+  uninstrumentedResume('uninstrumented_resume');
 
   const ShadowMismatchClass(this.wire);
 

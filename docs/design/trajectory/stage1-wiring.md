@@ -288,7 +288,7 @@ exactly one writer").
 | `work_bead_id` | the ORIGINAL immutable id. The recorder strips `#rN`/`#void-` when deriving from legacy strings; the record never carries a mutated key |
 | `round` | recorder-held per-session counter, seeded by parsing the `#rN` shape at first sight (and re-seedable from the log after a bounce), bumped only by the round-retired observation (§2.3) |
 | `step_path` | nodePath at the observation site |
-| `step_round` | supersedes-chain depth as the engine computes it today (`supersedesDepthByPath`, `session_scope.dart:1507-1511`), captured at observation; a gate-cleared rearm bumps it |
+| `step_round` | supersedes-chain depth plus the count of CLOSED `type=gate` beads for the same session/node. `StationJoinBridge` derives the durable gate count from every watched state snapshot; `SessionScope` combines it with `supersedesDepthByPath` and threads the value through `CircuitScope` into `StepMount.circuitRound`. A gate-cleared rearm records the successor round and the resumed host observes that same round |
 | `incarnation` | persisted restartCount (§2.1) |
 | `attempt_id` | §2.1 — breadcrumb-carried |
 | `mount_attempt_id` | recorder-minted ULID spanning ONE `SessionScope` mint sequence (the in-memory `_maxMintAttempts` = 5 budget, `session_scope.dart:156`) — **plus (r2, major 8) the payload carries the legacy mount-attempt bead's `grid.attempt.count`** (`mount_attempt.dart:49`, merged in place per `:70-80`, durable cap `kMaxMountAttempts` = 3 at `:69`) **as `legacy_attempt_count`, the shadow-comparable ordinal.** The ULID keys the record; the ordinal is what `traj shadow-diff` joins against the legacy bead |
@@ -327,19 +327,28 @@ named class).
 | `step.transition` (running/ready/complete/failed) | `capability_host.dart` persist sites via `_firePersist` (`:366` started, `:369` ready, `:373` complete, `:384` failure; failure_class splits store_unavailable vs work per the tg-7ux conflation) | after each step-bead mutation returns; result keys on complete ride the payload |
 | `step.transition` (gated) | `capability_host.dart:90-130` (step half at `:116`) + derived twin `session_scope.dart:1004-1030` | state=gated; the GATE BEAD mint stays wholly legacy — `gate.opened/.closed` records are NOT in G1 and do not append at Stage 1 |
 | `step.transition` (rearm) | `session_scope.dart:1222-1274` (`_rearm`, single-key write `:1260-1263`) | cause='gate_cleared', **step_round bumped** — this is the record that kills the I-14 stale-join loop at the cut; during the window it shadows the bump |
+| `step.transition` (gate-close re-arm resume) | the existing `CapabilityHost._firePersist` running/complete sites, reached after the closed-gate snapshot re-keys the host with the incremented `StepMount.circuitRound` | the resumed run mints a fresh host `attempt_id`; its running and complete transitions carry that one identity and the same successor `step_round` as the rearm row |
 
 **Not in this table, deliberately:** `molecule.poured`, `step.superseded` (G2, Stage 2),
 all admission/grant/authority records (G3) — **including the worktree-outstanding
 refusal** (§2.4) — all verification/effect records (G4), `gate.*` records (arrive with
 P4's writers).
 
-**A known, counted gap (r2, minor 16): stop-races-spawn.** When a teardown deregisters a
-session while the spawner is suspended, the provider kills the process and returns with
-no `sessionStarted` and no supervision armed (`subprocess_provider.dart:268-279` — the
-comment says so verbatim). A real process incarnation ran and died with zero events,
-hence zero records. No attempt row means no obligation, so the tick will not notice —
-accepted: `traj shadow-diff` classifies this alongside the named non-atomic-crash class
-as a counted, named gap rather than an unnamed silent one.
+**Known, counted gaps.** When a teardown deregisters a session while the spawner is
+suspended, the provider kills the process and returns with no `sessionStarted` and no
+supervision armed (`subprocess_provider.dart:268-279` — the comment says so verbatim).
+A real process incarnation ran and died with zero events, hence zero records. No attempt
+row means no obligation, so the tick will not notice; this remains
+`stop_races_spawn`. Ordinary append loss after a successful legacy write remains
+`non_atomic_crash`.
+
+Post-fix gate-cured rounds must yield **zero shadow-diff rows for the cured node**: the
+rearm successor and its resumed running/complete writes now share one incremented
+`step_round`, and the resumed writes share one fresh `attempt_id`. Only banked streams
+with the structural predecessor-after-successor signature — successor pending with no
+attempt, its linked predecessor updated later to a ran state — earn
+`uninstrumented_resume`. That historical name does not reclassify ordinary state lag or
+ordinary missing process identity.
 
 ### 2.4 The tick at Stage 1 — attempt/step families only; nothing that mounts changes
 

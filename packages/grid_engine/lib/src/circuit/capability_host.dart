@@ -206,9 +206,9 @@ class CapabilityHostState extends State<CapabilityHost>
   String get _sessionId => seed.mount.session.sessionId;
   String get _nodePath => seed.mount.nodePath;
 
-  /// The trajectory's `step_round` (stage1-wiring §2.2): the supersedes-chain
-  /// depth as the engine already computes it — [StepMount.circuitRound],
-  /// which `SessionScope` fills from `supersedesDepthByPath`. Captured at the
+  /// The trajectory's `step_round` (stage1-wiring §2.2): supersedes-chain
+  /// depth plus durable closed-gate count — [StepMount.circuitRound], which
+  /// `SessionScope` derives from its watched joined snapshot. Captured at the
   /// observation, never invented here.
   int get _stepRound => seed.mount.circuitRound;
 
@@ -317,7 +317,15 @@ class CapabilityHostState extends State<CapabilityHost>
       final alloc = _createAllocationOrFlare();
       if (alloc == null) return;
       _allocation = alloc;
-      unawaited(alloc.startOrAdopt());
+      if (seed.capability is RouteCapability && seed.mount.isGateResume) {
+        _firePersist(
+          'started',
+          _persistStarted,
+          afterSuccess: alloc.startOrAdopt,
+        );
+      } else {
+        unawaited(alloc.startOrAdopt());
+      }
     } else {
       // A dependency the effect reads CHANGED (ADR-0009 D3: depending on context
       // is the norm). Resolve coherently: `update` in place if the type supports
@@ -546,7 +554,15 @@ class CapabilityHostState extends State<CapabilityHost>
     String op,
     Future<void> Function() persist, {
     bool recoverable = true,
-  }) => unawaited(_runPersist(op, persist, recoverable: recoverable));
+    Future<void> Function()? afterSuccess,
+  }) => unawaited(
+    _runPersist(
+      op,
+      persist,
+      recoverable: recoverable,
+      afterSuccess: afterSuccess,
+    ),
+  );
 
   /// [_firePersist]'s awaited body — `try`/`await`/`catch`, never the `Future`
   /// error-callback form the house rule bans (the `Future` API is limited to its
@@ -555,6 +571,7 @@ class CapabilityHostState extends State<CapabilityHost>
     String op,
     Future<void> Function() persist, {
     required bool recoverable,
+    Future<void> Function()? afterSuccess,
   }) async {
     try {
       await persist();
@@ -567,7 +584,10 @@ class CapabilityHostState extends State<CapabilityHost>
       });
       if (!recoverable) return;
       await _superviseFailedPersist(op, error);
+      return;
     }
+    if (_cancelled || !context.mounted) return;
+    await afterSuccess?.call();
   }
 
   /// Routes a dropped persist into the D-5 supervised-restart writer so the
@@ -668,13 +688,13 @@ class CapabilityHostState extends State<CapabilityHost>
     if (_cancelled || !context.mounted) return;
     // LOUD-or-GONE (Decided item 5, R3): every process-backed capability
     // MUST have a mounted lease vendor — the vendor, not this write, owns
-    // `grid.lease.*`. Belt-and-braces: the routing fork
+    // `grid.lease.*`. A gate-resumed route is in-process and reaches this same
+    // running observer without a lease. Belt-and-braces: the routing fork
     // (`_createAllocationOrFlare`, tg-h4u) already resolved the vendor at
-    // mount and routed the spawn through `leaseFor`/`acquire` (the real
-    // `stationProcessSpawner` surfaces this very report through the sink);
-    // this assertion re-checks presence on the persist path so a report
-    // arriving through any OTHER composition still refuses loud.
-    requireProcessLeaseVendor(context);
+    // mount and routed each process spawn through `leaseFor`/`acquire`.
+    if (seed.capability is ProcessCapability) {
+      requireProcessLeaseVendor(context);
+    }
     await _ctx!.writer.update(
       _stepBeadId,
       // pgid/pid/token are DELIBERATELY absent here (R3): the vendor owns

@@ -212,6 +212,10 @@ void main() {
       expect(openBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes, {
         'tg-1/route',
       });
+      expect(
+        openBridge.latest.sessionsByWorkBead['tg-1']!.closedGateCountByNodePath,
+        isEmpty,
+      );
 
       // CLOSED gate (resolved) → no open gate node (the re-arm signal).
       final closedState = FakeSnapshotSource(
@@ -231,6 +235,43 @@ void main() {
         closedBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
         isEmpty,
       );
+      expect(
+        closedBridge
+            .latest
+            .sessionsByWorkBead['tg-1']!
+            .closedGateCountByNodePath,
+        {'tg-1/route': 1},
+      );
+
+      final twiceClosedState = FakeSnapshotSource(
+        _graph([
+          sessionRow,
+          _gate(
+            id: 'tgdog-g1',
+            blocks: 'tgdog-s',
+            node: 'tg-1/route',
+            closed: true,
+          ),
+          _gate(
+            id: 'tgdog-g2',
+            blocks: 'tgdog-s',
+            node: 'tg-1/route',
+            closed: true,
+          ),
+        ]),
+      );
+      final twiceClosedBridge = StationJoinBridge(
+        work: work,
+        state: twiceClosedState,
+      );
+      addTearDown(twiceClosedBridge.dispose);
+      expect(
+        twiceClosedBridge
+            .latest
+            .sessionsByWorkBead['tg-1']!
+            .closedGateCountByNodePath,
+        {'tg-1/route': 2},
+      );
 
       // Positive control: a gate blocking an UNKNOWN session is ignored.
       final strayState = FakeSnapshotSource(
@@ -243,6 +284,13 @@ void main() {
       addTearDown(strayBridge.dispose);
       expect(
         strayBridge.latest.sessionsByWorkBead['tg-1']!.openGateNodes,
+        isEmpty,
+      );
+      expect(
+        strayBridge
+            .latest
+            .sessionsByWorkBead['tg-1']!
+            .closedGateCountByNodePath,
         isEmpty,
       );
     });

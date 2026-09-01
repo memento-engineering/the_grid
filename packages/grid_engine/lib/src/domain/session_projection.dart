@@ -92,6 +92,11 @@ abstract class SessionProjection with _$SessionProjection {
     /// parked node (`SessionScope` flips it back to `pending`).
     @Default(<String>{}) Set<String> openGateNodes,
 
+    /// The number of CLOSED `type=gate` beads for each nodePath in this
+    /// session. The join derives this from persisted gate beads on every
+    /// snapshot; it is history-as-state, never an in-memory round counter.
+    @Default(<String, int>{}) Map<String, int> closedGateCountByNodePath,
+
     /// Capture-only session lifecycle telemetry (FT-1, tg-pez) — the wall-clock
     /// instant the session bead was minted (its `started_at` metadata, stamped
     /// once at first spawn through the chokepoint); null for a legacy bead minted

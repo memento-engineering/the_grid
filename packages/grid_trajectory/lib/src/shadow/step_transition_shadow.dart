@@ -134,6 +134,7 @@ class StepTransitionShadow implements ShadowCompare {
     required String? legacyValue,
     required String? foldValue,
     required int? seq,
+    ShadowMismatchClass? classification,
   }) {
     if (unshadowableMismatchFields.contains(field)) {
       throw StateError(
@@ -148,7 +149,8 @@ class StepTransitionShadow implements ShadowCompare {
       legacyValue: legacyValue,
       foldValue: foldValue,
       seq: seq,
-      classification: _classify(field, legacyValue, foldValue),
+      classification:
+          classification ?? _classify(field, legacyValue, foldValue),
     );
   }
 
@@ -177,6 +179,7 @@ class StepTransitionShadow implements ShadowCompare {
     final mismatches = <ShadowMismatch>[];
     for (final view in legacy) {
       final row = byPath[view.stepPath];
+      final resumeGap = row != null && _isUninstrumentedResume(fold, row);
       void mismatch(String field, String? legacyValue, String? foldValue) =>
           mismatches.add(
             buildMismatch(
@@ -186,6 +189,11 @@ class StepTransitionShadow implements ShadowCompare {
               legacyValue: legacyValue,
               foldValue: foldValue,
               seq: row?.lastSeq,
+              classification:
+                  resumeGap &&
+                      (field == 'step_state' || field == 'step_attempt')
+                  ? ShadowMismatchClass.uninstrumentedResume
+                  : null,
             ),
           );
 
@@ -216,6 +224,28 @@ class StepTransitionShadow implements ShadowCompare {
       }
     }
     return ShadowCompareResult(mismatches);
+  }
+
+  static bool _isUninstrumentedResume(
+    StepCursorFoldResult fold,
+    StepCursorRow latest,
+  ) {
+    if (latest.stepRound == 0 ||
+        latest.state != 'pending' ||
+        latest.attemptId != null) {
+      return false;
+    }
+    final predecessor =
+        fold.rows[(
+          sessionId: latest.sessionId,
+          round: latest.round,
+          stepPath: latest.stepPath,
+          stepRound: latest.stepRound - 1,
+        )];
+    if (predecessor == null) return false;
+    return predecessor.supersededByStepRound == latest.stepRound &&
+        predecessor.lastSeq > latest.lastSeq &&
+        (stepStateProgress[predecessor.state] ?? -1) >= _ranProgress;
   }
 
   /// The comparable row per step path: the greatest `(round, step_round)`,

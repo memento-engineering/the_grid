@@ -1239,9 +1239,9 @@ class SessionScopeState extends State<SessionScope>
   /// refused LOUD in [_rearm] rather than falling back to a session-bead
   /// write the flat model used to make.
   /// [stepRound] and [incarnation] are the correlation facts the trajectory's
-  /// re-arm record needs (§2.2): the supersedes-chain depth and the persisted
-  /// `restartCount` at THIS node, both of which `build` has in hand and the
-  /// off-build write does not. Captured at schedule time, exactly like
+  /// re-arm record needs (§2.2): the gate-resume predecessor round and the
+  /// persisted `restartCount` at THIS node, both of which `build` has in hand
+  /// and the off-build write does not. Captured at schedule time, exactly like
   /// [moleculeTarget] — and REQUIRED: a second caller that forgot them would
   /// compile clean and append `step_round: 0`, the exact silent-0 the field
   /// exists to kill.
@@ -1703,6 +1703,12 @@ class SessionScopeState extends State<SessionScope>
     // cursor is read ONLY from a matching join; otherwise it is empty, which is
     // exactly what a fresh round's cursor IS.
     final joined = matchesJoin ? seed.existingSession : null;
+    final closedGateCountByNodePath =
+        joined?.closedGateCountByNodePath ?? const <String, int>{};
+    final gateResumePaths = {
+      for (final entry in closedGateCountByNodePath.entries)
+        if (entry.value > 0) entry.key,
+    };
 
     // The reentrant capability/circuit resolution seam — read ONCE, ambient;
     // the flat broken/complete check below needs it to resolve a
@@ -1767,7 +1773,10 @@ class SessionScopeState extends State<SessionScope>
         joined.moleculeBeads,
         joined.moleculeDependencies,
       );
-      circuitRoundsByPath = structuralDepthByPath;
+      circuitRoundsByPath = {
+        for (final entry in structuralDepthByPath.entries)
+          entry.key: entry.value + (closedGateCountByNodePath[entry.key] ?? 0),
+      };
       final activeByPath = activeStepBeadsByPath(
         joined.moleculeBeads,
         joined.moleculeDependencies,
@@ -1846,14 +1855,17 @@ class SessionScopeState extends State<SessionScope>
       if (node.state == StepState.gated &&
           !openGates.contains(nodePath) &&
           !invalidated.contains(nodePath)) {
+        final resumedStepRound = circuitRoundsByPath[nodePath] ?? 0;
+        final closedGateCount = closedGateCountByNodePath[nodePath] ?? 0;
         _scheduleRearm(
           id,
           nodePath,
           moleculeTarget: beadIdByNodePath[nodePath],
-          // §2.2: `step_round` is the supersedes-chain depth as the engine
-          // computes it today, captured at the observation; `incarnation` is
-          // the persisted restartCount. Both are build-time facts.
-          stepRound: structuralDepthByPath[nodePath] ?? 0,
+          // `stepRearmed` advances its supplied predecessor round, while the
+          // resumed StepMount receives the already-incremented circuit round.
+          stepRound: closedGateCount == 0
+              ? resumedStepRound
+              : resumedStepRound - 1,
           incarnation: node.restartCount,
         );
       }
@@ -1952,6 +1964,7 @@ class SessionScopeState extends State<SessionScope>
       cursor: cursor,
       nodePath: seed.bead.id,
       circuitRoundsByPath: circuitRoundsByPath,
+      gateResumePaths: gateResumePaths,
     );
     return Nest(
       children: [
