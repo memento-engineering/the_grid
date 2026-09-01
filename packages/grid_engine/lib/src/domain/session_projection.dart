@@ -89,6 +89,29 @@ abstract class SessionProjection with _$SessionProjection {
     /// populate it directly.
     @Default(<String, NodeCursor>{}) CircuitCursor cursor,
 
+    /// THE STEP AXIS'S FOLD READ (cut-wiring C4) — this session's OWN P2
+    /// (`proj_step_cursor`) rows, collapsed per `step_path` to the newest
+    /// incarnation and expressed in the in-memory cursor shape.
+    ///
+    /// **STATE ONLY, and identity-matched.** The bridge fills it from the P2
+    /// mirror's `byP2SessionId` index — rows whose `session_id` equals THIS
+    /// projection's own, never a `byWorkBead` winner (the OVERLAY IDENTITY
+    /// RULE, restated for BOTH axes in r6): a cross-session splice is a
+    /// PROMOTION the monotone rule cannot catch, which is why identity, not
+    /// monotonicity, is the guard here. Every other [NodeCursor] field is left
+    /// at its default and never read — `restartCount`, `cooldownUntil` and the
+    /// pgid/pid/token fence stay BEAD-READ for all of wave 1 (B-M2: the
+    /// breaker's read never moves).
+    ///
+    /// **NULL IS THE POSTURE.** It is filled only under `dualRead: primary`
+    /// with snapshot health `live` and a boot that has not disengaged, so no
+    /// consumer reads a config of its own: `effectiveStepCursor` returns the
+    /// site's own read unchanged whenever this is null, and under `observe`
+    /// that is every session. Never read this field directly — the merge rules
+    /// (the per-node P2-miss rule, monotone no-demotion, the never-creates
+    /// rule) live in `step_cursor_read.dart` and are what make it safe.
+    CircuitCursor? trajCursor,
+
     /// The per-node `grid.result.*` payloads, threaded down pull-free so a
     /// `route` step reads its siblings' grades — D-5. Keyed by `nodePath`; empty
     /// until a step records a result.

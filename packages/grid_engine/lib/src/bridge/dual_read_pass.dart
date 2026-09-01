@@ -60,6 +60,7 @@ class DualReadSessionObserver {
     DualReadFlareSink? onFlare,
     DualReadSummarySink? onRoundSummary,
     DualReadAppendStats Function()? appendStats,
+    bool Function()? stepAxisEngaged,
     DualReadAccounting? accounting,
   }) : _mode = mode,
        _clock = clock ?? DateTime.now,
@@ -68,6 +69,7 @@ class DualReadSessionObserver {
        _onFlare = onFlare,
        _onRoundSummary = onRoundSummary,
        _appendStats = appendStats,
+       _stepAxisEngaged = stepAxisEngaged,
        accounting = accounting ?? DualReadAccounting();
 
   static bool _neverQueued(String _) => false;
@@ -88,6 +90,13 @@ class DualReadSessionObserver {
   /// The harness's append counters, read at summary time (§0.4's "drops").
   /// Null off-tree, and the summary simply omits the block.
   final DualReadAppendStats Function()? _appendStats;
+
+  /// The STEP axis's posture at summary time (C4). It is the step observer's
+  /// own `stepAxisEngaged`, read through a getter rather than passed as a
+  /// value because the two passes run at different points of one join and the
+  /// note must report what the step axis actually did — the same reason
+  /// `overlay_engaged` is a served fact rather than the configured mode.
+  final bool Function()? _stepAxisEngaged;
 
   /// The boot's counters — the round summary's payload and the soak gates'
   /// evidence.
@@ -505,6 +514,7 @@ class DualReadSessionObserver {
           seededAt: snapshot.seededAt,
           scope: scope,
           overlayEngaged: overlayEngaged,
+          stepAxisEngaged: _stepAxisEngaged?.call() ?? false,
           appendStats: _appendStats?.call(),
         ),
       );

@@ -135,6 +135,9 @@ export 'package:grid_trajectory/grid_trajectory.dart'
 // over `grid_trajectory`'s row types. Exported so a status surface can read
 // the snapshot; nothing consumes it for DECISIONS until C2/C3.
 export 'src/trajectory/session_head_mirror.dart';
+// The P2 MIRROR (C4) — the same surface for the step axis, implementing the
+// engine's `TrajectoryStepSnapshot` seam and its `byP2SessionId` index.
+export 'src/trajectory/step_cursor_mirror.dart';
 export 'src/trajectory/trajectory_config.dart';
 export 'src/trajectory/trajectory_harness.dart';
 

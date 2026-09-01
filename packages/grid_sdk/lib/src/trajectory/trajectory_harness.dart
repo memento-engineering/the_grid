@@ -48,12 +48,14 @@ import 'package:grid_engine/grid_engine.dart'
     show
         TerminalReconcileOutcome,
         TerminalReconcileRequest,
-        TrajectoryHeadSnapshot;
+        TrajectoryHeadSnapshot,
+        TrajectoryStepSnapshot;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
 
 import 'session_head_mirror.dart';
+import 'step_cursor_mirror.dart';
 import 'trajectory_config.dart';
 
 /// The flare seam — shape-compatible with `ExplorationTransport.flare`.
@@ -420,6 +422,14 @@ class TrajectoryHarness {
   /// plumbing that changes no behavior.
   final SessionHeadMirror _sessionHeads = SessionHeadMirror();
 
+  /// THE P2 MIRROR (cut-wiring C4 / §0.2) — the step axis's twin of the P1
+  /// mirror, on identical terms: seeded at boot from the same serialized
+  /// connection, maintained POST-ACK from the same committed envelopes,
+  /// re-seeded by the same generation guard, latched by the same health rule.
+  /// It carries the FULL P2 column set (r3 — C-m3) so wave-2 design starts
+  /// from an honest inventory; wave-1 consumers read only the cursor state.
+  final StepCursorMirror _stepCursors = StepCursorMirror();
+
   /// The reseed guard's watched set: every `proj_meta` row's
   /// `(projection, fold_version, rebuilt_at)` triple as of the seed. The
   /// appender never writes `rebuilt_at` and all three in-tree replays do, so
@@ -443,6 +453,16 @@ class TrajectoryHarness {
     void Function(TrajectoryHeadSnapshot snapshot) listener, {
     bool fireImmediately = false,
   }) => _sessionHeads.addListener(listener, fireImmediately: fireImmediately);
+
+  /// The current P2 snapshot — the step axis's plain derived read for the join
+  /// bridge and `/status`.
+  TrajectoryStepSnapshot get stepCursors => _stepCursors.snapshot;
+
+  /// The step axis's change seam, on the same terms as [onSessionHeadsChanged].
+  RemoveListener onStepCursorsChanged(
+    void Function(TrajectoryStepSnapshot snapshot) listener, {
+    bool fireImmediately = false,
+  }) => _stepCursors.addListener(listener, fireImmediately: fireImmediately);
 
   TrajectoryHarnessMode get mode => _mode;
 
@@ -651,10 +671,11 @@ class TrajectoryHarness {
     return value is String ? value : null;
   }
 
-  // ── the P1 mirror (cut-wiring C1 / §0.2) ─────────────────────────────────
+  // ── the fold mirrors (cut-wiring C1 + C4 / §0.2) ─────────────────────────
 
   /// The boot seed: the lag rule, the generation set, the era boundary, and
-  /// one scan of `proj_session_head` — all on the serialized connection.
+  /// one scan EACH of `proj_session_head` (P1) and `proj_step_cursor` (P2) —
+  /// all on the serialized connection, both under one verdict.
   ///
   /// The lag rule reads the shared `'fold'` `proj_meta` row ONLY (the
   /// appender's live cursor); the `'step_cursor'`/`'process_identity'` rows
@@ -672,12 +693,25 @@ class TrajectoryHarness {
         () => readProjectionGenerations(_requireDb()),
       );
       final rows = await _serialize(() => scanSessionHeads(_requireDb()));
+      // The P2 seed rides the SAME lag verdict, the SAME generation set, and
+      // the SAME serialized lane — one boot read, two mirrors. Reading the
+      // step rows here rather than on their own pass is what keeps the two
+      // snapshots consistent with each other at the instant the mode goes
+      // live: a step row can never describe a session the head seed missed.
+      final stepRows = await _serialize(() => scanStepCursors(_requireDb()));
       final firstEpochAt = await _serialize(_readFirstEpochClaimedAt);
       _foldGenerations = {for (final row in generations) row.generation};
       _generationsReadAt = _clock();
+      final seededAt = _clock().toUtc();
       _sessionHeads.seed(
         rows: rows,
-        seededAt: _clock().toUtc(),
+        seededAt: seededAt,
+        stale: lag.isStale,
+        firstEpochClaimedAt: firstEpochAt,
+      );
+      _stepCursors.seed(
+        rows: stepRows,
+        seededAt: seededAt,
         stale: lag.isStale,
         firstEpochClaimedAt: firstEpochAt,
       );
@@ -687,15 +721,16 @@ class TrajectoryHarness {
           'headSeq': '${lag.maxSeq}',
           'records': '${lag.records}',
           'ageMs': '${lag.age.inMilliseconds}',
-          'effect': 'P1 snapshot refused for this boot; legacy stays primary',
+          'effect':
+              'P1/P2 snapshots refused for this boot; legacy stays primary',
         });
       }
     } on Object catch (error) {
-      // No seed ⇒ the snapshot stays `refused`, which is the honest reading:
+      // No seed ⇒ the snapshots stay `refused`, which is the honest reading:
       // nothing may be served from a mirror that never read the fold.
       _flare('trajectory.staleFold', {
         'reason': '$error',
-        'effect': 'P1 seed failed; snapshot refused, legacy stays primary',
+        'effect': 'fold seed failed; snapshots refused, legacy stays primary',
       });
     }
   }
@@ -724,7 +759,24 @@ class TrajectoryHarness {
       _latchMirrorCompromised('harness mode ${_mode.name}');
       return;
     }
+    _evictClosedStepCursors();
     unawaited(_checkFoldGeneration());
+  }
+
+  /// P2's EVICTION (§0.2's memory bound), driven off P1: rows for sessions
+  /// CLOSED in the head mirror go.
+  ///
+  /// P1 is the terminality carrier — P2 has no status column — so this is the
+  /// only direction the rule can be driven from, and it rides the tick rather
+  /// than the writer loop because a scan of the head rows is a per-interval
+  /// cost, not a per-append one. Nothing durable is lost: the SQL fold keeps
+  /// the whole ladder and `traj replay` rebuilds it.
+  void _evictClosedStepCursors() {
+    final closed = <String>{
+      for (final row in _sessionHeads.snapshot.rows)
+        if (!row.isOpen) row.sessionId,
+    };
+    _stepCursors.evictClosedSessions(closed);
   }
 
   /// THE FOLD-GENERATION RESEED GUARD (§0.2, r4 — J7-B2): re-reads the full
@@ -753,12 +805,20 @@ class TrajectoryHarness {
       final current = {for (final row in generations) row.generation};
       if (_setsEqual(current, seeded)) return;
       final rows = await _serialize(() => scanSessionHeads(_requireDb()));
+      final stepRows = await _serialize(() => scanStepCursors(_requireDb()));
       _foldGenerations = current;
-      _sessionHeads.reseed(rows: rows, seededAt: _clock().toUtc());
+      final seededAt = _clock().toUtc();
+      // BOTH mirrors re-seed on ANY moved triple, deliberately: the guard
+      // watches the full `proj_meta` row set precisely because a per-projection
+      // replay is expressible, and a mirror left on the old generation while
+      // its sibling adopted the new one is two folds in one process.
+      _sessionHeads.reseed(rows: rows, seededAt: seededAt);
+      _stepCursors.reseed(rows: stepRows, seededAt: seededAt);
       _flare('trajectory.mirrorReseeded', {
         'seeded': _renderGenerations(seeded),
         'observed': _renderGenerations(current),
         'rows': '${rows.length}',
+        'stepRows': '${stepRows.length}',
       });
     } on Object catch (error) {
       // A failed generation read is a transient, not a fold fact: flare
@@ -768,13 +828,20 @@ class TrajectoryHarness {
   }
 
   /// The COMPROMISED latch — one flare on the transition, by the latch.
+  ///
+  /// BOTH mirrors latch together and the flare fires if EITHER transitioned:
+  /// an append that was dropped is a hole in the fold, and which projection
+  /// the lost record would have touched is exactly what the harness cannot
+  /// know. One station, one health.
   void _latchMirrorCompromised(String reason) {
-    if (!_sessionHeads.latchCompromised()) return;
+    final head = _sessionHeads.latchCompromised();
+    final step = _stepCursors.latchCompromised();
+    if (!head && !step) return;
     _flare('trajectory.dualReadCompromised', {
       'reason': reason,
       'dropped': '$_dropped',
       'suppressed': '$_suppressed',
-      'effect': 'P1 overlay disengaged for this boot; legacy stays primary',
+      'effect': 'P1/P2 overlays disengaged for this boot; legacy stays primary',
     });
   }
 
@@ -1038,11 +1105,13 @@ class TrajectoryHarness {
           // envelope decodes itself.
           final converted =
               request.record.isSettling != (envelope.resolvesRecordId != null);
-          _sessionHeads.applyAppended(
-            envelope,
-            seq: seq,
-            decoded: converted ? null : request.record,
-          );
+          final decoded = converted ? null : request.record;
+          _sessionHeads.applyAppended(envelope, seq: seq, decoded: decoded);
+          // The step delta rides the SAME acked envelope at the SAME ordinal.
+          // It is a second pure fold over one record, never a second write:
+          // `stepCursorDeltaFor` returns null for every non-step family, so a
+          // session record costs one family check here.
+          _stepCursors.applyAppended(envelope, seq: seq, decoded: decoded);
         case AppendDeduped():
           // Applies NOTHING: the original row either landed this boot (already
           // applied) or predates it and rode the seed.

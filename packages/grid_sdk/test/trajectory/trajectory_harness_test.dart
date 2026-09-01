@@ -1251,14 +1251,15 @@ void main() {
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
-      // The P1 boot seed's four reads come FIRST (cut-wiring C1 / §0.2): the
-      // lag rule, the generation set, the row scan, the era boundary — all
-      // before the mode goes live, so no post-ACK delta can outrun them.
+      // The fold boot seed's FIVE reads come first (cut-wiring C1 + C4 /
+      // §0.2): the lag rule, the generation set, the P1 row scan, the P2 row
+      // scan, the era boundary — all before the mode goes live, so no
+      // post-ACK delta can outrun them.
       final statements = connected.single.statements;
-      expect(statements.take(4), everyElement(startsWith('SELECT')));
+      expect(statements.take(5), everyElement(startsWith('SELECT')));
       // Then the boot pass ran the obligations: three SELECTs on the same
       // serial lane, plus the detector's pulse prune.
-      final passStatements = statements.skip(4);
+      final passStatements = statements.skip(5);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
         hasLength(3),
@@ -1292,9 +1293,9 @@ void main() {
       await h.start();
 
       expect(h.tick!.queries, isEmpty);
-      // Only the P1 boot seed's own four reads: an empty obligation set still
-      // issues nothing of its own.
-      expect(connected.single.statements, hasLength(4));
+      // Only the fold boot seed's own five reads (P1 + P2): an empty
+      // obligation set still issues nothing of its own.
+      expect(connected.single.statements, hasLength(5));
       expect(connected.single.statements, everyElement(startsWith('SELECT')));
     });
 
@@ -1608,6 +1609,275 @@ void main() {
       expect(h.mode, TrajectoryHarnessMode.degraded);
       expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
       expect(h.sessionHeads.rows, isEmpty);
+    });
+  });
+
+  // ── the P2 mirror (cut-wiring C4 / §0.2) ──────────────────────────────────
+  //
+  // The step axis rides the P1 mirror's machinery exactly: one boot read on
+  // the same serialized lane under the SAME lag verdict, the same post-ACK
+  // apply off the same acked envelope, the same generation guard, the same
+  // health latch. What is P2's OWN is EVICTION, driven off P1's terminality.
+  group('the P2 mirror', () {
+    Object? Function(String sql) seedScript({
+      List<Map<String, String?>> heads = const [],
+      List<Map<String, String?>> steps = const [],
+      int appliedSeq = 40,
+      int maxSeq = 40,
+      List<Map<String, String?>> generations = const [
+        {
+          'projection': 'fold',
+          'fold_version': '2',
+          'applied_seq': '40',
+          'skipped': null,
+          'rebuilt_at': null,
+        },
+      ],
+    }) => (sql) {
+      if (sql.contains('AS max_seq')) {
+        return SqlResult(
+          rows: [
+            {'max_seq': '$maxSeq', 'applied_seq': '$appliedSeq'},
+          ],
+        );
+      }
+      if (sql.contains('MIN(recorded_at)')) {
+        return const SqlResult(
+          rows: [
+            {'oldest': null},
+          ],
+        );
+      }
+      if (sql.contains('FROM proj_meta')) return SqlResult(rows: generations);
+      if (sql.contains('FROM proj_session_head')) return SqlResult(rows: heads);
+      if (sql.contains('FROM proj_step_cursor')) return SqlResult(rows: steps);
+      if (sql.contains('MIN(advanced_at)')) {
+        return const SqlResult(
+          rows: [
+            {'first_at': '2026-08-01 09:00:00.000000'},
+          ],
+        );
+      }
+      return null;
+    };
+
+    Map<String, String?> headRow({
+      required String sessionId,
+      String status = 'open',
+    }) => {
+      'session_id': sessionId,
+      'work_bead_id': 'tg-9abc',
+      'round': '0',
+      'status': status,
+      'outcome': status == 'closed' ? 'succeeded' : null,
+      'terminal_provenance': null,
+      'unknown_reason': null,
+      'held': '0',
+      'started_at': '2026-08-31 10:00:00.000000',
+      'head_epoch': '1',
+      'last_seq': '4',
+    };
+
+    Map<String, String?> stepRow({
+      required String sessionId,
+      String stepPath = 'build',
+      String state = 'running',
+    }) => {
+      'session_id': sessionId,
+      'round': '0',
+      'step_path': stepPath,
+      'step_round': '0',
+      'state': state,
+      'incarnation': '0',
+      'last_seq': '4',
+    };
+
+    test('the boot seed reads P2 on the SAME lane, under the same verdict',
+        () async {
+      dbScript = seedScript(
+        heads: [headRow(sessionId: 'tranquility-1')],
+        steps: [
+          stepRow(sessionId: 'tranquility-1'),
+          stepRow(sessionId: 'tranquility-1', stepPath: 'review'),
+          stepRow(sessionId: 'tranquility-2'),
+        ],
+      );
+      final h = await harness();
+      await h.start();
+
+      expect(h.stepCursors.health, TrajectorySnapshotHealth.live);
+      expect(h.stepCursors.seededAt, now);
+      expect(h.stepCursors.firstEpochClaimedAt, DateTime.utc(2026, 8, 1, 9));
+      expect(h.stepCursors.byP2SessionId('tranquility-1'), hasLength(2));
+      expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
+      // The two mirrors seed from ONE read pass, so a step row can never
+      // describe a session the head seed missed.
+      expect(h.sessionHeads.seededAt, h.stepCursors.seededAt);
+    });
+
+    test('a STALE fold refuses BOTH mirrors — one verdict, one boot', () async {
+      dbScript = seedScript(
+        appliedSeq: 10,
+        maxSeq: 10 + staleLagLimit + 1,
+        steps: [stepRow(sessionId: 'tranquility-1')],
+      );
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live, reason: 'never boot-blocking');
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), contains('trajectory.staleFold'));
+    });
+
+    test('a landed step transition maintains P2 POST-ACK', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+
+      h.recorder.stepRunning(
+        sessionId: 'tranquility-9',
+        stepPath: 'build',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      await pumpEventQueue();
+
+      final rows = h.stepCursors.byP2SessionId('tranquility-9');
+      expect(rows, hasLength(1));
+      expect(rows.single.stepState, 'running');
+    });
+
+    test('a DROPPED append latches BOTH mirrors compromised, and flares ONCE',
+        () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      appender.appendOutcomes.add(
+        const AppendInternalError(cause: 'socket died'),
+      );
+
+      h.recorder.stepRunning(
+        sessionId: 'tranquility-9',
+        stepPath: 'build',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      await pumpEventQueue();
+
+      expect(h.stepCursors.byP2SessionId('tranquility-9'), isEmpty);
+      expect(h.stepCursors.health, TrajectorySnapshotHealth.compromised);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+      expect(
+        flareNames().where((n) => n == 'trajectory.dualReadCompromised'),
+        hasLength(1),
+        reason: 'one station, one health, one flare',
+      );
+    });
+
+    test('a moved generation triple RESEEDS P2 alongside P1', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      expect(h.stepCursors.byP2SessionId('tranquility-7'), isEmpty);
+
+      dbScript = seedScript(
+        heads: [headRow(sessionId: 'tranquility-7')],
+        steps: [stepRow(sessionId: 'tranquility-7')],
+        generations: const [
+          {
+            'projection': 'step_cursor',
+            'fold_version': '1',
+            'applied_seq': '40',
+            'skipped': null,
+            'rebuilt_at': '2026-08-31 12:00:00.000000',
+          },
+        ],
+      );
+      connected.single.onExecute = dbScript;
+      now = now.add(const Duration(minutes: 1));
+      await h.tick!.runPass();
+      await pumpEventQueue();
+
+      // A per-PROJECTION replay is expressible, so a mirror left on the old
+      // generation while its sibling adopted the new one would be two folds in
+      // one process — both re-seed on ANY moved triple.
+      expect(h.stepCursors.byP2SessionId('tranquility-7'), hasLength(1));
+      expect(h.sessionHeads.bySessionId('tranquility-7'), isNotNull);
+      expect(flareNames(), contains('trajectory.mirrorReseeded'));
+    });
+
+    test('EVICTION: a session that CLOSES in P1 loses its ladder on the next '
+        'tick', () async {
+      dbScript = seedScript(
+        heads: [
+          headRow(sessionId: 'tranquility-1'),
+          headRow(sessionId: 'tranquility-2'),
+        ],
+        steps: [
+          stepRow(sessionId: 'tranquility-1'),
+          stepRow(sessionId: 'tranquility-2'),
+        ],
+      );
+      final h = await harness();
+      await h.start();
+      expect(h.stepCursors.byP2SessionId('tranquility-1'), hasLength(1));
+
+      // The terminal lands post-ACK on P1; P2 has no status column of its own,
+      // so P1's terminality is the ONLY direction the rule can be driven from.
+      h.recorder.sessionCompleted(
+        sessionId: 'tranquility-1',
+        workBeadId: 'tg-9abc',
+      );
+      await pumpEventQueue();
+      now = now.add(const Duration(minutes: 1));
+      await h.tick!.runPass();
+      await pumpEventQueue();
+
+      expect(
+        h.stepCursors.byP2SessionId('tranquility-1'),
+        isEmpty,
+        reason: 'the SQL fold keeps the ladder; the mirror need not',
+      );
+      expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
+    });
+
+    test('a harness that never connected serves a REFUSED P2 snapshot',
+        () async {
+      connectError = StateError('listener unreachable');
+      final h = await harness();
+      await h.start();
+
+      expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
+      expect(h.stepCursors.byP2SessionId('tranquility-1'), isEmpty);
+    });
+
+    test('the change seam publishes and the remover works', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      final versions = <int>[];
+      final remove = h.onStepCursorsChanged((s) => versions.add(s.version));
+
+      h.recorder.stepRunning(
+        sessionId: 'tranquility-9',
+        stepPath: 'build',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      await pumpEventQueue();
+      expect(versions, isNotEmpty);
+
+      remove();
+      final seen = versions.length;
+      h.recorder.stepRunning(
+        sessionId: 'tranquility-9',
+        stepPath: 'review',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      await pumpEventQueue();
+      expect(versions, hasLength(seen));
     });
   });
 

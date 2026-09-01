@@ -5,6 +5,7 @@ import '../circuit/capability_registry.dart';
 import '../circuit/circuit_resolver.dart';
 import '../circuit/unclaimed_frontier.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/step_cursor_read.dart' show effectiveStepCursor;
 import '../domain/wedge.dart';
 import '../sdk/capability.dart';
 import '../sdk/capability_facts.dart';
@@ -136,7 +137,18 @@ class StationDriver {
     final now = _clock();
     DateTime? earliest;
     for (final session in bridge.latest.sessionsByWorkBead.values) {
-      for (final node in session.cursor.values) {
+      // CONSUMER 7 of the step dual read (cut-wiring C4). Like the frontier,
+      // this site iterates the structurally-empty `SessionProjection.cursor`
+      // today, so adoption is a behavior CHANGE (the r4 OPEN CARRY) and the
+      // unengaged branch has to return that same empty map — which is what
+      // passing the site's own read as `siteCursor` pins.
+      //
+      // Note what the merge does NOT move: `cooldownUntil` is BEAD-READ for
+      // all of wave 1 (B-M2 — the breaker's read never moves), so what the
+      // fold changes here is which NODES the scan sees, never when one is
+      // allowed to re-key.
+      final cursor = effectiveStepCursor(session, siteCursor: session.cursor);
+      for (final node in cursor.values) {
         final cooldown = node.cooldownUntil;
         if (cooldown != null &&
             cooldown.isAfter(now) &&

@@ -66,6 +66,7 @@ import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/rework.dart' show kMaxReworkRounds, reworkRoundOf;
+import '../domain/step_cursor_read.dart' show effectiveStepCursor;
 import '../kernel/station_services.dart';
 import '../kernel/idle.dart';
 import '../kernel/trajectory_scope.dart';
@@ -1734,7 +1735,22 @@ class SessionScopeState extends State<SessionScope>
         joined!.moleculeBeads,
         dependencies: joined.moleculeDependencies,
       );
-      moleculeProjectedCursor = projected.cursor;
+      // CONSUMER 6 of the step dual read (cut-wiring C4) — the MOUNT-FRONTIER
+      // authority and the most decision-bearing cursor read in the tree. It
+      // adopts at the projection point, so everything downstream (the R4
+      // derivation, the invalidation walk, the successor holds, the gate
+      // re-arm sweep) reads ONE cursor: without it the station would run two
+      // cursor truths under `primary` — the park check and the unclaimed
+      // frontier on the fold, the scope that actually mounts steps on its own
+      // bead recompute.
+      //
+      // The site's today-read is the bead recompute, so the unengaged branch
+      // is the identity and this is a pure read swap.
+      moleculeProjectedCursor = effectiveStepCursor(
+        joined,
+        siteCursor: projected.cursor,
+        beadCursor: projected.cursor,
+      );
       beadIdByNodePath = projected.beadIdByNodePath;
       if (beadIdByNodePath.isEmpty) {
         // A molecule session ALWAYS carries step beads — `_mintMolecule`
@@ -1795,7 +1811,7 @@ class SessionScopeState extends State<SessionScope>
       results = mergeOperatorRulings(stepResults, joined.results);
       invalidated = invalidatedNodes(
         seed.circuit,
-        projected.cursor,
+        moleculeProjectedCursor,
         results,
         seed.bead.id,
         circuitById: registry?.circuit ?? (String _) => null,
@@ -1803,7 +1819,7 @@ class SessionScopeState extends State<SessionScope>
       );
       final effective = effectiveCursor(
         seed.circuit,
-        projected.cursor,
+        moleculeProjectedCursor,
         results,
         seed.bead.id,
         circuitById: registry?.circuit ?? (String _) => null,
@@ -1816,7 +1832,7 @@ class SessionScopeState extends State<SessionScope>
         final spentRounds = spentRoundsByPath[path] ?? 0;
         if (spentRounds >= kMaxReworkRounds) continue;
         final priorStep = activeByPath[path];
-        final node = projected.cursor[path];
+        final node = moleculeProjectedCursor[path];
         if (priorStep == null || node == null || !node.isPositiveTerminal) {
           continue;
         }

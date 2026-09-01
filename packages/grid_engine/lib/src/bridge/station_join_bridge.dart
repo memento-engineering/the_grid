@@ -15,6 +15,7 @@ import '../notifiers/joined_snapshot_notifier.dart';
 import 'block_guard.dart';
 import 'dual_read_pass.dart';
 import 'snapshot_source.dart';
+import 'step_dual_read_pass.dart';
 
 typedef _JoinedStepIncarnation = ({Bead bead, int ordinal});
 
@@ -69,13 +70,18 @@ class StationJoinBridge {
     TrajectoryHeadSnapshot Function()? headSnapshot,
     HeadSnapshotSubscribe? onHeadChanges,
     DualReadSessionObserver? dualRead,
+    TrajectoryStepSnapshot Function()? stepSnapshot,
+    StepSnapshotSubscribe? onStepChanges,
+    DualReadStepObserver? stepDualRead,
   }) {
     final seed = _join(
       work.current,
       state.current,
       headSnapshot?.call(),
+      stepSnapshot?.call(),
       onUnresolvedCrossLink: onUnresolvedCrossLink,
       dualRead: dualRead,
+      stepDualRead: stepDualRead,
     );
     return StationJoinBridge._(
       work: work,
@@ -87,6 +93,9 @@ class StationJoinBridge {
       headSnapshot: headSnapshot,
       onHeadChanges: onHeadChanges,
       dualRead: dualRead,
+      stepSnapshot: stepSnapshot,
+      onStepChanges: onStepChanges,
+      stepDualRead: stepDualRead,
     );
   }
 
@@ -100,6 +109,9 @@ class StationJoinBridge {
     required TrajectoryHeadSnapshot Function()? headSnapshot,
     required HeadSnapshotSubscribe? onHeadChanges,
     required DualReadSessionObserver? dualRead,
+    required TrajectoryStepSnapshot Function()? stepSnapshot,
+    required StepSnapshotSubscribe? onStepChanges,
+    required DualReadStepObserver? stepDualRead,
   }) : _work = work,
        _state = state,
        _ownsNotifier = ownsNotifier,
@@ -107,7 +119,10 @@ class StationJoinBridge {
        _onUnresolvedCrossLink = onUnresolvedCrossLink,
        _headSnapshot = headSnapshot,
        _onHeadChanges = onHeadChanges,
-       _dualRead = dualRead;
+       _dualRead = dualRead,
+       _stepSnapshot = stepSnapshot,
+       _onStepChanges = onStepChanges,
+       _stepDualRead = stepDualRead;
 
   final SnapshotSource _work;
   final SnapshotSource _state;
@@ -125,6 +140,16 @@ class StationJoinBridge {
   /// flares, the heal requests, the durable round summaries. Under `observe`
   /// it only counts: decisions stay legacy in wave 1's C2.
   final DualReadSessionObserver? _dualRead;
+
+  /// THE STEP AXIS'S PRE-FETCHED READ (C4) — the P2 mirror, on exactly the
+  /// same terms as the P1 one: a value, never an await.
+  final TrajectoryStepSnapshot Function()? _stepSnapshot;
+
+  final StepSnapshotSubscribe? _onStepChanges;
+  void Function()? _removeStepListener;
+
+  /// The step comparator's bookkeeper. Under `observe` it only counts.
+  final DualReadStepObserver? _stepDualRead;
 
   /// The LOUD sink an unenforceable cross-link is reported through — a
   /// malformed link bead, or a `to` target no federated work member observes.
@@ -174,6 +199,11 @@ class StationJoinBridge {
     // store — and it pushes through the SAME funnel, so the "one push per real
     // change" rule still holds.
     _removeHeadListener = _onHeadChanges?.call((_) => _push(_rejoin()));
+    // The step axis's own re-join, through the SAME funnel and on the same
+    // terms: a P2 fact lands promptly, and it is still one push per real
+    // change. Two mirrors, one pipeline — the derailment invariant counts
+    // SUBSCRIPTIONS INTO THE SNAPSHOT PIPELINES, and neither mirror is one.
+    _removeStepListener = _onStepChanges?.call((_) => _push(_rejoin()));
   }
 
   /// Recomputes the join from the latest of all three inputs, taking the
@@ -182,8 +212,10 @@ class StationJoinBridge {
     work ?? _work.current,
     state ?? _state.current,
     _headSnapshot?.call(),
+    _stepSnapshot?.call(),
     onUnresolvedCrossLink: _onUnresolvedCrossLink,
     dualRead: _dualRead,
+    stepDualRead: _stepDualRead,
   );
 
   /// Re-emits a FRESH-instance copy of [latest] — the kernel's backoff re-poke
@@ -218,6 +250,8 @@ class StationJoinBridge {
     _stateSub = null;
     _removeHeadListener?.call();
     _removeHeadListener = null;
+    _removeStepListener?.call();
+    _removeStepListener = null;
     // THE CLEAN-DOWN FIXPOINT (§0.4): one boot-final round summary, riding the
     // sessionId of the LAST terminal session of the boot. It runs HERE because
     // the driver disposes the bridge before the trajectory harness drains, so
@@ -258,9 +292,11 @@ class StationJoinBridge {
   static JoinedSnapshot _join(
     GraphSnapshot? work,
     GraphSnapshot? state,
-    TrajectoryHeadSnapshot? head, {
+    TrajectoryHeadSnapshot? head,
+    TrajectoryStepSnapshot? steps, {
     void Function(String message)? onUnresolvedCrossLink,
     DualReadSessionObserver? dualRead,
+    DualReadStepObserver? stepDualRead,
   }) {
     if (work == null) return JoinedSnapshot.empty();
     var graph = work;
@@ -301,6 +337,19 @@ class StationJoinBridge {
     if (head != null) {
       final overlays = dualRead?.observe(sessions, head);
       if (overlays != null && overlays.isNotEmpty) sessions.addAll(overlays);
+    }
+    // THE STEP AXIS (C4) runs AFTER the session overlay is spliced, so it
+    // compares against the projections a decision would actually read — and
+    // so a session the session axis just marked terminal is skipped rather
+    // than compared node by node. Same discipline: the pass RETURNS the
+    // `trajCursor` entries and the join splices them, one writer for the map.
+    if (steps != null) {
+      final cursors = stepDualRead?.observe(sessions, steps);
+      cursors?.forEach((key, trajCursor) {
+        final projection = sessions[key];
+        if (projection == null) return;
+        sessions[key] = projection.copyWith(trajCursor: trajCursor);
+      });
     }
     return JoinedSnapshot(
       graph: graph,

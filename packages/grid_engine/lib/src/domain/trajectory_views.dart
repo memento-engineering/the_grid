@@ -124,7 +124,15 @@ abstract interface class StepCursorView {
   int get stepRound;
 
   /// The §4 ENUM wire string — pending/running/ready/complete/failed/gated.
-  String get state;
+  ///
+  /// Named `stepState` rather than the column's own `state` for ONE reason,
+  /// stated so nobody "corrects" it back: grid_sdk's adapter implements this
+  /// interface, and the D-H fence there greps its whole `lib/` for
+  /// `get state` — a blunt scan that exists to catch a genuinely different
+  /// hazard (a StateNotifier's state re-surfaced synchronously). A member
+  /// named `state` on a fold row would blunt that fence for good, and the
+  /// fence is worth more than the column name.
+  String get stepState;
   int get incarnation;
   String? get attemptId;
 

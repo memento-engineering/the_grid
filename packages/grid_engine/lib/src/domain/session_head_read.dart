@@ -585,6 +585,48 @@ class DualReadAccounting {
   int reconstructedTerminalSkipped = 0;
   int teardownReplayAppends = 0;
 
+  // ── the STEP AXIS (C4) — the same object, because one boot owes one
+  // durable round summary and a gate reads both axes out of it.
+  //
+  // Same GAUGE/ACCUMULATOR split as above: the populations are the last
+  // pass's, the event classes are deduped across the boot by
+  // `(sessionId, stepPath)`.
+
+  /// Step comparator passes run this boot.
+  int stepPasses = 0;
+
+  /// Live sessions whose P2 rows were found by the identity lookup.
+  int stepHits = 0;
+
+  /// Live sessions served from their bead cursor: no same-session P2 rows at
+  /// all, or the step axis disengaged for the boot.
+  int stepFallbacks = 0;
+
+  /// Sessions whose `trajCursor` was spliced into the map this pass — zero
+  /// under `observe`, zero while disengaged.
+  int stepCursorsServed = 0;
+
+  /// Nodes the BEAD carries with no P2 row — the per-node P2-miss rule's
+  /// counter. Never a default and never an omission: the node stays in the
+  /// effective cursor with its bead state, because an omitted node reads as
+  /// unclaimed and is re-mounted (I-10).
+  int p2Miss = 0;
+
+  /// P2 rows for a node path the legacy session does not carry. Dropped from
+  /// the effective cursor (the overlay never creates on this axis either) and
+  /// counted, like a `p1Orphan` head.
+  int p2Orphan = 0;
+
+  /// The LIVE `stepLag` population — §0.3 gate (b), "all lag classes zero at
+  /// round end", now including the step axis (r5).
+  int openStepLag = 0;
+  int maxStepLagMs = 0;
+
+  /// Deduped step-axis events across the boot.
+  int stepLagObserved = 0;
+  int stepLagEscalations = 0;
+  int stepDivergences = 0;
+
   final Map<String, int> divergencesByField = <String, int>{};
 
   /// Health transitions witnessed (`live→compromised`, a refused seed, …) —
@@ -619,6 +661,19 @@ class DualReadAccounting {
     overlaysApplied = 0;
     overlaysServed = 0;
     overlaysSuppressed = 0;
+  }
+
+  /// Zeroes the STEP pass's gauges. Separate from [beginPass] because the two
+  /// passes are separate calls over the same join, and a step pass that never
+  /// ran (no P2 snapshot composed) must leave the session gauges alone.
+  void beginStepPass() {
+    stepPasses += 1;
+    stepHits = 0;
+    stepFallbacks = 0;
+    stepCursorsServed = 0;
+    p2Miss = 0;
+    p2Orphan = 0;
+    openStepLag = 0;
   }
 
   /// Folds one comparison into the counters, returning true when this was a
@@ -676,8 +731,9 @@ class DualReadAccounting {
   }
 
   /// Every LAG class's live population — §0.3's gate (b), "all lag classes
-  /// must be zero at round end".
-  int get openLagEntries => openTerminalLag + openRetirementLag;
+  /// must be zero at round end". `stepLag` joins the arithmetic in C4 (r5),
+  /// so a gate reading this ONE number covers both axes.
+  int get openLagEntries => openTerminalLag + openRetirementLag + openStepLag;
 
   /// The durable round summary's body (§0.4). JSON so `traj show` and the
   /// `/status` block read the SAME shape, and so a gate can diff two rounds
@@ -696,10 +752,14 @@ class DualReadAccounting {
     DateTime? seededAt,
     String? scope,
     bool overlayEngaged = false,
+    bool stepAxisEngaged = false,
     DualReadAppendStats? appendStats,
   }) => <String, Object?>{
     'channel': kDualReadRoundSummaryChannel,
-    'axis': 'session',
+    // BOTH axes ride one note (C4: "the round summary gains the step axis").
+    // The key stays `axis` so an existing reader keeps parsing, and the step
+    // block below is additive — a C2/C3-era summary simply carries zeros.
+    'axis': 'session+step',
     if (scope != null) 'scope': scope,
     'mode': mode.name,
     'health': health.name,
@@ -740,6 +800,22 @@ class DualReadAccounting {
     'heals_failed': healsFailed,
     'heal_escalations': healEscalations,
     'health_transitions': List<String>.from(healthTransitions),
+    // THE STEP AXIS (C4). Same arithmetic as the session axis, one ladder
+    // down: gates count `step_divergences` only, `step_lag_open` must be zero
+    // at round end, and `step_axis_engaged` distinguishes a certified round
+    // from one that quietly rode the bead cursor under `mode: primary`.
+    'step_axis_engaged': stepAxisEngaged,
+    'step_passes': stepPasses,
+    'step_hits': stepHits,
+    'step_fallbacks': stepFallbacks,
+    'step_cursors_served': stepCursorsServed,
+    'p2_miss': p2Miss,
+    'p2_orphan': p2Orphan,
+    'step_divergences': stepDivergences,
+    'step_lag': stepLagObserved,
+    'step_lag_open': openStepLag,
+    'step_lag_max_ms': maxStepLagMs,
+    'step_lag_escalations': stepLagEscalations,
     // THE APPEND SIDE (§0.4's "drops"). The comparator cannot see a dropped
     // append — the hole it leaves in the fold looks exactly like a session
     // that never happened — so the gate reads the harness's own counters, on
@@ -764,6 +840,7 @@ class DualReadAccounting {
     DateTime? seededAt,
     String? scope,
     bool overlayEngaged = false,
+    bool stepAxisEngaged = false,
     DualReadAppendStats? appendStats,
   }) => jsonEncode(
     toJson(
@@ -774,6 +851,7 @@ class DualReadAccounting {
       seededAt: seededAt,
       scope: scope,
       overlayEngaged: overlayEngaged,
+      stepAxisEngaged: stepAxisEngaged,
       appendStats: appendStats,
     ),
   );

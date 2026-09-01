@@ -107,6 +107,15 @@ export 'src/domain/trajectory_views.dart';
 // pure — plus the stateful pass that runs them over one join.
 export 'src/bridge/dual_read_pass.dart';
 export 'src/domain/session_head_read.dart';
+// The STEP-AXIS DUAL READ (cut-wiring C4): the collapse rule, the shared
+// `effectiveStepCursor` the cursor consumers adopt, the three step-axis
+// protections (monotone no-demotion, the per-node P2-miss rule, the
+// never-creates rule), the `stepLag` class and its tracker — pure — plus the
+// stateful pass. `grid rework`'s park check is an OUT-OF-PACKAGE consumer
+// (grid_sdk's command handler), which is why the helper rides the public
+// surface rather than staying engine-private.
+export 'src/bridge/step_dual_read_pass.dart';
+export 'src/domain/step_cursor_read.dart';
 // Wedge detection (tg-jwh) — the station's own "is the grid stuck?" derivation
 // over the producer-side join; the status surface reports it, no watcher
 // re-derives it from raw sessions.

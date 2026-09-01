@@ -839,7 +839,8 @@ void main() {
       expect(sinks.notes.single.$1, 's1');
       expect(sinks.notes.single.$2, contains('"scope":"session-terminal"'));
       expect(sinks.notes.single.$2, contains('"mode":"observe"'));
-      expect(sinks.notes.single.$2, contains('"axis":"session"'));
+      // C4: ONE note carries BOTH axes, so the field names both.
+      expect(sinks.notes.single.$2, contains('"axis":"session+step"'));
       // The note names the exact snapshot it was written against, so a gate
       // reading it across boots can say which state produced the counters.
       expect(sinks.notes.single.$2, contains('"snapshot_version":31'));

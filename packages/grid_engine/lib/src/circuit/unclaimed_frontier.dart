@@ -15,6 +15,7 @@
 library;
 
 import '../domain/joined_snapshot.dart';
+import '../domain/step_cursor_read.dart';
 import '../sdk/capability_facts.dart';
 import '../sdk/claim.dart';
 import 'capability_registry.dart';
@@ -84,7 +85,15 @@ List<UnclaimedRequirement> stationUnclaimedFrontier(
     final root = rootCircuitFor(bead);
     final steps = unclaimedSteps(
       root,
-      session.cursor,
+      // CONSUMER 1 of the step dual read (cut-wiring C4). `session.cursor` is
+      // the STRUCTURALLY EMPTY field in production — `projectSession` stopped
+      // filling it at tg-eli phase 2 — so adoption here is a behavior CHANGE
+      // and not a pure read swap (the r4 OPEN CARRY, J6-M1/J7-M5). That is
+      // exactly why the site's own read is passed as `siteCursor`: with the
+      // step axis unengaged (every `observe` boot) this returns that same
+      // empty map, so "config off = today" is pinned HERE rather than
+      // asserted in prose.
+      effectiveStepCursor(session, siteCursor: session.cursor),
       session.workBeadId,
       stationFacts: stationFacts,
       circuitById: registry.circuit,

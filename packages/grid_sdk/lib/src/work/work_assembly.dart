@@ -581,6 +581,15 @@ Future<StationWorkRuntime> assembleStationWork({
   // comparator classifies, flares, and writes evidence. `primary` (C3) serves
   // the certified overlay from the same functions.
   final dualReadAccounting = DualReadAccounting();
+  // THE STEP-AXIS DUAL READ (cut-wiring C4) — the same accounting object, so
+  // one boot owes one durable round summary carrying both axes, and so the
+  // OVERLAY DISENGAGE LATCH covers both: a boot whose P1 mirror missed an
+  // append must stop serving the step axis too.
+  final stepDualRead = DualReadStepObserver(
+    mode: trajectoryConfig.dualRead,
+    accounting: dualReadAccounting,
+    onFlare: transport?.flare,
+  );
   final dualRead = DualReadSessionObserver(
     mode: trajectoryConfig.dualRead,
     accounting: dualReadAccounting,
@@ -596,6 +605,11 @@ Future<StationWorkRuntime> assembleStationWork({
     // what the wave-1 gates read.
     onRoundSummary: (sessionId, body) =>
         recorder.dualReadRoundSummaryNoted(sessionId: sessionId, body: body),
+    // BOTH axes ride ONE note (C4): the summary reports what the STEP axis
+    // actually did, read at emit time off the step observer — the same
+    // served-fact discipline `overlay_engaged` has, for the same reason (a
+    // `mode: primary` boot that disengaged certifies nothing).
+    stepAxisEngaged: () => stepDualRead.stepAxisEngaged,
     // THE APPEND SIDE OF THE SOAK GATE (C3): "zero drops" is not a fact any
     // comparator can observe — a dropped append leaves a hole in the fold
     // shaped exactly like a session that never happened — so the harness's own
@@ -664,6 +678,12 @@ Future<StationWorkRuntime> assembleStationWork({
     // `grid rework`'s re-key is one of `attempt.round.retired`'s two
     // observation sites (stage1-wiring §2.3).
     recorder: recorder,
+    // CONSUMER 3 of the step dual read (C4): the park check has no
+    // SessionProjection to carry a `trajCursor`, so its posture arrives by
+    // constructor — the same three inputs the bridge derives engagement from.
+    stepSnapshot: () => trajectory.stepCursors,
+    dualReadMode: trajectoryConfig.dualRead,
+    dualReadAccounting: dualReadAccounting,
   );
 
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
@@ -798,6 +818,15 @@ Future<StationWorkRuntime> assembleStationWork({
     onHeadChanges: (listener) =>
         trajectory.onSessionHeadsChanged(listener, fireImmediately: false),
     dualRead: dualRead,
+    // THE STEP AXIS's third input (C4), on identical terms: a pre-fetched P2
+    // read and its own re-join seam, both pushing through the same single
+    // funnel. The pass fills `SessionProjection.trajCursor` under
+    // `primary` + `live`, and every cursor consumer reads it through
+    // `effectiveStepCursor` — so `observe` leaves all seven byte-identical.
+    stepSnapshot: () => trajectory.stepCursors,
+    onStepChanges: (listener) =>
+        trajectory.onStepCursorsChanged(listener, fireImmediately: false),
+    stepDualRead: stepDualRead,
   );
   // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
   // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
