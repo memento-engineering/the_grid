@@ -65,6 +65,11 @@ TrajectoryEnvelope committedEnvelope(
   return TrajectoryEnvelope.fromJson(json);
 }
 
+/// The stale-fold shape probe's statement (r12) — the one boot read a test
+/// that fails "every SELECT" usually still wants answered, because failing it
+/// refuses the live arm outright.
+bool _isShapeProbe(String sql) => sql.contains('information_schema.columns');
+
 /// A scriptable [TrajectoryDb]: records statements, optionally throws.
 final class _FakeDb implements TrajectoryDb {
   _FakeDb({this.onExecute});
@@ -91,7 +96,20 @@ final class _FakeDb implements TrajectoryDb {
       // ignore: only_throw_errors
       throw scripted;
     }
-    return scripted is SqlResult ? scripted : const SqlResult();
+    if (scripted is SqlResult) return scripted;
+    // DEFAULT: a grid home already at the WAVE-1 CUT SHAPE. `start()` refuses
+    // the live arm on a pre-cut `proj_session_head` (the stale-fold refusal),
+    // so the fake has to answer the shape probe or every harness test would
+    // degrade at boot. A test that wants the PRE-CUT home scripts an empty (or
+    // partial) answer for this statement.
+    if (sql.contains('information_schema.columns')) {
+      return SqlResult(
+        rows: [
+          for (final column in projSessionHeadCutColumns) {'name': column},
+        ],
+      );
+    }
+    return const SqlResult();
   }
 
   @override
@@ -407,6 +425,62 @@ void main() {
         expect(connected.single.closed, isTrue);
       },
     );
+
+    // ── THE STALE-FOLD REFUSAL (cut-wiring C0, r12) ──────────────────────
+    //
+    // The wave-1 cut widened `proj_session_head`. The boot seed reads
+    // `SELECT *` and nulls absent columns, so an un-reshaped home SEEDS CLEAN
+    // and reads live — and then every terminal append dies inside its
+    // transaction on an unknown column, rolls back whole, and lands as a
+    // counted drop behind a RATE-LIMITED flare. The trajectory is dead for
+    // that home and nothing says why. Fail closed and loud instead.
+    test('a PRE-CUT proj_session_head REFUSES the live arm, before the claim, '
+        'with a cause naming `traj replay`', () async {
+      dbScript = (sql) => _isShapeProbe(sql)
+          // The pre-cut shape: the table exists, the wave-1 columns do not.
+          ? const SqlResult(
+              rows: [
+                {'name': 'session_id'},
+                {'name': 'status'},
+                {'name': 'outcome'},
+              ],
+            )
+          : null;
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.cause, contains('traj replay'));
+      expect(h.status.cause, contains('terminal_provenance'));
+      expect(h.status.cause, contains('unknown_reason'));
+      expect(flareNames(), contains('trajectory.degraded'));
+      // NO EPOCH CLAIM: a boot that will not run must not advance the fence.
+      expect(appender.calls, ['verify'], reason: 'claimEpoch never ran');
+      expect(h.status.epoch, isNull);
+      expect(h.tick, isNull);
+      expect(connected.single.closed, isTrue);
+    });
+
+    test('the refusal is not silent death: an append enqueued after it is '
+        'SUPPRESSED and counted, never a hole nobody can see', () async {
+      dbScript = (sql) => _isShapeProbe(sql) ? const SqlResult() : null;
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.suppressed, greaterThan(0));
+      expect(h.status.dropped, isZero, reason: 'refused up front, not dropped');
+    });
+
+    test('a home ALREADY at the cut shape arms normally, and the probe runs '
+        'before the claim', () async {
+      final h = await harness();
+      await h.start();
+      expect(h.mode, TrajectoryHarnessMode.live);
+      final statements = connected.single.statements;
+      expect(statements.first, contains('information_schema.columns'));
+      expect(statements.first, contains(':table'));
+    });
 
     test('records enqueued before the claim drain once live', () async {
       final h = await harness();
@@ -1073,12 +1147,16 @@ void main() {
     // needs server-level privilege. THE BOUNDARY WINS — the denial is a
     // POSTURE, so the cadence disables itself instead of denying once a
     // cycle forever, and reclamation moves to the operator's `traj gc`.
+    //
+    // r12: the latch keys on the ACCESS-DENIED CODES only. A predicate that
+    // disables a cadence for the process lifetime may not be decided by a
+    // message substring — see the 1105 test below.
     test('a PRIVILEGE-denied gc disables the cadence after ONE flare and '
         'never re-arms', () async {
       dbScript = (sql) => sql == 'CALL DOLT_GC()'
           ? MySQLServerException(
-              "command denied to user 'trajectory'@'%'",
-              1105,
+              "Access denied for user 'trajectory'@'%'",
+              1045,
             )
           : null;
       final h = await harness();
@@ -1107,8 +1185,8 @@ void main() {
         're-flares', () async {
       dbScript = (sql) => sql == 'CALL DOLT_GC()'
           ? MySQLServerException(
-              "command denied to user 'trajectory'@'%'",
-              1105,
+              "Access denied for user 'trajectory'@'%'",
+              1045,
             )
           : null;
       final h = await harness();
@@ -1137,6 +1215,38 @@ void main() {
         timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
         hasLength(1),
       );
+    });
+
+    test('a 1105 whose MESSAGE reads as a denial does NOT latch (r12) — it '
+        'keeps flaring and re-arming', () async {
+      // dolt answers a denied CALL on its unknown-error code, the SAME code it
+      // answers a commit-time unique violation on. The old predicate matched
+      // the bare word "denied" inside a 1105 and permanently disabled
+      // reclamation on any 1105 that happened to contain it. Retrying a
+      // genuinely refused CALL costs a round trip; latching off a
+      // misclassified one costs the database, so the cadence retries.
+      dbScript = (sql) => sql == 'CALL DOLT_GC()'
+          ? MySQLServerException(
+              "command denied to user 'trajectory'@'%'",
+              1105,
+            )
+          : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+
+      expect(flareNames(), contains('trajectory.gcFailed'));
+      expect(flareNames(), isNot(contains('trajectory.gcDisabled')));
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(2),
+        reason: 'still re-armed',
+      );
+      expect(h.mode, TrajectoryHarnessMode.live);
     });
 
     test('a non-privilege gc error is untouched by the latch — it keeps '
@@ -1251,15 +1361,18 @@ void main() {
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
-      // The fold boot seed's FIVE reads come first (cut-wiring C1 + C4 /
-      // §0.2): the lag rule, the generation set, the P1 row scan, the P2 row
-      // scan, the era boundary — all before the mode goes live, so no
-      // post-ACK delta can outrun them.
+      // SIX boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
+      // refusal that keeps a pre-cut home from dropping every terminal
+      // append), then the fold boot seed's five (cut-wiring C1 + C4 / §0.2):
+      // the lag rule, the generation set, the P1 row scan, the P2 row scan,
+      // the era boundary — all before the mode goes live, so no post-ACK
+      // delta can outrun them.
       final statements = connected.single.statements;
-      expect(statements.take(5), everyElement(startsWith('SELECT')));
+      expect(statements.take(6), everyElement(startsWith('SELECT')));
+      expect(statements.first, contains('information_schema.columns'));
       // Then the boot pass ran the obligations: three SELECTs on the same
       // serial lane, plus the detector's pulse prune.
-      final passStatements = statements.skip(5);
+      final passStatements = statements.skip(6);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
         hasLength(3),
@@ -1293,9 +1406,10 @@ void main() {
       await h.start();
 
       expect(h.tick!.queries, isEmpty);
-      // Only the fold boot seed's own five reads (P1 + P2): an empty
-      // obligation set still issues nothing of its own.
-      expect(connected.single.statements, hasLength(5));
+      // Only the stale-fold shape probe plus the fold boot seed's own five
+      // reads (P1 + P2): an empty obligation set still issues nothing of its
+      // own.
+      expect(connected.single.statements, hasLength(6));
       expect(connected.single.statements, everyElement(startsWith('SELECT')));
     });
 
@@ -1303,8 +1417,12 @@ void main() {
         'consecutive passes, and the note rides the QUEUE', () async {
       // Every SELECT the obligation set issues fails: the store is unreachable
       // for reads while the appender is fine — the shape the accounting is for.
-      dbScript = (sql) =>
-          sql.startsWith('SELECT') ? StateError('store unavailable') : null;
+      // The stale-fold SHAPE PROBE is exempted: a home that cannot answer it
+      // is the r12 REFUSAL case (no live arm at all), which is a different
+      // test — this one needs a harness that armed.
+      dbScript = (sql) => sql.startsWith('SELECT') && !_isShapeProbe(sql)
+          ? StateError('store unavailable')
+          : null;
       final h = await harness();
       await h.start(); // pass 1 (the boot pass)
       for (var i = 0; i < kStuckObligationThreshold - 1; i++) {
@@ -1323,8 +1441,9 @@ void main() {
 
     test('a fenced-out pass is no evidence: the streak holds rather than '
         'resetting or firing', () async {
-      dbScript = (sql) =>
-          sql.startsWith('SELECT') ? StateError('store unavailable') : null;
+      dbScript = (sql) => sql.startsWith('SELECT') && !_isShapeProbe(sql)
+          ? StateError('store unavailable')
+          : null;
       final h = await harness();
       await h.start();
       appender.fakeInert = true;

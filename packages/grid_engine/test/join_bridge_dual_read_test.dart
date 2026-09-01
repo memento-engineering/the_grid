@@ -222,6 +222,43 @@ void main() {
     expect(observer.accounting.passes, beforePasses + 1);
   });
 
+  test('THE ROLLBACK POSTURE (r12): under `off` the bridge SUBSCRIBES to '
+      'neither mirror, so the push cadence is pre-cut mainline\'s', () {
+    // The mirror publishes on EVERY append that yields a delta — including
+    // the derived process-lifecycle pair, which carries nothing the legacy
+    // join reads — and each publish drives a full re-join plus a
+    // `notifier.push`, a mount-frontier evaluation cadence the station did not
+    // have before this cut. `off` has to be byte-identical to mainline, so it
+    // does not subscribe at all.
+    final work = _Source(_graph([_work('tg-1')]));
+    final state = _Source(
+      _graph([_sessionBead('tgdog-s1', workBeadId: 'tg-1')]),
+    );
+    var headSubscribed = false;
+    var stepSubscribed = false;
+    final bridge = StationJoinBridge(
+      work: work,
+      state: state,
+      headSnapshot: () =>
+          _Snapshot([_Head(sessionId: 'tgdog-s1', workBeadId: 'tg-1')]),
+      onHeadChanges: (_) {
+        headSubscribed = true;
+        return () {};
+      },
+      onStepChanges: (_) {
+        stepSubscribed = true;
+        return () {};
+      },
+      dualRead: DualReadSessionObserver(mode: DualReadMode.off),
+      stepDualRead: DualReadStepObserver(mode: DualReadMode.off),
+    );
+    addTearDown(bridge.dispose);
+    bridge.start();
+
+    expect(headSubscribed, isFalse);
+    expect(stepSubscribed, isFalse);
+  });
+
   test('dispose unsubscribes the seam and emits the boot-final summary', () {
     final work = _Source(_graph([_work('tg-1')]));
     final state = _Source(

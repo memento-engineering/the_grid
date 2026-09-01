@@ -217,7 +217,11 @@ Bead _molecule(String id, {required String sessionId}) => Bead(
   List<(String, Map<String, String>)> flares,
   List<String> loud,
 })
-_build({required List<Bead> state, TrajectoryHeadSnapshot? snapshot}) {
+_build({
+  required List<Bead> state,
+  TrajectoryHeadSnapshot? snapshot,
+  DualReadMode dualReadMode = DualReadMode.observe,
+}) {
   final bd = RecordingBdRunner()..exportBeads = state;
   final sink = _CapturingSink();
   final accounting = DualReadAccounting();
@@ -249,6 +253,7 @@ _build({required List<Bead> state, TrajectoryHeadSnapshot? snapshot}) {
       ),
       headSnapshot: snapshot == null ? null : () => snapshot,
       dualReadAccounting: accounting,
+      dualReadMode: dualReadMode,
       onFlare: (name, data) => flares.add((name, data)),
     ),
     sink: sink,
@@ -285,6 +290,28 @@ void main() {
       expect(f.sink.provenances.single, TrajectoryProvenance.reconstructed);
       expect(f.sink.bases.single, kRestartReconcilerBasis);
       expect(f.accounting.teardownReplayAppends, 1);
+    });
+
+    test('THE ROLLBACK POSTURE (r12): under `off` the teardown replay appends '
+        'NOTHING — the bd tail still replays byte-identically', () async {
+      // The observer append is a NEW WRITE and it permanently marks
+      // `terminal_provenance`, so `off` — the rollback — must not make it.
+      // The bd side is unchanged either way: that is what makes this an
+      // observer append rather than a behavior change.
+      final f = _build(
+        dualReadMode: DualReadMode.off,
+        state: [
+          _session('tgdog-sess1', workBead: 'tg-1'),
+          _step('tgdog-step1', sessionId: 'tgdog-sess1', attemptId: 'att-1'),
+        ],
+      );
+
+      final report = await f.reconciler.replayTeardownTail();
+
+      expect(report.replayed.map((e) => e.sessionId), ['tgdog-sess1']);
+      expect(f.sink.types, isNot(contains('attempt.terminal')));
+      expect(f.accounting.teardownReplayAppends, isZero);
+      expect(f.accounting.reconstructedTerminalSkipped, isZero);
     });
 
     test('the record carries NO heal basis, so it takes the PLAIN '

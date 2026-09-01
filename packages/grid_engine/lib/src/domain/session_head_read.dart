@@ -41,10 +41,20 @@ import 'trajectory_views.dart';
 
 /// The dual-read posture (cut-wiring C2's config line).
 ///
-/// [observe] compares and counts; the sessions map is pure legacy. [primary]
-/// additionally SERVES [sessionProjectionOverlay] — C3's flip, one line, and
-/// instantly revertible because legacy is still fully written either way.
-enum DualReadMode { observe, primary }
+/// [off] is THE ROLLBACK, and it is stated first because the rollback claim is
+/// only true of a posture that actually disarms everything wave 1 added: no
+/// comparator pass, no mirror push subscriptions on the join bridge, and none
+/// of the new OBSERVER APPENDS (the `terminal-reconcile` heal, the
+/// teardown-replay close, the durable round summaries). `off` is
+/// byte-identical to pre-cut mainline on every surface the station reads OR
+/// writes.
+///
+/// [observe] compares and counts; the sessions map is pure legacy, but the
+/// observer appends and the mirror-driven re-join cadence ARE armed — that is
+/// C2's scope, and the soak runs here. [primary] additionally SERVES
+/// [sessionProjectionOverlay] — C3's flip, one line, and instantly revertible
+/// because legacy is still fully written either way.
+enum DualReadMode { off, observe, primary }
 
 /// The heal grace on a `terminalLag` entry (r8 — V2-B2): three tick intervals,
 /// an order of magnitude past the post-ACK apply window, so a NORMAL terminal's
@@ -877,6 +887,13 @@ enum TerminalLagAction {
 }
 
 /// How a heal attempt resolved, reported back by the (async) healer.
+///
+/// THE ESCALATION SPLIT lives on this enum: only a heal ATTEMPT that reached
+/// the log — [appended] or [failed] — arms the one-further-pass escalation.
+/// Every `skipped*` member is a COUNTED ADJUDICATION STATE: the entry stays
+/// permanently lag-classed and never becomes a divergence, because no heal was
+/// attempted and a skip is evidence about the WORLD, not about a repair that
+/// failed.
 enum TerminalReconcileOutcome {
   /// The reconstructed close landed.
   appended,
@@ -888,7 +905,16 @@ enum TerminalReconcileOutcome {
 
   /// No attempt id on the P1 head (the head predates process start).
   /// `AttemptTerminal.attemptId` is required and no id is ever minted here.
+  ///
+  /// PERMANENTLY unhealable — no attempt id will ever appear for such a head —
+  /// which is exactly why it must never escalate: an unsatisfiable gate is the
+  /// defect class r3/r5/r8 kept re-fixing.
   skippedNoAttemptId,
+
+  /// No healer is wired on this boot at all, so no `traj_terminal_guard` was
+  /// ever read. Its OWN member rather than [skippedGuard]: the durable round
+  /// evidence must not assert a guard fact nobody observed.
+  skippedNoHealer,
 
   /// The append itself failed.
   failed,
@@ -932,6 +958,12 @@ class _TerminalLagEntry {
   bool healAttempted = false;
   bool healFailed = false;
   bool escalated = false;
+
+  /// A heal was declined before it reached the log (guard row present, no
+  /// attempt id, no healer). The entry is LAG for the rest of its life: it
+  /// never escalates, and it never asks for a second heal it would decline
+  /// again on the same unchanged fact.
+  bool healSkipped = false;
 }
 
 /// THE ONE ESCALATION RULE, mechanized (§0.3 MONOTONIC TERMINALITY, r8).
@@ -962,6 +994,11 @@ class TerminalLagTracker {
     final entry = _entries.putIfAbsent(sessionId, () => _TerminalLagEntry(now));
     entry.passes += 1;
     if (entry.escalated) return TerminalLagAction.watch;
+    // A SKIPPED heal is not a heal. The entry is counted lag from here to the
+    // end of its life — no escalation (nothing was repaired, so nothing can
+    // have failed to repair) and no second request against the same unchanged
+    // fact.
+    if (entry.healSkipped) return TerminalLagAction.watch;
     if (entry.healAttempted) {
       entry.passesSinceHeal += 1;
       // Heal failure escalates at once; a heal that LANDED gets one further
@@ -986,14 +1023,34 @@ class TerminalLagTracker {
     return entry == null ? Duration.zero : now.difference(entry.firstSeenAt);
   }
 
-  /// Marks the heal attempted. A guard SKIP counts as healed (the real record
-  /// is already there — pure lag), a failure arms the escalation.
+  /// Records how the heal resolved.
+  ///
+  /// ONLY A LANDED-OR-FAILED ATTEMPT ARMS ESCALATION (§0.3 MONOTONIC
+  /// TERMINALITY, r8 — "escalation signals RECONCILE FAILURE, never the normal
+  /// window"). [TerminalReconcileOutcome.appended] earns the one further full
+  /// comparator pass; [TerminalReconcileOutcome.failed] escalates on the next
+  /// pass. Every `skipped*` outcome latches the entry as counted LAG instead:
+  /// no append was made, so there is no repair whose failure a divergence
+  /// could be reporting — and `skippedNoAttemptId` in particular can NEVER be
+  /// repaired, which would make the zero-divergence gate unsatisfiable on any
+  /// board carrying a head that predates process start.
   void noteHealAttempted(String sessionId, TerminalReconcileOutcome outcome) {
     final entry = _entries[sessionId];
     if (entry == null) return;
-    entry.healAttempted = true;
-    entry.passesSinceHeal = 0;
-    entry.healFailed = outcome == TerminalReconcileOutcome.failed;
+    switch (outcome) {
+      case TerminalReconcileOutcome.appended:
+        entry.healAttempted = true;
+        entry.passesSinceHeal = 0;
+        entry.healFailed = false;
+      case TerminalReconcileOutcome.failed:
+        entry.healAttempted = true;
+        entry.passesSinceHeal = 0;
+        entry.healFailed = true;
+      case TerminalReconcileOutcome.skippedGuard:
+      case TerminalReconcileOutcome.skippedNoAttemptId:
+      case TerminalReconcileOutcome.skippedNoHealer:
+        entry.healSkipped = true;
+    }
   }
 
   /// The entry cleared — the head closed, so the lag healed on its own.

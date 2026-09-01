@@ -196,14 +196,30 @@ class StationJoinBridge {
     // THE THIRD AXIS (C2): a fold-side fact re-joins promptly. It is NOT a
     // fourth subscription into the snapshot pipelines (A39 / derailment
     // invariant 1) — the mirror is this process's own pre-fetched state, not a
-    // store — and it pushes through the SAME funnel, so the "one push per real
-    // change" rule still holds.
-    _removeHeadListener = _onHeadChanges?.call((_) => _push(_rejoin()));
+    // store — and it pushes through the SAME funnel.
+    //
+    // ARMED WITH THE COMPARATOR, never independently. The mirror publishes on
+    // EVERY append that yields a delta — including the derived
+    // `attempt.process.started`/`.exited` pair, which carries nothing the
+    // legacy join reads — so each publish drives a full `_rejoin()` and a
+    // `notifier.push`, the same signal `repush()` exists to send. That is a
+    // real mount-frontier evaluation cadence the station did not have before
+    // this cut, so it is honest only while the dual read is armed at all:
+    // under `off` the bridge does not subscribe, and the push cadence is
+    // byte-identical to pre-cut mainline. (The "one push per real change"
+    // claim holds for the SESSION-fact deltas; the process-lifecycle deltas
+    // are extra pushes whose join is equal to the previous one, which is the
+    // cost `observe` pays and `off` does not.)
+    if (_dualRead?.armed ?? false) {
+      _removeHeadListener = _onHeadChanges?.call((_) => _push(_rejoin()));
+    }
     // The step axis's own re-join, through the SAME funnel and on the same
-    // terms: a P2 fact lands promptly, and it is still one push per real
-    // change. Two mirrors, one pipeline — the derailment invariant counts
-    // SUBSCRIPTIONS INTO THE SNAPSHOT PIPELINES, and neither mirror is one.
-    _removeStepListener = _onStepChanges?.call((_) => _push(_rejoin()));
+    // terms, armed on the same condition. Two mirrors, one pipeline — the
+    // derailment invariant counts SUBSCRIPTIONS INTO THE SNAPSHOT PIPELINES,
+    // and neither mirror is one.
+    if (_stepDualRead?.armed ?? false) {
+      _removeStepListener = _onStepChanges?.call((_) => _push(_rejoin()));
+    }
   }
 
   /// Recomputes the join from the latest of all three inputs, taking the
@@ -345,10 +361,15 @@ class StationJoinBridge {
     // `trajCursor` entries and the join splices them, one writer for the map.
     if (steps != null) {
       final cursors = stepDualRead?.observe(sessions, steps);
-      cursors?.forEach((key, trajCursor) {
+      cursors?.forEach((key, overlay) {
         final projection = sessions[key];
         if (projection == null) return;
-        sessions[key] = projection.copyWith(trajCursor: trajCursor);
+        // BOTH halves or neither: the ladder views come from the same rows as
+        // the cursor, so a projection never carries one without the other.
+        sessions[key] = projection.copyWith(
+          trajCursor: overlay.cursor,
+          trajStepViews: overlay.views,
+        );
       });
     }
     return JoinedSnapshot(

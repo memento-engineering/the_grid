@@ -515,6 +515,34 @@ class TrajectoryHarness {
         return;
       }
 
+      // THE STALE-FOLD REFUSAL (cut-wiring C0, r12) — before the claim,
+      // because a boot that will not run must not advance the fence.
+      //
+      // The wave-1 cut widened `proj_session_head`, and the migration is a
+      // named, QUIESCED operator step (`traj replay`), never a boot-time
+      // auto-migrate: the reshape DROPs and rebuilds the projection, which is
+      // safe only with no writer running. But the boot seed reads `SELECT *`
+      // and `SessionHeadRow.fromSqlRow` nulls absent columns, so an
+      // un-reshaped home SEEDS CLEAN and reads `live` — and then every single
+      // terminal append dies inside its transaction on an unknown column,
+      // rolls back whole, and lands as a counted drop behind a rate-limited
+      // flare. The trajectory is dead for that home and nothing says why.
+      //
+      // So: fail CLOSED and LOUD. The harness refuses the live arm, the
+      // station runs legacy-only exactly as it does for any other degraded
+      // boot, and the cause names the operator action.
+      if (await sessionHeadProjectionNeedsReshape(db)) {
+        _degrade(
+          'proj_session_head predates the wave-1 cut shape (missing '
+          '${projSessionHeadCutColumns.join(', ')}) — the trajectory refuses '
+          'to arm rather than drop every terminal append on an unknown '
+          'column. Run the QUIESCED migration first: `traj replay` (station '
+          'down), which reshapes the projection and rebuilds it from the log.',
+        );
+        await _closeDbQuietly();
+        return;
+      }
+
       final claim = await appender.claimEpoch(
         pid: _identity.pid,
         pgid: _identity.pgid,

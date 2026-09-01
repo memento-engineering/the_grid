@@ -397,6 +397,12 @@ CircuitCursor effectiveStepCursor(
     sessionId: session.sessionId ?? '',
     legacy: beadCursor ?? legacyStepCursorOf(session),
     traj: traj,
+    // THE LADDER RIDES THE PROJECTION (r12): the bridge splices
+    // `trajStepViews` from the same rows as `trajCursor`, so a comparison
+    // raised HERE carries the same round/step-round/incarnation/supersedes
+    // evidence a comparator-site one does. Omitting it left all four null at
+    // every consumer site — the exact fields a step-axis triage reads.
+    collapsed: session.trajStepViews,
   ).cursor;
 }
 
@@ -423,7 +429,12 @@ class StepLagTracker {
   /// The tracker's key for one node — session id and step path, because the
   /// same path under two sessions is two independent lags.
   static String keyFor(String sessionId, String stepPath) =>
-      '$sessionId $stepPath';
+      // The escape, NEVER a literal NUL: a raw U+0000 in Dart source makes
+      // `file` report the whole file as binary data and makes plain `grep`
+      // return nothing for it, blinding every review, sweep and structural
+      // guard test in this repo that greps sources. The string value is
+      // identical.
+      '$sessionId\u0000$stepPath';
 
   /// Observes one lagging node at [now]; returns true exactly ONCE, on the
   /// pass where the entry earns its escalation.

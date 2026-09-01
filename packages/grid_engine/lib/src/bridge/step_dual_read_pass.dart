@@ -18,12 +18,30 @@
 /// rather than a different code path.
 library;
 
+import 'package:meta/meta.dart';
+
 import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
 import '../domain/step_cursor_read.dart';
 import '../domain/trajectory_views.dart';
 import '../sdk/cursor.dart';
 import 'dual_read_pass.dart' show DualReadFlareSink;
+
+/// ONE session's step-axis overlay, as the pass hands it to the join.
+///
+/// Two halves because the consumers need both: [cursor] is the STATE the merge
+/// serves, [views] is the collapsed P2 row behind each node — the
+/// round/step-round/incarnation/supersedes ladder a consumer-site
+/// `StepNodeComparison` reports. They are minted from the SAME rows in the
+/// same pass, so a projection can never carry a cursor whose ladder came from
+/// a different read.
+@immutable
+final class StepCursorOverlay {
+  const StepCursorOverlay({required this.cursor, required this.views});
+
+  final CircuitCursor cursor;
+  final Map<String, StepCursorView> views;
+}
 
 /// Subscribes to the P2 mirror's published snapshots and returns the remover
 /// (house convention) — the step axis's own re-join seam, spelled as a plain
@@ -68,15 +86,23 @@ class DualReadStepObserver {
   bool get stepAxisEngaged =>
       _mode == DualReadMode.primary && !accounting.overlayDisengaged;
 
+  /// Is the comparator ARMED at all? False under [DualReadMode.off] — the
+  /// rollback posture, where the pass does not run and the bridge does not
+  /// even subscribe to the P2 mirror. See [DualReadMode.off].
+  bool get armed => _mode != DualReadMode.off;
+
   /// ONE comparator pass over [sessions] against [snapshot].
   ///
-  /// Returns the `trajCursor` entries the join should splice, keyed by the
-  /// sessions map's own key — empty under `observe`, empty while the boot is
-  /// disengaged, and empty when the snapshot is not `live`.
-  Map<String, CircuitCursor> observe(
+  /// Returns the step overlay entries the join should splice, keyed by the
+  /// sessions map's own key — empty under `off` and `observe`, empty while the
+  /// boot is disengaged, and empty when the snapshot is not `live`.
+  Map<String, StepCursorOverlay> observe(
     Map<String, SessionProjection> sessions,
     TrajectoryStepSnapshot snapshot,
   ) {
+    // THE ROLLBACK POSTURE: `off` runs no pass at all — see the session pass's
+    // twin guard and [DualReadMode.off].
+    if (!armed) return const <String, StepCursorOverlay>{};
     accounting.beginStepPass();
     if (snapshot.health != TrajectorySnapshotHealth.live) {
       // Health non-`live` DISENGAGES the axis for the boot, exactly as on the
@@ -86,12 +112,12 @@ class DualReadStepObserver {
       accounting.overlayDisengaged = true;
       accounting.stepFallbacks += sessions.length;
       _stepLag.retainOnly(const <String>{});
-      return const <String, CircuitCursor>{};
+      return const <String, StepCursorOverlay>{};
     }
     final engaged = stepAxisEngaged;
     final now = _clock();
     final lagging = <String>{};
-    final cursors = <String, CircuitCursor>{};
+    final cursors = <String, StepCursorOverlay>{};
 
     for (final entry in sessions.entries) {
       final legacy = entry.value;
@@ -130,8 +156,13 @@ class DualReadStepObserver {
         // What the JOIN splices is P2's OWN cursor, not the merge's output:
         // the merge rules belong to the consumer's `effectiveStepCursor`, so
         // there is exactly one implementation of them and a projection never
-        // carries a pre-merged value some other site would merge again.
-        cursors[entry.key] = trajCursorOf(rows);
+        // carries a pre-merged value some other site would merge again. The
+        // COLLAPSED rows ride along unchanged — same rows, same pass — so the
+        // consumer's own merge reports the same ladder this one did.
+        cursors[entry.key] = StepCursorOverlay(
+          cursor: trajCursorOf(rows),
+          views: collapsed,
+        );
         accounting.stepCursorsServed += 1;
       }
     }

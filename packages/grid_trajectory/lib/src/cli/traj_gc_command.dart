@@ -120,10 +120,13 @@ Future<int> runTrajGc({
       await db.close();
     }
   } on Object catch (error) {
+    // A one-shot operator verb decorating its error line with the remedy —
+    // the HINT predicate, deliberately not the latching classification (see
+    // `readsAsPrivilegeDenial`): a wrong guess here costs one sentence.
     writeErr(
       'traj gc: $error'
-      '${isPrivilegeDenied(error) ? ' — the gridboot credential is missing '
-                'GRANT ALL ON *.*; re-seed it per §4 step 1b' : ''}',
+      '${readsAsPrivilegeDenial(error) ? ' — the gridboot credential is '
+                'missing GRANT ALL ON *.*; re-seed it per §4 step 1b' : ''}',
     );
     return 1;
   }

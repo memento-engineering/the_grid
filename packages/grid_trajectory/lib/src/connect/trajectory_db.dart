@@ -52,17 +52,44 @@ bool isUniqueViolationOn(Object error, String constraint) =>
 
 /// True when [error] is the server refusing on PRIVILEGE (tg-3o6b).
 ///
-/// The live shape is a 1105 reading `command denied to user 'trajectory'@'%'`
-/// — dolt carries a denied `CALL DOLT_GC()` on its unknown-error code, so the
-/// code alone cannot discriminate and the message is part of the predicate.
+/// **CODES ONLY — the message is deliberately NOT part of the predicate
+/// (r12).** A denial answer LATCHES at its one caller: the gc cadence stops
+/// for the whole process lifetime on a single match. A predicate that can
+/// latch must be decidable from the error CODE, because a message is not a
+/// contract — dolt carries both a denied `CALL` and a commit-time unique
+/// violation on [sqlErrUnknownError], so matching the bare word "denied"
+/// inside a 1105 let any unrelated 1105 whose text happened to contain it
+/// disable reclamation forever, the working set then growing unbounded until
+/// an operator noticed.
+///
+/// The cost is stated rather than hidden: dolt's own denied-`CALL` shape is a
+/// 1105 and therefore no longer lands in this class. It falls to the ordinary
+/// flare-and-rearm loop instead — a rate-limited `gcFailed` per cadence rather
+/// than one `gcDisabled` — which is the SAFE direction for a wrong answer
+/// (retrying a refused CALL costs a round trip; latching off a misclassified
+/// one costs the database).
+///
 /// This is a POSTURE, not a failure: the scoped service credential is granted
 /// `trajectory.*` only, by ratified design, and a caller that sees this stops
 /// asking rather than retrying.
 bool isPrivilegeDenied(Object error) =>
     error is MySQLServerException &&
-    (error.errorCode == sqlErrUnknownError ||
-        sqlErrAccessDenied.contains(error.errorCode)) &&
-    error.message.toLowerCase().contains('denied');
+    sqlErrAccessDenied.contains(error.errorCode);
+
+/// A HINT, not a classification: does [error] READ like a privilege denial?
+///
+/// The message heuristic [isPrivilegeDenied] refuses to carry lives here
+/// instead, where it can only decorate a one-shot operator verb's error line
+/// with the remedy — the observed dolt shape is a 1105 saying
+/// `command denied to user '<user>'@'%'`, and telling an operator about the
+/// missing GRANT is worth a guess. NEVER latch a cadence, disable a
+/// capability, or branch a control flow on this: guessing wrong here costs one
+/// misleading sentence, and guessing wrong there costs the database.
+bool readsAsPrivilegeDenial(Object error) =>
+    isPrivilegeDenied(error) ||
+    (error is MySQLServerException &&
+        error.errorCode == sqlErrUnknownError &&
+        error.message.toLowerCase().contains('command denied'));
 
 /// One statement's outcome, decoupled from the driver so unit tests can
 /// script every §5 branch without a socket.

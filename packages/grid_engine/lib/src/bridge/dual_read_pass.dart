@@ -123,6 +123,13 @@ class DualReadSessionObserver {
   bool get overlayEngaged =>
       _mode == DualReadMode.primary && !accounting.overlayDisengaged;
 
+  /// Is the comparator ARMED at all? False under [DualReadMode.off], which is
+  /// the rollback posture: no pass, no counters, no flares, no heal requests,
+  /// no durable notes — and, because the bridge reads this before it
+  /// subscribes, no mirror-driven re-join cadence either. `off` is the one
+  /// posture that is byte-identical to pre-cut mainline.
+  bool get armed => _mode != DualReadMode.off;
+
   /// ONE comparator pass over [sessions] (the join's map, keyed by the LEGACY
   /// work-bead key, which for a retired round is the `#rN`/`#void-` mutation)
   /// against [snapshot].
@@ -136,6 +143,11 @@ class DualReadSessionObserver {
     TrajectoryHeadSnapshot snapshot,
   ) {
     if (_finished) return const <String, SessionProjection>{};
+    // THE ROLLBACK POSTURE: `off` runs no pass at all. Not "runs and serves
+    // nothing" — nothing observable happens, so a boot under `off` writes the
+    // same records, pushes the same joins and flares the same flares as
+    // pre-cut mainline.
+    if (!armed) return const <String, SessionProjection>{};
     accounting.beginPass();
     _noteHealth(snapshot.health);
     if (snapshot.health != TrajectorySnapshotHealth.live) {
@@ -337,6 +349,7 @@ class DualReadSessionObserver {
   /// round contains terminal sessions by definition.
   void finish(TrajectoryHeadSnapshot snapshot) {
     if (_finished) return;
+    if (!armed) return;
     _finished = true;
     final sessionId = _lastTerminalSessionId;
     if (sessionId == null) return;
@@ -383,10 +396,13 @@ class DualReadSessionObserver {
         }
         final healer = _healer;
         if (healer == null) {
+          // NO healer on this boot: no `traj_terminal_guard` was ever read, so
+          // the durable evidence must not assert a guard fact nobody observed.
+          // Its own outcome member, counted and permanently lag-classed.
           accounting.healsSkipped += 1;
           _terminalLag.noteHealAttempted(
             sessionId,
-            TerminalReconcileOutcome.skippedGuard,
+            TerminalReconcileOutcome.skippedNoHealer,
           );
           return;
         }
@@ -424,6 +440,7 @@ class DualReadSessionObserver {
         accounting.healsAppended += 1;
       case TerminalReconcileOutcome.skippedGuard:
       case TerminalReconcileOutcome.skippedNoAttemptId:
+      case TerminalReconcileOutcome.skippedNoHealer:
         accounting.healsSkipped += 1;
       case TerminalReconcileOutcome.failed:
         accounting.healsFailed += 1;

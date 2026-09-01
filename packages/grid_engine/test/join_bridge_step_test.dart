@@ -25,6 +25,8 @@ final class _Row implements StepCursorView {
     required this.stepState,
     this.sessionId = 'tgdog-s1',
     this.stepRound = 0,
+    this.incarnation = 0,
+    this.supersededByStepRound,
   });
 
   @override
@@ -38,11 +40,11 @@ final class _Row implements StepCursorView {
   @override
   final String stepState;
   @override
-  int get incarnation => 0;
+  final int incarnation;
   @override
   String? get attemptId => null;
   @override
-  int? get supersededByStepRound => null;
+  final int? supersededByStepRound;
   @override
   DateTime? get cooldownUntil => null;
   @override
@@ -185,6 +187,55 @@ void main() {
       expect(session.trajCursor!['build']!.state, StepState.complete);
       // The molecule attachment the join made just before is untouched.
       expect(session.moleculeBeads, hasLength(1));
+    });
+
+    test('PRIMARY also fills trajStepViews — the LADDER a consumer-site '
+        'comparison reports (r12)', () {
+      // `trajCursor` carries only the STATE. Without the collapsed views on
+      // the projection, `effectiveStepCursor` called `mergeStepCursor` with no
+      // `collapsed` map and every comparison raised at a CONSUMER site
+      // reported round/stepRound/incarnation/supersededByStepRound null —
+      // exactly the evidence a step-axis triage needs.
+      final bridge = bridgeWith(
+        DualReadMode.primary,
+        _StepSnapshot([
+          _Row(
+            stepPath: 'build',
+            stepState: 'complete',
+            stepRound: 2,
+            incarnation: 3,
+            supersededByStepRound: 4,
+          ),
+        ]),
+      );
+      final session = bridge.latest.sessionsByWorkBead['tg-1']!;
+      final view = session.trajStepViews['build']!;
+      expect(view.stepRound, 2);
+      expect(view.incarnation, 3);
+      expect(view.supersededByStepRound, 4);
+      // And that is what a consumer-site merge — the body of
+      // `effectiveStepCursor` — now reports.
+      final node = mergeStepCursor(
+        sessionId: session.sessionId!,
+        legacy: legacyStepCursorOf(session),
+        traj: session.trajCursor,
+        collapsed: session.trajStepViews,
+      ).nodes.single;
+      expect(node.stepPath, 'build');
+      expect(node.stepRound, 2);
+      expect(node.incarnation, 3);
+      expect(node.supersededByStepRound, 4);
+    });
+
+    test('OBSERVE leaves trajStepViews EMPTY, with trajCursor null — both '
+        'halves or neither', () {
+      final bridge = bridgeWith(
+        DualReadMode.observe,
+        _StepSnapshot([_Row(stepPath: 'build', stepState: 'running')]),
+      );
+      final session = bridge.latest.sessionsByWorkBead['tg-1']!;
+      expect(session.trajCursor, isNull);
+      expect(session.trajStepViews, isEmpty);
     });
 
     test('a SIBLING session\'s rows never reach this projection', () {

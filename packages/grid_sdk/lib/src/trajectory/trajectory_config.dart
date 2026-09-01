@@ -64,17 +64,47 @@ final class TrajectoryConfig {
 
   final TrajectoryConfigMode mode;
 
-  /// THE DUAL-READ POSTURE (cut-wiring C2/C3).
+  /// THE DUAL-READ POSTURE (cut-wiring C2/C3), stated per posture so the
+  /// rollback claim is honest about WRITES as well as decisions.
   ///
-  /// [DualReadMode.observe] — wave 1's default and C2's whole scope: the
-  /// comparator runs, classifies, flares divergences and writes the durable
-  /// round summaries, and DECISIONS STAY LEGACY. [DualReadMode.primary] is
-  /// C3's flip, where the certified overlay is actually served; the default
-  /// stays `observe` even in C3's PR, and the flip is a separable one-line
-  /// commit attached to C2's gate evidence.
+  /// [DualReadMode.off] — THE ROLLBACK. Byte-identical to pre-cut mainline:
+  /// no comparator pass on either axis or in the restart reconciler, no mirror
+  /// subscriptions on the join bridge (so no extra `notifier.push` and no new
+  /// mount-frontier evaluation cadence), and NONE of the new observer appends.
   ///
-  /// Rollback is this one line either way, and it is instant — wave 1 retires
-  /// nothing, so legacy stays fully written and authoritative underneath.
+  /// [DualReadMode.observe] — wave 1's default and C2's whole scope, and the
+  /// posture the soak runs in. DECISIONS STAY LEGACY, but this is NOT a
+  /// read-only posture and must not be described as one. Armed here:
+  ///   * the comparator on both axes, its flares, and the durable
+  ///     `dual-read-round-summary` note per session terminal + one per boot;
+  ///   * the `terminal-reconcile` HEAL append — reconstructed testimony for a
+  ///     head whose terminal record dropped;
+  ///   * the restart reconciler's teardown-replay observer append;
+  ///   * the P1/P2 mirror subscriptions, which re-join and push on every
+  ///     append that yields a delta.
+  /// The first two permanently mark `proj_session_head.terminal_provenance`
+  /// as `reconstructed`, which excludes that head from settlement until an
+  /// observed terminal settles it. That is the designed C2 scope — it is what
+  /// keeps a replayed teardown from leaving an unhealable open head — but it
+  /// is a change to the LOG, so `observe` is not the rollback; `off` is.
+  ///
+  /// [DualReadMode.primary] — C3's flip, where the certified overlay is
+  /// actually served. The default stays `observe` even in C3's PR, and the
+  /// flip is a separable one-line commit attached to C2's gate evidence.
+  ///
+  /// Rollback is this one line at any posture, and it is instant — wave 1
+  /// retires nothing, so legacy stays fully written and authoritative
+  /// underneath whatever this says.
+  ///
+  /// **OPERATOR RUNBOOK — arming wave 1 on an EXISTING grid home.** The cut
+  /// widened `proj_session_head`, and the migration is a named quiesced step,
+  /// never a boot-time auto-migrate. On a home provisioned before this cut the
+  /// harness REFUSES the live arm (mode `degraded`, cause naming the missing
+  /// columns) rather than dropping every terminal append on an unknown column.
+  /// The fix, with the station DOWN: `traj replay` — it reshapes the
+  /// projection and rebuilds it from the log, stamping the bumped
+  /// `fold_version`. Then arm normally. A fresh home needs none of this: the
+  /// schema bootstrap creates the cut shape.
   final DualReadMode dualRead;
 
   /// The service tick's interval (§1.2 step 2; Stage-0 default 30 s).

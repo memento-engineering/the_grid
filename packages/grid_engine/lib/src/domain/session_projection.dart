@@ -2,6 +2,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/cursor.dart';
+import 'trajectory_views.dart';
 
 part 'session_projection.freezed.dart';
 
@@ -111,6 +112,21 @@ abstract class SessionProjection with _$SessionProjection {
     /// (the per-node P2-miss rule, monotone no-demotion, the never-creates
     /// rule) live in `step_cursor_read.dart` and are what make it safe.
     CircuitCursor? trajCursor,
+
+    /// THE LADDER EVIDENCE behind [trajCursor] — this session's collapsed P2
+    /// rows, keyed by `step_path`, spliced by the same bridge writer and under
+    /// exactly the same engagement rule.
+    ///
+    /// [trajCursor] carries only the STATE each node resolved to;
+    /// `round`/`step_round`/`incarnation`/`superseded_by_step_round` live
+    /// here. `effectiveStepCursor` hands it to `mergeStepCursor` as
+    /// `collapsed`, so a `StepNodeComparison` raised at a CONSUMER site
+    /// carries the same incarnation evidence a comparator-site one does —
+    /// without it every consumer-site comparison reports those four fields
+    /// null, which is exactly the triage evidence C4 says lands there.
+    /// Empty whenever [trajCursor] is null.
+    @Default(<String, StepCursorView>{})
+    Map<String, StepCursorView> trajStepViews,
 
     /// The per-node `grid.result.*` payloads, threaded down pull-free so a
     /// `route` step reads its siblings' grades — D-5. Keyed by `nodePath`; empty

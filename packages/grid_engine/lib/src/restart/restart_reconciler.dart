@@ -769,7 +769,15 @@ class RestartReconciler {
     // It is an OBSERVER APPEND — a new record ABOUT a bd write that already
     // happens today. The bd write itself is byte-identical, so wave 1's
     // zero-bd-write-changes invariant is untouched.
-    if (closed) {
+    //
+    // POSTURE (r12): it is a NEW WRITE all the same, so it rides the dual
+    // read's arming. `off` is the rollback and must be byte-identical to
+    // pre-cut mainline on the LOG as well as on decisions — no reconstructed
+    // close, no permanent `terminal_provenance` mark. `observe` arms it,
+    // because a teardown replay that left a permanently open head would make
+    // the C2/C3 zero-divergence gates unsatisfiable, which is the whole reason
+    // this append exists.
+    if (closed && _dualReadMode != DualReadMode.off) {
       if (recoveredAttemptId == null) {
         // NO FABRICATED ATTEMPT ID. A missing record is a visible lag; a
         // minted-id record is an immutable lie `revert` cannot remove and
@@ -1252,6 +1260,10 @@ class RestartReconciler {
     Map<String, int> beadsPerKey,
   ) {
     const none = <String, SessionProjection>{};
+    // THE ROLLBACK POSTURE: `off` runs no comparator pass here either — the
+    // reconciler's half and the bridge's half arm together, or the two readers
+    // would report different truths for one boot.
+    if (_dualReadMode == DualReadMode.off) return none;
     final accounting = _dualRead;
     final snapshot = _headSnapshot?.call();
     if (accounting == null || snapshot == null) return none;

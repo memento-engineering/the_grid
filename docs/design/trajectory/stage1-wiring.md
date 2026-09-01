@@ -562,11 +562,33 @@ dart run lunar:lunar up --grid-home "$(pwd)" --trajectory      # observe-only fi
 # banner shows: trajectory: LIVE epoch=1 …
 ```
 
+**BEFORE THE FIRST WAVE-1 ARM ON AN EXISTING HOME — run the quiesced migration.**
+The cut widened `proj_session_head` (`terminal_provenance`, `unknown_reason`), and the
+migration is a NAMED OPERATOR STEP, never a boot-time auto-migrate: it DROPs and rebuilds
+the projection, which is safe only with no writer running. With the station DOWN:
+
+```bash
+dart run lunar:lunar traj replay --state-workspace "$(pwd)"   # reshape + rebuild + stamp
+```
+
+A home that skips it does not fail silently: `TrajectoryHarness.start()` probes the
+projection's shape BEFORE it claims an epoch and REFUSES the live arm — mode `degraded`,
+one `trajectory.degraded` flare, and a cause naming the missing columns and this command.
+The station runs legacy-only meanwhile, exactly as for any other degraded boot. (Without
+that refusal the boot seed's `SELECT *` succeeds, health reads `live`, and every terminal
+append then dies on an unknown column inside its own transaction — a dead trajectory whose
+only signal is a rate-limited drop counter.) A freshly provisioned home needs none of
+this: the schema bootstrap creates the cut shape.
+
 **Reclamation on a scoped-grant home (tg-3o6b):** `DOLT_GC` needs SERVER-level privilege
 and step 2.3 grants the service `trajectory.*` ONLY — the boundary wins, so on these
-homes gc is **operator-run**: the harness disables its cadence after one
-`trajectory.gcDisabled` flare and the operator runs `traj gc` (the gridboot credential)
-when growth warrants it. The service grant is never widened to make the cadence work.
+homes gc is **operator-run**: the operator runs `traj gc` (the gridboot credential) when
+growth warrants it, and the service grant is never widened to make the cadence work. The
+harness's own cadence latches OFF (one `trajectory.gcDisabled` flare, never re-armed) only
+on an unambiguous ACCESS-DENIED code; dolt answers a denied `CALL` on its catch-all 1105,
+which the harness deliberately does NOT latch on — a predicate that disables reclamation
+for a process lifetime may not be decided by a message substring, so that shape stays in
+the ordinary rate-limited `trajectory.gcFailed` retry loop instead.
 
 **Reconnect rule (r2, minor 15):** the harness resolves the listener at build via
 `resolveDoltServerListener` — and **re-resolves it on every reconnect attempt**. bd

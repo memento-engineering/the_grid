@@ -646,11 +646,18 @@ void main() {
       _Harness h, {
       required TrajectoryProvenance provenance,
       String recordId = '01RECONSTRUCTED0000000001',
+      String? settledBy,
+      String? resolvesRecordId,
     }) => h.db.on(
       'FROM traj_terminal_guard g JOIN trajectory t',
       result: SqlResult(
         rows: [
-          {'record_id': recordId, 'provenance': provenance.wire},
+          {
+            'record_id': recordId,
+            'provenance': provenance.wire,
+            'settled_by': settledBy,
+            'resolves_record_id': resolvesRecordId,
+          },
         ],
       ),
     );
@@ -828,9 +835,18 @@ void main() {
         final outcome = await h.appender.append(terminal());
 
         expect(outcome, isA<AppendCorruptionHalt>());
+        // THE REASON NAMES THE SHAPE THAT HAPPENED (r12). The pre-read was not
+        // "clean" here — it SAW the guard row and simply matched no branch, so
+        // control fell through to the insert by design. Blaming the serialized
+        // single-writer invariant would point an operator at the wrong
+        // failure; the halt reason is their only evidence.
+        final reason = (outcome as AppendCorruptionHalt).reason;
+        expect(reason, contains('two independent terminals'));
+        expect(reason, contains('01OBSERVEDTERMINAL00000001'));
         expect(
-          (outcome as AppendCorruptionHalt).reason,
-          contains('PK collision'),
+          reason,
+          isNot(contains('single-writer')),
+          reason: 'the serialization invariant did not break',
         );
         expect(h.appender.isHalted, isTrue);
         expect(
@@ -842,6 +858,143 @@ void main() {
         expect(h.db.matching('WHERE idem_key = :idem_key'), isEmpty);
       },
     );
+
+    // ── the at-least-once retry of a CONVERTED terminal (r12) ─────────────
+    //
+    // The conversion re-authors the record, and re-authoring MOVES the idem
+    // key: `terminal:<attempt>` becomes `terminal-resolve:<attempt>:<healed>`,
+    // so the key the caller computed is NEVER written. §5's at-least-once
+    // dedupe can re-present that append at any time, and before r12 the
+    // re-presentation found no idem match, passed a pre-read that matched no
+    // branch, and died on the guard PK — halting the harness and suppressing
+    // every later append. The cure is a DETERMINISTIC pre-read: the settled
+    // guard still names what was healed, so the retry re-derives the same
+    // settling envelope, the same idem key, and dedupes.
+    test('THE RETRY: a re-presented converted terminal DEDUPES on the settling '
+        'idem key — it never halts', () async {
+      // 1. The original: guard row carries reconstructed testimony, so this
+      //    observed terminal converts and lands in settling form.
+      final first = _Harness()
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(301);
+      scriptExistingTerminal(
+        first,
+        provenance: TrajectoryProvenance.reconstructed,
+      );
+      await first.claim();
+      final landed = await first.appender.append(terminal()) as Appended;
+      final settlingIdemKey = first.db
+          .matching('INSERT INTO trajectory (')
+          .single
+          .params!['idem_key'];
+
+      // 2. The re-presentation, against the guard state the first append left:
+      //    seq now points at the SETTLING record, `settled_by` names it, and
+      //    `resolves_record_id` still names the testimony it healed.
+      final retry = _Harness()
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(302);
+      scriptExistingTerminal(
+        retry,
+        provenance: TrajectoryProvenance.observed,
+        recordId: landed.recordId,
+        settledBy: landed.recordId,
+        resolvesRecordId: '01RECONSTRUCTED0000000001',
+      );
+      retry.db.on(
+        'WHERE idem_key = :idem_key',
+        result: SqlResult(
+          rows: [
+            {'record_id': landed.recordId},
+          ],
+        ),
+      );
+      // The guard PK would fire if the retry ever reached the insert — this
+      // rule is the trap that used to spring.
+      retry.db.on('INSERT INTO traj_terminal_guard', throwing: _duplicate);
+      await retry.claim();
+
+      final outcome = await retry.appender.append(terminal());
+
+      expect(outcome, isA<AppendDeduped>());
+      expect((outcome as AppendDeduped).recordId, landed.recordId);
+      expect(retry.appender.isHalted, isFalse);
+      expect(
+        retry.eventKinds,
+        isNot(contains(TrajectoryServiceEventKind.corruptionHalt)),
+      );
+      // No second row, and no guard contention: the pre-read answered it.
+      expect(retry.db.matching('INSERT INTO trajectory ('), isEmpty);
+      expect(retry.db.matching('INSERT INTO traj_terminal_guard'), isEmpty);
+      // DETERMINISM is the whole mechanism: the retry re-derived the SAME
+      // settling idem key the original wrote, which is why uq_idem has
+      // something to match.
+      expect(
+        retry.db
+            .matching('WHERE idem_key = :idem_key')
+            .single
+            .params!['idem_key'],
+        settlingIdemKey,
+      );
+    });
+
+    test('a NON-reconstructed terminal arriving after a settlement it did not '
+        'author is the corruption class, named for what it is', () async {
+      final h = _Harness()
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(303);
+      scriptExistingTerminal(
+        h,
+        provenance: TrajectoryProvenance.observed,
+        recordId: '01SETTLING000000000000001',
+        settledBy: '01SETTLING000000000000001',
+        resolvesRecordId: '01RECONSTRUCTED0000000001',
+      );
+      // No row carries the converted key: this is not a re-presentation.
+      h.db.on('WHERE idem_key = :idem_key');
+      await h.claim();
+
+      final outcome = await h.appender.append(terminal());
+
+      expect(outcome, isA<AppendCorruptionHalt>());
+      expect(
+        (outcome as AppendCorruptionHalt).reason,
+        contains('second independent terminal'),
+      );
+      expect(h.db.matching('INSERT INTO trajectory ('), isEmpty);
+    });
+
+    test('a RECONSTRUCTED heal re-presented against a settled guard still '
+        'yields — testimony never contends with what landed', () async {
+      final h = _Harness()
+        ..scriptClaimReads()
+        ..scriptFenceHeld()
+        ..scriptInsertSeq(304);
+      scriptExistingTerminal(
+        h,
+        provenance: TrajectoryProvenance.observed,
+        recordId: '01SETTLING000000000000001',
+        settledBy: '01SETTLING000000000000001',
+        resolvesRecordId: '01RECONSTRUCTED0000000001',
+      );
+      await h.claim();
+
+      final outcome = await h.appender.append(
+        terminal(
+          outcome: TerminalOutcome.unknown,
+          unknownReason: 'external-close',
+        ),
+        provenance: TrajectoryProvenance.reconstructed,
+        provenanceBasis: 'terminal-reconcile',
+      );
+
+      expect(outcome, isA<AppendRefusedTestimony>());
+      expect(h.appender.isHalted, isFalse);
+      expect(h.db.matching('INSERT INTO trajectory ('), isEmpty);
+    });
 
     test('a NON-terminal append never runs the pre-read at all', () async {
       final h = _Harness()

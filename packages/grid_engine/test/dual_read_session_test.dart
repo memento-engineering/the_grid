@@ -774,6 +774,21 @@ void main() {
       expect(observer.accounting.healsSkipped, 1);
       expect(observer.accounting.healsAppended, isZero);
       expect(sinks.divergences(), isEmpty);
+      // AND IT NEVER ESCALATES, however long the boot runs (r12). A skip is
+      // not a heal: nothing was appended, so there is no repair whose failure
+      // a divergence could be reporting. Before r12 `noteHealAttempted` armed
+      // the escalation for EVERY outcome, so the very next pass raised one.
+      for (var i = 0; i < 10; i++) {
+        now = now.add(const Duration(seconds: 60));
+        observer.observe(sessions, snapshot);
+      }
+      expect(sinks.divergences(), isEmpty);
+      expect(observer.accounting.healEscalations, isZero);
+      expect(
+        sinks.heals,
+        hasLength(1),
+        reason: 'and it does not re-ask on the same unchanged fact',
+      );
     });
 
     test('a head with NO attempt_id SKIPS the heal, counts it, and flares '
@@ -795,6 +810,132 @@ void main() {
       expect(sinks.flares.single.$1, kReconstructedTerminalSkippedFlare);
       expect(sinks.flares.single.$2['basis'], 'terminal-reconcile');
     });
+
+    test('GATE (a) IS SATISFIABLE: a head that predates process start is '
+        'PERMANENTLY lag-classed, never a divergence (r12)', () {
+      // The shape is ordinary — a session minted and voided/closed before
+      // `attempt.process.started` wrote `attempt_id`. Such a head can NEVER be
+      // healed (`AttemptTerminal.attemptId` is required and no id is ever
+      // minted here), so escalating it would make C2's "zero divergence-class
+      // events" gate unsatisfiable on any live board.
+      final sinks = _Sinks();
+      var now = DateTime.utc(2026, 8, 31, 14);
+      final observer = DualReadSessionObserver(
+        onFlare: sinks.flare,
+        clock: () => now,
+        healer: sinks.heal,
+      );
+      final sessions = _map([_legacy(isTerminal: true, completed: true)]);
+      final snapshot = _Snapshot([_Head(sessionId: 's1')]);
+      for (var i = 0; i < 12; i++) {
+        observer.observe(sessions, snapshot);
+        now = now.add(const Duration(seconds: 60));
+      }
+      expect(sinks.heals, isEmpty);
+      expect(sinks.divergences(), isEmpty);
+      expect(observer.accounting.divergences, isZero);
+      expect(observer.accounting.healEscalations, isZero);
+      // Counted, and counted ONCE — the flare is not a per-pass storm either.
+      expect(observer.accounting.healsSkipped, 1);
+      expect(
+        sinks.flares.where((f) => f.$1 == kReconstructedTerminalSkippedFlare),
+        hasLength(1),
+      );
+    });
+
+    test('NO HEALER WIRED is its own outcome — never `skippedGuard`, and '
+        'never an escalation (r12)', () {
+      // No healer means no `traj_terminal_guard` was ever read, so the durable
+      // round evidence must not report "the real record already landed".
+      final observer = TerminalLagTracker();
+      final now = DateTime.utc(2026, 8, 31, 14);
+      observer
+        ..observe('s1', now: now, appendQueued: false)
+        ..noteHealAttempted('s1', TerminalReconcileOutcome.skippedNoHealer);
+      for (var i = 0; i < 5; i++) {
+        expect(
+          observer.observe(
+            's1',
+            now: now.add(Duration(minutes: i + 5)),
+            appendQueued: false,
+          ),
+          TerminalLagAction.watch,
+        );
+      }
+    });
+
+    test('THE SPLIT, stated on the tracker: only a LANDED-or-FAILED attempt '
+        'arms escalation (r12)', () {
+      final now = DateTime.utc(2026, 8, 31, 14);
+      TerminalLagAction next(TerminalReconcileOutcome outcome) {
+        final tracker = TerminalLagTracker()
+          ..observe('s1', now: now, appendQueued: false)
+          ..noteHealAttempted('s1', outcome);
+        return tracker.observe(
+          's1',
+          now: now.add(const Duration(minutes: 5)),
+          appendQueued: false,
+        );
+      }
+
+      expect(
+        next(TerminalReconcileOutcome.appended),
+        TerminalLagAction.escalate,
+      );
+      expect(next(TerminalReconcileOutcome.failed), TerminalLagAction.escalate);
+      for (final skip in const [
+        TerminalReconcileOutcome.skippedGuard,
+        TerminalReconcileOutcome.skippedNoAttemptId,
+        TerminalReconcileOutcome.skippedNoHealer,
+      ]) {
+        expect(next(skip), TerminalLagAction.watch, reason: skip.name);
+      }
+    });
+  });
+
+  group('THE ROLLBACK POSTURE — dualRead: off (r12)', () {
+    test('the comparator does not run: no counters, no flares, no notes, no '
+        'heal requests', () {
+      final sinks = _Sinks();
+      var now = DateTime.utc(2026, 8, 31, 14);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.off,
+        onFlare: sinks.flare,
+        onRoundSummary: sinks.note,
+        clock: () => now,
+        healer: sinks.heal,
+      );
+      // A shape that would otherwise flare a divergence AND heal AND note.
+      final sessions = _map([_legacy(isTerminal: true, completed: true)]);
+      final snapshot = _Snapshot([_Head(sessionId: 's1', attemptId: 'att-1')]);
+      for (var i = 0; i < 4; i++) {
+        expect(observer.observe(sessions, snapshot), isEmpty);
+        now = now.add(const Duration(seconds: 91));
+      }
+      observer.finish(snapshot);
+
+      expect(observer.armed, isFalse);
+      expect(sinks.flares, isEmpty);
+      expect(sinks.notes, isEmpty);
+      expect(sinks.heals, isEmpty);
+      expect(observer.accounting.hits, isZero);
+      expect(observer.accounting.terminalLagObserved, isZero);
+      expect(observer.accounting.openLagEntries, isZero);
+    });
+
+    test(
+      'observe and primary are ARMED — `off` is the only disarmed posture',
+      () {
+        for (final mode in const [DualReadMode.observe, DualReadMode.primary]) {
+          expect(
+            DualReadSessionObserver(mode: mode).armed,
+            isTrue,
+            reason: mode.name,
+          );
+        }
+        expect(DualReadStepObserver(mode: DualReadMode.off).armed, isFalse);
+      },
+    );
   });
 
   group('the durable round evidence (§0.4)', () {

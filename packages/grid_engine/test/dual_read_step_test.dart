@@ -447,7 +447,7 @@ void main() {
           ),
         }, _StepSnapshot([_Row(stepPath: 'a', stepState: 'running')]));
         expect(served.keys, ['tg-9abc']);
-        expect(served['tg-9abc']!['a']!.state, StepState.running);
+        expect(served['tg-9abc']!.cursor['a']!.state, StepState.running);
         expect(o.accounting.stepCursorsServed, 1);
       },
     );
@@ -492,7 +492,7 @@ void main() {
         expect(o.accounting.stepDivergences, 0, reason: bead.name);
         expect(o.accounting.openStepLag, 1, reason: bead.name);
         // And what is SERVED is the bead's state — the window never demotes.
-        expect(served['tg-9abc']!['a']!.state, StepState.running);
+        expect(served['tg-9abc']!.cursor['a']!.state, StepState.running);
       }
       expect(flares, isEmpty);
     });
@@ -605,11 +605,17 @@ void main() {
     /// `effectiveStepCursor` — exactly the seam production uses.
     CircuitCursor consumerReads(
       SessionProjection legacy,
-      Map<String, CircuitCursor> served,
-    ) => effectiveStepCursor(
-      legacy.copyWith(trajCursor: served['tg-9abc']),
-      siteCursor: const <String, NodeCursor>{},
-    );
+      Map<String, StepCursorOverlay> served,
+    ) {
+      final overlay = served['tg-9abc'];
+      return effectiveStepCursor(
+        legacy.copyWith(
+          trajCursor: overlay?.cursor,
+          trajStepViews: overlay?.views ?? const <String, StepCursorView>{},
+        ),
+        siteCursor: const <String, NodeCursor>{},
+      );
+    }
 
     test('THE I-14 WALK: gate -> rearm -> resume never re-parks the node', () {
       final o = observer(mode: DualReadMode.primary);
@@ -659,7 +665,7 @@ void main() {
           steps: [_stepBead('a', state: StepState.failed, restartCount: 2)],
         ),
       }, _StepSnapshot([_Row(stepPath: 'a', stepState: 'failed')]));
-      expect(served['tg-9abc']!['a']!.state, StepState.failed);
+      expect(served['tg-9abc']!.cursor['a']!.state, StepState.failed);
       expect(o.accounting.stepDivergences, 0);
       // What the frontier reads for the breaker is the BEAD's count.
       final merged = consumerReads(
