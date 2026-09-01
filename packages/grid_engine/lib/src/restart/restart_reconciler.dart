@@ -453,11 +453,13 @@ class RestartReconciler {
     StationTrajectoryRecorder? recorder,
     TrajectoryHeadSnapshot Function()? headSnapshot,
     DualReadAccounting? dualReadAccounting,
+    DualReadMode dualReadMode = DualReadMode.observe,
     void Function(String name, Map<String, String> data)? onFlare,
   }) : assert(workRoot != null || workRoots.isNotEmpty),
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _headSnapshot = headSnapshot,
        _dualRead = dualReadAccounting,
+       _dualReadMode = dualReadMode,
        _onFlare = onFlare,
        _listWorktrees = listWorktrees,
        _reapWorktree = reapWorktree,
@@ -516,8 +518,16 @@ class RestartReconciler {
   final TrajectoryHeadSnapshot Function()? _headSnapshot;
 
   /// Shared with the bridge's observer so ONE boot has ONE set of counters —
-  /// the round summary must not report two different truths for one boot.
+  /// the round summary must not report two different truths for one boot. It
+  /// also carries the boot's OVERLAY DISENGAGE LATCH, which is why the two
+  /// readers can never disagree about whether this boot serves the fold.
   final DualReadAccounting? _dualRead;
+
+  /// The dual-read posture (cut-wiring C3). `primary` makes
+  /// [_projectOwnedSessions] serve the SAME overlay the join bridge serves —
+  /// one rule set, two readers, so a disposition cannot depend on which pass
+  /// asked. `observe` (the default) counts and serves pure legacy.
+  final DualReadMode _dualReadMode;
 
   final void Function(String name, Map<String, String> data)? _onFlare;
 
@@ -1209,7 +1219,9 @@ class RestartReconciler {
           (beadsPerKey[projection.workBeadId] ?? 0) + 1;
       out[projection.workBeadId] = projection;
     }
-    _observeDualRead(out, beadsPerKey);
+    // C3: the SAME overlay the join bridge serves, spliced by the caller of
+    // the comparison rather than inside it — one writer for this map too.
+    out.addAll(_observeDualRead(out, beadsPerKey));
     return out;
   }
 
@@ -1226,19 +1238,34 @@ class RestartReconciler {
   /// DETERMINISTIC. Everything else classifies exactly as it does in the
   /// bridge.
   ///
-  /// Read-only and non-fatal by construction: it counts and flares, and no
-  /// disposition anywhere in this pass consults it.
-  void _observeDualRead(
+  /// Under `observe` it is read-only and non-fatal by construction: it counts
+  /// and flares, and no disposition in this pass consults it. Under `primary`
+  /// (C3) it also RETURNS the overlay entries for the caller to splice — the
+  /// same `resolveSessionOverlay`, the same suppressors, the same boot latch.
+  ///
+  /// The `incumbentAdjudication` class NEVER serves an overlay: the legacy
+  /// winner there was chosen by map iteration order, so the projection the
+  /// fold would decorate is not a determinate row to begin with. Adjudicate
+  /// it, count it, serve pure legacy.
+  Map<String, SessionProjection> _observeDualRead(
     Map<String, SessionProjection> sessions,
     Map<String, int> beadsPerKey,
   ) {
+    const none = <String, SessionProjection>{};
     final accounting = _dualRead;
     final snapshot = _headSnapshot?.call();
-    if (accounting == null || snapshot == null) return;
+    if (accounting == null || snapshot == null) return none;
     if (snapshot.health != TrajectorySnapshotHealth.live) {
+      // The same boot-scoped latch the bridge sets, on the same shared object
+      // (§0.2): once either reader sees a non-`live` mirror, NEITHER serves
+      // the fold again this boot.
+      accounting.overlayDisengaged = true;
       accounting.fallbacks += sessions.length;
-      return;
+      return none;
     }
+    final engaged =
+        _dualReadMode == DualReadMode.primary && !accounting.overlayDisengaged;
+    final overlays = <String, SessionProjection>{};
     for (final entry in sessions.entries) {
       final legacy = entry.value;
       final sessionId = legacy.sessionId;
@@ -1260,8 +1287,10 @@ class RestartReconciler {
       final comparison = compareHeadToProjection(legacy, head);
       // ORDER-DEPENDENT INCUMBENT: more than one session bead landed on this
       // work-bead key, so `out[key] = projection` discarded some of them by
-      // iteration order. Any mismatch here is adjudicated, not counted.
+      // iteration order. Any mismatch here is adjudicated, not counted — and
+      // nothing is overlaid onto a projection the ledger picked arbitrarily.
       if ((beadsPerKey[entry.key] ?? 0) > 1) {
+        accounting.overlaysSuppressed += 1;
         if (comparison.classification == DualReadClass.match) continue;
         accounting.record(
           DualReadComparison(
@@ -1279,6 +1308,22 @@ class RestartReconciler {
         );
         continue;
       }
+      // THE OVERLAY (C3), resolved for every identity-matched head — counted
+      // always, served only under `primary` + an engaged boot.
+      final resolved = resolveSessionOverlay(legacy, head);
+      switch (resolved.outcome) {
+        case SessionOverlayOutcome.applied:
+          accounting.overlaysApplied += 1;
+          if (engaged) {
+            overlays[entry.key] = resolved.projection;
+            accounting.overlaysServed += 1;
+          }
+        case SessionOverlayOutcome.agreed:
+          break;
+        case SessionOverlayOutcome.suppressedReconstructed:
+        case SessionOverlayOutcome.suppressedDemotion:
+          accounting.overlaysSuppressed += 1;
+      }
       if (accounting.record(comparison) && comparison.isDivergence) {
         for (final mismatch in comparison.mismatches) {
           _onFlare?.call(kDualReadDivergenceFlare, {
@@ -1294,6 +1339,7 @@ class RestartReconciler {
         }
       }
     }
+    return overlays;
   }
 
   /// Reconciles a single [wt] against its OWNED [session] (null when the

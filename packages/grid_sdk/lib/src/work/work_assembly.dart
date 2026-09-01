@@ -572,11 +572,14 @@ Future<StationWorkRuntime> assembleStationWork({
   // reach them. One recorder, one queue, one appender: the sole-appender
   // invariant is threading, not convention.
   final recorder = trajectory.recorder;
-  // THE SESSION-AXIS DUAL READ (cut-wiring C2) — ONE accounting per boot,
+  // THE SESSION-AXIS DUAL READ (cut-wiring C2/C3) — ONE accounting per boot,
   // shared by the join bridge's comparator pass and the restart reconciler's,
   // because the durable round summary must not report two different truths for
-  // one boot. Under the default `observe` posture nothing here changes a
-  // decision: the comparator classifies, flares, and writes evidence.
+  // one boot, and because the OVERLAY DISENGAGE LATCH lives on it: a mirror
+  // that missed an append must stop being served by BOTH readers at once.
+  // Under the default `observe` posture nothing here changes a decision: the
+  // comparator classifies, flares, and writes evidence. `primary` (C3) serves
+  // the certified overlay from the same functions.
   final dualReadAccounting = DualReadAccounting();
   final dualRead = DualReadSessionObserver(
     mode: trajectoryConfig.dualRead,
@@ -593,6 +596,21 @@ Future<StationWorkRuntime> assembleStationWork({
     // what the wave-1 gates read.
     onRoundSummary: (sessionId, body) =>
         recorder.dualReadRoundSummaryNoted(sessionId: sessionId, body: body),
+    // THE APPEND SIDE OF THE SOAK GATE (C3): "zero drops" is not a fact any
+    // comparator can observe — a dropped append leaves a hole in the fold
+    // shaped exactly like a session that never happened — so the harness's own
+    // counters ride the same durable note, in the same round.
+    appendStats: () {
+      final status = trajectory.status;
+      return (
+        appended: status.appended,
+        deduped: status.deduped,
+        dropped: status.dropped,
+        suppressed: status.suppressed,
+        refusedTestimony: status.refusedTestimony,
+        queueDepth: status.queueDepth,
+      );
+    },
   );
   final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
@@ -759,6 +777,9 @@ Future<StationWorkRuntime> assembleStationWork({
     // `_projectOwnedSessions`' order-dependent winner can produce.
     headSnapshot: () => trajectory.sessionHeads,
     dualReadAccounting: dualReadAccounting,
+    // C3: the reconciler serves the SAME overlay under the SAME posture — a
+    // disposition must not depend on which pass asked for it.
+    dualReadMode: trajectoryConfig.dualRead,
     onFlare: transport?.flare,
     // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.

@@ -10,6 +10,14 @@
 /// function of (work, state, snapshot), and this observer is the third input's
 /// BOOKKEEPER, handed in like `onUnresolvedCrossLink`. A null observer is the
 /// offline default and changes nothing.
+///
+/// **C3 — what changed.** The pass now RESOLVES the overlay for every
+/// identity-matched head and RETURNS the entries that differ, keyed by the
+/// sessions map's own key. It still splices nothing itself: the JOIN applies
+/// them, so the map has exactly one writer and the observer stays a
+/// bookkeeper. Under `observe` the map is always empty and the resolution is
+/// pure accounting — which is what makes the observe window a forecast of the
+/// flip rather than a different code path.
 library;
 
 import '../domain/session_head_read.dart';
@@ -17,7 +25,8 @@ import '../domain/session_projection.dart';
 import '../domain/trajectory_views.dart';
 
 /// The emit-only flare sink shape the engine already uses everywhere else.
-typedef DualReadFlareSink = void Function(String name, Map<String, String> data);
+typedef DualReadFlareSink =
+    void Function(String name, Map<String, String> data);
 
 /// Emits one durable round-summary note (§0.4) — `AttemptNote` REQUIRES a
 /// `sessionId`, so the vehicle is always keyed to a real session: the session
@@ -50,6 +59,7 @@ class DualReadSessionObserver {
     TerminalReconcileHealer? healer,
     DualReadFlareSink? onFlare,
     DualReadSummarySink? onRoundSummary,
+    DualReadAppendStats Function()? appendStats,
     DualReadAccounting? accounting,
   }) : _mode = mode,
        _clock = clock ?? DateTime.now,
@@ -57,6 +67,7 @@ class DualReadSessionObserver {
        _healer = healer,
        _onFlare = onFlare,
        _onRoundSummary = onRoundSummary,
+       _appendStats = appendStats,
        accounting = accounting ?? DualReadAccounting();
 
   static bool _neverQueued(String _) => false;
@@ -73,6 +84,10 @@ class DualReadSessionObserver {
   final TerminalReconcileHealer? _healer;
   final DualReadFlareSink? _onFlare;
   final DualReadSummarySink? _onRoundSummary;
+
+  /// The harness's append counters, read at summary time (§0.4's "drops").
+  /// Null off-tree, and the summary simply omits the block.
+  final DualReadAppendStats Function()? _appendStats;
 
   /// The boot's counters — the round summary's payload and the soak gates'
   /// evidence.
@@ -93,37 +108,53 @@ class DualReadSessionObserver {
   /// The last terminal session of the boot — the boot-final note's vehicle.
   String? get lastTerminalSessionId => _lastTerminalSessionId;
 
+  /// THE POSTURE, as a served fact (C3): `primary` AND the boot has not
+  /// disengaged. A caller reads this rather than the mode, because a
+  /// `primary` boot that latched `compromised` serves legacy and must SAY so.
+  bool get overlayEngaged =>
+      _mode == DualReadMode.primary && !accounting.overlayDisengaged;
+
   /// ONE comparator pass over [sessions] (the join's map, keyed by the LEGACY
   /// work-bead key, which for a retired round is the `#rN`/`#void-` mutation)
   /// against [snapshot].
   ///
-  /// Decisions are untouched: under `observe` this only counts, and under
-  /// `primary` the overlay C3 serves is applied by the JOIN, never here.
-  void observe(
+  /// Returns THE OVERLAY ENTRIES the join should splice, keyed by the same map
+  /// key — empty under `observe`, empty while the boot is disengaged, and
+  /// empty on the pass where every head agrees with its projection. The pass
+  /// never mutates [sessions]: the join owns its map.
+  Map<String, SessionProjection> observe(
     Map<String, SessionProjection> sessions,
     TrajectoryHeadSnapshot snapshot,
   ) {
-    if (_finished) return;
+    if (_finished) return const <String, SessionProjection>{};
     accounting.beginPass();
     _noteHealth(snapshot.health);
-    _emitTerminalSummaries(sessions, snapshot);
     if (snapshot.health != TrajectorySnapshotHealth.live) {
       // Health non-`live` DISENGAGES the overlay for the boot (§0.2): every
       // session rides pure legacy — still fully written, still authoritative —
       // and every read counts as a fallback. No flares: the compromise itself
-      // already flared once, at the latch.
+      // already flared once, at the latch. The LATCH is what makes "for the
+      // boot" true rather than "for this pass": a mirror that missed one
+      // append never becomes trustworthy again, whatever its health reads
+      // later, and the reconciler reads the same latch off the same object.
+      accounting.overlayDisengaged = true;
       accounting.fallbacks += sessions.length;
       _terminalLag.retainOnly(const <String>{});
       _retirementLag.retainOnly(const <String>{});
-      return;
+      _emitTerminalSummaries(sessions, snapshot);
+      return const <String, SessionProjection>{};
     }
+    final engaged = overlayEngaged;
     final now = _clock();
     final matchedSessionIds = <String>{};
     final laggingTerminals = <String>{};
     final laggingRetirements = <String>{};
     final beadsToSentinel = <String>{};
+    final overlays = <String, SessionProjection>{};
+    final overlaidBeadByKey = <String, String>{};
 
-    for (final legacy in sessions.values) {
+    for (final entry in sessions.entries) {
+      final legacy = entry.value;
       final sessionId = legacy.sessionId;
       if (sessionId == null || sessionId.isEmpty) continue;
       // THE OVERLAY IDENTITY RULE (§0.3): the same-session lookup, never a
@@ -145,6 +176,28 @@ class DualReadSessionObserver {
       matchedSessionIds.add(sessionId);
       accounting.hits += 1;
       beadsToSentinel.add(head.workBeadId);
+
+      // THE OVERLAY (C3), resolved for EVERY identity-matched head before any
+      // classification branch — the two suppressors live inside
+      // `resolveSessionOverlay`, so a reconstructed head and a demoting one
+      // decline here for the same reason the comparator classes them
+      // `reconstructedTerminal` and `terminalLag` below. One decision, one
+      // function, no second copy of the rules.
+      final resolved = resolveSessionOverlay(legacy, head);
+      switch (resolved.outcome) {
+        case SessionOverlayOutcome.applied:
+          accounting.overlaysApplied += 1;
+          if (engaged) {
+            overlays[entry.key] = resolved.projection;
+            overlaidBeadByKey[entry.key] = head.workBeadId;
+            accounting.overlaysServed += 1;
+          }
+        case SessionOverlayOutcome.agreed:
+          break;
+        case SessionOverlayOutcome.suppressedReconstructed:
+        case SessionOverlayOutcome.suppressedDemotion:
+          accounting.overlaysSuppressed += 1;
+      }
 
       // RETIREMENT LAG precedes the terminal-lag read: the retire path closes
       // the bd bead and emits ONLY `roundRetired`, so between the re-key and
@@ -216,6 +269,19 @@ class DualReadSessionObserver {
     for (final workBeadId in beadsToSentinel) {
       final winner = snapshot.byWorkBead(workBeadId);
       if (winner is! SessionHeadCardinalityBreach) continue;
+      // THE BREACH RETRACTS THE SERVE (§0.2 partition case 2: "serve NO row").
+      // The identity rule already kept a sibling's terminal off this session,
+      // so what is left is narrower and still wrong to serve: the bead is
+      // genuinely double-mounted, which means the fold and the ledger disagree
+      // about how many sessions exist at all. Nothing about the four certified
+      // fields is trustworthy under that, so the whole bead falls back to
+      // legacy for the pass.
+      overlays.removeWhere((key, _) {
+        if (overlaidBeadByKey[key] != workBeadId) return false;
+        accounting.overlaysServed -= 1;
+        accounting.overlaysSuppressed += 1;
+        return true;
+      });
       _recordAndFlare(
         DualReadComparison(
           sessionId: (<String>[
@@ -246,6 +312,14 @@ class DualReadSessionObserver {
 
     _terminalLag.retainOnly(laggingTerminals);
     _retirementLag.retainOnly(laggingRetirements);
+    // THE NOTES RIDE THE END OF THE PASS, not its start (C3): `beginPass`
+    // zeroes the GAUGES, and the gauges are half of what a gate reads —
+    // `terminal_lag_open`, `miss_post_epoch`, `overlays_served`. A note
+    // emitted before the loop would carry a zeroed pass and report every
+    // round clean by construction, which is the same defect class r3 fixed
+    // for the winner rule: a gate that cannot fail is not a gate.
+    _emitTerminalSummaries(sessions, snapshot);
+    return overlays;
   }
 
   /// The clean-down fixpoint's boot-final summary (§0.4), riding the sessionId
@@ -430,6 +504,8 @@ class DualReadSessionObserver {
           snapshotVersion: snapshot.version,
           seededAt: snapshot.seededAt,
           scope: scope,
+          overlayEngaged: overlayEngaged,
+          appendStats: _appendStats?.call(),
         ),
       );
     } on Object {

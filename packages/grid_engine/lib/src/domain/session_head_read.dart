@@ -25,8 +25,11 @@
 ///     adjudicated, never counted as a divergence. A reconstructed outcome is
 ///     fold bookkeeping; it was never decision state.
 ///
-/// Wave 1 changes no decision: the overlay is built and certified here, and
-/// C3 is what serves it. Under `observe` this file only ever COUNTS.
+/// C2 built and certified the overlay here and served nothing; C3 SERVES it
+/// under `dualRead: primary` — the same functions, the same three rules, now
+/// spliced into the sessions map by the join. Under `observe` this file still
+/// only ever COUNTS, and the flip back is one config line because wave 1
+/// retires nothing: legacy stays fully written underneath either way.
 library;
 
 import 'dart:convert';
@@ -172,18 +175,97 @@ SessionHeadFacts legacyFactsOf(SessionProjection legacy) => SessionHeadFacts(
 SessionProjection sessionProjectionOverlay(
   SessionProjection legacy,
   SessionHeadView head,
+) => resolveSessionOverlay(legacy, head).projection;
+
+/// Why [resolveSessionOverlay] served what it served — the accounting axis C3
+/// needs and the reason a soak round can be read: "how many decisions did the
+/// fold actually change, and how many did a rule refuse?"
+enum SessionOverlayOutcome {
+  /// P1 won inside the certified field set and the served projection DIFFERS
+  /// from the legacy one. Under `primary` this is the entry the join splices.
+  applied,
+
+  /// Both sides already say the same thing on all four fields, so the overlay
+  /// is the identity: legacy is served, and the fold changed no decision.
+  /// The overwhelmingly common case, and the reason `primary` is quiet.
+  agreed,
+
+  /// THE RECONSTRUCTED SUPPRESSOR (r5/r7 — J8-B1, V1-B2): the head's terminal
+  /// is TESTIMONY, so pure legacy is served and the pair is adjudicated.
+  suppressedReconstructed,
+
+  /// MONOTONIC TERMINALITY (r3 — F-B4) refused a demotion: legacy says
+  /// terminal, P1 has not folded it yet. Pure legacy, and the comparator calls
+  /// it `terminalLag`.
+  suppressedDemotion,
+}
+
+/// One resolved overlay — the projection to serve plus WHY.
+@immutable
+final class SessionOverlayResult {
+  const SessionOverlayResult({required this.projection, required this.outcome});
+
+  /// What a decision reads. Identical to the legacy instance unless
+  /// [outcome] is [SessionOverlayOutcome.applied].
+  final SessionProjection projection;
+
+  final SessionOverlayOutcome outcome;
+
+  /// True when the served projection differs from the legacy base.
+  bool get changed => outcome == SessionOverlayOutcome.applied;
+
+  /// True when a RULE declined the merge — the two suppressor classes, which
+  /// are the ones a round summary must be able to count separately from plain
+  /// agreement.
+  bool get suppressed =>
+      outcome == SessionOverlayOutcome.suppressedReconstructed ||
+      outcome == SessionOverlayOutcome.suppressedDemotion;
+}
+
+/// THE OVERLAY, resolved — [sessionProjectionOverlay] plus the reason.
+///
+/// C3 serves this; C2 counted it. Both call the SAME function, so what the
+/// soak certified under `observe` is byte-identical to what `primary` serves —
+/// which is the entire point of running the observe window first.
+SessionOverlayResult resolveSessionOverlay(
+  SessionProjection legacy,
+  SessionHeadView head,
 ) {
   // THE RECONSTRUCTED SUPPRESSOR (r5/r7): pure legacy, adjudicated elsewhere.
   if (head.terminalProvenance == SessionHeadProvenance.reconstructed) {
-    return legacy;
+    return SessionOverlayResult(
+      projection: legacy,
+      outcome: SessionOverlayOutcome.suppressedReconstructed,
+    );
   }
   final facts = sessionHeadFactsOf(head);
-  if (demotesTerminalFact(legacy, facts)) return legacy;
-  return legacy.copyWith(
-    isTerminal: facts.isTerminal,
-    completed: facts.completed,
-    humanHeld: facts.humanHeld,
-    closedAt: facts.closedAt ?? legacy.closedAt,
+  if (demotesTerminalFact(legacy, facts)) {
+    return SessionOverlayResult(
+      projection: legacy,
+      outcome: SessionOverlayOutcome.suppressedDemotion,
+    );
+  }
+  final closedAt = facts.closedAt ?? legacy.closedAt;
+  if (facts.isTerminal == legacy.isTerminal &&
+      facts.completed == legacy.completed &&
+      facts.humanHeld == legacy.humanHeld &&
+      closedAt == legacy.closedAt) {
+    // The IDENTITY case, returned as the legacy INSTANCE rather than an equal
+    // copy: the join's map then holds the very object pure legacy would have
+    // held, so "primary changed nothing here" is provable by reference.
+    return SessionOverlayResult(
+      projection: legacy,
+      outcome: SessionOverlayOutcome.agreed,
+    );
+  }
+  return SessionOverlayResult(
+    projection: legacy.copyWith(
+      isTerminal: facts.isTerminal,
+      completed: facts.completed,
+      humanHeld: facts.humanHeld,
+      closedAt: closedAt,
+    ),
+    outcome: SessionOverlayOutcome.applied,
   );
 }
 
@@ -400,6 +482,21 @@ bool isRetiredWorkBeadKey(String workBeadKey) => workBeadKey.contains('#');
 
 // ── the accounting (§0.4's per-boot counters) ─────────────────────────────
 
+/// The harness's append counters, as the round summary reports them (§0.4's
+/// "drops" field, C3's soak-gate arithmetic).
+///
+/// A record rather than an import: `grid_engine` names no harness type, and
+/// the gate only ever reads these as numbers. `dropped > 0` disqualifies a
+/// round on its own — a dropped append is a fold hole no comparator can see.
+typedef DualReadAppendStats = ({
+  int appended,
+  int deduped,
+  int dropped,
+  int suppressed,
+  int refusedTestimony,
+  int queueDepth,
+});
+
 /// The per-boot dual-read counters — the durable round summary's payload.
 ///
 /// GAUGE vs ACCUMULATOR is a deliberate split, and the reason is the join's
@@ -422,6 +519,20 @@ class DualReadAccounting {
   /// Comparator passes run this boot.
   int passes = 0;
 
+  /// THE OVERLAY DISENGAGE LATCH (§0.2's wave-1 health semantics, C3).
+  ///
+  /// Any non-`live` snapshot health disengages the overlay FOR THE BOOT:
+  /// decisions ride pure legacy — still fully written, still authoritative,
+  /// because wave 1 retires nothing — with the loud flare the harness already
+  /// raised at the latch and this round-summary field.
+  ///
+  /// It lives on the ACCOUNTING because the accounting is the one per-boot
+  /// object both readers share: the bridge's comparator and the reconciler's
+  /// must never disagree about whether this boot is serving the fold.
+  /// Latched, never lifted — a health that recovers does not re-engage a boot
+  /// whose mirror already missed an append.
+  bool overlayDisengaged = false;
+
   // Gauges — the LAST pass's populations.
   int hits = 0;
   int missPostEpoch = 0;
@@ -433,6 +544,32 @@ class DualReadAccounting {
   int openRetirementLag = 0;
   int maxTerminalLagMs = 0;
   int maxRetirementLagMs = 0;
+
+  /// Identity-matched heads whose overlay CHANGED the projection this pass —
+  /// under `observe` the count of decisions `primary` WOULD have changed,
+  /// under `primary` the count it did. Same function on both sides, so the
+  /// observe window's number is the flip's forecast.
+  ///
+  /// **Read it beside [divergences], and expect them to move together.** The
+  /// overlay changes a projection exactly when the derived tuples disagree,
+  /// which is the comparator's definition of a divergence (the one exception
+  /// is a `closedAt`-only difference, which is outside the tuple). So a CLEAN
+  /// round under `primary` serves almost nothing, and that is the correct
+  /// reading rather than a wiring doubt: what the flip buys is a certified
+  /// carrier for wave 2, not different decisions. A round where this number
+  /// runs ahead of `divergences` by more than the `closedAt` cases is the
+  /// shape worth investigating.
+  int overlaysApplied = 0;
+
+  /// Of those, how many were actually spliced into the sessions map. Zero
+  /// under `observe`, zero while [overlayDisengaged], and equal to
+  /// [overlaysApplied] on a clean `primary` pass — the difference is exactly
+  /// the retracted-by-cardinality set.
+  int overlaysServed = 0;
+
+  /// Identity-matched heads a RULE declined to merge: the reconstructed
+  /// suppressor, the monotone-terminality guard, or a cardinality retraction.
+  int overlaysSuppressed = 0;
 
   // Accumulators — deduped events across the boot.
   int divergences = 0;
@@ -479,6 +616,9 @@ class DualReadAccounting {
     p1Orphan = 0;
     openTerminalLag = 0;
     openRetirementLag = 0;
+    overlaysApplied = 0;
+    overlaysServed = 0;
+    overlaysSuppressed = 0;
   }
 
   /// Folds one comparison into the counters, returning true when this was a
@@ -490,8 +630,7 @@ class DualReadAccounting {
       case DualReadClass.divergence:
         var first = false;
         for (final mismatch in comparison.mismatches) {
-          final key =
-              'divergence:${comparison.sessionId}:${mismatch.field}';
+          final key = 'divergence:${comparison.sessionId}:${mismatch.field}';
           if (noteEvent(key)) {
             first = true;
             divergences += 1;
@@ -543,6 +682,12 @@ class DualReadAccounting {
   /// The durable round summary's body (§0.4). JSON so `traj show` and the
   /// `/status` block read the SAME shape, and so a gate can diff two rounds
   /// mechanically rather than by eye.
+  ///
+  /// C3's soak gate reads FIVE numbers out of this and nothing else:
+  /// `divergences` = 0, `append_drops` = 0, `miss_post_epoch` = 0,
+  /// `terminal_lag_open` + `retirement_lag_open` = 0 at round end, and
+  /// `overlay_engaged` = true (a round that quietly rode legacy certifies
+  /// nothing about serving the fold).
   Map<String, Object?> toJson({
     required DualReadMode mode,
     required TrajectorySnapshotHealth health,
@@ -550,12 +695,20 @@ class DualReadAccounting {
     int? snapshotRows,
     DateTime? seededAt,
     String? scope,
+    bool overlayEngaged = false,
+    DualReadAppendStats? appendStats,
   }) => <String, Object?>{
     'channel': kDualReadRoundSummaryChannel,
     'axis': 'session',
     if (scope != null) 'scope': scope,
     'mode': mode.name,
     'health': health.name,
+    // WHAT THE ROUND ACTUALLY SERVED, never what it was configured to serve:
+    // `mode: primary` with `overlay_engaged: false` is a boot that disengaged
+    // on health, and reading the two together is how a gate tells a certified
+    // round from a silently-legacy one.
+    'overlay_engaged': overlayEngaged,
+    'overlay_disengaged_for_boot': overlayDisengaged,
     'snapshot_version': snapshotVersion,
     if (snapshotRows != null) 'snapshot_rows': snapshotRows,
     if (seededAt != null) 'seeded_at': seededAt.toUtc().toIso8601String(),
@@ -566,6 +719,9 @@ class DualReadAccounting {
     'null_started_at': nullStartedAt,
     'fallbacks': fallbacks,
     'p1_orphan': p1Orphan,
+    'overlays_applied': overlaysApplied,
+    'overlays_served': overlaysServed,
+    'overlays_suppressed': overlaysSuppressed,
     'divergences': divergences,
     'divergences_by_field': Map<String, int>.from(divergencesByField),
     'terminal_lag': terminalLagObserved,
@@ -584,6 +740,18 @@ class DualReadAccounting {
     'heals_failed': healsFailed,
     'heal_escalations': healEscalations,
     'health_transitions': List<String>.from(healthTransitions),
+    // THE APPEND SIDE (§0.4's "drops"). The comparator cannot see a dropped
+    // append — the hole it leaves in the fold looks exactly like a session
+    // that never happened — so the gate reads the harness's own counters, on
+    // the same durable vehicle, in the same round.
+    if (appendStats != null) ...<String, Object?>{
+      'appends': appendStats.appended,
+      'append_dedupes': appendStats.deduped,
+      'append_drops': appendStats.dropped,
+      'append_suppressed': appendStats.suppressed,
+      'append_refused_testimony': appendStats.refusedTestimony,
+      'append_queue_depth': appendStats.queueDepth,
+    },
   };
 
   /// The note body — the JSON above, encoded. Deterministic key order (the
@@ -595,6 +763,8 @@ class DualReadAccounting {
     int? snapshotRows,
     DateTime? seededAt,
     String? scope,
+    bool overlayEngaged = false,
+    DualReadAppendStats? appendStats,
   }) => jsonEncode(
     toJson(
       mode: mode,
@@ -603,6 +773,8 @@ class DualReadAccounting {
       snapshotRows: snapshotRows,
       seededAt: seededAt,
       scope: scope,
+      overlayEngaged: overlayEngaged,
+      appendStats: appendStats,
     ),
   );
 }
@@ -709,10 +881,7 @@ class TerminalLagTracker {
     required DateTime now,
     required bool appendQueued,
   }) {
-    final entry = _entries.putIfAbsent(
-      sessionId,
-      () => _TerminalLagEntry(now),
-    );
+    final entry = _entries.putIfAbsent(sessionId, () => _TerminalLagEntry(now));
     entry.passes += 1;
     if (entry.escalated) return TerminalLagAction.watch;
     if (entry.healAttempted) {

@@ -81,9 +81,9 @@ void main() {
     test('ONE accounting instance is shared by the bridge observer and the '
         'reconciler', () {
       expect(
-        RegExp(r'final dualReadAccounting = DualReadAccounting\(\)')
-            .allMatches(source)
-            .length,
+        RegExp(
+          r'final dualReadAccounting = DualReadAccounting\(\)',
+        ).allMatches(source).length,
         1,
       );
       expect(source, contains('accounting: dualReadAccounting'));
@@ -95,10 +95,7 @@ void main() {
         source,
         contains('appendQueuedFor: trajectory.hasQueuedAppendFor'),
       );
-      expect(
-        source,
-        contains('healer: trajectory.requestTerminalReconcile'),
-      );
+      expect(source, contains('healer: trajectory.requestTerminalReconcile'));
     });
 
     test('the durable round summary reaches the recorder — silence on this '
@@ -113,12 +110,46 @@ void main() {
 
     test('the reconciler takes the same snapshot getter', () {
       expect(
-        RegExp(r'headSnapshot: \(\) => trajectory\.sessionHeads')
-            .allMatches(source)
-            .length,
+        RegExp(
+          r'headSnapshot: \(\) => trajectory\.sessionHeads',
+        ).allMatches(source).length,
         2,
         reason: 'the bridge AND the restart reconciler',
       );
+    });
+
+    // ── C3 (cut-wiring) — the flip's own composition seams ───────────────
+    test('C3: the POSTURE reaches BOTH readers from ONE config field — a '
+        'bridge serving the fold while the reconciler served legacy would '
+        'reap and re-mount the same session by turns', () {
+      expect(source, contains('mode: trajectoryConfig.dualRead'));
+      expect(source, contains('dualReadMode: trajectoryConfig.dualRead'));
+    });
+
+    test("C3: the harness's append counters reach the round summary — the "
+        'gate reads "zero drops" from the note, and no comparator can '
+        'observe a dropped append', () {
+      expect(source, contains('appendStats:'));
+      expect(source, contains('dropped: status.dropped'));
+      expect(source, contains('refusedTestimony: status.refusedTestimony'));
+    });
+  });
+
+  group('C3 — the flip is a CONFIG line, and the default is still observe', () {
+    test('primary is expressible without disturbing any other field', () {
+      const config = TrajectoryConfig(dualRead: DualReadMode.primary);
+      expect(config.dualRead, DualReadMode.primary);
+      // …and it survives the dry-run force, which only ever touches `mode`.
+      // A dry arm claims no epoch and writes nothing, so its mirror never
+      // seeds and its snapshot stays `refused` — the posture is carried, and
+      // health is what disengages.
+      expect(config.asDisabled.dualRead, DualReadMode.primary);
+      expect(config.asDisabled.mode, TrajectoryConfigMode.disabled);
+    });
+
+    test('the PR default stays observe — the flip is a separable one-line '
+        "commit attached to C2's gate evidence", () {
+      expect(const TrajectoryConfig().dualRead, DualReadMode.observe);
     });
   });
 }

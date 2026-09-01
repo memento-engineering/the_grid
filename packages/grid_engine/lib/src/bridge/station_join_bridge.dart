@@ -250,9 +250,9 @@ class StationJoinBridge {
   ///
   /// [head] is the DUAL READ's third input (cut-wiring §0.2/§0.3): a
   /// pre-fetched, immutable P1 mirror snapshot. It is PURE here — the join
-  /// takes it as a value, never awaits it, and in wave 1's C2 never lets it
-  /// change what the map holds: the comparator classifies and counts, and the
-  /// overlay it certifies is served by C3. The read is identity-matched
+  /// takes it as a value and never awaits it. Under `observe` it changes
+  /// nothing the map holds; under `primary` (C3) it OVERLAYS the four
+  /// certified fields onto the legacy base. The read is identity-matched
   /// (`bySessionId`) by the OVERLAY IDENTITY RULE, so a sibling row can never
   /// splice a terminal onto a live session.
   static JoinedSnapshot _join(
@@ -287,8 +287,21 @@ class StationJoinBridge {
     }
     // The comparator pass runs over the FINISHED sessions map — after the
     // molecule/gate attachments, so it compares what a decision would actually
-    // read. It mutates nothing in `sessions`.
-    if (head != null) dualRead?.observe(sessions, head);
+    // read. It mutates nothing in `sessions`: it RETURNS the overlay entries
+    // and the JOIN splices them, so the map keeps exactly one writer.
+    //
+    // Under `observe` that map is always empty and this is a no-op — C2's
+    // "byte-for-byte what pure legacy produced" invariant is untouched. Under
+    // `primary` (C3) each entry is `sessionProjectionOverlay`'s: the legacy
+    // projection as BASE with P1 overriding exactly
+    // `{isTerminal, completed, humanHeld, closedAt}`. Everything else — the
+    // fence identity triple, the cursor, the molecule and gate attachments
+    // made just above — rides its own live carrier, because wave 1 retires no
+    // writer.
+    if (head != null) {
+      final overlays = dualRead?.observe(sessions, head);
+      if (overlays != null && overlays.isNotEmpty) sessions.addAll(overlays);
+    }
     return JoinedSnapshot(
       graph: graph,
       sessionsByWorkBead: sessions,
