@@ -11,6 +11,12 @@
 /// transport" edge **ADR-0002 Decision 1** names (an ALLOWED dependency
 /// direction, not a new seam).
 ///
+/// Channel-session parity is signal-led: a bare process exit interpreted as
+/// [StepSignal.none] cannot settle the leased dispatcher; a protocol-style
+/// non-[Exited] event interpreted as [StepSignal.complete] advances it. Assets
+/// own protocol adapters; this transport trusts the capability's signal rather
+/// than classifying protocol events.
+///
 /// The leased dispatcher uses the SAME work-signal probe as `ProcessAllocation`
 /// for [CompletionContract.committedWorkspace] capabilities, with the SAME A49
 /// scope: only an `Exited(inferred: true)` event that the capability interprets
