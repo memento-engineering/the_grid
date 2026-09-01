@@ -17,6 +17,9 @@ import 'dart:io';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
+// TEST-ONLY (tg-3o6b): the gc branches classify REAL server errors, so the
+// suite throws the real shape rather than a stand-in.
+import 'package:mysql_client/exception.dart';
 import 'package:test/test.dart';
 
 /// A scriptable [TrajectoryDb]: records statements, optionally throws.
@@ -1001,6 +1004,98 @@ void main() {
         timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
         hasLength(2),
         reason: 'still re-armed',
+      );
+    });
+
+    // tg-3o6b: M2 made online gc the service's job, but the ratified
+    // provision boundary grants the service `trajectory.*` ONLY and DOLT_GC
+    // needs server-level privilege. THE BOUNDARY WINS — the denial is a
+    // POSTURE, so the cadence disables itself instead of denying once a
+    // cycle forever, and reclamation moves to the operator's `traj gc`.
+    test('a PRIVILEGE-denied gc disables the cadence after ONE flare and '
+        'never re-arms', () async {
+      dbScript = (sql) => sql == 'CALL DOLT_GC()'
+          ? MySQLServerException(
+              "command denied to user 'trajectory'@'%'",
+              1105,
+            )
+          : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+
+      expect(flareNames(), contains('trajectory.gcDisabled'));
+      expect(flareNames(), isNot(contains('trajectory.gcFailed')));
+      expect(
+        flares.firstWhere((f) => f.$1 == 'trajectory.gcDisabled').$2['remedy'],
+        contains('traj gc'),
+      );
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(1),
+        reason: 'the disable latch means the timer is NOT re-armed',
+      );
+      expect(h.mode, TrajectoryHarnessMode.live, reason: 'growth-only');
+    });
+
+    test('the latch survives the loop: a second gc pass neither runs nor '
+        're-flares', () async {
+      dbScript = (sql) => sql == 'CALL DOLT_GC()'
+          ? MySQLServerException(
+              "command denied to user 'trajectory'@'%'",
+              1105,
+            )
+          : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+      Iterable<String> gcCalls() =>
+          connected.single.statements.where((s) => s == 'CALL DOLT_GC()');
+      expect(gcCalls(), hasLength(1));
+
+      // The only timer this process will ever hold for gc is the spent one;
+      // firing it again is the worst case (a stray callback). "Disabled"
+      // means the collection does not run, whatever fired it.
+      fire();
+      await pumpEventQueue();
+      expect(gcCalls(), hasLength(1), reason: 'the latch stops the work too');
+      expect(
+        flareNames().where((n) => n == 'trajectory.gcDisabled'),
+        hasLength(1),
+        reason: 'ONE flare, ever — the latch is what makes it once',
+      );
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(1),
+      );
+    });
+
+    test('a non-privilege gc error is untouched by the latch — it keeps '
+        'flaring and re-arming', () async {
+      dbScript = (sql) => sql == 'CALL DOLT_GC()'
+          ? MySQLServerException('unique key violation on uq_idem', 1105)
+          : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+      expect(flareNames(), contains('trajectory.gcFailed'));
+      expect(flareNames(), isNot(contains('trajectory.gcDisabled')));
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(2),
+        reason: 're-armed: a 1105 that is not a denial is transient',
       );
     });
   });

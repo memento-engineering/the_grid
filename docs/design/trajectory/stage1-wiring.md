@@ -562,6 +562,12 @@ dart run lunar:lunar up --grid-home "$(pwd)" --trajectory      # observe-only fi
 # banner shows: trajectory: LIVE epoch=1 …
 ```
 
+**Reclamation on a scoped-grant home (tg-3o6b):** `DOLT_GC` needs SERVER-level privilege
+and step 2.3 grants the service `trajectory.*` ONLY — the boundary wins, so on these
+homes gc is **operator-run**: the harness disables its cadence after one
+`trajectory.gcDisabled` flare and the operator runs `traj gc` (the gridboot credential)
+when growth warrants it. The service grant is never widened to make the cadence work.
+
 **Reconnect rule (r2, minor 15):** the harness resolves the listener at build via
 `resolveDoltServerListener` — and **re-resolves it on every reconnect attempt**. bd
 rewrites the child server's port on its own terms (M1b had to rewrite port 63412 to

@@ -524,6 +524,12 @@ Future<StationWorkRuntime> assembleStationWork({
     reader: stateBundle.probeReader,
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
+    // C8a (cut-wiring): the STATE writer's flares were null-sunk — the work
+    // writers below wired `onFlare` and this one did not, so `session.minted`,
+    // `gate.autoClosed`, and `session.workTerminal` never reached the
+    // transport for the partition that mints every session bead. That is
+    // exactly the evidence the dual-read gates read.
+    onFlare: transport?.flare,
   );
 
   // --- the runtime provider (ONE dry/live posture, per-seam override = a

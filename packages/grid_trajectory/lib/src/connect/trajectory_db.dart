@@ -27,6 +27,11 @@ const int sqlErrDuplicateEntry = 1062;
 /// was never bootstrapped on this grid home" answer, not a failure.
 const int sqlErrUnknownDatabase = 1049;
 
+/// The classic MySQL access-denied codes. dolt answers a denied `CALL` with
+/// [sqlErrUnknownError] instead (tg-3o6b, observed live), but a server that
+/// uses these must land in the same class.
+const Set<int> sqlErrAccessDenied = {1044, 1045, 1142, 1143, 1370};
+
 bool _isServerError(Object error, int code) =>
     error is MySQLServerException && error.errorCode == code;
 
@@ -44,6 +49,20 @@ bool isUnknownDatabase(Object error) =>
 bool isUniqueViolationOn(Object error, String constraint) =>
     _isServerError(error, sqlErrUnknownError) &&
     (error as MySQLServerException).message.contains(constraint);
+
+/// True when [error] is the server refusing on PRIVILEGE (tg-3o6b).
+///
+/// The live shape is a 1105 reading `command denied to user 'trajectory'@'%'`
+/// — dolt carries a denied `CALL DOLT_GC()` on its unknown-error code, so the
+/// code alone cannot discriminate and the message is part of the predicate.
+/// This is a POSTURE, not a failure: the scoped service credential is granted
+/// `trajectory.*` only, by ratified design, and a caller that sees this stops
+/// asking rather than retrying.
+bool isPrivilegeDenied(Object error) =>
+    error is MySQLServerException &&
+    (error.errorCode == sqlErrUnknownError ||
+        sqlErrAccessDenied.contains(error.errorCode)) &&
+    error.message.toLowerCase().contains('denied');
 
 /// One statement's outcome, decoupled from the driver so unit tests can
 /// script every §5 branch without a socket.

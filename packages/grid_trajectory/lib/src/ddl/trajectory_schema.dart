@@ -20,6 +20,44 @@ const String doltIgnoreSeedSql =
     "INSERT INTO dolt_ignore VALUES ('proj_%', true), ('traj_pulse', true), "
     "('traj_fence', true)";
 
+/// P1's CREATE TABLE, named separately because it is the ONE projection the
+/// wave-1 cut reshapes (cut-wiring C0, r6/r7 — J11-B1/V1-B1): the fold gains
+/// `terminal_provenance` + `unknown_reason`, so the durable head can say
+/// whether a terminal is observed testimony or a reconstructed close, and
+/// which explicit-unknown vocabulary word an `outcome='unknown'` carries.
+///
+/// The migration is a DROP + re-CREATE at this shape plus a full replay
+/// ([reshapeSessionHeadProjection]) — never an ALTER: nothing in the tree
+/// reshapes an existing table, `applyTrajectorySchema` is CREATE-IF-NOT-EXISTS
+/// only, and `proj_%` is `dolt_ignore`'d, so the drop is journal-invisible and
+/// costs one replay.
+const String projSessionHeadDdl = '''
+CREATE TABLE IF NOT EXISTS proj_session_head (
+  session_id VARCHAR(40) NOT NULL PRIMARY KEY,
+  work_bead_id VARCHAR(40) NOT NULL,
+  round INT NOT NULL DEFAULT 0,
+  status ENUM('open','closed') NOT NULL,
+  outcome ENUM('succeeded','failed','cancelled','lost','escalated','settled','unknown') NULL,
+  work_terminal_reason VARCHAR(255) NULL,
+  terminal_provenance ENUM('observed','inferred','reconstructed') NULL,
+  unknown_reason VARCHAR(32) NULL,
+  held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
+  pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
+  rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
+  seat VARCHAR(64) NULL,
+  started_at DATETIME(6) NOT NULL, closed_at DATETIME(6) NULL,
+  head_epoch BIGINT NOT NULL,
+  last_seq BIGINT NOT NULL,
+  KEY ix_bead (work_bead_id, status)
+)''';
+
+/// The columns the wave-1 reshape ADDS to P1 — the presence test a
+/// provisioned-before-the-cut home fails ([sessionHeadProjectionNeedsReshape]).
+const List<String> projSessionHeadCutColumns = [
+  'terminal_provenance',
+  'unknown_reason',
+];
+
 /// Every §4 CREATE TABLE, in the doc's order.
 const List<String> trajectoryTableDdl = [
   '''
@@ -126,23 +164,7 @@ CREATE TABLE IF NOT EXISTS proj_meta (
   skipped      JSON        NULL,
   rebuilt_at   DATETIME(6) NULL
 )''',
-  '''
-CREATE TABLE IF NOT EXISTS proj_session_head (
-  session_id VARCHAR(40) NOT NULL PRIMARY KEY,
-  work_bead_id VARCHAR(40) NOT NULL,
-  round INT NOT NULL DEFAULT 0,
-  status ENUM('open','closed') NOT NULL,
-  outcome ENUM('succeeded','failed','cancelled','lost','escalated','settled','unknown') NULL,
-  work_terminal_reason VARCHAR(255) NULL,
-  held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
-  pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
-  rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
-  seat VARCHAR(64) NULL,
-  started_at DATETIME(6) NOT NULL, closed_at DATETIME(6) NULL,
-  head_epoch BIGINT NOT NULL,
-  last_seq BIGINT NOT NULL,
-  KEY ix_bead (work_bead_id, status)
-)''',
+  projSessionHeadDdl,
   '''
 CREATE TABLE IF NOT EXISTS proj_step_cursor (
   session_id VARCHAR(40) NOT NULL, round INT NOT NULL,
@@ -326,4 +348,37 @@ Future<void> applyTrajectorySchema(TrajectoryDb db) async {
   await db.execute(
     "CALL DOLT_COMMIT('--skip-empty', '-m', 'traj: schema bootstrap')",
   );
+}
+
+/// The live column set of `proj_session_head` on [db], read from
+/// `information_schema` under an explicit alias (the column's own name comes
+/// back cased differently across servers; the alias does not).
+const String projSessionHeadColumnsSql =
+    'SELECT column_name AS name FROM information_schema.columns '
+    'WHERE table_schema = DATABASE() AND table_name = :table';
+
+/// True when this home's `proj_session_head` predates the wave-1 cut shape —
+/// it is missing one of [projSessionHeadCutColumns], or it does not exist at
+/// all. Read-only; the caller decides whether it is quiesced enough to fix.
+Future<bool> sessionHeadProjectionNeedsReshape(TrajectoryDb db) async {
+  final result = await db.execute(projSessionHeadColumnsSql, {
+    'table': 'proj_session_head',
+  });
+  final columns = {for (final row in result.rows) row['name']?.toLowerCase()};
+  return !projSessionHeadCutColumns.every(columns.contains);
+}
+
+/// THE wave-1 P1 migration, as a named step (cut-wiring C0, r7 — V1-B1):
+/// `DROP TABLE proj_session_head` + re-CREATE at [projSessionHeadDdl]. An
+/// ALTER path is deliberately not built.
+///
+/// Destructive by design and safe only because P1 is REBUILDABLE state: the
+/// caller runs it QUIESCED and follows it with a full `replaySessionHeads`,
+/// which is also what stamps the bumped `fold_version`. `proj_%` is
+/// `dolt_ignore`'d, so neither the drop nor the re-create stages dolt history.
+Future<void> reshapeSessionHeadProjection(TrajectoryDb db) async {
+  // DDL cannot ride a transaction (the same reason the replays DELETE rather
+  // than TRUNCATE); the two statements are the whole step.
+  await db.execute('DROP TABLE IF EXISTS proj_session_head');
+  await db.execute(projSessionHeadDdl);
 }

@@ -217,6 +217,19 @@ class SessionHeadRow {
   String toString() => 'SessionHeadRow(${toSqlParams()})';
 }
 
+/// [sqlDateTime6]'s inverse: a DATETIME(6) column read back as UTC.
+///
+/// The column carries no zone and every writer here writes UTC, so the value
+/// is re-read as UTC rather than reinterpreted as local time — the same rule
+/// `envelopeFromRow` applies to the log's own instants. Null/blank in, null
+/// out (the columns are nullable).
+DateTime? parseSqlDateTime6(String? raw) {
+  final text = raw?.trim();
+  if (text == null || text.isEmpty) return null;
+  if (text.endsWith('Z') || text.contains('+')) return DateTime.parse(text);
+  return DateTime.parse('${text.replaceFirst(' ', 'T')}Z');
+}
+
 /// DATETIME(6) literal — dolt refuses ISO-8601's trailing `Z`; the fold, like
 /// the appender, writes UTC.
 String sqlDateTime6(DateTime value) {

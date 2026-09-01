@@ -330,6 +330,15 @@ class TrajectoryHarness {
   TrajectoryAppender? _appender;
   TrajectoryTick? _tick;
   Timer? _gcTimer;
+
+  /// The gc POSTURE latch (tg-3o6b): set when the server refuses `DOLT_GC` on
+  /// PRIVILEGE. The service credential is granted `trajectory.*` only by
+  /// ratified design (stage1-wiring §4 / r2 minor 15), so a denial is a
+  /// standing fact about this home, not a transient failure — the cadence
+  /// stops for the process lifetime after ONE flare and reclamation becomes
+  /// `traj gc`, run by the operator under the gridboot credential. Never
+  /// cleared: nothing this process does can widen its own grant.
+  bool _gcDisabled = false;
   bool _needsReconnect = false;
 
   /// The last eager-reconnect ATTEMPT instant — the debounce anchor
@@ -911,7 +920,7 @@ class TrajectoryHarness {
   // ── the gc cadence (§1.2 / M2) ───────────────────────────────────────────
 
   void _armGc() {
-    if (_isShutdown || _gcTimer != null) return;
+    if (_isShutdown || _gcDisabled || _gcTimer != null) return;
     _gcTimer = _scheduleTimer(config.gcInterval, _onGcTimer);
   }
 
@@ -922,13 +931,28 @@ class TrajectoryHarness {
   }
 
   Future<void> _runGc() async {
+    // The latch is checked HERE too, not only in `_armGc`: "disabled" has to
+    // mean the collection does not run, whatever fired the callback.
+    if (_gcDisabled) return;
     try {
       if (_mode == TrajectoryHarnessMode.live && !_needsReconnect) {
         // Online, ~120 ms, reclaims ~98% — never touches bd's proxy (M2).
         await _serialize(() => _db!.execute('CALL DOLT_GC()'));
       }
     } on Object catch (error) {
-      _flareLimited('trajectory.gcFailed', {'reason': '$error'});
+      // PRIVILEGE-denied is a posture, not a failure (tg-3o6b): latch, flare
+      // ONCE — the latch is what makes it once — and never re-arm. Every
+      // other gc error keeps the old flare-and-rearm loop: those are
+      // transient and the cadence is how they recover.
+      if (isPrivilegeDenied(error)) {
+        _gcDisabled = true;
+        _flare('trajectory.gcDisabled', {
+          'reason': '$error',
+          'remedy': 'operator-run `traj gc` (gridboot credential)',
+        });
+      } else {
+        _flareLimited('trajectory.gcFailed', {'reason': '$error'});
+      }
     } finally {
       _armGc();
     }

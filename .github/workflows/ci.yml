@@ -101,6 +101,16 @@ jobs:
           dart test -t integration \
             test/integration/traj_provision_integration_test.dart \
             test/integration/stage1_fold_measurement_test.dart
+      # The C0 operator verbs, pinned by PATH for the same fail-closed reason:
+      # the replay GOLDEN (what the verb writes == what the pure fold says) is
+      # what the whole rebuildability constraint rests on, and the quiesce
+      # fence is the guard whose silent absence would let a live replay erase
+      # fold effects nothing downstream can detect.
+      - name: Wave-1 guard pin — traj replay (golden, fence, reshape) + traj gc
+        run: |
+          cd packages/grid_trajectory
+          dart test -t integration \
+            test/integration/traj_operator_verbs_integration_test.dart
       # The shadow window's own tooling is pure-Dart and also runs in the
       # `dart` job's wildcard — but a §9 stage cut is adjudicated on exactly
       # what these produce, so they are named rather than left to a wildcard,

@@ -596,6 +596,12 @@ CREATE TABLE proj_session_head (          -- P1
   status ENUM('open','closed') NOT NULL,
   outcome ENUM('succeeded','failed','cancelled','lost','escalated','settled','unknown') NULL,
   work_terminal_reason VARCHAR(255) NULL,
+  -- fold_version 2 (cut-wiring C0, r6/r7): whether the terminal is observed
+  -- testimony or a reconstructed close, and which explicit-unknown word an
+  -- `outcome='unknown'` carries. Migration = quiesced DROP + re-CREATE + full
+  -- replay (`traj replay`); an ALTER path is deliberately not built.
+  terminal_provenance ENUM('observed','inferred','reconstructed') NULL,
+  unknown_reason VARCHAR(32) NULL,
   held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
   pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
   rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
