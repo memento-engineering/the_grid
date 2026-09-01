@@ -15,7 +15,7 @@ void main() {
     var reloads = 0;
     var restarts = 0;
 
-    final seat = await armDevMode(
+    final host = await armDevMode(
       vmServiceUri: null,
       latest: () {
         reads++;
@@ -32,7 +32,7 @@ void main() {
       },
     );
 
-    expect(seat, isNull);
+    expect(host, isNull);
     expect((reads, reloads, restarts), (0, 0, 0));
   });
 
@@ -43,16 +43,21 @@ void main() {
       var reloads = 0;
       var restarts = 0;
 
-      final seat = await armDevMode(
+      final host = await armDevMode(
         vmServiceUri: 'http://127.0.0.1:8181/auth=/',
         latest: () => latest,
         readPath: () => 'joined:primary+state',
         hotReload: () async => {'mode': 'reload', 'generation': ++reloads},
         hotRestart: () async => {'mode': 'restart', 'generation': ++restarts},
       );
-      expect(seat, isNotNull);
-      final armed = seat!;
+      expect(host, isNotNull);
+      final armed = host!;
       addTearDown(armed.dispose);
+
+      expect(armed, isA<DevModeHost>());
+      // ignore: deprecated_member_use_from_same_package
+      final DevModeSeat legacyHost = armed;
+      expect(legacyHost, same(armed));
 
       expect(armed.vmServiceUri, 'http://127.0.0.1:8181/auth=/');
       expect(armed.runtime.current!.bead('first'), isNotNull);

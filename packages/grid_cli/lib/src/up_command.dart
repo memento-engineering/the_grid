@@ -10,7 +10,7 @@ import 'package:beads_dart/beads_dart.dart'
 import 'package:grid_engine/grid_engine.dart'
     show SessionProjection, configuredBdTypeNames;
 import 'package:grid_exploration/grid_exploration.dart'
-    show DevModeSeat, armDevMode, stationVmServiceUri;
+    show DevModeHost, armDevMode, stationVmServiceUri;
 import 'package:grid_runtime/grid_runtime.dart'
     show
         BeadOwnershipPredicate,
@@ -159,7 +159,7 @@ Future<Map<String, dynamic>> _defaultReadStateStoreTypes({
 /// Boots a foreground resident station over `runGrid`.
 ///
 /// The shell owns the PROCESS concerns — flag parsing, the freshness probes,
-/// the station lock, the control socket, the dev-mode seat, the diagnostics
+/// the station lock, the control socket, the dev-mode host, the diagnostics
 /// [TreeProjector] (process-lifetime, so `/stream` survives hot restarts),
 /// signals, exit codes — and reads everything stateful off the delegate's
 /// narrow vended views ([GridDelegate]): reference types flow OUT of
@@ -482,10 +482,10 @@ class UpCommand extends Command<int> {
       return 64;
     }
 
-    // The ONE post-mount arming unwind: every shell seat created so far is
-    // disposed in reverse creation order — including the seat whose OWN
-    // arming step threw (a bound control socket or a registered dev-mode
-    // seat must never be stranded because its lock advertisement failed).
+    // The ONE post-mount arming unwind: every shell resource created so far is
+    // disposed in reverse creation order — including the resource whose OWN
+    // arming step threw (a bound control socket or a registered dev-mode host
+    // must never be stranded because its lock advertisement failed).
     Future<int> failArming(
       Object error, {
       ControlResource? control,
@@ -533,7 +533,7 @@ class UpCommand extends Command<int> {
         // fabricated snapshot would masquerade as a real one. The refusal
         // renders where each read actually reaches the delegate: [readPath]
         // is per-request and refuses LOUD through the RPC layer, while
-        // [latest] feeds the seat's graph refresh — the refused refresh
+        // [latest] feeds the host's graph refresh — the refused refresh
         // rides the runtime's errors stream, no baseline is ever captured,
         // and the graph tools serve the distinguishable never-joined shape
         // (zero beads, `capturedAt: null`), never a fabricated join. Pinned
@@ -570,16 +570,13 @@ class UpCommand extends Command<int> {
         'control: ${control.url}  ·  token: (see ${stationLock.path}, 0600)',
       );
 
-    // The unwind (tg-1fa2.4): unmount tree (in-tree resources unwind by
-    // unmount order; `teardown` then runs the orphan sweep on the still-live
-    // delegate and disposes it last) → release the shell's projector →
-    // release lock. The shell's own seats (dev mode, the control socket)
-    // close first — they are process concerns that never entered the tree.
+    // The shell's own resources (dev-mode host, the control socket) close
+    // first — they are process concerns that never entered the tree.
     // Each step is settled independently: a throwing dispose is loud but
     // never strands the steps beneath it — the lock release always runs last.
     Future<void> unwind() async {
-      if (devMode case final seat?) {
-        await settle('dev-mode dispose', seat.dispose);
+      if (devMode case final host?) {
+        await settle('dev-mode dispose', host.dispose);
       }
       await settle('control dispose', control.dispose);
       await settle('grid teardown', grid.teardown);
@@ -668,7 +665,7 @@ class UpCommand extends Command<int> {
 }
 
 /// Reads the LIVE delegate's vended view or refuses LOUD when the station
-/// vends none — the dev-mode seat's per-request reads have no honest empty
+/// vends none — the dev-mode host's per-request reads have no honest empty
 /// rendering (a fabricated snapshot would masquerade as a real join).
 StationView _requireView(GridDelegate live) =>
     live.stationView ??
@@ -743,15 +740,15 @@ final class _ControlResource implements ControlResource {
 }
 
 final class _DevModeResource implements DevModeResource {
-  _DevModeResource(this._seat);
-  final DevModeSeat _seat;
+  _DevModeResource(this._host);
+  final DevModeHost _host;
 
   @override
-  String get vmServiceUri => _seat.vmServiceUri;
+  String get vmServiceUri => _host.vmServiceUri;
   @override
-  void register() => _seat.register();
+  void register() => _host.register();
   @override
-  Future<void> dispose() => _seat.dispose();
+  Future<void> dispose() => _host.dispose();
 }
 
 /// The production [GridRunner]: `runGrid` plus the seam's
@@ -819,14 +816,14 @@ Future<DevModeResource?> _defaultArmDevelopmentMode({
   required GraphSnapshot Function() latest,
   required String Function() readPath,
 }) async {
-  final seat = await armDevMode(
+  final host = await armDevMode(
     vmServiceUri: vmServiceUri,
     hotReload: hotReload,
     hotRestart: hotRestart,
     latest: latest,
     readPath: readPath,
   );
-  return seat == null ? null : _DevModeResource(seat);
+  return host == null ? null : _DevModeResource(host);
 }
 
 Future<void> _waitForTerminationSignal() async {
