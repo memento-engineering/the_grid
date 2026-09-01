@@ -32,6 +32,22 @@ void main() {
     expect(runner, contains('[[ "\$bd_bin" = /* && -x'));
 
     final policy = loadYaml(read('packages/beads_dart/bd_compatibility.yaml'));
+    final forkPatches = policy['fork_patches'] as YamlMap;
+    final patch = forkPatches['graph_apply_parent_cycle_skip'] as YamlMap;
+    expect(patch['repository'], 'nicholasspencer/beads');
+    expect(patch['base_sha'], 'f9fe4ef2a6d3d90b52f1b62df15a5b2c0833c82b');
+    expect(patch['ref'], 'grid-v1.0.5-graph-apply-parent-cycle-skip.1');
+    expect(
+      patch['fixture_set'],
+      '2026-09-01-bd-grid-v1.0.5-graph-apply-parent-cycle-skip.1',
+    );
+    final receipt = read(patch['resolved_sha_receipt'] as String);
+    expect(receipt, contains('grid-v1.0.5-graph-apply-parent-cycle-skip.1'));
+    expect(
+      RegExp(r'resolved SHA:\*\* `[0-9a-f]{40}`').hasMatch(receipt),
+      isTrue,
+    );
+    expect(receipt, contains('BD_JSON_ENVELOPE=1'));
     expect(policy['floor'], 'v1.0.5');
     expect(policy['day_one_wait_through'], 'v1.1.2');
   });

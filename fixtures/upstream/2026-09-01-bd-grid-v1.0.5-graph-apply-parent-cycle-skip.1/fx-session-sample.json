@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "id": "fx-session",
+      "title": "Fixture session",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "session",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-09-01T18:23:31Z",
+      "created_by": "fixture-capture",
+      "updated_at": "2026-09-01T18:23:31Z",
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "schema_version": 1
+}

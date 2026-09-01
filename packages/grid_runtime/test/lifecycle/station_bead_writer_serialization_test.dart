@@ -10,6 +10,7 @@
 // (the flat `grid.cursor.*` model this file's keys once echoed retired with
 // tg-eli phase 2). Zero I/O — pure fakes.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -71,6 +72,49 @@ class GatedBdRunner implements BdRunner {
   void release(int i) => _gates[i].complete();
 }
 
+final class GatedGraphApplyRunner implements BdRunner {
+  final List<List<String>> started = <List<String>>[];
+  final List<Completer<void>> _gates = <Completer<void>>[];
+  final List<Completer<void>> _starts = <Completer<void>>[];
+  final Set<int> failIndexes = <int>{};
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    if (args.length < 3 || args[0] != 'create' || args[1] != '--graph') {
+      throw StateError('unexpected non-graph call: $args');
+    }
+    final index = started.length;
+    started.add(List<String>.unmodifiable(args));
+    _startSignal(index).complete();
+    final gate = Completer<void>();
+    _gates.add(gate);
+    await gate.future;
+    if (failIndexes.contains(index)) {
+      throw StateError('graph apply failed (call $index)');
+    }
+    return const BdResult(
+      exitCode: 0,
+      stdout: '{"schema_version":1,"data":{"ids":{"root":"tgdog-root"}}}',
+      stderr: '',
+    );
+  }
+
+  Future<void> waitForStarted(int count) => _startSignal(count - 1).future;
+
+  void release(int index) => _gates[index].complete();
+
+  Completer<void> _startSignal(int index) {
+    while (_starts.length <= index) {
+      _starts.add(Completer<void>());
+    }
+    return _starts[index];
+  }
+}
+
 /// A [BdRunner] that simulates bd's row-locked metadata merge transaction.
 class MergingBdRunner implements BdRunner {
   final Map<String, Map<String, String>> store = {};
@@ -118,6 +162,19 @@ StationBeadWriter _writer(BdRunner runner) => StationBeadWriter(
   reader: _EmptyReader(),
   ownership: BeadOwnershipPredicate({'tgdog'}),
 );
+
+const _pourPlan = GraphApplyPlan(
+  commitMessage: 'serialization test',
+  nodes: <GraphNode>[GraphNode(key: 'root', title: 'Root', type: 'task')],
+);
+
+Future<Map<String, String>> _pour(StationBeadWriter writer, String sessionId) =>
+    writer.createMolecule(
+      _pourPlan,
+      substation: 'tgdog',
+      sessionId: sessionId,
+      rootCrumbs: <String>['tgdog-work', sessionId],
+    );
 
 final class _EmptyReader implements BeadProbeReader {
   @override
@@ -263,5 +320,72 @@ void main() {
       await second;
       expect(r.startedCount, 2);
     });
+
+    test(
+      'two concurrent pours on one store serialize and finish within 15 seconds',
+      () async {
+        final runner = GatedGraphApplyRunner();
+        final writer = _writer(runner);
+        final first = _pour(writer, 'tgdog-session-a');
+        final second = _pour(writer, 'tgdog-session-b');
+        await runner.waitForStarted(1);
+
+        expect(runner.started, hasLength(1));
+        runner.release(0);
+        await runner.waitForStarted(2);
+        expect(runner.started, hasLength(2));
+        runner.release(1);
+
+        await Future.wait(<Future<Map<String, String>>>[
+          first,
+          second,
+        ]).timeout(const Duration(seconds: 15));
+      },
+    );
+
+    test('a failed pour does not poison the store queue', () async {
+      final runner = GatedGraphApplyRunner()..failIndexes.add(0);
+      final writer = _writer(runner);
+      final first = _pour(
+        writer,
+        'tgdog-session-a',
+      ).then<Object?>((value) => value, onError: (Object error) => error);
+      final second = _pour(writer, 'tgdog-session-b');
+      await runner.waitForStarted(1);
+
+      runner.release(0);
+      await runner.waitForStarted(2);
+      expect(await first, isA<StateError>());
+      expect(runner.started, hasLength(2));
+      runner.release(1);
+      await second;
+    });
+
+    test(
+      'different store writers do not share a durable or process-global queue',
+      () async {
+        final runnerA = GatedGraphApplyRunner();
+        final runnerB = GatedGraphApplyRunner();
+        final first = _pour(_writer(runnerA), 'tgdog-session-a');
+        final second = _pour(_writer(runnerB), 'tgdog-session-b');
+        await Future.wait(<Future<void>>[
+          runnerA.waitForStarted(1),
+          runnerB.waitForStarted(1),
+        ]);
+
+        expect(runnerA.started, hasLength(1));
+        expect(runnerB.started, hasLength(1));
+        final source = File(
+          'lib/src/lifecycle/station_bead_writer.dart',
+        ).readAsStringSync();
+        expect(source, contains('Future<void>? _storePourTail;'));
+        expect(source, isNot(contains("import 'dart:io';")));
+        expect(source, isNot(contains('DoltQueryService')));
+
+        runnerA.release(0);
+        runnerB.release(0);
+        await Future.wait(<Future<Map<String, String>>>[first, second]);
+      },
+    );
   });
 }

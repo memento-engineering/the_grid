@@ -3,6 +3,9 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+const forkPatchFixtureSet =
+    '2026-09-01-bd-grid-v1.0.5-graph-apply-parent-cycle-skip.1';
+
 Object? fixture(String path) =>
     jsonDecode(File('../../fixtures/upstream/$path').readAsStringSync());
 
@@ -29,6 +32,32 @@ Map<String, Object?> issueMap(Object? value) {
 }
 
 void main() {
+  test('fork graph-apply patch retains the 1.0.5 envelope shape', () {
+    for (final file in <String>[
+      'tg-list-all-empty.json',
+      'tg-statuses.json',
+      'tg-types.json',
+      'tg-error-stdout.json',
+      'fx-session-sample.json',
+      'fx-message-sample.json',
+      'fx-molecule-sample.json',
+      'fx-ready-sample.json',
+      'fx-show-sample.json',
+    ]) {
+      final envelope =
+          fixture('$forkPatchFixtureSet/$file')! as Map<String, Object?>;
+      expect(envelope['schema_version'], 1, reason: file);
+    }
+    for (final file in <String>[
+      'fx-session-sample.json',
+      'fx-message-sample.json',
+      'fx-molecule-sample.json',
+      'fx-show-sample.json',
+    ]) {
+      expect(issueMap(fixture('$forkPatchFixtureSet/$file')), isNotEmpty);
+    }
+  });
+
   test('show revision drift', () {
     final oldIssue = issueMap(
       fixture('2026-07-10-bd-1.0.5/fx-message-sample.json'),

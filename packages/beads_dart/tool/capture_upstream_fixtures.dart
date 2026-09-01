@@ -15,6 +15,13 @@ final class FixtureCapture {
   static final RegExp _refPattern = RegExp(r'^[A-Za-z0-9._-]+$');
   static final RegExp _shaPattern = RegExp(r'^[0-9a-f]{40}$');
 
+  static const List<String> mainRailFindings = <String>[
+    'Drift from the 1.0.5 set is asserted in '
+        'packages/beads_dart/test/tool/fixture_drift_test.dart: '
+        'show --json adds revision, truncated envelope output adds pagination, '
+        'and envelope schema version remains 1.',
+  ];
+
   Future<Directory> capture({
     required String ref,
     required String sha,
@@ -22,6 +29,7 @@ final class FixtureCapture {
     required String executable,
     required String sampleId,
     required Directory outputRoot,
+    List<String> findings = mainRailFindings,
   }) async {
     if (!_refPattern.hasMatch(ref)) {
       throw const FormatException('ref must match [A-Za-z0-9._-]+');
@@ -125,7 +133,13 @@ final class FixtureCapture {
         File(p.join(staging.path, command.fileName)).writeAsStringSync(bytes);
       }
       File(p.join(staging.path, 'README.md')).writeAsStringSync(
-        _readme(ref: ref, sha: sha, executable: executable, commands: commands),
+        _readme(
+          ref: ref,
+          sha: sha,
+          executable: executable,
+          commands: commands,
+          findings: findings,
+        ),
       );
       return staging.renameSync(target.path);
     } catch (_) {
@@ -139,6 +153,7 @@ final class FixtureCapture {
     required String sha,
     required String executable,
     required List<_CaptureCommand> commands,
+    required List<String> findings,
   }) =>
       '''# Upstream fixtures — ${DateTime.now().toUtc().toIso8601String()}
 
@@ -152,7 +167,7 @@ ${commands.map((c) => '| `${c.fileName}` | `bd ${c.args.join(' ')}` |').join('\n
 
 ## Findings
 
-Drift from the 1.0.5 set is asserted in `packages/beads_dart/test/tool/fixture_drift_test.dart`: `show --json` adds `revision`, and truncated envelope output adds `pagination`; envelope schema version remains 1.
+${findings.map((finding) => '- $finding').join('\n')}
 ''';
 }
 
@@ -184,7 +199,8 @@ Future<void> main(List<String> arguments) async {
     ..addOption('sample-root')
     ..addOption('sample-id')
     ..addOption('output-root')
-    ..addOption('date');
+    ..addOption('date')
+    ..addMultiOption('finding', splitCommas: false);
 
   try {
     final options = parser.parse(arguments);
@@ -203,6 +219,10 @@ Future<void> main(List<String> arguments) async {
     final sampleRoot = requireOption('sample-root');
     final sampleId = requireOption('sample-id');
     final outputRoot = requireOption('output-root');
+    final findings = options.multiOption('finding');
+    if (findings.isEmpty) {
+      throw const FormatException('--finding is required at least once');
+    }
     final dateOption = options.option('date');
     final date = dateOption == null
         ? DateTime.now().toUtc()
@@ -218,6 +238,7 @@ Future<void> main(List<String> arguments) async {
       executable: bd,
       sampleId: sampleId,
       outputRoot: Directory(outputRoot),
+      findings: findings,
     );
     stdout.writeln(result.path);
   } on _CaptureCommandFailure catch (error) {
