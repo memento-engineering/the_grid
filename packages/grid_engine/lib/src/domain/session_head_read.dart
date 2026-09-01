@@ -108,9 +108,11 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'step_cursors_served': 'gauge',
   'p2_miss': 'gauge',
   'p2_orphan': 'gauge',
+  'step_fold_absent': 'gauge',
   'step_divergences': 'cumulative',
   'step_operator_store_edit_divergences': 'cumulative',
   'step_unexplained_divergences': 'cumulative',
+  'step_fold_ahead_of_legacy_divergences': 'cumulative',
   'step_lag': 'cumulative',
   'step_lag_open': 'gauge',
   'step_lag_max_ms': 'cumulative',
@@ -404,6 +406,12 @@ enum DualReadDivergenceCause {
   /// The legacy value changed while the session's trajectory append cursor did
   /// not advance during the compare window.
   operatorStoreEdit('operator-store-edit'),
+
+  /// The fold carried a STRICTLY LATER step state than the legacy bead and the
+  /// legacy caught up inside `kStepLagGrace` — the bead-first/append-later
+  /// write order seen from the fold's side, mechanically explained rather
+  /// than adjudicated. Minted by the STEP comparator only.
+  foldAheadOfLegacy('fold-ahead-of-legacy'),
 
   /// No append-absence proof exists; operator adjudication uses the detail.
   unexplained('unexplained');
@@ -752,6 +760,18 @@ class DualReadAccounting {
   /// counted, like a `p1Orphan` head.
   int p2Orphan = 0;
 
+  /// Nodes the bead carries whose fold row CANNOT EXIST YET — the bead has
+  /// never transitioned, so no `step.transition` record was ever appended for
+  /// it ([expectsFoldStepRow]). The LAST pass's population, like every gauge
+  /// here.
+  ///
+  /// Counted HERE instead of entering the `stepLag` tracker, because a row
+  /// that was never written is not a row in flight: it carries no evidence
+  /// about a dropped append, and under `primary` it would breach C4's own
+  /// soak gate forever. A node that HAS transitioned and is still rowless is
+  /// a lag entry and escalates exactly as before.
+  int stepFoldAbsent = 0;
+
   /// The LIVE `stepLag` population — §0.3 gate (b), "all lag classes zero at
   /// round end", now including the step axis (r5).
   int openStepLag = 0;
@@ -763,6 +783,12 @@ class DualReadAccounting {
   int stepDivergences = 0;
   int stepOperatorStoreEditDivergences = 0;
   int stepUnexplainedDivergences = 0;
+
+  /// Step divergences the write order explains
+  /// ([DualReadDivergenceCause.foldAheadOfLegacy]) — counted apart from the
+  /// unexplained ones so a gate reading the summary never has to re-derive the
+  /// split from the details.
+  int stepFoldAheadOfLegacyDivergences = 0;
 
   final Map<String, int> divergencesByField = <String, int>{};
   final List<DualReadDivergenceDetail> divergenceDetails =
@@ -812,6 +838,7 @@ class DualReadAccounting {
     stepCursorsServed = 0;
     p2Miss = 0;
     p2Orphan = 0;
+    stepFoldAbsent = 0;
     openStepLag = 0;
   }
 
@@ -880,6 +907,9 @@ class DualReadAccounting {
       switch (cause) {
         case DualReadDivergenceCause.operatorStoreEdit:
           operatorStoreEditDivergences += 1;
+        // The session comparator cannot mint `foldAheadOfLegacy`; if a future
+        // caller does, it lands in the bucket that asks for adjudication.
+        case DualReadDivergenceCause.foldAheadOfLegacy:
         case DualReadDivergenceCause.unexplained:
           unexplainedDivergences += 1;
       }
@@ -913,6 +943,8 @@ class DualReadAccounting {
     switch (cause) {
       case DualReadDivergenceCause.operatorStoreEdit:
         stepOperatorStoreEditDivergences += 1;
+      case DualReadDivergenceCause.foldAheadOfLegacy:
+        stepFoldAheadOfLegacyDivergences += 1;
       case DualReadDivergenceCause.unexplained:
         stepUnexplainedDivergences += 1;
     }
@@ -1014,9 +1046,11 @@ class DualReadAccounting {
     'step_cursors_served': stepCursorsServed,
     'p2_miss': p2Miss,
     'p2_orphan': p2Orphan,
+    'step_fold_absent': stepFoldAbsent,
     'step_divergences': stepDivergences,
     'step_operator_store_edit_divergences': stepOperatorStoreEditDivergences,
     'step_unexplained_divergences': stepUnexplainedDivergences,
+    'step_fold_ahead_of_legacy_divergences': stepFoldAheadOfLegacyDivergences,
     'step_lag': stepLagObserved,
     'step_lag_open': openStepLag,
     'step_lag_max_ms': maxStepLagMs,

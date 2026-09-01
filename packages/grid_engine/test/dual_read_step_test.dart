@@ -768,5 +768,187 @@ void main() {
       expect(served, isEmpty);
       expect(o.accounting.stepHits, 0);
     });
+
+    /// One session, two nodes: `a` always has a P2 row (so the session is a
+    /// HIT and the per-node rule applies), `b` never does — the epoch-9 shape.
+    Map<String, SessionProjection> twoNodeSessions({required StepState b}) => {
+      'tg-9abc': _session(
+        steps: [
+          _stepBead('a', state: StepState.running),
+          _stepBead('b', state: b),
+        ],
+      ),
+    };
+
+    test('a node that has NEVER TRANSITIONED is step_fold_absent under BOTH '
+        'postures, never a lag or a divergence', () {
+      // The 138 epoch-9 records: legacy `pending`, fold `<no P2 row>`. The one
+      // `pending`-carrying recorder verb (`stepRearmed`) always leaves a
+      // predecessor rung behind, and P2 has no mint record, so a node with NO
+      // row at all is not late — its row cannot exist yet.
+      for (final mode in [DualReadMode.observe, DualReadMode.primary]) {
+        var now = DateTime.utc(2026, 9, 1, 12);
+        final o = observer(mode: mode, clock: () => now);
+        final sessions = twoNodeSessions(b: StepState.pending);
+        final snapshot = _StepSnapshot([
+          _Row(stepPath: 'a', stepState: 'running'),
+        ]);
+
+        o.observe(sessions, snapshot);
+        now = now.add(const Duration(minutes: 5));
+        o.observe(sessions, snapshot);
+        o.observe(sessions, snapshot);
+
+        expect(o.accounting.stepFoldAbsent, 1, reason: mode.name);
+        expect(o.accounting.p2Miss, 1, reason: mode.name);
+        expect(o.accounting.openStepLag, 0, reason: mode.name);
+        expect(o.accounting.stepLagEscalations, 0, reason: mode.name);
+        expect(o.accounting.stepDivergences, 0, reason: mode.name);
+        expect(o.accounting.divergenceDetails, isEmpty, reason: mode.name);
+      }
+      expect(flares, isEmpty);
+    });
+
+    test('a TRANSITIONED node with no fold row still escalates under BOTH '
+        'postures', () {
+      // The clause C4 actually states — "bead row present / P2 row absent"
+      // past the grace names a probable dropped transition append. It must
+      // survive under `observe` too: the observe window IS the soak.
+      for (final mode in [DualReadMode.observe, DualReadMode.primary]) {
+        var now = DateTime.utc(2026, 9, 1, 12);
+        final o = observer(mode: mode, clock: () => now);
+        final sessions = twoNodeSessions(b: StepState.running);
+        final snapshot = _StepSnapshot([
+          _Row(stepPath: 'a', stepState: 'running'),
+        ]);
+
+        o.observe(sessions, snapshot);
+        now = now.add(const Duration(minutes: 5));
+        o.observe(sessions, snapshot);
+
+        expect(o.accounting.stepFoldAbsent, 0, reason: mode.name);
+        expect(o.accounting.stepLagEscalations, 1, reason: mode.name);
+        expect(o.accounting.stepDivergences, 1, reason: mode.name);
+        expect(o.accounting.stepUnexplainedDivergences, 1, reason: mode.name);
+        expect(
+          o.accounting.stepFoldAheadOfLegacyDivergences,
+          0,
+          reason: mode.name,
+        );
+        final detail = o.accounting.divergenceDetails.single;
+        expect(detail.axis, 'step');
+        expect(detail.activeStepPath, 'b');
+        expect(detail.field, 'stepLag');
+        expect(detail.legacyValue, 'running');
+        expect(detail.foldValue, '<no P2 row>');
+        expect(detail.cause, DualReadDivergenceCause.unexplained);
+      }
+      expect(flares, hasLength(2));
+    });
+
+    test('a session with no P2 rows at all counts its pre-transition nodes in '
+        'step_fold_absent', () {
+      // The wholesale branch applies the per-node rule to every node at once,
+      // so the gauge must mean the same thing on both branches.
+      final o = observer(mode: DualReadMode.primary);
+      o.observe({
+        'tg-9abc': _session(
+          steps: [
+            _stepBead('a', state: StepState.pending),
+            _stepBead('b', state: StepState.running),
+          ],
+        ),
+      }, _StepSnapshot([]));
+
+      expect(o.accounting.stepFallbacks, 1);
+      expect(o.accounting.p2Miss, 2);
+      expect(o.accounting.stepFoldAbsent, 1);
+      expect(o.accounting.stepDivergences, 0);
+      expect(flares, isEmpty);
+    });
+
+    test('a fold-ahead pair that catches up inside the grace is '
+        'fold-ahead-of-legacy, carrying the first-observed values', () {
+      var now = DateTime.utc(2026, 9, 1, 12);
+      final o = observer(mode: DualReadMode.primary, clock: () => now);
+      final snapshot = _StepSnapshot([
+        _Row(stepPath: 'a', stepState: 'complete'),
+      ]);
+
+      // The fold saw `complete` first: the bead write and the record append
+      // crossed. HELD, not counted.
+      o.observe({
+        'tg-9abc': _session(steps: [_stepBead('a', state: StepState.running)]),
+      }, snapshot);
+      expect(o.accounting.stepDivergences, 0);
+      expect(flares, isEmpty);
+
+      // The bead caught up well inside the grace.
+      now = now.add(const Duration(seconds: 5));
+      o.observe({
+        'tg-9abc': _session(steps: [_stepBead('a', state: StepState.complete)]),
+      }, snapshot);
+
+      expect(o.accounting.stepDivergences, 1);
+      expect(o.accounting.stepFoldAheadOfLegacyDivergences, 1);
+      expect(o.accounting.stepUnexplainedDivergences, 0);
+      expect(o.accounting.stepOperatorStoreEditDivergences, 0);
+      final detail = o.accounting.divergenceDetails.single;
+      expect(detail.field, 'state');
+      expect(detail.legacyValue, 'running');
+      expect(detail.foldValue, 'complete');
+      expect(detail.cause, DualReadDivergenceCause.foldAheadOfLegacy);
+      final flare = flares.single;
+      expect(flare.$1, kDualReadDivergenceFlare);
+      expect(flare.$2['cause'], 'fold-ahead-of-legacy');
+      expect(flare.$2['legacy_value'], 'running');
+      expect(flare.$2['fold_value'], 'complete');
+    });
+
+    test('a fold-ahead pair that never catches up is unexplained past the '
+        'grace', () {
+      var now = DateTime.utc(2026, 9, 1, 12);
+      final o = observer(mode: DualReadMode.primary, clock: () => now);
+      final sessions = {
+        'tg-9abc': _session(steps: [_stepBead('a', state: StepState.running)]),
+      };
+      final snapshot = _StepSnapshot([
+        _Row(stepPath: 'a', stepState: 'complete'),
+      ]);
+
+      o.observe(sessions, snapshot);
+      expect(o.accounting.stepDivergences, 0);
+      now = now.add(const Duration(minutes: 5));
+      o.observe(sessions, snapshot);
+
+      expect(o.accounting.stepDivergences, 1);
+      expect(o.accounting.stepUnexplainedDivergences, 1);
+      expect(o.accounting.stepFoldAheadOfLegacyDivergences, 0);
+      final detail = o.accounting.divergenceDetails.single;
+      expect(detail.field, 'state');
+      expect(detail.legacyValue, 'running');
+      expect(detail.foldValue, 'complete');
+      expect(detail.cause, DualReadDivergenceCause.unexplained);
+    });
+
+    test('the round summary documents step_fold_absent and the new cause', () {
+      final accounting = DualReadAccounting()
+        ..stepFoldAbsent = 3
+        ..stepFoldAheadOfLegacyDivergences = 2;
+      final json = accounting.toJson(
+        mode: DualReadMode.observe,
+        health: TrajectorySnapshotHealth.live,
+        snapshotVersion: 11,
+      );
+      expect(json['step_fold_absent'], 3);
+      expect(json['step_fold_ahead_of_legacy_divergences'], 2);
+      final semantics = json['counter_semantics']! as Map<String, String>;
+      expect(semantics['step_fold_absent'], 'gauge');
+      expect(semantics['step_fold_ahead_of_legacy_divergences'], 'cumulative');
+      expect(
+        DualReadDivergenceCause.foldAheadOfLegacy.wire,
+        'fold-ahead-of-legacy',
+      );
+    });
   });
 }
