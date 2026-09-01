@@ -288,6 +288,94 @@ void main() {
       ),
     ];
 
+    test(
+      'default scope excludes open and boot-voided legacy sessions',
+      () async {
+        const completed = 'tranquility-completed';
+        const open = 'tranquility-live';
+        const voided = 'tranquility-voided';
+        final out = <String>[];
+        final code = await runTrajShadowDiff(
+          gridHome: '/grid/home',
+          open: openerFor(
+            TrajectoryOpened(
+              ScriptedReader([
+                ...lifecycle(completed),
+                _note(open, 3),
+                _note(voided, 4),
+              ]),
+            ),
+          ),
+          compare: CompositeShadow([
+            AttemptLifecycleShadow(
+              _LegacyById(const {
+                completed: LegacySessionView(
+                  sessionId: completed,
+                  workBeadId: 'tg-9abc',
+                  closed: true,
+                  completed: true,
+                ),
+                open: LegacySessionView(
+                  sessionId: open,
+                  workBeadId: 'tg-live',
+                  closed: false,
+                ),
+                voided: LegacySessionView(
+                  sessionId: voided,
+                  workBeadId: 'tg-voided',
+                  closed: true,
+                  voided: true,
+                ),
+              }),
+            ),
+          ]),
+          accounting: const ShadowRunAccounting(dropped: 0),
+          out: out.add,
+          err: out.add,
+        );
+        final text = out.join('\n');
+        expect(code, 0);
+        expect(text, contains('scope: $completed'));
+        expect(text, isNot(contains('tranquility-live')));
+        expect(text, isNot(contains('tranquility-voided')));
+        expect(text, contains('skipped in-flight: 1 session'));
+        expect(text, contains('skipped voided: 1 session'));
+        expect(text, contains('0 mismatches over 1 session'));
+        expect(text, contains('does NOT count toward the 3-clean-round'));
+        expect(text, isNot(contains('one clean run')));
+        expect(text, isNot(contains('named gaps:')));
+      },
+    );
+
+    test('--session explicitly compares an open legacy session', () async {
+      const open = 'tranquility-live';
+      final out = <String>[];
+      final code = await runTrajShadowDiff(
+        gridHome: '/grid/home',
+        open: openerFor(TrajectoryOpened(ScriptedReader([_note(open, 1)]))),
+        compare: AttemptLifecycleShadow(
+          _LegacyById(const {
+            open: LegacySessionView(
+              sessionId: open,
+              workBeadId: 'tg-live',
+              closed: false,
+            ),
+          }),
+        ),
+        accounting: const ShadowRunAccounting(dropped: 0),
+        sessions: const [open],
+        out: out.add,
+        err: out.add,
+      );
+      final text = out.join('\n');
+      expect(code, 0);
+      expect(text, contains('scope: $open'));
+      expect(text, contains('[non_atomic_crash]'));
+      expect(text, contains('1 mismatch, 0 unexplained'));
+      expect(text, isNot(contains('skipped in-flight:')));
+      expect(text, isNot(contains('skipped voided:')));
+    });
+
     test('the factory sees the parsed grid home and outranks the fixed '
         'strategy', () async {
       final homes = <String>[];
@@ -378,6 +466,17 @@ void main() {
       expect(out.join('\n'), contains('nothing compared'));
     });
   });
+}
+
+/// A legacy reader with one scripted view per session id.
+class _LegacyById implements LegacySessionReader {
+  const _LegacyById(this.views);
+
+  final Map<String, LegacySessionView> views;
+
+  @override
+  Future<LegacySessionView?> sessionView(String sessionId) async =>
+      views[sessionId];
 }
 
 /// A legacy reader that agrees with the folded lifecycle except for the work

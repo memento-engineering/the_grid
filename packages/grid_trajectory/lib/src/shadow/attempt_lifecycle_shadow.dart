@@ -71,7 +71,7 @@ ShadowMismatchClass nonAtomicCrashClassifier(
 
 /// The Family-1 [ShadowCompare] strategy — the seam `traj shadow-diff` runs
 /// when a station composes a real [LegacySessionReader] (grid_cli does).
-class AttemptLifecycleShadow implements ShadowCompare {
+class AttemptLifecycleShadow implements ShadowCompare, ShadowDefaultScope {
   AttemptLifecycleShadow(
     this._legacy, {
     ShadowMismatchClassifier classifier = nonAtomicCrashClassifier,
@@ -140,6 +140,20 @@ class AttemptLifecycleShadow implements ShadowCompare {
   /// and not a widening of the projection under test.
   static bool _comparableHeld(SessionHeadRow row) =>
       row.held || row.outcome == TerminalOutcome.escalated;
+
+  /// Projects the legacy ledger's liveness into the implicit CLI scope.
+  @override
+  Future<ShadowDefaultSessionDisposition> defaultDispositionFor(
+    String sessionId,
+  ) async {
+    final legacy = await _legacy.sessionView(sessionId);
+    return switch (legacy) {
+      LegacySessionView(voided: true) => ShadowDefaultSessionDisposition.voided,
+      LegacySessionView(closed: false) =>
+        ShadowDefaultSessionDisposition.inFlight,
+      _ => ShadowDefaultSessionDisposition.compare,
+    };
+  }
 
   @override
   Future<ShadowCompareResult> compare({
