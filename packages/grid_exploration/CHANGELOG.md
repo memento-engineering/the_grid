@@ -1,3 +1,9 @@
+## Unreleased
+
+- Deprecated: `DevModeSeat` is renamed to `DevModeHost`.
+- Compatibility: the deprecated `DevModeSeat` typedef remains throughout 0.3.x
+  and will be removed in 0.4.0.
+
 ## 0.3.0-rc.3
 
 - Fix: the published archive ships the DevTools extension bundle again — the
