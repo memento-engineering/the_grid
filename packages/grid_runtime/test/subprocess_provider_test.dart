@@ -36,6 +36,7 @@ class FakeSpawner implements SubprocessSpawner {
   /// (the name is reserved, no pid is stamped yet). Null ⇒ spawn returns
   /// immediately.
   Completer<void>? spawnGate;
+  Object? closeInputFailure;
 
   @override
   Future<SpawnedProcess> spawn({
@@ -54,6 +55,7 @@ class FakeSpawner implements SubprocessSpawner {
       stdout: stdoutCtl.stream,
       stderr: stderrCtl.stream,
       exitCode: provideExitCode ? exit.future : null,
+      closeInputFailure: closeInputFailure,
     );
   }
 
@@ -72,6 +74,7 @@ class _FakeSpawned implements SpawnedProcess {
     required this.stdout,
     required this.stderr,
     required Future<int>? exitCode,
+    required this.closeInputFailure,
   }) : _exit = exitCode;
 
   @override
@@ -81,6 +84,7 @@ class _FakeSpawned implements SpawnedProcess {
   @override
   final Stream<List<int>> stderr;
   final Future<int>? _exit;
+  final Object? closeInputFailure;
 
   final List<List<int>> writes = <List<int>>[];
   int closeInputCount = 0;
@@ -96,6 +100,8 @@ class _FakeSpawned implements SpawnedProcess {
   @override
   Future<void> closeInput() async {
     closeInputCount += 1;
+    final failure = closeInputFailure;
+    if (failure != null) throw failure;
   }
 }
 
@@ -994,6 +1000,54 @@ echo "done"
   });
 
   group('SubprocessProvider — the stop-vs-spawn window', () {
+    test(
+      'a throwing one-turn stdin close cannot skip a raced-spawn hand-off',
+      () async {
+        final closeFailure = StateError('stdin close failed');
+        final spawner = FakeSpawner()
+          ..spawnGate = Completer<void>()
+          ..closeInputFailure = closeFailure;
+        final groups = _DyingGroupController();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: groups,
+          parentEnvironment: const {},
+        );
+        addTearDown(provider.dispose);
+        final events = <RuntimeEvent>[];
+        final eventSub = provider.events.listen(events.add);
+        addTearDown(eventSub.cancel);
+
+        const name = 'tgstate-1/tg-gpg/one-turn-agent';
+        final starting = provider.start(
+          name,
+          const RuntimeConfig(
+            workDir: '/tmp',
+            command: 'claude',
+            lifecycle: Lifecycle.oneTurn,
+          ),
+        );
+        final transcriptClosed = provider.output(name).drain<void>();
+        expect(provider.listRunning('tgstate-'), [name]);
+
+        await provider.stop(name);
+        expect(groups.signals, isEmpty);
+
+        spawner.spawnGate!.complete();
+        await expectLater(starting, throwsA(same(closeFailure)));
+        await expectLater(
+          transcriptClosed.timeout(const Duration(seconds: 1)),
+          completes,
+        );
+
+        expect(groups.signals, [(4242, ProcessSignal.sigterm)]);
+        expect(spawner._lastSpawned!.closeInputCount, 1);
+        expect(events.whereType<SessionStarted>(), isEmpty);
+        expect(provider.listRunning('tgstate-'), isEmpty);
+        expect(provider.isRunning(name), isFalse);
+      },
+    );
+
     test('a `stop` that lands while the spawn is IN FLIGHT is HANDED OFF: the '
         'landing spawn reaps its own group — never an orphan the transport '
         'forgot', () async {
