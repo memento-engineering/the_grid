@@ -936,7 +936,11 @@ out in r4, without exception — C2's reconciler append is a trajectory-side obs
 record, not a bd write), so no durable damage class exists. At any point:
 `dualRead: off` — THE DEFAULT since r13, and therefore the posture main ships in — =
 today's decision paths, against a ledger that never stopped being written exactly as
-today. **`off` = byte-equivalent to main EXCEPT C8a's flare delivery, a designed fix.**
+today. **`off` = byte-equivalent to main EXCEPT TWO reviewed bug fixes, adjudicated as the
+stated exceptions (r14, operator): (a) C8a's flare delivery, and (b) C0's gc
+disable-on-deny — main's cadence retries a permanently-denied `CALL DOLT_GC()` every
+5 minutes forever (tg-3o6b's live finding); latching it off once with a named flare is
+the fix, deliberately posture-independent.**
 C8a is ungated on purpose: the state-store writer was null-sinking `session.minted`,
 `gate.autoClosed`, and `session.workTerminal`, and repairing that is a reviewed BUG FIX,
 not a posture. Everything else the wave adds — the comparator on both axes, the P1/P2

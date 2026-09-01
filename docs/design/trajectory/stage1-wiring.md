@@ -584,11 +584,14 @@ this: the schema bootstrap creates the cut shape.
 and step 2.3 grants the service `trajectory.*` ONLY — the boundary wins, so on these
 homes gc is **operator-run**: the operator runs `traj gc` (the gridboot credential) when
 growth warrants it, and the service grant is never widened to make the cadence work. The
-harness's own cadence latches OFF (one `trajectory.gcDisabled` flare, never re-armed) only
-on an unambiguous ACCESS-DENIED code; dolt answers a denied `CALL` on its catch-all 1105,
-which the harness deliberately does NOT latch on — a predicate that disables reclamation
-for a process lifetime may not be decided by a message substring, so that shape stays in
-the ordinary rate-limited `trajectory.gcFailed` retry loop instead.
+harness's own cadence latches OFF (one `trajectory.gcDisabled` flare, never re-armed for
+the process) on an unambiguous access-denied code OR on dolt's catch-all 1105 when the
+message carries the server's own denial phrasing (`command denied to user` — the shared
+`isPrivilegeDenied` predicate, one definition consulted by both the harness latch and
+`traj gc`'s operator sentence, so the two can never disagree). An arbitrary 1105 without
+that phrasing stays in the ordinary rate-limited `trajectory.gcFailed` retry loop. (This
+paragraph superseded an earlier draft that refused to latch on any 1105 — the shipped
+rule is cut-wiring.md C0's, verified against dolt's real denial shape by the CI guard.)
 
 **Reconnect rule (r2, minor 15):** the harness resolves the listener at build via
 `resolveDoltServerListener` — and **re-resolves it on every reconnect attempt**. bd
