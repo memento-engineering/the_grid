@@ -48,6 +48,12 @@ class FakeRuntimeProvider implements RuntimeProvider {
   /// Every `stop`ped session name, in call order.
   final List<String> stopped = [];
 
+  /// Exact immutable chunks written to each session.
+  final Map<String, List<List<int>>> writes = <String, List<List<int>>>{};
+
+  final Map<String, StreamController<List<int>>> _interaction =
+      <String, StreamController<List<int>>>{};
+
   /// A gate the test can hold to delay a `start` (proves the spawn ordering /
   /// races); when null, `start` completes immediately.
   Completer<void>? startGate;
@@ -60,6 +66,7 @@ class FakeRuntimeProvider implements RuntimeProvider {
   /// `listRunning`/`isRunning`/`processAlive` reflect, so a test can prove a
   /// spawn landing mid-teardown is visible to `RestartReconciler.sweepOrphans`.
   final Set<String> _live = <String>{};
+  final Map<String, Lifecycle> _lifecycles = <String, Lifecycle>{};
 
   /// Each session's RETAINED terminal, mirroring the real provider's
   /// latch-before-emit contract ([RuntimeProvider.terminalOf], tg-uad): [emit]
@@ -84,6 +91,11 @@ class FakeRuntimeProvider implements RuntimeProvider {
       case Exited() || Died():
         _terminals[event.name] = event;
         _live.remove(event.name);
+        _lifecycles.remove(event.name);
+        final interaction = _interaction[event.name];
+        if (interaction != null && !interaction.isClosed) {
+          unawaited(interaction.close());
+        }
       case SessionStarted() || Respawned() || ActivityChanged():
         break;
     }
@@ -104,12 +116,19 @@ class FakeRuntimeProvider implements RuntimeProvider {
     // contract).
     _terminals.remove(name);
     _live.add(name);
+    _lifecycles[name] = config.lifecycle;
+    _interaction[name] = StreamController<List<int>>();
   }
 
   @override
   Future<void> stop(String name) async {
     stopped.add(name);
     _live.remove(name);
+    _lifecycles.remove(name);
+    final interaction = _interaction.remove(name);
+    if (interaction != null && !interaction.isClosed) {
+      unawaited(interaction.close());
+    }
     // stop RELEASES the retained terminal (the terminalOf release contract).
     _terminals.remove(name);
   }
@@ -118,10 +137,37 @@ class FakeRuntimeProvider implements RuntimeProvider {
   Future<void> interrupt(String name) async {}
 
   @override
+  Future<void> write(String name, List<int> bytes) async {
+    if (!_live.contains(name) || _lifecycles[name] != Lifecycle.longLived) {
+      throw SessionNotWritable(name, 'unknown or terminal session');
+    }
+    writes
+        .putIfAbsent(name, () => <List<int>>[])
+        .add(List<int>.unmodifiable(bytes));
+  }
+
+  @override
   Stream<RuntimeEvent> get events => _events.stream;
 
   @override
   Stream<String> output(String name) => const Stream.empty();
+
+  @override
+  Stream<List<int>> interactionOutput(String name) {
+    if (!_live.contains(name) || _lifecycles[name] != Lifecycle.longLived) {
+      throw SessionNotWritable(name, 'no long-lived interaction stream');
+    }
+    return _interaction[name]!.stream;
+  }
+
+  /// Emits one raw stdout [bytes] chunk to an interaction decoder.
+  void emitInteraction(String name, List<int> bytes) {
+    final controller = _interaction[name];
+    if (controller == null || controller.isClosed) {
+      throw StateError('no live interaction stream for "$name"');
+    }
+    controller.add(List<int>.unmodifiable(bytes));
+  }
 
   @override
   bool isRunning(String name) => _live.contains(name);
@@ -151,9 +197,13 @@ class FakeRuntimeProvider implements RuntimeProvider {
 
   /// Closes the broadcast event stream and drops all retained terminals (call
   /// from an `addTearDown`).
-  Future<void> close() {
+  Future<void> close() async {
     _terminals.clear();
-    return _events.close();
+    _lifecycles.clear();
+    for (final controller in _interaction.values) {
+      if (!controller.isClosed) unawaited(controller.close());
+    }
+    await _events.close();
   }
 }
 

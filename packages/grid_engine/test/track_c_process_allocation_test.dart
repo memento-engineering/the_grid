@@ -4,6 +4,8 @@
 // controllable FakeRuntimeProvider + an injectable liveness seam. Zero I/O; the
 // live cross-process output re-wire is the deferred adopt-a-live-process piece
 // (ADR-0008 D6) — what's proven here is the adopt DECISION + not double-spawning.
+import 'dart:async';
+
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
@@ -86,6 +88,54 @@ class _JobCap extends ProcessCapability {
   }
 }
 
+class _FlatChannelSession implements ProcessSession {
+  final StreamController<ProcessSessionUpdate> _updates =
+      StreamController<ProcessSessionUpdate>();
+
+  @override
+  Stream<ProcessSessionUpdate> get updates => _updates.stream;
+
+  @override
+  Future<void> start() async {
+    _updates.add(
+      const ProcessSessionUpdate.completed(result: {'channel': 'shared'}),
+    );
+  }
+
+  @override
+  Future<ProcessCommandDisposition> send(ProcessSessionCommand command) async =>
+      ProcessCommandDisposition.terminal;
+
+  @override
+  void onRuntimeEvent(RuntimeEvent event) {}
+
+  @override
+  Future<void> close() async => _updates.close();
+}
+
+class _ChannelJobCap extends _JobCap {
+  _ChannelJobCap(this.session);
+
+  final ProcessSession session;
+
+  @override
+  RuntimeConfig spawn(TreeContext context, StepArgs args) => RuntimeConfig(
+    workDir: context.getInheritedSeedOfExactType<Workspace>()!.workspaceDir,
+    command: 'probe',
+    lifecycle: Lifecycle.longLived,
+  );
+
+  @override
+  ProcessSession createSession({
+    required RuntimeProvider runtime,
+    required String name,
+    required String attemptId,
+    required String instanceFence,
+    required TreeContext context,
+    required StepArgs args,
+  }) => session;
+}
+
 /// The ambient values the old CapabilityContext threaded, now read from the
 /// tree (the context rip-out): the workspace the spawn runs in.
 FakeTreeContext _treeCtx() => FakeTreeContext(
@@ -124,6 +174,32 @@ Future<void> _pump() async {
 }
 
 void main() {
+  test(
+    'flat process allocation consumes the shared channel contract',
+    () async {
+      final reports = <AllocationReport>[];
+      final provider = FakeRuntimeProvider();
+      final allocation = _ChannelJobCap(_FlatChannelSession()).createAllocation(
+        _ctx(
+          transport: provider,
+          sink: reports.add,
+          cancel: CancelToken(),
+          kind: StepKind.job,
+          fence: const AdoptFence(),
+        ),
+      );
+
+      await allocation.startOrAdopt();
+      await _pump();
+
+      expect(provider.started, hasLength(1));
+      expect(reports.whereType<AllocationCompleted>(), hasLength(1));
+      expect(reports.whereType<AllocationCompleted>().single.payload, {
+        'channel': 'shared',
+      });
+    },
+  );
+
   group('Track C — kind drives adoptability/detachability (D4)', () {
     test('a daemon is adoptable + detachable; a job is neither', () {
       final provider = FakeRuntimeProvider();

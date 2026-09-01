@@ -21,6 +21,7 @@
 //    greping the helpers, not the literal key strings, so a stray
 //    `writer.update(id, metadata: leaseBreadcrumb(x))` anywhere in lib/
 //    FAILS this test (the round-3 committee's false-verifier fix).
+import 'dart:async';
 import 'dart:io';
 
 import 'package:genesis_tree/genesis_tree.dart';
@@ -54,6 +55,51 @@ class _FakeProcessCap extends ProcessCapability {
     Exited() || Died() => StepSignal.failed,
     _ => StepSignal.none,
   };
+}
+
+class _ImmediateSession implements ProcessSession {
+  final StreamController<ProcessSessionUpdate> _updates =
+      StreamController<ProcessSessionUpdate>();
+  bool closed = false;
+
+  @override
+  Stream<ProcessSessionUpdate> get updates => _updates.stream;
+
+  @override
+  Future<void> start() async {
+    _updates.add(
+      const ProcessSessionUpdate.completed(result: {'structured': 'yes'}),
+    );
+  }
+
+  @override
+  Future<ProcessCommandDisposition> send(ProcessSessionCommand command) async =>
+      ProcessCommandDisposition.terminal;
+
+  @override
+  void onRuntimeEvent(RuntimeEvent event) {}
+
+  @override
+  Future<void> close() async {
+    closed = true;
+    await _updates.close();
+  }
+}
+
+class _ChannelProcessCap extends _FakeProcessCap {
+  _ChannelProcessCap(this.session);
+
+  final ProcessSession session;
+
+  @override
+  ProcessSession createSession({
+    required RuntimeProvider runtime,
+    required String name,
+    required String attemptId,
+    required String instanceFence,
+    required TreeContext context,
+    required StepArgs args,
+  }) => session;
 }
 
 class _ProvisionSourceControl implements SourceControl {
@@ -159,6 +205,69 @@ void main() {
       expect(requireProcessLeaseVendor(ctx), same(vendor));
     });
   });
+
+  test(
+    'channel session bypasses legacy dispatcher and maps protocol terminal',
+    () async {
+      final reports = <AllocationReport>[];
+      final runtime = FakeRuntimeProvider();
+      final session = _ImmediateSession();
+      var legacyDispatches = 0;
+      final request = ProcessLeaseRequest(
+        stepBeadId: 'tgdog-step-channel',
+        capability: _ChannelProcessCap(session),
+        allocation: AllocationContext(
+          treeContext: FakeTreeContext(),
+          args: stepArgs('tg-1/lease'),
+          transport: runtime,
+          address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
+          env: const {
+            'GRID_ATTEMPT_ID': 'attempt-1',
+            'GRID_INSTANCE_TOKEN': 'fence-1',
+          },
+          sink: reports.add,
+        ),
+      );
+      final vendor = SelfManagedProcessVendor(
+        spawn: (request, context, args) async => const ProcessHandle(
+          pgid: 1,
+          pid: 2,
+          token: 'fence-1',
+          attemptId: 'attempt-1',
+        ),
+        dispatch: (handle, request, context, args) async {
+          legacyDispatches += 1;
+          return const Failed('legacy dispatcher must not run');
+        },
+      );
+      final allocation = vendor
+          .leaseFor(request)
+          .createAllocation(
+            AllocationContext(
+              treeContext: FakeTreeContext(),
+              args: stepArgs('tg-1/lease'),
+              transport: runtime,
+              address: const AllocationAddress('tgdog-s', 'tg-1/lease'),
+              env: const {},
+              sink: reports.add,
+            ),
+          );
+
+      expect(
+        const ProcessSessionUpdate.completed(result: <String, String>{}).signal,
+        StepSignal.complete,
+      );
+      await allocation.startOrAdopt();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(legacyDispatches, 0);
+      expect(session.closed, isTrue);
+      expect(reports.whereType<AllocationCompleted>(), hasLength(1));
+      expect(reports.whereType<AllocationCompleted>().single.payload, {
+        'structured': 'yes',
+      });
+    },
+  );
 
   group('stationProcessSpawner — provisioned workspace checkout guard', () {
     test('sourceless provision fails before start', () async {
@@ -577,8 +686,11 @@ void main() {
       'LeaseKeys) — greping the HELPERS, so a stray '
       'writer.update(id, metadata: leaseBreadcrumb(x)) anywhere FAILS here',
       () {
-        // Runs from the package root (dart test's cwd contract).
-        final lib = Directory('lib');
+        // Accept both a package-root run and the coordinated repository-root
+        // invocation used by the cross-package acceptance suite.
+        final lib = Directory('lib').existsSync()
+            ? Directory('lib')
+            : Directory('packages/grid_engine/lib');
         expect(lib.existsSync(), isTrue);
         final offenders = <String>[];
         for (final entity in lib.listSync(recursive: true)) {
@@ -601,7 +713,7 @@ void main() {
         }
         expect(
           offenders,
-          ['lib/src/molecule/process_lease_vendor.dart'],
+          ['${lib.path}/src/molecule/process_lease_vendor.dart'],
           reason:
               'grid.lease.* has EXACTLY one writer — a helper-mediated write '
               'anywhere else breaks the single-writer invariant (item 5)',

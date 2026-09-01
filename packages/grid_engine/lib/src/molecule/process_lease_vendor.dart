@@ -590,6 +590,43 @@ typedef ProcessDispatcher =
       StepArgs args,
     );
 
+Future<StepOutcome> _dispatchProcess({
+  required ProcessHandle handle,
+  required ProcessLeaseRequest request,
+  required ProcessDispatcher fallback,
+  required TreeContext context,
+  required StepArgs args,
+}) async {
+  final allocation = request.allocation;
+  final name = allocation.address.providerName;
+  final session = request.capability.createSession(
+    runtime: allocation.transport,
+    name: name,
+    attemptId: handle.attemptId,
+    instanceFence: handle.token,
+    context: context,
+    args: args,
+  );
+  if (session == null) {
+    return fallback(handle, request, context, args);
+  }
+
+  final update = await driveProcessSession(
+    session: session,
+    runtimeEvents:
+        handle.events?.stream ??
+        allocation.transport.events.where((event) => event.name == name),
+    retainedTerminal: allocation.transport.terminalOf(name),
+  );
+  return switch (update) {
+    ProcessSessionCompleted(:final result) => Ok(result),
+    ProcessSessionFailed(:final reason) => Failed(reason),
+    ProcessSessionProgress() => const Failed(
+      'channel session returned a non-terminal update',
+    ),
+  };
+}
+
 /// Reads a step bead's CURRENT metadata — the real bd lookup
 /// [StationProcessLeaseVendor.adoptable] needs to see a prior incarnation's
 /// breadcrumb after a station restart (an in-memory recollection would not
@@ -1049,7 +1086,13 @@ class _VendedProcessLease extends LeaseCapability<ProcessHandle> {
     ProcessHandle handle,
     TreeContext context,
     StepArgs args,
-  ) => dispatch(handle, request, context, args);
+  ) => _dispatchProcess(
+    handle: handle,
+    request: request,
+    fallback: dispatch,
+    context: context,
+    args: args,
+  );
 
   /// Frees the SLOT — which for a process lease is the running GROUP plus the
   /// durable breadcrumb: stop the spawned group at the request's transport
@@ -1161,7 +1204,13 @@ class _SelfManagedProcessLease extends LeaseCapability<ProcessHandle> {
     ProcessHandle handle,
     TreeContext context,
     StepArgs args,
-  ) => dispatch(handle, request, context, args);
+  ) => _dispatchProcess(
+    handle: handle,
+    request: request,
+    fallback: dispatch,
+    context: context,
+    args: args,
+  );
 
   @override
   Future<void> release(ProcessHandle handle) async {

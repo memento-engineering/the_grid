@@ -32,7 +32,12 @@ import 'package:grid_runtime/grid_runtime.dart';
 import '../domain/mount_eligibility.dart';
 import 'allocation.dart';
 import 'cursor.dart';
+import 'process_session.dart';
 import 'route.dart';
+import 'step_signal.dart';
+
+export 'process_session.dart';
+export 'step_signal.dart';
 
 /// A leaf the engine mounts. The engine ships three families — [ProcessCapability]
 /// (a spawned process), [ServiceCapability] (an async body), and
@@ -180,6 +185,16 @@ abstract class ProcessCapability extends Capability {
   /// `none`). The host writes the resulting cursor state through the chokepoint.
   StepSignal interpretEvent(RuntimeEvent event);
 
+  /// Creates a protocol session for this incarnation, or null for one-turn I/O.
+  ProcessSession? createSession({
+    required RuntimeProvider runtime,
+    required String name,
+    required String attemptId,
+    required String instanceFence,
+    required TreeContext context,
+    required StepArgs args,
+  }) => null;
+
   /// An optional result payload this process step contributes on a clean
   /// completion (e.g. a critic's grade). Called by the host on a `complete`
   /// signal; the returned map is recorded under `grid.result.<nodePath>.*`
@@ -270,10 +285,6 @@ abstract class ServiceCapability extends Capability {
   Allocation createAllocation(AllocationContext ctx) =>
       ServiceAllocation(this, ctx);
 }
-
-/// What a runtime event means to a [ProcessCapability]. `ready` and `complete`
-/// are POSITIVE TERMINALS (satisfy a `dependsOn`); `none` is "no cursor change".
-enum StepSignal { none, ready, complete, failed }
 
 /// The outcome of an ordinary capability body — `{Ok, Failed}` and nothing else.
 ///

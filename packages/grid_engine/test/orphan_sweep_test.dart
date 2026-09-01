@@ -64,9 +64,16 @@ class _StubbornProvider implements RuntimeProvider {
   @override
   Future<void> interrupt(String name) async {}
   @override
+  Future<void> write(String name, List<int> bytes) => Future<void>.error(
+    SessionNotWritable(name, 'stubborn test provider is not writable'),
+  );
+  @override
   Stream<RuntimeEvent> get events => const Stream<RuntimeEvent>.empty();
   @override
   Stream<String> output(String name) => const Stream<String>.empty();
+  @override
+  Stream<List<int>> interactionOutput(String name) =>
+      throw SessionNotWritable(name, 'no interaction stream');
   @override
   bool isRunning(String name) => true;
   @override

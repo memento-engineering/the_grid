@@ -81,6 +81,9 @@ class _GatedSpawner implements SubprocessSpawner {
 class _FakeSpawned implements SpawnedProcess {
   _FakeSpawned(this.pid);
 
+  final List<List<int>> writes = <List<int>>[];
+  int closeInputCount = 0;
+
   @override
   final int pid;
 
@@ -92,6 +95,16 @@ class _FakeSpawned implements SpawnedProcess {
 
   @override
   Future<int>? get exitCode => null;
+
+  @override
+  Future<void> write(List<int> bytes) async {
+    writes.add(List<int>.unmodifiable(bytes));
+  }
+
+  @override
+  Future<void> closeInput() async {
+    closeInputCount += 1;
+  }
 }
 
 class _FakeGroups implements ProcessGroupController {

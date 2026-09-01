@@ -559,6 +559,9 @@ class ProcessAllocation extends Allocation {
   final ProcessCapability capability;
 
   StreamSubscription<RuntimeEvent>? _sub;
+  final StreamController<RuntimeEvent> _sessionEvents =
+      StreamController<RuntimeEvent>();
+  ProcessSession? _session;
   bool _started = false;
   bool _adopted = false;
   bool _terminal = false;
@@ -680,12 +683,22 @@ class ProcessAllocation extends Allocation {
         );
       }
       final config = base.copyWith(env: {...base.env, ...context.env});
+      final session = capability.createSession(
+        runtime: context.transport,
+        name: name,
+        attemptId: context.env['GRID_ATTEMPT_ID'] ?? '',
+        instanceFence: context.env['GRID_INSTANCE_TOKEN'] ?? '',
+        context: tree,
+        args: args,
+      );
+      _session = session;
       _started = true;
       try {
         await context.transport.start(name, config);
       } on SessionAlreadyExists {
         // A re-fired ready event raced the spawn, and the group is up.
       }
+      if (session != null) unawaited(_driveChannel(session, name));
     } on Object catch (e) {
       if (_terminal) return;
       _terminal = true;
@@ -704,8 +717,17 @@ class ProcessAllocation extends Allocation {
     if (_terminal) return;
     if (e is SessionStarted) {
       context.sink(AllocationStarted(pid: e.pid, pgid: e.pgid));
+    }
+    final session = _session;
+    if (session != null) {
+      if (!_sessionEvents.isClosed) _sessionEvents.add(e);
       return;
     }
+    _onOneTurnEvent(e);
+  }
+
+  void _onOneTurnEvent(RuntimeEvent e) {
+    if (e is SessionStarted) return;
     final signal = capability.interpretEvent(e);
     // THE COMPLETION FENCE — **no-complete-on-faith**, the dual of D4/D5's
     // no-adopt-on-faith. A detached one-shot exposes NO readable exit code, so the
@@ -747,6 +769,26 @@ class ProcessAllocation extends Allocation {
         state = AllocationState.gone;
         final reason = e is Died && e.reason.isNotEmpty ? e.reason : '';
         context.sink(AllocationFailed(reason));
+    }
+  }
+
+  Future<void> _driveChannel(ProcessSession session, String name) async {
+    final update = await driveProcessSession(
+      session: session,
+      runtimeEvents: _sessionEvents.stream,
+      retainedTerminal: context.transport.terminalOf(name),
+    );
+    if (_terminal || context.args.cancel.isCancelled) return;
+    _terminal = true;
+    switch (update) {
+      case ProcessSessionCompleted(:final result):
+        state = AllocationState.gone;
+        context.sink(AllocationCompleted(result));
+      case ProcessSessionFailed(:final reason):
+        state = AllocationState.gone;
+        context.sink(AllocationFailed(reason));
+      case ProcessSessionProgress():
+        throw StateError('session driver returned progress');
     }
   }
 
@@ -918,19 +960,27 @@ class ProcessAllocation extends Allocation {
   @override
   Future<void> detach() async {
     state = AllocationState.dying;
+    _terminal = true;
     unawaited(_sub?.cancel());
     _sub = null;
+    unawaited(_session?.close());
+    _session = null;
+    if (!_sessionEvents.isClosed) unawaited(_sessionEvents.close());
     state = AllocationState.gone;
   }
 
   @override
   Future<void> dispose() async {
     state = AllocationState.dying;
+    _terminal = true;
     // Cancel the cooperative token FIRST — a racing `startOrAdopt` that has not
     // yet spawned bails at its guard (no orphan spawn after unmount).
     context.args.cancel.cancel();
     unawaited(_sub?.cancel());
     _sub = null;
+    unawaited(_session?.close());
+    _session = null;
+    if (!_sessionEvents.isClosed) unawaited(_sessionEvents.close());
     // Kill the managed group — whether we spawned it (_started) or reattached a
     // survivor (_adopted); dispose is KILL, the floor (D4).
     if (_started || _adopted) {

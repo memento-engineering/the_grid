@@ -50,6 +50,12 @@ abstract interface class SpawnedProcess {
   /// [RuntimeEvent.died]). A fake spawner provides it so the supervisor emits a
   /// precise [RuntimeEvent.exited] with the code.
   Future<int>? get exitCode;
+
+  /// Writes [bytes] unchanged to the child's stdin and flushes them.
+  Future<void> write(List<int> bytes);
+
+  /// Closes the child's stdin exactly once.
+  Future<void> closeInput();
 }
 
 /// Spawns real agent subprocesses via `dart:io` with the Track-2 contract.
@@ -86,14 +92,6 @@ class SystemSubprocessSpawner implements SubprocessSpawner {
       runInShell: false,
       mode: ProcessStartMode.detachedWithStdio,
     );
-    // CLOSE the child's stdin immediately: the agent transport is ARGV-ONLY
-    // ([SpawnedProcess] exposes no stdin, so nothing can ever write to it). An
-    // open, never-written pipe does not mean "no input" — it means "input still
-    // pending", and a harness that READS stdin blocks on it forever. `claude -p`
-    // ignores stdin and so never noticed; `codex exec` prints "Reading additional
-    // input from stdin..." and hangs BEFORE opening its thread — no rollout, no
-    // telemetry, no error, the session latched at `running` until killed.
-    unawaited(process.stdin.close().catchError((Object _) {}));
     return _SystemSpawnedProcess(process);
   }
 }
@@ -115,6 +113,15 @@ class _SystemSpawnedProcess implements SpawnedProcess {
   // Unavailable for a detached process — see [SpawnedProcess.exitCode].
   @override
   Future<int>? get exitCode => null;
+
+  @override
+  Future<void> write(List<int> bytes) async {
+    _process.stdin.add(List<int>.unmodifiable(bytes));
+    await _process.stdin.flush();
+  }
+
+  @override
+  Future<void> closeInput() => _process.stdin.close();
 }
 
 /// The dogfood-default [RuntimeProvider]: spawns a `claude` agent per ready bead
@@ -257,10 +264,12 @@ class SubprocessProvider implements RuntimeProvider {
       );
     } on Object {
       _sessions.remove(name);
+      session.close();
       rethrow;
     }
 
     session.pid = spawned.pid;
+    session.bind(spawned);
     session.pgid = await _groups.resolvePgid(spawned.pid);
     session.startedAt = DateTime.now();
     session.lastActivity = session.startedAt;
@@ -278,7 +287,10 @@ class SubprocessProvider implements RuntimeProvider {
 
     // Pipe the transcript: merge stdout+stderr into the per-session line stream
     // and the bounded peek buffer.
-    session.attachTranscript(spawned.stdout, spawned.stderr);
+    session.attachTranscript(session.tapStdout(spawned.stdout), spawned.stderr);
+    if (config.lifecycle == Lifecycle.oneTurn) {
+      await session.closeInput();
+    }
 
     final effectiveDeadline = config.deadline ?? _agentDeadline;
 
@@ -412,8 +424,28 @@ class SubprocessProvider implements RuntimeProvider {
   }
 
   @override
+  Future<void> write(String name, List<int> bytes) {
+    final session = _sessions[name];
+    if (session == null || _terminals.containsKey(name)) {
+      throw SessionNotWritable(name, 'unknown or terminal session');
+    }
+    return session.write(bytes);
+  }
+
+  @override
   Stream<String> output(String name) =>
       _sessions[name]?.transcript ?? const Stream<String>.empty();
+
+  @override
+  Stream<List<int>> interactionOutput(String name) {
+    final session = _sessions[name];
+    if (session == null ||
+        session.lifecycle != Lifecycle.longLived ||
+        _terminals.containsKey(name)) {
+      throw SessionNotWritable(name, 'no long-lived interaction stream');
+    }
+    return session.interaction;
+  }
 
   @override
   bool isRunning(String name) => _sessions.containsKey(name);
@@ -519,7 +551,7 @@ class SubprocessProvider implements RuntimeProvider {
     // settles from state instead of latching at `running` forever.
     _terminals[session.name] = terminal;
     _emit(terminal);
-    if (killed == null) session.close();
+    session.close();
   }
 
   /// Tears down the provider: cancels all supervision and closes the event
@@ -562,6 +594,8 @@ class _Session {
   DateTime? startedAt;
   DateTime? lastActivity;
   bool stopping = false;
+  SpawnedProcess? _process;
+  bool _inputClosed = false;
 
   /// Set once the death event has been emitted, so a near-simultaneous
   /// exit-future resolution and liveness-poll miss cannot double-emit.
@@ -596,11 +630,53 @@ class _Session {
 
   final StreamController<String> _transcript =
       StreamController<String>.broadcast();
+  final StreamController<List<int>> _interaction =
+      StreamController<List<int>>();
   final List<String> _peekBuffer = <String>[];
   Timer? _superviseTimer;
   bool _closed = false;
 
   Stream<String> get transcript => _transcript.stream;
+
+  Stream<List<int>> get interaction => _interaction.stream;
+
+  void bind(SpawnedProcess process) {
+    _process = process;
+  }
+
+  Future<void> write(List<int> bytes) async {
+    final process = _process;
+    if (lifecycle != Lifecycle.longLived ||
+        process == null ||
+        _closed ||
+        stopping) {
+      throw SessionNotWritable(name, 'session is not a live long-lived child');
+    }
+    await process.write(List<int>.unmodifiable(bytes));
+  }
+
+  Future<void> closeInput() async {
+    if (_inputClosed) return;
+    _inputClosed = true;
+    final process = _process;
+    if (process != null) await process.closeInput();
+  }
+
+  Stream<List<int>> tapStdout(Stream<List<int>> source) => source.transform(
+    StreamTransformer<List<int>, List<int>>.fromHandlers(
+      handleData: (bytes, sink) {
+        final copy = List<int>.unmodifiable(bytes);
+        if (!_interaction.isClosed) _interaction.add(copy);
+        sink.add(copy);
+      },
+      handleError: (Object error, StackTrace stack, sink) {
+        if (!_interaction.isClosed) {
+          _interaction.addError(error, stack);
+        }
+        sink.addError(error, stack);
+      },
+    ),
+  );
 
   /// Merges [out] and [err] byte streams into newline-delimited transcript
   /// lines, fanned to the broadcast stream and the bounded peek ring.
@@ -661,6 +737,8 @@ class _Session {
     if (_closed) return;
     _closed = true;
     cancelSupervision();
+    unawaited(closeInput().catchError((Object _) {}));
+    if (!_interaction.isClosed) unawaited(_interaction.close());
     if (!_transcript.isClosed) _transcript.close();
   }
 }

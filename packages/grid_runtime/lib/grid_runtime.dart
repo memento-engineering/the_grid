@@ -60,7 +60,7 @@ export 'src/runtime/runtime_config.dart'
 export 'src/runtime/runtime_event.dart'
     show ActivityChanged, Died, Exited, Respawned, RuntimeEvent, SessionStarted;
 export 'src/runtime/runtime_provider.dart'
-    show RuntimeProvider, SessionAlreadyExists;
+    show RuntimeProvider, SessionAlreadyExists, SessionNotWritable;
 export 'src/runtime/subprocess_provider.dart'
     show
         SpawnedProcess,
