@@ -482,6 +482,7 @@ void main() {
     test('manual bd close is operator-store-edit', () {
       expect(DualReadDivergenceCause.values, const [
         DualReadDivergenceCause.operatorStoreEdit,
+        DualReadDivergenceCause.foldAheadOfLegacy,
         DualReadDivergenceCause.unexplained,
       ]);
       var now = DateTime.utc(2026, 9, 1, 16);
@@ -801,6 +802,8 @@ void main() {
               greaterThan(0),
             );
             expect(observer.accounting.unexplainedDivergences, 0);
+          case DualReadDivergenceCause.foldAheadOfLegacy:
+            fail('the session comparator never mints fold-ahead-of-legacy');
           case DualReadDivergenceCause.unexplained:
             expect(observer.accounting.unexplainedDivergences, greaterThan(0));
             expect(observer.accounting.operatorStoreEditDivergences, 0);

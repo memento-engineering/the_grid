@@ -247,6 +247,43 @@ bool staleRungPromotion(StepState bead, StepState fold) =>
 bool servesFoldStepState(StepState bead, StepState fold) =>
     !demotesStepState(bead, fold) && !staleRungPromotion(bead, fold);
 
+/// Can a fold row EXIST yet for a node whose bead carries [bead]?
+///
+/// False for [StepState.pending] ALONE, and that is a structural fact rather
+/// than a heuristic. The recorder's six step verbs are `stepRunning` /
+/// `stepReady` / `stepComplete` / `stepFailed` / `stepGated` / `stepRearmed`
+/// (`station_trajectory_recorder.dart:1145-1330`); exactly one of them —
+/// `stepRearmed` (`:1330-1348`) — carries `pending`, and it fires at
+/// `fromStepRound + 1` on a node that necessarily already has its `stepGated`
+/// row at the predecessor rung. P2 has no mint record — "the FIRST transition
+/// on a (session, round, step_path, step_round) key is what births the cursor
+/// row" (`grid_trajectory/lib/src/fold/step_cursor_delta.dart:11-14`) — so a
+/// bead-`pending` node with NO row AT ALL has never transitioned, while a
+/// REARMED one always keeps its predecessor rung and reads as
+/// [staleRungPromotion] lag instead of a miss.
+///
+/// This is what scopes C4's P2-miss clause to the window C4 itself names —
+/// "the GUARANTEED state of every step for the whole append round-trip AFTER
+/// IT TRANSITIONS". Before the first transition no round-trip is in flight,
+/// so the absent row is not lag and carries no evidence; after it, an absent
+/// row is exactly the dropped append the escalation is for.
+bool expectsFoldStepRow(StepState bead) => bead != StepState.pending;
+
+/// Is [fold] STRICTLY LATER than [bead] on the step lifecycle's progress
+/// ordering (`_stepProgress`)?
+///
+/// Every state divergence has this shape by construction — a divergence is
+/// [servesFoldStepState] returning true, which excludes both the demotions and
+/// the stale rungs — and the pair the comparator sees most often, bead
+/// `running` / fold `complete`, is the bead-first/append-later window read
+/// from the FOLD's side: it resolves as soon as the bead's own write lands.
+/// This is the discriminator for
+/// [DualReadDivergenceCause.foldAheadOfLegacy] and the "has the bead caught up
+/// yet?" test at window resolution, never a merge input: what is SERVED stays
+/// [servesFoldStepState]'s call.
+bool foldAheadOfLegacyStep(StepState bead, StepState fold) =>
+    _stepProgress(fold) > _stepProgress(bead);
+
 /// The step lifecycle's progress ordering — pending → running → gated →
 /// terminal. `gated` sits above `running` because a node reaches its gate by
 /// running into it, and the three terminals share a rank because they are
