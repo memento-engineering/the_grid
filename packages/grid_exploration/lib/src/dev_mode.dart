@@ -25,8 +25,8 @@ class JoinedWorkReader implements SnapshotReader {
 
 /// The exploration host, read-only runtime, and advertised VM-service URI for
 /// one JIT station.
-class DevModeSeat {
-  DevModeSeat._(this.host, this.runtime, this.vmServiceUri);
+class DevModeHost {
+  DevModeHost._(this.host, this.runtime, this.vmServiceUri);
 
   /// The sole registrar carrying the optional reassemble contributor.
   final GridExplorationHost host;
@@ -47,7 +47,13 @@ class DevModeSeat {
   }
 }
 
-/// Arms a dev-mode seat only when this process exposes [vmServiceUri].
+/// Deprecated compatibility name for [DevModeHost].
+///
+/// Use [DevModeHost]. This alias will be removed in 0.4.0.
+@Deprecated('Use DevModeHost. DevModeSeat will be removed in 0.4.0.')
+typedef DevModeSeat = DevModeHost;
+
+/// Arms a dev-mode host only when this process exposes [vmServiceUri].
 ///
 /// A null URI returns null without reading [latest] or invoking [hotReload] or
 /// [hotRestart]. A JIT station adapts its live grid at the composition boundary:
@@ -61,7 +67,7 @@ class DevModeSeat {
 ///   readPath: () => stationWork.readPath,
 /// );
 /// ```
-Future<DevModeSeat?> armDevMode({
+Future<DevModeHost?> armDevMode({
   required String? vmServiceUri,
   required StationReassemble hotReload,
   required StationReassemble hotRestart,
@@ -79,5 +85,5 @@ Future<DevModeSeat?> armDevMode({
     plugin: GridControllerPlugin(runtime, readPath: readPath),
     reassemble: ReassembleTool(hotReload: hotReload, hotRestart: hotRestart),
   );
-  return DevModeSeat._(host, runtime, vmServiceUri);
+  return DevModeHost._(host, runtime, vmServiceUri);
 }
