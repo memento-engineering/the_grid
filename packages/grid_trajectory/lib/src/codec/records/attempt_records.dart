@@ -501,6 +501,28 @@ final class AttemptTerminal extends AttemptRecord {
   @override
   bool get isSettling => resolvesRecordId != null;
 
+  /// The settling re-authoring the resolving pre-read asks for: the same
+  /// terminal fact, now pointing at the record it heals. Every other field
+  /// rides through unchanged — the OUTCOME especially, which is the whole
+  /// point (the observed truth is what lands on the head).
+  ///
+  /// An already-settling record returns null: a settlement of a settlement is
+  /// not a shape the guard permits, and the pre-read never asks for one.
+  @override
+  TrajectoryRecord? settlingForm(String recordId) => isSettling
+      ? null
+      : AttemptTerminal(
+          attemptId: attemptId,
+          outcome: outcome,
+          sessionId: sessionId,
+          workBeadId: workBeadId,
+          unknownReason: unknownReason,
+          resolvesRecordId: recordId,
+          reason: reason,
+          attemptIdBasis: attemptIdBasis,
+          seatBasis: seatBasis,
+        );
+
   /// One of §5's three dolt-commit boundaries.
   @override
   bool get forcesDoltCommitBoundary => true;

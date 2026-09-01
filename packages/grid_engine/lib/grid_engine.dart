@@ -96,6 +96,11 @@ export 'src/domain/session_ledger_metrics_projection.dart';
 export 'src/domain/session_disposition.dart';
 export 'src/domain/substation_config.dart';
 export 'src/domain/session_projection.dart';
+// The trajectory dual-read's TYPE SEAM (cut-wiring C1): the engine declares
+// the fold READ interfaces + the winner rule in its own domain layer, and
+// grid_sdk implements them over grid_trajectory's fold row types — so the
+// engine gains no dependency and no SQL client enters its transitive set.
+export 'src/domain/trajectory_views.dart';
 // Wedge detection (tg-jwh) — the station's own "is the grid stuck?" derivation
 // over the producer-side join; the status surface reports it, no watcher
 // re-derives it from raw sessions.

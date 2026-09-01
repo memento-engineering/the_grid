@@ -14,6 +14,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:grid_engine/grid_engine.dart'
+    show SessionHeadWon, TrajectorySnapshotHealth;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
@@ -22,12 +24,51 @@ import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:mysql_client/exception.dart';
 import 'package:test/test.dart';
 
+/// The envelope a landed append hands back (cut-wiring §0.2's post-ACK mirror
+/// seam) — the appender's own derivation, minus the service stamps a test
+/// does not care about.
+TrajectoryEnvelope committedEnvelope(
+  TrajectoryRecord record, {
+  required String recordId,
+  DateTime? occurredAt,
+  TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+  String? provenanceBasis,
+  String? seat,
+}) {
+  final stamped = occurredAt ?? DateTime.utc(2026, 8, 31, 12);
+  final json = <String, Object?>{
+    'record_id': recordId,
+    'idem_key': recordId.padRight(64, '0'),
+    'idem_key_text': 'test:$recordId',
+    'family': record.family.wire,
+    'record_type': record.recordType,
+    'type_version': record.typeVersion,
+    'occurred_at': stamped.toIso8601String(),
+    'recorded_at': stamped.toIso8601String(),
+    'station': 'fake',
+    'authority_id': 'fake/1',
+    'boot_epoch': 1,
+    'provenance': provenance.wire,
+    if (provenance != TrajectoryProvenance.observed)
+      'provenance_basis': provenanceBasis ?? 'test-basis',
+    'source': 'test',
+    'payload': record.payloadToJson(),
+    ...record.correlationToJson(),
+  };
+  // ck_seat: the service derives the seat from the bead's store prefix.
+  if (json['work_bead_id'] != null) json['seat'] = seat ?? 'tg';
+  return TrajectoryEnvelope.fromJson(json);
+}
+
 /// A scriptable [TrajectoryDb]: records statements, optionally throws.
 final class _FakeDb implements TrajectoryDb {
   _FakeDb({this.onExecute});
 
   final List<String> statements = [];
-  final Object? Function(String sql)? onExecute;
+
+  /// Re-assignable: the mirror's reseed guard is driven by CHANGING what the
+  /// live session answers between two passes.
+  Object? Function(String sql)? onExecute;
   bool closed = false;
   bool closeThrows = false;
 
@@ -143,7 +184,22 @@ final class _FakeAppender extends TrajectoryAppender {
     if (appendNeverCompletes) return Completer<AppendOutcome>().future;
     if (appendOutcomes.isNotEmpty) return appendOutcomes.removeAt(0);
     _seq += 1;
-    return Appended(recordId: 'r$_seq', seq: _seq, epochSeq: _seq);
+    return Appended(
+      recordId: 'r$_seq',
+      seq: _seq,
+      epochSeq: _seq,
+      // The COMMITTED envelope the post-ACK mirror seam folds (cut-wiring
+      // §0.2): derived from the record exactly as the real appender derives
+      // it, so a mirror test sees real deltas rather than a stand-in.
+      envelope: committedEnvelope(
+        record,
+        recordId: 'r$_seq',
+        occurredAt: occurredAt,
+        provenance: provenance,
+        provenanceBasis: provenanceBasis,
+        seat: seat,
+      ),
+    );
   }
 
   @override
@@ -1190,9 +1246,14 @@ void main() {
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
-      // The boot pass ran them: three SELECTs on the harness's own serial
-      // lane, plus the detector's pulse prune.
-      final passStatements = connected.single.statements;
+      // The P1 boot seed's four reads come FIRST (cut-wiring C1 / §0.2): the
+      // lag rule, the generation set, the row scan, the era boundary — all
+      // before the mode goes live, so no post-ACK delta can outrun them.
+      final statements = connected.single.statements;
+      expect(statements.take(4), everyElement(startsWith('SELECT')));
+      // Then the boot pass ran the obligations: three SELECTs on the same
+      // serial lane, plus the detector's pulse prune.
+      final passStatements = statements.skip(4);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
         hasLength(3),
@@ -1226,7 +1287,10 @@ void main() {
       await h.start();
 
       expect(h.tick!.queries, isEmpty);
-      expect(connected.single.statements, isEmpty);
+      // Only the P1 boot seed's own four reads: an empty obligation set still
+      // issues nothing of its own.
+      expect(connected.single.statements, hasLength(4));
+      expect(connected.single.statements, everyElement(startsWith('SELECT')));
     });
 
     test('a refusing obligation files the stuck note after schema §5\'s N '
@@ -1265,6 +1329,280 @@ void main() {
 
       expect(h.stuckObligations.values, everyElement(1));
       expect(appender.calls, isNot(contains('append:attempt.note')));
+    });
+  });
+
+  // ── the P1 mirror (cut-wiring C1 / §0.2) ──────────────────────────────────
+  group('the P1 mirror', () {
+    /// Scripts the four boot-seed reads. [rows] is the projection scan.
+    Object? Function(String sql) seedScript({
+      List<Map<String, String?>> rows = const [],
+      int appliedSeq = 40,
+      int maxSeq = 40,
+      String? oldestUnappliedAt,
+      List<Map<String, String?>> generations = const [
+        {
+          'projection': 'fold',
+          'fold_version': '2',
+          'applied_seq': '40',
+          'skipped': null,
+          'rebuilt_at': null,
+        },
+      ],
+    }) => (sql) {
+      if (sql.contains('AS max_seq')) {
+        return SqlResult(
+          rows: [
+            {'max_seq': '$maxSeq', 'applied_seq': '$appliedSeq'},
+          ],
+        );
+      }
+      if (sql.contains('MIN(recorded_at)')) {
+        return SqlResult(
+          rows: [
+            {'oldest': oldestUnappliedAt},
+          ],
+        );
+      }
+      if (sql.contains('FROM proj_meta')) return SqlResult(rows: generations);
+      if (sql.contains('FROM proj_session_head')) return SqlResult(rows: rows);
+      if (sql.contains('MIN(advanced_at)')) {
+        return const SqlResult(
+          rows: [
+            {'first_at': '2026-08-01 09:00:00.000000'},
+          ],
+        );
+      }
+      return null;
+    };
+
+    Map<String, String?> headRow({
+      required String sessionId,
+      String workBeadId = 'tg-9abc',
+      String round = '0',
+      String status = 'open',
+      String? outcome,
+      String lastSeq = '4',
+    }) => {
+      'session_id': sessionId,
+      'work_bead_id': workBeadId,
+      'round': round,
+      'status': status,
+      'outcome': outcome,
+      'terminal_provenance': null,
+      'unknown_reason': null,
+      'held': '0',
+      'started_at': '2026-08-31 10:00:00.000000',
+      'head_epoch': '1',
+      'last_seq': lastSeq,
+    };
+
+    test('the boot seed publishes a LIVE snapshot with the fold\'s rows and '
+        'the era boundary — one scan, before the mode goes live', () async {
+      dbScript = seedScript(
+        rows: [
+          headRow(sessionId: 'tranquility-1'),
+          headRow(sessionId: 'tranquility-2', round: '1'),
+        ],
+      );
+      final h = await harness();
+      await h.start();
+
+      final snapshot = h.sessionHeads;
+      expect(snapshot.health, TrajectorySnapshotHealth.live);
+      expect(snapshot.seededAt, now);
+      expect(snapshot.firstEpochClaimedAt, DateTime.utc(2026, 8, 1, 9));
+      expect(snapshot.rows, hasLength(2));
+      // The retired head is legible: an OPEN row at round 1.
+      expect(snapshot.bySessionId('tranquility-2')!.round, 1);
+      expect(
+        (snapshot.byWorkBead('tg-9abc') as SessionHeadWon).row.sessionId,
+        'tranquility-1',
+      );
+      expect(flareNames(), isNot(contains('trajectory.staleFold')));
+    });
+
+    test('a fold behind by more than the RECORD bound refuses the snapshot '
+        'for the boot — loud, and the boot still succeeds', () async {
+      dbScript = seedScript(appliedSeq: 10, maxSeq: 10 + staleLagLimit + 1);
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live, reason: 'never boot-blocking');
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), contains('trajectory.staleFold'));
+    });
+
+    test('a fold behind by more than the AGE bound refuses too — the other '
+        'edge of the same rule', () async {
+      dbScript = seedScript(
+        appliedSeq: 10,
+        maxSeq: 11,
+        // 61s older than the harness clock.
+        oldestUnappliedAt: '2026-08-31 11:58:59.000000',
+      );
+      final h = await harness();
+      await h.start();
+
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), contains('trajectory.staleFold'));
+    });
+
+    test('a fold INSIDE both bounds stays live', () async {
+      dbScript = seedScript(
+        appliedSeq: 10,
+        maxSeq: 10 + staleLagLimit,
+        oldestUnappliedAt: '2026-08-31 11:59:30.000000',
+      );
+      final h = await harness();
+      await h.start();
+
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+      expect(flareNames(), isNot(contains('trajectory.staleFold')));
+    });
+
+    test('a landed append maintains the mirror POST-ACK, at the ordinal the '
+        'append committed', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+
+      h.recorder.sessionMinted(
+        sessionId: 'tranquility-9',
+        workBeadId: 'tg-9abc',
+        rig: 'operator',
+        model: 'molecule',
+      );
+      await pumpEventQueue();
+
+      final row = h.sessionHeads.bySessionId('tranquility-9');
+      expect(row, isNotNull);
+      expect(row!.workBeadId, 'tg-9abc');
+      expect(row.isOpen, isTrue);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+    });
+
+    test('a DROPPED append never reaches the mirror, and latches the snapshot '
+        'compromised — a frozen fold must never read live (B-B7)', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      appender.appendOutcomes.add(
+        const AppendInternalError(cause: 'socket died'),
+      );
+
+      h.recorder.sessionMinted(
+        sessionId: 'tranquility-9',
+        workBeadId: 'tg-9abc',
+        rig: 'operator',
+        model: 'molecule',
+      );
+      await pumpEventQueue();
+
+      expect(h.sessionHeads.bySessionId('tranquility-9'), isNull);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+      expect(flareNames(), contains('trajectory.dualReadCompromised'));
+    });
+
+    test('SUPPRESSION latches too — a fenced-out harness freezes the mirror '
+        'while nothing is dropped (r4 — J6-B3)', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+
+      appender.appendOutcomes.add(
+        const AppendFencedOut(reason: 'cas-zero-rows'),
+      );
+      h.enqueue(_note(1));
+      await pumpEventQueue();
+
+      expect(h.status.dropped, 0, reason: 'a fence-out drops nothing');
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+      expect(flareNames(), contains('trajectory.dualReadCompromised'));
+    });
+
+    test('a moved (projection, fold_version, rebuilt_at) triple RESEEDS the '
+        'mirror — the detector for an out-of-contract replay', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      expect(h.sessionHeads.rows, isEmpty);
+
+      // A replay ran under us: `rebuilt_at` moved and the rows changed.
+      dbScript = seedScript(
+        rows: [headRow(sessionId: 'tranquility-7')],
+        generations: const [
+          {
+            'projection': 'fold',
+            'fold_version': '2',
+            'applied_seq': '40',
+            'skipped': null,
+            'rebuilt_at': '2026-08-31 12:00:00.000000',
+          },
+        ],
+      );
+      connected.single.onExecute = dbScript;
+      // The guard rides the tick, no more often than the tick interval.
+      now = now.add(const Duration(minutes: 1));
+      await h.tick!.runPass();
+      await pumpEventQueue();
+
+      expect(h.sessionHeads.bySessionId('tranquility-7'), isNotNull);
+      expect(flareNames(), contains('trajectory.mirrorReseeded'));
+      expect(
+        h.sessionHeads.health,
+        TrajectorySnapshotHealth.live,
+        reason: 'a reseed is a re-read, not a failure',
+      );
+    });
+
+    test('an UNCHANGED generation set reseeds nothing and flares nothing',
+        () async {
+      dbScript = seedScript(rows: [headRow(sessionId: 'tranquility-1')]);
+      final h = await harness();
+      await h.start();
+      final seeded = h.sessionHeads.version;
+
+      now = now.add(const Duration(minutes: 1));
+      await h.tick!.runPass();
+      await pumpEventQueue();
+
+      expect(h.sessionHeads.version, seeded);
+      expect(flareNames(), isNot(contains('trajectory.mirrorReseeded')));
+    });
+
+    test('REFUSED TESTIMONY is counted on its own axis — not a drop, not a '
+        'dedupe, and no health consequence', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      appender.appendOutcomes.add(
+        const AppendRefusedTestimony(
+          attemptId: '01J8ATTEMPT000000000000002',
+          existingRecordId: '01OBSERVEDTERMINAL00000001',
+          reason: 'the real terminal already landed',
+        ),
+      );
+
+      h.enqueue(_note(1));
+      await pumpEventQueue();
+
+      expect(h.status.refusedTestimony, 1);
+      expect(h.status.dropped, 0);
+      expect(h.status.deduped, 0);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+    });
+
+    test('a harness that never connected serves a REFUSED snapshot rather '
+        'than an empty one that reads clean', () async {
+      connectError = StateError('listener unreachable');
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(h.sessionHeads.rows, isEmpty);
     });
   });
 }

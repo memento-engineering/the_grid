@@ -44,9 +44,12 @@ import 'package:grid_runtime/grid_runtime.dart'
         StuckObligationAccountant,
         TrajectoryRecordSink,
         buildStage1ObligationQueries;
+import 'package:grid_engine/grid_engine.dart' show TrajectoryHeadSnapshot;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
+import 'package:state_notifier/state_notifier.dart' show RemoveListener;
 
+import 'session_head_mirror.dart';
 import 'trajectory_config.dart';
 
 /// The flare seam — shape-compatible with `ExplorationTransport.flare`.
@@ -132,6 +135,7 @@ final class TrajectoryHarnessStatus {
     required this.suppressed,
     required this.queueDepth,
     this.exitJoinGaps = 0,
+    this.refusedTestimony = 0,
   });
 
   final TrajectoryHarnessMode mode;
@@ -162,13 +166,21 @@ final class TrajectoryHarnessStatus {
   /// terminals the tick's unknown-terminal settlement settles.
   final int exitJoinGaps;
 
+  /// Reconstructed terminals the appender refused because the attempt's REAL
+  /// terminal had already landed (cut-wiring §0.3's TESTIMONY YIELDS TO
+  /// OBSERVATION). Benign by construction — the refused record would have been
+  /// redundant — but counted, because the round summary reports it and a
+  /// rising count means the heal is racing something it should not be.
+  final int refusedTestimony;
+
   @override
   String toString() =>
       'TrajectoryHarnessStatus(${mode.name}'
       '${cause == null ? '' : ' ($cause)'}, epoch: $epoch, '
       'appended: $appended, deduped: $deduped, dropped: $dropped, '
       'suppressed: $suppressed, queue: $queueDepth'
-      '${exitJoinGaps == 0 ? '' : ', exitJoinGaps: $exitJoinGaps'})';
+      '${exitJoinGaps == 0 ? '' : ', exitJoinGaps: $exitJoinGaps'}'
+      '${refusedTestimony == 0 ? '' : ', refusedTestimony: $refusedTestimony'})';
 }
 
 /// The fenced service's station-side owner (stage1-wiring §1.1).
@@ -389,8 +401,39 @@ class TrajectoryHarness {
   int _deduped = 0;
   int _dropped = 0;
   int _suppressed = 0;
+  int _refusedTestimony = 0;
 
   final Map<String, DateTime> _lastFlareAt = <String, DateTime>{};
+
+  /// THE P1 MIRROR (cut-wiring C1 / §0.2) — seeded at boot, maintained
+  /// POST-ACK, published as immutable versioned snapshots. Nothing consumes it
+  /// in C1: the dual-read that reads it is C2's, and until then this is inert
+  /// plumbing that changes no behavior.
+  final SessionHeadMirror _sessionHeads = SessionHeadMirror();
+
+  /// The reseed guard's watched set: every `proj_meta` row's
+  /// `(projection, fold_version, rebuilt_at)` triple as of the seed. The
+  /// appender never writes `rebuilt_at` and all three in-tree replays do, so
+  /// ANY difference means a replay ran against this store — which
+  /// `traj replay` refuses to be. Defense in depth, never a sanctioned path.
+  Set<(String, int, DateTime?)>? _foldGenerations;
+
+  /// When the generation set was last READ — the boot seed reads it, so the
+  /// boot pass has nothing to re-read. The guard runs at most once per
+  /// [TrajectoryConfig.tickInterval], which is the cadence it is specified at
+  /// ("re-reads all rows on its existing timer tick"), not once per pass.
+  DateTime? _generationsReadAt;
+
+  /// The current P1 snapshot — a plain derived read for the join bridge, the
+  /// reconciler, and `/status`.
+  TrajectoryHeadSnapshot get sessionHeads => _sessionHeads.snapshot;
+
+  /// The change seam: a fold-side fact re-joins promptly rather than waiting
+  /// for the next poll. Returns the remover, house convention.
+  RemoveListener onSessionHeadsChanged(
+    void Function(TrajectoryHeadSnapshot snapshot) listener, {
+    bool fireImmediately = false,
+  }) => _sessionHeads.addListener(listener, fireImmediately: fireImmediately);
 
   TrajectoryHarnessMode get mode => _mode;
 
@@ -405,6 +448,7 @@ class TrajectoryHarness {
     suppressed: _suppressed,
     queueDepth: _queue.length,
     exitJoinGaps: _exitJoinGaps,
+    refusedTestimony: _refusedTestimony,
   );
 
   /// The tick, for a status surface's `lastPass` — null until live.
@@ -467,8 +511,16 @@ class TrajectoryHarness {
         scheduleTimer: _scheduleTimer,
         // Schema §5's N-consecutive-failure accounting reads the pass
         // telemetry; the note it files rides the queue, not the pass.
-        onPass: _accountant.observe,
+        // The mirror's guards ride the SAME tick (§0.2: "re-reads all rows on
+        // its existing timer tick") rather than arming a timer of their own.
+        onPass: _onTickPass,
       );
+      // The P1 boot seed (§0.2): ONE SELECT on the serialized connection,
+      // after the epoch claim and BEFORE the mode goes live — so no post-ACK
+      // delta can ever race ahead of the rows it applies to. Guarded like
+      // everything else here: a failed seed refuses the snapshot, it never
+      // fails the boot.
+      await _seedSessionHeads();
       _mode = TrajectoryHarnessMode.live;
       _cause = null;
       // §1.1's runtime-event subscriber — armed only once live (a disabled/
@@ -507,6 +559,152 @@ class TrajectoryHarness {
     pulseCoalesce: config.pulseCoalesce,
     clock: _clock,
   );
+
+  // ── the P1 mirror (cut-wiring C1 / §0.2) ─────────────────────────────────
+
+  /// The boot seed: the lag rule, the generation set, the era boundary, and
+  /// one scan of `proj_session_head` — all on the serialized connection.
+  ///
+  /// The lag rule reads the shared `'fold'` `proj_meta` row ONLY (the
+  /// appender's live cursor); the `'step_cursor'`/`'process_identity'` rows
+  /// carry a replay-time `applied_seq` frozen where their rebuild left it,
+  /// which is not a lag signal. Stale ⇒ health `refused` + one
+  /// `trajectory.staleFold` flare, which under wave 1 means legacy-primary for
+  /// the boot: loud, never quiet, never boot-blocking, because the incumbent
+  /// is still a full oracle.
+  Future<void> _seedSessionHeads() async {
+    try {
+      final lag = await _serialize(
+        () => readFoldLag(_requireDb(), clock: _clock),
+      );
+      final generations = await _serialize(
+        () => readProjectionGenerations(_requireDb()),
+      );
+      final rows = await _serialize(() => scanSessionHeads(_requireDb()));
+      final firstEpochAt = await _serialize(_readFirstEpochClaimedAt);
+      _foldGenerations = {for (final row in generations) row.generation};
+      _generationsReadAt = _clock();
+      _sessionHeads.seed(
+        rows: rows,
+        seededAt: _clock().toUtc(),
+        stale: lag.isStale,
+        firstEpochClaimedAt: firstEpochAt,
+      );
+      if (lag.isStale) {
+        _flare('trajectory.staleFold', {
+          'appliedSeq': '${lag.appliedSeq}',
+          'headSeq': '${lag.maxSeq}',
+          'records': '${lag.records}',
+          'ageMs': '${lag.age.inMilliseconds}',
+          'effect': 'P1 snapshot refused for this boot; legacy stays primary',
+        });
+      }
+    } on Object catch (error) {
+      // No seed ⇒ the snapshot stays `refused`, which is the honest reading:
+      // nothing may be served from a mirror that never read the fold.
+      _flare('trajectory.staleFold', {
+        'reason': '$error',
+        'effect': 'P1 seed failed; snapshot refused, legacy stays primary',
+      });
+    }
+  }
+
+  /// The era boundary the miss classifier splits on: when this station FIRST
+  /// claimed an epoch. A session that started before it — or with a null
+  /// `startedAt` — is legacy-era, and its missing head is not a defect.
+  Future<DateTime?> _readFirstEpochClaimedAt() async {
+    final result = await _requireDb().execute(
+      'SELECT MIN(advanced_at) AS first_at FROM traj_epoch '
+      'WHERE station = :station',
+      {'station': _station},
+    );
+    if (result.rows.isEmpty) return null;
+    return parseSqlDateTime6(result.rows.first['first_at']);
+  }
+
+  /// The tick's telemetry hook, extended with the mirror's two per-pass
+  /// guards. Emit-only, like every flare seam: a throw here never breaks the
+  /// tick's loop.
+  void _onTickPass(TrajectoryTickPass pass) {
+    _accountant.observe(pass);
+    // The mode latch (§0.2's wave-1 health): a harness that has left `live`
+    // freezes the mirror, and a frozen fold must not keep reading `live`.
+    if (_mode != TrajectoryHarnessMode.live) {
+      _latchMirrorCompromised('harness mode ${_mode.name}');
+      return;
+    }
+    unawaited(_checkFoldGeneration());
+  }
+
+  /// THE FOLD-GENERATION RESEED GUARD (§0.2, r4 — J7-B2): re-reads the full
+  /// `proj_meta` row set and re-seeds the mirror when ANY
+  /// `(projection, fold_version, rebuilt_at)` triple moved.
+  ///
+  /// Every in-tree replay stamps `rebuilt_at` and the appender never does, so
+  /// a moved triple means a rebuild ran under a live reader. `traj replay` is
+  /// QUIESCE-ONLY and refuses while the harness is armed, which makes this the
+  /// DETECTOR for an out-of-contract replay — never a licence for one.
+  Future<void> _checkFoldGeneration() async {
+    final seeded = _foldGenerations;
+    if (seeded == null || _mode != TrajectoryHarnessMode.live) return;
+    // At most once per tick interval, anchored on the LAST read — which the
+    // boot seed performed, so the boot pass re-reads nothing.
+    final lastRead = _generationsReadAt;
+    if (lastRead != null &&
+        _clock().difference(lastRead) < config.tickInterval) {
+      return;
+    }
+    _generationsReadAt = _clock();
+    try {
+      final generations = await _serialize(
+        () => readProjectionGenerations(_requireDb()),
+      );
+      final current = {for (final row in generations) row.generation};
+      if (_setsEqual(current, seeded)) return;
+      final rows = await _serialize(() => scanSessionHeads(_requireDb()));
+      _foldGenerations = current;
+      _sessionHeads.reseed(rows: rows, seededAt: _clock().toUtc());
+      _flare('trajectory.mirrorReseeded', {
+        'seeded': _renderGenerations(seeded),
+        'observed': _renderGenerations(current),
+        'rows': '${rows.length}',
+      });
+    } on Object catch (error) {
+      // A failed generation read is a transient, not a fold fact: flare
+      // rate-limited and try again on the next pass.
+      _flareLimited('trajectory.mirrorReseedFailed', {'reason': '$error'});
+    }
+  }
+
+  /// The COMPROMISED latch — one flare on the transition, by the latch.
+  void _latchMirrorCompromised(String reason) {
+    if (!_sessionHeads.latchCompromised()) return;
+    _flare('trajectory.dualReadCompromised', {
+      'reason': reason,
+      'dropped': '$_dropped',
+      'suppressed': '$_suppressed',
+      'effect': 'P1 overlay disengaged for this boot; legacy stays primary',
+    });
+  }
+
+  TrajectoryDb _requireDb() {
+    final db = _db;
+    if (db == null) throw StateError('trajectory connection is closed');
+    return db;
+  }
+
+  static bool _setsEqual(
+    Set<(String, int, DateTime?)> a,
+    Set<(String, int, DateTime?)> b,
+  ) => a.length == b.length && a.containsAll(b);
+
+  static String _renderGenerations(Set<(String, int, DateTime?)> set) {
+    final rendered = [
+      for (final (projection, version, rebuiltAt) in set)
+        '$projection@v$version/${rebuiltAt?.toIso8601String() ?? 'never'}',
+    ]..sort();
+    return rendered.join(',');
+  }
 
   // ── the runtime-event subscriber (§1.1 / §2.3 rows 2–3) ──────────────────
 
@@ -650,16 +848,22 @@ class TrajectoryHarness {
       case TrajectoryHarnessMode.degraded:
       case TrajectoryHarnessMode.fencedOut:
       case TrajectoryHarnessMode.halted:
+        // SUPPRESSION IS NOT A DROP (§0.2, r4 — J6-B3): a fenced-out or
+        // halted harness freezes the mirror while `_dropped` never moves, so
+        // a drops-only latch would keep serving a frozen fold as `live`.
         _suppressed += 1;
+        _latchMirrorCompromised('append suppressed: mode ${_mode.name}');
         return;
       case TrajectoryHarnessMode.down:
       case TrajectoryHarnessMode.live:
         if (_isShutdown) {
           _suppressed += 1;
+          _latchMirrorCompromised('append suppressed: shutting down');
           return;
         }
         if (_queue.length >= config.queueBound) {
           _dropped += 1;
+          _latchMirrorCompromised('append dropped: queue overflow');
           _flareLimited('trajectory.queueOverflow', {
             'queueBound': '${config.queueBound}',
             'dropped': '$_dropped',
@@ -707,6 +911,7 @@ class TrajectoryHarness {
             last != null && _clock().difference(last) < kReconnectDebounce;
         if (debounced || !await _reconnect()) {
           _dropped += 1;
+          _latchMirrorCompromised('append dropped: reconnect');
           _flareLimited('trajectory.appendDropped', {
             'reason': debounced
                 ? 'reconnect debounced (retry within ${kReconnectDebounce.inSeconds}s)'
@@ -727,10 +932,35 @@ class TrajectoryHarness {
         ),
       );
       switch (outcome) {
-        case Appended():
+        case Appended(:final envelope, :final seq):
           _appended += 1;
+          // POST-ACK, never at enqueue (B-B7): the transaction has COMMITTED,
+          // and `seq` is the ordinal that same transaction wrote as
+          // `proj_meta.applied_seq` — so the mirror's ordinal is earned.
+          //
+          // `decoded` short-circuits the codec only when the record provably
+          // describes THIS envelope: the appender's resolving pre-read can
+          // rebuild a terminal into settling form, and the request still holds
+          // the pre-conversion record. Folding that pair would apply the
+          // non-settling branch to a settling row — so on any mismatch the
+          // envelope decodes itself.
+          final converted =
+              request.record.isSettling != (envelope.resolvesRecordId != null);
+          _sessionHeads.applyAppended(
+            envelope,
+            seq: seq,
+            decoded: converted ? null : request.record,
+          );
         case AppendDeduped():
+          // Applies NOTHING: the original row either landed this boot (already
+          // applied) or predates it and rode the seed.
           _deduped += 1;
+        case AppendRefusedTestimony():
+          // Benign and COUNTED (§0.3): the attempt's real terminal already
+          // landed, so the refused record has no fold effect to apply and no
+          // health consequence — it is not a drop, not a failure, and not a
+          // dedupe. Its own counter is what the round summary reports.
+          _refusedTestimony += 1;
         case AppendFencedOut(:final reason):
           _latchFencedOut(reason);
         case AppendCorruptionHalt(:final reason):
@@ -739,6 +969,7 @@ class TrajectoryHarness {
           // Cannot occur at Stage 1 (no grant-scoped appends) — counted as
           // dropped if it ever does (§3).
           _dropped += 1;
+          _latchMirrorCompromised('append dropped: grant refused');
           _flareLimited('trajectory.appendDropped', {
             'reason': reason,
             'recordType': request.record.recordType,
@@ -750,6 +981,7 @@ class TrajectoryHarness {
           // append (§3; M4: a typed ~20 ms outcome, no hang).
           _dropped += 1;
           _needsReconnect = true;
+          _latchMirrorCompromised('append failed: $cause');
           _flareLimited('trajectory.appendDropped', {
             'reason': '$cause',
             'recordType': request.record.recordType,
@@ -762,6 +994,7 @@ class TrajectoryHarness {
       // error out of the writer loop.
       _dropped += 1;
       _needsReconnect = true;
+      _latchMirrorCompromised('append threw: $error');
       _flareLimited('trajectory.appendDropped', {
         'reason': '$error',
         'recordType': request.record.recordType,
@@ -911,6 +1144,7 @@ class TrajectoryHarness {
       'deduped': '$_deduped',
       'dropped': '$_dropped',
       'suppressed': '$_suppressed',
+      'refusedTestimony': '$_refusedTestimony',
       'fixpointReached': '${fixpoint?.reached ?? false}',
       'outstanding': '${fixpoint?.outstanding ?? 0}',
       'unflushed': '${_queue.length}',
@@ -1019,6 +1253,8 @@ class TrajectoryHarness {
       'reason': reason,
       'epoch': '${_epoch ?? ''}',
     });
+    // The mirror is frozen from here: a successor holds the authority.
+    _latchMirrorCompromised('harness fenced out: $reason');
   }
 
   void _latchHalted(String reason) {
@@ -1030,6 +1266,7 @@ class TrajectoryHarness {
     // Loud on every status read is the /status surface's job; the flare fires
     // once at the latch (§3): the log is presumed damaged until a human looks.
     _flare('trajectory.halted', {'reason': reason});
+    _latchMirrorCompromised('harness halted: $reason');
   }
 
   bool get _latched =>
@@ -1042,6 +1279,7 @@ class TrajectoryHarness {
     _suppressed += _queue.length;
     _queue.clear();
     _flare('trajectory.degraded', {'reason': cause});
+    _latchMirrorCompromised('harness degraded: $cause');
   }
 
   void _flare(String name, Map<String, String> data) {

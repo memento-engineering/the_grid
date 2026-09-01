@@ -67,6 +67,18 @@ sealed class TrajectoryRecord {
   /// rather than inserting a second one.
   bool get isSettling => false;
 
+  /// THIS record re-authored in its SETTLING form, resolving [recordId] —
+  /// or null for a type that has no settling form.
+  ///
+  /// The append mechanics' resolving pre-read (cut-wiring §0.3, r10 — V4-B1)
+  /// calls this BEFORE the row insert when an observed or inferred terminal
+  /// meets a head whose terminal is reconstructed testimony: the record must
+  /// be AUTHORED in its final shape, so the log, the live fold, and
+  /// `traj replay` decode identically. Re-authoring is the vocabulary's job —
+  /// the idem-key grammar and the correlation columns both change — which is
+  /// why the seam is declared here and read off the base.
+  TrajectoryRecord? settlingForm(String recordId) => null;
+
   /// True for §5's dolt-commit boundary set — the records after which the
   /// cadence must commit at the next allowed opportunity.
   bool get forcesDoltCommitBoundary => false;

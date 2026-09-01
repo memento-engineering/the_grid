@@ -11,9 +11,10 @@
 /// Per §6 row 1 and the §7 head fields:
 ///   * `attempt.session.started` INSERTS the row — work_bead_id, rig, model,
 ///     seat, started_at, round 0, status open;
-///   * `attempt.terminal` sets outcome/closed_at/status; a SETTLING terminal
-///     (resolves_record_id set) updates OUTCOME ONLY — closed_at stays the
-///     original close instant, not the probe's;
+///   * `attempt.terminal` sets outcome/closed_at/status plus the wave-1 cut's
+///     `unknown_reason`/`terminal_provenance` pair (cut-wiring §0.3, r9–r11);
+///     a SETTLING terminal (resolves_record_id set) updates OUTCOME ONLY —
+///     closed_at stays the original close instant, not the probe's;
 ///   * `attempt.round.retired` bumps `round`;
 ///   * `attempt.rework_declined` sets held + reason;
 ///   * `attempt.process.started`/`.exited` maintain pid/pgid/attempt_id (P1
@@ -82,10 +83,18 @@ final class SessionHeadUpdate extends SessionHeadDelta {
     required super.sessionId,
     required this.columns,
     this.guardAttemptId,
+    this.guardTerminalLess = false,
   });
 
   final Map<String, Object?> columns;
   final String? guardAttemptId;
+
+  /// TESTIMONY YIELDS TO OBSERVATION (cut-wiring §0.3, r9–r11): a
+  /// RECONSTRUCTED terminal may close only a head that has no terminal yet.
+  /// The guard renders as `AND outcome IS NULL` / an in-memory
+  /// `row.outcome == null` check, so testimony can never rewrite an observed
+  /// head's `status`/`outcome`/`closed_at` wholesale.
+  final bool guardTerminalLess;
 }
 
 /// The one delta function. Returns null for every record with no P1 effect —
@@ -125,12 +134,29 @@ SessionHeadDelta? sessionHeadDeltaFor(
         headEpoch: envelope.bootEpoch,
       );
     case AttemptTerminal(:final sessionId?):
+      final reconstructed =
+          envelope.provenance == TrajectoryProvenance.reconstructed;
+      final observed = envelope.provenance == TrajectoryProvenance.observed;
       if (record.isSettling) {
         // The settlement chain heals OUTCOME only (§6 row 1 / task letter):
-        // the original terminal's closed_at stands.
+        // the original terminal's closed_at stands. `unknown_reason` rides
+        // the outcome it explains — a healed head that is no longer `unknown`
+        // must not keep the word that said why it was.
+        //
+        // TRUTH MONOTONICITY (cut-wiring §0.3, r9–r11) lands exactly here:
+        // the mark clears iff the SETTLING RECORD's provenance is `observed`
+        // — the durable discriminator, never the outcome VALUE. An observed
+        // `settled` clears; the obligation's own `inferred` settlement (and
+        // the reconciler's inferred settle arm) writes the outcome with the
+        // mark INTACT, keeping the session in the `reconstructedTerminal`
+        // adjudication class.
         return SessionHeadUpdate(
           sessionId: sessionId,
-          columns: {'outcome': record.outcome.wire},
+          columns: {
+            'outcome': record.outcome.wire,
+            'unknown_reason': record.unknownReason,
+            if (observed) 'terminal_provenance': null,
+          },
         );
       }
       return SessionHeadUpdate(
@@ -139,8 +165,19 @@ SessionHeadDelta? sessionHeadDeltaFor(
           'status': SessionHeadStatus.closed.wire,
           'outcome': record.outcome.wire,
           'closed_at': envelope.occurredAt,
+          'unknown_reason': record.unknownReason,
           if (record.reason != null) 'work_terminal_reason': record.reason,
+          // The MARK, set only by reconstructed testimony; an observed
+          // terminal clears it (truth supersedes testimony) and an inferred
+          // one leaves it alone — the same trichotomy the appender's
+          // resolving pre-read runs on, stated once per side.
+          if (reconstructed) 'terminal_provenance': envelope.provenance.wire,
+          if (observed) 'terminal_provenance': null,
         },
+        // "…landing on a terminal-less head": reconstructed testimony never
+        // rewrites a head that already carries an outcome. Live and replay
+        // agree, because the guard is part of the delta, not the caller.
+        guardTerminalLess: reconstructed,
       );
     case AttemptRoundRetired():
       return SessionHeadUpdate(
@@ -206,6 +243,8 @@ const List<String> _insertColumns = [
   'status',
   'outcome',
   'work_terminal_reason',
+  'terminal_provenance',
+  'unknown_reason',
   'held',
   'held_reason',
   'pgid',
@@ -261,6 +300,7 @@ SqlStatement sessionHeadSqlFor(SessionHeadDelta delta, {required int lastSeq}) {
         sql += ' AND attempt_id = :guard_attempt_id';
         params['guard_attempt_id'] = delta.guardAttemptId;
       }
+      if (delta.guardTerminalLess) sql += ' AND outcome IS NULL';
       return (sql: sql, params: params);
   }
 }
@@ -272,7 +312,9 @@ SqlStatement sessionHeadSqlFor(SessionHeadDelta delta, {required int lastSeq}) {
 ///   duplicate arm);
 /// * an update for an absent session matches 0 rows and does nothing (the
 ///   fold never invents a head from a mid-life record);
-/// * a guarded update whose `attempt_id` no longer matches does nothing.
+/// * a guarded update whose `attempt_id` no longer matches does nothing, and
+///   a terminal-less-guarded one does nothing on a head that already carries
+///   an outcome (`AND outcome IS NULL`, matched exactly).
 void applySessionHeadDelta(
   Map<String, SessionHeadRow> rows,
   SessionHeadDelta delta, {
@@ -291,6 +333,7 @@ void applySessionHeadDelta(
           row.attemptId != delta.guardAttemptId) {
         return;
       }
+      if (delta.guardTerminalLess && row.outcome != null) return;
       // DateTime column values arrive typed here; `applying` stores them
       // typed (the SQL renderer is where DATETIME(6) formatting lives).
       rows[delta.sessionId] = row.applying(delta.columns, lastSeq: lastSeq);

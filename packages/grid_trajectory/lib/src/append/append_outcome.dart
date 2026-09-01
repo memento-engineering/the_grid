@@ -7,6 +7,8 @@ library;
 
 import 'package:meta/meta.dart';
 
+import '../codec/envelope.dart';
+
 /// One append's disposition.
 @immutable
 sealed class AppendOutcome {
@@ -20,11 +22,47 @@ final class Appended extends AppendOutcome {
     required this.recordId,
     required this.seq,
     required this.epochSeq,
+    required this.envelope,
   });
 
   final String recordId;
   final int seq;
   final int epochSeq;
+
+  /// THE POST-ACK MIRROR SEAM (cut-wiring §0.2, r4 — J6-B4): the envelope the
+  /// transaction actually COMMITTED, handed back so an in-process fold mirror
+  /// can apply the same pure delta the SQL fold applied — at ordinal [seq],
+  /// which the same transaction wrote as `proj_meta.applied_seq`, so
+  /// `mirrorOrdinal ≡ applied_seq` is earned rather than reconstructed.
+  ///
+  /// This is the COMMITTED shape, not the caller's intent: when the resolving
+  /// pre-read rebuilds a terminal into settling form
+  /// ([AppendRefusedTestimony]'s sibling arm), THIS is the rebuilt envelope —
+  /// the one the log holds and `traj replay` decodes.
+  ///
+  /// `seq`/`epoch_seq` are read off this outcome's own fields; the envelope
+  /// carries the row's identity, correlation, and provenance.
+  final TrajectoryEnvelope envelope;
+}
+
+/// TESTIMONY YIELDS TO OBSERVATION (cut-wiring §0.3, r9–r10): an incoming
+/// RECONSTRUCTED terminal met an existing `traj_terminal_guard` row for the
+/// same attempt — the real terminal already landed, so the testimony is
+/// refused before any insert.
+///
+/// Benign and counted, never a halt and never a drop: the record it would
+/// have written is redundant by construction. [existingRecordId] names the
+/// terminal that won.
+final class AppendRefusedTestimony extends AppendOutcome {
+  const AppendRefusedTestimony({
+    required this.attemptId,
+    required this.existingRecordId,
+    required this.reason,
+  });
+
+  final String attemptId;
+  final String existingRecordId;
+  final String reason;
 }
 
 /// `1105` naming `uq_idem`: the DESIGNED at-least-once dedupe. [recordId] is

@@ -241,7 +241,7 @@ void main() {
         ],
       );
       harness.appender.outcomes = [
-        const Appended(recordId: 'a', seq: 7, epochSeq: 1),
+        fakeAppended(recordId: 'a', seq: 7, epochSeq: 1),
         const AppendDeduped(recordId: 'a'),
       ];
 
