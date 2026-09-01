@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:grid_runtime/src/runtime/subprocess_provider.dart'
+    show interactionBufferForTesting;
 import 'package:test/test.dart';
 
 /// A fake [SubprocessSpawner] (Fakes, not mocks): it records the env/argv/cwd it
@@ -353,13 +355,23 @@ void main() {
             lifecycle: Lifecycle.longLived,
           ),
         );
-        final exact = <int>[0, 1, 2, 127, 128, 255];
-        spawner.stdoutCtl.add(exact);
+        final exact = <List<int>>[
+          <int>[0, 1, 2],
+          <int>[127, 128, 255],
+        ];
+        for (final chunk in exact) {
+          spawner.stdoutCtl.add(chunk);
+        }
         await Future<void>.delayed(Duration.zero);
 
-        final observed = await provider.interactionOutput('channel').first;
+        final observed = await provider
+            .interactionOutput('channel')
+            .take(exact.length)
+            .toList();
         expect(observed, exact);
-        expect(observed, isNot(same(exact)));
+        for (var index = 0; index < exact.length; index += 1) {
+          expect(observed[index], isNot(same(exact[index])));
+        }
 
         await provider.write('channel', <int>[9, 8, 7]);
         expect(spawner._lastSpawned!.writes, <List<int>>[
@@ -406,7 +418,16 @@ void main() {
             lifecycle: Lifecycle.oneTurn,
           ),
         );
-        expect(spawner._lastSpawned!.closeInputCount, 1);
+        final rawInteraction = interactionBufferForTesting(
+          provider,
+          'one-turn',
+        );
+        final large = List<int>.filled(1024 * 1024 + 1, 0x61, growable: false);
+        large[large.length - 1] = 0x0a;
+        final transcript = provider.output('one-turn').first;
+        spawner.stdoutCtl.add(large);
+        expect(await transcript, hasLength(1024 * 1024));
+
         await expectLater(
           provider.write('one-turn', const <int>[1]),
           throwsA(isA<SessionNotWritable>()),
@@ -415,6 +436,11 @@ void main() {
           () => provider.interactionOutput('one-turn'),
           throwsA(isA<SessionNotWritable>()),
         );
+
+        final exited = provider.events.where((event) => event is Exited).first;
+        spawner.exit.complete(0);
+        await exited;
+        expect(await rawInteraction.toList(), isEmpty);
         await provider.stop('one-turn');
         expect(spawner._lastSpawned!.closeInputCount, 1);
       },

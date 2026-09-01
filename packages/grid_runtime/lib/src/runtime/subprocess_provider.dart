@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:meta/meta.dart';
+
 import 'env_allowlist.dart';
 import 'incarnation_env.dart';
 import 'process_group.dart';
@@ -287,7 +289,10 @@ class SubprocessProvider implements RuntimeProvider {
 
     // Pipe the transcript: merge stdout+stderr into the per-session line stream
     // and the bounded peek buffer.
-    session.attachTranscript(session.tapStdout(spawned.stdout), spawned.stderr);
+    final stdout = config.lifecycle == Lifecycle.longLived
+        ? session.tapStdout(spawned.stdout)
+        : spawned.stdout;
+    session.attachTranscript(stdout, spawned.stderr);
     if (config.lifecycle == Lifecycle.oneTurn) {
       await session.closeInput();
     }
@@ -569,6 +574,14 @@ class SubprocessProvider implements RuntimeProvider {
     await _events.close();
   }
 }
+
+/// Exposes [name]'s raw interaction controller to tests without widening the
+/// [RuntimeProvider] contract.
+@visibleForTesting
+Stream<List<int>> interactionBufferForTesting(
+  SubprocessProvider provider,
+  String name,
+) => provider._sessions[name]?.interaction ?? const Stream<List<int>>.empty();
 
 /// In-process state for one supervised session — the registry entry that stands
 /// in for gc's per-session Unix control socket (CUT for Tier-1).
