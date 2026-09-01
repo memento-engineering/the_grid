@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_runtime/grid_runtime.dart';
+import 'package:grid_runtime/src/runtime/subprocess_provider.dart'
+    show interactionBufferForTesting;
 import 'package:test/test.dart';
 
 /// A fake [SubprocessSpawner] (Fakes, not mocks): it records the env/argv/cwd it
@@ -22,6 +24,7 @@ class FakeSpawner implements SubprocessSpawner {
   final Completer<int> exit = Completer<int>();
 
   int nextPid = 4242;
+  _FakeSpawned? _lastSpawned;
 
   /// When false, the spawned process reports a NULL exit code — mirroring the
   /// real detached path (`Process.exitCode` unavailable), so death is observed
@@ -46,7 +49,7 @@ class FakeSpawner implements SubprocessSpawner {
     lastArgs = args;
     lastWorkDir = workingDirectory;
     lastEnv = environment;
-    return _FakeSpawned(
+    return _lastSpawned = _FakeSpawned(
       pid: nextPid,
       stdout: stdoutCtl.stream,
       stderr: stderrCtl.stream,
@@ -79,8 +82,21 @@ class _FakeSpawned implements SpawnedProcess {
   final Stream<List<int>> stderr;
   final Future<int>? _exit;
 
+  final List<List<int>> writes = <List<int>>[];
+  int closeInputCount = 0;
+
   @override
   Future<int>? get exitCode => _exit;
+
+  @override
+  Future<void> write(List<int> bytes) async {
+    writes.add(List<int>.unmodifiable(bytes));
+  }
+
+  @override
+  Future<void> closeInput() async {
+    closeInputCount += 1;
+  }
 }
 
 /// A fake process-group seam that reports the spawned pid as always-alive until
@@ -318,6 +334,119 @@ void main() {
     );
   });
 
+  group('SubprocessProvider — interaction', () {
+    test(
+      'interaction keeps long-lived stdin open and buffers exact stdout bytes',
+      () async {
+        final spawner = FakeSpawner();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: AliveGroupController(),
+          parentEnvironment: const {},
+          agentDeadline: null,
+        );
+        addTearDown(provider.dispose);
+
+        await provider.start(
+          'channel',
+          const RuntimeConfig(
+            workDir: '/tmp',
+            command: 'probe',
+            lifecycle: Lifecycle.longLived,
+          ),
+        );
+        final exact = <List<int>>[
+          <int>[0, 1, 2],
+          <int>[127, 128, 255],
+        ];
+        for (final chunk in exact) {
+          spawner.stdoutCtl.add(chunk);
+        }
+        await Future<void>.delayed(Duration.zero);
+
+        final observed = await provider
+            .interactionOutput('channel')
+            .take(exact.length)
+            .toList();
+        expect(observed, exact);
+        for (var index = 0; index < exact.length; index += 1) {
+          expect(observed[index], isNot(same(exact[index])));
+        }
+
+        await provider.write('channel', <int>[9, 8, 7]);
+        expect(spawner._lastSpawned!.writes, <List<int>>[
+          <int>[9, 8, 7],
+        ]);
+        expect(spawner._lastSpawned!.closeInputCount, 0);
+        expect(
+          () => provider.interactionOutput('channel').listen((_) {}),
+          throwsStateError,
+        );
+        final exited = provider.events.where((event) => event is Exited).first;
+        spawner.exit.complete(0);
+        await exited;
+        expect(
+          () => provider.interactionOutput('channel'),
+          throwsA(isA<SessionNotWritable>()),
+        );
+        expect(
+          () => provider.write('channel', const <int>[1]),
+          throwsA(isA<SessionNotWritable>()),
+        );
+        await provider.stop('channel');
+        expect(spawner._lastSpawned!.closeInputCount, 1);
+      },
+    );
+
+    test(
+      'one-turn input closes once and interaction writes are refused',
+      () async {
+        final spawner = FakeSpawner();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: AliveGroupController(),
+          parentEnvironment: const {},
+          agentDeadline: null,
+        );
+        addTearDown(provider.dispose);
+
+        await provider.start(
+          'one-turn',
+          const RuntimeConfig(
+            workDir: '/tmp',
+            command: 'probe',
+            lifecycle: Lifecycle.oneTurn,
+          ),
+        );
+        final rawInteraction = interactionBufferForTesting(
+          provider,
+          'one-turn',
+        );
+        final large = List<int>.filled(1024 * 1024 + 1, 0x61, growable: false);
+        large[large.length - 1] = 0x0a;
+        final transcript = provider.output('one-turn').first;
+        spawner.stdoutCtl.add(large);
+        expect(await transcript, hasLength(1024 * 1024));
+
+        await expectLater(
+          provider.write('one-turn', const <int>[1]),
+          throwsA(isA<SessionNotWritable>()),
+        );
+        expect(
+          () => provider.interactionOutput('one-turn'),
+          throwsA(isA<SessionNotWritable>()),
+        );
+
+        final exited = provider.events.where((event) => event is Exited).first;
+        spawner.exit.complete(0);
+        await exited;
+        expect(await rawInteraction.toList(), isEmpty);
+        await provider.stop('one-turn');
+        expect(spawner._lastSpawned!.closeInputCount, 1);
+      },
+    );
+  });
+
   group('SubprocessProvider — whole-tree kill (REAL stub, never claude)', () {
     test('(b) stop() SIGKILLs the whole process group — a child that spawns a '
         'grandchild: BOTH die', () async {
@@ -346,7 +475,12 @@ sleep 120
 
       await provider.start(
         'kill-tree',
-        RuntimeConfig(workDir: tmp.path, command: '/bin/sh', args: [stub.path]),
+        RuntimeConfig(
+          workDir: tmp.path,
+          command: '/bin/sh',
+          args: [stub.path],
+          lifecycle: Lifecycle.oneTurn,
+        ),
       );
 
       // Wait for the stub to write the grandchild pid.
@@ -469,7 +603,12 @@ echo "stdin-eof"
       final lines = <String>[];
       await provider.start(
         'stdin-reader',
-        RuntimeConfig(workDir: tmp.path, command: '/bin/sh', args: [stub.path]),
+        RuntimeConfig(
+          workDir: tmp.path,
+          command: '/bin/sh',
+          args: [stub.path],
+          lifecycle: Lifecycle.oneTurn,
+        ),
       );
       final outSub = provider.output('stdin-reader').listen(lines.add);
 

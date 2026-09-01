@@ -900,10 +900,19 @@ class DryRunProvider implements RuntimeProvider {
   Future<void> interrupt(String name) async {}
 
   @override
+  Future<void> write(String name, List<int> bytes) => Future<void>.error(
+    SessionNotWritable(name, 'dry-run sessions are not writable'),
+  );
+
+  @override
   Stream<RuntimeEvent> get events => _events.stream;
 
   @override
   Stream<String> output(String name) => const Stream<String>.empty();
+
+  @override
+  Stream<List<int>> interactionOutput(String name) =>
+      throw SessionNotWritable(name, 'dry-run sessions have no interaction');
 
   @override
   bool isRunning(String name) => _running.contains(name);

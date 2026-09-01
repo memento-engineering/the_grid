@@ -6,15 +6,17 @@ import 'runtime_event.dart';
 /// (M3-BUILD-ORDER Track 2). A reference type (the `Provider` role name; no
 /// extra classifier — predictable-flutter).
 ///
-/// **What is CUT vs gc** (reference only): attach/`IsAttached`, `Nudge`/
-/// `SendKeys`/interaction, the `*Meta` k/v store, `CopyTo`/`ClearScrollback`/
-/// `RunLive`, and every optional extension interface (ACP/T3/dialog/idle-wait).
-/// M3's dogfood needs only: spawn, supervise, observe, kill.
+/// **What is CUT vs gc** (reference only): attach/`IsAttached`, `Nudge`, the
+/// `*Meta` k/v store, `CopyTo`/`ClearScrollback`/`RunLive`, and every optional
+/// extension interface (ACP/T3/dialog/idle-wait). The protocol-neutral byte
+/// interaction surface is restored here without moving process ownership out
+/// of the provider.
 ///
-/// **API shape (CLAUDE.md):** Futures for acts ([start]/[stop]/[interrupt]),
-/// Streams for observations ([events]/[output]), plus cheap point-in-time
-/// queries. Implementations must be safe for concurrent use across distinct
-/// session names; duplicate [start] of one name rejects consistently.
+/// **API shape (CLAUDE.md):** Futures for acts
+/// ([start]/[stop]/[interrupt]/[write]), Streams for observations
+/// ([events]/[output]/[interactionOutput]), plus cheap point-in-time queries.
+/// Implementations must be safe for concurrent use across distinct session
+/// names; duplicate [start] of one name rejects consistently.
 abstract interface class RuntimeProvider {
   // ---- Acts (Futures) ----
 
@@ -33,6 +35,9 @@ abstract interface class RuntimeProvider {
   /// does not exist.
   Future<void> interrupt(String name);
 
+  /// Writes [bytes] unchanged to the stdin of a live long-lived session.
+  Future<void> write(String name, List<int> bytes);
+
   // ---- Observations (Streams) ----
 
   /// The lifecycle event stream across ALL sessions this provider owns
@@ -43,6 +48,9 @@ abstract interface class RuntimeProvider {
   /// The live transcript (merged stdout+stderr lines) of the named session.
   /// Broadcast per session; empty for an unknown session.
   Stream<String> output(String name);
+
+  /// Buffered raw stdout for one protocol decoder; single-subscription.
+  Stream<List<int>> interactionOutput(String name);
 
   // ---- Point-in-time queries ----
 
@@ -111,4 +119,19 @@ class SessionAlreadyExists implements Exception {
 
   @override
   String toString() => 'SessionAlreadyExists: session "$name" already exists';
+}
+
+/// Refuses interaction with an unknown, one-turn, or terminal session.
+class SessionNotWritable implements Exception {
+  /// Creates a refusal for [name] with a stable [reason].
+  const SessionNotWritable(this.name, this.reason);
+
+  /// The refused runtime session name.
+  final String name;
+
+  /// Why the interaction was refused.
+  final String reason;
+
+  @override
+  String toString() => 'SessionNotWritable($name): $reason';
 }

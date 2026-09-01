@@ -36,7 +36,11 @@ class _JobCap extends ProcessCapability {
 
   @override
   RuntimeConfig spawn(TreeContext context, StepArgs args) =>
-      const RuntimeConfig(workDir: '/tmp/tg-1', command: 'sh');
+      const RuntimeConfig(
+        workDir: '/tmp/tg-1',
+        command: 'sh',
+        lifecycle: Lifecycle.oneTurn,
+      );
 
   @override
   StepSignal interpretEvent(RuntimeEvent event) => switch (event) {
@@ -64,6 +68,8 @@ ProcessLeaseRequest _request(RuntimeProvider transport) => ProcessLeaseRequest(
 class _GatedSpawner implements SubprocessSpawner {
   final Completer<void> gate = Completer<void>();
   final Completer<void> entered = Completer<void>();
+  int spawnCount = 0;
+  _FakeSpawned? spawned;
 
   @override
   Future<SpawnedProcess> spawn({
@@ -72,14 +78,18 @@ class _GatedSpawner implements SubprocessSpawner {
     required String workingDirectory,
     required Map<String, String> environment,
   }) async {
+    spawnCount += 1;
     entered.complete();
     await gate.future;
-    return _FakeSpawned(4242);
+    return spawned = _FakeSpawned(4242);
   }
 }
 
 class _FakeSpawned implements SpawnedProcess {
   _FakeSpawned(this.pid);
+
+  final List<List<int>> writes = <List<int>>[];
+  int closeInputCount = 0;
 
   @override
   final int pid;
@@ -92,6 +102,16 @@ class _FakeSpawned implements SpawnedProcess {
 
   @override
   Future<int>? get exitCode => null;
+
+  @override
+  Future<void> write(List<int> bytes) async {
+    writes.add(List<int>.unmodifiable(bytes));
+  }
+
+  @override
+  Future<void> closeInput() async {
+    closeInputCount += 1;
+  }
 }
 
 class _FakeGroups implements ProcessGroupController {
@@ -154,6 +174,14 @@ void main() {
     expect(h2.pid, 4242, reason: 'the duplicate bound the SAME live group');
     expect(h2.pgid, 4242);
     expect(h2.token, 'tok-midspawn');
+    expect(spawner.spawnCount, 1, reason: 'one provider owns one spawn');
+    expect(spawner.spawned, isNotNull);
+    expect(spawner.spawned!.writes, isEmpty);
+    expect(
+      spawner.spawned!.closeInputCount,
+      1,
+      reason: 'one-turn stdin closes once before SessionStarted',
+    );
     await h1.events?.close();
     await h2.events?.close();
   });
