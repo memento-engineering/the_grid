@@ -82,6 +82,7 @@ void main() {
           executable: '/tmp/bd',
           sampleId: 'fx-show',
           outputRoot: temp,
+          findings: const <String>['fixture-specific finding'],
         );
     expect(grid.calls, [
       ['list', '--json', '--all', '--limit', '0'],
@@ -106,6 +107,7 @@ void main() {
         contains('`${'a' * 40}`'),
         contains('`/tmp/bd`'),
         contains('BD_JSON_ENVELOPE=1'),
+        contains('- fixture-specific finding'),
       ),
     );
   });

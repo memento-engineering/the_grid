@@ -1,2 +1,9 @@
 floor: v1.0.5
 day_one_wait_through: v1.1.2
+fork_patches:
+  graph_apply_parent_cycle_skip:
+    repository: nicholasspencer/beads
+    base_sha: f9fe4ef2a6d3d90b52f1b62df15a5b2c0833c82b
+    ref: grid-v1.0.5-graph-apply-parent-cycle-skip.1
+    fixture_set: 2026-09-01-bd-grid-v1.0.5-graph-apply-parent-cycle-skip.1
+    resolved_sha_receipt: fixtures/upstream/2026-09-01-bd-grid-v1.0.5-graph-apply-parent-cycle-skip.1/README.md

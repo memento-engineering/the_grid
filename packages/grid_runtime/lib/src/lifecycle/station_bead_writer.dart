@@ -234,6 +234,12 @@ class StationBeadWriter {
   /// before running. Entries self-prune once their chain drains.
   final Map<String, Future<void>> _tail = {};
 
+  /// The in-process graph-apply tail for this writer's one bd store.
+  ///
+  /// This serializes already-admitted pour I/O only. It is deliberately
+  /// non-durable and carries no start-eligibility or lifecycle authority.
+  Future<void>? _storePourTail;
+
   /// The owned-substation metadata key stamped on every minted session bead.
   static const String rigKey = 'rig';
 
@@ -797,7 +803,9 @@ class StationBeadWriter {
       if (await _moleculeAlreadyMinted(sessionId: sessionId)) {
         return const <String, String>{};
       }
-      final ids = await _bd.applyGraph(plan, ephemeral: false);
+      final ids = await _serializedStorePour(
+        () => _bd.applyGraph(plan, ephemeral: false),
+      );
       await _stampMoleculeCrumbs(plan, ids, rootCrumbList);
       return ids;
     });
@@ -1281,6 +1289,20 @@ class StationBeadWriter {
       ids,
       () => _bd.batch([for (final entry in lines) entry.line]),
     );
+  }
+
+  /// Serializes graph applies against this writer's one store.
+  Future<T> _serializedStorePour<T>(Future<T> Function() op) {
+    final prior = _storePourTail ?? Future<void>.value();
+    final run = prior.then((_) => op());
+    final tail = run.then((_) {}, onError: (_) {});
+    _storePourTail = tail;
+    unawaited(
+      tail.whenComplete(() {
+        if (identical(_storePourTail, tail)) _storePourTail = null;
+      }),
+    );
+    return run;
   }
 
   /// Chains [op] after the prior write on [id] (D-1). Returns [op]'s future

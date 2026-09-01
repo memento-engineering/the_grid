@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "id": "fx-message",
+      "title": "Fixture message",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "message",
+      "owner": "nicholas.scott.spencer@gmail.com",
+      "created_at": "2026-09-01T18:23:32Z",
+      "created_by": "fixture-capture",
+      "updated_at": "2026-09-01T18:23:32Z",
+      "ephemeral": true,
+      "dependent_count": 0,
+      "dependency_count": 0,
+      "comment_count": 0
+    }
+  ],
+  "schema_version": 1
+}
