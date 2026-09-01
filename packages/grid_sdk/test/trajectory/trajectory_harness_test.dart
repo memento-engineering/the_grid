@@ -15,7 +15,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:grid_engine/grid_engine.dart'
-    show SessionHeadWon, TrajectorySnapshotHealth;
+    show
+        DualReadMode,
+        SessionHeadWon,
+        TerminalReconcileOutcome,
+        TerminalReconcileRequest,
+        TrajectorySnapshotHealth;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
@@ -1603,6 +1608,141 @@ void main() {
       expect(h.mode, TrajectoryHarnessMode.degraded);
       expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
       expect(h.sessionHeads.rows, isEmpty);
+    });
+  });
+
+  group("the dual read's harness surfaces (cut-wiring C2)", () {
+    TerminalReconcileRequest request(
+      List<TerminalReconcileOutcome> reported, {
+      String attemptId = '01J8ATTEMPT000000000000009',
+    }) => TerminalReconcileRequest(
+      sessionId: 'tranquility-1',
+      attemptId: attemptId,
+      workBeadId: 'tg-9abc',
+      report: reported.add,
+    );
+
+    test('hasQueuedAppendFor sees BOTH the queued and the IN-FLIGHT request — '
+        'the writer dequeues before it awaits, so a queue-only read has a '
+        'real hole (r8 — V2-B1s trigger depends on this)', () async {
+      final h = await harness();
+      await h.start();
+      appender.appendNeverCompletes = true;
+
+      h
+        ..enqueue(
+          TrajectoryAppendRequest(
+            AttemptTerminal(
+              attemptId: 'A' * 26,
+              sessionId: 's-1',
+              outcome: TerminalOutcome.succeeded,
+            ),
+          ),
+        )
+        ..enqueue(
+          TrajectoryAppendRequest(
+            AttemptTerminal(
+              attemptId: 'B' * 26,
+              sessionId: 's-2',
+              outcome: TerminalOutcome.succeeded,
+            ),
+          ),
+        );
+      await pumpEventQueue();
+
+      expect(h.hasQueuedAppendFor('A' * 26), isTrue, reason: 'in flight');
+      expect(h.hasQueuedAppendFor('B' * 26), isTrue, reason: 'queued');
+      expect(h.hasQueuedAppendFor('C' * 26), isFalse);
+    });
+
+    test('THE GUARD PRE-CHECK (r9 — V3-B1): an existing terminal row for the '
+        'attempt means the real record LANDED, so the heal SKIPS and counts — '
+        'no append at all', () async {
+      dbScript = (sql) {
+        if (sql.contains('traj_terminal_guard')) {
+          return const SqlResult(
+            rows: [
+              {'attempt_id': '01J8ATTEMPT000000000000009'},
+            ],
+          );
+        }
+        return null;
+      };
+      final h = await harness();
+      await h.start();
+      final reported = <TerminalReconcileOutcome>[];
+
+      h.requestTerminalReconcile(request(reported));
+      await pumpEventQueue();
+
+      expect(reported, [TerminalReconcileOutcome.skippedGuard]);
+      expect(
+        [for (final r in appender.records) r.recordType],
+        isNot(contains('attempt.terminal')),
+      );
+    });
+
+    test('with no guard row the heal appends the reconstructed close under '
+        'its OWN basis and its OWN idem grammar', () async {
+      final h = await harness();
+      await h.start();
+      final reported = <TerminalReconcileOutcome>[];
+
+      h.requestTerminalReconcile(request(reported));
+      await pumpEventQueue();
+
+      expect(reported, [TerminalReconcileOutcome.appended]);
+      final terminal =
+          appender.records.whereType<AttemptTerminal>().single;
+      expect(terminal.outcome, TerminalOutcome.unknown);
+      expect(terminal.unknownReason, 'external-close');
+      expect(terminal.attemptId, '01J8ATTEMPT000000000000009');
+      expect(terminal.attemptIdBasis, isNull, reason: 'never minted');
+      expect(
+        appender.provenances.last,
+        TrajectoryProvenance.reconstructed,
+      );
+    });
+
+    test('a heal whose guard read THROWS reports failed and flares — the '
+        'escalation rule keys on exactly that', () async {
+      dbScript = (sql) => sql.contains('traj_terminal_guard')
+          ? StateError('guard read exploded')
+          : null;
+      final h = await harness();
+      await h.start();
+      final reported = <TerminalReconcileOutcome>[];
+
+      h.requestTerminalReconcile(request(reported));
+      await pumpEventQueue();
+
+      expect(reported, [TerminalReconcileOutcome.failed]);
+      expect(flareNames(), contains('trajectory.terminalReconcileFailed'));
+    });
+
+    test('a DOWN or degraded harness reports a SKIP, never a failure: a '
+        'harness that cannot append never manufactures an escalation', () async {
+      final h = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+      );
+      await h.start();
+      final reported = <TerminalReconcileOutcome>[];
+
+      h.requestTerminalReconcile(request(reported));
+      await pumpEventQueue();
+
+      expect(reported, [TerminalReconcileOutcome.skippedGuard]);
+      expect(flares, isEmpty);
+    });
+
+    test('the config carries the posture and defaults to OBSERVE', () {
+      expect(const TrajectoryConfig().dualRead, DualReadMode.observe);
+      expect(
+        const TrajectoryConfig(dualRead: DualReadMode.primary).asDisabled
+            .dualRead,
+        DualReadMode.primary,
+        reason: 'dry-run forces the WRITE posture, never the read one',
+      );
     });
   });
 }

@@ -101,6 +101,12 @@ export 'src/domain/session_projection.dart';
 // grid_sdk implements them over grid_trajectory's fold row types — so the
 // engine gains no dependency and no SQL client enters its transitive set.
 export 'src/domain/trajectory_views.dart';
+// The SESSION-AXIS DUAL READ (cut-wiring C2): the overlay and its monotone
+// guard, the comparator, the lag/adjudication classes, the per-boot accounting
+// behind the durable round summaries, and the ONE escalation rule's tracker —
+// pure — plus the stateful pass that runs them over one join.
+export 'src/bridge/dual_read_pass.dart';
+export 'src/domain/session_head_read.dart';
 // Wedge detection (tg-jwh) — the station's own "is the grid stuck?" derivation
 // over the producer-side join; the status surface reports it, no watcher
 // re-derives it from raw sessions.

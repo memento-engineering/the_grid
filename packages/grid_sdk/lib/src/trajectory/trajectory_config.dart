@@ -7,6 +7,7 @@
 /// `assembleStationWork`.
 library;
 
+import 'package:grid_engine/grid_engine.dart' show DualReadMode;
 import 'package:grid_runtime/grid_runtime.dart'
     show kDefaultLivenessThreshold, kDefaultPulseCoalesce;
 import 'package:grid_trajectory/grid_trajectory.dart';
@@ -58,9 +59,23 @@ final class TrajectoryConfig {
     this.livenessThreshold = kDefaultLivenessThreshold,
     this.pulseCoalesce = kDefaultPulseCoalesce,
     this.shutdownDrainTimeout = kDefaultShutdownDrainTimeout,
+    this.dualRead = DualReadMode.observe,
   });
 
   final TrajectoryConfigMode mode;
+
+  /// THE DUAL-READ POSTURE (cut-wiring C2/C3).
+  ///
+  /// [DualReadMode.observe] — wave 1's default and C2's whole scope: the
+  /// comparator runs, classifies, flares divergences and writes the durable
+  /// round summaries, and DECISIONS STAY LEGACY. [DualReadMode.primary] is
+  /// C3's flip, where the certified overlay is actually served; the default
+  /// stays `observe` even in C3's PR, and the flip is a separable one-line
+  /// commit attached to C2's gate evidence.
+  ///
+  /// Rollback is this one line either way, and it is instant — wave 1 retires
+  /// nothing, so legacy stays fully written and authoritative underneath.
+  final DualReadMode dualRead;
 
   /// The service tick's interval (§1.2 step 2; Stage-0 default 30 s).
   final Duration tickInterval;
@@ -100,5 +115,6 @@ final class TrajectoryConfig {
     livenessThreshold: livenessThreshold,
     pulseCoalesce: pulseCoalesce,
     shutdownDrainTimeout: shutdownDrainTimeout,
+    dualRead: dualRead,
   );
 }

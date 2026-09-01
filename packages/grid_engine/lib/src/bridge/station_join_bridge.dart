@@ -8,10 +8,12 @@ import '../domain/joined_snapshot.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
+import '../domain/trajectory_views.dart';
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
 import 'block_guard.dart';
+import 'dual_read_pass.dart';
 import 'snapshot_source.dart';
 
 typedef _JoinedStepIncarnation = ({Bead bead, int ordinal});
@@ -53,16 +55,27 @@ class StationJoinBridge {
   ///
   /// [onUnresolvedCrossLink] is the LOUD sink an unenforceable cross-link is
   /// reported through (see [_applyCrossLinks]).
+  /// [headSnapshot] and [dualRead] are the DUAL READ's third input (cut-wiring
+  /// C2): a pre-fetched, immutable P1 mirror read and the comparator that
+  /// observes it. Both are optional — an offline or trajectory-less
+  /// composition passes neither and the join is byte-identical to before.
+  /// [onHeadChanges] is the re-join seam so a fold-side fact lands promptly
+  /// rather than waiting for the next work/state emission.
   factory StationJoinBridge({
     required SnapshotSource work,
     required SnapshotSource state,
     JoinedSnapshotNotifier? notifier,
     void Function(String message)? onUnresolvedCrossLink,
+    TrajectoryHeadSnapshot Function()? headSnapshot,
+    HeadSnapshotSubscribe? onHeadChanges,
+    DualReadSessionObserver? dualRead,
   }) {
     final seed = _join(
       work.current,
       state.current,
+      headSnapshot?.call(),
       onUnresolvedCrossLink: onUnresolvedCrossLink,
+      dualRead: dualRead,
     );
     return StationJoinBridge._(
       work: work,
@@ -71,6 +84,9 @@ class StationJoinBridge {
       notifier: notifier ?? JoinedSnapshotNotifier(seed),
       latest: seed,
       onUnresolvedCrossLink: onUnresolvedCrossLink,
+      headSnapshot: headSnapshot,
+      onHeadChanges: onHeadChanges,
+      dualRead: dualRead,
     );
   }
 
@@ -81,15 +97,34 @@ class StationJoinBridge {
     required this.notifier,
     required JoinedSnapshot latest,
     required void Function(String message)? onUnresolvedCrossLink,
+    required TrajectoryHeadSnapshot Function()? headSnapshot,
+    required HeadSnapshotSubscribe? onHeadChanges,
+    required DualReadSessionObserver? dualRead,
   }) : _work = work,
        _state = state,
        _ownsNotifier = ownsNotifier,
        _latest = latest,
-       _onUnresolvedCrossLink = onUnresolvedCrossLink;
+       _onUnresolvedCrossLink = onUnresolvedCrossLink,
+       _headSnapshot = headSnapshot,
+       _onHeadChanges = onHeadChanges,
+       _dualRead = dualRead;
 
   final SnapshotSource _work;
   final SnapshotSource _state;
   final bool _ownsNotifier;
+
+  /// The PRE-FETCHED P1 mirror read (§0.2). `_join` is pure and synchronous
+  /// and a P1 SQL read is async, so the splice is state that was already
+  /// fetched — never an inline await.
+  final TrajectoryHeadSnapshot Function()? _headSnapshot;
+
+  final HeadSnapshotSubscribe? _onHeadChanges;
+  void Function()? _removeHeadListener;
+
+  /// The comparator's bookkeeper — accounting, the two lag trackers, the
+  /// flares, the heal requests, the durable round summaries. Under `observe`
+  /// it only counts: decisions stay legacy in wave 1's C2.
+  final DualReadSessionObserver? _dualRead;
 
   /// The LOUD sink an unenforceable cross-link is reported through — a
   /// malformed link bead, or a `to` target no federated work member observes.
@@ -124,34 +159,32 @@ class StationJoinBridge {
     // (non-replaying, broadcast) event was missed — recover it from `.current`
     // so the notifier never carries a stale construction-time seed. A no-op in
     // the intended atomic construct-then-start composition.
-    _push(
-      _join(
-        _work.current,
-        _state.current,
-        onUnresolvedCrossLink: _onUnresolvedCrossLink,
-      ),
-    );
+    _push(_rejoin());
     // Use the freshly-emitted snapshot for the source that fired and `.current`
     // for the other — one push per real emission, never two for one change.
     _workSub = _work.snapshots.listen((workSnapshot) {
-      _push(
-        _join(
-          workSnapshot,
-          _state.current,
-          onUnresolvedCrossLink: _onUnresolvedCrossLink,
-        ),
-      );
+      _push(_rejoin(work: workSnapshot));
     });
     _stateSub = _state.snapshots.listen((stateSnapshot) {
-      _push(
-        _join(
-          _work.current,
-          stateSnapshot,
-          onUnresolvedCrossLink: _onUnresolvedCrossLink,
-        ),
-      );
+      _push(_rejoin(state: stateSnapshot));
     });
+    // THE THIRD AXIS (C2): a fold-side fact re-joins promptly. It is NOT a
+    // fourth subscription into the snapshot pipelines (A39 / derailment
+    // invariant 1) — the mirror is this process's own pre-fetched state, not a
+    // store — and it pushes through the SAME funnel, so the "one push per real
+    // change" rule still holds.
+    _removeHeadListener = _onHeadChanges?.call((_) => _push(_rejoin()));
   }
+
+  /// Recomputes the join from the latest of all three inputs, taking the
+  /// freshly-emitted value for whichever source fired.
+  JoinedSnapshot _rejoin({GraphSnapshot? work, GraphSnapshot? state}) => _join(
+    work ?? _work.current,
+    state ?? _state.current,
+    _headSnapshot?.call(),
+    onUnresolvedCrossLink: _onUnresolvedCrossLink,
+    dualRead: _dualRead,
+  );
 
   /// Re-emits a FRESH-instance copy of [latest] — the kernel's backoff re-poke
   /// (a cooldown expired; `WorkList` must re-run the frontier predicate). A
@@ -183,6 +216,14 @@ class StationJoinBridge {
     _stateSub?.cancel();
     _workSub = null;
     _stateSub = null;
+    _removeHeadListener?.call();
+    _removeHeadListener = null;
+    // THE CLEAN-DOWN FIXPOINT (§0.4): one boot-final round summary, riding the
+    // sessionId of the LAST terminal session of the boot. It runs HERE because
+    // the driver disposes the bridge before the trajectory harness drains, so
+    // the note is enqueued while there is still a writer to take it.
+    final head = _headSnapshot;
+    if (head != null) _dualRead?.finish(head());
     if (_ownsNotifier) notifier.dispose();
   }
 
@@ -206,10 +247,20 @@ class StationJoinBridge {
   /// edges. This is where the link set enters the pipeline: the state axis
   /// already reaches here, so the fold adds NO new subscription and the bridge
   /// still pushes exactly once per real change.
+  ///
+  /// [head] is the DUAL READ's third input (cut-wiring §0.2/§0.3): a
+  /// pre-fetched, immutable P1 mirror snapshot. It is PURE here — the join
+  /// takes it as a value, never awaits it, and in wave 1's C2 never lets it
+  /// change what the map holds: the comparator classifies and counts, and the
+  /// overlay it certifies is served by C3. The read is identity-matched
+  /// (`bySessionId`) by the OVERLAY IDENTITY RULE, so a sibling row can never
+  /// splice a terminal onto a live session.
   static JoinedSnapshot _join(
     GraphSnapshot? work,
-    GraphSnapshot? state, {
+    GraphSnapshot? state,
+    TrajectoryHeadSnapshot? head, {
     void Function(String message)? onUnresolvedCrossLink,
+    DualReadSessionObserver? dualRead,
   }) {
     if (work == null) return JoinedSnapshot.empty();
     var graph = work;
@@ -234,6 +285,10 @@ class StationJoinBridge {
       _attachGateState(state, sessions);
       graph = _applyCrossLinks(work, state, onUnresolvedCrossLink);
     }
+    // The comparator pass runs over the FINISHED sessions map — after the
+    // molecule/gate attachments, so it compares what a decision would actually
+    // read. It mutates nothing in `sessions`.
+    if (head != null) dualRead?.observe(sessions, head);
     return JoinedSnapshot(
       graph: graph,
       sessionsByWorkBead: sessions,

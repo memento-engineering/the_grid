@@ -44,7 +44,11 @@ import 'package:grid_runtime/grid_runtime.dart'
         StuckObligationAccountant,
         TrajectoryRecordSink,
         buildStage1ObligationQueries;
-import 'package:grid_engine/grid_engine.dart' show TrajectoryHeadSnapshot;
+import 'package:grid_engine/grid_engine.dart'
+    show
+        TerminalReconcileOutcome,
+        TerminalReconcileRequest,
+        TrajectoryHeadSnapshot;
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 import 'package:state_notifier/state_notifier.dart' show RemoveListener;
@@ -392,6 +396,11 @@ class TrajectoryHarness {
   bool _writerActive = false;
   Future<void> _writerDone = Future<void>.value();
 
+  /// The attempt id of the request the writer loop is CURRENTLY appending —
+  /// the hole a queue-only "is an append pending" read would have, because the
+  /// loop dequeues before it awaits ([hasQueuedAppendFor]).
+  String? _inFlightAttemptId;
+
   /// The one serial lane every statement on the SQL session rides — the
   /// writer loop, the tick's passes, gc, and the boundary commit never
   /// interleave on the single `mysql_client` session.
@@ -559,6 +568,88 @@ class TrajectoryHarness {
     pulseCoalesce: config.pulseCoalesce,
     clock: _clock,
   );
+
+  // ── the dual read's harness surfaces (cut-wiring C2) ─────────────────────
+
+  /// Is an append for [attemptId] still QUEUED (or mid-flight)?
+  ///
+  /// The `terminal-reconcile` heal's trigger asks this before it fires (r8 —
+  /// V2-B1): every NORMAL terminal transits `terminalLag` briefly because bd
+  /// is written first and the record appended after, and a heal that fired
+  /// while the real record was still in this queue would race it. The
+  /// in-flight request counts too — the writer loop removes it from the queue
+  /// BEFORE awaiting the append, so a queue-only read has a real hole.
+  bool hasQueuedAppendFor(String attemptId) {
+    if (_inFlightAttemptId == attemptId) return true;
+    for (final request in _queue) {
+      if (_attemptIdOf(request.record) == attemptId) return true;
+    }
+    return false;
+  }
+
+  /// THE HEAL (cut-wiring §C2, r9 — V3-B1's guard contract).
+  ///
+  /// The append PRECONDITION is a `traj_terminal_guard` check: a terminal row
+  /// already existing for the attempt means the real record LANDED and the
+  /// head is merely folding — pure lag, so SKIP and count, no append. The
+  /// residual check-append race is closed inside the single fenced appender by
+  /// TESTIMONY YIELDS TO OBSERVATION (C1's resolving pre-read), so this
+  /// pre-check is the cheap arm, never the only one.
+  ///
+  /// Fire-and-forget, like every other append path: the request's `report` is
+  /// how the bridge's tracker learns what happened, and an enqueued append is
+  /// reported as attempted — a silent failure afterwards is caught by the
+  /// entry SURVIVING one further comparator pass, which is exactly what the
+  /// escalation rule keys on.
+  void requestTerminalReconcile(TerminalReconcileRequest request) {
+    if (_mode != TrajectoryHarnessMode.live || _isShutdown) {
+      // Nothing may be appended and nothing was: report a skip rather than a
+      // failure, so a down/degraded harness never manufactures an escalation.
+      request.report(TerminalReconcileOutcome.skippedGuard);
+      return;
+    }
+    unawaited(_reconcileTerminal(request));
+  }
+
+  Future<void> _reconcileTerminal(TerminalReconcileRequest request) async {
+    try {
+      final existing = await _serialize(
+        () => _requireDb().execute(
+          'SELECT attempt_id FROM traj_terminal_guard '
+          'WHERE attempt_id = :attempt_id LIMIT 1',
+          {'attempt_id': request.attemptId},
+        ),
+      );
+      if (existing.rows.isNotEmpty) {
+        request.report(TerminalReconcileOutcome.skippedGuard);
+        return;
+      }
+      recorder.sessionTerminalReconciled(
+        sessionId: request.sessionId,
+        attemptId: request.attemptId,
+        workBeadId: request.workBeadId.isEmpty ? null : request.workBeadId,
+        reason:
+            'terminal-reconcile: the ledger closed this session and no '
+            'terminal record was ever observed for its attempt',
+      );
+      request.report(TerminalReconcileOutcome.appended);
+    } on Object catch (error) {
+      request.report(TerminalReconcileOutcome.failed);
+      _flareLimited('trajectory.terminalReconcileFailed', {
+        'session_id': request.sessionId,
+        'attempt_id': request.attemptId,
+        'reason': '$error',
+      });
+    }
+  }
+
+  /// The attempt id a record correlates to, or null. Reads the CORRELATION map
+  /// (a column name), never a concrete record class — the same discipline the
+  /// append mechanics keep.
+  static String? _attemptIdOf(TrajectoryRecord record) {
+    final value = record.correlationToJson()['attempt_id'];
+    return value is String ? value : null;
+  }
 
   // ── the P1 mirror (cut-wiring C1 / §0.2) ─────────────────────────────────
 
@@ -900,6 +991,7 @@ class TrajectoryHarness {
   }
 
   Future<void> _appendOne(TrajectoryAppendRequest request) async {
+    _inFlightAttemptId = _attemptIdOf(request.record);
     try {
       if (_needsReconnect) {
         // Debounced (quality M3): eager on the first append after the
@@ -1000,6 +1092,8 @@ class TrajectoryHarness {
         'recordType': request.record.recordType,
         'dropped': '$_dropped',
       });
+    } finally {
+      _inFlightAttemptId = null;
     }
   }
 

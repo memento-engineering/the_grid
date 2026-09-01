@@ -1275,6 +1275,24 @@ deletes the class, lifts the interface, keeps its tests as the reader's seed.
 the reason given). Reconstructed facts are non-authoritative for admission and ordered by
 `occurred_at`.
 
+> **AMENDED by cut-wiring wave 1, chunk C2 (r8).** The "only by the migration-import path" clause
+> is widened to enumerate exactly TWO further named writers, both station-side observer appends
+> about bd writes that already happen, both `outcome='unknown'` with the schema's explicit reason,
+> and neither authoritative for admission:
+>
+> 1. the restart reconciler's **teardown-replay** close —
+>    `provenance_basis='restart-reconciler'`, `unknown_reason='teardown-replay'`;
+> 2. the bridge-homed **terminal-reconcile** heal —
+>    `provenance_basis='terminal-reconcile'`, `unknown_reason='external-close'`,
+>    idem key `terminal-reconcile:<attemptId>`.
+>
+> Two rules keep them from displacing truth: TESTIMONY YIELDS TO OBSERVATION (an observed or
+> inferred terminal meeting reconstructed testimony is re-authored in settling form by the
+> appender's resolving pre-read; an incoming reconstructed on a guard collision is refused), and
+> the SETTLEMENT EXCLUSION (`UnknownTerminalSettlementObligation` scans
+> `AND t.provenance != 'reconstructed'`, so a reconstructed unknown is permanently outside the
+> settlement candidate set). Stated as an amendment, never slipped.
+
 ---
 
 # 9 Migration posture

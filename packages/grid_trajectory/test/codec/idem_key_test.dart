@@ -116,6 +116,42 @@ void main() {
     );
   });
 
+  test('the terminal-reconcile HEAL takes its OWN key grammar (cut-wiring '
+      'C2, r8 — V2-B1): it can never dedupe against the real record in '
+      'EITHER direction', () {
+    final real = AttemptTerminal(
+      attemptId: 'a-one',
+      outcome: TerminalOutcome.succeeded,
+    );
+    final heal = AttemptTerminal(
+      attemptId: 'a-one',
+      outcome: TerminalOutcome.unknown,
+      unknownReason: 'external-close',
+      healBasis: 'terminal-reconcile',
+    );
+    expect(real.idemKeyText(fixtureContext), 'terminal:a-one');
+    expect(heal.idemKeyText(fixtureContext), 'terminal-reconcile:a-one');
+    expect(heal.idemKey(fixtureContext), isNot(real.idemKey(fixtureContext)));
+  });
+
+  test('the heal basis rides the payload, and a settling re-authoring carries '
+      'it through without changing the settling grammar', () {
+    final heal = AttemptTerminal(
+      attemptId: 'a-one',
+      outcome: TerminalOutcome.unknown,
+      unknownReason: 'external-close',
+      healBasis: 'terminal-reconcile',
+    );
+    expect(heal.payloadToJson()['heal_basis'], 'terminal-reconcile');
+    final settled =
+        heal.settlingForm('01J8TERMINAL00000000000001')! as AttemptTerminal;
+    expect(settled.payloadToJson()['heal_basis'], 'terminal-reconcile');
+    expect(
+      settled.idemKeyText(fixtureContext),
+      'terminal-resolve:a-one:01J8TERMINAL00000000000001',
+    );
+  });
+
   test('required-field invariants refuse at construction', () {
     expect(
       () => AttemptTerminal(attemptId: 'a', outcome: TerminalOutcome.unknown),

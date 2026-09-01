@@ -572,6 +572,28 @@ Future<StationWorkRuntime> assembleStationWork({
   // reach them. One recorder, one queue, one appender: the sole-appender
   // invariant is threading, not convention.
   final recorder = trajectory.recorder;
+  // THE SESSION-AXIS DUAL READ (cut-wiring C2) — ONE accounting per boot,
+  // shared by the join bridge's comparator pass and the restart reconciler's,
+  // because the durable round summary must not report two different truths for
+  // one boot. Under the default `observe` posture nothing here changes a
+  // decision: the comparator classifies, flares, and writes evidence.
+  final dualReadAccounting = DualReadAccounting();
+  final dualRead = DualReadSessionObserver(
+    mode: trajectoryConfig.dualRead,
+    accounting: dualReadAccounting,
+    // The harness's answer for one attempt — the heal must not race a terminal
+    // record that is still queued (r8 — V2-B1).
+    appendQueuedFor: trajectory.hasQueuedAppendFor,
+    // The heal's guard pre-check + append live on the harness's serialized
+    // lane; the bridge decides WHETHER, the harness decides ADMISSIBLE.
+    healer: trajectory.requestTerminalReconcile,
+    onFlare: transport?.flare,
+    // §0.4's durable evidence: one `attempt.note` per session terminal plus a
+    // boot-final note at the clean-down fixpoint, so bounces stop resetting
+    // what the wave-1 gates read.
+    onRoundSummary: (sessionId, body) =>
+        recorder.dualReadRoundSummaryNoted(sessionId: sessionId, body: body),
+  );
   final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
@@ -728,8 +750,16 @@ Future<StationWorkRuntime> assembleStationWork({
     leaseVendor: leaseVendor,
     onOrphan: orphanSink,
     // The INFERRED half of `attempt.terminal(settled)` (stage1-wiring §2.3):
-    // this pass settles a prior boot's sessions from evidence on disk.
+    // this pass settles a prior boot's sessions from evidence on disk. It also
+    // carries C2's teardown-replay OBSERVER APPEND — the reconstructed close
+    // that keeps a replayed teardown from leaving a permanently open head.
     recorder: recorder,
+    // The dual read's reconciler half (cut-wiring C2): the same identity rule
+    // and the same counters, plus the `incumbentAdjudication` class that only
+    // `_projectOwnedSessions`' order-dependent winner can produce.
+    headSnapshot: () => trajectory.sessionHeads,
+    dualReadAccounting: dualReadAccounting,
+    onFlare: transport?.flare,
     // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
   );
@@ -738,6 +768,15 @@ Future<StationWorkRuntime> assembleStationWork({
     work: work,
     state: stateSource,
     onUnresolvedCrossLink: unresolvedSink,
+    // The DUAL READ's third input (cut-wiring §0.2/§0.3): a PRE-FETCHED,
+    // immutable P1 mirror read — `_join` is pure and synchronous, and a P1 SQL
+    // read is async, so nothing here awaits. `onHeadChanges` is the re-join
+    // seam: a fold-side fact lands promptly instead of waiting for the next
+    // work/state emission, and it pushes through the same single funnel.
+    headSnapshot: () => trajectory.sessionHeads,
+    onHeadChanges: (listener) =>
+        trajectory.onSessionHeadsChanged(listener, fireImmediately: false),
+    dualRead: dualRead,
   );
   // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
   // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no
