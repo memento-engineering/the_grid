@@ -291,8 +291,7 @@ class SubprocessProvider implements RuntimeProvider {
       // so NOTHING else will ever reap this process — kill it HERE, through the
       // same guarded path `stop` uses. This `finally` keeps the hand-off live
       // even when one-turn stdin closure throws.
-      stopRacedSpawn =
-          session.stopping || !identical(_sessions[name], session);
+      stopRacedSpawn = session.stopping || !identical(_sessions[name], session);
       if (stopRacedSpawn) {
         await _terminateSession(session);
         session.close();
