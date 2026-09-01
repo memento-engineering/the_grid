@@ -61,8 +61,14 @@ void main() {
         'status': 'closed',
         'outcome': 'failed',
         'closed_at': closedAt,
+        // An OBSERVED terminal states both cut columns explicitly: no
+        // explicit-unknown word, and no reconstructed mark — truth
+        // supersedes testimony (cut-wiring §0.3, r9–r11).
+        'unknown_reason': null,
+        'terminal_provenance': null,
         'work_terminal_reason': 'gating rc 1',
       });
+      expect(update.guardTerminalLess, isFalse);
     });
 
     test('a SETTLING terminal updates OUTCOME only — closed_at stands', () {
@@ -77,7 +83,12 @@ void main() {
         ),
       );
       final update = delta! as SessionHeadUpdate;
-      expect(update.columns, {'outcome': 'settled'});
+      expect(update.columns, {
+        'outcome': 'settled',
+        'unknown_reason': null,
+        // OBSERVED settlement ⇒ the reconstructed mark clears with it.
+        'terminal_provenance': null,
+      });
     });
 
     test('a terminal without a session_id has nothing to key: no delta', () {
@@ -364,5 +375,227 @@ void main() {
         expect(row.lastSeq, 3);
       },
     );
+  });
+
+  // ── the wave-1 cut columns (cut-wiring §0.3, r9–r11) ─────────────────────
+
+  group('TRUTH MONOTONICITY — terminal_provenance', () {
+    TrajectoryEnvelope terminal({
+      required TerminalOutcome outcome,
+      TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+      String? unknownReason,
+      String? resolvesRecordId,
+      int seq = 2,
+    }) => envelope(
+      recordType: 'attempt.terminal',
+      family: TrajectoryFamily.attempt,
+      seq: seq,
+      sessionId: 'tranquility-1',
+      attemptId: '01J8ATTEMPT000000000000002',
+      outcome: outcome,
+      unknownReason: unknownReason,
+      resolvesRecordId: resolvesRecordId,
+      provenance: provenance,
+    );
+
+    SessionHeadRow fold(List<TrajectoryEnvelope> stream) {
+      final rows = <String, SessionHeadRow>{};
+      var seq = 0;
+      for (final record in [started(), ...stream]) {
+        seq += 1;
+        final delta = sessionHeadDeltaFor(record);
+        if (delta != null) applySessionHeadDelta(rows, delta, lastSeq: seq);
+      }
+      return rows['tranquility-1']!;
+    }
+
+    test('a RECONSTRUCTED terminal marks a terminal-less head and carries the '
+        'explicit-unknown word', () {
+      final update =
+          sessionHeadDeltaFor(
+                terminal(
+                  outcome: TerminalOutcome.unknown,
+                  unknownReason: 'teardown-replay',
+                  provenance: TrajectoryProvenance.reconstructed,
+                ),
+              )!
+              as SessionHeadUpdate;
+      expect(update.columns['terminal_provenance'], 'reconstructed');
+      expect(update.columns['unknown_reason'], 'teardown-replay');
+      expect(
+        update.guardTerminalLess,
+        isTrue,
+        reason: 'testimony closes ONLY a head with no terminal yet',
+      );
+    });
+
+    test('reconstructed testimony NEVER rewrites a head that already carries '
+        'an outcome — the guard is part of the delta, so live and replay '
+        'agree', () {
+      final row = fold([
+        terminal(outcome: TerminalOutcome.escalated),
+        terminal(
+          outcome: TerminalOutcome.unknown,
+          unknownReason: 'teardown-replay',
+          provenance: TrajectoryProvenance.reconstructed,
+          seq: 3,
+        ),
+      ]);
+      expect(row.outcome, TerminalOutcome.escalated);
+      expect(row.terminalProvenance, isNull);
+    });
+
+    test('an OBSERVED settlement over a reconstructed close writes the real '
+        'outcome AND clears the mark', () {
+      final row = fold([
+        terminal(
+          outcome: TerminalOutcome.unknown,
+          unknownReason: 'external-close',
+          provenance: TrajectoryProvenance.reconstructed,
+        ),
+        // The appender's resolving pre-read authors the observed terminal in
+        // settling form; this is what lands in the log.
+        terminal(
+          outcome: TerminalOutcome.succeeded,
+          resolvesRecordId: '01J8RECONSTRUCTED000000001',
+          seq: 3,
+        ),
+      ]);
+      expect(row.outcome, TerminalOutcome.succeeded);
+      expect(row.terminalProvenance, isNull, reason: 'truth supersedes');
+      expect(row.unknownReason, isNull);
+    });
+
+    test('an INFERRED settlement writes the outcome and LEAVES the mark — the '
+        'session stays in the reconstructedTerminal adjudication class', () {
+      final row = fold([
+        terminal(
+          outcome: TerminalOutcome.unknown,
+          unknownReason: 'external-close',
+          provenance: TrajectoryProvenance.reconstructed,
+        ),
+        terminal(
+          outcome: TerminalOutcome.settled,
+          provenance: TrajectoryProvenance.inferred,
+          resolvesRecordId: '01J8RECONSTRUCTED000000001',
+          seq: 3,
+        ),
+      ]);
+      expect(row.outcome, TerminalOutcome.settled);
+      expect(
+        row.terminalProvenance,
+        TrajectoryProvenance.reconstructed,
+        reason: 'the discriminator is the RECORD provenance, not the outcome',
+      );
+    });
+
+    test('the settling branch still heals OUTCOME only — closed_at stands', () {
+      final closedAt = DateTime.utc(2026, 8, 31, 11, 30);
+      final row = fold([
+        envelope(
+          recordType: 'attempt.terminal',
+          family: TrajectoryFamily.attempt,
+          seq: 2,
+          sessionId: 'tranquility-1',
+          attemptId: '01J8ATTEMPT000000000000002',
+          outcome: TerminalOutcome.unknown,
+          unknownReason: 'process-vanished',
+          occurredAt: closedAt,
+        ),
+        terminal(
+          outcome: TerminalOutcome.succeeded,
+          resolvesRecordId: '01J8UNKNOWNTERMINAL0000001',
+          seq: 3,
+        ),
+      ]);
+      expect(row.closedAt, closedAt);
+      expect(row.outcome, TerminalOutcome.succeeded);
+    });
+
+    test('an INFERRED non-settling terminal touches the mark neither way', () {
+      final update =
+          sessionHeadDeltaFor(
+                terminal(
+                  outcome: TerminalOutcome.lost,
+                  provenance: TrajectoryProvenance.inferred,
+                ),
+              )!
+              as SessionHeadUpdate;
+      expect(update.columns.containsKey('terminal_provenance'), isFalse);
+      expect(update.guardTerminalLess, isFalse);
+    });
+
+    test('the terminal-less guard renders as `AND outcome IS NULL`, and only '
+        'for testimony', () {
+      final testimony = sessionHeadSqlFor(
+        sessionHeadDeltaFor(
+          terminal(
+            outcome: TerminalOutcome.unknown,
+            unknownReason: 'teardown-replay',
+            provenance: TrajectoryProvenance.reconstructed,
+          ),
+        )!,
+        lastSeq: 9,
+      );
+      expect(testimony.sql, contains('AND outcome IS NULL'));
+      final observed = sessionHeadSqlFor(
+        sessionHeadDeltaFor(terminal(outcome: TerminalOutcome.succeeded))!,
+        lastSeq: 9,
+      );
+      expect(observed.sql, isNot(contains('outcome IS NULL')));
+    });
+
+    // THE ROLLBACK SHAPE (cut-wiring, r13): `DualReadMode.off` registers
+    // `kPreCutFoldDeltas`, which renders P1 without the two columns the wave-1
+    // reshape added. An existing home that upgraded WITHOUT running the
+    // quiesced `traj replay` must keep appending rather than die on an unknown
+    // column — which is what lets the harness skip the boot reshape probe.
+    test('cutShape: false drops the wave-1 columns from the UPDATE — the '
+        'pre-cut home keeps appending', () {
+      final statement = sessionHeadSqlFor(
+        sessionHeadDeltaFor(
+          terminal(
+            outcome: TerminalOutcome.unknown,
+            unknownReason: 'teardown-replay',
+            provenance: TrajectoryProvenance.reconstructed,
+          ),
+        )!,
+        lastSeq: 9,
+        cutShape: false,
+      );
+      for (final column in projSessionHeadCutColumns) {
+        expect(statement.sql, isNot(contains(column)), reason: column);
+        expect(statement.params.containsKey(column), isFalse, reason: column);
+      }
+      // Everything the pre-cut shape DOES carry still rides.
+      expect(statement.sql, contains('status = :status'));
+      expect(statement.sql, contains('outcome = :outcome'));
+      expect(statement.sql, contains('closed_at = :closed_at'));
+    });
+
+    test('cutShape: false drops them from the INSERT column list too', () {
+      final statement = sessionHeadSqlFor(
+        sessionHeadDeltaFor(started(seq: 7))!,
+        lastSeq: 7,
+        cutShape: false,
+      );
+      for (final column in projSessionHeadCutColumns) {
+        expect(statement.sql, isNot(contains(column)), reason: column);
+        expect(statement.params.containsKey(column), isFalse, reason: column);
+      }
+      expect(statement.sql, contains('INSERT INTO proj_session_head'));
+      expect(statement.params['session_id'], 'tranquility-1');
+    });
+
+    test('cutShape: true (the default) still writes them — the armed posture '
+        'is unchanged', () {
+      final statement = sessionHeadSqlFor(
+        sessionHeadDeltaFor(started(seq: 7))!,
+        lastSeq: 7,
+      );
+      for (final column in projSessionHeadCutColumns) {
+        expect(statement.sql, contains(column), reason: column);
+      }
+    });
   });
 }

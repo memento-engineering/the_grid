@@ -206,6 +206,13 @@ class TrajectoryTick {
             appended += 1;
           case AppendDeduped():
             deduped += 1;
+          // TESTIMONY YIELDS TO OBSERVATION (cut-wiring §0.3): the attempt's
+          // real terminal already landed, so this repair was redundant — the
+          // same class as a dedupe, success but not progress. Unreachable
+          // from the Stage-1 obligation set, whose terminals all SETTLE an
+          // existing row rather than claim one.
+          case AppendRefusedTestimony():
+            deduped += 1;
           case AppendFencedOut(:final reason):
             refusals.add(
               TickRefusal(

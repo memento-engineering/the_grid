@@ -23,7 +23,12 @@ import 'session_head_row.dart';
 
 /// P1's fold version (§5: bumped with any projection-shape change, which
 /// forces truncate + replay).
-const int sessionHeadFoldVersion = 1;
+///
+/// **2** — the wave-1 cut's P1 reshape (cut-wiring C0, r6/r7): P1 gained
+/// `terminal_provenance` + `unknown_reason`. The generation bump is what a
+/// mirror's reseed guard sees, and `traj replay` is the migration that stamps
+/// it (`reshapeSessionHeadProjection` + this replay).
+const int sessionHeadFoldVersion = 2;
 
 /// §2.6 rule 5: the `(record_type, min_version, max_version)` set this fold
 /// CONSUMES — the boot check's declaration. Family-1 types absent here are

@@ -99,6 +99,39 @@ const String kRecorderMintedAttemptBasis = 'recorder-minted';
 /// content-split for agent journaling is deferred.
 const String kObligationStuckChannel = 'obligation-stuck';
 
+/// The SECOND `attempt.note` channel, added by wave 1's C2 (cut-wiring §0.4) —
+/// the durable dual-read round summary. Stage-1's §2.3 statement that the
+/// obligation channel is the only armed one is a STATED EXTENSION here, not a
+/// slip: the doc amendment rides C2's PR.
+///
+/// The vehicle was chosen because it EXISTS: `AttemptNote` requires a
+/// `sessionId` and mints `note:<session>:<ordinal>`, so every summary is keyed
+/// to a real session — the one that just reached its terminal, or (at the
+/// clean-down fixpoint) the boot's last terminal session. Bounces therefore
+/// stop resetting the evidence: the wave-1 gates read notes ACROSS boots.
+const String kDualReadRoundSummaryChannel = 'dual-read-round-summary';
+
+/// `provenance_basis` for the teardown-replay observer append (cut-wiring §C2,
+/// r5): the reconciler closed an OPEN session bead and emitted no terminal, so
+/// the head would stay open forever. Reconstructed testimony about a session
+/// whose attempt this pass never observed — `outcome='settled'` stays reserved
+/// for the settle arm, which EARNS it by joining the attempt row.
+const String kRestartReconcilerBasis = 'restart-reconciler';
+
+/// `provenance_basis` AND idem grammar for the bridge-homed `terminal-reconcile`
+/// heal (cut-wiring §C2, r6–r11): its OWN named basis, because `ck_prov`
+/// requires one and this writer is not the reconciler.
+const String kTerminalReconcileBasis = 'terminal-reconcile';
+
+/// `unknown_reason` for the teardown-replay observer append — the schema's
+/// explicit-unknown vocabulary (`ck_unknown` requires a reason).
+const String kTeardownReplayUnknownReason = 'teardown-replay';
+
+/// `unknown_reason` for the `terminal-reconcile` heal: the ledger says closed
+/// and no station bd write exists for it. A record about a fact the station
+/// OBSERVED in the ledger — which is what an observer append is.
+const String kExternalCloseUnknownReason = 'external-close';
+
 /// `provenance_basis` for the tick's `worktree.reaped` backfill (§2.4
 /// obligation 2): the legacy reap already ran, the record never landed — the
 /// named non-atomic crash class, healed record-only.
@@ -715,6 +748,115 @@ class StationTrajectoryRecorder {
           : kRecorderMintedAttemptBasis,
       occurredAt: occurredAt,
     );
+  }
+
+  /// `attempt.terminal(outcome=unknown, unknown_reason='teardown-replay')` —
+  /// the TEARDOWN-REPLAY OBSERVER APPEND (cut-wiring §C2, r5 form).
+  ///
+  /// The reconciler's teardown replay closes an OPEN session bead and emits no
+  /// recorder terminal, so its head would stay `status='open'` forever: an
+  /// unhealable `terminalLag` that escalates and makes the C2/C3
+  /// zero-divergence gates unsatisfiable. This is the record that closes it.
+  ///
+  /// Three things it is NOT, each a corrected earlier form:
+  ///
+  ///   * NOT `settled` — that outcome stays reserved for the settle arm, which
+  ///     EARNS it by joining the attempt row. This pass never observed the
+  ///     attempt, so it says so: `unknown` with the schema's explicit reason,
+  ///     `provenance='reconstructed'`, basis `restart-reconciler`.
+  ///   * NOT minted — [attemptId] is REQUIRED and recovered by the caller from
+  ///     the session's `grid.lease.*` breadcrumb. A missing breadcrumb is a
+  ///     SKIP the caller counts and flares; a minted-id record would be an
+  ///     immutable lie that `revert` cannot remove and every `traj replay`
+  ///     reproduces.
+  ///   * NOT re-keyed — it takes the plain `terminal:<attemptId>` idem key, so
+  ///     a re-run of the replay lands `AppendDeduped` rather than a second row.
+  ///
+  /// Classification: a trajectory-side OBSERVER APPEND — a new record ABOUT a
+  /// bd write that already happens today. The bd write itself stays
+  /// byte-identical, so the wave-1 zero-bd-write-changes invariant holds.
+  void sessionTeardownReplayed({
+    required String sessionId,
+    required String attemptId,
+    String? workBeadId,
+    String? reason,
+    DateTime? occurredAt,
+  }) {
+    _terminal(
+      site: 'sessionTeardownReplayed',
+      sessionId: sessionId,
+      workBeadId: workBeadId,
+      attemptId: attemptId,
+      outcome: TerminalOutcome.unknown,
+      unknownReason: kTeardownReplayUnknownReason,
+      reason: reason,
+      provenance: TrajectoryProvenance.reconstructed,
+      provenanceBasis: kRestartReconcilerBasis,
+      occurredAt: occurredAt,
+    );
+  }
+
+  /// `attempt.terminal(outcome=unknown, unknown_reason='external-close')` —
+  /// the BRIDGE-HOMED `terminal-reconcile` HEAL (cut-wiring §C2, r6–r11).
+  ///
+  /// Fires only for a `terminalLag` entry that PERSISTED past the 90 s grace
+  /// across at least two comparator passes with no queued append for the
+  /// attempt (r8 — V2-B1 killed the first-observation trigger: the
+  /// bd-first/append-later window means every normal terminal transits
+  /// terminalLag briefly, and an eager heal races the real record).
+  ///
+  /// [attemptId] comes from THE P1 HEAD'S OWN `attempt_id` column, never a
+  /// breadcrumb and never a mint; a head that predates process start is a SKIP
+  /// the caller counts. The record takes its OWN idem grammar
+  /// (`terminal-reconcile:<attemptId>`, [kTerminalReconcileBasis]) so even a
+  /// pathological race can never dedupe-swallow the true outcome in either
+  /// direction — and if the real record DID land first, the appender's
+  /// resolving pre-read refuses this one as `AppendRefusedTestimony`
+  /// (TESTIMONY YIELDS TO OBSERVATION).
+  void sessionTerminalReconciled({
+    required String sessionId,
+    required String attemptId,
+    String? workBeadId,
+    String? reason,
+    DateTime? occurredAt,
+  }) {
+    _terminal(
+      site: 'sessionTerminalReconciled',
+      sessionId: sessionId,
+      workBeadId: workBeadId,
+      attemptId: attemptId,
+      outcome: TerminalOutcome.unknown,
+      unknownReason: kExternalCloseUnknownReason,
+      healBasis: kTerminalReconcileBasis,
+      reason: reason,
+      provenance: TrajectoryProvenance.reconstructed,
+      provenanceBasis: kTerminalReconcileBasis,
+      occurredAt: occurredAt,
+    );
+  }
+
+  /// `attempt.note(channel='dual-read-round-summary')` — the DURABLE round
+  /// evidence (cut-wiring §0.4).
+  ///
+  /// One note per session terminal plus one boot-final note at the clean-down
+  /// fixpoint, each carrying the boot's dual-read counters. It shares
+  /// [buildNote]'s service-minted ordinal with the obligation channel, so the
+  /// two can never mint the same `note:<session>:<ordinal>` key.
+  void dualReadRoundSummaryNoted({
+    required String sessionId,
+    required String body,
+    DateTime? occurredAt,
+  }) {
+    _observe('dualReadRoundSummaryNoted', () {
+      _enqueue(
+        buildNote(
+          sessionId: sessionId,
+          body: body,
+          channel: kDualReadRoundSummaryChannel,
+        ).record,
+        occurredAt: occurredAt,
+      );
+    });
   }
 
   /// `attempt.round.retired` — one record per retire (rework re-key or
@@ -1415,6 +1557,21 @@ class StationTrajectoryRecorder {
   DerivedRecord buildObligationStuckNote({
     required String sessionId,
     required String body,
+  }) => buildNote(
+    sessionId: sessionId,
+    body: body,
+    channel: kObligationStuckChannel,
+  );
+
+  /// [buildObligationStuckNote]'s generalization over the note CHANNEL — one
+  /// ordinal minter for both armed channels (§2.3's obligation-stuck and, from
+  /// wave 1's C2, §0.4's dual-read round summary), so the two can never mint
+  /// the same `note:<session>:<ordinal>` key. Every word of the ordinal
+  /// discipline above applies unchanged.
+  DerivedRecord buildNote({
+    required String sessionId,
+    required String body,
+    required String channel,
   }) {
     final last = _noteOrdinals[sessionId];
     final micros = _clock().toUtc().microsecondsSinceEpoch;
@@ -1428,7 +1585,7 @@ class StationTrajectoryRecorder {
       AttemptNote(
         sessionId: sessionId,
         body: body,
-        channel: kObligationStuckChannel,
+        channel: channel,
         noteOrdinal: ordinal,
       ),
     );
@@ -1505,6 +1662,8 @@ class StationTrajectoryRecorder {
     String? workBeadId,
     String? attemptId,
     String? reason,
+    String? unknownReason,
+    String? healBasis,
     String? resolvesRecordId,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
@@ -1518,6 +1677,8 @@ class StationTrajectoryRecorder {
         workBeadId: workBeadId,
         attemptId: attemptId,
         reason: reason,
+        unknownReason: unknownReason,
+        healBasis: healBasis,
         resolvesRecordId: resolvesRecordId,
         mintedAttemptBasis: mintedAttemptBasis,
       );
@@ -1537,6 +1698,8 @@ class StationTrajectoryRecorder {
     String? workBeadId,
     String? attemptId,
     String? reason,
+    String? unknownReason,
+    String? healBasis,
     String? resolvesRecordId,
     String mintedAttemptBasis = kRecorderMintedAttemptBasis,
   }) {
@@ -1559,6 +1722,8 @@ class StationTrajectoryRecorder {
         workBeadId: parsed?.workBeadId,
         outcome: outcome,
         reason: reason,
+        unknownReason: unknownReason,
+        healBasis: healBasis,
         resolvesRecordId: resolvesRecordId,
         attemptIdBasis: attemptIdBasis,
         seatBasis: seat?.basis,

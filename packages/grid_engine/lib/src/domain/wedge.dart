@@ -24,6 +24,7 @@ import '../molecule/molecule_codec.dart' show projectMoleculeCursor;
 import '../sdk/circuit.dart';
 import '../sdk/cursor.dart' show NodeCursor;
 import 'joined_snapshot.dart';
+import 'step_cursor_read.dart' show effectiveStepCursor;
 
 part 'wedge.freezed.dart';
 
@@ -191,12 +192,23 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
     // its first step bead landed still samples down the molecule arm (an
     // empty cursor — a stall that can honestly ripen). A non-molecule (legacy
     // flat) session contributes no nodes at all — see the function doc.
-    final nodes = session.isMolecule
+    // CONSUMER 2 of the step dual read (cut-wiring C4). Unlike the frontier,
+    // this site's today-read IS the bead recompute, so adoption here is the
+    // pure read swap the design describes: with the step axis unengaged the
+    // helper hands back that same projection, unchanged and un-copied.
+    final beadCursor = session.isMolecule
         ? projectMoleculeCursor(
             session.moleculeBeads,
             dependencies: session.moleculeDependencies,
-          ).cursor.values
-        : const <NodeCursor>[];
+          ).cursor
+        : null;
+    final nodes = beadCursor == null
+        ? const <NodeCursor>[]
+        : effectiveStepCursor(
+            session,
+            siteCursor: beadCursor,
+            beadCursor: beadCursor,
+          ).values;
     var isRunning = false;
     var isGated = false;
     var isCooling = false;

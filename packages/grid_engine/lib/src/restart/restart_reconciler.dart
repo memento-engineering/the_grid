@@ -70,7 +70,9 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/session_bead.dart';
+import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
+import '../domain/trajectory_views.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
 import '../molecule/process_lease_vendor.dart'
     show
@@ -449,8 +451,16 @@ class RestartReconciler {
     ProcessLeaseVendor? leaseVendor,
     void Function(String message)? onOrphan,
     StationTrajectoryRecorder? recorder,
+    TrajectoryHeadSnapshot Function()? headSnapshot,
+    DualReadAccounting? dualReadAccounting,
+    DualReadMode dualReadMode = DualReadMode.off,
+    void Function(String name, Map<String, String> data)? onFlare,
   }) : assert(workRoot != null || workRoots.isNotEmpty),
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
+       _headSnapshot = headSnapshot,
+       _dualRead = dualReadAccounting,
+       _dualReadMode = dualReadMode,
+       _onFlare = onFlare,
        _listWorktrees = listWorktrees,
        _reapWorktree = reapWorktree,
        _workRoots = List<RootCheckout>.unmodifiable(
@@ -500,6 +510,26 @@ class RestartReconciler {
   /// there to observe the transition it is recording. Absent (the default) it
   /// is a counting no-op.
   final StationTrajectoryRecorder _recorder;
+
+  /// The DUAL READ's third input on this pass (cut-wiring C2) — the SAME
+  /// pre-fetched P1 mirror the join bridge reads, injected as a getter so the
+  /// reconciler stays synchronous and store-free. Null off-tree; then the
+  /// comparison simply does not run and this pass is byte-identical to before.
+  final TrajectoryHeadSnapshot Function()? _headSnapshot;
+
+  /// Shared with the bridge's observer so ONE boot has ONE set of counters —
+  /// the round summary must not report two different truths for one boot. It
+  /// also carries the boot's OVERLAY DISENGAGE LATCH, which is why the two
+  /// readers can never disagree about whether this boot serves the fold.
+  final DualReadAccounting? _dualRead;
+
+  /// The dual-read posture (cut-wiring C3). `primary` makes
+  /// [_projectOwnedSessions] serve the SAME overlay the join bridge serves —
+  /// one rule set, two readers, so a disposition cannot depend on which pass
+  /// asked. `observe` (the default) counts and serves pure legacy.
+  final DualReadMode _dualReadMode;
+
+  final void Function(String name, Map<String, String> data)? _onFlare;
 
   /// Whether the ONE bd chokepoint reached this pass — a wiring proof for the
   /// composition (the assembly's own test asserts it). A capability query on
@@ -682,6 +712,15 @@ class RestartReconciler {
       );
     }
     final failures = <String>[];
+    // The ATTEMPT ID is recovered BEFORE the close, off the same post-barrier
+    // state snapshot everything else in this pass projects from: the observer
+    // append below needs it, and no id is ever minted for it.
+    String? recoveredAttemptId;
+    try {
+      recoveredAttemptId = _recoverSessionAttemptId(session.id);
+    } on Object {
+      recoveredAttemptId = null;
+    }
     try {
       await writer.reapMolecule(sessionId: session.id);
     } on Object catch (error) {
@@ -703,11 +742,71 @@ class RestartReconciler {
         );
       }
     }
+    var closed = false;
     try {
       await writer.close(session.id);
+      closed = true;
     } on Object catch (error) {
       failures.add('close');
       _onOrphan('teardown replay ${session.id}: close failed — $error');
+    }
+    // THE TEARDOWN-REPLAY OBSERVER APPEND (cut-wiring §C2, r5 form).
+    //
+    // SCOPE, stated as a RULE rather than left to the control flow: the append
+    // rides ONLY this arm — the closed-an-OPEN-session branch, after ITS
+    // successful `writer.close`. The closed-session early-return above appends
+    // NOTHING: an already-closed session had its terminal, and that terminal's
+    // absence from P1 is not this arm's to invent. (The candidate set really
+    // does hold both shapes — `sessionsAwaitingTeardown` plus
+    // `_closedSessionsWithOpenMolecules` — so the split is load-bearing, not
+    // decorative: a settled-outcome append with a minted id here would sit one
+    // refactor away from overwriting an `escalated`/`lost` head.)
+    //
+    // Without it every teardown replay leaves a permanent P1-open /
+    // legacy-terminal head: an UNHEALABLE `terminalLag` that escalates and
+    // makes the C2/C3 zero-divergence gates unsatisfiable.
+    //
+    // It is an OBSERVER APPEND — a new record ABOUT a bd write that already
+    // happens today. The bd write itself is byte-identical, so wave 1's
+    // zero-bd-write-changes invariant is untouched.
+    //
+    // POSTURE (r12): it is a NEW WRITE all the same, so it rides the dual
+    // read's arming. `off` is the rollback and must be byte-identical to
+    // pre-cut mainline on the LOG as well as on decisions — no reconstructed
+    // close, no permanent `terminal_provenance` mark. `observe` arms it,
+    // because a teardown replay that left a permanently open head would make
+    // the C2/C3 zero-divergence gates unsatisfiable, which is the whole reason
+    // this append exists.
+    if (closed && _dualReadMode != DualReadMode.off) {
+      if (recoveredAttemptId == null) {
+        // NO FABRICATED ATTEMPT ID. A missing record is a visible lag; a
+        // minted-id record is an immutable lie `revert` cannot remove and
+        // every `traj replay` reproduces.
+        _dualRead?.reconstructedTerminalSkipped += 1;
+        _onFlare?.call(kReconstructedTerminalSkippedFlare, {
+          'session_id': session.id,
+          'work_bead': workBeadId,
+          // The vendor owns the breadcrumb SCHEMA (Nico's 2026-07-19 ruling);
+          // this pass names only the recovery's OUTCOME, never its key.
+          'reason': 'no attempt id recoverable for the session',
+          'basis': 'restart-reconciler',
+        });
+        _onOrphan(
+          'teardown replay ${session.id}: reconstructed terminal SKIPPED — no '
+          'attempt id was recoverable; the P1 head stays open (a visible lag) '
+          'rather than taking a minted id',
+        );
+      } else {
+        _dualRead?.teardownReplayAppends += 1;
+        _recorder.sessionTeardownReplayed(
+          sessionId: session.id,
+          attemptId: recoveredAttemptId,
+          workBeadId: workBeadId.isEmpty ? null : workBeadId,
+          reason:
+              'teardown replay closed an open session bead; the attempt was '
+              'never observed by this pass',
+        );
+      }
     }
     try {
       await writer.closeOpenGatesForTerminal(
@@ -1116,13 +1215,143 @@ class RestartReconciler {
   /// iteration order) — the state store holds one live session per work bead.
   Map<String, SessionProjection> _projectOwnedSessions() {
     final out = <String, SessionProjection>{};
+    // How many session beads this pass saw per work-bead key — the
+    // `incumbentAdjudication` trigger below. The map itself keeps only the
+    // last writer, so the count is the only place the multiplicity survives.
+    final beadsPerKey = <String, int>{};
     for (final bead in _stateSnapshot().beadsById.values) {
       if (bead.issueType != GridIssueTypes.session) continue;
       final projection = projectSession(bead);
       if (projection.workBeadId.isEmpty) continue;
+      beadsPerKey[projection.workBeadId] =
+          (beadsPerKey[projection.workBeadId] ?? 0) + 1;
       out[projection.workBeadId] = projection;
     }
+    // C3: the SAME overlay the join bridge serves, spliced by the caller of
+    // the comparison rather than inside it — one writer for this map too.
+    out.addAll(_observeDualRead(out, beadsPerKey));
     return out;
+  }
+
+  /// The reconciler's half of the session-axis dual read (cut-wiring C2) — the
+  /// SAME comparator the bridge runs, over the SAME identity rule, folding
+  /// into the SAME accounting.
+  ///
+  /// One class is this pass's alone: when two same-bead sessions coexist, the
+  /// legacy incumbent picks its winner by MAP ITERATION ORDER (the doc on
+  /// [_projectOwnedSessions] says so in as many words). A mismatch there is
+  /// `incumbentAdjudication` — logged with both identities and ADJUDICATED,
+  /// never auto-presumed against the fold, because the incumbent rule ("the
+  /// fold is presumed wrong") only applies where the incumbent is
+  /// DETERMINISTIC. Everything else classifies exactly as it does in the
+  /// bridge.
+  ///
+  /// Under `observe` it is read-only and non-fatal by construction: it counts
+  /// and flares, and no disposition in this pass consults it. Under `primary`
+  /// (C3) it also RETURNS the overlay entries for the caller to splice — the
+  /// same `resolveSessionOverlay`, the same suppressors, the same boot latch.
+  ///
+  /// The `incumbentAdjudication` class NEVER serves an overlay: the legacy
+  /// winner there was chosen by map iteration order, so the projection the
+  /// fold would decorate is not a determinate row to begin with. Adjudicate
+  /// it, count it, serve pure legacy.
+  Map<String, SessionProjection> _observeDualRead(
+    Map<String, SessionProjection> sessions,
+    Map<String, int> beadsPerKey,
+  ) {
+    const none = <String, SessionProjection>{};
+    // THE ROLLBACK POSTURE: `off` runs no comparator pass here either — the
+    // reconciler's half and the bridge's half arm together, or the two readers
+    // would report different truths for one boot.
+    if (_dualReadMode == DualReadMode.off) return none;
+    final accounting = _dualRead;
+    final snapshot = _headSnapshot?.call();
+    if (accounting == null || snapshot == null) return none;
+    if (snapshot.health != TrajectorySnapshotHealth.live) {
+      // The same boot-scoped latch the bridge sets, on the same shared object
+      // (§0.2): once either reader sees a non-`live` mirror, NEITHER serves
+      // the fold again this boot.
+      accounting.overlayDisengaged = true;
+      accounting.fallbacks += sessions.length;
+      return none;
+    }
+    final engaged =
+        _dualReadMode == DualReadMode.primary && !accounting.overlayDisengaged;
+    final overlays = <String, SessionProjection>{};
+    for (final entry in sessions.entries) {
+      final legacy = entry.value;
+      final sessionId = legacy.sessionId;
+      if (sessionId == null || sessionId.isEmpty) continue;
+      final head = snapshot.bySessionId(sessionId);
+      if (head == null) {
+        accounting.fallbacks += 1;
+        final miss = classifyDualReadMiss(legacy, snapshot.firstEpochClaimedAt);
+        if (miss.nullStartedAt) accounting.nullStartedAt += 1;
+        switch (miss.era) {
+          case DualReadMissClass.postEpoch:
+            accounting.missPostEpoch += 1;
+          case DualReadMissClass.legacyEra:
+            accounting.missLegacyEra += 1;
+        }
+        continue;
+      }
+      accounting.hits += 1;
+      final comparison = compareHeadToProjection(legacy, head);
+      // ORDER-DEPENDENT INCUMBENT: more than one session bead landed on this
+      // work-bead key, so `out[key] = projection` discarded some of them by
+      // iteration order. Any mismatch here is adjudicated, not counted — and
+      // nothing is overlaid onto a projection the ledger picked arbitrarily.
+      if ((beadsPerKey[entry.key] ?? 0) > 1) {
+        accounting.overlaysSuppressed += 1;
+        if (comparison.classification == DualReadClass.match) continue;
+        accounting.record(
+          DualReadComparison(
+            sessionId: comparison.sessionId,
+            workBeadId: comparison.workBeadId,
+            classification: DualReadClass.incumbentAdjudication,
+            mismatches: comparison.mismatches,
+          ),
+        );
+        _onOrphan(
+          'dual-read incumbent adjudication ${entry.key}: legacy kept session '
+          '$sessionId by map iteration order over '
+          '${beadsPerKey[entry.key]} candidates; fold reads '
+          '${comparison.mismatches.join(', ')}',
+        );
+        continue;
+      }
+      // THE OVERLAY (C3), resolved for every identity-matched head — counted
+      // always, served only under `primary` + an engaged boot.
+      final resolved = resolveSessionOverlay(legacy, head);
+      switch (resolved.outcome) {
+        case SessionOverlayOutcome.applied:
+          accounting.overlaysApplied += 1;
+          if (engaged) {
+            overlays[entry.key] = resolved.projection;
+            accounting.overlaysServed += 1;
+          }
+        case SessionOverlayOutcome.agreed:
+          break;
+        case SessionOverlayOutcome.suppressedReconstructed:
+        case SessionOverlayOutcome.suppressedDemotion:
+          accounting.overlaysSuppressed += 1;
+      }
+      if (accounting.record(comparison) && comparison.isDivergence) {
+        for (final mismatch in comparison.mismatches) {
+          _onFlare?.call(kDualReadDivergenceFlare, {
+            'axis': 'session',
+            'scope': 'restart-reconciler',
+            'work_bead': comparison.workBeadId,
+            'session_id': comparison.sessionId,
+            'field': mismatch.field,
+            'fold_value': mismatch.foldValue,
+            'legacy_value': mismatch.legacyValue,
+            'snapshot_version': '${snapshot.version}',
+          });
+        }
+      }
+    }
+    return overlays;
   }
 
   /// Reconciles a single [wt] against its OWNED [session] (null when the

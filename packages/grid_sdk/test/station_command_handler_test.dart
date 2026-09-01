@@ -1391,6 +1391,236 @@ void main() {
       await rework(_ThrowingSink());
     });
   });
+
+  // ── the step dual read at the park check (cut-wiring C4, consumer 3) ─────
+  //
+  // `grid rework`'s park check is the one cursor consumer with NO
+  // SessionProjection to hang a `trajCursor` on, so its posture arrives by
+  // constructor. What the group proves is the pair the rollback story needs:
+  // `observe` is byte-identical to today, and `primary` actually reads the
+  // fold — through the ENGINE's merge, with the same three protections.
+  group('grid/rework — the step dual read (C4)', () {
+    Future<GridCommandResult> park({
+      required StepState beadState,
+      required List<StepCursorView> rows,
+      DualReadMode mode = DualReadMode.observe,
+      TrajectorySnapshotHealth health = TrajectorySnapshotHealth.live,
+      DualReadAccounting? accounting,
+    }) {
+      final handler = _handler(
+        state: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tgdog-session',
+              issueType: GridIssueTypes.session,
+              metadata: {
+                'work_bead': 'tg-1',
+                'rig': 'tgdog',
+                'grid.session.model': 'molecule',
+              },
+            ),
+            Bead(
+              id: 'tgdog-step-build',
+              issueType: GridIssueTypes.step,
+              metadata: {
+                'rig': 'tgdog',
+                MoleculeStepKeys.path: 'build',
+                MoleculeStepKeys.session: 'tgdog-session',
+                MoleculeStepKeys.state: beadState.name,
+              },
+            ),
+          ]),
+        ),
+        work: _Source(
+          _snapshot([
+            const Bead(
+              id: 'tg-1',
+              issueType: IssueType.task,
+              metadata: {'rig': 'tg'},
+            ),
+          ]),
+        ),
+        stateRunner: _RecordingRunner(),
+        workRunner: _RecordingRunner(),
+        stepSnapshot: () => _StepSnapshot(rows, health: health),
+        dualReadMode: mode,
+        dualReadAccounting: accounting,
+      );
+      return handler(const GridCommandRequest.rework(beadId: 'tg-1'));
+    }
+
+    Matcher notParked() => isA<GridCommandRefused>().having(
+      (value) => value.code,
+      'code',
+      'session_not_parked',
+    );
+
+    test('OBSERVE reads the BEAD: a running step refuses, however the fold '
+        'reads', () async {
+      expect(
+        await park(
+          beadState: StepState.running,
+          rows: [_StepRow(stepPath: 'build', stepState: 'gated')],
+        ),
+        notParked(),
+        reason: 'config off = today, at this site as at the other six',
+      );
+    });
+
+    test('PRIMARY serves the FOLD: the SAME inputs proceed, because P2 says '
+        'the node parked', () async {
+      expect(
+        await park(
+          beadState: StepState.running,
+          rows: [_StepRow(stepPath: 'build', stepState: 'gated')],
+          mode: DualReadMode.primary,
+        ),
+        isA<GridCommandCompleted>(),
+      );
+    });
+
+    test('MONOTONE NO-DEMOTION holds here too: a bead-parked node is never '
+        'un-parked by a lagging P2', () async {
+      // Bead `gated`, P2 still `running`: the append-in-flight window at the
+      // rearm's own persist site. Serving P2 would make the session look busy
+      // and refuse a legitimate rework — the operator-visible face of a
+      // demotion.
+      expect(
+        await park(
+          beadState: StepState.gated,
+          rows: [_StepRow(stepPath: 'build', stepState: 'running')],
+          mode: DualReadMode.primary,
+        ),
+        isA<GridCommandCompleted>(),
+      );
+    });
+
+    test('THE NEVER-CREATES RULE: a P2 node with no step bead is dropped and '
+        'counted, never parked on', () async {
+      final accounting = DualReadAccounting();
+      expect(
+        await park(
+          beadState: StepState.gated,
+          rows: [
+            _StepRow(stepPath: 'build', stepState: 'gated'),
+            _StepRow(stepPath: 'ghost', stepState: 'running'),
+          ],
+          mode: DualReadMode.primary,
+          accounting: accounting,
+        ),
+        isA<GridCommandCompleted>(),
+        reason: 'a phantom running node would refuse the rework',
+      );
+      expect(accounting.p2Orphan, 1);
+    });
+
+    test('THE IDENTITY RULE: a sibling session\'s rows never reach this '
+        'check, and the miss is counted', () async {
+      final accounting = DualReadAccounting();
+      expect(
+        await park(
+          beadState: StepState.running,
+          rows: [
+            _StepRow(
+              sessionId: 'tgdog-OTHER',
+              stepPath: 'build',
+              stepState: 'gated',
+            ),
+          ],
+          mode: DualReadMode.primary,
+          accounting: accounting,
+        ),
+        notParked(),
+        reason: 'no same-session rows ⇒ the P2-miss rule, not a sibling splice',
+      );
+      expect(accounting.p2Miss, 1);
+    });
+
+    test('health non-live reads the bead — the disengage covers this site', () {
+      expect(
+        park(
+          beadState: StepState.running,
+          rows: [_StepRow(stepPath: 'build', stepState: 'gated')],
+          mode: DualReadMode.primary,
+          health: TrajectorySnapshotHealth.compromised,
+        ),
+        completion(notParked()),
+      );
+    });
+
+    test('the boot\'s DISENGAGE LATCH covers this site too', () {
+      expect(
+        park(
+          beadState: StepState.running,
+          rows: [_StepRow(stepPath: 'build', stepState: 'gated')],
+          mode: DualReadMode.primary,
+          accounting: DualReadAccounting()..overlayDisengaged = true,
+        ),
+        completion(notParked()),
+      );
+    });
+  });
+}
+
+/// One P2 row for the park check's snapshot (cut-wiring C4).
+final class _StepRow implements StepCursorView {
+  _StepRow({
+    required this.stepPath,
+    required this.stepState,
+    this.sessionId = 'tgdog-session',
+  });
+
+  @override
+  final String sessionId;
+  @override
+  int get round => 0;
+  @override
+  final String stepPath;
+  @override
+  int get stepRound => 0;
+  @override
+  final String stepState;
+  @override
+  int get incarnation => 0;
+  @override
+  String? get attemptId => null;
+  @override
+  int? get supersededByStepRound => null;
+  @override
+  DateTime? get cooldownUntil => null;
+  @override
+  int? get restartBudget => null;
+  @override
+  DateTime? get startedAt => null;
+  @override
+  DateTime? get readyAt => null;
+  @override
+  DateTime? get completedAt => null;
+  @override
+  String? get failureClass => null;
+  @override
+  int get lastSeq => 1;
+}
+
+final class _StepSnapshot implements TrajectoryStepSnapshot {
+  _StepSnapshot(this._rows, {this.health = TrajectorySnapshotHealth.live});
+
+  final List<StepCursorView> _rows;
+
+  @override
+  int get version => 11;
+  @override
+  final TrajectorySnapshotHealth health;
+  @override
+  DateTime? get seededAt => null;
+  @override
+  DateTime? get firstEpochClaimedAt => null;
+
+  @override
+  Iterable<StepCursorView> byP2SessionId(String sessionId) => [
+    for (final row in _rows)
+      if (row.sessionId == sessionId) row,
+  ];
 }
 
 Bead _session(
@@ -1479,9 +1709,16 @@ StationCommandHandler _handler({
   Set<String> workWriterOwnership = const {'tg'},
   String workIdentity = 'tg',
   StationTrajectoryRecorder? recorder,
+  TrajectoryStepSnapshot Function()? stepSnapshot,
+  DualReadMode dualReadMode = DualReadMode.observe,
+  DualReadAccounting? dualReadAccounting,
 }) => StationCommandHandler(
   stateSource: state,
   refreshState: refreshState ?? () async {},
+  // CONSUMER 3 of the step dual read (cut-wiring C4) — the park check.
+  stepSnapshot: stepSnapshot,
+  dualReadMode: dualReadMode,
+  dualReadAccounting: dualReadAccounting,
   stateWriter: StationBeadWriter(
     bd: BdCliService(stateRunner),
     reader: stateRunner,

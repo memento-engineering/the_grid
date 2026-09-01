@@ -321,7 +321,7 @@ named class).
 | `attempt.lease.acquired/.released/.swept` | `process_lease_vendor.dart:806/:820` (acquire persist), release (`:860-875`), boot sweep (`:566-710`) | after each breadcrumb write/sweep; the breadcrumb now CARRIES attempt_id (§2.1) — the record reads it, never invents it |
 | `attempt.adopt.proved` | `process_lease_vendor.dart:747+` (breadcrumb read) / `sdk/allocation.dart:593-626` (adopt decision); fence `capability_host.dart:340-344` | adopted-vs-respawned durable at last; attempt_id = the breadcrumb's, continued (§2.1) |
 | `attempt.liveness.lost/.regained` + `traj_pulse` beats | net-new (inventory: NO EMITTER EXISTS — confirmed, and `RuntimeEvent.activityChanged` is ALSO emitter-less in production). r2 (major 11): the observation surface is **(a)** a worktree `.grid` mtime scan on the tick — the signal the standing operational finding says tells the truth about dead sessions — and **(b)** the provider's activity poll surface `RuntimeProvider.lastActivity(name)` (`runtime_provider.dart:66`; impl `subprocess_provider.dart:433`, refreshed per transcript line at `:589`). The wedge monitor (`wedge_monitor.dart:88-123`) reads bead state, not liveness, and is NOT a surface here. Beats UPSERT `traj_pulse` on the tick cadence, `observed_via='worktree-mtime'` or `'provider-activity'` | detector rides the tick (§2.4); may emit `lost` ONLY for a beat observed within the current epoch — the empty-pulse ⇒ `unknown` rule verbatim. The scanner walks every live worktree's `.grid` per tick; its I/O cost is budgeted and measured in W7 (§6) |
-| `attempt.note` | `work_assembly.dart:522-532` registry sink | Stage 1 arms ONLY the tick's `channel='obligation-stuck'` notes (schema §5's N-failure rule); the Q5 content-split for agent journaling is deferred |
+| `attempt.note` | `work_assembly.dart:522-532` registry sink | Stage 1 arms ONLY the tick's `channel='obligation-stuck'` notes (schema §5's N-failure rule); the Q5 content-split for agent journaling is deferred. **AMENDED by cut-wiring wave 1, chunk C2 (§0.4):** a SECOND channel is armed — `channel='dual-read-round-summary'`, one note at every session terminal plus one boot-final note at the clean-down fixpoint, carrying the boot's dual-read counters. The vehicle was chosen because it EXISTS (`AttemptNote` requires a `sessionId` and mints `note:<session>:<ordinal>`), and it is what makes bounces stop resetting the wave-1 gate evidence. A stated extension, not a slip |
 | `worktree.provisioned` | **`station_git_service.dart:309-358` (`provisionWorktree`) itself** — r2 (blocker 3): the observation moves INTO the service, where `preexisting` (`:335-336`) and the branch are locally in hand; one added `git rev-parse HEAD` captures the base sha at the same instant. No power_station edit; `adopted_existing` need not ride the return type — the recorder hook is inside the method | after the worktree add/adopt returns; `ck_provision` gets sha+branch |
 | `worktree.reaped/.held` | `session_scope.dart:934/:939/:949` (reap outcomes; today flare-only) | after the reap attempt; payload gains path + branch (the flares omit them today — the record does not) |
 | `step.transition` (running/ready/complete/failed) | `capability_host.dart` persist sites via `_firePersist` (`:366` started, `:369` ready, `:373` complete, `:384` failure; failure_class splits store_unavailable vs work per the tg-7ux conflation) | after each step-bead mutation returns; result keys on complete ride the payload |
@@ -561,6 +561,37 @@ manual repair exists or is needed.
 dart run lunar:lunar up --grid-home "$(pwd)" --trajectory      # observe-only first, as ever
 # banner shows: trajectory: LIVE epoch=1 …
 ```
+
+**BEFORE THE FIRST WAVE-1 ARM ON AN EXISTING HOME — run the quiesced migration.**
+The cut widened `proj_session_head` (`terminal_provenance`, `unknown_reason`), and the
+migration is a NAMED OPERATOR STEP, never a boot-time auto-migrate: it DROPs and rebuilds
+the projection, which is safe only with no writer running. With the station DOWN:
+
+```bash
+dart run lunar:lunar traj replay --state-workspace "$(pwd)"   # reshape + rebuild + stamp
+```
+
+A home that skips it does not fail silently: `TrajectoryHarness.start()` probes the
+projection's shape BEFORE it claims an epoch and REFUSES the live arm — mode `degraded`,
+one `trajectory.degraded` flare, and a cause naming the missing columns and this command.
+The station runs legacy-only meanwhile, exactly as for any other degraded boot. (Without
+that refusal the boot seed's `SELECT *` succeeds, health reads `live`, and every terminal
+append then dies on an unknown column inside its own transaction — a dead trajectory whose
+only signal is a rate-limited drop counter.) A freshly provisioned home needs none of
+this: the schema bootstrap creates the cut shape.
+
+**Reclamation on a scoped-grant home (tg-3o6b):** `DOLT_GC` needs SERVER-level privilege
+and step 2.3 grants the service `trajectory.*` ONLY — the boundary wins, so on these
+homes gc is **operator-run**: the operator runs `traj gc` (the gridboot credential) when
+growth warrants it, and the service grant is never widened to make the cadence work. The
+harness's own cadence latches OFF (one `trajectory.gcDisabled` flare, never re-armed for
+the process) on an unambiguous access-denied code OR on dolt's catch-all 1105 when the
+message carries the server's own denial phrasing (`command denied to user` — the shared
+`isPrivilegeDenied` predicate, one definition consulted by both the harness latch and
+`traj gc`'s operator sentence, so the two can never disagree). An arbitrary 1105 without
+that phrasing stays in the ordinary rate-limited `trajectory.gcFailed` retry loop. (This
+paragraph superseded an earlier draft that refused to latch on any 1105 — the shipped
+rule is cut-wiring.md C0's, verified against dolt's real denial shape by the CI guard.)
 
 **Reconnect rule (r2, minor 15):** the harness resolves the listener at build via
 `resolveDoltServerListener` — and **re-resolves it on every reconnect attempt**. bd

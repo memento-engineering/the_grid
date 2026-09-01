@@ -8,7 +8,9 @@ library;
 import 'package:args/command_runner.dart';
 
 import 'shadow_accounting.dart';
+import 'traj_gc_command.dart';
 import 'traj_provision_command.dart';
+import 'traj_replay_command.dart';
 import 'traj_shadow_diff_command.dart';
 import 'traj_show_command.dart';
 import 'trajectory_reader.dart';
@@ -37,6 +39,14 @@ class TrajCommand extends Command<int> {
     // operator who knows `traj show` should not have to learn a second noun
     // to bootstrap the thing it reads.
     addSubcommand(TrajProvisionCommand(connect: connect));
+    // The two OPERATOR verbs (cut-wiring C0). `replay` rebuilds the fold and
+    // is QUIESCE-ONLY — it fences itself on the station lock. `gc` is
+    // reclamation under the gridboot credential, the operator half of the
+    // cadence the harness disables on a scoped-grant home (tg-3o6b). Both
+    // share `provision`'s connect seam: one SQL shape, three credentials
+    // resolved inside the verbs.
+    addSubcommand(TrajReplayCommand(connect: connect));
+    addSubcommand(TrajGcCommand(connect: connect));
   }
 
   @override
@@ -45,7 +55,8 @@ class TrajCommand extends Command<int> {
   @override
   final String description =
       'Read the trajectory log: per-subject history and the shadow '
-      'comparator; provision it on a fresh grid home.';
+      'comparator; provision it on a fresh grid home; rebuild the fold '
+      '(quiesced) and reclaim the database.';
 
   @override
   Future<int> run() async {

@@ -35,11 +35,17 @@ final class StationCommandHandler implements GridCommandHandler {
     required BeadOwnershipPredicate stateOwnership,
     required Map<String, WorkCommandStore> workStoresByIdentity,
     StationTrajectoryRecorder? recorder,
+    TrajectoryStepSnapshot Function()? stepSnapshot,
+    DualReadMode dualReadMode = DualReadMode.off,
+    DualReadAccounting? dualReadAccounting,
   }) : _stateSource = stateSource,
        _refreshState = refreshState,
        _stateWriter = stateWriter,
        _stateOwnership = stateOwnership,
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
+       _stepSnapshot = stepSnapshot,
+       _dualReadMode = dualReadMode,
+       _dualReadAccounting = dualReadAccounting,
        _workStoresByIdentity = Map.unmodifiable(workStoresByIdentity);
 
   final SnapshotSource _stateSource;
@@ -52,6 +58,24 @@ final class StationCommandHandler implements GridCommandHandler {
   /// handler is the code that makes the re-key — so it is one of that record's
   /// two observation sites. Absent it is a counting no-op.
   final StationTrajectoryRecorder _recorder;
+
+  /// THE STEP AXIS'S PRE-FETCHED READ (cut-wiring C4) — the P2 mirror, for
+  /// CONSUMER 3: `grid rework`'s park check.
+  ///
+  /// The check is the one cursor consumer with NO [SessionProjection] to hang
+  /// a `trajCursor` on — it reads raw state beads off the resident snapshot —
+  /// so the posture reaches it by constructor rather than structurally. The
+  /// three inputs are exactly what the bridge derives its own engagement
+  /// from, and they are read the same way: `primary`, snapshot health `live`,
+  /// and a boot that has not disengaged.
+  final TrajectoryStepSnapshot Function()? _stepSnapshot;
+  final DualReadMode _dualReadMode;
+
+  /// The boot's SHARED accounting — the same object the bridge's passes use,
+  /// so the disengage latch is one fact and the p2Miss/stepLag this site sees
+  /// land in the same durable round summary.
+  final DualReadAccounting? _dualReadAccounting;
+
   final Map<String, WorkCommandStore> _workStoresByIdentity;
   Future<void> _tail = Future<void>.value();
 
@@ -287,7 +311,7 @@ final class StationCommandHandler implements GridCommandHandler {
     final round = maxRound + 1;
 
     if (!session.isClosed) {
-      final cursor =
+      final beadCursor =
           _meta(session, SessionBeadKeys.model) == kSessionModelMolecule
           ? projectMoleculeCursor(
               state.beads.where(
@@ -298,6 +322,10 @@ final class StationCommandHandler implements GridCommandHandler {
               dependencies: state.dependencies,
             ).cursor
           : const <String, NodeCursor>{};
+      // CONSUMER 3 of the step dual read (cut-wiring C4) — the park check.
+      // The site's today-read IS the bead recompute, so the unengaged branch
+      // is the identity and `observe` leaves this verb byte-identical.
+      final cursor = _effectiveParkCursor(session.id, beadCursor);
       final states = cursor.values.map((node) => node.state);
       // The SESSION-LEVEL park (tg-aec / tg-ehht): a failed molecule pour
       // leaves a session with NO steps at all, parked by an open gate bead
@@ -565,6 +593,69 @@ final class StationCommandHandler implements GridCommandHandler {
         'node': node,
       },
     );
+  }
+
+  /// The park check's EFFECTIVE cursor (cut-wiring C4, consumer 3).
+  ///
+  /// The bridge's own engagement rule, re-derived here because this verb has
+  /// no [SessionProjection] to carry a `trajCursor`: `primary`, snapshot
+  /// health `live`, and a boot that has not disengaged. Anything else returns
+  /// [beadCursor] unchanged — which is today's read, so the rollback claim
+  /// holds at this site the same way it does at the other six.
+  ///
+  /// The merge itself is the ENGINE's, unchanged and unduplicated: the
+  /// identity-matched `byP2SessionId` rows, the per-node P2-miss rule, the
+  /// monotone guard, and the never-creates rule all come from
+  /// `mergeStepCursor`. The counters land on the boot's SHARED accounting, so
+  /// a `grid rework` issued mid-round shows up in the same durable summary the
+  /// gates read.
+  CircuitCursor _effectiveParkCursor(
+    String sessionId,
+    CircuitCursor beadCursor,
+  ) {
+    final read = _stepSnapshot;
+    if (read == null || _dualReadMode != DualReadMode.primary) {
+      return beadCursor;
+    }
+    if (_dualReadAccounting?.overlayDisengaged ?? false) return beadCursor;
+    final snapshot = read();
+    if (snapshot.health != TrajectorySnapshotHealth.live) return beadCursor;
+    final rows = snapshot.byP2SessionId(sessionId).toList(growable: false);
+    if (rows.isEmpty) {
+      // No same-session rows: the P2-miss rule applied wholesale — the legacy
+      // bead for every node, never a sibling session's rows (the OVERLAY
+      // IDENTITY RULE, step axis).
+      _dualReadAccounting?.p2Miss += beadCursor.length;
+      return beadCursor;
+    }
+    final merge = mergeStepCursor(
+      sessionId: sessionId,
+      legacy: beadCursor,
+      traj: trajCursorOf(rows),
+      collapsed: collapseStepCursors(rows),
+    );
+    final accounting = _dualReadAccounting;
+    if (accounting != null) {
+      for (final node in merge.nodes) {
+        switch (node.classification) {
+          case StepNodeClass.p2Miss:
+            accounting.p2Miss += 1;
+          case StepNodeClass.p2Orphan:
+            accounting.p2Orphan += 1;
+          case StepNodeClass.stepLag:
+            accounting.openStepLag += 1;
+          case StepNodeClass.divergence:
+            if (accounting.noteEvent(
+              'stepDivergence:$sessionId:${node.stepPath}',
+            )) {
+              accounting.stepDivergences += 1;
+            }
+          case StepNodeClass.match:
+            break;
+        }
+      }
+    }
+    return merge.cursor;
   }
 }
 

@@ -524,6 +524,12 @@ Future<StationWorkRuntime> assembleStationWork({
     reader: stateBundle.probeReader,
     ownership: BeadOwnershipPredicate(allowSet),
     onRefusal: refusalSink,
+    // C8a (cut-wiring): the STATE writer's flares were null-sunk — the work
+    // writers below wired `onFlare` and this one did not, so `session.minted`,
+    // `gate.autoClosed`, and `session.workTerminal` never reached the
+    // transport for the partition that mints every session bead. That is
+    // exactly the evidence the dual-read gates read.
+    onFlare: transport?.flare,
   );
 
   // --- the runtime provider (ONE dry/live posture, per-seam override = a
@@ -566,6 +572,69 @@ Future<StationWorkRuntime> assembleStationWork({
   // reach them. One recorder, one queue, one appender: the sole-appender
   // invariant is threading, not convention.
   final recorder = trajectory.recorder;
+  // THE POSTURE, READ ONCE (r13). `off` is the DEFAULT and the rollback: the
+  // dual read is not merely inert then, it is UNWIRED — no observer reaches
+  // the bridge or the reconciler, so the composition below is the pre-cut
+  // composition, not a gated version of the new one.
+  final dualReadArmed = trajectoryConfig.dualRead != DualReadMode.off;
+  // THE SESSION-AXIS DUAL READ (cut-wiring C2/C3) — ONE accounting per boot,
+  // shared by the join bridge's comparator pass and the restart reconciler's,
+  // because the durable round summary must not report two different truths for
+  // one boot, and because the OVERLAY DISENGAGE LATCH lives on it: a mirror
+  // that missed an append must stop being served by BOTH readers at once.
+  // Under `observe` nothing here changes a decision: the comparator
+  // classifies, flares, and writes evidence. `primary` (C3) serves the
+  // certified overlay from the same functions.
+  final dualReadAccounting = dualReadArmed ? DualReadAccounting() : null;
+  // THE STEP-AXIS DUAL READ (cut-wiring C4) — the same accounting object, so
+  // one boot owes one durable round summary carrying both axes, and so the
+  // OVERLAY DISENGAGE LATCH covers both: a boot whose P1 mirror missed an
+  // append must stop serving the step axis too.
+  final stepDualRead = dualReadArmed
+      ? DualReadStepObserver(
+          mode: trajectoryConfig.dualRead,
+          accounting: dualReadAccounting,
+          onFlare: transport?.flare,
+        )
+      : null;
+  final dualRead = !dualReadArmed
+      ? null
+      : DualReadSessionObserver(
+          mode: trajectoryConfig.dualRead,
+          accounting: dualReadAccounting,
+          // The harness's answer for one attempt — the heal must not race a terminal
+          // record that is still queued (r8 — V2-B1).
+          appendQueuedFor: trajectory.hasQueuedAppendFor,
+          // The heal's guard pre-check + append live on the harness's serialized
+          // lane; the bridge decides WHETHER, the harness decides ADMISSIBLE.
+          healer: trajectory.requestTerminalReconcile,
+          onFlare: transport?.flare,
+          // §0.4's durable evidence: one `attempt.note` per session terminal plus a
+          // boot-final note at the clean-down fixpoint, so bounces stop resetting
+          // what the wave-1 gates read.
+          onRoundSummary: (sessionId, body) => recorder
+              .dualReadRoundSummaryNoted(sessionId: sessionId, body: body),
+          // BOTH axes ride ONE note (C4): the summary reports what the STEP axis
+          // actually did, read at emit time off the step observer — the same
+          // served-fact discipline `overlay_engaged` has, for the same reason (a
+          // `mode: primary` boot that disengaged certifies nothing).
+          stepAxisEngaged: () => stepDualRead!.stepAxisEngaged,
+          // THE APPEND SIDE OF THE SOAK GATE (C3): "zero drops" is not a fact any
+          // comparator can observe — a dropped append leaves a hole in the fold
+          // shaped exactly like a session that never happened — so the harness's own
+          // counters ride the same durable note, in the same round.
+          appendStats: () {
+            final status = trajectory.status;
+            return (
+              appended: status.appended,
+              deduped: status.deduped,
+              dropped: status.dropped,
+              suppressed: status.suppressed,
+              refusedTestimony: status.refusedTestimony,
+              queueDepth: status.queueDepth,
+            );
+          },
+        );
   final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
     final workBd =
@@ -618,6 +687,13 @@ Future<StationWorkRuntime> assembleStationWork({
     // `grid rework`'s re-key is one of `attempt.round.retired`'s two
     // observation sites (stage1-wiring §2.3).
     recorder: recorder,
+    // CONSUMER 3 of the step dual read (C4): the park check has no
+    // SessionProjection to carry a `trajCursor`, so its posture arrives by
+    // constructor — the same three inputs the bridge derives engagement from.
+    // UNWIRED at `off` (r13): the handler never reaches the mirror at all.
+    stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
+    dualReadMode: trajectoryConfig.dualRead,
+    dualReadAccounting: dualReadAccounting,
   );
 
   // --- the transports (ONE dry/live posture, per-seam overrides = tests).
@@ -722,8 +798,21 @@ Future<StationWorkRuntime> assembleStationWork({
     leaseVendor: leaseVendor,
     onOrphan: orphanSink,
     // The INFERRED half of `attempt.terminal(settled)` (stage1-wiring §2.3):
-    // this pass settles a prior boot's sessions from evidence on disk.
+    // this pass settles a prior boot's sessions from evidence on disk. It also
+    // carries C2's teardown-replay OBSERVER APPEND — the reconstructed close
+    // that keeps a replayed teardown from leaving a permanently open head.
     recorder: recorder,
+    // The dual read's reconciler half (cut-wiring C2): the same identity rule
+    // and the same counters, plus the `incumbentAdjudication` class that only
+    // `_projectOwnedSessions`' order-dependent winner can produce. UNWIRED at
+    // `off` (r13) — the pass never reaches the mirror, so it is the pre-cut
+    // pass, teardown-replay observer append included.
+    headSnapshot: dualReadArmed ? () => trajectory.sessionHeads : null,
+    dualReadAccounting: dualReadAccounting,
+    // C3: the reconciler serves the SAME overlay under the SAME posture — a
+    // disposition must not depend on which pass asked for it.
+    dualReadMode: trajectoryConfig.dualRead,
+    onFlare: transport?.flare,
     // Adopt-across-restart (ADR-0009 D4) stays UNARMED — both halves at their
     // never-adopt defaults; arming is a deliberate later wire, all-or-nothing.
   );
@@ -732,6 +821,33 @@ Future<StationWorkRuntime> assembleStationWork({
     work: work,
     state: stateSource,
     onUnresolvedCrossLink: unresolvedSink,
+    // The DUAL READ's third input (cut-wiring §0.2/§0.3): a PRE-FETCHED,
+    // immutable P1 mirror read — `_join` is pure and synchronous, and a P1 SQL
+    // read is async, so nothing here awaits. `onHeadChanges` is the re-join
+    // seam: a fold-side fact lands promptly instead of waiting for the next
+    // work/state emission, and it pushes through the same single funnel.
+    // BOTH ARE NULL AT `off` (r13): no pre-fetched read on the join path and
+    // no acked-envelope handback subscription — the bridge composes exactly as
+    // it did pre-cut.
+    headSnapshot: dualReadArmed ? () => trajectory.sessionHeads : null,
+    onHeadChanges: !dualReadArmed
+        ? null
+        : (listener) => trajectory.onSessionHeadsChanged(
+            listener,
+            fireImmediately: false,
+          ),
+    dualRead: dualRead,
+    // THE STEP AXIS's third input (C4), on identical terms: a pre-fetched P2
+    // read and its own re-join seam, both pushing through the same single
+    // funnel. The pass fills `SessionProjection.trajCursor` under
+    // `primary` + `live`, and every cursor consumer reads it through
+    // `effectiveStepCursor` — so `observe` leaves all seven byte-identical.
+    stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
+    onStepChanges: !dualReadArmed
+        ? null
+        : (listener) =>
+              trajectory.onStepCursorsChanged(listener, fireImmediately: false),
+    stepDualRead: stepDualRead,
   );
   // The wedge (tg-jwh) flares `station.wedged` through the SAME emit-only
   // transport the engine's other LOUD signals use (ADR-0008 D9 / D-8) — no

@@ -520,6 +520,69 @@ void main() {
     });
   });
 
+  group('the wave-1 RECONSTRUCTED writers (cut-wiring C2)', () {
+    test('sessionTeardownReplayed: unknown/teardown-replay, reconstructed, '
+        'restart-reconciler basis, the RECOVERED id, plain terminal key', () {
+      recorder.sessionTeardownReplayed(
+        sessionId: 'old-1',
+        attemptId: 'B' * 26,
+        workBeadId: 'tg-1',
+        reason: 'teardown replay closed an open session bead',
+      );
+      final capture = single();
+      final record = capture.record as AttemptTerminal;
+      expect(record.outcome, TerminalOutcome.unknown);
+      expect(record.unknownReason, 'teardown-replay');
+      expect(record.attemptId, 'B' * 26);
+      // NEVER minted: `attempt_id_basis` is the marker a mint would leave.
+      expect(record.attemptIdBasis, isNull);
+      expect(record.healBasis, isNull);
+      expect(capture.provenance, TrajectoryProvenance.reconstructed);
+      expect(capture.provenanceBasis, kRestartReconcilerBasis);
+      const context = IdemContext(station: 'tranquility', bootEpoch: 3);
+      expect(record.idemKeyText(context), 'terminal:${'B' * 26}');
+    });
+
+    test('sessionTerminalReconciled: unknown/external-close, reconstructed, '
+        'its OWN basis and its OWN idem grammar (r8 — V2-B1)', () {
+      recorder.sessionTerminalReconciled(
+        sessionId: 'old-1',
+        attemptId: 'C' * 26,
+        workBeadId: 'tg-1',
+      );
+      final capture = single();
+      final record = capture.record as AttemptTerminal;
+      expect(record.outcome, TerminalOutcome.unknown);
+      expect(record.unknownReason, 'external-close');
+      expect(record.attemptIdBasis, isNull);
+      expect(capture.provenance, TrajectoryProvenance.reconstructed);
+      expect(capture.provenanceBasis, kTerminalReconcileBasis);
+      const context = IdemContext(station: 'tranquility', bootEpoch: 3);
+      // A DISTINCT key from the real record's `terminal:<attemptId>`, so even
+      // a pathological race can never dedupe-swallow the true outcome in
+      // either direction.
+      expect(record.idemKeyText(context), 'terminal-reconcile:${'C' * 26}');
+    });
+
+    test('the round-summary note rides its OWN channel and shares the note '
+        'ordinal minter with obligation-stuck, so the two can never mint the '
+        'same `note:<session>:<ordinal>` key', () {
+      recorder
+        ..obligationStuckNoted(sessionId: 's1', body: 'stuck')
+        ..dualReadRoundSummaryNoted(sessionId: 's1', body: '{"hits":1}');
+      final notes = [
+        for (final capture in sink.captured)
+          expectSchemaClean(capture).record as AttemptNote,
+      ];
+      expect(notes.map((n) => n.channel), [
+        kObligationStuckChannel,
+        kDualReadRoundSummaryChannel,
+      ]);
+      expect(notes.last.body, '{"hits":1}');
+      expect(notes[1].noteOrdinal, greaterThan(notes[0].noteOrdinal));
+    });
+  });
+
   group('process lifecycle', () {
     test('processStarted carries pid/pgid/incarnation + predecessor', () {
       recorder.processStarted(

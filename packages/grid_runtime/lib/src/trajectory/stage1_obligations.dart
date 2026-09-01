@@ -136,6 +136,18 @@ final class UnknownTerminalSettlementObligation extends ObligationQuery {
   /// The unsettled unknowns of THIS station, oldest first. `settled_by IS
   /// NULL` on the terminal guard is the authority on "no settling successor" —
   /// the appender's settling arm is what fills it (§5 step 4).
+  ///
+  /// **`t.provenance != 'reconstructed'` — the SETTLEMENT EXCLUSION** (r9 —
+  /// V3-B2, re-keyed off the IMMUTABLE RECORD after r7's head-column form was
+  /// found displaceable). A reconstructed unknown is final testimony: the
+  /// teardown-replay append and the `terminal-reconcile` heal both write one
+  /// about a terminal this station never observed, and settling it would
+  /// probe a long-dead pid, call it `settled`, and read `done` on a session
+  /// nobody finished. Keying the exclusion on the record — not on the head's
+  /// mutable `terminal_provenance` mark — makes it PERMANENT: truth
+  /// monotonicity clears that mark when a real observed terminal lands, and
+  /// with a head-keyed exclusion the stale reconstructed RECORD would be
+  /// re-exposed and clobber the observed outcome back to `settled`.
   @override
   String get sql =>
       'SELECT t.record_id AS record_id, t.attempt_id AS attempt_id, '
@@ -146,6 +158,7 @@ final class UnknownTerminalSettlementObligation extends ObligationQuery {
       'JOIN traj_terminal_guard g ON g.attempt_id = t.attempt_id '
       'LEFT JOIN proj_process_identity p ON p.attempt_id = t.attempt_id '
       "WHERE t.record_type = 'attempt.terminal' AND t.outcome = 'unknown' "
+      "AND t.provenance != 'reconstructed' "
       'AND g.settled_by IS NULL AND t.station = :station '
       'ORDER BY t.seq LIMIT $batch';
 
@@ -242,7 +255,7 @@ final class WorktreeReapedBackfillObligation extends ObligationQuery {
       final sessionId = row['session_id'];
       final worktree = row['worktree'];
       if (sessionId == null || worktree == null) continue;
-      if (!seen.add('$sessionId $worktree')) continue;
+      if (!seen.add('$sessionId\u0000$worktree')) continue;
       if (io.Directory(worktree).existsSync()) continue;
       appends.add(
         ObligationAppend(

@@ -13,7 +13,8 @@ import 'dart:convert';
 
 import 'package:meta/meta.dart';
 
-import 'session_head_row.dart' show sqlDateTime6;
+import '../connect/trajectory_db.dart';
+import 'session_head_row.dart' show parseSqlDateTime6, sqlDateTime6;
 
 /// The two-ladder key — P2's PRIMARY KEY, and the in-memory map key both
 /// application modes share.
@@ -47,6 +48,56 @@ class StepCursorRow {
     this.failureClass,
     this.result,
   });
+
+  /// One `SELECT * FROM proj_step_cursor` row, read back — the inverse of
+  /// [toSqlParams], and the P2 mirror's BOOT SEED decoder (cut-wiring C4).
+  ///
+  /// Same contract as `SessionHeadRow.fromSqlRow`: values arrive as the
+  /// `assoc()` shape's strings from a real server, but the map is typed
+  /// [Object?] so the in-memory params map round-trips directly (an `int`
+  /// `step_round`, a DATETIME(6) literal, the `result` JSON as text). Every
+  /// non-null value is therefore read through its own string form.
+  factory StepCursorRow.fromSqlRow(Map<String, Object?> row) {
+    String? text(String column) {
+      final value = row[column];
+      return value == null ? null : '$value';
+    }
+
+    int? number(String column) {
+      final raw = text(column);
+      return raw == null ? null : int.parse(raw);
+    }
+
+    final rawResult = row['result'];
+    return StepCursorRow(
+      sessionId: text('session_id') ?? '',
+      round: number('round') ?? 0,
+      stepPath: text('step_path') ?? '',
+      stepRound: number('step_round') ?? 0,
+      // NOT NULL in the DDL; a row without either is unreadable, not
+      // defaultable — the same rule `started_at` gets on P1.
+      state: text('state') ?? '',
+      incarnation: number('incarnation') ?? 0,
+      attemptId: text('attempt_id'),
+      supersededByStepRound: number('superseded_by_step_round'),
+      cooldownUntil: parseSqlDateTime6(text('cooldown_until')),
+      restartBudget: number('restart_budget'),
+      startedAt: parseSqlDateTime6(text('started_at')),
+      readyAt: parseSqlDateTime6(text('ready_at')),
+      completedAt: parseSqlDateTime6(text('completed_at')),
+      failureClass: text('failure_class'),
+      // The in-memory params map carries the decoded map; a real server hands
+      // back the encoded JSON text. Both decode to the same value, and a
+      // malformed payload reads as NULL rather than failing the whole seed —
+      // one unreadable result column must not cost the mirror its rows.
+      result: switch (rawResult) {
+        final Map<String, Object?> map => map,
+        final String json => _decodeResult(json),
+        _ => null,
+      },
+      lastSeq: number('last_seq') ?? 0,
+    );
+  }
 
   final String sessionId;
   final int round;
@@ -213,6 +264,33 @@ class StepCursorRow {
 
   @override
   String toString() => 'StepCursorRow(${toSqlParams()})';
+}
+
+/// The whole of P2, read in one SELECT — the P2 mirror's BOOT SEED
+/// (cut-wiring C4 / §0.2).
+///
+/// One statement on the caller's already-serialized connection. The order is
+/// the two-ladder key's own, so the seed is deterministic AND the supersedes
+/// ladder arrives in ascending order per path — the collapse rule's input in
+/// the shape it wants it.
+const String scanStepCursorsSql =
+    'SELECT * FROM proj_step_cursor '
+    'ORDER BY session_id, step_path, round, step_round';
+
+/// Reads every `proj_step_cursor` row off [db] via [scanStepCursorsSql].
+Future<List<StepCursorRow>> scanStepCursors(TrajectoryDb db) async {
+  final result = await db.execute(scanStepCursorsSql);
+  return [for (final row in result.rows) StepCursorRow.fromSqlRow(row)];
+}
+
+Map<String, Object?>? _decodeResult(String json) {
+  if (json.trim().isEmpty) return null;
+  try {
+    final decoded = jsonDecode(json);
+    return decoded is Map<String, Object?> ? decoded : null;
+  } on FormatException {
+    return null;
+  }
 }
 
 /// Structural equality for the `result` JSON column — value semantics without

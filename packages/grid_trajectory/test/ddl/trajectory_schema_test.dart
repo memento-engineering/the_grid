@@ -94,6 +94,78 @@ void main() {
     );
   });
 
+  group('the wave-1 P1 reshape (cut-wiring C0, r6/r7)', () {
+    test('the bootstrap creates P1 at the CUT shape — a fresh home never '
+        'needs the migration', () {
+      expect(trajectoryTableDdl, contains(projSessionHeadDdl));
+      for (final column in projSessionHeadCutColumns) {
+        expect(projSessionHeadDdl, contains(column));
+      }
+      expect(
+        projSessionHeadDdl,
+        contains(
+          "terminal_provenance ENUM('observed','inferred','reconstructed')",
+        ),
+        reason: "the provenance vocabulary is the log envelope's own",
+      );
+      expect(projSessionHeadDdl, contains('unknown_reason VARCHAR(32) NULL'));
+    });
+
+    test('a pre-cut home NEEDS the reshape; a current one does not', () async {
+      final stale = ScriptedDb()
+        ..on(
+          'information_schema.columns',
+          result: const SqlResult(
+            rows: [
+              {'name': 'session_id'},
+              {'name': 'terminal_provenance'},
+            ],
+          ),
+        );
+      expect(await sessionHeadProjectionNeedsReshape(stale), isTrue);
+      expect(
+        stale.log.single.params!['table'],
+        'proj_session_head',
+        reason: 'DATABASE()-scoped, so a sibling schema cannot answer for us',
+      );
+
+      final current = ScriptedDb()
+        ..on(
+          'information_schema.columns',
+          result: const SqlResult(
+            rows: [
+              {'name': 'TERMINAL_PROVENANCE'},
+              {'name': 'unknown_reason'},
+            ],
+          ),
+        );
+      expect(
+        await sessionHeadProjectionNeedsReshape(current),
+        isFalse,
+        reason: 'servers case column names differently; the check does not',
+      );
+    });
+
+    test(
+      'an absent table reads as needing the reshape (which creates it)',
+      () async {
+        expect(await sessionHeadProjectionNeedsReshape(ScriptedDb()), isTrue);
+      },
+    );
+
+    test('the reshape is DROP + re-CREATE, never ALTER, and rides no '
+        'transaction', () async {
+      final db = ScriptedDb();
+      await reshapeSessionHeadProjection(db);
+      expect(db.log.map((call) => call.sql), [
+        'DROP TABLE IF EXISTS proj_session_head',
+        projSessionHeadDdl,
+      ]);
+      expect(db.matching('ALTER TABLE'), isEmpty);
+      expect(db.matching('START TRANSACTION'), isEmpty);
+    });
+  });
+
   test('the trajectory DDL pins all seven named CHECK constraints', () {
     final trajectory = trajectoryTableDdl[2];
     for (final constraint in const [

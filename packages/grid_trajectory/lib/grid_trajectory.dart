@@ -42,13 +42,17 @@ export 'src/tick/trajectory_tick.dart'; // the interval loop, fence skip, runToF
 export 'src/cli/shadow_accounting.dart'; // per-round append accounting + its disqualification rule
 export 'src/cli/traj_command.dart'; // the `traj` group; runners compose it explicitly
 export 'src/cli/traj_flags.dart'; // the shared exact-root grid-home flag
+export 'src/cli/traj_gc_command.dart'; // operator reclamation under the gridboot credential
 export 'src/cli/traj_provision_command.dart'; // runbook §4 step 2: database + DDL + scoped user
+export 'src/cli/traj_quiesce.dart'; // the station-lock/fence quiesce check + its SQL seams
 export 'src/cli/traj_render.dart'; // typed row rendering (opaque rows stay opaque)
+export 'src/cli/traj_replay_command.dart'; // quiesce-only fold rebuild + the P1 reshape + --check
 export 'src/cli/traj_shadow_diff_command.dart'; // §9 comparator + injectable strategy
 export 'src/cli/traj_show_command.dart'; // per-subject history
 export 'src/cli/trajectory_reader.dart'; // read-only log seam + sealed open result
 
 // SECTION: fold — the Family-1 P1 fold (§6 row 1 / §7 head summary).
+export 'src/fold/fold_lag.dart'; // the reader lag rule + the proj_meta generation set
 export 'src/fold/session_head_delta.dart'; // THE delta fn + its two appliers (SQL / in-memory)
 export 'src/fold/session_head_fold.dart'; // replay: fold a stream, truncate + rewrite, proj_meta
 export 'src/fold/session_head_row.dart'; // the proj_session_head row image

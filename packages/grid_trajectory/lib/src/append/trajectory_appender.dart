@@ -17,6 +17,13 @@
 ///      something already committed out of order. Grant-scoped appends also
 ///      match the grant row's `fencing_token` and `expires_at > NOW(6)` —
 ///      a failed grant predicate is a per-append REFUSAL, never a halt;
+///   2c. the RESOLVING PRE-READ for terminals (cut-wiring §0.3, r9–r11):
+///      the attempt's `traj_terminal_guard` row joined to its record's
+///      provenance decides, BEFORE the insert, whether this terminal converts
+///      to settling form (observed/inferred over reconstructed testimony), is
+///      refused as redundant testimony, or appends normally. Authoring the
+///      final shape here is what keeps the log, the live fold, and
+///      `traj replay` in agreement;
 ///   3. INSERT the `trajectory` row (`epoch_seq` service-assigned in the
 ///      serialized stream);
 ///   4. `traj_terminal_guard` insert/update for terminals;
@@ -54,6 +61,7 @@ library;
 
 import 'dart:convert';
 
+import 'package:meta/meta.dart';
 import 'package:mysql_client/exception.dart';
 
 import '../codec/envelope.dart';
@@ -108,13 +116,15 @@ class TrajectoryAppender {
     int commitRowThreshold = 512,
     TrajectoryEventSink onEvent = stdoutTrajectoryEventSink,
     List<TrajectoryFoldDelta> folds = const [],
+    bool resolveTerminals = false,
   }) : _db = db,
        _clock = clock ?? DateTime.now,
        _commitCadence = commitCadence,
        _commitMinInterval = commitMinInterval,
        _commitRowThreshold = commitRowThreshold,
        _onEvent = onEvent,
-       _folds = folds;
+       _folds = folds,
+       _resolveTerminals = resolveTerminals;
 
   TrajectoryDb _db;
   final String station;
@@ -124,6 +134,23 @@ class TrajectoryAppender {
   final Duration _commitMinInterval;
   final int _commitRowThreshold;
   final TrajectoryEventSink _onEvent;
+
+  /// THE RESOLVING PRE-READ'S POSTURE (cut-wiring §0.3, gated r13).
+  ///
+  /// The pre-read exists to convert a terminal landing on an already-present
+  /// RECONSTRUCTED terminal into its settling form, and reconstructed
+  /// terminals are appended only where the dual read is armed. Default FALSE
+  /// — off is the rollback and the pre-Stage-1 semantics: no in-transaction
+  /// `traj_terminal_guard` SELECT per terminal on the serialized writer lane,
+  /// and a guard-PK collision propagates to §5's ordinary duplicate contract
+  /// exactly as it did on mainline.
+  ///
+  /// The ONE caveat, documented on `TrajectoryConfig.dualRead`: downgrading a
+  /// home to `off` AFTER an observe-era soak left reconstructed rows means a
+  /// late REAL terminal for such an attempt is no longer converted, so it
+  /// halts loudly on the guard PK instead. Bounce back to `observe` once to
+  /// convert those rows.
+  final bool _resolveTerminals;
 
   /// §5 step 5's registered synchronous folds, in registration order.
   final List<TrajectoryFoldDelta> _folds;
@@ -317,8 +344,14 @@ class TrajectoryAppender {
 
     final now = _clock().toUtc();
     final context = IdemContext(station: station, bootEpoch: epoch);
-    final envelope = _buildEnvelope(
-      record,
+    // The envelope builder, not just the envelope: the resolving pre-read
+    // (§0.3's TESTIMONY YIELDS TO OBSERVATION) may re-author the record in its
+    // settling form INSIDE the transaction, and the rebuilt row must be
+    // stamped from exactly these inputs — same clock instant, same seat, same
+    // provenance — with only the record's own identity and correlation
+    // changing. A re-mint of `record_id` is part of that (V5 build note).
+    TrajectoryEnvelope build(TrajectoryRecord subject) => _buildEnvelope(
+      subject,
       context: context,
       now: now,
       occurredAt: occurredAt?.toUtc() ?? now,
@@ -328,8 +361,13 @@ class TrajectoryAppender {
       source: source ?? this.source,
       fencingToken: fencingToken,
     );
+    final envelope = build(record);
 
-    final outcome = await _appendInTransaction(record, envelope);
+    final outcome = await _appendInTransaction(
+      record,
+      envelope,
+      rebuild: build,
+    );
     if (outcome is Appended) {
       // Post-COMMIT the row IS durable: a cadence failure is its own
       // non-fatal signal, retried at the next cadence — it never rewrites
@@ -348,9 +386,16 @@ class TrajectoryAppender {
   }
 
   Future<AppendOutcome> _appendInTransaction(
-    TrajectoryRecord record,
-    TrajectoryEnvelope envelope,
-  ) async {
+    TrajectoryRecord incomingRecord,
+    TrajectoryEnvelope incomingEnvelope, {
+    required TrajectoryEnvelope Function(TrajectoryRecord) rebuild,
+  }) async {
+    // Both are re-bindable: the resolving pre-read below can replace the pair
+    // with the settling re-authoring BEFORE the row insert, and everything
+    // downstream — the row, the guard arm, the folds, the outcome — reads the
+    // rebound pair, so the log holds the shape the fold and `traj replay` see.
+    var record = incomingRecord;
+    var envelope = incomingEnvelope;
     final epoch = _requireEpoch();
     final candidateEpochSeq = _epochSeq + 1;
     try {
@@ -399,6 +444,111 @@ class TrajectoryAppender {
         issuerType: record.grantBeltIssuerType,
       );
       if (grantBelt != null) return grantBelt;
+
+      // Step 2c — THE RESOLVING PRE-READ (cut-wiring §0.3, r9–r11): a
+      // terminal's disposition against an EXISTING terminal for the same
+      // attempt is decided here, at the top of the serialized transaction and
+      // BEFORE the row insert, because the record must be AUTHORED in its
+      // final shape — a conversion after the insert would leave the log
+      // holding one shape while the live fold applied another, and `traj
+      // replay` would then diverge from the incremental fold (V4-B1).
+      //
+      // The trichotomy is EXHAUSTIVE over the INCOMING provenance:
+      //   (a) guard row exists, its record is reconstructed TESTIMONY, and
+      //       this append is not — observed AND inferred both convert: the
+      //       envelope is rebuilt in settling form carrying the incoming
+      //       outcome, so the guard takes its UPDATE arm (no PK contention)
+      //       and the delta writes the real outcome;
+      //   (b) guard row exists and THIS append is the reconstructed one — the
+      //       real terminal already landed: refused, counted, no insert;
+      //   (c) no guard row — the ordinary non-settling append.
+      // Everything else (two observed terminals) stays the corruption class.
+      //
+      // THE PRE-READ IS DETERMINISTIC UNDER RETRY (r12). The conversion in (a)
+      // re-authors the record, and re-authoring MOVES the idem key
+      // (`terminal:<attempt>` → `terminal-resolve:<attempt>:<healed>`), so the
+      // key the caller computed is never written and §5's at-least-once
+      // dedupe has nothing to match on a re-presentation. The cure is
+      // determinism, not a second key: once the guard is SETTLED it still
+      // names the record that was healed (`settled_by` says settled,
+      // `resolves_record_id` says of what), so a retry re-derives the SAME
+      // settling envelope and therefore the SAME idem key — and the settled
+      // arm answers it as the dedupe-shaped no-op it is, without an insert.
+      // Falling through instead is what turned an ordinary retry into a
+      // guard-PK corruption halt that suppressed every later append.
+      //
+      // AND IT IS POSTURE-GATED (r13): under `DualReadMode.off` nothing
+      // appends a reconstructed terminal, so the answer here is structurally
+      // always null and the read is a pure round trip on the serialized
+      // writer lane. `off` takes the pre-Stage-1 collision semantics instead
+      // — see [_resolveTerminals].
+      _TerminalGuardState? preRead;
+      if (_resolveTerminals && record.isTerminal && !record.isSettling) {
+        final subject = envelope.attemptId;
+        final existing = subject == null
+            ? null
+            : await _readTerminalGuard(subject);
+        preRead = existing;
+        if (existing != null && subject != null) {
+          if (envelope.provenance == TrajectoryProvenance.reconstructed) {
+            await _rollbackQuietly();
+            return AppendRefusedTestimony(
+              attemptId: subject,
+              existingRecordId: existing.recordId,
+              reason:
+                  'terminal guard: attempt $subject already carries a '
+                  '${existing.provenance.wire} terminal '
+                  '(${existing.recordId}) — reconstructed testimony yields '
+                  'to it and is not appended',
+            );
+          }
+          if (existing.isSettled) {
+            // (a′) THE RETRY ARM: this attempt's reconstructed terminal has
+            // ALREADY been settled. Re-author against the same subject the
+            // landed settlement healed — same guard state, same converted
+            // envelope, same settling idem key — and answer from the log.
+            final subjectRecordId = _settledSubjectOf(existing);
+            final settling = record.settlingForm(subjectRecordId);
+            if (settling == null) {
+              return _haltInTransaction(
+                'terminal guard: ${envelope.recordType} must settle the '
+                'terminal $subjectRecordId for attempt $subject but declares '
+                'no settling form',
+              );
+            }
+            final settled = rebuild(settling);
+            final original = await _recordIdForIdemKey(settled.idemKey);
+            if (original != null) {
+              // The at-least-once re-presentation of the very append that
+              // settled this guard: byte-identical work, already committed.
+              await _rollbackQuietly();
+              return AppendDeduped(recordId: original);
+            }
+            // A non-reconstructed terminal arriving after a settlement that it
+            // did NOT author. The guard permits a chain, not a second
+            // independent terminal, and there is no idem row to yield to —
+            // corruption class, named for what it is.
+            return _haltInTransaction(
+              'terminal guard: attempt $subject is already settled by '
+              '${existing.settledBy} (healing $subjectRecordId) and this '
+              '${envelope.provenance.wire} ${envelope.recordType} settles '
+              'nothing that landed — a second independent terminal',
+            );
+          }
+          if (existing.provenance == TrajectoryProvenance.reconstructed) {
+            final settling = record.settlingForm(existing.recordId);
+            if (settling == null) {
+              return _haltInTransaction(
+                'terminal guard: ${envelope.recordType} must settle the '
+                'reconstructed terminal ${existing.recordId} for attempt '
+                '$subject but declares no settling form',
+              );
+            }
+            record = settling;
+            envelope = rebuild(settling);
+          }
+        }
+      }
 
       // Step 3 — the row. seq is dolt-assigned; epoch_seq is ours, in the
       // serialized stream.
@@ -449,11 +599,40 @@ class TrajectoryAppender {
             },
           );
         } else {
-          await _db.execute(
-            'INSERT INTO traj_terminal_guard (attempt_id, seq, settled_by) '
-            'VALUES (:attempt_id, :seq, NULL)',
-            {'attempt_id': attemptId, 'seq': seq},
-          );
+          try {
+            await _db.execute(
+              'INSERT INTO traj_terminal_guard (attempt_id, seq, settled_by) '
+              'VALUES (:attempt_id, :seq, NULL)',
+              {'attempt_id': attemptId, 'seq': seq},
+            );
+          } on MySQLServerException catch (error) {
+            if (!isDuplicateEntry(error)) rethrow;
+            // PRE-STAGE-1 SEMANTICS AT `off` (r13): with no resolving
+            // pre-read there is no evidence to name a shape with, so the
+            // duplicate propagates to §5's ordinary 1062 contract below —
+            // byte-identical to mainline, which never caught it here.
+            if (!_resolveTerminals) rethrow;
+            // TWO CORRUPTION SHAPES, and the halt reason is the operator's
+            // only evidence — so it must name the one that actually happened
+            // (r12). The pre-read above ran in THIS serialized transaction:
+            //   * it SAW a guard row and no branch claimed it ⇒ the genuine
+            //     two-independent-OBSERVED-terminals class, which the design
+            //     says falls through to the insert by design;
+            //   * it saw NOTHING ⇒ a PK collision is only reachable if the
+            //     single-writer serialization invariant itself broke.
+            final seen = preRead;
+            return _haltInTransaction(
+              seen == null
+                  ? 'terminal guard: PK collision on attempt $attemptId after '
+                        'a clean resolving pre-read — the serialized '
+                        'single-writer invariant broke: $error'
+                  : 'terminal guard: attempt $attemptId already carries a '
+                        '${seen.provenance.wire} terminal (${seen.recordId}) '
+                        'and this ${envelope.provenance.wire} '
+                        '${envelope.recordType} settles nothing — two '
+                        'independent terminals for one attempt: $error',
+            );
+          }
         }
       }
 
@@ -483,6 +662,10 @@ class TrajectoryAppender {
         recordId: envelope.recordId,
         seq: seq,
         epochSeq: candidateEpochSeq,
+        // The COMMITTED envelope rides back (§0.2's post-ACK mirror seam):
+        // an in-process fold mirror applies the same pure delta the
+        // registered folds just applied, at this same ordinal.
+        envelope: envelope,
       );
     } on MySQLServerException catch (error) {
       await _rollbackQuietly();
@@ -716,6 +899,62 @@ class TrajectoryAppender {
     );
   }
 
+  /// The resolving pre-read's ONE statement: the attempt's
+  /// `traj_terminal_guard` row joined to the record it points at.
+  ///
+  /// The guard row carries no provenance of its own — it carries the `seq` —
+  /// so the JOIN is the stated read (r10, V4 note 1). Null means no terminal
+  /// has landed for this attempt.
+  ///
+  /// `settledBy` and `resolvesRecordId` come back too, because the SETTLED
+  /// state is a distinct pre-read answer (r12): once a settling record landed,
+  /// the guard's `seq` points at IT, and the record it healed is named by its
+  /// own `resolves_record_id`. Without those two columns the pre-read cannot
+  /// re-derive the conversion it already performed, and an at-least-once retry
+  /// of the settling append reads as a brand-new terminal.
+  Future<_TerminalGuardState?> _readTerminalGuard(String attemptId) async {
+    final result = await _db.execute(
+      'SELECT t.record_id AS record_id, t.provenance AS provenance, '
+      't.resolves_record_id AS resolves_record_id, '
+      'g.settled_by AS settled_by '
+      'FROM traj_terminal_guard g JOIN trajectory t ON t.seq = g.seq '
+      'WHERE g.attempt_id = :attempt_id',
+      {'attempt_id': attemptId},
+    );
+    if (result.rows.isEmpty) return null;
+    final row = result.rows.first;
+    final recordId = row['record_id'];
+    final provenance = row['provenance'];
+    // A guard row whose record vanished is not evidence of a terminal; the
+    // append proceeds and the guard's own PK arbitrates.
+    if (recordId == null || provenance == null) return null;
+    return _TerminalGuardState(
+      recordId: recordId,
+      provenance: TrajectoryProvenance.fromWire(provenance),
+      settledBy: row['settled_by'],
+      resolvesRecordId: row['resolves_record_id'],
+    );
+  }
+
+  /// The record id a retry's conversion must point at, for a guard row that is
+  /// already SETTLED: the record the landed settling record healed.
+  ///
+  /// Falls back to the settling record's own id only if `resolves_record_id`
+  /// is somehow absent — a shape `isSettling` forbids, kept so the pre-read is
+  /// total.
+  String _settledSubjectOf(_TerminalGuardState guard) =>
+      guard.resolvesRecordId ?? guard.recordId;
+
+  /// Does a row already carry [idemKey]? The explicit half of the settled-state
+  /// dedupe — the retry is answered without ever attempting an insert.
+  Future<String?> _recordIdForIdemKey(String idemKey) async {
+    final existing = await _db.execute(
+      'SELECT record_id FROM trajectory WHERE idem_key = :idem_key',
+      {'idem_key': idemKey},
+    );
+    return existing.rows.isEmpty ? null : existing.rows.first['record_id'];
+  }
+
   Future<AppendOutcome> _dedupeOriginal(TrajectoryEnvelope envelope) async {
     final original = await _db.execute(
       'SELECT record_id FROM trajectory WHERE idem_key = :idem_key',
@@ -834,4 +1073,36 @@ class TrajectoryAppender {
         '${pad(utc.hour, 2)}:${pad(utc.minute, 2)}:${pad(utc.second, 2)}'
         '.${pad(utc.microsecond + utc.millisecond * 1000, 6)}';
   }
+}
+
+/// What the resolving pre-read found for one attempt's `traj_terminal_guard`
+/// row — the guard joined to the record it points at.
+///
+/// Four facts, because the pre-read has to answer three different questions
+/// with them: what landed ([recordId] / [provenance]), whether it has since
+/// been settled ([settledBy]), and — when it has — WHICH record the settlement
+/// healed ([resolvesRecordId]), so a retry re-derives the same settling
+/// envelope instead of authoring a fresh terminal.
+@immutable
+final class _TerminalGuardState {
+  const _TerminalGuardState({
+    required this.recordId,
+    required this.provenance,
+    required this.settledBy,
+    required this.resolvesRecordId,
+  });
+
+  /// The record the guard's `seq` points at — the reconstructed testimony
+  /// before a settlement, the SETTLING record after one.
+  final String recordId;
+  final TrajectoryProvenance provenance;
+
+  /// The settling record's id, or null while the guard is unsettled.
+  final String? settledBy;
+
+  /// `resolves_record_id` of the record at the guard's `seq` — non-null
+  /// exactly when that record is itself a settlement.
+  final String? resolvesRecordId;
+
+  bool get isSettled => settledBy != null;
 }

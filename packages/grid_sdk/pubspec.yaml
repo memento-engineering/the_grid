@@ -46,4 +46,10 @@ dev_dependencies:
   freezed: ^3.0.0
   json_serializable: ^6.9.0
   lints: ^5.1.0
+  # TEST-ONLY: the driver `grid_trajectory` speaks, so the harness suite can
+  # throw the REAL server-error shapes its failure branches classify (a
+  # privilege-denied gc is a 1105 whose MESSAGE carries the denial — tg-3o6b).
+  # Never a runtime dependency: the harness holds `TrajectoryDb`, never a
+  # connection or exception type from the driver.
+  mysql_client: ^0.0.27
   test: ^1.25.0

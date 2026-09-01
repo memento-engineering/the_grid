@@ -14,17 +14,71 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:grid_engine/grid_engine.dart'
+    show
+        DualReadMode,
+        SessionHeadWon,
+        TerminalReconcileOutcome,
+        TerminalReconcileRequest,
+        TrajectorySnapshotHealth;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart';
+// TEST-ONLY (tg-3o6b): the gc branches classify REAL server errors, so the
+// suite throws the real shape rather than a stand-in.
+import 'package:mysql_client/exception.dart';
 import 'package:test/test.dart';
+
+/// The envelope a landed append hands back (cut-wiring §0.2's post-ACK mirror
+/// seam) — the appender's own derivation, minus the service stamps a test
+/// does not care about.
+TrajectoryEnvelope committedEnvelope(
+  TrajectoryRecord record, {
+  required String recordId,
+  DateTime? occurredAt,
+  TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+  String? provenanceBasis,
+  String? seat,
+}) {
+  final stamped = occurredAt ?? DateTime.utc(2026, 8, 31, 12);
+  final json = <String, Object?>{
+    'record_id': recordId,
+    'idem_key': recordId.padRight(64, '0'),
+    'idem_key_text': 'test:$recordId',
+    'family': record.family.wire,
+    'record_type': record.recordType,
+    'type_version': record.typeVersion,
+    'occurred_at': stamped.toIso8601String(),
+    'recorded_at': stamped.toIso8601String(),
+    'station': 'fake',
+    'authority_id': 'fake/1',
+    'boot_epoch': 1,
+    'provenance': provenance.wire,
+    if (provenance != TrajectoryProvenance.observed)
+      'provenance_basis': provenanceBasis ?? 'test-basis',
+    'source': 'test',
+    'payload': record.payloadToJson(),
+    ...record.correlationToJson(),
+  };
+  // ck_seat: the service derives the seat from the bead's store prefix.
+  if (json['work_bead_id'] != null) json['seat'] = seat ?? 'tg';
+  return TrajectoryEnvelope.fromJson(json);
+}
+
+/// The stale-fold shape probe's statement (r12) — the one boot read a test
+/// that fails "every SELECT" usually still wants answered, because failing it
+/// refuses the live arm outright.
+bool _isShapeProbe(String sql) => sql.contains('information_schema.columns');
 
 /// A scriptable [TrajectoryDb]: records statements, optionally throws.
 final class _FakeDb implements TrajectoryDb {
   _FakeDb({this.onExecute});
 
   final List<String> statements = [];
-  final Object? Function(String sql)? onExecute;
+
+  /// Re-assignable: the mirror's reseed guard is driven by CHANGING what the
+  /// live session answers between two passes.
+  Object? Function(String sql)? onExecute;
   bool closed = false;
   bool closeThrows = false;
 
@@ -42,7 +96,20 @@ final class _FakeDb implements TrajectoryDb {
       // ignore: only_throw_errors
       throw scripted;
     }
-    return scripted is SqlResult ? scripted : const SqlResult();
+    if (scripted is SqlResult) return scripted;
+    // DEFAULT: a grid home already at the WAVE-1 CUT SHAPE. `start()` refuses
+    // the live arm on a pre-cut `proj_session_head` (the stale-fold refusal),
+    // so the fake has to answer the shape probe or every harness test would
+    // degrade at boot. A test that wants the PRE-CUT home scripts an empty (or
+    // partial) answer for this statement.
+    if (sql.contains('information_schema.columns')) {
+      return SqlResult(
+        rows: [
+          for (final column in projSessionHeadCutColumns) {'name': column},
+        ],
+      );
+    }
+    return const SqlResult();
   }
 
   @override
@@ -140,7 +207,22 @@ final class _FakeAppender extends TrajectoryAppender {
     if (appendNeverCompletes) return Completer<AppendOutcome>().future;
     if (appendOutcomes.isNotEmpty) return appendOutcomes.removeAt(0);
     _seq += 1;
-    return Appended(recordId: 'r$_seq', seq: _seq, epochSeq: _seq);
+    return Appended(
+      recordId: 'r$_seq',
+      seq: _seq,
+      epochSeq: _seq,
+      // The COMMITTED envelope the post-ACK mirror seam folds (cut-wiring
+      // §0.2): derived from the record exactly as the real appender derives
+      // it, so a mirror test sees real deltas rather than a stand-in.
+      envelope: committedEnvelope(
+        record,
+        recordId: 'r$_seq',
+        occurredAt: occurredAt,
+        provenance: provenance,
+        provenanceBasis: provenanceBasis,
+        seat: seat,
+      ),
+    );
   }
 
   @override
@@ -205,9 +287,14 @@ void main() {
 
   List<String> flareNames() => [for (final (name, _) in flares) name];
 
+  /// The default config ARMS the dual read (`observe`). Production defaults to
+  /// `off` (r13) and this file's `dualRead: off` group pins that posture
+  /// explicitly; every other test here is about the cut's own machinery, which
+  /// only exists when the posture asks for it.
   Future<TrajectoryHarness> harness({
     TrajectoryConfig config = const TrajectoryConfig(
       mode: TrajectoryConfigMode.required,
+      dualRead: DualReadMode.observe,
     ),
     Stream<RuntimeEvent>? runtimeEvents,
     List<ObligationQuery>? tickQueries,
@@ -344,6 +431,151 @@ void main() {
       },
     );
 
+    // ── THE STALE-FOLD REFUSAL (cut-wiring C0, r12) ──────────────────────
+    //
+    // The wave-1 cut widened `proj_session_head`. The boot seed reads
+    // `SELECT *` and nulls absent columns, so an un-reshaped home SEEDS CLEAN
+    // and reads live — and then every terminal append dies inside its
+    // transaction on an unknown column, rolls back whole, and lands as a
+    // counted drop behind a RATE-LIMITED flare. The trajectory is dead for
+    // that home and nothing says why. Fail closed and loud instead.
+    test('a PRE-CUT proj_session_head REFUSES the live arm, before the claim, '
+        'with a cause naming `traj replay`', () async {
+      dbScript = (sql) => _isShapeProbe(sql)
+          // The pre-cut shape: the table exists, the wave-1 columns do not.
+          ? const SqlResult(
+              rows: [
+                {'name': 'session_id'},
+                {'name': 'status'},
+                {'name': 'outcome'},
+              ],
+            )
+          : null;
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.cause, contains('traj replay'));
+      expect(h.status.cause, contains('terminal_provenance'));
+      expect(h.status.cause, contains('unknown_reason'));
+      expect(flareNames(), contains('trajectory.degraded'));
+      // NO EPOCH CLAIM: a boot that will not run must not advance the fence.
+      expect(appender.calls, ['verify'], reason: 'claimEpoch never ran');
+      expect(h.status.epoch, isNull);
+      expect(h.tick, isNull);
+      expect(connected.single.closed, isTrue);
+    });
+
+    test('the refusal is not silent death: an append enqueued after it is '
+        'SUPPRESSED and counted, never a hole nobody can see', () async {
+      dbScript = (sql) => _isShapeProbe(sql) ? const SqlResult() : null;
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.suppressed, greaterThan(0));
+      expect(h.status.dropped, isZero, reason: 'refused up front, not dropped');
+    });
+
+    test('a home ALREADY at the cut shape arms normally, and the probe runs '
+        'before the claim', () async {
+      final h = await harness();
+      await h.start();
+      expect(h.mode, TrajectoryHarnessMode.live);
+      final statements = connected.single.statements;
+      expect(statements.first, contains('information_schema.columns'));
+      expect(statements.first, contains(':table'));
+    });
+
+    // ── THE ROLLBACK POSTURE (r13) ───────────────────────────────────────
+    //
+    // `DualReadMode.off` is the DEFAULT and must be byte-equivalent to pre-cut
+    // mainline. It is not enough for the comparator to be inert: the FOLD-SIDE
+    // machinery has to be off too, or an existing home that upgraded without
+    // running the quiesced `traj replay` refuses to arm — the exact population
+    // the rollback is for.
+    test('dualRead: off does NOT probe the projection shape — a PRE-CUT home '
+        'arms exactly as it does on mainline', () async {
+      dbScript = (sql) => _isShapeProbe(sql)
+          ? const SqlResult(
+              rows: [
+                {'name': 'session_id'},
+                {'name': 'status'},
+              ],
+            )
+          : null;
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.off,
+        ),
+      );
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live);
+      expect(
+        connected.single.statements.where(_isShapeProbe),
+        isEmpty,
+        reason: 'no reshape probe at the rollback posture',
+      );
+    });
+
+    test('dualRead: off seeds NEITHER mirror and re-reads no generation set — '
+        'the boot pays for no fold nobody reads', () async {
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.off,
+        ),
+      );
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live);
+      // The seed's five reads, by shape. (The Stage-1 obligation queries also
+      // name `proj_session_head`; they are pre-cut and unrelated.)
+      final statements = connected.single.statements;
+      for (final seedRead in [
+        'SELECT * FROM proj_session_head',
+        'SELECT * FROM proj_step_cursor',
+        'FROM proj_meta',
+        'MIN(advanced_at)',
+      ]) {
+        expect(
+          statements.where((s) => s.contains(seedRead)),
+          isEmpty,
+          reason: seedRead,
+        );
+      }
+      expect(
+        h.sessionHeads.health,
+        TrajectorySnapshotHealth.refused,
+        reason: 'never seeded is never live',
+      );
+      expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), isEmpty);
+    });
+
+    test('dualRead: off keeps the mirrors out of the append path, and a '
+        'dropped append raises no dualReadCompromised', () async {
+      appender.appendOutcomes.add(const AppendInternalError(cause: 'socket'));
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.off,
+        ),
+      );
+      await h.start();
+      h.enqueue(_note(1));
+      await h.runToFixpoint();
+
+      expect(h.status.dropped, 1);
+      expect(
+        flareNames(),
+        isNot(contains('trajectory.dualReadCompromised')),
+        reason: 'no mirror is being maintained to compromise',
+      );
+    });
+
     test('records enqueued before the claim drain once live', () async {
       final h = await harness();
       h.enqueue(_note(1));
@@ -375,6 +607,7 @@ void main() {
       final h = await harness(
         config: const TrajectoryConfig(
           mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
           queueBound: 2,
         ),
       );
@@ -669,6 +902,7 @@ void main() {
         final h = await harness(
           config: const TrajectoryConfig(
             mode: TrajectoryConfigMode.required,
+            dualRead: DualReadMode.observe,
             shutdownDrainTimeout: Duration(milliseconds: 200),
           ),
         );
@@ -1003,6 +1237,139 @@ void main() {
         reason: 'still re-armed',
       );
     });
+
+    // tg-3o6b: M2 made online gc the service's job, but the ratified
+    // provision boundary grants the service `trajectory.*` ONLY and DOLT_GC
+    // needs server-level privilege. THE BOUNDARY WINS — the denial is a
+    // POSTURE, so the cadence disables itself instead of denying once a
+    // cycle forever, and reclamation moves to the operator's `traj gc`.
+    //
+    // r13: the latch keys on the ACCESS-DENIED CODES **and** on dolt's own
+    // 1105 denied-CALL shape — which is the only shape a scoped grant is ever
+    // refused with, and the one cut-wiring C0 names normatively. What it does
+    // NOT key on is the bare word "denied" in an arbitrary 1105 (the r12
+    // major, kept in its narrow form) — see the test below.
+    test('a PRIVILEGE-denied gc disables the cadence after ONE flare and '
+        'never re-arms', () async {
+      dbScript = (sql) => sql == 'CALL DOLT_GC()'
+          ? MySQLServerException(
+              "command denied to user 'trajectory'@'%'",
+              1105,
+            )
+          : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+
+      expect(flareNames(), contains('trajectory.gcDisabled'));
+      expect(flareNames(), isNot(contains('trajectory.gcFailed')));
+      expect(
+        flares.firstWhere((f) => f.$1 == 'trajectory.gcDisabled').$2['remedy'],
+        contains('traj gc'),
+      );
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(1),
+        reason: 'the disable latch means the timer is NOT re-armed',
+      );
+      expect(h.mode, TrajectoryHarnessMode.live, reason: 'growth-only');
+    });
+
+    test('the latch survives the loop: a second gc pass neither runs nor '
+        're-flares', () async {
+      dbScript = (sql) => sql == 'CALL DOLT_GC()'
+          ? MySQLServerException(
+              "Access denied for user 'trajectory'@'%'",
+              1045,
+            )
+          : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+      Iterable<String> gcCalls() =>
+          connected.single.statements.where((s) => s == 'CALL DOLT_GC()');
+      expect(gcCalls(), hasLength(1));
+
+      // The only timer this process will ever hold for gc is the spent one;
+      // firing it again is the worst case (a stray callback). "Disabled"
+      // means the collection does not run, whatever fired it.
+      fire();
+      await pumpEventQueue();
+      expect(gcCalls(), hasLength(1), reason: 'the latch stops the work too');
+      expect(
+        flareNames().where((n) => n == 'trajectory.gcDisabled'),
+        hasLength(1),
+        reason: 'ONE flare, ever — the latch is what makes it once',
+      );
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(1),
+      );
+    });
+
+    test(
+      'a 1105 that merely CONTAINS the word "denied" does NOT latch (the '
+      'r12 major, in its narrow form) — it keeps flaring and re-arming',
+      () async {
+        // dolt answers a denied CALL on its unknown-error code, the SAME code it
+        // answers a commit-time unique violation on. Matching the bare word
+        // "denied" anywhere in a 1105 permanently disabled reclamation on any
+        // 1105 that happened to contain it; the cure is the server's own
+        // phrasing (`command denied to user`), which this message is not.
+        dbScript = (sql) => sql == 'CALL DOLT_GC()'
+            ? MySQLServerException(
+                'runtime error: access to table trajectory was denied by a '
+                'policy',
+                1105,
+              )
+            : null;
+        final h = await harness();
+        await h.start();
+        final (_, fire, _) = timers.firstWhere(
+          (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+        );
+        fire();
+        await pumpEventQueue();
+
+        expect(flareNames(), contains('trajectory.gcFailed'));
+        expect(flareNames(), isNot(contains('trajectory.gcDisabled')));
+        expect(
+          timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+          hasLength(2),
+          reason: 'still re-armed',
+        );
+        expect(h.mode, TrajectoryHarnessMode.live);
+      },
+    );
+
+    test('a non-privilege gc error is untouched by the latch — it keeps '
+        'flaring and re-arming', () async {
+      dbScript = (sql) => sql == 'CALL DOLT_GC()'
+          ? MySQLServerException('unique key violation on uq_idem', 1105)
+          : null;
+      final h = await harness();
+      await h.start();
+      final (_, fire, _) = timers.firstWhere(
+        (entry) => entry.$1 == kDefaultTrajectoryGcInterval,
+      );
+      fire();
+      await pumpEventQueue();
+      expect(flareNames(), contains('trajectory.gcFailed'));
+      expect(flareNames(), isNot(contains('trajectory.gcDisabled')));
+      expect(
+        timers.where((entry) => entry.$1 == kDefaultTrajectoryGcInterval),
+        hasLength(2),
+        reason: 're-armed: a 1105 that is not a denial is transient',
+      );
+    });
   });
 
   group('recorder wiring (W3 — §2 handoff to the queue)', () {
@@ -1095,9 +1462,18 @@ void main() {
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
-      // The boot pass ran them: three SELECTs on the harness's own serial
-      // lane, plus the detector's pulse prune.
-      final passStatements = connected.single.statements;
+      // SIX boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
+      // refusal that keeps a pre-cut home from dropping every terminal
+      // append), then the fold boot seed's five (cut-wiring C1 + C4 / §0.2):
+      // the lag rule, the generation set, the P1 row scan, the P2 row scan,
+      // the era boundary — all before the mode goes live, so no post-ACK
+      // delta can outrun them.
+      final statements = connected.single.statements;
+      expect(statements.take(6), everyElement(startsWith('SELECT')));
+      expect(statements.first, contains('information_schema.columns'));
+      // Then the boot pass ran the obligations: three SELECTs on the same
+      // serial lane, plus the detector's pulse prune.
+      final passStatements = statements.skip(6);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
         hasLength(3),
@@ -1110,7 +1486,10 @@ void main() {
     test('an EXPLICIT query list still wins — Stage 0\'s empty set is a '
         'station\'s prerogative', () async {
       final h = await TrajectoryHarness.build(
-        config: const TrajectoryConfig(mode: TrajectoryConfigMode.required),
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
+        ),
         gridHome: tmp.path,
         station: 'tranquility',
         onFlare: (name, data) => flares.add((name, data)),
@@ -1131,15 +1510,23 @@ void main() {
       await h.start();
 
       expect(h.tick!.queries, isEmpty);
-      expect(connected.single.statements, isEmpty);
+      // Only the stale-fold shape probe plus the fold boot seed's own five
+      // reads (P1 + P2): an empty obligation set still issues nothing of its
+      // own.
+      expect(connected.single.statements, hasLength(6));
+      expect(connected.single.statements, everyElement(startsWith('SELECT')));
     });
 
     test('a refusing obligation files the stuck note after schema §5\'s N '
         'consecutive passes, and the note rides the QUEUE', () async {
       // Every SELECT the obligation set issues fails: the store is unreachable
       // for reads while the appender is fine — the shape the accounting is for.
-      dbScript = (sql) =>
-          sql.startsWith('SELECT') ? StateError('store unavailable') : null;
+      // The stale-fold SHAPE PROBE is exempted: a home that cannot answer it
+      // is the r12 REFUSAL case (no live arm at all), which is a different
+      // test — this one needs a harness that armed.
+      dbScript = (sql) => sql.startsWith('SELECT') && !_isShapeProbe(sql)
+          ? StateError('store unavailable')
+          : null;
       final h = await harness();
       await h.start(); // pass 1 (the boot pass)
       for (var i = 0; i < kStuckObligationThreshold - 1; i++) {
@@ -1158,8 +1545,9 @@ void main() {
 
     test('a fenced-out pass is no evidence: the streak holds rather than '
         'resetting or firing', () async {
-      dbScript = (sql) =>
-          sql.startsWith('SELECT') ? StateError('store unavailable') : null;
+      dbScript = (sql) => sql.startsWith('SELECT') && !_isShapeProbe(sql)
+          ? StateError('store unavailable')
+          : null;
       final h = await harness();
       await h.start();
       appender.fakeInert = true;
@@ -1170,6 +1558,694 @@ void main() {
 
       expect(h.stuckObligations.values, everyElement(1));
       expect(appender.calls, isNot(contains('append:attempt.note')));
+    });
+  });
+
+  // ── the P1 mirror (cut-wiring C1 / §0.2) ──────────────────────────────────
+  group('the P1 mirror', () {
+    /// Scripts the four boot-seed reads. [rows] is the projection scan.
+    Object? Function(String sql) seedScript({
+      List<Map<String, String?>> rows = const [],
+      int appliedSeq = 40,
+      int maxSeq = 40,
+      String? oldestUnappliedAt,
+      List<Map<String, String?>> generations = const [
+        {
+          'projection': 'fold',
+          'fold_version': '2',
+          'applied_seq': '40',
+          'skipped': null,
+          'rebuilt_at': null,
+        },
+      ],
+    }) => (sql) {
+      if (sql.contains('AS max_seq')) {
+        return SqlResult(
+          rows: [
+            {'max_seq': '$maxSeq', 'applied_seq': '$appliedSeq'},
+          ],
+        );
+      }
+      if (sql.contains('MIN(recorded_at)')) {
+        return SqlResult(
+          rows: [
+            {'oldest': oldestUnappliedAt},
+          ],
+        );
+      }
+      if (sql.contains('FROM proj_meta')) return SqlResult(rows: generations);
+      if (sql.contains('FROM proj_session_head')) return SqlResult(rows: rows);
+      if (sql.contains('MIN(advanced_at)')) {
+        return const SqlResult(
+          rows: [
+            {'first_at': '2026-08-01 09:00:00.000000'},
+          ],
+        );
+      }
+      return null;
+    };
+
+    Map<String, String?> headRow({
+      required String sessionId,
+      String workBeadId = 'tg-9abc',
+      String round = '0',
+      String status = 'open',
+      String? outcome,
+      String lastSeq = '4',
+    }) => {
+      'session_id': sessionId,
+      'work_bead_id': workBeadId,
+      'round': round,
+      'status': status,
+      'outcome': outcome,
+      'terminal_provenance': null,
+      'unknown_reason': null,
+      'held': '0',
+      'started_at': '2026-08-31 10:00:00.000000',
+      'head_epoch': '1',
+      'last_seq': lastSeq,
+    };
+
+    test('the boot seed publishes a LIVE snapshot with the fold\'s rows and '
+        'the era boundary — one scan, before the mode goes live', () async {
+      dbScript = seedScript(
+        rows: [
+          headRow(sessionId: 'tranquility-1'),
+          headRow(sessionId: 'tranquility-2', round: '1'),
+        ],
+      );
+      final h = await harness();
+      await h.start();
+
+      final snapshot = h.sessionHeads;
+      expect(snapshot.health, TrajectorySnapshotHealth.live);
+      expect(snapshot.seededAt, now);
+      expect(snapshot.firstEpochClaimedAt, DateTime.utc(2026, 8, 1, 9));
+      expect(snapshot.rows, hasLength(2));
+      // The retired head is legible: an OPEN row at round 1.
+      expect(snapshot.bySessionId('tranquility-2')!.round, 1);
+      expect(
+        (snapshot.byWorkBead('tg-9abc') as SessionHeadWon).row.sessionId,
+        'tranquility-1',
+      );
+      expect(flareNames(), isNot(contains('trajectory.staleFold')));
+    });
+
+    test('a fold behind by more than the RECORD bound refuses the snapshot '
+        'for the boot — loud, and the boot still succeeds', () async {
+      dbScript = seedScript(appliedSeq: 10, maxSeq: 10 + staleLagLimit + 1);
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live, reason: 'never boot-blocking');
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), contains('trajectory.staleFold'));
+    });
+
+    test('a fold behind by more than the AGE bound refuses too — the other '
+        'edge of the same rule', () async {
+      dbScript = seedScript(
+        appliedSeq: 10,
+        maxSeq: 11,
+        // 61s older than the harness clock.
+        oldestUnappliedAt: '2026-08-31 11:58:59.000000',
+      );
+      final h = await harness();
+      await h.start();
+
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), contains('trajectory.staleFold'));
+    });
+
+    test('a fold INSIDE both bounds stays live', () async {
+      dbScript = seedScript(
+        appliedSeq: 10,
+        maxSeq: 10 + staleLagLimit,
+        oldestUnappliedAt: '2026-08-31 11:59:30.000000',
+      );
+      final h = await harness();
+      await h.start();
+
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+      expect(flareNames(), isNot(contains('trajectory.staleFold')));
+    });
+
+    test('a landed append maintains the mirror POST-ACK, at the ordinal the '
+        'append committed', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+
+      h.recorder.sessionMinted(
+        sessionId: 'tranquility-9',
+        workBeadId: 'tg-9abc',
+        rig: 'operator',
+        model: 'molecule',
+      );
+      await pumpEventQueue();
+
+      final row = h.sessionHeads.bySessionId('tranquility-9');
+      expect(row, isNotNull);
+      expect(row!.workBeadId, 'tg-9abc');
+      expect(row.isOpen, isTrue);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+    });
+
+    test('a DROPPED append never reaches the mirror, and latches the snapshot '
+        'compromised — a frozen fold must never read live (B-B7)', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      appender.appendOutcomes.add(
+        const AppendInternalError(cause: 'socket died'),
+      );
+
+      h.recorder.sessionMinted(
+        sessionId: 'tranquility-9',
+        workBeadId: 'tg-9abc',
+        rig: 'operator',
+        model: 'molecule',
+      );
+      await pumpEventQueue();
+
+      expect(h.sessionHeads.bySessionId('tranquility-9'), isNull);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+      expect(flareNames(), contains('trajectory.dualReadCompromised'));
+    });
+
+    test('SUPPRESSION latches too — a fenced-out harness freezes the mirror '
+        'while nothing is dropped (r4 — J6-B3)', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+
+      appender.appendOutcomes.add(
+        const AppendFencedOut(reason: 'cas-zero-rows'),
+      );
+      h.enqueue(_note(1));
+      await pumpEventQueue();
+
+      expect(h.status.dropped, 0, reason: 'a fence-out drops nothing');
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+      expect(flareNames(), contains('trajectory.dualReadCompromised'));
+    });
+
+    test('a moved (projection, fold_version, rebuilt_at) triple RESEEDS the '
+        'mirror — the detector for an out-of-contract replay', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      expect(h.sessionHeads.rows, isEmpty);
+
+      // A replay ran under us: `rebuilt_at` moved and the rows changed.
+      dbScript = seedScript(
+        rows: [headRow(sessionId: 'tranquility-7')],
+        generations: const [
+          {
+            'projection': 'fold',
+            'fold_version': '2',
+            'applied_seq': '40',
+            'skipped': null,
+            'rebuilt_at': '2026-08-31 12:00:00.000000',
+          },
+        ],
+      );
+      connected.single.onExecute = dbScript;
+      // The guard rides the tick, no more often than the tick interval.
+      now = now.add(const Duration(minutes: 1));
+      await h.tick!.runPass();
+      await pumpEventQueue();
+
+      expect(h.sessionHeads.bySessionId('tranquility-7'), isNotNull);
+      expect(flareNames(), contains('trajectory.mirrorReseeded'));
+      expect(
+        h.sessionHeads.health,
+        TrajectorySnapshotHealth.live,
+        reason: 'a reseed is a re-read, not a failure',
+      );
+    });
+
+    test(
+      'an UNCHANGED generation set reseeds nothing and flares nothing',
+      () async {
+        dbScript = seedScript(rows: [headRow(sessionId: 'tranquility-1')]);
+        final h = await harness();
+        await h.start();
+        final seeded = h.sessionHeads.version;
+
+        now = now.add(const Duration(minutes: 1));
+        await h.tick!.runPass();
+        await pumpEventQueue();
+
+        expect(h.sessionHeads.version, seeded);
+        expect(flareNames(), isNot(contains('trajectory.mirrorReseeded')));
+      },
+    );
+
+    test('REFUSED TESTIMONY is counted on its own axis — not a drop, not a '
+        'dedupe, and no health consequence', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      appender.appendOutcomes.add(
+        const AppendRefusedTestimony(
+          attemptId: '01J8ATTEMPT000000000000002',
+          existingRecordId: '01OBSERVEDTERMINAL00000001',
+          reason: 'the real terminal already landed',
+        ),
+      );
+
+      h.enqueue(_note(1));
+      await pumpEventQueue();
+
+      expect(h.status.refusedTestimony, 1);
+      expect(h.status.dropped, 0);
+      expect(h.status.deduped, 0);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+    });
+
+    test('a harness that never connected serves a REFUSED snapshot rather '
+        'than an empty one that reads clean', () async {
+      connectError = StateError('listener unreachable');
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(h.sessionHeads.rows, isEmpty);
+    });
+  });
+
+  // ── the P2 mirror (cut-wiring C4 / §0.2) ──────────────────────────────────
+  //
+  // The step axis rides the P1 mirror's machinery exactly: one boot read on
+  // the same serialized lane under the SAME lag verdict, the same post-ACK
+  // apply off the same acked envelope, the same generation guard, the same
+  // health latch. What is P2's OWN is EVICTION, driven off P1's terminality.
+  group('the P2 mirror', () {
+    Object? Function(String sql) seedScript({
+      List<Map<String, String?>> heads = const [],
+      List<Map<String, String?>> steps = const [],
+      int appliedSeq = 40,
+      int maxSeq = 40,
+      List<Map<String, String?>> generations = const [
+        {
+          'projection': 'fold',
+          'fold_version': '2',
+          'applied_seq': '40',
+          'skipped': null,
+          'rebuilt_at': null,
+        },
+      ],
+    }) => (sql) {
+      if (sql.contains('AS max_seq')) {
+        return SqlResult(
+          rows: [
+            {'max_seq': '$maxSeq', 'applied_seq': '$appliedSeq'},
+          ],
+        );
+      }
+      if (sql.contains('MIN(recorded_at)')) {
+        return const SqlResult(
+          rows: [
+            {'oldest': null},
+          ],
+        );
+      }
+      if (sql.contains('FROM proj_meta')) return SqlResult(rows: generations);
+      if (sql.contains('FROM proj_session_head')) return SqlResult(rows: heads);
+      if (sql.contains('FROM proj_step_cursor')) return SqlResult(rows: steps);
+      if (sql.contains('MIN(advanced_at)')) {
+        return const SqlResult(
+          rows: [
+            {'first_at': '2026-08-01 09:00:00.000000'},
+          ],
+        );
+      }
+      return null;
+    };
+
+    Map<String, String?> headRow({
+      required String sessionId,
+      String status = 'open',
+    }) => {
+      'session_id': sessionId,
+      'work_bead_id': 'tg-9abc',
+      'round': '0',
+      'status': status,
+      'outcome': status == 'closed' ? 'succeeded' : null,
+      'terminal_provenance': null,
+      'unknown_reason': null,
+      'held': '0',
+      'started_at': '2026-08-31 10:00:00.000000',
+      'head_epoch': '1',
+      'last_seq': '4',
+    };
+
+    Map<String, String?> stepRow({
+      required String sessionId,
+      String stepPath = 'build',
+      String state = 'running',
+    }) => {
+      'session_id': sessionId,
+      'round': '0',
+      'step_path': stepPath,
+      'step_round': '0',
+      'state': state,
+      'incarnation': '0',
+      'last_seq': '4',
+    };
+
+    test(
+      'the boot seed reads P2 on the SAME lane, under the same verdict',
+      () async {
+        dbScript = seedScript(
+          heads: [headRow(sessionId: 'tranquility-1')],
+          steps: [
+            stepRow(sessionId: 'tranquility-1'),
+            stepRow(sessionId: 'tranquility-1', stepPath: 'review'),
+            stepRow(sessionId: 'tranquility-2'),
+          ],
+        );
+        final h = await harness();
+        await h.start();
+
+        expect(h.stepCursors.health, TrajectorySnapshotHealth.live);
+        expect(h.stepCursors.seededAt, now);
+        expect(h.stepCursors.firstEpochClaimedAt, DateTime.utc(2026, 8, 1, 9));
+        expect(h.stepCursors.byP2SessionId('tranquility-1'), hasLength(2));
+        expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
+        // The two mirrors seed from ONE read pass, so a step row can never
+        // describe a session the head seed missed.
+        expect(h.sessionHeads.seededAt, h.stepCursors.seededAt);
+      },
+    );
+
+    test('a STALE fold refuses BOTH mirrors — one verdict, one boot', () async {
+      dbScript = seedScript(
+        appliedSeq: 10,
+        maxSeq: 10 + staleLagLimit + 1,
+        steps: [stepRow(sessionId: 'tranquility-1')],
+      );
+      final h = await harness();
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.live, reason: 'never boot-blocking');
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.refused);
+      expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
+      expect(flareNames(), contains('trajectory.staleFold'));
+    });
+
+    test('a landed step transition maintains P2 POST-ACK', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+
+      h.recorder.stepRunning(
+        sessionId: 'tranquility-9',
+        stepPath: 'build',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      await pumpEventQueue();
+
+      final rows = h.stepCursors.byP2SessionId('tranquility-9');
+      expect(rows, hasLength(1));
+      expect(rows.single.stepState, 'running');
+    });
+
+    test(
+      'a DROPPED append latches BOTH mirrors compromised, and flares ONCE',
+      () async {
+        dbScript = seedScript();
+        final h = await harness();
+        await h.start();
+        appender.appendOutcomes.add(
+          const AppendInternalError(cause: 'socket died'),
+        );
+
+        h.recorder.stepRunning(
+          sessionId: 'tranquility-9',
+          stepPath: 'build',
+          stepRound: 0,
+          incarnation: 0,
+        );
+        await pumpEventQueue();
+
+        expect(h.stepCursors.byP2SessionId('tranquility-9'), isEmpty);
+        expect(h.stepCursors.health, TrajectorySnapshotHealth.compromised);
+        expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+        expect(
+          flareNames().where((n) => n == 'trajectory.dualReadCompromised'),
+          hasLength(1),
+          reason: 'one station, one health, one flare',
+        );
+      },
+    );
+
+    test('a moved generation triple RESEEDS P2 alongside P1', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      expect(h.stepCursors.byP2SessionId('tranquility-7'), isEmpty);
+
+      dbScript = seedScript(
+        heads: [headRow(sessionId: 'tranquility-7')],
+        steps: [stepRow(sessionId: 'tranquility-7')],
+        generations: const [
+          {
+            'projection': 'step_cursor',
+            'fold_version': '1',
+            'applied_seq': '40',
+            'skipped': null,
+            'rebuilt_at': '2026-08-31 12:00:00.000000',
+          },
+        ],
+      );
+      connected.single.onExecute = dbScript;
+      now = now.add(const Duration(minutes: 1));
+      await h.tick!.runPass();
+      await pumpEventQueue();
+
+      // A per-PROJECTION replay is expressible, so a mirror left on the old
+      // generation while its sibling adopted the new one would be two folds in
+      // one process — both re-seed on ANY moved triple.
+      expect(h.stepCursors.byP2SessionId('tranquility-7'), hasLength(1));
+      expect(h.sessionHeads.bySessionId('tranquility-7'), isNotNull);
+      expect(flareNames(), contains('trajectory.mirrorReseeded'));
+    });
+
+    test('EVICTION: a session that CLOSES in P1 loses its ladder on the next '
+        'tick', () async {
+      dbScript = seedScript(
+        heads: [
+          headRow(sessionId: 'tranquility-1'),
+          headRow(sessionId: 'tranquility-2'),
+        ],
+        steps: [
+          stepRow(sessionId: 'tranquility-1'),
+          stepRow(sessionId: 'tranquility-2'),
+        ],
+      );
+      final h = await harness();
+      await h.start();
+      expect(h.stepCursors.byP2SessionId('tranquility-1'), hasLength(1));
+
+      // The terminal lands post-ACK on P1; P2 has no status column of its own,
+      // so P1's terminality is the ONLY direction the rule can be driven from.
+      h.recorder.sessionCompleted(
+        sessionId: 'tranquility-1',
+        workBeadId: 'tg-9abc',
+      );
+      await pumpEventQueue();
+      now = now.add(const Duration(minutes: 1));
+      await h.tick!.runPass();
+      await pumpEventQueue();
+
+      expect(
+        h.stepCursors.byP2SessionId('tranquility-1'),
+        isEmpty,
+        reason: 'the SQL fold keeps the ladder; the mirror need not',
+      );
+      expect(h.stepCursors.byP2SessionId('tranquility-2'), hasLength(1));
+    });
+
+    test(
+      'a harness that never connected serves a REFUSED P2 snapshot',
+      () async {
+        connectError = StateError('listener unreachable');
+        final h = await harness();
+        await h.start();
+
+        expect(h.stepCursors.health, TrajectorySnapshotHealth.refused);
+        expect(h.stepCursors.byP2SessionId('tranquility-1'), isEmpty);
+      },
+    );
+
+    test('the change seam publishes and the remover works', () async {
+      dbScript = seedScript();
+      final h = await harness();
+      await h.start();
+      final versions = <int>[];
+      final remove = h.onStepCursorsChanged((s) => versions.add(s.version));
+
+      h.recorder.stepRunning(
+        sessionId: 'tranquility-9',
+        stepPath: 'build',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      await pumpEventQueue();
+      expect(versions, isNotEmpty);
+
+      remove();
+      final seen = versions.length;
+      h.recorder.stepRunning(
+        sessionId: 'tranquility-9',
+        stepPath: 'review',
+        stepRound: 0,
+        incarnation: 0,
+      );
+      await pumpEventQueue();
+      expect(versions, hasLength(seen));
+    });
+  });
+
+  group("the dual read's harness surfaces (cut-wiring C2)", () {
+    TerminalReconcileRequest request(
+      List<TerminalReconcileOutcome> reported, {
+      String attemptId = '01J8ATTEMPT000000000000009',
+    }) => TerminalReconcileRequest(
+      sessionId: 'tranquility-1',
+      attemptId: attemptId,
+      workBeadId: 'tg-9abc',
+      report: reported.add,
+    );
+
+    test('hasQueuedAppendFor sees BOTH the queued and the IN-FLIGHT request — '
+        'the writer dequeues before it awaits, so a queue-only read has a '
+        'real hole (r8 — V2-B1s trigger depends on this)', () async {
+      final h = await harness();
+      await h.start();
+      appender.appendNeverCompletes = true;
+
+      h
+        ..enqueue(
+          TrajectoryAppendRequest(
+            AttemptTerminal(
+              attemptId: 'A' * 26,
+              sessionId: 's-1',
+              outcome: TerminalOutcome.succeeded,
+            ),
+          ),
+        )
+        ..enqueue(
+          TrajectoryAppendRequest(
+            AttemptTerminal(
+              attemptId: 'B' * 26,
+              sessionId: 's-2',
+              outcome: TerminalOutcome.succeeded,
+            ),
+          ),
+        );
+      await pumpEventQueue();
+
+      expect(h.hasQueuedAppendFor('A' * 26), isTrue, reason: 'in flight');
+      expect(h.hasQueuedAppendFor('B' * 26), isTrue, reason: 'queued');
+      expect(h.hasQueuedAppendFor('C' * 26), isFalse);
+    });
+
+    test('THE GUARD PRE-CHECK (r9 — V3-B1): an existing terminal row for the '
+        'attempt means the real record LANDED, so the heal SKIPS and counts — '
+        'no append at all', () async {
+      dbScript = (sql) {
+        if (sql.contains('traj_terminal_guard')) {
+          return const SqlResult(
+            rows: [
+              {'attempt_id': '01J8ATTEMPT000000000000009'},
+            ],
+          );
+        }
+        return null;
+      };
+      final h = await harness();
+      await h.start();
+      final reported = <TerminalReconcileOutcome>[];
+
+      h.requestTerminalReconcile(request(reported));
+      await pumpEventQueue();
+
+      expect(reported, [TerminalReconcileOutcome.skippedGuard]);
+      expect([
+        for (final r in appender.records) r.recordType,
+      ], isNot(contains('attempt.terminal')));
+    });
+
+    test('with no guard row the heal appends the reconstructed close under '
+        'its OWN basis and its OWN idem grammar', () async {
+      final h = await harness();
+      await h.start();
+      final reported = <TerminalReconcileOutcome>[];
+
+      h.requestTerminalReconcile(request(reported));
+      await pumpEventQueue();
+
+      expect(reported, [TerminalReconcileOutcome.appended]);
+      final terminal = appender.records.whereType<AttemptTerminal>().single;
+      expect(terminal.outcome, TerminalOutcome.unknown);
+      expect(terminal.unknownReason, 'external-close');
+      expect(terminal.attemptId, '01J8ATTEMPT000000000000009');
+      expect(terminal.attemptIdBasis, isNull, reason: 'never minted');
+      expect(appender.provenances.last, TrajectoryProvenance.reconstructed);
+    });
+
+    test('a heal whose guard read THROWS reports failed and flares — the '
+        'escalation rule keys on exactly that', () async {
+      dbScript = (sql) => sql.contains('traj_terminal_guard')
+          ? StateError('guard read exploded')
+          : null;
+      final h = await harness();
+      await h.start();
+      final reported = <TerminalReconcileOutcome>[];
+
+      h.requestTerminalReconcile(request(reported));
+      await pumpEventQueue();
+
+      expect(reported, [TerminalReconcileOutcome.failed]);
+      expect(flareNames(), contains('trajectory.terminalReconcileFailed'));
+    });
+
+    test(
+      'a DOWN or degraded harness reports a SKIP, never a failure: a '
+      'harness that cannot append never manufactures an escalation',
+      () async {
+        final h = await harness(
+          config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+        );
+        await h.start();
+        final reported = <TerminalReconcileOutcome>[];
+
+        h.requestTerminalReconcile(request(reported));
+        await pumpEventQueue();
+
+        // THE TRANSIENT MEMBER (r13): no guard row was read, and the entry
+        // must stay healable so a later pass re-asks once the harness is live.
+        expect(reported, [TerminalReconcileOutcome.skippedUnavailable]);
+        expect(flares, isEmpty);
+      },
+    );
+
+    test('the config carries the posture and defaults to OFF (r13) — the '
+        'soak posture is armed explicitly by the runner', () {
+      expect(const TrajectoryConfig().dualRead, DualReadMode.off);
+      expect(
+        const TrajectoryConfig(
+          dualRead: DualReadMode.primary,
+        ).asDisabled.dualRead,
+        DualReadMode.primary,
+        reason: 'dry-run forces the WRITE posture, never the read one',
+      );
     });
   });
 }

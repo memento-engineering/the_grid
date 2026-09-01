@@ -28,6 +28,25 @@ List<SqlStatement> sessionHeadFoldStep(
   return [sessionHeadSqlFor(delta, lastSeq: seq)];
 }
 
+/// P1 in the PRE-CUT SHAPE (cut-wiring, r13) — the SAME delta, rendered
+/// without the two columns the wave-1 reshape added to `proj_session_head`.
+///
+/// This is the fold half of `DualReadMode.off`. The rollback posture must
+/// append exactly as pre-cut mainline did, so an existing home that took this
+/// code WITHOUT running the quiesced `traj replay` migration keeps appending
+/// rather than dying on an unknown column — which is what lets the harness
+/// skip the boot reshape probe at `off`: there is no cut-shape write to
+/// protect.
+List<SqlStatement> preCutSessionHeadFoldStep(
+  TrajectoryEnvelope envelope,
+  TrajectoryRecord record, {
+  required int seq,
+}) {
+  final delta = sessionHeadDeltaFor(envelope, decoded: record);
+  if (delta == null) return const [];
+  return [sessionHeadSqlFor(delta, lastSeq: seq, cutShape: false)];
+}
+
 /// P2 — `proj_step_cursor` (§6 rows 14–16, the step_round chain rule).
 List<SqlStatement> stepCursorFoldStep(
   TrajectoryEnvelope envelope,
@@ -51,9 +70,19 @@ List<SqlStatement> processIdentityFoldStep(
 }
 
 /// The Stage-1 set, in registration order — hand this to
-/// `TrajectoryAppender(folds: ...)` (the harness's default appender does).
+/// `TrajectoryAppender(folds: ...)` (the harness's default appender does when
+/// the dual read is ARMED).
 const List<TrajectoryFoldDelta> kStage1FoldDeltas = [
   sessionHeadFoldStep,
+  stepCursorFoldStep,
+  processIdentityFoldStep,
+];
+
+/// The ROLLBACK set (`DualReadMode.off`): identical to [kStage1FoldDeltas]
+/// except that P1 renders in the pre-cut column shape. P2 and P6 are unchanged
+/// by the wave-1 cut, so they are the very same entries.
+const List<TrajectoryFoldDelta> kPreCutFoldDeltas = [
+  preCutSessionHeadFoldStep,
   stepCursorFoldStep,
   processIdentityFoldStep,
 ];

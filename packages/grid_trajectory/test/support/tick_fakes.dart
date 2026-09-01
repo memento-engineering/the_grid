@@ -71,6 +71,40 @@ class _ManualTimer implements Timer {
   int get tick => 0;
 }
 
+/// An [Appended] outcome carrying the committed envelope the post-ACK mirror
+/// seam requires (cut-wiring C1 / §0.2) — the shape a real append hands back.
+Appended fakeAppended({
+  required String recordId,
+  required int seq,
+  TrajectoryRecord? record,
+  int? epochSeq,
+  String? sessionId,
+  TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+}) => Appended(
+  recordId: recordId,
+  seq: seq,
+  epochSeq: epochSeq ?? seq,
+  envelope: TrajectoryEnvelope(
+    recordId: recordId,
+    idemKey: 'f' * 64,
+    idemKeyText: 'fake:$recordId',
+    family: record?.family ?? TrajectoryFamily.attempt,
+    recordType: record?.recordType ?? 'attempt.note',
+    occurredAt: DateTime.utc(2026, 8, 31, 12),
+    recordedAt: DateTime.utc(2026, 8, 31, 12),
+    station: 'lunar',
+    authorityId: 'lunar/1',
+    bootEpoch: 1,
+    provenance: provenance,
+    provenanceBasis: provenance == TrajectoryProvenance.observed
+        ? null
+        : 'test-basis',
+    source: 'test',
+    sessionId: sessionId,
+    payload: const {},
+  ),
+);
+
 /// A [TickAppender] whose disposition and per-append outcomes the test writes.
 class FakeTickAppender implements TickAppender {
   FakeTickAppender({List<AppendOutcome> outcomes = const []})
@@ -105,10 +139,10 @@ class FakeTickAppender implements TickAppender {
     appended.add(record);
     seats.add(seat);
     if (outcomes.isEmpty) {
-      return Appended(
+      return fakeAppended(
         recordId: 'r${appended.length}',
         seq: appended.length,
-        epochSeq: appended.length,
+        record: record,
       );
     }
     return outcomes.removeAt(0);

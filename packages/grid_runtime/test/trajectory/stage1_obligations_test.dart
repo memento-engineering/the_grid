@@ -155,6 +155,18 @@ void main() {
       expect(query.parameters, {'station': 'tranquility'});
     });
 
+    test('THE SETTLEMENT EXCLUSION (cut-wiring C2, r9 — V3-B2): the scan '
+        'excludes reconstructed testimony ON THE RECORD, never on the '
+        'head flag', () {
+      // Keying the exclusion on the IMMUTABLE record is what makes it
+      // permanent. Truth monotonicity clears the head's `terminal_provenance`
+      // mark when a real observed terminal lands, so a head-keyed exclusion
+      // would re-expose the stale reconstructed record and clobber the
+      // observed outcome back to `settled` ⇒ `done`.
+      expect(build().sql, contains("t.provenance != 'reconstructed'"));
+      expect(build().sql, isNot(contains('terminal_provenance')));
+    });
+
     test('settles a dead attempt with a SETTLING terminal — resolves the '
         'unknown row, inferred, with the probe basis', () async {
       final appends = await build().repair([row(pid: '4242')]);

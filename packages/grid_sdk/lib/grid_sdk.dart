@@ -130,6 +130,14 @@ export 'package:grid_trajectory/grid_trajectory.dart'
         TrajectoryTick,
         TrajectoryTickFixpoint,
         TrajectoryTickPass;
+// The P1 MIRROR (the trajectory cut, wave 1 / C1): the harness's in-memory
+// fold read surface, implementing the ENGINE's `TrajectoryHeadSnapshot` seam
+// over `grid_trajectory`'s row types. Exported so a status surface can read
+// the snapshot; nothing consumes it for DECISIONS until C2/C3.
+export 'src/trajectory/session_head_mirror.dart';
+// The P2 MIRROR (C4) — the same surface for the step axis, implementing the
+// engine's `TrajectoryStepSnapshot` seam and its `byP2SessionId` index.
+export 'src/trajectory/step_cursor_mirror.dart';
 export 'src/trajectory/trajectory_config.dart';
 export 'src/trajectory/trajectory_harness.dart';
 

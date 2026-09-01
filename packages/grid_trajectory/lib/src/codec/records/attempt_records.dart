@@ -450,6 +450,7 @@ final class AttemptTerminal extends AttemptRecord {
     this.reason,
     this.attemptIdBasis,
     this.seatBasis,
+    this.healBasis,
   }) {
     if (outcome == TerminalOutcome.unknown && unknownReason == null) {
       _refuse(recordType, 'outcome unknown requires unknown_reason');
@@ -470,6 +471,7 @@ final class AttemptTerminal extends AttemptRecord {
     reason: _opt<String>(payload, 'reason'),
     attemptIdBasis: _opt<String>(payload, 'attempt_id_basis'),
     seatBasis: _opt<String>(payload, 'seat_basis'),
+    healBasis: _opt<String>(payload, 'heal_basis'),
   );
 
   final String attemptId;
@@ -492,6 +494,21 @@ final class AttemptTerminal extends AttemptRecord {
   /// (stage1-wiring §2.2, r2 minor 12).
   final String? seatBasis;
 
+  /// THE HEAL's OWN IDEM GRAMMAR (cut-wiring §C2, r8 — V2-B1).
+  ///
+  /// The `terminal-reconcile` heal appends RECONSTRUCTED testimony about a
+  /// terminal the station never observed. It must never dedupe against the
+  /// real record in EITHER direction — a heal landing first must not swallow
+  /// the true outcome, and a real record landing first must not be mistaken
+  /// for the heal — so a healing terminal takes the key
+  /// `<heal_basis>:<attemptId>` (`terminal-reconcile:<attemptId>`) rather than
+  /// the plain `terminal:<attemptId>`.
+  ///
+  /// The teardown-replay observer append deliberately does NOT set this: it is
+  /// a record about that session's ONE terminal, so `terminal:<recovered-id>`
+  /// is exactly the key a re-run should dedupe on.
+  final String? healBasis;
+
   /// The §5 terminal guard keys on this: `traj_terminal_guard` takes one row
   /// per attempt, so an unsettled terminal INSERTs and a second independent
   /// one dies on the PK.
@@ -500,6 +517,29 @@ final class AttemptTerminal extends AttemptRecord {
 
   @override
   bool get isSettling => resolvesRecordId != null;
+
+  /// The settling re-authoring the resolving pre-read asks for: the same
+  /// terminal fact, now pointing at the record it heals. Every other field
+  /// rides through unchanged — the OUTCOME especially, which is the whole
+  /// point (the observed truth is what lands on the head).
+  ///
+  /// An already-settling record returns null: a settlement of a settlement is
+  /// not a shape the guard permits, and the pre-read never asks for one.
+  @override
+  TrajectoryRecord? settlingForm(String recordId) => isSettling
+      ? null
+      : AttemptTerminal(
+          attemptId: attemptId,
+          outcome: outcome,
+          sessionId: sessionId,
+          workBeadId: workBeadId,
+          unknownReason: unknownReason,
+          resolvesRecordId: recordId,
+          reason: reason,
+          attemptIdBasis: attemptIdBasis,
+          seatBasis: seatBasis,
+          healBasis: healBasis,
+        );
 
   /// One of §5's three dolt-commit boundaries.
   @override
@@ -513,6 +553,7 @@ final class AttemptTerminal extends AttemptRecord {
     if (reason != null) 'reason': reason,
     if (attemptIdBasis != null) 'attempt_id_basis': attemptIdBasis,
     if (seatBasis != null) 'seat_basis': seatBasis,
+    if (healBasis != null) 'heal_basis': healBasis,
   };
 
   @override
@@ -528,7 +569,7 @@ final class AttemptTerminal extends AttemptRecord {
   @override
   String idemKeyText(IdemContext context) => isSettling
       ? 'terminal-resolve:$attemptId:$resolvesRecordId'
-      : 'terminal:$attemptId';
+      : '${healBasis ?? 'terminal'}:$attemptId';
 }
 
 /// `attempt.round.retired` — bumps envelope `round` only; the operator

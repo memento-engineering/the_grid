@@ -54,7 +54,40 @@ mixin _$SessionProjection {
 /// [moleculeBeads] via `projectMoleculeCursor`. The field survives as the
 /// projection's in-memory cursor shape — synthetic/test projections
 /// populate it directly.
- CircuitCursor get cursor;/// The per-node `grid.result.*` payloads, threaded down pull-free so a
+ CircuitCursor get cursor;/// THE STEP AXIS'S FOLD READ (cut-wiring C4) — this session's OWN P2
+/// (`proj_step_cursor`) rows, collapsed per `step_path` to the newest
+/// incarnation and expressed in the in-memory cursor shape.
+///
+/// **STATE ONLY, and identity-matched.** The bridge fills it from the P2
+/// mirror's `byP2SessionId` index — rows whose `session_id` equals THIS
+/// projection's own, never a `byWorkBead` winner (the OVERLAY IDENTITY
+/// RULE, restated for BOTH axes in r6): a cross-session splice is a
+/// PROMOTION the monotone rule cannot catch, which is why identity, not
+/// monotonicity, is the guard here. Every other [NodeCursor] field is left
+/// at its default and never read — `restartCount`, `cooldownUntil` and the
+/// pgid/pid/token fence stay BEAD-READ for all of wave 1 (B-M2: the
+/// breaker's read never moves).
+///
+/// **NULL IS THE POSTURE.** It is filled only under `dualRead: primary`
+/// with snapshot health `live` and a boot that has not disengaged, so no
+/// consumer reads a config of its own: `effectiveStepCursor` returns the
+/// site's own read unchanged whenever this is null, and under `observe`
+/// that is every session. Never read this field directly — the merge rules
+/// (the per-node P2-miss rule, monotone no-demotion, the never-creates
+/// rule) live in `step_cursor_read.dart` and are what make it safe.
+ CircuitCursor? get trajCursor;/// THE LADDER EVIDENCE behind [trajCursor] — this session's collapsed P2
+/// rows, keyed by `step_path`, spliced by the same bridge writer and under
+/// exactly the same engagement rule.
+///
+/// [trajCursor] carries only the STATE each node resolved to;
+/// `round`/`step_round`/`incarnation`/`superseded_by_step_round` live
+/// here. `effectiveStepCursor` hands it to `mergeStepCursor` as
+/// `collapsed`, so a `StepNodeComparison` raised at a CONSUMER site
+/// carries the same incarnation evidence a comparator-site one does —
+/// without it every consumer-site comparison reports those four fields
+/// null, which is exactly the triage evidence C4 says lands there.
+/// Empty whenever [trajCursor] is null.
+ Map<String, StepCursorView> get trajStepViews;/// The per-node `grid.result.*` payloads, threaded down pull-free so a
 /// `route` step reads its siblings' grades — D-5. Keyed by `nodePath`; empty
 /// until a step records a result.
  Map<String, Map<String, String>> get results;/// The nodePaths with an OPEN `type=gate` bead blocking this session (D-7) —
@@ -106,16 +139,16 @@ $SessionProjectionCopyWith<SessionProjection> get copyWith => _$SessionProjectio
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.completed, completed) || other.completed == completed)&&(identical(other.workTerminalReason, workTerminalReason) || other.workTerminalReason == workTerminalReason)&&(identical(other.humanHeld, humanHeld) || other.humanHeld == humanHeld)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other.cursor, cursor)&&const DeepCollectionEquality().equals(other.results, results)&&const DeepCollectionEquality().equals(other.openGateNodes, openGateNodes)&&const DeepCollectionEquality().equals(other.closedGateCountByNodePath, closedGateCountByNodePath)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.closedAt, closedAt) || other.closedAt == closedAt)&&(identical(other.isMolecule, isMolecule) || other.isMolecule == isMolecule)&&const DeepCollectionEquality().equals(other.moleculeBeads, moleculeBeads)&&const DeepCollectionEquality().equals(other.moleculeDependencies, moleculeDependencies));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.completed, completed) || other.completed == completed)&&(identical(other.workTerminalReason, workTerminalReason) || other.workTerminalReason == workTerminalReason)&&(identical(other.humanHeld, humanHeld) || other.humanHeld == humanHeld)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other.cursor, cursor)&&const DeepCollectionEquality().equals(other.trajCursor, trajCursor)&&const DeepCollectionEquality().equals(other.trajStepViews, trajStepViews)&&const DeepCollectionEquality().equals(other.results, results)&&const DeepCollectionEquality().equals(other.openGateNodes, openGateNodes)&&const DeepCollectionEquality().equals(other.closedGateCountByNodePath, closedGateCountByNodePath)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.closedAt, closedAt) || other.closedAt == closedAt)&&(identical(other.isMolecule, isMolecule) || other.isMolecule == isMolecule)&&const DeepCollectionEquality().equals(other.moleculeBeads, moleculeBeads)&&const DeepCollectionEquality().equals(other.moleculeDependencies, moleculeDependencies));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,isTerminal,completed,workTerminalReason,humanHeld,pgid,token,pid,const DeepCollectionEquality().hash(cursor),const DeepCollectionEquality().hash(results),const DeepCollectionEquality().hash(openGateNodes),const DeepCollectionEquality().hash(closedGateCountByNodePath),startedAt,closedAt,isMolecule,const DeepCollectionEquality().hash(moleculeBeads),const DeepCollectionEquality().hash(moleculeDependencies));
+int get hashCode => Object.hashAll([runtimeType,workBeadId,sessionId,isTerminal,completed,workTerminalReason,humanHeld,pgid,token,pid,const DeepCollectionEquality().hash(cursor),const DeepCollectionEquality().hash(trajCursor),const DeepCollectionEquality().hash(trajStepViews),const DeepCollectionEquality().hash(results),const DeepCollectionEquality().hash(openGateNodes),const DeepCollectionEquality().hash(closedGateCountByNodePath),startedAt,closedAt,isMolecule,const DeepCollectionEquality().hash(moleculeBeads),const DeepCollectionEquality().hash(moleculeDependencies)]);
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, completed: $completed, workTerminalReason: $workTerminalReason, humanHeld: $humanHeld, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, results: $results, openGateNodes: $openGateNodes, closedGateCountByNodePath: $closedGateCountByNodePath, startedAt: $startedAt, closedAt: $closedAt, isMolecule: $isMolecule, moleculeBeads: $moleculeBeads, moleculeDependencies: $moleculeDependencies)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, completed: $completed, workTerminalReason: $workTerminalReason, humanHeld: $humanHeld, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, trajCursor: $trajCursor, trajStepViews: $trajStepViews, results: $results, openGateNodes: $openGateNodes, closedGateCountByNodePath: $closedGateCountByNodePath, startedAt: $startedAt, closedAt: $closedAt, isMolecule: $isMolecule, moleculeBeads: $moleculeBeads, moleculeDependencies: $moleculeDependencies)';
 }
 
 
@@ -126,7 +159,7 @@ abstract mixin class $SessionProjectionCopyWith<$Res>  {
   factory $SessionProjectionCopyWith(SessionProjection value, $Res Function(SessionProjection) _then) = _$SessionProjectionCopyWithImpl;
 @useResult
 $Res call({
- String workBeadId, String? sessionId, bool isTerminal, bool completed, String? workTerminalReason, bool humanHeld, int? pgid, String? token, int? pid, CircuitCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, Map<String, int> closedGateCountByNodePath, DateTime? startedAt, DateTime? closedAt, bool isMolecule, List<Bead> moleculeBeads, List<BeadDependency> moleculeDependencies
+ String workBeadId, String? sessionId, bool isTerminal, bool completed, String? workTerminalReason, bool humanHeld, int? pgid, String? token, int? pid, CircuitCursor cursor, CircuitCursor? trajCursor, Map<String, StepCursorView> trajStepViews, Map<String, Map<String, String>> results, Set<String> openGateNodes, Map<String, int> closedGateCountByNodePath, DateTime? startedAt, DateTime? closedAt, bool isMolecule, List<Bead> moleculeBeads, List<BeadDependency> moleculeDependencies
 });
 
 
@@ -143,7 +176,7 @@ class _$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? completed = null,Object? workTerminalReason = freezed,Object? humanHeld = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? results = null,Object? openGateNodes = null,Object? closedGateCountByNodePath = null,Object? startedAt = freezed,Object? closedAt = freezed,Object? isMolecule = null,Object? moleculeBeads = null,Object? moleculeDependencies = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? completed = null,Object? workTerminalReason = freezed,Object? humanHeld = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? trajCursor = freezed,Object? trajStepViews = null,Object? results = null,Object? openGateNodes = null,Object? closedGateCountByNodePath = null,Object? startedAt = freezed,Object? closedAt = freezed,Object? isMolecule = null,Object? moleculeBeads = null,Object? moleculeDependencies = null,}) {
   return _then(_self.copyWith(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
 as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
@@ -155,7 +188,9 @@ as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_no
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
 as int?,cursor: null == cursor ? _self.cursor : cursor // ignore: cast_nullable_to_non_nullable
-as CircuitCursor,results: null == results ? _self.results : results // ignore: cast_nullable_to_non_nullable
+as CircuitCursor,trajCursor: freezed == trajCursor ? _self.trajCursor : trajCursor // ignore: cast_nullable_to_non_nullable
+as CircuitCursor?,trajStepViews: null == trajStepViews ? _self.trajStepViews : trajStepViews // ignore: cast_nullable_to_non_nullable
+as Map<String, StepCursorView>,results: null == results ? _self.results : results // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<String, String>>,openGateNodes: null == openGateNodes ? _self.openGateNodes : openGateNodes // ignore: cast_nullable_to_non_nullable
 as Set<String>,closedGateCountByNodePath: null == closedGateCountByNodePath ? _self.closedGateCountByNodePath : closedGateCountByNodePath // ignore: cast_nullable_to_non_nullable
 as Map<String, int>,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
@@ -248,10 +283,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  bool completed,  String? workTerminalReason,  bool humanHeld,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  Map<String, int> closedGateCountByNodePath,  DateTime? startedAt,  DateTime? closedAt,  bool isMolecule,  List<Bead> moleculeBeads,  List<BeadDependency> moleculeDependencies)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  bool completed,  String? workTerminalReason,  bool humanHeld,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  CircuitCursor? trajCursor,  Map<String, StepCursorView> trajStepViews,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  Map<String, int> closedGateCountByNodePath,  DateTime? startedAt,  DateTime? closedAt,  bool isMolecule,  List<Bead> moleculeBeads,  List<BeadDependency> moleculeDependencies)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.completed,_that.workTerminalReason,_that.humanHeld,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.closedGateCountByNodePath,_that.startedAt,_that.closedAt,_that.isMolecule,_that.moleculeBeads,_that.moleculeDependencies);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.completed,_that.workTerminalReason,_that.humanHeld,_that.pgid,_that.token,_that.pid,_that.cursor,_that.trajCursor,_that.trajStepViews,_that.results,_that.openGateNodes,_that.closedGateCountByNodePath,_that.startedAt,_that.closedAt,_that.isMolecule,_that.moleculeBeads,_that.moleculeDependencies);case _:
   return orElse();
 
 }
@@ -269,10 +304,10 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.complete
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  bool completed,  String? workTerminalReason,  bool humanHeld,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  Map<String, int> closedGateCountByNodePath,  DateTime? startedAt,  DateTime? closedAt,  bool isMolecule,  List<Bead> moleculeBeads,  List<BeadDependency> moleculeDependencies)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String workBeadId,  String? sessionId,  bool isTerminal,  bool completed,  String? workTerminalReason,  bool humanHeld,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  CircuitCursor? trajCursor,  Map<String, StepCursorView> trajStepViews,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  Map<String, int> closedGateCountByNodePath,  DateTime? startedAt,  DateTime? closedAt,  bool isMolecule,  List<Bead> moleculeBeads,  List<BeadDependency> moleculeDependencies)  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection():
-return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.completed,_that.workTerminalReason,_that.humanHeld,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.closedGateCountByNodePath,_that.startedAt,_that.closedAt,_that.isMolecule,_that.moleculeBeads,_that.moleculeDependencies);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.completed,_that.workTerminalReason,_that.humanHeld,_that.pgid,_that.token,_that.pid,_that.cursor,_that.trajCursor,_that.trajStepViews,_that.results,_that.openGateNodes,_that.closedGateCountByNodePath,_that.startedAt,_that.closedAt,_that.isMolecule,_that.moleculeBeads,_that.moleculeDependencies);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -289,10 +324,10 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.complete
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  bool isTerminal,  bool completed,  String? workTerminalReason,  bool humanHeld,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  Map<String, int> closedGateCountByNodePath,  DateTime? startedAt,  DateTime? closedAt,  bool isMolecule,  List<Bead> moleculeBeads,  List<BeadDependency> moleculeDependencies)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String workBeadId,  String? sessionId,  bool isTerminal,  bool completed,  String? workTerminalReason,  bool humanHeld,  int? pgid,  String? token,  int? pid,  CircuitCursor cursor,  CircuitCursor? trajCursor,  Map<String, StepCursorView> trajStepViews,  Map<String, Map<String, String>> results,  Set<String> openGateNodes,  Map<String, int> closedGateCountByNodePath,  DateTime? startedAt,  DateTime? closedAt,  bool isMolecule,  List<Bead> moleculeBeads,  List<BeadDependency> moleculeDependencies)?  $default,) {final _that = this;
 switch (_that) {
 case _SessionProjection() when $default != null:
-return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.completed,_that.workTerminalReason,_that.humanHeld,_that.pgid,_that.token,_that.pid,_that.cursor,_that.results,_that.openGateNodes,_that.closedGateCountByNodePath,_that.startedAt,_that.closedAt,_that.isMolecule,_that.moleculeBeads,_that.moleculeDependencies);case _:
+return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.completed,_that.workTerminalReason,_that.humanHeld,_that.pgid,_that.token,_that.pid,_that.cursor,_that.trajCursor,_that.trajStepViews,_that.results,_that.openGateNodes,_that.closedGateCountByNodePath,_that.startedAt,_that.closedAt,_that.isMolecule,_that.moleculeBeads,_that.moleculeDependencies);case _:
   return null;
 
 }
@@ -304,7 +339,7 @@ return $default(_that.workBeadId,_that.sessionId,_that.isTerminal,_that.complete
 
 
 class _SessionProjection implements SessionProjection {
-  const _SessionProjection({required this.workBeadId, this.sessionId, this.isTerminal = false, this.completed = false, this.workTerminalReason, this.humanHeld = false, this.pgid, this.token, this.pid, final  CircuitCursor cursor = const <String, NodeCursor>{}, final  Map<String, Map<String, String>> results = const <String, Map<String, String>>{}, final  Set<String> openGateNodes = const <String>{}, final  Map<String, int> closedGateCountByNodePath = const <String, int>{}, this.startedAt, this.closedAt, this.isMolecule = false, final  List<Bead> moleculeBeads = const <Bead>[], final  List<BeadDependency> moleculeDependencies = const <BeadDependency>[]}): _cursor = cursor,_results = results,_openGateNodes = openGateNodes,_closedGateCountByNodePath = closedGateCountByNodePath,_moleculeBeads = moleculeBeads,_moleculeDependencies = moleculeDependencies;
+  const _SessionProjection({required this.workBeadId, this.sessionId, this.isTerminal = false, this.completed = false, this.workTerminalReason, this.humanHeld = false, this.pgid, this.token, this.pid, final  CircuitCursor cursor = const <String, NodeCursor>{}, final  CircuitCursor? trajCursor, final  Map<String, StepCursorView> trajStepViews = const <String, StepCursorView>{}, final  Map<String, Map<String, String>> results = const <String, Map<String, String>>{}, final  Set<String> openGateNodes = const <String>{}, final  Map<String, int> closedGateCountByNodePath = const <String, int>{}, this.startedAt, this.closedAt, this.isMolecule = false, final  List<Bead> moleculeBeads = const <Bead>[], final  List<BeadDependency> moleculeDependencies = const <BeadDependency>[]}): _cursor = cursor,_trajCursor = trajCursor,_trajStepViews = trajStepViews,_results = results,_openGateNodes = openGateNodes,_closedGateCountByNodePath = closedGateCountByNodePath,_moleculeBeads = moleculeBeads,_moleculeDependencies = moleculeDependencies;
   
 
 /// The work bead this session drives (`metadata.work_bead`).
@@ -372,6 +407,88 @@ class _SessionProjection implements SessionProjection {
   if (_cursor is EqualUnmodifiableMapView) return _cursor;
   // ignore: implicit_dynamic_type
   return EqualUnmodifiableMapView(_cursor);
+}
+
+/// THE STEP AXIS'S FOLD READ (cut-wiring C4) — this session's OWN P2
+/// (`proj_step_cursor`) rows, collapsed per `step_path` to the newest
+/// incarnation and expressed in the in-memory cursor shape.
+///
+/// **STATE ONLY, and identity-matched.** The bridge fills it from the P2
+/// mirror's `byP2SessionId` index — rows whose `session_id` equals THIS
+/// projection's own, never a `byWorkBead` winner (the OVERLAY IDENTITY
+/// RULE, restated for BOTH axes in r6): a cross-session splice is a
+/// PROMOTION the monotone rule cannot catch, which is why identity, not
+/// monotonicity, is the guard here. Every other [NodeCursor] field is left
+/// at its default and never read — `restartCount`, `cooldownUntil` and the
+/// pgid/pid/token fence stay BEAD-READ for all of wave 1 (B-M2: the
+/// breaker's read never moves).
+///
+/// **NULL IS THE POSTURE.** It is filled only under `dualRead: primary`
+/// with snapshot health `live` and a boot that has not disengaged, so no
+/// consumer reads a config of its own: `effectiveStepCursor` returns the
+/// site's own read unchanged whenever this is null, and under `observe`
+/// that is every session. Never read this field directly — the merge rules
+/// (the per-node P2-miss rule, monotone no-demotion, the never-creates
+/// rule) live in `step_cursor_read.dart` and are what make it safe.
+ final  CircuitCursor? _trajCursor;
+/// THE STEP AXIS'S FOLD READ (cut-wiring C4) — this session's OWN P2
+/// (`proj_step_cursor`) rows, collapsed per `step_path` to the newest
+/// incarnation and expressed in the in-memory cursor shape.
+///
+/// **STATE ONLY, and identity-matched.** The bridge fills it from the P2
+/// mirror's `byP2SessionId` index — rows whose `session_id` equals THIS
+/// projection's own, never a `byWorkBead` winner (the OVERLAY IDENTITY
+/// RULE, restated for BOTH axes in r6): a cross-session splice is a
+/// PROMOTION the monotone rule cannot catch, which is why identity, not
+/// monotonicity, is the guard here. Every other [NodeCursor] field is left
+/// at its default and never read — `restartCount`, `cooldownUntil` and the
+/// pgid/pid/token fence stay BEAD-READ for all of wave 1 (B-M2: the
+/// breaker's read never moves).
+///
+/// **NULL IS THE POSTURE.** It is filled only under `dualRead: primary`
+/// with snapshot health `live` and a boot that has not disengaged, so no
+/// consumer reads a config of its own: `effectiveStepCursor` returns the
+/// site's own read unchanged whenever this is null, and under `observe`
+/// that is every session. Never read this field directly — the merge rules
+/// (the per-node P2-miss rule, monotone no-demotion, the never-creates
+/// rule) live in `step_cursor_read.dart` and are what make it safe.
+@override CircuitCursor? get trajCursor {
+  final value = _trajCursor;
+  if (value == null) return null;
+  if (_trajCursor is EqualUnmodifiableMapView) return _trajCursor;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableMapView(value);
+}
+
+/// THE LADDER EVIDENCE behind [trajCursor] — this session's collapsed P2
+/// rows, keyed by `step_path`, spliced by the same bridge writer and under
+/// exactly the same engagement rule.
+///
+/// [trajCursor] carries only the STATE each node resolved to;
+/// `round`/`step_round`/`incarnation`/`superseded_by_step_round` live
+/// here. `effectiveStepCursor` hands it to `mergeStepCursor` as
+/// `collapsed`, so a `StepNodeComparison` raised at a CONSUMER site
+/// carries the same incarnation evidence a comparator-site one does —
+/// without it every consumer-site comparison reports those four fields
+/// null, which is exactly the triage evidence C4 says lands there.
+/// Empty whenever [trajCursor] is null.
+ final  Map<String, StepCursorView> _trajStepViews;
+/// THE LADDER EVIDENCE behind [trajCursor] — this session's collapsed P2
+/// rows, keyed by `step_path`, spliced by the same bridge writer and under
+/// exactly the same engagement rule.
+///
+/// [trajCursor] carries only the STATE each node resolved to;
+/// `round`/`step_round`/`incarnation`/`superseded_by_step_round` live
+/// here. `effectiveStepCursor` hands it to `mergeStepCursor` as
+/// `collapsed`, so a `StepNodeComparison` raised at a CONSUMER site
+/// carries the same incarnation evidence a comparator-site one does —
+/// without it every consumer-site comparison reports those four fields
+/// null, which is exactly the triage evidence C4 says lands there.
+/// Empty whenever [trajCursor] is null.
+@override@JsonKey() Map<String, StepCursorView> get trajStepViews {
+  if (_trajStepViews is EqualUnmodifiableMapView) return _trajStepViews;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableMapView(_trajStepViews);
 }
 
 /// The per-node `grid.result.*` payloads, threaded down pull-free so a
@@ -488,16 +605,16 @@ _$SessionProjectionCopyWith<_SessionProjection> get copyWith => __$SessionProjec
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.completed, completed) || other.completed == completed)&&(identical(other.workTerminalReason, workTerminalReason) || other.workTerminalReason == workTerminalReason)&&(identical(other.humanHeld, humanHeld) || other.humanHeld == humanHeld)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other._cursor, _cursor)&&const DeepCollectionEquality().equals(other._results, _results)&&const DeepCollectionEquality().equals(other._openGateNodes, _openGateNodes)&&const DeepCollectionEquality().equals(other._closedGateCountByNodePath, _closedGateCountByNodePath)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.closedAt, closedAt) || other.closedAt == closedAt)&&(identical(other.isMolecule, isMolecule) || other.isMolecule == isMolecule)&&const DeepCollectionEquality().equals(other._moleculeBeads, _moleculeBeads)&&const DeepCollectionEquality().equals(other._moleculeDependencies, _moleculeDependencies));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionProjection&&(identical(other.workBeadId, workBeadId) || other.workBeadId == workBeadId)&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.isTerminal, isTerminal) || other.isTerminal == isTerminal)&&(identical(other.completed, completed) || other.completed == completed)&&(identical(other.workTerminalReason, workTerminalReason) || other.workTerminalReason == workTerminalReason)&&(identical(other.humanHeld, humanHeld) || other.humanHeld == humanHeld)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.token, token) || other.token == token)&&(identical(other.pid, pid) || other.pid == pid)&&const DeepCollectionEquality().equals(other._cursor, _cursor)&&const DeepCollectionEquality().equals(other._trajCursor, _trajCursor)&&const DeepCollectionEquality().equals(other._trajStepViews, _trajStepViews)&&const DeepCollectionEquality().equals(other._results, _results)&&const DeepCollectionEquality().equals(other._openGateNodes, _openGateNodes)&&const DeepCollectionEquality().equals(other._closedGateCountByNodePath, _closedGateCountByNodePath)&&(identical(other.startedAt, startedAt) || other.startedAt == startedAt)&&(identical(other.closedAt, closedAt) || other.closedAt == closedAt)&&(identical(other.isMolecule, isMolecule) || other.isMolecule == isMolecule)&&const DeepCollectionEquality().equals(other._moleculeBeads, _moleculeBeads)&&const DeepCollectionEquality().equals(other._moleculeDependencies, _moleculeDependencies));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,workBeadId,sessionId,isTerminal,completed,workTerminalReason,humanHeld,pgid,token,pid,const DeepCollectionEquality().hash(_cursor),const DeepCollectionEquality().hash(_results),const DeepCollectionEquality().hash(_openGateNodes),const DeepCollectionEquality().hash(_closedGateCountByNodePath),startedAt,closedAt,isMolecule,const DeepCollectionEquality().hash(_moleculeBeads),const DeepCollectionEquality().hash(_moleculeDependencies));
+int get hashCode => Object.hashAll([runtimeType,workBeadId,sessionId,isTerminal,completed,workTerminalReason,humanHeld,pgid,token,pid,const DeepCollectionEquality().hash(_cursor),const DeepCollectionEquality().hash(_trajCursor),const DeepCollectionEquality().hash(_trajStepViews),const DeepCollectionEquality().hash(_results),const DeepCollectionEquality().hash(_openGateNodes),const DeepCollectionEquality().hash(_closedGateCountByNodePath),startedAt,closedAt,isMolecule,const DeepCollectionEquality().hash(_moleculeBeads),const DeepCollectionEquality().hash(_moleculeDependencies)]);
 
 @override
 String toString() {
-  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, completed: $completed, workTerminalReason: $workTerminalReason, humanHeld: $humanHeld, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, results: $results, openGateNodes: $openGateNodes, closedGateCountByNodePath: $closedGateCountByNodePath, startedAt: $startedAt, closedAt: $closedAt, isMolecule: $isMolecule, moleculeBeads: $moleculeBeads, moleculeDependencies: $moleculeDependencies)';
+  return 'SessionProjection(workBeadId: $workBeadId, sessionId: $sessionId, isTerminal: $isTerminal, completed: $completed, workTerminalReason: $workTerminalReason, humanHeld: $humanHeld, pgid: $pgid, token: $token, pid: $pid, cursor: $cursor, trajCursor: $trajCursor, trajStepViews: $trajStepViews, results: $results, openGateNodes: $openGateNodes, closedGateCountByNodePath: $closedGateCountByNodePath, startedAt: $startedAt, closedAt: $closedAt, isMolecule: $isMolecule, moleculeBeads: $moleculeBeads, moleculeDependencies: $moleculeDependencies)';
 }
 
 
@@ -508,7 +625,7 @@ abstract mixin class _$SessionProjectionCopyWith<$Res> implements $SessionProjec
   factory _$SessionProjectionCopyWith(_SessionProjection value, $Res Function(_SessionProjection) _then) = __$SessionProjectionCopyWithImpl;
 @override @useResult
 $Res call({
- String workBeadId, String? sessionId, bool isTerminal, bool completed, String? workTerminalReason, bool humanHeld, int? pgid, String? token, int? pid, CircuitCursor cursor, Map<String, Map<String, String>> results, Set<String> openGateNodes, Map<String, int> closedGateCountByNodePath, DateTime? startedAt, DateTime? closedAt, bool isMolecule, List<Bead> moleculeBeads, List<BeadDependency> moleculeDependencies
+ String workBeadId, String? sessionId, bool isTerminal, bool completed, String? workTerminalReason, bool humanHeld, int? pgid, String? token, int? pid, CircuitCursor cursor, CircuitCursor? trajCursor, Map<String, StepCursorView> trajStepViews, Map<String, Map<String, String>> results, Set<String> openGateNodes, Map<String, int> closedGateCountByNodePath, DateTime? startedAt, DateTime? closedAt, bool isMolecule, List<Bead> moleculeBeads, List<BeadDependency> moleculeDependencies
 });
 
 
@@ -525,7 +642,7 @@ class __$SessionProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionProjection
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? completed = null,Object? workTerminalReason = freezed,Object? humanHeld = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? results = null,Object? openGateNodes = null,Object? closedGateCountByNodePath = null,Object? startedAt = freezed,Object? closedAt = freezed,Object? isMolecule = null,Object? moleculeBeads = null,Object? moleculeDependencies = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? workBeadId = null,Object? sessionId = freezed,Object? isTerminal = null,Object? completed = null,Object? workTerminalReason = freezed,Object? humanHeld = null,Object? pgid = freezed,Object? token = freezed,Object? pid = freezed,Object? cursor = null,Object? trajCursor = freezed,Object? trajStepViews = null,Object? results = null,Object? openGateNodes = null,Object? closedGateCountByNodePath = null,Object? startedAt = freezed,Object? closedAt = freezed,Object? isMolecule = null,Object? moleculeBeads = null,Object? moleculeDependencies = null,}) {
   return _then(_SessionProjection(
 workBeadId: null == workBeadId ? _self.workBeadId : workBeadId // ignore: cast_nullable_to_non_nullable
 as String,sessionId: freezed == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
@@ -537,7 +654,9 @@ as bool,pgid: freezed == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_no
 as int?,token: freezed == token ? _self.token : token // ignore: cast_nullable_to_non_nullable
 as String?,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
 as int?,cursor: null == cursor ? _self._cursor : cursor // ignore: cast_nullable_to_non_nullable
-as CircuitCursor,results: null == results ? _self._results : results // ignore: cast_nullable_to_non_nullable
+as CircuitCursor,trajCursor: freezed == trajCursor ? _self._trajCursor : trajCursor // ignore: cast_nullable_to_non_nullable
+as CircuitCursor?,trajStepViews: null == trajStepViews ? _self._trajStepViews : trajStepViews // ignore: cast_nullable_to_non_nullable
+as Map<String, StepCursorView>,results: null == results ? _self._results : results // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<String, String>>,openGateNodes: null == openGateNodes ? _self._openGateNodes : openGateNodes // ignore: cast_nullable_to_non_nullable
 as Set<String>,closedGateCountByNodePath: null == closedGateCountByNodePath ? _self._closedGateCountByNodePath : closedGateCountByNodePath // ignore: cast_nullable_to_non_nullable
 as Map<String, int>,startedAt: freezed == startedAt ? _self.startedAt : startedAt // ignore: cast_nullable_to_non_nullable
