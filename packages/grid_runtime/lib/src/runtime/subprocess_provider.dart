@@ -272,6 +272,13 @@ class SubprocessProvider implements RuntimeProvider {
 
     session.pid = spawned.pid;
     session.bind(spawned);
+    if (config.lifecycle == Lifecycle.oneTurn) {
+      // CLOSE argv-only one-turn stdin before the next asynchronous operation.
+      // An open, never-written pipe means input is still pending: `codex exec`
+      // waits for EOF before opening its thread, leaving the session hung with
+      // no transcript or terminal event when the close is delayed.
+      await session.closeInput();
+    }
     session.pgid = await _groups.resolvePgid(spawned.pid);
     session.startedAt = DateTime.now();
     session.lastActivity = session.startedAt;
@@ -293,9 +300,6 @@ class SubprocessProvider implements RuntimeProvider {
         ? session.tapStdout(spawned.stdout)
         : spawned.stdout;
     session.attachTranscript(stdout, spawned.stderr);
-    if (config.lifecycle == Lifecycle.oneTurn) {
-      await session.closeInput();
-    }
 
     final effectiveDeadline = config.deadline ?? _agentDeadline;
 

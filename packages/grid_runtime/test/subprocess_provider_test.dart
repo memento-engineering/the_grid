@@ -120,6 +120,23 @@ class AliveGroupController implements ProcessGroupController {
   int currentGroupId() => 99999;
 }
 
+class _GatedPgidGroupController extends AliveGroupController {
+  _GatedPgidGroupController({this.failure});
+
+  final Object? failure;
+  final Completer<void> entered = Completer<void>();
+  final Completer<void> release = Completer<void>();
+
+  @override
+  Future<int?> resolvePgid(int pid) async {
+    entered.complete();
+    await release.future;
+    final failure = this.failure;
+    if (failure != null) throw failure;
+    return pid;
+  }
+}
+
 void main() {
   group('SubprocessProvider — env policy (fake spawner)', () {
     test('child env contains the token allowlist and NOT GC_DOLT_PASSWORD; '
@@ -445,6 +462,39 @@ void main() {
         expect(spawner._lastSpawned!.closeInputCount, 1);
       },
     );
+
+    test(
+      'one-turn stdin closes before pgid resolution and survives resolver failure',
+      () async {
+        final failure = StateError('pgid resolution failed');
+        final groups = _GatedPgidGroupController(failure: failure);
+        final spawner = FakeSpawner();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: groups,
+          parentEnvironment: const {},
+          agentDeadline: null,
+        );
+        addTearDown(provider.dispose);
+
+        final starting = provider.start(
+          'one-turn-pgid-failure',
+          const RuntimeConfig(
+            workDir: '/tmp',
+            command: 'probe',
+            lifecycle: Lifecycle.oneTurn,
+          ),
+        );
+
+        await groups.entered.future;
+        expect(groups.release.isCompleted, isFalse);
+        expect(spawner._lastSpawned!.closeInputCount, 1);
+
+        groups.release.complete();
+        await expectLater(starting, throwsA(same(failure)));
+        expect(spawner._lastSpawned!.closeInputCount, 1);
+      },
+    );
   });
 
   group('SubprocessProvider — whole-tree kill (REAL stub, never claude)', () {
@@ -628,6 +678,70 @@ echo "stdin-eof"
       await outSub.cancel();
       await provider.dispose();
     }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test(
+      'a real one-turn stdin reader gets EOF before delayed pgid resolution',
+      () async {
+        final tmp = await Directory.systemTemp.createTemp(
+          'grid_runtime_stdin_pgid_',
+        );
+        addTearDown(() => tmp.delete(recursive: true));
+        final marker = File('${tmp.path}/stdin-eof');
+        final stub = File('${tmp.path}/stub.sh')
+          ..writeAsStringSync('''
+#!/bin/sh
+cat > /dev/null
+echo "stdin-eof" > "${marker.path}"
+''');
+        await Process.run('chmod', ['+x', stub.path]);
+
+        final groups = _GatedPgidGroupController();
+        final provider = SubprocessProvider(
+          groupController: groups,
+          parentEnvironment: const {'PATH': '/usr/bin:/bin'},
+          livenessPollPeriod: const Duration(milliseconds: 25),
+          agentDeadline: null,
+        );
+        final starting = provider.start(
+          'stdin-reader-before-pgid',
+          RuntimeConfig(
+            workDir: tmp.path,
+            command: '/bin/sh',
+            args: [stub.path],
+            lifecycle: Lifecycle.oneTurn,
+          ),
+        );
+        addTearDown(() async {
+          if (!groups.release.isCompleted) groups.release.complete();
+          try {
+            await starting;
+          } on Object {
+            // The test assertion reports the start failure; teardown still
+            // releases every owned controller.
+          }
+          await provider.dispose();
+        });
+
+        await groups.entered.future.timeout(const Duration(seconds: 2));
+
+        Future<void> waitForCompletionMarker() async {
+          while (!marker.existsSync()) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+        }
+
+        await expectLater(
+          waitForCompletionMarker().timeout(const Duration(seconds: 2)),
+          completes,
+        );
+        expect(marker.readAsStringSync().trim(), 'stdin-eof');
+        expect(groups.release.isCompleted, isFalse);
+
+        groups.release.complete();
+        await starting.timeout(const Duration(seconds: 2));
+      },
+      timeout: const Timeout(Duration(seconds: 10)),
+    );
 
     test(
       '(f real) THE WATCHDOG: an agent that outlives its deadline is KILLED and '
