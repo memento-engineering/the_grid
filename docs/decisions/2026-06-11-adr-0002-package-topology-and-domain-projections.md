@@ -1,0 +1,141 @@
+---
+status: accepted
+date: 2026-06-11
+decision-makers: ["nico"]
+consulted: []
+informed: []
+register:
+  spec: 1
+  slug: adr-0002-package-topology-and-domain-projections
+  surfaces:
+    - "packages/**"
+  obsoletes: []
+  updates: []
+  obsoleted-by: null
+  updated-by: []
+  bead: null
+  legacy-id: "ADR-0002"
+---
+# ADR-0002 — Package topology and reactive domain projections
+
+**Status:** Accepted 2026-06-11 (Nico)
+**Date:** 2026-06-11
+**Deciders:** Nico Spencer
+**Context:** ADR-0001 fixed the layering and substrate. This ADR fixes the package map (names set by Nico, 2026-06-11) and the requirement that **every grid domain gets reactive, typed views** — not just raw beads.
+
+---
+
+## Decision 1 — Package topology
+
+| Package | Role | Milestone | Notes |
+|---|---|---|---|
+| **`grid_controller`** | The SDK. Domain models (freezed), services (`BdCliService`, `DoltQueryService`, dirty-signal sources), `BeadsRepository`, interactors, selectors/projections, Riverpod providers. | M1 | Pure Dart, no Flutter. Everything else depends on it. |
+| **`grid_cli`** | Management CLI (`grid watch`, later `grid status`, `grid doctor`, …). | M1 | `args`-based; runs under `--enable-vm-service`. |
+| **`grid_exploration`** | The lenny plugin: `GridControllerPlugin` + the minimal pure-Dart host registering the three `ext.exploration.*` extensions. | M1 | Depends on lenny's `exploration_contract` (M0 extraction) + `grid_controller`. |
+| **`grid_devtools`** | DevTools extension for the grid: events timeline, ready queue, graph/domain inspectors. | Scaffold in M1 (timeline panel); richer panels M2+ | Flutter web (`devtools_extensions`) — the only Flutter-dependent package in the workspace. Talks to the process exclusively over the exploration protocol. |
+| **`grid_reconciler`** | M2: the convergence state machine (`DesiredState`, transitions, actions) — see ADR-0003. | M2 | Pure Dart; consumes `grid_controller` events/snapshots, actuates via its mutation services. |
+| **`grid_runtime`** | M3: runtime providers (tmux, subprocess) — see ADR-0004. | M3 | Pure Dart; `TmuxProvider` is built on the `tmux` package. |
+| **`tmux`** | Standalone, general-purpose tmux client for Dart: command layer (Futures) + reactive layer (Streams) — see ADR-0004 Decision 2. | M3 | **Zero grid dependencies**; pub.dev candidate. |
+
+Dependency direction (longevity outward-in, per predictable-flutter):
+
+```
+grid_cli ──┐
+grid_exploration ──┤──► grid_controller ◄── grid_reconciler ◄── grid_runtime ──► tmux
+grid_devtools ─────┘         (sdk)                                (actions spawn sessions)
+```
+
+Internal layout of `grid_controller` follows the skill: `lib/src/{models,services,repositories,interactors,selectors,providers}`, public API through the barrel only.
+
+Not packages: the porting skill (`skills/`), docs, fixtures.
+
+**Amended 2026-06-25 (A40, ratified Nico 2026-06-24 — the M4 tree-engine package):** add an **eighth** package row:
+
+| Package | Role | Milestone | Notes |
+|---|---|---|---|
+| **`grid_engine`** | M4: the `genesis_tree` tree engine — `build(observed)` reconciles the running system (`Grid` → `RigScope` → `Rig` → `WorkList` → `WorkBead` → effect Seed); the kernel + the compiled `DefaultExtension` capabilities. See ADR-0007. | M4 (P0) | Pure Dart. **Acyclic: `grid_engine → {grid_controller, grid_runtime}`** (NOT `grid_reconciler` — the M2 gate machinery is P3-fenced). Consumes `genesis_tree` as a dev-time path dep (genesis ADR-0001 D8). Its minimal import surface *is* the enforcement of derailment-invariant 1 (it cannot import the detection pipeline). |
+
+Dependency direction gains: `grid_engine ──► grid_controller` (snapshot/ownership seams) and `grid_engine ──► grid_runtime` (subprocess/git/chokepoint transport); `grid_cli ──► grid_engine` (the kernel composition / `composeRun`). The M2 `grid_reconciler` convergence state machine is retained intact (A41 excludes `type=convergence` at the engine's mount boundary, so the two never collide).
+
+**Amended 2026-06-27 (ADR-0008 Decision 2, ratified):** the authoring layer adds a **public SDK package `the_grid`** (the consumers' pubspec entry; **`grid_engine` becomes private** — never imported by consumers) and **`*_grid_assets`** packs (the gc-pack-protocol home: `station_grid_assets` = baseline + dogfood, replaces the placeholder `the_rig`; `butane_grid_assets`; `zero_conf_grid_assets`). The engine types `Grid` / `RigScope` / `Rig` rename to **`Station` / `SubstationScope` / `Substation`** (ADR-0008 D1; `Grid` repurposed for the federation; **applied in code 2026-06-27**, whole-repo, `melos analyze` + offline suite green — engine machinery also moved to `Station*`, the_grid's lowercase ownership vocab to `substation`, CLI flags to `--substation`/`--state-substation`; the persisted gc `metadata.rig` key + convergence byte-port schema preserved). The package-name renames (public `the_grid` SDK, private `grid_engine`, `*_grid_assets`) are **not yet applied** — a later task. Federation + observability packages are **ADR-0011 / ADR-0012** (Nico, 2026-06-27, appended after ADR-0007 §5's reserved P2/0009 + P3/0010).
+
+**Amended 2026-07-05 (stamp; records the ratified 2026-07-03 alignment unit — `SCRATCH-grid-alignment` D-A5/D-A6/D-A7 — and the 2026-07-05 GLOSSARY-review rulings R9/R13):** the post-alignment topology, superseding this Decision's rows where named:
+
+- **`grid_controller` → `beads_dart`** (D-A6/D-A7, rename applied 2026-07-03): the framework-free beads client — Streams for observations, Futures for acts, hand-coded value types (no freezed — the 2026-07-04 boundary ruling), pinned against bd 1.0.5, `publish_to: none` until the_grid publishes. Riverpod is gone with the rename (the Decision 2 note below already flipped the reactive primitive). Beads-native symbol renames (`GridControllerRuntime` → …) tracked as tg-cxw.
+- **`grid_reconciler` DELETED** (D-A5, approved 2026-07-03; executed RS-8/tg-cyv): the M2 convergence port's remaining live duties moved into the engine's exclusion rules + codec; the package row above is historical.
+- **`grid_federation` never shipped as a package** — dissolved into **`power_station/packages/federated_grid_assets`** (tg-457/tg-043): broker seam, claim/lease family, ACP envelope, serve/lease services. The engine holds contracts only (D-B5 — no bus impl in the engine, ever).
+- **The public SDK package name is `grid_sdk`** (R9, Nico 2026-07-05, superseding the 2026-06-27 amendment's `the_grid` name — the fallback won): "the grid" remains the framework as a *concept*; `grid_sdk` is the framework as concrete code. The physical split (public `grid_sdk` over private `grid_engine`) remains a later task.
+- **Empty stub directories removed** (R13, 2026-07-05): `packages/{grid_controller,grid_reconciler,grid_federation}` husks deleted from disk (untracked `.iml` remnants only; the workspace pubspec had already dropped them).
+- The live workspace as of this stamp: `beads_dart · grid_cli · grid_exploration · grid_devtools · grid_runtime · grid_engine` (+ external consumers `space_station`, `power_station/packages/*_grid_assets`).
+
+**Supersession stamp 2026-08-08 (D-BD1, ratified Nico):** the historical
+`beads_dart` clause “pinned against bd 1.0.5” is superseded. `beads_dart`
+supports `bd >= 1.0.5` through two compatibility rails: scheduled drift CI
+against `gastownhall/beads@main`, and release gating against the declared
+floor plus GitHub's latest published non-prerelease bd tag. See
+`docs/SCRATCH-bd-repin.md` §3 and `packages/beads_dart/bd_compatibility.yaml`.
+
+This ratified stamp fulfills and supersedes only ADR-0000 A54’s overlapping
+`Affects (if promoted)` note for the ADR-0002 `beads_dart` row. A54’s
+separate ADR-0001 Decision 4 shape-probe mechanism remains Pending and is
+unchanged by D-BD1 or this stamp.
+
+**Amended 2026-07-23 (ADR-0012 Decision 2, ratified 2026-07-18):** add the diagnostics wire-contract package:
+
+| Package | Role | Milestone | Notes |
+|---|---|---|---|
+| **`genesis_foundation`** | The dependency-free versioned diagnostics projection wire contract and shared `Diagnosticable.debugFillProperties(DiagnosticsBuilder)` substrate. | P2 observability | Shared by engine-side projectors/reporters and Flutter/headless consumers; it sits below `genesis_tree`. |
+| **`grid_diagnostics_contract`** | The grid-local resident-station lock and bearer-subprotocol contract. | P2 observability | Owns `.grid/station.lock`, `StationLockRecord`, and the `grid.tree.bearer.` prefix across the CLI/DevTools boundary. |
+
+## Decision 2 — Reactive domain projections, grounded in Gas City's primitive model
+
+*(Rewritten 2026-06-11 to ground projections in the documented concept model — [docs.gascityhall.com/concepts/primitives](https://docs.gascityhall.com/concepts/primitives) — rather than generic bead filtering.)*
+
+Gas City's docs define **five primitives** (Session, Beads Store, Event Bus, Config, Prompt Templates) and **four derived mechanisms** (Messaging, Formulas & Molecules, Dispatch/Sling, Health Patrol) — and every derived mechanism is documented as a *composition over beads*: "everything is a bead", differentiated by type, labels, relationships, and metadata. That composition rule is exactly what a projection encodes. the_grid's domain model is therefore not invented here — it is the primitive model, made typed and reactive.
+
+**Primitives → the_grid counterparts:**
+
+| Gas City primitive | the_grid counterpart |
+|---|---|
+| Beads Store ("the universal persistence substrate") | `GraphSnapshot` + `BeadsRepository` — the substrate everything projects from |
+| Event Bus ("reactive watching instead of polling") | the `GraphEvent` stream + domain-event Transformers — we make the beads layer itself reactive, which gc's bus (gc-emitted events only) does not |
+| Session ("a live process… work persists in the Beads Store, not the process") | `AgentSession` projection (M1); actuation in `grid_runtime` (M3) |
+| Config ("TOML with progressive activation") | M4 |
+| Prompt Templates ("the entire behavioral specification for a session") | M3/M4 — rendered at spawn by the runtime |
+
+**Derived mechanisms → projections.** Each projection is a freezed value type decoded from `(bead, metadata, labels, dependencies)` plus *named derived views* encoding that mechanism's documented composition rule:
+
+| Domain (bead type) | Value type | Composition rule (from the docs) | Derived reactive views |
+|---|---|---|---|
+| `agent`, `role`, `rig` | `Agent`, `Role`, `Rig` | Infrastructure beads; labels drive pool dispatch and rig scoping; issue prefix partitions rigs in one store | `agentsProvider`, `agentProvider(id)`, `rigsProvider`, `agentsInPoolProvider(label)`, `agentsForRigProvider(rig)` |
+| `session` | `AgentSession` | "Stable name even as the underlying process restarts"; disposable container, durable identity | `sessionsProvider`, `sessionsForAgentProvider(agent)`, `sessionsByStateProvider` |
+| `message` | `Message` | Mail = "bead with `type: message`"; "closing = archiving"; open + addressed = unread | `inboxProvider(agent)`, `threadProvider(id)` (via `replies-to` edges) |
+| `molecule` + `step` | `Molecule`, `Step` | "A formula instantiated at runtime: one root bead plus child step beads"; `needs` declares step deps; wisp = ephemeral molecule, TTL'd | `moleculesProvider`, `moleculeProgressProvider(id)` (closed/total steps), `runnableStepsProvider(id)` (needs satisfied), `isWisp` on the value type |
+| `convoy` | `Convoy` | "Container bead that groups related work as one tracked batch" | `convoysProvider`, `convoyProgressProvider(id)` (member rollup) |
+| `convergence` | `Convergence` | ADR-0003's metadata schema (`convergence.state`, iteration, gate config…) | `convergencesProvider`, `convergencesByStateProvider(state)`, `activeWispProvider(id)` |
+| `gate`, `merge-request`, `spec`, `event` | `Gate`, `MergeRequest`, `Spec`, `GridEventRecord` | the_grid `types.custom`; composition rules pinned from fixtures | list + per-id families; derived views added with their first consumer |
+
+**Amended 2026-06-24 (ADR-0007 §6.6, ratified — the M4 tree-engine pivot):** the projection table's *reactive views* above are provided as **`StateNotifier` services** (via `InheritedSeed`, observed by `StatefulSeed`s), **not** Riverpod providers — the table's *shape and composition rules are unchanged*, only the reactive primitive flips. (Decision 1's `grid_reconciler` convergence state machine is **retained intact**, not reversed.)
+
+**Metadata transformations are first-class.** Raw bead metadata is a JSON blob; each projection owns a **typed metadata codec for its namespace** (e.g. `convergence.*` per ADR-0003), and *Transformers* (predictable-flutter's stream-reshaping role) lift generic `GraphEvent`s into domain events — `SessionStateChanged`, `MessageReceived`, `MoleculeStepCompleted`, `ConvergenceIterated` — by running the projection over the before/after beads. Unknown metadata keys are preserved in a raw map (projections never lose data); decode failures surface as typed `ProjectionError` values, never silent drops.
+
+Consequences:
+- The snapshot composition MUST include the metadata column and infrastructure beads (SQL reads do naturally; the CLI fallback uses `bd export --include-infra` — ADR-0001 Decision 4 amendment).
+- Mapping fidelity comes from **fixtures captured from the live city per domain** (real agent/session/rig/message/molecule beads), checked in with the gc version recorded — the same pinning discipline as the bd codec fixtures. Health Patrol's composition (probe → threshold → restart) is a *consumer* of these projections and lands with M3.
+- M1 ships the mechanism plus the proving trio **sessions, messages, molecules/steps** *(promoted from ADR-0000 A2, 2026-06-11 — the live city holds zero agent/rig/role/convoy beads; in current gc those are config/registry-derived, so there is nothing to pin their mappings against yet)*. `agent`/`role`/`rig`/`convoy` projections remain targets in the table above but wait on an upstream-representation investigation; remaining domains land with their first consumer.
+
+**Track A implementation record — the decode boundary & typing discipline** *(promoted from ADR-0000 A17, 2026-06-14)*: the projection codecs adopt a **total-decode** boundary that never throws past it — per-field `FieldReading {value | absent | malformed}` + a reading-level total surface (e.g. `ConvergenceStateReading {notAdopted | known | unrecognized}`, where absent **and** empty-string both decode to `notAdopted` = gc's unstarted state), with the raw input map held verbatim so `encode(decode(m)) == m` for ANY map. Closed Dart enums are used where the upstream (gc) **validates and errors** on unknowns; **open extension-types-over-String** where gc **passes the value through unvalidated** (a value the_grid doesn't yet know is preserved, not rejected). Go-scalar parity (durations, ints) is byte-faithful to the upstream's encoders (pinned to go1.26 output; validated against real gc bytes — ADR-0000 A29). **Actions are data:** a sealed `ReconcilerAction` union carries semantic fields + derived ordered-write getters (the actuator executes, never re-decides); `ReducerEvent` is the `reduce()` input. *Cross-reference (genesis, ADR-0000 A30):* this total-decode + structured-reject discipline independently matches genesis's `staleUnmounted`/structured-error stance ("never a silent drop") — confirming the shared memento canon — but it lives at a **different layer** (a persistence-substrate domain codec, not a mounted-tree wire codec), so `genesis_taxonomy`/`genesis_dialogue` are **not** adopted here.
+
+## Decision 3 — grid_devtools rides the exploration protocol only
+
+`grid_devtools` never links `grid_controller` for live data — it attaches to the process VM service and consumes the same `ext.exploration.*` surface as lenny's tooling (handshake → observation → tools). This keeps one protocol (ADR-0001 Decision 6) and makes the panels work against any future grid process (reconciler daemon, runtime supervisor) for free.
+
+**Amended 2026-08-01 (`tg-vg5k`), preserving the 2026-07-25 Nico ruling (`tg-0ds.5`):** the “exploration protocol only” clause retains one live-data exception: `grid_devtools` may consume `genesis_foundation` `TreeSnapshot`s from the bearer-authenticated unified `StationControl` HTTP/WS door. It still never links `grid_controller` for live data; debugger operations remain on `ext.exploration.*`; lock discovery continues through `grid_diagnostics_contract`.
+
+---
+
+## Alternatives considered
+
+- `beads_client`/`beads_controller` split (original draft) — superseded by Nico's naming; the substrate services live inside `grid_controller` as its service layer. Extract a riverpod-free `grid_beads` later only if a non-Riverpod consumer actually appears.
+- Raw bead access at call sites (no projections) — rejected: every consumer re-implements metadata decoding; domain semantics drift.
+- Generic `Map`-based domain views — rejected: loses freezed pattern-matching and compiler exhaustiveness, the house style (ADR-0001 Decision 1).
