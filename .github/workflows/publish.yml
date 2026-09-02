@@ -88,9 +88,39 @@ jobs:
     needs: [parse, bd-compatibility]
     # bd-compatibility SKIPS for every package except beads_dart; a skipped
     # need must not skip the publish.
-    if: ${{ !cancelled() && needs.parse.result == 'success' && (needs.bd-compatibility.result == 'success' || needs.bd-compatibility.result == 'skipped') }}
+    # grid_exploration publishes through its own job below (it needs a built
+    # DevTools bundle the reusable workflow cannot produce).
+    if: ${{ !cancelled() && needs.parse.result == 'success' && needs.parse.outputs.package != 'grid_exploration' && (needs.bd-compatibility.result == 'success' || needs.bd-compatibility.result == 'skipped') }}
     permissions:
       id-token: write # pub.dev OIDC trusted publishing
     uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
     with:
       working-directory: packages/${{ needs.parse.outputs.package }}
+
+  publish-grid-exploration:
+    # grid_exploration ships the `grid` DevTools panel under
+    # extension/devtools/build/ — gitignored, let into the archive by the
+    # package's .pubignore. pub.dev refuses the package when that directory is
+    # absent ("It looks like you are making a devtools extension!"), which is
+    # why every grid_exploration release before 0.3.0-rc.4 was hand-published
+    # and the only tag-push run (v0.1.1) failed. This job builds the bundle
+    # with tool/build_devtools_extension.sh before `dart pub publish`; the OIDC
+    # trusted-publishing exchange happens inside pub itself under id-token.
+    needs: parse
+    if: needs.parse.outputs.package == 'grid_exploration'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # pub.dev OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Build the DevTools bundle into grid_exploration
+        run: tool/build_devtools_extension.sh
+      - name: Publish grid_exploration
+        working-directory: packages/grid_exploration
+        run: |
+          test -s extension/devtools/build/index.html
+          dart pub get
+          dart pub publish --force
