@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-12
-decision-makers: ["nico"]
+decision-makers: ["agent"]
 consulted: []
 informed: []
 register:
