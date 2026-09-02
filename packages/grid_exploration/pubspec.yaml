@@ -1,7 +1,7 @@
 name: grid_exploration
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.3.0-rc.3
+version: 0.3.0-rc.4
 description: >-
   Exploration-protocol host for the_grid — registers lenny's ext.leonard.*
   wire protocol as Dart VM-service extensions over the controller runtime.
@@ -13,7 +13,7 @@ environment:
 
 dependencies:
   beads_dart: ^0.2.0-rc.4
-  leonard_contract: ^0.2.0
+  leonard_contract: ^0.2.2
   meta: ^1.16.0
 
 dev_dependencies:

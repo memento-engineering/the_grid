@@ -1,3 +1,15 @@
+## 0.2.0-rc.8
+
+- Breaking: none new in this candidate — it continues the 0.2.0 candidate
+  line; `grid_engine 0.3.0-rc.10` and `grid_sdk 0.3.0-rc.8` were published
+  against these fixes.
+- Graph applies are serialized within each store-scoped writer so admitted
+  pours never overlap, and a failed pour drains without poisoning the queue (#256).
+- One-turn spawns close argv-only stdin immediately after binding, before
+  process-group resolution, so a slow or failing PGID lookup cannot leave a
+  stdin reader waiting forever (#253); a raced stop whose stdin close throws
+  still terminates, releases, and cleans the registry (#255).
+
 ## 0.2.0-rc.7
 
 - Supervised process sessions: `RuntimeProvider` gains `write(name, bytes)` and `interactionOutput(name)`, so a long-lived process keeps stdin open and exposes a raw byte tap. Only long-lived stdout is routed through that tap — one-turn transcripts no longer accumulate unread chunks (#246).

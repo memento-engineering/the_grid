@@ -29,8 +29,6 @@ workspace:
 # leonard_contract 0.2.1 has not yet widened its genesis_perception constraint.
 # Perception 0.3.0 only adds the optional inherited-dependency aspect and is the
 # companion release required by genesis_tree 0.3.0.
-dependency_overrides:
-  genesis_perception: ^0.3.0
 
 dev_dependencies:
   melos: ^7.7.0

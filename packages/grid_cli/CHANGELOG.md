@@ -1,3 +1,7 @@
+## 0.5.0-rc.10
+
+- Breaking: requires `grid_exploration ^0.3.0-rc.4` (which requires `leonard_contract ^0.2.2` on genesis 0.3.0). Migration: none beyond the constraint. Fixes rc.9, which did not resolve from pub.dev at all: it pinned `genesis_tree ^0.3.0` while `grid_exploration` rc.3 still reached genesis_tree 0.2 through `leonard_contract 0.2.1`, so `dart pub global activate grid_cli 0.5.0-rc.9` failed version solving. The `DevModeHost` import (#249) now also matches the hosted grid_exploration.
+
 ## 0.5.0-rc.9
 
 - Breaking: adopts genesis_tree 0.3.0, grid_engine 0.3.0-rc.10 and grid_sdk 0.3.0-rc.8 (#260). Migration: bump `genesis_tree` to `^0.3.0`.

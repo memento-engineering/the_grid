@@ -1,8 +1,7 @@
-## Unreleased
+## 0.3.0-rc.4
 
-- Deprecated: `DevModeSeat` is renamed to `DevModeHost`.
-- Compatibility: the deprecated `DevModeSeat` typedef remains throughout 0.3.x
-  and will be removed in 0.4.0.
+- Breaking: requires `leonard_contract ^0.2.2` (genesis_perception 0.3.0 / genesis_tree 0.3.0). Migration: consumers on genesis_tree 0.2 stay on rc.3; consumers on 0.3 bump `genesis_tree` to `^0.3.0`. This is the release that lets grid_cli resolve from pub.dev again (rc.9 pinned genesis_tree 0.3 while this package still reached genesis_tree 0.2 through leonard_contract 0.2.1).
+- Deprecated: `DevModeSeat` is renamed to `DevModeHost` (#249). The deprecated `DevModeSeat` typedef remains throughout 0.3.x and will be removed in 0.4.0.
 
 ## 0.3.0-rc.3
 
