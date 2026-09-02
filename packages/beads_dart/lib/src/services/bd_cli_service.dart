@@ -76,15 +76,25 @@ class BdCliService {
     return beads;
   }
 
-  /// Reads one explicit type scope, optionally narrowed to [status] and the
-  /// conjunctive metadata equality filters in [metadataFields].
+  /// Reads one scope — an explicit [type], an [externalRef], or both —
+  /// optionally narrowed to [status] and to the conjunctive metadata equality
+  /// filters in [metadataFields], or widened past bd's open-only default by
+  /// [includeClosed].
   Future<({List<Bead> beads, List<BeadDependency> dependencies})> listScope({
-    required IssueType type,
+    IssueType? type,
     BeadStatus? status,
     Map<String, String> metadataFields = const {},
+    String? externalRef,
+    bool includeClosed = false,
   }) async {
     final env = await _runEnvelope(
-      listScopeArgs(type: type, status: status, metadataFields: metadataFields),
+      listScopeArgs(
+        type: type,
+        status: status,
+        metadataFields: metadataFields,
+        externalRef: externalRef,
+        includeClosed: includeClosed,
+      ),
     );
     return _parseIssueList(env.dataList);
   }
@@ -148,13 +158,35 @@ class BdCliService {
   // MUTATIONS — bd CLI only, never SQL; every one carries --actor grid-controller.
   // ---------------------------------------------------------------------------
 
-  /// `bd create --title … [--type …] [--priority …] [--description …]` —
-  /// creates one bead and returns the created [Bead]'s id from the envelope.
+  /// `bd create --title … [--type …] [--priority …] [--description …]
+  /// [--defer …] [--external-ref …]` — creates one bead and returns the
+  /// created [Bead]'s id from the envelope.
+  ///
+  /// [defer] hides the bead from `bd ready` until that calendar date.
+  /// [externalRef] stamps the foreign identity (`gh-9`, a Linear URL) that
+  /// [listScope]'s `externalRef` filter later reads back.
+  ///
+  /// [setMetadata] is written by an **unconditional follow-up [update]** —
+  /// one `bd create`, then one `bd update <id> --set-metadata k=v …` — never
+  /// by `bd create --metadata <json>`, whose whole-object semantics replace
+  /// keys other writers own on the same bead. There is no capability probe
+  /// and no second code path: the sequence is identical on every bd from the
+  /// 1.0.5 floor up, at the cost of one extra spawn per metadata-bearing
+  /// create (`the_grid#bd-create-metadata-rides-a-follow-up-update`). An
+  /// empty map writes nothing and spawns nothing.
+  ///
+  /// If the follow-up fails, the created bead survives WITHOUT its metadata
+  /// and the id is not returned — but the foreign identity rides the create
+  /// argv, so a caller's [externalRef] dedupe read still finds it instead of
+  /// double-filing.
   Future<String> create({
     required String title,
     IssueType type = IssueType.task,
     int priority = 2,
     String? description,
+    DateTime? defer,
+    String? externalRef,
+    Map<String, String> setMetadata = const {},
   }) async {
     final env = await _runEnvelope(
       createArgs(
@@ -162,9 +194,15 @@ class BdCliService {
         type: type,
         priority: priority,
         description: description,
+        defer: defer,
+        externalRef: externalRef,
       ),
     );
-    return _idFromEnvelope(env);
+    final id = _idFromEnvelope(env);
+    if (setMetadata.isNotEmpty) {
+      await update(id, mergeMetadata: setMetadata);
+    }
+    return id;
   }
 
   /// `bd update` with any of `--title`, `--status`, `--priority`,
@@ -496,20 +534,40 @@ class BdCliService {
 
   List<String> readyArgs() => const ['ready', '--json', '--limit', '0'];
 
+  /// `bd list [-t <type>] [--status <status>] [--all] [--external-ref <ref>]
+  /// [--metadata-field k=v …] --json --limit 0`.
+  ///
+  /// Refuses LOUDLY rather than emitting a surprising read:
+  /// - neither [type] nor [externalRef]: an unscoped `--limit 0` list returns
+  ///   the whole store, and the caller would diff that against a scoped set;
+  /// - [status] together with [includeClosed]: one narrows to a single status
+  ///   while the other lifts the status filter, so the pair has no single
+  ///   meaning (the [update] `notes`/`appendNotes` exclusion precedent).
   List<String> listScopeArgs({
-    required IssueType type,
+    IssueType? type,
     BeadStatus? status,
     Map<String, String> metadataFields = const {},
-  }) => [
-    'list',
-    '-t',
-    type.wire,
-    if (status != null) ...['--status', status.wire],
-    ...metadataFieldArgs(metadataFields),
-    '--json',
-    '--limit',
-    '0',
-  ];
+    String? externalRef,
+    bool includeClosed = false,
+  }) {
+    if (type == null && externalRef == null) {
+      throw ArgumentError('listScope needs a type or an externalRef scope');
+    }
+    if (status != null && includeClosed) {
+      throw ArgumentError('status and includeClosed are mutually exclusive');
+    }
+    return [
+      'list',
+      if (type != null) ...['-t', type.wire],
+      if (status != null) ...['--status', status.wire],
+      if (includeClosed) '--all',
+      if (externalRef != null) ...['--external-ref', externalRef],
+      ...metadataFieldArgs(metadataFields),
+      '--json',
+      '--limit',
+      '0',
+    ];
+  }
 
   List<String> queryArgs(String expr, {bool includeClosed = false}) => [
     'query',
@@ -533,11 +591,20 @@ class BdCliService {
 
   List<String> showArgs(List<String> ids) => ['show', ...ids, '--json'];
 
+  /// `bd create --json --actor … --title … --type … --priority …`, plus the
+  /// optional `--description`, `--defer` and `--external-ref` flags.
+  ///
+  /// **No metadata flag rides this argv.** bd's `create` carries only the
+  /// whole-object `--metadata <json>` form, which REPLACES the bead's map;
+  /// metadata is written by [create]'s follow-up per-key [update] instead
+  /// (`the_grid#bd-create-metadata-rides-a-follow-up-update`).
   List<String> createArgs({
     required String title,
     required IssueType type,
     required int priority,
     String? description,
+    DateTime? defer,
+    String? externalRef,
   }) => [
     'create',
     '--json',
@@ -551,6 +618,11 @@ class BdCliService {
     if (description != null && description.isNotEmpty) ...[
       '--description',
       description,
+    ],
+    if (defer != null) ...['--defer', _isoDate(defer)],
+    if (externalRef != null && externalRef.isNotEmpty) ...[
+      '--external-ref',
+      externalRef,
     ],
   ];
 
@@ -682,6 +754,16 @@ class BdCliService {
       }
     }
   }
+
+  /// bd's calendar-date form for `--defer`/`--due` (`2026-01-05`).
+  ///
+  /// [value]'s own calendar fields are rendered verbatim — never normalized
+  /// through UTC, which would shift the date by a day either side of midnight
+  /// and defer a bead onto the wrong calendar day.
+  static String _isoDate(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 
   String _contextAt(String value, int offset) {
     final start = (offset - 30).clamp(0, value.length);

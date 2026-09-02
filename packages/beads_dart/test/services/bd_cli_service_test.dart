@@ -189,6 +189,82 @@ void main() {
       );
     });
 
+    test('listScopeArgs filters by external ref and widens to closed', () {
+      final service = BdCliService(FakeBdRunner());
+
+      expect(service.listScopeArgs(externalRef: 'gh-9', includeClosed: true), [
+        'list',
+        '--all',
+        '--external-ref',
+        'gh-9',
+        '--json',
+        '--limit',
+        '0',
+      ]);
+      expect(service.listScopeArgs(type: IssueType.bug, externalRef: 'gh-9'), [
+        'list',
+        '-t',
+        'bug',
+        '--external-ref',
+        'gh-9',
+        '--json',
+        '--limit',
+        '0',
+      ]);
+      expect(
+        service.listScopeArgs(
+          externalRef: 'gh-9',
+          metadataFields: const {'github.repo': 'memento-engineering/the_grid'},
+        ),
+        [
+          'list',
+          '--external-ref',
+          'gh-9',
+          '--metadata-field',
+          'github.repo=memento-engineering/the_grid',
+          '--json',
+          '--limit',
+          '0',
+        ],
+      );
+    });
+
+    test('listScopeArgs refuses an unscoped read and a status/all pair', () {
+      final service = BdCliService(FakeBdRunner());
+
+      expect(service.listScopeArgs, throwsArgumentError);
+      expect(
+        () => service.listScopeArgs(
+          type: IssueType.task,
+          status: BeadStatus.open,
+          includeClosed: true,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('listScope carries the external-ref filter to bd', () async {
+      final runner = FakeBdRunner()
+        ..stubCommand('list', BdReply(stdout: beadListEnvelope(2)));
+      final service = BdCliService(runner);
+
+      final scope = await service.listScope(
+        externalRef: 'gh-9',
+        includeClosed: true,
+      );
+
+      expect(scope.beads, hasLength(2));
+      expect(runner.calls.single, [
+        'list',
+        '--all',
+        '--external-ref',
+        'gh-9',
+        '--json',
+        '--limit',
+        '0',
+      ]);
+    });
+
     test('query() returns more than the default page', () async {
       final runner = FakeBdRunner()
         ..stubCommand('query', BdReply(stdout: beadListEnvelope(120)));
@@ -373,6 +449,86 @@ void main() {
         expect(argv, containsAllInOrder(['--description', 'body']));
       },
     );
+
+    test('create() carries defer and external ref, then writes metadata by one '
+        'follow-up update', () async {
+      final id = await service.create(
+        title: 'Intake gh-9',
+        type: IssueType.bug,
+        priority: 1,
+        defer: DateTime.utc(9999, 12, 31),
+        externalRef: 'gh-9',
+        setMetadata: const {
+          'github.node_id': 'I_kwDO',
+          'github.updated_at': '2026-09-02T00:00:00Z',
+        },
+      );
+
+      expect(id, 'tg-new1');
+      expect(runner.calls, hasLength(2));
+
+      final createArgv = runner.calls.first;
+      expect(createArgv.first, 'create');
+      expectActor(createArgv);
+      expect(createArgv, containsAllInOrder(['--defer', '9999-12-31']));
+      expect(createArgv, containsAllInOrder(['--external-ref', 'gh-9']));
+      expect(createArgv, isNot(contains('--set-metadata')));
+      expect(createArgv, isNot(contains('--metadata')));
+
+      final updateArgv = runner.calls[1];
+      expect(updateArgv.first, 'update');
+      expect(updateArgv[1], 'tg-new1');
+      expectActor(updateArgv);
+      expect(
+        updateArgv,
+        containsAllInOrder(['--set-metadata', 'github.node_id=I_kwDO']),
+      );
+      expect(
+        updateArgv,
+        containsAllInOrder([
+          '--set-metadata',
+          'github.updated_at=2026-09-02T00:00:00Z',
+        ]),
+      );
+      expect(updateArgv, isNot(contains('--metadata')));
+    });
+
+    test('create() without metadata spawns exactly one bd call', () async {
+      await service.create(title: 'Plain');
+
+      expect(runner.calls, hasLength(1));
+      expect(runner.calls.single.first, 'create');
+      expect(runner.calls.single, isNot(contains('--defer')));
+      expect(runner.calls.single, isNot(contains('--external-ref')));
+      expect(runner.calls.single, isNot(contains('--set-metadata')));
+      expect(runner.calls.single, isNot(contains('--metadata')));
+    });
+
+    test('createArgs renders bd calendar dates without a timezone shift', () {
+      List<String> argsFor(DateTime defer) => service.createArgs(
+        title: 't',
+        type: IssueType.task,
+        priority: 2,
+        defer: defer,
+      );
+
+      expect(
+        argsFor(DateTime(2026, 1, 5)),
+        containsAllInOrder(['--defer', '2026-01-05']),
+      );
+      expect(
+        argsFor(DateTime.utc(2026, 1, 5)),
+        containsAllInOrder(['--defer', '2026-01-05']),
+      );
+      expect(
+        argsFor(DateTime(9999, 12, 31)),
+        containsAllInOrder(['--defer', '9999-12-31']),
+      );
+      expect(
+        service.createArgs(title: 't', type: IssueType.task, priority: 2),
+        isNot(contains('--defer')),
+      );
+    });
 
     test('update() stamps actor and only sends provided fields', () async {
       await service.update('tg-7', status: BeadStatus.inProgress, priority: 0);
