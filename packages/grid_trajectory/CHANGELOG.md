@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- `traj committee-report`: a cross-session, read-only report folding
+  verdicts, gates, respec outcomes, and usage into per-lane precision,
+  override rate, respec convergence, and cost (tg-9x80, #259).
+- Shadow-diff scope excludes incomplete sessions (#251).
 ## 0.1.0
 
 First release — the trajectory log substrate (tg-zfek). A leaf package: zero

@@ -1,3 +1,16 @@
+## 0.2.0-rc.5
+
+- Breaking: none new in this candidate — it continues the 0.2.0 candidate
+  line so that main and pub.dev agree again (rc.4 shipped before #237/#256).
+- Workspace endpoint resolution is injectable: `BeadsWorkspace.discover(endpointResolver:)`
+  takes an `EndpointResolver`; `ProxiedServerEndpointResolver` is the default
+  and the gc-era endpoint fossils are gone (#237).
+- `bd_compatibility.yaml` records the owned bd fork's plan-local parent
+  cycle-check patch with a ref-specific fixture capture (#256).
+- Tests pin loud SQL snapshot failures (a persistent SQL failure propagates
+  instead of silently degrading to the CLI read path, #233) and the
+  job-level bd-compatibility CI gate (#230).
+
 ## 0.2.0-rc.4
 
 - Breaking: guarded conditional updates ride a NEGOTIATED capability (#205).
