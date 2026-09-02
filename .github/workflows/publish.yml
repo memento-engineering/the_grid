@@ -124,6 +124,10 @@ jobs:
           channel: stable
       - name: Build the DevTools bundle into grid_exploration
         run: tool/build_devtools_extension.sh
+      # setup-dart performs the pub.dev OIDC token exchange (the reusable
+      # dart-lang publish workflow gets it from here); without it pub falls
+      # back to the browser OAuth prompt and the job hangs forever.
+      - uses: dart-lang/setup-dart@v1
       - name: Publish grid_exploration
         working-directory: packages/grid_exploration
         run: |
