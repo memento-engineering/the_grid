@@ -18,7 +18,13 @@ dart test \
   test/integration/sql_cli_equivalence_test.dart \
   test/integration/wisp_snapshot_test.dart
 corpus_test=test/tool/upstream_protocol_replay_test.dart
-if [[ -f "$corpus_test" ]]; then
+corpus_dir="$upstream_dir/cmd/bd/protocol/testdata/corpus"
+if [[ ! -d "$corpus_dir" ]]; then
+  # The protocol corpus landed upstream after v1.2.2; released tags before it
+  # (the release rail's floor v1.0.5 and latest v1.2.2) carry no corpus. Say so
+  # loudly and pass — the replay is a main-rail check until a tag carries it.
+  echo "CORPUS REPLAY SKIPPED: $corpus_dir is absent at this bd ref" >&2
+elif [[ -f "$corpus_test" ]]; then
   BD_PROTOCOL_ROOT="$upstream_dir/cmd/bd/protocol" dart test "$corpus_test"
 else
   echo 'A2 corpus replay not landed; tg-7ukf owns this test seam.' >&2
