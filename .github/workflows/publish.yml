@@ -80,10 +80,13 @@ jobs:
         run: |
           curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
           dolt version
+      # CGO_ENABLED=1: embedded Dolt (the hermetic `bd init` the suite uses)
+      # refuses a CGO-free binary; upstream's own linux/darwin releases build
+      # with CGO on plus the gms_pure_go tag (.goreleaser.yml).
       - name: Build bd
         run: |
           mkdir -p "${{ runner.temp }}/bin"
-          (cd upstream-beads && CGO_ENABLED=0 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
+          (cd upstream-beads && CGO_ENABLED=1 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
       - name: Run compatibility suite
         run: tool/bd_compatibility/run.sh "${{ github.workspace }}/upstream-beads" "${{ runner.temp }}/bin/bd"
 
