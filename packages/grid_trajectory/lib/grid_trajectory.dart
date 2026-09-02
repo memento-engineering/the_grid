@@ -39,8 +39,12 @@ export 'src/tick/tick_telemetry.dart'; // per-pass telemetry + the fixpoint resu
 export 'src/tick/trajectory_tick.dart'; // the interval loop, fence skip, runToFixpoint
 
 // SECTION: cli — the traj verbs (traj show / traj shadow-diff / traj provision).
+export 'src/cli/committee_report.dart'; // the pure committee-effectiveness fold + its value types
+export 'src/cli/committee_report_render.dart'; // the operator table + the one --json object
+export 'src/cli/committee_report_usage.dart'; // the .usage.json FALLBACK scan (never the primary source)
 export 'src/cli/shadow_accounting.dart'; // per-round append accounting + its disqualification rule
 export 'src/cli/traj_command.dart'; // the `traj` group; runners compose it explicitly
+export 'src/cli/traj_committee_report_command.dart'; // per-lane committee effectiveness over a log window
 export 'src/cli/traj_flags.dart'; // the shared exact-root grid-home flag
 export 'src/cli/traj_gc_command.dart'; // operator reclamation under the gridboot credential
 export 'src/cli/traj_provision_command.dart'; // runbook §4 step 2: database + DDL + scoped user

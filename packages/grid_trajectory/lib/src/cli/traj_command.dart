@@ -8,6 +8,7 @@ library;
 import 'package:args/command_runner.dart';
 
 import 'shadow_accounting.dart';
+import 'traj_committee_report_command.dart';
 import 'traj_gc_command.dart';
 import 'traj_provision_command.dart';
 import 'traj_replay_command.dart';
@@ -24,8 +25,15 @@ class TrajCommand extends Command<int> {
     ShadowCompareFactory? compareFor,
     ShadowAccountingSource? accountingFor,
     ProvisionConnect? connect,
+    UsageFallbackSource? usageFallback,
   }) {
     addSubcommand(TrajShowCommand(open: open));
+    // The forensics REPORT verb: cross-session, read-only, and the one verb
+    // that may also read `.usage.json` files — as a fallback, behind
+    // `--telemetry-root`, never as the primary source.
+    addSubcommand(
+      TrajCommitteeReportCommand(open: open, usageFallback: usageFallback),
+    );
     addSubcommand(
       TrajShadowDiffCommand(
         open: open,
@@ -54,9 +62,9 @@ class TrajCommand extends Command<int> {
 
   @override
   final String description =
-      'Read the trajectory log: per-subject history and the shadow '
-      'comparator; provision it on a fresh grid home; rebuild the fold '
-      '(quiesced) and reclaim the database.';
+      'Read the trajectory log: per-subject history, the committee report, '
+      'and the shadow comparator; provision it on a fresh grid home; rebuild '
+      'the fold (quiesced) and reclaim the database.';
 
   @override
   Future<int> run() async {

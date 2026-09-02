@@ -55,6 +55,19 @@ abstract interface class TrajectoryLogReader {
     int ceiling = completeReadCeiling,
   });
 
+  /// Every row in a TIME/EPOCH window, in `seq` order — the corpus read a
+  /// cross-session report folds (`traj committee-report`), as opposed to the
+  /// per-subject reads above. Filters are optional and AND together.
+  ///
+  /// Like [allRecordsForSubject] this is not a window on ROWS: reaching
+  /// [ceiling] is REPORTED via `SubjectRecords.truncatedAt`, never folded as
+  /// if the stream were whole.
+  Future<SubjectRecords> recordsInWindow({
+    DateTime? since,
+    int? bootEpoch,
+    int ceiling = completeReadCeiling,
+  });
+
   /// Distinct `session_id`s present in the log, oldest first.
   Future<List<String>> sessions({int limit = defaultReadLimit});
 
@@ -205,6 +218,19 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
       'WHERE work_bead_id = :id OR session_id = :id OR attempt_id = :id '
       'ORDER BY seq LIMIT :limit';
 
+  /// The window read's SQL, assembled from the filters actually supplied —
+  /// a bound `NULL` compared with `>=` matches nothing, so an absent filter
+  /// must drop its clause rather than bind null.
+  static String windowSql({required bool since, required bool bootEpoch}) {
+    final where = <String>[
+      if (since) 'occurred_at >= :since',
+      if (bootEpoch) 'boot_epoch = :epoch',
+    ];
+    return 'SELECT * FROM trajectory'
+        '${where.isEmpty ? '' : ' WHERE ${where.join(' AND ')}'}'
+        ' ORDER BY seq LIMIT :limit';
+  }
+
   static const String sessionsSql =
       'SELECT session_id, MIN(seq) AS first_seq FROM trajectory '
       'WHERE session_id IS NOT NULL '
@@ -250,6 +276,30 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
   }
 
   @override
+  Future<SubjectRecords> recordsInWindow({
+    DateTime? since,
+    int? bootEpoch,
+    int ceiling = completeReadCeiling,
+  }) async {
+    final result = await _db.execute(
+      windowSql(since: since != null, bootEpoch: bootEpoch != null),
+      {
+        'limit': ceiling + 1,
+        if (since != null) 'since': sqlInstant(since),
+        if (bootEpoch != null) 'epoch': bootEpoch,
+      },
+    );
+    final rows = [for (final row in result.rows) envelopeFromRow(row)];
+    if (rows.length > ceiling) {
+      return SubjectRecords(
+        records: rows.sublist(0, ceiling),
+        truncatedAt: ceiling,
+      );
+    }
+    return SubjectRecords(records: rows);
+  }
+
+  @override
   Future<List<String>> sessions({int limit = defaultReadLimit}) async {
     final result = await _db.execute(sessionsSql, {'limit': limit});
     return [
@@ -275,6 +325,15 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
   @override
   Future<void> close() => _db.close();
 }
+
+/// A `DATETIME(6)` comparison literal. The appender writes UTC, so a bound
+/// instant is normalised to UTC and stripped of its zone marker rather than
+/// compared against a local-time reading of the column.
+String sqlInstant(DateTime instant) => instant
+    .toUtc()
+    .toIso8601String()
+    .replaceFirst('T', ' ')
+    .replaceFirst('Z', '');
 
 /// Decodes one `assoc()` row — every column a nullable string — into the
 /// typed §1 envelope.
