@@ -365,9 +365,11 @@ final class _ProviderInheritedBranch<T extends Object>
   final Set<Branch> _live = {};
 
   @override
-  void addDependent(Branch branch) {
+  void addDependent(Branch branch, {Object? aspect}) {
+    // Forward first: a plain provider rejects non-null aspects. Mirroring the
+    // branch before that rejection would leave a phantom live dependent.
+    super.addDependent(branch, aspect: aspect);
     _live.add(branch);
-    super.addDependent(branch);
   }
 
   @override
@@ -439,10 +441,12 @@ final class _RegistryBranch extends InheritedBranch<AvailabilityRegistry> {
   _RegistryBranch(_RegistrySeed super.seed);
 
   @override
-  void addDependent(Branch branch) {
+  void addDependent(Branch branch, {Object? aspect}) {
+    // Forward first so a rejected aspect cannot park a pending registration
+    // without a corresponding dependency edge in the substrate.
+    super.addDependent(branch, aspect: aspect);
     final type = value._registering;
     if (type != null) value._addPending(type, branch);
-    super.addDependent(branch);
   }
 
   @override

@@ -19,12 +19,18 @@ workspace:
   - packages/grid_trajectory
 
 # genesis_tree is the M4 engine (ADR-0007). It is now consumed from pub.dev at
-# the `^0.2.0` pin — the genesis ADR-0001 D8 stabilization
+# the `^0.3.0` pin — the genesis ADR-0001 D8 stabilization
 # move (path-dep during dev → published copy). The path override was DROPPED so a
 # per-bead worktree (the_grid-as-substation: .grid/worktrees/<sub>/<bead>, a deep
 # checkout where `../genesis/packages/tree` would not resolve) gets the dep from
 # pub.dev. Add a local path override only when actively developing
 # genesis_tree alongside the_grid.
+
+# leonard_contract 0.2.1 has not yet widened its genesis_perception constraint.
+# Perception 0.3.0 only adds the optional inherited-dependency aspect and is the
+# companion release required by genesis_tree 0.3.0.
+dependency_overrides:
+  genesis_perception: ^0.3.0
 
 dev_dependencies:
   melos: ^7.7.0

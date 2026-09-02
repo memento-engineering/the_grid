@@ -19,7 +19,7 @@ dependencies:
   # The element model the composition Seeds are authored on (re-exported: one
   # import authors a station). The 0.2 wave shares foundation's native
   # diagnostics hook with the engine.
-  genesis_tree: ^0.2.0
+  genesis_tree: ^0.3.0
   # The private element layer this SDK surfaces (ADR-0002 / ADR-0008 D2).
   # Consumers compose `grid_sdk`; they never import `grid_engine` directly.
   grid_engine: ^0.3.0-rc.9

@@ -425,21 +425,21 @@ packages:
     source: hosted
     version: "0.2.0"
   genesis_perception:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
       name: genesis_perception
-      sha256: "71fafcd4db7148635163496ed710360acbe3baee1fc3181624056972f9f32bca"
+      sha256: b8a6e8d55814d2208ac9bdf0d1d82f1c5e9895c17f6d06f4000488508ffe81f5
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.0"
+    version: "0.3.0"
   genesis_tree:
     dependency: transitive
     description:
       name: genesis_tree
-      sha256: e9af052b12c7e7cfc2eec6d54f6013e3416ae3e3b61c22612f91298c3bcc1fc1
+      sha256: "71980ea11cf77a7d266ec51c084cf9d8b82568e0c17c6c3a094a34f46aa835dc"
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.0"
+    version: "0.3.0"
   glob:
     dependency: transitive
     description:
