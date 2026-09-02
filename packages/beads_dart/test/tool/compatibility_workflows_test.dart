@@ -67,8 +67,8 @@ void main() {
     expect(source, contains('rev-parse HEAD'));
     expect(source, contains('subosito/flutter-action@v2'));
     expect(source, contains('actions/setup-go@v5'));
-    expect(source, contains('dolthub/setup-dolt@v1'));
-    expect(source, contains('CGO_ENABLED=0 go build -tags gms_pure_go'));
+    expect(source, contains('releases/latest/download/install.sh | sudo bash'));
+    expect(source, contains('CGO_ENABLED=1 go build -tags gms_pure_go'));
     expect(source, contains('tool/bd_compatibility/run.sh'));
     expect(source, contains("failure() && github.event_name == 'schedule'"));
     expect(source, contains('steps.upstream.outputs.upstream_sha'));

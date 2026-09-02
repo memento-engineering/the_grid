@@ -425,7 +425,7 @@ packages:
     source: hosted
     version: "0.2.0"
   genesis_perception:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: genesis_perception
       sha256: b8a6e8d55814d2208ac9bdf0d1d82f1c5e9895c17f6d06f4000488508ffe81f5
@@ -540,10 +540,10 @@ packages:
     dependency: transitive
     description:
       name: leonard_contract
-      sha256: "6195985d4d92250fafddf1a64c343cfef0152537d7522ef58acbdf24b18a9ed5"
+      sha256: "2e490406e8c1dd10719d6d3c2254ef827fbfd33d1a9c41fb1020ba980af2a516"
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.1"
+    version: "0.2.2"
   lints:
     dependency: transitive
     description:
