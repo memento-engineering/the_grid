@@ -74,9 +74,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ runner.temp }}/beads/go.mod
-      # TODO(beads_dart): dolthub/setup-dolt@v1 no longer resolves — replace
-      # with a maintained install path before the next beads_dart release.
-      - uses: dolthub/setup-dolt@v1
+      # dolthub/setup-dolt@v1 no longer exists (404, 2026-09-02); install
+      # dolt with the release install script instead.
+      - name: Install dolt
+        run: |
+          curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
+          dolt version
       - name: Build bd
         run: |
           mkdir -p "${{ runner.temp }}/bin"
