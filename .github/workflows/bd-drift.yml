@@ -20,22 +20,26 @@ jobs:
         with:
           repository: gastownhall/beads
           ref: main
-          path: ${{ runner.temp }}/beads
+          path: upstream-beads
       - id: upstream
-        run: echo "upstream_sha=$(git -C "${{ runner.temp }}/beads" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: echo "upstream_sha=$(git -C upstream-beads rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ${{ runner.temp }}/beads/go.mod
-      - uses: dolthub/setup-dolt@v1
+          go-version-file: upstream-beads/go.mod
+      # dolthub/setup-dolt@v1 no longer exists (404, 2026-09-02).
+      - name: Install dolt
+        run: |
+          curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
+          dolt version
       - name: Build bd
         run: |
           mkdir -p "${{ runner.temp }}/bin"
-          (cd "${{ runner.temp }}/beads" && CGO_ENABLED=0 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
+          (cd upstream-beads && CGO_ENABLED=1 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
       - name: Run compatibility suite
-        run: tool/bd_compatibility/run.sh "${{ runner.temp }}/beads" "${{ runner.temp }}/bin/bd"
+        run: tool/bd_compatibility/run.sh "${{ github.workspace }}/upstream-beads" "${{ runner.temp }}/bin/bd"
       - name: File drift alarm
         if: ${{ failure() && github.event_name == 'schedule' }}
         env:
