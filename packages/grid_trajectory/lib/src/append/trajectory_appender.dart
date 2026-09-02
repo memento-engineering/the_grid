@@ -433,7 +433,7 @@ class TrajectoryAppender {
         prevEpoch = int.parse(row['boot_epoch']!);
         prevEpochSeq = int.parse(row['epoch_seq']!);
         if (prevEpoch > epoch) {
-          return _haltInTransaction(
+          return await _haltInTransaction(
             'belt: boot_epoch would decrease over seq '
             '($prevEpoch then $epoch) — a higher epoch already committed',
           );
@@ -510,7 +510,7 @@ class TrajectoryAppender {
             final subjectRecordId = _settledSubjectOf(existing);
             final settling = record.settlingForm(subjectRecordId);
             if (settling == null) {
-              return _haltInTransaction(
+              return await _haltInTransaction(
                 'terminal guard: ${envelope.recordType} must settle the '
                 'terminal $subjectRecordId for attempt $subject but declares '
                 'no settling form',
@@ -528,7 +528,7 @@ class TrajectoryAppender {
             // did NOT author. The guard permits a chain, not a second
             // independent terminal, and there is no idem row to yield to —
             // corruption class, named for what it is.
-            return _haltInTransaction(
+            return await _haltInTransaction(
               'terminal guard: attempt $subject is already settled by '
               '${existing.settledBy} (healing $subjectRecordId) and this '
               '${envelope.provenance.wire} ${envelope.recordType} settles '
@@ -538,7 +538,7 @@ class TrajectoryAppender {
           if (existing.provenance == TrajectoryProvenance.reconstructed) {
             final settling = record.settlingForm(existing.recordId);
             if (settling == null) {
-              return _haltInTransaction(
+              return await _haltInTransaction(
                 'terminal guard: ${envelope.recordType} must settle the '
                 'reconstructed terminal ${existing.recordId} for attempt '
                 '$subject but declares no settling form',
@@ -566,7 +566,7 @@ class TrajectoryAppender {
       if (prevSeq != null &&
           (seq <= prevSeq ||
               !_ordered(prevEpoch, prevEpochSeq, epoch, candidateEpochSeq))) {
-        return _haltInTransaction(
+        return await _haltInTransaction(
           'belt: seq $prevSeq ($prevEpoch/$prevEpochSeq) then seq $seq '
           '($epoch/$candidateEpochSeq) — seq order disagrees with '
           '(boot_epoch, epoch_seq) order',
@@ -583,7 +583,7 @@ class TrajectoryAppender {
         if (attemptId == null) {
           // Structurally unreachable: the guard's subject is exactly what
           // makes a record terminal. Fail closed rather than guess a key.
-          return _haltInTransaction(
+          return await _haltInTransaction(
             'terminal guard: ${envelope.recordType} declares isTerminal but '
             'carries no attempt_id — the guard row has no subject',
           );
@@ -621,7 +621,7 @@ class TrajectoryAppender {
             //   * it saw NOTHING ⇒ a PK collision is only reachable if the
             //     single-writer serialization invariant itself broke.
             final seen = preRead;
-            return _haltInTransaction(
+            return await _haltInTransaction(
               seen == null
                   ? 'terminal guard: PK collision on attempt $attemptId after '
                         'a clean resolving pre-read — the serialized '
