@@ -63,15 +63,36 @@ class StationConfig {
 }
 
 /// Adds the shared resident `up` flags; deliberately adds no `--bead`.
+///
+/// [harnessAllowList] decides WHICH harnesses are legal; [defaultHarness]
+/// decides WHICH ONE is ambient — two independent decisions. Omit
+/// [defaultHarness] and `--harness` keeps defaulting to the sorted allow
+/// list's first entry (source-compatible with every existing caller); supply
+/// it and that name is the default whatever the sort order, so a station
+/// arming `{claude, copilot}` boots `copilot` with `claude` still reachable as
+/// `--harness claude`.
+///
+/// Throws [ArgumentError] when [harnessAllowList] is empty, or when
+/// [defaultHarness] is not one of its members: a station that names an
+/// unarmed ambient harness is misconfigured, and the refusal is LOUD at
+/// construction rather than a silent fall back to the alphabetical winner.
 void stationFlags(
   ArgParser parser, {
   required List<String> codedNames,
   required Set<String> harnessAllowList,
+  String? defaultHarness,
 }) {
   if (harnessAllowList.isEmpty) {
     throw ArgumentError.value(harnessAllowList, 'harnessAllowList');
   }
   final harnesses = harnessAllowList.toList()..sort();
+  if (defaultHarness != null && !harnessAllowList.contains(defaultHarness)) {
+    throw ArgumentError.value(
+      defaultHarness,
+      'defaultHarness',
+      'not one of the armed harnesses: ${harnesses.join(', ')}',
+    );
+  }
   parser
     ..addMultiOption(
       'substation',
@@ -104,7 +125,7 @@ void stationFlags(
     )
     ..addOption(
       'harness',
-      defaultsTo: harnesses.first,
+      defaultsTo: defaultHarness ?? harnesses.first,
       allowed: harnesses,
       help: 'Ambient agent harness.',
     )
