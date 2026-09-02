@@ -1,10 +1,14 @@
-## Unreleased
+## 0.2.0-rc.6
 
+- Added intake-safe create and list options: `create` takes `defer`,
+  `externalRef` and `setMetadata`, and `listScope` reads one scope by `type`,
+  `externalRef`, or both, with `includeClosed`. Metadata rides an unconditional
+  follow-up `update` per key, because bd has no `create --set-metadata` on any
+  supported version; the create argv still carries the external reference, so a
+  caller's dedupe read finds the bead even if the metadata write fails.
 - bd 1.3.0-rc.1 rehearsal — fixture set, hermetic guard, day-one window
   v1.3.0, drift audit receipts. No store, binary, or fleet component moved:
-  per D-BD1 the release rail's first real gate waits on the published v1.3.0
-  tag (`docs/adr/ADR-0002-package-topology-and-domain-projections.md`,
-  Supersession stamp 2026-08-08).
+  the release rail's first real gate waits on the published v1.3.0 tag.
 - New fixture set `fixtures/upstream/2026-09-02-bd-1.3.0-rc.1/` (ref
   `v1.3.0-rc.1`, SHA `9c6a69ec12350959ec8c495c74eeb02902d629b6`); every delta
   versus `2026-08-08-bd-main` is pinned by name in
@@ -15,10 +19,10 @@
   MIXED shapes. `metadataEntryEquals`/`metadataScalarText` normalise both, and
   `CliBeadProbeReader.openBeads` uses them. bd's own `--metadata-field` filter
   and the SQL leg already agreed (`JSON_UNQUOTE` renders a scalar as its text).
-- Fix: `BdCliService.deleteArgs` pins `--cascade` beside `--force`, EXTENDING
-  ADR-0003 Decision 8 (A26)'s `bd delete <id> --force`. bd 1.3 stops cascading
-  by default and `--force` alone orphans dependents; the burn primitive is a
-  subtree delete on every supported bd, and bd 1.0.5 accepts the flag.
+- Fix: `BdCliService.deleteArgs` pins `--cascade` beside `--force`. bd 1.3
+  stops cascading by default and `--force` alone orphans dependents; a delete
+  through this service is a subtree delete on every supported bd, and 1.0.5
+  accepts the flag.
 - Feat: exit 14 (`MIGRATION-FREEZE` marker present, write refused) decodes to
   `BdMigrationFrozen`, carrying the marker path bd named. A frozen store reads
   as frozen, never as a crash.
