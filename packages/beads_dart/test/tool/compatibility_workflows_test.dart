@@ -49,7 +49,11 @@ void main() {
     );
     expect(receipt, contains('BD_JSON_ENVELOPE=1'));
     expect(policy['floor'], 'v1.0.5');
-    expect(policy['day_one_wait_through'], 'v1.3.0');
+    // The window must name a bd tag that EXISTS: the guard refuses a release
+    // while upstream's latest is older, so an unreleased value embargoes every
+    // beads_dart release (it blocked 0.2.0-rc.6). Raise it to v1.3.0 when bd
+    // 1.3.0 ships.
+    expect(policy['day_one_wait_through'], 'v1.2.2');
   });
 
   test('drift workflow contract', () {
