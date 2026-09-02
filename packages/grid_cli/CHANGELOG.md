@@ -1,3 +1,10 @@
+## 0.5.0-rc.9
+
+- Breaking: adopts genesis_tree 0.3.0, grid_engine 0.3.0-rc.10 and grid_sdk 0.3.0-rc.8 (#260). Migration: bump `genesis_tree` to `^0.3.0`.
+- Trajectory: the Stage 0 substrate (grid_trajectory, the fenced appender, the `traj` verbs, guard CI) and the Stage 1 dual-write shadow window ride the CLI (#241, #242, #245).
+- `DevModeSeat` is renamed `DevModeHost` (#249).
+- Historical sessions with legacy outcomes are fenced (#232).
+
 ## 0.5.0-rc.8
 
 - `VmServiceSession.connect` gains an injectable `VmServiceConnector` seam (defaulting to the existing connector), enabling direct tests of reload-capability classification and isolate selection (#225).

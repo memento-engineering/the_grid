@@ -1,3 +1,7 @@
+## 0.3.0-rc.8
+
+- Breaking: adopts genesis_tree 0.3.0 and grid_engine 0.3.0-rc.10; `FakeTreeContext` and the SDK's tree overrides forward `{Object? aspect}` (#260). Migration: bump `genesis_tree` to `^0.3.0`; consumers that override `addDependent` add the parameter.
+
 ## 0.3.0-rc.7
 
 - The trajectory harness's dual-read posture (tg-zfek, cut-wiring C1–C4): `TrajectoryConfig.dualRead` selects `DualReadMode.off` (THE DEFAULT and the rollback — byte-identical to no harness), `observe`, or `primary`. The harness implements grid_engine's fold read interfaces over grid_trajectory's rows (#245, #250).
