@@ -1,0 +1,26 @@
+---
+status: accepted
+date: 2026-06-12
+decision-makers: ["agent"]
+consulted: []
+informed: []
+register:
+  spec: 1
+  slug: a15-wisp-pour-verb-track-0-2-spike-bd-cook-bd-create-graph-i
+  surfaces:
+    - "packages/**"
+  obsoletes: []
+  updates: []
+  obsoleted-by: null
+  updated-by: []
+  bead: null
+  legacy-id: "A15"
+---
+## A15 (2026-06-12) — Wisp-pour verb (Track 0.2 spike): `bd cook` + `bd create --graph`, idempotency is the_grid's own concern
+
+**Decision:** the M2 pour actuator (ADR-0003 D4) instantiates a convergence wisp via two pinned bd 1.0.5 verbs, not `bd mol wisp`: (1) **resolve** the formula with `bd cook <file> --mode=runtime --var k=v --json` (substitutes vars, emits the resolved step DAG); (2) **pour atomically** with `bd create --graph <plan.json> --ephemeral --json`, where the plan is a `GraphApplyPlan {commit_message, nodes[], edges[]}` (`cmd/bd/graph_apply.go`) whose root node carries `parent_id`→the convergence bead and `metadata.idempotency_key = converge:{beadID}:iter:{N}`, step nodes hang off it via `parent_key`, and `needs` become `blocks` edges. This is one transaction / one `DOLT_COMMIT` — the faithful CLI analog of gc's in-process `molecule.Cook(Options{ParentID, IdempotencyKey})` (`cmd/gc/convergence_store.go` → `internal/molecule/molecule.go:555`). **Idempotency is implemented in the_grid, not by bd**: before pouring, scan the convergence root's children (resolved through the `parent-child` dependency edge — beads models hierarchy as an edge; the `parent_id` *column* stays null but `bd children`/`List(ParentID)` resolve through the edge) for `metadata.idempotency_key == key`; if found, return the existing wisp (gc's `FindByIdempotencyKey`, ported). The grid already has children + metadata in its `GraphSnapshot`, so the pre-check is a snapshot read, not a bd spawn. The `Actuator` seam (ADR-0003 D4) wraps the cook+graph-apply pair; `bd mol wisp <proto>` is rejected for this path because it (a) resolves only a *registered* proto/name, not a file (needs a prior `bd cook --persist`), (b) exposes no `--parent` and no idempotency-key surface, and (c) is not batchable.
+**Why:** Track 0.2 asked whether the pour is offline-reproducible against the pinned bd. Verified hermetically (`bd init` + synthetic vapor formula): cook resolves vars; `create --graph --ephemeral` produces an ephemeral wisp root with the idempotency_key metadata set, steps as ephemeral children, the `needs` edge present, and `bd children <root>` resolving the wisp — i.e. every property gc's convergence store depends on, atomically. So the pour does **not** need to stay stubbed behind the seam (the build-order's fallback); the seam stands for testability (fake actuator in unit tests), not for an offline gap.
+**Correction (2026-06-13, post-Track-A verification — supersedes the `--ephemeral` choice above):** the pour must be **PERSISTENT — drop `--ephemeral`**. gc's convergence iterations are *not* ephemeral despite the name "wisp": the pour path `convergence_store.go pourWisp → molecule.Cook(Options{Vars, ParentID, IdempotencyKey, DeferAssignees})` → `store.Create(b)` sets neither `Ephemeral` nor `NoHistory` (verified `internal/molecule/molecule.go:628`; `Options` carries no Ephemeral field), so every iteration bead is a committed, git-synced row in the `issues` table — which the crash-safety invariants (recover/replay across restart) depend on. The spike's `--ephemeral` was a fidelity error from conflating beads' "wisp = vapor" CLI concept with gc's persistent convergence iteration. Track E therefore pours with `bd create --graph` **without** `--ephemeral`. (Note this makes the wisp-table snapshot union of [[A20]] *not* required for the_grid's own pours — they land in `issues` — but that union is still needed independently for post-0035 infra beads; see A20.) Two more pins from the same verification (extend [[A16]]): `bd update --metadata` **merges** (named keys overwrite, absent keys preserved — `beads/cmd/bd/update.go mergeMetadata`) and **works on a closed bead** (required: `last_processed_wisp` is written AFTER `CloseBead` in terminal transitions, [[A19]]); a **speculative pour** (`PourSpeculativeWisp`) is the same graph plan with actionable nodes typed `gate` (ready-excluded) and their real type/assignee/routing stashed under `gc.deferred_type`/`gc.deferred_assignee`/`gc.deferred_routed_to`/`gc.deferred_execution_routed_to`, activated later by per-node `bd update` (`convergence_store.go:204-246`); **burn** = `bd delete` post-order subtree, never `close` ([[A16]]).
+**Affects (if promoted):** ADR-0003 D4 (pins the pour verb to `cook`+`create --graph` **persistent**, and records that idempotency/parent are the_grid's responsibility, not a bd primitive); `docs/M2-BUILD-ORDER.md` Track 0.2 (resolved) + Track E (actuator pour path). Code (M2): `grid_reconciler` actuator + a `FindByIdempotencyKey` over the snapshot. Spike artifact: `packages/grid_reconciler/tool/wisp_pour_spike.sh` (demonstrates the atomic graph-apply *mechanism*; uses `--ephemeral` for the assertion, which the actuator must drop per the correction above).
+**Status:** **promoted → ADR-0003 Decision 4 (Nico, 2026-06-14)** — persistent pour pinned; idempotency is the_grid's job.
+
