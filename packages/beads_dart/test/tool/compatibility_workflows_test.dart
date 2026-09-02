@@ -158,14 +158,13 @@ done
     }
 
     test('enforces release policy variants', () {
-      expect(
-        refs(package: 'beads_dart', floor: 'v1.0.5', latest: 'v1.3.0'),
-        ['v1.0.5', 'v1.3.0'],
-      );
-      expect(
-        refs(package: 'beads_dart', floor: 'v1.3.0', latest: 'v1.3.0'),
-        ['v1.3.0'],
-      );
+      expect(refs(package: 'beads_dart', floor: 'v1.0.5', latest: 'v1.3.0'), [
+        'v1.0.5',
+        'v1.3.0',
+      ]);
+      expect(refs(package: 'beads_dart', floor: 'v1.3.0', latest: 'v1.3.0'), [
+        'v1.3.0',
+      ]);
       expect(
         () => refs(package: 'beads_dart', floor: '1.0.5', latest: 'v1.3.0'),
         throwsFormatException,
@@ -174,10 +173,10 @@ done
       // refusal — it is just the other end of the matrix. This is the case the
       // removed embargo turned into a failed release.
       for (final latest in ['v1.1.0', 'v1.2.2']) {
-        expect(
-          refs(package: 'beads_dart', floor: 'v1.0.5', latest: latest),
-          ['v1.0.5', latest],
-        );
+        expect(refs(package: 'beads_dart', floor: 'v1.0.5', latest: latest), [
+          'v1.0.5',
+          latest,
+        ]);
       }
       expect(refs(package: 'grid_cli', floor: 'bad', latest: 'bad'), ['none']);
     });
