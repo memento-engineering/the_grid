@@ -67,13 +67,13 @@ jobs:
         with:
           repository: gastownhall/beads
           ref: ${{ matrix.bd_ref }}
-          path: ${{ runner.temp }}/beads
+          path: upstream-beads
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ${{ runner.temp }}/beads/go.mod
+          go-version-file: upstream-beads/go.mod
       # dolthub/setup-dolt@v1 no longer exists (404, 2026-09-02); install
       # dolt with the release install script instead.
       - name: Install dolt
@@ -83,9 +83,9 @@ jobs:
       - name: Build bd
         run: |
           mkdir -p "${{ runner.temp }}/bin"
-          (cd "${{ runner.temp }}/beads" && CGO_ENABLED=0 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
+          (cd upstream-beads && CGO_ENABLED=0 go build -tags gms_pure_go -o "${{ runner.temp }}/bin/bd" ./cmd/bd)
       - name: Run compatibility suite
-        run: tool/bd_compatibility/run.sh "${{ runner.temp }}/beads" "${{ runner.temp }}/bin/bd"
+        run: tool/bd_compatibility/run.sh "${{ github.workspace }}/upstream-beads" "${{ runner.temp }}/bin/bd"
 
   publish:
     needs: [parse, bd-compatibility]
