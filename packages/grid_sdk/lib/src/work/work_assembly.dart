@@ -516,7 +516,7 @@ Future<StationWorkRuntime> assembleStationWork({
   final bd =
       stateBdOverride ??
       (dryRun
-          ? BdCliService(NoOpBdRunner())
+          ? BdCliService(NoOpBdRunner(substation: stateSubstation))
           : BdCliService(ProcessBdRunner(workspaceRoot: stateWs.root)));
   final refusalSink = onRefusal ?? (String m) => stdout.writeln(m);
   final writer = StationBeadWriter(
@@ -641,7 +641,7 @@ Future<StationWorkRuntime> assembleStationWork({
         workBdOverrides[spec.name] ??
         BdCliService(
           dryRun
-              ? const NoOpBdRunner()
+              ? NoOpBdRunner(substation: spec.prefix)
               : ProcessBdRunner(
                   workspaceRoot: workspacesByName[spec.name]!.root,
                 ),
@@ -973,15 +973,44 @@ class _RuntimeSnapshotSource implements SnapshotSource {
 
 /// The DRY-RUN bd seam: returns a canned envelope so the engine's session mint
 /// runs end-to-end, but issues no real `bd` and touches no store.
+///
+/// Every canned `create` id is minted under [substation] — the partition whose
+/// `StationBeadWriter` asserts it — so the inert seam satisfies the SAME
+/// ownership invariant a live mint does (ADR-0006 Decision 1: a freshly minted
+/// session bead carries the owned marker only after its first metadata stamp,
+/// but its id prefix is owned from birth). The former fixed literal carried no
+/// owned prefix at all, so the first write that ASSERTED that id — the
+/// chokepoint's `_assertOwned` on `close`/`update`, and the molecule pour's
+/// parent check on the session bead — refused fail-closed and printed an
+/// ADR-0006 violation ahead of a new station's banner (tg-czsf).
+///
+/// The `graph apply` envelope is deliberately NOT synthesized here:
+/// `BdCliService.applyGraph` reads a `data.ids` map this seam does not emit, so
+/// a dry molecule pour still fails — loudly, as a `BdParseException` the engine
+/// routes to supervision, never as an ownership refusal. That is a separate gap
+/// in the dry posture and is out of scope for tg-czsf.
 class NoOpBdRunner implements BdRunner {
-  /// Const-constructible.
-  const NoOpBdRunner();
+  /// A dry seam minting ids under [substation] — the owned partition prefix:
+  /// the state store's `dolt_database` for the state chokepoint, a
+  /// [SubstationWorkSpec.prefix] for a work seam. Required, never defaulted: a
+  /// seam that does not know its owner cannot mint an id that owner accepts.
+  NoOpBdRunner({required this.substation});
+
+  /// The owned partition every canned `create` id is minted under.
+  final String substation;
+
+  int _minted = 0;
 
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
     final sub = args.isNotEmpty ? args.first : '';
+    // A counter, not a constant: repeated mints stay distinguishable in a dry
+    // recording, and a second session never collides with the first on the
+    // chokepoint's per-target-id serialization chain (D-1). `dry` rather than
+    // `dry-session` because this seam serves EVERY `create` the chokepoint
+    // issues — `createStepSuccessor` too, not only the session mint.
     final id = sub == 'create'
-        ? 'dry-session'
+        ? '$substation-dry-${++_minted}'
         : (args.length >= 2 ? args[1] : '');
     return Future<BdResult>.value(
       BdResult(
