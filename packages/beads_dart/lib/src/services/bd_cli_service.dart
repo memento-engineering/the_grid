@@ -476,15 +476,18 @@ class BdCliService {
     return env.dataMap;
   }
 
-  /// `bd delete <id> --force` — the **burn** primitive (ADR-0000 A16): a
-  /// subtree delete that removes the bead (and its descendants) entirely.
+  /// `bd delete <id> --cascade --force` — the **burn** primitive (ADR-0000
+  /// A16): a subtree delete that removes the bead (and its descendants)
+  /// entirely.
   ///
   /// Convergence **burns a speculative wisp by deleting it, NEVER closing**:
   /// a closed speculative wisp keeps its `converge:…:iter:N` key prefix +
   /// closed status and permanently inflates `deriveIterationCount`
   /// (ADR-0003 invariant 4; handler-9step trap 2). The actuator calls this
   /// in **post-order** over `Wisp.subtreeIds` (children before parents).
-  /// `--force` skips the interactive confirmation (non-interactive spawn).
+  /// `--force` skips the interactive confirmation (non-interactive spawn);
+  /// `--cascade` keeps the subtree semantics bd 1.3 stopped defaulting to, so
+  /// a post-order walk and a single root burn agree (tg-1liv).
   Future<void> delete(String id) async {
     await _runEnvelope(deleteArgs(id));
   }
@@ -713,10 +716,19 @@ class BdCliService {
     '--json',
   ];
 
-  /// `bd delete <id> --force --json` — the burn primitive (subtree delete).
+  /// `bd delete <id> --cascade --force --json` — the burn primitive (subtree
+  /// delete).
+  ///
+  /// `--cascade` is PINNED on the argv: bd 1.3 stopped cascading by default,
+  /// so `--force` alone ORPHANS dependents, and orphaning is never what a burn
+  /// means. bd 1.0.5 and the fleet binary already accept the flag, so one argv
+  /// serves every supported bd. This EXTENDS ADR-0003 Decision 8 (A26)'s
+  /// `bd delete <id> --force`; the verb, the actor and the post-order caller
+  /// contract are unchanged (`the_grid#burn-primitive-argv-pins-cascade`).
   List<String> deleteArgs(String id) => [
     'delete',
     id,
+    '--cascade',
     '--force',
     '--json',
     ..._actorArgs,

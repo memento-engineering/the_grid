@@ -1,3 +1,48 @@
+## Unreleased
+
+- bd 1.3.0-rc.1 rehearsal — fixture set, hermetic guard, day-one window
+  v1.3.0, drift audit receipts. No store, binary, or fleet component moved:
+  per D-BD1 the release rail's first real gate waits on the published v1.3.0
+  tag (`docs/adr/ADR-0002-package-topology-and-domain-projections.md`,
+  Supersession stamp 2026-08-08).
+- New fixture set `fixtures/upstream/2026-09-02-bd-1.3.0-rc.1/` (ref
+  `v1.3.0-rc.1`, SHA `9c6a69ec12350959ec8c495c74eeb02902d629b6`); every delta
+  versus `2026-08-08-bd-main` is pinned by name in
+  `test/tool/fixture_drift_test.dart`, and a removed or renamed `Bead`-decoded
+  wire key now fails that suite loudly.
+- Fix: `--set-metadata` values written by bd 1.3 arrive as typed JSON scalars
+  (`attempt=3` → `3`) while pre-1.3 values stay strings, so one store carries
+  MIXED shapes. `metadataEntryEquals`/`metadataScalarText` normalise both, and
+  `CliBeadProbeReader.openBeads` uses them. bd's own `--metadata-field` filter
+  and the SQL leg already agreed (`JSON_UNQUOTE` renders a scalar as its text).
+- Fix: `BdCliService.deleteArgs` pins `--cascade` beside `--force`, EXTENDING
+  ADR-0003 Decision 8 (A26)'s `bd delete <id> --force`. bd 1.3 stops cascading
+  by default and `--force` alone orphans dependents; the burn primitive is a
+  subtree delete on every supported bd, and bd 1.0.5 accepts the flag.
+- Feat: exit 14 (`MIGRATION-FREEZE` marker present, write refused) decodes to
+  `BdMigrationFrozen`, carrying the marker path bd named. A frozen store reads
+  as frozen, never as a crash.
+- Test: `test/integration/sql_cli_equivalence_test.dart` and
+  `cross_workspace_probe_test.dart` skip when the `bd` on PATH is not the
+  store's `.beads/.local_version` writer. `tool/bd_compatibility/run.sh` keeps
+  its two-argument form and now completes through the corpus-replay step on a
+  foreign binary.
+- Receipt (d): `bd dep cycles --json` changes shape at 1.3. beads_dart never
+  calls it (`grep -rn "cycles" lib` is empty) — no action.
+- Receipt (e): the 1.3 `--brief` / `--brief-deps` projections are NOT adopted
+  here; the light-snapshot memory model is tg-185's.
+- Receipt (f): proxied `bd update --ephemeral` half-wisps written by pre-1.3
+  builds are NOT repaired by 1.3. A future repair sweep would be witnessed in
+  `test/integration/wisp_snapshot_test.dart`.
+- Receipt: upstream's ready-work exclusion set at rc.1
+  (`internal/storage/sqlbuild/ready.go:17-27`) is identical to the hand port in
+  `lib/src/ready/ready_work_query.dart` — pinned as a comment, no code change.
+- Receipt: the rc `delete` envelope's `data.deleted` is a bare string without
+  `--cascade` and a list (plus `deleted_count`) with it. `BdCliService.delete`
+  discards the envelope, so only the argv moved.
+- Follow-up scope: `grid_runtime`'s `StationBeadWriter` writes numeric-looking
+  `--set-metadata` values (pgid/pid); its readers require a separate audit.
+
 ## 0.2.0-rc.5
 
 - Breaking: none new in this candidate — it continues the 0.2.0 candidate

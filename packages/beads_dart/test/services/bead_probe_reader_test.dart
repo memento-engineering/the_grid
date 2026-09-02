@@ -119,6 +119,17 @@ void main() {
         ],
       ]);
     });
+
+    test('a typed-scalar metadata value matches the writer string', () async {
+      final runner = _ScopedRunner(typedMetadata: true);
+
+      final beads = await _reader(runner).openBeads(
+        types: const {IssueType('step')},
+        metadataAll: const {'grid.step.attempt': '3'},
+      );
+
+      expect(beads.map((bead) => bead.id), ['tg-step-typed']);
+    });
   });
 
   group('SqlBeadProbeReader', () {
@@ -174,10 +185,17 @@ CliBeadProbeReader _reader(_ScopedRunner runner) => CliBeadProbeReader(
 );
 
 class _ScopedRunner implements BdRunner {
-  _ScopedRunner({this.duplicateExactMatch = false, this.failQuery = false});
+  _ScopedRunner({
+    this.duplicateExactMatch = false,
+    this.failQuery = false,
+    this.typedMetadata = false,
+  });
 
   final bool duplicateExactMatch;
   final bool failQuery;
+
+  /// Adds a bead whose metadata carries a bd 1.3 TYPED scalar (tg-1liv).
+  final bool typedMetadata;
   final List<List<String>> calls = [];
 
   @override
@@ -250,6 +268,18 @@ class _ScopedRunner implements BdRunner {
           'metadata': {'grid.step.session': 'tgdog-sess2'},
         },
       ]);
+      if (typedMetadata) {
+        data.add({
+          // bd 1.3 re-types numeric-looking --set-metadata values (tg-1liv).
+          'id': 'tg-step-typed',
+          'issue_type': 'step',
+          'status': 'open',
+          'metadata': {
+            'grid.step.session': 'tgdog-sess2',
+            'grid.step.attempt': 3,
+          },
+        });
+      }
     }
     if (type == 'gate') {
       data.add({

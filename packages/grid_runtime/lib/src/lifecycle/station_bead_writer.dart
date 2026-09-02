@@ -1264,9 +1264,9 @@ class StationBeadWriter {
     };
   }
 
-  /// `bd delete <id> --force` — the burn primitive, used only for speculative
-  /// wisp burns (never close-as-burn; A16). Fail-closed on the target's substation.
-  /// Serialized per-id (D-1).
+  /// `bd delete <id> --cascade --force` — the burn primitive, used only for
+  /// speculative wisp burns (never close-as-burn; A16). Fail-closed on the
+  /// target's substation. Serialized per-id (D-1).
   Future<void> delete(String id) async {
     _assertOwned('delete', id, const {});
     return _serialized(id, () => _bd.delete(id));

@@ -246,20 +246,33 @@ void main() {
   });
 
   group('delete — the burn primitive (A16: delete, NEVER close)', () {
-    test('delete() spawns `bd delete <id> --force` with the actor', () async {
-      final runner = FakeBdRunner()..stubCommand('delete', okObject());
-      final service = BdCliService(runner);
+    test(
+      'delete() spawns `bd delete <id> --cascade --force` with the actor',
+      () async {
+        final runner = FakeBdRunner()..stubCommand('delete', okObject());
+        final service = BdCliService(runner);
 
-      await service.delete('tg-wisp-r2');
+        await service.delete('tg-wisp-r2');
 
-      final argv = runner.calls.single;
-      expect(argv.first, 'delete');
-      expect(argv[1], 'tg-wisp-r2');
-      expect(argv, contains('--force'));
-      expectActor(argv);
-      // A burn must NEVER route through close.
-      expect(argv, isNot(contains('close')));
-    });
+        final argv = runner.calls.single;
+        // burn = subtree delete (ADR-0003 D8/A26): bd 1.3 stops cascading by
+        // default and --force alone orphans dependents, so --cascade is pinned
+        // on every supported bd (tg-1liv).
+        expect(
+          argv,
+          containsAllInOrder([
+            'delete',
+            'tg-wisp-r2',
+            '--cascade',
+            '--force',
+            '--json',
+          ]),
+        );
+        expectActor(argv);
+        // A burn must NEVER route through close.
+        expect(argv, isNot(contains('close')));
+      },
+    );
   });
 
   group('cook — formula resolve (A15 step 1; a READ)', () {

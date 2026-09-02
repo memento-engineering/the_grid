@@ -68,6 +68,46 @@ void main() {
     },
   );
 
+  test('exit 14 is a typed migration-freeze refusal', () {
+    const refusal =
+        '⛔ ERROR: workspace is frozen for migration (by operator=grid-test).\n'
+        '   bd create is blocked by the freeze marker at '
+        '/work/repo/MIGRATION-FREEZE.\n'
+        '   To resume writes, remove that file or unset '
+        'BD_MIGRATION_FREEZE_FILE.\n';
+    final frozen = BdException.fromOutput(
+      command: const ['bd', 'create', '--json'],
+      exitCode: 14,
+      stdout: '',
+      stderr: refusal,
+    );
+    expect(frozen, isA<BdMigrationFrozen>());
+    expect(
+      (frozen as BdMigrationFrozen).markerPath,
+      '/work/repo/MIGRATION-FREEZE',
+    );
+
+    final undeterminable = BdException.fromOutput(
+      command: const ['bd', 'create', '--json'],
+      exitCode: 14,
+      stdout: '',
+      stderr:
+          '⛔ ERROR: cannot determine whether this workspace is frozen for '
+          'migration.\n   permission denied\n',
+    );
+    expect(undeterminable, isA<BdMigrationFrozen>());
+    expect((undeterminable as BdMigrationFrozen).markerPath, isNull);
+    expect(
+      BdException.fromOutput(
+        command: const ['bd', 'create', '--json'],
+        exitCode: 1,
+        stdout: '',
+        stderr: 'boom',
+      ),
+      isA<BdCommandFailed>(),
+    );
+  });
+
   test('multi-ID partial failure parses the final stderr-line report', () {
     final partial = BdException.fromOutput(
       command: const ['bd', 'update', 'tg-1', 'tg-missing', 'tg-2', '--json'],

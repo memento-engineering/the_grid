@@ -18,11 +18,13 @@
 ///
 /// ## Version-compat contract
 ///
-/// Supports **bd >= 1.0.5** (verified against 1.0.5 / schema v50 and 1.1.0 /
-/// schema v53). Not a pin: the SQL read path probes the store's table/column
-/// shape at connect ([DoltSchemaShape]) and refuses only a store it cannot
-/// serve, naming the missing columns; the migration version is diagnostic
-/// only.
+/// Supports **bd >= 1.0.5** (verified against 1.0.5 / schema v50, 1.1.0 /
+/// schema v53, and 1.3.0-rc.1 / schema v66 (rehearsal) — the rehearsal is a
+/// hermetic fixture capture + drift audit, not a store move; production stores
+/// move on the release rail only, at the published v1.3.0 tag). Not a pin: the
+/// SQL read path probes the store's table/column shape at connect
+/// ([DoltSchemaShape]) and refuses only a store it cannot serve, naming the
+/// missing columns; the migration version is diagnostic only.
 ///
 /// The wire contract is bd's enveloped `--json` output
 /// (`{schema_version, data}`); every decode path asserts `schema_version == 1`
@@ -48,6 +50,7 @@ export 'src/models/issue_type.dart';
 
 // Codecs.
 export 'src/codecs/envelope.dart';
+export 'src/codecs/metadata_scalar.dart';
 
 // Ready-work SQL port + differential harness (Track F; ADR-0003 Decision 5).
 // The ready-work predicate ported from beads ready_work.go over the pooled,

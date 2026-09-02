@@ -475,6 +475,13 @@ class ReadyWorkQuery {
 
   // -------------------------------------------------------------------------
   // Exclusion-type list — readyWorkExcludeTypes (ready_work.go:412-434).
+  //
+  // Receipt (tg-1liv, bd 1.3.0-rc.1 @ 9c6a69ec1): upstream moved the list to
+  // internal/storage/sqlbuild/ready.go:17-27 — {merge-request, gate, molecule,
+  // rig} + domain.DefaultInfraTypes() {agent, role, message} — the SAME SET as
+  // the seven below. The `IN (...)` rendering is order-insensitive, so no code
+  // change is warranted; a future ref that ADDS or DROPS a type does warrant
+  // one.
   // -------------------------------------------------------------------------
 
   static List<String> _readyWorkExcludeTypes(List<String> extra) {

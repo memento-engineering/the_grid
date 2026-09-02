@@ -7,6 +7,8 @@ import 'package:beads_dart/src/services/beads_workspace.dart';
 import 'package:beads_dart/src/services/dolt_query_service.dart';
 import 'package:test/test.dart';
 
+import '../support/fleet_binary_guard.dart';
+
 /// Criterion 2 (PDR §6.2): the cross-workspace change probe.
 ///
 /// OPTIONAL / skip-guarded — only meaningful against a live credentialed Dolt
@@ -26,6 +28,10 @@ void main() {
   test('the working-set probe is the authoritative, stable change signal '
       '(live, requires a credentialed endpoint)', () async {
     final ws = BeadsWorkspace.discover();
+    // Hermetic-only default (tg-1liv): a bd that did not write this store must
+    // never open it — bd 1.3 refuses a pre-upgrade proxied store and leaves a
+    // gate lock behind. Skip, never fail, so a compatibility run completes.
+    if (skippedForForeignBinary(ws)) return;
     final endpoint = ws?.endpoint;
     if (ws == null || endpoint == null || !endpoint.hasCredential) {
       markTestSkipped(

@@ -72,7 +72,9 @@ against the `bd ready --json` oracle (the ready-work port's differential contrac
 ## Version-compat contract
 
 Supports **bd >= 1.0.5** — a RANGE, not a pin. Verified against bd 1.0.5
-(`f9fe4ef2a`, schema v50) and bd 1.1.0 (Homebrew, schema v53).
+(`f9fe4ef2a`, schema v50), bd 1.1.0 (Homebrew, schema v53), and bd 1.3.0-rc.1
+(`9c6a69ec1`, schema v66 — rehearsal: fixtures + drift audit, no store moved;
+`fixtures/upstream/2026-09-02-bd-1.3.0-rc.1/`).
 
 Two independent guards back that claim. Every decode path asserts the bd
 envelope's `schema_version`; a mismatch fails loud rather than silently
