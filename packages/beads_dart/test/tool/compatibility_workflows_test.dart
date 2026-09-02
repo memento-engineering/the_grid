@@ -49,11 +49,9 @@ void main() {
     );
     expect(receipt, contains('BD_JSON_ENVELOPE=1'));
     expect(policy['floor'], 'v1.0.5');
-    // The window must name a bd tag that EXISTS: the guard refuses a release
-    // while upstream's latest is older, so an unreleased value embargoes every
-    // beads_dart release (it blocked 0.2.0-rc.6). Raise it to v1.3.0 when bd
-    // 1.3.0 ships.
-    expect(policy['day_one_wait_through'], 'v1.2.2');
+    // No release embargo: a publish is never gated on what bd has RELEASED,
+    // because this package ships candidates against bd's candidates.
+    expect(policy, isNot(contains('day_one_wait_through')));
   });
 
   test('drift workflow contract', () {
@@ -147,74 +145,40 @@ done
     List<String> refs({
       required String package,
       required String floor,
-      required String wait,
       required String latest,
     }) {
       if (package != 'beads_dart') return ['none'];
       final semver = RegExp(r'^v[0-9]+\.[0-9]+\.[0-9]+$');
-      if (![floor, wait, latest].every(semver.hasMatch)) {
+      if (![floor, latest].every(semver.hasMatch)) {
         throw const FormatException('malformed semver');
       }
-      List<int> parts(String value) =>
-          value.substring(1).split('.').map(int.parse).toList();
-      int compare(String a, String b) {
-        final aa = parts(a), bb = parts(b);
-        for (var i = 0; i < 3; i++) {
-          if (aa[i] != bb[i]) return aa[i].compareTo(bb[i]);
-        }
-        return 0;
-      }
-
-      // day_one_wait_through names the tag the rail WAITS FOR: at-or-newer
-      // opens the gate (tg-1liv;
-      // the_grid#day-one-window-names-the-tag-the-release-rail-waits-for).
-      if (compare(latest, wait) < 0) throw StateError('day-one wait');
+      // The matrix is the whole gate: floor + upstream's latest release. No
+      // comparison between them can refuse a publish.
       return {floor, latest}.toList()..sort();
     }
 
     test('enforces release policy variants', () {
+      expect(refs(package: 'beads_dart', floor: 'v1.0.5', latest: 'v1.3.0'), [
+        'v1.0.5',
+        'v1.3.0',
+      ]);
+      expect(refs(package: 'beads_dart', floor: 'v1.3.0', latest: 'v1.3.0'), [
+        'v1.3.0',
+      ]);
       expect(
-        refs(
-          package: 'beads_dart',
-          floor: 'v1.0.5',
-          wait: 'v1.3.0',
-          latest: 'v1.3.0',
-        ),
-        ['v1.0.5', 'v1.3.0'],
-      );
-      expect(
-        refs(
-          package: 'beads_dart',
-          floor: 'v1.3.0',
-          wait: 'v1.3.0',
-          latest: 'v1.3.0',
-        ),
-        ['v1.3.0'],
-      );
-      expect(
-        () => refs(
-          package: 'beads_dart',
-          floor: '1.0.5',
-          wait: 'v1.3.0',
-          latest: 'v1.3.0',
-        ),
+        () => refs(package: 'beads_dart', floor: '1.0.5', latest: 'v1.3.0'),
         throwsFormatException,
       );
+      // An upstream latest OLDER than anything this package targets is not a
+      // refusal — it is just the other end of the matrix. This is the case the
+      // removed embargo turned into a failed release.
       for (final latest in ['v1.1.0', 'v1.2.2']) {
-        expect(
-          () => refs(
-            package: 'beads_dart',
-            floor: 'v1.0.5',
-            wait: 'v1.3.0',
-            latest: latest,
-          ),
-          throwsStateError,
-        );
+        expect(refs(package: 'beads_dart', floor: 'v1.0.5', latest: latest), [
+          'v1.0.5',
+          latest,
+        ]);
       }
-      expect(
-        refs(package: 'grid_cli', floor: 'bad', wait: 'bad', latest: 'bad'),
-        ['none'],
-      );
+      expect(refs(package: 'grid_cli', floor: 'bad', latest: 'bad'), ['none']);
     });
 
     test('has compatibility matrix before publication', () {
@@ -226,8 +190,8 @@ done
       expect(source, contains('fromJSON(needs.parse.outputs.bd_refs)'));
       expect(source, contains('repos/gastownhall/beads/releases/latest'));
       expect(source, contains('[\$floor,\$latest]|unique'));
-      expect(source, contains('day-one window'));
-      expect(source, isNot(contains(r'"$latest" != "$wait"')));
+      expect(source, isNot(contains('day_one_wait_through')));
+      expect(source, contains('There is NO release embargo here'));
       expect(yaml['jobs']['publish']['needs'], ['parse', 'bd-compatibility']);
       // The bd-compatibility job gates at the JOB level (a declared action that
       // fails to resolve kills a job at setup regardless of step-level ifs), and

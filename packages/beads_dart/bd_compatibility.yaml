@@ -1,15 +1,15 @@
 floor: v1.0.5
-# The newest bd RELEASE this package has been exercised through. The publish
-# guard refuses a release while upstream's latest tag is older than this, so
-# the value must name a tag that EXISTS: pointing it at an unreleased version
-# embargoes every beads_dart release, including ones that have nothing to do
-# with that bd version (it blocked 0.2.0-rc.6 on 2026-09-02).
+# `floor` is the oldest bd this package supports. Together with upstream's
+# latest RELEASE it forms the compatibility matrix the publish workflow runs
+# before publishing.
 #
-# bd 1.3.0 is rehearsed — the rc fixtures and drift pins are in
-# fixtures/upstream/2026-09-02-bd-1.3.0-rc.1/ — but 1.3.0 itself is not
-# released. Move this to v1.3.0 when it is; the gate stays open at that point
-# because upstream's latest will equal it.
-day_one_wait_through: v1.2.2
+# There is deliberately no release-embargo key here. A `day_one_wait_through`
+# gate briefly refused every beads_dart publish while upstream's latest release
+# sorted below it, which blocked 0.2.0-rc.6 (and power_station behind it) for a
+# reason unrelated to that release: this package ships CANDIDATES against bd's
+# own CANDIDATES, so what upstream has promoted to a release says nothing about
+# whether a beads_dart candidate may ship. Compatibility evidence is the matrix
+# plus the fixture sets under fixtures/upstream/, never a hold on the tag.
 fork_patches:
   graph_apply_parent_cycle_skip:
     repository: nicholasspencer/beads

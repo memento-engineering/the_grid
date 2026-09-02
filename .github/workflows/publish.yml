@@ -34,20 +34,18 @@ jobs:
           fi
           policy=packages/beads_dart/bd_compatibility.yaml
           floor=$(ruby -e 'require "yaml"; puts YAML.load_file(ARGV[0]).fetch(ARGV[1])' "$policy" floor)
-          wait=$(ruby -e 'require "yaml"; puts YAML.load_file(ARGV[0]).fetch(ARGV[1])' "$policy" day_one_wait_through)
           latest=$(gh api repos/gastownhall/beads/releases/latest --jq .tag_name)
           semver='^v[0-9]+\.[0-9]+\.[0-9]+$'
-          [[ "$floor" =~ $semver && "$wait" =~ $semver && "$latest" =~ $semver ]] || {
-            echo 'bd compatibility policy and latest release must be vMAJOR.MINOR.PATCH' >&2
+          [[ "$floor" =~ $semver && "$latest" =~ $semver ]] || {
+            echo 'bd compatibility floor and latest release must be vMAJOR.MINOR.PATCH' >&2
             exit 1
           }
-          # day-one window: day_one_wait_through names the tag the release rail
-          # WAITS FOR, so latest at-or-newer opens the gate (tg-1liv).
-          newest=$(printf '%s\n%s\n' "$wait" "$latest" | sort -V | tail -n1)
-          [[ "$newest" == "$latest" ]] || {
-            echo "beads_dart release waits for bd tag $wait or newer (day-one window)" >&2
-            exit 1
-          }
+          # There is NO release embargo here. beads_dart ships candidates
+          # against bd's own candidates, so gating a publish on what upstream
+          # has RELEASED blocks exactly the work that adopts a prerelease. What
+          # proves compatibility is the matrix below (floor + upstream's latest
+          # release) and the fixture sets under fixtures/upstream/, both of
+          # which still run before the publish job.
           echo "bd_refs=$(jq -cn --arg floor "$floor" --arg latest "$latest" '[$floor,$latest]|unique')" >> "$GITHUB_OUTPUT"
 
   bd-compatibility:
