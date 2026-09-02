@@ -51,6 +51,29 @@ class ScriptedReader implements TrajectoryLogReader {
   }
 
   @override
+  Future<SubjectRecords> recordsInWindow({
+    DateTime? since,
+    int? bootEpoch,
+    int ceiling = completeReadCeiling,
+  }) async {
+    final matched = rows
+        .where(
+          (row) =>
+              (since == null || !row.occurredAt.isBefore(since)) &&
+              (bootEpoch == null || row.bootEpoch == bootEpoch),
+        )
+        .toList();
+    final cut = truncateCompleteReadsAt ?? ceiling;
+    if (matched.length > cut) {
+      return SubjectRecords(
+        records: matched.take(cut).toList(),
+        truncatedAt: cut,
+      );
+    }
+    return SubjectRecords(records: matched);
+  }
+
+  @override
   Future<List<String>> sessions({int limit = defaultReadLimit}) async => {
     for (final row in rows)
       if (row.sessionId case final String id) id,

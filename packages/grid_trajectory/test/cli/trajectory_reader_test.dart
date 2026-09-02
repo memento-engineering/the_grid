@@ -59,11 +59,41 @@ void main() {
       await reader.rowsForSubject('tg-9abc');
       await reader.allRecordsForSubject('tg-9abc');
       await reader.sessions();
+      await reader.recordsInWindow();
       await reader.foldStaleness();
       for (final call in db.log) {
         expect(call.sql, startsWith('SELECT '));
       }
     });
+
+    test(
+      'the window read drops an absent filter rather than binding null',
+      () async {
+        final db = ScriptedDb();
+        await SqlTrajectoryLogReader(db).recordsInWindow(ceiling: 10);
+        expect(db.log.single.sql, isNot(contains('WHERE')));
+        expect(db.log.single.params, {'limit': 11});
+      },
+    );
+
+    test('the window read binds --since as a UTC DATETIME(6)', () async {
+      final db = ScriptedDb();
+      await SqlTrajectoryLogReader(db).recordsInWindow(
+        since: DateTime.utc(2026, 9, 2, 3, 4, 5),
+        bootEpoch: 7,
+        ceiling: 10,
+      );
+      final call = db.log.single;
+      expect(call.sql, contains('occurred_at >= :since'));
+      expect(call.sql, contains('boot_epoch = :epoch'));
+      expect(call.sql, contains('ORDER BY seq'));
+      expect(call.params, {
+        'limit': 11,
+        'since': '2026-09-02 03:04:05.000',
+        'epoch': 7,
+      });
+    });
+
     test(
       'foldStaleness reads the log head against the fold frontier',
       () async {
