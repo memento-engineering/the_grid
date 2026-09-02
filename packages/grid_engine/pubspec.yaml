@@ -18,7 +18,7 @@ dependencies:
   # The engine. Pinned (^0.1.5) — the composition layer is EXPERIMENTAL and
   # the_grid is its triggering 2nd consumer (ADR-0007 / A34 precedent). A
   # workspace-root dependency_overrides path dep supplies it during dev.
-  genesis_tree: ^0.2.0
+  genesis_tree: ^0.3.0
   grid_runtime: ^0.2.0-rc.7
   json_annotation: ^4.9.0
   meta: ^1.16.0

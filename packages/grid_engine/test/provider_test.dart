@@ -94,6 +94,43 @@ final class _WatchBoth extends StatelessSeed {
   }
 }
 
+/// Depends with an aspect and records the substrate's rejection instead of
+/// propagating it, so the mount completes and the provider branch's
+/// bookkeeping stays observable.
+final class _AspectWatch extends StatelessSeed {
+  const _AspectWatch(this.errors);
+  final List<ArgumentError> errors;
+
+  @override
+  Seed build(TreeContext context) {
+    try {
+      context.dependOnInheritedSeedOfExactType<_Value>(aspect: 'name');
+    } on ArgumentError catch (error) {
+      errors.add(error);
+    }
+    return const _Leaf();
+  }
+}
+
+/// The registry-branch counterpart of [_AspectWatch]: an aspect-scoped depend
+/// on the scope's own provided value.
+final class _RegistryAspectWatch extends StatelessSeed {
+  const _RegistryAspectWatch(this.errors);
+  final List<ArgumentError> errors;
+
+  @override
+  Seed build(TreeContext context) {
+    try {
+      context.dependOnInheritedSeedOfExactType<AvailabilityRegistry>(
+        aspect: 'name',
+      );
+    } on ArgumentError catch (error) {
+      errors.add(error);
+    }
+    return const _Leaf();
+  }
+}
+
 final class _Leaf extends Seed {
   const _Leaf();
   @override
@@ -1431,6 +1468,70 @@ void main() {
       // The queue is a set and both announcements landed in one batch: the
       // dependent rebuilds once, not once per announcement.
       expect(dependent.pings, 1);
+    });
+  });
+
+  group('aspect forwarding (genesis_tree 0.3.0)', () {
+    test('a Provider REJECTS an aspect — the override reached super', () {
+      final errors = <ArgumentError>[];
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: Provider<_Value>.value(
+            const _Value('held'),
+            child: _AspectWatch(errors),
+          ),
+        ),
+      );
+
+      expect(errors, hasLength(1));
+      expect(errors.single.name, 'aspect');
+    });
+
+    test('the REGISTRY branch rejects an aspect too', () {
+      final errors = <ArgumentError>[];
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(ProviderScope(child: _RegistryAspectWatch(errors)));
+
+      expect(errors, hasLength(1));
+      expect(errors.single.name, 'aspect');
+    });
+
+    test('a rejected aspect leaves NO phantom live dependent', () {
+      final errors = <ArgumentError>[];
+      final values = <String?>[];
+      late _HostState host;
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      owner.mountRoot(
+        ProviderScope(
+          child: _Host(
+            onCreate: (state) => host = state,
+            describe: () => Provider<_Value>.value(
+              const _Value('held'),
+              child: _Slots([_Watch(values), _AspectWatch(errors)]),
+            ),
+          ),
+        ),
+      );
+      expect(values, ['held'], reason: 'the aspect-free watcher resolved');
+      expect(errors, hasLength(1), reason: 'the aspect-scoped one was refused');
+      final registry = host.context.read<AvailabilityRegistry>()!;
+
+      host.swap(() => const _Leaf());
+      owner.flush();
+      expect(
+        registry.debugNotifying,
+        hasLength(1),
+        reason:
+            'only the aspect-free watcher became a dependent; the refused '
+            'branch must never have entered _live',
+      );
     });
   });
 }

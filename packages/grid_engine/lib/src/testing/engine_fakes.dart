@@ -628,7 +628,9 @@ class FakeSnapshotSource implements SnapshotSource {
 
 /// A fake [TreeContext] for driving an [Allocation]/[Capability] bare — no
 /// mounted tree. Ambient values resolve from [values] by EXACT type (mirroring
-/// genesis's exact-type inherited lookup). Flip [mounted] to false to exercise
+/// genesis's exact-type inherited lookup); a non-null `aspect` is rejected with
+/// [ArgumentError], exactly as a plain `InheritedSeed` provider rejects one.
+/// Flip [mounted] to false to exercise
 /// the loud async-gap protection ([getInheritedSeedOfExactType] then throws,
 /// like the real handle).
 class FakeTreeContext implements TreeContext {
@@ -656,8 +658,17 @@ class FakeTreeContext implements TreeContext {
   }
 
   @override
-  T? dependOnInheritedSeedOfExactType<T extends Object>() {
+  T? dependOnInheritedSeedOfExactType<T extends Object>({Object? aspect}) {
     _checkMounted('dependOnInheritedSeedOfExactType');
+    if (aspect != null) {
+      throw ArgumentError.value(
+        aspect,
+        'aspect',
+        'FakeTreeContext provides plain values, not InheritedModelSeed '
+            'aspects — like a plain InheritedSeed<$T> provider, which genesis '
+            'rejects an aspect against. Depend without an aspect.',
+      );
+    }
     return _values[T] as T?;
   }
 

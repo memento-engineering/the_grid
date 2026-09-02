@@ -19,7 +19,7 @@ dependencies:
   beads_dart: ^0.2.0-rc.4
   freezed_annotation: ^3.0.0
   genesis_foundation: ^0.2.0
-  genesis_tree: ^0.2.0
+  genesis_tree: ^0.3.0
   grid_diagnostics_contract: ^0.2.0
   grid_engine: ^0.3.0-rc.8
   grid_exploration: ^0.3.0-rc.3
