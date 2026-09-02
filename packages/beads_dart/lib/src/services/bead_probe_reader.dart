@@ -1,3 +1,4 @@
+import '../codecs/metadata_scalar.dart';
 import '../errors/bd_exception.dart';
 import '../models/bead.dart';
 import '../models/bead_status.dart';
@@ -170,12 +171,14 @@ final class CliBeadProbeReader implements BeadProbeReader {
     return beads
         .where((bead) {
           final all = metadataAll.entries.every(
-            (entry) => bead.metadata[entry.key] == entry.value,
+            (entry) =>
+                metadataEntryEquals(bead.metadata, entry.key, entry.value),
           );
           final any =
               metadataAny.isEmpty ||
               metadataAny.entries.any(
-                (entry) => bead.metadata[entry.key] == entry.value,
+                (entry) =>
+                    metadataEntryEquals(bead.metadata, entry.key, entry.value),
               );
           return all && any;
         })

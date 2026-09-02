@@ -41,9 +41,11 @@ jobs:
             echo 'bd compatibility policy and latest release must be vMAJOR.MINOR.PATCH' >&2
             exit 1
           }
+          # day-one window: day_one_wait_through names the tag the release rail
+          # WAITS FOR, so latest at-or-newer opens the gate (tg-1liv).
           newest=$(printf '%s\n%s\n' "$wait" "$latest" | sort -V | tail -n1)
-          [[ "$newest" == "$latest" && "$latest" != "$wait" ]] || {
-            echo "beads_dart release waits for a bd tag newer than $wait" >&2
+          [[ "$newest" == "$latest" ]] || {
+            echo "beads_dart release waits for bd tag $wait or newer (day-one window)" >&2
             exit 1
           }
           echo "bd_refs=$(jq -cn --arg floor "$floor" --arg latest "$latest" '[$floor,$latest]|unique')" >> "$GITHUB_OUTPUT"

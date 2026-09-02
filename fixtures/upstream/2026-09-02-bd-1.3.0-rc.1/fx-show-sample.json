@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": "fx-show",
+      "title": "Shown fixture",
+      "status": "open",
+      "priority": 1,
+      "issue_type": "task",
+      "assignee": "fixture-owner",
+      "created_at": "2026-09-02T17:51:25Z",
+      "created_by": "fixture-capture",
+      "updated_at": "2026-09-02T17:51:34Z",
+      "metadata": {
+        "flag": true,
+        "name": "alpha",
+        "attempt": 3,
+        "fixture": "rc",
+        "nothing": null
+      },
+      "labels": [
+        "captured",
+        "show"
+      ],
+      "dependent_count": 0,
+      "dependency_count": 0,
+      "comment_count": 3,
+      "comments_omitted": true,
+      "revision": "-6498778448545042582"
+    }
+  ],
+  "schema_version": 1
+}

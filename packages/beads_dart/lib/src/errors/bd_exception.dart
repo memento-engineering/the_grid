@@ -22,6 +22,21 @@ sealed class BdException implements Exception {
       );
     }
 
+    if (exitCode == 14) {
+      // bd 1.3 `ExitMigrationFrozen`: a write refused because a
+      // MIGRATION-FREEZE marker is active. The refusal is plain text on
+      // stderr with an empty stdout, so the dedicated, stable exit code IS the
+      // discriminator (ADR-0000 A3's stdout envelope does not apply). A frozen
+      // store must read as "frozen", never as a crash.
+      return BdMigrationFrozen(
+        command: command,
+        message: _messageFromOutput(exitCode, stdout, stderr),
+        markerPath: _freezeMarkerPath(stderr),
+        stdout: stdout,
+        stderr: stderr,
+      );
+    }
+
     if (command.length > 1 && command[1] == 'update') {
       final report = _envelopeData(_lastNonEmptyLine(stderr));
       final failed = report?['failed'];
@@ -113,6 +128,33 @@ class BdGuardMismatch extends BdException {
   final List<String> command;
   @override
   final String message;
+  final String stdout;
+  final String stderr;
+}
+
+/// Exit 14 — a write refused because a `MIGRATION-FREEZE` marker is active.
+///
+/// The marker is a plain file an operator (or a migration tool) creates to stop
+/// writes against a workspace and removes to resume them; bd only reads it.
+/// This is a "come back later", not a failure to retry immediately.
+class BdMigrationFrozen extends BdException {
+  const BdMigrationFrozen({
+    required this.command,
+    required this.message,
+    required this.markerPath,
+    required this.stdout,
+    required this.stderr,
+  });
+
+  final List<String> command;
+  @override
+  final String message;
+
+  /// The marker path bd named, or null when bd could not stat the marker and
+  /// failed closed instead ("cannot determine whether this workspace is
+  /// frozen"), which names no marker.
+  final String? markerPath;
+
   final String stdout;
   final String stderr;
 }
@@ -259,6 +301,14 @@ String _messageFromOutput(int exitCode, String stdout, String stderr) {
   if (stdout.trim().isNotEmpty) return stdout.trim();
   return 'bd exited $exitCode with no output';
 }
+
+/// The `MIGRATION-FREEZE` marker path bd names in its refusal
+/// (`bd <op> is blocked by the freeze marker at <path>.`), or null for the
+/// fail-closed "cannot determine" shape, which names no marker.
+String? _freezeMarkerPath(String stderr) => RegExp(
+  r'blocked by the freeze marker at (.+)\.\s*$',
+  multiLine: true,
+).firstMatch(stderr)?.group(1);
 
 String _lastNonEmptyLine(String source) {
   final lines = source.split('\n');

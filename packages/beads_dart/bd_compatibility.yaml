@@ -1,5 +1,5 @@
 floor: v1.0.5
-day_one_wait_through: v1.1.2
+day_one_wait_through: v1.3.0
 fork_patches:
   graph_apply_parent_cycle_skip:
     repository: nicholasspencer/beads

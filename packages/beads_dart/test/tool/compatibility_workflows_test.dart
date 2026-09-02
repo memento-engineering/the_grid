@@ -49,7 +49,7 @@ void main() {
     );
     expect(receipt, contains('BD_JSON_ENVELOPE=1'));
     expect(policy['floor'], 'v1.0.5');
-    expect(policy['day_one_wait_through'], 'v1.1.2');
+    expect(policy['day_one_wait_through'], 'v1.3.0');
   });
 
   test('drift workflow contract', () {
@@ -161,7 +161,10 @@ done
         return 0;
       }
 
-      if (compare(latest, wait) <= 0) throw StateError('day-one wait');
+      // day_one_wait_through names the tag the rail WAITS FOR: at-or-newer
+      // opens the gate (tg-1liv;
+      // the_grid#day-one-window-names-the-tag-the-release-rail-waits-for).
+      if (compare(latest, wait) < 0) throw StateError('day-one wait');
       return {floor, latest}.toList()..sort();
     }
 
@@ -170,35 +173,35 @@ done
         refs(
           package: 'beads_dart',
           floor: 'v1.0.5',
-          wait: 'v1.1.2',
-          latest: 'v1.2.0',
+          wait: 'v1.3.0',
+          latest: 'v1.3.0',
         ),
-        ['v1.0.5', 'v1.2.0'],
+        ['v1.0.5', 'v1.3.0'],
       );
       expect(
         refs(
           package: 'beads_dart',
-          floor: 'v1.2.0',
-          wait: 'v1.1.2',
-          latest: 'v1.2.0',
+          floor: 'v1.3.0',
+          wait: 'v1.3.0',
+          latest: 'v1.3.0',
         ),
-        ['v1.2.0'],
+        ['v1.3.0'],
       );
       expect(
         () => refs(
           package: 'beads_dart',
           floor: '1.0.5',
-          wait: 'v1.1.2',
-          latest: 'v1.2.0',
+          wait: 'v1.3.0',
+          latest: 'v1.3.0',
         ),
         throwsFormatException,
       );
-      for (final latest in ['v1.1.1', 'v1.1.2']) {
+      for (final latest in ['v1.1.0', 'v1.2.2']) {
         expect(
           () => refs(
             package: 'beads_dart',
             floor: 'v1.0.5',
-            wait: 'v1.1.2',
+            wait: 'v1.3.0',
             latest: latest,
           ),
           throwsStateError,
@@ -219,6 +222,8 @@ done
       expect(source, contains('fromJSON(needs.parse.outputs.bd_refs)'));
       expect(source, contains('repos/gastownhall/beads/releases/latest'));
       expect(source, contains('[\$floor,\$latest]|unique'));
+      expect(source, contains('day-one window'));
+      expect(source, isNot(contains(r'"$latest" != "$wait"')));
       expect(yaml['jobs']['publish']['needs'], ['parse', 'bd-compatibility']);
       // The bd-compatibility job gates at the JOB level (a declared action that
       // fails to resolve kills a job at setup regardless of step-level ifs), and
