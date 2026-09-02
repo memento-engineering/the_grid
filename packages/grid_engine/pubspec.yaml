@@ -1,7 +1,7 @@
 name: grid_engine
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.3.0-rc.9
+version: 0.3.0-rc.10
 description: >-
   Tree engine for the_grid — genesis_tree reconciles the running system:
   build(observed), mount = spawn, unmount = kill.

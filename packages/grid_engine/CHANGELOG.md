@@ -1,3 +1,9 @@
+## 0.3.0-rc.10
+
+- Breaking: adopts genesis_tree 0.3.0 — `InheritedBranch.addDependent` and `TreeContext.dependOnInheritedSeedOfExactType` gain `{Object? aspect}`, and the engine's `Provider` / registry overrides and `FakeTreeContext` forward it (#260). Migration: bump `genesis_tree` to `^0.3.0` and add the `aspect` parameter to any `addDependent` / `dependOnInheritedSeedOfExactType` override; callers that pass no aspect are unchanged.
+- Dual-read: pre-transition step fold absences are classified rather than reported as unexplained divergences (#258); session/step dual-read divergences carry a classified cause (#254).
+- Tests pin leased protocol-event completion (#257).
+
 ## 0.3.0-rc.9
 
 - The trajectory dual-read surfaces (tg-zfek, cut-wiring C1–C4): `trajectory_views` declares the fold READ interfaces and the winner rule in the engine's own domain layer — grid_sdk implements them over grid_trajectory's row types, so the engine gains no dependency and no SQL client enters its transitive set. Adds the session-axis pass (`dual_read_pass`: the overlay and its monotone guard, the comparator, lag/adjudication, the one escalation rule) and the step-axis pass (`step_dual_read_pass`: the collapse rule, the shared `effectiveStepCursor`, the three step-axis protections), plus the `trajectory_scope` ambient value (#245, #250).

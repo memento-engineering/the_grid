@@ -1,7 +1,7 @@
 name: grid_cli
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.5.0-rc.8
+version: 0.5.0-rc.9
 description: >-
   Management CLI for the_grid — `grid watch` and companion commands for
   operating a grid station.
@@ -21,10 +21,10 @@ dependencies:
   genesis_foundation: ^0.2.0
   genesis_tree: ^0.3.0
   grid_diagnostics_contract: ^0.2.0
-  grid_engine: ^0.3.0-rc.8
+  grid_engine: ^0.3.0-rc.10
   grid_exploration: ^0.3.0-rc.3
   grid_runtime: ^0.2.0-rc.6
-  grid_sdk: ^0.3.0-rc.6
+  grid_sdk: ^0.3.0-rc.8
   # The dev bin composes `traj`. grid_trajectory is a leaf below the whole
   # chain, so this edge adds no cycle (decision: grid-trajectory-leaf-package).
   grid_trajectory: ^0.1.0
