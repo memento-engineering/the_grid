@@ -85,6 +85,7 @@ export 'src/molecule/molecule_schema.dart'
 // definition of the wire keys.
 export 'src/domain/cross_link.dart';
 export 'src/domain/joined_snapshot.dart';
+export 'src/domain/linked_sessions.dart';
 // The rework-round contract (tg-o90) — the ONE cap + retired-round key shape
 // shared by the `Rewind` arm (the engine) and `grid rework` (the operator verb).
 export 'src/domain/rework.dart';

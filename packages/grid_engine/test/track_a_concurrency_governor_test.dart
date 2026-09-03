@@ -277,6 +277,7 @@ void main() {
           sessions: {
             'tg-1': const SessionProjection(
               workBeadId: 'tg-1',
+              sessionId: 'tgdog-tg-1',
               isTerminal: true,
               // A POSITIVE terminal: the engine's close path stamps
               // `grid.outcome=complete` (tg-4rw / I-10) — that marker is what
@@ -301,9 +302,15 @@ void main() {
       // the governor's contract — assert the SET of events, not the order.
       expect(recorder.events.toSet(), {'STOP work(tg-1)', 'START work(tg-3)'});
       expect(recorder.events, hasLength(2));
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.name, 'work.throttled');
-      expect(transport.flares.single.data, {'count': '1', 'beadIds': 'tg-4'});
+      final throttled = transport.flares.singleWhere(
+        (flare) => flare.name == 'work.throttled',
+      );
+      expect(throttled.data, {'count': '1', 'beadIds': 'tg-4'});
+      final skipped = transport.flares.singleWhere(
+        (flare) => flare.name == 'work.terminalSkip',
+      );
+      expect(skipped.data['sessionId'], 'tgdog-tg-1');
+      expect(skipped.data['disposition'], 'done');
     });
 
     test('a substation override CANNOT raise the station-wide ceiling — the '
@@ -859,6 +866,7 @@ void main() {
           sessions: {
             'tg-aaa': const SessionProjection(
               workBeadId: 'tg-aaa',
+              sessionId: 'tgdog-tg-aaa',
               isTerminal: true,
               completed: true,
             ),
@@ -874,8 +882,12 @@ void main() {
         'START work(tg-zzz)',
       });
       expect(recorder.events, hasLength(2));
-      // Nothing waits any more, so the governor stays quiet.
-      expect(transport.flares, isEmpty);
+      // Nothing waits any more, so the governor stays quiet; the terminal
+      // boundary still names the session whose positive close freed the slot.
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.name, 'work.terminalSkip');
+      expect(transport.flares.single.data['sessionId'], 'tgdog-tg-aaa');
+      expect(transport.flares.single.data['disposition'], 'done');
     });
   });
 }

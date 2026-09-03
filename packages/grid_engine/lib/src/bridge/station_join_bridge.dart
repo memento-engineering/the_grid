@@ -5,6 +5,7 @@ import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
 
 import '../domain/cross_link.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/linked_sessions.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_projection.dart';
@@ -243,6 +244,7 @@ class StationJoinBridge {
       JoinedSnapshot(
         graph: _latest.graph,
         sessionsByWorkBead: _latest.sessionsByWorkBead,
+        surplusSessionsByWorkBead: _latest.surplusSessionsByWorkBead,
         mountAttemptsByWorkBead: _latest.mountAttemptsByWorkBead,
       ),
     );
@@ -317,8 +319,10 @@ class StationJoinBridge {
     if (work == null) return JoinedSnapshot.empty();
     var graph = work;
     final sessions = <String, SessionProjection>{};
+    final surplus = <String, List<SessionProjection>>{};
     final attempts = <String, MountAttemptRecord>{};
     if (state != null) {
+      final linkedRows = <String, List<SessionProjection>>{};
       for (final bead in state.beadsById.values) {
         // The DURABLE remount budget (tg-zlfu) projects in the SAME pass: the
         // mount predicate is synchronous and cannot read the store, so the
@@ -331,7 +335,21 @@ class StationJoinBridge {
         if (bead.issueType != GridIssueTypes.session) continue;
         final projection = projectSession(bead);
         if (projection.workBeadId.isEmpty) continue; // no JOIN key — skip.
-        sessions[projection.workBeadId] = projection;
+        (linkedRows[projection.workBeadId] ??= <SessionProjection>[]).add(
+          projection,
+        );
+      }
+      // ONE ordering rule (tg-83k1): the published row is
+      // `orderLinkedSessions(...).first`, never map iteration order. A48 left
+      // the last-writer-wins pick as-is because the void retire was assumed to
+      // keep one row per key; twin mints and hand-closed rounds break that
+      // assumption, and an order-dependent winner is what strands a ready bead.
+      for (final entry in linkedRows.entries) {
+        final ordered = orderLinkedSessions(entry.value);
+        sessions[entry.key] = ordered.first;
+        if (ordered.length > 1) {
+          surplus[entry.key] = ordered.skip(1).toList(growable: false);
+        }
       }
       _attachMoleculeBeads(state, sessions);
       _attachGateState(state, sessions);
@@ -375,6 +393,7 @@ class StationJoinBridge {
     return JoinedSnapshot(
       graph: graph,
       sessionsByWorkBead: sessions,
+      surplusSessionsByWorkBead: surplus,
       mountAttemptsByWorkBead: attempts,
     );
   }
