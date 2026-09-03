@@ -348,6 +348,9 @@ void main() {
 
   test(
     'a throwing drain settle is reported LOUD and flushing continues',
+    // Integration tier: assembleStationWork needs a REAL state store, so this
+    // shells out to `bd init` — absent on the unit-tier CI runner.
+    tags: ['integration'],
     () async {
       final temp = Directory.systemTemp.createTempSync('settle-guard-');
       addTearDown(() => temp.deleteSync(recursive: true));
