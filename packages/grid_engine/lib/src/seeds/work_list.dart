@@ -506,9 +506,24 @@ class _WorkListState extends State<WorkList>
       slotsAvailable = math.min(substationSlots, stationSlots);
     }
 
-    // Deterministic admission order (lowest bead id first) — same tie-break
-    // the final sort below applies, so which beads get in is reproducible.
-    pending.sort((a, b) => a.bead.id.compareTo(b.bead.id));
+    // Deterministic admission order: HIGHEST PRIORITY first, then lowest bead
+    // id WITHIN one priority (tg-lohr). bd priority is ascending-urgent — P0
+    // is `0` — so the priority leg is a plain ascending `compareTo`, matching
+    // beads_dart's own `ORDER BY priority ASC` ready-work sort. The id leg is
+    // what keeps admission reproducible across reconciles; on its own it was
+    // arbitrary (ids carry a random-ish suffix), which made priority
+    // decorative at the mount boundary: a P0 filed as `tg-zzzz` lost its slot
+    // to a P4 filed as `tg-aaaa`, every reconcile.
+    //
+    // This decides only WHICH pending beads take the free slots. It never
+    // evicts a mounted bead (a higher-priority bead waits for a natural slot),
+    // and it never reorders ACROSS substations — each substation's `WorkList`
+    // sorts only its own pending bin, so the per-substation and station-wide
+    // caps keep exactly their A43 meaning.
+    pending.sort((a, b) {
+      final byPriority = a.bead.priority.compareTo(b.bead.priority);
+      return byPriority != 0 ? byPriority : a.bead.id.compareTo(b.bead.id);
+    });
     final admitted = pending.take(slotsAvailable);
     final waiting = pending.skip(slotsAvailable).toList();
     for (final entry in admitted) {
