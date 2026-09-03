@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart' as engine;
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart' show BeadWorktree, RootCheckout;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -66,6 +67,21 @@ final class _RecordingResolver implements engine.SessionResolver {
   Seed sessionFor({required Bead bead, engine.SessionProjection? session}) {
     mounted.add(bead.id);
     return const _Leaf();
+  }
+}
+
+/// A dry git service whose worktree listing THROWS — the injection point that
+/// makes a drain settle fail, because `StationWorkRuntime.decommission` lists
+/// a detached seat's worktrees before reaping them.
+final class _ThrowingDryGit extends DryStationGitService {
+  var listings = 0;
+  var throwing = false;
+
+  @override
+  Future<List<BeadWorktree>?> listBeadWorktrees(RootCheckout root) async {
+    if (!throwing) return super.listBeadWorktrees(root);
+    listings++;
+    throw StateError('worktree listing exploded');
   }
 }
 
@@ -173,11 +189,43 @@ Future<void> _pumpUntil(bool Function() condition) async {
   expect(condition(), isTrue);
 }
 
-void _seedStore(String root) {
+Future<void> _pumpUntilIo(bool Function() condition) async {
+  for (var i = 0; i < 500 && !condition(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  expect(condition(), isTrue);
+}
+
+/// Drains the microtask/event queue so a fire-and-forget settle has completed.
+Future<void> _pumpSettled() async {
+  for (var i = 0; i < 20; i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
+}
+
+void _seedStore(String root, {String? database}) {
   Directory('$root/.beads').createSync(recursive: true);
-  File(
-    '$root/.beads/metadata.json',
-  ).writeAsStringSync('{"dolt_mode":"embedded"}');
+  File('$root/.beads/metadata.json').writeAsStringSync(
+    database == null
+        ? '{"dolt_mode":"embedded"}'
+        : '{"dolt_mode":"embedded","dolt_database":"$database"}',
+  );
+}
+
+Future<void> _initializeStore(String root, {required String database}) async {
+  Directory(root).createSync(recursive: true);
+  final result = await Process.run('bd', [
+    'init',
+    '--non-interactive',
+    '--quiet',
+    '--skip-agents',
+    '--skip-hooks',
+    '--prefix',
+    database,
+  ], workingDirectory: root);
+  if (result.exitCode != 0) {
+    throw StateError('bd init failed: ${result.stderr}');
+  }
 }
 
 void main() {
@@ -297,4 +345,64 @@ void main() {
     expect(resolver.mounted, isNot(contains('ea-2')));
     expect(provisioner.decommissions, 0);
   });
+
+  test(
+    'a throwing drain settle is reported LOUD and flushing continues',
+    () async {
+      final temp = Directory.systemTemp.createTempSync('settle-guard-');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      await _initializeStore('${temp.path}/home/.grid', database: 'tgstate');
+      _seedStore('${temp.path}/proj', database: 'proj');
+      _seedStore('${temp.path}/earth', database: 'earth');
+      final refusals = <String>[];
+      final git = _ThrowingDryGit();
+      final work = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${temp.path}/home'),
+        substations: [
+          SubstationWorkSpec(name: 'proj', root: '${temp.path}/proj'),
+        ],
+        resolver: _RecordingResolver(),
+        dryRun: true,
+        gitOverride: git,
+        onRefusal: refusals.add,
+      );
+      addTearDown(work.shutdown);
+      await work.start();
+      refusals.clear();
+      git.throwing = true;
+
+      // An IDLE roster: the settle must be a no-op, so the guard is not yet
+      // exercised and no refusal is emitted.
+      work.afterFlush();
+      await _pumpSettled();
+      expect(refusals, isEmpty);
+      expect(git.listings, 0);
+
+      // Now a seat that drains and immediately goes idle: the settle finalises
+      // it, decommission lists worktrees, the listing throws.
+      final attached = await work.roster.attach(
+        name: 'earth',
+        root: '${temp.path}/earth',
+      );
+      expect(attached, isA<RosterAttached>());
+      final draining = await work.roster.detach(
+        name: 'earth',
+        force: true,
+        inFlightOf: (_) => {'earth-1'},
+      );
+      expect(draining, isA<RosterDraining>());
+      work.afterFlush();
+      await _pumpUntilIo(() => refusals.isNotEmpty);
+
+      expect(git.listings, 1);
+      expect(refusals.single, contains('roster drain settle failed'));
+      expect(refusals.single, contains('worktree listing exploded'));
+
+      // The station keeps flushing: the seat left the roster before the throw,
+      // so the next flush settles nothing, raises nothing, and adds no refusal.
+      work.afterFlush();
+      await _pumpSettled();
+      expect(refusals, hasLength(1));
+    },
+  );
 }

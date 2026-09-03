@@ -299,10 +299,29 @@ class StationWorkRuntime implements SubstationProvisioner {
   }
 
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
-  /// unclaimed-frontier re-scans (D-5/F1).
+  /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle.
   void afterFlush() {
     _driver.afterFlush();
-    unawaited(_handler.settleRosterDrains());
+    unawaited(_settleRosterDrainsGuarded());
+  }
+
+  /// Settles draining roster seats, reporting a failure instead of raising it.
+  ///
+  /// The settle is ASYNC and rides the handler's serialized tail, so a failure
+  /// cannot surface at [afterFlush]'s synchronous call site: fire-and-forget
+  /// would let it escape to the ROOT ZONE and take the resident down. The
+  /// posture is the kernel's own (`StationKernel._runFlushPass` guards
+  /// `_driver.afterFlush` the same way) — a post-flush rail reports LOUD
+  /// through the refusal sink and the loop keeps flushing.
+  Future<void> _settleRosterDrainsGuarded() async {
+    try {
+      await _handler.settleRosterDrains();
+    } on Object catch (error) {
+      _onRefusal(
+        'grid: roster drain settle failed (the station keeps flushing) — '
+        '$error',
+      );
+    }
   }
 
   @override

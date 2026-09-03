@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
-import 'package:grid_engine/grid_engine.dart' show SessionBeadKeys;
-import 'package:grid_runtime/grid_runtime.dart' show GridIssueTypes;
+import 'package:grid_engine/grid_engine.dart'
+    show SessionBeadKeys, SnapshotSource;
+import 'package:grid_runtime/grid_runtime.dart'
+    show BeadOwnershipPredicate, GridIssueTypes, StationBeadWriter;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
@@ -30,6 +32,51 @@ final class _FakeProvisioner implements SubstationProvisioner {
     return 2;
   }
 }
+
+final class _FakeBd implements BdRunner, BeadProbeReader {
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async => BdResult(
+    exitCode: 0,
+    stdout: '{"schema_version":1,"data":{}}',
+    stderr: '',
+  );
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async =>
+      null;
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const <Bead>[];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async =>
+      const <Bead>[];
+}
+
+final class _StateSource implements SnapshotSource {
+  _StateSource(this.current);
+
+  @override
+  GraphSnapshot? current;
+
+  @override
+  Stream<GraphSnapshot> get snapshots => Stream<GraphSnapshot>.empty();
+}
+
+GraphSnapshot _emptyState() => GraphSnapshot.fromParts(
+  beads: const [],
+  dependencies: const [],
+  readyIds: const [],
+  capturedAt: DateTime.utc(2026),
+);
 
 final class _Delegate extends GridDelegate {}
 
@@ -183,7 +230,10 @@ void main() {
       expect(draining, isA<RosterDraining>());
       expect(current.seats.single.drainIds, {'earth-1'});
 
-      await roster.settleDrains((_) => const <String>{});
+      await roster.settleDrains(
+        () async =>
+            (_) => const <String>{},
+      );
       await _pump();
       expect(current.seats, isEmpty);
       expect(provisioner.decommissioned, ['earth']);
@@ -232,7 +282,10 @@ void main() {
         inFlightOf: (_) => {'earth-1', 'earth-2'},
       );
 
-      await roster.settleDrains((_) => {'earth-2'});
+      await roster.settleDrains(
+        () async =>
+            (_) => {'earth-2'},
+      );
 
       expect(current.seats.single.drainIds, {'earth-2'});
       expect(provisioner.decommissioned, isEmpty);
@@ -294,6 +347,75 @@ void main() {
       expect(delegate.attachedRoster.map((seat) => seat.name), ['earth']);
       expect(delegate.liveRoster.map((seat) => seat.name), ['coded', 'earth']);
       expect(delegate.armedRoster.map((seat) => seat.name), ['coded']);
+    },
+  );
+
+  test('settleDrains resolves no probe when no seat is draining', () async {
+    await roster.attach(name: 'earth', root: root);
+    var resolved = 0;
+
+    await roster.settleDrains(() async {
+      resolved++;
+      return (_) => const <String>{};
+    });
+
+    expect(resolved, 0, reason: 'an idle roster costs no store read');
+    expect(current.seats, hasLength(1));
+    expect(provisioner.decommissioned, isEmpty);
+  });
+
+  test(
+    'settleDrains resolves the probe once when a seat is draining',
+    () async {
+      await roster.attach(name: 'earth', root: root);
+      await roster.detach(
+        name: 'earth',
+        force: true,
+        inFlightOf: (_) => {'earth-1'},
+      );
+      var resolved = 0;
+
+      await roster.settleDrains(() async {
+        resolved++;
+        return (_) => const <String>{};
+      });
+
+      expect(resolved, 1, reason: 'the laziness must not be vacuous');
+      expect(current.seats, isEmpty);
+      expect(provisioner.decommissioned, ['earth']);
+    },
+  );
+
+  test(
+    'a post-flush settle performs zero state-store requeries when idle',
+    () async {
+      var refreshes = 0;
+      final bd = _FakeBd();
+      final handler = StationCommandHandler(
+        stateSource: _StateSource(_emptyState()),
+        refreshState: () async => refreshes++,
+        stateWriter: StationBeadWriter(
+          bd: BdCliService(bd),
+          reader: bd,
+          ownership: BeadOwnershipPredicate({'state'}),
+        ),
+        stateOwnership: BeadOwnershipPredicate({'state'}),
+        workStoresByIdentity: const <String, WorkCommandStore>{},
+      )..bindRoster(roster);
+      await roster.attach(name: 'earth', root: root);
+
+      await handler.settleRosterDrains();
+      expect(refreshes, 0, reason: 'no seat drains — no store round trip');
+
+      await roster.detach(
+        name: 'earth',
+        force: true,
+        inFlightOf: (_) => {'earth-1'},
+      );
+      await handler.settleRosterDrains();
+
+      expect(refreshes, 1, reason: 'a draining seat costs exactly one requery');
+      expect(provisioner.decommissioned, ['earth']);
     },
   );
 }

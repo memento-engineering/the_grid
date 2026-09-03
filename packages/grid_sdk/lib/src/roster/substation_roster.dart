@@ -11,6 +11,18 @@ import '../work/work_assembly.dart' show SubstationWorkSpec;
 import 'roster_outcome.dart';
 import 'roster_seat.dart';
 
+/// Answers "which of [spec]'s work beads still carry a live session".
+typedef InFlightProbe = Set<String> Function(SubstationWorkSpec spec);
+
+/// Produces an [InFlightProbe] against a FRESH read of the state store, or
+/// null when no snapshot is available.
+///
+/// It is a RESOLVER rather than a probe because resolving costs a state-store
+/// requery and the station settles drains after EVERY tree flush:
+/// [SubstationRoster.settleDrains] calls this only once it has established, on
+/// its own state, that a seat is actually draining.
+typedef InFlightProbeResolver = Future<InFlightProbe?> Function();
+
 /// Owns the off-tree half of a live substation attachment.
 abstract interface class SubstationProvisioner {
   /// Starts [spec]'s controller, membership, writer, root, and ownership.
@@ -171,9 +183,20 @@ class SubstationRoster extends StateNotifier<AttachedRoster> {
   }
 
   /// Finalises draining seats that have become idle.
-  Future<void> settleDrains(
-    Set<String> Function(SubstationWorkSpec spec) inFlightOf,
-  ) async {
+  ///
+  /// [resolveProbe] is invoked ONLY when at least one seat is draining. The
+  /// station's post-flush rail calls this after every completed tree flush and
+  /// the resolver costs a state-store requery, so an eager resolve would put a
+  /// store round trip in front of every operator command on the resident's
+  /// serialized command tail.
+  ///
+  /// The draining check reads this notifier's state from INSIDE the notifier —
+  /// it is never re-surfaced to a caller (ADR-0008 D-H rule 2), which is why
+  /// the laziness lives here rather than at the call site.
+  Future<void> settleDrains(InFlightProbeResolver resolveProbe) async {
+    if (!_hasDrainingSeat()) return;
+    final inFlightOf = await resolveProbe();
+    if (inFlightOf == null) return;
     for (final seat in state.seats.toList(growable: false)) {
       if (!seat.isDraining) continue;
       final inFlight = inFlightOf(seat.spec);
@@ -192,6 +215,18 @@ class SubstationRoster extends StateNotifier<AttachedRoster> {
             other,
       ]);
     }
+  }
+
+  /// Whether any seat is draining.
+  ///
+  /// Deliberately PRIVATE and written as statements: D-H rule 2 bans a public
+  /// synchronous accessor over notifier state, and the `dh_state_leak_gate`
+  /// fence rejects an expression body over `state` outright.
+  bool _hasDrainingSeat() {
+    for (final seat in state.seats) {
+      if (seat.isDraining) return true;
+    }
+    return false;
   }
 
   Future<RosterOutcome> _finalize(String name) async {

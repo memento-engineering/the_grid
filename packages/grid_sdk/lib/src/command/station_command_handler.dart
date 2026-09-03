@@ -142,10 +142,17 @@ final class StationCommandHandler implements GridCommandHandler {
   Future<void> _settleRosterDrains() async {
     final roster = _roster;
     if (roster == null) return;
-    await _refreshState();
-    final snapshot = _stateSource.current;
-    if (snapshot == null) return;
-    await roster.settleDrains((spec) => liveWorkBeadsFor(spec, snapshot));
+    // The requery is LAZY: it rides the resolver the roster invokes only once
+    // it has established that a seat is draining. The station settles drains
+    // after EVERY tree flush on this handler's serialized tail, so an eager
+    // refresh here would queue a state-store round trip in front of every
+    // operator command.
+    await roster.settleDrains(() async {
+      await _refreshState();
+      final snapshot = _stateSource.current;
+      if (snapshot == null) return null;
+      return (SubstationWorkSpec spec) => liveWorkBeadsFor(spec, snapshot);
+    });
   }
 
   @override
