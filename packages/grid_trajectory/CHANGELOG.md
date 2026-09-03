@@ -2,6 +2,7 @@
 
 ## 0.2.0-rc.1
 
+- Silent, artifact-less harness exits (a usage window running out, a network refusal) classify as `infra`: the restart budget is spent with backoff, then the round opens a gate naming the throttle and flares `harness.throttled` with the tail of the agent's output — never a gateless `failed` strand (tg-mbeh, #294; shipped in this rc after the tag was cut from main).
 - Breaking: the store-identity column is `substation`, not `seat` — `trajectory.seat`, `proj_session_head.seat` and the `ck_seat` check are renamed, the journal rename is pinned against real dolt, and the wave-1 guard names it (tg-j1zn, #289). Migration: reshape an existing trajectory db with the rename journal before arming dual-read; readers select `substation`.
 - Appends with oversized reasons survive: the fold bounds `work_terminal_reason` (and every free-text reason column the schema declares) with a visible truncation marker instead of dropping the whole `attempt.terminal` record (tg-kzvs, #288).
 - The W6 drain and Stage-1 fold guard pins are runner-relative on a shared runner (`TRAJ_GUARD_SHARED_RUNNER`), keeping the tight absolute values for local runs (tg-2zao, #292).
