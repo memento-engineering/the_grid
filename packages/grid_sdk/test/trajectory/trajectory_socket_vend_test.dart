@@ -60,7 +60,7 @@ final class _FakeAppender extends TrajectoryAppender {
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     String? source,
