@@ -1,7 +1,7 @@
 name: grid_runtime
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.2.0-rc.8
+version: 0.2.0-rc.9
 description: >-
   Runtime providers for the_grid — spawns and supervises a coding agent per
   ready bead, isolating each bead's work in a git worktree.
@@ -12,13 +12,13 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart: ^0.2.0-rc.4
+  beads_dart: ^0.2.0-rc.7
   freezed_annotation: ^3.0.0
   # Stage-1 dep edge (tg-zfek, stage1-wiring §1.1): the engine-side derivation
   # layer (`StationTrajectoryRecorder`, chunk W3) constructs grid_trajectory's
   # sealed records here — the edge lands with the harness (W1) so W3–W5 build
   # on it. grid_trajectory stays a LEAF; nothing flows back.
-  grid_trajectory: ^0.1.0
+  grid_trajectory: ^0.1.2
   json_annotation: ^4.9.0
   meta: ^1.16.0
   path: ^1.9.0

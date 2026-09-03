@@ -1,3 +1,8 @@
+## 0.2.0-rc.9
+
+- bd 1.3.0-rc.1 compatibility rails rehearsed against the pinned upstream fixture set; a removed or renamed wire key fails the drift suite loudly (tg-1liv, #272).
+- Floors tightened to `beads_dart ^0.2.0-rc.7` and `grid_trajectory ^0.1.2`.
+
 ## 0.2.0-rc.8
 
 - Breaking: none new in this candidate — it continues the 0.2.0 candidate
