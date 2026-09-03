@@ -82,7 +82,7 @@ final class TrajectoryAppendRequest {
   const TrajectoryAppendRequest(
     this.record, {
     this.occurredAt,
-    this.seat,
+    this.substation,
     this.provenance = TrajectoryProvenance.observed,
     this.provenanceBasis,
   });
@@ -92,9 +92,9 @@ final class TrajectoryAppendRequest {
   /// The observation instant (§2.2); null lets the appender stamp now.
   final DateTime? occurredAt;
 
-  /// Recorder-derived seat (§2.2); null falls back to the appender's
+  /// Recorder-derived substation (§2.2); null falls back to the appender's
   /// prefix derivation.
-  final String? seat;
+  final String? substation;
 
   final TrajectoryProvenance provenance;
   final String? provenanceBasis;
@@ -196,7 +196,7 @@ class TrajectoryHarness {
     required this.config,
     required String gridHome,
     required String station,
-    required this.seatPrefixes,
+    required this.substationPrefixes,
     required TrajectoryFlare? onFlare,
     required Future<TrajectoryDb> Function()? connect,
     required TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
@@ -234,7 +234,7 @@ class TrajectoryHarness {
     required TrajectoryConfig config,
     required String gridHome,
     required String station,
-    Set<String> seatPrefixes = const {},
+    Set<String> substationPrefixes = const {},
     TrajectoryFlare? onFlare,
     Future<TrajectoryDb> Function()? connect,
     TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
@@ -266,7 +266,7 @@ class TrajectoryHarness {
       config: config,
       gridHome: gridHome,
       station: station,
-      seatPrefixes: Set<String>.unmodifiable(seatPrefixes),
+      substationPrefixes: Set<String>.unmodifiable(substationPrefixes),
       onFlare: onFlare,
       connect: connect,
       appenderFactory: appenderFactory,
@@ -297,9 +297,9 @@ class TrajectoryHarness {
   /// a mirror that seeds but never applies is worse than either posture.
   bool get _dualReadArmed => config.dualRead != DualReadMode.off;
 
-  /// The seat-derivation input (§2.2's seat row) — carried for the derivation
-  /// layer; the harness itself never derives a seat.
-  final Set<String> seatPrefixes;
+  /// The substation-derivation input (§2.2's substation row) — carried for the
+  /// derivation layer; the harness itself never derives a substation.
+  final Set<String> substationPrefixes;
 
   /// The derivation layer (§2) — one of the five things the harness owns
   /// (§1.1). Its sink is THIS harness's bounded queue, so every derived
@@ -308,7 +308,7 @@ class TrajectoryHarness {
   /// counting no-op and no call site ever branches on "is the trajectory up".
   late final StationTrajectoryRecorder recorder = StationTrajectoryRecorder(
     sink: _HarnessRecordSink(this),
-    seatPrefixes: seatPrefixes,
+    substationPrefixes: substationPrefixes,
     clock: _clock,
     // Derivation-failure flares ride the harness's standing 30 s bucket.
     onFlare: _flareLimited,
@@ -559,6 +559,25 @@ class TrajectoryHarness {
           'to arm rather than drop every terminal append on an unknown '
           'column. Run the QUIESCED migration first: `traj replay` (station '
           'down), which reshapes the projection and rebuilds it from the log.',
+        );
+        await _closeDbQuietly();
+        return;
+      }
+
+      // THE STALE-JOURNAL REFUSAL (tg-j1zn) — the same fail-closed posture as
+      // the reshape above, but NOT posture-gated. The P1 refusal protects the
+      // FOLD, so `dualRead: off` may skip it; `trajectory.substation` is
+      // written by EVERY append at EVERY posture, so an un-migrated home would
+      // lose the whole log to an unknown column behind a rate-limited flare.
+      // Placed after the P1 probe so the projection probe stays the first
+      // statement a boot issues.
+      if (await journalNeedsSubstationRename(db)) {
+        _degrade(
+          'the trajectory journal still carries the pre-tg-j1zn `seat` column '
+          '— the trajectory refuses to arm rather than lose every append to '
+          'an unknown column. Run the QUIESCED migration first: `traj replay` '
+          '(station down), which renames the column and rebuilds the '
+          'projections from the log.',
         );
         await _closeDbQuietly();
         return;
@@ -1179,7 +1198,7 @@ class TrajectoryHarness {
         () => _appender!.append(
           request.record,
           occurredAt: request.occurredAt,
-          seat: request.seat,
+          substation: request.substation,
           provenance: request.provenance,
           provenanceBasis: request.provenanceBasis,
         ),
@@ -1605,13 +1624,13 @@ final class _SerializedTickAppender implements TickAppender {
   @override
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => _harness._serialize(
     () => _appender.append(
       record,
-      seat: seat,
+      substation: substation,
       provenance: provenance,
       provenanceBasis: provenanceBasis,
     ),
@@ -1644,14 +1663,14 @@ final class _HarnessRecordSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => _harness.enqueue(
     TrajectoryAppendRequest(
       record,
       occurredAt: occurredAt,
-      seat: seat,
+      substation: substation,
       provenance: provenance,
       provenanceBasis: provenanceBasis,
     ),

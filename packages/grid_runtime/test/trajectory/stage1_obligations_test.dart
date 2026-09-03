@@ -56,7 +56,7 @@ final class _CountingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => enqueued.add(record);
@@ -70,8 +70,11 @@ class _FakeClock {
   void advance(Duration by) => now = now.add(by);
 }
 
-StationTrajectoryRecorder _recorder({Set<String> seats = const {'tg'}}) =>
-    StationTrajectoryRecorder(sink: _CountingSink(), seatPrefixes: seats);
+StationTrajectoryRecorder _recorder({Set<String> substations = const {'tg'}}) =>
+    StationTrajectoryRecorder(
+      sink: _CountingSink(),
+      substationPrefixes: substations,
+    );
 
 /// A `traj_pulse` beat as the server renders it back: DATETIME(6), no zone,
 /// UTC — the same text the appender writes.
@@ -183,9 +186,9 @@ void main() {
       expect(record.reason, contains('write_timeout'));
       expect(append.provenance, TrajectoryProvenance.inferred);
       expect(append.provenanceBasis, kTickUnknownSettlementBasis);
-      // ck_seat: the record carries a work_bead_id, so it carries a seat —
-      // the recorder's allowSet match, not the appender's fallback.
-      expect(append.seat, 'tg');
+      // ck_substation: the record carries a work_bead_id, so it carries a
+      // substation — the recorder's allowSet match, not the appender's fallback.
+      expect(append.substation, 'tg');
     });
 
     test('settles an attempt with no pid on record — nothing to probe means '

@@ -14,7 +14,7 @@ final class _CapturingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => enqueued.add(record);

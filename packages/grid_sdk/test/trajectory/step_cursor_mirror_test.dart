@@ -41,8 +41,9 @@ TrajectoryEnvelope _envelope(TrajectoryRecord record) {
     'payload': record.payloadToJson(),
     ...record.correlationToJson(),
   };
-  // §2.6 rule 7's `ck_seat`: a work_bead_id needs the service-derived seat.
-  if (json['work_bead_id'] != null) json['seat'] = 'tg';
+  // §2.6 rule 7's `ck_substation`: a work_bead_id needs the service-derived
+  // substation.
+  if (json['work_bead_id'] != null) json['substation'] = 'tg';
   return TrajectoryEnvelope.fromJson(json);
 }
 

@@ -175,7 +175,7 @@ void main() {
       'ck_provision',
       'ck_grant',
       'ck_grant_link',
-      'ck_seat',
+      'ck_substation',
     ]) {
       expect(trajectory, contains('CONSTRAINT $constraint'));
     }

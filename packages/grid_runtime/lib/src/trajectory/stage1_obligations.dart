@@ -199,7 +199,7 @@ final class UnknownTerminalSettlementObligation extends ObligationQuery {
       appends.add(
         ObligationAppend(
           derived.record,
-          seat: derived.seat,
+          substation: derived.substation,
           provenance: TrajectoryProvenance.inferred,
           provenanceBasis: kTickUnknownSettlementBasis,
         ),

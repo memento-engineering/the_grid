@@ -176,7 +176,7 @@ Future<_Outcome> _runUp(
           required readPath,
         }) async => null,
     readVmServiceUri: () async => null,
-    inspectPrimaryCheckout: (seat) async =>
+    inspectPrimaryCheckout: (substation) async =>
         const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.fresh),
     maintainStateStore: ({required gridHome}) async {},
     readStateStoreTypes: ({required gridHome}) async => <String, dynamic>{

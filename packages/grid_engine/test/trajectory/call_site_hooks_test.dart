@@ -42,7 +42,7 @@ import 'package:test/test.dart';
 final class _CapturingSink implements TrajectoryRecordSink {
   final List<TrajectoryRecord> records = [];
   final List<TrajectoryProvenance> provenances = [];
-  final List<String?> seats = [];
+  final List<String?> substations = [];
 
   @override
   bool get accepting => true;
@@ -51,13 +51,13 @@ final class _CapturingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) {
     records.add(record);
     provenances.add(provenance);
-    seats.add(seat);
+    substations.add(substation);
   }
 
   List<String> get types => [for (final r in records) r.recordType];
@@ -93,7 +93,7 @@ final class _RefusingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => throw StateError('a non-accepting sink must never be reached');
@@ -109,14 +109,17 @@ final class _ThrowingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => throw StateError('sink refused');
 }
 
 StationTrajectoryRecorder _recorderOver(TrajectoryRecordSink sink) =>
-    StationTrajectoryRecorder(sink: sink, seatPrefixes: const {'tg', 'tgdog'});
+    StationTrajectoryRecorder(
+      sink: sink,
+      substationPrefixes: const {'tg', 'tgdog'},
+    );
 
 /// The three postures a differential test runs the SAME scenario under.
 final class _Posture {
@@ -580,8 +583,8 @@ void main() {
         expect(started['model'], kSessionModelMolecule);
         // §2.2's grant_id row: no grants exist before Stage 3.
         expect(started['grant_basis'], kPreStage3GrantBasis);
-        // §2.2's seat row, resolved by ownedPrefixOf over the allow-set.
-        expect(sink.seats.first, 'tg');
+        // §2.2's substation row, resolved by ownedPrefixOf over the allow-set.
+        expect(sink.substations.first, 'tg');
       },
     );
 
@@ -859,9 +862,9 @@ void main() {
       final terminal = sink.fact('attempt.terminal');
       expect(terminal['outcome'], 'succeeded');
       expect(terminal['session_id'], 'tgdog-s');
-      // The record carries the ORIGINAL work bead id and its resolved seat.
+      // The record carries the ORIGINAL work bead id and its resolved substation.
       expect(terminal['work_bead_id'], 'tg-1');
-      expect(sink.seats.last, 'tg');
+      expect(sink.substations.last, 'tg');
       // Derived at the OUTCOME-BEARING caller, after the legacy close landed.
       expect(
         fakes.runner.callsFor('close').map((c) => c[1]),

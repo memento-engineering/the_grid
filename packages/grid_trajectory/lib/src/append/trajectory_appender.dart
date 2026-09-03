@@ -310,7 +310,7 @@ class TrajectoryAppender {
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     String? source,
@@ -348,7 +348,7 @@ class TrajectoryAppender {
     // The envelope builder, not just the envelope: the resolving pre-read
     // (§0.3's TESTIMONY YIELDS TO OBSERVATION) may re-author the record in its
     // settling form INSIDE the transaction, and the rebuilt row must be
-    // stamped from exactly these inputs — same clock instant, same seat, same
+    // stamped from exactly these inputs — same clock instant, same substation, same
     // provenance — with only the record's own identity and correlation
     // changing. A re-mint of `record_id` is part of that (V5 build note).
     TrajectoryEnvelope build(TrajectoryRecord subject) => _buildEnvelope(
@@ -356,7 +356,7 @@ class TrajectoryAppender {
       context: context,
       now: now,
       occurredAt: occurredAt?.toUtc() ?? now,
-      seat: seat,
+      substation: substation,
       provenance: provenance,
       provenanceBasis: provenanceBasis,
       source: source ?? this.source,
@@ -1010,7 +1010,7 @@ class TrajectoryAppender {
     required IdemContext context,
     required DateTime now,
     required DateTime occurredAt,
-    required String? seat,
+    required String? substation,
     required TrajectoryProvenance provenance,
     required String? provenanceBasis,
     required String source,
@@ -1038,16 +1038,16 @@ class TrajectoryAppender {
     // The caller's grant token never clobbers a record-carried one (issuing
     // records stamp their own).
     if (fencingToken != null) json['fencing_token'] ??= fencingToken;
-    // §2.6 rule 7: seat is service-derived from the bead's store prefix —
-    // no caller supplies it, so no caller can forget it (ck_seat).
+    // §2.6 rule 7: substation is service-derived from the bead's store prefix —
+    // no caller supplies it, so no caller can forget it (ck_substation).
     final workBeadId = json['work_bead_id'] as String?;
     if (workBeadId != null) {
-      json['seat'] = seat ?? _seatFor(workBeadId);
+      json['substation'] = substation ?? _substationFor(workBeadId);
     }
     return TrajectoryEnvelope.fromJson(json);
   }
 
-  static String _seatFor(String workBeadId) {
+  static String _substationFor(String workBeadId) {
     final dash = workBeadId.indexOf('-');
     return dash <= 0 ? workBeadId : workBeadId.substring(0, dash);
   }

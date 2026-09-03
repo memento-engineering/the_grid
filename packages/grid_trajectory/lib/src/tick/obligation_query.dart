@@ -45,19 +45,21 @@ abstract class ObligationQuery {
 final class ObligationAppend {
   const ObligationAppend(
     this.record, {
-    this.seat,
+    this.substation,
     this.provenance = TrajectoryProvenance.observed,
     this.provenanceBasis,
   });
 
   final TrajectoryRecord record;
 
-  /// The derivation layer's seat for this record when the repair derived one
-  /// (stage1-wiring §2.2's seat row: `ownedPrefixOf` over the allowSet, plus
+  /// The derivation layer's substation for this record when the repair derived
+  /// one (stage1-wiring §2.2's substation row: `ownedPrefixOf` over the
+  /// allowSet, plus
   /// the deterministic `unowned` fallback). Null falls back to the appender's
-  /// own prefix derivation — a repair's seat must not differ from the seat the
-  /// same record would carry had it been derived at an observation site.
-  final String? seat;
+  /// own prefix derivation — a repair's substation must not differ from the
+  /// substation the same record would carry had it been derived at an
+  /// observation site.
+  final String? substation;
 
   final TrajectoryProvenance provenance;
   final String? provenanceBasis;

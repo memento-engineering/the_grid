@@ -21,7 +21,7 @@ are resolved, not carried.
 Every record is **one row in `trajectory`**: identity, order, time, authority, provenance, the
 promoted correlation keys the fold joins on constantly (correlation-key gaps 1, 4, 5, 8), a small
 set of promoted invariant columns the database CHECK-enforces (probe T2: all five probe-era CHECKs
-refuse at write time, by name; §4 now ships **seven** — `ck_grant_link` and `ck_seat` postdate the
+refuse at write time, by name; §4 now ships **seven** — `ck_grant_link` and `ck_substation` postdate the
 probe, and stage 0 pins them), and a JSON payload for everything type-specific. Payload shape is governed by the
 codec registry (§2.6).
 
@@ -105,7 +105,7 @@ erDiagram
 | `occurred_at` | DATETIME(6) | ✓ | When the observed fact happened. Advisory testimony — never an ordering source, **except** for `reconstructed` rows, which the fold orders by `occurred_at`. |
 | `recorded_at` | DATETIME(6) | ✓ | When appended. |
 | `station` | VARCHAR(64) | ✓ | The composing station's name. **Scopes the epoch, the fence, and `uq_epoch_seq`** — a second station over the same database gets its own epoch line and fence cell instead of permanently starving the first (major: traj_epoch scope). **This scoping is DEFENSIVE, read-side only** (audit round 2): it makes a second station's writes loud — refused or detected — instead of silent; it is NOT license for a second live appender, which remains the condition that reopens the whole storage shape (§10 flip conditions, §12 — unchanged). Cross-station replay order is out of scope until that reopening. |
-| `seat` | VARCHAR(64) | – | Substation/seat identity. **Derived at append time by the service from the work bead's store prefix** — no writer supplies it, so no writer can forget it; enforced by `ck_seat`: `work_bead_id IS NULL OR seat IS NOT NULL`. Part of the §2.6 envelope-construction rules. |
+| `substation` | VARCHAR(64) | – | Substation identity. **Derived at append time by the service from the work bead's store prefix** — no writer supplies it, so no writer can forget it; enforced by `ck_substation`: `work_bead_id IS NULL OR substation IS NOT NULL`. Part of the §2.6 envelope-construction rules. |
 | `authority_id` | VARCHAR(64) | ✓ | tg-y4fd authority identity (`<station>/<epoch>`). |
 | `fencing_token` | BIGINT | – | **Promoted and indexed** (was buried in grant/lease JSON — the single most load-bearing tg-y4fd value, checked on every grant-scoped append and every federation wire request; a JSON extract on the hottest path was indefensible). `(epoch << 32) \| per-epoch counter` — see §5 for why 32 low bits, not the draft's 20. |
 | `provenance` | ENUM('observed','inferred','reconstructed') | ✓ | Q18 (§8). Default `observed`. |
@@ -360,9 +360,9 @@ set it consumes, checked at boot. (6) Required-field invariants live in the seal
 constructors; the cross-cutting ones are additionally CHECK-enforced on promoted envelope columns
 (§4) — **empirically real, not aspirational: probe T2 shows the five probe-era CHECKs refuse at
 write time by name, ENUM columns fail closed under strict mode; the DDL now carries seven —
-`ck_grant_link` and `ck_seat` are new since the probe, and the stage-0 CI guard pins their
+`ck_grant_link` and `ck_substation` are new since the probe, and the stage-0 CI guard pins their
 refusal behavior alongside the measured five.** (7) **Envelope-construction rules** the codec
-enforces on every append: `seat` derived from the work bead's store prefix whenever
+enforces on every append: `substation` derived from the work bead's store prefix whenever
 `work_bead_id` is set; `station`/`authority_id`/`boot_epoch`/`source` stamped by the service, never
 by the caller.
 
@@ -496,7 +496,7 @@ CREATE TABLE trajectory (
   occurred_at      DATETIME(6)  NOT NULL,
   recorded_at      DATETIME(6)  NOT NULL,
   station          VARCHAR(64)  NOT NULL,
-  seat             VARCHAR(64)  NULL,
+  substation       VARCHAR(64)  NULL,
   authority_id     VARCHAR(64)  NOT NULL,
   fencing_token    BIGINT       NULL,
   provenance       ENUM('observed','inferred','reconstructed') NOT NULL DEFAULT 'observed',
@@ -547,7 +547,7 @@ CREATE TABLE trajectory (
                                   ('admission.grant.consumed','admission.grant.expired',
                                    'admission.grant.released','attempt.session.started')
                                  OR grant_id IS NOT NULL),
-  CONSTRAINT ck_seat      CHECK (work_bead_id IS NULL OR seat IS NOT NULL)
+  CONSTRAINT ck_substation CHECK (work_bead_id IS NULL OR substation IS NOT NULL)
 );
 
 -- one UNSETTLED terminal per attempt, structurally, even under a key-grammar bug —
@@ -605,7 +605,7 @@ CREATE TABLE proj_session_head (          -- P1
   held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
   pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
   rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
-  seat VARCHAR(64) NULL,
+  substation VARCHAR(64) NULL,
   started_at DATETIME(6) NOT NULL, closed_at DATETIME(6) NULL,
   head_epoch BIGINT NOT NULL,             -- last epoch whose bd head-stamp succeeded (§5/§7)
   last_seq BIGINT NOT NULL,
@@ -1167,7 +1167,7 @@ flowchart LR
 | 3 | P1+P2+P4+P5+P6 | cursor = P2 rows for (session, round); supersedes chain = `superseded_by_step_round` ordered by step_round; staleFences = P6. |
 | 4 | P1 | pure rule over head columns; `outcome` and `held` separate axes. |
 | 5 | P1+P2 aggregate | liveness reads `traj_pulse`; post-restore state is `unknown` and the wedge renders it — and the DETECTOR honours it (§2 F1). |
-| 6 | P1+P3 aggregates | perSubstation on the `seat` column — populated by the service for every work-bead-bearing record, CHECK-backed (minor fix); sync stats stay stream. |
+| 6 | P1+P3 aggregates | perSubstation on the `substation` column — populated by the service for every work-bead-bearing record, CHECK-backed (minor fix); sync stats stay stream. |
 | 7 | P1+P2 | non-terminal sessions + cursor. |
 | 8 | P1+P2+P4+P5 | first-class (bead, session, round) tuple; spent rounds read P5's **chain** (all step_rounds — the fatal-3 fix is what makes this row honest). |
 | 9 | P4+P4-cycles+P5 | regate age from proj_gate (opened_at/regated_at/regate_count — real columns now); per-cycle history in proj_gate_cycles; adjudication reads the record. |
@@ -1362,7 +1362,7 @@ only for the `#rN` string synthesis, which is genuinely a projection. (P1's `las
   duration at ≥100 k rows; the two-database restore drill; the CI guard tests (status-clean after
   fold writes, force-ban, dolt_log commit counting, `--doltcfg-dir`, branch-change fail-closed,
   and the CHECK-refusal pin — a T2-style violating INSERT per constraint, all seven, covering
-  the two post-probe additions ck_grant_link and ck_seat; cert round).
+  the two post-probe additions ck_grant_link and ck_substation; cert round).
   Also: fix the cursor-file path doc discrepancy (Q19).
 * **Stage 1 — tg-zfek's ratification gate: the terminal tail + step-state churn together, behind a
   quiesced boundary.** Mint, round-retire, terminal become single atomic appends (head as
@@ -1586,7 +1586,7 @@ taken — updated where the probe or the red-team moved the ground:
   **Surviving argument for satellites:** a database CHECK cannot be bypassed; a codec can. The
   mitigation (promoted CHECKed columns; sole appender) is now **empirically demonstrated** (probe
   T2: the five probe-era CHECKs refuse at write time; the two added since — `ck_grant_link`,
-  `ck_seat` — are pinned by the stage-0 guard) — discipline plus constraints, still not the full
+  `ck_substation` — are pinned by the stage-0 guard) — discipline plus constraints, still not the full
   lattice. If a second appender ever exists, revisit. (Unchanged in substance.)
 * **Storage location: same database vs sibling database.** **NEW — decided by the storage call
   (§10), overturning the ratified default.** Surviving argument for same-db: T4 proved selective
@@ -1800,8 +1800,8 @@ No defect is rebutted — all 26 are accepted; three suggested fixes were replac
 
 ## Minor
 
-23. **seat column nothing populates** → Derived at append by the service from the work bead's
-    store prefix; envelope-construction rule in §2.6; `ck_seat` CHECK (§1, §4).
+23. **substation column nothing populates** → Derived at append by the service from the work bead's
+    store prefix; envelope-construction rule in §2.6; `ck_substation` CHECK (§1, §4).
 24. **grant_id vs grant_record_id duplication** → `grant_id` is the only join key, CHECKed present
     (`ck_grant_link`) on every grant-lifecycle record and `attempt.session.started`;
     `grant_record_id` payload fields deleted (§1, §2).
@@ -1912,7 +1912,7 @@ per-evaluation ULID; uniqueness rides the id; proj_admission counts); **§13 hea
 28→29 fold-served rows (29+5+1=35); **non-step-scoped placement rule** stated — CI conclusions
 land at the PINNED step_round (lane `ci:<check_name>`), acks at their intent's key (§2 F3/F4,
 §6 rows 21/22/25); **"all five CHECKs" → seven** in the three places it appeared, with
-ck_grant_link/ck_seat named as post-probe and stage-0-pinned; **T3 liveness paths** (branch
+ck_grant_link/ck_substation named as post-probe and stage-0-pinned; **T3 liveness paths** (branch
 switch, trap recovery) folded into §10's restore story and §13's caveat; **the drain vehicle**
 at a blocked cut named in §9 (boot the previous epoch's code, or close/harvest the open
 sessions).

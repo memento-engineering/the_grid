@@ -128,7 +128,7 @@ TrajectoryEnvelope envelope({
   occurredAt: occurredAt ?? DateTime.utc(2026, 8, 31, 9, 14, 2, 123),
   recordedAt: DateTime.utc(2026, 8, 31, 9, 14, 2, 456),
   station: 'lunar',
-  seat: workBeadId == null ? null : 'the_grid',
+  substation: workBeadId == null ? null : 'the_grid',
   authorityId: 'lunar/$bootEpoch',
   bootEpoch: bootEpoch,
   provenance: provenance,

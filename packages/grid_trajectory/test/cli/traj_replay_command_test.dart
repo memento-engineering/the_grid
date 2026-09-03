@@ -208,6 +208,56 @@ void main() {
     });
   });
 
+  group('the journal substation rename (tg-j1zn)', () {
+    /// A journal still at the pre-tg-j1zn shape. Registered BEFORE
+    /// [seedCurrentShape] so it wins for the journal probe only.
+    void seedStaleJournal() => db.on(
+      "table_name = 'trajectory'",
+      result: const SqlResult(
+        rows: [
+          {'name': 'seat'},
+        ],
+      ),
+    );
+
+    test(
+      'a stale journal is RENAMEd before any projection is replayed',
+      () async {
+        seedStaleJournal();
+        seedCurrentShape();
+        expect(await replay(), 0);
+
+        final alters = db.matching('ALTER TABLE trajectory');
+        expect(alters.map((call) => call.sql), [
+          'ALTER TABLE trajectory DROP CHECK ck_seat',
+          'ALTER TABLE trajectory RENAME COLUMN seat TO substation',
+          'ALTER TABLE trajectory ADD CONSTRAINT ck_substation '
+              'CHECK (work_bead_id IS NULL OR substation IS NOT NULL)',
+        ]);
+        expect(
+          db.log.indexOf(alters.last),
+          lessThan(db.log.indexWhere((call) => call.sql.contains('proj_'))),
+          reason: 'the codec reads `substation`; every fold decodes through it',
+        );
+        expect(out.join('\n'), contains('trajectory.substation'));
+      },
+    );
+
+    test('a current journal is left alone', () async {
+      seedCurrentShape();
+      expect(await replay(), 0);
+      expect(db.matching('ALTER TABLE trajectory'), isEmpty);
+    });
+
+    test('--check reports the pending rename without performing it', () async {
+      seedStaleJournal();
+      seedCurrentShape();
+      expect(await replay(check: true), 0);
+      expect(out.join('\n'), contains('migrate: PENDING'));
+      expect(db.matching('ALTER TABLE'), isEmpty);
+    });
+  });
+
   group('projection selection (replay is per-projection in the tree)', () {
     test('the default rebuilds all three', () async {
       seedCurrentShape();

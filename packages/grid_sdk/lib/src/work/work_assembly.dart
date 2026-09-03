@@ -556,7 +556,7 @@ Future<StationWorkRuntime> assembleStationWork({
 
   // --- the trajectory harness (stage1-wiring §1.1), built beside the state
   // writer — the one place that knows everything the fenced service needs:
-  // the grid home, the state partition, the seat allow-set, and the flare
+  // the grid home, the state partition, the substation allow-set, and the flare
   // transport. Dry-run forces `disabled` (§1.3): a dry arm must not claim an
   // epoch or write anything — same physics as the recording no-op bd.
   // [trajectoryOverride] is a TEST seam, like every other per-seam override.
@@ -566,7 +566,7 @@ Future<StationWorkRuntime> assembleStationWork({
         config: dryRun ? trajectoryConfig.asDisabled : trajectoryConfig,
         gridHome: stateStore.gridRoot,
         station: stateSubstation,
-        seatPrefixes: allowSet,
+        substationPrefixes: allowSet,
         onFlare: transport?.flare,
         // The tick's liveness detector polls the provider (§2.4 obligation
         // 3); the worktree `.grid` mtime scan is the other surface and needs

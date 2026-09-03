@@ -11,6 +11,12 @@
 ///   * the RESHAPE against a real pre-cut table: dolt actually drops it,
 ///     actually re-creates it with `terminal_provenance`/`unknown_reason`, and
 ///     the replay actually repopulates it at the bumped `fold_version`;
+///   * the JOURNAL RENAME (tg-j1zn) against a real pre-rename journal: dolt
+///     actually applies the three `ALTER`s, every recorded row keeps its
+///     substation value, and `ck_substation` refuses by its NEW name — the one
+///     migration in the schema that touches dolt-versioned truth instead of
+///     rebuildable projection state, so a scripted fake echoing our own SQL
+///     back at us is not evidence;
 ///   * the QUIESCE FENCE refusing with a real lock file in place, leaving the
 ///     projection it would have rewritten untouched;
 ///   * `traj gc` under a gridboot-shaped credential — the operator half of the
@@ -27,6 +33,7 @@ library;
 import 'dart:io';
 
 import 'package:grid_trajectory/grid_trajectory.dart';
+import 'package:mysql_client/exception.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -285,7 +292,7 @@ CREATE TABLE proj_session_head (
   held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
   pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
   rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
-  seat VARCHAR(64) NULL,
+  substation VARCHAR(64) NULL,
   started_at DATETIME(6) NOT NULL, closed_at DATETIME(6) NULL,
   head_epoch BIGINT NOT NULL,
   last_seq BIGINT NOT NULL,
@@ -418,5 +425,103 @@ CREATE TABLE proj_session_head (
       1,
     );
     expect(err.join('\n'), contains('gridboot.secret'));
+  });
+
+  // LAST in the file, deliberately: this test stands the SHARED hermetic
+  // journal back at the pre-tg-j1zn shape and relies on the production
+  // migration to restore it. A failure mid-rename would leave the journal
+  // with the retired column spelling, and every earlier verb test would then
+  // fail for a reason that is not its own.
+  test('THE RENAME: a pre-tg-j1zn journal is migrated in place — the column '
+      'is renamed, every recorded row survives, and ck_substation refuses by '
+      'its new name', () async {
+    final db = await openService();
+    await appendLifecycle(db, station: 6);
+    const retiredColumn =
+        'se'
+        'at';
+
+    /// The (record_id → owning substation) map, read through [column]. These
+    /// rows are the whole reason this migration ALTERs instead of dropping:
+    /// the journal is dolt-versioned truth, not rebuildable projection state.
+    Future<Map<String, String?>> ownership(String column) async {
+      final result = await db.execute(
+        'SELECT record_id, $column FROM trajectory '
+        'WHERE work_bead_id IS NOT NULL ORDER BY seq',
+      );
+      return {for (final row in result.rows) row['record_id']!: row[column]};
+    }
+
+    final before = await ownership('substation');
+    expect(before, isNotEmpty);
+    expect(before.values, everyElement(isNotNull));
+
+    // Stand the home back at the PRE-RENAME shape with a reverse ALTER, not
+    // an inline CREATE: re-creating the journal means dropping it, which
+    // destroys the very rows this test asserts survive.
+    await db.execute('ALTER TABLE trajectory DROP CHECK ck_substation');
+    await db.execute(
+      'ALTER TABLE trajectory RENAME COLUMN substation TO $retiredColumn',
+    );
+    await db.execute(
+      'ALTER TABLE trajectory ADD CONSTRAINT ck_$retiredColumn '
+      'CHECK (work_bead_id IS NULL OR $retiredColumn IS NOT NULL)',
+    );
+    expect(await journalNeedsSubstationRename(db), isTrue);
+
+    // WHY the verb renames BEFORE it replays: every fold decodes through the
+    // §1 codec, which reads `substation`. A pre-rename row cannot decode at
+    // all, so a replay that folded first would throw rather than quietly
+    // disagree.
+    final raw = await db.execute(
+      'SELECT * FROM trajectory WHERE work_bead_id IS NOT NULL '
+      'ORDER BY seq LIMIT 1',
+    );
+    expect(
+      () => envelopeFromRow(raw.rows.single),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => '${e.message}',
+          'message',
+          contains('ck_substation'),
+        ),
+      ),
+    );
+
+    final out = <String>[];
+    final err = <String>[];
+    expect(
+      await replay(out: out, err: err),
+      0,
+      reason: err.join('\n'),
+    );
+    expect(
+      out.join('\n'),
+      contains(
+        'migrate: trajectory.$retiredColumn RENAMEd to '
+        'trajectory.substation',
+      ),
+    );
+
+    // The column is back, the probe is quiet, and no row lost its value.
+    expect(await journalNeedsSubstationRename(db), isFalse);
+    expect(await ownership('substation'), before);
+
+    // ck_substation came back as a CONSTRAINT, not just a column: dolt
+    // refuses a write that clears a work-bead row's substation, BY NAME.
+    await expectLater(
+      db.execute(
+        'UPDATE trajectory SET substation = NULL '
+        'WHERE work_bead_id IS NOT NULL',
+      ),
+      throwsA(
+        isA<MySQLServerException>().having(
+          (e) => e.message,
+          'message',
+          contains('ck_substation'),
+        ),
+      ),
+    );
+    await db.close();
   });
 }

@@ -24,7 +24,7 @@ abstract interface class TickAppender {
 
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance,
     String? provenanceBasis,
   });
@@ -38,7 +38,7 @@ abstract interface class TickAppender {
 /// Binds the concrete [TrajectoryAppender] to [TickAppender].
 ///
 /// An adapter rather than an `implements` clause on the appender: the append
-/// path owns its own full signature (seat, occurred_at, source), and the tick
+/// path owns its own full signature (substation, occurred_at, source), and the tick
 /// has no business widening it.
 final class AppenderTickPort implements TickAppender {
   const AppenderTickPort(this._appender);
@@ -54,12 +54,12 @@ final class AppenderTickPort implements TickAppender {
   @override
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) async => _appender.append(
     record,
-    seat: seat,
+    substation: substation,
     provenance: provenance,
     provenanceBasis: provenanceBasis,
   );

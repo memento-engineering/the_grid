@@ -517,7 +517,7 @@ void main() {
     });
 
     // All seven §4 CHECKs, including the two post-probe additions
-    // (ck_grant_link, ck_seat) the cert round added.
+    // (ck_grant_link, ck_substation) the cert round added.
     for (final (constraint, overrides) in <(String, Map<String, Object?>)>[
       ('ck_prov', {'provenance': 'inferred'}),
       ('ck_terminal', {'record_type': 'attempt.terminal'}),
@@ -525,7 +525,7 @@ void main() {
       ('ck_provision', {'record_type': 'worktree.provisioned'}),
       ('ck_grant', {'record_type': 'admission.grant.issued'}),
       ('ck_grant_link', {'record_type': 'admission.grant.consumed'}),
-      ('ck_seat', {'work_bead_id': 'tg-zfek'}),
+      ('ck_substation', {'work_bead_id': 'tg-zfek'}),
     ]) {
       test('$constraint refuses at write time, by name', () async {
         await expectLater(

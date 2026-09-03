@@ -31,7 +31,7 @@ void main() {
       expect(row.workBeadId, 'tg-9abc');
       expect(row.rig, 'operator');
       expect(row.model, 'molecule');
-      expect(row.seat, 'the_grid');
+      expect(row.substation, 'the_grid');
       expect(row.round, 0);
       expect(row.status, SessionHeadStatus.open);
       expect(row.startedAt, start);

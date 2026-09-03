@@ -1,7 +1,8 @@
 // W3 (tg-zfek Stage 1) — the additive payload markers the derivation layer
 // stamps (stage1-wiring §2.1/§2.2): `grant_basis` + `legacy_attempt_count` +
-// `seat_basis` on attempt.session.started, `attempt_id_basis` + `seat_basis`
-// on attempt.terminal, `legacy_attempt_count` + `seat_basis` on
+// `substation_basis` on attempt.session.started, `attempt_id_basis` +
+// `substation_basis` on attempt.terminal, `legacy_attempt_count` +
+// `substation_basis` on
 // attempt.mint.outcome.
 //
 // Rule under test is §2.6 rule 1: within type_version 1 the change is
@@ -10,7 +11,7 @@
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
 
-TrajectoryEnvelope _envelope(TrajectoryRecord record, {String? seat}) {
+TrajectoryEnvelope _envelope(TrajectoryRecord record, {String? substation}) {
   const context = IdemContext(station: 'tranquility', bootEpoch: 1);
   final now = DateTime.utc(2026, 8, 31, 12);
   final json = <String, Object?>{
@@ -30,7 +31,7 @@ TrajectoryEnvelope _envelope(TrajectoryRecord record, {String? seat}) {
     'payload': record.payloadToJson(),
     ...record.correlationToJson(),
   };
-  if (json['work_bead_id'] != null) json['seat'] = seat ?? 'tg';
+  if (json['work_bead_id'] != null) json['substation'] = substation ?? 'tg';
   return TrajectoryEnvelope.fromJson(json);
 }
 
@@ -59,15 +60,15 @@ void main() {
         mountAttemptId: 'M-1',
         grantBasis: 'pre-stage3',
         legacyAttemptCount: 2,
-        seatBasis: 'no-owned-prefix',
+        substationBasis: 'no-owned-prefix',
       );
       final decoded = TrajectoryCodec.decode(
-        _envelope(record, seat: 'unowned'),
+        _envelope(record, substation: 'unowned'),
       );
       final typed = decoded as AttemptSessionStarted;
       expect(typed.grantBasis, 'pre-stage3');
       expect(typed.legacyAttemptCount, 2);
-      expect(typed.seatBasis, 'no-owned-prefix');
+      expect(typed.substationBasis, 'no-owned-prefix');
       expect(typed.payloadToJson(), record.payloadToJson());
     });
   });
@@ -89,12 +90,12 @@ void main() {
         workBeadId: 'tg-9xk2',
         outcome: TerminalOutcome.settled,
         attemptIdBasis: 'reconciler-minted',
-        seatBasis: 'no-owned-prefix',
+        substationBasis: 'no-owned-prefix',
       );
       final typed =
           TrajectoryCodec.decode(_envelope(record)) as AttemptTerminal;
       expect(typed.attemptIdBasis, 'reconciler-minted');
-      expect(typed.seatBasis, 'no-owned-prefix');
+      expect(typed.substationBasis, 'no-owned-prefix');
       expect(typed.payloadToJson(), record.payloadToJson());
     });
   });
@@ -117,12 +118,12 @@ void main() {
         phase: MintPhase.refused,
         mintAttempt: 1,
         legacyAttemptCount: 3,
-        seatBasis: 'no-owned-prefix',
+        substationBasis: 'no-owned-prefix',
       );
       final typed =
           TrajectoryCodec.decode(_envelope(record)) as AttemptMintOutcome;
       expect(typed.legacyAttemptCount, 3);
-      expect(typed.seatBasis, 'no-owned-prefix');
+      expect(typed.substationBasis, 'no-owned-prefix');
       expect(typed.payloadToJson(), record.payloadToJson());
     });
   });

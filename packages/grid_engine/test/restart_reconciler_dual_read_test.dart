@@ -56,7 +56,7 @@ final class _CapturingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) {
@@ -249,7 +249,7 @@ _build({
       ),
       recorder: StationTrajectoryRecorder(
         sink: sink,
-        seatPrefixes: const {'tg'},
+        substationPrefixes: const {'tg'},
       ),
       headSnapshot: snapshot == null ? null : () => snapshot,
       dualReadAccounting: accounting,

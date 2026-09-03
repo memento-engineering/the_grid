@@ -222,7 +222,9 @@ class UpCommand extends Command<int> {
     }
     stationFlags(
       argParser,
-      codedNames: [for (final seat in codedRoster(gridHome: '/')) seat.name],
+      codedNames: [
+        for (final substation in codedRoster(gridHome: '/')) substation.name,
+      ],
       harnessAllowList: _harnessAllowList,
       defaultHarness: defaultHarness,
     );
@@ -246,8 +248,8 @@ class UpCommand extends Command<int> {
   final ShutdownWaiter _waitForShutdown;
 
   static Future<PrimaryCheckoutFreshness> _defaultInspectPrimaryCheckout(
-    SubstationWorkSpec seat,
-  ) => GitOps(SystemGitRunner()).inspectPrimaryCheckout(seat.root);
+    SubstationWorkSpec substation,
+  ) => GitOps(SystemGitRunner()).inspectPrimaryCheckout(substation.root);
 
   static Future<void> _defaultMaintainStateStore({required String gridHome}) =>
       StateStoreGc().run(gridHome: gridHome);
@@ -275,7 +277,7 @@ class UpCommand extends Command<int> {
       config = stationConfigFrom(
         args,
         stationName: stationName,
-        codedNames: {for (final seat in roster) seat.name},
+        codedNames: {for (final substation in roster) substation.name},
       );
     } on FormatException catch (error) {
       stderr.writeln('$prefix: ${error.message}');
@@ -316,7 +318,7 @@ class UpCommand extends Command<int> {
           onSkip: (message) => stdout.writeln('$prefix: $message'),
         );
       } on Object {
-        // ANY resolution failure — a styled StationRefusal (no armed seat, a
+        // ANY resolution failure — a styled StationRefusal (no armed substation, a
         // vanished appended store) or an unexpected throw — must leave
         // nothing to unwind: no runner has adopted this delegate, so dispose
         // the fresh corpse here and let the error reach the caller loudly
@@ -356,7 +358,7 @@ class UpCommand extends Command<int> {
     // posture): a throwing dispose is reported to stderr and the unwind
     // CONTINUES — every later step still runs, so the original error is
     // never masked and a lock release at the tail is guaranteed regardless
-    // of which seat's dispose blew up.
+    // of which substation's dispose blew up.
     Future<bool> settle(
       String step,
       FutureOr<void> Function() action, {
@@ -394,21 +396,23 @@ class UpCommand extends Command<int> {
       );
     }
 
-    final List<({SubstationWorkSpec seat, PrimaryCheckoutFreshness value})>
+    final List<
+      ({SubstationWorkSpec substation, PrimaryCheckoutFreshness value})
+    >
     freshness;
     try {
       freshness = await Future.wait([
-        for (final seat in armed)
+        for (final substation in armed)
           _inspectPrimaryCheckout(
-            seat,
-          ).then((value) => (seat: seat, value: value)),
+            substation,
+          ).then((value) => (substation: substation, value: value)),
       ]);
     } on Object {
       await settle('delegate dispose', delegate.dispose);
       rethrow;
     }
     final freshnessText = freshness
-        .map((entry) => '${entry.seat.name}: ${entry.value.verdict}')
+        .map((entry) => '${entry.substation.name}: ${entry.value.verdict}')
         .join(', ');
     final posture = delegate.stalenessPosture(
       anyStale: freshness.any((entry) => !entry.value.isFresh),
@@ -556,7 +560,7 @@ class UpCommand extends Command<int> {
         token: token,
         // Per-request reads come off the LIVE delegate — roster included: a
         // hot restart re-resolves the armed roster, and a closure capturing
-        // the launch-time list would render retired seats forever.
+        // the launch-time list would render retired substations forever.
         view: () =>
             _status(config, live.armedRoster, startedAt, live.stationView),
         commandHandler: _LiveDelegateCommandHandler(() => live),
@@ -671,24 +675,24 @@ class UpCommand extends Command<int> {
       for (final entry in liveEntries) entry.key,
     };
     final wedge = latest == null ? kNotWedged : view!.wedgeFor(latest);
-    final prefixes = armed.map((seat) => seat.prefix).toSet();
+    final prefixes = armed.map((substation) => substation.prefix).toSet();
     String? ownerOf(String id) =>
         BeadOwnershipPredicate.ownedPrefixOf(id, prefixes);
     final perSubstation = <SubstationStatus>[
-      for (final seat in armed)
+      for (final substation in armed)
         () {
           final readyIds =
               latest?.graph.readyIds
-                  .where((id) => ownerOf(id) == seat.prefix)
+                  .where((id) => ownerOf(id) == substation.prefix)
                   .toSet() ??
               <String>{};
           final liveIds = <String>{
             for (final entry in liveEntries)
-              if (ownerOf(entry.key) == seat.prefix) entry.key,
+              if (ownerOf(entry.key) == substation.prefix) entry.key,
           };
           return SubstationStatus(
-            substation: seat.name,
-            root: seat.root,
+            substation: substation.name,
+            root: substation.root,
             ready: readyIds.length,
             mounted: <String>{...readyIds, ...liveIds}.length,
             live: liveIds.length,
@@ -697,9 +701,11 @@ class UpCommand extends Command<int> {
     ];
     final capturedAt = latest?.graph.capturedAt;
     return StationStatus(
-      substation: armed.map((seat) => seat.name).join(','),
+      substation: armed.map((substation) => substation.name).join(','),
       stateStore: config.gridHome,
-      workRoot: armed.map((seat) => '${seat.name}=${seat.root}').join(', '),
+      workRoot: armed
+          .map((substation) => '${substation.name}=${substation.root}')
+          .join(', '),
       dryRun: config.dryRun,
       pid: pid,
       startedAt: startedAt,

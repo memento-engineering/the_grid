@@ -68,7 +68,7 @@ and knows everything the service needs: the grid home, the state store's dolt se
 listener (via `grid_trajectory`'s `resolveDoltServerListener(gridHome)` —
 `grid_trajectory/lib/src/connect/server_config.dart:54`, over `.grid/.beads/dolt/`,
 never bd's proxy), the station name (the state partition, `work_assembly.dart:403`), the
-substation prefix set (the `allowSet`, `:470-473` — the seat-derivation input), and the
+substation prefix set (the `allowSet`, `:470-473` — the substation-derivation input), and the
 flare transport.
 
 **Scope honesty (r2, blocker 3):** `assembleStationWork` has **no production caller in
@@ -97,7 +97,7 @@ final trajectory = await TrajectoryHarness.build(
   config: trajectoryConfig,            // §1.3
   gridHome: stateStore.root,
   station: stateSubstation,            // 'tranquility' on the reference deployment
-  seatPrefixes: allowSet,              // input to ownedPrefixOf — §2.2 seat row
+  substationPrefixes: allowSet,        // input to ownedPrefixOf — §2.2 substation row
   onFlare: transport?.flare,
 );
 ```
@@ -293,7 +293,7 @@ exactly one writer").
 | `attempt_id` | §2.1 — breadcrumb-carried |
 | `mount_attempt_id` | recorder-minted ULID spanning ONE `SessionScope` mint sequence (the in-memory `_maxMintAttempts` = 5 budget, `session_scope.dart:156`) — **plus (r2, major 8) the payload carries the legacy mount-attempt bead's `grid.attempt.count`** (`mount_attempt.dart:49`, merged in place per `:70-80`, durable cap `kMaxMountAttempts` = 3 at `:69`) **as `legacy_attempt_count`, the shadow-comparable ordinal.** The ULID keys the record; the ordinal is what `traj shadow-diff` joins against the legacy bead |
 | `grant_id` | **Stage-1 placeholder** (design call): `ck_grant_link` requires `grant_id` on `attempt.session.started`, but no grants exist before Stage 3. The recorder mints a fresh ULID per mount as a pre-grant id, payload-marked `grant_basis:'pre-stage3'`. At Stage 3 the real `admission.grant.issued` takes over the same slot |
-| `seat` | derived by the recorder via `BeadOwnershipPredicate.ownedPrefixOf(id, knownPrefixes)` (`grid_runtime/lib/src/lifecycle/bead_ownership.dart:69` — static, TWO arguments, longest-prefix match over the allowSet, **nullable**). r2 (minor 12): on a null return (no known prefix owns the id) the recorder stamps the literal `seat='unowned'` with a payload marker — deterministic, never CHECK-refused, so `ck_seat`'s presence rule cannot turn an unowned id into a permanent clean-round blocker. Note the allowSet carries both identity axes (name and prefix, `work_assembly.dart:470-473`); longest-match is deterministic but the resolved seat may be either axis |
+| `substation` | derived by the recorder via `BeadOwnershipPredicate.ownedPrefixOf(id, knownPrefixes)` (`grid_runtime/lib/src/lifecycle/bead_ownership.dart:69` — static, TWO arguments, longest-prefix match over the allowSet, **nullable**). r2 (minor 12): on a null return (no known prefix owns the id) the recorder stamps the literal `substation='unowned'` with a payload marker — deterministic, never CHECK-refused, so `ck_substation`'s presence rule cannot turn an unowned id into a permanent clean-round blocker. Note the allowSet carries both identity axes (name and prefix, `work_assembly.dart:470-473`); longest-match is deterministic but the resolved substation may be either axis |
 | `worktree`/`branch`/`commit_sha` | captured **inside `StationGitService.provisionWorktree`** (§2.3): `preexisting` is computed locally at `station_git_service.dart:335-336`, and the base sha is one `git rev-parse HEAD` at the same instant — the_grid-only, no power_station edit |
 | `occurred_at` | the observation instant; `provenance` defaults `observed`, `inferred` only where stated (exit inference, reconciler settlement, reconciler-minted attempt ids, and the `step-complete-implies-running` reconstruction whose complete observation proves its running predecessor) |
 
@@ -694,7 +694,7 @@ only "WS after W1's API exists on the branch".
 | W1 | the_grid | Harness + config + lifecycle | `TrajectoryHarness`, `TrajectoryConfig`, append queue + writer loop (§2.5), assembly threading, verify-before-claim boot order, guarded shutdown drain (§1.2), gc cadence | 450 + 350 |
 | W2 | the_grid | Attempt identity | `LeaseKeys.attemptId` + breadcrumb shapes, `ProcessHandle` threading, mint/adopt-continue/reconciler-recover rules (§2.1), `AllocationContext` env export, `RuntimeEvent.sessionStarted.attemptId` | 200 + 200 |
 | WS | space_station | Runner surface | `TrajectoryConfig` threading at `up_command.dart:491`, `--trajectory`/`--no-trajectory`, banner + `/status` block | 120 + 100 |
-| W3 | the_grid | Recorder core + attempt family | `StationTrajectoryRecorder`, failure posture + latches, ~11 attempt/worktree builders, seat/round/pre-grant derivation, `legacy_attempt_count` read | 700 + 500 |
+| W3 | the_grid | Recorder core + attempt family | `StationTrajectoryRecorder`, failure posture + latches, ~11 attempt/worktree builders, substation/round/pre-grant derivation, `legacy_attempt_count` read | 700 + 500 |
 | W4 | the_grid | Call-site hooks | outcome-bearing terminal callers (`_completeAndClose`/`_escalateAndClose`/void/settle callers), session_scope (decline/mint-per-evaluation/rearm), command handler (round-retired), lease vendor, `provisionWorktree` in-service capture + base sha | 320 + 260 |
 | W5 | the_grid | step.transition family | capability_host persist-site hooks, gated half, rearm step_round bump, failure_class split, restart-succession derivation | 260 + 210 |
 | W6 | the_grid | P2 + P6 folds | `stepCursorDeltaFor` + `processIdentityDeltaFor`, incremental SQL + replay appliers, appender step-5 registration. **Acceptance criterion: the integration suite measures the REAL P2+P6 fold shapes — sustained drain rate above observed storm production rate, p99 writer-loop transaction time — before the window arms (§2.5)** | 550 + 500 |

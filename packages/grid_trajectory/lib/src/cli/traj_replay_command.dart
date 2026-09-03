@@ -25,6 +25,11 @@
 /// on such a home the verb drops and re-creates the table at the new shape
 /// first; the replay that follows is what stamps the bumped `fold_version`. An
 /// ALTER path is deliberately not built.
+///
+/// **The journal rename** (tg-j1zn) rides here too, ahead of every projection:
+/// `trajectory.seat` became `trajectory.substation`, and a home provisioned
+/// before that carries the old column. Unlike the P1 reshape this one IS an
+/// ALTER — the journal is the versioned log, not rebuildable projection state.
 library;
 
 import 'dart:io';
@@ -225,6 +230,12 @@ Future<void> _writeCheck(
     '(applied ${lag.appliedSeq}), oldest unapplied ${lag.age.inSeconds}s — '
     '${lag.isStale ? 'STALE (a reader refuses this fold)' : 'within bounds'}',
   );
+  if (await journalNeedsSubstationRename(db)) {
+    write(
+      '  migrate: PENDING — the journal still spells the substation identity '
+      '`seat`; a quiesced `traj replay` renames it',
+    );
+  }
   final generations = await readProjectionGenerations(db);
   if (generations.isEmpty) {
     write('  generations: none — no projection has ever been folded');
@@ -266,6 +277,17 @@ Future<int> _rebuild(
       'one of ${replayProjections.join(', ')}.',
     );
     return 1;
+  }
+
+  // THE JOURNAL RENAME (tg-j1zn), a named step that runs before any replay:
+  // the folds decode the journal through the envelope codec, which reads
+  // `substation`. Quiesced by the fence in `runTrajReplay`.
+  if (await journalNeedsSubstationRename(db)) {
+    await renameJournalSubstationColumn(db);
+    write(
+      '  migrate: trajectory.seat RENAMEd to trajectory.substation, '
+      'ck_seat re-added as ck_substation',
+    );
   }
 
   // Replay order is the declared order, not the caller's, so a partial set

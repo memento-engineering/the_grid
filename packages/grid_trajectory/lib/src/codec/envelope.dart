@@ -3,7 +3,7 @@
 /// Column names in JSON are the §4 DDL names verbatim. Per-type required-key
 /// invariants live in the sealed record classes (§2.6 rule 6); this type
 /// enforces only the cross-cutting CHECKs that are per-row, not per-type
-/// (`ck_prov`, `ck_unknown`, `ck_seat`).
+/// (`ck_prov`, `ck_unknown`, `ck_substation`).
 library;
 
 import 'package:meta/meta.dart';
@@ -67,7 +67,7 @@ class TrajectoryEnvelope {
     this.typeVersion = 1,
     this.seq,
     this.epochSeq,
-    this.seat,
+    this.substation,
     this.fencingToken,
     this.provenance = TrajectoryProvenance.observed,
     this.provenanceBasis,
@@ -104,9 +104,9 @@ class TrajectoryEnvelope {
         'ck_unknown: outcome unknown requires unknown_reason',
       );
     }
-    if (workBeadId != null && seat == null) {
+    if (workBeadId != null && substation == null) {
       throw ArgumentError(
-        'ck_seat: work_bead_id set requires seat (service-derived from the '
+        'ck_substation: work_bead_id set requires substation (service-derived from the '
         'store prefix — §2.6 rule 7)',
       );
     }
@@ -130,7 +130,7 @@ class TrajectoryEnvelope {
       occurredAt: date('occurred_at')!,
       recordedAt: date('recorded_at')!,
       station: json['station'] as String,
-      seat: json['seat'] as String?,
+      substation: json['substation'] as String?,
       authorityId: json['authority_id'] as String,
       bootEpoch: json['boot_epoch'] as int,
       fencingToken: json['fencing_token'] as int?,
@@ -175,7 +175,7 @@ class TrajectoryEnvelope {
   final DateTime occurredAt;
   final DateTime recordedAt;
   final String station;
-  final String? seat;
+  final String? substation;
   final String authorityId;
   final int bootEpoch;
   final int? fencingToken;
@@ -216,7 +216,7 @@ class TrajectoryEnvelope {
     'occurred_at': occurredAt.toIso8601String(),
     'recorded_at': recordedAt.toIso8601String(),
     'station': station,
-    if (seat != null) 'seat': seat,
+    if (substation != null) 'substation': substation,
     'authority_id': authorityId,
     'boot_epoch': bootEpoch,
     if (fencingToken != null) 'fencing_token': fencingToken,

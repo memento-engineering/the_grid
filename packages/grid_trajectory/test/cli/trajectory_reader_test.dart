@@ -25,7 +25,7 @@ Map<String, String?> _row({
   'occurred_at': '2026-08-31 09:14:02.123456',
   'recorded_at': '2026-08-31 09:14:02.456789',
   'station': 'lunar',
-  'seat': 'the_grid',
+  'substation': 'the_grid',
   'authority_id': 'lunar/3',
   'provenance': 'observed',
   'source': 'test',

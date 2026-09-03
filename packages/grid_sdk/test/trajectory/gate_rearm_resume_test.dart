@@ -38,7 +38,7 @@ final class _CapturingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) {
@@ -150,7 +150,7 @@ Bead _gate({required bool closed}) => Bead(
             value: TrajectoryRecorderScope(
               StationTrajectoryRecorder(
                 sink: sink,
-                seatPrefixes: const {'tg', 'tgdog'},
+                substationPrefixes: const {'tg', 'tgdog'},
               ),
             ),
             child: InheritedSeed<SessionResolver>(

@@ -44,7 +44,7 @@ TrajectoryEnvelope _envelope(
     'payload': record.payloadToJson(),
     ...record.correlationToJson(),
   };
-  if (json['work_bead_id'] != null) json['seat'] = 'tg';
+  if (json['work_bead_id'] != null) json['substation'] = 'tg';
   return TrajectoryEnvelope.fromJson(json);
 }
 

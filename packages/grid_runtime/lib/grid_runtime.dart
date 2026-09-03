@@ -180,8 +180,8 @@ export 'src/trajectory/station_trajectory_recorder.dart'
         kTerminalReconcileBasis,
         kTickReapedBackfillBasis,
         kTickUnknownSettlementBasis,
-        kUnownedSeat,
-        kUnownedSeatBasis;
+        kUnownedSubstation,
+        kUnownedSubstationBasis;
 // Stage 1 (tg-zfek, chunk W7) — the tick's shadow-posture obligation set and
 // its two real liveness surfaces. The harness composes these; nothing here
 // writes bd or the filesystem (stage1-wiring §2.4).

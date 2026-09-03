@@ -91,7 +91,7 @@ final class AttemptSessionStarted extends AttemptRecord {
     this.mountAttemptId,
     this.grantBasis,
     this.legacyAttemptCount,
-    this.seatBasis,
+    this.substationBasis,
   });
 
   factory AttemptSessionStarted.fromJson(
@@ -107,7 +107,7 @@ final class AttemptSessionStarted extends AttemptRecord {
     model: _req<String>(payload, 'model'),
     grantBasis: _opt<String>(payload, 'grant_basis'),
     legacyAttemptCount: _opt<int>(payload, 'legacy_attempt_count'),
-    seatBasis: _opt<String>(payload, 'seat_basis'),
+    substationBasis: _opt<String>(payload, 'substation_basis'),
   );
 
   final String sessionId;
@@ -129,9 +129,9 @@ final class AttemptSessionStarted extends AttemptRecord {
   /// the record; this ordinal is what joins.
   final int? legacyAttemptCount;
 
-  /// Set when the envelope seat is the deterministic unowned fallback rather
+  /// Set when the envelope substation is the deterministic unowned fallback rather
   /// than an owned-prefix derivation (stage1-wiring §2.2, r2 minor 12).
-  final String? seatBasis;
+  final String? substationBasis;
 
   @override
   String get recordType => 'attempt.session.started';
@@ -147,7 +147,7 @@ final class AttemptSessionStarted extends AttemptRecord {
     'model': model,
     if (grantBasis != null) 'grant_basis': grantBasis,
     if (legacyAttemptCount != null) 'legacy_attempt_count': legacyAttemptCount,
-    if (seatBasis != null) 'seat_basis': seatBasis,
+    if (substationBasis != null) 'substation_basis': substationBasis,
   };
 
   @override
@@ -449,7 +449,7 @@ final class AttemptTerminal extends AttemptRecord {
     this.resolvesRecordId,
     this.reason,
     this.attemptIdBasis,
-    this.seatBasis,
+    this.substationBasis,
     this.healBasis,
   }) {
     if (outcome == TerminalOutcome.unknown && unknownReason == null) {
@@ -470,7 +470,7 @@ final class AttemptTerminal extends AttemptRecord {
     resolvesRecordId: envelope.resolvesRecordId,
     reason: _opt<String>(payload, 'reason'),
     attemptIdBasis: _opt<String>(payload, 'attempt_id_basis'),
-    seatBasis: _opt<String>(payload, 'seat_basis'),
+    substationBasis: _opt<String>(payload, 'substation_basis'),
     healBasis: _opt<String>(payload, 'heal_basis'),
   );
 
@@ -490,9 +490,9 @@ final class AttemptTerminal extends AttemptRecord {
   /// comparable set. Additive within type_version 1 (§2.6 rule 1).
   final String? attemptIdBasis;
 
-  /// Set when the envelope seat is the deterministic unowned fallback
+  /// Set when the envelope substation is the deterministic unowned fallback
   /// (stage1-wiring §2.2, r2 minor 12).
-  final String? seatBasis;
+  final String? substationBasis;
 
   /// THE HEAL's OWN IDEM GRAMMAR (cut-wiring §C2, r8 — V2-B1).
   ///
@@ -537,7 +537,7 @@ final class AttemptTerminal extends AttemptRecord {
           resolvesRecordId: recordId,
           reason: reason,
           attemptIdBasis: attemptIdBasis,
-          seatBasis: seatBasis,
+          substationBasis: substationBasis,
           healBasis: healBasis,
         );
 
@@ -552,7 +552,7 @@ final class AttemptTerminal extends AttemptRecord {
   Map<String, Object?> payloadToJson() => {
     if (reason != null) 'reason': reason,
     if (attemptIdBasis != null) 'attempt_id_basis': attemptIdBasis,
-    if (seatBasis != null) 'seat_basis': seatBasis,
+    if (substationBasis != null) 'substation_basis': substationBasis,
     if (healBasis != null) 'heal_basis': healBasis,
   };
 
@@ -671,7 +671,7 @@ final class AttemptMintOutcome extends AttemptRecord {
     this.stage,
     this.reason,
     this.legacyAttemptCount,
-    this.seatBasis,
+    this.substationBasis,
   });
 
   factory AttemptMintOutcome.fromJson(
@@ -690,7 +690,7 @@ final class AttemptMintOutcome extends AttemptRecord {
     stage: _opt<String>(payload, 'stage'),
     reason: _opt<String>(payload, 'reason'),
     legacyAttemptCount: _opt<int>(payload, 'legacy_attempt_count'),
-    seatBasis: _opt<String>(payload, 'seat_basis'),
+    substationBasis: _opt<String>(payload, 'substation_basis'),
   );
 
   final String workBeadId;
@@ -706,9 +706,9 @@ final class AttemptMintOutcome extends AttemptRecord {
   /// within type_version 1 (§2.6 rule 1).
   final int? legacyAttemptCount;
 
-  /// Set when the envelope seat is the deterministic unowned fallback
+  /// Set when the envelope substation is the deterministic unowned fallback
   /// (stage1-wiring §2.2, r2 minor 12).
-  final String? seatBasis;
+  final String? substationBasis;
 
   @override
   String get recordType => 'attempt.mint.outcome';
@@ -721,7 +721,7 @@ final class AttemptMintOutcome extends AttemptRecord {
     if (stage != null) 'stage': stage,
     if (reason != null) 'reason': reason,
     if (legacyAttemptCount != null) 'legacy_attempt_count': legacyAttemptCount,
-    if (seatBasis != null) 'seat_basis': seatBasis,
+    if (substationBasis != null) 'substation_basis': substationBasis,
   };
 
   @override

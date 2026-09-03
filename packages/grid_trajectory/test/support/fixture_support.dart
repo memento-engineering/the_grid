@@ -23,9 +23,9 @@ Map<String, Object?> fixtureFor(TrajectoryRecord record) => {
 };
 
 /// Rebuilds the full envelope row a fixture describes: service-stamped base
-/// columns + the fixture's correlation block. `seat` is service-derived from
+/// columns + the fixture's correlation block. `substation` is service-derived from
 /// the bead's store prefix, so fixtures omit it and it is supplied here
-/// (ck_seat).
+/// (ck_substation).
 TrajectoryEnvelope envelopeFor(Map<String, Object?> fixture) {
   final overrides = (fixture['envelope'] as Map).cast<String, Object?>();
   final json = <String, Object?>{
@@ -45,7 +45,7 @@ TrajectoryEnvelope envelopeFor(Map<String, Object?> fixture) {
     ...overrides,
   };
   if (json['work_bead_id'] != null) {
-    json['seat'] ??= 'tg';
+    json['substation'] ??= 'tg';
   }
   return TrajectoryEnvelope.fromJson(json);
 }
