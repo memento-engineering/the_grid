@@ -67,6 +67,14 @@ class DoltQueryService {
   final DoltConnectionFactory _connectionFactory;
 
   final List<DoltConnection> _pool = [];
+
+  /// Every connection this service opened whose close is not confirmed — the
+  /// pool plus any handle a lease path evicted out of it. [close] drains this,
+  /// not the pool: an evicted connection is off the pool and can still be
+  /// established, and on a server with idle reaping disabled nothing else
+  /// closes it.
+  final Set<DoltConnection> _opened = <DoltConnection>{};
+
   int _rr = 0;
   bool _closed = false;
   DoltSchemaShape? _shape;
@@ -97,20 +105,16 @@ class DoltQueryService {
     await _ensureShapeProbed();
   }
 
-  /// Closes every pooled connection. The service can be [connect]ed again after.
+  /// Closes every connection this service opened — the pool plus any handle a
+  /// lease path evicted out of it. The service can be [connect]ed again after.
   Future<void> close() async {
     _closed = true;
-    final conns = List<DoltConnection>.of(_pool);
     _pool.clear();
     _rr = 0;
     // A reconnect re-probes: the store may have been migrated meanwhile.
     _shape = null;
-    for (final conn in conns) {
-      try {
-        await conn.close();
-      } on Object {
-        // Best-effort: a socket already torn down by the server is fine.
-      }
+    for (final conn in _opened.toList(growable: false)) {
+      await _safeClose(conn);
     }
   }
 
@@ -506,8 +510,9 @@ class DoltQueryService {
     if (forceFresh) {
       return _openInto();
     }
-    // Reap any dead connections first.
-    _pool.removeWhere((c) => !c.connected);
+    // Reap any dead connections first — closing them: a bare removeWhere
+    // drops the handle while its socket could still be established.
+    _evictDead();
     if (_pool.length < _poolSize) {
       return _openInto();
     }
@@ -522,6 +527,7 @@ class DoltQueryService {
 
   Future<DoltConnection> _openInto() async {
     final conn = await _connectionFactory(endpoint);
+    _opened.add(conn);
     if (_pool.length >= _poolSize) {
       // Never exceed the documented ≤2 ceiling: retire the oldest.
       final evicted = _pool.removeAt(0);
@@ -539,11 +545,13 @@ class DoltQueryService {
     }
   }
 
-  static Future<void> _safeClose(DoltConnection conn) async {
+  Future<void> _safeClose(DoltConnection conn) async {
     try {
       await conn.close();
+      _opened.remove(conn);
     } on Object {
-      // ignore — best effort.
+      // Best-effort: a socket already torn down by the server is fine. The
+      // handle stays tracked — a refused close is not a confirmed one.
     }
   }
 

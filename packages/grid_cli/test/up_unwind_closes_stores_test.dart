@@ -19,7 +19,13 @@ import 'support/recording_stdout.dart';
 /// can refuse ([refuses]) or hang forever ([hangs]) the way a half-open proxy
 /// socket does.
 final class _Store implements StoreConnection {
-  _Store(this.name, this.events, {this.refuses = false, this.hangs = false});
+  _Store(
+    this.name,
+    this.events, {
+    this.refuses = false,
+    this.hangs = false,
+    this.open,
+  });
 
   @override
   final String name;
@@ -27,11 +33,16 @@ final class _Store implements StoreConnection {
   final bool refuses;
   final bool hangs;
 
+  /// The shared ledger of handles still open. A confirmed close removes this
+  /// store's name so tests can assert that none survive the unwind.
+  final Set<String>? open;
+
   @override
   Future<void> close() async {
     events.add('store.close:$name');
     if (refuses) throw StateError('close refused: $name');
     if (hangs) await Completer<void>().future;
+    open?.remove(name);
     events.add('store.closed:$name');
   }
 }
@@ -255,4 +266,33 @@ void main() {
     expect(outcome.out, isNot(contains('store connections closed')));
     expect(outcome.events.last, 'lock.release');
   });
+
+  test(
+    'the enlarged vend drains state, trajectory, and work before lock release',
+    () async {
+      final open = <String>{'state', 'trajectory', 'earth'};
+      final outcome = await _runUp(
+        (events) => [
+          _Store('state', events, open: open),
+          _Store('trajectory', events, open: open),
+          _Store('earth', events, open: open),
+        ],
+      );
+
+      expect(outcome.code, 0);
+      expect(
+        outcome.events,
+        containsAllInOrder([
+          'grid.teardown',
+          'store.close:state',
+          'store.close:trajectory',
+          'store.close:earth',
+          'lock.release',
+        ]),
+      );
+      expect(open, isEmpty, reason: 'no state-server handle survives unwind');
+      expect(outcome.events.last, 'lock.release');
+      expect(outcome.out, contains('store connections closed: 3/3'));
+    },
+  );
 }
