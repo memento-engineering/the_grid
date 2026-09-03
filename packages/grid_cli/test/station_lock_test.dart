@@ -13,7 +13,8 @@ import 'package:test/test.dart';
 ///
 ///  (a) a second acquire against a LIVE holder → [StationRefusal] naming the
 ///      pid + the one-supervisor invariant (+ the `space status` hint);
-///  (b) a stale (dead-holder) lock is stolen with a LOUD line;
+///  (b) a stale (dead-holder) lock that PARSES is stolen with a LOUD line,
+///      while an UNREADABLE lock is held and then REFUSED — never stolen;
 ///  (c) release removes the file and is idempotent;
 ///  (d) the codec round-trips with and without the RS-4 control fields;
 ///  (e) the lock file is 0600 (it will carry the RS-4 bearer token).
@@ -137,31 +138,41 @@ void main() {
     });
 
     test(
-      'a corrupt (torn-write) lock is stolen LOUD without probing',
+      'an UNREADABLE lock is HELD and then REFUSED — never stolen (the '
+      'young-or-mid-populate case; a human decides)',
       () async {
         final store = _tempStore();
         Directory('${store.path}/.grid').createSync(recursive: true);
-        File(
-          StationLockService.lockPath(store.path),
-        ).writeAsStringSync('{"pid": tor'); // a crash mid-acquire
+        final lockFile = File(StationLockService.lockPath(store.path))
+          ..writeAsStringSync('{"pid": tor'); // a crash mid-acquire
         final loud = <String>[];
         final service = StationLockService(
-          isPidAlive: (_) => fail('no pid to probe in a torn lock'),
+          isPidAlive: (_) => fail('an unreadable lock names no pid to probe'),
           log: loud.add,
           prepareProcessGroup: (stationPid) async => stationPid,
+          delay: (_) async {}, // the hold costs no wall time offline
         );
 
-        final handle = await service.acquire(
-          stateWorkspaceDir: store.path,
-          pid: 7777,
-          now: DateTime.utc(2026, 7, 2),
+        await expectLater(
+          service.acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 7, 2),
+          ),
+          throwsA(
+            isA<StationRefusal>().having(
+              (r) => r.message,
+              'message',
+              allOf(contains('UNREADABLE'), contains(lockFile.path)),
+            ),
+          ),
         );
-
         expect(
-          loud.where((l) => l.contains('STEALING corrupt station.lock')),
-          hasLength(1),
+          loud.where((l) => l.contains('STEALING')),
+          isEmpty,
+          reason: 'an unreadable record is never stolen',
         );
-        expect(handle.record.pid, 7777);
+        expect(lockFile.readAsStringSync(), '{"pid": tor');
       },
     );
 

@@ -665,10 +665,16 @@ testing/debugging doc (R17/W5). Short form: an exploration client attaches to th
 station's VM service, handshakes the `grid` namespace, observes/invokes, and subscribes
 the out-of-band event stream.
 
-**F9 · Lock acquisition / steal.** `up` reads any existing lock → `kill -0` the recorded
-pid → alive ⇒ refuse (one supervisor per state store); dead/torn ⇒ **loud steal** →
-write fresh record (0600) → `down`/signals ride the pid, never HTTP (control surface is
-GET-only).
+**F9 · Lock acquisition / steal.** `up` exclusive-creates the lock as its CLAIM, then
+PUBLISHES the record into it by an atomic same-directory rename of a 0600 temp — a reader
+sees the lock absent or complete, never empty. On collision it reads the existing lock: a
+record that PARSES gets `kill -0` on the recorded pid → alive ⇒ refuse (one supervisor per
+state store); dead ⇒ **loud steal** → re-claim and publish. A record that does NOT parse is
+HELD (re-probed on a doubling backoff over a bounded window) and then REFUSED — never
+stolen; a human removes a genuinely corrupt lock (decision:
+`station-lock-holds-never-steals-an-unreadable-record`). Every rewrite and the release
+delete re-verify ownership (`pid` + `startedAt`) against disk first. `down`/signals ride
+the pid, never HTTP (control surface is GET-only).
 
 **F10 · Receipt provenance.** On land: `buildCircuitReceipt(beadId, siblings)` reads the
 committee's per-lane grades + route and the rebase/revalidate outcomes from the

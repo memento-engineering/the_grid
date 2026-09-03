@@ -72,10 +72,12 @@ class Up extends AttachResult {
 
 /// No station is attached: no lock file at all (nothing has ever bound this
 /// state store, or a prior station released cleanly), OR the lock file
-/// exists but is unreadable/malformed (a torn write from a crashed acquire —
-/// mirrors [StationLockService]'s own stale-steal treatment of a torn write:
-/// no live holder can be named, so there is nothing addressable to attach
-/// to).
+/// exists but is unreadable/malformed. A lock read is all-or-nothing —
+/// [StationLockService] PUBLISHES the record by an atomic same-directory
+/// rename, so an unreadable lock is corruption from outside the grid, never a
+/// half-written acquire; either way no live holder can be named, so there is
+/// nothing addressable to attach to. (Unlike an acquiring station, a reader
+/// never HOLDS on it: `space status` reports, it does not arbitrate.)
 class Down extends AttachResult {
   /// Const-constructible — carries no data.
   const Down();
@@ -291,8 +293,10 @@ class StationAttach {
   }
 
   /// Reads + parses the lock at [stateWorkspaceDir], or null when there is
-  /// no lock file or it is unreadable/malformed (a torn write — no live
-  /// holder can be named).
+  /// no lock file or it is unreadable/malformed (corruption from outside the
+  /// grid — [StationLockService] publishes atomically, so there is no
+  /// half-written acquire to observe; either way no live holder can be
+  /// named).
   Future<StationLockRecord?> _readLock(String stateWorkspaceDir) async {
     final file = File(StationLockService.lockPath(stateWorkspaceDir));
     if (!await file.exists()) return null;
