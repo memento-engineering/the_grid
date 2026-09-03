@@ -54,6 +54,9 @@ class _NoGroups implements ProcessGroupController {
   bool signalGroup(int pgid, ProcessSignal signal) => false;
   @override
   int currentGroupId() => 999;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 }
 
 /// The reconciler under test at the rail: no worktree seam is reachable from

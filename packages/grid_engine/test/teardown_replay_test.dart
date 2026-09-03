@@ -45,6 +45,9 @@ class _FakeGroups implements ProcessGroupController {
   bool signalGroup(int pgid, ProcessSignal signal) => false;
   @override
   int currentGroupId() => 1;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
   @override
   Future<int?> resolvePgid(int pid) async => null;
 }

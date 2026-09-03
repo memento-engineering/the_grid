@@ -5,12 +5,13 @@ part 'runtime_event.freezed.dart';
 /// An observation from a [RuntimeProvider]'s session lifecycle, emitted on the
 /// `events` stream (Streams for observations; APIs convention, CLAUDE.md).
 ///
-/// The five variants are the M3-trimmed projection of the lifecycle signals gc's
+/// The six variants are the M3-trimmed projection of the lifecycle signals gc's
 /// runtime surfaces (`gascity/internal/runtime/` + `internal/session/`): a
 /// session was created, its process exited cleanly with a code, it died
 /// unexpectedly (crash — the restart/quarantine trigger Track 4 consumes), it
-/// was respawned (restart generation bumped), or its activity state changed.
-/// Each carries the session [name] so a multiplexed stream is demuxable.
+/// was respawned (restart generation bumped), its activity state changed, or its
+/// leader vanished leaving live descendants behind. Each carries the session
+/// [name] so a multiplexed stream is demuxable.
 ///
 /// Consume with an exhaustive `switch` (sealed) — a new lifecycle signal forces
 /// every consumer to handle it.
@@ -89,6 +90,23 @@ sealed class RuntimeEvent with _$RuntimeEvent {
     /// reason.
     int? pid,
   }) = Died;
+
+  /// The session's LEADER is gone but its OWNED process group still has live
+  /// members — a harness that backgrounded a descendant and exited. Emitted
+  /// ONCE per session, and NOT a terminal: those survivors are still consuming
+  /// resources and still mutating the worktree, so the session stays supervised
+  /// until the group empties or the bounded grace elapses and the group is
+  /// signalled. [pgid] is the owned group and [memberCount] the number of live
+  /// members observed at the moment of detection.
+  const factory RuntimeEvent.sessionOrphaned({
+    required String name,
+    required int pgid,
+    required int memberCount,
+
+    /// The leader pid that vanished, when the emitter still knew it — the same
+    /// exit-join discriminator [RuntimeEvent.exited] carries.
+    int? pid,
+  }) = SessionOrphaned;
 
   /// The session was restarted in a new incarnation; [epoch] is the new runtime
   /// generation (gc's `GRID_RUNTIME_EPOCH` bump). Emitted by the supervisor, not

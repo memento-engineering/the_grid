@@ -35,7 +35,8 @@ class _ProtocolEventCapability extends ProcessCapability {
     SessionStarted() ||
     Exited() ||
     Respawned() ||
-    ActivityChanged() => StepSignal.none,
+    ActivityChanged() ||
+    SessionOrphaned() => StepSignal.none,
   };
 
   @override

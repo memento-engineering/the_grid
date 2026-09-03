@@ -89,6 +89,9 @@ class _FakeProcessGroupController implements ProcessGroupController {
 
   @override
   int currentGroupId() => 999;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 }
 
 ({StationBeadWriter writer, RecordingBdRunner bd}) _chokepoint() {

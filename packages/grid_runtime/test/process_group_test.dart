@@ -10,6 +10,7 @@ class FakeProcessGroupController implements ProcessGroupController {
   FakeProcessGroupController({
     this.ownGroupId = 99999,
     this.dieAfterTermSignals,
+    this.members = const <int>[],
   });
 
   /// The caller's own group — the self-group guard input.
@@ -19,6 +20,11 @@ class FakeProcessGroupController implements ProcessGroupController {
   /// (the group obeyed SIGTERM within the grace window). When null, the group
   /// only dies after a SIGKILL.
   final int? dieAfterTermSignals;
+
+  /// The live members of the group, reported by [groupMembers] until the group
+  /// dies. Empty by default: every pre-existing case is a leader-only group and
+  /// keeps its exact behaviour.
+  List<int> members;
 
   final List<(int pgid, ProcessSignal signal)> signals = [];
   int _termCount = 0;
@@ -46,6 +52,15 @@ class FakeProcessGroupController implements ProcessGroupController {
 
   @override
   int currentGroupId() => ownGroupId;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async {
+    if (_killed) return const <int>[];
+    if (dieAfterTermSignals != null && _termCount >= dieAfterTermSignals!) {
+      return const <int>[];
+    }
+    return members;
+  }
 }
 
 void main() {
@@ -172,6 +187,29 @@ void main() {
       expect(result, GroupTerminateResult.alreadyGone);
       expect(ctl.signals, isEmpty);
     });
+
+    test(
+      'a DEAD leader with LIVE group members is SIGNALLED, not skipped',
+      () async {
+        final ctl = _DeadController(members: <int>[7771]);
+
+        final result = await terminateGroup(
+          controller: ctl,
+          pgid: 4242,
+          leaderPid: 4242,
+          grace: const Duration(milliseconds: 30),
+          pollPeriod: const Duration(milliseconds: 5),
+        );
+
+        expect(result, GroupTerminateResult.killed);
+        expect(
+          ctl.signals.map((s) => s.$2),
+          containsAllInOrder([ProcessSignal.sigterm, ProcessSignal.sigkill]),
+          reason: 'a dead leader must never be read as an empty group',
+        );
+        expect(ctl.signals.every((s) => s.$1 == 4242), isTrue);
+      },
+    );
   });
 }
 
@@ -189,6 +227,8 @@ class _ResolvingGroups extends FakeProcessGroupController {
 }
 
 class _DeadController extends FakeProcessGroupController {
+  _DeadController({super.members});
+
   @override
   bool processAlive(int pid) => false;
 }

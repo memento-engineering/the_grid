@@ -126,6 +126,9 @@ class _FakeGroups implements ProcessGroupController {
 
   @override
   int currentGroupId() => 999999;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 }
 
 SubprocessProvider _provider(_GatedSpawner spawner) => SubprocessProvider(

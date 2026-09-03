@@ -58,7 +58,14 @@ export 'src/runtime/process_group.dart'
 export 'src/runtime/runtime_config.dart'
     show Lifecycle, RuntimeCapabilities, RuntimeConfig;
 export 'src/runtime/runtime_event.dart'
-    show ActivityChanged, Died, Exited, Respawned, RuntimeEvent, SessionStarted;
+    show
+        ActivityChanged,
+        Died,
+        Exited,
+        Respawned,
+        RuntimeEvent,
+        SessionOrphaned,
+        SessionStarted;
 export 'src/runtime/runtime_provider.dart'
     show RuntimeProvider, SessionAlreadyExists, SessionNotWritable;
 export 'src/runtime/subprocess_provider.dart'
@@ -66,7 +73,10 @@ export 'src/runtime/subprocess_provider.dart'
         SpawnedProcess,
         SubprocessProvider,
         SubprocessSpawner,
-        SystemSubprocessSpawner;
+        SystemSubprocessSpawner,
+        kExitStatusFileEnv,
+        kOrphanGrace,
+        kReaperScript;
 
 // Track 3 — git-worktree-per-bead isolation.
 export 'src/git/git_runner.dart'

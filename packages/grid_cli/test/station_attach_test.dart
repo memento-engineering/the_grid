@@ -502,6 +502,9 @@ class _FakeGroups implements ProcessGroupController {
   int currentGroupId() => ownGroupId;
 
   @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
+
+  @override
   bool processAlive(int pid) => true;
 
   @override

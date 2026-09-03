@@ -47,6 +47,9 @@ class _FakeGroups implements ProcessGroupController {
 
   @override
   int currentGroupId() => 999;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 }
 
 /// A transport that never lets go — proves the settle window is BOUNDED.

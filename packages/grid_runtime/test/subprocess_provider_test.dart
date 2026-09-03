@@ -124,6 +124,9 @@ class AliveGroupController implements ProcessGroupController {
 
   @override
   int currentGroupId() => 99999;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 }
 
 class _GatedPgidGroupController extends AliveGroupController {
@@ -1134,6 +1137,9 @@ class _DyingGroupController implements ProcessGroupController {
 
   @override
   int currentGroupId() => 99999;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 }
 
 /// True when [pid] still names a live process (SIGWINCH is a harmless probe).

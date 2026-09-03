@@ -40,6 +40,9 @@ final class _FakeProcesses implements ProcessGroupController {
   int currentGroupId() => 1;
 
   @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
+
+  @override
   Future<int?> resolvePgid(int pid) async => pid;
 
   @override
