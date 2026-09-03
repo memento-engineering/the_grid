@@ -112,7 +112,14 @@ final runner = CommandRunner<int>('lunar', 'Lunar station')
     codedRoster: lunarRoster,
     harnessAllowList: lunarHarnesses.names.toSet(),
     validateHarness: (name) => lunarHarnesses.resolve(name).validate(),
+    defaultHarness: 'copilot',
   ))
   ..addCommand(DownCommand(stationName: 'lunar'))
   ..addCommand(StatusCommand(stationName: 'lunar'));
 ```
+
+`harnessAllowList` decides WHICH harnesses are legal; `defaultHarness` decides
+WHICH ONE is ambient. Omit it and `--harness` defaults to the allow list's
+alphabetically first armed name; supply it — it must be a member, or the
+constructor throws `ArgumentError` — and the station boots on that harness with
+every other armed name still reachable as `--harness <name>`.

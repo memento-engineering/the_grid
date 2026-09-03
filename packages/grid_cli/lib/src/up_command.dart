@@ -169,12 +169,19 @@ Future<Map<String, dynamic>> _defaultReadStateStoreTypes({
 /// outlive it) → dispose the shell's projector → release lock.
 class UpCommand extends Command<int> {
   /// Creates a resident `up` command.
+  ///
+  /// [defaultHarness], when supplied, is the ambient `--harness` default and
+  /// must be a member of [harnessAllowList]; a composing runner sets it
+  /// without reaching around this constructor. Membership is enforced at the
+  /// ONE locus that owns the option — `stationFlags` — and is never
+  /// re-checked here.
   UpCommand({
     required this.stationName,
     required GridDelegateFactory delegateFactory,
     required RosterReader codedRoster,
     required Set<String> harnessAllowList,
     required HarnessValidator validateHarness,
+    String? defaultHarness,
     StationLockService? lockService,
     LockAcquirer? acquireLock,
     GridRunner? runMountedGrid,
@@ -208,6 +215,7 @@ class UpCommand extends Command<int> {
       argParser,
       codedNames: [for (final seat in codedRoster(gridHome: '/')) seat.name],
       harnessAllowList: _harnessAllowList,
+      defaultHarness: defaultHarness,
     );
   }
 

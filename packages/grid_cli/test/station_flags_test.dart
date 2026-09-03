@@ -14,6 +14,20 @@ ArgParser parser() {
   return parser;
 }
 
+ArgParser parserWith({
+  required Set<String> harnessAllowList,
+  String? defaultHarness,
+}) {
+  final parser = ArgParser();
+  stationFlags(
+    parser,
+    codedNames: const ['grid'],
+    harnessAllowList: harnessAllowList,
+    defaultHarness: defaultHarness,
+  );
+  return parser;
+}
+
 void main() {
   late Directory temp;
   setUp(() => temp = Directory.systemTemp.createTempSync('resident-flags-'));
@@ -179,5 +193,109 @@ void main() {
     final status = StatusCommand(stationName: 'lunar');
 
     expect((up.name, down.name, status.name), ('up', 'down', 'status'));
+  });
+
+  group('the ambient harness is chosen independently of the allow list', () {
+    test('omitted: the sorted allow list still wins', () {
+      expect(parser().defaultFor('harness'), 'claude');
+      expect(
+        parserWith(
+          harnessAllowList: const {'copilot', 'claude'},
+        ).defaultFor('harness'),
+        'claude',
+      );
+      expect(
+        parserWith(harnessAllowList: const {'copilot'}).defaultFor('harness'),
+        'copilot',
+      );
+    });
+
+    test('supplied: it wins over sort order, the rest stay opt-in', () {
+      final armed = parserWith(
+        harnessAllowList: const {'claude', 'copilot'},
+        defaultHarness: 'copilot',
+      );
+      expect(armed.defaultFor('harness'), 'copilot');
+      expect(armed.parse(const <String>[]).option('harness'), 'copilot');
+      expect(
+        armed.parse(const ['--harness', 'claude']).option('harness'),
+        'claude',
+      );
+      // Set insertion order moves nothing — only the explicit choice does.
+      expect(
+        parserWith(
+          harnessAllowList: const {'copilot', 'claude'},
+          defaultHarness: 'copilot',
+        ).defaultFor('harness'),
+        'copilot',
+      );
+    });
+
+    test('the ambient default reaches StationConfig.harness', () {
+      final args = parserWith(
+        harnessAllowList: const {'claude', 'copilot'},
+        defaultHarness: 'copilot',
+      ).parse(['--grid-home', temp.path]);
+      expect(
+        stationConfigFrom(
+          args,
+          stationName: 'lunar',
+          codedNames: const {},
+        ).harness,
+        'copilot',
+      );
+    });
+
+    test('an unarmed defaultHarness refuses LOUDLY', () {
+      expect(
+        () => parserWith(
+          harnessAllowList: const {'claude', 'copilot'},
+          defaultHarness: 'opencode',
+        ),
+        throwsA(
+          isA<ArgumentError>().having((e) => e.name, 'name', 'defaultHarness'),
+        ),
+      );
+      expect(
+        () => parserWith(
+          harnessAllowList: const <String>{},
+          defaultHarness: 'claude',
+        ),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.name,
+            'name',
+            'harnessAllowList',
+          ),
+        ),
+      );
+    });
+
+    test('UpCommand forwards the choice and refuses an unarmed one', () {
+      final up = UpCommand(
+        stationName: 'lunar',
+        delegateFactory: ({required config}) =>
+            throw StateError('compile witness only'),
+        codedRoster: ({required gridHome}) => const [],
+        harnessAllowList: const {'claude', 'copilot'},
+        validateHarness: (_) => null,
+        defaultHarness: 'copilot',
+      );
+      expect(up.argParser.defaultFor('harness'), 'copilot');
+      expect(
+        () => UpCommand(
+          stationName: 'lunar',
+          delegateFactory: ({required config}) =>
+              throw StateError('compile witness only'),
+          codedRoster: ({required gridHome}) => const [],
+          harnessAllowList: const {'claude', 'copilot'},
+          validateHarness: (_) => null,
+          defaultHarness: 'pi',
+        ),
+        throwsA(
+          isA<ArgumentError>().having((e) => e.name, 'name', 'defaultHarness'),
+        ),
+      );
+    });
   });
 }
