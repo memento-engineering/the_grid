@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
@@ -14,6 +13,8 @@ import 'package:grid_runtime/grid_runtime.dart'
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/recording_stdout.dart';
 
 final class _View implements StationView {
   _View(this._label, {JoinedSnapshot? snapshot, WedgeMonitor? monitor})
@@ -151,8 +152,8 @@ final class _Harness {
     final home = p.join(temp.path, 'home');
     final workRoot = p.join(temp.path, 'work');
     final missingRoot = p.join(temp.path, 'missing');
-    _seedStore(p.join(home, '.grid'));
-    if (seedWorkStore) _seedStore(workRoot);
+    seedStore(p.join(home, '.grid'));
+    if (seedWorkStore) seedStore(workRoot);
     return _Harness._(
       temp: temp,
       home: home,
@@ -190,8 +191,8 @@ final class _Harness {
   final JoinedSnapshot? snapshot;
   final WedgeMonitor? monitor;
   final events = <String>[];
-  final _stdout = _ByteConsumer();
-  final _stderr = _ByteConsumer();
+  final _stdout = ByteConsumer();
+  final _stderr = ByteConsumer();
 
   /// Every delegate the command's factory built, in construction order (the
   /// launch delegate first, hot-restart generations after).
@@ -227,8 +228,8 @@ final class _Harness {
     List<String> extra = const [],
     bool untimed = false,
   }) async {
-    final stdoutSink = _RecordingStdout(_stdout);
-    final stderrSink = _RecordingStdout(_stderr);
+    final stdoutSink = RecordingStdout(_stdout);
+    final stderrSink = RecordingStdout(_stderr);
     _stdout.onText = (text) {
       if (!events.contains('render') && text.contains('lunar up —')) {
         events.add('render');
@@ -507,75 +508,6 @@ final class _DevMode implements DevModeResource {
   }
 }
 
-final class _ByteConsumer implements StreamConsumer<List<int>> {
-  final _bytes = <int>[];
-  void Function(String text)? onText;
-
-  String get text => utf8.decode(_bytes);
-
-  @override
-  Future<void> addStream(Stream<List<int>> stream) async {
-    await for (final chunk in stream) {
-      _bytes.addAll(chunk);
-      onText?.call(text);
-    }
-  }
-
-  @override
-  Future<void> close() async {}
-}
-
-final class _RecordingStdout implements Stdout {
-  _RecordingStdout(_ByteConsumer consumer) : _sink = IOSink(consumer);
-  final IOSink _sink;
-
-  @override
-  Encoding get encoding => _sink.encoding;
-  @override
-  set encoding(Encoding value) => _sink.encoding = value;
-  @override
-  String lineTerminator = '\n';
-  @override
-  Future<void> get done => _sink.done;
-  @override
-  bool get hasTerminal => false;
-  @override
-  int get terminalColumns => 80;
-  @override
-  int get terminalLines => 24;
-  @override
-  bool get supportsAnsiEscapes => false;
-  @override
-  IOSink get nonBlocking => _sink;
-  @override
-  void add(List<int> data) => _sink.add(data);
-  @override
-  void addError(Object error, [StackTrace? stackTrace]) =>
-      _sink.addError(error, stackTrace);
-  @override
-  Future<void> addStream(Stream<List<int>> stream) => _sink.addStream(stream);
-  @override
-  Future<void> close() => _sink.close();
-  @override
-  Future<void> flush() => _sink.flush();
-  @override
-  void write(Object? object) => _sink.write(object);
-  @override
-  void writeAll(Iterable<Object?> objects, [String separator = '']) =>
-      _sink.writeAll(objects, separator);
-  @override
-  void writeCharCode(int charCode) => _sink.writeCharCode(charCode);
-  @override
-  void writeln([Object? object = '']) => _sink.writeln(object);
-}
-
-void _seedStore(String root) {
-  final store = Directory(p.join(root, '.beads'))..createSync(recursive: true);
-  File(
-    p.join(store.path, 'metadata.json'),
-  ).writeAsStringSync('{"dolt_mode":"embedded"}');
-}
-
 JoinedSnapshot _statusSnapshot({
   required Set<String> readyIds,
   required Map<String, SessionProjection> sessions,
@@ -694,7 +626,7 @@ void main() {
       monitor: monitor,
     );
     addTearDown(h.dispose);
-    _seedStore(h.missingRoot);
+    seedStore(h.missingRoot);
     final run = h.run(untimed: true);
     await h.stationUp.future;
 
@@ -745,8 +677,8 @@ void main() {
       },
     );
     final runner = CommandRunner<int>('lunar', 'test')..addCommand(command);
-    final stderrBytes = _ByteConsumer();
-    final stderrSink = _RecordingStdout(stderrBytes);
+    final stderrBytes = ByteConsumer();
+    final stderrSink = RecordingStdout(stderrBytes);
     final result = await IOOverrides.runZoned(
       () => runner.run(['up', '--grid-home', home.path]),
       stderr: () => stderrSink,
@@ -882,7 +814,7 @@ void main() {
       final h = await _Harness.create();
       addTearDown(h.dispose);
       final moon = p.join(h.temp.path, 'oversized-work-store');
-      _seedStore(moon);
+      seedStore(moon);
       expect(
         await h.run(
           extra: <String>['--no-dry-run', '--substation', 'moon=$moon'],
@@ -1020,7 +952,7 @@ void main() {
         final h = await _Harness.create();
         addTearDown(h.dispose);
         final moon = p.join(h.temp.path, 'moon');
-        _seedStore(moon);
+        seedStore(moon);
         expect(await h.run(extra: <String>['--substation', 'moon=$moon']), 0);
         expect(
           h.events,
@@ -1089,7 +1021,7 @@ void main() {
       );
       addTearDown(h.dispose);
       final moon = p.join(h.temp.path, 'moon');
-      _seedStore(moon);
+      seedStore(moon);
       expect(await h.run(extra: <String>['--substation', 'moon=$moon']), 64);
       final lines = h.stderrText.trim().split('\n');
       expect(lines, hasLength(1));
@@ -1454,7 +1386,7 @@ void main() {
 
       expect(h.statusView!().substation, 'earth');
 
-      _seedStore(h.missingRoot);
+      seedStore(h.missingRoot);
       await h.devHotRestart!();
       expect(h.statusView!().substation, 'earth,dark');
 
@@ -1665,7 +1597,7 @@ void main() {
       final temp = Directory.systemTemp.createTempSync('resident-roster-');
       addTearDown(() => temp.deleteSync(recursive: true));
       final root = p.join(temp.path, 'earth');
-      _seedStore(root);
+      seedStore(root);
       final delegate = _Delegate(<String>[]);
       addTearDown(delegate.dispose);
 

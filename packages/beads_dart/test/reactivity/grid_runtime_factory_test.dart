@@ -48,6 +48,7 @@ void main() {
       addTearDown(bundle.shutdown);
 
       expect(bundle.readPath, ReadPath.sql);
+      expect(bundle.dolt, isNotNull);
       expect(bundle.probeReader, isA<SqlBeadProbeReader>());
       expect(connection.queries, [
         'SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations',
@@ -55,6 +56,36 @@ void main() {
       ]);
     },
   );
+
+  test('bundle.shutdown closes the pooled connection', () async {
+    final root = Directory.systemTemp.createTempSync('grid_runtime_factory_');
+    addTearDown(() async {
+      if (root.existsSync()) await root.delete(recursive: true);
+    });
+    final beadsDir = Directory(p.join(root.path, '.beads'))..createSync();
+    File(p.join(beadsDir.path, 'metadata.json')).writeAsStringSync(
+      '{"dolt_mode":"custom-server","dolt_database":"custom"}',
+    );
+    final workspace = BeadsWorkspace.discover(
+      start: root.path,
+      endpointResolver: const _ResolvedEndpointResolver(),
+    )!;
+    final connection = _ShapeConnection();
+    final bundle = await GridRuntimeFactory.build(
+      workspace: workspace,
+      runner: FakeBdRunner(),
+      doltQueryServiceFactory: (endpoint) => DoltQueryService(
+        endpoint,
+        connectionFactory: (_) async => connection,
+      ),
+      probeInterval: const Duration(days: 1),
+      syncFloorInterval: const Duration(days: 1),
+    );
+    expect(bundle.dolt, isNotNull);
+    expect(connection.connected, isTrue);
+    await bundle.shutdown();
+    expect(connection.connected, isFalse);
+  });
 }
 
 final class _ResolvedEndpointResolver implements EndpointResolver {

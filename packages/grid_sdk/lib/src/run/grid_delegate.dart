@@ -5,6 +5,7 @@ import 'package:state_notifier/state_notifier.dart';
 import '../command/command_operation.dart';
 import '../composition/composition.dart';
 import '../stores/stores.dart';
+import '../work/store_connection.dart';
 import '../work/work_assembly.dart';
 import 'configuration.dart';
 import 'staleness_posture.dart';
@@ -330,6 +331,25 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// and BEFORE [dispose] — an implementation may rely on everything boot
   /// assembled still being live. Default: nothing to sweep.
   Future<void> sweepOrphans() async {}
+
+  /// The store connections this delegate's boot opened, in shutdown order
+  /// (state store first — it is the last writer). Default: none.
+  ///
+  /// The shell reads this while the delegate is still live, and closes the
+  /// handles after the tree unmounted and [sweepOrphans] ran — the tree, the
+  /// sweep and the trajectory all read their stores on the way down. The
+  /// handles must therefore survive [dispose], and their [StoreConnection.close]
+  /// must be idempotent: a boot-assembled [StationWorkRuntime.shutdown] closes
+  /// the same pools.
+  ///
+  /// This is a handle vend, not a state read: it exposes no `StateNotifier`
+  /// state, exactly as [stationView] and [sweepOrphans] vend reference types
+  /// out of the delegate.
+  ///
+  /// The shell owns this because [dispose] is synchronous and void. A delegate
+  /// can only fire the async store shutdown and drop its future; an unawaited
+  /// close leaves established proxy sockets able to keep the resident alive.
+  List<StoreConnection> get openStores => const <StoreConnection>[];
 
   // Deliberately NO ambient `of`/`maybeOf` accessor for the delegate itself.
   //

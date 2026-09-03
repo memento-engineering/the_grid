@@ -173,6 +173,7 @@ export 'src/command/station_command_handler.dart';
 //                           bridge) BEFORE `runGrid`; `afterFlush` rides
 //                           `runGrid(onFlushed:)`; `shutdown()` AFTER
 //                           `grid.teardown()`.
+export 'src/work/store_connection.dart';
 export 'src/work/station_work.dart';
 export 'src/work/work_assembly.dart';
 // The narrow engine seam a RUNNER names when assembling (ADR-0008 D2 —
