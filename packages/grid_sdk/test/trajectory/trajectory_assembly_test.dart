@@ -61,6 +61,16 @@ void main() {
     trajectoryOverride: trajectoryOverride,
   );
 
+  test("the assembly vends the harness's sockets", () async {
+    final work = await assemble();
+    addTearDown(work.shutdown);
+    expect(
+      work.openStores.map((store) => store.name),
+      contains('trajectory'),
+      reason: "the state server's other writer rides the one closing locus",
+    );
+  });
+
   test('dry-run FORCES disabled — even a required config claims no epoch and '
       'writes nothing (§1.3)', () async {
     final work = await assemble(

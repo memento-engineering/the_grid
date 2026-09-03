@@ -907,6 +907,7 @@ Future<StationWorkRuntime> assembleStationWork({
     readPathName: readPathName,
     openStores: orderedStoreConnections(
       state: stateBundle.dolt,
+      trajectory: trajectory,
       work: {for (final e in bundles.entries) e.key: e.value.dolt},
     ),
     driver: driver,

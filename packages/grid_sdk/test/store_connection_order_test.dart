@@ -22,6 +22,33 @@ void main() {
     expect(ordered.map((c) => c.name), ['state', 'earth', 'mars']);
   });
 
+  test(
+    'the trajectory rides between the state store and the work stores',
+    () async {
+      final harness = await TrajectoryHarness.build(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+        gridHome: '/nonexistent',
+        station: 'tranquility',
+      );
+      final ordered = orderedStoreConnections(
+        state: DoltQueryService(_endpoint),
+        trajectory: harness,
+        work: {
+          'mars': DoltQueryService(_endpoint),
+          'earth': DoltQueryService(_endpoint),
+        },
+      );
+      expect(ordered.map((c) => c.name), [
+        'state',
+        'trajectory',
+        'earth',
+        'mars',
+      ]);
+      // A harness that never dialled closes nothing and never throws.
+      await ordered[1].close();
+    },
+  );
+
   test('a CLI-path store contributes no connection', () {
     final ordered = orderedStoreConnections(state: null, work: {'earth': null});
     expect(ordered, isEmpty);

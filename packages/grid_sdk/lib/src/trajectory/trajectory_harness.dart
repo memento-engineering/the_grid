@@ -358,6 +358,16 @@ class TrajectoryHarness {
   bool _isShutdown = false;
 
   TrajectoryDb? _db;
+
+  /// Every session this harness dialled whose close is not confirmed — the
+  /// live one plus any corpse a close threw on or timed out under.
+  ///
+  /// A dropped handle is an established socket on the state server, and the
+  /// grid's own `bd db-proxy-child` runs `--idle-timeout -1ns`: nothing else
+  /// ever reaps it, so it keeps the resident isolate alive after the station
+  /// lock is released. Tracked here, retired by [closeOpenSessions].
+  final Set<TrajectoryDb> _openSessions = <TrajectoryDb>{};
+
   TrajectoryAppender? _appender;
   TrajectoryTick? _tick;
   Timer? _gcTimer;
@@ -1409,11 +1419,13 @@ class TrajectoryHarness {
       _flare('trajectory.shutdownDisposeFailed', {'reason': '$error'});
     }
     // Bounded too: closing a half-open socket can itself hang on the wire.
-    try {
-      await _closeDbQuietly().timeout(config.shutdownDrainTimeout);
-    } on TimeoutException {
-      _db = null; // abandoned; the process exit reaps the socket.
-    }
+    // Every session goes, not just the live one: a reconnect corpse whose
+    // close threw is still an established socket, and in a resident the
+    // process exit is exactly what that socket blocks. A session that
+    // outlives its budget stays tracked for the shell's later close at the
+    // one unwind locus.
+    _db = null;
+    await closeOpenSessions();
     // The final status flare — the §1.2 receipt (skipped when the harness
     // was a silent no-op all along).
     if (neverCameUp && _mode != TrajectoryHarnessMode.degraded) return;
@@ -1429,6 +1441,28 @@ class TrajectoryHarness {
       'outstanding': '${fixpoint?.outstanding ?? 0}',
       'unflushed': '${_queue.length}',
     });
+  }
+
+  /// Closes every session this harness opened whose close is not yet
+  /// confirmed — the socket half of [shutdown], vended to the resident shell
+  /// as a store connection so the one closing locus can await it.
+  ///
+  /// Idempotent and never throws: [shutdown] calls it, and the shell's unwind
+  /// calls it again over a set that is empty after a clean down. Each close is
+  /// bounded by [within] (default [TrajectoryConfig.shutdownDrainTimeout]) —
+  /// closing a half-open socket can itself hang on the wire — and a session
+  /// that outlives its budget stays tracked, so the next caller retries it
+  /// rather than losing the handle.
+  Future<void> closeOpenSessions({Duration? within}) async {
+    final budget = within ?? config.shutdownDrainTimeout;
+    for (final session in _openSessions.toList(growable: false)) {
+      try {
+        await _closeQuietly(session).timeout(budget);
+      } on TimeoutException {
+        // Still tracked: the socket is what keeps the isolate alive, and the
+        // shell's own bounded attempt runs at a later, quieter instant.
+      }
+    }
   }
 
   // ── the gc cadence (§1.2 / M2) ───────────────────────────────────────────
@@ -1475,6 +1509,15 @@ class TrajectoryHarness {
   // ── internals ────────────────────────────────────────────────────────────
 
   Future<TrajectoryDb> _openConnection() async {
+    final db = await _dialConnection();
+    // One tracking point for both callers (boot and the writer loop's
+    // reconnect): an untracked handle can never be retried, and a retry is
+    // the whole cure.
+    _openSessions.add(db);
+    return db;
+  }
+
+  Future<TrajectoryDb> _dialConnection() async {
     final connect = _connect;
     if (connect != null) return connect();
     // Suspend BEFORE any filesystem read (quality M3): this method is reached
@@ -1601,8 +1644,11 @@ class TrajectoryHarness {
   Future<void> _closeQuietly(TrajectoryDb db) async {
     try {
       await db.close();
+      _openSessions.remove(db);
     } on Object {
-      // The session may already be gone.
+      // The session may already be gone — but it may equally still be
+      // established, and a refused close is not a confirmed one, so the
+      // handle stays tracked for [closeOpenSessions] to retry.
     }
   }
 }
