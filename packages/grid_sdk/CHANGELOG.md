@@ -1,3 +1,11 @@
+## 0.3.0-rc.9
+
+- Breaking: `StationKernel` is deleted; `runGrid` is the station's single flush coordinator and now carries the tg-60n fail-closed flush guard (#284). Migration: nothing constructs `StationKernel` in the org — drop any import of it and call `runGrid` (grid_sdk `run_grid.dart`); see decisions/2026-09-02-run-grid-is-the-single-flush-coordinator.
+- `grid rework` accepts a gate-parked PARTIAL molecule pour (an open gate naming the session) as parked, not only an empty cursor (#277).
+- Dry-run `NoOpBdRunner` mints under the owning store prefix (tg-czsf, #278).
+- Foreign dependency rows refused loudly (tg-mspw, #283); resident unwind closes store sockets (tg-46q1, #285).
+- Floors tightened to `beads_dart ^0.2.0-rc.7`, `grid_runtime ^0.2.0-rc.9`, `grid_engine ^0.3.0-rc.11`, `grid_trajectory ^0.1.2`.
+
 ## 0.3.0-rc.8
 
 - Breaking: adopts genesis_tree 0.3.0 and grid_engine 0.3.0-rc.10; `FakeTreeContext` and the SDK's tree overrides forward `{Object? aspect}` (#260). Migration: bump `genesis_tree` to `^0.3.0`; consumers that override `addDependent` add the parameter.

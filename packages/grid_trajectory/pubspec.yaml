@@ -1,5 +1,5 @@
 name: grid_trajectory
-version: 0.1.1
+version: 0.1.2
 description: >-
   Trajectory log substrate — record codec, fenced append client, service tick,
   and traj verbs (docs/design/trajectory/trajectory-schema.md). A leaf package:

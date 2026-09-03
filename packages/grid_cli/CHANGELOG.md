@@ -1,3 +1,10 @@
+## 0.5.0-rc.11
+
+- Breaking: `StationKernel` is deleted; `runGrid` is the station's single flush coordinator and now carries the tg-60n fail-closed flush guard (#284). Migration: nothing constructs `StationKernel` in the org — drop any import of it and call `runGrid` (grid_sdk `run_grid.dart`); see decisions/2026-09-02-run-grid-is-the-single-flush-coordinator.
+- `up` closes every resident store's query service during unwind (dev-mode dispose, control dispose, grid teardown, projector dispose, then lock release), so the VM exits after `down` instead of idling on ESTABLISHED db-proxy sockets and pinning the VM-service port for the next boot (tg-46q1, #285).
+- `stationFlags()` and `UpCommand` take a `defaultHarness`, so a composed station picks its ambient harness independently of the allow list's sort order; the default must be a member of the armed set (#276).
+- Floors tightened to `beads_dart ^0.2.0-rc.7`, `grid_runtime ^0.2.0-rc.9`, `grid_engine ^0.3.0-rc.11`, `grid_sdk ^0.3.0-rc.9`, `grid_trajectory ^0.1.2`.
+
 ## 0.5.0-rc.10
 
 - Breaking: requires `grid_exploration ^0.3.0-rc.4` (which requires `leonard_contract ^0.2.2` on genesis 0.3.0). Migration: none beyond the constraint. Fixes rc.9, which did not resolve from pub.dev at all: it pinned `genesis_tree ^0.3.0` while `grid_exploration` rc.3 still reached genesis_tree 0.2 through `leonard_contract 0.2.1`, so `dart pub global activate grid_cli 0.5.0-rc.9` failed version solving. The `DevModeHost` import (#249) now also matches the hosted grid_exploration.

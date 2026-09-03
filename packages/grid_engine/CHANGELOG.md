@@ -1,3 +1,10 @@
+## 0.3.0-rc.11
+
+- Breaking: `StationKernel` is deleted; `runGrid` is the station's single flush coordinator and now carries the tg-60n fail-closed flush guard (#284). Migration: nothing constructs `StationKernel` in the org — drop any import of it and call `runGrid` (grid_sdk `run_grid.dart`); see decisions/2026-09-02-run-grid-is-the-single-flush-coordinator.
+- Foreign dependency rows (a bd dep naming another store's prefix) are refused loudly instead of silently mis-linking; cross-store edges are link beads (tg-mspw, #283).
+- Pending work is admitted by priority, then bead id, so a P0 never waits behind alphabetically earlier P2s (tg-lohr, #279).
+- Floors tightened to `beads_dart ^0.2.0-rc.7` and `grid_runtime ^0.2.0-rc.9`.
+
 ## 0.3.0-rc.10
 
 - Breaking: adopts genesis_tree 0.3.0 — `InheritedBranch.addDependent` and `TreeContext.dependOnInheritedSeedOfExactType` gain `{Object? aspect}`, and the engine's `Provider` / registry overrides and `FakeTreeContext` forward it (#260). Migration: bump `genesis_tree` to `^0.3.0` and add the `aspect` parameter to any `addDependent` / `dependOnInheritedSeedOfExactType` override; callers that pass no aspect are unchanged.

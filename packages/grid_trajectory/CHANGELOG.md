@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- `traj committee-report` folds `step.transition` rows into the lane tables, cost totals, and gate causes, so the report reads the same facts the projections carry instead of waiting on `verify.*` record families that do not exist (#281).
+
 ## 0.1.1
 
 - `traj committee-report`: a cross-session, read-only report folding

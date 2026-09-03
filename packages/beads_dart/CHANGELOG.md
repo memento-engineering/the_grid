@@ -1,3 +1,9 @@
+## 0.2.0-rc.7
+
+- Molecule pours (`bd create --graph`) run on a dedicated 60-second deadline instead of the 15-second single-row default; the exception is named, tested, and bounded, and every other bd call keeps the 15-second deadline (tg-336w, #280).
+- `DoltQueryService.close()` releases the state-store proxy sockets so a resident can exit after its shutdown fixpoint (tg-46q1, #285).
+- The publish gate no longer embargoes on the upstream bd day-one window; we ship our rc against their rc (#275).
+
 ## 0.2.0-rc.6
 
 - Added intake-safe create and list options: `create` takes `defer`,
