@@ -153,6 +153,7 @@ one state store (`tgdog`), one lock.
   see beats a false positive that spawns unprerequisited work). Zero cross-store deps exist today
   (measured), so this guard costs nothing until someone creates one — and then it is already
   correct.
+  **Amended 2026-09-02 (tg-mspw, `docs/decisions/2026-09-02-cross-store-dep-rows-are-refused-not-honoured.md`):** the dep-row half of this guard is BLOCKED OFF. A blocking row whose endpoints do not resolve to the same armed member is REFUSED loudly and blocks nothing; an OPEN `type=link` bead in the station's state store is the only cross-store blocking edge. Honouring dep rows returns with tg-xh5d.
 - **D-F3 — Union identity + coalescing: a per-member freshness vector** *(amended §4b)*.
   Per-member `latest` retained; any member emission rebuilds the union; the union emits only when
   `diffSnapshots(previous, next)` is non-empty (the honest change gate). The union carries a

@@ -477,8 +477,9 @@ Future<StationWorkRuntime> assembleStationWork({
     'state=${stateBundle.readPath.name}',
   ].join(', ');
 
-  // ONE sink for BOTH cross-store edge sources — the union's dependency rows
-  // and the join's state-owned link beads report through the same LOUD channel.
+  // ONE sink for BOTH cross-store reports — the union's REFUSED dependency
+  // rows (tg-mspw: a dep row blocks nothing) and the join's state-owned link
+  // beads, which are the only cross-store blocking edge.
   final unresolvedSink =
       onUnresolvedExternalDep ?? (String m) => stdout.writeln(m);
 
@@ -487,6 +488,11 @@ Future<StationWorkRuntime> assembleStationWork({
       for (final e in bundles.entries)
         e.key: _RuntimeSnapshotSource(e.value.runtime),
     },
+    // tg-mspw — the union classifies ownership on BOTH identity axes, the
+    // same {name, prefix} pair `identityOwner` above already refuses
+    // collisions on. The member map is keyed by NAME only; every production
+    // id is PREFIX-shaped (`tg-…`, `pow-…`), so names alone resolved nothing.
+    memberPrefixes: {for (final s in substations) s.name: s.prefix},
     onUnresolvedExternalDep: unresolvedSink,
     // Ready-staleness by AGE (tg-zd4v face 2): a small multiple of the floor,
     // so a healthy member (re-capturing every floor tick) never trips it and
