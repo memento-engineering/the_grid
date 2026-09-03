@@ -23,6 +23,7 @@ export 'src/connect/trajectory_connection.dart'; // real session + connect-time 
 export 'src/connect/trajectory_db.dart'; // TrajectoryDb seam + §5 error-code classification
 
 // SECTION: ddl — schema DDL + database bootstrap.
+export 'src/ddl/column_bounds.dart'; // §4 VARCHAR widths + the reason-column bound
 export 'src/ddl/trajectory_provisioning.dart'; // write-capable SQL user, secret under .grid/trajectory/
 export 'src/ddl/trajectory_schema.dart'; // §4 verbatim DDL, dolt_ignore-first, idempotent
 

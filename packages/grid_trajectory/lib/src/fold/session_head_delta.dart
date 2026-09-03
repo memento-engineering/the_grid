@@ -29,6 +29,7 @@ import 'package:meta/meta.dart';
 import '../codec/codec_registry.dart';
 import '../codec/envelope.dart';
 import '../codec/trajectory_record.dart';
+import '../ddl/column_bounds.dart';
 import '../ddl/trajectory_schema.dart' show projSessionHeadCutColumns;
 import 'session_head_row.dart';
 
@@ -105,7 +106,40 @@ final class SessionHeadUpdate extends SessionHeadDelta {
 ///
 /// [decoded] short-circuits the codec when the caller already holds the typed
 /// record (the Stage-1 appender does); replay decodes from the envelope.
+///
+/// BOUNDED AT DERIVATION (tg-kzvs). Every P1 reason column the delta writes is
+/// shaped to its declared §4 width before it leaves here, so one leg's multi-KB
+/// failure text can never 1105 the append transaction and take the `trajectory`
+/// row down with the projection update. The bound sits HERE rather than in
+/// either applier so the incremental fold, `traj replay` and the in-process
+/// mirror cannot disagree. No truth is lost: the record's own `payload` JSON on
+/// the immutable log row keeps the whole text.
 SessionHeadDelta? sessionHeadDeltaFor(
+  TrajectoryEnvelope envelope, {
+  TrajectoryRecord? decoded,
+}) {
+  final delta = _rawSessionHeadDeltaFor(envelope, decoded: decoded);
+  return switch (delta) {
+    // The mint-time row carries no free text — P1's reason columns are all
+    // NULL at insert, and §7 pins them immutable.
+    null || SessionHeadInsert() => delta,
+    SessionHeadUpdate() => SessionHeadUpdate(
+      sessionId: delta.sessionId,
+      columns: boundReasonColumns(kSessionHeadTable, delta.columns),
+      guardAttemptId: delta.guardAttemptId,
+      guardTerminalLess: delta.guardTerminalLess,
+    ),
+  };
+}
+
+/// The one raw delta function. Returns null for every record with no P1
+/// effect — non-attempt families, session-less records, and the Family-1 types
+/// whose facts live on P6 (worktree/lease/liveness/adopt) or P3 (mint) or
+/// nowhere in P1's DDL (note).
+///
+/// [decoded] short-circuits the codec when the caller already holds the typed
+/// record (the Stage-1 appender does); replay decodes from the envelope.
+SessionHeadDelta? _rawSessionHeadDeltaFor(
   TrajectoryEnvelope envelope, {
   TrajectoryRecord? decoded,
 }) {

@@ -262,6 +262,21 @@ TrajectoryAppendRequest _note(int ordinal, {String session = 's-1'}) =>
       ),
     );
 
+/// A record carrying BOTH promoted correlation keys the drop flare reports.
+TrajectoryAppendRequest _stepTransition({
+  String session = 's-1',
+  String stepPath = 'code/deliver',
+}) => TrajectoryAppendRequest(
+  StepTransition(
+    sessionId: session,
+    round: 1,
+    stepPath: stepPath,
+    stepRound: 0,
+    incarnation: 0,
+    state: StepState.failed,
+  ),
+);
+
 void main() {
   late Directory tmp;
   late List<(String, Map<String, String>)> flares;
@@ -636,6 +651,35 @@ void main() {
   });
 
   group('sealed-outcome mapping (§3)', () {
+    test(
+      'a dropped append NAMES the session and step it lost (tg-kzvs)',
+      () async {
+        appender.appendOutcomes.add(
+          const AppendInternalError(
+            cause: MySQLServerException(
+              "string 'pow-26dd/deliver: …' is too large for column "
+              "'work_terminal_reason'",
+              1105,
+            ),
+          ),
+        );
+        final h = await harness();
+        await h.start();
+        h.enqueue(_stepTransition());
+        await h.runToFixpoint();
+
+        final data = flares
+            .firstWhere((flare) => flare.$1 == 'trajectory.appendDropped')
+            .$2;
+        expect(data['recordType'], 'step.transition');
+        expect(data['sessionId'], 's-1');
+        expect(data['stepPath'], 'code/deliver');
+        expect(data['reason'], contains('work_terminal_reason'));
+        expect(data['dropped'], '1');
+        expect(h.status.dropped, 1);
+      },
+    );
+
     test('AppendInternalError: drop + rate-limited flare + eager guarded '
         'reconnect on the next append', () async {
       appender.appendOutcomes.add(
