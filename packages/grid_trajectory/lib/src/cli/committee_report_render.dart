@@ -16,6 +16,13 @@ List<String> renderCommitteeReport(CommitteeReport report) {
         '${report.recordsRead == 1 ? '' : 's'}'
         '${report.truncated ? ' (TRUNCATED — totals are a prefix, not a total)' : ''}',
   ];
+  final sources = report.sources;
+  lines.add(
+    '  sources: verdicts ${sources.verdictsFromRecord} record / '
+    '${sources.verdictsFromStep} step.transition · usage '
+    '${sources.usageFromTelemetry} telemetry / ${sources.usageFromStep} '
+    'step.transition / ${sources.usageFromFallback} fallback',
+  );
   if (report.gateCauses.isEmpty) {
     lines.add('  gates: none opened in this window');
   } else {

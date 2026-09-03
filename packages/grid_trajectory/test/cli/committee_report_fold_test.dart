@@ -109,6 +109,117 @@ TrajectoryEnvelope _usage({
   },
 );
 
+TrajectoryEnvelope _step({
+  required String session,
+  required String node,
+  required StepState state,
+  int stepRound = 1,
+  String? attempt,
+  String? failureReason,
+  Map<String, String>? result,
+  DateTime? startedAt,
+  DateTime? completedAt,
+}) => envelope(
+  recordType: 'step.transition',
+  family: TrajectoryFamily.step,
+  seq: ++_seq,
+  sessionId: session,
+  round: 1,
+  stepPath: node,
+  stepRound: stepRound,
+  incarnation: 1,
+  attemptId: attempt,
+  payload: {
+    'state': state.wire,
+    if (failureReason != null) 'failure_reason': failureReason,
+    if (startedAt != null) 'started_at': startedAt.toIso8601String(),
+    if (completedAt != null) 'completed_at': completedAt.toIso8601String(),
+    if (result != null) 'result': result,
+  },
+);
+
+/// A window with NO `verify.*` and NO `gate.*` row — only the step family the
+/// engine actually writes today, plus the attempt row that joins session→bead.
+///
+/// Session s3 (`tg-ccc`): coherence A, adr-alignment D, a gate parked at the
+/// route node, and a route step that ESCALATED — the D is upheld.
+/// Session s4 (`tg-ddd`): code-validation F, a gate, and a route step that
+/// ADVANCED anyway — the F is overridden.
+List<TrajectoryEnvelope> stepOnlyRows() {
+  _seq = 0;
+  final t0 = DateTime.utc(2026, 9, 2, 12);
+  return [
+    _processStarted(
+      session: 's3',
+      bead: 'tg-ccc',
+      attempt: 'att-10',
+      lane: 'coherence',
+      round: 1,
+    ),
+    _step(
+      session: 's3',
+      node: 'review/coherence',
+      state: StepState.complete,
+      attempt: 'att-10',
+      startedAt: t0,
+      completedAt: t0.add(const Duration(minutes: 1)),
+      result: {'grade': 'A', 'round': '1', 'costUsd': '5.00'},
+    ),
+    _step(
+      session: 's3',
+      node: 'review/adr-alignment',
+      state: StepState.complete,
+      startedAt: t0,
+      completedAt: t0.add(const Duration(minutes: 3)),
+      result: {'grade': 'D', 'round': '1', 'costUsd': '2.00'},
+    ),
+    _step(
+      session: 's3',
+      node: 'review/route',
+      state: StepState.gated,
+      failureReason: 'hard block: structural contract failed',
+    ),
+    _step(
+      session: 's3',
+      node: 'review/route',
+      state: StepState.complete,
+      result: {
+        'route_verdict': 'escalate',
+        'lane': 'adr-alignment',
+        'grade': 'D',
+      },
+    ),
+    _processStarted(
+      session: 's4',
+      bead: 'tg-ddd',
+      attempt: 'att-11',
+      lane: 'code-validation',
+      round: 1,
+    ),
+    _step(
+      session: 's4',
+      node: 'review/code-validation',
+      state: StepState.complete,
+      attempt: 'att-11',
+      startedAt: t0,
+      completedAt: t0.add(const Duration(minutes: 2)),
+      result: {'grade': 'F', 'round': '1', 'costUsd': '1.00'},
+    ),
+    _step(
+      session: 's4',
+      node: 'review/route',
+      state: StepState.gated,
+      failureReason: 'critic F on a non-code diff',
+    ),
+    _step(
+      session: 's4',
+      node: 'review/route',
+      state: StepState.complete,
+      result: {'route_verdict': 'advance', 'lane': 'code-validation'},
+    ),
+  ];
+}
+
 /// One boot's worth of records: two beads, five gates (one per named cause),
 /// one operator override, one upheld+converged respec, one unwinnable loop.
 List<TrajectoryEnvelope> fixtureRows() {
@@ -332,6 +443,159 @@ void main() {
       final report = foldCommitteeReport(fixtureRows(), truncated: true);
       expect(report.truncated, isTrue);
       expect(report.toJson()['truncated'], isTrue);
+    });
+  });
+
+  group('the step.transition adapter', () {
+    late CommitteeReport report;
+    setUp(() => report = foldCommitteeReport(stepOnlyRows()));
+
+    LaneReport lane(String name) =>
+        report.lanes.firstWhere((row) => row.lane == name);
+
+    test('a window with NO verify.* or gate.* row still reports a populated '
+        'lane table', () {
+      expect(report.recordsRead, 9);
+      expect(report.lanes.map((row) => row.lane), [
+        'adr-alignment',
+        'code-validation',
+        'coherence',
+      ]);
+      expect(lane('coherence').gradeCounts, {'A': 1});
+      expect(lane('adr-alignment').gradeCounts, {'D': 1});
+      expect(lane('code-validation').gradeCounts, {'F': 1});
+      // Gate-causing, dollars and seconds all come off the same step rows.
+      expect(lane('adr-alignment').gateCausing, 1);
+      expect(lane('coherence').runs, 1);
+      expect(lane('coherence').runsFromFallback, 0);
+      expect(lane('coherence').meanCostUsd, 5.0);
+      expect(lane('coherence').meanDurationMs, 60000);
+    });
+
+    test('a gated row lights the cause histogram', () {
+      expect(report.gateCauses, {GateCause.hardBlock: 1, GateCause.criticF: 1});
+    });
+
+    test('an escalating route UPHOLDS the adverse verdict it gated on', () {
+      final adr = lane('adr-alignment');
+      expect(adr.adverseVerdicts, 1);
+      expect(adr.gateCausing, 1);
+      expect(adr.upheld, 1);
+      expect(adr.overridden, 0);
+      expect(adr.precision, 1.0);
+    });
+
+    test('an advancing route OVERRIDES it', () {
+      final code = lane('code-validation');
+      expect(code.gateCausing, 1);
+      expect(code.overridden, 1);
+      expect(code.upheld, 0);
+      expect(code.precision, 0.0);
+    });
+
+    test('an operator ruling on the lane result is an override', () {
+      final ruled = foldCommitteeReport([
+        ...stepOnlyRows(),
+        _step(
+          session: 's3',
+          node: 'review/plan-completeness',
+          state: StepState.complete,
+          result: {'grade': 'D', 'round': '1', 'transport': 'operator-ruling'},
+        ),
+      ]);
+      final plan = ruled.lanes.firstWhere(
+        (row) => row.lane == 'plan-completeness',
+      );
+      expect(plan.gateCausing, 1);
+      expect(plan.overridden, 1);
+    });
+
+    test('a route step contributes no verdict and no lane of its own', () {
+      expect(report.lanes.map((row) => row.lane), isNot(contains('route')));
+      expect(lane('adr-alignment').gradeCounts['D'], 1);
+    });
+
+    test('per-bead dollars total from the step rows', () {
+      expect(report.beads.map((row) => row.beadId), ['tg-ccc', 'tg-ddd']);
+      expect(report.beads.first.costUsd, 7.0);
+      expect(report.beads.last.costUsd, 1.0);
+    });
+
+    test('the report names its sources', () {
+      expect(report.sources.verdictsFromRecord, 0);
+      expect(report.sources.verdictsFromStep, 3);
+      expect(report.sources.usageFromTelemetry, 0);
+      expect(report.sources.usageFromStep, 3);
+      expect(report.sources.usageFromFallback, 0);
+      expect(
+        report.toJson()['sources'],
+        containsPair('verdicts_from_step_transition', 3),
+      );
+      expect(
+        renderCommitteeReport(report)[1],
+        '  sources: verdicts 0 record / 3 step.transition · usage '
+        '0 telemetry / 3 step.transition / 0 fallback',
+      );
+    });
+  });
+
+  group('usage precedence', () {
+    test('a telemetry row beats a step-derived cost for the same pair', () {
+      final report = foldCommitteeReport([
+        ...stepOnlyRows(),
+        _usage(session: 's3', attempt: 'att-10', cost: 42.0, durationMs: 1000),
+      ]);
+      final coherence = report.lanes.firstWhere(
+        (row) => row.lane == 'coherence',
+      );
+      expect(coherence.runs, 1);
+      expect(coherence.meanCostUsd, 42.0);
+      expect(report.sources.usageFromTelemetry, 1);
+      expect(report.sources.usageFromStep, 2);
+    });
+
+    test(
+      'a step-derived cost beats a fallback sample, and is not fallback',
+      () {
+        final report = foldCommitteeReport(
+          stepOnlyRows(),
+          fallback: const [
+            UsageSample(
+              lane: 'coherence',
+              beadId: 'tg-ccc',
+              fromFallback: true,
+              costUsd: 99.0,
+            ),
+          ],
+        );
+        final coherence = report.lanes.firstWhere(
+          (row) => row.lane == 'coherence',
+        );
+        expect(coherence.runs, 1);
+        expect(coherence.runsFromFallback, 0);
+        expect(coherence.meanCostUsd, 5.0);
+        expect(report.sources.usageFromFallback, 0);
+      },
+    );
+
+    test('a fallback sample outside the window contributes NO dollars', () {
+      final report = foldCommitteeReport(
+        stepOnlyRows(),
+        fallback: const [
+          UsageSample(
+            lane: 'readiness',
+            beadId: 'lenny-qxx.7',
+            fromFallback: true,
+            costUsd: 18.92,
+          ),
+        ],
+      );
+      expect(report.sources.usageFromFallback, 0);
+      expect(
+        report.beads.map((row) => row.beadId),
+        isNot(contains('lenny-qxx.7')),
+      );
+      expect(report.lanes.map((row) => row.lane), isNot(contains('readiness')));
     });
   });
 }
