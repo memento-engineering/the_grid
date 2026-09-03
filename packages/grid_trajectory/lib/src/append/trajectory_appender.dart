@@ -68,6 +68,7 @@ import '../codec/envelope.dart';
 import '../codec/idem_key.dart';
 import '../codec/trajectory_record.dart';
 import '../connect/trajectory_db.dart';
+import '../ddl/column_bounds.dart';
 import 'append_outcome.dart';
 import 'service_event.dart';
 import 'ulid.dart';
@@ -1062,7 +1063,11 @@ class TrajectoryAppender {
       final value = row[key];
       if (value is String) row[key] = _sqlDate(DateTime.parse(value));
     }
-    return row;
+    // The log row's own free-text reason is bounded for the same reason the
+    // fold's is: an oversized value would 1105 this INSERT and lose the record
+    // entirely. Only `*_reason` columns are touched — `payload` (JSON) keeps
+    // the whole text, and `idem_key_text` is identity, never reshaped.
+    return boundReasonColumns(kTrajectoryTable, row);
   }
 
   /// DATETIME(6) literal: dolt refuses ISO-8601's trailing `Z`.

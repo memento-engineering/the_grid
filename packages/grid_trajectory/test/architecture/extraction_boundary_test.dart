@@ -156,7 +156,11 @@ void main() {
       _dartFilesIn(
         'lib/src/ddl',
       ).map((file) => file.uri.pathSegments.last).toSet(),
-      {'trajectory_provisioning.dart', vocabularyDdl},
+      // column_bounds.dart is MECHANICS, classified here deliberately: it
+      // derives VARCHAR widths from the DDL's own text and bounds values by
+      // COLUMN NAME. It names no record class and no record_type, so the three
+      // prohibitions below cover it unchanged.
+      {'column_bounds.dart', 'trajectory_provisioning.dart', vocabularyDdl},
     );
   });
 

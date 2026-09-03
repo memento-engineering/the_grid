@@ -723,12 +723,36 @@ class TrajectoryHarness {
     }
   }
 
-  /// The attempt id a record correlates to, or null. Reads the CORRELATION map
-  /// (a column name), never a concrete record class — the same discipline the
-  /// append mechanics keep.
-  static String? _attemptIdOf(TrajectoryRecord record) {
-    final value = record.correlationToJson()['attempt_id'];
+  /// One promoted correlation column off a record's CORRELATION map (a column
+  /// name), never a concrete record class — the same discipline the append
+  /// mechanics keep.
+  static String? _correlationOf(TrajectoryRecord record, String column) {
+    final value = record.correlationToJson()[column];
     return value is String ? value : null;
+  }
+
+  /// The attempt id a record correlates to, or null.
+  static String? _attemptIdOf(TrajectoryRecord record) =>
+      _correlationOf(record, 'attempt_id');
+
+  /// The `trajectory.appendDropped` payload (tg-kzvs). A drop must name the
+  /// SUBJECT it lost, not only the record type: the receipt's flare left an
+  /// operator reading the boot log to find which session lost its terminal.
+  /// A record carrying neither key simply omits it.
+  Map<String, String> _appendDroppedData(
+    TrajectoryAppendRequest request,
+    String reason,
+  ) {
+    final record = request.record;
+    final sessionId = _correlationOf(record, 'session_id');
+    final stepPath = _correlationOf(record, 'step_path');
+    return {
+      'reason': reason,
+      'recordType': record.recordType,
+      if (sessionId != null) 'sessionId': sessionId,
+      if (stepPath != null) 'stepPath': stepPath,
+      'dropped': '$_dropped',
+    };
   }
 
   // ── the fold mirrors (cut-wiring C1 + C4 / §0.2) ─────────────────────────
@@ -1138,13 +1162,16 @@ class TrajectoryHarness {
         if (debounced || !await _reconnect()) {
           _dropped += 1;
           _latchMirrorCompromised('append dropped: reconnect');
-          _flareLimited('trajectory.appendDropped', {
-            'reason': debounced
-                ? 'reconnect debounced (retry within ${kReconnectDebounce.inSeconds}s)'
-                : 'reconnect failed; listener re-resolved next attempt',
-            'recordType': request.record.recordType,
-            'dropped': '$_dropped',
-          });
+          _flareLimited(
+            'trajectory.appendDropped',
+            _appendDroppedData(
+              request,
+              debounced
+                  ? 'reconnect debounced (retry within '
+                        '${kReconnectDebounce.inSeconds}s)'
+                  : 'reconnect failed; listener re-resolved next attempt',
+            ),
+          );
           return;
         }
       }
@@ -1205,11 +1232,10 @@ class TrajectoryHarness {
           // dropped if it ever does (§3).
           _dropped += 1;
           _latchMirrorCompromised('append dropped: grant refused');
-          _flareLimited('trajectory.appendDropped', {
-            'reason': reason,
-            'recordType': request.record.recordType,
-            'dropped': '$_dropped',
-          });
+          _flareLimited(
+            'trajectory.appendDropped',
+            _appendDroppedData(request, reason),
+          );
         case AppendInternalError(:final cause):
           // Server hiccup / dead socket: count, flare rate-limited, keep
           // draining, and drive the guarded reconnect eagerly on the next
@@ -1217,11 +1243,10 @@ class TrajectoryHarness {
           _dropped += 1;
           _needsReconnect = true;
           _latchMirrorCompromised('append failed: $cause');
-          _flareLimited('trajectory.appendDropped', {
-            'reason': '$cause',
-            'recordType': request.record.recordType,
-            'dropped': '$_dropped',
-          });
+          _flareLimited(
+            'trajectory.appendDropped',
+            _appendDroppedData(request, '$cause'),
+          );
       }
     } on Object catch (error) {
       // §5's sealed contract says append() never throws — belt and braces: a
@@ -1230,11 +1255,10 @@ class TrajectoryHarness {
       _dropped += 1;
       _needsReconnect = true;
       _latchMirrorCompromised('append threw: $error');
-      _flareLimited('trajectory.appendDropped', {
-        'reason': '$error',
-        'recordType': request.record.recordType,
-        'dropped': '$_dropped',
-      });
+      _flareLimited(
+        'trajectory.appendDropped',
+        _appendDroppedData(request, '$error'),
+      );
     } finally {
       _inFlightAttemptId = null;
     }
