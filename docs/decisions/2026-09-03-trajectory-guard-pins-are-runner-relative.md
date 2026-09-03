@@ -13,7 +13,7 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by: ["trajectory-guard-pins-use-the-median-of-five-probes"]
   bead: tg-1pzo
   legacy-id: null
 ---

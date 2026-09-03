@@ -68,7 +68,11 @@ void main() {
       final claim = await appender.claimEpoch(pid: 4242, pgid: 4242);
       expect(claim, isA<EpochClaimed>());
 
-      final baselineMicros = <int>[];
+      // FIVE interleaved calibration probes (tg-2zao round 2): one before the
+      // storm, three between its quarters, one after — so a scheduler stall
+      // lands on the guarded path AND on the calibration, and no single
+      // unlucky window can move either band.
+      final probes = <BaselineProbe>[];
 
       // The storm: full attempt lifecycles with a gated step whose rearm
       // BUMPS step_round (the two-ladder chain write — two fold statements in
@@ -78,6 +82,7 @@ void main() {
       final durationsMicros = <int>[];
       var appended = 0;
       final wall = Stopwatch()..start();
+      probes.add(await runBaselineProbe(db, label: 'w6-probe0'));
       for (var i = 0; i < sessions; i++) {
         final sessionId = 'tranquility-w6$i';
         final workBead = 'tg-w6$i';
@@ -166,9 +171,6 @@ void main() {
           );
           txn.stop();
           durationsMicros.add(txn.elapsedMicroseconds);
-          baselineMicros.add(
-            await timeBaselineRoundTrip(db, path: '$sessionId/$ordinal'),
-          );
           expect(
             landed,
             isA<Appended>(),
@@ -176,16 +178,20 @@ void main() {
           );
           appended++;
         }
+        if (i == 9 || i == 19 || i == 29) {
+          probes.add(
+            await runBaselineProbe(db, label: 'w6-probe${probes.length}'),
+          );
+        }
       }
+      probes.add(await runBaselineProbe(db, label: 'w6-probe4'));
       wall.stop();
       expect(appended, sessions * 13);
 
-      baselineMicros.sort();
-      int basePct(double p) =>
-          baselineMicros[(baselineMicros.length * p).ceil() - 1];
+      final calibration = BaselineCalibration(probes);
       final budget = GuardBudget(
-        baselineUnitMicros: basePct(0.50),
-        baselineTailMicros: basePct(0.99),
+        baselineUnitMicros: calibration.unitMicros,
+        baselineTailMicros: calibration.tailMicros,
       );
       final host = resolveGuardHost(Platform.environment);
 
@@ -215,26 +221,34 @@ void main() {
         '$kM3BaselineRate appends/s — this run is '
         '${(drainRate / kM3BaselineRate * 100).toStringAsFixed(0)}% of it '
         'with the full Stage-1 fold set\n'
-        '  machine-speed unit (median bare round trip): '
+        '  calibration: $kProbeCount interleaved probes x '
+        '${calibration.probes.first.trips} bare round trips\n'
+        '  machine-speed unit (median of the probe medians): '
         '${(budget.baselineUnitMicros / 1000).toStringAsFixed(2)} ms '
         '(${budget.baselineOpsPerSecond.toStringAsFixed(1)} ops/s)\n'
+        '  machine-tail unit (median of the probe slowest trips): '
+        '${(budget.baselineTailMicros / 1000).toStringAsFixed(2)} ms\n'
         '  host: ${host.name} — calibrated floor '
-        '${budget.minimumDrainPerSecond.toStringAsFixed(1)} appends/s, '
-        'calibrated p99 ceiling '
-        '${budget.maximumP99Millis.toStringAsFixed(1)} ms\n'
+        '${budget.minimumDrainPerSecond.toStringAsFixed(1)} appends/s '
+        '(${kFoldMeanCostRatio}x bound at the '
+        '${kDrainToleranceFraction}x round-2 tolerance), calibrated p99 '
+        'ceiling ${budget.maximumP99Millis.toStringAsFixed(1)} ms '
+        '(${kFoldTailCostRatio}x bound at the '
+        '${kTailToleranceFactor}x round-2 tolerance)\n'
         '  OBSERVED RATIOS: mean/unit '
         '${(mean * 1000 / budget.baselineUnitMicros).toStringAsFixed(3)}, '
         'p99/tail '
-        '${(atPercentile(0.99) * 1000 / budget.baselineTailMicros).toStringAsFixed(3)}, '
-        'baseline tail '
-        '${(budget.baselineTailMicros / 1000).toStringAsFixed(2)} ms',
+        '${(atPercentile(0.99) * 1000 / budget.baselineTailMicros).toStringAsFixed(3)}',
       );
       expect(
         drainRate,
         greaterThan(budget.minimumDrainPerSecond),
         reason:
-            'the Stage-1 fold costs more than ${kMaxFoldMeanCostRatio}x a '
-            'bare round trip on THIS machine: drain '
+            'the Stage-1 fold costs more than '
+            '${(kFoldMeanCostRatio / kDrainToleranceFraction).toStringAsFixed(2)}x '
+            'a bare round trip on THIS machine (the calibrated '
+            '${kFoldMeanCostRatio}x bound at the '
+            '${kDrainToleranceFraction}x round-2 tolerance): drain '
             '${drainRate.toStringAsFixed(1)}/s under the calibrated floor '
             '${budget.minimumDrainPerSecond.toStringAsFixed(1)}/s '
             '(machine-speed unit '
@@ -245,7 +259,8 @@ void main() {
         lessThan(budget.maximumP99Millis),
         reason:
             'p99 writer-loop transaction time exceeds '
-            '${kMaxFoldP99TailRatio}x the machine-tail unit: '
+            '${(kFoldTailCostRatio * kTailToleranceFactor).toStringAsFixed(2)}x '
+            'the machine-tail unit: '
             '${atPercentile(0.99).toStringAsFixed(2)} ms over the calibrated '
             'ceiling ${budget.maximumP99Millis.toStringAsFixed(1)} ms',
       );
