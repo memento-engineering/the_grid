@@ -39,8 +39,8 @@ void main() {
         baselineTailMicros: 10000,
       );
       expect(budget.baselineOpsPerSecond, 200);
-      expect(budget.minimumDrainPerSecond, 50);
-      expect(budget.maximumP99Millis, 50);
+      expect(budget.minimumDrainPerSecond, closeTo(30, 1e-9));
+      expect(budget.maximumP99Millis, closeTo(80, 1e-9));
     });
 
     test('a runner 6x slower scales both floors past the tg-2zao receipts', () {
@@ -50,6 +50,32 @@ void main() {
       );
       expect(budget.minimumDrainPerSecond, lessThan(22.5));
       expect(budget.maximumP99Millis, greaterThan(297.775));
+    });
+
+    test('the round-1 CI receipts clear the round-2 floor', () {
+      // Run 33777666093: a 119.27/s calibrated bound => a 2096 us unit.
+      final first = GuardBudget(
+        baselineUnitMicros: 2096,
+        baselineTailMicros: 4192,
+      );
+      expect(first.minimumDrainPerSecond, lessThan(106.65));
+      expect(first.minimumDrainPerSecond, greaterThan(106.65 / 2));
+      // Run 33778914681: a 120.60/s calibrated bound => a 2073 us unit.
+      final second = GuardBudget(
+        baselineUnitMicros: 2073,
+        baselineTailMicros: 4146,
+      );
+      expect(second.minimumDrainPerSecond, lessThan(109.51));
+      expect(second.minimumDrainPerSecond, greaterThan(109.51 / 2));
+    });
+
+    test('the 297.775 ms tail receipt clears the round-2 ceiling', () {
+      final budget = GuardBudget(
+        baselineUnitMicros: 31000,
+        baselineTailMicros: 62000,
+      );
+      expect(budget.maximumP99Millis, greaterThan(297.775));
+      expect(budget.maximumP99Millis, lessThan(297.775 * 2));
     });
 
     test('a non-positive unit is refused LOUDLY', () {

@@ -28,11 +28,28 @@ const double kStormProductionRateTop = 28.0;
 /// 24.93 ms observation.
 const double kP99CeilingMillis = 250.0;
 
-/// Ceiling on mean(fold append) / the machine-speed unit.
-const double kMaxFoldMeanCostRatio = 4.0;
+/// The MEASURED cost of one Stage-1 fold append against the machine-speed
+/// unit, carried UNCHANGED from
+/// `the_grid#trajectory-guard-pins-are-runner-relative`, whose Consequences
+/// forbid moving it without remeasurement. This is the calibrated
+/// EXPECTATION, not the assertion's ceiling.
+const double kFoldMeanCostRatio = 4.0;
 
-/// Ceiling on p99(fold append) / the machine-tail unit.
-const double kMaxFoldP99TailRatio = 5.0;
+/// The MEASURED cost of the fold p99 against the machine-tail unit, carried
+/// unchanged from the same entry, on the same terms.
+const double kFoldTailCostRatio = 5.0;
+
+/// The round-2 shared-runner tolerance on the calibrated drain bound
+/// (`tg-2zao`): the guarded drain must clear 0.60x it. Receipts it covers —
+/// 106.65 appends/s against a 119.27/s bound (0.89) on run 33777666093, and
+/// 109.51 against 120.60 (0.91) on run 33778914681. A 2x fold slowdown of
+/// either still lands under the floor.
+const double kDrainToleranceFraction = 0.60;
+
+/// The round-2 shared-runner tolerance on the calibrated tail bound
+/// (`tg-2zao`): the fold p99 may reach 1.60x it. Receipt it covers — a
+/// 297.775 ms p99 against the 250 ms absolute pin (1.19) on run 33767416244.
+const double kTailToleranceFactor = 1.60;
 
 /// Where the guard is running.
 enum GuardHost {
@@ -87,20 +104,24 @@ class GuardBudget {
     }
   }
 
-  /// The MEDIAN interleaved bare round trip, in microseconds.
+  /// The machine-speed unit: the MEDIAN of the five interleaved probes'
+  /// median round trips, in microseconds.
   final int baselineUnitMicros;
 
-  /// The p99 interleaved bare round trip, in microseconds.
+  /// The machine-tail unit: the MEDIAN of the five interleaved probes'
+  /// slowest round trips, in microseconds.
   final int baselineTailMicros;
 
   /// The runner's bare round-trip throughput.
   double get baselineOpsPerSecond => 1e6 / baselineUnitMicros;
 
-  /// The drain floor this runner must clear, in appends/s.
+  /// The drain floor this runner must clear, in appends/s: the calibrated
+  /// bound at the round-2 tolerance.
   double get minimumDrainPerSecond =>
-      baselineOpsPerSecond / kMaxFoldMeanCostRatio;
+      baselineOpsPerSecond / kFoldMeanCostRatio * kDrainToleranceFraction;
 
-  /// The p99 ceiling this runner must stay under, in milliseconds.
+  /// The p99 ceiling this runner must stay under, in milliseconds: the
+  /// calibrated bound at the round-2 tolerance.
   double get maximumP99Millis =>
-      baselineTailMicros * kMaxFoldP99TailRatio / 1000.0;
+      baselineTailMicros * kFoldTailCostRatio * kTailToleranceFactor / 1000.0;
 }
