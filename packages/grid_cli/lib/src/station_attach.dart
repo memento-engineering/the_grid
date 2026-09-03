@@ -6,9 +6,10 @@
 /// (`station_lock.dart`) → classify reachability against the RS-4
 /// [StationControl](`station_control.dart`) surface, and a graceful-stop
 /// helper that rides OS signals, never HTTP (D-C3 — "lifecycle rides OS
-/// signals, not HTTP"). **Read-only + signals: this client can never mutate
-/// over HTTP — there is nothing to call** (D-C4, the control plane is
-/// GET-only by construction). Deleting or rewriting the lock file is likewise
+/// signals, not HTTP"). **Read-only + signals: this client never mutates.**
+/// `POST /command` carries operator one-shots through [StationCommandClient];
+/// RS-5a remains the reachability/lifecycle client, a different seam from a
+/// substation attach despite the shared word. Deleting or rewriting the lock file is likewise
 /// out of scope here — a lingering stale lock is the NEXT `up`'s stale-steal
 /// to reap ([StationLockService]), not this client's job.
 ///

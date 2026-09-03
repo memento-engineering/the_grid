@@ -81,6 +81,12 @@ export 'src/assets/asset_declaration.dart';
 export 'src/assets/asset_identity.dart';
 export 'src/assets/asset_registry.dart';
 
+// ── The live substation roster ──────────────────────────────────────────────
+export 'src/roster/roster_composition.dart';
+export 'src/roster/roster_outcome.dart';
+export 'src/roster/roster_seat.dart';
+export 'src/roster/substation_roster.dart';
+
 // ── runGrid + GridDelegate + GridConfiguration (Track C — tg-tv3) ────────────
 // The entry point + lifecycle rails: `await runGrid(delegate)` runs
 // `didLaunch → boot → mount`, returning a `GridHandle`; `initGrid → onReady`

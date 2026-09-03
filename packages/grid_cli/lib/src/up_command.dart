@@ -569,7 +569,7 @@ class UpCommand extends Command<int> {
         // hot restart re-resolves the armed roster, and a closure capturing
         // the launch-time list would render retired substations forever.
         view: () =>
-            _status(config, live.armedRoster, startedAt, live.stationView),
+            _status(config, live.liveRoster, startedAt, live.stationView),
         commandHandler: _LiveDelegateCommandHandler(() => live),
         assetCatalogResolver: assetCatalogResolver,
         treeProjector: treeProjector,

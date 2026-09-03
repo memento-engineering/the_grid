@@ -43,6 +43,19 @@ sealed class GridCommandRequest with _$GridCommandRequest {
   /// Reads one work bead's current-round identity.
   const factory GridCommandRequest.beadRound({required String beadId}) =
       GridBeadRound;
+
+  /// Attaches a substation to the live station.
+  const factory GridCommandRequest.attachSubstation({
+    required String name,
+    required String root,
+    String? prefix,
+  }) = GridAttachSubstation;
+
+  /// Detaches an attached substation, draining live sessions when forced.
+  const factory GridCommandRequest.detachSubstation({
+    required String name,
+    @Default(false) bool force,
+  }) = GridDetachSubstation;
 }
 
 /// The typed outcome consumed by the control-surface adapter.

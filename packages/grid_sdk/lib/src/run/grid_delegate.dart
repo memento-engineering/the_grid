@@ -4,6 +4,7 @@ import 'package:state_notifier/state_notifier.dart';
 
 import '../command/command_operation.dart';
 import '../composition/composition.dart';
+import '../roster/substation_roster.dart';
 import '../stores/stores.dart';
 import '../work/store_connection.dart';
 import '../work/work_assembly.dart';
@@ -204,10 +205,34 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   void onTeardown() {}
 
   List<SubstationWorkSpec> _armed = const <SubstationWorkSpec>[];
+  List<SubstationWorkSpec> _attached = const <SubstationWorkSpec>[];
+  RemoveListener? _rosterSubscription;
 
   /// The armed roster [resolveArmedRoster] resolved — what [boot] assembles
   /// over. Empty until resolved.
   List<SubstationWorkSpec> get armedRoster => _armed;
+
+  /// Observes [roster] so status can include seats attached since boot.
+  @nonVirtual
+  void observeSubstationRoster(SubstationRoster roster) {
+    _rosterSubscription?.call();
+    _rosterSubscription = roster.addListener((value) {
+      _attached = List<SubstationWorkSpec>.unmodifiable(
+        value.seats.map((seat) => seat.spec),
+      );
+    });
+  }
+
+  /// The seats attached at runtime.
+  List<SubstationWorkSpec> get attachedRoster => _attached;
+
+  /// The boot-armed and runtime-attached roster currently served by status.
+  List<SubstationWorkSpec> get liveRoster => _attached.isEmpty
+      ? _armed
+      : List<SubstationWorkSpec>.unmodifiable(<SubstationWorkSpec>[
+          ..._armed,
+          ..._attached,
+        ]);
 
   /// Resolves and RETAINS the armed roster: applies [armRoster] (the
   /// overridable policy), refuses an empty result LOUD, and stores the
@@ -356,6 +381,13 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// can only fire the async store shutdown and drop its future; an unawaited
   /// close leaves established proxy sockets able to keep the resident alive.
   List<StoreConnection> get openStores => const <StoreConnection>[];
+
+  @override
+  void dispose() {
+    _rosterSubscription?.call();
+    _rosterSubscription = null;
+    super.dispose();
+  }
 
   // Deliberately NO ambient `of`/`maybeOf` accessor for the delegate itself.
   //

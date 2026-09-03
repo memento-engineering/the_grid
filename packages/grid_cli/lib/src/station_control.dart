@@ -589,6 +589,27 @@ class StationControl {
       if (beadId is String && beadId.isNotEmpty) {
         command = GridCommandRequest.beadRound(beadId: beadId);
       }
+    } else if (method == 'grid/substation/attach') {
+      final name = params['name'];
+      final root = params['root'];
+      final prefix = params['prefix'];
+      if (name is String &&
+          name.isNotEmpty &&
+          root is String &&
+          root.isNotEmpty &&
+          (prefix == null || prefix is String)) {
+        command = GridCommandRequest.attachSubstation(
+          name: name,
+          root: root,
+          prefix: prefix as String?,
+        );
+      }
+    } else if (method == 'grid/substation/detach') {
+      final name = params['name'];
+      final force = params['force'] ?? false;
+      if (name is String && name.isNotEmpty && force is bool) {
+        command = GridCommandRequest.detachSubstation(name: name, force: force);
+      }
     }
     if (command == null) {
       return _CommandResponse(HttpStatus.badRequest, {

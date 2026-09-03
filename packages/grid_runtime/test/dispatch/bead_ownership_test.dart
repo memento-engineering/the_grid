@@ -130,6 +130,24 @@ void main() {
     });
   });
 
+  group('live ownership mutation', () {
+    test('admit widens ownership and duplicate admission is loud', () {
+      final predicate = BeadOwnershipPredicate({'earth'});
+
+      predicate.admit('moon');
+      expect(predicate.owns(workBead('moon-1')), isTrue);
+      expect(() => predicate.admit('moon'), throwsStateError);
+    });
+
+    test('revoke narrows ownership and an absent token is loud', () {
+      final predicate = BeadOwnershipPredicate({'earth', 'moon'});
+
+      predicate.revoke('moon');
+      expect(predicate.owns(workBead('moon-1')), isFalse);
+      expect(() => predicate.revoke('moon'), throwsStateError);
+    });
+  });
+
   group('substationOf / ownedPrefixOf helpers', () {
     test('ownedPrefixOf returns the longest complete known prefix', () {
       const known = {'swift', 'swift-infer'};

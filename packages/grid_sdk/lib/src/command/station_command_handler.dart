@@ -7,6 +7,9 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'bead_board.dart';
 import 'bead_round.dart';
 import 'command_operation.dart';
+import '../roster/roster_outcome.dart';
+import '../roster/substation_roster.dart';
+import '../work/work_assembly.dart' show SubstationWorkSpec;
 
 /// The resident read/write rails for one substation work store.
 final class WorkCommandStore {
@@ -56,7 +59,9 @@ final class StationCommandHandler implements GridCommandHandler {
        _stepSnapshot = stepSnapshot,
        _dualReadMode = dualReadMode,
        _dualReadAccounting = dualReadAccounting,
-       _workStoresByIdentity = Map.unmodifiable(workStoresByIdentity);
+       _workStoresByIdentity = Map<String, WorkCommandStore>.of(
+         workStoresByIdentity,
+       );
 
   final SnapshotSource _stateSource;
   final Future<void> Function() _refreshState;
@@ -87,7 +92,61 @@ final class StationCommandHandler implements GridCommandHandler {
   final DualReadAccounting? _dualReadAccounting;
 
   final Map<String, WorkCommandStore> _workStoresByIdentity;
+  SubstationRoster? _roster;
   Future<void> _tail = Future<void>.value();
+
+  /// Binds the runtime-attached roster exactly once.
+  void bindRoster(SubstationRoster roster) {
+    if (_roster != null) {
+      throw StateError(
+        'StationCommandHandler.bindRoster: a roster is already bound.',
+      );
+    }
+    _roster = roster;
+  }
+
+  /// Registers [spec]'s work-store rails under both identity axes.
+  void registerWorkStore(SubstationWorkSpec spec, WorkCommandStore store) {
+    if (_workStoresByIdentity.containsKey(spec.name) ||
+        _workStoresByIdentity.containsKey(spec.prefix)) {
+      throw StateError(
+        'StationCommandHandler.registerWorkStore: "${spec.name}" collides '
+        'with an existing work-store identity.',
+      );
+    }
+    _workStoresByIdentity[spec.name] = store;
+    _workStoresByIdentity[spec.prefix] = store;
+  }
+
+  /// Unregisters [spec]'s work-store rails under both identity axes.
+  void unregisterWorkStore(SubstationWorkSpec spec) {
+    _workStoresByIdentity
+      ..remove(spec.name)
+      ..remove(spec.prefix);
+  }
+
+  /// Finalises draining roster seats that have become idle.
+  Future<void> settleRosterDrains() {
+    final completer = Completer<void>();
+    _tail = _tail.then((_) async {
+      try {
+        await _settleRosterDrains();
+        completer.complete();
+      } on Object catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> _settleRosterDrains() async {
+    final roster = _roster;
+    if (roster == null) return;
+    await _refreshState();
+    final snapshot = _stateSource.current;
+    if (snapshot == null) return;
+    await roster.settleDrains((spec) => liveWorkBeadsFor(spec, snapshot));
+  }
 
   @override
   Future<GridCommandResult> call(GridCommandRequest request) {
@@ -137,7 +196,100 @@ final class StationCommandHandler implements GridCommandHandler {
         ),
       ),
     GridBeadRound(:final beadId) => _beadRound(beadId),
+    GridAttachSubstation(:final name, :final root, :final prefix) =>
+      _attachSubstation(name: name, root: root, prefix: prefix),
+    GridDetachSubstation(:final name, :final force) => _detachSubstation(
+      name: name,
+      force: force,
+    ),
   };
+
+  Future<GridCommandResult> _attachSubstation({
+    required String name,
+    required String root,
+    required String? prefix,
+  }) async {
+    final roster = _roster;
+    if (roster == null) {
+      return _refused(
+        'roster_unavailable',
+        'This station composes no SubstationRoster; attach/detach are '
+            'unavailable.',
+      );
+    }
+    final outcome = await roster.attach(name: name, root: root, prefix: prefix);
+    return switch (outcome) {
+      RosterAttached(:final prefix, :final root) => GridCommandResult.completed(
+        message: 'Attached substation "$name" at $root (prefix $prefix).',
+        value: {
+          'operation': 'grid/substation/attach',
+          'name': name,
+          'prefix': prefix,
+          'root': root,
+        },
+      ),
+      RosterRefused(:final code, :final message) => _refused(code, message),
+      RosterDetached() || RosterDraining() => _refused(
+        'roster_invariant',
+        'attach "$name" returned a detach outcome.',
+      ),
+    };
+  }
+
+  Future<GridCommandResult> _detachSubstation({
+    required String name,
+    required bool force,
+  }) async {
+    final roster = _roster;
+    if (roster == null) {
+      return _refused(
+        'roster_unavailable',
+        'This station composes no SubstationRoster; attach/detach are '
+            'unavailable.',
+      );
+    }
+    await _refreshState();
+    final snapshot = _stateSource.current;
+    if (snapshot == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot.',
+      );
+    }
+    final outcome = await roster.detach(
+      name: name,
+      force: force,
+      inFlightOf: (spec) => liveWorkBeadsFor(spec, snapshot),
+    );
+    return switch (outcome) {
+      RosterDetached(:final reapedWorktrees) => GridCommandResult.completed(
+        message:
+            'Detached substation "$name" '
+            '($reapedWorktrees worktree(s) reaped).',
+        value: {
+          'operation': 'grid/substation/detach',
+          'name': name,
+          'reapedWorktrees': reapedWorktrees,
+        },
+      ),
+      RosterDraining(:final inFlight) => GridCommandResult.completed(
+        message:
+            'Draining substation "$name": ${inFlight.length} in-flight '
+            'bead(s); no new work will mount.',
+        value: {
+          'operation': 'grid/substation/detach',
+          'name': name,
+          'draining': true,
+          'inFlight': inFlight.toList(growable: false)..sort(),
+        },
+      ),
+      RosterRefused(:final code, :final message) => _refused(code, message),
+      RosterAttached() => _refused(
+        'roster_invariant',
+        'detach "$name" returned an attach outcome.',
+      ),
+    };
+  }
 
   Future<GridCommandResult> _setBeadText({
     required String beadId,
