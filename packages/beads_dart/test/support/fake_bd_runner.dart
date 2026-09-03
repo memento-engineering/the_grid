@@ -26,6 +26,12 @@ class FakeBdRunner implements BdRunner {
   /// Each invocation's piped stdin (null when none), parallel to [calls].
   final List<String?> stdins = <String?>[];
 
+  /// Each invocation's requested timeout (`null` when the caller took the
+  /// runner's default), parallel to [calls]. Pins WHICH calls carry an
+  /// explicit deadline — the pour does, nothing else does
+  /// (`the_grid#the-pour-gets-its-own-bd-deadline`).
+  final List<Duration?> timeouts = <Duration?>[];
+
   /// In-flight call count and its high-water mark.
   int _inFlight = 0;
   int maxConcurrent = 0;
@@ -58,6 +64,7 @@ class FakeBdRunner implements BdRunner {
   }) async {
     calls.add(List<String>.unmodifiable(args));
     stdins.add(stdin);
+    timeouts.add(timeout);
     _inFlight++;
     if (_inFlight > maxConcurrent) maxConcurrent = _inFlight;
     try {
@@ -65,6 +72,8 @@ class FakeBdRunner implements BdRunner {
       if (reply.delay > Duration.zero) {
         await Future<void>.delayed(reply.delay);
       }
+      final failure = reply.throws;
+      if (failure != null) throw failure;
       return BdResult(
         exitCode: reply.exitCode,
         stdout: reply.stdout,
@@ -96,6 +105,7 @@ class BdReply {
     this.stderr = '',
     this.exitCode = 0,
     this.delay = Duration.zero,
+    this.throws,
     this.matcher,
   });
 
@@ -103,6 +113,12 @@ class BdReply {
   final String stderr;
   final int exitCode;
   final Duration delay;
+
+  /// Raised after [delay] instead of returning — the failure a non-zero
+  /// [exitCode] cannot express, notably the [BdTimeoutException] a real
+  /// [ProcessBdRunner] throws when it kills the process tree at the deadline.
+  final Object? throws;
+
   final BdMatcher? matcher;
 
   BdReply withMatcher(BdMatcher matcher) => BdReply(
@@ -110,6 +126,7 @@ class BdReply {
     stderr: stderr,
     exitCode: exitCode,
     delay: delay,
+    throws: throws,
     matcher: matcher,
   );
 }

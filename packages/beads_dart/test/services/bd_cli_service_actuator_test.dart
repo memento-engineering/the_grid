@@ -243,6 +243,93 @@ void main() {
       expect((edges[0] as Map)['from_key'], 'work');
       expect((edges[0] as Map)['type'], 'parent-child');
     });
+
+    test(
+      'the pour carries pourTimeout; a non-pour call keeps the default',
+      () async {
+        final runner = FakeBdRunner()
+          ..stub(
+            (args) => args.isNotEmpty && args.first == 'create',
+            BdReply(
+              stdout: jsonEncode({
+                'schema_version': 1,
+                'data': {
+                  'ids': {'wisp': 'tg-w1'},
+                },
+              }),
+            ),
+          )
+          ..stubCommand('delete', okObject());
+        final service = BdCliService(runner);
+
+        await service.applyGraph(
+          const GraphApplyPlan(
+            commitMessage: 'pour',
+            nodes: [GraphNode(key: 'wisp', title: 'w')],
+          ),
+        );
+        await service.delete('tg-x');
+
+        expect(
+          BdCliService.pourTimeout.inSeconds,
+          greaterThanOrEqualTo(60),
+          reason:
+              'the measured live pour median is 9.3s; the deadline is 6x it',
+        );
+        expect(runner.calls[0].first, 'create');
+        expect(
+          runner.timeouts[0],
+          BdCliService.pourTimeout,
+          reason: 'the pour runs on its own deadline, never the 15s default',
+        );
+        expect(runner.calls[1].first, 'delete');
+        expect(
+          runner.timeouts[1],
+          isNull,
+          reason:
+              'ADR-0001 D4 holds: every non-pour call takes '
+              'ProcessBdRunner.defaultTimeout',
+        );
+      },
+    );
+
+    test(
+      'a pour that exceeds its deadline throws ONCE and is never retried',
+      () async {
+        final runner = FakeBdRunner()
+          ..stub(
+            (args) => args.isNotEmpty && args.first == 'create',
+            const BdReply(
+              throws: BdTimeoutException(
+                command: ['bd', 'create', '--graph'],
+                timeout: BdCliService.pourTimeout,
+              ),
+            ),
+          );
+        final service = BdCliService(runner);
+
+        await expectLater(
+          service.applyGraph(
+            const GraphApplyPlan(
+              commitMessage: 'pour',
+              nodes: [GraphNode(key: 'wisp', title: 'w')],
+            ),
+          ),
+          throwsA(isA<BdTimeoutException>()),
+        );
+
+        // ATOMIC, and no retry loop: exactly ONE bd invocation reaches the
+        // store, and applyGraph returns no id map a caller could half-stamp.
+        expect(
+          runner.calls,
+          hasLength(1),
+          reason:
+              'a timed-out pour is not transient — re-issuing re-pays ~10s '
+              'and risks a second graph',
+        );
+        expect(runner.calls.single.first, 'create');
+      },
+    );
   });
 
   group('delete — the burn primitive (A16: delete, NEVER close)', () {

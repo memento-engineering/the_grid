@@ -39,6 +39,24 @@ class BdCliService {
   /// (ADR-0001 D4: "never spawn bd per issue in a loop").
   static const int idChunkSize = 50;
 
+  /// The deadline for the molecule pour (`bd create --graph`) — the ONE bd
+  /// call that does not run on [ProcessBdRunner.defaultTimeout].
+  ///
+  /// A pour is the heaviest bd invocation by two orders of magnitude: it pays
+  /// bd's per-edge dependency-cycle check, whose reachability CTE re-joins each
+  /// recursion hop against an un-indexed UNION of the dependency tables
+  /// (109.6ms for one deep edge vs 2.8ms against a single indexed table), so a
+  /// 28-step molecule costs ~0.05s per node plus ~130ms per blocking edge.
+  /// Measured live: median 9.3s over 46 pours, with the tail dying against the
+  /// 15s default.
+  ///
+  /// 60s is 6x that median. Every other bd call keeps the 15s default
+  /// (ADR-0001 Decision 4); this constant is the single named, measured
+  /// exception (`the_grid#the-pour-gets-its-own-bd-deadline`). It is a
+  /// deadline, NOT a retry: a pour that exceeds it is killed, rolls back whole,
+  /// and is never re-issued.
+  static const Duration pourTimeout = Duration(seconds: 60);
+
   static Future<_GuardedWriteSupport>? _guardedWriteSupport;
   static bool _guardedWriteReceiptEmitted = false;
 
@@ -507,6 +525,13 @@ class BdCliService {
   /// bd reads the plan from a **file path** (graph_apply.go:262
   /// `os.ReadFile`), so the plan is written to a temp file under the system
   /// temp dir, passed by path, and deleted afterwards (best-effort).
+  ///
+  /// Runs on [pourTimeout], not [ProcessBdRunner.defaultTimeout]: the pour is
+  /// the heaviest bd call and shared the budget of a single-row update
+  /// (`the_grid#the-pour-gets-its-own-bd-deadline`). The call stays atomic —
+  /// one transaction, one `DOLT_COMMIT` — so a deadline kill rolls the whole
+  /// graph back and this method throws [BdTimeoutException] having written
+  /// nothing. There is no retry.
   Future<Map<String, String>> applyGraph(
     GraphApplyPlan plan, {
     bool ephemeral = false,
@@ -517,6 +542,7 @@ class BdCliService {
       await planFile.writeAsString(plan.toJsonString());
       final env = await _runEnvelope(
         applyGraphArgs(planFile.path, ephemeral: ephemeral),
+        timeout: pourTimeout,
       );
       return _idMapFromEnvelope(env);
     } finally {
@@ -749,9 +775,11 @@ class BdCliService {
   // internals
   // ---------------------------------------------------------------------------
 
-  Future<BdResult> _run(List<String> args, {String? stdin}) {
+  Future<BdResult> _run(List<String> args, {String? stdin, Duration? timeout}) {
     // [stdin] feeds text through bd's native stdin transports.
-    return _runner.run(args, stdin: stdin);
+    // [timeout] overrides the runner's default deadline; null keeps it, so
+    // every caller but the pour stays on ADR-0001 D4's 15s.
+    return _runner.run(args, stdin: stdin, timeout: timeout);
   }
 
   void _refuseUnsafeArgvText(String field, String value) {
@@ -803,8 +831,12 @@ class BdCliService {
     );
   }
 
-  Future<BdEnvelope> _runEnvelope(List<String> args, {String? stdin}) async {
-    final result = await _run(args, stdin: stdin);
+  Future<BdEnvelope> _runEnvelope(
+    List<String> args, {
+    String? stdin,
+    Duration? timeout,
+  }) async {
+    final result = await _run(args, stdin: stdin, timeout: timeout);
     _throwIfFailed(args, result);
     return BdEnvelope.parse(result.stdout);
   }
