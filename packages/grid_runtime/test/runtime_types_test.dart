@@ -62,19 +62,25 @@ void main() {
         const RuntimeEvent.died(name: 's3'),
         const RuntimeEvent.respawned(name: 's4', epoch: 2),
         const RuntimeEvent.activityChanged(name: 's5', active: true),
+        const RuntimeEvent.sessionOrphaned(
+          name: 's6',
+          pgid: 42,
+          memberCount: 2,
+        ),
       ];
-      expect(events.map((e) => e.name), ['s1', 's2', 's3', 's4', 's5']);
+      expect(events.map((e) => e.name), ['s1', 's2', 's3', 's4', 's5', 's6']);
       final started = events.whereType<SessionStarted>().single;
       expect(started.deadline, const Duration(minutes: 20));
     });
 
-    test('exhaustive switch covers all five variants', () {
+    test('exhaustive switch covers all six variants', () {
       String describe(RuntimeEvent e) => switch (e) {
         SessionStarted(:final pid) => 'started:$pid',
         Exited(:final exitCode) => 'exited:$exitCode',
         Died(:final reason) => 'died:$reason',
         Respawned(:final epoch) => 'respawned:$epoch',
         ActivityChanged(:final active) => 'activity:$active',
+        SessionOrphaned(:final memberCount) => 'orphaned:$memberCount',
       };
 
       expect(
@@ -84,6 +90,16 @@ void main() {
       expect(
         describe(const RuntimeEvent.died(name: 's', reason: 'vanished')),
         'died:vanished',
+      );
+      expect(
+        describe(
+          const RuntimeEvent.sessionOrphaned(
+            name: 's',
+            pgid: 42,
+            memberCount: 2,
+          ),
+        ),
+        'orphaned:2',
       );
     });
   });

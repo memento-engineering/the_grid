@@ -95,6 +95,9 @@ class FakeProcessGroupController implements ProcessGroupController {
 
   @override
   int currentGroupId() => ownGroupId;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 }
 
 class VanishedBetweenProbeController implements ProcessGroupController {
@@ -103,6 +106,9 @@ class VanishedBetweenProbeController implements ProcessGroupController {
 
   @override
   int currentGroupId() => 999;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
 
   @override
   bool processAlive(int pid) => probes++ == 0;

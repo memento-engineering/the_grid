@@ -63,6 +63,20 @@ abstract interface class ProcessGroupController {
   /// `killPid` boolean is false exactly when the process is gone.
   bool processAlive(int pid);
 
+  /// The pids currently alive in process group [pgid] — the GROUP liveness
+  /// probe, and the honest complement of [processAlive].
+  ///
+  /// A leader that backgrounds a descendant and exits leaves the group
+  /// POPULATED: those survivors keep consuming resources and keep mutating the
+  /// worktree, while `processAlive(leaderPid)` alone reports the session gone.
+  ///
+  /// An EMPTY result means the group is empty **or** unreadable. The probe
+  /// never throws: a broken probe can only make a supervisor readier to declare
+  /// a terminal, never leave a session hanging forever on an answer it cannot
+  /// get. The member COUNT is what `RuntimeEvent.sessionOrphaned` reports, so
+  /// this returns the members rather than a bool.
+  Future<List<int>> groupMembers(int pgid);
+
   /// Sends [signal] to the whole process group [pgid] (`kill(-pgid, signal)`).
   /// Returns false when the group is already gone (ESRCH). Never throws.
   bool signalGroup(int pgid, ProcessSignal signal);
@@ -100,9 +114,10 @@ enum GroupTerminateResult {
 /// the_grid itself. Both are refused with [GroupTerminateResult.refusedUnsafe]
 /// and NO signal is sent.
 ///
-/// [leaderPid] is the spawned child's pid, used only as the liveness probe
-/// subject (the group is considered exited when the leader is gone); pass the
-/// `process.pid` from the detached spawn.
+/// [leaderPid] is the spawned child's pid, used as the cheap first liveness
+/// probe (the group is considered exited when the leader is gone AND
+/// [ProcessGroupController.groupMembers] is empty); pass the `process.pid` from
+/// the detached spawn.
 Future<GroupTerminateResult> terminateGroup({
   required ProcessGroupController controller,
   required int pgid,
@@ -114,34 +129,53 @@ Future<GroupTerminateResult> terminateGroup({
   if (pgid <= 1 || pgid == controller.currentGroupId()) {
     return GroupTerminateResult.refusedUnsafe;
   }
-  if (!controller.processAlive(leaderPid)) {
+  // A DEAD LEADER IS NOT AN EMPTY GROUP. A leader that backgrounds a descendant
+  // and exits leaves live members behind; refusing on the leader alone left them
+  // running, which is exactly the case this primitive must handle. The refusals
+  // stay PGID-based and nothing else.
+  if (await _groupGone(controller, pgid, leaderPid)) {
     return GroupTerminateResult.alreadyGone;
   }
 
   controller.signalGroup(pgid, ProcessSignal.sigterm);
-  if (await _waitForExit(controller, leaderPid, grace, pollPeriod)) {
+  if (await _waitForExit(controller, pgid, leaderPid, grace, pollPeriod)) {
     return GroupTerminateResult.exitedOnTerm;
   }
 
   controller.signalGroup(pgid, ProcessSignal.sigkill);
   // gc waits a second time after SIGKILL (gc:67); a process group cannot
   // survive SIGKILL, so this is just to confirm/settle the reap.
-  await _waitForExit(controller, leaderPid, grace, pollPeriod);
+  await _waitForExit(controller, pgid, leaderPid, grace, pollPeriod);
   return GroupTerminateResult.killed;
 }
 
-/// Polls [ProcessGroupController.processAlive] until [leaderPid] is gone or
-/// [timeout] elapses. Returns true when the process exited in time. gc's
-/// `waitForExit` (`processgroup_unix.go:92-103`).
+/// True when NEITHER [leaderPid] NOR any member of [pgid] is alive — the honest
+/// "this group is over" predicate.
+///
+/// The cheap synchronous leader probe runs FIRST and short-circuits, so a live
+/// group never pays for the shell-out.
+Future<bool> _groupGone(
+  ProcessGroupController controller,
+  int pgid,
+  int leaderPid,
+) async {
+  if (controller.processAlive(leaderPid)) return false;
+  return (await controller.groupMembers(pgid)).isEmpty;
+}
+
+/// Polls [_groupGone] until the whole group is gone or [timeout] elapses.
+/// Returns true when it emptied in time. gc's `waitForExit`
+/// (`processgroup_unix.go:92-103`), widened from the leader to the group.
 Future<bool> _waitForExit(
   ProcessGroupController controller,
+  int pgid,
   int leaderPid,
   Duration timeout,
   Duration pollPeriod,
 ) async {
   final deadline = DateTime.now().add(timeout);
   while (true) {
-    if (!controller.processAlive(leaderPid)) return true;
+    if (await _groupGone(controller, pgid, leaderPid)) return true;
     if (DateTime.now().isAfter(deadline)) return false;
     await Future<void>.delayed(pollPeriod);
   }
@@ -172,6 +206,27 @@ class SystemProcessGroupController implements ProcessGroupController {
     // No signal-0 in Dart; SIGWINCH is a harmless no-op (window-size change)
     // that `killPid` reports as false exactly when the pid is gone (ESRCH).
     return Process.killPid(pid, ProcessSignal.sigwinch);
+  }
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async {
+    if (pgid <= 1) return const <int>[];
+    // `pgrep -g <pgid>` prints one pid per line for every live member of the
+    // group and exits 1 for "no matches" (an EMPTY group, not an error). It is
+    // present on macOS and Linux alike, and Dart exposes no `kill(-pgid, 0)`,
+    // so this is the portable member probe.
+    final ProcessResult result;
+    try {
+      result = await Process.run('pgrep', <String>['-g', '$pgid']);
+    } on Object {
+      return const <int>[]; // pgrep absent or unrunnable — read as empty.
+    }
+    if (result.exitCode != 0) return const <int>[];
+    return (result.stdout as String)
+        .split('\n')
+        .map((line) => int.tryParse(line.trim()))
+        .whereType<int>()
+        .toList(growable: false);
   }
 
   @override

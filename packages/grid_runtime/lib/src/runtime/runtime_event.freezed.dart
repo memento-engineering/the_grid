@@ -86,13 +86,14 @@ extension RuntimeEventPatterns on RuntimeEvent {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( SessionStarted value)?  sessionStarted,TResult Function( Exited value)?  exited,TResult Function( Died value)?  died,TResult Function( Respawned value)?  respawned,TResult Function( ActivityChanged value)?  activityChanged,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( SessionStarted value)?  sessionStarted,TResult Function( Exited value)?  exited,TResult Function( Died value)?  died,TResult Function( SessionOrphaned value)?  sessionOrphaned,TResult Function( Respawned value)?  respawned,TResult Function( ActivityChanged value)?  activityChanged,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
 return sessionStarted(_that);case Exited() when exited != null:
 return exited(_that);case Died() when died != null:
-return died(_that);case Respawned() when respawned != null:
+return died(_that);case SessionOrphaned() when sessionOrphaned != null:
+return sessionOrphaned(_that);case Respawned() when respawned != null:
 return respawned(_that);case ActivityChanged() when activityChanged != null:
 return activityChanged(_that);case _:
   return orElse();
@@ -112,13 +113,14 @@ return activityChanged(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( SessionStarted value)  sessionStarted,required TResult Function( Exited value)  exited,required TResult Function( Died value)  died,required TResult Function( Respawned value)  respawned,required TResult Function( ActivityChanged value)  activityChanged,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( SessionStarted value)  sessionStarted,required TResult Function( Exited value)  exited,required TResult Function( Died value)  died,required TResult Function( SessionOrphaned value)  sessionOrphaned,required TResult Function( Respawned value)  respawned,required TResult Function( ActivityChanged value)  activityChanged,}){
 final _that = this;
 switch (_that) {
 case SessionStarted():
 return sessionStarted(_that);case Exited():
 return exited(_that);case Died():
-return died(_that);case Respawned():
+return died(_that);case SessionOrphaned():
+return sessionOrphaned(_that);case Respawned():
 return respawned(_that);case ActivityChanged():
 return activityChanged(_that);}
 }
@@ -134,13 +136,14 @@ return activityChanged(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( SessionStarted value)?  sessionStarted,TResult? Function( Exited value)?  exited,TResult? Function( Died value)?  died,TResult? Function( Respawned value)?  respawned,TResult? Function( ActivityChanged value)?  activityChanged,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( SessionStarted value)?  sessionStarted,TResult? Function( Exited value)?  exited,TResult? Function( Died value)?  died,TResult? Function( SessionOrphaned value)?  sessionOrphaned,TResult? Function( Respawned value)?  respawned,TResult? Function( ActivityChanged value)?  activityChanged,}){
 final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
 return sessionStarted(_that);case Exited() when exited != null:
 return exited(_that);case Died() when died != null:
-return died(_that);case Respawned() when respawned != null:
+return died(_that);case SessionOrphaned() when sessionOrphaned != null:
+return sessionOrphaned(_that);case Respawned() when respawned != null:
 return respawned(_that);case ActivityChanged() when activityChanged != null:
 return activityChanged(_that);case _:
   return null;
@@ -159,12 +162,13 @@ return activityChanged(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline,  String attemptId)?  sessionStarted,TResult Function( String name,  int exitCode,  int? pid,  bool inferred)?  exited,TResult Function( String name,  String reason,  int? pid)?  died,TResult Function( String name,  int epoch)?  respawned,TResult Function( String name,  bool active)?  activityChanged,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline,  String attemptId)?  sessionStarted,TResult Function( String name,  int exitCode,  int? pid,  bool inferred)?  exited,TResult Function( String name,  String reason,  int? pid)?  died,TResult Function( String name,  int pgid,  int memberCount,  int? pid)?  sessionOrphaned,TResult Function( String name,  int epoch)?  respawned,TResult Function( String name,  bool active)?  activityChanged,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
 return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId,_that.deadline,_that.attemptId);case Exited() when exited != null:
 return exited(_that.name,_that.exitCode,_that.pid,_that.inferred);case Died() when died != null:
-return died(_that.name,_that.reason,_that.pid);case Respawned() when respawned != null:
+return died(_that.name,_that.reason,_that.pid);case SessionOrphaned() when sessionOrphaned != null:
+return sessionOrphaned(_that.name,_that.pgid,_that.memberCount,_that.pid);case Respawned() when respawned != null:
 return respawned(_that.name,_that.epoch);case ActivityChanged() when activityChanged != null:
 return activityChanged(_that.name,_that.active);case _:
   return orElse();
@@ -184,12 +188,13 @@ return activityChanged(_that.name,_that.active);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline,  String attemptId)  sessionStarted,required TResult Function( String name,  int exitCode,  int? pid,  bool inferred)  exited,required TResult Function( String name,  String reason,  int? pid)  died,required TResult Function( String name,  int epoch)  respawned,required TResult Function( String name,  bool active)  activityChanged,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline,  String attemptId)  sessionStarted,required TResult Function( String name,  int exitCode,  int? pid,  bool inferred)  exited,required TResult Function( String name,  String reason,  int? pid)  died,required TResult Function( String name,  int pgid,  int memberCount,  int? pid)  sessionOrphaned,required TResult Function( String name,  int epoch)  respawned,required TResult Function( String name,  bool active)  activityChanged,}) {final _that = this;
 switch (_that) {
 case SessionStarted():
 return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId,_that.deadline,_that.attemptId);case Exited():
 return exited(_that.name,_that.exitCode,_that.pid,_that.inferred);case Died():
-return died(_that.name,_that.reason,_that.pid);case Respawned():
+return died(_that.name,_that.reason,_that.pid);case SessionOrphaned():
+return sessionOrphaned(_that.name,_that.pgid,_that.memberCount,_that.pid);case Respawned():
 return respawned(_that.name,_that.epoch);case ActivityChanged():
 return activityChanged(_that.name,_that.active);}
 }
@@ -205,12 +210,13 @@ return activityChanged(_that.name,_that.active);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline,  String attemptId)?  sessionStarted,TResult? Function( String name,  int exitCode,  int? pid,  bool inferred)?  exited,TResult? Function( String name,  String reason,  int? pid)?  died,TResult? Function( String name,  int epoch)?  respawned,TResult? Function( String name,  bool active)?  activityChanged,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String name,  int pid,  int? pgid,  String beadId,  Duration? deadline,  String attemptId)?  sessionStarted,TResult? Function( String name,  int exitCode,  int? pid,  bool inferred)?  exited,TResult? Function( String name,  String reason,  int? pid)?  died,TResult? Function( String name,  int pgid,  int memberCount,  int? pid)?  sessionOrphaned,TResult? Function( String name,  int epoch)?  respawned,TResult? Function( String name,  bool active)?  activityChanged,}) {final _that = this;
 switch (_that) {
 case SessionStarted() when sessionStarted != null:
 return sessionStarted(_that.name,_that.pid,_that.pgid,_that.beadId,_that.deadline,_that.attemptId);case Exited() when exited != null:
 return exited(_that.name,_that.exitCode,_that.pid,_that.inferred);case Died() when died != null:
-return died(_that.name,_that.reason,_that.pid);case Respawned() when respawned != null:
+return died(_that.name,_that.reason,_that.pid);case SessionOrphaned() when sessionOrphaned != null:
+return sessionOrphaned(_that.name,_that.pgid,_that.memberCount,_that.pid);case Respawned() when respawned != null:
 return respawned(_that.name,_that.epoch);case ActivityChanged() when activityChanged != null:
 return activityChanged(_that.name,_that.active);case _:
   return null;
@@ -464,6 +470,80 @@ class _$DiedCopyWithImpl<$Res>
 name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
 as String,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
+as int?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class SessionOrphaned extends RuntimeEvent {
+  const SessionOrphaned({required this.name, required this.pgid, required this.memberCount, this.pid}): super._();
+
+
+@override final  String name;
+ final  int pgid;
+ final  int memberCount;
+/// The leader pid that vanished, when the emitter still knew it — the same
+/// exit-join discriminator [RuntimeEvent.exited] carries.
+ final  int? pid;
+
+/// Create a copy of RuntimeEvent
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$SessionOrphanedCopyWith<SessionOrphaned> get copyWith => _$SessionOrphanedCopyWithImpl<SessionOrphaned>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionOrphaned&&(identical(other.name, name) || other.name == name)&&(identical(other.pgid, pgid) || other.pgid == pgid)&&(identical(other.memberCount, memberCount) || other.memberCount == memberCount)&&(identical(other.pid, pid) || other.pid == pid));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,name,pgid,memberCount,pid);
+
+@override
+String toString() {
+  return 'RuntimeEvent.sessionOrphaned(name: $name, pgid: $pgid, memberCount: $memberCount, pid: $pid)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $SessionOrphanedCopyWith<$Res> implements $RuntimeEventCopyWith<$Res> {
+  factory $SessionOrphanedCopyWith(SessionOrphaned value, $Res Function(SessionOrphaned) _then) = _$SessionOrphanedCopyWithImpl;
+@override @useResult
+$Res call({
+ String name, int pgid, int memberCount, int? pid
+});
+
+
+
+
+}
+/// @nodoc
+class _$SessionOrphanedCopyWithImpl<$Res>
+    implements $SessionOrphanedCopyWith<$Res> {
+  _$SessionOrphanedCopyWithImpl(this._self, this._then);
+
+  final SessionOrphaned _self;
+  final $Res Function(SessionOrphaned) _then;
+
+/// Create a copy of RuntimeEvent
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? name = null,Object? pgid = null,Object? memberCount = null,Object? pid = freezed,}) {
+  return _then(SessionOrphaned(
+name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,pgid: null == pgid ? _self.pgid : pgid // ignore: cast_nullable_to_non_nullable
+as int,memberCount: null == memberCount ? _self.memberCount : memberCount // ignore: cast_nullable_to_non_nullable
+as int,pid: freezed == pid ? _self.pid : pid // ignore: cast_nullable_to_non_nullable
 as int?,
   ));
 }

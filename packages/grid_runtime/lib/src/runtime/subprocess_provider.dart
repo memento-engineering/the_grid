@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:meta/meta.dart';
+import 'package:path/path.dart' as p;
 
 import 'env_allowlist.dart';
 import 'incarnation_env.dart';
@@ -11,6 +12,42 @@ import 'process_group.dart';
 import 'runtime_config.dart';
 import 'runtime_event.dart';
 import 'runtime_provider.dart';
+
+/// The env var naming the per-session file the REAPER PARENT writes the real
+/// leader exit code into. [SubprocessProvider.start] sets it (the provider owns
+/// the path); [SystemSubprocessSpawner.spawn] reads it to decide whether to
+/// compose the reaper; the provider reads the FILE on vanish. Absent or empty ⇒
+/// no reaper is composed and the spawn is byte-for-byte what it was before, so
+/// any caller outside the provider is unchanged.
+const String kExitStatusFileEnv = 'GRID_EXIT_STATUS_FILE';
+
+/// How long a session whose LEADER is gone but whose OWNED process group still
+/// has live members is given to drain before that group is signalled. Generous
+/// on purpose: a legitimately-backgrounded flush deserves to finish, and the
+/// session cannot advance the circuit while the grace runs anyway.
+const Duration kOrphanGrace = Duration(seconds: 30);
+
+/// The REAPER PARENT script. `detachedWithStdio` buys the process group but
+/// costs the exit code (`Process.exitCode` throws for a detached process), so a
+/// vanish had to be INFERRED — and a murdered agent vanishes exactly like a
+/// finished one. This wrapper IS the leader: it runs the harness as its child in
+/// the SAME group, WAITS for it, writes the real code, and exits with it.
+///
+/// `"$@"` keeps argv positional, so the no-shell contract still holds (no word
+/// splitting; gc `condition.go:319`). The write is atomic (`.part` then
+/// `mv -f`) and completes BEFORE the wrapper exits, so a provider that only
+/// reads the file once the leader is gone can never observe a torn value; if
+/// `mv` itself fails the `.part` file is inert and the provider falls back to
+/// the INFERRED reading rather than reading half a number.
+const String kReaperScript = r'''
+"$@"
+__grid_code=$?
+if [ -n "$GRID_EXIT_STATUS_FILE" ]; then
+  printf '%s\n' "$__grid_code" > "$GRID_EXIT_STATUS_FILE.part" 2>/dev/null &&
+    mv -f "$GRID_EXIT_STATUS_FILE.part" "$GRID_EXIT_STATUS_FILE" 2>/dev/null
+fi
+exit $__grid_code
+''';
 
 /// The Process SEAM for spawning agents — the single point where
 /// [SubprocessProvider] touches `Process.start`. Mirrors
@@ -75,6 +112,11 @@ abstract interface class SpawnedProcess {
 /// process liveness via the [ProcessGroupController] seam instead, which is the
 /// honest signal anyway (a backgrounded grandchild can hold the stdout pipe open
 /// long after the agent exits, so stdout-EOF is NOT a reliable death signal).
+///
+/// Its second cost — that a detached exit code is unreadable AT ALL — is paid by
+/// [kReaperScript]: the spawned leader is a tiny `sh` parent that waits on the
+/// harness and records its real status, so the provider reads a fact instead of
+/// inferring one.
 class SystemSubprocessSpawner implements SubprocessSpawner {
   const SystemSubprocessSpawner();
 
@@ -85,9 +127,15 @@ class SystemSubprocessSpawner implements SubprocessSpawner {
     required String workingDirectory,
     required Map<String, String> environment,
   }) async {
+    // Compose the reaper parent when the caller asked for a real exit status.
+    // `$0` is `grid-reaper` so an operator reading `ps` can see what it is.
+    final statusFile = environment[kExitStatusFileEnv] ?? '';
+    final reaped = statusFile.isNotEmpty;
     final process = await Process.start(
-      executable,
-      args,
+      reaped ? '/bin/sh' : executable,
+      reaped
+          ? <String>['-c', kReaperScript, 'grid-reaper', executable, ...args]
+          : args,
       workingDirectory: workingDirectory,
       environment: environment,
       includeParentEnvironment: false,
@@ -161,6 +209,8 @@ class SubprocessProvider implements RuntimeProvider {
     Duration stopGrace = const Duration(seconds: 2),
     Duration livenessPollPeriod = const Duration(milliseconds: 100),
     Duration? agentDeadline = const Duration(hours: 2),
+    Duration orphanGrace = kOrphanGrace,
+    Directory? exitStatusDirectory,
     int peekBufferLines = 2000,
     Random? random,
   }) : _spawner = spawner,
@@ -170,6 +220,8 @@ class SubprocessProvider implements RuntimeProvider {
        _stopGrace = stopGrace,
        _pollPeriod = livenessPollPeriod,
        _agentDeadline = agentDeadline,
+       _orphanGrace = orphanGrace,
+       _exitStatusDirectory = exitStatusDirectory,
        _peekBufferLines = peekBufferLines,
        _random = random;
 
@@ -179,6 +231,16 @@ class SubprocessProvider implements RuntimeProvider {
   final Map<String, String> _parentEnv;
   final Duration _stopGrace;
   final Duration _pollPeriod;
+  final Duration _orphanGrace;
+
+  /// Where per-session reaper status files land. Injected by tests; otherwise a
+  /// provider-owned temp dir created on first use and deleted by [dispose].
+  /// It is deliberately OUTSIDE the agent's worktree: a status file written
+  /// into the worktree would read as uncommitted work to the engine's
+  /// `committedWorkspace` completion fence and turn every proven completion
+  /// into a respawn loop.
+  Directory? _exitStatusDirectory;
+  bool _ownsStatusDirectory = false;
 
   /// The WATCHDOG deadline: how long ONE agent may live before it is presumed
   /// hung and killed. Null disarms it (the tests' default posture).
@@ -239,6 +301,29 @@ class SubprocessProvider implements RuntimeProvider {
     return env;
   }
 
+  /// The provider's own status-file directory, created on first use.
+  ///
+  /// This holds an OWNED RESOURCE HANDLE, not an ambient tree dependency — the
+  /// ADR-0008 D-H "never `??=`-cache" rule is about values read from the tree,
+  /// and nothing here is read from one.
+  Directory _statusDirectory() {
+    final existing = _exitStatusDirectory;
+    if (existing != null) return existing;
+    final created = Directory.systemTemp.createTempSync('grid_exit_status_');
+    _ownsStatusDirectory = true;
+    _exitStatusDirectory = created;
+    return created;
+  }
+
+  /// The per-incarnation status file for [name]. Session names carry slashes
+  /// (`<sessionId>/<nodePath>`), so they are sanitized; [token] (the
+  /// incarnation's `GRID_INSTANCE_TOKEN`) keeps two sanitized names from ever
+  /// sharing one file.
+  File _exitStatusFileFor(String name, String token) {
+    final safe = name.replaceAll(RegExp('[^A-Za-z0-9._-]'), '_');
+    return File(p.join(_statusDirectory().path, '$safe-$token.status'));
+  }
+
   @override
   Future<void> start(String name, RuntimeConfig config) async {
     if (_sessions.containsKey(name)) {
@@ -256,13 +341,23 @@ class SubprocessProvider implements RuntimeProvider {
     );
     _sessions[name] = session;
 
+    final env = _buildChildEnv(name, config);
+    // The provider OWNS the reaper contract, so its path wins over any
+    // `config.env` entry of the same name.
+    final statusFile = _exitStatusFileFor(
+      name,
+      env['GRID_INSTANCE_TOKEN'] ?? '',
+    );
+    env[kExitStatusFileEnv] = statusFile.path;
+    session.exitStatusFile = statusFile;
+
     final SpawnedProcess spawned;
     try {
       spawned = await _spawner.spawn(
         executable: config.command,
         args: config.args,
         workingDirectory: config.workDir,
-        environment: _buildChildEnv(name, config),
+        environment: env,
       );
     } on Object {
       _sessions.remove(name);
@@ -345,7 +440,7 @@ class SubprocessProvider implements RuntimeProvider {
       );
     }
     session.supervise(
-      poll: () => session.pid != null && _groups.processAlive(session.pid!),
+      poll: () => _groupAlive(session),
       pollPeriod: _pollPeriod,
       onDeath: () {
         if (!_sessions.containsKey(name)) return;
@@ -423,6 +518,69 @@ class SubprocessProvider implements RuntimeProvider {
     // pgid resolution failed at spawn — best-effort direct kill.
     Process.killPid(pid, ProcessSignal.sigterm);
     Process.killPid(pid, ProcessSignal.sigkill);
+  }
+
+  /// The session's liveness: the LEADER, or — once the leader is gone — any live
+  /// member of the OWNED process group.
+  ///
+  /// A leader that backgrounds a descendant and exits is NOT terminal. Its group
+  /// is still burning resources and still mutating the worktree, and a terminal
+  /// there would let the circuit advance on a lie. The first time this is
+  /// observed the session is reported ORPHANED and a bounded grace is armed. A
+  /// group that empties on its own BEFORE the grace elapses reaches the normal
+  /// terminal path with no orphan kill — a backgrounded flush that finished.
+  ///
+  /// The group probe runs ONLY once the cheap leader probe says gone, so a
+  /// healthy session never shells out. A group we could never signal (no pgid,
+  /// `pgid <= 1`, our own group — the [terminateGroup] refusals) is no evidence
+  /// at all: the leader's death stays the terminal, exactly as before.
+  Future<bool> _groupAlive(_Session session) async {
+    final pid = session.pid;
+    if (pid == null) return false;
+    if (_groups.processAlive(pid)) return true;
+    final pgid = session.pgid;
+    if (pgid == null || pgid <= 1 || pgid == _groups.currentGroupId()) {
+      return false;
+    }
+    final members = await _groups.groupMembers(pgid);
+    if (members.isEmpty) return false;
+    _noteOrphaned(session, pgid: pgid, memberCount: members.length);
+    return true;
+  }
+
+  /// Reports the orphan ONCE and arms the bounded grace. When it elapses the
+  /// group is signalled through the SAME guarded path [stop] uses, and the
+  /// session is latched terminal afterwards: whatever survives a full
+  /// SIGTERM→grace→SIGKILL escalation is unkillable by us, and a node stuck at
+  /// `running` with no event is the wedge the watchdog exists to prevent.
+  void _noteOrphaned(
+    _Session session, {
+    required int pgid,
+    required int memberCount,
+  }) {
+    if (session.orphanReported) return;
+    session.orphanReported = true;
+    _emit(
+      RuntimeEvent.sessionOrphaned(
+        name: session.name,
+        pgid: pgid,
+        memberCount: memberCount,
+        pid: session.pid,
+      ),
+    );
+    session.armOrphanGrace(_orphanGrace, () {
+      if (!_sessions.containsKey(session.name)) return;
+      session.orphanKillReason =
+          'orphaned descendants killed: the leader exited but process group '
+          '$pgid still had live members after a ${_humanize(_orphanGrace)} '
+          'grace';
+      unawaited(
+        _terminateSession(session).whenComplete(() {
+          session.cancelSupervision();
+          _emitExit(session);
+        }),
+      );
+    });
   }
 
   @override
@@ -517,14 +675,30 @@ class SubprocessProvider implements RuntimeProvider {
     // back to the start it observed can prove the two are the SAME process
     // (the session name is a slot, and a stop racing a respawn can refill it).
     final pid = session.pid;
+    // The REAL leader exit status, when the reaper parent wrote one.
+    final reaped = session.readReapedExitCode();
+    final orphaned = session.orphanKillReason;
     if (killed != null) {
       terminal = RuntimeEvent.died(
         name: session.name,
         reason: killed,
         pid: pid,
       );
+    } else if (orphaned != null) {
+      // A session we had to shoot for its survivors is NEVER a clean success,
+      // however its leader exited — the descendants may have been mid-write.
+      // `Died` is the only terminal that carries a reason, so the fence and the
+      // harvest can both see WHY.
+      terminal = RuntimeEvent.died(
+        name: session.name,
+        reason: reaped == null ? orphaned : '$orphaned (leader exit $reaped)',
+        pid: pid,
+      );
     } else {
-      final code = session.observedExitCode;
+      // A code the spawner READ outranks the reaper's file (same value by
+      // construction — the wrapper exits with the harness's code — but it is
+      // the more direct observation); the file is the detached path's proof.
+      final code = session.observedExitCode ?? reaped;
       if (code != null) {
         terminal = RuntimeEvent.exited(
           name: session.name,
@@ -532,17 +706,10 @@ class SubprocessProvider implements RuntimeProvider {
           pid: pid,
         );
       } else if (session.lifecycle == Lifecycle.oneTurn) {
-        // A run-once agent that disappears has COMPLETED its single turn. The
-        // detached spawn gives no readable exit code, so we cannot prove `0` —
-        // but a one-shot exit is success-by-intent (whether the WORK succeeded
-        // is judged by its commit, separately). Emit a clean exit so the
-        // actuator parks it asleep instead of treating success as a crash and
-        // crash-looping/quarantining it (the bug the first genesis arm
-        // exposed).
-        //
-        // ...and FLAG it: the 0 is inferred from the vanish, not read. A
-        // murdered agent vanishes identically, so the engine's completion
-        // fence proves an inferred exit against the workspace before it
+        // No reaper status file: a run-once agent that disappears has COMPLETED
+        // its single turn (completion-by-intent), but the 0 is INFERRED from the
+        // vanish, not read — a murdered agent vanishes identically, so the
+        // engine's completion fence proves it against the workspace before it
         // advances the circuit.
         terminal = RuntimeEvent.exited(
           name: session.name,
@@ -582,6 +749,16 @@ class SubprocessProvider implements RuntimeProvider {
     // Provider teardown releases every retained terminal (the [terminalOf]
     // release contract).
     _terminals.clear();
+    if (_ownsStatusDirectory) {
+      final dir = _exitStatusDirectory;
+      if (dir != null) {
+        try {
+          if (dir.existsSync()) dir.deleteSync(recursive: true);
+        } on Object {
+          // Best-effort teardown of a temp dir; never fails a dispose.
+        }
+      }
+    }
     await _events.close();
   }
 }
@@ -636,6 +813,22 @@ class _Session {
   /// inferred success, and a hung agent we shot must NEVER look like one.
   String? deadlineReason;
 
+  /// The reaper parent's status file for this incarnation, or null when the
+  /// session was never spawned through [SubprocessProvider.start].
+  File? exitStatusFile;
+
+  /// Set once the ORPHAN has been reported, so the event fires exactly once.
+  bool orphanReported = false;
+
+  /// Set when the orphan GRACE elapsed and the group was signalled — carries
+  /// the reason for the [RuntimeEvent.died]. Its presence FORCES the died path:
+  /// a session whose descendants we had to shoot must never read as a clean
+  /// success, whatever the leader's own exit status was.
+  String? orphanKillReason;
+
+  Timer? _orphanTimer;
+  bool _polling = false;
+
   Timer? _deadlineTimer;
 
   /// Arms the watchdog: [onDeadline] fires once if this session is still alive
@@ -652,11 +845,38 @@ class _Session {
     _deadlineTimer = null;
   }
 
+  /// The real leader exit code the REAPER PARENT wrote, or null when there is no
+  /// status file (a caller that supplied none, or a leader killed before the
+  /// wrapper could write). Never throws: an unreadable or malformed file is "no
+  /// code", which falls back to the INFERRED reading rather than inventing one.
+  int? readReapedExitCode() {
+    final file = exitStatusFile;
+    if (file == null) return null;
+    try {
+      if (!file.existsSync()) return null;
+      return int.tryParse(file.readAsStringSync().trim());
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Arms the bounded orphan grace: [onGrace] fires once, [after] the orphan was
+  /// first observed, if this session is still live.
+  void armOrphanGrace(Duration after, void Function() onGrace) {
+    _orphanTimer?.cancel();
+    _orphanTimer = Timer(after, () {
+      if (_closed || stopping) return;
+      onGrace();
+    });
+  }
+
   final StreamController<String> _transcript =
       StreamController<String>.broadcast();
   final StreamController<List<int>> _interaction =
       StreamController<List<int>>();
   final List<String> _peekBuffer = <String>[];
+  final List<StreamSubscription<String>> _transcriptSubs =
+      <StreamSubscription<String>>[];
   Timer? _superviseTimer;
   bool _closed = false;
 
@@ -703,7 +923,10 @@ class _Session {
   );
 
   /// Merges [out] and [err] byte streams into newline-delimited transcript
-  /// lines, fanned to the broadcast stream and the bounded peek ring.
+  /// lines, fanned to the broadcast stream and the bounded peek ring. The
+  /// subscriptions are RETAINED and cancelled only by [close] — the transcript
+  /// follows the GROUP, not the leader, so a survivor's output is still captured
+  /// after the leader exits.
   void attachTranscript(Stream<List<int>> out, Stream<List<int>> err) {
     void onLine(String line) {
       lastActivity = DateTime.now();
@@ -714,31 +937,45 @@ class _Session {
       if (!_transcript.isClosed) _transcript.add(line);
     }
 
-    out
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(onLine, onError: (_) {}, cancelOnError: false);
-    err
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(onLine, onError: (_) {}, cancelOnError: false);
+    _transcriptSubs.add(
+      out
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(onLine, onError: (_) {}, cancelOnError: false),
+    );
+    _transcriptSubs.add(
+      err
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(onLine, onError: (_) {}, cancelOnError: false),
+    );
   }
 
   /// Polls [poll] every [pollPeriod]; calls [onDeath] once when it first reports
-  /// the process gone.
+  /// the process gone. [poll] is ASYNC because its group half shells out; an
+  /// overlapping tick is SKIPPED rather than queued, so a slow probe can never
+  /// stack up probes behind itself.
   void supervise({
-    required bool Function() poll,
+    required Future<bool> Function() poll,
     required Duration pollPeriod,
     required void Function() onDeath,
   }) {
-    _superviseTimer = Timer.periodic(pollPeriod, (timer) {
+    _superviseTimer = Timer.periodic(pollPeriod, (timer) async {
       if (_closed || stopping) {
         timer.cancel();
         return;
       }
-      if (!poll()) {
-        timer.cancel();
-        onDeath();
+      if (_polling) return;
+      _polling = true;
+      try {
+        final alive = await poll();
+        if (_closed || stopping || !timer.isActive) return;
+        if (!alive) {
+          timer.cancel();
+          onDeath();
+        }
+      } finally {
+        _polling = false;
       }
     });
   }
@@ -746,6 +983,8 @@ class _Session {
   void cancelSupervision() {
     _superviseTimer?.cancel();
     _superviseTimer = null;
+    _orphanTimer?.cancel();
+    _orphanTimer = null;
     cancelDeadline();
   }
 
@@ -761,6 +1000,19 @@ class _Session {
     if (_closed) return;
     _closed = true;
     cancelSupervision();
+    for (final sub in _transcriptSubs) {
+      unawaited(sub.cancel());
+    }
+    _transcriptSubs.clear();
+    final statusFile = exitStatusFile;
+    if (statusFile != null) {
+      try {
+        if (statusFile.existsSync()) statusFile.deleteSync();
+      } on Object {
+        // Best-effort: a leftover status file is inert — the provider's temp
+        // dir goes with [SubprocessProvider.dispose].
+      }
+    }
     unawaited(closeInput().catchError((Object _) {}));
     if (!_interaction.isClosed) unawaited(_interaction.close());
     if (!_transcript.isClosed) _transcript.close();

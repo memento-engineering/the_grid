@@ -57,6 +57,9 @@ class _ScaleReader implements BeadProbeReader {
 class _Groups implements ProcessGroupController {
   @override
   int currentGroupId() => 1;
+
+  @override
+  Future<List<int>> groupMembers(int pgid) async => const <int>[];
   @override
   bool processAlive(int pid) => false;
   @override

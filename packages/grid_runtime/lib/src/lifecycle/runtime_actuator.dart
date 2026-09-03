@@ -158,6 +158,11 @@ class RuntimeActuator {
       case Respawned(:final name, :final epoch):
         await _onRespawned(name, epoch);
         return null;
+      case SessionOrphaned():
+        // NOT a lifecycle transition: the session is still occupied (its group
+        // is alive), so the record stays exactly where it is. The provider owns
+        // the grace-then-kill; the actuator reacts to the TERMINAL that follows.
+        return null;
       case Exited(:final name, :final exitCode):
         // A clean exit (code 0) parks asleep; a non-zero exit is a crash.
         return exitCode == 0

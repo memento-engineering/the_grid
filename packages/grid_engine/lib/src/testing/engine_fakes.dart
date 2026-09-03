@@ -96,7 +96,10 @@ class FakeRuntimeProvider implements RuntimeProvider {
         if (interaction != null && !interaction.isClosed) {
           unawaited(interaction.close());
         }
-      case SessionStarted() || Respawned() || ActivityChanged():
+      case SessionStarted() ||
+          Respawned() ||
+          ActivityChanged() ||
+          SessionOrphaned():
         break;
     }
     _events.add(event);
