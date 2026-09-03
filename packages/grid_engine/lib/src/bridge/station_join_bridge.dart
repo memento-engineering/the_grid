@@ -389,11 +389,12 @@ class StationJoinBridge {
   /// is the same shape [_attachGateState] already uses one level down: an OPEN
   /// state bead narrows what the tree sees; a CLOSED one retires the narrowing.
   ///
-  /// The ENFORCEMENT is [applyBlockGuard]'s, shared with the federated union's
-  /// dependency-row edges. Unlike that source, this one applies its edges
-  /// whether or not the two ids share a store prefix: a link bead is an
-  /// operator-authored edge no store's `is_blocked` knows about, so there is no
-  /// origin `bd ready` to defer a same-store link to.
+  /// The ENFORCEMENT is [applyBlockGuard]'s, and since tg-mspw this is its ONE
+  /// edge source: the federated union no longer authors dependency-row edges,
+  /// it refuses cross-store rows loudly. A link bead applies whether or not
+  /// the two ids share a store prefix — it is an operator-authored edge no
+  /// store's `is_blocked` knows about, so there is no origin `bd ready` to
+  /// defer a same-store link to.
   ///
   /// Returns the [work] INSTANCE unchanged when nothing is excluded — the
   /// common case (no links at all, or every blocker closed) costs one scan and

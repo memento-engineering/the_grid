@@ -2,11 +2,12 @@ import 'package:beads_dart/beads_dart.dart';
 
 /// One blocking edge the union frontier must enforce, whatever authored it.
 ///
-/// Two edge SOURCES feed this one enforcement: a real cross-store dependency
-/// row observed on a member snapshot (`FederatedSnapshotSource`, D-F2) and an
-/// OPEN grid-state `type=link` bead (`domain/cross_link.dart`). [origin] is the
-/// human phrase the LOUD unresolved message names, so an operator reading the
-/// log can tell the two apart.
+/// ONE edge source feeds this enforcement: an OPEN grid-state `type=link` bead
+/// (`domain/cross_link.dart`). A raw cross-store dependency row is NOT an edge
+/// source — `FederatedSnapshotSource` refuses such a row loudly and authors
+/// nothing (tg-mspw; honouring them is tg-xh5d). [origin] is the human phrase
+/// the LOUD unresolved message names, so an operator reading the log can tell
+/// what authored an edge.
 class BlockEdge {
   /// Creates the edge "[from] is blocked until [to] closes", authored by
   /// [origin].
