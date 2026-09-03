@@ -2,12 +2,12 @@
 // requirements:
 //
 //   * every builder's output survives the REAL envelope construction (the
-//     ck_prov / ck_unknown / ck_seat constructor mirrors) and the REAL codec
+//     ck_prov / ck_unknown / ck_substation constructor mirrors) and the REAL codec
 //     round-trip — a missing CHECK-relevant field fails here, not at the
 //     server;
 //   * identity threading (§2.1/§2.2): session-scope attempt ids, the round
 //     ladder (seeded by `#rN` at first sight, bumped only by round-retired),
-//     the mount sequence ULID, the pre-grant id, seat via ownedPrefixOf with
+//     the mount sequence ULID, the pre-grant id, substation via ownedPrefixOf with
 //     the deterministic unowned fallback;
 //   * the §2.3 trigger discipline as API shape: synchronous, void, and
 //     NON-FATAL — a throwing sink or flare transport never reaches the caller.
@@ -19,14 +19,14 @@ final class _Capture {
   const _Capture({
     required this.record,
     required this.occurredAt,
-    required this.seat,
+    required this.substation,
     required this.provenance,
     required this.provenanceBasis,
   });
 
   final TrajectoryRecord record;
   final DateTime? occurredAt;
-  final String? seat;
+  final String? substation;
   final TrajectoryProvenance provenance;
   final String? provenanceBasis;
 }
@@ -41,7 +41,7 @@ final class _CapturingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) {
@@ -49,7 +49,7 @@ final class _CapturingSink implements TrajectoryRecordSink {
       _Capture(
         record: record,
         occurredAt: occurredAt,
-        seat: seat,
+        substation: substation,
         provenance: provenance,
         provenanceBasis: provenanceBasis,
       ),
@@ -65,7 +65,7 @@ final class _ThrowingSink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => throw StateError('sink refused');
@@ -85,7 +85,7 @@ void main() {
     flares = [];
     recorder = StationTrajectoryRecorder(
       sink: sink,
-      seatPrefixes: const {'tg', 'swift-infer', 'tranquility'},
+      substationPrefixes: const {'tg', 'swift-infer', 'tranquility'},
       clock: () => clockNow,
       onFlare: (name, data) => flares.add((name, data)),
     );
@@ -93,8 +93,8 @@ void main() {
 
   /// Builds the envelope EXACTLY the way the appender's `_buildEnvelope`
   /// does — correlation columns merged over the service-stamped base, the
-  /// recorder-supplied seat applied when `work_bead_id` is present — so the
-  /// §4 cross-cutting CHECK mirrors (`ck_prov`, `ck_unknown`, `ck_seat`) and
+  /// recorder-supplied substation applied when `work_bead_id` is present — so the
+  /// §4 cross-cutting CHECK mirrors (`ck_prov`, `ck_unknown`, `ck_substation`) and
   /// each type's `_envReq` required-column reads all run for real.
   TrajectoryEnvelope envelopeOf(_Capture capture) {
     const context = IdemContext(station: 'tranquility', bootEpoch: 3);
@@ -118,7 +118,7 @@ void main() {
       'payload': record.payloadToJson(),
       ...record.correlationToJson(),
     };
-    if (json['work_bead_id'] != null) json['seat'] = capture.seat;
+    if (json['work_bead_id'] != null) json['substation'] = capture.substation;
     return TrajectoryEnvelope.fromJson(json);
   }
 
@@ -271,7 +271,7 @@ void main() {
     });
   });
 
-  group('seat derivation (§2.2 seat row, r2 minor 12)', () {
+  group('substation derivation (§2.2 substation row, r2 minor 12)', () {
     test('longest owned prefix wins', () {
       recorder.mintOutcome(
         workBeadId: 'swift-infer-097',
@@ -279,9 +279,9 @@ void main() {
         mintAttempt: 1,
       );
       final capture = single();
-      expect(capture.seat, 'swift-infer');
+      expect(capture.substation, 'swift-infer');
       final record = capture.record as AttemptMintOutcome;
-      expect(record.seatBasis, isNull);
+      expect(record.substationBasis, isNull);
     });
 
     test('no owned prefix stamps the literal unowned + payload marker', () {
@@ -292,10 +292,13 @@ void main() {
         model: 'm',
       );
       final capture = single();
-      expect(capture.seat, kUnownedSeat);
+      expect(capture.substation, kUnownedSubstation);
       final record = capture.record as AttemptSessionStarted;
-      expect(record.seatBasis, kUnownedSeatBasis);
-      expect(record.payloadToJson()['seat_basis'], kUnownedSeatBasis);
+      expect(record.substationBasis, kUnownedSubstationBasis);
+      expect(
+        record.payloadToJson()['substation_basis'],
+        kUnownedSubstationBasis,
+      );
     });
   });
 

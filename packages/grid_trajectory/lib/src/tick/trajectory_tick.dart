@@ -197,7 +197,7 @@ class TrajectoryTick {
       for (final repair in repairs) {
         final outcome = await _appender.append(
           repair.record,
-          seat: repair.seat,
+          substation: repair.substation,
           provenance: repair.provenance,
           provenanceBasis: repair.provenanceBasis,
         );

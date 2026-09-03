@@ -7,7 +7,7 @@
 /// dependencies (decision: grid-trajectory-leaf-package); stations compose it
 /// explicitly.
 ///
-/// Later seats append exports under their own SECTION marker; do not reorder
+/// Later waves append exports under their own SECTION marker; do not reorder
 /// or merge the sections.
 library;
 

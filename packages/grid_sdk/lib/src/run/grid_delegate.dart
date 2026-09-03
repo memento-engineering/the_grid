@@ -65,7 +65,7 @@ import 'substation_config.dart';
 ///     reference-boot follow-up bead.
 ///  2. **[resolveArmedRoster]** — the shell calls it exactly once per
 ///     delegate instance, BEFORE the boot rail, folding the station's arming
-///     policy (skip a coded seat with no store, refuse an appended one) over
+///     policy (skip a coded substation with no store, refuse an appended one) over
 ///     the roster. The delegate retains the result ([armedRoster]) — what
 ///     [boot] assembles over.
 ///  3. **[boot]** (`runGrid` awaits it before the first mount) — assembles
@@ -100,7 +100,7 @@ import 'substation_config.dart';
 ///     boot-assembled runtime, exactly what `dispose` unwinds) → dispose the
 ///     shell projector → release lock.
 ///
-/// **The rule-5 posture, honestly stated.** [armRoster] (which seats arm,
+/// **The rule-5 posture, honestly stated.** [armRoster] (which substations arm,
 /// skip-coded vs refuse-appended) and [stalenessPosture] are STATION POLICY
 /// executing on the pre-boot rail, not in `build` — docs/STYLE.md rule 5
 /// names exactly these decisions as tree policy. They live here pre-tree by
@@ -232,10 +232,10 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
 
   /// THE arming policy (relocated from the command's for-loops, tg-1fa2.4 —
   /// pre-tree by necessity, ratchet debt under STYLE.md rule 5; see the class
-  /// doc): which seats arm is a station opinion. The standing default: a
-  /// CODED seat whose root resolves no work store is skipped loudly via
+  /// doc): which substations arm is a station opinion. The standing default: a
+  /// CODED substation whose root resolves no work store is skipped loudly via
   /// [onSkip] (not present in this checkout — a legitimate partial checkout);
-  /// an APPENDED seat that refuses is a boot refusal ([StationRefusal] — the
+  /// an APPENDED substation that refuses is a boot refusal ([StationRefusal] — the
   /// operator explicitly asked for it, so absence is an error: exit 64 for a
   /// malformed spec, exit 1 for a missing store).
   ///
@@ -249,25 +249,31 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   }) {
     final locator = StoreLocator();
     final armed = <SubstationWorkSpec>[];
-    for (final seat in coded) {
+    for (final substation in coded) {
       try {
-        locator.locateWorkStore(root: seat.root, substationName: seat.name);
-        armed.add(seat);
+        locator.locateWorkStore(
+          root: substation.root,
+          substationName: substation.name,
+        );
+        armed.add(substation);
       } on StoreRefusal {
         onSkip(
-          'skipping coded substation "${seat.name}" — no work store '
-          'at ${seat.root} (not present in this checkout).',
+          'skipping coded substation "${substation.name}" — no work store '
+          'at ${substation.root} (not present in this checkout).',
         );
       }
     }
-    for (final seat in appended) {
+    for (final substation in appended) {
       try {
-        locator.locateWorkStore(root: seat.root, substationName: seat.name);
+        locator.locateWorkStore(
+          root: substation.root,
+          substationName: substation.name,
+        );
         armed.add(
           SubstationWorkSpec(
-            name: seat.name,
-            root: seat.root,
-            prefix: seat.prefix,
+            name: substation.name,
+            root: substation.root,
+            prefix: substation.prefix,
           ),
         );
       } on ArgumentError catch (error) {
@@ -283,7 +289,7 @@ abstract class GridDelegate extends StateNotifier<GridConfiguration> {
   /// from the command's `--allow-stale` refusal, tg-1fa2.4 — pre-tree by
   /// necessity, ratchet debt under STYLE.md rule 5; see the class doc).
   /// [verdicts] is
-  /// the rendered per-seat verdict line (`earth: fresh, moon: stale: …`, in
+  /// the rendered per-substation verdict line (`earth: fresh, moon: stale: …`, in
   /// roster order); the standing default refuses any stale checkout unless
   /// [allowStale] downgrades the refusal to one warning.
   StalenessPosture stalenessPosture({

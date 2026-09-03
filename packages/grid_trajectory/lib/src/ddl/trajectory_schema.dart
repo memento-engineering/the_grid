@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS proj_session_head (
   held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
   pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
   rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
-  seat VARCHAR(64) NULL,
+  substation VARCHAR(64) NULL,
   started_at DATETIME(6) NOT NULL, closed_at DATETIME(6) NULL,
   head_epoch BIGINT NOT NULL,
   last_seq BIGINT NOT NULL,
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS trajectory (
   occurred_at      DATETIME(6)  NOT NULL,
   recorded_at      DATETIME(6)  NOT NULL,
   station          VARCHAR(64)  NOT NULL,
-  seat             VARCHAR(64)  NULL,
+  substation       VARCHAR(64)  NULL,
   authority_id     VARCHAR(64)  NOT NULL,
   fencing_token    BIGINT       NULL,
   provenance       ENUM('observed','inferred','reconstructed') NOT NULL DEFAULT 'observed',
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS trajectory (
                                   ('admission.grant.consumed','admission.grant.expired',
                                    'admission.grant.released','attempt.session.started')
                                  OR grant_id IS NOT NULL),
-  CONSTRAINT ck_seat      CHECK (work_bead_id IS NULL OR seat IS NOT NULL)
+  CONSTRAINT ck_substation CHECK (work_bead_id IS NULL OR substation IS NOT NULL)
 )''',
   '''
 CREATE TABLE IF NOT EXISTS traj_terminal_guard (
@@ -381,4 +381,52 @@ Future<void> reshapeSessionHeadProjection(TrajectoryDb db) async {
   // than TRUNCATE); the two statements are the whole step.
   await db.execute('DROP TABLE IF EXISTS proj_session_head');
   await db.execute(projSessionHeadDdl);
+}
+
+/// The live column set of the `trajectory` JOURNAL.
+///
+/// Deliberately a table-LITERAL statement rather than
+/// [projSessionHeadColumnsSql]'s parameterized form: the two probes run under
+/// different rules — the projection probe is dual-read-gated, this one is
+/// unconditional — and both a human tailing the SQL log and every scripted
+/// fake in the tree key on statement TEXT, never on parameters.
+const String journalColumnsSql =
+    'SELECT column_name AS name FROM information_schema.columns '
+    "WHERE table_schema = DATABASE() AND table_name = 'trajectory'";
+
+/// True when this home's journal still spells the substation identity `seat`
+/// — the pre-tg-j1zn column name.
+///
+/// Reads the LIVE column set and tests for the OLD name, so a home already at
+/// the current shape, and a home with no `trajectory` table at all, both
+/// answer false: the migration is never run speculatively.
+Future<bool> journalNeedsSubstationRename(TrajectoryDb db) async {
+  final result = await db.execute(journalColumnsSql);
+  final columns = {for (final row in result.rows) row['name']?.toLowerCase()};
+  return columns.contains('seat');
+}
+
+/// THE tg-j1zn journal migration, as a named step beside
+/// [reshapeSessionHeadProjection]: `trajectory.seat` becomes
+/// `trajectory.substation` and `ck_seat` returns as `ck_substation`.
+///
+/// An in-place ALTER, and deliberately NOT the P1 shape. P1 may DROP because
+/// `proj_%` is `dolt_ignore`'d, rebuildable state; the journal IS the
+/// dolt-versioned log, so a drop would destroy the only copy of every recorded
+/// fact. Renaming a promoted envelope COLUMN is a schema migration and is
+/// distinct from §2.6's "the log is never migrated" rule, which governs
+/// payload `type_version` evolution — no record's payload changes here.
+/// Verified against dolt 2.2.2: `DROP CHECK`, `RENAME COLUMN`, and
+/// `ADD CONSTRAINT` all apply, and the re-added CHECK refuses by its new name.
+///
+/// Quiesced by the same fence as the reshape (`traj replay`): DDL cannot ride
+/// a transaction, and an append mid-rename would target a column that exists
+/// under neither name.
+Future<void> renameJournalSubstationColumn(TrajectoryDb db) async {
+  await db.execute('ALTER TABLE trajectory DROP CHECK ck_seat');
+  await db.execute('ALTER TABLE trajectory RENAME COLUMN seat TO substation');
+  await db.execute(
+    'ALTER TABLE trajectory ADD CONSTRAINT ck_substation '
+    'CHECK (work_bead_id IS NULL OR substation IS NOT NULL)',
+  );
 }

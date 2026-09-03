@@ -327,10 +327,10 @@ final class _Harness {
         _throwIf('vmService');
         return 'ws://vm';
       },
-      inspectPrimaryCheckout: (seat) async {
-        events.add('inspect:${seat.name}');
+      inspectPrimaryCheckout: (substation) async {
+        events.add('inspect:${substation.name}');
         _throwIf('inspect');
-        return checkoutFreshness[seat.name] ??
+        return checkoutFreshness[substation.name] ??
             const PrimaryCheckoutFreshness(state: PrimaryCheckoutState.fresh);
       },
       maintainStateStore: ({required gridHome}) async {
@@ -1607,7 +1607,7 @@ void main() {
         appended: const [],
         onSkip: (message) => fail('nothing to skip: $message'),
       );
-      expect(armed.map((seat) => seat.name), ['earth']);
+      expect(armed.map((substation) => substation.name), ['earth']);
       expect(delegate.armedRoster, same(armed));
       // Retained UNMODIFIABLE: boot assembles over a fixed roster.
       expect(() => delegate.armedRoster.clear(), throwsUnsupportedError);

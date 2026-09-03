@@ -422,11 +422,11 @@ TrajectoryEnvelope syntheticEnvelope(
     'payload': record.payloadToJson(),
     ...record.correlationToJson(),
   };
-  // §2.6 rule 7 / ck_seat: seat is service-derived from the bead's prefix.
+  // §2.6 rule 7 / ck_substation: substation is service-derived from the bead's prefix.
   final workBeadId = json['work_bead_id'] as String?;
   if (workBeadId != null) {
     final dash = workBeadId.indexOf('-');
-    json['seat'] = dash <= 0 ? workBeadId : workBeadId.substring(0, dash);
+    json['substation'] = dash <= 0 ? workBeadId : workBeadId.substring(0, dash);
   }
   return TrajectoryEnvelope.fromJson(json);
 }
@@ -450,7 +450,7 @@ Future<int> bulkInsertTrajectory(
     'occurred_at',
     'recorded_at',
     'station',
-    'seat',
+    'substation',
     'authority_id',
     'provenance',
     'source',

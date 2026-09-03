@@ -218,7 +218,7 @@ void main() {
     );
 
     test(
-      'seat is service-derived from the work bead store prefix (ck_seat)',
+      'substation is service-derived from the work bead store prefix (ck_substation)',
       () async {
         final h = _Harness()
           ..scriptClaimReads()
@@ -232,7 +232,7 @@ void main() {
 
         final row = h.db.matching('INSERT INTO trajectory (').single.params!;
         expect(row['work_bead_id'], 'tg-zfek');
-        expect(row['seat'], 'tg');
+        expect(row['substation'], 'tg');
       },
     );
   });

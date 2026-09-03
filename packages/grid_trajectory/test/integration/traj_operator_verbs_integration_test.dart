@@ -285,7 +285,7 @@ CREATE TABLE proj_session_head (
   held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
   pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
   rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
-  seat VARCHAR(64) NULL,
+  substation VARCHAR(64) NULL,
   started_at DATETIME(6) NOT NULL, closed_at DATETIME(6) NULL,
   head_epoch BIGINT NOT NULL,
   last_seq BIGINT NOT NULL,

@@ -10,7 +10,7 @@
 ///
 /// Per §6 row 1 and the §7 head fields:
 ///   * `attempt.session.started` INSERTS the row — work_bead_id, rig, model,
-///     seat, started_at, round 0, status open;
+///     substation, started_at, round 0, status open;
 ///   * `attempt.terminal` sets outcome/closed_at/status plus the wave-1 cut's
 ///     `unknown_reason`/`terminal_provenance` pair (cut-wiring §0.3, r9–r11);
 ///     a SETTLING terminal (resolves_record_id set) updates OUTCOME ONLY —
@@ -53,13 +53,13 @@ final class SessionHeadInsert extends SessionHeadDelta {
     required this.model,
     required this.startedAt,
     required this.headEpoch,
-    this.seat,
+    this.substation,
   });
 
   final String workBeadId;
   final String rig;
   final String model;
-  final String? seat;
+  final String? substation;
   final DateTime startedAt;
   final int headEpoch;
 
@@ -69,7 +69,7 @@ final class SessionHeadInsert extends SessionHeadDelta {
     workBeadId: workBeadId,
     rig: rig,
     model: model,
-    seat: seat,
+    substation: substation,
     startedAt: startedAt,
     headEpoch: headEpoch,
     lastSeq: lastSeq,
@@ -155,7 +155,7 @@ SessionHeadDelta? _rawSessionHeadDeltaFor(
         workBeadId: record.workBeadId ?? '',
         rig: record.rig,
         model: record.model,
-        seat: envelope.seat,
+        substation: envelope.substation,
         startedAt: envelope.occurredAt,
         // CONSTRAINT — mint-time seeding is PROVISIONAL. `head_epoch` is a
         // LEDGER-side fact (§7): the authority epoch the ledger head was last
@@ -287,7 +287,7 @@ const List<String> _insertColumns = [
   'attempt_id',
   'rig',
   'model',
-  'seat',
+  'substation',
   'started_at',
   'closed_at',
   'head_epoch',

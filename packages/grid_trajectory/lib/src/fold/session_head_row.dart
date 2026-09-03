@@ -45,7 +45,7 @@ class SessionHeadRow {
     this.attemptId,
     this.rig,
     this.model,
-    this.seat,
+    this.substation,
     this.closedAt,
   });
 
@@ -89,7 +89,7 @@ class SessionHeadRow {
       attemptId: text('attempt_id'),
       rig: text('rig'),
       model: text('model'),
-      seat: text('seat'),
+      substation: text('substation'),
       // NOT NULL in the DDL; a row without it is unreadable, not defaultable.
       startedAt: parseSqlDateTime6(text('started_at'))!,
       closedAt: parseSqlDateTime6(text('closed_at')),
@@ -132,7 +132,7 @@ class SessionHeadRow {
   final String? attemptId;
   final String? rig;
   final String? model;
-  final String? seat;
+  final String? substation;
   final DateTime startedAt;
   final DateTime? closedAt;
 
@@ -217,7 +217,7 @@ class SessionHeadRow {
       attemptId: attemptId,
       rig: rig,
       model: model,
-      seat: seat,
+      substation: substation,
       startedAt: startedAt,
       closedAt: closedAt,
       headEpoch: headEpoch,
@@ -243,7 +243,7 @@ class SessionHeadRow {
     'attempt_id': attemptId,
     'rig': rig,
     'model': model,
-    'seat': seat,
+    'substation': substation,
     'started_at': sqlDateTime6(startedAt),
     'closed_at': closedAt == null ? null : sqlDateTime6(closedAt!),
     'head_epoch': headEpoch,
@@ -268,7 +268,7 @@ class SessionHeadRow {
       other.attemptId == attemptId &&
       other.rig == rig &&
       other.model == model &&
-      other.seat == seat &&
+      other.substation == substation &&
       other.startedAt == startedAt &&
       other.closedAt == closedAt &&
       other.headEpoch == headEpoch &&
@@ -291,7 +291,7 @@ class SessionHeadRow {
     attemptId,
     rig,
     model,
-    seat,
+    substation,
     startedAt,
     closedAt,
     headEpoch,

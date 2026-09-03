@@ -180,7 +180,7 @@ pre-fetched state, not an inline await:
   (`sessionHeadDeltaFor` → `applySessionHeadDelta`) to the mirror only AFTER the append's
   transaction commits. The delta's input is a `TrajectoryEnvelope`
   (`session_head_delta.dart:97-100`) with envelope-derived insert columns
-  (`startedAt: envelope.occurredAt`, `seat`, `headEpoch` — `:113-129`), and today that
+  (`startedAt: envelope.occurredAt`, `substation`, `headEpoch` — `:113-129`), and today that
   envelope is built and discarded INSIDE the appender (`trajectory_appender.dart:320/:332`)
   while the harness sees only `Appended{recordId, seq, epochSeq}`
   (`append_outcome.dart:18-28`). So C1 extends the append contract: **`Appended` gains the
@@ -1158,7 +1158,7 @@ only for `refused`. r2 needs a stated cut-posture rule for `compromised`
 | O-M2 | a trajectory blip under cut = station-wide breaker storm; budget/quiesce undesigned |
 | O-M3 | abort has no admission freeze/draining posture; the documented rollback may not converge |
 | O-M4 | C9 (irreversible) gated on one round of C8; needs its own gate or operator ratification |
-| O-M6 / C-M5 | pre-mount `admission.refused` has no seat, no `mountAttemptId`, no `snapshotRev` source |
+| O-M6 / C-M5 | pre-mount `admission.refused` has no substation, no `mountAttemptId`, no `snapshotRev` source |
 | O-M7 | break-glass override site list inconsistent (one site vs two bypass targets) |
 | F-M4 | acked appends invert stage1-wiring §2.5's never-await + non-fatal invariants, undisclosed, on the hottest path with no latency budget |
 | F-M5 | routing a `step.transition(complete)` ack failure into `_persistFailure` re-drives completed work (the `land` step example) |
@@ -1196,7 +1196,7 @@ Synchronous mount-eligibility clause over the ambient P6+P1 snapshots at
 candidate bead has any P6 `worktree_state='live'` row under a P1-terminal session,
 `clause='worktree-outstanding'`. Staleness via tick-stamped `heartbeatAt` (fail closed only
 when the harness itself is wedged; idle-healthy admits). `admission.refused` through the
-recorder seam + 30 s per-bead dedupe [idem key defective per C-B3/F-M3; seat/attemptId/
+recorder seam + 30 s per-bead dedupe [idem key defective per C-B3/F-M3; substation/attemptId/
 snapshotRev unsourced per O-M6/C-M5]. Armed only under `cut`. Doc fixes for the three
 staging sites [one of three listed — F-m3].
 
@@ -1294,7 +1294,7 @@ verified against source in its revision session, not taken on the judges' word.
 | B-B7 | Enqueue-time mirror makes a dropped append durable | **A-F** | post-ACK apply (§0.2); C1 regression test |
 | B-M1 | Falsifier checkpoint reads half the union | **A-R** | re-homed with the deletion (FINAL Q4) |
 | B-M2 | R11 moves the breaker onto a lossy path | ~~A-F~~ → **r3 correction (C-B1/F-B2): the r2 disposition was self-contradictory — R8's `:789-798` site IS the restartCount/cooldown persist (one `writer.update` via `_moleculeMetadata`); "R11 KEPT" and "R8 retired" name the same write. REOPENED as a wave-2 entry criterion. Wave 1 is unaffected (nothing retires; C4 keeps the breaker read on beads)** | |
-| B-M3 | FINAL Q2 named the wrong CHECK; `ck_seat` bites | ~~A-F~~ → **r3 correction: `ck_seat` half stands, but the idem-key half of the r2 disposition is REOPENED with A-M4 (C-B3); seat/attemptId/snapshotRev sourcing also open (O-M6/C-M5)** | |
+| B-M3 | FINAL Q2 named the wrong CHECK; `ck_substation` bites | ~~A-F~~ → **r3 correction: `ck_substation` half stands, but the idem-key half of the r2 disposition is REOPENED with A-M4 (C-B3); substation/attemptId/snapshotRev sourcing also open (O-M6/C-M5)** | |
 | B-M4 | Barrier staleness wedges the station | **A-F** (heartbeat) — carried in W2-B | |
 | B-M5 | Miss classifier has no null-`started_at` rule | **A-F** — verified `session_projection.dart:105-114` | §0.3 classifier |
 | B-M6 | Comparator narrower than the flipped fact set; token lost | ~~A-F~~ → **r3 correction (C-B2/O-B5): the r2 "fix" mislabeled the cursor's carriers as "KEPT or later-staged" while retiring them in the same document, and diagnosed the fence hazard on the wrong field (token, not cursor STATE). Dissolved for wave 1 (nothing retires — §0.3's rule is now literally true); the adoption half is a wave-2 entry criterion** | |
@@ -1324,7 +1324,7 @@ verified against source in its revision session, not taken on the judges' word.
 | O-M3 | No admission freeze; abort may not converge | **A-W2** | carried majors table |
 | O-M4 | C9 irreversible on a one-round gate | **A-W2** | carried majors table |
 | O-M5 | C8a scheduled after every gate that needs it | **A-F** — verified `work_assembly.dart:521-526` vs `:588` | C8a moved into C0; ~~C8b stays the wave-1 tail~~ **r4: C8b left wave 1 entirely (J7-B3 — it changes bd writes); now appendix W2-E** |
-| O-M6 | No seat for a pre-mount refusal | **A-W2** | carried majors table (with C-M5) |
+| O-M6 | No substation for a pre-mount refusal | **A-W2** | carried majors table (with C-M5) |
 | O-M7 | Break-glass site list inconsistent | **A-W2** | carried majors table |
 | O-m1 | r1-blocker audit: fixes real, new windows opened | **N** | the new windows are exactly r3's fix list |
 | O-m2 | C4 cite drift (frontier path/line; wedge line) | **A-F** — verified `circuit/unclaimed_frontier.dart:87`, `domain/wedge.dart:195-198` | corrected in C4 |

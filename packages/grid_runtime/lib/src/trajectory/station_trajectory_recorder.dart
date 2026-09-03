@@ -63,19 +63,19 @@ abstract interface class TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance,
     String? provenanceBasis,
   });
 }
 
-/// The seat stamped when no known prefix owns a work bead id (§2.2, r2 minor
-/// 12) — deterministic, never CHECK-refused, so `ck_seat`'s presence rule
+/// The substation stamped when no known prefix owns a work bead id (§2.2, r2 minor
+/// 12) — deterministic, never CHECK-refused, so `ck_substation`'s presence rule
 /// cannot turn an unowned id into a permanent clean-round blocker.
-const String kUnownedSeat = 'unowned';
+const String kUnownedSubstation = 'unowned';
 
-/// The payload marker accompanying [kUnownedSeat] (`seat_basis`).
-const String kUnownedSeatBasis = 'no-owned-prefix';
+/// The payload marker accompanying [kUnownedSubstation] (`substation_basis`).
+const String kUnownedSubstationBasis = 'no-owned-prefix';
 
 /// The `grant_basis` payload marker on Stage-1 pre-grant ids (§2.2): no
 /// grants exist before Stage 3, so the recorder mints a placeholder ULID per
@@ -198,7 +198,7 @@ typedef _ProvisionSeed = ({
   int? incarnation,
 });
 
-/// One constructed record plus the seat its envelope must carry — what a
+/// One constructed record plus the substation its envelope must carry — what a
 /// BUILDER hands back to a caller that owns its own append.
 ///
 /// The queue path ([StationTrajectoryRecorder]'s observation methods) enqueues
@@ -208,13 +208,13 @@ typedef _ProvisionSeed = ({
 /// is what keeps the concrete record vocabulary in this one library (§2).
 @immutable
 final class DerivedRecord {
-  const DerivedRecord(this.record, {this.seat});
+  const DerivedRecord(this.record, {this.substation});
 
   final TrajectoryRecord record;
 
-  /// §2.2's seat row, or null when the record carries no `work_bead_id` (and
-  /// `ck_seat` therefore demands nothing).
-  final String? seat;
+  /// §2.2's substation row, or null when the record carries no `work_bead_id` (and
+  /// `ck_substation` therefore demands nothing).
+  final String? substation;
 }
 
 /// A recorder status read — plain counters for the `/status` trajectory block.
@@ -249,11 +249,11 @@ final class TrajectoryRecorderStats {
 class StationTrajectoryRecorder {
   StationTrajectoryRecorder({
     required TrajectoryRecordSink sink,
-    Set<String> seatPrefixes = const {},
+    Set<String> substationPrefixes = const {},
     DateTime Function()? clock,
     TrajectoryRecorderFlare? onFlare,
   }) : _sink = sink,
-       _seatPrefixes = Set<String>.unmodifiable(seatPrefixes),
+       _substationPrefixes = Set<String>.unmodifiable(substationPrefixes),
        _clock = clock ?? DateTime.now,
        _onFlare = onFlare;
 
@@ -265,8 +265,8 @@ class StationTrajectoryRecorder {
 
   /// The `allowSet` (§1.1) — input to [BeadOwnershipPredicate.ownedPrefixOf].
   /// Note it carries both identity axes (name and prefix); longest-match is
-  /// deterministic but the resolved seat may be either axis (§2.2).
-  final Set<String> _seatPrefixes;
+  /// deterministic but the resolved substation may be either axis (§2.2).
+  final Set<String> _substationPrefixes;
 
   final DateTime Function() _clock;
   final TrajectoryRecorderFlare? _onFlare;
@@ -557,7 +557,7 @@ class StationTrajectoryRecorder {
       // sequence for this work bead gets a fresh ULID.
       final mountAttemptId =
           _mountSequences.remove(parsed.workBeadId) ?? _mintUlid();
-      final seat = _seatOf(parsed.workBeadId);
+      final owned = _substationOf(parsed.workBeadId);
       _enqueue(
         AttemptSessionStarted(
           sessionId: sessionId,
@@ -571,9 +571,9 @@ class StationTrajectoryRecorder {
           workBeadId: parsed.workBeadId,
           mountAttemptId: mountAttemptId,
           legacyAttemptCount: _legacyAttemptCount(mountAttemptMetadata),
-          seatBasis: seat.basis,
+          substationBasis: owned.basis,
         ),
-        seat: seat.seat,
+        substation: owned.substation,
         occurredAt: occurredAt,
       );
     });
@@ -926,7 +926,7 @@ class StationTrajectoryRecorder {
       if (phase == MintPhase.exhausted || phase == MintPhase.abandoned) {
         _mountSequences.remove(parsed.workBeadId);
       }
-      final seat = _seatOf(parsed.workBeadId);
+      final owned = _substationOf(parsed.workBeadId);
       _enqueue(
         AttemptMintOutcome(
           workBeadId: parsed.workBeadId,
@@ -937,9 +937,9 @@ class StationTrajectoryRecorder {
           stage: stage,
           reason: reason,
           legacyAttemptCount: _legacyAttemptCount(mountAttemptMetadata),
-          seatBasis: seat.basis,
+          substationBasis: owned.basis,
         ),
-        seat: seat.seat,
+        substation: owned.substation,
         occurredAt: occurredAt,
       );
     });
@@ -1640,7 +1640,7 @@ class StationTrajectoryRecorder {
   void _enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) {
@@ -1649,7 +1649,7 @@ class StationTrajectoryRecorder {
       // The observation instant is NOW, at the derivation site — the append
       // happens later on the writer loop and must not re-stamp it (§2.2).
       occurredAt: occurredAt ?? _clock(),
-      seat: seat,
+      substation: substation,
       provenance: provenance,
       provenanceBasis: provenanceBasis,
     );
@@ -1684,7 +1684,7 @@ class StationTrajectoryRecorder {
       );
       _enqueue(
         derived.record,
-        seat: derived.seat,
+        substation: derived.substation,
         occurredAt: occurredAt,
         provenance: provenance,
         provenanceBasis: provenanceBasis,
@@ -1714,7 +1714,7 @@ class StationTrajectoryRecorder {
       _cap(_sessionAttempts);
       attemptIdBasis = mintedAttemptBasis;
     }
-    final seat = parsed == null ? null : _seatOf(parsed.workBeadId);
+    final owned = parsed == null ? null : _substationOf(parsed.workBeadId);
     return DerivedRecord(
       AttemptTerminal(
         attemptId: resolved,
@@ -1726,9 +1726,9 @@ class StationTrajectoryRecorder {
         healBasis: healBasis,
         resolvesRecordId: resolvesRecordId,
         attemptIdBasis: attemptIdBasis,
-        seatBasis: seat?.basis,
+        substationBasis: owned?.basis,
       ),
-      seat: seat?.seat,
+      substation: owned?.substation,
     );
   }
 
@@ -1835,16 +1835,17 @@ class StationTrajectoryRecorder {
     });
   }
 
-  /// §2.2 seat row: `ownedPrefixOf` over the allowSet, longest-prefix match,
-  /// with the deterministic [kUnownedSeat] fallback and its payload marker.
-  ({String seat, String? basis}) _seatOf(String workBeadId) {
+  /// §2.2 substation row: `ownedPrefixOf` over the allowSet, longest-prefix
+  /// match, with the deterministic [kUnownedSubstation] fallback and its
+  /// payload marker.
+  ({String substation, String? basis}) _substationOf(String workBeadId) {
     final prefix = BeadOwnershipPredicate.ownedPrefixOf(
       workBeadId,
-      _seatPrefixes,
+      _substationPrefixes,
     );
     return prefix == null
-        ? (seat: kUnownedSeat, basis: kUnownedSeatBasis)
-        : (seat: prefix, basis: null);
+        ? (substation: kUnownedSubstation, basis: kUnownedSubstationBasis)
+        : (substation: prefix, basis: null);
   }
 
   /// Tolerant read of the mount-attempt bead's `grid.attempt.count` (the
@@ -1879,7 +1880,7 @@ final class _NeverAccepting implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) {}

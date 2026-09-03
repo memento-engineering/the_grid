@@ -249,7 +249,7 @@ class _StageOneProjectionDb implements TrajectoryDb {
 
   /// The delta the Stage-1 appender would compute from the record it already
   /// holds. It builds a minimal envelope because `sessionHeadDeltaFor` reads
-  /// only `family`, `seat`, `occurred_at`, and `boot_epoch` off it when the
+  /// only `family`, `substation`, `occurred_at`, and `boot_epoch` off it when the
   /// decoded record is supplied.
   SessionHeadDelta? _deltaFor(TrajectoryRecord record, int seq) {
     if (record.family != TrajectoryFamily.attempt) return null;

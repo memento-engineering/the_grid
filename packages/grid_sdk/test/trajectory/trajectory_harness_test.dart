@@ -38,7 +38,7 @@ TrajectoryEnvelope committedEnvelope(
   DateTime? occurredAt,
   TrajectoryProvenance provenance = TrajectoryProvenance.observed,
   String? provenanceBasis,
-  String? seat,
+  String? substation,
 }) {
   final stamped = occurredAt ?? DateTime.utc(2026, 8, 31, 12);
   final json = <String, Object?>{
@@ -60,15 +60,20 @@ TrajectoryEnvelope committedEnvelope(
     'payload': record.payloadToJson(),
     ...record.correlationToJson(),
   };
-  // ck_seat: the service derives the seat from the bead's store prefix.
-  if (json['work_bead_id'] != null) json['seat'] = seat ?? 'tg';
+  // ck_substation: the service derives the substation from the bead's store
+  // prefix.
+  if (json['work_bead_id'] != null) json['substation'] = substation ?? 'tg';
   return TrajectoryEnvelope.fromJson(json);
 }
 
-/// The stale-fold shape probe's statement (r12) — the one boot read a test
-/// that fails "every SELECT" usually still wants answered, because failing it
-/// refuses the live arm outright.
-bool _isShapeProbe(String sql) => sql.contains('information_schema.columns');
+/// The PROJECTION shape probe's statement (r12) — the dual-read-gated one, the
+/// only probe that carries a `:table` parameter.
+bool _isShapeProbe(String sql) =>
+    sql.contains('information_schema.columns') && sql.contains(':table');
+
+/// The JOURNAL shape probe's statement (tg-j1zn) — unconditional, so it runs
+/// at every posture including `dualRead: off`.
+bool _isJournalProbe(String sql) => sql.contains("table_name = 'trajectory'");
 
 /// A scriptable [TrajectoryDb]: records statements, optionally throws.
 final class _FakeDb implements TrajectoryDb {
@@ -97,12 +102,22 @@ final class _FakeDb implements TrajectoryDb {
       throw scripted;
     }
     if (scripted is SqlResult) return scripted;
+    // DEFAULT: a journal already at the tg-j1zn shape, so no rename is pending
+    // and the arm proceeds. A test that wants the PRE-tg-j1zn journal scripts
+    // a `seat` row for this statement.
+    if (_isJournalProbe(sql)) {
+      return const SqlResult(
+        rows: [
+          {'name': 'substation'},
+        ],
+      );
+    }
     // DEFAULT: a grid home already at the WAVE-1 CUT SHAPE. `start()` refuses
     // the live arm on a pre-cut `proj_session_head` (the stale-fold refusal),
     // so the fake has to answer the shape probe or every harness test would
     // degrade at boot. A test that wants the PRE-CUT home scripts an empty (or
     // partial) answer for this statement.
-    if (sql.contains('information_schema.columns')) {
+    if (_isShapeProbe(sql)) {
       return SqlResult(
         rows: [
           for (final column in projSessionHeadCutColumns) {'name': column},
@@ -195,7 +210,7 @@ final class _FakeAppender extends TrajectoryAppender {
   Future<AppendOutcome> append(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
     String? source,
@@ -220,7 +235,7 @@ final class _FakeAppender extends TrajectoryAppender {
         occurredAt: occurredAt,
         provenance: provenance,
         provenanceBasis: provenanceBasis,
-        seat: seat,
+        substation: substation,
       ),
     );
   }
@@ -317,7 +332,7 @@ void main() {
     config: config,
     gridHome: tmp.path,
     station: 'tranquility',
-    seatPrefixes: const {'tg', 'the_grid', 'tranquility'},
+    substationPrefixes: const {'tg', 'the_grid', 'tranquility'},
     onFlare: (name, data) => flares.add((name, data)),
     runtimeEvents: runtimeEvents,
     tickQueries: tickQueries,
@@ -492,6 +507,32 @@ void main() {
       expect(h.status.dropped, isZero, reason: 'refused up front, not dropped');
     });
 
+    test('a PRE-tg-j1zn journal REFUSES the live arm at EVERY posture, '
+        'including dualRead: off', () async {
+      dbScript = (sql) => _isJournalProbe(sql)
+          ? const SqlResult(
+              rows: [
+                {'name': 'seat'},
+              ],
+            )
+          : null;
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.off,
+        ),
+      );
+      await h.start();
+
+      expect(h.mode, TrajectoryHarnessMode.degraded);
+      expect(h.status.cause, contains('traj replay'));
+      expect(h.status.cause, contains('seat'));
+      expect(flareNames(), contains('trajectory.degraded'));
+      expect(appender.calls, ['verify'], reason: 'claimEpoch never ran');
+      expect(h.status.epoch, isNull);
+      expect(connected.single.closed, isTrue);
+    });
+
     test('a home ALREADY at the cut shape arms normally, and the probe runs '
         'before the claim', () async {
       final h = await harness();
@@ -532,6 +573,11 @@ void main() {
         connected.single.statements.where(_isShapeProbe),
         isEmpty,
         reason: 'no reshape probe at the rollback posture',
+      );
+      expect(
+        connected.single.statements.where(_isJournalProbe),
+        hasLength(1),
+        reason: 'the journal probe is posture-independent',
       );
     });
 
@@ -1506,18 +1552,18 @@ void main() {
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
-      // SIX boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
+      // SEVEN boot reads come first: the STALE-FOLD SHAPE PROBE (r12 — the
       // refusal that keeps a pre-cut home from dropping every terminal
-      // append), then the fold boot seed's five (cut-wiring C1 + C4 / §0.2):
-      // the lag rule, the generation set, the P1 row scan, the P2 row scan,
-      // the era boundary — all before the mode goes live, so no post-ACK
-      // delta can outrun them.
+      // append), the journal probe, then the fold boot seed's five (cut-wiring
+      // C1 + C4 / §0.2): the lag rule, the generation set, the P1 row scan,
+      // the P2 row scan, the era boundary — all before the mode goes live, so
+      // no post-ACK delta can outrun them.
       final statements = connected.single.statements;
-      expect(statements.take(6), everyElement(startsWith('SELECT')));
+      expect(statements.take(7), everyElement(startsWith('SELECT')));
       expect(statements.first, contains('information_schema.columns'));
       // Then the boot pass ran the obligations: three SELECTs on the same
       // serial lane, plus the detector's pulse prune.
-      final passStatements = statements.skip(6);
+      final passStatements = statements.skip(7);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
         hasLength(3),
@@ -1554,10 +1600,10 @@ void main() {
       await h.start();
 
       expect(h.tick!.queries, isEmpty);
-      // Only the stale-fold shape probe plus the fold boot seed's own five
-      // reads (P1 + P2): an empty obligation set still issues nothing of its
-      // own.
-      expect(connected.single.statements, hasLength(6));
+      // Only the stale-fold shape probe, the journal probe, plus the fold boot
+      // seed's own five reads (P1 + P2): an empty obligation set still issues
+      // nothing of its own.
+      expect(connected.single.statements, hasLength(7));
       expect(connected.single.statements, everyElement(startsWith('SELECT')));
     });
 
@@ -1568,7 +1614,10 @@ void main() {
       // The stale-fold SHAPE PROBE is exempted: a home that cannot answer it
       // is the r12 REFUSAL case (no live arm at all), which is a different
       // test — this one needs a harness that armed.
-      dbScript = (sql) => sql.startsWith('SELECT') && !_isShapeProbe(sql)
+      dbScript = (sql) =>
+          sql.startsWith('SELECT') &&
+              !_isShapeProbe(sql) &&
+              !_isJournalProbe(sql)
           ? StateError('store unavailable')
           : null;
       final h = await harness();
@@ -1589,7 +1638,10 @@ void main() {
 
     test('a fenced-out pass is no evidence: the streak holds rather than '
         'resetting or firing', () async {
-      dbScript = (sql) => sql.startsWith('SELECT') && !_isShapeProbe(sql)
+      dbScript = (sql) =>
+          sql.startsWith('SELECT') &&
+              !_isShapeProbe(sql) &&
+              !_isJournalProbe(sql)
           ? StateError('store unavailable')
           : null;
       final h = await harness();
