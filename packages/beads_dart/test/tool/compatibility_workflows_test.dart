@@ -48,6 +48,33 @@ void main() {
       isTrue,
     );
     expect(receipt, contains('BD_JSON_ENVELOPE=1'));
+    final indexedRecursion =
+        forkPatches['dep_cycle_indexed_recursion'] as YamlMap;
+    expect(indexedRecursion['repository'], 'nicholasspencer/beads');
+    expect(
+      indexedRecursion['base_sha'],
+      'a45199a546f959044426b98716975c70b7c77a16',
+    );
+    expect(
+      indexedRecursion['ref'],
+      'grid-head-a45199a-dep-cycle-indexed-recursion.1',
+    );
+    final indexedReceipt = read(
+      indexedRecursion['resolved_sha_receipt'] as String,
+    );
+    expect(
+      indexedReceipt,
+      contains('grid-head-a45199a-dep-cycle-indexed-recursion.1'),
+    );
+    expect(
+      RegExp(r'resolved SHA:\*\* `[0-9a-f]{40}`').hasMatch(indexedReceipt),
+      isTrue,
+    );
+    expect(indexedReceipt, contains('BD_JSON_ENVELOPE=1'));
+    expect(
+      indexedRecursion['fixture_set'],
+      indexedRecursion['resolved_sha_receipt'].toString().split('/')[2],
+    );
     expect(policy['floor'], 'v1.0.5');
     // No release embargo: a publish is never gated on what bd has RELEASED,
     // because this package ships candidates against bd's candidates.

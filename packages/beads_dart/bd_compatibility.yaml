@@ -17,3 +17,9 @@ fork_patches:
     ref: grid-v1.0.5-graph-apply-parent-cycle-skip.1
     fixture_set: 2026-09-01-bd-grid-v1.0.5-graph-apply-parent-cycle-skip.1
     resolved_sha_receipt: fixtures/upstream/2026-09-01-bd-grid-v1.0.5-graph-apply-parent-cycle-skip.1/README.md
+  dep_cycle_indexed_recursion:
+    repository: nicholasspencer/beads
+    base_sha: a45199a546f959044426b98716975c70b7c77a16
+    ref: grid-head-a45199a-dep-cycle-indexed-recursion.1
+    fixture_set: 2026-09-03-bd-grid-head-a45199a-dep-cycle-indexed-recursion.1
+    resolved_sha_receipt: fixtures/upstream/2026-09-03-bd-grid-head-a45199a-dep-cycle-indexed-recursion.1/README.md
