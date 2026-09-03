@@ -15,7 +15,7 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by: ["agent-disc-file-shape-and-home"]
   bead: tg-4owk
   legacy-id: null
 ---
