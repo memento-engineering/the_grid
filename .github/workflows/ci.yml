@@ -105,8 +105,11 @@ jobs:
       # the replay GOLDEN (what the verb writes == what the pure fold says) is
       # what the whole rebuildability constraint rests on, and the quiesce
       # fence is the guard whose silent absence would let a live replay erase
-      # fold effects nothing downstream can detect.
-      - name: Wave-1 guard pin — traj replay (golden, fence, reshape) + traj gc
+      # fold effects nothing downstream can detect. The journal-column rename
+      # rides the same file: it is the one migration in the schema that ALTERs
+      # dolt-versioned truth, so its statements are pinned against real dolt
+      # rather than against a scripted fake.
+      - name: Wave-1 guard pin — traj replay (golden, fence, reshape, journal rename) + traj gc
         run: |
           cd packages/grid_trajectory
           dart test -t integration \
