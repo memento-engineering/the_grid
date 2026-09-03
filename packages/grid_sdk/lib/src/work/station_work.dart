@@ -7,8 +7,8 @@ import 'package:grid_engine/src/seeds/provider.dart';
 import '../composition/scopes.dart';
 
 /// The station-level work-axis wiring — the ambient VALUES [StationWork]
-/// provides to the work subtree (the same stack `StationKernel.start` mounts
-/// above the engine's `Station` seed, tg-yl8): the work-axis
+/// provides to the work subtree (the stack mounted above the engine's
+/// `Station` seed, tg-yl8): the work-axis
 /// [JoinedSnapshotNotifier], the machine's [StationServices], the
 /// bead→work-Seed [SessionResolver], the reentrant [CapabilityRegistry], and
 /// the molecule model's [ProcessLeaseVendor] (tg-2mb — the seam a circuit's
@@ -49,8 +49,7 @@ class StationWorkWiring {
   /// The molecule model's process-lease seam (tg-2mb): the vendor a circuit's
   /// allocation resolves. Built OFF-tree by `assembleStationWork`
   /// (`defaultProcessLeaseVendor` over [services]); null falls back to that
-  /// same default at mount, mirroring `StationKernel.start`'s
-  /// `_processLeaseVendor ?? defaultProcessLeaseVendor` provision.
+  /// same default at mount (the `?? defaultProcessLeaseVendor` provision).
   final ProcessLeaseVendor? processLeaseVendor;
 
   /// The emit-only observability sink assembled by the runner.
@@ -73,8 +72,7 @@ class StationWorkWiring {
 /// `WorkList`", v3 §3).
 ///
 /// Mounted as a station asset ABOVE the `Substations` fan-out (typically under
-/// `HarnessProvider`); chains in a `Nest`. The provided stack is exactly
-/// `StationKernel.start`'s, in the same order (notifier outermost). The
+/// `HarnessProvider`); chains in a `Nest`, notifier outermost. The
 /// off-tree machinery those values are driven by (the join bridge, the D-5
 /// cooldown Timer, the restart reconciler) is the runner-held
 /// `StationWorkRuntime` — unmounting this asset stops NOTHING by itself; the
@@ -91,13 +89,11 @@ class StationWork extends SingleChildStatelessSeed {
   @override
   Seed buildWithChild(TreeContext context, Seed child) {
     final registry = wiring.registry;
-    // The molecule model's process-lease seam — mounted at the SAME position
-    // `StationKernel.start` mounts it (between the registry and the resolver,
-    // tg-h4u / tg-2mb). The PRODUCTION runGrid path uses THIS seat, not
-    // `StationKernel.start`, so without this seed a molecule step's
-    // `requireProcessLeaseVendor` throws at readiness and the station wedges to
-    // zero. Null wiring falls back to the real production vendor over the
-    // ambient services, mirroring the kernel's `?? defaultProcessLeaseVendor`.
+    // The molecule model's process-lease seam — between the registry and the
+    // resolver (tg-h4u / tg-2mb). The PRODUCTION runGrid path uses THIS seat:
+    // without this seed a molecule step's `requireProcessLeaseVendor` throws
+    // at readiness and the station wedges to zero. Null wiring falls back to
+    // the real production vendor over the ambient services.
     // Ambient-registry dependence: `watch<T>` misses below these providers
     // park with the AvailabilityRegistry of runGrid's root ProviderScope — an
     // assumed ancestor of every StationWork mount (debug-asserted on a miss).

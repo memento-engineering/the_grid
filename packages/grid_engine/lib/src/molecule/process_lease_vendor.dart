@@ -48,9 +48,9 @@
 /// the real [StepMetadataReader] is `StationBeadWriter.metadataOf` (a snapshot
 /// read in grid_runtime — the exact `grid_engine ──► grid_runtime`
 /// "subprocess/git/chokepoint transport" edge ADR-0002 Decision 1 names, an
-/// ALLOWED direction). `kernel/station_kernel.dart` now composes a real
-/// [StationProcessLeaseVendor] over `StationServices` by DEFAULT at the kernel
-/// root (a composer-supplied vendor overrides it), and
+/// ALLOWED direction). The production work seat — grid_sdk's `StationWork` —
+/// composes a real [StationProcessLeaseVendor] over `StationServices` by
+/// DEFAULT (a composer-supplied vendor overrides it), and
 /// `CapabilityHost._createAllocationOrFlare` routes a molecule-mode
 /// [ProcessCapability] through [ProcessLeaseVendor.leaseFor] →
 /// `LeaseAllocation` instead of the flat `ProcessAllocation` path. Still inert

@@ -175,8 +175,8 @@ extension ProviderTreeContext on TreeContext {
     // Debug guard, release behavior unchanged (return null): a scope-less
     // miss is almost always a composition mistake — the registration cannot
     // park anywhere, so the branch would never learn when a Provider<T>
-    // mounts. Production roots (StationKernel.start, runGrid) always mount
-    // the scope.
+    // mounts. The production root (runGrid's configuration scope) always
+    // mounts the scope.
     assert(
       registry != null,
       'watch<$T>() missed with no ProviderScope ancestor: there is no '

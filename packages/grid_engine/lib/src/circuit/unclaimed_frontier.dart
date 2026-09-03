@@ -6,9 +6,9 @@
 /// reconciliation phase** is broadcast for pickup by a peer station. This file
 /// is the "end of a reconciliation phase" half: [stationUnclaimedFrontier]
 /// aggregates every LIVE session's unclaimed steps from the SAME
-/// [JoinedSnapshot] the kernel already holds after a flush — no extra
-/// subscription, no re-query (A39) — and [StationKernel] calls it once per
-/// flush cycle (mirroring its existing cooldown scan) so a composed asset's
+/// [JoinedSnapshot] the driver already holds after a flush — no extra
+/// subscription, no re-query (A39) — and [StationDriver.afterFlush] calls it
+/// once per flush cycle (mirroring its existing cooldown scan) so a composed asset's
 /// `onUnclaimedFrontier` callback sees a fresh snapshot each time. Still no
 /// transport, no bus: what the callback does with the list is the asset's
 /// affair entirely.
@@ -59,7 +59,7 @@ class UnclaimedRequirement {
 }
 
 /// Aggregates [unclaimedSteps] across every LIVE (non-terminal) session in
-/// [snapshot] — the unit [StationKernel] computes once per reconciliation
+/// [snapshot] — the unit [StationDriver] computes once per reconciliation
 /// phase and hands to its `onUnclaimedFrontier` hook (D-B5 hook #1).
 ///
 /// Resolves each session's ROOT circuit via [rootCircuitFor] — the SAME

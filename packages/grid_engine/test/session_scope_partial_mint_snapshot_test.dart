@@ -16,8 +16,8 @@ import 'package:grid_engine/src/seeds/provider.dart';
 /// `matchesJoin` admits it on session-id alone. Before the fix,
 /// `SessionScope.build` mounted an `InheritedCircuit` with an empty
 /// `beadIdByNodePath` and `CircuitScope`'s fresh-projection guard threw a
-/// `StateError` INSIDE the flush — which runs in an unguarded root-zone
-/// microtask (`StationKernel._scheduleFlush`), so one partial snapshot
+/// `StateError` INSIDE the flush — which aborts the whole coalesced pass
+/// (`runGrid`'s `GridHandle._runFlushPass`), so one partial snapshot
 /// killed the whole resident station VM at boot (three live receipts:
 /// tg-5drf.1, tg-udnu, tg-wvmt).
 ///

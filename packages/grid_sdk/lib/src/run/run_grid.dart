@@ -9,6 +9,16 @@ import 'configuration.dart';
 import 'grid_delegate.dart';
 import 'reassemble.dart';
 
+/// How long a grid waits before re-attempting a flush pass that threw (tg-60n,
+/// ported from the retired coordinator). Coarse on purpose: the retry
+/// exists to un-strand a dirty set, not to drive latency.
+const Duration _kFlushRetryDelay = Duration(seconds: 1);
+
+/// How many CONSECUTIVE failed flush passes a grid re-arms before it stops and
+/// lets the stall become a VISIBLE wedge (tg-60n). Loud and stuck beats silent
+/// and stuck; a hot loop is neither.
+const int _kMaxFlushRetries = 5;
+
 /// Launches a grid from [delegate] — **the entry point** (v3 §4 / GLOSSARY R15:
 /// the delegation pattern's `runGrid(delegate)`). The framework root is
 /// `final`; all station behaviour enters through the delegate.
@@ -72,6 +82,12 @@ import 'reassemble.dart';
 /// a FAILED restart boot would leave the shell reading a disposed corpse
 /// while the mounted grid keeps running the old delegate. Never invoked for
 /// the launch delegate, and never on a failed restart.
+///
+/// [scheduleTimer] is the failed-flush RE-ARM seam (tg-um8k): a pass that threw
+/// schedules one bounded retry through it, so the re-arm is driven
+/// deterministically offline. Defaults to [Timer.new]. It is the SAME
+/// `Timer Function(Duration, void Function())` seam `StationDriver` and
+/// `WedgeMonitor` already take — no new abstraction.
 Future<GridHandle> runGrid(
   GridDelegate delegate, {
   void Function(GridHookError refusal)? onError,
@@ -80,6 +96,7 @@ Future<GridHandle> runGrid(
   Future<void> Function()? orphanSweep,
   GridDelegate Function()? delegateFactory,
   void Function(GridDelegate next)? onDelegateSwapped,
+  Timer Function(Duration, void Function())? scheduleTimer,
 }) async {
   final report = onError ?? _rethrowToZone;
 
@@ -114,6 +131,7 @@ Future<GridHandle> runGrid(
     reassemble,
     delegateFactory,
     onDelegateSwapped,
+    scheduleTimer ?? Timer.new,
   );
   // Wire the flush trigger BEFORE mounting: the first build runs synchronously
   // in mountRoot with no markNeedsRebuild (the config scope assigns its
@@ -184,8 +202,9 @@ Future<void> _kickoff(
 ///
 /// The grid runs its reactive loop autonomously: a configuration re-emission
 /// dirties the configuration scope and flushes on a coalesced microtask
-/// (mirroring `StationKernel` — many dirties between turns collapse into one
-/// flush). `root.markNeedsRebuild()` is never called; only the observing scope
+/// (many dirties between turns collapse into one flush). This loop is the
+/// station's ONE flush coordinator (tg-um8k).
+/// `root.markNeedsRebuild()` is never called; only the observing scope
 /// dirties.
 ///
 /// Call [teardown] to run the delegate's `onTeardown` rail and unmount the
@@ -201,6 +220,7 @@ class GridHandle {
     this._reassemble,
     this._delegateFactory,
     this._onDelegateSwapped,
+    this._scheduleTimer,
   );
 
   final TreeOwner _owner;
@@ -242,33 +262,118 @@ class GridHandle {
   bool _flushScheduled = false;
   Future<void>? _teardown;
 
+  /// The retry clock for [_rearmAfterFailedFlush] — injectable so the re-arm is
+  /// driven deterministically offline.
+  final Timer Function(Duration, void Function()) _scheduleTimer;
+
+  /// Consecutive failed flush passes — reset by the first clean pass. Bounds
+  /// [_rearmAfterFailedFlush] so a branch that throws every time degrades into
+  /// a visible wedge instead of a hot retry loop.
+  int _consecutiveFlushFailures = 0;
+
+  /// The pending failure re-arm, if any (cancelled on [teardown]).
+  Timer? _flushRetry;
+
   /// Coalesces dirties into one microtask flush. Wired before mount so the
   /// synchronous first build never trips it.
   void _wireFlush() {
-    _owner.onNeedsFlush = () {
-      if (_flushScheduled || _tornDown) return;
-      _flushScheduled = true;
-      scheduleMicrotask(() {
-        _flushScheduled = false;
-        if (_tornDown) {
-          _failWaiters();
-          return;
-        }
-        try {
-          final rebuilt = _owner.flush();
-          _treeProjector?.afterFlush(_root);
-          _onFlushed?.call();
-          _completeWaiters(rebuilt.length);
-        } catch (error, stackTrace) {
-          _refusePostSwapFlush(error, stackTrace);
-        }
-      });
-    };
+    _owner.onNeedsFlush = _scheduleFlush;
   }
 
-  void _completeWaiters(int rebuilt) {
-    final waiters = List<_ReassembleWaiter>.of(_flushWaiters);
+  void _scheduleFlush() {
+    if (_flushScheduled || _tornDown) return;
+    _flushScheduled = true;
+    scheduleMicrotask(_runFlushPass);
+  }
+
+  /// One flush pass, FAIL-CLOSED (tg-60n, ported here by tg-um8k from the
+  /// retired coordinator, which held this guard while never running in
+  /// production).
+  ///
+  /// `TreeOwner.flush()` has no internal catch (genesis_tree 0.3.0
+  /// `tree_owner.dart`), so one throwing `branch.rebuild()` propagates straight
+  /// out. Unguarded that killed the WHOLE remainder of the tick, and the two
+  /// consequences were invisible and unbounded:
+  ///
+  /// 1. **[_onFlushed] never ran.** It carries `StationDriver.afterFlush`,
+  ///    whose `WedgeMonitor.poll` is the station's ONLY stall alarm. A
+  ///    non-stalled sample cancels the monitor's timer by design ("a healthy
+  ///    grid arms no wall clock at all"), so a flush is its only remaining
+  ///    heartbeat. Skipping it froze the wedge state at its last good sample: a
+  ///    live arm reported `wedged: false, live: 0` while `/status` computed 6
+  ///    live sessions from the SAME bridge, for 18.6 hours (receipt on tg-60n,
+  ///    2026-08-06).
+  /// 2. **The dirty set could strand NON-EMPTY.** `TreeOwner.scheduleRebuildFor`
+  ///    fires `onNeedsFlush` only on the empty→non-empty EDGE. A pass that
+  ///    threw part-way leaves branches dirty, so every later `markNeedsRebuild`
+  ///    sees a non-empty set and schedules NOTHING — the tree freezes for the
+  ///    life of the process, and a bounce is the only cure.
+  ///
+  /// The guard fixes both: [_onFlushed] runs in a `finally`, and a failed pass
+  /// re-arms so a stranded set cannot wedge the tree silently.
+  void _runFlushPass() {
+    _flushScheduled = false;
+    if (_tornDown) {
+      _failWaiters();
+      return;
+    }
+    // The APPLIED generation: the waiters this pass answers for, captured
+    // BEFORE the flush. A waiter registered while the pass runs (a reassemble
+    // requested from the post-flush rail) belongs to a LATER generation and is
+    // served by the flush its own emission schedules — never completed or
+    // refused by a pass that did not carry it.
+    final applied = List<_ReassembleWaiter>.of(_flushWaiters);
     _flushWaiters.clear();
+    var failed = false;
+    try {
+      final rebuilt = _owner.flush();
+      _treeProjector?.afterFlush(_root);
+      _consecutiveFlushFailures = 0;
+      _completeWaiters(applied, rebuilt.length);
+    } on Object catch (error, stackTrace) {
+      failed = true;
+      _consecutiveFlushFailures++;
+      _refusePostSwapFlush(applied, error, stackTrace);
+    } finally {
+      // The runner's post-flush machinery runs even when the pass THREW: a
+      // broken tick is exactly when the stall alarm must keep sampling.
+      if (!_tornDown) {
+        try {
+          _onFlushed?.call();
+        } on Object catch (error, stackTrace) {
+          _report(
+            GridHookError(
+              'onFlushed',
+              _delegate.runtimeType,
+              error,
+              stackTrace,
+            ),
+          );
+        }
+      }
+    }
+    if (failed) _rearmAfterFailedFlush();
+  }
+
+  /// Re-arms a flush after a failed pass, so a dirty set stranded by the throw
+  /// cannot silently freeze the tree (the edge-trigger trap above).
+  ///
+  /// BOUNDED on purpose: a branch that throws on every pass would otherwise
+  /// spin. After [_kMaxFlushRetries] consecutive failures the grid stops
+  /// re-arming and lets the station ripen into a VISIBLE wedge — which it now
+  /// can, because [_onFlushed] keeps running.
+  void _rearmAfterFailedFlush() {
+    if (_tornDown || _flushScheduled) return;
+    if (_consecutiveFlushFailures > _kMaxFlushRetries) return;
+    _flushRetry?.cancel();
+    _flushRetry = _scheduleTimer(_kFlushRetryDelay, () {
+      _flushRetry = null;
+      if (_tornDown) return;
+      _scheduleFlush();
+    });
+  }
+
+  void _completeWaiters(List<_ReassembleWaiter> waiters, int rebuilt) {
     for (final waiter in waiters) {
       waiter.completer.complete(
         ReassembleReport(
@@ -294,9 +399,11 @@ class GridHandle {
   // [ReassembleReport] when a caller is waiting, the [GridHookError] report
   // rail when none is. No VM-service log side channel — that surface is the
   // JIT debug channel, never a diagnostic dependency (ADR-0012 D2).
-  void _refusePostSwapFlush(Object error, StackTrace stackTrace) {
-    final waiters = List<_ReassembleWaiter>.of(_flushWaiters);
-    _flushWaiters.clear();
+  void _refusePostSwapFlush(
+    List<_ReassembleWaiter> waiters,
+    Object error,
+    StackTrace stackTrace,
+  ) {
     if (waiters.isEmpty) {
       _report(GridHookError('flush', _delegate.runtimeType, error, stackTrace));
       return;
@@ -485,6 +592,8 @@ class GridHandle {
     // Set synchronously (an async body runs to its first await eagerly): the
     // flush loop reads it to stop scheduling into a dying tree.
     _tornDown = true;
+    _flushRetry?.cancel();
+    _flushRetry = null;
     // An in-flight reassemble will never see its flush — fail it LOUDLY rather
     // than leave the caller's future hanging forever.
     _failWaiters();

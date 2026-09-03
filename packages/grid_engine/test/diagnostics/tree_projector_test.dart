@@ -1,9 +1,7 @@
 import 'dart:async';
 
-import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
-import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
 
 final class _DiagnosableRoot extends Seed with GridDiagnosticable {
@@ -15,49 +13,6 @@ final class _DiagnosableRoot extends Seed with GridDiagnosticable {
 
 final class _LeafBranch extends Branch {
   _LeafBranch(super.seed);
-}
-
-final class _IdleResolver implements SessionResolver {
-  const _IdleResolver();
-
-  @override
-  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
-      const Idle();
-}
-
-GraphSnapshot _emptyGraph(DateTime capturedAt) => GraphSnapshot.fromParts(
-  beads: const [],
-  dependencies: const [],
-  readyIds: const [],
-  capturedAt: capturedAt,
-);
-
-Future<void> _pump() async {
-  for (var i = 0; i < 5; i++) {
-    await Future<void>.delayed(Duration.zero);
-  }
-}
-
-StationKernel _kernel({
-  required FakeSnapshotSource work,
-  required FakeSnapshotSource state,
-  TreeProjector? treeProjector,
-}) {
-  final fakes = buildFakes();
-  return StationKernel(
-    bridge: StationJoinBridge(work: work, state: state),
-    stationServices: fakes.ctx,
-    resolver: const _IdleResolver(),
-    substations: [
-      SubstationScope(
-        configNotifier: SubstationConfigNotifier(
-          const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
-        ),
-        key: const ValueKey('scope.tg'),
-      ),
-    ],
-    treeProjector: treeProjector,
-  );
 }
 
 void main() {
@@ -126,43 +81,4 @@ void main() {
       expect(emitted, hasLength(2));
     },
   );
-
-  test('kernel projects retained root once after a coalesced flush', () async {
-    final initial = _emptyGraph(DateTime.utc(2026, 7, 22));
-    final work = FakeSnapshotSource(initial);
-    final state = FakeSnapshotSource(initial);
-    addTearDown(work.close);
-    addTearDown(state.close);
-    final projectedAt = DateTime.utc(2026, 7, 23);
-    final projector = TreeProjector(clock: () => projectedAt);
-    final emitted = <TreeSnapshot>[];
-    projector.snapshots.listen(emitted.add);
-    final kernel = _kernel(work: work, state: state, treeProjector: projector);
-    addTearDown(kernel.dispose);
-
-    kernel.start();
-    expect(projector.latest, isNull);
-    work.push(_emptyGraph(DateTime.utc(2026, 7, 23, 1)));
-    state.push(_emptyGraph(DateTime.utc(2026, 7, 23, 2)));
-    await _pump();
-
-    expect(emitted, hasLength(1));
-    expect(emitted.single.root.seedType, 'Station');
-    expect(emitted.single.projectedAt, projectedAt);
-  });
-
-  test('kernel projector seam is optional and null by default', () async {
-    final initial = _emptyGraph(DateTime.utc(2026, 7, 22));
-    final work = FakeSnapshotSource(initial);
-    final state = FakeSnapshotSource(initial);
-    addTearDown(work.close);
-    addTearDown(state.close);
-    final kernel = _kernel(work: work, state: state);
-
-    expect(kernel.start, returnsNormally);
-    work.push(_emptyGraph(DateTime.utc(2026, 7, 23, 1)));
-    state.push(_emptyGraph(DateTime.utc(2026, 7, 23, 2)));
-    await _pump();
-    expect(kernel.dispose, returnsNormally);
-  });
 }

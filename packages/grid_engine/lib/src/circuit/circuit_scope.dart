@@ -138,9 +138,10 @@ class CircuitScope extends StatelessSeed with GridDiagnosticable {
             // point of consumption is `CapabilityHost._stepBeadId`,
             // contained per-work at the allocation seam (ADR-0008 D10: one
             // bad bead never crashes the station). NEVER throw here: a
-            // build-path throw escapes the tree flush unguarded
-            // (`StationKernel._scheduleFlush` runs in a root-zone
-            // microtask) and killed the whole resident VM.
+            // build-path throw aborts the whole flush pass (`runGrid`'s
+            // `GridHandle._runFlushPass`), which since tg-um8k reports and
+            // re-arms rather than killing the resident VM — but the pass
+            // still loses every branch it had not yet drained.
             effect = registry.host(
               StepMount(
                 step: step,

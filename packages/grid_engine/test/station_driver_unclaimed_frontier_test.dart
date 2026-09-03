@@ -1,13 +1,10 @@
-// StationKernel — the D-B5 hook #1 wiring: `onUnclaimedFrontier` fires once
-// per reconciliation phase (the baseline scan at `start()`, then once per
-// flush) with the CURRENT station-wide unclaimed requirement set, computed
-// off the SAME bridge.latest the kernel already holds (no extra
-// subscription). Mirrors track_g_supervision_test.dart's G3 kernel-cooldown
-// test harness. Zero I/O — fakes + injected clock.
-import 'dart:async';
-
+// StationDriver — the D-B5 hook #1 wiring: `onUnclaimedFrontier` fires once per
+// reconciliation phase (the baseline scan at `start()`, then once per
+// `afterFlush()` — the rail `runGrid` drives through its `onFlushed` hook) with
+// the CURRENT station-wide unclaimed requirement set, computed off the SAME
+// `bridge.latest` the driver already holds (no extra subscription). Zero I/O —
+// fakes + injected clock.
 import 'package:beads_dart/beads_dart.dart';
-import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
@@ -44,20 +41,6 @@ const _burn = Circuit(
   ],
 );
 
-const _tgConfig = SubstationConfig(
-  substationId: 'tg',
-  ownedSubstations: {'tg'},
-);
-
-/// The G3 harness's Idle resolver — this suite exercises the unclaimed-
-/// frontier scan, not the mounted tree, so no real effect ever needs to spawn.
-class _IdleResolver implements SessionResolver {
-  const _IdleResolver();
-  @override
-  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
-      const Idle();
-}
-
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -74,34 +57,25 @@ GraphSnapshot _emptyGraph() => GraphSnapshot.fromParts(
 void main() {
   test(
     'the baseline scan at start() reports EMPTY (no work yet); pushing a '
-    'live session surfaces its unclaimed requirement on the NEXT flush',
+    'live session surfaces its unclaimed requirement on the NEXT afterFlush',
     () async {
       final work = FakeSnapshotSource(_emptyGraph());
       final state = FakeSnapshotSource(_emptyGraph());
       addTearDown(work.close);
       addTearDown(state.close);
       final bridge = StationJoinBridge(work: work, state: state);
-      final f = buildFakes();
       final registry = RecordingCapabilityRegistry(clock: DateTime(2026));
 
       final captured = <List<UnclaimedRequirement>>[];
-      final kernel = StationKernel(
+      final driver = StationDriver(
         bridge: bridge,
-        stationServices: f.ctx,
-        resolver: const _IdleResolver(),
-        substations: [
-          SubstationScope(
-            configNotifier: SubstationConfigNotifier(_tgConfig),
-            key: const ValueKey('scope.tg'),
-          ),
-        ],
         registry: registry,
         rootCircuitFor: (_) => _burn,
         stationFacts: _macos,
         onUnclaimedFrontier: captured.add,
       );
-      addTearDown(kernel.dispose);
-      kernel.start();
+      addTearDown(driver.dispose);
+      driver.start();
 
       // The baseline scan (no work pushed yet) reports nothing unclaimed.
       expect(captured, hasLength(1));
@@ -123,6 +97,7 @@ void main() {
         ),
       );
       await _pump();
+      driver.afterFlush();
       state.push(
         GraphSnapshot.fromParts(
           beads: [
@@ -139,9 +114,10 @@ void main() {
         ),
       );
       await _pump();
+      driver.afterFlush();
 
-      // The LAST scan (after the flush the state push triggered) sees the
-      // linux-requiring follower as unclaimed; the macOS-requiring host is not.
+      // The LAST scan sees the linux-requiring follower as unclaimed; the
+      // macOS-requiring host is not.
       final last = captured.last;
       expect(last, hasLength(1));
       expect(last.single.sessionId, 'tgdog-s1');
@@ -158,23 +134,15 @@ void main() {
     addTearDown(work.close);
     addTearDown(state.close);
     final bridge = StationJoinBridge(work: work, state: state);
-    final f = buildFakes();
 
-    final kernel = StationKernel(
+    final driver = StationDriver(
       bridge: bridge,
-      stationServices: f.ctx,
-      resolver: const _IdleResolver(),
-      substations: [
-        SubstationScope(
-          configNotifier: SubstationConfigNotifier(_tgConfig),
-          key: const ValueKey('scope.tg'),
-        ),
-      ],
       registry: RecordingCapabilityRegistry(clock: DateTime(2026)),
       // rootCircuitFor + onUnclaimedFrontier both omitted (default null).
     );
-    addTearDown(kernel.dispose);
-    expect(kernel.start, returnsNormally);
+    addTearDown(driver.dispose);
+    expect(driver.start, returnsNormally);
     await _pump();
+    expect(driver.afterFlush, returnsNormally);
   });
 }
