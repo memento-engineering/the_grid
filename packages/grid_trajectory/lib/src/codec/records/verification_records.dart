@@ -7,7 +7,13 @@ part of '../trajectory_record.dart';
 enum VerdictTransport {
   artifact,
   operator,
-  envelope;
+  envelope,
+
+  /// DERIVED, never written: the committee-report fold stamps this on a verdict
+  /// it recovered from a `step.transition` result map. No writer may put it on
+  /// the wire — [VerifyVerdictRecorded] refuses it at construction, exactly as
+  /// it refuses [envelope].
+  stepTransition;
 
   static VerdictTransport fromWire(String wire) => values.byName(wire);
 
@@ -131,6 +137,13 @@ final class VerifyVerdictRecorded extends VerificationRecord {
   }) {
     if (transport == VerdictTransport.envelope) {
       _refuse(recordType, "transport 'envelope' is verify.verdict.recovered");
+    }
+    if (transport == VerdictTransport.stepTransition) {
+      _refuse(
+        recordType,
+        "transport 'stepTransition' is DERIVED by the committee-report fold "
+        'and is never written',
+      );
     }
   }
 

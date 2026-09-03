@@ -1,9 +1,10 @@
 /// The `.usage.json` FALLBACK — the only filesystem read the report does.
 ///
-/// The state of record is the log: `verify.usage.telemetry` rows are the
-/// primary source and this scan is consulted ONLY for a (bead, lane) pair
-/// that produced none (ADR-0013 D5 — a file may be agent-IO transport, never
-/// the state of record). The parse is deliberately re-expressed here rather
+/// The state of record is the log: `verify.usage.telemetry` rows first, then a
+/// cost recovered from a `step.transition` result map, and this scan ONLY for a
+/// (bead, lane) pair the window carries and that produced neither (ADR-0013 D5
+/// — a file may be agent-IO transport, never the state of record).
+/// The parse is deliberately re-expressed here rather
 /// than shared with power_station's `UsageReport`: `grid_trajectory` is a LEAF
 /// with zero grid_* dependencies (decision: grid-trajectory-leaf-package) and
 /// power_station is a separate repository, so there is no seam to extend.

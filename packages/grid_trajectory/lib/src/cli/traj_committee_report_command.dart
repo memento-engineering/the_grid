@@ -6,9 +6,11 @@
 /// gate-causing verdicts, override-vs-uphold, respec convergence, mean cost
 /// and duration, and per-bead rounds and dollars.
 ///
-/// `.usage.json` files are consulted ONLY through `--telemetry-root`, and only
-/// for a (bead, lane) pair the log carried no `verify.usage.telemetry` row
-/// for.
+/// Cost and grades come from `step.transition` result maps wherever the
+/// dedicated `verify.*` families are unwritten; `.usage.json` files are
+/// consulted ONLY through `--telemetry-root`, and only for a (bead, lane) pair
+/// the window carries and that produced neither a `verify.usage.telemetry` row
+/// nor a step-derived cost.
 library;
 
 import 'dart:io';
