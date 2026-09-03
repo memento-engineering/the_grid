@@ -273,6 +273,10 @@ class SubprocessProvider implements RuntimeProvider {
   /// [dispose] drops all).
   final Map<String, RuntimeEvent> _terminals = <String, RuntimeEvent>{};
 
+  /// Each session's retained exit-output head, with [_terminals]' release
+  /// contract.
+  final Map<String, String> _exitOutput = <String, String>{};
+
   final StreamController<RuntimeEvent> _events =
       StreamController<RuntimeEvent>.broadcast();
 
@@ -333,6 +337,7 @@ class SubprocessProvider implements RuntimeProvider {
     // terminal (the [terminalOf] release contract — the name is reborn, and a
     // stale outcome must never shadow the new process).
     _terminals.remove(name);
+    _exitOutput.remove(name);
     // Reserve the name synchronously so a concurrent same-name start rejects.
     final session = _Session(
       name: name,
@@ -472,6 +477,7 @@ class SubprocessProvider implements RuntimeProvider {
     // both for a live session being torn down and for one already dead (the
     // lease-release path stops the name after its terminal settled the step).
     _terminals.remove(name);
+    _exitOutput.remove(name);
     final session = _sessions.remove(name);
     if (session == null) return; // idempotent
     session.stopping = true;
@@ -648,6 +654,9 @@ class SubprocessProvider implements RuntimeProvider {
   RuntimeEvent? terminalOf(String name) => _terminals[name];
 
   @override
+  String exitOutputOf(String name) => _exitOutput[name] ?? '';
+
+  @override
   ({int pid, int? pgid})? identityOf(String name) {
     final session = _sessions[name];
     final pid = session?.pid;
@@ -664,6 +673,7 @@ class SubprocessProvider implements RuntimeProvider {
     // poll both fire for the same death.
     if (session.exitEmitted) return;
     session.exitEmitted = true;
+    _exitOutput[session.name] = exitOutputHead(session.peek(0));
     _sessions.remove(session.name);
     // A WATCHDOG kill is a DEATH, and outranks every other reading. A `oneTurn`
     // agent that vanishes is normally an inferred success — and a hung agent we
@@ -759,6 +769,7 @@ class SubprocessProvider implements RuntimeProvider {
         }
       }
     }
+    _exitOutput.clear();
     await _events.close();
   }
 }

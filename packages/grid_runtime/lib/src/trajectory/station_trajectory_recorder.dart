@@ -1256,16 +1256,15 @@ class StationTrajectoryRecorder {
   /// durable succession signal (§2.3's incarnation-succession row), so the
   /// log carries it without any event to key on.
   ///
-  /// [storeUnavailable] splits the tg-7ux CONFLATION the legacy bead cannot
-  /// express: a step whose own work failed and a step whose failure write was
-  /// a dropped PERSIST both land as `state=failed` on the bead, and only the
-  /// caller knows which. `failure_class` is where they separate.
+  /// [failureClass] separates failed work, a dropped PERSIST, and a step whose
+  /// execution environment refused to run it. All three land as `state=failed`
+  /// on the legacy bead, and only the caller knows which one occurred.
   void stepFailed({
     required String sessionId,
     required String stepPath,
     required int stepRound,
     required int incarnation,
-    required bool storeUnavailable,
+    required StepFailureClass failureClass,
     String? attemptId,
     String? failureReason,
     int? restartBudget,
@@ -1285,9 +1284,7 @@ class StationTrajectoryRecorder {
       cooldownUntil: cooldownUntil,
       restartBudget: restartBudget,
       failureReason: failureReason,
-      failureClass: storeUnavailable
-          ? StepFailureClass.storeUnavailable
-          : StepFailureClass.work,
+      failureClass: failureClass,
       occurredAt: occurredAt,
     );
   }

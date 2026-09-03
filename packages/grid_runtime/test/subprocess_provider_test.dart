@@ -1114,6 +1114,65 @@ echo "done"
       },
     );
   });
+
+  group('exitOutputOf — the retained exit-output head', () {
+    test(
+      'retains the transcript head at exit and releases it on stop',
+      () async {
+        final spawner = FakeSpawner();
+        final provider = SubprocessProvider(
+          spawner: spawner,
+          groupController: AliveGroupController(),
+          parentEnvironment: const {'PATH': '/usr/bin'},
+        );
+        await provider.start(
+          'sess',
+          const RuntimeConfig(workDir: '/tmp', command: 'claude'),
+        );
+        expect(provider.exitOutputOf('sess'), isEmpty);
+
+        spawner.emitStdout('Claude usage limit reached; resets at 09:00Z');
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        spawner.finish(0);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+
+        expect(
+          provider.exitOutputOf('sess'),
+          contains('Claude usage limit reached'),
+        );
+        await provider.stop('sess');
+        expect(provider.exitOutputOf('sess'), isEmpty);
+        await provider.dispose();
+      },
+    );
+
+    test('the head is bounded by code points', () {
+      final long = '😀' * (kExitOutputHeadChars + 50);
+      expect(exitOutputHead(long).runes.length, kExitOutputHeadChars);
+      expect(exitOutputHead('short'), 'short');
+    });
+
+    test('provider disposal drops all retained heads', () async {
+      final spawner = FakeSpawner();
+      final provider = SubprocessProvider(
+        spawner: spawner,
+        groupController: AliveGroupController(),
+        parentEnvironment: const {'PATH': '/usr/bin'},
+      );
+      await provider.start(
+        'sess',
+        const RuntimeConfig(workDir: '/tmp', command: 'claude'),
+      );
+      spawner.emitStderr('usage limit');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      spawner.finish(1);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(provider.exitOutputOf('sess'), contains('usage limit'));
+
+      await provider.dispose();
+      expect(provider.exitOutputOf('sess'), isEmpty);
+    });
+  });
 }
 
 /// A group seam whose group DIES on the first signal, so the REAL

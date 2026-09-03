@@ -1099,6 +1099,9 @@ class DryRunProvider implements RuntimeProvider {
   @override
   RuntimeEvent? terminalOf(String name) => null;
 
+  @override
+  String exitOutputOf(String name) => '';
+
   // No OS process exists behind a would-be spawn — a duplicate dry-run start
   // therefore fails acquire LOUD (tg-090) instead of waiting forever.
   @override

@@ -213,6 +213,11 @@ void main() {
       expect(failed.single.reason, contains('interrupted'));
       expect(failed.single.reason, contains('UNCOMMITTED'));
       expect(
+        failed.single.nonResult,
+        isFalse,
+        reason: 'uncommitted changes prove that the interrupted turn did work',
+      );
+      expect(
         log,
         isNot(contains('result')),
         reason: 'an interrupted turn has no result to read',

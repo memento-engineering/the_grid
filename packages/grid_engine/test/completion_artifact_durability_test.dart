@@ -127,6 +127,34 @@ Future<StepOutcome> _leased(
 
 void main() {
   group('artifact-durable direct completion', () {
+    for (final outcome in <GateOutcome>[
+      GateOutcome.present,
+      GateOutcome.probeError,
+    ]) {
+      test('an artifactless completion ($outcome) is a non-result', () async {
+        final reports = await _direct(
+          _ArtifactCapability(
+            contract: CompletionContract.artifactDurability,
+            artifactOutcome: outcome,
+            log: <String>[],
+          ),
+        );
+        expect(reports.whereType<AllocationFailed>().single.nonResult, isTrue);
+      });
+
+      test('the leased artifactless completion ($outcome) is too', () async {
+        final result = await _leased(
+          _ArtifactCapability(
+            contract: CompletionContract.artifactDurability,
+            artifactOutcome: outcome,
+            log: <String>[],
+          ),
+          retained: true,
+        );
+        expect((result as Failed).nonResult, isTrue);
+      });
+    }
+
     test(
       'cached current-round result without an artifact is unresolved',
       () async {

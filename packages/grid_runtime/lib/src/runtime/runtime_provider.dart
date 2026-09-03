@@ -1,6 +1,18 @@
 import 'runtime_config.dart';
 import 'runtime_event.dart';
 
+/// How much of an exited session's transcript [RuntimeProvider.exitOutputOf]
+/// retains, measured in code points.
+const int kExitOutputHeadChars = 200;
+
+/// Returns the bounded diagnostic head of [output] without splitting a code
+/// point.
+String exitOutputHead(String output) {
+  final runes = output.runes;
+  if (runes.length <= kExitOutputHeadChars) return output;
+  return String.fromCharCodes(runes.take(kExitOutputHeadChars));
+}
+
 /// Manages agent sessions — the Dart port of gc's `runtime.Provider`
 /// (`gascity/internal/runtime/runtime.go:107-200`), **trimmed to M3**
 /// (M3-BUILD-ORDER Track 2). A reference type (the `Provider` role name; no
@@ -93,6 +105,13 @@ abstract interface class RuntimeProvider {
   ///    stopped session is silent by design AND holds no terminal);
   ///  - provider teardown (dispose/close) releases all held terminals.
   RuntimeEvent? terminalOf(String name);
+
+  /// The retained head of the named session's transcript, captured beside its
+  /// terminal. Empty while live, unknown, or released.
+  ///
+  /// Release semantics match [terminalOf]: a new [start] clears it, [stop]
+  /// releases it, and provider teardown drops all retained heads.
+  String exitOutputOf(String name);
 
   /// The OS identity of the named LIVE session — its leader pid and (when
   /// resolution succeeded at spawn) its pgid — or null when the session is
