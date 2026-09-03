@@ -1,3 +1,8 @@
+## 0.2.0-rc.10
+
+- Breaking: process groups are supervised as groups and exit status is preserved — `SessionOrphaned` is a new `RuntimeEvent` variant (emitted once, NOT terminal: the group stays supervised until it empties or the bounded grace elapses and it is signalled), so exhaustive switches over `RuntimeEvent` need an arm (tg-8kye, #290). Migration: add `SessionOrphaned()` to every `switch (event)`; power_station#195 is the consumer fix.
+- Adopts grid_trajectory 0.2.0-rc.1 (`substation` column).
+
 ## 0.2.0-rc.9
 
 - bd 1.3.0-rc.1 compatibility rails rehearsed against the pinned upstream fixture set; a removed or renamed wire key fails the drift suite loudly (tg-1liv, #272).
