@@ -137,44 +137,41 @@ void main() {
       expect(_modeOf(handle.path), '600');
     });
 
-    test(
-      'an UNREADABLE lock is HELD and then REFUSED — never stolen (the '
-      'young-or-mid-populate case; a human decides)',
-      () async {
-        final store = _tempStore();
-        Directory('${store.path}/.grid').createSync(recursive: true);
-        final lockFile = File(StationLockService.lockPath(store.path))
-          ..writeAsStringSync('{"pid": tor'); // a crash mid-acquire
-        final loud = <String>[];
-        final service = StationLockService(
-          isPidAlive: (_) => fail('an unreadable lock names no pid to probe'),
-          log: loud.add,
-          prepareProcessGroup: (stationPid) async => stationPid,
-          delay: (_) async {}, // the hold costs no wall time offline
-        );
+    test('an UNREADABLE lock is HELD and then REFUSED — never stolen (the '
+        'young-or-mid-populate case; a human decides)', () async {
+      final store = _tempStore();
+      Directory('${store.path}/.grid').createSync(recursive: true);
+      final lockFile = File(StationLockService.lockPath(store.path))
+        ..writeAsStringSync('{"pid": tor'); // a crash mid-acquire
+      final loud = <String>[];
+      final service = StationLockService(
+        isPidAlive: (_) => fail('an unreadable lock names no pid to probe'),
+        log: loud.add,
+        prepareProcessGroup: (stationPid) async => stationPid,
+        delay: (_) async {}, // the hold costs no wall time offline
+      );
 
-        await expectLater(
-          service.acquire(
-            stateWorkspaceDir: store.path,
-            pid: 7777,
-            now: DateTime.utc(2026, 7, 2),
+      await expectLater(
+        service.acquire(
+          stateWorkspaceDir: store.path,
+          pid: 7777,
+          now: DateTime.utc(2026, 7, 2),
+        ),
+        throwsA(
+          isA<StationRefusal>().having(
+            (r) => r.message,
+            'message',
+            allOf(contains('UNREADABLE'), contains(lockFile.path)),
           ),
-          throwsA(
-            isA<StationRefusal>().having(
-              (r) => r.message,
-              'message',
-              allOf(contains('UNREADABLE'), contains(lockFile.path)),
-            ),
-          ),
-        );
-        expect(
-          loud.where((l) => l.contains('STEALING')),
-          isEmpty,
-          reason: 'an unreadable record is never stolen',
-        );
-        expect(lockFile.readAsStringSync(), '{"pid": tor');
-      },
-    );
+        ),
+      );
+      expect(
+        loud.where((l) => l.contains('STEALING')),
+        isEmpty,
+        reason: 'an unreadable record is never stolen',
+      );
+      expect(lockFile.readAsStringSync(), '{"pid": tor');
+    });
 
     test('(c) release deletes the lock; a second release is a no-op', () async {
       final store = _tempStore();

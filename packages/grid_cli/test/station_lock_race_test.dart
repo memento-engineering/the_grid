@@ -23,20 +23,21 @@ void main() {
       final chmodEntered = Completer<void>();
       final releaseChmod = Completer<void>();
 
-      final first = StationLockService(
-        isPidAlive: (_) => fail('the first acquirer has no collision'),
-        log: (_) {},
-        prepareProcessGroup: (stationPid) async => stationPid,
-        setMode: (path) async {
-          if (!chmodEntered.isCompleted) chmodEntered.complete();
-          await releaseChmod.future; // a chmod that takes forever
-          await defaultChmod600(path); // then the REAL mode lands
-        },
-      ).acquire(
-        stateWorkspaceDir: store.path,
-        pid: 4242,
-        now: DateTime.utc(2026, 9, 3, 10),
-      );
+      final first =
+          StationLockService(
+            isPidAlive: (_) => fail('the first acquirer has no collision'),
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+            setMode: (path) async {
+              if (!chmodEntered.isCompleted) chmodEntered.complete();
+              await releaseChmod.future; // a chmod that takes forever
+              await defaultChmod600(path); // then the REAL mode lands
+            },
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 4242,
+            now: DateTime.utc(2026, 9, 3, 10),
+          );
 
       await chmodEntered.future;
       expect(lockFile.existsSync(), isTrue, reason: 'the claim is on disk');
@@ -133,18 +134,23 @@ void main() {
       final loud = <String>[];
       final delays = <Duration>[];
 
-      final handle = await StationLockService(
-        isPidAlive: (_) => false,
-        log: loud.add,
-        prepareProcessGroup: (stationPid) async => stationPid,
-        delay: (d) async => delays.add(d),
-      ).acquire(
-        stateWorkspaceDir: store.path,
-        pid: 7777,
-        now: DateTime.utc(2026, 9, 3),
-      );
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => false,
+            log: loud.add,
+            prepareProcessGroup: (stationPid) async => stationPid,
+            delay: (d) async => delays.add(d),
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 9, 3),
+          );
 
-      expect(delays, isEmpty, reason: 'a readable record is arbitrated at once');
+      expect(
+        delays,
+        isEmpty,
+        reason: 'a readable record is arbitrated at once',
+      );
       expect(
         loud.where(
           (l) =>
@@ -158,31 +164,34 @@ void main() {
   });
 
   group('ownership is re-verified before every write', () {
-    test('updateControl refuses a FOREIGN pid and leaves the file intact', () async {
-      final store = _tempStore();
-      final handle = await _acquire(store, pid: 7777);
-      _mintLock(store, pid: 4242, startedAt: DateTime.utc(2026, 9, 2));
+    test(
+      'updateControl refuses a FOREIGN pid and leaves the file intact',
+      () async {
+        final store = _tempStore();
+        final handle = await _acquire(store, pid: 7777);
+        _mintLock(store, pid: 4242, startedAt: DateTime.utc(2026, 9, 2));
 
-      await expectLater(
-        handle.updateControl(
-          controlUrl: 'http://127.0.0.1:8137',
-          token: 's3cret',
-        ),
-        throwsA(
-          isA<StationRefusal>().having(
-            (r) => r.message,
-            'message',
-            allOf(contains('updateControl'), contains('NOT ours')),
+        await expectLater(
+          handle.updateControl(
+            controlUrl: 'http://127.0.0.1:8137',
+            token: 's3cret',
           ),
-        ),
-      );
-      final json =
-          jsonDecode(File(handle.path).readAsStringSync())
-              as Map<String, Object?>;
-      expect(json['pid'], 4242, reason: 'the re-minted lock is untouched');
-      expect(json.containsKey('token'), isFalse);
-      expect(handle.record.token, isNull, reason: 'no in-memory advance');
-    });
+          throwsA(
+            isA<StationRefusal>().having(
+              (r) => r.message,
+              'message',
+              allOf(contains('updateControl'), contains('NOT ours')),
+            ),
+          ),
+        );
+        final json =
+            jsonDecode(File(handle.path).readAsStringSync())
+                as Map<String, Object?>;
+        expect(json['pid'], 4242, reason: 'the re-minted lock is untouched');
+        expect(json.containsKey('token'), isFalse);
+        expect(handle.record.token, isNull, reason: 'no in-memory advance');
+      },
+    );
 
     test('updateVmService refuses a re-mint under the SAME pid (startedAt is '
         'half the nonce)', () async {
@@ -197,22 +206,26 @@ void main() {
       expect(handle.record.vmServiceUri, isNull);
     });
 
-    test('release refuses to delete a record that is not ours, LOUDLY', () async {
-      final store = _tempStore();
-      final loud = <String>[];
-      final handle = await _acquire(store, pid: 7777, log: loud.add);
-      _mintLock(store, pid: 4242, startedAt: DateTime.utc(2026, 9, 2));
+    test(
+      'release refuses to delete a record that is not ours, LOUDLY',
+      () async {
+        final store = _tempStore();
+        final loud = <String>[];
+        final handle = await _acquire(store, pid: 7777, log: loud.add);
+        _mintLock(store, pid: 4242, startedAt: DateTime.utc(2026, 9, 2));
 
-      await handle.release();
+        await handle.release();
 
-      expect(File(handle.path).existsSync(), isTrue);
-      expect(
-        loud.where(
-          (l) => l.contains('NOT releasing station.lock') && l.contains('4242'),
-        ),
-        hasLength(1),
-      );
-    });
+        expect(File(handle.path).existsSync(), isTrue);
+        expect(
+          loud.where(
+            (l) =>
+                l.contains('NOT releasing station.lock') && l.contains('4242'),
+          ),
+          hasLength(1),
+        );
+      },
+    );
 
     test('release still deletes OUR record and stays idempotent', () async {
       final store = _tempStore();
@@ -224,42 +237,48 @@ void main() {
   });
 
   group('the mode is terminal', () {
-    test('a chmod failure aborts acquire and leaves NO lock and NO temp', () async {
-      final store = _tempStore();
-      final loud = <String>[];
+    test(
+      'a chmod failure aborts acquire and leaves NO lock and NO temp',
+      () async {
+        final store = _tempStore();
+        final loud = <String>[];
 
-      await expectLater(
-        StationLockService(
-          isPidAlive: (_) => fail('no collision'),
-          log: loud.add,
-          prepareProcessGroup: (stationPid) async => stationPid,
-          setMode: (path) async =>
-              throw FileSystemException('chmod 600 failed (exit 1)', path),
-        ).acquire(
-          stateWorkspaceDir: store.path,
-          pid: 7777,
-          now: DateTime.utc(2026, 9, 3),
-        ),
-        throwsA(
-          isA<StationRefusal>()
-              .having((r) => r.code, 'code', 1)
-              .having((r) => r.message, 'message', contains('chmod 600')),
-        ),
-      );
+        await expectLater(
+          StationLockService(
+            isPidAlive: (_) => fail('no collision'),
+            log: loud.add,
+            prepareProcessGroup: (stationPid) async => stationPid,
+            setMode: (path) async =>
+                throw FileSystemException('chmod 600 failed (exit 1)', path),
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 9, 3),
+          ),
+          throwsA(
+            isA<StationRefusal>()
+                .having((r) => r.code, 'code', 1)
+                .having((r) => r.message, 'message', contains('chmod 600')),
+          ),
+        );
 
-      expect(loud.where((l) => l.contains('could NOT chmod 600')), hasLength(1));
-      expect(
-        File(StationLockService.lockPath(store.path)).existsSync(),
-        isFalse,
-      );
-      expect(
-        Directory(
-          '${store.path}/.grid',
-        ).listSync().where((e) => e.path.contains('station.lock')),
-        isEmpty,
-        reason: 'no claim and no temp survive a failed publish',
-      );
-    });
+        expect(
+          loud.where((l) => l.contains('could NOT chmod 600')),
+          hasLength(1),
+        );
+        expect(
+          File(StationLockService.lockPath(store.path)).existsSync(),
+          isFalse,
+        );
+        expect(
+          Directory(
+            '${store.path}/.grid',
+          ).listSync().where((e) => e.path.contains('station.lock')),
+          isEmpty,
+          reason: 'no claim and no temp survive a failed publish',
+        );
+      },
+    );
 
     test('a published lock is 0600 and leaves no temp behind', () async {
       final store = _tempStore();
@@ -287,15 +306,16 @@ Future<StationLockHandle> _acquire(
   Directory store, {
   required int pid,
   void Function(String)? log,
-}) => StationLockService(
-  isPidAlive: (_) => true,
-  log: log ?? (_) {},
-  prepareProcessGroup: (stationPid) async => stationPid,
-).acquire(
-  stateWorkspaceDir: store.path,
-  pid: pid,
-  now: DateTime.utc(2026, 9, 3, 12),
-);
+}) =>
+    StationLockService(
+      isPidAlive: (_) => true,
+      log: log ?? (_) {},
+      prepareProcessGroup: (stationPid) async => stationPid,
+    ).acquire(
+      stateWorkspaceDir: store.path,
+      pid: pid,
+      now: DateTime.utc(2026, 9, 3, 12),
+    );
 
 /// A temp state-store root (no `.grid/` yet — acquire creates it).
 Directory _tempStore() {
