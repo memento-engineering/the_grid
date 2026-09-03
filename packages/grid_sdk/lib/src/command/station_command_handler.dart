@@ -188,6 +188,14 @@ final class StationCommandHandler implements GridCommandHandler {
         content: content,
         append: append,
       ),
+    GridPauseSession(:final beadId) => _setPauseState(
+      beadId: beadId,
+      pause: true,
+    ),
+    GridResumeSession(:final beadId) => _setPauseState(
+      beadId: beadId,
+      pause: false,
+    ),
     GridBeadBoard(
       :final stores,
       :final statuses,
@@ -354,6 +362,93 @@ final class StationCommandHandler implements GridCommandHandler {
         'operation': 'grid/bead/set',
         'beadId': beadId,
         'field': field.name,
+      },
+    );
+  }
+
+  /// Sets the operator pause axis on the_grid's owned session bead.
+  Future<GridCommandResult> _setPauseState({
+    required String beadId,
+    required bool pause,
+  }) async {
+    final verb = pause ? 'pause' : 'resume';
+    await _refreshState();
+    final state = _stateSource.current;
+    if (state == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot.',
+      );
+    }
+    final linked = state.beads
+        .where(
+          (bead) =>
+              bead.issueType == GridIssueTypes.session &&
+              _meta(bead, SessionBeadKeys.workBead) == beadId,
+        )
+        .toList(growable: false);
+    if (linked.isEmpty) {
+      return _refused(
+        'session_not_found',
+        'No session is linked to "$beadId".',
+      );
+    }
+    if (linked.length != 1) {
+      return _refused(
+        'session_ambiguous',
+        '${linked.length} sessions are linked to "$beadId".',
+      );
+    }
+    final session = linked.single;
+    if (session.isClosed) {
+      return _refused(
+        'session_terminal',
+        'Session "${session.id}" is CLOSED — $verb applies only to a live '
+            'session (use `grid rework` to retire a round).',
+      );
+    }
+    final current = pauseStateOf(session.metadata);
+    final target = pause ? SessionPauseState.paused : SessionPauseState.resumed;
+    if (current == target) {
+      return GridCommandResult.completed(
+        message: 'Session "${session.id}" is already ${target.name}.',
+        value: {
+          'operation': 'grid/session/$verb',
+          'beadId': beadId,
+          'sessionId': session.id,
+          'pauseState': target.name,
+          'changed': false,
+        },
+      );
+    }
+    if (!pause && current == SessionPauseState.none) {
+      return _refused(
+        'session_not_paused',
+        'Session "${session.id}" was never paused; there is nothing to resume.',
+      );
+    }
+    try {
+      await _stateWriter.update(
+        session.id,
+        metadata: {SessionBeadKeys.pauseState: target.name},
+      );
+    } on OwnershipRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    } on OwnershipGuardRefused catch (error) {
+      return _refused('ownership_refused', error.toString());
+    }
+    await _refreshState();
+    return GridCommandResult.completed(
+      message: pause
+          ? 'Paused session "${session.id}" — cursor preserved, slot freed.'
+          : 'Resumed session "${session.id}" — it re-competes for a slot, then '
+                'adopts its preserved cursor.',
+      value: {
+        'operation': 'grid/session/$verb',
+        'beadId': beadId,
+        'sessionId': session.id,
+        'pauseState': target.name,
+        'changed': true,
       },
     );
   }

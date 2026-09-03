@@ -33,6 +33,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/allocation.dart';
 import '../sdk/circuit.dart';
+import 'session_bead.dart';
 import 'session_projection.dart';
 
 part 'session_disposition.freezed.dart';
@@ -62,13 +63,18 @@ sealed class SessionDisposition with _$SessionDisposition {
   const factory SessionDisposition.voided({required String reason}) =
       VoidedSession;
 
+  /// OPEN, but parked by an operator. The session remains alive and keeps its
+  /// durable cursor while its work branch stays unmounted.
+  const factory SessionDisposition.paused({required String reason}) =
+      PausedSession;
+
   const SessionDisposition._();
 
   /// Whether this session BLOCKS its work bead from mounting — the single
   /// predicate `WorkList` gates on (exhaustive: a new arm is a compile error,
   /// never a silently-mounting default).
   bool get blocksMount => switch (this) {
-    DoneSession() || HeldSession() => true,
+    DoneSession() || HeldSession() || PausedSession() => true,
     NoSession() || LiveSession() || VoidedSession() => false,
   };
 }
@@ -84,9 +90,15 @@ SessionDisposition sessionDispositionOf(SessionProjection? session) {
     // row) — mint, exactly as the pre-I-10 adopt guard did (`session_scope.dart`
     // initState: `existing != null && existing.isNotEmpty`).
     final id = session.sessionId ?? '';
-    return id.isEmpty
-        ? const SessionDisposition.none()
-        : const SessionDisposition.live();
+    if (id.isEmpty) return const SessionDisposition.none();
+    if (session.pauseState == SessionPauseState.paused) {
+      return const SessionDisposition.paused(
+        reason:
+            'an operator paused this session — the cursor is preserved and the '
+            'slot is freed; `grid resume <bead>` re-admits it',
+      );
+    }
+    return const SessionDisposition.live();
   }
   if (session.humanHeld) {
     return const SessionDisposition.held(

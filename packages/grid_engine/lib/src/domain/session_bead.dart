@@ -103,7 +103,40 @@ abstract final class SessionBeadKeys {
   /// write as [workBead], so it is never absent for a session that intended to
   /// mint molecule.
   static const model = 'grid.session.model';
+
+  /// The operator pause axis. `paused` parks this session's work branch
+  /// without closing or re-keying it; `resumed` releases the park.
+  ///
+  /// This is three-valued because the public write chokepoint merges metadata
+  /// and has no key-removal operation. The `resumed` value also tells the
+  /// mount boundary that this session must re-compete for a concurrency slot.
+  static const pauseState = 'grid.session.pause_state';
 }
+
+/// The [SessionBeadKeys.pauseState] vocabulary. Absence means [none].
+///
+/// This operator axis is distinct from `grid_runtime`'s per-process
+/// `LifecycleState`; only the engine's mount boundary consumes it.
+enum SessionPauseState {
+  /// The session has never been paused.
+  none,
+
+  /// An operator parked the session without changing its durable cursor.
+  paused,
+
+  /// An operator released the park so the session can be re-admitted.
+  resumed,
+}
+
+/// Reads the operator pause axis from raw session-bead metadata.
+///
+/// Unknown and absent values retain the historical driveable behavior.
+SessionPauseState pauseStateOf(Map<String, Object?> metadata) =>
+    switch (metadata[SessionBeadKeys.pauseState]) {
+      'paused' => SessionPauseState.paused,
+      'resumed' => SessionPauseState.resumed,
+      _ => SessionPauseState.none,
+    };
 
 /// The [SessionBeadKeys.model] value a LEGACY / flat-cursor session carries —
 /// written here for symmetry with [kSessionModelMolecule] even though the
@@ -455,6 +488,7 @@ SessionProjection projectSession(Bead sessionBead) {
     // still read true here (Decided item 8 / §3 conflict 2). Any value other
     // than [kSessionModelMolecule] — including ABSENT — projects false.
     isMolecule: metadata[SessionBeadKeys.model] == kSessionModelMolecule,
+    pauseState: pauseStateOf(metadata),
     pgid: _asInt(metadata[SessionBeadKeys.pgid]),
     pid: _asInt(metadata[SessionBeadKeys.pid]),
     token: metadata[SessionBeadKeys.token] as String?,

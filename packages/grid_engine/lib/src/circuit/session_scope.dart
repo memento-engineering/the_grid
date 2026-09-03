@@ -191,7 +191,9 @@ class SessionScopeState extends State<SessionScope>
   GateSweepSessionDisposition _gateSweepDisposition(
     SessionDisposition disposition,
   ) => switch (disposition) {
-    LiveSession() || NoSession() => GateSweepSessionDisposition.live,
+    LiveSession() ||
+    NoSession() ||
+    PausedSession() => GateSweepSessionDisposition.live,
     DoneSession() => GateSweepSessionDisposition.done,
     HeldSession() => GateSweepSessionDisposition.held,
     VoidedSession() => GateSweepSessionDisposition.voided,
@@ -437,7 +439,7 @@ class SessionScopeState extends State<SessionScope>
       case NoSession():
         // MINT — once, above the fan-out.
         unawaited(_mint());
-      case DoneSession() || HeldSession():
+      case DoneSession() || HeldSession() || PausedSession():
         // Unreachable through `WorkList` (a blocking disposition never mounts a
         // WorkBead). If any other composition mounts one anyway, say WHY once and
         // go inert — never silently adopt a terminal session's id, never mint a
@@ -458,7 +460,7 @@ class SessionScopeState extends State<SessionScope>
   /// — the exact bug class this bead exists to kill.
   void _declineMount(SessionDisposition disposition) {
     final reason = switch (disposition) {
-      HeldSession(:final reason) => reason,
+      HeldSession(:final reason) || PausedSession(:final reason) => reason,
       DoneSession() => 'the session already closed at a positive terminal',
       // Unreachable: only the blocking arms decline (initState dispatches the
       // other three) — named for exhaustiveness, never a silent default.
@@ -480,7 +482,7 @@ class SessionScopeState extends State<SessionScope>
 
   bool _isBlockingDisposition(SessionDisposition disposition) =>
       switch (disposition) {
-        DoneSession() || HeldSession() => true,
+        DoneSession() || HeldSession() || PausedSession() => true,
         NoSession() || LiveSession() || VoidedSession() => false,
       };
 

@@ -46,8 +46,9 @@ List<SessionProjection> orderLinkedSessions(
 }
 
 int _rankOf(SessionProjection row) {
-  if (!row.isTerminal) return 0;
-  return sessionDispositionOf(row).blocksMount ? 1 : 2;
+  final disposition = sessionDispositionOf(row);
+  if (!row.isTerminal && disposition is! PausedSession) return 0;
+  return disposition.blocksMount ? 1 : 2;
 }
 
 int _newestFirst(DateTime? a, DateTime? b) {
@@ -74,9 +75,9 @@ sealed class LinkedSessionVerdict with _$LinkedSessionVerdict {
     required List<SessionProjection> rivals,
   }) = AdoptLinkedSession;
 
-  /// The published row BLOCKS (A48 `done` / `held`). Nothing is demoted and
-  /// nothing is minted: landed work must not re-run and an escalation must not
-  /// loop.
+  /// The published row BLOCKS (A48 `done` / `held`, or an operator-paused open
+  /// session). Nothing is demoted and nothing is minted: landed work must not
+  /// re-run, an escalation must not loop, and a park must preserve its cursor.
   const factory LinkedSessionVerdict.blocked({
     required SessionProjection session,
   }) = BlockedLinkedSession;
@@ -111,13 +112,14 @@ LinkedSessionVerdict linkedSessionVerdictOf(
   if (ordered.isEmpty) return const LinkedSessionVerdict.none();
   final winner = ordered.first;
   final rest = ordered.skip(1).toList(growable: false);
-  if (!winner.isTerminal) {
+  final disposition = sessionDispositionOf(winner);
+  if (!winner.isTerminal && disposition is! PausedSession) {
     return LinkedSessionVerdict.adopt(
       session: winner,
       rivals: rest.where((row) => !row.isTerminal).toList(growable: false),
     );
   }
-  if (sessionDispositionOf(winner).blocksMount) {
+  if (disposition.blocksMount) {
     return LinkedSessionVerdict.blocked(session: winner);
   }
   // The ordering puts every blocking terminal ahead of every voided one, so a

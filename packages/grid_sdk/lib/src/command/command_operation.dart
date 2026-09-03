@@ -32,6 +32,14 @@ sealed class GridCommandRequest with _$GridCommandRequest {
     @Default(false) bool append,
   }) = GridSetBeadText;
 
+  /// Parks the live session driving [beadId] without closing its round.
+  const factory GridCommandRequest.pauseSession({required String beadId}) =
+      GridPauseSession;
+
+  /// Releases a parked session to re-compete for a slot and adopt its cursor.
+  const factory GridCommandRequest.resumeSession({required String beadId}) =
+      GridResumeSession;
+
   /// Projects every resident work store's open beads into board rows.
   const factory GridCommandRequest.board({
     @Default(<String>{}) Set<String> stores,

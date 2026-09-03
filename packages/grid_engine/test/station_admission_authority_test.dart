@@ -384,6 +384,147 @@ void main() {
     },
   );
 
+  test('paused rows release authority capacity without retiring', () async {
+    final runner = RecordingBdRunner();
+    final station = _stationOver(runner, maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final first = _bead('tg-1');
+    final second = _bead('tg-2');
+    const live = SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-s1');
+    final paused = live.copyWith(pauseState: SessionPauseState.paused);
+    final capOne = _config.copyWith(maxConcurrentWork: 1);
+
+    final mounted = station.admission.admitPending(
+      _snapshot([first], sessions: const {'tg-1': live}),
+      capOne,
+      const ServiceBundle(),
+      [StationAdmissionCandidate(bead: first, session: live)],
+    );
+    expect(mounted.admitted.single.sessionId, 'tgdog-s1');
+
+    var eligibilityChecks = 0;
+    final parkedBeforeContentGates = station.admission.admitPending(
+      _snapshot([first], sessions: {'tg-1': paused}),
+      capOne,
+      ServiceBundle(
+        mountEligibility: (_) {
+          eligibilityChecks += 1;
+          return const MountEligibilityDecision.refused(
+            clause: 'controlled refusal',
+          );
+        },
+      ),
+      [StationAdmissionCandidate(bead: first, session: paused)],
+    );
+    expect(parkedBeforeContentGates.refused.single.clause, 'paused');
+    expect(eligibilityChecks, 0);
+
+    final parked = station.admission.admitPending(
+      _snapshot([first, second], sessions: {'tg-1': paused}),
+      capOne,
+      const ServiceBundle(),
+      [
+        StationAdmissionCandidate(bead: first, session: paused),
+        StationAdmissionCandidate(bead: second, session: null),
+      ],
+    );
+    expect(parked.refused.single.clause, 'paused');
+    expect(parked.admitted.single.candidate.bead.id, 'tg-2');
+    await _pump();
+    expect(runner.callsFor('close'), isEmpty);
+    expect(
+      runner.callsFor('update').where((call) => call[1] == 'tgdog-s1'),
+      isEmpty,
+      reason: 'parking never mutates the durable session',
+    );
+  });
+
+  test('resumed rows re-compete once and retain their session identity', () {
+    final runner = RecordingBdRunner();
+    final station = _stationOver(runner, maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final first = _bead('tg-1');
+    final second = _bead('tg-2');
+    const resumed = SessionProjection(
+      workBeadId: 'tg-1',
+      sessionId: 'tgdog-s1',
+      pauseState: SessionPauseState.resumed,
+    );
+    const occupying = SessionProjection(
+      workBeadId: 'tg-2',
+      sessionId: 'tgdog-s2',
+    );
+    final capOne = _config.copyWith(maxConcurrentWork: 1);
+
+    final waiting = station.admission.admitPending(
+      _snapshot(
+        [first, second],
+        sessions: const {'tg-1': resumed, 'tg-2': occupying},
+      ),
+      capOne,
+      const ServiceBundle(),
+      [
+        StationAdmissionCandidate(bead: first, session: resumed),
+        StationAdmissionCandidate(bead: second, session: occupying),
+      ],
+    );
+    expect(waiting.admitted.single.sessionId, 'tgdog-s2');
+    expect(waiting.waiting.single.bead.id, 'tg-1');
+
+    final closedOccupant = occupying.copyWith(
+      isTerminal: true,
+      completed: true,
+    );
+    final admitted = station.admission.admitPending(
+      _snapshot(
+        [first, second],
+        sessions: {'tg-1': resumed, 'tg-2': closedOccupant},
+      ),
+      capOne,
+      const ServiceBundle(),
+      [
+        StationAdmissionCandidate(bead: first, session: resumed),
+        StationAdmissionCandidate(bead: second, session: closedOccupant),
+      ],
+    );
+    expect(admitted.admitted.single.sessionId, 'tgdog-s1');
+    expect(admitted.admitted.single.adopted, isTrue);
+    expect(admitted.waiting, isEmpty);
+    expect(runner.calls, isEmpty, reason: 'resume adopts instead of minting');
+  });
+
+  test('multiple resumed rows consume synchronous authority slots', () {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final first = _bead('tg-1');
+    final second = _bead('tg-2');
+    const resumedFirst = SessionProjection(
+      workBeadId: 'tg-1',
+      sessionId: 'tgdog-s1',
+      pauseState: SessionPauseState.resumed,
+    );
+    const resumedSecond = SessionProjection(
+      workBeadId: 'tg-2',
+      sessionId: 'tgdog-s2',
+      pauseState: SessionPauseState.resumed,
+    );
+    final batch = station.admission.admitPending(
+      _snapshot(
+        [first, second],
+        sessions: const {'tg-1': resumedFirst, 'tg-2': resumedSecond},
+      ),
+      _config.copyWith(maxConcurrentWork: 1),
+      const ServiceBundle(),
+      [
+        StationAdmissionCandidate(bead: first, session: resumedFirst),
+        StationAdmissionCandidate(bead: second, session: resumedSecond),
+      ],
+    );
+
+    expect(batch.admitted.single.sessionId, 'tgdog-s1');
+    expect(batch.waiting.single.bead.id, 'tg-2');
+  });
+
   test(
     'invalidation removal and disposal are idempotent and fail closed',
     () async {

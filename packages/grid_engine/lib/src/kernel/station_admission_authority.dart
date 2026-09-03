@@ -252,12 +252,16 @@ final class StationAdmissionAuthority {
         if (reservation == null || reservation.sessionId == terminalId) {
           _release(candidate.bead.id, onlyScope: scopeKey);
         }
+      } else if (candidate.session?.pauseState == SessionPauseState.paused) {
+        _release(candidate.bead.id, onlyScope: scopeKey);
       }
     }
     // Existing durable work consumes this substation's cap regardless of its
     // position in the pending priority order below.
     for (final candidate in supplied) {
-      if (candidate.session case final session? when !session.isTerminal) {
+      if (candidate.session case final session?
+          when !session.isTerminal &&
+              session.pauseState == SessionPauseState.none) {
         scope._mountedIds.add(candidate.bead.id);
       }
     }
@@ -283,7 +287,11 @@ final class StationAdmissionAuthority {
     );
     final durableLiveIds = {
       for (final entry in durableRows.entries)
-        if (!entry.value.isTerminal) entry.key,
+        if (!entry.value.isTerminal &&
+            entry.value.pauseState != SessionPauseState.paused &&
+            (entry.value.pauseState != SessionPauseState.resumed ||
+                _isMounted(entry.value.workBeadId)))
+          entry.key,
     };
 
     // A reservation represented by its now-terminal durable row has settled.
@@ -321,6 +329,21 @@ final class StationAdmissionAuthority {
           reworkRoundOf(bead.id, candidate.session!.workBeadId) != null;
       final alreadyMounted =
           scope._mountedIds.contains(bead.id) || retiredRound;
+      final linked = snapshot.linkedSessions(bead.id);
+      final verdict = linkedSessionVerdictOf(linked);
+      if (!bead.isClosed && verdict is BlockedLinkedSession) {
+        if (sessionDispositionOf(verdict.session) is PausedSession) {
+          _release(bead.id, onlyScope: scopeKey);
+          refused.add(
+            StationAdmissionRefusal(
+              candidate: candidate,
+              clause: 'paused',
+              detail: 'the linked session has blocking disposition paused',
+            ),
+          );
+          continue;
+        }
+      }
       final eligibility = _evaluateEligibility(
         snapshot,
         config,
@@ -364,8 +387,6 @@ final class StationAdmissionAuthority {
         continue;
       }
 
-      final linked = snapshot.linkedSessions(bead.id);
-      final verdict = linkedSessionVerdictOf(linked);
       if (bead.isClosed) {
         final disposition = sessionDispositionOf(verdict.winner);
         if (disposition is! LiveSession) {
@@ -375,7 +396,7 @@ final class StationAdmissionAuthority {
           LiveSession() => 'work-terminal',
           HeldSession() => 'held',
           DoneSession() => 'done',
-          NoSession() || VoidedSession() => 'work-terminal',
+          NoSession() || VoidedSession() || PausedSession() => 'work-terminal',
         };
         refused.add(
           StationAdmissionRefusal(
@@ -425,6 +446,27 @@ final class StationAdmissionAuthority {
             continue;
           }
           final sessionId = session.sessionId;
+          final awaitsReadmission =
+              session.pauseState == SessionPauseState.resumed &&
+              !scope._mountedIds.contains(bead.id);
+          if (awaitsReadmission &&
+              !_hasCapacity(
+                scope,
+                config,
+                durableLiveIds,
+                candidateAlreadyCounted: false,
+              )) {
+            waiting.add(candidate);
+            capacityWaiting.add(candidate);
+            continue;
+          }
+          if (awaitsReadmission) {
+            durableLiveIds.add(
+              sessionId != null && sessionId.isNotEmpty
+                  ? sessionId
+                  : 'work:${bead.id}',
+            );
+          }
           if (sessionId == null || sessionId.isEmpty) {
             // A hand-built/offline projection can represent a live round
             // without its bead id. It remains mounted and capacity-counted,
@@ -462,12 +504,19 @@ final class StationAdmissionAuthority {
         case BlockedLinkedSession(:final session):
           _release(bead.id, onlyScope: scopeKey);
           final disposition = sessionDispositionOf(session);
-          final name = disposition is HeldSession ? 'held' : 'done';
+          final name = switch (disposition) {
+            HeldSession() => 'held',
+            PausedSession() => 'paused',
+            DoneSession() => 'done',
+            NoSession() ||
+            LiveSession() ||
+            VoidedSession() => 'blocked-session',
+          };
           refused.add(
             StationAdmissionRefusal(
               candidate: candidate,
               clause: name,
-              detail: 'the linked session is a blocking terminal ($name)',
+              detail: 'the linked session has blocking disposition $name',
             ),
           );
           continue;
@@ -642,6 +691,9 @@ final class StationAdmissionAuthority {
     }
     return true;
   }
+
+  bool _isMounted(String workBeadId) =>
+      _scopes.values.any((scope) => scope._mountedIds.contains(workBeadId));
 
   StationAdmissionReservation _reservationValue(
     StationAdmissionCandidate candidate,
