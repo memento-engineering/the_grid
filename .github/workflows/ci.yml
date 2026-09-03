@@ -60,6 +60,17 @@ jobs:
   trajectory-guards:
     name: Trajectory guards (dolt) — Stage-0 seven + Stage-1
     runs-on: ubuntu-latest
+    # tg-2zao: this is a SHARED runner. W6's drain and p99 pins are
+    # WALL-CLOCK, so on a shared runner they measure the runner rather than
+    # the fold — a grid_runtime-only diff failed them at 22.5 appends/s and
+    # 297.775 ms while the same commit passed on the next runner, ejecting a
+    # good PR from the merge queue. This switches those two pins to their
+    # runner-relative form (packages/grid_trajectory/test/support/
+    # guard_budget.dart); every guard still RUNS and still fails closed
+    # (decision: stage0-guards-gate-prs). Unset on a developer machine, the
+    # tight absolute values stay asserted.
+    env:
+      TRAJ_GUARD_SHARED_RUNNER: '1'
     steps:
       - uses: actions/checkout@v4
       # PINNED, and pinned independently of the Dart toolchain: these guards
