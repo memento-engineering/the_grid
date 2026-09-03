@@ -36,7 +36,7 @@ final class _Sink implements TrajectoryRecordSink {
   void enqueue(
     TrajectoryRecord record, {
     DateTime? occurredAt,
-    String? seat,
+    String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) => records.add(record);
@@ -116,7 +116,7 @@ _Harness _drive(
           value: TrajectoryRecorderScope(
             StationTrajectoryRecorder(
               sink: sink,
-              seatPrefixes: const {'tg', 'tgdog'},
+              substationPrefixes: const {'tg', 'tgdog'},
             ),
           ),
           child: InheritedSeed<ServiceBundle>(
