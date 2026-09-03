@@ -11,8 +11,8 @@ import '../sdk/capability.dart';
 import '../sdk/capability_facts.dart';
 import 'wedge_monitor.dart';
 
-/// The station's OFF-TREE work-axis machinery (extracted from [StationKernel]
-/// so a tree mounted by a DIFFERENT owner — `runGrid`'s, tg-yl8 — reuses it
+/// The station's OFF-TREE work-axis machinery (extracted from the retired
+/// kernel so a tree mounted by a DIFFERENT owner — `runGrid`'s, tg-yl8 — reuses it
 /// unchanged): the join-bridge lifecycle, the supervised-restart cooldown
 /// Timer (D-5/F1: the driver owns the wall clock + the cooldown Timer, NEVER a
 /// Seed), the backoff re-poke, and the unclaimed-frontier scan (D-B5 hook #1).
@@ -28,9 +28,9 @@ import 'wedge_monitor.dart';
 /// scans), [afterFlush] once per completed tree flush (a failure cursor
 /// written this tick may carry a new cooldown to arm; whatever the flush left
 /// unfulfillable is what a composed claim asset sees next), and [dispose] at
-/// teardown (cancels the timer, disposes the bridge). `StationKernel` wires
-/// these into its own flush loop; `runGrid` wires [afterFlush] through its
-/// `onFlushed` hook.
+/// teardown (cancels the timer, disposes the bridge). `runGrid` — the ONE
+/// production flush coordinator (tg-um8k) — wires [afterFlush] through its
+/// `onFlushed` hook, in a `finally` so a throwing rebuild cannot silence it.
 class StationDriver {
   /// Assembles the driver over [bridge]. [clock] / [scheduleTimer] are the
   /// backoff seam (injectable so the re-poke — and the wedge poll — are driven

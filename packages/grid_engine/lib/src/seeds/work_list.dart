@@ -476,7 +476,7 @@ class _WorkListState extends State<WorkList>
     //
     // `stationCap` is null when no `StationServices` is ambient (an offline
     // test that never wires the governor) — every REAL run always composes
-    // one (`buildLiveWiring`/`StationKernel`), so the station-wide ceiling
+    // one (`buildLiveWiring` → `StationWork`), so the station-wide ceiling
     // below is only ever skipped by a test that doesn't care about it. A
     // substation's own override still applies either way, defaulting to
     // [kDefaultMaxConcurrentWork] when nothing is configured at all.

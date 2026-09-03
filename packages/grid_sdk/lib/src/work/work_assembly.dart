@@ -883,7 +883,7 @@ Future<StationWorkRuntime> assembleStationWork({
       registry: resolvedRegistry,
       // tg-2mb: build the vendor OFF-tree (the DI rule — a branch never builds a
       // service) so the production work subtree resolves the SAME real vendor
-      // StationKernel.start mounts. Without this the molecule allocation at the
+      // `StationWork` mounts. Without this the molecule allocation at the
       // readiness gate throws `No ProcessLeaseVendor` and the station wedges.
       // The SAME instance the restart reconciler sweeps with (tg-eli phase 1).
       processLeaseVendor: leaseVendor,

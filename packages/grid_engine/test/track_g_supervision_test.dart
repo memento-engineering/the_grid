@@ -1,7 +1,8 @@
 // Track G — supervision + the restorable circuit-breaker (D-5):
 //  - the failing leaf host authors the supervised-restart cursor (Track E),
 //  - SessionScope escalates + tears down on breaker-exhaustion (G2),
-//  - the kernel owns the backoff Timer and re-pokes on cooldown expiry (G3/F1).
+//  - StationDriver owns the backoff Timer and re-pokes on cooldown expiry
+//    (G3/F1).
 //
 // ADR-0008 D7 / M4-P1 Track G. Zero I/O — fakes + injected clock/timer.
 import 'dart:async';
@@ -92,16 +93,7 @@ Bead _stepBead(
   },
 );
 
-/// An SessionResolver that returns a const Idle (the G3 kernel test does not need
-/// real effects — it exercises the cooldown scanner, not the tree).
-class _IdleResolver implements SessionResolver {
-  const _IdleResolver();
-  @override
-  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
-      const Idle();
-}
-
-/// A controllable Timer the kernel's scheduleTimer seam returns (no real wall
+/// A controllable Timer the driver's scheduleTimer seam returns (no real wall
 /// clock — the test fires the callback by hand).
 class _FakeTimer implements Timer {
   @override
@@ -253,7 +245,7 @@ void main() {
     });
   });
 
-  group('Track G (G3/F1) — the kernel owns the backoff Timer + re-poke', () {
+  group('Track G (G3/F1) — StationDriver owns the backoff Timer + re-poke', () {
     test(
       'MIGRATED (tg-eli phase 2, a residual gap — flagged, not fixed here): '
       'a session bead carrying a cooldown-bearing `grid.cursor.*` payload no '
@@ -274,26 +266,16 @@ void main() {
         addTearDown(work.close);
         addTearDown(state.close);
         final bridge = StationJoinBridge(work: work, state: state);
-        final f = buildFakes();
-
-        final kernel = StationKernel(
+        final driver = StationDriver(
           bridge: bridge,
-          stationServices: f.ctx,
-          resolver: const _IdleResolver(),
-          substations: [
-            SubstationScope(
-              configNotifier: SubstationConfigNotifier(_tgConfig),
-              key: const ValueKey('scope.tg'),
-            ),
-          ],
           clock: () => now,
           scheduleTimer: (delay, cb) {
             timers.add((delay: delay, cb: cb));
             return _FakeTimer();
           },
         );
-        addTearDown(kernel.dispose);
-        kernel.start();
+        addTearDown(driver.dispose);
+        driver.start();
 
         // Push a state snapshot: a session whose agent cursor WOULD be cooling
         // down 30s under the retired flat-projection read. CLOSED (terminal)
@@ -325,6 +307,7 @@ void main() {
           ),
         );
         await _pump();
+        driver.afterFlush();
 
         // No Timer is armed: the projected cursor is empty, so the scan sees
         // no cooldown at all — the residual gap this test now pins.
@@ -340,25 +323,16 @@ void main() {
       addTearDown(work.close);
       addTearDown(state.close);
       final bridge = StationJoinBridge(work: work, state: state);
-      final f = buildFakes();
-      final kernel = StationKernel(
+      final driver = StationDriver(
         bridge: bridge,
-        stationServices: f.ctx,
-        resolver: const _IdleResolver(),
-        substations: [
-          SubstationScope(
-            configNotifier: SubstationConfigNotifier(_tgConfig),
-            key: const ValueKey('scope.tg'),
-          ),
-        ],
         clock: () => now,
         scheduleTimer: (delay, cb) {
           timers.add((delay: delay, cb: cb));
           return _FakeTimer();
         },
       );
-      addTearDown(kernel.dispose);
-      kernel.start();
+      addTearDown(driver.dispose);
+      driver.start();
 
       // CLOSED (terminal) — see the sibling test's doc: an OPEN session with
       // no visible cooldown would still arm WedgeMonitor's own unrelated
@@ -384,6 +358,7 @@ void main() {
         ),
       );
       await _pump();
+      driver.afterFlush();
 
       expect(timers, isEmpty);
     });

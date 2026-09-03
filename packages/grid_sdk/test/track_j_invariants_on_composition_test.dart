@@ -350,8 +350,8 @@ void main() {
     test(
       'tg-2mb: StationWork mounts the ProcessLeaseVendor AMBIENT to the '
       'work subtree — a molecule allocation resolves the vendor '
-      '`requireProcessLeaseVendor` needs (the seed StationKernel.start '
-      'mounts, restored on the production runGrid seat). Without it the '
+      '`requireProcessLeaseVendor` needs, on the production runGrid seat). '
+      'Without it the '
       'readiness gate throws `No ProcessLeaseVendor` and the station wedges '
       'to zero; positive control: the probe capability actually spawns.',
       () async {

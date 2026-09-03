@@ -55,8 +55,8 @@ export 'src/circuit/session_scope.dart';
 export 'src/circuit/unclaimed_frontier.dart';
 
 // Molecule model — the process-lease seam the circuit's allocation resolves
-// (the vendor StationKernel.start / StationWork mount ambient to the work
-// subtree, tg-h4u / tg-2mb).
+// (the vendor `StationWork` mounts ambient to the work subtree,
+// tg-h4u / tg-2mb).
 export 'src/molecule/process_lease_vendor.dart'
     show
         ProcessLeaseVendor,
@@ -145,12 +145,12 @@ export 'src/kernel/trajectory_scope.dart';
 // `SourceControl`) live in the `grid_assets` package, NEVER in the engine
 // (ADR-0007 §1: the opinion-free kernel — a structural fence keeps them out).
 
-// Kernel: the seams + the composition/flush driver. StationDriver is the
-// off-tree work-axis machinery (bridge lifecycle + D-5 cooldown Timer +
-// unclaimed scan) extracted so runGrid's tree (grid_sdk, tg-yl8) reuses it.
+// Kernel: the seams + the off-tree work-axis machinery. StationDriver owns the
+// bridge lifecycle, the D-5 cooldown Timer and the unclaimed scan; the flush
+// loop that drives it lives in `runGrid` (grid_sdk, tg-yl8), the ONE
+// production coordinator (tg-um8k).
 export 'src/kernel/session_resolver.dart';
 export 'src/kernel/station_driver.dart';
-export 'src/kernel/station_kernel.dart';
 // The station's own stuck-detector — owned + ticked by the StationDriver.
 export 'src/kernel/wedge_monitor.dart';
 export 'src/kernel/idle.dart';

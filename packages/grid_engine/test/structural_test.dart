@@ -103,7 +103,7 @@ Directory _libSrc() {
       final probe = Directory(p.join(dir.path, rel));
       if (probe.existsSync() &&
           File(
-            p.join(probe.path, 'kernel', 'station_kernel.dart'),
+            p.join(probe.path, 'kernel', 'station_driver.dart'),
           ).existsSync()) {
         return probe;
       }
