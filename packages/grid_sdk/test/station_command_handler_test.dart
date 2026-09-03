@@ -487,6 +487,201 @@ void main() {
       },
     );
 
+    group('grid/rework — a PARTIAL molecule pour parks the same way '
+        '(tg-xpgx)', () {
+      /// The live shape: `applyGraph` LANDED every step bead, then the
+      /// crumb-stamping loop threw. The session therefore carries a FULL
+      /// `pending` cursor (no `grid.step.state` key reads back as
+      /// `StepState.pending`) AND an open gate at the bare work-bead root.
+      List<Bead> partialPour() => const [
+        Bead(
+          id: 'tgdog-session',
+          issueType: GridIssueTypes.session,
+          metadata: {
+            'work_bead': 'tg-1',
+            'rig': 'tgdog',
+            SessionBeadKeys.model: kSessionModelMolecule,
+          },
+        ),
+        Bead(
+          id: 'tgdog-gate',
+          issueType: GridIssueTypes.gate,
+          metadata: {
+            'rig': 'tgdog',
+            'blocks': 'tgdog-session',
+            'node': 'tg-1',
+            'reason':
+                'Molecule pour failed: BdTimeoutException: bd timed out '
+                'after 15000ms: bd update --set-metadata grid.step.crumb',
+          },
+        ),
+        Bead(
+          id: 'tgdog-step-specify',
+          issueType: GridIssueTypes.step,
+          metadata: {
+            'rig': 'tgdog',
+            MoleculeStepKeys.path: 'tg-1/specify',
+            MoleculeStepKeys.session: 'tgdog-session',
+          },
+        ),
+        Bead(
+          id: 'tgdog-step-build',
+          issueType: GridIssueTypes.step,
+          metadata: {
+            'rig': 'tgdog',
+            MoleculeStepKeys.path: 'tg-1/build',
+            MoleculeStepKeys.session: 'tgdog-session',
+          },
+        ),
+      ];
+
+      _RecordingRunner reapableStateRunner() =>
+          _RecordingRunner()
+            ..openBeadsResult = const [
+              Bead(
+                id: 'tgdog-step-specify',
+                issueType: GridIssueTypes.step,
+                metadata: {
+                  StationBeadWriter.stepSessionKey: 'tgdog-session',
+                  'rig': 'tgdog',
+                },
+              ),
+              Bead(
+                id: 'tgdog-step-build',
+                issueType: GridIssueTypes.step,
+                metadata: {
+                  StationBeadWriter.stepSessionKey: 'tgdog-session',
+                  'rig': 'tgdog',
+                },
+              ),
+            ];
+
+      Future<GridCommandResult> rework(
+        List<Bead> stateBeads, {
+        _RecordingRunner? stateRunner,
+      }) =>
+          _handler(
+            state: _Source(_snapshot(stateBeads)),
+            work: _Source(_workSnapshot()),
+            stateRunner: stateRunner ?? _RecordingRunner(),
+            workRunner: _RecordingRunner(),
+          )(
+            const GridCommandRequest.rework(
+              beadId: 'tg-1',
+              note: 'recovered partial molecule pour',
+            ),
+          );
+
+      Matcher notParked() => isA<GridCommandRefused>().having(
+        (value) => value.code,
+        'code',
+        'session_not_parked',
+      );
+
+      test('ACCEPTS a partial pour: a FULL pending cursor, no gated step, an '
+          'open gate at the bare work-bead root', () async {
+        final stateRunner = reapableStateRunner();
+        expect(
+          await rework(partialPour(), stateRunner: stateRunner),
+          isA<GridCommandCompleted>(),
+          reason:
+              'the open gate naming the session IS the park; a cursor of '
+              'never-run pending steps is not a mid-flight session',
+        );
+        expect(_reworkUpdates(stateRunner), hasLength(1));
+      });
+
+      test('the partial pour\'s landed graph is REAPED by the retire — no '
+          'orphan step beads, no hand-closing', () async {
+        final stateRunner = reapableStateRunner();
+        await rework(partialPour(), stateRunner: stateRunner);
+        final batch = stateRunner.calls.singleWhere(
+          (call) => call.first == 'batch',
+        );
+        final script = stateRunner.stdins[stateRunner.calls.indexOf(batch)]!;
+        expect(
+          script.split('\n'),
+          containsAll(<String>[
+            'close tgdog-step-specify',
+            'close tgdog-step-build',
+          ]),
+        );
+      });
+
+      test('REFUSES a RUNNING step even under an open gate — the widening '
+          'never retires a live round', () async {
+        expect(
+          await rework([
+            ...partialPour(),
+            Bead(
+              id: 'tgdog-step-agent',
+              issueType: GridIssueTypes.step,
+              metadata: {
+                'rig': 'tgdog',
+                MoleculeStepKeys.path: 'tg-1/agent',
+                MoleculeStepKeys.session: 'tgdog-session',
+                MoleculeStepKeys.state: StepState.running.name,
+              },
+            ),
+          ]),
+          notParked(),
+        );
+      });
+
+      test(
+        'REFUSES a pending cursor with NO open gate naming the session',
+        () async {
+          expect(
+            await rework(
+              partialPour()
+                  .where((bead) => bead.issueType != GridIssueTypes.gate)
+                  .toList(growable: false),
+            ),
+            notParked(),
+          );
+        },
+      );
+
+      test('a COMMITTEE-shaped park is unchanged: a gated step under a '
+          'review/route gate still retires', () async {
+        final stateRunner = _RecordingRunner();
+        expect(
+          await rework([
+            const Bead(
+              id: 'tgdog-session',
+              issueType: GridIssueTypes.session,
+              metadata: {
+                'work_bead': 'tg-1',
+                'rig': 'tgdog',
+                SessionBeadKeys.model: kSessionModelMolecule,
+              },
+            ),
+            const Bead(
+              id: 'tgdog-gate',
+              issueType: GridIssueTypes.gate,
+              metadata: {
+                'rig': 'tgdog',
+                'blocks': 'tgdog-session',
+                'node': 'tg-1/review/route',
+              },
+            ),
+            Bead(
+              id: 'tgdog-step-route',
+              issueType: GridIssueTypes.step,
+              metadata: {
+                'rig': 'tgdog',
+                MoleculeStepKeys.path: 'tg-1/review/route',
+                MoleculeStepKeys.session: 'tgdog-session',
+                MoleculeStepKeys.state: StepState.gated.name,
+              },
+            ),
+          ], stateRunner: stateRunner),
+          isA<GridCommandCompleted>(),
+        );
+        expect(_reworkUpdates(stateRunner), hasLength(1));
+      });
+    });
+
     test('a THROWING reap is non-fatal: the retire and the note both land, and '
         'the failure rides the result LOUD (2026-08-07 live: a reap exception '
         'ate the round\'s findings behind a generic 500)', () async {

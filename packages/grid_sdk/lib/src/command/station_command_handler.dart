@@ -327,22 +327,32 @@ final class StationCommandHandler implements GridCommandHandler {
       // is the identity and `observe` leaves this verb byte-identical.
       final cursor = _effectiveParkCursor(session.id, beadCursor);
       final states = cursor.values.map((node) => node.state);
-      // The SESSION-LEVEL park (tg-aec / tg-ehht): a failed molecule pour
-      // leaves a session with NO steps at all, parked by an open gate bead
-      // blocking it at the work-bead root. There is no gated STEP to find —
-      // recognizing the gate is what makes the pour-failure runbook's
-      // "repair the cause, then grid rework" actually executable.
-      final pourParked =
-          cursor.isEmpty &&
-          state.beads.any(
-            (bead) =>
-                bead.issueType == GridIssueTypes.gate &&
-                !bead.isClosed &&
-                _meta(bead, 'blocks') == session.id,
-          );
-      if (!pourParked &&
-          (states.contains(StepState.running) ||
-              !states.contains(StepState.gated))) {
+      // THE PARK PREDICATE KEYS ON THE OPEN GATE, NEVER ON CURSOR ABSENCE
+      // (tg-aec / tg-ehht / tg-xpgx). Minting a gate bead whose `blocks`
+      // names the session IS the park — the invariant
+      // `SessionScope._parkFailedMoleculePour` establishes and
+      // `StationBeadWriter.createGate` stamps. A pour failure never leaves a
+      // gated STEP to find, and its cursor is not reliably empty either: the
+      // pour dies BEFORE `applyGraph` (zero step beads — tg-ehht) or AFTER it
+      // while stamping crumbs (every step bead lands, all `pending` —
+      // tg-xpgx, 5 molecules + 28 steps live). The old `cursor.isEmpty`
+      // conjunct described only the first shape and refused the second,
+      // leaving a session that was neither driving nor reworkable with no
+      // sanctioned operator exit. This is A48's rule on the park axis: the
+      // MARKER, not the cursor, is the evidence.
+      final gateParked = state.beads.any(
+        (bead) =>
+            bead.issueType == GridIssueTypes.gate &&
+            !bead.isClosed &&
+            _meta(bead, 'blocks') == session.id,
+      );
+      // A `running` step REFUSES even under an open gate — the mid-flight
+      // guard the widening must not spend. A settled park has nothing running
+      // by construction (OPERATIONS §2.3: "an open-but-gated session with
+      // nothing running is the one safe retire"), so a live runner beside an
+      // open gate means the park has not settled and the retire would race it.
+      if (states.contains(StepState.running) ||
+          !(gateParked || states.contains(StepState.gated))) {
         return _refused(
           'session_not_parked',
           'Session "${session.id}" is open and not parked at a gate.',

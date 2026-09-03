@@ -84,7 +84,12 @@ an edit to the work.
   lifecycle type, slow store read, or other reported fault first. Then run
   `grid rework <work-bead-id> --grid-root <grid-home>
   --note "recovered failed molecule pour"` to
-  retire the gated empty session and mint a fresh round. Do not blind-resolve
+  retire the gated session and mint a fresh round. The retire accepts the park
+  whichever shape the pour left: NO step beads (it died before
+  `bd create --graph`) or a FULL `pending` graph (it died while
+  stamping crumbs — tg-xpgx). The OPEN GATE naming the session is what proves
+  the park, never the cursor, and the retire reaps whatever the pour did land. Do not
+  blind-resolve
   this gate: the failed scope has no molecule step to re-arm, so closing the
   evidence without rework only hides the partial mint.
 - **Never bare-resolve a gate born from a persisted lane F** (I-14). The route re-reads
