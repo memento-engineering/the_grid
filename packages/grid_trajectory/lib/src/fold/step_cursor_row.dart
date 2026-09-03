@@ -118,7 +118,7 @@ class StepCursorRow {
   final DateTime? readyAt;
   final DateTime? completedAt;
 
-  /// VARCHAR(24) wire — the tg-7ux split (work / store_unavailable / unknown).
+  /// VARCHAR(24) wire — work / store_unavailable / infra / unknown.
   final String? failureClass;
   final Map<String, Object?>? result;
   final int lastSeq;

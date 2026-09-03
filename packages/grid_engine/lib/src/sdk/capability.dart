@@ -310,10 +310,16 @@ class Ok extends StepOutcome {
 /// The capability failed (routes to supervision). Maps to `StepState.failed`.
 class Failed extends StepOutcome {
   /// Creates a failure with an optional [reason] (diagnostics).
-  const Failed([this.reason = '']);
+  const Failed([this.reason = '']) : nonResult = false;
+
+  /// Creates a failure for a step that produced nothing to grade.
+  const Failed.nonResult([this.reason = '']) : nonResult = true;
 
   /// A human-readable failure reason.
   final String reason;
+
+  /// Whether the step produced no result rather than a bad result.
+  final bool nonResult;
 }
 
 /// A cooperative cancellation flag a [Capability] polls across async gaps — set

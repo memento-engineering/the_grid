@@ -79,6 +79,15 @@ void main() {
       expect(upsert.columns['result'], {'rc': 1});
     });
 
+    test('the infra class rounds through the wire and reaches the fold', () {
+      expect(StepFailureClass.infra.wire, 'infra');
+      expect(StepFailureClass.fromWire('infra'), StepFailureClass.infra);
+      final delta = stepCursorDeltaFor(
+        transition(state: 'failed', extra: {'failure_class': 'infra'}),
+      );
+      expect((delta! as StepCursorUpsert).columns['failure_class'], 'infra');
+    });
+
     test('the gated half is a plain state on the cursor', () {
       final delta = stepCursorDeltaFor(transition(state: 'gated'));
       expect((delta! as StepCursorUpsert).columns['state'], 'gated');

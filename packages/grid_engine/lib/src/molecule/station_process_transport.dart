@@ -398,11 +398,13 @@ Future<StepOutcome> stationProcessDispatcher(
           case GateOutcome.clear:
             break;
           case GateOutcome.present:
-            return const Failed(
+            return const Failed.nonResult(
               'unresolved: declared completion artifact is not durable',
             );
           case GateOutcome.probeError:
-            return const Failed('unresolved: completion artifact probe failed');
+            return const Failed.nonResult(
+              'unresolved: completion artifact probe failed',
+            );
         }
       }
       try {

@@ -46,6 +46,7 @@ export 'src/sdk/sdk.dart';
 // (Track D), and the resolver that roots the subtree at the SessionResolver seam.
 export 'src/circuit/capability_host.dart'
     show CapabilityHost, CapabilityHostState;
+export 'src/circuit/harness_throttle.dart';
 export 'src/circuit/capability_registry.dart';
 export 'src/circuit/default_capability_registry.dart';
 export 'src/circuit/circuit_resolver.dart';

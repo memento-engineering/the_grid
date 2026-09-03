@@ -34,8 +34,15 @@ enum StepCause {
 }
 
 enum StepFailureClass {
+  /// The step's own WORK failed: the agent ran and produced a bad result.
   work('work'),
+
+  /// The failed write is a dropped persist recovered through the same writer.
   storeUnavailable('store_unavailable'),
+
+  /// The step never ran because its execution environment refused it.
+  infra('infra'),
+
   unknown('unknown');
 
   const StepFailureClass(this.wire);

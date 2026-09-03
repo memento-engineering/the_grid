@@ -264,9 +264,9 @@ class LeaseAllocation<H> extends Allocation {
           state = AllocationState.gone;
           _reportTerminal(AllocationCompleted(payload));
         }
-      case Failed(:final reason):
+      case final Failed failed:
         state = AllocationState.gone;
-        _reportTerminal(AllocationFailed(reason));
+        _reportTerminal(AllocationFailed.of(failed));
     }
   }
 

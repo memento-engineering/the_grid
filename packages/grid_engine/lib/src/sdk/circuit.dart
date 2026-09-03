@@ -109,6 +109,13 @@ abstract class Backoff with _$Backoff {
     max: Duration(seconds: 60),
   );
 
+  /// The harness-throttle schedule — +5, +15, then +30 minutes.
+  static const Backoff harnessThrottle = Backoff(
+    min: Duration(minutes: 5),
+    max: Duration(minutes: 30),
+    factor: 3.0,
+  );
+
   factory Backoff.fromJson(Map<String, dynamic> json) =>
       _$BackoffFromJson(json);
 

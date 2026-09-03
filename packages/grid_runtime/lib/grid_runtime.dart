@@ -67,7 +67,12 @@ export 'src/runtime/runtime_event.dart'
         SessionOrphaned,
         SessionStarted;
 export 'src/runtime/runtime_provider.dart'
-    show RuntimeProvider, SessionAlreadyExists, SessionNotWritable;
+    show
+        RuntimeProvider,
+        SessionAlreadyExists,
+        SessionNotWritable,
+        exitOutputHead,
+        kExitOutputHeadChars;
 export 'src/runtime/subprocess_provider.dart'
     show
         SpawnedProcess,
@@ -165,6 +170,7 @@ export 'package:grid_trajectory/grid_trajectory.dart'
         LeaseDisposition,
         MintPhase,
         RoundRetireCause,
+        StepFailureClass,
         TrajectoryProvenance,
         TrajectoryRecord;
 // Stage 1 (tg-zfek) — the trajectory derivation layer: the ONLY code that

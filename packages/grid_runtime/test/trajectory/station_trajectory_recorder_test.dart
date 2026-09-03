@@ -1200,7 +1200,7 @@ void main() {
         stepPath: 'tg-1/build',
         stepRound: 0,
         incarnation: 1,
-        storeUnavailable: false,
+        failureClass: StepFailureClass.work,
         failureReason: 'the agent exited 1',
         restartBudget: 2,
       );
@@ -1209,7 +1209,7 @@ void main() {
         stepPath: 'tg-1/build',
         stepRound: 0,
         incarnation: 2,
-        storeUnavailable: true,
+        failureClass: StepFailureClass.storeUnavailable,
         failureReason: 'persist "complete" failed: bd timeout',
         restartBudget: 1,
       );
@@ -1231,7 +1231,7 @@ void main() {
         stepPath: 'tg-1/build',
         stepRound: 0,
         incarnation: 3,
-        storeUnavailable: false,
+        failureClass: StepFailureClass.work,
       );
       expect((single().record as StepTransition).incarnation, 3);
     });

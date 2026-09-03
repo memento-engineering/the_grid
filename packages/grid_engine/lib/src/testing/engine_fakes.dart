@@ -74,6 +74,14 @@ class FakeRuntimeProvider implements RuntimeProvider {
   /// incarnation), [stop] releases it, [close] drops all.
   final Map<String, RuntimeEvent> _terminals = <String, RuntimeEvent>{};
 
+  /// Retained exit-output heads staged by tests, with [_terminals]' release
+  /// contract.
+  final Map<String, String> _exitOutput = <String, String>{};
+
+  /// Stages a bounded retained exit-output head for [name].
+  void stageExitOutput(String name, String output) =>
+      _exitOutput[name] = exitOutputHead(output);
+
   /// The programmable OS identities [identityOf] reports for a LIVE session —
   /// a test stages `identities[name] = (pid: …, pgid: …)` to exercise the
   /// SessionAlreadyExists synchronous-resolution path (tg-090). Unstaged names
@@ -118,6 +126,7 @@ class FakeRuntimeProvider implements RuntimeProvider {
     // new incarnation clears any stale prior terminal (the terminalOf release
     // contract).
     _terminals.remove(name);
+    _exitOutput.remove(name);
     _live.add(name);
     _lifecycles[name] = config.lifecycle;
     _interaction[name] = StreamController<List<int>>();
@@ -134,6 +143,7 @@ class FakeRuntimeProvider implements RuntimeProvider {
     }
     // stop RELEASES the retained terminal (the terminalOf release contract).
     _terminals.remove(name);
+    _exitOutput.remove(name);
   }
 
   @override
@@ -192,6 +202,9 @@ class FakeRuntimeProvider implements RuntimeProvider {
   RuntimeEvent? terminalOf(String name) => _terminals[name];
 
   @override
+  String exitOutputOf(String name) => _exitOutput[name] ?? '';
+
+  @override
   ({int pid, int? pgid})? identityOf(String name) =>
       _live.contains(name) ? identities[name] : null;
 
@@ -202,6 +215,7 @@ class FakeRuntimeProvider implements RuntimeProvider {
   /// from an `addTearDown`).
   Future<void> close() async {
     _terminals.clear();
+    _exitOutput.clear();
     _lifecycles.clear();
     for (final controller in _interaction.values) {
       if (!controller.isClosed) unawaited(controller.close());

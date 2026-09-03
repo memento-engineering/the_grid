@@ -54,6 +54,7 @@ import '../sdk/cursor.dart';
 import '../sdk/lease.dart' show LeaseAllocation;
 import '../sdk/route.dart';
 import 'capability_registry.dart';
+import 'harness_throttle.dart';
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
 /// keyed `ValueKey('$nodePath#$restartCount')` so a supervised restart re-keys.
@@ -451,7 +452,7 @@ class CapabilityHostState extends State<CapabilityHost>
         if (_completed) return;
         _completed = true;
         _firePersist('complete', () => _persistComplete(payload));
-      case AllocationFailed(:final reason):
+      case AllocationFailed(:final reason, :final nonResult):
         if (_completed) return;
         _completed = true;
         if (reason.contains('sourceless-workspace')) {
@@ -461,7 +462,7 @@ class CapabilityHostState extends State<CapabilityHost>
         }
         _firePersist(
           'failure',
-          () => _persistFailure(reason),
+          () => _persistReportedFailure(reason, nonResult: nonResult),
           recoverable: false,
         );
       case AllocationAdvanced(:final payload):
@@ -581,7 +582,7 @@ class CapabilityHostState extends State<CapabilityHost>
       // splits (§2.3).
       await _persistFailureClassed(
         'persist "$op" failed: $error',
-        storeUnavailable: true,
+        failureClass: StepFailureClass.storeUnavailable,
       );
     } on Object catch (e) {
       _emitFlare('step.persistRecoveryFailed', {
@@ -764,28 +765,80 @@ class CapabilityHostState extends State<CapabilityHost>
   /// as the truncated `failureReason`, merged into the SAME write; an empty
   /// reason (e.g. a bare process death carrying no diagnostic) omits the key.
   ///
-  /// [storeUnavailable] is NAMED (the codebase names its flags — `terminal:`,
-  /// `restartCount:`, `inferred:`): the positional shape read as nothing at
-  /// its one true call site. The optional-positional [reason] survives so the
+  /// The optional-positional [reason] survives so the
   /// `Future<void> Function(String)` tear-off at [_persistEscalate] still
   /// satisfies its seam.
   Future<void> _persistFailure([String reason = '']) =>
       _persistFailureClassed(reason);
 
-  /// [_persistFailure]'s full-signature body — the one site that knows a
-  /// `failed` is a dropped STORE WRITE passes `storeUnavailable: true`.
+  /// The retained output head for this incarnation's provider address.
+  String _exitOutputHead() => _ctx!.provider.exitOutputOf(
+    AllocationAddress(_sessionId, _nodePath).providerName,
+  );
+
+  /// Classifies a fast artifact-less failure before persisting it.
+  Future<void> _persistReportedFailure(
+    String reason, {
+    required bool nonResult,
+  }) async {
+    if (_cancelled || !context.mounted) return;
+    final timing = _terminalTiming();
+    final startedAt = timing.startedAt;
+    final ranFor = startedAt == null
+        ? null
+        : timing.finishedAt.difference(startedAt);
+    if (!isHarnessSilence(nonResult: nonResult, ranFor: ranFor)) {
+      await _persistFailureClassed(reason, timing: timing);
+      return;
+    }
+
+    final head = _exitOutputHead();
+    final since = harnessThrottleSince(
+      priorReason: seed.mount.node.failureReason,
+      now: timing.finishedAt,
+    );
+    final silentExits = seed.mount.node.restartCount + 1;
+    _emitFlare(kHarnessThrottledFlare, {
+      'since': since.toIso8601String(),
+      'silentExits': '$silentExits',
+      'exitOutput': head,
+      'underlying': truncateReason(reason),
+    });
+    await _persistFailureClassed(
+      harnessThrottleReason(
+        since: since,
+        silentExits: silentExits,
+        exitOutputHead: head,
+        underlying: reason,
+      ),
+      failureClass: StepFailureClass.infra,
+      timing: timing,
+    );
+  }
+
+  /// Persists a supervised failure using the class-appropriate schedule.
+  /// Infra exhaustion parks at a gate instead of leaving an unwatched failure.
   Future<void> _persistFailureClassed(
     String reason, {
-    bool storeUnavailable = false,
+    StepFailureClass failureClass = StepFailureClass.work,
+    ({DateTime? startedAt, DateTime finishedAt, int? durationMs})? timing,
   }) async {
     if (_cancelled || !context.mounted) return;
     final next = seed.mount.node.restartCount + 1;
     final exhausted = next >= seed.mount.maxRestarts;
-    final cooldown = exhausted
-        ? null
-        : _now().add(seed.mount.backoff.delayFor(next));
+    final infra = failureClass == StepFailureClass.infra;
     final failureReason = reason.isEmpty ? null : reason;
-    final timing = _terminalTiming();
+    final stamps = timing ?? _terminalTiming();
+    if (infra && exhausted) {
+      await _persistThrottleGate(
+        reason: reason,
+        silentExits: next,
+        timing: stamps,
+      );
+      return;
+    }
+    final schedule = infra ? Backoff.harnessThrottle : seed.mount.backoff;
+    final cooldown = exhausted ? null : _now().add(schedule.delayFor(next));
     await _ctx!.writer.update(
       _stepBeadId,
       metadata: _moleculeMetadata(
@@ -793,34 +846,75 @@ class CapabilityHostState extends State<CapabilityHost>
         restartCount: next,
         cooldownUntil: cooldown,
         failureReason: failureReason,
-        timing: timing,
+        timing: stamps,
       ),
     );
-    // §2.3's `step.transition (failed)` row, carrying two facts the bead
-    // cannot express:
+    // §2.3's `step.transition (failed)` row carries the succession fact and a
+    // failure class the legacy bead cannot express:
     //
     //  * `incarnation` is the BUMPED restartCount this write just persisted —
     //    the successor the ValueKey re-key is about to mount is incarnation
     //    `next`, so the log records the succession with no event to key on
     //    (`RuntimeEvent.respawned` has zero production emitters, r2 major 7);
-    //  * `failure_class` splits the tg-7ux CONFLATION. The bead says `failed`
-    //    for a step whose WORK failed and for a step whose failure is a
-    //    DROPPED PERSIST recovered through this same writer — one state, two
-    //    causes, indistinguishable in the incumbent and separated here.
+    //  * `failure_class` separates failed WORK, a DROPPED PERSIST recovered
+    //    through this same writer, and an INFRA non-result — one legacy state,
+    //    three causes separated in the trajectory.
     _recorder.stepFailed(
       sessionId: _sessionId,
       stepPath: _nodePath,
       stepRound: _stepRound,
       incarnation: next,
-      storeUnavailable: storeUnavailable,
+      failureClass: failureClass,
       attemptId: _attemptId,
       failureReason: failureReason,
       restartBudget: seed.mount.maxRestarts - next,
-      startedAt: timing.startedAt,
+      startedAt: stamps.startedAt,
       cooldownUntil: cooldown,
     );
     _emitFlare('step.failed', const {});
   }
+
+  /// Parks an exhausted harness-throttle failure through the shared gate
+  /// primitive so the round remains reworkable.
+  Future<void> _persistThrottleGate({
+    required String reason,
+    required int silentExits,
+    required ({DateTime? startedAt, DateTime finishedAt, int? durationMs})
+    timing,
+  }) => persistRaisedEscalation(
+    station: _ctx!,
+    services: _services,
+    request: EscalationRequest(
+      beadId: _beadId,
+      sessionId: _sessionId,
+      nodePath: _nodePath,
+      reason: harnessThrottleGateReason(
+        sessionId: _sessionId,
+        nodePath: _nodePath,
+        since: harnessThrottleSince(
+          priorReason: seed.mount.node.failureReason,
+          now: timing.finishedAt,
+        ),
+        silentExits: silentExits,
+        exitOutputHead: _exitOutputHead(),
+      ),
+      rewindCount: seed.mount.node.rewindCount,
+    ),
+    stepBeadId: _stepBeadId,
+    gatedMetadata: _moleculeMetadata(
+      StepState.gated,
+      restartCount: silentExits,
+      failureReason: reason,
+      timing: timing,
+    ),
+    isActive: () => !_cancelled && context.mounted,
+    failToSupervision: _persistFailure,
+    emitFlare: _emitFlare,
+    recorder: _recorder,
+    stepRound: _stepRound,
+    incarnation: silentExits,
+    attemptId: _attemptId,
+  );
 
   /// ADVANCE (M5 D-4a): move the cursor forward. At the ROOT circuit's TERMINAL
   /// step this ACTUATES the substation's bound [DeliveryMethod] and merges its

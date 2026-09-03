@@ -456,6 +456,23 @@ void main() {
       },
     );
 
+    test('a non-zero exit is failed work, not a non-result', () async {
+      final reports = <AllocationReport>[];
+      final provider = FakeRuntimeProvider();
+      final alloc = _RecProcessCap([]).createAllocation(
+        _allocCtx(
+          transport: provider,
+          sink: reports.add,
+          cancel: CancelToken(),
+        ),
+      );
+      await alloc.startOrAdopt();
+      provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1));
+      await _pump();
+
+      expect(reports.whereType<AllocationFailed>().single.nonResult, isFalse);
+    });
+
     test(
       'a daemon reaches ready (state=ready) WITHOUT terminating, then a later '
       'death reports Failed (no latch on ready — OQ-5)',

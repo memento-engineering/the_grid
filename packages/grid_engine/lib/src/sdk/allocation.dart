@@ -221,10 +221,21 @@ class AllocationCompleted extends AllocationReport {
 /// exhausted breaker) and latches.
 class AllocationFailed extends AllocationReport {
   /// Reports a failure with an optional diagnostic [reason].
-  const AllocationFailed([this.reason = '']);
+  const AllocationFailed([this.reason = '']) : nonResult = false;
+
+  /// Reports a failure for an effect that produced nothing to grade.
+  const AllocationFailed.nonResult([this.reason = '']) : nonResult = true;
+
+  /// Preserves [outcome]'s classification when mapping from [StepOutcome].
+  factory AllocationFailed.of(Failed outcome) => outcome.nonResult
+      ? AllocationFailed.nonResult(outcome.reason)
+      : AllocationFailed(outcome.reason);
 
   /// A human-readable failure reason.
   final String reason;
+
+  /// Whether the effect produced no result rather than a bad result.
+  final bool nonResult;
 }
 
 /// The route ADVANCED (M5 D-4a) — the cursor moves forward. The Host persists
@@ -523,7 +534,7 @@ class ServiceAllocation extends Allocation {
   /// ordinary service does not route (M5 D-4a): its only arms are Ok/Failed.
   AllocationReport _reportFor(StepOutcome outcome) => switch (outcome) {
     Ok(:final payload) => AllocationCompleted(payload),
-    Failed(:final reason) => AllocationFailed(reason),
+    final Failed failed => AllocationFailed.of(failed),
   };
 
   @override
@@ -911,7 +922,7 @@ class ProcessAllocation extends Allocation {
         case GateOutcome.present:
           state = AllocationState.gone;
           context.sink(
-            const AllocationFailed(
+            const AllocationFailed.nonResult(
               'unresolved: declared completion artifact is not durable',
             ),
           );
@@ -919,7 +930,7 @@ class ProcessAllocation extends Allocation {
         case GateOutcome.probeError:
           state = AllocationState.gone;
           context.sink(
-            const AllocationFailed(
+            const AllocationFailed.nonResult(
               'unresolved: completion artifact probe failed',
             ),
           );
