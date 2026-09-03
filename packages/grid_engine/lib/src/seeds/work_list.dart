@@ -11,6 +11,7 @@ import '../domain/mount_eligibility.dart';
 import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/linked_sessions.dart';
 import '../domain/mount_attempt.dart';
 import '../domain/rework.dart';
 import '../domain/session_bead.dart';
@@ -20,6 +21,7 @@ import '../domain/substation_config.dart';
 import '../kernel/station_services.dart';
 import '../kernel/trajectory_scope.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
+import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import 'work_bead.dart';
 import 'provider.dart';
@@ -84,10 +86,16 @@ class _WorkListState extends State<WorkList>
   /// genuine positive terminal.
   final Set<String> _mountedIds = <String>{};
 
-  /// Bead ids whose HELD session has already been reported (I-10) — the flare is
-  /// LOUD but said ONCE per bead per station lifetime, never once per build (the
-  /// same rising-edge discipline as the wedge monitor).
-  final Set<String> _heldReported = <String>{};
+  /// Bead ids whose TERMINAL-cursor skip has already been reported (tg-83k1) —
+  /// the flare is LOUD but said ONCE per bead per station lifetime.
+  final Set<String> _terminalSkipReported = <String>{};
+
+  /// Surplus session ids already scheduled for demotion. The projection lags
+  /// the write by a store round-trip, so without the latch every rebuild in
+  /// that window would re-key the same row again.
+  final Set<String> _surplusRetiresScheduled = <String>{};
+  final Set<String> _surplusAliveReported = <String>{};
+  final Set<String> _sessionAmbiguityReported = <String>{};
   final Set<String> _gateSweepsScheduled = <String>{};
 
   /// `<workBeadId>:<attempt>` pairs already written to the DURABLE remount
@@ -359,7 +367,12 @@ class _WorkListState extends State<WorkList>
         }
       }
 
-      final session = _snapshot.sessionsByWorkBead[bead.id];
+      // THE JOIN, over ALL of this bead's linked rows (tg-83k1) — not just the
+      // one the map publishes. `verdict.winner` IS
+      // `_snapshot.sessionsByWorkBead[bead.id]`; the verdict additionally
+      // states what the OTHER rows mean.
+      final verdict = linkedSessionVerdictOf(_snapshot.linkedSessions(bead.id));
+      final session = verdict.winner;
       final retiredSession = session == null
           ? _latestRetiredSession(bead.id, _snapshot.sessionsByWorkBead.values)
           : null;
@@ -405,6 +418,14 @@ class _WorkListState extends State<WorkList>
           switch (disposition) {
             case DoneSession():
               final sessionId = session?.sessionId ?? '';
+              _reportTerminalSkip(
+                services,
+                bead.id,
+                sessionId,
+                'done',
+                'the session closed at a positive terminal — landed work is '
+                    'never re-driven',
+              );
               if (sessionId.isNotEmpty && stationServices != null) {
                 _scheduleGateSweep(
                   stationServices,
@@ -416,11 +437,31 @@ class _WorkListState extends State<WorkList>
                 );
               }
             case HeldSession(:final reason):
-              _reportHeld(services, bead.id, session?.sessionId ?? '', reason);
+              _reportTerminalSkip(
+                services,
+                bead.id,
+                session?.sessionId ?? '',
+                'held',
+                reason,
+              );
             case NoSession() || LiveSession() || VoidedSession():
               break;
           }
         }
+        continue;
+      }
+
+      // THE SURPLUS DEMOTION (tg-83k1). Re-key the older dead rows off this
+      // bead through the SAME `voidRetireMetadata` payload and the SAME
+      // `voidKeyFor` shape `SessionScope` writes — one re-key mechanic, never a
+      // second — so the join goes single-valued and A48's retire-then-mint path
+      // runs exactly as it does for a bead that only ever had one row.
+      if (_holdForLinkedSessions(
+        stationServices,
+        services,
+        bead: bead,
+        verdict: verdict,
+      )) {
         continue;
       }
 
@@ -652,27 +693,158 @@ class _WorkListState extends State<WorkList>
     }
   }
 
-  /// Emits ONE LOUD line (I-10) when a HELD session — an escalated or
-  /// declined-rework round a HUMAN owns — keeps its work bead unmounted. A
-  /// station that declines to drive ready work must say WHY, once: silent
-  /// forever-waits are exactly how I-10 hid for an hour (the guard principle,
-  /// ADR-0008 D3 — LOUD or GONE). Deduped per bead; a throwing/absent transport
-  /// never breaks the mount reconcile.
-  void _reportHeld(
+  /// Whether [verdict]'s surplus rows HOLD [bead] out of this build.
+  ///
+  /// True only for the fail-closed case: a surplus dead row whose recorded
+  /// process fences still probe ALIVE. Minting beside a running twin
+  /// double-runs the work, so the bead waits — LOUD — until the operator kills
+  /// the group. This is A48's liveness clause ("Any fence still ALIVE refuses
+  /// the mint LOUD … and the scope goes inert") applied at the surplus, which
+  /// `SessionScope` never sees.
+  bool _holdForLinkedSessions(
+    StationServices? stationServices,
+    ServiceBundle? services, {
+    required Bead bead,
+    required LinkedSessionVerdict verdict,
+  }) {
+    switch (verdict) {
+      case RemintLinkedSession(:final session, :final surplus):
+        if (surplus.isEmpty) return false;
+        final probe = stationServices?.liveness ?? neverLive;
+        final alive = surplus
+            .where((row) => staleFences(row).any(probe))
+            .toList(growable: false);
+        if (alive.isNotEmpty) {
+          _reportSurplusAlive(services, bead.id, alive);
+          return true;
+        }
+        if (stationServices != null) {
+          _scheduleSurplusRetire(
+            stationServices,
+            services,
+            workBeadId: bead.id,
+            keptSessionId: session.sessionId ?? '',
+            surplus: surplus,
+          );
+        }
+        return false;
+      case AdoptLinkedSession(:final session, :final rivals):
+        if (rivals.isNotEmpty) {
+          _reportSessionAmbiguity(services, bead.id, session, rivals);
+        }
+        return false;
+      case NoLinkedSession() || BlockedLinkedSession():
+        return false;
+    }
+  }
+
+  /// Re-keys every row in [surplus] off [workBeadId], off `build` (invariant 2)
+  /// and through the ONE chokepoint (invariant 3), latched per session id.
+  void _scheduleSurplusRetire(
+    StationServices stationServices,
+    ServiceBundle? services, {
+    required String workBeadId,
+    required String keptSessionId,
+    required List<SessionProjection> surplus,
+  }) {
+    for (final row in surplus) {
+      final deadId = row.sessionId ?? '';
+      if (deadId.isEmpty) continue;
+      if (!_surplusRetiresScheduled.add(deadId)) continue;
+      final reason =
+          'surplus linked session: "$workBeadId" keeps "$keptSessionId"; this '
+          'closed row was demoted so the join stays single-valued';
+      scheduleMicrotask(() async {
+        try {
+          await stationServices.writer.update(
+            deadId,
+            metadata: voidRetireMetadata(
+              workBeadId: workBeadId,
+              deadSessionId: deadId,
+              reason: reason,
+            ),
+          );
+          _flareWork(services, 'work.sessionSurplusRetired', {
+            'beadId': workBeadId,
+            'sessionId': deadId,
+            'workBeadKey': voidKeyFor(workBeadId, deadId),
+            'keptSessionId': keptSessionId,
+          });
+        } on Object catch (error) {
+          // LOUD and deliberately non-blocking, exactly like the mount-attempt
+          // budget: a demotion that cannot be written must not also stop the
+          // station from working. The latch is NOT released — a write storm
+          // against a failing store would be a worse failure than one bead
+          // waiting for the operator this flare summons.
+          _flareWork(services, 'work.sessionSurplusRetireFailed', {
+            'beadId': workBeadId,
+            'sessionId': deadId,
+            'reason': truncateReason('$error'),
+          });
+        }
+      });
+    }
+  }
+
+  /// Emits ONE LOUD line when a bead is SKIPPED because its joined session
+  /// cursor is a BLOCKING terminal (A48 `done` / `held`).
+  ///
+  /// tg-83k1 point 3: the trap state must never be inferred from an ABSENCE.
+  /// Before this, `done` skipped in total silence — the operator had to
+  /// cross-reference a closed-session list against an open PR list to see it —
+  /// and only `held` said anything (`work.held`, which this replaces: one
+  /// concept, one flare, carrying WHICH terminal it was).
+  void _reportTerminalSkip(
     ServiceBundle? services,
     String beadId,
     String sessionId,
+    String disposition,
     String reason,
   ) {
-    if (!_heldReported.add(beadId)) return;
+    if (!_terminalSkipReported.add(beadId)) return;
+    _flareWork(services, 'work.terminalSkip', {
+      'beadId': beadId,
+      'sessionId': sessionId,
+      'disposition': disposition,
+      'reason': truncateReason(reason),
+    });
+  }
+
+  void _reportSurplusAlive(
+    ServiceBundle? services,
+    String beadId,
+    List<SessionProjection> alive,
+  ) {
+    if (!_surplusAliveReported.add(beadId)) return;
+    _flareWork(services, 'work.sessionSurplusAlive', {
+      'beadId': beadId,
+      'sessionIds': alive.map((row) => row.sessionId ?? '').join(','),
+    });
+  }
+
+  void _reportSessionAmbiguity(
+    ServiceBundle? services,
+    String beadId,
+    SessionProjection adopted,
+    List<SessionProjection> rivals,
+  ) {
+    if (!_sessionAmbiguityReported.add(beadId)) return;
+    _flareWork(services, 'work.sessionAmbiguous', {
+      'beadId': beadId,
+      'adoptedSessionId': adopted.sessionId ?? '',
+      'rivalSessionIds': rivals.map((row) => row.sessionId ?? '').join(','),
+    });
+  }
+
+  static void _flareWork(
+    ServiceBundle? services,
+    String name,
+    Map<String, String> data,
+  ) {
     try {
-      services?.transport?.flare('work.held', {
-        'beadId': beadId,
-        'sessionId': sessionId,
-        'reason': truncateReason(reason),
-      });
+      services?.transport?.flare(name, data);
     } catch (_) {
-      // A throwing transport never breaks the mount reconcile — swallow.
+      // A throwing transport never breaks the mount reconcile.
     }
   }
 

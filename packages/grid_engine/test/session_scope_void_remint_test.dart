@@ -339,7 +339,15 @@ void main() {
 
       expect(f.runner.calls, isEmpty);
       expect(reg.events, isEmpty);
-      expect(transport.flares, isEmpty);
+      expect(transport.named('work.terminalSkip'), hasLength(1));
+      expect(
+        transport.named('work.terminalSkip').single.data['disposition'],
+        'done',
+      );
+      expect(
+        transport.named('work.terminalSkip').single.data['sessionId'],
+        'tgdog-done',
+      );
     });
 
     test('CONTROL — a LEGACY done session (no marker, an all-positive-terminal '
@@ -407,9 +415,10 @@ void main() {
 
       expect(f.runner.calls, isEmpty);
       expect(reg.events, isEmpty);
-      final held = transport.named('work.held');
+      final held = transport.named('work.terminalSkip');
       expect(held, hasLength(1));
       expect(held.single.data['sessionId'], 'tgdog-esc');
+      expect(held.single.data['disposition'], 'held');
 
       // A second snapshot must NOT re-flare (LOUD, never spammy).
       joined.push(
@@ -424,7 +433,7 @@ void main() {
       );
       m.owner.flush();
       await _pump();
-      expect(transport.named('work.held'), hasLength(1));
+      expect(transport.named('work.terminalSkip'), hasLength(1));
     });
 
     test('CONTROL — an OPEN session for the bead is still ADOPTED (no mint, no '

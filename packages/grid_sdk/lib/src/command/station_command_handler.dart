@@ -228,23 +228,35 @@ final class StationCommandHandler implements GridCommandHandler {
     final sessions = state.beads
         .where((bead) => bead.issueType == GridIssueTypes.session)
         .toList(growable: false);
-    final current = sessions
+    final linked = sessions
         .where((bead) => _meta(bead, SessionBeadKeys.workBead) == beadId)
         .toList(growable: false);
-    if (current.isEmpty) {
+    if (linked.isEmpty) {
       return _refused(
         'session_not_found',
         'No session is linked to "$beadId".',
       );
     }
-    if (current.length != 1) {
+    // REWORK KEYS ON OPEN SESSIONS ONLY (tg-83k1). A CLOSED row is never
+    // adoptable under A48 (its done/held/voided disposition separately governs
+    // the mount boundary), so counting closed history toward this live-session
+    // ambiguity refusal made `grid rework` unusable on any bead with mint
+    // history. The refusal survives for the ONE genuinely ambiguous shape: two
+    // or more OPEN rows, which is two live agents and a human's call.
+    final open = linked.where((bead) => !bead.isClosed).toList(growable: false);
+    if (open.length > 1) {
       return _refused(
         'session_ambiguous',
-        '${current.length} sessions are linked to "$beadId".',
+        '${open.length} sessions are linked to "$beadId".',
       );
     }
-
-    final session = current.single;
+    // All-terminal: retire the row the JOIN publishes, resolved through the
+    // engine's ONE ordering rule rather than a second recency rule beside it —
+    // so the operator verb and the frontier never disagree about which round is
+    // current. That row is the newest dead key, or the BLOCKING terminal when
+    // one is present, which is precisely the row an operator runs `grid rework`
+    // to unstick.
+    final session = open.length == 1 ? open.single : _publishedRow(linked);
     final retiredRoundAccounting = sessions
         .map((candidate) {
           final steps = state.beads
@@ -430,6 +442,13 @@ final class StationCommandHandler implements GridCommandHandler {
         if (reapFailure != null) 'reapFailure': reapFailure,
       },
     );
+  }
+
+  /// The row `JoinedSnapshot` would publish for [linked], resolved through the
+  /// engine's own `orderLinkedSessions` over `projectSession`.
+  static Bead _publishedRow(List<Bead> linked) {
+    final published = orderLinkedSessions(linked.map(projectSession)).first;
+    return linked.firstWhere((bead) => bead.id == published.sessionId);
   }
 
   Future<GridCommandResult> _listGates() async {

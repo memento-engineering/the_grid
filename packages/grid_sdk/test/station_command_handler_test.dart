@@ -1247,13 +1247,61 @@ void main() {
       ),
     );
     test(
-      'multiple linked sessions',
+      'two OPEN linked sessions stay ambiguous',
       () => refused(
-        state: _snapshot([_session('tgdog-a'), _session('tgdog-b')]),
+        state: _snapshot([
+          _session('tgdog-a', open: true),
+          _session('tgdog-b', open: true),
+        ]),
         work: _workSnapshot(),
         code: 'session_ambiguous',
       ),
     );
+
+    test('tg-83k1 — CLOSED rows never count: one OPEN row beside two closed '
+        'twins is selected, and refuses only for not being parked', () async {
+      final stateRunner = _RecordingRunner();
+      final workRunner = _RecordingRunner();
+      final result = await _handler(
+        state: _Source(
+          _snapshot([
+            _session('tgdog-twin-a'),
+            _session('tgdog-twin-b'),
+            _session('tgdog-session', open: true),
+          ]),
+        ),
+        work: _Source(_workSnapshot()),
+        stateRunner: stateRunner,
+        workRunner: workRunner,
+      )(const GridCommandRequest.rework(beadId: 'tg-1'));
+
+      expect(
+        result,
+        isA<GridCommandRefused>()
+            .having((value) => value.code, 'code', 'session_not_parked')
+            .having(
+              (value) => value.message,
+              'message',
+              'Session "tgdog-session" is open and not parked at a gate.',
+            ),
+      );
+    });
+
+    test('tg-83k1 — ALL-TERMINAL rows re-key the published row instead of '
+        'refusing session_ambiguous', () async {
+      final stateRunner = _RecordingRunner();
+      final result = await _handler(
+        state: _Source(
+          _snapshot([_session('tgdog-old'), _session('tgdog-session')]),
+        ),
+        work: _Source(_workSnapshot()),
+        stateRunner: stateRunner,
+        workRunner: _RecordingRunner(),
+      )(const GridCommandRequest.rework(beadId: 'tg-1'));
+
+      expect(result, isA<GridCommandCompleted>());
+      expect(_reworkUpdates(stateRunner), hasLength(1));
+    });
     test(
       'open session not parked at a gate',
       () => refused(
@@ -1823,10 +1871,11 @@ Bead _session(
   String workBead = 'tg-1',
   bool reachedVerdict = false,
   bool molecule = false,
+  bool open = false,
 }) => Bead(
   id: id,
   issueType: GridIssueTypes.session,
-  status: BeadStatus.closed,
+  status: open ? BeadStatus.open : BeadStatus.closed,
   metadata: {
     'rig': 'tgdog',
     'work_bead': workBead,

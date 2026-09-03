@@ -19,6 +19,7 @@ class JoinedSnapshot {
   const JoinedSnapshot({
     required this.graph,
     this.sessionsByWorkBead = const {},
+    this.surplusSessionsByWorkBead = const {},
     this.mountAttemptsByWorkBead = const {},
   });
 
@@ -33,6 +34,7 @@ class JoinedSnapshot {
         capturedAt: DateTime.fromMillisecondsSinceEpoch(0),
       ),
       sessionsByWorkBead = const {},
+      surplusSessionsByWorkBead = const {},
       mountAttemptsByWorkBead = const {};
 
   /// The read-workspace work graph (pristine source — read-only, A37).
@@ -49,6 +51,31 @@ class JoinedSnapshot {
   /// projection it already holds, so a molecule session is additive, not a
   /// second parallel join.
   final Map<String, SessionProjection> sessionsByWorkBead;
+
+  /// The SURPLUS session rows per work bead id (tg-83k1) — every projection
+  /// whose `work_bead` equals the key EXCEPT the one [sessionsByWorkBead]
+  /// publishes, in `orderLinkedSessions` order (newest first).
+  ///
+  /// Absent for the overwhelmingly common single-row bead, and empty BY
+  /// DEFAULT so a hand-built snapshot keeps its exact prior meaning:
+  /// [linkedSessions] then returns just the published row.
+  ///
+  /// A surplus row is the raw `projectSession` projection: the molecule/gate
+  /// attachments and the dual-read overlay enrich only the PUBLISHED row (the
+  /// overlay identity rule keys on the published session's own id). The mount
+  /// boundary reads only `isTerminal` / `sessionId` / `closedAt` / the process
+  /// fences off a surplus row, so the un-enriched shape is what it needs.
+  final Map<String, List<SessionProjection>> surplusSessionsByWorkBead;
+
+  /// Every session row linked to [workBeadId] — the published row first, then
+  /// its surplus. The ONE read the mount boundary joins on.
+  List<SessionProjection> linkedSessions(String workBeadId) {
+    final published = sessionsByWorkBead[workBeadId];
+    final surplus =
+        surplusSessionsByWorkBead[workBeadId] ?? const <SessionProjection>[];
+    if (published == null) return surplus;
+    return <SessionProjection>[published, ...surplus];
+  }
 
   /// The DURABLE remount-attempt budget per work bead id (tg-zlfu), projected
   /// from the state store's `type=mount-attempt` records.

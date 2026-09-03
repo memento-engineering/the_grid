@@ -238,7 +238,7 @@ void main() {
         ),
         isEmpty,
       );
-      expect(transport.named('work.held'), hasLength(1));
+      expect(transport.named('work.terminalSkip'), hasLength(1));
     },
   );
 }
