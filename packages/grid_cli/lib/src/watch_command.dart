@@ -10,6 +10,7 @@ import 'package:grid_sdk/grid_sdk.dart'
 
 import 'event_renderer.dart';
 import 'station_stores.dart';
+import 'watch_predicate.dart';
 
 /// `grid watch <substation-root>` — stream typed graph events from a
 /// substation's live work graph. A generic, asset-agnostic CLI-SDK command
@@ -39,6 +40,19 @@ class WatchCommand extends Command<int> {
         help:
             'Run for a fixed number of seconds then exit (for scripted '
             'demos / CI) instead of until Ctrl-C.',
+      )
+      ..addOption(
+        'until',
+        help:
+            'Block until a named condition holds, then exit 0. The set is '
+            'CLOSED: ${kWatchPredicateLiterals.join(', ')}. Requires '
+            '--timeout; mutually exclusive with --for-seconds.',
+      )
+      ..addOption(
+        'timeout',
+        help:
+            'Seconds to wait for --until before giving up with exit '
+            '$kWatchUntilTimedOut. Required whenever --until is passed.',
       );
   }
 
@@ -54,7 +68,8 @@ class WatchCommand extends Command<int> {
 
   @override
   String get invocation =>
-      'grid watch <substation-root> [--json] [--for-seconds N]';
+      'grid watch <substation-root> [--json] [--for-seconds N] '
+      '[--until <predicate> --timeout N]';
 
   @override
   Future<int> run() async {
@@ -75,6 +90,17 @@ class WatchCommand extends Command<int> {
       );
       return 64;
     }
+    final WatchUntil? until;
+    try {
+      until = armWatchUntil(
+        until: args.option('until'),
+        timeout: args.option('timeout'),
+        forSeconds: args.option('for-seconds'),
+      );
+    } on WatchUntilRefusal catch (e) {
+      stderr.writeln('grid watch: ${e.message}');
+      return 64;
+    }
     final SubstationWorkStore store;
     try {
       store = SubstationWorkStore.forRoot(rest.single);
@@ -88,6 +114,7 @@ class WatchCommand extends Command<int> {
       json: args.flag('json'),
       noSql: args.flag('no-sql'),
       runFor: seconds == null ? null : Duration(seconds: int.parse(seconds)),
+      until: until,
     );
   }
 }
@@ -102,6 +129,10 @@ class WatchCommand extends Command<int> {
 /// signal wait is skipped when [runForever] is false (tests drive a fixed
 /// duration via [runFor]). [workspaceOverride] bypasses store opening entirely
 /// (offline tests over a fake store); [dirExists] injects the existence probe.
+/// When [until] is armed the watch TERMINATES on the first event satisfying
+/// its predicate ([kWatchUntilSatisfied]), or on the arming's deadline
+/// ([kWatchUntilTimedOut]); [until] is mutually exclusive with [runFor], which
+/// the CLI enforces through `armWatchUntil`.
 Future<int> runWatch({
   required SubstationWorkStore store,
   bool json = false,
@@ -110,6 +141,7 @@ Future<int> runWatch({
   void Function(String)? err,
   bool runForever = true,
   Duration? runFor,
+  WatchUntil? until,
   BeadsWorkspace? workspaceOverride,
   DirectoryProbe? dirExists,
 }) async {
@@ -140,7 +172,7 @@ Future<int> runWatch({
   host.register();
 
   final renderer = EventRenderer(json: json);
-  final subscription = runtime.events.listen((event) {
+  void renderEvent(GraphEvent event) {
     write(
       renderer.render(
         event,
@@ -148,7 +180,22 @@ Future<int> runWatch({
         at: DateTime.now(),
       ),
     );
-  });
+  }
+
+  StreamSubscription<GraphEvent>? subscription;
+  Future<int>? untilExit;
+  if (until != null) {
+    // Armed BEFORE `runtime.start()`: `awaitPredicate` subscribes
+    // synchronously, so the baseline `SnapshotInitialized` is not missed.
+    untilExit = awaitPredicate(
+      events: runtime.events,
+      evaluator: PredicateEvaluator(until.predicate),
+      timeout: until.timeout,
+      render: renderEvent,
+    );
+  } else {
+    subscription = runtime.events.listen(renderEvent);
+  }
 
   if (!json) {
     write('grid watch — substation work store: ${workspace.root}');
@@ -156,6 +203,12 @@ Future<int> runWatch({
       'read path: ${bundle.readPath.name}  '
       '(${workspace.mode.name} mode, db ${workspace.database ?? '—'})',
     );
+    if (until != null) {
+      write(
+        'until: ${until.predicate.literal}  ·  timeout '
+        '${until.timeout.inSeconds}s',
+      );
+    }
     final info = await developer.Service.getInfo();
     final uri = info.serverUri;
     write(
@@ -169,9 +222,30 @@ Future<int> runWatch({
   await runtime.start(); // baseline snapshot + begin reacting
 
   Future<void> shutdown() async {
-    await subscription.cancel();
+    await subscription?.cancel();
     await host.dispose();
     await bundle.shutdown();
+  }
+
+  if (until != null) {
+    final int code;
+    try {
+      code = await untilExit!;
+    } on StateError catch (e) {
+      writeErr('grid watch: ${e.message}');
+      await shutdown();
+      return kWatchUntilBrokenStream;
+    }
+    if (!json) {
+      write(
+        code == kWatchUntilSatisfied
+            ? '\ngrid watch: --until ${until.predicate.literal} satisfied.'
+            : '\ngrid watch: --until ${until.predicate.literal} did NOT hold '
+                  'within ${until.timeout.inSeconds}s.',
+      );
+    }
+    await shutdown();
+    return code;
   }
 
   if (runFor != null) {
