@@ -11,6 +11,7 @@ import '../command/station_command_handler.dart';
 import '../stores/stores.dart';
 import '../trajectory/trajectory_config.dart';
 import '../trajectory/trajectory_harness.dart';
+import 'store_connection.dart';
 import 'station_work.dart';
 
 /// One substation's assembly identity — mirrors the `Substation` the author
@@ -72,6 +73,7 @@ class StationWorkRuntime {
     required this.trajectory,
     required this.stateSubstation,
     required this.readPathName,
+    required this.openStores,
     required StationDriver driver,
     required RestartReconciler restart,
     required RuntimeProvider provider,
@@ -120,6 +122,13 @@ class StationWorkRuntime {
   /// The controllers' read-path provenance (`sql` / `cli` per store) — banner
   /// material.
   final String readPathName;
+
+  /// The store connections this assembly opened, in shutdown order (state
+  /// store first). The runner's unwind closes them after `grid.teardown()` and
+  /// before it releases the station lock: [shutdown] closes the same pools,
+  /// but only a caller that can await keeps the isolate from surviving on an
+  /// established proxy socket.
+  final List<StoreConnection> openStores;
 
   final StationDriver _driver;
   final RestartReconciler _restart;
@@ -896,6 +905,10 @@ Future<StationWorkRuntime> assembleStationWork({
     trajectory: trajectory,
     stateSubstation: stateSubstation,
     readPathName: readPathName,
+    openStores: orderedStoreConnections(
+      state: stateBundle.dolt,
+      work: {for (final e in bundles.entries) e.key: e.value.dolt},
+    ),
     driver: driver,
     restart: restart,
     provider: provider,

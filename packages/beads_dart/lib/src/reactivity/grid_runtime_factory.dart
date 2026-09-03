@@ -23,10 +23,17 @@ class GridRuntimeBundle {
     required this.probeReader,
     required this.readPath,
     required this.shutdown,
+    this.dolt,
   });
 
   final GridControllerRuntime runtime;
   final BeadProbeReader probeReader;
+
+  /// The pooled Dolt read service this bundle opened, or null on
+  /// [ReadPath.cli] (no socket exists to close). Exposed so a station's
+  /// shutdown can await the socket close explicitly: [shutdown] closes it too,
+  /// and [DoltQueryService.close] is idempotent, so both paths are safe.
+  final DoltQueryService? dolt;
 
   /// The active read path: [ReadPath.sql] when pooled Dolt reads are in use,
   /// [ReadPath.cli] when composing via scoped lists (embedded mode, no
@@ -124,6 +131,7 @@ class GridRuntimeFactory {
       runtime: runtime,
       probeReader: probeReader,
       readPath: readPath,
+      dolt: dolt,
       shutdown: () async {
         await runtime.dispose();
         await dolt?.close();

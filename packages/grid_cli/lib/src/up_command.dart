@@ -33,6 +33,7 @@ import 'package:grid_sdk/grid_sdk.dart'
         StalenessWarned,
         StationRefusal,
         StationView,
+        StoreConnection,
         SubstationWorkSpec,
         TreeProjector,
         kNotWedged,
@@ -45,6 +46,14 @@ import 'station_flags.dart';
 import 'station_lock.dart';
 import 'station_stores.dart';
 import 'state_store_gc.dart';
+
+/// The per-store close budget in the resident's unwind.
+///
+/// `StationAttach.stop` gives a stopping station a 10 s grace before `down`
+/// reports a timeout, and the closes run in order (state store first), so a
+/// station holding three stores stays inside that grace even if every close
+/// hangs on a half-open socket.
+const Duration kStoreCloseTimeout = Duration(seconds: 2);
 
 /// Builds the station-authored delegate from parsed boot configuration ALONE
 /// (tg-1fa2.4): no wiring, no provisioner, no effect implementations —
@@ -348,12 +357,41 @@ class UpCommand extends Command<int> {
     // CONTINUES — every later step still runs, so the original error is
     // never masked and a lock release at the tail is guaranteed regardless
     // of which seat's dispose blew up.
-    Future<void> settle(String step, FutureOr<void> Function() action) async {
+    Future<bool> settle(
+      String step,
+      FutureOr<void> Function() action, {
+      Duration? within,
+    }) async {
       try {
-        await action();
+        final pending = action();
+        if (pending is Future<void>) {
+          await (within == null ? pending : pending.timeout(within));
+        }
+        return true;
       } on Object catch (error) {
         stderr.writeln('$prefix: unwind step "$step" failed: $error');
+        return false;
       }
+    }
+
+    // The socket half of the unwind: every store connection the live delegate
+    // opened is closed here — state store first (it is the last writer) — each
+    // on its own bounded budget. A throwing or hung close is loud and strands
+    // neither the closes beneath it nor the lock release.
+    Future<void> closeStores(List<StoreConnection> stores) async {
+      if (stores.isEmpty) return;
+      var closed = 0;
+      for (final store in stores) {
+        final settled = await settle(
+          'store close (${store.name})',
+          store.close,
+          within: kStoreCloseTimeout,
+        );
+        if (settled) closed += 1;
+      }
+      stdout.writeln(
+        '$prefix: store connections closed: $closed/${stores.length}',
+      );
     }
 
     final List<({SubstationWorkSpec seat, PrimaryCheckoutFreshness value})>
@@ -499,10 +537,12 @@ class UpCommand extends Command<int> {
       ControlResource? control,
       DevModeResource? devMode,
     }) async {
+      final stores = List<StoreConnection>.of(live.openStores);
       if (devMode != null) await settle('dev-mode dispose', devMode.dispose);
       if (control != null) await settle('control dispose', control.dispose);
       await settle('grid teardown', grid.teardown);
       await settle('projector dispose', treeProjector.dispose);
+      await closeStores(stores);
       await settle('lock release', stationLock.release);
       stderr.writeln('$prefix: $error');
       return 1;
@@ -583,12 +623,17 @@ class UpCommand extends Command<int> {
     // Each step is settled independently: a throwing dispose is loud but
     // never strands the steps beneath it — the lock release always runs last.
     Future<void> unwind() async {
+      // Read while the delegate is still live: `grid.teardown()` disposes it.
+      // The closes run after that teardown on purpose — the tree, the orphan
+      // sweep and the trajectory all read their stores on the way down.
+      final stores = List<StoreConnection>.of(live.openStores);
       if (devMode case final host?) {
         await settle('dev-mode dispose', host.dispose);
       }
       await settle('control dispose', control.dispose);
       await settle('grid teardown', grid.teardown);
       await settle('projector dispose', treeProjector.dispose);
+      await closeStores(stores);
       await settle('lock release', stationLock.release);
     }
 
