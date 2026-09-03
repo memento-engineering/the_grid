@@ -59,8 +59,12 @@ class _RecordingTransport implements ExplorationTransport {
       flares.add((name: name, data: data));
 }
 
-Bead _bead(String id) =>
-    Bead(id: id, issueType: IssueType.task, status: BeadStatus.open);
+Bead _bead(String id, {int priority = 0}) => Bead(
+  id: id,
+  issueType: IssueType.task,
+  status: BeadStatus.open,
+  priority: priority,
+);
 
 JoinedSnapshot _joined({
   required List<Bead> beads,
@@ -171,7 +175,8 @@ void main() {
         ),
       );
 
-      // Only the two LOWEST-id beads mount — deterministic admission order.
+      // Only the two LOWEST-id beads mount: all four are the same priority, so
+      // the lowest-id tie-break decides admission (tg-lohr).
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
       expect(transport.flares, hasLength(1));
       expect(transport.flares.single.name, 'work.throttled');
@@ -673,6 +678,204 @@ void main() {
         'count': '2',
         'beadIds': 'b-1,b-2',
       });
+    });
+
+    test('the cap binds: the HIGHEST-priority pending beads are admitted — a '
+        'P0 mounts ahead of an alphabetically EARLIER P4, and the lowest-id '
+        'tie-break still decides WITHIN one priority (tg-lohr)', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      // Ids chosen adversarially against the OLD lowest-id-first order: under
+      // it `tg-aaa` (P4) and `tg-bbb` (P1) would have taken both slots and the
+      // two P0s would have waited.
+      final beads = [
+        _bead('tg-aaa', priority: 4),
+        _bead('tg-bbb', priority: 1),
+        _bead('tg-mmm', priority: 0),
+        _bead('tg-zzz', priority: 0),
+      ];
+      final joined = JoinedSnapshotNotifier(
+        _joined(beads: beads, ready: {'tg-aaa', 'tg-bbb', 'tg-mmm', 'tg-zzz'}),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 2,
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+          ),
+        ),
+      );
+
+      // Both P0s take the slots, in lowest-id order within that priority.
+      expect(recorder.events, ['START work(tg-mmm)', 'START work(tg-zzz)']);
+      // The LOUD line keeps its shape and membership; the held beads are now
+      // listed in the same admission order, next-up (P1) first.
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.name, 'work.throttled');
+      expect(transport.flares.single.data, {
+        'count': '2',
+        'beadIds': 'tg-bbb,tg-aaa',
+      });
+    });
+
+    test('the mixed case — two substations x two priorities, one slot each: '
+        'each substation admits its OWN highest-priority bead and holds the '
+        'rest; the station ceiling is untouched (tg-lohr)', () {
+      final recorder = _Recorder();
+      final transportA = _RecordingTransport();
+      final transportB = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [
+            _bead('a-ace', priority: 3),
+            _bead('a-zed', priority: 0),
+            _bead('b-cat', priority: 4),
+            _bead('b-yak', priority: 1),
+          ],
+          ready: {'a-ace', 'a-zed', 'b-cat', 'b-yak'},
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _twoSubstationRoot(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationA: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'a',
+                ownedSubstations: {'a'},
+                maxConcurrentWork: 1,
+              ),
+            ),
+            substationB: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'b',
+                ownedSubstations: {'b'},
+                maxConcurrentWork: 1,
+              ),
+            ),
+            servicesA: ServiceBundle(transport: transportA),
+            servicesB: ServiceBundle(transport: transportB),
+            stationServices: StationServices(
+              provider: FakeRuntimeProvider(),
+              writer: StationBeadWriter(
+                bd: BdCliService(RecordingBdRunner()),
+                reader: RecordingBdRunner(),
+                ownership: BeadOwnershipPredicate(const {'a', 'b'}),
+              ),
+              stateSubstation: 'a',
+              // Generous station ceiling (4 > the 2 admissions below), so the
+              // PER-SUBSTATION cap of 1 is what binds — A43's `min()` is
+              // exercised unchanged.
+              maxConcurrentWork: 4,
+            ),
+          ),
+        ),
+      );
+
+      // Each substation admits its own top-priority bead, never the
+      // alphabetically-first one. Ordering stays PER-SUBSTATION: this bead
+      // adds no cross-substation weighting, so assert the SET (which
+      // substation flushes first is the reconciler's detail).
+      expect(recorder.events.toSet(), {
+        'START work(a-zed)',
+        'START work(b-yak)',
+      });
+      expect(recorder.events, hasLength(2));
+      expect(transportA.flares, hasLength(1));
+      expect(transportA.flares.single.name, 'work.throttled');
+      expect(transportA.flares.single.data, {'count': '1', 'beadIds': 'a-ace'});
+      expect(transportB.flares, hasLength(1));
+      expect(transportB.flares.single.name, 'work.throttled');
+      expect(transportB.flares.single.data, {'count': '1', 'beadIds': 'b-cat'});
+    });
+
+    test('a MOUNTED P4 is never evicted for a pending P0 — the P0 waits and '
+        'takes the next NATURAL slot when that session closes done '
+        '(tg-lohr)', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final beads = [
+        _bead('tg-aaa', priority: 4),
+        _bead('tg-zzz', priority: 0),
+      ];
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: beads,
+          ready: {'tg-aaa', 'tg-zzz'},
+          sessions: {
+            'tg-aaa': const SessionProjection(
+              workBeadId: 'tg-aaa',
+              isTerminal: false,
+            ),
+          },
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 1,
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+          ),
+        ),
+      );
+
+      // The live P4 keeps the only slot; the P0 is HELD, never swapped in.
+      expect(recorder.events, ['START work(tg-aaa)']);
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.data, {'count': '1', 'beadIds': 'tg-zzz'});
+      recorder.events.clear();
+      transport.flares.clear();
+
+      // The P4's session closes as a POSITIVE terminal — the engine's own
+      // `grid.outcome=complete` marker (I-10 / A48), the only close that frees
+      // a slot rather than re-minting a dead key. Now the P0 mounts.
+      joined.push(
+        _joined(
+          beads: beads,
+          ready: {'tg-aaa', 'tg-zzz'},
+          sessions: {
+            'tg-aaa': const SessionProjection(
+              workBeadId: 'tg-aaa',
+              isTerminal: true,
+              completed: true,
+            ),
+          },
+        ),
+      );
+      owner.flush();
+
+      // Mount-vs-unmount order within one flush is the reconciler's detail,
+      // not the governor's contract — assert the SET.
+      expect(recorder.events.toSet(), {
+        'STOP work(tg-aaa)',
+        'START work(tg-zzz)',
+      });
+      expect(recorder.events, hasLength(2));
+      // Nothing waits any more, so the governor stays quiet.
+      expect(transport.flares, isEmpty);
     });
   });
 }
