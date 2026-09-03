@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-rc.1
+
+- Breaking: the store-identity column is `substation`, not `seat` — `trajectory.seat`, `proj_session_head.seat` and the `ck_seat` check are renamed, the journal rename is pinned against real dolt, and the wave-1 guard names it (tg-j1zn, #289). Migration: reshape an existing trajectory db with the rename journal before arming dual-read; readers select `substation`.
+- Appends with oversized reasons survive: the fold bounds `work_terminal_reason` (and every free-text reason column the schema declares) with a visible truncation marker instead of dropping the whole `attempt.terminal` record (tg-kzvs, #288).
+- The W6 drain and Stage-1 fold guard pins are runner-relative on a shared runner (`TRAJ_GUARD_SHARED_RUNNER`), keeping the tight absolute values for local runs (tg-2zao, #292).
+
 ## 0.1.2
 
 - `traj committee-report` folds `step.transition` rows into the lane tables, cost totals, and gate causes, so the report reads the same facts the projections carry instead of waiting on `verify.*` record families that do not exist (#281).

@@ -1,3 +1,9 @@
+## 0.5.0-rc.12
+
+- Breaking: process groups are supervised as groups and exit status is preserved — `SessionOrphaned` is a new `RuntimeEvent` variant (emitted once, NOT terminal: the group stays supervised until it empties or the bounded grace elapses and it is signalled), so exhaustive switches over `RuntimeEvent` need an arm (tg-8kye, #290; `up` supervises process groups). Migration: add `SessionOrphaned()` to every `switch (event)`; power_station#195 is the consumer fix.
+- `station.lock` is published atomically: exclusive create, pid/startedAt ownership, hold-never-steal (tg-o2fy, #287).
+- Floors tightened to `grid_runtime ^0.2.0-rc.10`, `grid_engine ^0.3.0-rc.12`, `grid_sdk ^0.3.0-rc.10`, `grid_trajectory ^0.2.0-rc.1`.
+
 ## 0.5.0-rc.11
 
 - Breaking: `StationKernel` is deleted; `runGrid` is the station's single flush coordinator and now carries the tg-60n fail-closed flush guard (#284). Migration: nothing constructs `StationKernel` in the org — drop any import of it and call `runGrid` (grid_sdk `run_grid.dart`); see decisions/2026-09-02-run-grid-is-the-single-flush-coordinator.
