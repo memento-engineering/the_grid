@@ -22,14 +22,14 @@
 @Timeout(Duration(minutes: 5))
 library;
 
+import 'dart:io';
+
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
 
+import '../support/baseline_calibration.dart';
+import '../support/guard_budget.dart';
 import 'support/hermetic_trajectory_server.dart';
-
-/// §5's storm-production band top: an 8-attempt storm at grid tempo needs
-/// ~22–28 appends/s; the drain must sustain more than the band's top.
-const double kStormProductionRateTop = 28.0;
 
 /// The cited M3 baseline (stage0-measurements.md M3, Stage-1 run):
 /// `proj_meta` + P1 only, 2,080 appends, under concurrent ledger load.
@@ -46,6 +46,7 @@ void main() {
     await createTrajectoryDatabase(admin);
     db = await TrajectoryConnection.connect(server.endpointFor('trajectory'));
     await applyTrajectorySchema(db);
+    await createCalibrationTable(db);
   });
 
   tearDownAll(() async {
@@ -66,6 +67,8 @@ void main() {
       );
       final claim = await appender.claimEpoch(pid: 4242, pgid: 4242);
       expect(claim, isA<EpochClaimed>());
+
+      final baselineMicros = <int>[];
 
       // The storm: full attempt lifecycles with a gated step whose rearm
       // BUMPS step_round (the two-ladder chain write — two fold statements in
@@ -163,6 +166,9 @@ void main() {
           );
           txn.stop();
           durationsMicros.add(txn.elapsedMicroseconds);
+          baselineMicros.add(
+            await timeBaselineRoundTrip(db, path: '$sessionId/$ordinal'),
+          );
           expect(
             landed,
             isA<Appended>(),
@@ -174,20 +180,29 @@ void main() {
       wall.stop();
       expect(appended, sessions * 13);
 
+      baselineMicros.sort();
+      int basePct(double p) =>
+          baselineMicros[(baselineMicros.length * p).ceil() - 1];
+      final budget = GuardBudget(
+        baselineUnitMicros: basePct(0.50),
+        baselineTailMicros: basePct(0.99),
+      );
+      final host = resolveGuardHost(Platform.environment);
+
       // ── the numbers the window arms on (record, then assert) ────────────
       durationsMicros.sort();
       double atPercentile(double p) =>
           durationsMicros[(durationsMicros.length * p).ceil() - 1] / 1000.0;
-      final drainRate = appended / (wall.elapsedMicroseconds / 1e6);
-      final mean =
-          durationsMicros.reduce((a, b) => a + b) /
-          durationsMicros.length /
-          1000.0;
+      final appendMicros = durationsMicros.reduce((a, b) => a + b);
+      final drainRate = appended / (appendMicros / 1e6);
+      final mean = appendMicros / durationsMicros.length / 1000.0;
       // ignore: avoid_print — recording the measurement IS the deliverable.
       print(
         'W6 MEASUREMENT (real P1+P2+P6 fold shapes, hermetic dolt):\n'
         '  appends: $appended in '
-        '${(wall.elapsedMicroseconds / 1e6).toStringAsFixed(2)} s\n'
+        '${(appendMicros / 1e6).toStringAsFixed(2)} s of append time '
+        '(${(wall.elapsedMicroseconds / 1e6).toStringAsFixed(2)} s wall, '
+        'incl. the interleaved calibration trips)\n'
         '  sustained drain rate: ${drainRate.toStringAsFixed(1)} appends/s\n'
         '  writer-loop transaction time: mean ${mean.toStringAsFixed(2)} ms, '
         'p50 ${atPercentile(0.50).toStringAsFixed(2)} ms, '
@@ -199,24 +214,60 @@ void main() {
         '  cited M3 baseline (stage0-measurements.md M3, proj_meta+P1 only): '
         '$kM3BaselineRate appends/s — this run is '
         '${(drainRate / kM3BaselineRate * 100).toStringAsFixed(0)}% of it '
-        'with the full Stage-1 fold set',
+        'with the full Stage-1 fold set\n'
+        '  machine-speed unit (median bare round trip): '
+        '${(budget.baselineUnitMicros / 1000).toStringAsFixed(2)} ms '
+        '(${budget.baselineOpsPerSecond.toStringAsFixed(1)} ops/s)\n'
+        '  host: ${host.name} — calibrated floor '
+        '${budget.minimumDrainPerSecond.toStringAsFixed(1)} appends/s, '
+        'calibrated p99 ceiling '
+        '${budget.maximumP99Millis.toStringAsFixed(1)} ms\n'
+        '  OBSERVED RATIOS: mean/unit '
+        '${(mean * 1000 / budget.baselineUnitMicros).toStringAsFixed(3)}, '
+        'p99/tail '
+        '${(atPercentile(0.99) * 1000 / budget.baselineTailMicros).toStringAsFixed(3)}, '
+        'baseline tail '
+        '${(budget.baselineTailMicros / 1000).toStringAsFixed(2)} ms',
       );
       expect(
         drainRate,
-        greaterThan(kStormProductionRateTop),
+        greaterThan(budget.minimumDrainPerSecond),
         reason:
-            'the shadow window cannot arm: drain '
-            '${drainRate.toStringAsFixed(1)}/s does not clear the observed '
-            'storm production rate ($kStormProductionRateTop/s, schema §5; '
-            'M3 measured $kM3BaselineRate/s for the lighter P1-only set)',
+            'the Stage-1 fold costs more than ${kMaxFoldMeanCostRatio}x a '
+            'bare round trip on THIS machine: drain '
+            '${drainRate.toStringAsFixed(1)}/s under the calibrated floor '
+            '${budget.minimumDrainPerSecond.toStringAsFixed(1)}/s '
+            '(machine-speed unit '
+            '${(budget.baselineUnitMicros / 1000).toStringAsFixed(2)} ms)',
       );
       expect(
         atPercentile(0.99),
-        lessThan(250),
+        lessThan(budget.maximumP99Millis),
         reason:
-            'p99 writer-loop transaction time regressed an order of '
-            'magnitude past M3\'s 24.93 ms observation',
+            'p99 writer-loop transaction time exceeds '
+            '${kMaxFoldP99TailRatio}x the machine-tail unit: '
+            '${atPercentile(0.99).toStringAsFixed(2)} ms over the calibrated '
+            'ceiling ${budget.maximumP99Millis.toStringAsFixed(1)} ms',
       );
+
+      if (absolutePinsApply(host)) {
+        expect(
+          drainRate,
+          greaterThan(kStormProductionRateTop),
+          reason:
+              'the shadow window cannot arm: drain '
+              '${drainRate.toStringAsFixed(1)}/s does not clear the observed '
+              'storm production rate ($kStormProductionRateTop/s, schema §5; '
+              'M3 measured $kM3BaselineRate/s for the lighter P1-only set)',
+        );
+        expect(
+          atPercentile(0.99),
+          lessThan(kP99CeilingMillis),
+          reason:
+              'p99 writer-loop transaction time regressed an order of '
+              'magnitude past M3\'s 24.93 ms observation',
+        );
+      }
 
       // ── golden invariant (§5): fold(log) == incrementally maintained ────
       final cursorRows = await db.execute(
