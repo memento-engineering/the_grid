@@ -62,6 +62,11 @@ class FakeGitRunner implements GitRunner {
     final head = args.isNotEmpty ? args.first : '';
     final sub = args.length >= 2 ? args[1] : '';
 
+    // rev-parse --show-toplevel --show-prefix (the root guard) — this fake's
+    // dirs ARE roots: the toplevel, then an EMPTY prefix.
+    if (head == 'rev-parse' && args.contains('--show-toplevel')) {
+      return GitRunResult(exitCode: 0, output: '$workingDirectory\n\n');
+    }
     // rev-parse --git-dir (isRepo) — yes.
     if (head == 'rev-parse') {
       return const GitRunResult(exitCode: 0, output: '.git');

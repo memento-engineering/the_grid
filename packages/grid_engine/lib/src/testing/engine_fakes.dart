@@ -532,6 +532,15 @@ class RecordingGitRunner implements GitRunner {
     required String workingDirectory,
     required List<String> args,
   }) async {
+    // The GitOps root probe — answered as a work-tree ROOT and NOT recorded, so
+    // `calls`/`subcommands` stay the land argv the tests assert on. The answer
+    // ignores [exitCode] on purpose: a test that scripts a land FAILURE must
+    // fail at commit or push, never at the guard.
+    if (args.length >= 2 &&
+        args.first == 'rev-parse' &&
+        args.contains('--show-toplevel')) {
+      return GitRunResult(exitCode: 0, output: '$workingDirectory\n\n');
+    }
     calls.add((workDir: workingDirectory, args: List.unmodifiable(args)));
     return GitRunResult(exitCode: exitCode, output: '');
   }

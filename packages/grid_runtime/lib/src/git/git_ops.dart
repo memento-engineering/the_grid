@@ -80,6 +80,24 @@ enum GateOutcome {
 /// [GateOutcome.probeError] block; only [GateOutcome.clear] permits.
 bool gateBlocks(GateOutcome outcome) => outcome != GateOutcome.clear;
 
+/// The exit code a [GitOps] work-tree-root refusal carries. Negative, so it can
+/// never collide with a real `git` status, and distinct from the runner's
+/// non-launch sentinel (`-1`) so a refusal is legible as such in a log.
+const int kGitRootGuardExitCode = -2;
+
+/// The root probe's argv. `--show-prefix` is EMPTY exactly when the cwd IS the
+/// work-tree root (a linked worktree root included); `--show-toplevel` names the
+/// repository git resolved, so a refusal can report it. One `git` call answers
+/// both.
+const List<String> _rootProbeArgs = <String>[
+  'rev-parse',
+  '--show-toplevel',
+  '--show-prefix',
+];
+
+/// Collapses [text] to one trimmed line so a refusal stays greppable.
+String _oneLine(String text) => text.trim().replaceAll(RegExp(r'\s+'), ' ');
+
 /// Whether EVERY path a `git status --porcelain` [line] names lies under one of
 /// the [excluded] directory prefixes — the completion fence's residue filter. A
 /// line whose paths cannot be parsed is NEVER excluded (fail closed: unreadable
@@ -142,6 +160,88 @@ class GitOps {
 
   Future<GitRunResult> _run(String workDir, List<String> args) =>
       _runner.run(workingDirectory: workDir, args: args);
+
+  /// Refuses [args] unless [workDir] is ITSELF a git work-tree root — null when
+  /// the run may proceed, or a failed [GitRunResult] naming both [workDir] and
+  /// the repository git resolved.
+  ///
+  /// A `git` command run from a directory that is not a checkout does NOT fail:
+  /// git walks UP and operates on the enclosing repository. A workspace dir left
+  /// without a `.git` entry therefore lets `commit`/`push` act on the
+  /// substation's PRIMARY checkout — the failure this guard exists for (a
+  /// delivery step committed to the primary's `main` and pushed three branches
+  /// from it; nothing downstream noticed, because the residue commit no-opped on
+  /// a clean tree and the push succeeded). The primary is the base every later
+  /// worktree is cut from, so one stray commit there poisons every later round.
+  ///
+  /// Asks git rather than stat-ing `.git`: a `.git` file can point at a gitdir
+  /// that no longer exists, and `--show-prefix` needs no path canonicalisation,
+  /// so a symlinked or differently-cased [workDir] cannot false-refuse.
+  ///
+  /// FAIL CLOSED, like the three reap gates: a probe that does not launch (a
+  /// missing [workDir]), exits non-zero (not a repository, or a bare repo with
+  /// no work tree), or answers unreadably is a REFUSAL, never a pass.
+  Future<GitRunResult?> _guardRepoRoot(
+    String workDir,
+    List<String> args,
+  ) async {
+    final probe = await _run(workDir, _rootProbeArgs);
+    if (!probe.ok) {
+      return _rootRefusal(
+        workDir: workDir,
+        args: args,
+        detail: 'git resolved no work tree here (${_oneLine(probe.output)})',
+      );
+    }
+    // The runner puts stdout BEFORE stderr in `output`, so line 0 is the
+    // toplevel and line 1 the prefix even when git also warned.
+    final lines = probe.output.split('\n');
+    final toplevel = lines.first.trim();
+    final prefix = lines.length >= 2 ? lines[1].trim() : null;
+    if (toplevel.isEmpty || prefix == null) {
+      return _rootRefusal(
+        workDir: workDir,
+        args: args,
+        detail:
+            'the root probe answered unreadably '
+            '(${_oneLine(probe.output)})',
+      );
+    }
+    if (prefix.isNotEmpty) {
+      return _rootRefusal(
+        workDir: workDir,
+        args: args,
+        detail:
+            'git resolved the enclosing repository "$toplevel" '
+            '(this workDir is "$prefix" inside it)',
+      );
+    }
+    return null;
+  }
+
+  /// The refusal value: LOUD (it names the refused command, the workDir, and
+  /// what git found) and unmistakably failed (`ok == false`).
+  GitRunResult _rootRefusal({
+    required String workDir,
+    required List<String> args,
+    required String detail,
+  }) {
+    final message =
+        'git-root-guard: refused `git ${args.join(' ')}` — workDir "$workDir" '
+        'is not a git work-tree root: $detail';
+    return GitRunResult(
+      exitCode: kGitRootGuardExitCode,
+      output: message,
+      stderr: message,
+      launched: false,
+    );
+  }
+
+  /// [_run], but only when [workDir] is itself a work-tree root.
+  Future<GitRunResult> _runAtRoot(String workDir, List<String> args) async {
+    final refusal = await _guardRepoRoot(workDir, args);
+    return refusal ?? await _run(workDir, args);
+  }
 
   /// Whether [workDir] is inside a git repository. gc's `IsRepo`
   /// (`git.go:31-39`).
@@ -295,7 +395,10 @@ class GitOps {
     String workDir, {
     Set<String> excluding = const <String>{},
   }) async {
-    final r = await _run(workDir, const <String>['status', '--porcelain']);
+    final r = await _runAtRoot(workDir, const <String>[
+      'status',
+      '--porcelain',
+    ]);
     if (!r.ok) return GateOutcome.probeError;
     if (r.stderr.trim().isNotEmpty) return GateOutcome.probeError;
     // stderr is empty, so `output` IS stdout: every line is porcelain.
@@ -310,7 +413,7 @@ class GitOps {
   /// tracking branch — completed work that a removal would lose. gc's
   /// `HasUnpushedCommitsResult` (`git.go:156-162`): fail-closed on probe error.
   Future<GateOutcome> hasUnpushedCommits(String workDir) async {
-    final r = await _run(workDir, const <String>[
+    final r = await _runAtRoot(workDir, const <String>[
       'log',
       'HEAD',
       '--oneline',
@@ -324,7 +427,7 @@ class GitOps {
   /// **Gate 3.** Whether the repository has stashed work. gc's
   /// `HasStashesResult` (`git.go:176-182`): fail-closed on probe error.
   Future<GateOutcome> hasStashes(String workDir) async {
-    final r = await _run(workDir, const <String>['stash', 'list']);
+    final r = await _runAtRoot(workDir, const <String>['stash', 'list']);
     if (!r.ok) return GateOutcome.probeError;
     return r.output.trim().isEmpty ? GateOutcome.clear : GateOutcome.present;
   }
@@ -351,7 +454,7 @@ class GitOps {
     required String newBranch,
     required String baseBranch,
   }) {
-    return _run(rootRepo, <String>[
+    return _runAtRoot(rootRepo, <String>[
       'worktree',
       'add',
       '-b',
@@ -386,7 +489,7 @@ class GitOps {
     required String path,
     required String branch,
   }) {
-    return _run(rootRepo, <String>['worktree', 'add', path, branch]);
+    return _runAtRoot(rootRepo, <String>['worktree', 'add', path, branch]);
   }
 
   /// The resolved commit [workDir]'s HEAD points at — the BASE SHA the
@@ -397,7 +500,7 @@ class GitOps {
   /// root's mainline or adopted at its own tip. Null on any probe error —
   /// [GitRunner] never throws, and no caller fails a provision over telemetry.
   Future<String?> headSha(String workDir) async {
-    final r = await _run(workDir, const <String>['rev-parse', 'HEAD']);
+    final r = await _runAtRoot(workDir, const <String>['rev-parse', 'HEAD']);
     if (!r.ok) return null;
     final sha = r.output.trim();
     return sha.isEmpty ? null : sha;
@@ -414,7 +517,7 @@ class GitOps {
     required String rootRepo,
     required String branch,
   }) {
-    return _run(rootRepo, <String>['branch', '-D', branch]);
+    return _runAtRoot(rootRepo, <String>['branch', '-D', branch]);
   }
 
   /// Removes a worktree. MUST be run from the [rootRepo], never from inside the
@@ -427,7 +530,7 @@ class GitOps {
     required String path,
     bool force = false,
   }) {
-    return _run(rootRepo, <String>[
+    return _runAtRoot(rootRepo, <String>[
       'worktree',
       'remove',
       path,
@@ -442,9 +545,9 @@ class GitOps {
     required String workDir,
     required String message,
   }) async {
-    final add = await _run(workDir, const <String>['add', '-A']);
+    final add = await _runAtRoot(workDir, const <String>['add', '-A']);
     if (!add.ok) return add;
-    return _run(workDir, <String>['commit', '-m', message]);
+    return _runAtRoot(workDir, <String>['commit', '-m', message]);
   }
 
   /// Pushes [branch] to [remote] with `-u` (sets upstream so
@@ -454,7 +557,7 @@ class GitOps {
     required String remote,
     required String branch,
   }) {
-    return _run(workDir, <String>['push', '-u', remote, branch]);
+    return _runAtRoot(workDir, <String>['push', '-u', remote, branch]);
   }
 }
 

@@ -29,6 +29,14 @@ class _ScriptedGitRunner implements GitRunner {
     final command = args.join(' ');
     calls.add(command);
     final verb = args.isEmpty ? '' : args.first;
+    // The GitOps root probe: answered as a work-tree ROOT unless a test scripts
+    // the exact command, so the guarded op under test is actually reached.
+    // `_primaryRunner`'s `rev-parse --git-dir` / `rev-parse --abbrev-ref HEAD`
+    // scripts are untouched — neither carries `--show-toplevel`.
+    if (verb == 'rev-parse' && args.contains('--show-toplevel')) {
+      return _byCommand[command] ??
+          GitRunResult(exitCode: 0, output: '$workingDirectory\n\n');
+    }
     return _byCommand[command] ??
         _byVerb[verb] ??
         const GitRunResult(exitCode: 0, output: '');

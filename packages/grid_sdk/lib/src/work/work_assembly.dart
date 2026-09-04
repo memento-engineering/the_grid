@@ -1141,7 +1141,18 @@ class _DryGitRunner implements GitRunner {
   Future<GitRunResult> run({
     required String workingDirectory,
     required List<String> args,
-  }) async => const GitRunResult(exitCode: 0, output: '');
+  }) async {
+    // The GitOps root guard probes before every mutating op and before the reap
+    // gates. The inert seam answers as a work-tree root so the guard reads the
+    // same dry as live — the check is the thing you most want unchanged between
+    // the two postures (decision: dry-bd-seam-mints-under-the-owning-prefix).
+    if (args.length >= 2 &&
+        args.first == 'rev-parse' &&
+        args.contains('--show-toplevel')) {
+      return GitRunResult(exitCode: 0, output: '$workingDirectory\n\n');
+    }
+    return const GitRunResult(exitCode: 0, output: '');
+  }
 }
 
 /// A no-op PR opener — never reached in dry-run (land ops are null), but the

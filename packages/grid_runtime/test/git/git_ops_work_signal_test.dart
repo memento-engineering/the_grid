@@ -19,7 +19,18 @@ class _CannedGit implements GitRunner {
   Future<GitRunResult> run({
     required String workingDirectory,
     required List<String> args,
-  }) async => GitRunResult(exitCode: exitCode, output: output, stderr: stderr);
+  }) async {
+    // The GitOps root probe. A faithful `git` at a work-tree root answers
+    // `<toplevel>\n<empty prefix>\n`; canned porcelain is not an answer to it,
+    // so the fake models the real shape and the residue filter under test stays
+    // the thing the assertions read.
+    if (args.length >= 2 &&
+        args.first == 'rev-parse' &&
+        args.contains('--show-toplevel')) {
+      return GitRunResult(exitCode: 0, output: '$workingDirectory\n\n');
+    }
+    return GitRunResult(exitCode: exitCode, output: output, stderr: stderr);
+  }
 }
 
 Future<GateOutcome> probe(
