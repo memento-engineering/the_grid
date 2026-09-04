@@ -1,3 +1,8 @@
+## 0.3.0-rc.13
+
+- `bead board` renders cross-store LINK blockers in its BLOCKED-BY column (previously only same-store `blocks` edges), and the station join bridge threads block observations into the joined snapshot (tg-vdt0, #311).
+- Floors tightened to `beads_dart ^0.2.0-rc.8`, `grid_engine ^0.3.0-rc.16`.
+
 ## 0.3.0-rc.12
 
 - Re-exports `CacheTokenTotals` and `LandedDeliveryTotals` (tg-mws0, #307); the trajectory-harness reshape message names the current projection shape (tg-0zop, #306).

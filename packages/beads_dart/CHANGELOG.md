@@ -1,3 +1,7 @@
+## 0.2.0-rc.8
+
+- The SQL ready port and the CLI snapshot reader carry a ready-only fallback merge, so a bead the store reports ready is never silently absent from a joined snapshot (tg-vdt0, #311).
+
 ## 0.2.0-rc.7
 
 - Molecule pours (`bd create --graph`) run on a dedicated 60-second deadline instead of the 15-second single-row default; the exception is named, tested, and bounded, and every other bd call keeps the 15-second deadline (tg-336w, #280).
