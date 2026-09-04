@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:grid_cli/src/station_lock.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 import 'package:test/test.dart';
 
 /// RS-2 (D-A1, `docs/SCRATCH-resident-station.md` §4): the station lock —
@@ -49,6 +49,8 @@ void main() {
       expect(json['pid'], 4242);
       expect(json['pgid'], 4242);
       expect(json['startedAt'], '2026-07-02T12:00:00.000Z');
+      expect(json['phase'], 'acquired');
+      expect(handle.record.phase, StationLifecyclePhase.acquired);
       expect(
         json.containsKey('controlUrl'),
         isFalse,
@@ -188,6 +190,7 @@ void main() {
 
       await handle.release();
       expect(File(handle.path).existsSync(), isFalse);
+      expect(handle.record.phase, StationLifecyclePhase.releasing);
       await handle.release(); // idempotent — must not throw
     });
 
@@ -218,8 +221,42 @@ void main() {
       expect(json['startedAt'], '2026-07-02T12:00:00.000Z');
       expect(json['controlUrl'], 'http://127.0.0.1:8137');
       expect(json['token'], 's3cret');
+      expect(json['phase'], 'live');
       expect(_modeOf(handle.path), '600', reason: 'the token file stays 0600');
       expect(handle.record.token, 's3cret');
+      expect(handle.record.phase, StationLifecyclePhase.live);
+    });
+
+    test('updateVmService preserves phase before and after control', () async {
+      final store = _tempStore();
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => true,
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: 7777,
+            now: DateTime.utc(2026, 7, 2, 12),
+          );
+
+      await handle.updateVmService('http://127.0.0.1:1234/first');
+      expect(handle.record.phase, StationLifecyclePhase.acquired);
+      expect(_readRecord(handle.path).phase, StationLifecyclePhase.acquired);
+
+      await handle.updateControl(
+        controlUrl: 'http://127.0.0.1:8137',
+        token: 's3cret',
+      );
+      expect(handle.record.phase, StationLifecyclePhase.live);
+      expect(handle.record.vmServiceUri, 'http://127.0.0.1:1234/first');
+
+      await handle.updateVmService('http://127.0.0.1:1234/second');
+      final disk = _readRecord(handle.path);
+      expect(disk.phase, StationLifecyclePhase.live);
+      expect(disk.vmServiceUri, 'http://127.0.0.1:1234/second');
+      expect(disk.controlUrl, 'http://127.0.0.1:8137');
+      expect(disk.token, 's3cret');
     });
 
     test('group preparation failure is loud and writes no lock', () async {
@@ -373,3 +410,7 @@ void _mintLock(Directory store, {required int pid}) {
 /// The POSIX permission bits of [path], octal (e.g. `600`).
 String _modeOf(String path) =>
     (FileStat.statSync(path).mode & 0xFFF).toRadixString(8);
+
+StationLockRecord _readRecord(String path) => StationLockRecord.fromJson(
+  jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>,
+);

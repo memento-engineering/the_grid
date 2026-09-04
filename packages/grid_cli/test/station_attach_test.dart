@@ -5,7 +5,7 @@ import 'package:grid_cli/src/station_attach.dart';
 import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_cli/src/station_lock.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
@@ -16,12 +16,12 @@ import 'package:test/test.dart';
 /// clock; NO live stores, NO real `claude`/`git`/`bd`. What this file locks
 /// (the acceptance criteria):
 ///
-///  (a) the up/down/stale/unauthorized matrix, against a real
+///  (a) the up/down/starting/unreachable/unauthorized matrix, against a real
 ///      ephemeral-port [StationControl] + temp locks;
 ///  (b) `stop` is SIGTERM-only, bounded, LOUD-by-type on timeout (a distinct
 ///      [TimedOut] variant, never silently collapsed into [Stopped]), a
 ///      clean [AlreadyDown] no-op;
-///  (c) 401 surfaces as [Unauthorized], distinct from [Stale] — never
+///  (c) 401 surfaces as [Unauthorized], distinct from [Unreachable] — never
 ///      swallowed;
 ///  (d) no mutation path exists in the client — a construction property:
 ///      [StationAttach.status] only ever issues a `GET`, and
@@ -30,7 +30,7 @@ import 'package:test/test.dart';
 ///      where a test can observe the lock file surviving/absent as
 ///      expected).
 void main() {
-  group('StationAttach.status — the up/down/stale/unauthorized matrix (a)', () {
+  group('StationAttach.status classifications (a)', () {
     test('no lock file at all → Down', () async {
       final store = _tempStore();
       final attach = StationAttach(
@@ -57,7 +57,7 @@ void main() {
       expect(result, isA<Down>());
     });
 
-    test('a lock naming a DEAD pid → Stale(pid), no HTTP attempted', () async {
+    test('a lock naming a DEAD pid → Unreachable, no HTTP attempted', () async {
       final store = _tempStore();
       _mintLock(store, pid: 4242);
       final probed = <int>[];
@@ -71,25 +71,115 @@ void main() {
 
       final result = await attach.status(stateWorkspaceDir: store.path);
 
-      expect(result, isA<Stale>());
-      expect((result as Stale).pid, 4242);
+      expect(result, isA<Unreachable>());
+      expect((result as Unreachable).pid, 4242);
       expect(probed, [4242]);
     });
 
-    test('a live pid but no controlUrl/token yet (RS-2-only lock, a '
-        'boot-order race) → Stale(pid)', () async {
+    test('an acquired service lock with a live pid → Starting', () async {
       final store = _tempStore();
-      _mintLock(store, pid: 4242); // no controlUrl/token
+      final handle =
+          await StationLockService(
+            isPidAlive: (_) => true,
+            log: (_) {},
+            prepareProcessGroup: (stationPid) async => stationPid,
+          ).acquire(
+            stateWorkspaceDir: store.path,
+            pid: pid,
+            now: DateTime.utc(2026, 9, 4),
+          );
+      addTearDown(handle.release);
+      final probed = <int>[];
       final attach = StationAttach(
-        isPidAlive: (_) => true,
+        isPidAlive: (candidate) {
+          probed.add(candidate);
+          return candidate == pid;
+        },
         httpClientFactory: () =>
             fail('nothing to attach to before control is advertised'),
       );
 
       final result = await attach.status(stateWorkspaceDir: store.path);
 
-      expect(result, isA<Stale>());
-      expect((result as Stale).pid, 4242);
+      expect(result, isA<Starting>());
+      expect((result as Starting).pid, pid);
+      expect(result.record.phase, StationLifecyclePhase.acquired);
+      expect(probed, [pid]);
+    });
+
+    test('an acquired record with credentials is still Starting', () async {
+      final store = _tempStore();
+      _mintLock(
+        store,
+        pid: 4242,
+        phase: StationLifecyclePhase.acquired,
+        controlUrl: 'http://127.0.0.1:9',
+        token: 't',
+      );
+      final attach = StationAttach(
+        isPidAlive: (_) => true,
+        httpClientFactory: () =>
+            fail('advertisement fields cannot override acquired phase'),
+      );
+
+      final result = await attach.status(stateWorkspaceDir: store.path);
+
+      expect(result, isA<Starting>());
+      expect((result as Starting).pid, 4242);
+    });
+
+    test('an acquired record with a dead pid is Unreachable', () async {
+      final store = _tempStore();
+      _mintLock(store, pid: 4242, phase: StationLifecyclePhase.acquired);
+      final attach = StationAttach(
+        isPidAlive: (_) => false,
+        httpClientFactory: () => fail('a dead pid must never reach HTTP'),
+      );
+
+      final result = await attach.status(stateWorkspaceDir: store.path);
+
+      expect(result, isA<Unreachable>());
+      expect((result as Unreachable).pid, 4242);
+    });
+
+    test('a releasing record with a live pid is Unreachable', () async {
+      final store = _tempStore();
+      _mintLock(
+        store,
+        pid: 4242,
+        phase: StationLifecyclePhase.releasing,
+        controlUrl: 'http://127.0.0.1:9',
+        token: 't',
+      );
+      final attach = StationAttach(
+        isPidAlive: (_) => true,
+        httpClientFactory: () =>
+            fail('a releasing station must never reach HTTP'),
+      );
+
+      final result = await attach.status(stateWorkspaceDir: store.path);
+
+      expect(result, isA<Unreachable>());
+      expect(
+        (result as Unreachable).record.phase,
+        StationLifecyclePhase.releasing,
+      );
+    });
+
+    test('a legacy no-phase record follows live and missing credentials '
+        'are Unreachable', () async {
+      final store = _tempStore();
+      _mintLegacyLock(store, pid: 4242);
+      final attach = StationAttach(
+        isPidAlive: (_) => true,
+        httpClientFactory: () =>
+            fail('missing live credentials must not attempt HTTP'),
+      );
+
+      final result = await attach.status(stateWorkspaceDir: store.path);
+
+      expect(result, isA<Unreachable>());
+      expect((result as Unreachable).record.phase, StationLifecyclePhase.live);
     });
 
     test('a live pid, a live control surface, the right bearer → Up '
@@ -123,7 +213,7 @@ void main() {
     });
 
     test('(c) a live pid, a live control surface, the WRONG bearer → '
-        'Unauthorized — DISTINCT from Stale, never swallowed', () async {
+        'Unauthorized — DISTINCT from Unreachable, never swallowed', () async {
       final store = _tempStore();
       final control = await StationControl.start(
         port: 0,
@@ -147,7 +237,7 @@ void main() {
     });
 
     test('a live pid but connection-refused (the control surface died '
-        'without releasing the lock) → Stale(pid)', () async {
+        'without releasing the lock) → Unreachable', () async {
       final store = _tempStore();
       final control = await StationControl.start(
         port: 0,
@@ -162,12 +252,12 @@ void main() {
 
       final result = await attach.status(stateWorkspaceDir: store.path);
 
-      expect(result, isA<Stale>());
-      expect((result as Stale).pid, 4242);
+      expect(result, isA<Unreachable>());
+      expect((result as Unreachable).pid, 4242);
     });
 
     test('a live pid but the control surface never answers (hangs) → '
-        'Stale(pid) once the bounded timeout elapses', () async {
+        'Unreachable once the bounded timeout elapses', () async {
       final store = _tempStore();
       final serverSocket = await ServerSocket.bind(
         InternetAddress.loopbackIPv4,
@@ -195,8 +285,8 @@ void main() {
         timeout: const Duration(milliseconds: 200),
       );
 
-      expect(result, isA<Stale>());
-      expect((result as Stale).pid, 4242);
+      expect(result, isA<Unreachable>());
+      expect((result as Unreachable).pid, 4242);
     });
   });
 
@@ -469,6 +559,7 @@ void _mintLock(
   Directory store, {
   required int pid,
   int? pgid,
+  StationLifecyclePhase phase = StationLifecyclePhase.live,
   String? controlUrl,
   String? token,
 }) {
@@ -477,6 +568,7 @@ void _mintLock(
     pid: pid,
     pgid: pgid ?? pid,
     startedAt: DateTime.utc(2026, 7, 2),
+    phase: phase,
   );
   if (controlUrl != null && token != null) {
     record = record.withControl(controlUrl: controlUrl, token: token);
@@ -484,6 +576,18 @@ void _mintLock(
   File(
     StationLockService.lockPath(store.path),
   ).writeAsStringSync(jsonEncode(record.toJson()));
+}
+
+/// Pre-mints a legacy lock with no lifecycle phase key.
+void _mintLegacyLock(Directory store, {required int pid}) {
+  Directory('${store.path}/.grid').createSync(recursive: true);
+  File(StationLockService.lockPath(store.path)).writeAsStringSync(
+    jsonEncode(<String, Object?>{
+      'pid': pid,
+      'pgid': pid,
+      'startedAt': DateTime.utc(2026, 7, 2).toIso8601String(),
+    }),
+  );
 }
 
 class _FakeGroups implements ProcessGroupController {

@@ -32,7 +32,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 import 'package:grid_runtime/grid_runtime.dart'
     show establishStationProcessGroup;
 import 'package:grid_sdk/grid_sdk.dart' show StationRefusal;
@@ -195,7 +195,12 @@ class StationLockService {
 
     final file = File(lockPath(stateWorkspaceDir));
     await file.parent.create(recursive: true);
-    final record = StationLockRecord(pid: pid, pgid: pgid, startedAt: now);
+    final record = StationLockRecord(
+      pid: pid,
+      pgid: pgid,
+      startedAt: now,
+      phase: StationLifecyclePhase.acquired,
+    );
 
     for (var attempt = 0; ; attempt++) {
       try {
@@ -316,7 +321,7 @@ class StationLockService {
 /// shutdown path (and the start-throw unwind) releases through [release].
 /// Every write re-verifies OWNERSHIP against disk first — the on-disk record's
 /// `pid` + `startedAt` must be the pair this handle minted at acquire (that
-/// pair IS the nonce; `StationLockRecord` gains no field, per tg-vg5k).
+/// pair IS the nonce; lifecycle phase is never ownership evidence).
 class StationLockHandle {
   StationLockHandle._({
     required File file,
@@ -346,7 +351,9 @@ class StationLockHandle {
     required String controlUrl,
     required String token,
   }) => _replace(
-    _record.withControl(controlUrl: controlUrl, token: token),
+    _record
+        .withControl(controlUrl: controlUrl, token: token)
+        .withPhase(StationLifecyclePhase.live),
     'updateControl',
   );
 
@@ -378,17 +385,18 @@ class StationLockHandle {
   }
 
   /// True iff [disk] is the record this handle minted: same `pid`, same
-  /// `startedAt`. That pair is the ownership proof (no new record field).
+  /// `startedAt`. That pair is the ownership proof; phase is not part of it.
   bool _isOurs(StationLockRecord? disk) =>
       disk != null &&
       disk.pid == _record.pid &&
       disk.startedAt.isAtSameMomentAs(_record.startedAt);
 
-  /// Releases the lock (deletes the file) — only when the on-disk record is
-  /// still OURS. A foreign or unreadable record is left alone with a LOUD
-  /// line: deleting it would evict the supervisor that re-minted it.
-  /// Idempotent — the graceful path and the start-throw unwind may both reach
-  /// it.
+  /// Releases the lock — only when the on-disk record is still OURS. First
+  /// publishes [StationLifecyclePhase.releasing] through the same atomic
+  /// replacement path as every rewrite, then deletes the file. A foreign or
+  /// unreadable record is left alone with a LOUD line: deleting it would evict
+  /// the supervisor that re-minted it. Idempotent — the graceful path and the
+  /// start-throw unwind may both reach it.
   Future<void> release() async {
     if (!await _file.exists()) return;
     final disk = await _readRecord(_file);
@@ -402,6 +410,9 @@ class StationLockHandle {
       );
       return;
     }
+    final releasing = _record.withPhase(StationLifecyclePhase.releasing);
+    await _publishRecord(file: _file, record: releasing, applyMode: _applyMode);
+    _record = releasing;
     await _file.delete();
   }
 }

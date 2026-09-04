@@ -178,7 +178,14 @@ containers for multiples. **The ceiling (later, separate passes):** the ADR-0008
 leasing-is-core for substation attention-scheduling — this ADR deliberately builds neither; the
 lock is the only arbitration a single-machine dogfood needs.
 
-**Preserved by `tg-vg5k` (2026-08-01):** `packages/grid_diagnostics_contract/lib/src/station_lock_record.dart` remains byte-for-byte unchanged, and the CLI/DevTools package boundary for `StationLockRecord` remains in `grid_diagnostics_contract`.
+**Preserved by `tg-vg5k` (2026-08-01):**
+`packages/grid_diagnostics_contract/lib/src/station_lock_record.dart` remained
+byte-for-byte unchanged by that package re-homing, and the CLI/DevTools package
+boundary for `StationLockRecord` remains in `grid_diagnostics_contract`.
+**Narrowed by `station-lock-record-carries-an-optional-lifecycle-phase`
+(2026-09-04):** the byte-for-byte statement was a scope pin for the re-homing,
+not a permanent schema freeze; the record may carry the decision's
+backward-compatible optional lifecycle phase.
 
 ## Supersessions and amendments
 

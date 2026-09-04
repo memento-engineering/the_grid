@@ -72,10 +72,14 @@ class StatusCommand extends Command<int> {
         switch (await _attach.status(stateWorkspaceDir: home)) {
           Up(:final payload) => _renderUp(payload),
           Down() => await _renderDownFallback(args, workspace),
-          Stale(:final pid, :final record) => _renderRefusal(
+          Starting(:final pid) => _renderRefusal(
+            '$stationName status: station is BOOTING (pid $pid).',
+            1,
+          ),
+          Unreachable(:final pid, :final record) => _renderRefusal(
             '$stationName status: station.lock at '
             '$home/.grid/station.lock names pid $pid but it is unreachable '
-            '(dead, or alive-but-not-answering — record: $record). '
+            '(dead or alive-but-not-answering — record: $record). '
             '(station: down) — a fresh `$stationName up` steals a dead lock '
             'automatically; if $pid is alive, investigate it directly.',
             1,

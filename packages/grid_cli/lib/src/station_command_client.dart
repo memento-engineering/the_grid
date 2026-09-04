@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 
 import 'station_attach.dart' show HttpClientFactory;
 import 'station_lock.dart';
@@ -74,12 +74,24 @@ class StationCommandClient {
         'station.lock at $lockPath is unreadable; no resident station is UP.',
       );
     }
+    switch (record.phase) {
+      case StationLifecyclePhase.acquired:
+        return StationCommandUnavailable(
+          'station.lock at $lockPath names a STARTING resident station.',
+        );
+      case StationLifecyclePhase.releasing:
+        return StationCommandUnavailable(
+          'station.lock at $lockPath names a RELEASING resident station.',
+        );
+      case StationLifecyclePhase.live:
+        break;
+    }
     final controlUrl = record.controlUrl;
     final token = record.token;
     if (controlUrl == null || token == null) {
       return StationCommandUnavailable(
-        'station.lock at $lockPath has no control endpoint or bearer; '
-        'no resident station is UP.',
+        'station.lock at $lockPath declares a live station but has an '
+        'unusable control transport advertisement.',
       );
     }
     final fence = _clock().toUtc().microsecondsSinceEpoch;
