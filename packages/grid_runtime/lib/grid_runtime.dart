@@ -99,6 +99,7 @@ export 'src/git/git_ops.dart'
         PrimaryCheckoutFreshness,
         PrimaryCheckoutState,
         gateBlocks,
+        kGitRootGuardExitCode,
         parseWorktreeList;
 export 'src/git/station_git_service.dart'
     show
