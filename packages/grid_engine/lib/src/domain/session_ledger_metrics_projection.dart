@@ -100,6 +100,35 @@ abstract class FalseFMetrics with _$FalseFMetrics {
   }) = _FalseFMetrics;
 }
 
+/// Cache-token components retained for lossless projection merges.
+@freezed
+abstract class CacheTokenTotals with _$CacheTokenTotals {
+  /// Creates cache-token totals.
+  const factory CacheTokenTotals({
+    /// Input tokens served from cache.
+    @Default(0) int cacheRead,
+
+    /// Input tokens written into cache.
+    @Default(0) int cacheCreate,
+
+    /// Input tokens not served from or written into cache.
+    @Default(0) int uncachedInput,
+  }) = _CacheTokenTotals;
+}
+
+/// Landed-delivery components retained for lossless projection merges.
+@freezed
+abstract class LandedDeliveryTotals with _$LandedDeliveryTotals {
+  /// Creates landed-delivery totals.
+  const factory LandedDeliveryTotals({
+    /// Cost in US dollars across landed sessions.
+    @Default(0) double landedCost,
+
+    /// Number of sessions with a non-empty delivery.
+    @Default(0) int landedCount,
+  }) = _LandedDeliveryTotals;
+}
+
 @freezed
 abstract class SessionLedgerMetricsProjection
     with _$SessionLedgerMetricsProjection {
@@ -109,8 +138,14 @@ abstract class SessionLedgerMetricsProjection
     @Default(<String, List<LedgerSessionMetrics>>{})
     Map<String, List<LedgerSessionMetrics>> sessionsByLane,
     @Default(FalseFMetrics()) FalseFMetrics falseFs,
+
+    /// Components used to derive [cacheHitRatio].
+    @Default(CacheTokenTotals()) CacheTokenTotals cacheTokens,
     double? cacheHitRatio,
     @Default(<String, int>{}) Map<String, int> reworkRoundsByWorkBead,
+
+    /// Components used to derive [costPerLandedDelivery].
+    @Default(LandedDeliveryTotals()) LandedDeliveryTotals landedDeliveries,
     double? costPerLandedDelivery,
     @Default(<String, Map<LedgerGrade, int>>{})
     Map<String, Map<LedgerGrade, int>> gradeDistributionByLane,
@@ -607,13 +642,15 @@ SessionLedgerMetricsProjection projectSessionLedgerMetrics(
         },
       )
       .length;
-  final cacheRead = _sumInts(allNodes, (node) => node.cacheReadInputTokens);
-  final cacheCreate = _sumInts(
-    allNodes,
-    (node) => node.cacheCreationInputTokens,
+  final cacheTokens = CacheTokenTotals(
+    cacheRead: _sumInts(allNodes, (node) => node.cacheReadInputTokens),
+    cacheCreate: _sumInts(allNodes, (node) => node.cacheCreationInputTokens),
+    uncachedInput: _sumInts(allNodes, (node) => node.tokensIn),
   );
-  final uncachedInput = _sumInts(allNodes, (node) => node.tokensIn);
-  final cacheDenominator = cacheRead + cacheCreate + uncachedInput;
+  final cacheDenominator =
+      cacheTokens.cacheRead +
+      cacheTokens.cacheCreate +
+      cacheTokens.uncachedInput;
   final landed = sessions
       .where(
         (session) => session.nodes.any(
@@ -621,9 +658,12 @@ SessionLedgerMetricsProjection projectSessionLedgerMetrics(
         ),
       )
       .toList();
-  final landedCost = landed
-      .expand((session) => session.nodes)
-      .fold<double>(0, (sum, node) => sum + (node.costUsd ?? 0));
+  final landedDeliveries = LandedDeliveryTotals(
+    landedCost: landed
+        .expand((session) => session.nodes)
+        .fold<double>(0, (sum, node) => sum + (node.costUsd ?? 0)),
+    landedCount: landed.length,
+  );
 
   return SessionLedgerMetricsProjection(
     sessionsById: {for (final session in sessions) session.sessionId: session},
@@ -634,13 +674,19 @@ SessionLedgerMetricsProjection projectSessionLedgerMetrics(
       realVerdict: fNodes.length - falseFCount,
       rate: fNodes.isEmpty ? null : falseFCount / fNodes.length,
     ),
-    cacheHitRatio: cacheDenominator == 0 ? null : cacheRead / cacheDenominator,
+    cacheTokens: cacheTokens,
+    cacheHitRatio: cacheDenominator == 0
+        ? null
+        : cacheTokens.cacheRead / cacheDenominator,
     reworkRoundsByWorkBead: _reworkRounds(
       sessions,
       snapshot.beads,
       snapshot.dependencies,
     ),
-    costPerLandedDelivery: landed.isEmpty ? null : landedCost / landed.length,
+    landedDeliveries: landedDeliveries,
+    costPerLandedDelivery: landedDeliveries.landedCount == 0
+        ? null
+        : landedDeliveries.landedCost / landedDeliveries.landedCount,
     gradeDistributionByLane: _gradeDistribution(allNodes),
     issues: _sortedIssues([
       ...issues,
