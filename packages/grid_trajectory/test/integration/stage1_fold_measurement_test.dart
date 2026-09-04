@@ -202,6 +202,7 @@ void main() {
       final appendMicros = durationsMicros.reduce((a, b) => a + b);
       final drainRate = appended / (appendMicros / 1e6);
       final mean = appendMicros / durationsMicros.length / 1000.0;
+      final p99Millis = atPercentile(0.99);
       // ignore: avoid_print — recording the measurement IS the deliverable.
       print(
         'W6 MEASUREMENT (real P1+P2+P6 fold shapes, hermetic dolt):\n'
@@ -231,38 +232,32 @@ void main() {
         '  host: ${host.name} — calibrated floor '
         '${budget.minimumDrainPerSecond.toStringAsFixed(1)} appends/s '
         '(${kFoldMeanCostRatio}x bound at the '
-        '${kDrainToleranceFraction}x round-2 tolerance), calibrated p99 '
-        'ceiling ${budget.maximumP99Millis.toStringAsFixed(1)} ms '
+        '${kDrainToleranceFraction}x tg-shry shared-runner tolerance), '
+        'calibrated p99 ceiling '
+        '${budget.maximumP99Millis.toStringAsFixed(1)} ms '
         '(${kFoldTailCostRatio}x bound at the '
-        '${kTailToleranceFactor}x round-2 tolerance)\n'
+        '${kTailToleranceFactor}x tg-shry shared-runner tolerance)\n'
         '  OBSERVED RATIOS: mean/unit '
-        '${(mean * 1000 / budget.baselineUnitMicros).toStringAsFixed(3)}, '
+        '${(mean * 1000 / budget.baselineUnitMicros).toStringAsFixed(3)} and '
         'p99/tail '
-        '${(atPercentile(0.99) * 1000 / budget.baselineTailMicros).toStringAsFixed(3)}',
+        '${(p99Millis * 1000 / budget.baselineTailMicros).toStringAsFixed(3)} '
+        '(what $kFoldMeanCostRatio and $kFoldTailCostRatio are calibrated '
+        'against); drain/calibrated-bound '
+        '${(drainRate / budget.calibratedDrainBound).toStringAsFixed(4)} and '
+        'p99/calibrated-bound '
+        '${(p99Millis / budget.calibratedP99BoundMillis).toStringAsFixed(4)} '
+        '(what $kDrainToleranceFraction and $kTailToleranceFactor are set '
+        'against — re-tune ONLY against these)',
       );
       expect(
         drainRate,
         greaterThan(budget.minimumDrainPerSecond),
-        reason:
-            'the Stage-1 fold costs more than '
-            '${(kFoldMeanCostRatio / kDrainToleranceFraction).toStringAsFixed(2)}x '
-            'a bare round trip on THIS machine (the calibrated '
-            '${kFoldMeanCostRatio}x bound at the '
-            '${kDrainToleranceFraction}x round-2 tolerance): drain '
-            '${drainRate.toStringAsFixed(1)}/s under the calibrated floor '
-            '${budget.minimumDrainPerSecond.toStringAsFixed(1)}/s '
-            '(machine-speed unit '
-            '${(budget.baselineUnitMicros / 1000).toStringAsFixed(2)} ms)',
+        reason: drainFailureMessage(budget: budget, drainRate: drainRate),
       );
       expect(
-        atPercentile(0.99),
+        p99Millis,
         lessThan(budget.maximumP99Millis),
-        reason:
-            'p99 writer-loop transaction time exceeds '
-            '${(kFoldTailCostRatio * kTailToleranceFactor).toStringAsFixed(2)}x '
-            'the machine-tail unit: '
-            '${atPercentile(0.99).toStringAsFixed(2)} ms over the calibrated '
-            'ceiling ${budget.maximumP99Millis.toStringAsFixed(1)} ms',
+        reason: tailFailureMessage(budget: budget, p99Millis: p99Millis),
       );
 
       if (absolutePinsApply(host)) {
@@ -276,7 +271,7 @@ void main() {
               'M3 measured $kM3BaselineRate/s for the lighter P1-only set)',
         );
         expect(
-          atPercentile(0.99),
+          p99Millis,
           lessThan(kP99CeilingMillis),
           reason:
               'p99 writer-loop transaction time regressed an order of '
