@@ -13,7 +13,7 @@ register:
   obsoletes: []
   updates: ["trajectory-guard-pins-are-runner-relative"]
   obsoleted-by: null
-  updated-by: []
+  updated-by: ["trajectory-guard-bands-widen-to-the-observed-ratio"]
   bead: tg-2zao
   legacy-id: null
 ---

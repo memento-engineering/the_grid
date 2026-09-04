@@ -10,9 +10,12 @@
 /// (P1 + P2 + P6 in one transaction) against one bare round trip INTERLEAVED
 /// with it on the same connection. Measured locally against dolt 2.2.2 over
 /// six runs — one of them 1.8x slower than the others — the mean ratio stayed
-/// in 1.26–1.55 and the p99-tail ratio in 1.18–1.70. The ceilings below carry
-/// ~2.6x and ~2.9x headroom over those, so an order-of-magnitude fold
-/// regression still reddens the guard on any runner.
+/// in 1.26–1.55 and the p99-tail ratio in 1.18–1.70. The calibrated ratios
+/// below carry ~2.6x and ~2.9x headroom over those; the shared-runner
+/// tolerances (`tg-shry`) widen the ASSERTED ceilings to 13.33x and 12.5x a
+/// bare round trip, so against the slowest measured base a fold regression of
+/// ~8.6x or more still reddens the guard on a shared runner, while ordinary
+/// runner swing no longer does.
 library;
 
 /// The environment variable a SHARED CI runner sets to `1`.
@@ -39,17 +42,26 @@ const double kFoldMeanCostRatio = 4.0;
 /// unchanged from the same entry, on the same terms.
 const double kFoldTailCostRatio = 5.0;
 
-/// The round-2 shared-runner tolerance on the calibrated drain bound
-/// (`tg-2zao`): the guarded drain must clear 0.60x it. Receipts it covers —
-/// 106.65 appends/s against a 119.27/s bound (0.89) on run 33777666093, and
-/// 109.51 against 120.60 (0.91) on run 33778914681. A 2x fold slowdown of
-/// either still lands under the floor.
-const double kDrainToleranceFraction = 0.60;
+/// The shared-runner tolerance on the calibrated drain bound (`tg-shry`): the
+/// guarded drain must clear 0.30x it.
+///
+/// `tg-2zao`'s 0.60 was read off ratios measured against the ROUND-1 baseline
+/// — one bare probe per append: 22.5 against 28 (0.80), 106.65 against 119.27
+/// (0.89) — and then applied to a DIFFERENT distribution, the median of five
+/// bare probes, whose ratio to the sustained drain is 0.60. The floor landed
+/// ON the observation: run 33818055118 (PR #297, rerun 23:37Z 2026-09-03)
+/// failed at 120.69804320618569 against a 120.77294685990339 floor, a 0.5996
+/// drain/bound ratio, and PRs #296 and #299 failed the same job. 0.30 is half
+/// that observed ratio — a 2x fold slowdown of that receipt still lands under
+/// the floor, and runner swing no longer does.
+const double kDrainToleranceFraction = 0.30;
 
-/// The round-2 shared-runner tolerance on the calibrated tail bound
-/// (`tg-2zao`): the fold p99 may reach 1.60x it. Receipt it covers — a
-/// 297.775 ms p99 against the 250 ms absolute pin (1.19) on run 33767416244.
-const double kTailToleranceFactor = 1.60;
+/// The shared-runner tolerance on the calibrated tail bound (`tg-shry`): the
+/// fold p99 may reach 2.50x it — double-plus the observed shared-runner
+/// ratio, on the same terms as [kDrainToleranceFraction]. Receipt it covers —
+/// a 297.775 ms p99 against the 250 ms absolute pin (1.19) on run
+/// 33767416244.
+const double kTailToleranceFactor = 2.50;
 
 /// Where the guard is running.
 enum GuardHost {
@@ -115,13 +127,74 @@ class GuardBudget {
   /// The runner's bare round-trip throughput.
   double get baselineOpsPerSecond => 1e6 / baselineUnitMicros;
 
+  /// The calibrated throughput BOUND, in appends/s: what the fold is expected
+  /// to sustain at [kFoldMeanCostRatio]. [minimumDrainPerSecond] is this
+  /// bound at [kDrainToleranceFraction], so drain-over-this-bound is the ONLY
+  /// ratio a re-tune of that tolerance may be measured against.
+  double get calibratedDrainBound => baselineOpsPerSecond / kFoldMeanCostRatio;
+
+  /// The calibrated latency BOUND, in milliseconds: what the fold p99 is
+  /// expected to hold at [kFoldTailCostRatio]. [maximumP99Millis] is this
+  /// bound at [kTailToleranceFactor], on the same terms.
+  double get calibratedP99BoundMillis =>
+      baselineTailMicros * kFoldTailCostRatio / 1000.0;
+
   /// The drain floor this runner must clear, in appends/s: the calibrated
-  /// bound at the round-2 tolerance.
+  /// bound at the `tg-shry` shared-runner tolerance.
   double get minimumDrainPerSecond =>
       baselineOpsPerSecond / kFoldMeanCostRatio * kDrainToleranceFraction;
 
   /// The p99 ceiling this runner must stay under, in milliseconds: the
-  /// calibrated bound at the round-2 tolerance.
+  /// calibrated bound at the `tg-shry` shared-runner tolerance.
   double get maximumP99Millis =>
       baselineTailMicros * kFoldTailCostRatio * kTailToleranceFactor / 1000.0;
 }
+
+/// The W6 drain-leg failure message: expected, actual, and the OBSERVED
+/// RATIOS the band must be re-tuned against.
+///
+/// `drain/probe-rate` is the raw machine-independent reading — its reciprocal
+/// is the fold's cost in bare round trips, the number [kFoldMeanCostRatio] is
+/// calibrated against. `drain/calibrated-bound` is the number
+/// [kDrainToleranceFraction] is literally set against; `tg-2zao` set 0.60 from
+/// a ratio measured on a different baseline, which is why both are printed.
+String drainFailureMessage({
+  required GuardBudget budget,
+  required double drainRate,
+}) =>
+    'W6 drain leg FAILED. expected: greater than '
+    '${budget.minimumDrainPerSecond.toStringAsFixed(3)} appends/s (the '
+    '${budget.calibratedDrainBound.toStringAsFixed(3)}/s calibrated bound at '
+    'the ${kDrainToleranceFraction}x tg-shry shared-runner tolerance); '
+    'actual: ${drainRate.toStringAsFixed(3)} appends/s. OBSERVED RATIOS: '
+    'drain/probe-rate '
+    '${(drainRate / budget.baselineOpsPerSecond).toStringAsFixed(4)} (bare '
+    'probe rate ${budget.baselineOpsPerSecond.toStringAsFixed(1)} ops/s, '
+    'machine-speed unit '
+    '${(budget.baselineUnitMicros / 1000).toStringAsFixed(3)} ms), '
+    'drain/calibrated-bound '
+    '${(drainRate / budget.calibratedDrainBound).toStringAsFixed(4)} — '
+    're-tune $kDrainToleranceFraction against THIS ratio, never against one '
+    'measured on another baseline.';
+
+/// The W6 tail-leg failure message, on the same terms as
+/// [drainFailureMessage]: `p99/probe-latency` against the machine-tail unit,
+/// `p99/calibrated-bound` against the number [kTailToleranceFactor] is set
+/// against.
+String tailFailureMessage({
+  required GuardBudget budget,
+  required double p99Millis,
+}) =>
+    'W6 tail leg FAILED. expected: less than '
+    '${budget.maximumP99Millis.toStringAsFixed(3)} ms (the '
+    '${budget.calibratedP99BoundMillis.toStringAsFixed(3)} ms calibrated '
+    'bound at the ${kTailToleranceFactor}x tg-shry shared-runner tolerance); '
+    'actual: ${p99Millis.toStringAsFixed(3)} ms. OBSERVED RATIOS: '
+    'p99/probe-latency '
+    '${(p99Millis * 1000 / budget.baselineTailMicros).toStringAsFixed(4)} '
+    '(machine-tail unit '
+    '${(budget.baselineTailMicros / 1000).toStringAsFixed(3)} ms), '
+    'p99/calibrated-bound '
+    '${(p99Millis / budget.calibratedP99BoundMillis).toStringAsFixed(4)} — '
+    're-tune $kTailToleranceFactor against THIS ratio, never against one '
+    'measured on another baseline.';
