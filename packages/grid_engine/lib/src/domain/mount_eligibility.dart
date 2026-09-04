@@ -26,6 +26,37 @@ sealed class MountEligibilityDecision with _$MountEligibilityDecision {
       MountRefused;
 }
 
+/// Refuses a bead whose issue type is not dispatchable by this substation.
+///
+/// Non-resident substations retain the core-work allow-list. Resident
+/// substations narrow that list to the driveable work types because their
+/// ready frontier is the station's autonomous drive set.
+MountEligibilityPredicate dispatchableWorkClause({required bool resident}) =>
+    (bead) {
+      final type = bead.issueType;
+      if (type.isCore && (!resident || type.isDriveable)) {
+        return const MountEligibilityDecision.eligible();
+      }
+      return MountEligibilityDecision.refused(
+        clause:
+            'issue type ${type.wire} is not dispatchable for this substation',
+      );
+    };
+
+/// Refuses a bead omitted from this substation's configured drive list.
+///
+/// An empty list means there is no per-bead restriction. The live-arm rule
+/// requiring a non-empty list is enforced upstream; this clause only narrows
+/// the already-owned candidates presented to the mount boundary.
+MountEligibilityPredicate driveListClause(Set<String> driveList) => (bead) {
+  if (driveList.isEmpty || driveList.contains(bead.id)) {
+    return const MountEligibilityDecision.eligible();
+  }
+  return const MountEligibilityDecision.refused(
+    clause: 'bead is not selected by the substation drive list',
+  );
+};
+
 /// Refuses a fresh bead held out by the join's active cross-link projection.
 ///
 /// Both inputs are immutable snapshot projections. A bead carrying a live

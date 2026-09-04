@@ -73,11 +73,12 @@ Future<void> _pumpUntil(
 JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
+  List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessions = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
-    dependencies: const [],
+    dependencies: dependencies,
     readyIds: ready,
     capturedAt: DateTime(2026),
   ),
@@ -101,6 +102,7 @@ const _tgConfig = SubstationConfig(
   required CapabilityRegistry registry,
   required RootCircuitFor rootCircuit,
   ServiceBundle services = const ServiceBundle(),
+  SubstationConfig substationConfig = _tgConfig,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -115,7 +117,7 @@ const _tgConfig = SubstationConfig(
               value: CircuitResolver(rootCircuit),
               child: Station([
                 SubstationScope(
-                  configNotifier: SubstationConfigNotifier(_tgConfig),
+                  configNotifier: SubstationConfigNotifier(substationConfig),
                   services: services,
                   key: const ValueKey('scope.tg'),
                 ),
@@ -218,6 +220,157 @@ void main() {
             'START b(tgdog-sess1/tg-burn/b)',
           ]),
         );
+      },
+    );
+
+    test(
+      'genesis-7ob missing eligibility row flares then mints exactly once',
+      () async {
+        final f = buildFakes();
+        final transport = RecordingExplorationTransport();
+        final writer = StationBeadWriter(
+          bd: BdCliService(f.runner),
+          reader: f.runner,
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
+          onFlare: transport.flare,
+        );
+        const genesis = Bead(
+          id: 'genesis-7ob',
+          title:
+              'P0: release tree invariants permit infinite flushes and '
+              'corrupted reconciliation',
+          issueType: IssueType.bug,
+          status: BeadStatus.open,
+          priority: 0,
+          labels: ['orchestrator', 'review'],
+          metadata: {
+            'grid.approved_at': '2026-09-03T05:10:45.328492Z',
+            'grid.approved_by': 'operator',
+            'grid.approved_rev': 'db134bf211b3d1c3f037066eff178cf33d96af3a',
+            'validation_plan':
+                'cd packages/tree && dart analyze && dart test && dart run '
+                'test/release_invariants_test.dart',
+          },
+        );
+        const predecessor = Bead(
+          id: 'genesis-7r9',
+          issueType: IssueType.bug,
+          status: BeadStatus.closed,
+          priority: 0,
+        );
+        const alreadyLive = Bead(
+          id: 'genesis-live',
+          issueType: IssueType.task,
+          status: BeadStatus.open,
+          priority: 4,
+        );
+        final snapshot = _joined(
+          beads: const [genesis, predecessor, alreadyLive],
+          ready: const {'genesis-7ob'},
+          dependencies: const [
+            BeadDependency(
+              issueId: 'genesis-7ob',
+              dependsOnId: 'genesis-7r9',
+              type: DependencyType.discoveredFrom,
+            ),
+          ],
+          sessions: const {
+            'genesis-live': SessionProjection(
+              workBeadId: 'genesis-live',
+              sessionId: 'tgdog-live',
+            ),
+          },
+        );
+
+        // the-frontier-demotes-surplus-linked-sessions governs the adjacent
+        // join branch. The live receipt did not enumerate linked rows, so this
+        // witness deliberately isolates the specified no-session acceptance
+        // shape, while work_list_linked_sessions_test covers every non-empty
+        // verdict (adopt, blocking terminal, dead-key remint, and surplus).
+        expect(snapshot.linkedSessions(genesis.id), isEmpty);
+
+        final joined = JoinedSnapshotNotifier(snapshot);
+        final registry = RecordingCapabilityRegistry(circuits: const {});
+        const pendingClause = 'fresh mount-eligibility read pending';
+        var genesisEligibilityEvaluations = 0;
+        final mounted = _mountFull(
+          joined: joined,
+          ctx: StationServices(
+            provider: f.provider,
+            writer: writer,
+            stateSubstation: stateSubstation,
+            maxConcurrentWork: 6,
+          ),
+          registry: registry,
+          rootCircuit: (_) => _code,
+          services: ServiceBundle(
+            transport: transport,
+            mountEligibility: (bead) {
+              if (bead.id != genesis.id) {
+                return const MountEligibilityDecision.eligible();
+              }
+              genesisEligibilityEvaluations += 1;
+              return genesisEligibilityEvaluations == 1
+                  ? const MountEligibilityDecision.refused(
+                      clause: pendingClause,
+                    )
+                  : const MountEligibilityDecision.eligible();
+            },
+          ),
+          substationConfig: const SubstationConfig(
+            substationId: 'genesis',
+            ownedSubstations: {'genesis'},
+            resident: true,
+            maxConcurrentWork: 6,
+          ),
+        );
+        addTearDown(mounted.owner.dispose);
+
+        Iterable<({String name, Map<String, String> data})> genesisFlares(
+          String name,
+          String dataKey,
+        ) {
+          return transport
+              .named(name)
+              .where((flare) => flare.data[dataKey] == genesis.id);
+        }
+
+        expect(genesisEligibilityEvaluations, 1);
+        final refused = genesisFlares('work.mountEligibilityRefused', 'beadId');
+        expect(refused, hasLength(1));
+        expect(refused.single.data['clause'], pendingClause);
+        expect(genesisFlares('session.minted', 'workBeadId'), isEmpty);
+
+        await Future<void>.delayed(Duration.zero);
+        mounted.owner.flush();
+        await _pumpUntil(
+          mounted.owner,
+          () =>
+              genesisFlares('session.minted', 'workBeadId').length == 1 &&
+              f.runner.workCreates.length >= 2,
+        );
+
+        void expectOneRestoredMint() {
+          expect(genesisEligibilityEvaluations, 2);
+          final restored = genesisFlares(
+            'work.mountEligibilityRestored',
+            'beadId',
+          );
+          expect(restored, hasLength(1));
+          expect(restored.single.data['clause'], pendingClause);
+          expect(genesisFlares('session.minted', 'workBeadId'), hasLength(1));
+          expect(
+            f.runner.workCreates.where((call) => !call.contains('--graph')),
+            hasLength(1),
+            reason: 'only the genesis session is created as a plain bead',
+          );
+        }
+
+        expectOneRestoredMint();
+
+        await Future<void>.delayed(Duration.zero);
+        mounted.owner.flush();
+        expectOneRestoredMint();
       },
     );
   });

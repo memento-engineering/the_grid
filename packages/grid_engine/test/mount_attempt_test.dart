@@ -145,6 +145,57 @@ void main() {
     });
   });
 
+  group('local mount clauses', () {
+    Bead work(String id, IssueType type) =>
+        Bead(id: id, issueType: type, status: BeadStatus.open);
+
+    test('dispatchable work preserves the non-resident core allow-list', () {
+      final clause = dispatchableWorkClause(resident: false);
+
+      expect(clause(work('tg-task', IssueType.task)), isA<MountEligible>());
+      expect(clause(work('tg-epic', IssueType.epic)), isA<MountEligible>());
+    });
+
+    test('resident work narrows to driveable types and names exclusions', () {
+      final clause = dispatchableWorkClause(resident: true);
+
+      expect(clause(work('tg-bug', IssueType.bug)), isA<MountEligible>());
+      expect(
+        (clause(work('tg-epic', IssueType.epic)) as MountRefused).clause,
+        'issue type epic is not dispatchable for this substation',
+      );
+      expect(
+        (clause(work('tg-gate', GridIssueTypes.gate)) as MountRefused).clause,
+        'issue type gate is not dispatchable for this substation',
+      );
+    });
+
+    test('drive list is open when empty or selected and otherwise names the '
+        'exclusion', () {
+      final bead = work('tg-1', IssueType.task);
+
+      expect(driveListClause(const {})(bead), isA<MountEligible>());
+      expect(driveListClause(const {'tg-1'})(bead), isA<MountEligible>());
+      expect(
+        (driveListClause(const {'tg-2'})(bead) as MountRefused).clause,
+        'bead is not selected by the substation drive list',
+      );
+    });
+
+    test('composition reports the first local refusal', () {
+      final bead = work('tg-epic', IssueType.epic);
+      final composed = composeMountEligibility([
+        dispatchableWorkClause(resident: true),
+        driveListClause(const {'tg-other'}),
+      ], null);
+
+      expect(
+        (composed(bead) as MountRefused).clause,
+        'issue type epic is not dispatchable for this substation',
+      );
+    });
+  });
+
   group('composeMountEligibility', () {
     Bead work(String id) =>
         Bead(id: id, issueType: IssueType.feature, status: BeadStatus.open);

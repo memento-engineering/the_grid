@@ -8,8 +8,12 @@ import 'package:test/test.dart';
 
 final class _MutableEligibility {
   MountEligibilityDecision decision = const MountEligibilityDecision.eligible();
+  int evaluations = 0;
 
-  MountEligibilityDecision call(Bead bead) => decision;
+  MountEligibilityDecision call(Bead bead) {
+    evaluations += 1;
+    return decision;
+  }
 }
 
 final class _RecordingTransport implements ExplorationTransport {
@@ -29,9 +33,13 @@ final class _ThrowingTransport implements ExplorationTransport {
 }
 
 final class _RecordingResolver implements SessionResolver {
+  final calls = <String>[];
+
   @override
-  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
-      const Idle();
+  Seed sessionFor({required Bead bead, SessionProjection? session}) {
+    calls.add(bead.id);
+    return const Idle();
+  }
 }
 
 final class _Harness {
@@ -75,11 +83,12 @@ JoinedSnapshot _snapshot(
   Bead bead,
   int second, {
   Set<String>? readyIds,
+  List<Bead> additionalBeads = const [],
   Map<String, String> frontierExclusionsByBeadId = const {},
   Map<String, SessionProjection> sessionsByWorkBead = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
-    beads: [bead],
+    beads: [bead, ...additionalBeads],
     dependencies: const [],
     readyIds: readyIds ?? {bead.id},
     capturedAt: DateTime(2026, 1, 1, 0, 0, second),
@@ -103,8 +112,10 @@ _Harness _mountHarness({
   MountEligibilityPredicate? mountEligibility,
   ExplorationTransport? transport,
   Set<String>? readyIds,
+  List<Bead> additionalBeads = const [],
   Map<String, String> frontierExclusionsByBeadId = const {},
   Map<String, SessionProjection> sessionsByWorkBead = const {},
+  SessionResolver? resolver,
 }) {
   final bead = _task();
   final joined = JoinedSnapshotNotifier(
@@ -112,6 +123,7 @@ _Harness _mountHarness({
       bead,
       0,
       readyIds: readyIds,
+      additionalBeads: additionalBeads,
       frontierExclusionsByBeadId: frontierExclusionsByBeadId,
       sessionsByWorkBead: sessionsByWorkBead,
     ),
@@ -122,7 +134,7 @@ _Harness _mountHarness({
       child: InheritedSeed<JoinedSnapshotNotifier>(
         value: joined,
         child: InheritedSeed<SessionResolver>(
-          value: _RecordingResolver(),
+          value: resolver ?? _RecordingResolver(),
           child: Station([
             SubstationScope(
               configNotifier: SubstationConfigNotifier(
@@ -193,6 +205,158 @@ void main() {
     harness.pushAndFlush();
     expect(transport.flares.last.name, 'work.mountEligibilityRefused');
     expect(transport.flares, hasLength(4));
+  });
+
+  test(
+    'eligibility retry does not re-resolve unchanged mounted neighbors',
+    () async {
+      const neighbor = Bead(
+        id: 'tg-2',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      final resolver = _RecordingResolver();
+      final transport = _RecordingTransport();
+      var pendingEvaluations = 0;
+      var neighborEvaluations = 0;
+      final harness = _mountHarness(
+        mountEligibility: (bead) {
+          if (bead.id == 'tg-2') {
+            neighborEvaluations += 1;
+            return const MountEligibilityDecision.eligible();
+          }
+          pendingEvaluations += 1;
+          return pendingEvaluations == 1
+              ? const MountEligibilityDecision.refused(
+                  clause: 'fresh mount-eligibility read pending',
+                )
+              : const MountEligibilityDecision.eligible();
+        },
+        transport: transport,
+        readyIds: const {'tg-1', 'tg-2'},
+        additionalBeads: const [neighbor],
+        resolver: resolver,
+      );
+
+      expect(pendingEvaluations, 1);
+      expect(neighborEvaluations, 1);
+      expect(harness.workBeads().map((work) => work.bead.id), ['tg-2']);
+      expect(resolver.calls, ['tg-2']);
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.name, 'work.mountEligibilityRefused');
+      expect(transport.flares.single.data, {
+        'beadId': 'tg-1',
+        'clause': 'fresh mount-eligibility read pending',
+      });
+
+      await Future<void>.delayed(Duration.zero);
+      harness.owner.flush();
+
+      expect(pendingEvaluations, 2);
+      expect(neighborEvaluations, 2);
+      expect(harness.workBeads().map((work) => work.bead.id), ['tg-1', 'tg-2']);
+      expect(
+        resolver.calls,
+        ['tg-2', 'tg-1'],
+        reason: 'the unchanged mounted neighbor must retain seed identity',
+      );
+      expect(transport.flares, hasLength(2));
+      expect(transport.flares.last.name, 'work.mountEligibilityRestored');
+      expect(transport.flares.last.data, {
+        'beadId': 'tg-1',
+        'clause': 'fresh mount-eligibility read pending',
+      });
+
+      await Future<void>.delayed(Duration.zero);
+      harness.owner.flush();
+      expect(pendingEvaluations, 2);
+      expect(neighborEvaluations, 2);
+      expect(resolver.calls, ['tg-2', 'tg-1']);
+      expect(transport.flares, hasLength(2));
+    },
+  );
+
+  test('a persistent refusal receives only one automatic recheck', () async {
+    final eligibility = _MutableEligibility()
+      ..decision = const MountEligibilityDecision.refused(
+        clause: 'approval: not approved',
+      );
+    final transport = _RecordingTransport();
+    final harness = _mountHarness(
+      mountEligibility: eligibility.call,
+      transport: transport,
+    );
+
+    expect(eligibility.evaluations, 1);
+    await Future<void>.delayed(Duration.zero);
+    harness.owner.flush();
+    expect(eligibility.evaluations, 2);
+
+    await Future<void>.delayed(Duration.zero);
+    harness.owner.flush();
+    expect(eligibility.evaluations, 2);
+    expect(transport.flares, hasLength(1));
+  });
+
+  test('a throwing predicate names the failure and does not abort the next '
+      'candidate', () {
+    final transport = _RecordingTransport();
+    final first = _task();
+    const second = Bead(
+      id: 'tg-2',
+      issueType: IssueType.task,
+      status: BeadStatus.open,
+    );
+    final joined = JoinedSnapshotNotifier(
+      JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: [first, second],
+          dependencies: const [],
+          readyIds: const {'tg-1', 'tg-2'},
+          capturedAt: DateTime(2026),
+        ),
+      ),
+    );
+    final owner = TreeOwner();
+    addTearDown(owner.dispose);
+    final root = owner.mountRoot(
+      ProviderScope(
+        child: InheritedSeed<JoinedSnapshotNotifier>(
+          value: joined,
+          child: InheritedSeed<SessionResolver>(
+            value: _RecordingResolver(),
+            child: Station([
+              SubstationScope(
+                configNotifier: SubstationConfigNotifier(
+                  const SubstationConfig(
+                    substationId: 'test',
+                    ownedSubstations: {'tg'},
+                    maxConcurrentWork: 10,
+                  ),
+                ),
+                services: ServiceBundle(
+                  transport: transport,
+                  mountEligibility: (bead) {
+                    if (bead.id == 'tg-1') {
+                      throw StateError('asset unavailable');
+                    }
+                    return const MountEligibilityDecision.eligible();
+                  },
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+
+    expect(_workBeads(root).map((work) => work.bead.id), ['tg-2']);
+    expect(transport.flares.single.name, 'work.mountEligibilityRefused');
+    expect(transport.flares.single.data['beadId'], 'tg-1');
+    expect(
+      transport.flares.single.data['clause'],
+      'mount eligibility evaluation failed: Bad state: asset unavailable',
+    );
   });
 
   test('frontier exclusion uses existing refusal edges and preserves live '

@@ -27,6 +27,14 @@ class _Recorder {
   void record(String event) => events.add(event);
 }
 
+class _RecordingTransport implements ExplorationTransport {
+  final List<({String name, Map<String, String> data})> flares = [];
+
+  @override
+  void flare(String name, Map<String, String> data) =>
+      flares.add((name: name, data: Map.unmodifiable(data)));
+}
+
 /// Returns a `_FakeEffect` keyed `'<beadId>:work'` — the bead-keyed subtree root
 /// the real resolver returns (a `SessionScope`). It is STABLE across cursor
 /// ticks: a cursor advance threads new config down, never swaps this child.
@@ -93,6 +101,7 @@ Seed _root({
   required JoinedSnapshotNotifier joined,
   required SessionResolver resolver,
   required SubstationConfigNotifier substationConfig,
+  ServiceBundle services = const ServiceBundle(),
 }) => InheritedSeed<JoinedSnapshotNotifier>(
   value: joined,
   child: InheritedSeed<SessionResolver>(
@@ -100,6 +109,7 @@ Seed _root({
     child: Station([
       SubstationScope(
         configNotifier: substationConfig,
+        services: services,
         key: const ValueKey('scope.tg'),
       ),
     ]),
@@ -416,6 +426,7 @@ void main() {
         'custom type (convergence, infra, AND the orchestration nouns bd ready '
         'leaks) mounts ZERO work beads', () {
       final recorder = _Recorder();
+      final transport = _RecordingTransport();
       // Every the_grid custom IssueType, all owned + ready. NONE may mount —
       // especially the orchestration nouns (convoy/event/step/spec/gate/
       // molecule/message/merge-request) that bd ready does NOT narrow out and a
@@ -446,6 +457,7 @@ void main() {
             joined: joined,
             resolver: _FakeSessionResolver(recorder),
             substationConfig: SubstationConfigNotifier(_tgConfig()),
+            services: ServiceBundle(transport: transport),
           ),
         ),
       );
@@ -456,6 +468,14 @@ void main() {
         expect(_workBead(root, id), isNull, reason: '$id must not mount');
       }
       expect(_workBead(root, 'tg-1'), isNotNull);
+      expect(
+        transport.flares
+            .where((flare) => flare.name == 'work.mountEligibilityRefused')
+            .map((flare) => flare.data['beadId'])
+            .toSet(),
+        customs.keys.toSet(),
+      );
+      expect(transport.flares.first.data['clause'], startsWith('issue type '));
     });
 
     test('core work types each mount (the allow-list is not over-narrow)', () {
@@ -591,6 +611,7 @@ void main() {
 
     test('an unowned bead (foreign prefix) never mounts (fail-closed)', () {
       final recorder = _Recorder();
+      final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1'), _bead('gc-9')], ready: {'tg-1', 'gc-9'}),
       );
@@ -602,17 +623,24 @@ void main() {
             joined: joined,
             resolver: _FakeSessionResolver(recorder),
             substationConfig: SubstationConfigNotifier(_tgConfig()),
+            services: ServiceBundle(transport: transport),
           ),
         ),
       );
 
       expect(recorder.events, ['START work(tg-1)']);
       expect(_workBead(root, 'gc-9'), isNull);
+      expect(
+        transport.flares,
+        isEmpty,
+        reason: 'ownership is a silent federated routing filter',
+      );
     });
 
     test('approved-bead drive-list (ADR-0006): when non-empty, ONLY listed beads '
         'mount — owned, ready, core beads not approved stay dormant', () {
       final recorder = _Recorder();
+      final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [_bead('tg-1'), _bead('tg-2'), _bead('tg-3')],
@@ -629,6 +657,7 @@ void main() {
             substationConfig: SubstationConfigNotifier(
               _tgConfig().copyWith(driveList: const {'tg-2'}),
             ),
+            services: ServiceBundle(transport: transport),
           ),
         ),
       );
@@ -638,6 +667,19 @@ void main() {
       expect(_workBead(root, 'tg-1'), isNull);
       expect(_workBead(root, 'tg-2'), isNotNull);
       expect(_workBead(root, 'tg-3'), isNull);
+      expect(
+        transport.flares.map((flare) => flare.data),
+        unorderedEquals([
+          {
+            'beadId': 'tg-1',
+            'clause': 'bead is not selected by the substation drive list',
+          },
+          {
+            'beadId': 'tg-3',
+            'clause': 'bead is not selected by the substation drive list',
+          },
+        ]),
+      );
     });
 
     test('the drive-list NARROWS, never widens: an approved bead still fails the '

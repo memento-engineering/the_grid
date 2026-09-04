@@ -6,7 +6,6 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:state_notifier/state_notifier.dart';
 
-import '../domain/driveable_work.dart';
 import '../domain/mount_eligibility.dart';
 import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
@@ -86,6 +85,16 @@ class _WorkListState extends State<WorkList>
   /// genuine positive terminal.
   final Set<String> _mountedIds = <String>{};
 
+  /// The value-config seeds currently emitted for mounted work branches.
+  ///
+  /// `WorkList` can rebuild without a new joined snapshot when the bounded
+  /// mount-eligibility recheck fires. Reusing an unchanged seed instance lets
+  /// genesis_tree's identity fast path prune that branch, so a sibling's
+  /// refusal cannot re-run an already-mounted `SessionResolver` and mint a
+  /// duplicate session. Entries live only while the corresponding branch is
+  /// present in this build's mounted projection.
+  final Map<String, WorkBead> _mountedWorkBeadsById = <String, WorkBead>{};
+
   /// Bead ids whose TERMINAL-cursor skip has already been reported (tg-83k1) —
   /// the flare is LOUD but said ONCE per bead per station lifetime.
   final Set<String> _terminalSkipReported = <String>{};
@@ -106,6 +115,9 @@ class _WorkListState extends State<WorkList>
 
   final Set<String> _trustRefusedReported = <String>{};
   final Map<String, String> _mountEligibilityRefusals = <String, String>{};
+  final Set<({String beadId, String clause})> _mountEligibilityRechecks =
+      <({String beadId, String clause})>{};
+  Timer? _mountEligibilityRecheckTimer;
 
   /// The Stage-1 derivation layer (stage1-wiring §2), resolved off the ambient
   /// scope on each build. Absent it is a counting no-op.
@@ -224,6 +236,18 @@ class _WorkListState extends State<WorkList>
     return latest;
   }
 
+  WorkBead _workBeadFor({required Bead bead, SessionProjection? session}) {
+    final cached = _mountedWorkBeadsById[bead.id];
+    if (cached != null && cached.bead == bead && cached.session == session) {
+      return cached;
+    }
+    return _mountedWorkBeadsById[bead.id] = WorkBead(
+      bead: bead,
+      session: session,
+      key: ValueKey(bead.id),
+    );
+  }
+
   @override
   void debugFillProperties(DiagnosticsBuilder properties) {
     super.debugFillProperties(properties);
@@ -260,6 +284,8 @@ class _WorkListState extends State<WorkList>
 
   @override
   void dispose() {
+    _mountEligibilityRecheckTimer?.cancel();
+    _mountEligibilityRecheckTimer = null;
     _remove?.call();
     _remove = null;
   }
@@ -298,6 +324,8 @@ class _WorkListState extends State<WorkList>
     // put in memory (the predicate is synchronous and cannot read the store),
     // composed with the station's own eligibility predicate when one exists.
     final mountEligibility = composeMountEligibility([
+      dispatchableWorkClause(resident: seed.substationConfig.resident),
+      driveListClause(seed.substationConfig.driveList),
       crossLinkExclusionClause(
         _snapshot.frontierExclusionsByBeadId,
         _snapshot.sessionsByWorkBead,
@@ -305,39 +333,31 @@ class _WorkListState extends State<WorkList>
       mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
     ], services?.mountEligibility);
     final mounted = <WorkBead>[];
+    final emittedMountedIds = <String>{};
     // A43's pending bin, unchanged in MEANING (freshly ready, no live session —
     // the only bin the budget gates) and richer by one field: a VOIDED bead
     // (I-10) enters it too, and its `SessionScope` needs the DEAD projection in
     // order to retire it before minting.
     final pending = <({Bead bead, SessionProjection? session})>[];
     for (final bead in _snapshot.graph.beadsById.values) {
-      // Dispatchable-type gate BEFORE ownership, as an ALLOW-list (fail-closed):
-      // only plain coding-work types mount a WorkBead + spawn an agent. A
-      // deny-list would have to enumerate every non-work type, and `bd ready`
-      // leaks the_grid's orchestration/coordination customs — its ready_work
-      // query narrows only {merge-request,gate,molecule,message,agent,role,rig},
-      // never convergence/convoy/event/step/spec. An allow-list of core work
-      // types excludes convergence (the M2 two-writer axis), `session`
-      // (the_grid's own lifecycle), every gc orchestration noun, and infra
-      // (agent/rig/role) by construction; an unknown custom type does NOT mount.
-      // (A41 — refines A40's mount-boundary type gate; the live-arm approved-bead
-      // drive-list remains a SEPARATE gate, ADR-0006.)
-      if (!_isDispatchableWork(
-        bead.issueType,
-        resident: seed.substationConfig.resident,
-      )) {
-        continue;
-      }
+      // Ownership is the one intentionally silent filter: each WorkList sees
+      // the shared federated graph, but only the owning substation may explain
+      // or mount a bead. Every LOCAL exclusion below is a named eligibility
+      // clause instead.
       if (!ownership.owns(bead)) continue;
 
-      // Approved-bead drive-list gate (ADR-0006): when a drive-list is configured
-      // (a live arm approves specific beads via `--bead`), ONLY those beads mount.
-      // Empty = no per-bead restriction (dev/dry-run observes all owned work); a
-      // live run refuses an empty drive-list upstream, so when armed this gate is
-      // always active. Independent of the type/ownership allow-lists above — it
-      // narrows further, never widens.
-      final driveList = seed.substationConfig.driveList;
-      if (driveList.isNotEmpty && !driveList.contains(bead.id)) continue;
+      final inReady = _snapshot.graph.readyIds.contains(bead.id);
+      final linkedSessions = _snapshot.linkedSessions(bead.id);
+      final retiredSession = linkedSessions.isEmpty
+          ? _latestRetiredSession(bead.id, _snapshot.sessionsByWorkBead.values)
+          : null;
+      final participatesInReconciliation =
+          inReady ||
+          _snapshot.frontierExclusionsByBeadId.containsKey(bead.id) ||
+          linkedSessions.isNotEmpty ||
+          retiredSession != null ||
+          _mountedIds.contains(bead.id);
+      if (!participatesInReconciliation) continue;
 
       // ONE content gate, several clauses (tg-zlfu). The engine's own DURABLE
       // remount budget composes with whatever eligibility the station itself
@@ -346,7 +366,7 @@ class _WorkListState extends State<WorkList>
       // would duplicate that machinery and then drift from it. The composed
       // predicate is never null: the attempt clause applies even on a station
       // that composes no eligibility assets at all.
-      final decision = mountEligibility(bead);
+      final decision = _evaluateMountEligibility(mountEligibility, bead);
       switch (decision) {
         case MountEligible():
           _restoreMountEligibility(services, bead.id);
@@ -375,11 +395,8 @@ class _WorkListState extends State<WorkList>
       // one the map publishes. `verdict.winner` IS
       // `_snapshot.sessionsByWorkBead[bead.id]`; the verdict additionally
       // states what the OTHER rows mean.
-      final verdict = linkedSessionVerdictOf(_snapshot.linkedSessions(bead.id));
+      final verdict = linkedSessionVerdictOf(linkedSessions);
       final session = verdict.winner;
-      final retiredSession = session == null
-          ? _latestRetiredSession(bead.id, _snapshot.sessionsByWorkBead.values)
-          : null;
       final scopeSession = session ?? retiredSession;
       final disposition = sessionDispositionOf(session);
 
@@ -469,7 +486,6 @@ class _WorkListState extends State<WorkList>
         continue;
       }
 
-      final inReady = _snapshot.graph.readyIds.contains(bead.id);
       // A43's "live session" bin is about the ROW, not about what `SessionScope`
       // will do with it: any non-terminal session row is in-flight work that is
       // never evicted for budget reasons (a row that names no session bead is
@@ -502,9 +518,8 @@ class _WorkListState extends State<WorkList>
       // an owned, dispatchable, ready bead mounts.
       if (staysMounted) {
         _mountedIds.add(bead.id);
-        mounted.add(
-          WorkBead(bead: bead, session: scopeSession, key: ValueKey(bead.id)),
-        );
+        emittedMountedIds.add(bead.id);
+        mounted.add(_workBeadFor(bead: bead, session: scopeSession));
       } else {
         pending.add((bead: bead, session: scopeSession));
       }
@@ -590,13 +605,8 @@ class _WorkListState extends State<WorkList>
       // keeps the branch mounted across the retire→mint gap (the same tg-zat
       // mechanism that carries a `grid rework` re-key), so the governor can never
       // evict the very scope that is minting the fresh round.
-      mounted.add(
-        WorkBead(
-          bead: entry.bead,
-          session: entry.session,
-          key: ValueKey(entry.bead.id),
-        ),
-      );
+      emittedMountedIds.add(entry.bead.id);
+      mounted.add(_workBeadFor(bead: entry.bead, session: entry.session));
     }
     if (waiting.isNotEmpty) {
       _reportThrottled(services, [for (final w in waiting) w.bead]);
@@ -609,6 +619,9 @@ class _WorkListState extends State<WorkList>
       final byPriority = a.bead.priority.compareTo(b.bead.priority);
       return byPriority != 0 ? byPriority : a.bead.id.compareTo(b.bead.id);
     });
+    _mountedWorkBeadsById.removeWhere(
+      (beadId, _) => !emittedMountedIds.contains(beadId),
+    );
     // Re-provide the settled joined snapshot and data config as observed VALUES
     // for descendants. WorkList remains the only notifier subscriber;
     // SessionScope consumes these values through ambient tree seams.
@@ -621,27 +634,19 @@ class _WorkListState extends State<WorkList>
     );
   }
 
-  /// [IssueTypeDriveability] asks whether this KIND of bead may ever mount;
-  /// [MountEligibilityPredicate] asks whether THIS bead is fit to mount right now.
-  ///
-  /// The ALLOW-list: only plain, coding-dispatchable work mounts. `isCore` =
-  /// {task, bug, feature, chore, epic, decision, spike, story, milestone} — the
-  /// upstream built-in work types; every the_grid custom type (convergence /
-  /// session / convoy / event / step / spec / gate / molecule / message /
-  /// merge-request / agent / rig / role) is non-core and excluded. Fail-closed:
-  /// an unrecognised custom type does NOT mount. (A41, ratified Nico
-  /// 2026-06-25 — `isCore` stands; the epic / milestone / decision narrowing
-  /// was considered and left in scope.)
-  ///
-  /// Under [resident] arming (RS-3/D-R4) the allow-list narrows FURTHER to
-  /// the DRIVEABLE-WORK boundary ([IssueTypeDriveability.isDriveable]) — a
-  /// resident station's ready frontier IS the drive set, so an organizational core
-  /// type (epic/milestone/decision/spike/story) must never auto-mount just
-  /// because it surfaced ready (the filing-time CATCH on RS-3; a scoped
-  /// refinement of A41, flagged for the graduation ADR, never a weakening of
-  /// the gates themselves).
-  static bool _isDispatchableWork(IssueType type, {required bool resident}) =>
-      type.isCore && (!resident || type.isDriveable);
+  MountEligibilityDecision _evaluateMountEligibility(
+    MountEligibilityPredicate mountEligibility,
+    Bead bead,
+  ) {
+    try {
+      return mountEligibility(bead);
+    } on Object catch (error) {
+      return MountEligibilityDecision.refused(
+        clause:
+            'mount eligibility evaluation failed: ${truncateReason('$error')}',
+      );
+    }
+  }
 
   void _refuseMountEligibility(
     ServiceBundle? services,
@@ -650,6 +655,7 @@ class _WorkListState extends State<WorkList>
   ) {
     final formerClause = _mountEligibilityRefusals[beadId];
     _mountEligibilityRefusals[beadId] = clause;
+    _scheduleMountEligibilityRecheck(beadId, clause);
     if (formerClause == clause) return;
     _emitMountEligibilityFlare(
       services,
@@ -660,6 +666,7 @@ class _WorkListState extends State<WorkList>
   }
 
   void _restoreMountEligibility(ServiceBundle? services, String beadId) {
+    _clearMountEligibilityRechecks(beadId);
     final formerClause = _mountEligibilityRefusals.remove(beadId);
     if (formerClause == null) return;
     _emitMountEligibilityFlare(
@@ -668,6 +675,27 @@ class _WorkListState extends State<WorkList>
       beadId,
       formerClause,
     );
+  }
+
+  /// Gives a newly observed refusal one local next-event-tick re-evaluation.
+  ///
+  /// This closes the transient "fresh read pending" gap without adding a
+  /// second snapshot observer. The retry key remains latched through the second
+  /// identical refusal, so a permanent clause cannot hot-loop; restoration
+  /// clears it so a later refusal edge receives its own bounded retry.
+  void _scheduleMountEligibilityRecheck(String beadId, String clause) {
+    if (!_mountEligibilityRechecks.add((beadId: beadId, clause: clause))) {
+      return;
+    }
+    _mountEligibilityRecheckTimer ??= Timer(Duration.zero, () {
+      _mountEligibilityRecheckTimer = null;
+      if (!context.mounted) return;
+      setState(() {});
+    });
+  }
+
+  void _clearMountEligibilityRechecks(String beadId) {
+    _mountEligibilityRechecks.removeWhere((retry) => retry.beadId == beadId);
   }
 
   static void _emitMountEligibilityFlare(
