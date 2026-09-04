@@ -139,12 +139,14 @@ final class AssetArtifact {
 /// (ADR-0012's typed `DiagnosticsProperty` union).
 final class GridAssetDefinition extends MultiChildSeed {
   /// Declares [assetKey], documented by [description], delivered by
-  /// [artifacts]; [audience], [visibility], and [selector] default to the
-  /// common agent-facing, public, unconditional case.
+  /// [artifacts], and teaching the lowercase top-level command names in
+  /// [teaches]; [audience], [visibility], and [selector] default to the common
+  /// agent-facing, public, unconditional case.
   const GridAssetDefinition({
     required this.assetKey,
     required this.description,
     required this.artifacts,
+    this.teaches = const <String>[],
     this.audience = AssetAudience.agent,
     this.visibility = AssetVisibility.public,
     this.selector = const AlwaysApplies(),
@@ -158,6 +160,9 @@ final class GridAssetDefinition extends MultiChildSeed {
 
   /// The delivery legs, in declaration order.
   final List<AssetArtifact> artifacts;
+
+  /// The lowercase top-level command names this asset teaches.
+  final List<String> teaches;
 
   /// Who the asset is authored for.
   final AssetAudience audience;

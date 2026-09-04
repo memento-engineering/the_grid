@@ -46,6 +46,7 @@ const GridAssetDefinition _decide = GridAssetDefinition(
       ],
     ),
   ],
+  teaches: <String>['decide'],
   selector: RequiresPackage('genesis_tree'),
 );
 
@@ -246,6 +247,172 @@ void main() {
       expect(seen, <String>['demo']);
     });
   });
+
+  group(
+    'teaches declarations are preserved and validated at the pack boundary',
+    () {
+      test('an omitted teaches list remains empty and legal in a pack', () {
+        const brief = GridAssetDefinition(
+          assetKey: AssetKey(
+            package: 'demo_grid_assets',
+            kind: AssetKind.prompt,
+            id: 'brief',
+          ),
+          description: 'Summarize the brief.',
+          artifacts: <AssetArtifact>[],
+        );
+
+        final pack = GridAssetPackDefinition(
+          package: 'demo_grid_assets',
+          assets: const <GridAssetDefinition>[brief],
+        );
+
+        expect(brief.teaches, isEmpty);
+        expect(pack.assets.single.teaches, isEmpty);
+      });
+
+      test(
+        'a skill teaches list round-trips unchanged through pack and registry',
+        () {
+          final pack = GridAssetPackDefinition(
+            package: 'demo_grid_assets',
+            assets: const <GridAssetDefinition>[_decide],
+          );
+          final registry = GridAssetRegistry(<GridAssetPackDefinition>[pack]);
+
+          expect(
+            identical(pack.assets.single.teaches, _decide.teaches),
+            isTrue,
+          );
+          expect(
+            identical(
+              registry.definitionFor(_decideKey)!.teaches,
+              _decide.teaches,
+            ),
+            isTrue,
+          );
+          expect(_decide.teaches, <String>['decide']);
+        },
+      );
+
+      test('a non-skill asset cannot teach a command', () {
+        const prompt = GridAssetDefinition(
+          assetKey: AssetKey(
+            package: 'demo_grid_assets',
+            kind: AssetKind.prompt,
+            id: 'brief',
+          ),
+          description: 'Summarize the brief.',
+          artifacts: <AssetArtifact>[],
+          teaches: <String>['decide'],
+        );
+
+        expect(
+          () => GridAssetPackDefinition(
+            package: 'demo_grid_assets',
+            assets: const <GridAssetDefinition>[prompt],
+          ),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => '${e.message}',
+              'message',
+              contains(prompt.assetKey.canonical),
+            ),
+          ),
+        );
+      });
+
+      test('a skill cannot teach a blank command', () {
+        const skill = GridAssetDefinition(
+          assetKey: AssetKey(
+            package: 'demo_grid_assets',
+            kind: AssetKind.skill,
+            id: 'blank',
+          ),
+          description: 'Teach nothing valid.',
+          artifacts: <AssetArtifact>[],
+          teaches: <String>[''],
+        );
+
+        expect(
+          () => GridAssetPackDefinition(
+            package: 'demo_grid_assets',
+            assets: const <GridAssetDefinition>[skill],
+          ),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => '${e.message}',
+              'message',
+              contains(skill.assetKey.canonical),
+            ),
+          ),
+        );
+      });
+
+      test('a skill can teach only lowercase top-level command names', () {
+        for (final invalid in <String>[
+          'Decide',
+          'decide record',
+          'decide/run',
+          'decide_record',
+          '1decide',
+        ]) {
+          final skill = GridAssetDefinition(
+            assetKey: const AssetKey(
+              package: 'demo_grid_assets',
+              kind: AssetKind.skill,
+              id: 'invalid',
+            ),
+            description: 'Teach an invalid command.',
+            artifacts: const <AssetArtifact>[],
+            teaches: <String>[invalid],
+          );
+
+          expect(
+            () => GridAssetPackDefinition(
+              package: 'demo_grid_assets',
+              assets: <GridAssetDefinition>[skill],
+            ),
+            throwsA(
+              isA<ArgumentError>().having(
+                (e) => '${e.message}',
+                'message',
+                contains(skill.assetKey.canonical),
+              ),
+            ),
+            reason: 'must reject "$invalid"',
+          );
+        }
+      });
+
+      test('a skill cannot teach the same command twice', () {
+        const skill = GridAssetDefinition(
+          assetKey: AssetKey(
+            package: 'demo_grid_assets',
+            kind: AssetKind.skill,
+            id: 'duplicate',
+          ),
+          description: 'Teach one command twice.',
+          artifacts: <AssetArtifact>[],
+          teaches: <String>['decide', 'decide'],
+        );
+
+        expect(
+          () => GridAssetPackDefinition(
+            package: 'demo_grid_assets',
+            assets: const <GridAssetDefinition>[skill],
+          ),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => '${e.message}',
+              'message',
+              contains(skill.assetKey.canonical),
+            ),
+          ),
+        );
+      });
+    },
+  );
 
   group('duplicates refuse LOUD before a partial registry is exposed', () {
     test('a duplicate AssetKey across packs throws', () {
