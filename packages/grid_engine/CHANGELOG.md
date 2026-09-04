@@ -1,3 +1,9 @@
+## 0.3.0-rc.13
+
+- Ready work is re-minted after a terminal session closes: linked session rows are ordered deterministically, surplus dead keys retire through the existing void path, and every blocking terminal is surfaced; rework selects open sessions without changing its park predicate (tg-83k1, #300).
+- Adopts grid_runtime 0.2.0-rc.11 (the GitOps work-tree-root guard): the engine fakes answer the root probe without recording it (tg-amwa, #302).
+- Floors tightened to `grid_runtime ^0.2.0-rc.11`.
+
 ## 0.3.0-rc.12
 
 - Silent, artifact-less harness exits (a usage window running out, a network refusal) classify as `infra`: the restart budget is spent with backoff, then the round opens a gate naming the throttle and flares `harness.throttled` with the tail of the agent's output — never a gateless `failed` strand (tg-mbeh, #294; shipped in this rc after the tag was cut from main).
