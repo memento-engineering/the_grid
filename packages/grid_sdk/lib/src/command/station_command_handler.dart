@@ -482,6 +482,14 @@ final class StationCommandHandler implements GridCommandHandler {
   /// (ADR-0014 D-C4), touching no writer and opening no store. A store that
   /// cannot be projected contributes its own row; it is never dropped.
   Future<GridCommandResult> _board(BoardFilter filter) async {
+    await _refreshState();
+    final state = _stateSource.current;
+    if (state == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'The resident state store has no current snapshot for link blockers.',
+      );
+    }
     // The bindings map is keyed by BOTH name and prefix (work_assembly), so
     // one store appears twice — dedupe by identity or every bead emits twice.
     final bindings = <WorkCommandStore>[];
@@ -492,6 +500,7 @@ final class StationCommandHandler implements GridCommandHandler {
     }
     bindings.sort((a, b) => a.substation.compareTo(b.substation));
     final rows = <BoardRow>[];
+    final readable = <({WorkCommandStore binding, GraphSnapshot snapshot})>[];
     for (final binding in bindings) {
       if (filter.stores.isNotEmpty &&
           !filter.stores.contains(binding.substation)) {
@@ -520,12 +529,36 @@ final class StationCommandHandler implements GridCommandHandler {
         );
         continue;
       }
+      readable.add((binding: binding, snapshot: snapshot));
+    }
+
+    final beadsById = <String, Bead>{
+      for (final entry in readable)
+        for (final bead in entry.snapshot.beads) bead.id: bead,
+    };
+    final linkBlockersByBeadId = <String, Set<String>>{};
+    applyBlockGuard(
+      candidates: {
+        for (final bead in beadsById.values)
+          if (!bead.isClosed) bead.id,
+      },
+      beadsById: beadsById,
+      edges: crossLinkEdges(projectCrossLinks(state)),
+      onBlocked: (beadId, edge, target) {
+        (linkBlockersByBeadId[beadId] ??= <String>{}).add(
+          edge.to.isEmpty ? edge.origin : edge.to,
+        );
+      },
+    );
+
+    for (final entry in readable) {
       rows.addAll(
         projectBoard(
-          store: binding.substation,
-          root: binding.root,
-          snapshot: snapshot,
+          store: entry.binding.substation,
+          root: entry.binding.root,
+          snapshot: entry.snapshot,
           filter: filter,
+          linkBlockersByBeadId: linkBlockersByBeadId,
         ),
       );
     }

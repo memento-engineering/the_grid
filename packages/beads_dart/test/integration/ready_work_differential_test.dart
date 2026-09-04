@@ -2,6 +2,8 @@
 @Tags(['integration'])
 library;
 
+import 'dart:convert';
+
 import 'package:beads_dart/src/codecs/envelope.dart';
 import 'package:beads_dart/src/errors/bd_exception.dart';
 import 'package:beads_dart/src/models/dependency_type.dart';
@@ -17,6 +19,46 @@ import 'package:test/test.dart';
 
 import 'support/hermetic_dolt_server.dart';
 import 'support/hermetic_workspace.dart';
+
+typedef _NamedReadyFixture = ({
+  String id,
+  String title,
+  IssueType type,
+  int priority,
+  List<String> labels,
+  Map<String, String> metadata,
+});
+
+Future<void> _seedNamedReady(
+  BdRunner runner,
+  _NamedReadyFixture fixture,
+) async {
+  final result = await runner.run([
+    'create',
+    '--id',
+    fixture.id,
+    '--force',
+    '--status',
+    'open',
+    '--title',
+    fixture.title,
+    '--type',
+    fixture.type.wire,
+    '--priority',
+    '${fixture.priority}',
+    if (fixture.labels.isNotEmpty) ...['--labels', fixture.labels.join(',')],
+    '--metadata',
+    jsonEncode(fixture.metadata),
+    '--json',
+    '--actor',
+    BdCliService.actor,
+  ]);
+  expect(
+    result.exitCode,
+    0,
+    reason: 'failed to seed ${fixture.id}: ${result.stderr}',
+  );
+}
 
 /// Track F differential test gate (ADR-0003 Decision 5), in three halves.
 ///
@@ -509,6 +551,243 @@ void main() {
       }
       await expectAgreementEveryPolicy();
     });
+
+    test('the four epoch-27/28 bead shapes are ready on SQL and bd under every '
+        'sort policy', () async {
+      final s = server;
+      if (s == null) {
+        markTestSkipped('dolt/bd not on PATH — hermetic differential skipped');
+        return;
+      }
+      const fixtures = <_NamedReadyFixture>[
+        (
+          id: 'genesis-7ob',
+          title:
+              'P0: release tree invariants permit infinite flushes and '
+              'corrupted reconciliation',
+          type: IssueType.bug,
+          priority: 0,
+          labels: ['orchestrator', 'review'],
+          metadata: {
+            'grid.approved_at': '2026-09-03T05:10:45.328492Z',
+            'grid.approved_by': 'operator',
+            'grid.approved_rev': 'db134bf211b3d1c3f037066eff178cf33d96af3a',
+            'validation_plan':
+                'cd packages/tree && dart analyze && dart test && dart run '
+                'test/release_invariants_test.dart && cd ../dialogue && '
+                'dart analyze && dart test && dart run '
+                'test/surface_root_compat_test.dart && cd ../perception && '
+                'dart analyze && dart test',
+          },
+        ),
+        (
+          id: 'tg-5kb',
+          title:
+              'grid_sdk: pause/resume work sessions — preserve the cursor, '
+              'resume NEAR close (not a rework-from-top)',
+          type: IssueType.feature,
+          priority: 1,
+          labels: ['grid.approved'],
+          metadata: {
+            'grid.approved_at': '2026-09-03T00:36:29.693922Z',
+            'grid.approved_by': 'operator',
+            'grid.approved_rev': 'cee27e40a47a5905cb008f5bd1b236b777c74db8',
+            'validation_plan':
+                'cd packages/grid_engine && dart analyze && dart test && '
+                'cd ../grid_sdk && dart analyze && dart test && cd '
+                '../grid_cli && dart analyze && dart test',
+          },
+        ),
+        (
+          id: 'tg-wv9',
+          title:
+              'grid_sdk: attach/detach substations on a LIVE station — '
+              'control-surface mutation, no bounce',
+          type: IssueType.feature,
+          priority: 1,
+          labels: ['grid.approved'],
+          metadata: {
+            'grid.approved_at': '2026-09-03T00:36:30.924993Z',
+            'grid.approved_by': 'operator',
+            'grid.approved_rev': 'cee27e40a47a5905cb008f5bd1b236b777c74db8',
+            'validation_plan':
+                'dart analyze packages/grid_sdk packages/grid_cli '
+                'packages/grid_runtime && (cd packages/grid_sdk && dart '
+                'test) && (cd packages/grid_cli && dart test) && (cd '
+                'packages/grid_runtime && dart test)',
+          },
+        ),
+        (
+          id: 'butane_flutter-41eh',
+          title:
+              'butane_grid_assets overlay source is DOTTED — ships hollow '
+              'if ever published (pow-1mp defect class)',
+          type: IssueType.task,
+          priority: 2,
+          labels: ['grid.approved'],
+          metadata: {
+            'grid.approved_at': '2026-09-02T23:16:21.083736Z',
+            'grid.approved_by': 'governor',
+            'grid.approved_rev': '8d33da61b5828bd4b53d5b65ff060350bdb453cd',
+            'validation_plan':
+                'cd packages/butane_grid_assets && dart pub get && dart '
+                'analyze && dart test test/burn_overlay_test.dart && dart '
+                'test',
+          },
+        ),
+      ];
+      const targetShapes = <String, ({IssueType type, int priority})>{
+        'genesis-7r9': (type: IssueType.feature, priority: 2),
+        'tg-o2fy': (type: IssueType.bug, priority: 0),
+        'tg-mspw': (type: IssueType.bug, priority: 0),
+        'tg-um8k': (type: IssueType.bug, priority: 0),
+        'tg-8kye': (type: IssueType.bug, priority: 0),
+        'butane_flutter-t9y': (type: IssueType.task, priority: 1),
+      };
+      const closedReasons = <String, String>{
+        'genesis-7r9':
+            'Already shipped in genesis mainline (multi_child.dart keyed '
+            'reconcile; key.dart Key/LocalKey/ValueKey, no GlobalKey) — '
+            'closed by the governor so the station stops rebuilding '
+            'shipped work.',
+        'tg-o2fy':
+            'Landed: https://github.com/memento-engineering/the_grid/pull/'
+            '287 (squash via queue). station.lock published atomically '
+            '(exclusive-create, pid/startedAt ownership, hold-never-steal). '
+            'Committee A/A/A/C/B all-approve; plan re-run green (264 tests) '
+            'in the worktree; the station\'s deliver leg opened the PR on '
+            'retry.',
+        'tg-mspw':
+            'Landed as https://github.com/memento-engineering/the_grid/pull/'
+            '283 (merge 15eec92). Committee: spec review A/A/A/B/A after '
+            'one respec round, review A/A/A/B; governor plan re-run in the '
+            'worktree: grid_engine 1025 + grid_sdk 316 tests pass, analyzers '
+            'clean (5 pre-existing implementation-import infos in '
+            'untouched grid_sdk files).',
+        'tg-um8k':
+            'Landed as https://github.com/memento-engineering/the_grid/pull/'
+            '284 (merge 9c8d914). Committee: spec review A/A/A/C/A after '
+            'one respec round, review A/A/A with regression-risk C on one '
+            'dev-mode-only waiter-attribution edge; governor plan re-run in '
+            'the worktree: melos analyze + melos test green across the '
+            'workspace. Decision record supersedes A43/ADR-0012\'s '
+            'kernel-as-live wording; zero StationKernel references remain '
+            'in packages/.',
+        'tg-8kye':
+            'Landed: https://github.com/memento-engineering/the_grid/pull/'
+            '290 (squash via queue). Process groups supervised, exit status '
+            'preserved (grace-then-kill, reaper parent). Codex-authored spec '
+            'passed the spec committee A/A/A/A; review A/A/B/A/C '
+            'all-approve; plan re-run green in the worktree (grid_runtime '
+            '365, grid_engine 1017, grid_sdk 329, grid_cli 266). Two '
+            'trajectory-guard timing flakes on CI (tg-2zao) needed job '
+            'reruns.',
+        'butane_flutter-t9y':
+            'Landed: https://github.com/nicholasspencer/butane_flutter/pull/'
+            '46 (squash). Resident ruling executed: burn through the one '
+            'resident\'s circuitry, BurnRunCommand deleted with redlines, '
+            'overlay vended, every async cancellation boundary covered '
+            '(def66c5). r3 committee B/A/B, rc=0; operator resolved the 5dk '
+            'pubspec conflict to this port\'s pins and re-ran the full pack '
+            'plan GREEN post-rebase.',
+      };
+
+      for (final entry in targetShapes.entries) {
+        await _seedNamedReady(s.runner, (
+          id: entry.key,
+          title: 'closed target ${entry.key}',
+          type: entry.value.type,
+          priority: entry.value.priority,
+          labels: const [],
+          metadata: const {},
+        ));
+        await bd.close(entry.key, reason: closedReasons[entry.key]);
+      }
+      for (final fixture in fixtures) {
+        await _seedNamedReady(s.runner, fixture);
+      }
+      await bd.depAdd(
+        'genesis-7ob',
+        'genesis-7r9',
+        type: DependencyType.discoveredFrom,
+      );
+      for (final id in const ['tg-5kb', 'tg-wv9']) {
+        for (final blocker in const [
+          'tg-o2fy',
+          'tg-mspw',
+          'tg-um8k',
+          'tg-8kye',
+        ]) {
+          await bd.depAdd(id, blocker, type: DependencyType.blocks);
+        }
+      }
+      await bd.depAdd(
+        'butane_flutter-41eh',
+        'butane_flutter-t9y',
+        type: DependencyType.discoveredFrom,
+      );
+
+      final observed = {
+        for (final bead in await bd.show([
+          for (final fixture in fixtures) fixture.id,
+        ]))
+          bead.id: bead,
+      };
+      for (final fixture in fixtures) {
+        final bead = observed[fixture.id]!;
+        expect(bead.issueType, fixture.type);
+        expect(bead.priority, fixture.priority);
+        final expectedLabels = [...fixture.labels]..sort();
+        expect(bead.labels, expectedLabels);
+        for (final entry in fixture.metadata.entries) {
+          expect(bead.metadata[entry.key], entry.value);
+        }
+        expect(bead.assignee, isEmpty);
+        expect(bead.deferUntil, isNull);
+      }
+
+      final edges = await bd.depList([
+        for (final fixture in fixtures) fixture.id,
+      ]);
+      expect(edges.map((edge) => edge.edgeKey).toSet(), {
+        'genesis-7ob genesis-7r9 discovered-from',
+        'butane_flutter-41eh butane_flutter-t9y discovered-from',
+        for (final id in const ['tg-5kb', 'tg-wv9'])
+          for (final blocker in const [
+            'tg-o2fy',
+            'tg-mspw',
+            'tg-um8k',
+            'tg-8kye',
+          ])
+            '$id $blocker blocks',
+      });
+      final targets = {
+        for (final bead in await bd.show(targetShapes.keys.toList()))
+          bead.id: bead,
+      };
+      for (final entry in closedReasons.entries) {
+        expect(targets[entry.key]!.closeReason, entry.value);
+      }
+
+      final expected = fixtures.map((fixture) => fixture.id).toSet();
+      final now = DateTime.now().toUtc();
+      for (final policy in ReadyWorkSortPolicy.values) {
+        final diff = await differential.assertAgreement(
+          ReadyWorkFilter(sortPolicy: policy),
+          now: now,
+        );
+        expect(
+          diff.sqlIds,
+          containsAll(expected),
+          reason: 'SQL omitted under $policy',
+        );
+        expect(
+          diff.oracleIds,
+          containsAll(expected),
+          reason: 'bd ready omitted under $policy',
+        );
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
 
     test(
       'the full seeded graph (all shapes at once) agrees under every policy',

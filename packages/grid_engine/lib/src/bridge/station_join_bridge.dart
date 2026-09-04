@@ -246,6 +246,7 @@ class StationJoinBridge {
         sessionsByWorkBead: _latest.sessionsByWorkBead,
         surplusSessionsByWorkBead: _latest.surplusSessionsByWorkBead,
         mountAttemptsByWorkBead: _latest.mountAttemptsByWorkBead,
+        frontierExclusionsByBeadId: _latest.frontierExclusionsByBeadId,
       ),
     );
   }
@@ -321,6 +322,7 @@ class StationJoinBridge {
     final sessions = <String, SessionProjection>{};
     final surplus = <String, List<SessionProjection>>{};
     final attempts = <String, MountAttemptRecord>{};
+    var frontierExclusionsByBeadId = const <String, String>{};
     if (state != null) {
       final linkedRows = <String, List<SessionProjection>>{};
       for (final bead in state.beadsById.values) {
@@ -353,7 +355,9 @@ class StationJoinBridge {
       }
       _attachMoleculeBeads(state, sessions);
       _attachGateState(state, sessions);
-      graph = _applyCrossLinks(work, state, onUnresolvedCrossLink);
+      final crossLinks = _applyCrossLinks(work, state, onUnresolvedCrossLink);
+      graph = crossLinks.graph;
+      frontierExclusionsByBeadId = crossLinks.frontierExclusionsByBeadId;
     }
     // The comparator pass runs over the FINISHED sessions map — after the
     // molecule/gate attachments, so it compares what a decision would actually
@@ -395,6 +399,7 @@ class StationJoinBridge {
       sessionsByWorkBead: sessions,
       surplusSessionsByWorkBead: surplus,
       mountAttemptsByWorkBead: attempts,
+      frontierExclusionsByBeadId: frontierExclusionsByBeadId,
     );
   }
 
@@ -424,25 +429,49 @@ class StationJoinBridge {
   /// beads may newly mount. A bead already carrying a live session stays
   /// mounted (`work_list.dart`'s stays-mounted rule) — authoring a link never
   /// kills a running agent.
-  static GraphSnapshot _applyCrossLinks(
+  static ({GraphSnapshot graph, Map<String, String> frontierExclusionsByBeadId})
+  _applyCrossLinks(
     GraphSnapshot work,
     GraphSnapshot state,
     void Function(String message)? onUnresolved,
   ) {
-    final links = projectCrossLinks(state, onMalformed: onUnresolved);
-    if (links.isEmpty) return work;
+    final links = projectCrossLinks(state, onMalformed: onUnresolved)
+      ..sort((left, right) => left.beadId.compareTo(right.beadId));
+    if (links.isEmpty) {
+      return (
+        graph: work,
+        frontierExclusionsByBeadId: const <String, String>{},
+      );
+    }
+    final exclusions = <String, String>{};
     final guarded = applyBlockGuard(
       candidates: work.readyIds,
       beadsById: work.beadsById,
       edges: crossLinkEdges(links),
       onUnresolved: onUnresolved,
+      onBlocked: (beadId, edge, target) {
+        final targetState = target == null ? 'unobserved' : 'open';
+        final failClosed = target == null ? ' (fail-closed)' : '';
+        exclusions.putIfAbsent(
+          beadId,
+          () =>
+              'frontier cross-link: ${edge.origin} blocks $beadId on '
+              '$targetState target "${edge.to}"$failClosed',
+        );
+      },
     );
-    if (guarded.length == work.readyIds.length) return work;
-    return GraphSnapshot(
-      beadsById: work.beadsById,
-      dependencies: work.dependencies,
-      readyIds: guarded,
-      capturedAt: work.capturedAt,
+    final carried = Map<String, String>.unmodifiable(exclusions);
+    if (guarded.length == work.readyIds.length) {
+      return (graph: work, frontierExclusionsByBeadId: carried);
+    }
+    return (
+      graph: GraphSnapshot(
+        beadsById: work.beadsById,
+        dependencies: work.dependencies,
+        readyIds: guarded,
+        capturedAt: work.capturedAt,
+      ),
+      frontierExclusionsByBeadId: carried,
     );
   }
 

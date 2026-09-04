@@ -20,8 +20,8 @@ void main() {
     expect(snapshot.readyIds, contains('tg-gate'));
     expect(runner.calls, [
       ['query', allStatuses, '--all', '--json', '--limit', '0'],
-      ['dep', 'list', 'tg-gate', 'tg-task', '--json'],
       ['ready', '--json', '--limit', '0'],
+      ['dep', 'list', 'tg-gate', 'tg-task', '--json'],
     ]);
     expect(
       runner.calls.any(
@@ -148,10 +148,90 @@ void main() {
       expect(runner.calls, isEmpty);
     },
   );
+
+  test('ready-only fallback materializes rows and broad rows win for both '
+      'snapshot readers', () async {
+    const broad = [
+      {
+        'id': 'tg-shared',
+        'title': 'broad-row',
+        'issue_type': 'task',
+        'status': 'open',
+      },
+    ];
+    const ready = [
+      {
+        'id': 'tg-shared',
+        'title': 'ready-fallback',
+        'issue_type': 'task',
+        'status': 'open',
+      },
+      {
+        'id': 'tg-ready-only',
+        'title': 'ready-only',
+        'issue_type': 'task',
+        'status': 'open',
+      },
+    ];
+
+    void expectMerged(GraphSnapshot snapshot) {
+      expect(
+        snapshot.beadsById.keys,
+        containsAll(['tg-shared', 'tg-ready-only']),
+      );
+      expect(snapshot.readyIds, {'tg-shared', 'tg-ready-only'});
+      expect(snapshot.beadsById['tg-shared']!.title, 'broad-row');
+      expect(snapshot.beadsById['tg-ready-only']!.title, 'ready-only');
+    }
+
+    final cliRunner = _SnapshotRunner(
+      queryRows: broad,
+      readyRows: ready,
+      dependencyRows: const [],
+    );
+    expectMerged(await CliSnapshotReader(BdCliService(cliRunner)).read());
+    expect(cliRunner.calls, [
+      ['query', allStatuses, '--all', '--json', '--limit', '0'],
+      ['ready', '--json', '--limit', '0'],
+      ['dep', 'list', 'tg-shared', 'tg-ready-only', '--json'],
+    ]);
+
+    final dolt = DoltQueryService(
+      endpoint,
+      connectionFactory: (_) async => _SnapshotDoltConnection(
+        failOnQuery: null,
+        failure: StateError('unused'),
+        closeOnFailure: false,
+        issueRows: const [
+          {
+            'id': 'tg-shared',
+            'title': 'broad-row',
+            'issue_type': 'task',
+            'status': 'open',
+          },
+        ],
+      ),
+    );
+    addTearDown(dolt.close);
+    await dolt.connect();
+    final sqlRunner = _SnapshotRunner(readyRows: ready);
+
+    expectMerged(
+      await SqlSnapshotReader(dolt: dolt, bd: BdCliService(sqlRunner)).read(),
+    );
+    expect(sqlRunner.calls, [
+      ['ready', '--json', '--limit', '0'],
+    ]);
+  });
 }
 
 class _SnapshotRunner implements BdRunner {
+  _SnapshotRunner({this.queryRows, this.readyRows, this.dependencyRows});
+
   final List<List<String>> calls = [];
+  final List<Map<String, dynamic>>? queryRows;
+  final List<Map<String, dynamic>>? readyRows;
+  final List<Map<String, dynamic>>? dependencyRows;
   bool empty = false;
   bool failQuery = false;
   bool largeGraph = false;
@@ -173,6 +253,7 @@ class _SnapshotRunner implements BdRunner {
             {'id': 'tg-$i', 'issue_type': 'task', 'status': 'open'},
         ]);
       }
+      if (queryRows != null) return _list(queryRows!);
       return _list(
         empty
             ? const []
@@ -184,12 +265,14 @@ class _SnapshotRunner implements BdRunner {
     }
     if (args.first == 'dep') {
       if (largeGraph) return _list(const []);
+      if (dependencyRows != null) return _list(dependencyRows!);
       return _list(const [
         {'issue_id': 'tg-gate', 'depends_on_id': 'tg-task', 'type': 'blocks'},
       ]);
     }
     if (args.first == 'ready') {
       if (largeGraph) return _list(const []);
+      if (readyRows != null) return _list(readyRows!);
       return _list(
         empty
             ? const []
@@ -213,11 +296,13 @@ class _SnapshotDoltConnection implements DoltConnection {
     required this.failOnQuery,
     required this.failure,
     required this.closeOnFailure,
+    this.issueRows = const [],
   });
 
   final int? failOnQuery;
   final Object failure;
   final bool closeOnFailure;
+  final List<Map<String, Object?>> issueRows;
   var _open = true;
   var _queryCount = 0;
 
@@ -237,6 +322,7 @@ class _SnapshotDoltConnection implements DoltConnection {
       ];
     }
     if (sql == DoltSchemaShape.probeSql) return kV53ProbeRows;
+    if (sql == DoltQueryService.issuesSelect) return issueRows;
     return const [];
   }
 

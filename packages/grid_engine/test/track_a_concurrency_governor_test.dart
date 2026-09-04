@@ -69,17 +69,20 @@ Bead _bead(String id, {int priority = 0}) => Bead(
 JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
+  List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessions = const {},
   Map<String, MountAttemptRecord> mountAttempts = const {},
+  Map<String, String> frontierExclusionsByBeadId = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
-    dependencies: const [],
+    dependencies: dependencies,
     readyIds: ready,
     capturedAt: DateTime(2026),
   ),
   sessionsByWorkBead: sessions,
   mountAttemptsByWorkBead: mountAttempts,
+  frontierExclusionsByBeadId: frontierExclusionsByBeadId,
 );
 
 Seed _root({
@@ -888,6 +891,169 @@ void main() {
       expect(transport.flares.single.name, 'work.terminalSkip');
       expect(transport.flares.single.data['sessionId'], 'tgdog-tg-aaa');
       expect(transport.flares.single.data['disposition'], 'done');
+    });
+
+    test('frontier exclusion preserves priority-then-id order of the admitted '
+        'set', () {
+      const clause =
+          'frontier cross-link: link bead tranquility-z blocks tg-z '
+          'on open target "genesis-7ob"';
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [
+            _bead('tg-z', priority: 0),
+            _bead('tg-b', priority: 0),
+            _bead('tg-a', priority: 1),
+            _bead('tg-c', priority: 1),
+          ],
+          ready: {'tg-b', 'tg-a', 'tg-c'},
+          frontierExclusionsByBeadId: const {'tg-z': clause},
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+                maxConcurrentWork: 2,
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+          ),
+        ),
+      );
+
+      expect(recorder.events, ['START work(tg-b)', 'START work(tg-a)']);
+      expect(
+        transport.flares
+            .singleWhere(
+              (flare) => flare.name == 'work.mountEligibilityRefused',
+            )
+            .data['beadId'],
+        'tg-z',
+      );
+      expect(
+        transport.flares
+            .singleWhere((flare) => flare.name == 'work.throttled')
+            .data,
+        {'count': '1', 'beadIds': 'tg-c'},
+      );
+    });
+
+    test('epoch 27/28 silent pair reaches the mint path or a named eligibility '
+        'flare', () {
+      final genesis = Bead(
+        id: 'genesis-7ob',
+        title:
+            'P0: release tree invariants permit infinite flushes and '
+            'corrupted reconciliation',
+        issueType: IssueType.bug,
+        status: BeadStatus.open,
+        priority: 0,
+        labels: const ['orchestrator', 'review'],
+        metadata: const {
+          'grid.approved_at': '2026-09-03T05:10:45.328492Z',
+          'grid.approved_by': 'operator',
+          'grid.approved_rev': 'db134bf211b3d1c3f037066eff178cf33d96af3a',
+          'validation_plan':
+              'cd packages/tree && dart analyze && dart test && dart run '
+              'test/release_invariants_test.dart',
+        },
+      );
+      final butane = Bead(
+        id: 'butane_flutter-41eh',
+        title:
+            'butane_grid_assets overlay source is DOTTED — ships hollow '
+            'if ever published (pow-1mp defect class)',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+        priority: 2,
+        labels: const ['grid.approved'],
+        metadata: const {
+          'grid.approved_at': '2026-09-02T23:16:21.083736Z',
+          'grid.approved_by': 'governor',
+          'grid.approved_rev': '8d33da61b5828bd4b53d5b65ff060350bdb453cd',
+          'validation_plan':
+              'cd packages/butane_grid_assets && dart pub get && dart '
+              'analyze && dart test',
+        },
+      );
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [genesis, butane],
+          ready: {'genesis-7ob', 'butane_flutter-41eh'},
+          dependencies: const [
+            BeadDependency(
+              issueId: 'genesis-7ob',
+              dependsOnId: 'genesis-7r9',
+              type: DependencyType.discoveredFrom,
+            ),
+            BeadDependency(
+              issueId: 'butane_flutter-41eh',
+              dependsOnId: 'butane_flutter-t9y',
+              type: DependencyType.discoveredFrom,
+            ),
+          ],
+        ),
+      );
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'genesis', 'butane_flutter'},
+                resident: true,
+                maxConcurrentWork: 6,
+              ),
+            ),
+            services: ServiceBundle(
+              transport: transport,
+              mountEligibility: (bead) => bead.id == 'butane_flutter-41eh'
+                  ? const MountEligibilityDecision.refused(
+                      clause: 'fresh mount-eligibility read pending',
+                    )
+                  : const MountEligibilityDecision.eligible(),
+            ),
+          ),
+        ),
+      );
+
+      expect(recorder.events, ['START work(genesis-7ob)']);
+      expect(
+        transport.flares
+            .singleWhere(
+              (flare) => flare.name == 'work.mountEligibilityRefused',
+            )
+            .data,
+        {
+          'beadId': 'butane_flutter-41eh',
+          'clause': 'fresh mount-eligibility read pending',
+        },
+      );
+      final observed = <String>{
+        for (final event in recorder.events)
+          if (event.startsWith('START work('))
+            event.substring('START work('.length, event.length - 1),
+        for (final flare in transport.flares)
+          if (flare.name == 'work.mountEligibilityRefused')
+            flare.data['beadId']!,
+      };
+      expect(observed, {'genesis-7ob', 'butane_flutter-41eh'});
     });
   });
 }

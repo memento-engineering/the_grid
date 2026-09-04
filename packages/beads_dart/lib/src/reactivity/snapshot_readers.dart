@@ -1,7 +1,16 @@
+import '../models/bead.dart';
 import '../models/graph_snapshot.dart';
 import '../services/bd_cli_service.dart';
 import '../services/dolt_query_service.dart';
 import 'snapshot_reader.dart';
+
+List<Bead> _mergeReadyFallback(Iterable<Bead> broad, Iterable<Bead> ready) {
+  final byId = <String, Bead>{for (final bead in broad) bead.id: bead};
+  for (final bead in ready) {
+    byId.putIfAbsent(bead.id, () => bead);
+  }
+  return byId.values.toList(growable: false);
+}
 
 /// Composes a CLI snapshot with one broad graph query and one dependency read.
 class CliSnapshotReader implements SnapshotReader {
@@ -13,15 +22,16 @@ class CliSnapshotReader implements SnapshotReader {
 
   @override
   Future<GraphSnapshot> read() async {
-    final beads = await _bd.query(
+    final broad = await _bd.query(
       'status=open OR status=in_progress OR status=blocked OR '
       'status=deferred OR status=closed',
       includeClosed: true,
     );
+    final ready = await _bd.ready();
+    final beads = _mergeReadyFallback(broad, ready);
     final dependencies = await _bd.depList(
       beads.map((bead) => bead.id).toList(growable: false),
     );
-    final ready = await _bd.ready();
     return GraphSnapshot.fromParts(
       beads: beads,
       dependencies: dependencies,
@@ -55,7 +65,7 @@ class SqlSnapshotReader implements SnapshotReader {
     final parts = await _dolt.snapshotParts();
     final ready = await _bd.ready();
     return GraphSnapshot.fromParts(
-      beads: parts.beads,
+      beads: _mergeReadyFallback(parts.beads, ready),
       dependencies: parts.dependencies,
       readyIds: ready.map((bead) => bead.id),
       capturedAt: _clock(),
