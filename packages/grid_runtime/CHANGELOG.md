@@ -1,3 +1,7 @@
+## 0.2.0-rc.12
+
+- Floors `grid_trajectory` to `^0.2.0-rc.4`, where the re-exported `StepFailureClass.noResult` and `StepFailureClass.invalidResult` members were introduced.
+
 ## 0.2.0-rc.11
 
 - Breaking: guarded `GitOps` methods refuse a `workDir` that is not a work-tree root — mutating operations and reap probes are fenced at the GitOps seam so git can never walk into an enclosing checkout (tg-amwa, #302). Migration: pass the work-tree ROOT (what `git rev-parse --show-toplevel` answers) as `workDir`; a runner fake must answer the `rev-parse --show-toplevel` probe (the engine's `engine_fakes.dart` shows the shape).
