@@ -1,3 +1,8 @@
+## 0.3.0-rc.16
+
+- A bead the store reports ready but the frontier excludes now FLARES the clause: cross-store link exclusions are a composed `MountEligibilityPredicate` (`crossLinkExclusionClause` through `composeMountEligibility`, beside `mountAttemptClause`), `applyBlockGuard` reports each block through an `onBlocked` observation, and `work.mountEligibilityRefused` re-fires whenever the refusing clause CHANGES rather than once per transition. Priority-then-bead-id admission and the live-session carve-out are preserved and pinned (tg-vdt0, #311).
+- Floors tightened to `beads_dart ^0.2.0-rc.8`.
+
 ## 0.3.0-rc.15
 
 - Breaking: `Failed.nonResult`, `AllocationFailed.nonResult` and `isHarnessSilence(nonResult:)` are REMOVED with no shim; a capability failure is now the typed `CapabilityFailure` (`CapabilityFailureKind {work, noResult, invalidResult}`) carried on the existing `Failed`/`AllocationFailed` arms, and each capability declares its own per-step restart policy through `SupervisionPolicy` (retry budget + backoff; undeclared policies keep the circuit-wide defaults byte-for-byte). A malformed or absent result retries ONLY its own lane and is never graded F (tg-e32f, #309). Migration: replace every `Failed.nonResult(...)` / `AllocationFailed.nonResult(...)` with the typed failure and, where a capability needs a lane-specific budget, declare `supervisionPolicy`; power_station's `grid_assets` `committee.dart` carries six such call sites and migrates in pow-dzc — do not floor a consumer on this rc before that lands.

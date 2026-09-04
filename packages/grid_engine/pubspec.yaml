@@ -1,7 +1,7 @@
 name: grid_engine
 # Released as git tags per package (power_station ADR-0003 D1:
 # `<package>-v<version>`); consumers pin `git: {url, ref, path}`.
-version: 0.3.0-rc.15
+version: 0.3.0-rc.16
 description: >-
   Tree engine for the_grid — genesis_tree reconciles the running system:
   build(observed), mount = spawn, unmount = kill.
@@ -12,7 +12,7 @@ environment:
   sdk: ^3.11.0
 
 dependencies:
-  beads_dart: ^0.2.0-rc.7
+  beads_dart: ^0.2.0-rc.8
   freezed_annotation: ^3.0.0
   genesis_foundation: ^0.2.0
   # The engine. Pinned (^0.1.5) — the composition layer is EXPERIMENTAL and
