@@ -29,6 +29,7 @@ final class GridAssetPackDefinition {
       );
     }
     final seenAssets = <AssetKey>{};
+    final taughtCommandPattern = RegExp(r'^[a-z][a-z0-9-]*$');
     for (final asset in assets) {
       if (asset.assetKey.package != package) {
         throw ArgumentError.value(
@@ -44,6 +45,35 @@ final class GridAssetPackDefinition {
           'assets',
           'GridAssetPackDefinition("$package"): duplicate AssetKey',
         );
+      }
+      if (asset.teaches.isNotEmpty && asset.assetKey.kind != AssetKind.skill) {
+        throw ArgumentError.value(
+          asset.teaches,
+          'assets',
+          'GridAssetPackDefinition("$package"): '
+              '${asset.assetKey.canonical} declares teaches but is not a skill',
+        );
+      }
+      final seenTaughtCommands = <String>{};
+      for (final command in asset.teaches) {
+        if (!taughtCommandPattern.hasMatch(command)) {
+          throw ArgumentError.value(
+            command,
+            'assets',
+            'GridAssetPackDefinition("$package"): '
+                '${asset.assetKey.canonical} has invalid taught command '
+                '"$command"',
+          );
+        }
+        if (!seenTaughtCommands.add(command)) {
+          throw ArgumentError.value(
+            command,
+            'assets',
+            'GridAssetPackDefinition("$package"): '
+                '${asset.assetKey.canonical} has duplicate taught command '
+                '"$command"',
+          );
+        }
       }
       final seenArtifacts = <AssetArtifactKey>{};
       for (final key in asset.artifactKeys) {
