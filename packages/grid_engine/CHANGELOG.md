@@ -1,3 +1,7 @@
+## 0.3.0-rc.14
+
+- Added: `SessionLedgerMetricsProjection.cacheTokens` (`CacheTokenTotals{cacheRead, cacheCreate, uncachedInput}`) and `landedDeliveries` (`LandedDeliveryTotals{landedCost, landedCount}`) — the component totals behind `cacheHitRatio` and `costPerLandedDelivery`, so a multi-store consumer can merge projections by weighted sum instead of averaging averages; the two scalars are unchanged and derived from the records (tg-mws0, #307).
+
 ## 0.3.0-rc.13
 
 - Ready work is re-minted after a terminal session closes: linked session rows are ordered deterministically, surplus dead keys retire through the existing void path, and every blocking terminal is surfaced; rework selects open sessions without changing its park predicate (tg-83k1, #300).

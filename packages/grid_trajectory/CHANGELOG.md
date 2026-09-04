@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-rc.3
+
+- `traj replay` reshapes `proj_session_head` when it still spells the substation identity `seat`: `substation` joins `projSessionHeadCutColumns`, a DDL-coverage test pins that every column the fold writes is a cut column, and `--check` reports the projection half as pending beside the journal rename (tg-0zop, #306). Before this, a home that had run the tg-j1zn journal rename died on `Unknown column 'substation' in 'proj_session_head'`.
+
 ## 0.2.0-rc.2
 
 - Added: `bead_round_fold` — one round's lane verdicts folded from the trajectory, the substrate the new `grid bead round` read verb projects (tg-wk3j, #304).

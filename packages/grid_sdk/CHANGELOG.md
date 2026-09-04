@@ -1,3 +1,8 @@
+## 0.3.0-rc.12
+
+- Re-exports `CacheTokenTotals` and `LandedDeliveryTotals` (tg-mws0, #307); the trajectory-harness reshape message names the current projection shape (tg-0zop, #306).
+- Floors tightened to `grid_engine ^0.3.0-rc.14`, `grid_trajectory ^0.2.0-rc.3`.
+
 ## 0.3.0-rc.11
 
 - Added: the neutral typed asset registry contract — const inert asset definitions, stable logical and artifact identities, and validated pack and station registries, exported publicly and proven composition- and dependency-neutral (tg-1w3m, #301).
