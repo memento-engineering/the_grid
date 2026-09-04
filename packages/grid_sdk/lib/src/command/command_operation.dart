@@ -31,6 +31,18 @@ sealed class GridCommandRequest with _$GridCommandRequest {
     required String content,
     @Default(false) bool append,
   }) = GridSetBeadText;
+
+  /// Projects every resident work store's open beads into board rows.
+  const factory GridCommandRequest.board({
+    @Default(<String>{}) Set<String> stores,
+    @Default(<String>{}) Set<String> statuses,
+    @Default(false) bool blockedOnly,
+    bool? approved,
+  }) = GridBeadBoard;
+
+  /// Reads one work bead's current-round identity.
+  const factory GridCommandRequest.beadRound({required String beadId}) =
+      GridBeadRound;
 }
 
 /// The typed outcome consumed by the control-surface adapter.

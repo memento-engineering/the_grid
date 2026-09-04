@@ -548,6 +548,29 @@ class StationControl {
           append: append,
         );
       }
+    } else if (method == 'grid/bead/board') {
+      final stores = params['stores'] ?? const <Object?>[];
+      final statuses = params['statuses'] ?? const <Object?>[];
+      final blocked = params['blocked'] ?? false;
+      final approved = params['approved'];
+      if (stores is List &&
+          stores.every((value) => value is String) &&
+          statuses is List &&
+          statuses.every((value) => value is String) &&
+          blocked is bool &&
+          (approved == null || approved is bool)) {
+        command = GridCommandRequest.board(
+          stores: stores.cast<String>().toSet(),
+          statuses: statuses.cast<String>().toSet(),
+          blockedOnly: blocked,
+          approved: approved as bool?,
+        );
+      }
+    } else if (method == 'grid/bead/round') {
+      final beadId = params['beadId'];
+      if (beadId is String && beadId.isNotEmpty) {
+        command = GridCommandRequest.beadRound(beadId: beadId);
+      }
     }
     if (command == null) {
       return _CommandResponse(HttpStatus.badRequest, {

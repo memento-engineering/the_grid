@@ -4,16 +4,26 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import 'bead_board.dart';
+import 'bead_round.dart';
 import 'command_operation.dart';
 
 /// The resident read/write rails for one substation work store.
 final class WorkCommandStore {
   /// Creates one resident work-store command binding.
   const WorkCommandStore({
+    required this.substation,
+    required this.root,
     required this.source,
     required this.refresh,
     required this.writer,
   });
+
+  /// The substation NAME this binding serves — the board's `store` column.
+  final String substation;
+
+  /// That substation's single absolute work-store root.
+  final String root;
 
   /// The already-running controller for this work store.
   final SnapshotSource source;
@@ -112,6 +122,21 @@ final class StationCommandHandler implements GridCommandHandler {
         content: content,
         append: append,
       ),
+    GridBeadBoard(
+      :final stores,
+      :final statuses,
+      :final blockedOnly,
+      :final approved,
+    ) =>
+      _board(
+        BoardFilter(
+          stores: stores,
+          statuses: statuses,
+          blockedOnly: blockedOnly,
+          approved: approved,
+        ),
+      ),
+    GridBeadRound(:final beadId) => _beadRound(beadId),
   };
 
   Future<GridCommandResult> _setBeadText({
@@ -449,6 +474,113 @@ final class StationCommandHandler implements GridCommandHandler {
   static Bead _publishedRow(List<Bead> linked) {
     final published = orderLinkedSessions(linked.map(projectSession)).first;
     return linked.firstWhere((bead) => bead.id == published.sessionId);
+  }
+
+  /// The BOARD — every resident work store's open beads, one projection.
+  ///
+  /// READ-ONLY: an operator one-shot serviced inside the resident loop
+  /// (ADR-0014 D-C4), touching no writer and opening no store. A store that
+  /// cannot be projected contributes its own row; it is never dropped.
+  Future<GridCommandResult> _board(BoardFilter filter) async {
+    // The bindings map is keyed by BOTH name and prefix (work_assembly), so
+    // one store appears twice — dedupe by identity or every bead emits twice.
+    final bindings = <WorkCommandStore>[];
+    for (final binding in _workStoresByIdentity.values) {
+      if (!bindings.any((seen) => identical(seen, binding))) {
+        bindings.add(binding);
+      }
+    }
+    bindings.sort((a, b) => a.substation.compareTo(b.substation));
+    final rows = <BoardRow>[];
+    for (final binding in bindings) {
+      if (filter.stores.isNotEmpty &&
+          !filter.stores.contains(binding.substation)) {
+        continue;
+      }
+      try {
+        await binding.refresh();
+      } on Object catch (error) {
+        rows.add(
+          BoardRow.storeUnreadable(
+            store: binding.substation,
+            root: binding.root,
+            reason: 'refresh failed: $error',
+          ),
+        );
+        continue;
+      }
+      final snapshot = binding.source.current;
+      if (snapshot == null) {
+        rows.add(
+          BoardRow.storeUnreadable(
+            store: binding.substation,
+            root: binding.root,
+            reason: 'the resident store has no current snapshot',
+          ),
+        );
+        continue;
+      }
+      rows.addAll(
+        projectBoard(
+          store: binding.substation,
+          root: binding.root,
+          snapshot: snapshot,
+          filter: filter,
+        ),
+      );
+    }
+    return GridCommandResult.completed(
+      message: '${rows.length} board row(s).',
+      value: {
+        'operation': 'grid/bead/board',
+        'rows': [for (final row in rows) row.toJson()],
+      },
+    );
+  }
+
+  /// One bead's current-round identity — the bead-side half of `bead round`.
+  ///
+  /// READ-ONLY, same posture as [_board]. A bead with no round is a COMPLETED
+  /// result carrying a `no_round` context, never a refusal.
+  Future<GridCommandResult> _beadRound(String beadId) async {
+    final identity = BeadOwnershipPredicate.ownedPrefixOf(
+      beadId,
+      _workStoresByIdentity.keys,
+    );
+    final workStore = identity == null ? null : _workStoresByIdentity[identity];
+    if (workStore == null) {
+      return _refused(
+        'work_store_not_owned',
+        'No resident work store owns "$beadId".',
+      );
+    }
+    await Future.wait(<Future<void>>[_refreshState(), workStore.refresh()]);
+    final state = _stateSource.current;
+    final work = workStore.source.current;
+    if (state == null || work == null) {
+      return _refused(
+        'snapshot_unavailable',
+        'A resident store has no current snapshot.',
+      );
+    }
+    final bead = work.bead(beadId);
+    if (bead == null) {
+      return _refused(
+        'work_bead_missing',
+        'Work bead "$beadId" is absent from its resident store.',
+      );
+    }
+    final context = projectRoundContext(
+      workBead: bead,
+      stateBeads: state.beads,
+    );
+    return GridCommandResult.completed(
+      message: switch (context) {
+        BeadRoundFound(:final round) => 'Round $round for "$beadId".',
+        BeadRoundAbsent(:final reason) => reason,
+      },
+      value: {'operation': 'grid/bead/round', 'context': context.toJson()},
+    );
   }
 
   Future<GridCommandResult> _listGates() async {

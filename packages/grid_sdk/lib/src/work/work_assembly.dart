@@ -662,6 +662,8 @@ Future<StationWorkRuntime> assembleStationWork({
                 ),
         );
     final binding = WorkCommandStore(
+      substation: spec.name,
+      root: workspacesByName[spec.name]!.root,
       source: _RuntimeSnapshotSource(bundles[spec.name]!.runtime),
       refresh: bundles[spec.name]!.runtime.requery,
       writer: StationBeadWriter(

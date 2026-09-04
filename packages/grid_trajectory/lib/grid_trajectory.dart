@@ -40,6 +40,7 @@ export 'src/tick/tick_telemetry.dart'; // per-pass telemetry + the fixpoint resu
 export 'src/tick/trajectory_tick.dart'; // the interval loop, fence skip, runToFixpoint
 
 // SECTION: cli — the traj verbs (traj show / traj shadow-diff / traj provision).
+export 'src/cli/bead_round_fold.dart'; // one round's lane verdicts, for `bead round`
 export 'src/cli/committee_report.dart'; // the pure committee-effectiveness fold + its value types
 export 'src/cli/committee_report_render.dart'; // the operator table + the one --json object
 export 'src/cli/committee_report_usage.dart'; // the .usage.json FALLBACK scan (never the primary source)
