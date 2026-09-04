@@ -53,6 +53,7 @@ final class TrajectoryConfig {
   const TrajectoryConfig({
     this.mode = TrajectoryConfigMode.auto,
     this.tickInterval = kDefaultTickInterval,
+    this.obligationQueryExtensions = const <ObligationQuery>[],
     this.gcInterval = kDefaultTrajectoryGcInterval,
     this.commitCadence = const Duration(seconds: 30),
     this.queueBound = kDefaultTrajectoryQueueBound,
@@ -156,6 +157,10 @@ final class TrajectoryConfig {
   /// The service tick's interval (§1.2 step 2; Stage-0 default 30 s).
   final Duration tickInterval;
 
+  /// Station-authored standing queries appended after the rollout stage's
+  /// obligation set, in registration order. Empty leaves that set unchanged.
+  final List<ObligationQuery> obligationQueryExtensions;
+
   /// The `CALL DOLT_GC()` cadence the harness owns (§1.2 / M2).
   final Duration gcInterval;
 
@@ -185,6 +190,7 @@ final class TrajectoryConfig {
   TrajectoryConfig get asDisabled => TrajectoryConfig(
     mode: TrajectoryConfigMode.disabled,
     tickInterval: tickInterval,
+    obligationQueryExtensions: obligationQueryExtensions,
     gcInterval: gcInterval,
     commitCadence: commitCadence,
     queueBound: queueBound,

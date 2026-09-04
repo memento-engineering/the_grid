@@ -150,6 +150,27 @@ final class _ProbeQuery extends ObligationQuery {
   ) async => const [];
 }
 
+/// A named no-op query that records each pass it joins.
+final class _CountingNoOpQuery extends ObligationQuery {
+  _CountingNoOpQuery(this.name, this.order);
+
+  @override
+  final String name;
+
+  final List<String> order;
+  int runs = 0;
+
+  @override
+  String get sql => 'SELECT 1 AS one';
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    runs += 1;
+    order.add(name);
+    return const [];
+  }
+}
+
 /// A scriptable appender: the harness drives THIS seam; the real §5 SQL path
 /// is Stage-0-tested in grid_trajectory.
 final class _FakeAppender extends TrajectoryAppender {
@@ -1548,6 +1569,8 @@ void main() {
       final h = await harness();
       await h.start();
 
+      expect(h.config.obligationQueryExtensions, isEmpty);
+      expect(const TrajectoryConfig().obligationQueryExtensions, isEmpty);
       expect(h.tick!.queries.map((query) => query.name), [
         kUnknownTerminalSettlementObligation,
         kWorktreeReapedBackfillObligation,
@@ -1573,6 +1596,63 @@ void main() {
       expect(h.tick!.lastPass!.queriesRun, 3);
       expect(h.tick!.lastPass!.refusals, isEmpty);
     });
+
+    test(
+      'extensions append after Stage 1 and share boot interval and fixpoint',
+      () async {
+        final order = <String>[];
+        final first = _CountingNoOpQuery('first-extension', order);
+        final second = _CountingNoOpQuery('second-extension', order);
+        final config = TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
+          obligationQueryExtensions: [first, second],
+        );
+        final h = await harness(config: config);
+
+        await h.start();
+
+        expect(h.tick!.queries.map((query) => query.name), [
+          kUnknownTerminalSettlementObligation,
+          kWorktreeReapedBackfillObligation,
+          kLivenessDetectorObligation,
+          'first-extension',
+          'second-extension',
+        ]);
+        expect(order, ['first-extension', 'second-extension']);
+        expect([first.runs, second.runs], [1, 1]);
+
+        final (_, intervalCallback, _) = timers.singleWhere(
+          (timer) => timer.$1 == config.tickInterval,
+        );
+        intervalCallback();
+        await pumpEventQueue();
+
+        expect(order, [
+          'first-extension',
+          'second-extension',
+          'first-extension',
+          'second-extension',
+        ]);
+        expect([first.runs, second.runs], [2, 2]);
+
+        final fixpoint = await h.runToFixpoint();
+
+        expect(fixpoint, isNotNull);
+        expect(fixpoint!.reached, isTrue);
+        expect(fixpoint.passes.single.quiet, isTrue);
+        expect(fixpoint.passes.single.queriesRun, 5);
+        expect(order, [
+          'first-extension',
+          'second-extension',
+          'first-extension',
+          'second-extension',
+          'first-extension',
+          'second-extension',
+        ]);
+        expect([first.runs, second.runs], [3, 3]);
+      },
+    );
 
     test('an EXPLICIT query list still wins — Stage 0\'s empty set is a '
         'station\'s prerogative', () async {

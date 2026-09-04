@@ -150,6 +150,8 @@ export 'src/stores/substation_init.dart';
 // edit, stage1-wiring §1.1).
 export 'package:grid_trajectory/grid_trajectory.dart'
     show
+        ObligationAppend,
+        ObligationQuery,
         TrajectoryProvenance,
         TrajectoryRecord,
         TrajectoryTick,
