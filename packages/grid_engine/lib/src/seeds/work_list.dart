@@ -85,6 +85,16 @@ class _WorkListState extends State<WorkList>
   /// genuine positive terminal.
   final Set<String> _mountedIds = <String>{};
 
+  /// The value-config seeds currently emitted for mounted work branches.
+  ///
+  /// `WorkList` can rebuild without a new joined snapshot when the bounded
+  /// mount-eligibility recheck fires. Reusing an unchanged seed instance lets
+  /// genesis_tree's identity fast path prune that branch, so a sibling's
+  /// refusal cannot re-run an already-mounted `SessionResolver` and mint a
+  /// duplicate session. Entries live only while the corresponding branch is
+  /// present in this build's mounted projection.
+  final Map<String, WorkBead> _mountedWorkBeadsById = <String, WorkBead>{};
+
   /// Bead ids whose TERMINAL-cursor skip has already been reported (tg-83k1) —
   /// the flare is LOUD but said ONCE per bead per station lifetime.
   final Set<String> _terminalSkipReported = <String>{};
@@ -226,6 +236,18 @@ class _WorkListState extends State<WorkList>
     return latest;
   }
 
+  WorkBead _workBeadFor({required Bead bead, SessionProjection? session}) {
+    final cached = _mountedWorkBeadsById[bead.id];
+    if (cached != null && cached.bead == bead && cached.session == session) {
+      return cached;
+    }
+    return _mountedWorkBeadsById[bead.id] = WorkBead(
+      bead: bead,
+      session: session,
+      key: ValueKey(bead.id),
+    );
+  }
+
   @override
   void debugFillProperties(DiagnosticsBuilder properties) {
     super.debugFillProperties(properties);
@@ -311,6 +333,7 @@ class _WorkListState extends State<WorkList>
       mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
     ], services?.mountEligibility);
     final mounted = <WorkBead>[];
+    final emittedMountedIds = <String>{};
     // A43's pending bin, unchanged in MEANING (freshly ready, no live session —
     // the only bin the budget gates) and richer by one field: a VOIDED bead
     // (I-10) enters it too, and its `SessionScope` needs the DEAD projection in
@@ -325,10 +348,14 @@ class _WorkListState extends State<WorkList>
 
       final inReady = _snapshot.graph.readyIds.contains(bead.id);
       final linkedSessions = _snapshot.linkedSessions(bead.id);
+      final retiredSession = linkedSessions.isEmpty
+          ? _latestRetiredSession(bead.id, _snapshot.sessionsByWorkBead.values)
+          : null;
       final participatesInReconciliation =
           inReady ||
           _snapshot.frontierExclusionsByBeadId.containsKey(bead.id) ||
           linkedSessions.isNotEmpty ||
+          retiredSession != null ||
           _mountedIds.contains(bead.id);
       if (!participatesInReconciliation) continue;
 
@@ -370,9 +397,6 @@ class _WorkListState extends State<WorkList>
       // states what the OTHER rows mean.
       final verdict = linkedSessionVerdictOf(linkedSessions);
       final session = verdict.winner;
-      final retiredSession = session == null
-          ? _latestRetiredSession(bead.id, _snapshot.sessionsByWorkBead.values)
-          : null;
       final scopeSession = session ?? retiredSession;
       final disposition = sessionDispositionOf(session);
 
@@ -494,9 +518,8 @@ class _WorkListState extends State<WorkList>
       // an owned, dispatchable, ready bead mounts.
       if (staysMounted) {
         _mountedIds.add(bead.id);
-        mounted.add(
-          WorkBead(bead: bead, session: scopeSession, key: ValueKey(bead.id)),
-        );
+        emittedMountedIds.add(bead.id);
+        mounted.add(_workBeadFor(bead: bead, session: scopeSession));
       } else {
         pending.add((bead: bead, session: scopeSession));
       }
@@ -582,13 +605,8 @@ class _WorkListState extends State<WorkList>
       // keeps the branch mounted across the retire→mint gap (the same tg-zat
       // mechanism that carries a `grid rework` re-key), so the governor can never
       // evict the very scope that is minting the fresh round.
-      mounted.add(
-        WorkBead(
-          bead: entry.bead,
-          session: entry.session,
-          key: ValueKey(entry.bead.id),
-        ),
-      );
+      emittedMountedIds.add(entry.bead.id);
+      mounted.add(_workBeadFor(bead: entry.bead, session: entry.session));
     }
     if (waiting.isNotEmpty) {
       _reportThrottled(services, [for (final w in waiting) w.bead]);
@@ -601,6 +619,9 @@ class _WorkListState extends State<WorkList>
       final byPriority = a.bead.priority.compareTo(b.bead.priority);
       return byPriority != 0 ? byPriority : a.bead.id.compareTo(b.bead.id);
     });
+    _mountedWorkBeadsById.removeWhere(
+      (beadId, _) => !emittedMountedIds.contains(beadId),
+    );
     // Re-provide the settled joined snapshot and data config as observed VALUES
     // for descendants. WorkList remains the only notifier subscriber;
     // SessionScope consumes these values through ambient tree seams.

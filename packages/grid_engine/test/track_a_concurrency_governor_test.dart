@@ -15,7 +15,9 @@ import 'package:grid_engine/src/seeds/provider.dart';
 
 class _Recorder {
   final List<String> events = [];
+  final List<String> resolverCalls = [];
   void record(String event) => events.add(event);
+  void recordResolverCall(String beadId) => resolverCalls.add(beadId);
 }
 
 class _FakeSessionResolver implements SessionResolver {
@@ -23,12 +25,14 @@ class _FakeSessionResolver implements SessionResolver {
   final _Recorder recorder;
 
   @override
-  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
-      _FakeEffect(
-        recorder: recorder,
-        beadId: bead.id,
-        key: ValueKey('${bead.id}:work'),
-      );
+  Seed sessionFor({required Bead bead, SessionProjection? session}) {
+    recorder.recordResolverCall(bead.id);
+    return _FakeEffect(
+      recorder: recorder,
+      beadId: bead.id,
+      key: ValueKey('${bead.id}:work'),
+    );
+  }
 }
 
 class _FakeEffect extends StatefulSeed {
@@ -599,6 +603,58 @@ void main() {
       expect(recorder.events, isEmpty);
     });
 
+    test('a cold not-ready bead with only a round-keyed retired session '
+        'participates', () {
+      final recorder = _Recorder();
+      final transport = _RecordingTransport();
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_bead('tg-1')],
+          ready: const {},
+          sessions: const {
+            'tg-1#r1': SessionProjection(
+              workBeadId: 'tg-1#r1',
+              sessionId: 'tgdog-retired',
+            ),
+          },
+        ),
+      );
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+      owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: _FakeSessionResolver(recorder),
+            substationConfig: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'tg',
+                ownedSubstations: {'tg'},
+              ),
+            ),
+            services: ServiceBundle(transport: transport),
+            stationServices: StationServices(
+              provider: FakeRuntimeProvider(),
+              writer: StationBeadWriter(
+                bd: BdCliService(RecordingBdRunner()),
+                reader: RecordingBdRunner(),
+                ownership: BeadOwnershipPredicate(const {'tg'}),
+              ),
+              stateSubstation: 'tg',
+              maxConcurrentWork: 0,
+            ),
+          ),
+        ),
+      );
+
+      expect(recorder.events, ['START work(tg-1)']);
+      expect(recorder.resolverCalls, ['tg-1']);
+      expect(
+        transport.flares.where((flare) => flare.name == 'work.throttled'),
+        isEmpty,
+      );
+    });
+
     test('the station-wide cap is a TOTAL across substations — a busy '
         'substation starves a quiet sibling of slots even though the '
         "sibling's own substation cap is untouched", () {
@@ -1077,6 +1133,7 @@ void main() {
         'START work(genesis-7ob)',
         'START work(genesis-live)',
       ]);
+      expect(recorder.resolverCalls, ['genesis-7ob', 'genesis-live']);
       expect(
         transport.flares
             .singleWhere(
@@ -1094,6 +1151,11 @@ void main() {
 
       expect(pendingEvaluations, 2);
       expect(recorder.events, contains('START work(butane_flutter-41eh)'));
+      expect(recorder.resolverCalls, [
+        'genesis-7ob',
+        'genesis-live',
+        'butane_flutter-41eh',
+      ]);
       expect(evaluatedIds, isNot(contains('genesis-7r9')));
       expect(evaluatedIds, isNot(contains('butane_flutter-t9y')));
       expect(

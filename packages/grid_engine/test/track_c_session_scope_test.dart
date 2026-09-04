@@ -224,7 +224,7 @@ void main() {
     );
 
     test(
-      'genesis-7ob real frontier shape mints or names a clause within one tick',
+      'genesis-7ob missing eligibility row flares then mints exactly once',
       () async {
         final f = buildFakes();
         final transport = RecordingExplorationTransport();
@@ -291,6 +291,8 @@ void main() {
 
         final joined = JoinedSnapshotNotifier(snapshot);
         final registry = RecordingCapabilityRegistry(circuits: const {});
+        const pendingClause = 'fresh mount-eligibility read pending';
+        var genesisEligibilityEvaluations = 0;
         final mounted = _mountFull(
           joined: joined,
           ctx: StationServices(
@@ -301,7 +303,20 @@ void main() {
           ),
           registry: registry,
           rootCircuit: (_) => _code,
-          services: ServiceBundle(transport: transport),
+          services: ServiceBundle(
+            transport: transport,
+            mountEligibility: (bead) {
+              if (bead.id != genesis.id) {
+                return const MountEligibilityDecision.eligible();
+              }
+              genesisEligibilityEvaluations += 1;
+              return genesisEligibilityEvaluations == 1
+                  ? const MountEligibilityDecision.refused(
+                      clause: pendingClause,
+                    )
+                  : const MountEligibilityDecision.eligible();
+            },
+          ),
           substationConfig: const SubstationConfig(
             substationId: 'genesis',
             ownedSubstations: {'genesis'},
@@ -311,40 +326,51 @@ void main() {
         );
         addTearDown(mounted.owner.dispose);
 
-        bool namesGenesis(({String name, Map<String, String> data}) flare) {
-          if (flare.name == 'session.minted' ||
-              flare.name == 'session.mintRefused') {
-            return flare.data['workBeadId'] == genesis.id;
-          }
-          if (flare.name == 'work.throttled') {
-            return flare.data['beadIds']?.split(',').contains(genesis.id) ??
-                false;
-          }
-          return const {
-                'work.mountEligibilityRefused',
-                'work.trustRefused',
-              }.contains(flare.name) &&
-              flare.data['beadId'] == genesis.id;
+        Iterable<({String name, Map<String, String> data})> genesisFlares(
+          String name,
+          String dataKey,
+        ) {
+          return transport
+              .named(name)
+              .where((flare) => flare.data[dataKey] == genesis.id);
         }
 
+        expect(genesisEligibilityEvaluations, 1);
+        final refused = genesisFlares('work.mountEligibilityRefused', 'beadId');
+        expect(refused, hasLength(1));
+        expect(refused.single.data['clause'], pendingClause);
+        expect(genesisFlares('session.minted', 'workBeadId'), isEmpty);
+
+        await Future<void>.delayed(Duration.zero);
+        mounted.owner.flush();
         await _pumpUntil(
           mounted.owner,
-          () => transport.flares.any(namesGenesis),
+          () =>
+              genesisFlares('session.minted', 'workBeadId').length == 1 &&
+              f.runner.workCreates.length >= 2,
         );
 
-        final observed = transport.flares.where(namesGenesis).toList();
-        expect(
-          observed,
-          isNotEmpty,
-          reason: 'a resident frontier head must never disappear silently',
-        );
-        expect(
-          transport
-              .named('session.minted')
-              .where((flare) => flare.data['workBeadId'] == genesis.id),
-          hasLength(1),
-          reason: 'the valid no-session fixture must take the mint branch',
-        );
+        void expectOneRestoredMint() {
+          expect(genesisEligibilityEvaluations, 2);
+          final restored = genesisFlares(
+            'work.mountEligibilityRestored',
+            'beadId',
+          );
+          expect(restored, hasLength(1));
+          expect(restored.single.data['clause'], pendingClause);
+          expect(genesisFlares('session.minted', 'workBeadId'), hasLength(1));
+          expect(
+            f.runner.workCreates.where((call) => !call.contains('--graph')),
+            hasLength(1),
+            reason: 'only the genesis session is created as a plain bead',
+          );
+        }
+
+        expectOneRestoredMint();
+
+        await Future<void>.delayed(Duration.zero);
+        mounted.owner.flush();
+        expectOneRestoredMint();
       },
     );
   });
