@@ -21,6 +21,7 @@ void main() {
           contains("'/healthz'"),
           contains("'/status'"),
           contains("'/hooks'"),
+          contains("'/assets'"),
           contains("'/stream'"),
         ),
         reason:
@@ -66,6 +67,7 @@ void main() {
         '/healthz',
         '/status',
         '/hooks',
+        '/assets',
         '/stream',
         '/command',
       });

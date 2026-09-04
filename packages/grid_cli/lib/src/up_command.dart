@@ -41,6 +41,7 @@ import 'package:grid_sdk/grid_sdk.dart'
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 
+import 'asset_catalog_resolver.dart';
 import 'station_control.dart';
 import 'station_flags.dart';
 import 'station_lock.dart';
@@ -137,6 +138,7 @@ typedef ControlStarter =
       required String token,
       required StationStatus Function() view,
       required GridCommandHandler commandHandler,
+      required AssetCatalogResolver assetCatalogResolver,
       required TreeProjector? treeProjector,
     });
 typedef DevModeArmer =
@@ -201,6 +203,7 @@ class UpCommand extends Command<int> {
     PrimaryCheckoutInspector? inspectPrimaryCheckout,
     StateStoreMaintainer? maintainStateStore,
     StateStoreTypesReader? readStateStoreTypes,
+    this.assetCatalogResolver = const AssetCatalogResolver(),
   }) : _delegateFactory = delegateFactory,
        _codedRoster = codedRoster,
        _harnessAllowList = Set.unmodifiable(harnessAllowList),
@@ -232,6 +235,10 @@ class UpCommand extends Command<int> {
 
   /// The composing runner's operator-facing station name.
   final String stationName;
+
+  /// The station's compiled content/capability declaration resolver.
+  final AssetCatalogResolver assetCatalogResolver;
+
   final GridDelegateFactory _delegateFactory;
   final RosterReader _codedRoster;
   final Set<String> _harnessAllowList;
@@ -564,6 +571,7 @@ class UpCommand extends Command<int> {
         view: () =>
             _status(config, live.armedRoster, startedAt, live.stationView),
         commandHandler: _LiveDelegateCommandHandler(() => live),
+        assetCatalogResolver: assetCatalogResolver,
         treeProjector: treeProjector,
       );
       await stationLock.updateControl(
@@ -857,6 +865,7 @@ Future<ControlResource> _defaultStartControl({
   required String token,
   required StationStatus Function() view,
   required GridCommandHandler commandHandler,
+  required AssetCatalogResolver assetCatalogResolver,
   required TreeProjector? treeProjector,
 }) async => _ControlResource(
   await StationControl.start(
@@ -864,6 +873,7 @@ Future<ControlResource> _defaultStartControl({
     token: token,
     view: view,
     commandHandler: commandHandler,
+    assetCatalogResolver: assetCatalogResolver,
     treeProjector: treeProjector,
   ),
 );

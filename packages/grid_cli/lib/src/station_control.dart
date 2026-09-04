@@ -12,10 +12,10 @@
 /// ADR-0014 D-C4 (Nico-ratified 2026-07-24):
 /// the control plane cannot be a WORK trigger (`bd` stays the only work intake).
 /// operator one-shots ARE control-plane requests.
-/// `/healthz`, `/status`, `/hooks`, and the diagnostics WebSocket `/stream`
-/// remain read-only; fenced `POST /command` is the sole scoped mutation. This file
-/// holds no bd writer and calls no re-query. `/hooks` resolves declarations
-/// but never executes them.
+/// `/healthz`, `/status`, `/hooks`, `/assets`, and the diagnostics WebSocket
+/// `/stream` remain read-only; fenced `POST /command` is the sole scoped
+/// mutation. This file holds no bd writer and calls no re-query. `/hooks` and
+/// `/assets` resolve declarations but never execute or install them.
 ///
 /// D-C5: this is a floor — it gets re-homed onto the unified-surfaces
 /// substrate later (perception / control plane / MCP / CLI+RPC / MQTT, one
@@ -44,10 +44,12 @@ import 'package:grid_sdk/grid_sdk.dart'
         WedgeState,
         kNotWedged;
 
+import 'asset_catalog_resolver.dart';
 import 'hooks_resolver.dart';
 
 const _commandPath = '/command';
 const _streamPath = '/stream';
+const _assetsPath = '/assets';
 const _fenceHeader = 'X-Grid-Fence';
 const _idempotencyHeader = 'Idempotency-Key';
 
@@ -225,8 +227,9 @@ String mintControlToken() {
 
 /// One authenticated HTTP/WS station surface (D-C2), loopback by default with
 /// explicit LAN binding. Read-only exact-match routes
-/// are `/healthz` (liveness), `/status` (the [StationStatus] snapshot), and
-/// `/hooks` (contribution resolution only; it never executes contributions);
+/// are `/healthz` (liveness), `/status` (the [StationStatus] snapshot),
+/// `/hooks` (contribution resolution only), and `/assets` (content/capability
+/// catalog resolution only); neither declaration route executes work;
 /// `/stream` is the read-only diagnostics WebSocket. The VM exploration/debug
 /// surface remains separate.
 /// ADR-0014 D-C4 (Nico-ratified 2026-07-24):
@@ -242,6 +245,7 @@ class StationControl {
     this._token,
     StationStatus Function() view,
     this._hooksResolver,
+    this._assetCatalogResolver,
     this._commandHandler,
     this._treeProjector,
   ) : _routes = <String, Map<String, Object?> Function()>{
@@ -253,6 +257,7 @@ class StationControl {
   final String _token;
   final Map<String, Map<String, Object?> Function()> _routes;
   final HooksResolver _hooksResolver;
+  final AssetCatalogResolver _assetCatalogResolver;
   final GridCommandHandler _commandHandler;
   final TreeProjector? _treeProjector;
   final Set<WebSocket> _webSockets = <WebSocket>{};
@@ -270,6 +275,9 @@ class StationControl {
   /// visibly tied to the lock file that carries it; [view] is a
   /// value-snapshot getter with NO subscriptions (called fresh per request).
   /// [hooksResolver] performs read-only hook declaration resolution.
+  /// [assetCatalogResolver] performs read-only content/capability declaration
+  /// resolution. Per ADR-0011's two-family asset umbrella, `/assets` excludes
+  /// resource/capacity leases such as compute, agent slots, and HITL humans.
   /// [treeProjector] enables `/stream`; this control does not dispose it.
   static Future<StationControl> start({
     required int port,
@@ -277,6 +285,7 @@ class StationControl {
     required StationStatus Function() view,
     required GridCommandHandler commandHandler,
     HooksResolver hooksResolver = const HooksResolver(),
+    AssetCatalogResolver assetCatalogResolver = const AssetCatalogResolver(),
     InternetAddress? address,
     TreeProjector? treeProjector,
   }) async {
@@ -289,6 +298,7 @@ class StationControl {
       token,
       view,
       hooksResolver,
+      assetCatalogResolver,
       commandHandler,
       treeProjector,
     );
@@ -318,9 +328,13 @@ class StationControl {
       return;
     }
     final isHooks = request.uri.path == '/hooks';
+    final isAssets = request.uri.path == _assetsPath;
     final route = _routes[request.uri.path];
     final isKnownPath =
-        request.uri.path == _commandPath || isHooks || route != null;
+        request.uri.path == _commandPath ||
+        isHooks ||
+        isAssets ||
+        route != null;
     if (!isKnownPath) {
       await _respond(request, HttpStatus.notFound, <String, Object?>{
         'error': 'not found: ${request.uri.path}',
@@ -335,6 +349,10 @@ class StationControl {
     }
     if (isHooks) {
       await _handleHooks(request);
+      return;
+    }
+    if (isAssets) {
+      await _handleAssets(request);
       return;
     }
     await _respond(request, HttpStatus.ok, route!());
@@ -628,6 +646,19 @@ class StationControl {
       );
       await _respond(request, HttpStatus.ok, response.toJson());
     } on HooksResolutionException catch (error) {
+      await _respond(request, error.statusCode, <String, Object?>{
+        'error': error.message,
+      });
+    }
+  }
+
+  Future<void> _handleAssets(HttpRequest request) async {
+    try {
+      final report = await _assetCatalogResolver.resolve(
+        substation: request.uri.queryParameters['substation'],
+      );
+      await _respond(request, HttpStatus.ok, report.toJson());
+    } on AssetCatalogResolutionException catch (error) {
       await _respond(request, error.statusCode, <String, Object?>{
         'error': error.message,
       });
