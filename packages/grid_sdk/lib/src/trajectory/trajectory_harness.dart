@@ -564,11 +564,11 @@ class TrajectoryHarness {
       // home upgrading with `off` arms exactly as it does on main.
       if (_dualReadArmed && await sessionHeadProjectionNeedsReshape(db)) {
         _degrade(
-          'proj_session_head predates the wave-1 cut shape (missing '
+          'proj_session_head predates the current projection shape (missing '
           '${projSessionHeadCutColumns.join(', ')}) — the trajectory refuses '
-          'to arm rather than drop every terminal append on an unknown '
-          'column. Run the QUIESCED migration first: `traj replay` (station '
-          'down), which reshapes the projection and rebuilds it from the log.',
+          'to arm rather than drop an append on an unknown column. Run the '
+          'QUIESCED migration first: `traj replay` (station down), which '
+          're-creates the projection and rebuilds it from the log.',
         );
         await _closeDbQuietly();
         return;

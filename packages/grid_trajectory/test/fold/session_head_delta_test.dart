@@ -545,12 +545,9 @@ void main() {
       expect(observed.sql, isNot(contains('outcome IS NULL')));
     });
 
-    // THE ROLLBACK SHAPE (cut-wiring, r13): `DualReadMode.off` registers
-    // `kPreCutFoldDeltas`, which renders P1 without the two columns the wave-1
-    // reshape added. An existing home that upgraded WITHOUT running the
-    // quiesced `traj replay` must keep appending rather than die on an unknown
-    // column — which is what lets the harness skip the boot reshape probe.
-    test('cutShape: false drops the wave-1 columns from the UPDATE — the '
+    // THE ROLLBACK SHAPE (cut-wiring, r13): `kPreCutFoldDeltas` renders
+    // P1 without every column whose live-table absence requires a reshape.
+    test('cutShape: false drops every reshape column from the UPDATE — the '
         'pre-cut home keeps appending', () {
       final statement = sessionHeadSqlFor(
         sessionHeadDeltaFor(

@@ -51,11 +51,13 @@ CREATE TABLE IF NOT EXISTS proj_session_head (
   KEY ix_bead (work_bead_id, status)
 )''';
 
-/// The columns the wave-1 reshape ADDS to P1 — the presence test a
-/// provisioned-before-the-cut home fails ([sessionHeadProjectionNeedsReshape]).
+/// The columns added or renamed across P1 projection-shape cuts. A home
+/// provisioned before any listed column fails
+/// [sessionHeadProjectionNeedsReshape] and is rebuilt from the journal.
 const List<String> projSessionHeadCutColumns = [
   'terminal_provenance',
   'unknown_reason',
+  'substation',
 ];
 
 /// Every §4 CREATE TABLE, in the doc's order.
@@ -357,7 +359,7 @@ const String projSessionHeadColumnsSql =
     'SELECT column_name AS name FROM information_schema.columns '
     'WHERE table_schema = DATABASE() AND table_name = :table';
 
-/// True when this home's `proj_session_head` predates the wave-1 cut shape —
+/// True when this home's `proj_session_head` predates the current cut shape —
 /// it is missing one of [projSessionHeadCutColumns], or it does not exist at
 /// all. Read-only; the caller decides whether it is quiesced enough to fix.
 Future<bool> sessionHeadProjectionNeedsReshape(TrajectoryDb db) async {
@@ -368,9 +370,9 @@ Future<bool> sessionHeadProjectionNeedsReshape(TrajectoryDb db) async {
   return !projSessionHeadCutColumns.every(columns.contains);
 }
 
-/// THE wave-1 P1 migration, as a named step (cut-wiring C0, r7 — V1-B1):
-/// `DROP TABLE proj_session_head` + re-CREATE at [projSessionHeadDdl]. An
-/// ALTER path is deliberately not built.
+/// THE P1 projection-shape migration, as a named step (cut-wiring C0, r7 —
+/// V1-B1): `DROP TABLE proj_session_head` + re-CREATE at
+/// [projSessionHeadDdl]. An ALTER path is deliberately not built.
 ///
 /// Destructive by design and safe only because P1 is REBUILDABLE state: the
 /// caller runs it QUIESCED and follows it with a full `replaySessionHeads`,

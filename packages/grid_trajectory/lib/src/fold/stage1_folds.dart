@@ -29,14 +29,12 @@ List<SqlStatement> sessionHeadFoldStep(
 }
 
 /// P1 in the PRE-CUT SHAPE (cut-wiring, r13) — the SAME delta, rendered
-/// without the two columns the wave-1 reshape added to `proj_session_head`.
+/// without every column in [projSessionHeadCutColumns].
 ///
 /// This is the fold half of `DualReadMode.off`. The rollback posture must
-/// append exactly as pre-cut mainline did, so an existing home that took this
-/// code WITHOUT running the quiesced `traj replay` migration keeps appending
-/// rather than dying on an unknown column — which is what lets the harness
-/// skip the boot reshape probe at `off`: there is no cut-shape write to
-/// protect.
+/// append without naming any column that requires a projection migration, so
+/// an existing home that has not run the quiesced `traj replay` keeps
+/// appending rather than dying on an unknown column.
 List<SqlStatement> preCutSessionHeadFoldStep(
   TrajectoryEnvelope envelope,
   TrajectoryRecord record, {
@@ -79,8 +77,8 @@ const List<TrajectoryFoldDelta> kStage1FoldDeltas = [
 ];
 
 /// The ROLLBACK set (`DualReadMode.off`): identical to [kStage1FoldDeltas]
-/// except that P1 renders in the pre-cut column shape. P2 and P6 are unchanged
-/// by the wave-1 cut, so they are the very same entries.
+/// except that P1 renders without [projSessionHeadCutColumns]. P2 and P6 are
+/// unchanged, so they remain the same entries.
 const List<TrajectoryFoldDelta> kPreCutFoldDeltas = [
   preCutSessionHeadFoldStep,
   stepCursorFoldStep,

@@ -7,6 +7,27 @@ import 'package:test/test.dart';
 
 import '../support/scripted_db.dart';
 
+const Set<String> _preCutSessionHeadColumns = {
+  'session_id',
+  'work_bead_id',
+  'round',
+  'status',
+  'outcome',
+  'work_terminal_reason',
+  'held',
+  'held_reason',
+  'pgid',
+  'pid',
+  'attempt_id',
+  'rig',
+  'model',
+  'seat',
+  'started_at',
+  'closed_at',
+  'head_epoch',
+  'last_seq',
+};
+
 void main() {
   test('createTrajectoryDatabase is IF NOT EXISTS', () async {
     final db = ScriptedDb();
@@ -111,38 +132,69 @@ void main() {
       expect(projSessionHeadDdl, contains('unknown_reason VARCHAR(32) NULL'));
     });
 
-    test('a pre-cut home NEEDS the reshape; a current one does not', () async {
-      final stale = ScriptedDb()
-        ..on(
-          'information_schema.columns',
-          result: const SqlResult(
-            rows: [
-              {'name': 'session_id'},
-              {'name': 'terminal_provenance'},
-            ],
-          ),
+    test(
+      'a wave-1 seat home NEEDS the reshape; a current one does not',
+      () async {
+        final stale = ScriptedDb()
+          ..on(
+            'information_schema.columns',
+            result: const SqlResult(
+              rows: [
+                {'name': 'terminal_provenance'},
+                {'name': 'unknown_reason'},
+                {'name': 'SEAT'},
+              ],
+            ),
+          );
+        expect(await sessionHeadProjectionNeedsReshape(stale), isTrue);
+        expect(
+          stale.log.single.params!['table'],
+          'proj_session_head',
+          reason: 'DATABASE()-scoped, so a sibling schema cannot answer for us',
         );
-      expect(await sessionHeadProjectionNeedsReshape(stale), isTrue);
-      expect(
-        stale.log.single.params!['table'],
-        'proj_session_head',
-        reason: 'DATABASE()-scoped, so a sibling schema cannot answer for us',
-      );
 
-      final current = ScriptedDb()
-        ..on(
-          'information_schema.columns',
-          result: const SqlResult(
-            rows: [
-              {'name': 'TERMINAL_PROVENANCE'},
-              {'name': 'unknown_reason'},
-            ],
-          ),
+        final current = ScriptedDb()
+          ..on(
+            'information_schema.columns',
+            result: const SqlResult(
+              rows: [
+                {'name': 'TERMINAL_PROVENANCE'},
+                {'name': 'unknown_reason'},
+                {'name': 'substation'},
+              ],
+            ),
+          );
+        expect(
+          await sessionHeadProjectionNeedsReshape(current),
+          isFalse,
+          reason: 'servers case column names differently; the check does not',
         );
+      },
+    );
+
+    test('every fold-written column promoted since the pre-cut shape is a '
+        'literal reshape cut column', () {
+      final ddlColumns = createTableColumnNames(projSessionHeadDdl);
+      final foldColumns = SessionHeadRow(
+        sessionId: 'coverage-session',
+        workBeadId: 'tg-coverage',
+        startedAt: DateTime.utc(2026, 9, 4),
+        headEpoch: 1,
+        lastSeq: 1,
+      ).toSqlParams().keys.toSet();
+      final promotedFoldColumns = ddlColumns
+          .intersection(foldColumns)
+          .difference(_preCutSessionHeadColumns);
+
+      expect(ddlColumns, containsAll(foldColumns));
       expect(
-        await sessionHeadProjectionNeedsReshape(current),
-        isFalse,
-        reason: 'servers case column names differently; the check does not',
+        promotedFoldColumns,
+        equals({'terminal_provenance', 'unknown_reason', 'substation'}),
+      );
+      expect(
+        projSessionHeadCutColumns,
+        containsAll(promotedFoldColumns),
+        reason: 'a promoted fold write must force a projection reshape',
       );
     });
 
