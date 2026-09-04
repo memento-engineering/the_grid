@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-rc.4
+
+- The capability-failure kind introduced by grid_engine 0.3.0-rc.15 rides the trajectory's failure records (tg-e32f, #309). No wire change for readers that ignore the new field.
+
 ## 0.2.0-rc.3
 
 - `traj replay` reshapes `proj_session_head` when it still spells the substation identity `seat`: `substation` joins `projSessionHeadCutColumns`, a DDL-coverage test pins that every column the fold writes is a cut column, and `--check` reports the projection half as pending beside the journal rename (tg-0zop, #306). Before this, a home that had run the tg-j1zn journal rename died on `Unknown column 'substation' in 'proj_session_head'`.
