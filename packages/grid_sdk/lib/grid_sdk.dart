@@ -215,12 +215,14 @@ export 'src/work/work_assembly.dart';
 export 'package:grid_engine/grid_engine.dart'
     show
         CapabilityRegistry,
+        CacheTokenTotals,
         Circuit,
         CircuitResolver,
         ExplorationTransport,
         FalseFMetrics,
         Flowing,
         JoinedSnapshot,
+        LandedDeliveryTotals,
         LedgerGrade,
         LedgerNodeMetrics,
         LedgerSessionMetrics,

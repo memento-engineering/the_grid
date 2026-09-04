@@ -4,6 +4,28 @@ import 'package:test/test.dart';
 
 import 'fixtures/session_ledger_metrics_snapshot.dart';
 
+Bead _landedMetricsSession(String id, String nodePath) => Bead(
+  id: id,
+  issueType: GridIssueTypes.session,
+  status: BeadStatus.closed,
+  metadata: <String, dynamic>{
+    SessionBeadKeys.workBead: 'tg-work-2',
+    ResultKeys.keyFor(nodePath, ResultKeys.delivery): 'pr',
+    ResultKeys.keyFor(nodePath, ResultMetricFields.costUsd): '10',
+    ResultKeys.keyFor(nodePath, ResultMetricFields.tokensIn): '50',
+  },
+);
+
+GraphSnapshot _secondStoreMetricsFixture() => GraphSnapshot.fromParts(
+  beads: <Bead>[
+    _landedMetricsSession('session-second-a', 'review/a'),
+    _landedMetricsSession('session-second-b', 'review/b'),
+  ],
+  dependencies: const <BeadDependency>[],
+  readyIds: const <String>[],
+  capturedAt: DateTime.utc(2026, 7, 12),
+);
+
 void main() {
   test(
     'typed node decode preserves raw fields and reports malformed values',
@@ -51,13 +73,82 @@ void main() {
         rate: 0.5,
       ),
     );
+    expect(
+      metrics.cacheTokens,
+      const CacheTokenTotals(
+        cacheRead: 300,
+        cacheCreate: 500,
+        uncachedInput: 200,
+      ),
+    );
     expect(metrics.cacheHitRatio, 0.3);
     expect(metrics.reworkRoundsByWorkBead['tg-work-1'], 1);
+    expect(
+      metrics.landedDeliveries,
+      const LandedDeliveryTotals(landedCost: 2.5, landedCount: 1),
+    );
     expect(metrics.costPerLandedDelivery, 2.5);
     expect(metrics.gradeDistributionByLane['coherence'], {
       LedgerGrade.f: 2,
       LedgerGrade.a: 1,
     });
+  });
+
+  test('component totals merge to union projection with weighted scalars', () {
+    final firstSnapshot = sessionLedgerMetricsFixture();
+    final secondSnapshot = _secondStoreMetricsFixture();
+    final first = projectSessionLedgerMetrics(firstSnapshot);
+    final second = projectSessionLedgerMetrics(secondSnapshot);
+    final union = projectSessionLedgerMetrics(
+      GraphSnapshot.fromParts(
+        beads: <Bead>[...firstSnapshot.beads, ...secondSnapshot.beads],
+        dependencies: <BeadDependency>[
+          ...firstSnapshot.dependencies,
+          ...secondSnapshot.dependencies,
+        ],
+        readyIds: const <String>[],
+        capturedAt: secondSnapshot.capturedAt,
+      ),
+    );
+
+    final mergedCacheTokens = CacheTokenTotals(
+      cacheRead: first.cacheTokens.cacheRead + second.cacheTokens.cacheRead,
+      cacheCreate:
+          first.cacheTokens.cacheCreate + second.cacheTokens.cacheCreate,
+      uncachedInput:
+          first.cacheTokens.uncachedInput + second.cacheTokens.uncachedInput,
+    );
+    final cacheDenominator =
+        mergedCacheTokens.cacheRead +
+        mergedCacheTokens.cacheCreate +
+        mergedCacheTokens.uncachedInput;
+    final mergedCacheHitRatio = cacheDenominator == 0
+        ? null
+        : mergedCacheTokens.cacheRead / cacheDenominator;
+
+    final mergedLandedDeliveries = LandedDeliveryTotals(
+      landedCost:
+          first.landedDeliveries.landedCost +
+          second.landedDeliveries.landedCost,
+      landedCount:
+          first.landedDeliveries.landedCount +
+          second.landedDeliveries.landedCount,
+    );
+    final mergedCostPerLandedDelivery = mergedLandedDeliveries.landedCount == 0
+        ? null
+        : mergedLandedDeliveries.landedCost /
+              mergedLandedDeliveries.landedCount;
+
+    expect(mergedCacheHitRatio, union.cacheHitRatio);
+    expect(mergedCostPerLandedDelivery, union.costPerLandedDelivery);
+    expect(
+      (first.cacheHitRatio! + second.cacheHitRatio!) / 2,
+      isNot(union.cacheHitRatio),
+    );
+    expect(
+      (first.costPerLandedDelivery! + second.costPerLandedDelivery!) / 2,
+      isNot(union.costPerLandedDelivery),
+    );
   });
 
   test('malformed and orphan rows are total decode issues', () {
@@ -102,6 +193,8 @@ void main() {
         capturedAt: DateTime.utc(2026, 7, 11),
       ),
     );
+    expect(empty.cacheTokens, const CacheTokenTotals());
+    expect(empty.landedDeliveries, const LandedDeliveryTotals());
     expect(
       (empty.falseFs.rate, empty.cacheHitRatio, empty.costPerLandedDelivery),
       (null, null, null),

@@ -1530,9 +1530,544 @@ as double?,
 }
 
 /// @nodoc
+mixin _$CacheTokenTotals {
+
+/// Input tokens served from cache.
+ int get cacheRead;/// Input tokens written into cache.
+ int get cacheCreate;/// Input tokens not served from or written into cache.
+ int get uncachedInput;
+/// Create a copy of CacheTokenTotals
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$CacheTokenTotalsCopyWith<CacheTokenTotals> get copyWith => _$CacheTokenTotalsCopyWithImpl<CacheTokenTotals>(this as CacheTokenTotals, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is CacheTokenTotals&&(identical(other.cacheRead, cacheRead) || other.cacheRead == cacheRead)&&(identical(other.cacheCreate, cacheCreate) || other.cacheCreate == cacheCreate)&&(identical(other.uncachedInput, uncachedInput) || other.uncachedInput == uncachedInput));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,cacheRead,cacheCreate,uncachedInput);
+
+@override
+String toString() {
+  return 'CacheTokenTotals(cacheRead: $cacheRead, cacheCreate: $cacheCreate, uncachedInput: $uncachedInput)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $CacheTokenTotalsCopyWith<$Res>  {
+  factory $CacheTokenTotalsCopyWith(CacheTokenTotals value, $Res Function(CacheTokenTotals) _then) = _$CacheTokenTotalsCopyWithImpl;
+@useResult
+$Res call({
+ int cacheRead, int cacheCreate, int uncachedInput
+});
+
+
+
+
+}
+/// @nodoc
+class _$CacheTokenTotalsCopyWithImpl<$Res>
+    implements $CacheTokenTotalsCopyWith<$Res> {
+  _$CacheTokenTotalsCopyWithImpl(this._self, this._then);
+
+  final CacheTokenTotals _self;
+  final $Res Function(CacheTokenTotals) _then;
+
+/// Create a copy of CacheTokenTotals
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? cacheRead = null,Object? cacheCreate = null,Object? uncachedInput = null,}) {
+  return _then(_self.copyWith(
+cacheRead: null == cacheRead ? _self.cacheRead : cacheRead // ignore: cast_nullable_to_non_nullable
+as int,cacheCreate: null == cacheCreate ? _self.cacheCreate : cacheCreate // ignore: cast_nullable_to_non_nullable
+as int,uncachedInput: null == uncachedInput ? _self.uncachedInput : uncachedInput // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [CacheTokenTotals].
+extension CacheTokenTotalsPatterns on CacheTokenTotals {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _CacheTokenTotals value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _CacheTokenTotals() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _CacheTokenTotals value)  $default,){
+final _that = this;
+switch (_that) {
+case _CacheTokenTotals():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _CacheTokenTotals value)?  $default,){
+final _that = this;
+switch (_that) {
+case _CacheTokenTotals() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int cacheRead,  int cacheCreate,  int uncachedInput)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _CacheTokenTotals() when $default != null:
+return $default(_that.cacheRead,_that.cacheCreate,_that.uncachedInput);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int cacheRead,  int cacheCreate,  int uncachedInput)  $default,) {final _that = this;
+switch (_that) {
+case _CacheTokenTotals():
+return $default(_that.cacheRead,_that.cacheCreate,_that.uncachedInput);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int cacheRead,  int cacheCreate,  int uncachedInput)?  $default,) {final _that = this;
+switch (_that) {
+case _CacheTokenTotals() when $default != null:
+return $default(_that.cacheRead,_that.cacheCreate,_that.uncachedInput);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class _CacheTokenTotals implements CacheTokenTotals {
+  const _CacheTokenTotals({this.cacheRead = 0, this.cacheCreate = 0, this.uncachedInput = 0});
+  
+
+/// Input tokens served from cache.
+@override@JsonKey() final  int cacheRead;
+/// Input tokens written into cache.
+@override@JsonKey() final  int cacheCreate;
+/// Input tokens not served from or written into cache.
+@override@JsonKey() final  int uncachedInput;
+
+/// Create a copy of CacheTokenTotals
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$CacheTokenTotalsCopyWith<_CacheTokenTotals> get copyWith => __$CacheTokenTotalsCopyWithImpl<_CacheTokenTotals>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _CacheTokenTotals&&(identical(other.cacheRead, cacheRead) || other.cacheRead == cacheRead)&&(identical(other.cacheCreate, cacheCreate) || other.cacheCreate == cacheCreate)&&(identical(other.uncachedInput, uncachedInput) || other.uncachedInput == uncachedInput));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,cacheRead,cacheCreate,uncachedInput);
+
+@override
+String toString() {
+  return 'CacheTokenTotals(cacheRead: $cacheRead, cacheCreate: $cacheCreate, uncachedInput: $uncachedInput)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$CacheTokenTotalsCopyWith<$Res> implements $CacheTokenTotalsCopyWith<$Res> {
+  factory _$CacheTokenTotalsCopyWith(_CacheTokenTotals value, $Res Function(_CacheTokenTotals) _then) = __$CacheTokenTotalsCopyWithImpl;
+@override @useResult
+$Res call({
+ int cacheRead, int cacheCreate, int uncachedInput
+});
+
+
+
+
+}
+/// @nodoc
+class __$CacheTokenTotalsCopyWithImpl<$Res>
+    implements _$CacheTokenTotalsCopyWith<$Res> {
+  __$CacheTokenTotalsCopyWithImpl(this._self, this._then);
+
+  final _CacheTokenTotals _self;
+  final $Res Function(_CacheTokenTotals) _then;
+
+/// Create a copy of CacheTokenTotals
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? cacheRead = null,Object? cacheCreate = null,Object? uncachedInput = null,}) {
+  return _then(_CacheTokenTotals(
+cacheRead: null == cacheRead ? _self.cacheRead : cacheRead // ignore: cast_nullable_to_non_nullable
+as int,cacheCreate: null == cacheCreate ? _self.cacheCreate : cacheCreate // ignore: cast_nullable_to_non_nullable
+as int,uncachedInput: null == uncachedInput ? _self.uncachedInput : uncachedInput // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+/// @nodoc
+mixin _$LandedDeliveryTotals {
+
+/// Cost in US dollars across landed sessions.
+ double get landedCost;/// Number of sessions with a non-empty delivery.
+ int get landedCount;
+/// Create a copy of LandedDeliveryTotals
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$LandedDeliveryTotalsCopyWith<LandedDeliveryTotals> get copyWith => _$LandedDeliveryTotalsCopyWithImpl<LandedDeliveryTotals>(this as LandedDeliveryTotals, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is LandedDeliveryTotals&&(identical(other.landedCost, landedCost) || other.landedCost == landedCost)&&(identical(other.landedCount, landedCount) || other.landedCount == landedCount));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,landedCost,landedCount);
+
+@override
+String toString() {
+  return 'LandedDeliveryTotals(landedCost: $landedCost, landedCount: $landedCount)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $LandedDeliveryTotalsCopyWith<$Res>  {
+  factory $LandedDeliveryTotalsCopyWith(LandedDeliveryTotals value, $Res Function(LandedDeliveryTotals) _then) = _$LandedDeliveryTotalsCopyWithImpl;
+@useResult
+$Res call({
+ double landedCost, int landedCount
+});
+
+
+
+
+}
+/// @nodoc
+class _$LandedDeliveryTotalsCopyWithImpl<$Res>
+    implements $LandedDeliveryTotalsCopyWith<$Res> {
+  _$LandedDeliveryTotalsCopyWithImpl(this._self, this._then);
+
+  final LandedDeliveryTotals _self;
+  final $Res Function(LandedDeliveryTotals) _then;
+
+/// Create a copy of LandedDeliveryTotals
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? landedCost = null,Object? landedCount = null,}) {
+  return _then(_self.copyWith(
+landedCost: null == landedCost ? _self.landedCost : landedCost // ignore: cast_nullable_to_non_nullable
+as double,landedCount: null == landedCount ? _self.landedCount : landedCount // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [LandedDeliveryTotals].
+extension LandedDeliveryTotalsPatterns on LandedDeliveryTotals {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _LandedDeliveryTotals value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _LandedDeliveryTotals() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _LandedDeliveryTotals value)  $default,){
+final _that = this;
+switch (_that) {
+case _LandedDeliveryTotals():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _LandedDeliveryTotals value)?  $default,){
+final _that = this;
+switch (_that) {
+case _LandedDeliveryTotals() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( double landedCost,  int landedCount)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _LandedDeliveryTotals() when $default != null:
+return $default(_that.landedCost,_that.landedCount);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( double landedCost,  int landedCount)  $default,) {final _that = this;
+switch (_that) {
+case _LandedDeliveryTotals():
+return $default(_that.landedCost,_that.landedCount);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( double landedCost,  int landedCount)?  $default,) {final _that = this;
+switch (_that) {
+case _LandedDeliveryTotals() when $default != null:
+return $default(_that.landedCost,_that.landedCount);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class _LandedDeliveryTotals implements LandedDeliveryTotals {
+  const _LandedDeliveryTotals({this.landedCost = 0, this.landedCount = 0});
+  
+
+/// Cost in US dollars across landed sessions.
+@override@JsonKey() final  double landedCost;
+/// Number of sessions with a non-empty delivery.
+@override@JsonKey() final  int landedCount;
+
+/// Create a copy of LandedDeliveryTotals
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$LandedDeliveryTotalsCopyWith<_LandedDeliveryTotals> get copyWith => __$LandedDeliveryTotalsCopyWithImpl<_LandedDeliveryTotals>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _LandedDeliveryTotals&&(identical(other.landedCost, landedCost) || other.landedCost == landedCost)&&(identical(other.landedCount, landedCount) || other.landedCount == landedCount));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,landedCost,landedCount);
+
+@override
+String toString() {
+  return 'LandedDeliveryTotals(landedCost: $landedCost, landedCount: $landedCount)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$LandedDeliveryTotalsCopyWith<$Res> implements $LandedDeliveryTotalsCopyWith<$Res> {
+  factory _$LandedDeliveryTotalsCopyWith(_LandedDeliveryTotals value, $Res Function(_LandedDeliveryTotals) _then) = __$LandedDeliveryTotalsCopyWithImpl;
+@override @useResult
+$Res call({
+ double landedCost, int landedCount
+});
+
+
+
+
+}
+/// @nodoc
+class __$LandedDeliveryTotalsCopyWithImpl<$Res>
+    implements _$LandedDeliveryTotalsCopyWith<$Res> {
+  __$LandedDeliveryTotalsCopyWithImpl(this._self, this._then);
+
+  final _LandedDeliveryTotals _self;
+  final $Res Function(_LandedDeliveryTotals) _then;
+
+/// Create a copy of LandedDeliveryTotals
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? landedCost = null,Object? landedCount = null,}) {
+  return _then(_LandedDeliveryTotals(
+landedCost: null == landedCost ? _self.landedCost : landedCost // ignore: cast_nullable_to_non_nullable
+as double,landedCount: null == landedCount ? _self.landedCount : landedCount // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+/// @nodoc
 mixin _$SessionLedgerMetricsProjection {
 
- Map<String, LedgerSessionMetrics> get sessionsById; Map<String, List<LedgerSessionMetrics>> get sessionsByLane; FalseFMetrics get falseFs; double? get cacheHitRatio; Map<String, int> get reworkRoundsByWorkBead; double? get costPerLandedDelivery; Map<String, Map<LedgerGrade, int>> get gradeDistributionByLane; List<MetricsDecodeIssue> get issues;
+ Map<String, LedgerSessionMetrics> get sessionsById; Map<String, List<LedgerSessionMetrics>> get sessionsByLane; FalseFMetrics get falseFs;/// Components used to derive [cacheHitRatio].
+ CacheTokenTotals get cacheTokens; double? get cacheHitRatio; Map<String, int> get reworkRoundsByWorkBead;/// Components used to derive [costPerLandedDelivery].
+ LandedDeliveryTotals get landedDeliveries; double? get costPerLandedDelivery; Map<String, Map<LedgerGrade, int>> get gradeDistributionByLane; List<MetricsDecodeIssue> get issues;
 /// Create a copy of SessionLedgerMetricsProjection
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -1543,16 +2078,16 @@ $SessionLedgerMetricsProjectionCopyWith<SessionLedgerMetricsProjection> get copy
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionLedgerMetricsProjection&&const DeepCollectionEquality().equals(other.sessionsById, sessionsById)&&const DeepCollectionEquality().equals(other.sessionsByLane, sessionsByLane)&&(identical(other.falseFs, falseFs) || other.falseFs == falseFs)&&(identical(other.cacheHitRatio, cacheHitRatio) || other.cacheHitRatio == cacheHitRatio)&&const DeepCollectionEquality().equals(other.reworkRoundsByWorkBead, reworkRoundsByWorkBead)&&(identical(other.costPerLandedDelivery, costPerLandedDelivery) || other.costPerLandedDelivery == costPerLandedDelivery)&&const DeepCollectionEquality().equals(other.gradeDistributionByLane, gradeDistributionByLane)&&const DeepCollectionEquality().equals(other.issues, issues));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionLedgerMetricsProjection&&const DeepCollectionEquality().equals(other.sessionsById, sessionsById)&&const DeepCollectionEquality().equals(other.sessionsByLane, sessionsByLane)&&(identical(other.falseFs, falseFs) || other.falseFs == falseFs)&&(identical(other.cacheTokens, cacheTokens) || other.cacheTokens == cacheTokens)&&(identical(other.cacheHitRatio, cacheHitRatio) || other.cacheHitRatio == cacheHitRatio)&&const DeepCollectionEquality().equals(other.reworkRoundsByWorkBead, reworkRoundsByWorkBead)&&(identical(other.landedDeliveries, landedDeliveries) || other.landedDeliveries == landedDeliveries)&&(identical(other.costPerLandedDelivery, costPerLandedDelivery) || other.costPerLandedDelivery == costPerLandedDelivery)&&const DeepCollectionEquality().equals(other.gradeDistributionByLane, gradeDistributionByLane)&&const DeepCollectionEquality().equals(other.issues, issues));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(sessionsById),const DeepCollectionEquality().hash(sessionsByLane),falseFs,cacheHitRatio,const DeepCollectionEquality().hash(reworkRoundsByWorkBead),costPerLandedDelivery,const DeepCollectionEquality().hash(gradeDistributionByLane),const DeepCollectionEquality().hash(issues));
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(sessionsById),const DeepCollectionEquality().hash(sessionsByLane),falseFs,cacheTokens,cacheHitRatio,const DeepCollectionEquality().hash(reworkRoundsByWorkBead),landedDeliveries,costPerLandedDelivery,const DeepCollectionEquality().hash(gradeDistributionByLane),const DeepCollectionEquality().hash(issues));
 
 @override
 String toString() {
-  return 'SessionLedgerMetricsProjection(sessionsById: $sessionsById, sessionsByLane: $sessionsByLane, falseFs: $falseFs, cacheHitRatio: $cacheHitRatio, reworkRoundsByWorkBead: $reworkRoundsByWorkBead, costPerLandedDelivery: $costPerLandedDelivery, gradeDistributionByLane: $gradeDistributionByLane, issues: $issues)';
+  return 'SessionLedgerMetricsProjection(sessionsById: $sessionsById, sessionsByLane: $sessionsByLane, falseFs: $falseFs, cacheTokens: $cacheTokens, cacheHitRatio: $cacheHitRatio, reworkRoundsByWorkBead: $reworkRoundsByWorkBead, landedDeliveries: $landedDeliveries, costPerLandedDelivery: $costPerLandedDelivery, gradeDistributionByLane: $gradeDistributionByLane, issues: $issues)';
 }
 
 
@@ -1563,11 +2098,11 @@ abstract mixin class $SessionLedgerMetricsProjectionCopyWith<$Res>  {
   factory $SessionLedgerMetricsProjectionCopyWith(SessionLedgerMetricsProjection value, $Res Function(SessionLedgerMetricsProjection) _then) = _$SessionLedgerMetricsProjectionCopyWithImpl;
 @useResult
 $Res call({
- Map<String, LedgerSessionMetrics> sessionsById, Map<String, List<LedgerSessionMetrics>> sessionsByLane, FalseFMetrics falseFs, double? cacheHitRatio, Map<String, int> reworkRoundsByWorkBead, double? costPerLandedDelivery, Map<String, Map<LedgerGrade, int>> gradeDistributionByLane, List<MetricsDecodeIssue> issues
+ Map<String, LedgerSessionMetrics> sessionsById, Map<String, List<LedgerSessionMetrics>> sessionsByLane, FalseFMetrics falseFs, CacheTokenTotals cacheTokens, double? cacheHitRatio, Map<String, int> reworkRoundsByWorkBead, LandedDeliveryTotals landedDeliveries, double? costPerLandedDelivery, Map<String, Map<LedgerGrade, int>> gradeDistributionByLane, List<MetricsDecodeIssue> issues
 });
 
 
-$FalseFMetricsCopyWith<$Res> get falseFs;
+$FalseFMetricsCopyWith<$Res> get falseFs;$CacheTokenTotalsCopyWith<$Res> get cacheTokens;$LandedDeliveryTotalsCopyWith<$Res> get landedDeliveries;
 
 }
 /// @nodoc
@@ -1580,14 +2115,16 @@ class _$SessionLedgerMetricsProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionLedgerMetricsProjection
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? sessionsById = null,Object? sessionsByLane = null,Object? falseFs = null,Object? cacheHitRatio = freezed,Object? reworkRoundsByWorkBead = null,Object? costPerLandedDelivery = freezed,Object? gradeDistributionByLane = null,Object? issues = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? sessionsById = null,Object? sessionsByLane = null,Object? falseFs = null,Object? cacheTokens = null,Object? cacheHitRatio = freezed,Object? reworkRoundsByWorkBead = null,Object? landedDeliveries = null,Object? costPerLandedDelivery = freezed,Object? gradeDistributionByLane = null,Object? issues = null,}) {
   return _then(_self.copyWith(
 sessionsById: null == sessionsById ? _self.sessionsById : sessionsById // ignore: cast_nullable_to_non_nullable
 as Map<String, LedgerSessionMetrics>,sessionsByLane: null == sessionsByLane ? _self.sessionsByLane : sessionsByLane // ignore: cast_nullable_to_non_nullable
 as Map<String, List<LedgerSessionMetrics>>,falseFs: null == falseFs ? _self.falseFs : falseFs // ignore: cast_nullable_to_non_nullable
-as FalseFMetrics,cacheHitRatio: freezed == cacheHitRatio ? _self.cacheHitRatio : cacheHitRatio // ignore: cast_nullable_to_non_nullable
+as FalseFMetrics,cacheTokens: null == cacheTokens ? _self.cacheTokens : cacheTokens // ignore: cast_nullable_to_non_nullable
+as CacheTokenTotals,cacheHitRatio: freezed == cacheHitRatio ? _self.cacheHitRatio : cacheHitRatio // ignore: cast_nullable_to_non_nullable
 as double?,reworkRoundsByWorkBead: null == reworkRoundsByWorkBead ? _self.reworkRoundsByWorkBead : reworkRoundsByWorkBead // ignore: cast_nullable_to_non_nullable
-as Map<String, int>,costPerLandedDelivery: freezed == costPerLandedDelivery ? _self.costPerLandedDelivery : costPerLandedDelivery // ignore: cast_nullable_to_non_nullable
+as Map<String, int>,landedDeliveries: null == landedDeliveries ? _self.landedDeliveries : landedDeliveries // ignore: cast_nullable_to_non_nullable
+as LandedDeliveryTotals,costPerLandedDelivery: freezed == costPerLandedDelivery ? _self.costPerLandedDelivery : costPerLandedDelivery // ignore: cast_nullable_to_non_nullable
 as double?,gradeDistributionByLane: null == gradeDistributionByLane ? _self.gradeDistributionByLane : gradeDistributionByLane // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<LedgerGrade, int>>,issues: null == issues ? _self.issues : issues // ignore: cast_nullable_to_non_nullable
 as List<MetricsDecodeIssue>,
@@ -1601,6 +2138,24 @@ $FalseFMetricsCopyWith<$Res> get falseFs {
   
   return $FalseFMetricsCopyWith<$Res>(_self.falseFs, (value) {
     return _then(_self.copyWith(falseFs: value));
+  });
+}/// Create a copy of SessionLedgerMetricsProjection
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$CacheTokenTotalsCopyWith<$Res> get cacheTokens {
+  
+  return $CacheTokenTotalsCopyWith<$Res>(_self.cacheTokens, (value) {
+    return _then(_self.copyWith(cacheTokens: value));
+  });
+}/// Create a copy of SessionLedgerMetricsProjection
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$LandedDeliveryTotalsCopyWith<$Res> get landedDeliveries {
+  
+  return $LandedDeliveryTotalsCopyWith<$Res>(_self.landedDeliveries, (value) {
+    return _then(_self.copyWith(landedDeliveries: value));
   });
 }
 }
@@ -1684,10 +2239,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( Map<String, LedgerSessionMetrics> sessionsById,  Map<String, List<LedgerSessionMetrics>> sessionsByLane,  FalseFMetrics falseFs,  double? cacheHitRatio,  Map<String, int> reworkRoundsByWorkBead,  double? costPerLandedDelivery,  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane,  List<MetricsDecodeIssue> issues)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( Map<String, LedgerSessionMetrics> sessionsById,  Map<String, List<LedgerSessionMetrics>> sessionsByLane,  FalseFMetrics falseFs,  CacheTokenTotals cacheTokens,  double? cacheHitRatio,  Map<String, int> reworkRoundsByWorkBead,  LandedDeliveryTotals landedDeliveries,  double? costPerLandedDelivery,  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane,  List<MetricsDecodeIssue> issues)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _SessionLedgerMetricsProjection() when $default != null:
-return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cacheHitRatio,_that.reworkRoundsByWorkBead,_that.costPerLandedDelivery,_that.gradeDistributionByLane,_that.issues);case _:
+return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cacheTokens,_that.cacheHitRatio,_that.reworkRoundsByWorkBead,_that.landedDeliveries,_that.costPerLandedDelivery,_that.gradeDistributionByLane,_that.issues);case _:
   return orElse();
 
 }
@@ -1705,10 +2260,10 @@ return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cach
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( Map<String, LedgerSessionMetrics> sessionsById,  Map<String, List<LedgerSessionMetrics>> sessionsByLane,  FalseFMetrics falseFs,  double? cacheHitRatio,  Map<String, int> reworkRoundsByWorkBead,  double? costPerLandedDelivery,  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane,  List<MetricsDecodeIssue> issues)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( Map<String, LedgerSessionMetrics> sessionsById,  Map<String, List<LedgerSessionMetrics>> sessionsByLane,  FalseFMetrics falseFs,  CacheTokenTotals cacheTokens,  double? cacheHitRatio,  Map<String, int> reworkRoundsByWorkBead,  LandedDeliveryTotals landedDeliveries,  double? costPerLandedDelivery,  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane,  List<MetricsDecodeIssue> issues)  $default,) {final _that = this;
 switch (_that) {
 case _SessionLedgerMetricsProjection():
-return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cacheHitRatio,_that.reworkRoundsByWorkBead,_that.costPerLandedDelivery,_that.gradeDistributionByLane,_that.issues);case _:
+return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cacheTokens,_that.cacheHitRatio,_that.reworkRoundsByWorkBead,_that.landedDeliveries,_that.costPerLandedDelivery,_that.gradeDistributionByLane,_that.issues);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -1725,10 +2280,10 @@ return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cach
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( Map<String, LedgerSessionMetrics> sessionsById,  Map<String, List<LedgerSessionMetrics>> sessionsByLane,  FalseFMetrics falseFs,  double? cacheHitRatio,  Map<String, int> reworkRoundsByWorkBead,  double? costPerLandedDelivery,  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane,  List<MetricsDecodeIssue> issues)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( Map<String, LedgerSessionMetrics> sessionsById,  Map<String, List<LedgerSessionMetrics>> sessionsByLane,  FalseFMetrics falseFs,  CacheTokenTotals cacheTokens,  double? cacheHitRatio,  Map<String, int> reworkRoundsByWorkBead,  LandedDeliveryTotals landedDeliveries,  double? costPerLandedDelivery,  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane,  List<MetricsDecodeIssue> issues)?  $default,) {final _that = this;
 switch (_that) {
 case _SessionLedgerMetricsProjection() when $default != null:
-return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cacheHitRatio,_that.reworkRoundsByWorkBead,_that.costPerLandedDelivery,_that.gradeDistributionByLane,_that.issues);case _:
+return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cacheTokens,_that.cacheHitRatio,_that.reworkRoundsByWorkBead,_that.landedDeliveries,_that.costPerLandedDelivery,_that.gradeDistributionByLane,_that.issues);case _:
   return null;
 
 }
@@ -1740,7 +2295,7 @@ return $default(_that.sessionsById,_that.sessionsByLane,_that.falseFs,_that.cach
 
 
 class _SessionLedgerMetricsProjection implements SessionLedgerMetricsProjection {
-  const _SessionLedgerMetricsProjection({final  Map<String, LedgerSessionMetrics> sessionsById = const <String, LedgerSessionMetrics>{}, final  Map<String, List<LedgerSessionMetrics>> sessionsByLane = const <String, List<LedgerSessionMetrics>>{}, this.falseFs = const FalseFMetrics(), this.cacheHitRatio, final  Map<String, int> reworkRoundsByWorkBead = const <String, int>{}, this.costPerLandedDelivery, final  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane = const <String, Map<LedgerGrade, int>>{}, final  List<MetricsDecodeIssue> issues = const <MetricsDecodeIssue>[]}): _sessionsById = sessionsById,_sessionsByLane = sessionsByLane,_reworkRoundsByWorkBead = reworkRoundsByWorkBead,_gradeDistributionByLane = gradeDistributionByLane,_issues = issues;
+  const _SessionLedgerMetricsProjection({final  Map<String, LedgerSessionMetrics> sessionsById = const <String, LedgerSessionMetrics>{}, final  Map<String, List<LedgerSessionMetrics>> sessionsByLane = const <String, List<LedgerSessionMetrics>>{}, this.falseFs = const FalseFMetrics(), this.cacheTokens = const CacheTokenTotals(), this.cacheHitRatio, final  Map<String, int> reworkRoundsByWorkBead = const <String, int>{}, this.landedDeliveries = const LandedDeliveryTotals(), this.costPerLandedDelivery, final  Map<String, Map<LedgerGrade, int>> gradeDistributionByLane = const <String, Map<LedgerGrade, int>>{}, final  List<MetricsDecodeIssue> issues = const <MetricsDecodeIssue>[]}): _sessionsById = sessionsById,_sessionsByLane = sessionsByLane,_reworkRoundsByWorkBead = reworkRoundsByWorkBead,_gradeDistributionByLane = gradeDistributionByLane,_issues = issues;
   
 
  final  Map<String, LedgerSessionMetrics> _sessionsById;
@@ -1758,6 +2313,8 @@ class _SessionLedgerMetricsProjection implements SessionLedgerMetricsProjection 
 }
 
 @override@JsonKey() final  FalseFMetrics falseFs;
+/// Components used to derive [cacheHitRatio].
+@override@JsonKey() final  CacheTokenTotals cacheTokens;
 @override final  double? cacheHitRatio;
  final  Map<String, int> _reworkRoundsByWorkBead;
 @override@JsonKey() Map<String, int> get reworkRoundsByWorkBead {
@@ -1766,6 +2323,8 @@ class _SessionLedgerMetricsProjection implements SessionLedgerMetricsProjection 
   return EqualUnmodifiableMapView(_reworkRoundsByWorkBead);
 }
 
+/// Components used to derive [costPerLandedDelivery].
+@override@JsonKey() final  LandedDeliveryTotals landedDeliveries;
 @override final  double? costPerLandedDelivery;
  final  Map<String, Map<LedgerGrade, int>> _gradeDistributionByLane;
 @override@JsonKey() Map<String, Map<LedgerGrade, int>> get gradeDistributionByLane {
@@ -1792,16 +2351,16 @@ _$SessionLedgerMetricsProjectionCopyWith<_SessionLedgerMetricsProjection> get co
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionLedgerMetricsProjection&&const DeepCollectionEquality().equals(other._sessionsById, _sessionsById)&&const DeepCollectionEquality().equals(other._sessionsByLane, _sessionsByLane)&&(identical(other.falseFs, falseFs) || other.falseFs == falseFs)&&(identical(other.cacheHitRatio, cacheHitRatio) || other.cacheHitRatio == cacheHitRatio)&&const DeepCollectionEquality().equals(other._reworkRoundsByWorkBead, _reworkRoundsByWorkBead)&&(identical(other.costPerLandedDelivery, costPerLandedDelivery) || other.costPerLandedDelivery == costPerLandedDelivery)&&const DeepCollectionEquality().equals(other._gradeDistributionByLane, _gradeDistributionByLane)&&const DeepCollectionEquality().equals(other._issues, _issues));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _SessionLedgerMetricsProjection&&const DeepCollectionEquality().equals(other._sessionsById, _sessionsById)&&const DeepCollectionEquality().equals(other._sessionsByLane, _sessionsByLane)&&(identical(other.falseFs, falseFs) || other.falseFs == falseFs)&&(identical(other.cacheTokens, cacheTokens) || other.cacheTokens == cacheTokens)&&(identical(other.cacheHitRatio, cacheHitRatio) || other.cacheHitRatio == cacheHitRatio)&&const DeepCollectionEquality().equals(other._reworkRoundsByWorkBead, _reworkRoundsByWorkBead)&&(identical(other.landedDeliveries, landedDeliveries) || other.landedDeliveries == landedDeliveries)&&(identical(other.costPerLandedDelivery, costPerLandedDelivery) || other.costPerLandedDelivery == costPerLandedDelivery)&&const DeepCollectionEquality().equals(other._gradeDistributionByLane, _gradeDistributionByLane)&&const DeepCollectionEquality().equals(other._issues, _issues));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_sessionsById),const DeepCollectionEquality().hash(_sessionsByLane),falseFs,cacheHitRatio,const DeepCollectionEquality().hash(_reworkRoundsByWorkBead),costPerLandedDelivery,const DeepCollectionEquality().hash(_gradeDistributionByLane),const DeepCollectionEquality().hash(_issues));
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_sessionsById),const DeepCollectionEquality().hash(_sessionsByLane),falseFs,cacheTokens,cacheHitRatio,const DeepCollectionEquality().hash(_reworkRoundsByWorkBead),landedDeliveries,costPerLandedDelivery,const DeepCollectionEquality().hash(_gradeDistributionByLane),const DeepCollectionEquality().hash(_issues));
 
 @override
 String toString() {
-  return 'SessionLedgerMetricsProjection(sessionsById: $sessionsById, sessionsByLane: $sessionsByLane, falseFs: $falseFs, cacheHitRatio: $cacheHitRatio, reworkRoundsByWorkBead: $reworkRoundsByWorkBead, costPerLandedDelivery: $costPerLandedDelivery, gradeDistributionByLane: $gradeDistributionByLane, issues: $issues)';
+  return 'SessionLedgerMetricsProjection(sessionsById: $sessionsById, sessionsByLane: $sessionsByLane, falseFs: $falseFs, cacheTokens: $cacheTokens, cacheHitRatio: $cacheHitRatio, reworkRoundsByWorkBead: $reworkRoundsByWorkBead, landedDeliveries: $landedDeliveries, costPerLandedDelivery: $costPerLandedDelivery, gradeDistributionByLane: $gradeDistributionByLane, issues: $issues)';
 }
 
 
@@ -1812,11 +2371,11 @@ abstract mixin class _$SessionLedgerMetricsProjectionCopyWith<$Res> implements $
   factory _$SessionLedgerMetricsProjectionCopyWith(_SessionLedgerMetricsProjection value, $Res Function(_SessionLedgerMetricsProjection) _then) = __$SessionLedgerMetricsProjectionCopyWithImpl;
 @override @useResult
 $Res call({
- Map<String, LedgerSessionMetrics> sessionsById, Map<String, List<LedgerSessionMetrics>> sessionsByLane, FalseFMetrics falseFs, double? cacheHitRatio, Map<String, int> reworkRoundsByWorkBead, double? costPerLandedDelivery, Map<String, Map<LedgerGrade, int>> gradeDistributionByLane, List<MetricsDecodeIssue> issues
+ Map<String, LedgerSessionMetrics> sessionsById, Map<String, List<LedgerSessionMetrics>> sessionsByLane, FalseFMetrics falseFs, CacheTokenTotals cacheTokens, double? cacheHitRatio, Map<String, int> reworkRoundsByWorkBead, LandedDeliveryTotals landedDeliveries, double? costPerLandedDelivery, Map<String, Map<LedgerGrade, int>> gradeDistributionByLane, List<MetricsDecodeIssue> issues
 });
 
 
-@override $FalseFMetricsCopyWith<$Res> get falseFs;
+@override $FalseFMetricsCopyWith<$Res> get falseFs;@override $CacheTokenTotalsCopyWith<$Res> get cacheTokens;@override $LandedDeliveryTotalsCopyWith<$Res> get landedDeliveries;
 
 }
 /// @nodoc
@@ -1829,14 +2388,16 @@ class __$SessionLedgerMetricsProjectionCopyWithImpl<$Res>
 
 /// Create a copy of SessionLedgerMetricsProjection
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? sessionsById = null,Object? sessionsByLane = null,Object? falseFs = null,Object? cacheHitRatio = freezed,Object? reworkRoundsByWorkBead = null,Object? costPerLandedDelivery = freezed,Object? gradeDistributionByLane = null,Object? issues = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? sessionsById = null,Object? sessionsByLane = null,Object? falseFs = null,Object? cacheTokens = null,Object? cacheHitRatio = freezed,Object? reworkRoundsByWorkBead = null,Object? landedDeliveries = null,Object? costPerLandedDelivery = freezed,Object? gradeDistributionByLane = null,Object? issues = null,}) {
   return _then(_SessionLedgerMetricsProjection(
 sessionsById: null == sessionsById ? _self._sessionsById : sessionsById // ignore: cast_nullable_to_non_nullable
 as Map<String, LedgerSessionMetrics>,sessionsByLane: null == sessionsByLane ? _self._sessionsByLane : sessionsByLane // ignore: cast_nullable_to_non_nullable
 as Map<String, List<LedgerSessionMetrics>>,falseFs: null == falseFs ? _self.falseFs : falseFs // ignore: cast_nullable_to_non_nullable
-as FalseFMetrics,cacheHitRatio: freezed == cacheHitRatio ? _self.cacheHitRatio : cacheHitRatio // ignore: cast_nullable_to_non_nullable
+as FalseFMetrics,cacheTokens: null == cacheTokens ? _self.cacheTokens : cacheTokens // ignore: cast_nullable_to_non_nullable
+as CacheTokenTotals,cacheHitRatio: freezed == cacheHitRatio ? _self.cacheHitRatio : cacheHitRatio // ignore: cast_nullable_to_non_nullable
 as double?,reworkRoundsByWorkBead: null == reworkRoundsByWorkBead ? _self._reworkRoundsByWorkBead : reworkRoundsByWorkBead // ignore: cast_nullable_to_non_nullable
-as Map<String, int>,costPerLandedDelivery: freezed == costPerLandedDelivery ? _self.costPerLandedDelivery : costPerLandedDelivery // ignore: cast_nullable_to_non_nullable
+as Map<String, int>,landedDeliveries: null == landedDeliveries ? _self.landedDeliveries : landedDeliveries // ignore: cast_nullable_to_non_nullable
+as LandedDeliveryTotals,costPerLandedDelivery: freezed == costPerLandedDelivery ? _self.costPerLandedDelivery : costPerLandedDelivery // ignore: cast_nullable_to_non_nullable
 as double?,gradeDistributionByLane: null == gradeDistributionByLane ? _self._gradeDistributionByLane : gradeDistributionByLane // ignore: cast_nullable_to_non_nullable
 as Map<String, Map<LedgerGrade, int>>,issues: null == issues ? _self._issues : issues // ignore: cast_nullable_to_non_nullable
 as List<MetricsDecodeIssue>,
@@ -1851,6 +2412,24 @@ $FalseFMetricsCopyWith<$Res> get falseFs {
   
   return $FalseFMetricsCopyWith<$Res>(_self.falseFs, (value) {
     return _then(_self.copyWith(falseFs: value));
+  });
+}/// Create a copy of SessionLedgerMetricsProjection
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$CacheTokenTotalsCopyWith<$Res> get cacheTokens {
+  
+  return $CacheTokenTotalsCopyWith<$Res>(_self.cacheTokens, (value) {
+    return _then(_self.copyWith(cacheTokens: value));
+  });
+}/// Create a copy of SessionLedgerMetricsProjection
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$LandedDeliveryTotalsCopyWith<$Res> get landedDeliveries {
+  
+  return $LandedDeliveryTotalsCopyWith<$Res>(_self.landedDeliveries, (value) {
+    return _then(_self.copyWith(landedDeliveries: value));
   });
 }
 }
