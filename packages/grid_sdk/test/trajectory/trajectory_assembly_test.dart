@@ -29,6 +29,21 @@ final class _FakeDb implements TrajectoryDb {
   Future<void> close() async => closed = true;
 }
 
+final class _NoOpQuery extends ObligationQuery {
+  const _NoOpQuery(this.name);
+
+  @override
+  final String name;
+
+  @override
+  String get sql => 'SELECT 1 AS one';
+
+  @override
+  Future<List<ObligationAppend>> repair(
+    List<Map<String, String?>> rows,
+  ) async => const [];
+}
+
 void _seedStore(String dir, {String? database}) {
   Directory('$dir/.beads').createSync(recursive: true);
   File('$dir/.beads/metadata.json').writeAsStringSync(
@@ -95,6 +110,30 @@ void main() {
       );
       await work.start();
       await work.shutdown();
+    },
+  );
+
+  test(
+    'station composition forwards ordered obligation query extensions',
+    () async {
+      const first = _NoOpQuery('first-extension');
+      const second = _NoOpQuery('second-extension');
+      final work = await assemble(
+        trajectoryConfig: const TrajectoryConfig(
+          obligationQueryExtensions: [first, second],
+        ),
+      );
+      final defaultWork = await assemble();
+      addTearDown(work.shutdown);
+      addTearDown(defaultWork.shutdown);
+
+      expect(work.trajectory.mode, TrajectoryHarnessMode.disabled);
+      expect(work.trajectory.config.obligationQueryExtensions, [
+        same(first),
+        same(second),
+      ]);
+      expect(defaultWork.trajectory.config.obligationQueryExtensions, isEmpty);
+      expect(const TrajectoryConfig().obligationQueryExtensions, isEmpty);
     },
   );
 

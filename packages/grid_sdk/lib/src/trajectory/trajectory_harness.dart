@@ -225,11 +225,11 @@ class TrajectoryHarness {
   /// Builds the harness value — no I/O beyond the `auto`-mode artifact probe;
   /// connect/verify/claim happen in [start], after the stores are up (§1.2).
   ///
-  /// [connect] / [appenderFactory] / [scheduleTimer] / [clock] / [identity]
-  /// are TEST seams; production takes the defaults. The default connect path
-  /// resolves the dolt listener FRESH on every call — which is what makes the
-  /// reconnect rule (§4: re-resolve, never pin the boot-time port) hold by
-  /// construction.
+  /// [connect] / [appenderFactory] / [tickQueries] / [scheduleTimer] / [clock]
+  /// / [identity] are TEST seams; production takes the defaults. The default
+  /// connect path resolves the dolt listener FRESH on every call — which is
+  /// what makes the reconnect rule (§4: re-resolve, never pin the boot-time
+  /// port) hold by construction.
   static Future<TrajectoryHarness> build({
     required TrajectoryConfig config,
     required String gridHome,
@@ -331,9 +331,10 @@ class TrajectoryHarness {
   final Future<TrajectoryDb> Function()? _connect;
   final TrajectoryAppender Function(TrajectoryDb db)? _appenderFactory;
 
-  /// An EXPLICIT obligation set (tests, and a station that wants Stage 0's
-  /// empty one); null composes the Stage-1 set at [start], once the epoch the
-  /// detector's unknown rule keys on has actually been claimed (§2.4).
+  /// An EXPLICIT base obligation set for direct-harness tests; null composes
+  /// the Stage-1 set at [start], once the epoch the detector's unknown rule
+  /// keys on has actually been claimed (§2.4). Station composition contributes
+  /// only through [TrajectoryConfig.obligationQueryExtensions].
   final List<ObligationQuery>? _tickQueries;
 
   /// `RuntimeProvider.lastActivity` — liveness surface (b) of §2.3. Null (no
@@ -606,13 +607,16 @@ class TrajectoryHarness {
           return;
       }
 
+      final baseQueries = _tickQueries ?? _stage1Obligations();
       _tick = TrajectoryTick(
         appender: _SerializedTickAppender(this, appender),
         db: _SerializedDb(this),
         // §2.4: the Stage-1 set is built HERE, after the claim — the liveness
         // detector's unknown rule keys on the epoch this process holds, and
         // there is no such epoch before `claimEpoch` returned.
-        queries: _tickQueries ?? _stage1Obligations(),
+        // Station-authored queries join the same ordered, fenced tick after
+        // that base set; they never replace the rollout obligations.
+        queries: [...baseQueries, ...config.obligationQueryExtensions],
         interval: config.tickInterval,
         clock: _clock,
         scheduleTimer: _scheduleTimer,

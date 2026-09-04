@@ -126,6 +126,58 @@ void main() {
       expect(harness.tick.isArmed, isTrue);
     });
 
+    test('an appended no-op shares the existing timer and fence', () async {
+      final order = <String>[];
+      final base = StubObligationQuery(
+        name: 'base',
+        onRepair: (_) async {
+          order.add('base');
+          return const [];
+        },
+      );
+      final extension = StubObligationQuery(
+        name: 'extension',
+        onRepair: (_) async {
+          order.add('extension');
+          return const [];
+        },
+      );
+      final harness = _Harness(queries: [base, extension])
+        ..appender.isInert = true;
+
+      final boot = await harness.tick.start();
+
+      expect(boot.disposition, TickPassDisposition.skippedFencedOut);
+      expect(order, isEmpty);
+      expect([base.runs, extension.runs], [0, 0]);
+      expect(harness.db.log, isEmpty);
+      expect(harness.appender.doltCommits, 0);
+      expect(harness.timers.scheduled, [kDefaultTickInterval]);
+
+      harness.appender.isInert = false;
+      await harness.timers.fire();
+
+      expect(order, ['base', 'extension']);
+      expect([base.runs, extension.runs], [1, 1]);
+      expect(harness.appender.doltCommits, 1);
+      expect(harness.timers.scheduled, [
+        kDefaultTickInterval,
+        kDefaultTickInterval,
+      ]);
+
+      final fixpoint = await harness.tick.runToFixpoint();
+
+      expect(fixpoint.reached, isTrue);
+      expect(fixpoint.passes.single.quiet, isTrue);
+      expect(order, ['base', 'extension', 'base', 'extension']);
+      expect([base.runs, extension.runs], [2, 2]);
+      expect(harness.appender.doltCommits, 2);
+      expect(harness.timers.scheduled, [
+        kDefaultTickInterval,
+        kDefaultTickInterval,
+      ]);
+    });
+
     test(
       'an interval firing into a live pass is dropped, not queued',
       () async {
