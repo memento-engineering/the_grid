@@ -56,6 +56,31 @@ export 'package:state_notifier/state_notifier.dart'
 export 'src/composition/composition.dart' hide AssetFanOut;
 export 'src/composition/scopes.dart';
 
+// ── Asset declarations (tg-1w3m) ────────────────────────────────────────────
+// The dependency-neutral asset declaration contract every producer and
+// consumer sits above: asset packs in power_station and elsewhere, station
+// composition, and generic CLI surfaces. It lives HERE because no package in
+// the_grid may import power_station to understand an asset registry
+// (ADR-0002 Decision 1: consumers import the public SDK, never grid_engine).
+//   GridAssetDefinition  · ONE logical asset — a const, keyed, INERT Seed
+//                          whose reconciliation key IS its AssetKey, so one
+//                          generated instance inhabits both a registry and a
+//                          `Substation`'s `assets` List<Seed>.
+//   GridAssetPackDefinition / GridAssetRegistry · the validated collections;
+//                          duplicate AssetKey / AssetArtifactKey refuses LOUD
+//                          at construction.
+//   AssetKey / AssetArtifactKey · logical and delivery-leg identity, authored
+//                          independently (the claude and agents legs of one
+//                          skill share an AssetKey and nothing else).
+//   AssetKind / AssetAudience / AssetVisibility / AssetSelector · the closed
+//                          vocabularies; a selector is DECLARED here and
+//                          evaluated above — this package does no discovery,
+//                          no YAML parsing, no root probing, no selector I/O,
+//                          and no materialization.
+export 'src/assets/asset_declaration.dart';
+export 'src/assets/asset_identity.dart';
+export 'src/assets/asset_registry.dart';
+
 // ── runGrid + GridDelegate + GridConfiguration (Track C — tg-tv3) ────────────
 // The entry point + lifecycle rails: `await runGrid(delegate)` runs
 // `didLaunch → boot → mount`, returning a `GridHandle`; `initGrid → onReady`
