@@ -82,10 +82,27 @@ void main() {
     test('the infra class rounds through the wire and reaches the fold', () {
       expect(StepFailureClass.infra.wire, 'infra');
       expect(StepFailureClass.fromWire('infra'), StepFailureClass.infra);
+      expect(StepFailureClass.noResult.wire, 'no_result');
+      expect(StepFailureClass.invalidResult.wire, 'invalid_result');
+      expect(StepFailureClass.fromWire('no_result'), StepFailureClass.noResult);
+      expect(
+        StepFailureClass.fromWire('invalid_result'),
+        StepFailureClass.invalidResult,
+      );
       final delta = stepCursorDeltaFor(
         transition(state: 'failed', extra: {'failure_class': 'infra'}),
       );
       expect((delta! as StepCursorUpsert).columns['failure_class'], 'infra');
+    });
+
+    test('an invalid_result transition folds its class', () {
+      final delta = stepCursorDeltaFor(
+        transition(state: 'failed', extra: {'failure_class': 'invalid_result'}),
+      );
+      expect(
+        (delta! as StepCursorUpsert).columns['failure_class'],
+        'invalid_result',
+      );
     });
 
     test('the gated half is a plain state on the cursor', () {

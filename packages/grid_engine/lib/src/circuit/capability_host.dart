@@ -54,6 +54,7 @@ import '../sdk/cursor.dart';
 import '../sdk/lease.dart' show LeaseAllocation;
 import '../sdk/route.dart';
 import 'capability_registry.dart';
+import 'failure_policy.dart';
 import 'harness_throttle.dart';
 
 /// The carrier for one mounted [CapabilityStep]. Built by the registry's `host`;
@@ -452,7 +453,7 @@ class CapabilityHostState extends State<CapabilityHost>
         if (_completed) return;
         _completed = true;
         _firePersist('complete', () => _persistComplete(payload));
-      case AllocationFailed(:final reason, :final nonResult):
+      case AllocationFailed(:final reason, :final kind):
         if (_completed) return;
         _completed = true;
         if (reason.contains('sourceless-workspace')) {
@@ -462,7 +463,7 @@ class CapabilityHostState extends State<CapabilityHost>
         }
         _firePersist(
           'failure',
-          () => _persistReportedFailure(reason, nonResult: nonResult),
+          () => _persistReportedFailure(reason, kind: kind),
           recoverable: false,
         );
       case AllocationAdvanced(:final payload):
@@ -776,10 +777,10 @@ class CapabilityHostState extends State<CapabilityHost>
     AllocationAddress(_sessionId, _nodePath).providerName,
   );
 
-  /// Classifies a fast artifact-less failure before persisting it.
+  /// Classifies a reported failure from its kind plus this host's own evidence.
   Future<void> _persistReportedFailure(
     String reason, {
-    required bool nonResult,
+    required CapabilityFailureKind kind,
   }) async {
     if (_cancelled || !context.mounted) return;
     final timing = _terminalTiming();
@@ -787,8 +788,14 @@ class CapabilityHostState extends State<CapabilityHost>
     final ranFor = startedAt == null
         ? null
         : timing.finishedAt.difference(startedAt);
-    if (!isHarnessSilence(nonResult: nonResult, ranFor: ranFor)) {
-      await _persistFailureClassed(reason, timing: timing);
+    final failureClass = resolveFailureClass(kind: kind, ranFor: ranFor);
+    if (failureClass != StepFailureClass.infra) {
+      await _persistFailureClassed(
+        reason,
+        kind: kind,
+        failureClass: failureClass,
+        timing: timing,
+      );
       return;
     }
 
@@ -811,34 +818,45 @@ class CapabilityHostState extends State<CapabilityHost>
         exitOutputHead: head,
         underlying: reason,
       ),
+      kind: kind,
       failureClass: StepFailureClass.infra,
       timing: timing,
     );
   }
 
-  /// Persists a supervised failure using the class-appropriate schedule.
-  /// Infra exhaustion parks at a gate instead of leaving an unwatched failure.
+  /// Persists a supervised failure using the resolved per-kind schedule.
+  /// A non-result class parks at a gate at exhaustion instead of leaving an
+  /// unwatched failure; `work` keeps the latch-and-escalate path.
   Future<void> _persistFailureClassed(
     String reason, {
+    CapabilityFailureKind kind = CapabilityFailureKind.work,
     StepFailureClass failureClass = StepFailureClass.work,
     ({DateTime? startedAt, DateTime finishedAt, int? durationMs})? timing,
   }) async {
     if (_cancelled || !context.mounted) return;
+    final retry = resolveRetryPolicy(
+      declared: seed.capability.supervisionPolicy(_args!),
+      kind: kind,
+      failureClass: failureClass,
+      circuitBackoff: seed.mount.backoff,
+      circuitMaxRestarts: seed.mount.maxRestarts,
+    );
     final next = seed.mount.node.restartCount + 1;
-    final exhausted = next >= seed.mount.maxRestarts;
-    final infra = failureClass == StepFailureClass.infra;
+    final exhausted = next >= retry.maxRestarts;
     final failureReason = reason.isEmpty ? null : reason;
     final stamps = timing ?? _terminalTiming();
-    if (infra && exhausted) {
-      await _persistThrottleGate(
+    if (exhausted && retry.onExhaustion == ExhaustionBehavior.parkAtGate) {
+      await _persistExhaustionGate(
         reason: reason,
-        silentExits: next,
+        failureClass: failureClass,
+        attempts: next,
         timing: stamps,
       );
       return;
     }
-    final schedule = infra ? Backoff.harnessThrottle : seed.mount.backoff;
-    final cooldown = exhausted ? null : _now().add(schedule.delayFor(next));
+    final cooldown = exhausted
+        ? null
+        : _now().add(retry.backoff.delayFor(next));
     await _ctx!.writer.update(
       _stepBeadId,
       metadata: _moleculeMetadata(
@@ -867,18 +885,19 @@ class CapabilityHostState extends State<CapabilityHost>
       failureClass: failureClass,
       attemptId: _attemptId,
       failureReason: failureReason,
-      restartBudget: seed.mount.maxRestarts - next,
+      restartBudget: retry.maxRestarts - next,
       startedAt: stamps.startedAt,
       cooldownUntil: cooldown,
     );
-    _emitFlare('step.failed', const {});
+    _emitFlare('step.failed', {'failureClass': failureClass.wire});
   }
 
-  /// Parks an exhausted harness-throttle failure through the shared gate
-  /// primitive so the round remains reworkable.
-  Future<void> _persistThrottleGate({
+  /// Parks an exhausted NON-RESULT failure through the shared gate primitive so
+  /// the round remains reworkable.
+  Future<void> _persistExhaustionGate({
     required String reason,
-    required int silentExits,
+    required StepFailureClass failureClass,
+    required int attempts,
     required ({DateTime? startedAt, DateTime finishedAt, int? durationMs})
     timing,
   }) => persistRaisedEscalation(
@@ -888,22 +907,30 @@ class CapabilityHostState extends State<CapabilityHost>
       beadId: _beadId,
       sessionId: _sessionId,
       nodePath: _nodePath,
-      reason: harnessThrottleGateReason(
-        sessionId: _sessionId,
-        nodePath: _nodePath,
-        since: harnessThrottleSince(
-          priorReason: seed.mount.node.failureReason,
-          now: timing.finishedAt,
-        ),
-        silentExits: silentExits,
-        exitOutputHead: _exitOutputHead(),
-      ),
+      reason: failureClass == StepFailureClass.infra
+          ? harnessThrottleGateReason(
+              sessionId: _sessionId,
+              nodePath: _nodePath,
+              since: harnessThrottleSince(
+                priorReason: seed.mount.node.failureReason,
+                now: timing.finishedAt,
+              ),
+              silentExits: attempts,
+              exitOutputHead: _exitOutputHead(),
+            )
+          : nonResultGateReason(
+              failureClass: failureClass,
+              sessionId: _sessionId,
+              nodePath: _nodePath,
+              attempts: attempts,
+              reason: reason,
+            ),
       rewindCount: seed.mount.node.rewindCount,
     ),
     stepBeadId: _stepBeadId,
     gatedMetadata: _moleculeMetadata(
       StepState.gated,
-      restartCount: silentExits,
+      restartCount: attempts,
       failureReason: reason,
       timing: timing,
     ),
@@ -912,7 +939,7 @@ class CapabilityHostState extends State<CapabilityHost>
     emitFlare: _emitFlare,
     recorder: _recorder,
     stepRound: _stepRound,
-    incarnation: silentExits,
+    incarnation: attempts,
     attemptId: _attemptId,
   );
 

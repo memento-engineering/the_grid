@@ -37,6 +37,12 @@ enum StepFailureClass {
   /// The step's own WORK failed: the agent ran and produced a bad result.
   work('work'),
 
+  /// The step produced NO usable result: no artifact, nothing to grade.
+  noResult('no_result'),
+
+  /// A result exists but violates the capability's declared contract.
+  invalidResult('invalid_result'),
+
   /// The failed write is a dropped persist recovered through the same writer.
   storeUnavailable('store_unavailable'),
 

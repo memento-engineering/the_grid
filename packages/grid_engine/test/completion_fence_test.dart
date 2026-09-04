@@ -213,8 +213,8 @@ void main() {
       expect(failed.single.reason, contains('interrupted'));
       expect(failed.single.reason, contains('UNCOMMITTED'));
       expect(
-        failed.single.nonResult,
-        isFalse,
+        failed.single.kind,
+        CapabilityFailureKind.work,
         reason: 'uncommitted changes prove that the interrupted turn did work',
       );
       expect(

@@ -31,13 +31,17 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../domain/mount_eligibility.dart';
 import 'allocation.dart';
+import 'capability_failure.dart';
 import 'cursor.dart';
 import 'process_session.dart';
 import 'route.dart';
 import 'step_signal.dart';
+import 'supervision_policy.dart';
 
+export 'capability_failure.dart';
 export 'process_session.dart';
 export 'step_signal.dart';
+export 'supervision_policy.dart';
 
 /// A leaf the engine mounts. The engine ships three families — [ProcessCapability]
 /// (a spawned process), [ServiceCapability] (an async body), and
@@ -56,6 +60,19 @@ abstract class Capability {
   /// capability needs no change; an asset overrides only to customize adopt/
   /// detach/update for a bespoke effect.
   Allocation createAllocation(AllocationContext ctx);
+
+  /// This capability's per-kind supervision declaration.
+  ///
+  /// PURE and side-effect-free: no tree lookups, no I/O. The engine-private
+  /// host calls it OFF `build`, after a failure is reported, to select the
+  /// schedule for the reported [CapabilityFailureKind]. The default inherits
+  /// the owning `Circuit`'s backoff/budget, so an existing capability needs no
+  /// change.
+  ///
+  /// [args] carries the step's params, so ONE capability declares DIFFERENT
+  /// policies for different seats/lanes without a global cap.
+  SupervisionPolicy supervisionPolicy(StepArgs args) =>
+      const SupervisionPolicy.inherit();
 }
 
 /// The irreducibly per-step values a capability receives alongside the tree
@@ -309,17 +326,30 @@ class Ok extends StepOutcome {
 
 /// The capability failed (routes to supervision). Maps to `StepState.failed`.
 class Failed extends StepOutcome {
-  /// Creates a failure with an optional [reason] (diagnostics).
-  const Failed([this.reason = '']) : nonResult = false;
+  /// Creates a substantive WORK failure — the capability ran and produced a
+  /// valid negative result. The default, so every existing call site is
+  /// unchanged.
+  const Failed([this.reason = '']) : kind = CapabilityFailureKind.work;
 
-  /// Creates a failure for a step that produced nothing to grade.
-  const Failed.nonResult([this.reason = '']) : nonResult = true;
+  /// Creates a failure for a turn that produced NO usable result.
+  const Failed.noResult([this.reason = ''])
+    : kind = CapabilityFailureKind.noResult;
+
+  /// Creates a failure for a result that violates its declared contract.
+  const Failed.invalidResult([this.reason = ''])
+    : kind = CapabilityFailureKind.invalidResult;
+
+  /// Preserves a thrown [failure]'s kind + already-bounded reason.
+  Failed.from(CapabilityFailure failure)
+    : kind = failure.kind,
+      reason = failure.reason;
 
   /// A human-readable failure reason.
   final String reason;
 
-  /// Whether the step produced no result rather than a bad result.
-  final bool nonResult;
+  /// WHY the turn failed — the discriminant the host maps to a durable
+  /// `StepFailureClass` and to this kind's retry policy.
+  final CapabilityFailureKind kind;
 }
 
 /// A cooperative cancellation flag a [Capability] polls across async gaps — set
