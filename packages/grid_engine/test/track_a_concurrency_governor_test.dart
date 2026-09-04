@@ -949,7 +949,7 @@ void main() {
     });
 
     test('epoch 27/28 silent pair reaches the mint path or a named eligibility '
-        'flare', () {
+        'flare', () async {
       final genesis = Bead(
         id: 'genesis-7ob',
         title:
@@ -986,9 +986,27 @@ void main() {
               'analyze && dart test',
         },
       );
+      const genesisSource = Bead(
+        id: 'genesis-7r9',
+        issueType: IssueType.bug,
+        status: BeadStatus.closed,
+        priority: 0,
+      );
+      const butaneSource = Bead(
+        id: 'butane_flutter-t9y',
+        issueType: IssueType.task,
+        status: BeadStatus.closed,
+        priority: 2,
+      );
+      const alreadyLive = Bead(
+        id: 'genesis-live',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+        priority: 4,
+      );
       final joined = JoinedSnapshotNotifier(
         _joined(
-          beads: [genesis, butane],
+          beads: [genesis, genesisSource, butane, butaneSource, alreadyLive],
           ready: {'genesis-7ob', 'butane_flutter-41eh'},
           dependencies: const [
             BeadDependency(
@@ -1002,10 +1020,19 @@ void main() {
               type: DependencyType.discoveredFrom,
             ),
           ],
+          sessions: const {
+            'genesis-live': SessionProjection(
+              workBeadId: 'genesis-live',
+              sessionId: 'tgdog-live',
+            ),
+          },
         ),
       );
       final recorder = _Recorder();
       final transport = _RecordingTransport();
+      final fakes = buildFakes();
+      final evaluatedIds = <String>[];
+      var pendingEvaluations = 0;
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
@@ -1023,21 +1050,56 @@ void main() {
             ),
             services: ServiceBundle(
               transport: transport,
-              mountEligibility: (bead) => bead.id == 'butane_flutter-41eh'
-                  ? const MountEligibilityDecision.refused(
-                      clause: 'fresh mount-eligibility read pending',
-                    )
-                  : const MountEligibilityDecision.eligible(),
+              mountEligibility: (bead) {
+                evaluatedIds.add(bead.id);
+                if (bead.id != 'butane_flutter-41eh') {
+                  return const MountEligibilityDecision.eligible();
+                }
+                pendingEvaluations += 1;
+                return pendingEvaluations == 1
+                    ? const MountEligibilityDecision.refused(
+                        clause: 'fresh mount-eligibility read pending',
+                      )
+                    : const MountEligibilityDecision.eligible();
+              },
+            ),
+            stationServices: StationServices(
+              provider: fakes.ctx.provider,
+              writer: fakes.ctx.writer,
+              stateSubstation: fakes.ctx.stateSubstation,
+              maxConcurrentWork: 6,
             ),
           ),
         ),
       );
 
-      expect(recorder.events, ['START work(genesis-7ob)']);
+      expect(recorder.events, [
+        'START work(genesis-7ob)',
+        'START work(genesis-live)',
+      ]);
       expect(
         transport.flares
             .singleWhere(
               (flare) => flare.name == 'work.mountEligibilityRefused',
+            )
+            .data,
+        {
+          'beadId': 'butane_flutter-41eh',
+          'clause': 'fresh mount-eligibility read pending',
+        },
+      );
+
+      await Future<void>.delayed(Duration.zero);
+      owner.flush();
+
+      expect(pendingEvaluations, 2);
+      expect(recorder.events, contains('START work(butane_flutter-41eh)'));
+      expect(evaluatedIds, isNot(contains('genesis-7r9')));
+      expect(evaluatedIds, isNot(contains('butane_flutter-t9y')));
+      expect(
+        transport.flares
+            .singleWhere(
+              (flare) => flare.name == 'work.mountEligibilityRestored',
             )
             .data,
         {
@@ -1053,7 +1115,7 @@ void main() {
           if (flare.name == 'work.mountEligibilityRefused')
             flare.data['beadId']!,
       };
-      expect(observed, {'genesis-7ob', 'butane_flutter-41eh'});
+      expect(observed, containsAll({'genesis-7ob', 'butane_flutter-41eh'}));
     });
   });
 }

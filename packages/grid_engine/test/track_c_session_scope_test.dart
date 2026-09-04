@@ -73,11 +73,12 @@ Future<void> _pumpUntil(
 JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
+  List<BeadDependency> dependencies = const [],
   Map<String, SessionProjection> sessions = const {},
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: beads,
-    dependencies: const [],
+    dependencies: dependencies,
     readyIds: ready,
     capturedAt: DateTime(2026),
   ),
@@ -101,6 +102,7 @@ const _tgConfig = SubstationConfig(
   required CapabilityRegistry registry,
   required RootCircuitFor rootCircuit,
   ServiceBundle services = const ServiceBundle(),
+  SubstationConfig substationConfig = _tgConfig,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -115,7 +117,7 @@ const _tgConfig = SubstationConfig(
               value: CircuitResolver(rootCircuit),
               child: Station([
                 SubstationScope(
-                  configNotifier: SubstationConfigNotifier(_tgConfig),
+                  configNotifier: SubstationConfigNotifier(substationConfig),
                   services: services,
                   key: const ValueKey('scope.tg'),
                 ),
@@ -217,6 +219,131 @@ void main() {
             'START a(tgdog-sess1/tg-burn/a)',
             'START b(tgdog-sess1/tg-burn/b)',
           ]),
+        );
+      },
+    );
+
+    test(
+      'genesis-7ob real frontier shape mints or names a clause within one tick',
+      () async {
+        final f = buildFakes();
+        final transport = RecordingExplorationTransport();
+        final writer = StationBeadWriter(
+          bd: BdCliService(f.runner),
+          reader: f.runner,
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
+          onFlare: transport.flare,
+        );
+        const genesis = Bead(
+          id: 'genesis-7ob',
+          title:
+              'P0: release tree invariants permit infinite flushes and '
+              'corrupted reconciliation',
+          issueType: IssueType.bug,
+          status: BeadStatus.open,
+          priority: 0,
+          labels: ['orchestrator', 'review'],
+          metadata: {
+            'grid.approved_at': '2026-09-03T05:10:45.328492Z',
+            'grid.approved_by': 'operator',
+            'grid.approved_rev': 'db134bf211b3d1c3f037066eff178cf33d96af3a',
+            'validation_plan':
+                'cd packages/tree && dart analyze && dart test && dart run '
+                'test/release_invariants_test.dart',
+          },
+        );
+        const predecessor = Bead(
+          id: 'genesis-7r9',
+          issueType: IssueType.bug,
+          status: BeadStatus.closed,
+          priority: 0,
+        );
+        const alreadyLive = Bead(
+          id: 'genesis-live',
+          issueType: IssueType.task,
+          status: BeadStatus.open,
+          priority: 4,
+        );
+        final snapshot = _joined(
+          beads: const [genesis, predecessor, alreadyLive],
+          ready: const {'genesis-7ob'},
+          dependencies: const [
+            BeadDependency(
+              issueId: 'genesis-7ob',
+              dependsOnId: 'genesis-7r9',
+              type: DependencyType.discoveredFrom,
+            ),
+          ],
+          sessions: const {
+            'genesis-live': SessionProjection(
+              workBeadId: 'genesis-live',
+              sessionId: 'tgdog-live',
+            ),
+          },
+        );
+
+        // the-frontier-demotes-surplus-linked-sessions governs the adjacent
+        // join branch. The live receipt did not enumerate linked rows, so this
+        // witness deliberately isolates the specified no-session acceptance
+        // shape, while work_list_linked_sessions_test covers every non-empty
+        // verdict (adopt, blocking terminal, dead-key remint, and surplus).
+        expect(snapshot.linkedSessions(genesis.id), isEmpty);
+
+        final joined = JoinedSnapshotNotifier(snapshot);
+        final registry = RecordingCapabilityRegistry(circuits: const {});
+        final mounted = _mountFull(
+          joined: joined,
+          ctx: StationServices(
+            provider: f.provider,
+            writer: writer,
+            stateSubstation: stateSubstation,
+            maxConcurrentWork: 6,
+          ),
+          registry: registry,
+          rootCircuit: (_) => _code,
+          services: ServiceBundle(transport: transport),
+          substationConfig: const SubstationConfig(
+            substationId: 'genesis',
+            ownedSubstations: {'genesis'},
+            resident: true,
+            maxConcurrentWork: 6,
+          ),
+        );
+        addTearDown(mounted.owner.dispose);
+
+        bool namesGenesis(({String name, Map<String, String> data}) flare) {
+          if (flare.name == 'session.minted' ||
+              flare.name == 'session.mintRefused') {
+            return flare.data['workBeadId'] == genesis.id;
+          }
+          if (flare.name == 'work.throttled') {
+            return flare.data['beadIds']?.split(',').contains(genesis.id) ??
+                false;
+          }
+          return const {
+                'work.mountEligibilityRefused',
+                'work.trustRefused',
+              }.contains(flare.name) &&
+              flare.data['beadId'] == genesis.id;
+        }
+
+        await _pumpUntil(
+          mounted.owner,
+          () => transport.flares.any(namesGenesis),
+        );
+
+        final observed = transport.flares.where(namesGenesis).toList();
+        expect(
+          observed,
+          isNotEmpty,
+          reason: 'a resident frontier head must never disappear silently',
+        );
+        expect(
+          transport
+              .named('session.minted')
+              .where((flare) => flare.data['workBeadId'] == genesis.id),
+          hasLength(1),
+          reason: 'the valid no-session fixture must take the mint branch',
         );
       },
     );

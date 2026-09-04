@@ -1,3 +1,7 @@
+## Unreleased
+
+- Mount reconciliation now reports locally owned issue-type and drive-list exclusions through the existing named eligibility flare, turns a throwing eligibility predicate into a refusal instead of aborting the walk, and gives each new refusal one bounded next-event-tick recheck. A full-tree regression pins the sessionless `genesis-7ob` P0 shape through the real session mint, explicitly leaving linked-session classification to the existing `linkedSessionVerdictOf` path.
+
 ## 0.3.0-rc.17
 
 - Floors `grid_runtime` to `^0.2.0-rc.12` because `failure_policy.dart` consumes the re-exported `StepFailureClass.noResult` and `StepFailureClass.invalidResult` members introduced by `grid_trajectory 0.2.0-rc.4`; published `0.3.0-rc.15` and `0.3.0-rc.16` remain unchanged.

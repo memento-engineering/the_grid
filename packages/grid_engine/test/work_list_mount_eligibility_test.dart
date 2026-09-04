@@ -8,8 +8,12 @@ import 'package:test/test.dart';
 
 final class _MutableEligibility {
   MountEligibilityDecision decision = const MountEligibilityDecision.eligible();
+  int evaluations = 0;
 
-  MountEligibilityDecision call(Bead bead) => decision;
+  MountEligibilityDecision call(Bead bead) {
+    evaluations += 1;
+    return decision;
+  }
 }
 
 final class _RecordingTransport implements ExplorationTransport {
@@ -193,6 +197,131 @@ void main() {
     harness.pushAndFlush();
     expect(transport.flares.last.name, 'work.mountEligibilityRefused');
     expect(transport.flares, hasLength(4));
+  });
+
+  test(
+    'fresh mount-eligibility read pending resolves on the next tick',
+    () async {
+      final eligibility = _MutableEligibility()
+        ..decision = const MountEligibilityDecision.refused(
+          clause: 'fresh mount-eligibility read pending',
+        );
+      final transport = _RecordingTransport();
+      final harness = _mountHarness(
+        mountEligibility: eligibility.call,
+        transport: transport,
+      );
+
+      expect(eligibility.evaluations, 1);
+      expect(harness.workBeads(), isEmpty);
+      expect(transport.flares.single.data, {
+        'beadId': 'tg-1',
+        'clause': 'fresh mount-eligibility read pending',
+      });
+
+      eligibility.decision = const MountEligibilityDecision.eligible();
+      await Future<void>.delayed(Duration.zero);
+      harness.owner.flush();
+
+      expect(eligibility.evaluations, 2);
+      expect(harness.workBeads().map((work) => work.bead.id), ['tg-1']);
+      expect(transport.flares.last.name, 'work.mountEligibilityRestored');
+      expect(transport.flares.last.data, {
+        'beadId': 'tg-1',
+        'clause': 'fresh mount-eligibility read pending',
+      });
+
+      await Future<void>.delayed(Duration.zero);
+      harness.owner.flush();
+      expect(
+        eligibility.evaluations,
+        2,
+        reason: 'restoration must not leave an unbounded rebuild loop',
+      );
+    },
+  );
+
+  test('a persistent refusal receives only one automatic recheck', () async {
+    final eligibility = _MutableEligibility()
+      ..decision = const MountEligibilityDecision.refused(
+        clause: 'approval: not approved',
+      );
+    final transport = _RecordingTransport();
+    final harness = _mountHarness(
+      mountEligibility: eligibility.call,
+      transport: transport,
+    );
+
+    expect(eligibility.evaluations, 1);
+    await Future<void>.delayed(Duration.zero);
+    harness.owner.flush();
+    expect(eligibility.evaluations, 2);
+
+    await Future<void>.delayed(Duration.zero);
+    harness.owner.flush();
+    expect(eligibility.evaluations, 2);
+    expect(transport.flares, hasLength(1));
+  });
+
+  test('a throwing predicate names the failure and does not abort the next '
+      'candidate', () {
+    final transport = _RecordingTransport();
+    final first = _task();
+    const second = Bead(
+      id: 'tg-2',
+      issueType: IssueType.task,
+      status: BeadStatus.open,
+    );
+    final joined = JoinedSnapshotNotifier(
+      JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: [first, second],
+          dependencies: const [],
+          readyIds: const {'tg-1', 'tg-2'},
+          capturedAt: DateTime(2026),
+        ),
+      ),
+    );
+    final owner = TreeOwner();
+    addTearDown(owner.dispose);
+    final root = owner.mountRoot(
+      ProviderScope(
+        child: InheritedSeed<JoinedSnapshotNotifier>(
+          value: joined,
+          child: InheritedSeed<SessionResolver>(
+            value: _RecordingResolver(),
+            child: Station([
+              SubstationScope(
+                configNotifier: SubstationConfigNotifier(
+                  const SubstationConfig(
+                    substationId: 'test',
+                    ownedSubstations: {'tg'},
+                    maxConcurrentWork: 10,
+                  ),
+                ),
+                services: ServiceBundle(
+                  transport: transport,
+                  mountEligibility: (bead) {
+                    if (bead.id == 'tg-1') {
+                      throw StateError('asset unavailable');
+                    }
+                    return const MountEligibilityDecision.eligible();
+                  },
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+
+    expect(_workBeads(root).map((work) => work.bead.id), ['tg-2']);
+    expect(transport.flares.single.name, 'work.mountEligibilityRefused');
+    expect(transport.flares.single.data['beadId'], 'tg-1');
+    expect(
+      transport.flares.single.data['clause'],
+      'mount eligibility evaluation failed: Bad state: asset unavailable',
+    );
   });
 
   test('frontier exclusion uses existing refusal edges and preserves live '
