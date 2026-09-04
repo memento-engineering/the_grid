@@ -1,3 +1,7 @@
+## 0.3.0-rc.15
+
+- Breaking: `Failed.nonResult`, `AllocationFailed.nonResult` and `isHarnessSilence(nonResult:)` are REMOVED with no shim; a capability failure is now the typed `CapabilityFailure` (`CapabilityFailureKind {work, noResult, invalidResult}`) carried on the existing `Failed`/`AllocationFailed` arms, and each capability declares its own per-step restart policy through `SupervisionPolicy` (retry budget + backoff; undeclared policies keep the circuit-wide defaults byte-for-byte). A malformed or absent result retries ONLY its own lane and is never graded F (tg-e32f, #309). Migration: replace every `Failed.nonResult(...)` / `AllocationFailed.nonResult(...)` with the typed failure and, where a capability needs a lane-specific budget, declare `supervisionPolicy`; power_station's `grid_assets` `committee.dart` carries six such call sites and migrates in pow-dzc — do not floor a consumer on this rc before that lands.
+
 ## 0.3.0-rc.14
 
 - Added: `SessionLedgerMetricsProjection.cacheTokens` (`CacheTokenTotals{cacheRead, cacheCreate, uncachedInput}`) and `landedDeliveries` (`LandedDeliveryTotals{landedCost, landedCount}`) — the component totals behind `cacheHitRatio` and `costPerLandedDelivery`, so a multi-store consumer can merge projections by weighted sum instead of averaging averages; the two scalars are unchanged and derived from the records (tg-mws0, #307).
