@@ -220,22 +220,35 @@ class AllocationCompleted extends AllocationReport {
 /// supervised failure (bumped `restartCount` + backoff cooldown, or the
 /// exhausted breaker) and latches.
 class AllocationFailed extends AllocationReport {
-  /// Reports a failure with an optional diagnostic [reason].
-  const AllocationFailed([this.reason = '']) : nonResult = false;
+  /// Reports a substantive WORK failure with an optional diagnostic [reason].
+  const AllocationFailed([this.reason = ''])
+    : kind = CapabilityFailureKind.work;
 
-  /// Reports a failure for an effect that produced nothing to grade.
-  const AllocationFailed.nonResult([this.reason = '']) : nonResult = true;
+  /// Reports an effect that produced NO usable result.
+  const AllocationFailed.noResult([this.reason = ''])
+    : kind = CapabilityFailureKind.noResult;
 
-  /// Preserves [outcome]'s classification when mapping from [StepOutcome].
-  factory AllocationFailed.of(Failed outcome) => outcome.nonResult
-      ? AllocationFailed.nonResult(outcome.reason)
-      : AllocationFailed(outcome.reason);
+  /// Reports a result that violates its declared contract.
+  const AllocationFailed.invalidResult([this.reason = ''])
+    : kind = CapabilityFailureKind.invalidResult;
+
+  const AllocationFailed._(this.kind, this.reason);
+
+  /// Preserves [outcome]'s kind + reason when mapping from [StepOutcome] — the
+  /// ONE `Failed`→report mapping used by service and lease allocations.
+  factory AllocationFailed.of(Failed outcome) =>
+      AllocationFailed._(outcome.kind, outcome.reason);
+
+  /// Preserves a thrown [failure]'s kind + already-bounded reason.
+  factory AllocationFailed.from(CapabilityFailure failure) =>
+      AllocationFailed._(failure.kind, failure.reason);
 
   /// A human-readable failure reason.
   final String reason;
 
-  /// Whether the effect produced no result rather than a bad result.
-  final bool nonResult;
+  /// WHY the effect failed — the discriminant the Host maps to a durable
+  /// `StepFailureClass`.
+  final CapabilityFailureKind kind;
 }
 
 /// The route ADVANCED (M5 D-4a) — the cursor moves forward. The Host persists
@@ -912,6 +925,14 @@ class ProcessAllocation extends Allocation {
           context.treeContext,
           context.args,
         );
+      } on CapabilityFailure catch (e) {
+        // A probe that NAMES its own failure kind keeps it; only an untyped
+        // throw falls back to the fail-closed probeError default.
+        state = AllocationState.gone;
+        if (!context.args.cancel.isCancelled) {
+          context.sink(AllocationFailed.from(e));
+        }
+        return;
       } on Object {
         // The fail-closed default remains probeError.
       }
@@ -922,7 +943,7 @@ class ProcessAllocation extends Allocation {
         case GateOutcome.present:
           state = AllocationState.gone;
           context.sink(
-            const AllocationFailed.nonResult(
+            const AllocationFailed.noResult(
               'unresolved: declared completion artifact is not durable',
             ),
           );
@@ -930,7 +951,7 @@ class ProcessAllocation extends Allocation {
         case GateOutcome.probeError:
           state = AllocationState.gone;
           context.sink(
-            const AllocationFailed.nonResult(
+            const AllocationFailed.noResult(
               'unresolved: completion artifact probe failed',
             ),
           );
@@ -945,6 +966,12 @@ class ProcessAllocation extends Allocation {
       payload = await runCapabilityGuarded(
         () => capability.result(context.treeContext, context.args),
       );
+    } on CapabilityFailure catch (e) {
+      state = AllocationState.gone;
+      if (!context.args.cancel.isCancelled) {
+        context.sink(AllocationFailed.from(e));
+      }
+      return;
     } on Object catch (e) {
       state = AllocationState.gone;
       if (!context.args.cancel.isCancelled) {

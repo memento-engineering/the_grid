@@ -148,12 +148,27 @@ void main() {
     test('a non-result under the floor is silence; nothing else is', () {
       const under = Duration(seconds: 9);
       const over = Duration(seconds: 31);
-      expect(isHarnessSilence(nonResult: true, ranFor: under), isTrue);
-      expect(isHarnessSilence(nonResult: true, ranFor: over), isFalse);
-      expect(isHarnessSilence(nonResult: false, ranFor: under), isFalse);
-      expect(isHarnessSilence(nonResult: true, ranFor: null), isFalse);
       expect(
-        isHarnessSilence(nonResult: true, ranFor: kHarnessSilenceFloor),
+        isHarnessSilence(kind: CapabilityFailureKind.noResult, ranFor: under),
+        isTrue,
+      );
+      expect(
+        isHarnessSilence(kind: CapabilityFailureKind.noResult, ranFor: over),
+        isFalse,
+      );
+      expect(
+        isHarnessSilence(kind: CapabilityFailureKind.work, ranFor: under),
+        isFalse,
+      );
+      expect(
+        isHarnessSilence(kind: CapabilityFailureKind.noResult, ranFor: null),
+        isFalse,
+      );
+      expect(
+        isHarnessSilence(
+          kind: CapabilityFailureKind.noResult,
+          ranFor: kHarnessSilenceFloor,
+        ),
         isFalse,
       );
     });
@@ -217,7 +232,7 @@ void main() {
   group('a silent exit is INFRA, retried on the throttle schedule', () {
     test('the first silent exit records infra, backs off 5 min, and does NOT '
         'gate the round', () async {
-      final h = _drive(const Failed.nonResult(_artifactless));
+      final h = _drive(const Failed.noResult(_artifactless));
       addTearDown(() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
@@ -245,7 +260,7 @@ void main() {
     });
 
     test('the flare carries the session, step, and captured head', () async {
-      final h = _drive(const Failed.nonResult(_artifactless));
+      final h = _drive(const Failed.noResult(_artifactless));
       addTearDown(() {
         h.owner.dispose();
         unawaited(h.fakes.provider.close());
@@ -274,7 +289,7 @@ void main() {
           underlying: _artifactless,
         );
         final h = _drive(
-          const Failed.nonResult(_artifactless),
+          const Failed.noResult(_artifactless),
           restartCount: 2,
           priorReason: prior,
         );
@@ -334,9 +349,9 @@ void main() {
       expect(h.flares.named(kHarnessThrottledFlare), isEmpty);
     });
 
-    test('a long non-result remains work', () async {
+    test('a long non-result is no_result, not work', () async {
       final h = _drive(
-        const Failed.nonResult(_artifactless),
+        const Failed.noResult(_artifactless),
         nowFn: advancingClock(from: _clock, step: const Duration(minutes: 1)),
       );
       addTearDown(() {
@@ -345,7 +360,7 @@ void main() {
       });
       await _pump();
 
-      expect(h.sink.only('step.transition')['failure_class'], 'work');
+      expect(h.sink.only('step.transition')['failure_class'], 'no_result');
       expect(h.flares.named(kHarnessThrottledFlare), isEmpty);
       expect(
         h.fakes.runner.metadataOfUpdate(0)[MoleculeStepKeys.failureReason],

@@ -390,6 +390,8 @@ Future<StepOutcome> stationProcessDispatcher(
             context,
             args,
           );
+        } on CapabilityFailure catch (e) {
+          return Failed.from(e);
         } on Object {
           // The fail-closed default remains probeError.
         }
@@ -398,17 +400,20 @@ Future<StepOutcome> stationProcessDispatcher(
           case GateOutcome.clear:
             break;
           case GateOutcome.present:
-            return const Failed.nonResult(
+            return const Failed.noResult(
               'unresolved: declared completion artifact is not durable',
             );
           case GateOutcome.probeError:
-            return const Failed.nonResult(
+            return const Failed.noResult(
               'unresolved: completion artifact probe failed',
             );
         }
       }
       try {
         return Ok(await request.capability.result(context, args));
+      } on CapabilityFailure catch (e) {
+        // The capability NAMED its failure — keep the kind.
+        return Failed.from(e);
       } on Object catch (e) {
         // A completion whose result cannot be read must not advance the
         // circuit silently (mirrors ProcessAllocation._reportComplete).

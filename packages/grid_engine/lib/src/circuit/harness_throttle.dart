@@ -1,6 +1,8 @@
 /// Pure classification and diagnostics for artifact-less harness exits.
 library;
 
+import '../sdk/capability_failure.dart';
+
 /// Prefix persisted on every classified harness-throttle failure.
 const String kHarnessThrottleMarker = 'harness-throttled';
 
@@ -10,9 +12,18 @@ const String kHarnessThrottledFlare = 'harness.throttled';
 /// An artifact-less failure under this floor is a harness non-result.
 const Duration kHarnessSilenceFloor = Duration(seconds: 30);
 
-/// Whether a failure is a fast non-result rather than failed work.
-bool isHarnessSilence({required bool nonResult, required Duration? ranFor}) =>
-    nonResult && ranFor != null && ranFor < kHarnessSilenceFloor;
+/// Whether a failure is a fast NON-RESULT rather than failed work.
+///
+/// Both facts stay engine-owned: the reported kind and the wall-clock floor.
+/// Only [CapabilityFailureKind.noResult] can be silence — a fast INVALID result
+/// is a real invalid result, not an environment refusal.
+bool isHarnessSilence({
+  required CapabilityFailureKind kind,
+  required Duration? ranFor,
+}) =>
+    kind == CapabilityFailureKind.noResult &&
+    ranFor != null &&
+    ranFor < kHarnessSilenceFloor;
 
 /// Recovers the opening instant of a persisted throttle window.
 DateTime harnessThrottleSince({

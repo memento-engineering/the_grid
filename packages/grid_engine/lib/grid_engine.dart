@@ -16,7 +16,7 @@
 library;
 
 export 'package:grid_runtime/grid_runtime.dart'
-    show GridIssueTypes, GridIssueTypeClassification;
+    show GridIssueTypes, GridIssueTypeClassification, StepFailureClass;
 
 export 'src/diagnostics/diagnosable.dart';
 export 'src/diagnostics/diagnostics_tree_walker.dart';
@@ -46,6 +46,7 @@ export 'src/sdk/sdk.dart';
 // (Track D), and the resolver that roots the subtree at the SessionResolver seam.
 export 'src/circuit/capability_host.dart'
     show CapabilityHost, CapabilityHostState;
+export 'src/circuit/failure_policy.dart';
 export 'src/circuit/harness_throttle.dart';
 export 'src/circuit/capability_registry.dart';
 export 'src/circuit/default_capability_registry.dart';

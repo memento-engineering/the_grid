@@ -139,7 +139,10 @@ void main() {
             log: <String>[],
           ),
         );
-        expect(reports.whereType<AllocationFailed>().single.nonResult, isTrue);
+        expect(
+          reports.whereType<AllocationFailed>().single.kind,
+          CapabilityFailureKind.noResult,
+        );
       });
 
       test('the leased artifactless completion ($outcome) is too', () async {
@@ -151,7 +154,7 @@ void main() {
           ),
           retained: true,
         );
-        expect((result as Failed).nonResult, isTrue);
+        expect((result as Failed).kind, CapabilityFailureKind.noResult);
       });
     }
 

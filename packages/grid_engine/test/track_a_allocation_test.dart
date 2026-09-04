@@ -470,7 +470,10 @@ void main() {
       provider.emit(const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1));
       await _pump();
 
-      expect(reports.whereType<AllocationFailed>().single.nonResult, isFalse);
+      expect(
+        reports.whereType<AllocationFailed>().single.kind,
+        CapabilityFailureKind.work,
+      );
     });
 
     test(
