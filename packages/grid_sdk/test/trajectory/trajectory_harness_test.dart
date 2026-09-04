@@ -112,11 +112,11 @@ final class _FakeDb implements TrajectoryDb {
         ],
       );
     }
-    // DEFAULT: a grid home already at the WAVE-1 CUT SHAPE. `start()` refuses
-    // the live arm on a pre-cut `proj_session_head` (the stale-fold refusal),
-    // so the fake has to answer the shape probe or every harness test would
-    // degrade at boot. A test that wants the PRE-CUT home scripts an empty (or
-    // partial) answer for this statement.
+    // DEFAULT: a grid home already at the CURRENT PROJECTION SHAPE. `start()`
+    // refuses the live arm on a pre-cut `proj_session_head` (the stale-fold
+    // refusal), so the fake has to answer the shape probe or every harness
+    // test would degrade at boot. A test that wants the PRE-CUT home scripts
+    // an empty (or partial) answer for this statement.
     if (_isShapeProbe(sql)) {
       return SqlResult(
         rows: [
@@ -463,7 +463,7 @@ void main() {
 
     // ── THE STALE-FOLD REFUSAL (cut-wiring C0, r12) ──────────────────────
     //
-    // The wave-1 cut widened `proj_session_head`. The boot seed reads
+    // Projection cuts widened `proj_session_head`. The boot seed reads
     // `SELECT *` and nulls absent columns, so an un-reshaped home SEEDS CLEAN
     // and reads live — and then every terminal append dies inside its
     // transaction on an unknown column, rolls back whole, and lands as a
@@ -472,7 +472,7 @@ void main() {
     test('a PRE-CUT proj_session_head REFUSES the live arm, before the claim, '
         'with a cause naming `traj replay`', () async {
       dbScript = (sql) => _isShapeProbe(sql)
-          // The pre-cut shape: the table exists, the wave-1 columns do not.
+          // The pre-cut shape: the table exists, current cut columns do not.
           ? const SqlResult(
               rows: [
                 {'name': 'session_id'},
@@ -488,6 +488,7 @@ void main() {
       expect(h.status.cause, contains('traj replay'));
       expect(h.status.cause, contains('terminal_provenance'));
       expect(h.status.cause, contains('unknown_reason'));
+      expect(h.status.cause, contains('substation'));
       expect(flareNames(), contains('trajectory.degraded'));
       // NO EPOCH CLAIM: a boot that will not run must not advance the fence.
       expect(appender.calls, ['verify'], reason: 'claimEpoch never ran');

@@ -8,15 +8,13 @@
 ///     tables are, column for column, what the pure fold says the log folds
 ///     to. A replay that quietly disagrees with the fold is the one failure
 ///     the whole rebuildability constraint rests on;
-///   * the RESHAPE against a real pre-cut table: dolt actually drops it,
-///     actually re-creates it with `terminal_provenance`/`unknown_reason`, and
-///     the replay actually repopulates it at the bumped `fold_version`;
-///   * the JOURNAL RENAME (tg-j1zn) against a real pre-rename journal: dolt
-///     actually applies the three `ALTER`s, every recorded row keeps its
-///     substation value, and `ck_substation` refuses by its NEW name — the one
-///     migration in the schema that touches dolt-versioned truth instead of
-///     rebuildable projection state, so a scripted fake echoing our own SQL
-///     back at us is not evidence;
+///   * the RESHAPE/JOURNAL INCIDENT against a real pre-tg-j1zn journal plus a
+///     wave-1 `seat` projection: dolt actually applies the three journal
+///     `ALTER`s, keeps every recorded substation value, drops and re-creates
+///     P1 with `substation`, repopulates it to lag zero, and enforces the new
+///     `ck_substation` name — the journal half touches dolt-versioned truth
+///     while the projection half rebuilds disposable state, so a scripted
+///     fake echoing our own SQL back at us is not evidence;
 ///   * the QUIESCE FENCE refusing with a real lock file in place, leaving the
 ///     projection it would have rewritten untouched;
 ///   * `traj gc` under a gridboot-shaped credential — the operator half of the
@@ -428,13 +426,12 @@ CREATE TABLE proj_session_head (
   });
 
   // LAST in the file, deliberately: this test stands the SHARED hermetic
-  // journal back at the pre-tg-j1zn shape and relies on the production
-  // migration to restore it. A failure mid-rename would leave the journal
-  // with the retired column spelling, and every earlier verb test would then
-  // fail for a reason that is not its own.
-  test('THE RENAME: a pre-tg-j1zn journal is migrated in place — the column '
-      'is renamed, every recorded row survives, and ck_substation refuses by '
-      'its new name', () async {
+  // journal and P1 back at the two incident shapes and relies on the
+  // production migrations to restore them. A failure mid-rename would leave
+  // the journal with the retired column spelling, and every earlier verb test
+  // would then fail for a reason that is not its own.
+  test('THE INCIDENT: replay migrates a pre-tg-j1zn journal and a wave-1 '
+      'seat projection, then rebuilds to lag zero', () async {
     final db = await openService();
     await appendLifecycle(db, station: 6);
     const retiredColumn =
@@ -467,7 +464,51 @@ CREATE TABLE proj_session_head (
       'ALTER TABLE trajectory ADD CONSTRAINT ck_$retiredColumn '
       'CHECK (work_bead_id IS NULL OR $retiredColumn IS NOT NULL)',
     );
+
+    await db.execute('DROP TABLE IF EXISTS proj_session_head');
+    await db.execute('''
+CREATE TABLE proj_session_head (
+  session_id VARCHAR(40) NOT NULL PRIMARY KEY,
+  work_bead_id VARCHAR(40) NOT NULL,
+  round INT NOT NULL DEFAULT 0,
+  status ENUM('open','closed') NOT NULL,
+  outcome ENUM('succeeded','failed','cancelled','lost','escalated','settled','unknown') NULL,
+  work_terminal_reason VARCHAR(255) NULL,
+  terminal_provenance ENUM('observed','inferred','reconstructed') NULL,
+  unknown_reason VARCHAR(32) NULL,
+  held TINYINT(1) NOT NULL DEFAULT 0, held_reason VARCHAR(512) NULL,
+  pgid INT NULL, pid INT NULL, attempt_id CHAR(26) NULL,
+  rig VARCHAR(64) NULL, model VARCHAR(32) NULL,
+  $retiredColumn VARCHAR(64) NULL,
+  started_at DATETIME(6) NOT NULL, closed_at DATETIME(6) NULL,
+  head_epoch BIGINT NOT NULL,
+  last_seq BIGINT NOT NULL,
+  KEY ix_bead (work_bead_id, status)
+)''');
+
     expect(await journalNeedsSubstationRename(db), isTrue);
+    expect(await sessionHeadProjectionNeedsReshape(db), isTrue);
+
+    final beforeCheckOut = <String>[];
+    final beforeCheckErr = <String>[];
+    expect(
+      await replay(check: true, out: beforeCheckOut, err: beforeCheckErr),
+      0,
+      reason: beforeCheckErr.join('\n'),
+    );
+    final pending = beforeCheckOut
+        .where((line) => line.contains('migrate: PENDING'))
+        .toList();
+    expect(pending, hasLength(2));
+    expect(
+      beforeCheckOut.join('\n'),
+      allOf(
+        contains('the journal still spells the substation identity'),
+        contains('migrate: PENDING — proj_session_head'),
+      ),
+    );
+    expect(await journalNeedsSubstationRename(db), isTrue);
+    expect(await sessionHeadProjectionNeedsReshape(db), isTrue);
 
     // WHY the verb renames BEFORE it replays: every fold decodes through the
     // §1 codec, which reads `substation`. A pre-rename row cannot decode at
@@ -502,10 +543,44 @@ CREATE TABLE proj_session_head (
         'trajectory.substation',
       ),
     );
-
-    // The column is back, the probe is quiet, and no row lost its value.
+    expect(out.join('\n'), contains('reshape: proj_session_head DROPped'));
     expect(await journalNeedsSubstationRename(db), isFalse);
+    expect(await sessionHeadProjectionNeedsReshape(db), isFalse);
     expect(await ownership('substation'), before);
+
+    final projectionColumnsResult = await db.execute(
+      projSessionHeadColumnsSql,
+      {'table': 'proj_session_head'},
+    );
+    final projectionColumns = {
+      for (final row in projectionColumnsResult.rows)
+        row['name']!.toLowerCase(),
+    };
+    expect(projectionColumns, contains('substation'));
+    expect(projectionColumns, isNot(contains(retiredColumn)));
+
+    final heads = await db.execute(
+      'SELECT session_id, substation FROM proj_session_head ORDER BY session_id',
+    );
+    expect(
+      heads.rows,
+      isNotEmpty,
+      reason: 'the replay repopulated the projection',
+    );
+    expect(heads.rows, everyElement(containsPair('substation', isNotNull)));
+
+    final lag = await readFoldLag(db);
+    expect(lag.records, 0);
+    expect(lag.isStale, isFalse);
+
+    final afterCheckOut = <String>[];
+    final afterCheckErr = <String>[];
+    expect(
+      await replay(check: true, out: afterCheckOut, err: afterCheckErr),
+      0,
+      reason: afterCheckErr.join('\n'),
+    );
+    expect(afterCheckOut.join('\n'), isNot(contains('migrate: PENDING')));
 
     // ck_substation came back as a CONSTRAINT, not just a column: dolt
     // refuses a write that clears a work-bead row's substation, BY NAME.

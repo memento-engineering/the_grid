@@ -51,13 +51,14 @@ void main() {
     );
   }
 
-  /// P1 already at the wave-1 shape (the reshape is a no-op).
+  /// P1 already at the current projection shape (the reshape is a no-op).
   void seedCurrentShape() => db.on(
     'information_schema.columns',
     result: const SqlResult(
       rows: [
         {'name': 'terminal_provenance'},
         {'name': 'unknown_reason'},
+        {'name': 'substation'},
       ],
     ),
   );
@@ -258,6 +259,29 @@ void main() {
     });
   });
 
+  test('--check reports a stale projection before its first generation and '
+      'does not migrate it', () async {
+    db
+      ..on("table_name = 'trajectory'")
+      ..on(
+        'information_schema.columns',
+        result: const SqlResult(
+          rows: [
+            {'name': 'terminal_provenance'},
+            {'name': 'unknown_reason'},
+            {'name': 'seat'},
+          ],
+        ),
+      );
+
+    expect(await replay(check: true), 0);
+    final report = out.join('\n');
+    expect(report, contains('migrate: PENDING — proj_session_head'));
+    expect(report, contains('generations: none'));
+    expect(db.matching('ALTER TABLE'), isEmpty);
+    expect(db.matching('DROP TABLE'), isEmpty);
+  });
+
   group('projection selection (replay is per-projection in the tree)', () {
     test('the default rebuilds all three', () async {
       seedCurrentShape();
@@ -338,6 +362,7 @@ void main() {
       expect(report, contains('generation: fold fold_version=2'));
       expect(report, contains('generation: step_cursor fold_version=1'));
       expect(report, contains('skipped={"step.transition@v2":3}'));
+      expect(report, isNot(contains('migrate: PENDING')));
       expect(db.matching('DELETE FROM'), isEmpty);
       expect(db.matching('DROP TABLE'), isEmpty);
     });
@@ -352,7 +377,7 @@ void main() {
       expect(db.matching('DELETE FROM'), isEmpty);
     });
 
-    test('names a PENDING reshape', () async {
+    test('names a PENDING projection migration', () async {
       db.on(
         'information_schema.columns',
         result: const SqlResult(
@@ -362,7 +387,7 @@ void main() {
         ),
       );
       expect(await replay(check: true), 0);
-      expect(out.join('\n'), contains('reshape: PENDING'));
+      expect(out.join('\n'), contains('migrate: PENDING — proj_session_head'));
     });
   });
 

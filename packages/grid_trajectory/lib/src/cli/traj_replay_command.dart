@@ -236,6 +236,14 @@ Future<void> _writeCheck(
       '`seat`; a quiesced `traj replay` renames it',
     );
   }
+  if (await sessionHeadProjectionNeedsReshape(db)) {
+    write(
+      '  migrate: PENDING — proj_session_head predates the current '
+      'projection shape (required cut columns: '
+      '${projSessionHeadCutColumns.join(', ')}); a quiesced `traj replay` '
+      're-creates it',
+    );
+  }
   final generations = await readProjectionGenerations(db);
   if (generations.isEmpty) {
     write('  generations: none — no projection has ever been folded');
@@ -250,13 +258,6 @@ Future<void> _writeCheck(
       '${generation.foldVersion} applied_seq=${generation.appliedSeq} '
       'rebuilt_at=${generation.rebuiltAt?.toIso8601String() ?? 'never'}'
       '${generation.skipped == null ? '' : ' skipped=${generation.skipped}'}',
-    );
-  }
-  if (await sessionHeadProjectionNeedsReshape(db)) {
-    write(
-      '  reshape: PENDING — proj_session_head predates the wave-1 shape '
-      '(missing ${projSessionHeadCutColumns.join(', ')}); a quiesced '
-      '`traj replay` performs it',
     );
   }
 }
@@ -302,7 +303,7 @@ Future<int> _rebuild(
           await reshapeSessionHeadProjection(db);
           write(
             '  reshape: proj_session_head DROPped and re-CREATEd at the '
-            'wave-1 shape (+${projSessionHeadCutColumns.join(', +')}) — the '
+            'current shape (+${projSessionHeadCutColumns.join(', +')}) — the '
             'replay below stamps fold_version $sessionHeadFoldVersion',
           );
         }

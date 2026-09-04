@@ -34,22 +34,58 @@ const String kReasonColumnSuffix = '_reason';
 /// True when [column] is a free-text reason column by name.
 bool isReasonColumn(String column) => column.endsWith(kReasonColumnSuffix);
 
+final RegExp _createTablePattern = RegExp(
+  r'CREATE TABLE (?:IF NOT EXISTS )?(\w+)',
+  caseSensitive: false,
+);
+
+final RegExp _createTableEntryPattern = RegExp(
+  r'(?:^|,)\s*(\w+)\s+',
+  caseSensitive: false,
+  multiLine: true,
+);
+
+const Set<String> _createTableClauses = {
+  'CREATE',
+  'PRIMARY',
+  'UNIQUE',
+  'KEY',
+  'CONSTRAINT',
+  'FOREIGN',
+  'CHECK',
+  'AND',
+  'OR',
+};
+
+String? _createTableName(String statement) =>
+    _createTablePattern.firstMatch(statement)?.group(1)?.toLowerCase();
+
+/// Every column declared by one CREATE TABLE [statement].
+///
+/// The same CREATE TABLE parser that derives [trajectoryColumnWidths] backs
+/// this test-facing view, so schema-coverage tests do not carry a second DDL
+/// parser.
+Set<String> createTableColumnNames(String statement) {
+  if (_createTableName(statement) == null) return const <String>{};
+  return Set<String>.unmodifiable({
+    for (final match in _createTableEntryPattern.allMatches(statement))
+      if (!_createTableClauses.contains(match.group(1)!.toUpperCase()))
+        match.group(1)!.toLowerCase(),
+  });
+}
+
 Map<String, Map<String, int>> _parseColumnWidths() {
-  final createTable = RegExp(
-    r'CREATE TABLE (?:IF NOT EXISTS )?(\w+)',
-    caseSensitive: false,
-  );
   final varcharColumn = RegExp(
     r'(\w+)\s+VARCHAR\((\d+)\)',
     caseSensitive: false,
   );
   final parsed = <String, Map<String, int>>{};
   for (final statement in trajectoryTableDdl) {
-    final table = createTable.firstMatch(statement)?.group(1);
+    final table = _createTableName(statement);
     if (table == null) continue;
     parsed[table] = Map<String, int>.unmodifiable({
       for (final match in varcharColumn.allMatches(statement))
-        match.group(1)!: int.parse(match.group(2)!),
+        match.group(1)!.toLowerCase(): int.parse(match.group(2)!),
     });
   }
   return Map<String, Map<String, int>>.unmodifiable(parsed);

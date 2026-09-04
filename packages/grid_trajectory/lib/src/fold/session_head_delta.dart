@@ -304,14 +304,11 @@ const List<String> _insertColumns = [
 ///   by `attempt_id` when the delta says so — 0 matched rows is a fine
 ///   outcome (out-of-order fact, or a guard miss), never an error.
 ///
-/// [cutShape] IS THE POSTURE (cut-wiring, r13). The wave-1 cut widened
-/// `proj_session_head` by [projSessionHeadCutColumns], and the migration is a
-/// named quiesced step. A station arming `DualReadMode.off` is the ROLLBACK:
-/// it must write the PRE-CUT column set, so an existing home that upgraded
-/// this code without running `traj replay` appends exactly as it did on main
-/// rather than dying on an unknown column. Pass `false` there — the harness
-/// registers [kPreCutFoldDeltas] for exactly that reason — and the cut
-/// columns are dropped from both the insert list and the update's SET clause.
+/// [cutShape] IS THE POSTURE (cut-wiring, r13). The columns in
+/// [projSessionHeadCutColumns] span every P1 projection cut that requires a
+/// quiesced reshape. A station arming `DualReadMode.off` is the ROLLBACK: it
+/// writes the PRE-CUT column set, so a home that upgraded without running
+/// `traj replay` never names a column its live projection lacks.
 SqlStatement sessionHeadSqlFor(
   SessionHeadDelta delta, {
   required int lastSeq,
