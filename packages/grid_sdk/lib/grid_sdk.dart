@@ -173,6 +173,9 @@ export 'src/trajectory/trajectory_harness.dart';
 // `ResidentGridCommandHandler` / `ResidentWorkCommandStore`.)
 export 'src/command/command_operation.dart';
 export 'src/command/station_command_handler.dart';
+export 'src/command/work_bead_keys.dart';
+export 'src/command/bead_board.dart';
+export 'src/command/bead_round.dart';
 
 // ── The work binding (Track J0 — tg-yl8) ────────────────────────────────────
 // The runGrid→engine bridge: the engine's work subtree mounts INSIDE the

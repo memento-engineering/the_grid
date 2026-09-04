@@ -1972,6 +1972,8 @@ StationCommandHandler _handler({
   recorder: recorder,
   workStoresByIdentity: {
     workIdentity: WorkCommandStore(
+      substation: workIdentity,
+      root: '/work',
       source: work,
       refresh: refreshWork ?? () async {},
       writer: StationBeadWriter(

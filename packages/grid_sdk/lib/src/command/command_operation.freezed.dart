@@ -55,14 +55,16 @@ extension GridCommandRequestPatterns on GridCommandRequest {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,TResult Function( GridSetBeadText value)?  setBeadText,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,TResult Function( GridSetBeadText value)?  setBeadText,TResult Function( GridBeadBoard value)?  board,TResult Function( GridBeadRound value)?  beadRound,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that);case GridGateLs() when listGates != null:
 return listGates(_that);case GridGateResolve() when resolveGate != null:
 return resolveGate(_that);case GridSetBeadText() when setBeadText != null:
-return setBeadText(_that);case _:
+return setBeadText(_that);case GridBeadBoard() when board != null:
+return board(_that);case GridBeadRound() when beadRound != null:
+return beadRound(_that);case _:
   return orElse();
 
 }
@@ -80,14 +82,16 @@ return setBeadText(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,required TResult Function( GridSetBeadText value)  setBeadText,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,required TResult Function( GridSetBeadText value)  setBeadText,required TResult Function( GridBeadBoard value)  board,required TResult Function( GridBeadRound value)  beadRound,}){
 final _that = this;
 switch (_that) {
 case GridRework():
 return rework(_that);case GridGateLs():
 return listGates(_that);case GridGateResolve():
 return resolveGate(_that);case GridSetBeadText():
-return setBeadText(_that);}
+return setBeadText(_that);case GridBeadBoard():
+return board(_that);case GridBeadRound():
+return beadRound(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -101,14 +105,16 @@ return setBeadText(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,TResult? Function( GridSetBeadText value)?  setBeadText,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,TResult? Function( GridSetBeadText value)?  setBeadText,TResult? Function( GridBeadBoard value)?  board,TResult? Function( GridBeadRound value)?  beadRound,}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that);case GridGateLs() when listGates != null:
 return listGates(_that);case GridGateResolve() when resolveGate != null:
 return resolveGate(_that);case GridSetBeadText() when setBeadText != null:
-return setBeadText(_that);case _:
+return setBeadText(_that);case GridBeadBoard() when board != null:
+return board(_that);case GridBeadRound() when beadRound != null:
+return beadRound(_that);case _:
   return null;
 
 }
@@ -125,13 +131,15 @@ return setBeadText(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult Function( String beadId)?  beadRound,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
 return listGates();case GridGateResolve() when resolveGate != null:
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText() when setBeadText != null:
-return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case _:
+return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case GridBeadBoard() when board != null:
+return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound() when beadRound != null:
+return beadRound(_that.beadId);case _:
   return orElse();
 
 }
@@ -149,13 +157,15 @@ return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,required TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)  setBeadText,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,required TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)  setBeadText,required TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)  board,required TResult Function( String beadId)  beadRound,}) {final _that = this;
 switch (_that) {
 case GridRework():
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs():
 return listGates();case GridGateResolve():
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText():
-return setBeadText(_that.beadId,_that.field,_that.content,_that.append);}
+return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case GridBeadBoard():
+return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound():
+return beadRound(_that.beadId);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -169,13 +179,15 @@ return setBeadText(_that.beadId,_that.field,_that.content,_that.append);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult? Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult? Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,TResult? Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult? Function( String beadId)?  beadRound,}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
 return listGates();case GridGateResolve() when resolveGate != null:
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText() when setBeadText != null:
-return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case _:
+return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case GridBeadBoard() when board != null:
+return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound() when beadRound != null:
+return beadRound(_that.beadId);case _:
   return null;
 
 }
@@ -429,6 +441,156 @@ as String,field: null == field ? _self.field : field // ignore: cast_nullable_to
 as OperatorBeadTextField,content: null == content ? _self.content : content // ignore: cast_nullable_to_non_nullable
 as String,append: null == append ? _self.append : append // ignore: cast_nullable_to_non_nullable
 as bool,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridBeadBoard implements GridCommandRequest {
+  const GridBeadBoard({final  Set<String> stores = const <String>{}, final  Set<String> statuses = const <String>{}, this.blockedOnly = false, this.approved}): _stores = stores,_statuses = statuses;
+
+
+ final  Set<String> _stores;
+@JsonKey() Set<String> get stores {
+  if (_stores is EqualUnmodifiableSetView) return _stores;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableSetView(_stores);
+}
+
+ final  Set<String> _statuses;
+@JsonKey() Set<String> get statuses {
+  if (_statuses is EqualUnmodifiableSetView) return _statuses;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableSetView(_statuses);
+}
+
+@JsonKey() final  bool blockedOnly;
+ final  bool? approved;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridBeadBoardCopyWith<GridBeadBoard> get copyWith => _$GridBeadBoardCopyWithImpl<GridBeadBoard>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridBeadBoard&&const DeepCollectionEquality().equals(other._stores, _stores)&&const DeepCollectionEquality().equals(other._statuses, _statuses)&&(identical(other.blockedOnly, blockedOnly) || other.blockedOnly == blockedOnly)&&(identical(other.approved, approved) || other.approved == approved));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_stores),const DeepCollectionEquality().hash(_statuses),blockedOnly,approved);
+
+@override
+String toString() {
+  return 'GridCommandRequest.board(stores: $stores, statuses: $statuses, blockedOnly: $blockedOnly, approved: $approved)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridBeadBoardCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridBeadBoardCopyWith(GridBeadBoard value, $Res Function(GridBeadBoard) _then) = _$GridBeadBoardCopyWithImpl;
+@useResult
+$Res call({
+ Set<String> stores, Set<String> statuses, bool blockedOnly, bool? approved
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridBeadBoardCopyWithImpl<$Res>
+    implements $GridBeadBoardCopyWith<$Res> {
+  _$GridBeadBoardCopyWithImpl(this._self, this._then);
+
+  final GridBeadBoard _self;
+  final $Res Function(GridBeadBoard) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? stores = null,Object? statuses = null,Object? blockedOnly = null,Object? approved = freezed,}) {
+  return _then(GridBeadBoard(
+stores: null == stores ? _self._stores : stores // ignore: cast_nullable_to_non_nullable
+as Set<String>,statuses: null == statuses ? _self._statuses : statuses // ignore: cast_nullable_to_non_nullable
+as Set<String>,blockedOnly: null == blockedOnly ? _self.blockedOnly : blockedOnly // ignore: cast_nullable_to_non_nullable
+as bool,approved: freezed == approved ? _self.approved : approved // ignore: cast_nullable_to_non_nullable
+as bool?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridBeadRound implements GridCommandRequest {
+  const GridBeadRound({required this.beadId});
+
+
+ final  String beadId;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridBeadRoundCopyWith<GridBeadRound> get copyWith => _$GridBeadRoundCopyWithImpl<GridBeadRound>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridBeadRound&&(identical(other.beadId, beadId) || other.beadId == beadId));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,beadId);
+
+@override
+String toString() {
+  return 'GridCommandRequest.beadRound(beadId: $beadId)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridBeadRoundCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridBeadRoundCopyWith(GridBeadRound value, $Res Function(GridBeadRound) _then) = _$GridBeadRoundCopyWithImpl;
+@useResult
+$Res call({
+ String beadId
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridBeadRoundCopyWithImpl<$Res>
+    implements $GridBeadRoundCopyWith<$Res> {
+  _$GridBeadRoundCopyWithImpl(this._self, this._then);
+
+  final GridBeadRound _self;
+  final $Res Function(GridBeadRound) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? beadId = null,}) {
+  return _then(GridBeadRound(
+beadId: null == beadId ? _self.beadId : beadId // ignore: cast_nullable_to_non_nullable
+as String,
   ));
 }
 
