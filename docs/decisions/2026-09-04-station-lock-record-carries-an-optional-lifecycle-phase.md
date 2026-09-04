@@ -15,6 +15,7 @@ register:
   obsoletes: []
   updates:
     - station-lock-holds-never-steals-an-unreadable-record
+    - adr-0014-the-resident-station
   obsoleted-by: null
   updated-by: []
   bead: tg-knx0
@@ -53,7 +54,9 @@ so a new field must be optional with a defined reading when absent.
 pin recorded by tg-vg5k and restated in outcome 3 of
 `station-lock-holds-never-steals-an-unreadable-record` was the scope of that
 re-homing, not a freeze; outcome 3's nonce reasoning stands unchanged and is
-not reopened here.
+not reopened here. This outcome also narrows ADR-0014 D-A1's "Preserved by
+tg-vg5k" postscript: its byte-for-byte language likewise describes that
+package re-homing and does not prohibit the optional lifecycle field.
 
 Rules for the field:
 

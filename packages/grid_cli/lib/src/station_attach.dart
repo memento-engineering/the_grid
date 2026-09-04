@@ -22,7 +22,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 import 'package:grid_runtime/grid_runtime.dart'
     show ProcessGroupController, SystemProcessGroupController;
 
@@ -83,16 +83,30 @@ class Down extends AttachResult {
   const Down();
 }
 
-/// A lock file names [pid], but the station cannot be confirmed reachable:
-/// either [pid] is dead (a crash without releasing the lock), or it is alive
-/// but not answering (connection refused, a request timeout, or a lock read
-/// after `acquire` but before the control surface finished advertising
-/// `controlUrl`/`token` — a boot-order race). [record] is the lock read.
-class Stale extends AttachResult {
-  /// Creates a stale result naming the lock's [pid] and its [record].
-  const Stale({required this.pid, required this.record});
+/// A signalable station holds an [StationLifecyclePhase.acquired] lock and is
+/// still starting. The declared phase, not optional advertisement fields,
+/// establishes this result; no HTTP request is attempted. [record] is the
+/// lock read.
+final class Starting extends AttachResult {
+  /// Creates a starting result naming the lock's [pid] and its [record].
+  const Starting({required this.pid, required this.record});
 
-  /// The pid the lock names (dead, or alive-but-unreachable).
+  /// The signalable pid whose station is starting.
+  final int pid;
+
+  /// The lock record read.
+  final StationLockRecord record;
+}
+
+/// A lock file names [pid], but the station cannot be reached: the pid is
+/// unsignalable, its declared phase is [StationLifecyclePhase.releasing], its
+/// live transport advertisement is unusable, or the advertised control
+/// surface did not answer correctly. [record] is the lock read.
+final class Unreachable extends AttachResult {
+  /// Creates an unreachable result naming the lock's [pid] and its [record].
+  const Unreachable({required this.pid, required this.record});
+
+  /// The pid the lock names.
   final int pid;
 
   /// The lock record read.
@@ -100,9 +114,9 @@ class Stale extends AttachResult {
 }
 
 /// The station answered, but rejected the bearer token (401) — a wrong or
-/// expired credential. DISTINCT from [Stale] by construction: the process is
-/// demonstrably alive and serving, just not to this token, so it must never
-/// be swallowed into the generic unreachable bucket.
+/// expired credential. DISTINCT from [Unreachable] by construction: the
+/// process is demonstrably alive and serving, just not to this token, so it
+/// must never be swallowed into the generic unreachable bucket.
 class Unauthorized extends AttachResult {
   /// Creates an unauthorized result naming the [record] whose token was
   /// rejected.
@@ -189,12 +203,13 @@ class StationAttach {
   final DateTime Function() _clock;
 
   /// Classifies the station rooted at [stateWorkspaceDir]: no lock (or an
-  /// unreadable one) → [Down]; a lock naming a dead pid → [Stale]; a lock
-  /// naming a live pid → `GET /status` over the advertised `controlUrl` with
-  /// a bounded [timeout] → [Up] on 200, [Unauthorized] on 401 (never
-  /// [Stale]), [Stale] on any other outcome (connection refused, timeout, a
-  /// non-200/401 response, or a lock read before the control surface
-  /// finished advertising itself).
+  /// unreadable one) → [Down]; an unsignalable pid → [Unreachable]; a
+  /// signalable [StationLifecyclePhase.acquired] record → [Starting]; a
+  /// signalable [StationLifecyclePhase.releasing] record → [Unreachable]; and
+  /// only a signalable [StationLifecyclePhase.live] record attempts
+  /// `GET /status` over the advertised `controlUrl` with a bounded [timeout].
+  /// A valid 200 returns [Up], a 401 returns [Unauthorized], and every other
+  /// live-phase transport outcome returns [Unreachable].
   Future<AttachResult> status({
     required String stateWorkspaceDir,
     Duration timeout = const Duration(seconds: 3),
@@ -202,15 +217,21 @@ class StationAttach {
     final record = await _readLock(stateWorkspaceDir);
     if (record == null) return const Down();
     if (!_isPidAlive(record.pid)) {
-      return Stale(pid: record.pid, record: record);
+      return Unreachable(pid: record.pid, record: record);
+    }
+    switch (record.phase) {
+      case StationLifecyclePhase.acquired:
+        return Starting(pid: record.pid, record: record);
+      case StationLifecyclePhase.releasing:
+        return Unreachable(pid: record.pid, record: record);
+      case StationLifecyclePhase.live:
+        break;
     }
 
     final controlUrl = record.controlUrl;
     final token = record.token;
     if (controlUrl == null || token == null) {
-      // A live pid, but the lock was read before RS-4 finished advertising
-      // controlUrl/token (a boot-order race) — nothing to attach to yet.
-      return Stale(pid: record.pid, record: record);
+      return Unreachable(pid: record.pid, record: record);
     }
 
     final client = _httpClientFactory()..connectionTimeout = timeout;
@@ -230,7 +251,7 @@ class StationAttach {
           .join()
           .timeout(timeout);
       if (response.statusCode != HttpStatus.ok) {
-        return Stale(pid: record.pid, record: record);
+        return Unreachable(pid: record.pid, record: record);
       }
       return Up(
         payload: jsonDecode(body) as Map<String, Object?>,
@@ -239,7 +260,7 @@ class StationAttach {
     } on Object {
       // Connection refused, DNS failure, a timeout, or a malformed body — a
       // live pid that is not answering correctly.
-      return Stale(pid: record.pid, record: record);
+      return Unreachable(pid: record.pid, record: record);
     } finally {
       client.close(force: true);
     }

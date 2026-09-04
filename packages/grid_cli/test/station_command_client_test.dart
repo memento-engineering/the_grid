@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:grid_cli/src/station_command_client.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 import 'package:test/test.dart';
 
 void main() {
@@ -46,15 +46,13 @@ void main() {
     final lock = File('${root.path}/.grid/station.lock');
     await lock.parent.create(recursive: true);
     await lock.writeAsString(
-      jsonEncode(
-        StationLockRecord(
-          pid: 42,
-          pgid: 42,
-          startedAt: DateTime.utc(2026),
-          controlUrl: 'http://127.0.0.1:${server.port}',
-          token: 'secret',
-        ).toJson(),
-      ),
+      jsonEncode(<String, Object?>{
+        'pid': 42,
+        'pgid': 42,
+        'startedAt': DateTime.utc(2026).toIso8601String(),
+        'controlUrl': 'http://127.0.0.1:${server.port}',
+        'token': 'secret',
+      }),
     );
     final result = await StationCommandClient(
       clock: () => DateTime.fromMicrosecondsSinceEpoch(123, isUtc: true),
@@ -65,4 +63,73 @@ void main() {
     expect(headers.value('idempotency-key'), '42-123');
     expect(payload['method'], 'grid/gate/ls');
   });
+
+  for (final phase in <StationLifecyclePhase>[
+    StationLifecyclePhase.acquired,
+    StationLifecyclePhase.releasing,
+  ]) {
+    test(
+      '${phase.name} refuses before credential validation or HTTP',
+      () async {
+        final root = await Directory.systemTemp.createTemp('station-client-');
+        addTearDown(() => root.delete(recursive: true));
+        final lock = File('${root.path}/.grid/station.lock');
+        await lock.parent.create(recursive: true);
+        await lock.writeAsString(
+          jsonEncode(
+            StationLockRecord(
+              pid: 42,
+              pgid: 42,
+              startedAt: DateTime.utc(2026),
+              phase: phase,
+              controlUrl: 'http://127.0.0.1:9',
+              token: 'secret',
+            ).toJson(),
+          ),
+        );
+
+        final result = await StationCommandClient(
+          httpClientFactory: () => fail('${phase.name} must not attempt HTTP'),
+        ).send(gridRoot: root.path, method: 'grid/gate/ls', params: const {});
+
+        expect(result, isA<StationCommandUnavailable>());
+        expect(
+          (result as StationCommandUnavailable).message,
+          contains(
+            phase == StationLifecyclePhase.acquired ? 'STARTING' : 'RELEASING',
+          ),
+        );
+      },
+    );
+  }
+
+  test(
+    'live record with missing credentials reports unusable transport',
+    () async {
+      final root = await Directory.systemTemp.createTemp('station-client-');
+      addTearDown(() => root.delete(recursive: true));
+      final lock = File('${root.path}/.grid/station.lock');
+      await lock.parent.create(recursive: true);
+      await lock.writeAsString(
+        jsonEncode(
+          StationLockRecord(
+            pid: 42,
+            pgid: 42,
+            startedAt: DateTime.utc(2026),
+          ).toJson(),
+        ),
+      );
+
+      final result = await StationCommandClient(
+        httpClientFactory: () =>
+            fail('missing credentials must not reach HTTP'),
+      ).send(gridRoot: root.path, method: 'grid/gate/ls', params: const {});
+
+      expect(result, isA<StationCommandUnavailable>());
+      expect(
+        (result as StationCommandUnavailable).message,
+        contains('unusable control transport advertisement'),
+      );
+    },
+  );
 }

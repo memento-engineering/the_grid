@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:grid_cli/src/station_lock.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 import 'package:test/test.dart';
 
 /// tg-o2fy — the station lock's ATOMICITY pins (D-A1 + decision
@@ -236,6 +236,70 @@ void main() {
     });
   });
 
+  group('phase rewrites remain atomic', () {
+    test(
+      'readers see complete acquired, live, releasing, or absent records',
+      () async {
+        final store = _tempStore();
+        final secondPublishEntered = Completer<void>();
+        final releaseSecondPublish = Completer<void>();
+        final thirdPublishEntered = Completer<void>();
+        final releaseThirdPublish = Completer<void>();
+        var publishCount = 0;
+        final handle =
+            await StationLockService(
+              isPidAlive: (_) => true,
+              log: (_) {},
+              prepareProcessGroup: (stationPid) async => stationPid,
+              setMode: (path) async {
+                publishCount++;
+                if (publishCount == 2) {
+                  secondPublishEntered.complete();
+                  await releaseSecondPublish.future;
+                } else if (publishCount == 3) {
+                  thirdPublishEntered.complete();
+                  await releaseThirdPublish.future;
+                }
+                await defaultChmod600(path);
+              },
+            ).acquire(
+              stateWorkspaceDir: store.path,
+              pid: 7777,
+              now: DateTime.utc(2026, 9, 3, 12),
+            );
+
+        final update = handle.updateControl(
+          controlUrl: 'http://127.0.0.1:8137',
+          token: 's3cret',
+        );
+        await secondPublishEntered.future;
+        final duringControl = _readRecord(handle.path);
+        expect(duringControl.phase, StationLifecyclePhase.acquired);
+        expect(duringControl.controlUrl, isNull);
+        expect(duringControl.token, isNull);
+
+        releaseSecondPublish.complete();
+        await update;
+        final afterControl = _readRecord(handle.path);
+        expect(afterControl.phase, StationLifecyclePhase.live);
+        expect(afterControl.controlUrl, 'http://127.0.0.1:8137');
+        expect(afterControl.token, 's3cret');
+
+        final release = handle.release();
+        await thirdPublishEntered.future;
+        final duringRelease = _readRecord(handle.path);
+        expect(duringRelease.phase, StationLifecyclePhase.live);
+        expect(duringRelease.controlUrl, 'http://127.0.0.1:8137');
+        expect(duringRelease.token, 's3cret');
+
+        releaseThirdPublish.complete();
+        await release;
+        expect(File(handle.path).existsSync(), isFalse);
+        expect(handle.record.phase, StationLifecyclePhase.releasing);
+      },
+    );
+  });
+
   group('the mode is terminal', () {
     test(
       'a chmod failure aborts acquire and leaves NO lock and NO temp',
@@ -341,3 +405,7 @@ void _mintLock(
 /// The POSIX permission bits of [path], octal (e.g. `600`).
 String _modeOf(String path) =>
     (FileStat.statSync(path).mode & 0xFFF).toRadixString(8);
+
+StationLockRecord _readRecord(String path) => StationLockRecord.fromJson(
+  jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>,
+);

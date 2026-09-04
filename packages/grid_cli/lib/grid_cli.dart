@@ -17,7 +17,7 @@
 library;
 
 export 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
-    show StationLockRecord;
+    show StationLifecyclePhase, StationLockRecord;
 
 // The resident-station survivors (RS-2 lock / RS-4 read-only control / RS-5a
 // attach client) an asset runner orchestrates around `runGrid`.
