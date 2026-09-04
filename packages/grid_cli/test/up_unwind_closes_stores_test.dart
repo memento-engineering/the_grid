@@ -176,6 +176,7 @@ Future<_Outcome> _runUp(
           required token,
           required view,
           required commandHandler,
+          required assetCatalogResolver,
           required treeProjector,
         }) async => _Control(events),
     armDevelopmentMode:

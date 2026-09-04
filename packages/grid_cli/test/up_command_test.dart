@@ -208,6 +208,9 @@ final class _Harness {
   /// delegate's vended handler — or renders its absence as a refusal).
   GridCommandHandler? controlCommandHandler;
 
+  /// The asset resolver handed through the resident control-start seam.
+  AssetCatalogResolver? controlAssetCatalogResolver;
+
   /// Captured dev-mode closures (the seat the operator's reload rides).
   Future<Map<String, Object?>> Function()? devHotRestart;
   String Function()? devReadPath;
@@ -227,6 +230,7 @@ final class _Harness {
   Future<int?> run({
     List<String> extra = const [],
     bool untimed = false,
+    AssetCatalogResolver assetCatalogResolver = const AssetCatalogResolver(),
   }) async {
     final stdoutSink = RecordingStdout(_stdout);
     final stderrSink = RecordingStdout(_stderr);
@@ -300,11 +304,13 @@ final class _Harness {
             required token,
             required view,
             required commandHandler,
+            required assetCatalogResolver,
             required treeProjector,
           }) async {
             controlProjector = treeProjector;
             statusView = view;
             controlCommandHandler = commandHandler;
+            controlAssetCatalogResolver = assetCatalogResolver;
             events.add('control');
             _throwIf('control');
             return _Control(events, failAt: failAt);
@@ -342,6 +348,7 @@ final class _Harness {
         }
         _throwIf('gc');
       },
+      assetCatalogResolver: assetCatalogResolver,
       readStateStoreTypes: ({required gridHome}) async {
         expect(gridHome, p.canonicalize(home));
         events.add('types');
@@ -724,6 +731,33 @@ void main() {
   });
 
   group('UpCommand assembly', () {
+    test(
+      'UpCommand forwards the injected asset resolver to StationControl',
+      () async {
+        final injectedHarness = await _Harness.create();
+        addTearDown(injectedHarness.dispose);
+        final injected = AssetCatalogResolver(
+          substations: [
+            AssetCatalogSubstation(
+              substation: 'earth',
+              root: injectedHarness.workRoot,
+            ),
+          ],
+        );
+
+        expect(await injectedHarness.run(assetCatalogResolver: injected), 0);
+        expect(injectedHarness.controlAssetCatalogResolver, same(injected));
+
+        final defaultHarness = await _Harness.create();
+        addTearDown(defaultHarness.dispose);
+        expect(await defaultHarness.run(), 0);
+        expect(
+          defaultHarness.controlAssetCatalogResolver,
+          same(const AssetCatalogResolver()),
+        );
+      },
+    );
+
     test(
       'incomplete types.custom warns once in banner and boots anyway',
       () async {
