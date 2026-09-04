@@ -1,3 +1,10 @@
+## 0.5.0-rc.13
+
+- Added: `grid watch --until <predicate>` — a closed set of typed event predicates with a bounded wait (`--timeout`), distinct exit codes for timeout and broken stream, and NDJSON-safe termination; transition-only semantics, so an operator seat returns when the gate opens instead of polling (tg-u5xt, #297).
+- Added: `grid bead board` and `grid bead round` — deterministic operator READ verbs over the resident station (`grid/bead/board` and `grid/bead/round` on the StationControl surface): work across stores with status/blocked/approval filters, and one round's lane verdicts (tg-wk3j, #304).
+- `up` retains the Dolt query service's handles until close is confirmed during unwind (tg-gmkt, #296).
+- Floors tightened to `grid_runtime ^0.2.0-rc.11`, `grid_engine ^0.3.0-rc.13`, `grid_sdk ^0.3.0-rc.11`, `grid_trajectory ^0.2.0-rc.2`.
+
 ## 0.5.0-rc.12
 
 - Breaking: process groups are supervised as groups and exit status is preserved — `SessionOrphaned` is a new `RuntimeEvent` variant (emitted once, NOT terminal: the group stays supervised until it empties or the bounded grace elapses and it is signalled), so exhaustive switches over `RuntimeEvent` need an arm (tg-8kye, #290; `up` supervises process groups). Migration: add `SessionOrphaned()` to every `switch (event)`; power_station#195 is the consumer fix.

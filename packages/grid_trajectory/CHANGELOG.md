@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0-rc.2
+
+- Added: `bead_round_fold` — one round's lane verdicts folded from the trajectory, the substrate the new `grid bead round` read verb projects (tg-wk3j, #304).
+- The guard pins are calibrated from five interleaved probes of the unchanged bare round trip, and the w6 shared-runner bands are widened to the calibrated distribution with headroom for normal runner swing; failures and green measurements both report the raw and calibrated ratios (tg-2zao, #298; tg-shry, #303).
+
 ## 0.2.0-rc.1
 
 - Silent, artifact-less harness exits (a usage window running out, a network refusal) classify as `infra`: the restart budget is spent with backoff, then the round opens a gate naming the throttle and flares `harness.throttled` with the tail of the agent's output — never a gateless `failed` strand (tg-mbeh, #294; shipped in this rc after the tag was cut from main).

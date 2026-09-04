@@ -1,3 +1,11 @@
+## 0.3.0-rc.11
+
+- Added: the neutral typed asset registry contract — const inert asset definitions, stable logical and artifact identities, and validated pack and station registries, exported publicly and proven composition- and dependency-neutral (tg-1w3m, #301).
+- Added: `bead_board` and `bead_round` — deterministic board and round projections over resident snapshots and trajectory verdicts, store-free, with unreadable stores and missing rounds surfaced as typed outcomes (tg-wk3j, #304).
+- Trajectory and Dolt store handles are retained until their close is confirmed, and trajectory sessions are vended through the ordered resident shutdown locus, so an evicted or timed-out state-server socket stays reachable for a later close attempt (tg-gmkt, #296).
+- Adopts the grid_runtime 0.2.0-rc.11 GitOps work-tree-root guard in the work assembly (tg-amwa, #302).
+- Floors tightened to `grid_runtime ^0.2.0-rc.11`, `grid_engine ^0.3.0-rc.13`, `grid_trajectory ^0.2.0-rc.2`.
+
 ## 0.3.0-rc.10
 
 - Silent, artifact-less harness exits (a usage window running out, a network refusal) classify as `infra`: the restart budget is spent with backoff, then the round opens a gate naming the throttle and flares `harness.throttled` with the tail of the agent's output — never a gateless `failed` strand (tg-mbeh, #294; shipped in this rc after the tag was cut from main).

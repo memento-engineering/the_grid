@@ -1,3 +1,8 @@
+## 0.2.0-rc.11
+
+- Breaking: guarded `GitOps` methods refuse a `workDir` that is not a work-tree root — mutating operations and reap probes are fenced at the GitOps seam so git can never walk into an enclosing checkout (tg-amwa, #302). Migration: pass the work-tree ROOT (what `git rev-parse --show-toplevel` answers) as `workDir`; a runner fake must answer the `rev-parse --show-toplevel` probe (the engine's `engine_fakes.dart` shows the shape).
+- Floors tightened to `grid_trajectory ^0.2.0-rc.2`.
+
 ## 0.2.0-rc.10
 
 - Silent, artifact-less harness exits (a usage window running out, a network refusal) classify as `infra`: the restart budget is spent with backoff, then the round opens a gate naming the throttle and flares `harness.throttled` with the tail of the agent's output — never a gateless `failed` strand (tg-mbeh, #294; shipped in this rc after the tag was cut from main).
