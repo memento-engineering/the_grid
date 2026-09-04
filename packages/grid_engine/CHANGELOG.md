@@ -1,3 +1,7 @@
+## 0.3.0-rc.17
+
+- Floors `grid_runtime` to `^0.2.0-rc.12` because `failure_policy.dart` consumes the re-exported `StepFailureClass.noResult` and `StepFailureClass.invalidResult` members introduced by `grid_trajectory 0.2.0-rc.4`; published `0.3.0-rc.15` and `0.3.0-rc.16` remain unchanged.
+
 ## 0.3.0-rc.16
 
 - A bead the store reports ready but the frontier excludes now FLARES the clause: cross-store link exclusions are a composed `MountEligibilityPredicate` (`crossLinkExclusionClause` through `composeMountEligibility`, beside `mountAttemptClause`), `applyBlockGuard` reports each block through an `onBlocked` observation, and `work.mountEligibilityRefused` re-fires whenever the refusing clause CHANGES rather than once per transition. Priority-then-bead-id admission and the live-session carve-out are preserved and pinned (tg-vdt0, #311).
