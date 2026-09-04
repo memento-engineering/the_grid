@@ -1,3 +1,7 @@
+## 0.3.0-rc.15
+
+- Added: `GridAssetDefinition.teaches` — the top-level commands a skill asset teaches, declared beside `artifacts` (default empty) and validated at the pack boundary by `GridAssetPackDefinition` (well-formed command names, no duplicates per asset; `ArgumentError.value` names the offending asset). Round-trips unchanged through pack and registry (tg-onap, #318).
+
 ## 0.3.0-rc.14
 
 - Added: `TrajectoryConfig.obligationQueryExtensions` — a station-authored list of `ObligationQuery` values that `TrajectoryHarness.start` appends after the base tick queries (default empty, so every existing composition is unchanged); `asDisabled` forwards it (tg-8zfd, #316).
