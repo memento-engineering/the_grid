@@ -1,3 +1,8 @@
+## 0.5.0-rc.14
+
+- Added: `asset-catalog` — the union asset catalog served READ-ONLY and resolved offline from the resolved package closure (`AssetCatalogCommand` over `AssetCatalogResolver`), plus the `grid/assets` read on the StationControl surface; `up` composes it (tg-oym2, #320).
+- Floors tightened to `grid_sdk ^0.3.0-rc.15` and `grid_engine ^0.3.0-rc.18` so a resolved set is coherent.
+
 ## 0.5.0-rc.13
 
 - Added: `grid watch --until <predicate>` — a closed set of typed event predicates with a bounded wait (`--timeout`), distinct exit codes for timeout and broken stream, and NDJSON-safe termination; transition-only semantics, so an operator seat returns when the gate opens instead of polling (tg-u5xt, #297).
