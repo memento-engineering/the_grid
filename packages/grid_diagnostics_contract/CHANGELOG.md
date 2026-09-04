@@ -1,3 +1,7 @@
+## 0.2.1
+
+- Added: `StationLockRecord.phase` (`StationLifecyclePhase.acquired` / `live` / `releasing`) with `withPhase`; the field is OPTIONAL on the wire and an absent key decodes to `live`, so every existing reader keeps parsing (the_grid#station-lock-record-carries-an-optional-lifecycle-phase; tg-g3zx, #322).
+
 ## 0.2.0
 
 - Breaking: the tree wire types (`TreeSnapshot`, `TreeNode`, `DiagnosticsProperty`,

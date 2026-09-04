@@ -1,3 +1,9 @@
+## 0.5.0-rc.15
+
+- Breaking: `AttachResult.Stale` is replaced by `Starting` (a lock at `acquired` whose pid is alive — the station is booting) and `Unreachable` (a dead pid or an unreachable control endpoint), so a booting station is no longer reported as crashed; every `switch` over the sealed class must name both. Migration: replace the `Stale` arm with `Starting` + `Unreachable`.
+- Added: the station lock is stamped with its lifecycle phase — `acquired` at acquire, `live` at `updateControl` (the VM-service attach is an orthogonal flag), `releasing` at release — preserving atomic ownership; `status` reports the phase (tg-g3zx, #322).
+- Floor tightened to `grid_diagnostics_contract ^0.2.1`.
+
 ## 0.5.0-rc.14
 
 - Added: `asset-catalog` — the union asset catalog served READ-ONLY and resolved offline from the resolved package closure (`AssetCatalogCommand` over `AssetCatalogResolver`), plus the `grid/assets` read on the StationControl surface; `up` composes it (tg-oym2, #320).
