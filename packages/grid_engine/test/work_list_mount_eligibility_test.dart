@@ -48,8 +48,20 @@ final class _Harness {
   final Bead bead;
   var _second = 1;
 
-  void pushAndFlush() {
-    joined.push(_snapshot(bead, _second++));
+  void pushAndFlush({
+    Set<String>? readyIds,
+    Map<String, String> frontierExclusionsByBeadId = const {},
+    Map<String, SessionProjection> sessionsByWorkBead = const {},
+  }) {
+    joined.push(
+      _snapshot(
+        bead,
+        _second++,
+        readyIds: readyIds,
+        frontierExclusionsByBeadId: frontierExclusionsByBeadId,
+        sessionsByWorkBead: sessionsByWorkBead,
+      ),
+    );
     owner.flush();
   }
 
@@ -59,14 +71,21 @@ final class _Harness {
 Bead _task() =>
     const Bead(id: 'tg-1', issueType: IssueType.task, status: BeadStatus.open);
 
-JoinedSnapshot _snapshot(Bead bead, int second) => JoinedSnapshot(
+JoinedSnapshot _snapshot(
+  Bead bead,
+  int second, {
+  Set<String>? readyIds,
+  Map<String, String> frontierExclusionsByBeadId = const {},
+  Map<String, SessionProjection> sessionsByWorkBead = const {},
+}) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
     beads: [bead],
     dependencies: const [],
-    readyIds: {bead.id},
+    readyIds: readyIds ?? {bead.id},
     capturedAt: DateTime(2026, 1, 1, 0, 0, second),
   ),
-  sessionsByWorkBead: const {},
+  sessionsByWorkBead: sessionsByWorkBead,
+  frontierExclusionsByBeadId: frontierExclusionsByBeadId,
 );
 
 List<WorkBead> _workBeads(Branch root) {
@@ -83,9 +102,20 @@ List<WorkBead> _workBeads(Branch root) {
 _Harness _mountHarness({
   MountEligibilityPredicate? mountEligibility,
   ExplorationTransport? transport,
+  Set<String>? readyIds,
+  Map<String, String> frontierExclusionsByBeadId = const {},
+  Map<String, SessionProjection> sessionsByWorkBead = const {},
 }) {
   final bead = _task();
-  final joined = JoinedSnapshotNotifier(_snapshot(bead, 0));
+  final joined = JoinedSnapshotNotifier(
+    _snapshot(
+      bead,
+      0,
+      readyIds: readyIds,
+      frontierExclusionsByBeadId: frontierExclusionsByBeadId,
+      sessionsByWorkBead: sessionsByWorkBead,
+    ),
+  );
   final owner = TreeOwner();
   final root = owner.mountRoot(
     ProviderScope(
@@ -144,7 +174,9 @@ void main() {
       clause: 'approval',
     );
     harness.pushAndFlush();
-    expect(transport.flares, hasLength(1));
+    expect(transport.flares, hasLength(2));
+    expect(transport.flares.last.name, 'work.mountEligibilityRefused');
+    expect(transport.flares.last.data['clause'], 'approval');
 
     eligibility.decision = const MountEligibilityDecision.eligible();
     harness.pushAndFlush();
@@ -160,7 +192,57 @@ void main() {
     );
     harness.pushAndFlush();
     expect(transport.flares.last.name, 'work.mountEligibilityRefused');
-    expect(transport.flares, hasLength(3));
+    expect(transport.flares, hasLength(4));
+  });
+
+  test('frontier exclusion uses existing refusal edges and preserves live '
+      'sessions', () {
+    const clause =
+        'frontier cross-link: link bead tranquility-awgj18 blocks tg-1 '
+        'on open target "genesis-7ob"';
+
+    final transport = _RecordingTransport();
+    final fresh = _mountHarness(
+      readyIds: const {},
+      frontierExclusionsByBeadId: const {'tg-1': clause},
+      transport: transport,
+    );
+    expect(fresh.workBeads(), isEmpty);
+    expect(transport.flares.single.name, 'work.mountEligibilityRefused');
+    expect(transport.flares.single.data, {'beadId': 'tg-1', 'clause': clause});
+
+    fresh.pushAndFlush(
+      readyIds: const {},
+      frontierExclusionsByBeadId: const {'tg-1': clause},
+    );
+    expect(transport.flares, hasLength(1));
+
+    fresh.pushAndFlush(
+      readyIds: const {},
+      frontierExclusionsByBeadId: const {
+        'tg-1':
+            'frontier cross-link: link bead tranquility-new blocks tg-1 '
+            'on unobserved target "genesis-new" (fail-closed)',
+      },
+    );
+    expect(transport.flares, hasLength(2));
+    expect(transport.flares.last.name, 'work.mountEligibilityRefused');
+
+    fresh.pushAndFlush();
+    expect(fresh.workBeads().map((work) => work.bead.id), ['tg-1']);
+    expect(transport.flares.last.name, 'work.mountEligibilityRestored');
+
+    final liveTransport = _RecordingTransport();
+    final live = _mountHarness(
+      readyIds: const {},
+      frontierExclusionsByBeadId: const {'tg-1': clause},
+      sessionsByWorkBead: const {
+        'tg-1': SessionProjection(workBeadId: 'tg-1', isTerminal: false),
+      },
+      transport: liveTransport,
+    );
+    expect(live.workBeads().map((work) => work.bead.id), ['tg-1']);
+    expect(liveTransport.flares, isEmpty);
   });
 
   test('null predicate preserves mounting', () {

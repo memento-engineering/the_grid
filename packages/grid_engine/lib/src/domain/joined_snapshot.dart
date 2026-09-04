@@ -21,6 +21,7 @@ class JoinedSnapshot {
     this.sessionsByWorkBead = const {},
     this.surplusSessionsByWorkBead = const {},
     this.mountAttemptsByWorkBead = const {},
+    this.frontierExclusionsByBeadId = const {},
   });
 
   /// An empty baseline — the notifier's seed value before the first refresh
@@ -35,7 +36,8 @@ class JoinedSnapshot {
       ),
       sessionsByWorkBead = const {},
       surplusSessionsByWorkBead = const {},
-      mountAttemptsByWorkBead = const {};
+      mountAttemptsByWorkBead = const {},
+      frontierExclusionsByBeadId = const {};
 
   /// The read-workspace work graph (pristine source — read-only, A37).
   final GraphSnapshot graph;
@@ -89,4 +91,11 @@ class JoinedSnapshot {
   /// Empty for a bead the station has never attempted; absence means zero, so
   /// no record is written until the first mount.
   final Map<String, MountAttemptRecord> mountAttemptsByWorkBead;
+
+  /// Exact join-time exclusion clause per authoritative-ready work bead
+  /// removed by an active state-store cross-link.
+  ///
+  /// Empty means no cross-link exclusion. The join computes this once so the
+  /// synchronous mount-eligibility predicate performs no store read.
+  final Map<String, String> frontierExclusionsByBeadId;
 }

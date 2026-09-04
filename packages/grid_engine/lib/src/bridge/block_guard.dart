@@ -36,11 +36,14 @@ class BlockEdge {
 ///
 /// Callers own the FILTER (which edges apply at all); this function owns the
 /// ENFORCEMENT. Returns [candidates] itself when there is nothing to apply.
+/// [onBlocked] observes the exact first edge that excludes each candidate; it
+/// does not implement another blocking decision.
 Set<String> applyBlockGuard({
   required Set<String> candidates,
   required Map<String, Bead> beadsById,
   required Iterable<BlockEdge> edges,
   void Function(String message)? onUnresolved,
+  void Function(String beadId, BlockEdge edge, Bead? target)? onBlocked,
 }) {
   if (candidates.isEmpty) return candidates;
   final byFrom = <String, List<BlockEdge>>{};
@@ -60,10 +63,12 @@ Set<String> applyBlockGuard({
           'not observed by any federated store — excluding $id from ready '
           '(fail-closed).',
         );
+        onBlocked?.call(id, edge, null);
         blocked = true;
         break;
       }
       if (!target.isClosed) {
+        onBlocked?.call(id, edge, target);
         blocked = true;
         break;
       }

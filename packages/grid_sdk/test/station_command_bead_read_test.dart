@@ -8,6 +8,7 @@ import 'package:test/test.dart';
 
 void main() {
   test('board and round stay resident, complete, and write-free', () async {
+    var stateRefreshCount = 0;
     final stateRunner = _FakeRunner();
     final alphaRunner = _FakeRunner();
     final betaRunner = _FakeRunner();
@@ -20,6 +21,8 @@ void main() {
         _snapshot(const [
           Bead(id: 'a-1', title: 'round work'),
           Bead(id: 'a-2', title: 'between rounds'),
+          Bead(id: 'tg-5kb', title: 'cross-link dependent'),
+          Bead(id: 'butane_flutter-41eh', title: 'closed-target dependent'),
         ]),
       ),
       runner: alphaRunner,
@@ -27,7 +30,17 @@ void main() {
     final beta = _binding(
       name: 'beta',
       root: '/beta',
-      source: _Source(_snapshot(const [Bead(id: 'b-1', title: 'beta')])),
+      source: _Source(
+        _snapshot(const [
+          Bead(id: 'b-1', title: 'beta'),
+          Bead(id: 'genesis-7ob', title: 'open cross-link target'),
+          Bead(
+            id: 'butane_flutter-t9y',
+            title: 'closed cross-link target',
+            status: BeadStatus.closed,
+          ),
+        ]),
+      ),
       runner: betaRunner,
     );
     final missing = _binding(
@@ -51,9 +64,29 @@ void main() {
             issueType: GridIssueTypes.session,
             metadata: {SessionBeadKeys.workBead: 'a-1'},
           ),
+          Bead(
+            id: 'tranquility-awgj18',
+            issueType: GridIssueTypes.link,
+            metadata: {
+              CrossLinkKeys.from: 'tg-5kb',
+              CrossLinkKeys.to: 'genesis-7ob',
+              CrossLinkKeys.type: kCrossLinkBlocks,
+            },
+          ),
+          Bead(
+            id: 'tranquility-closed-target',
+            issueType: GridIssueTypes.link,
+            metadata: {
+              CrossLinkKeys.from: 'butane_flutter-41eh',
+              CrossLinkKeys.to: 'butane_flutter-t9y',
+              CrossLinkKeys.type: kCrossLinkBlocks,
+            },
+          ),
         ]),
       ),
-      refreshState: () async {},
+      refreshState: () async {
+        stateRefreshCount++;
+      },
       stateWriter: _writer(stateRunner, {'tgdog'}),
       stateOwnership: BeadOwnershipPredicate(const {'tgdog'}),
       workStoresByIdentity: {
@@ -78,8 +111,26 @@ void main() {
     expect(decoded.whereType<BoardBeadRow>().map((row) => row.id), [
       'a-1',
       'a-2',
+      'butane_flutter-41eh',
+      'tg-5kb',
       'b-1',
+      'genesis-7ob',
     ]);
+    expect(
+      decoded
+          .whereType<BoardBeadRow>()
+          .singleWhere((row) => row.id == 'tg-5kb')
+          .blockedBy,
+      ['genesis-7ob'],
+    );
+    expect(
+      decoded
+          .whereType<BoardBeadRow>()
+          .singleWhere((row) => row.id == 'butane_flutter-41eh')
+          .blockedBy,
+      isEmpty,
+    );
+    expect(stateRefreshCount, 1);
     expect(
       decoded.whereType<BoardStoreUnreadableRow>().map((row) => row.store),
       ['broken', 'missing'],

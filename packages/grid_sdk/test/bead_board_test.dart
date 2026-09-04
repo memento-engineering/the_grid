@@ -83,6 +83,31 @@ void main() {
     );
   });
 
+  test('active link targets join BLOCKED-BY and the blocked filter', () {
+    final rows = projectBoard(
+      store: 'the_grid',
+      root: '/grid',
+      snapshot: snapshot,
+      linkBlockersByBeadId: const {
+        'tg-c': ['genesis-7ob'],
+      },
+    ).whereType<BoardBeadRow>().toList();
+    expect(rows.singleWhere((row) => row.id == 'tg-c').blockedBy, [
+      'genesis-7ob',
+    ]);
+
+    final blocked = projectBoard(
+      store: 'the_grid',
+      root: '/grid',
+      snapshot: snapshot,
+      filter: const BoardFilter(blockedOnly: true),
+      linkBlockersByBeadId: const {
+        'tg-c': ['genesis-7ob'],
+      },
+    ).whereType<BoardBeadRow>().toList();
+    expect(blocked.map((row) => row.id), ['tg-a', 'tg-c']);
+  });
+
   test('both row union arms round-trip with their wire kinds', () {
     const rows = <BoardRow>[
       BoardRow.bead(

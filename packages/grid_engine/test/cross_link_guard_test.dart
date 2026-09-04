@@ -140,7 +140,9 @@ void main() {
         );
         await Future<void>.delayed(Duration.zero);
 
-        expect(read(bridge.notifier).graph.readyIds, contains('tg-1'));
+        final joined = read(bridge.notifier);
+        expect(joined.graph.readyIds, contains('tg-1'));
+        expect(joined.frontierExclusionsByBeadId, isEmpty);
       },
     );
 
@@ -184,6 +186,38 @@ void main() {
       expect(loud.last, contains('tg-1'));
       expect(loud.last, contains('space-404'));
       expect(loud.last, contains('fail-closed'));
+      expect(read(bridge.notifier).frontierExclusionsByBeadId, {
+        'tg-1':
+            'frontier cross-link: link bead houston-l1 blocks tg-1 on '
+            'unobserved target "space-404" (fail-closed)',
+      });
+    });
+
+    test('epoch 27/28 links carry exact frontier exclusion clauses', () {
+      workSrc = FakeSource(
+        graphOf([work('tg-5kb'), work('tg-wv9'), work('genesis-7ob')]),
+      );
+      stateSrc = FakeSource(
+        graphOf([
+          linkBead('tranquility-awgj18', from: 'tg-5kb', to: 'genesis-7ob'),
+          linkBead('tranquility-8fzpwn', from: 'tg-wv9', to: 'genesis-7ob'),
+        ], readyIds: const {}),
+      );
+      final bridge = bridgeOf();
+      addTearDown(bridge.dispose);
+
+      final joined = read(bridge.notifier);
+      expect(joined.graph.readyIds, isNot(contains('tg-5kb')));
+      expect(joined.graph.readyIds, isNot(contains('tg-wv9')));
+      expect(joined.graph.readyIds, contains('genesis-7ob'));
+      expect(joined.frontierExclusionsByBeadId, {
+        'tg-5kb':
+            'frontier cross-link: link bead tranquility-awgj18 blocks '
+            'tg-5kb on open target "genesis-7ob"',
+        'tg-wv9':
+            'frontier cross-link: link bead tranquility-8fzpwn blocks '
+            'tg-wv9 on open target "genesis-7ob"',
+      });
     });
 
     test('a MALFORMED link (no `to`, or an unknown `type`) blocks fail-closed '

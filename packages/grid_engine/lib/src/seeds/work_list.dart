@@ -298,6 +298,10 @@ class _WorkListState extends State<WorkList>
     // put in memory (the predicate is synchronous and cannot read the store),
     // composed with the station's own eligibility predicate when one exists.
     final mountEligibility = composeMountEligibility([
+      crossLinkExclusionClause(
+        _snapshot.frontierExclusionsByBeadId,
+        _snapshot.sessionsByWorkBead,
+      ),
       mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
     ], services?.mountEligibility);
     final mounted = <WorkBead>[];
@@ -598,9 +602,13 @@ class _WorkListState extends State<WorkList>
       _reportThrottled(services, [for (final w in waiting) w.bead]);
     }
 
-    // Deterministic order by bead id — all children are keyed, so reconcile is
-    // by key regardless, but a stable order keeps the tree legible.
-    mounted.sort((a, b) => a.bead.id.compareTo(b.bead.id));
+    // Keep the mounted projection in the same priority-then-id order used for
+    // admission. All children are keyed, so an existing branch still
+    // reconciles by key and is never evicted merely because priorities move.
+    mounted.sort((a, b) {
+      final byPriority = a.bead.priority.compareTo(b.bead.priority);
+      return byPriority != 0 ? byPriority : a.bead.id.compareTo(b.bead.id);
+    });
     // Re-provide the settled joined snapshot and data config as observed VALUES
     // for descendants. WorkList remains the only notifier subscriber;
     // SessionScope consumes these values through ambient tree seams.
@@ -642,7 +650,7 @@ class _WorkListState extends State<WorkList>
   ) {
     final formerClause = _mountEligibilityRefusals[beadId];
     _mountEligibilityRefusals[beadId] = clause;
-    if (formerClause != null) return;
+    if (formerClause == clause) return;
     _emitMountEligibilityFlare(
       services,
       'work.mountEligibilityRefused',
