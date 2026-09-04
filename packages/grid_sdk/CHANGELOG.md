@@ -1,3 +1,8 @@
+## 0.3.0-rc.14
+
+- Added: `TrajectoryConfig.obligationQueryExtensions` — a station-authored list of `ObligationQuery` values that `TrajectoryHarness.start` appends after the base tick queries (default empty, so every existing composition is unchanged); `asDisabled` forwards it (tg-8zfd, #316).
+- Floor tightened to `grid_engine ^0.3.0-rc.18` (the mount-eligibility recheck fix, tg-gukc, #315) so a resolved pair is coherent.
+
 ## 0.3.0-rc.13
 
 - `bead board` renders cross-store LINK blockers in its BLOCKED-BY column (previously only same-store `blocks` edges), and the station join bridge threads block observations into the joined snapshot (tg-vdt0, #311).

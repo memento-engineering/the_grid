@@ -1,4 +1,4 @@
-## Unreleased
+## 0.3.0-rc.18
 
 - Mount reconciliation now reports locally owned issue-type and drive-list exclusions through the existing named eligibility flare, turns a throwing eligibility predicate into a refusal instead of aborting the walk, and gives each new refusal one bounded next-event-tick recheck. Rechecks reuse value-equal mounted `WorkBead` seed identity so unchanged branches do not re-run `SessionResolver`, while cold round-keyed retired-session evidence now enters the existing stays-mounted reconciliation path. The full-tree missing-eligibility-row fixture is a falsifying regression witness for `genesis-7ob`; the exact epoch-29 production cause remains unconfirmed until the landed lunar boot.
 
