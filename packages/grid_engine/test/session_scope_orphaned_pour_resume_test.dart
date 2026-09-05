@@ -14,6 +14,8 @@
 // so a snapshot-lag false positive degrades to a no-op.
 //
 // Zero I/O — the recording chokepoint + a fake transport (Fakes, not mocks).
+import 'dart:async';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -126,7 +128,21 @@ Future<void> _pumpUntil(
 /// THROW (the tg-aec shape: a completed future that failed — a bd timeout or
 /// refused lifecycle type — against an EXISTING adopted session).
 class _ThrowingGraphRunner extends RecordingBdRunner {
+  _ThrowingGraphRunner({Object? beadByIdError})
+    : _beadByIdError = beadByIdError;
+
   int graphThrows = 1;
+  Object? _beadByIdError;
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    final error = _beadByIdError;
+    if (error != null) {
+      _beadByIdError = null;
+      throw error;
+    }
+    return super.beadById(id, types: types);
+  }
 
   @override
   Future<BdResult> run(List<String> args, {Duration? timeout, String? stdin}) {
@@ -164,6 +180,42 @@ const _orphan = SessionProjection(
   cursor: {},
   moleculeBeads: [],
   moleculeDependencies: [],
+);
+
+JoinedSnapshot _joinedWithHealthySibling() => JoinedSnapshot(
+  graph: GraphSnapshot.fromParts(
+    beads: [_task('tg-1'), _task('tg-2')],
+    dependencies: const [],
+    readyIds: const {'tg-1', 'tg-2'},
+    capturedAt: DateTime(2026),
+  ),
+  sessionsByWorkBead: {
+    'tg-1': _orphan,
+    'tg-2': SessionProjection(
+      workBeadId: 'tg-2',
+      sessionId: 'tgdog-healthy',
+      isMolecule: true,
+      cursor: const {'tg-2/agent': NodeCursor()},
+      moleculeBeads: [
+        _stepBead(
+          'step-healthy-agent',
+          path: 'tg-2/agent',
+          session: 'tgdog-healthy',
+        ),
+        _stepBead(
+          'step-healthy-verify',
+          path: 'tg-2/verify',
+          session: 'tgdog-healthy',
+        ),
+        _stepBead(
+          'step-healthy-land',
+          path: 'tg-2/land',
+          session: 'tgdog-healthy',
+        ),
+      ],
+      moleculeDependencies: const [],
+    ),
+  },
 );
 
 void main() {
@@ -254,6 +306,117 @@ void main() {
             'the scope for the life of the arm',
       );
       expect(transport.named('session.orphanedPourResumeFailed'), isEmpty);
+    },
+  );
+
+  for (final scenario in <({String label, Object error, String reason})>[
+    (
+      label: 'TimeoutException',
+      error: TimeoutException('fake gate assertion timed out'),
+      reason: 'fake gate assertion timed out',
+    ),
+    (
+      label: 'StateError',
+      error: StateError('fake gate assertion refused'),
+      reason: 'fake gate assertion refused',
+    ),
+  ]) {
+    test(
+      'orphan-resume park failure is contained (${scenario.label})',
+      () async {
+        final runner = _ThrowingGraphRunner(beadByIdError: scenario.error);
+        final transport = _RecordingTransport();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final uncaught = <Object>[];
+        late ({TreeOwner owner, Branch root}) mounted;
+
+        await runZonedGuarded(() async {
+          mounted = _mount(
+            joined: JoinedSnapshotNotifier(_joinedWithHealthySibling()),
+            ctx: _ctxOver(runner),
+            registry: reg,
+            transport: transport,
+          );
+          await _pumpUntil(
+            mounted.owner,
+            () =>
+                transport.named('session.moleculePourParkFailed').isNotEmpty &&
+                reg.events.contains('START agent(tgdog-healthy/tg-2/agent)'),
+          );
+          await Future<void>.delayed(Duration.zero);
+          mounted.owner.flush();
+        }, (error, stackTrace) => uncaught.add(error))!;
+        addTearDown(mounted.owner.dispose);
+
+        expect(uncaught, isEmpty);
+        final parkFailures = transport.named('session.moleculePourParkFailed');
+        expect(parkFailures, hasLength(1));
+        expect(parkFailures.single.data['sessionId'], 'tgdog-orphan');
+        expect(parkFailures.single.data['workBeadId'], 'tg-1');
+        expect(parkFailures.single.data['reason'], contains(scenario.reason));
+        expect(
+          reg.events,
+          contains('START agent(tgdog-healthy/tg-2/agent)'),
+          reason: 'a failed orphan park must not kill healthy sibling work',
+        );
+      },
+    );
+  }
+
+  test(
+    'failed orphan-resume park clears its latch for a later build retry',
+    () async {
+      final runner = _ThrowingGraphRunner(
+        beadByIdError: StateError('fake gate assertion refused once'),
+      );
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final joined = JoinedSnapshotNotifier(_joined(const {'tg-1': _orphan}));
+      final m = _mount(
+        joined: joined,
+        ctx: _ctxOver(runner),
+        registry: reg,
+        transport: transport,
+      );
+      addTearDown(m.owner.dispose);
+
+      await _pumpUntil(
+        m.owner,
+        () => transport.named('session.moleculePourParkFailed').isNotEmpty,
+      );
+      expect(
+        runner.calls.where((c) => c.length > 1 && c[1] == '--graph'),
+        hasLength(1),
+      );
+
+      joined.push(_joined(const {'tg-1': _orphan}));
+      await _pumpUntil(
+        m.owner,
+        () =>
+            runner.calls
+                .where((c) => c.length > 1 && c[1] == '--graph')
+                .length >=
+            2,
+      );
+
+      expect(
+        runner.calls.where((c) => c.length > 1 && c[1] == '--graph'),
+        hasLength(2),
+        reason: 'a later snapshot retries the existing session pour',
+      );
+      expect(
+        runner
+            .callsFor('create')
+            .where((c) => c.length <= 1 || c[1] != '--graph'),
+        isEmpty,
+        reason:
+            'retrying an adopted session mints no replacement session or gate',
+      );
+      expect(
+        transport.named('session.moleculePourParkFailed'),
+        hasLength(1),
+        reason: 'the successful retry emits no duplicate park-failure flare',
+      );
     },
   );
 
