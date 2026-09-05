@@ -45,6 +45,108 @@ List<Directory> _libRoots() {
 }
 
 void main() {
+  test(
+    'the in-process admission cut preserves bead state and appends no admission records',
+    () {
+      final workspace = _workspaceRoot();
+      expect(workspace, isNotNull);
+      final root = workspace!.path;
+      final authority = File(
+        '$root/packages/grid_engine/lib/src/kernel/station_admission_authority.dart',
+      ).readAsStringSync();
+      final workList = File(
+        '$root/packages/grid_engine/lib/src/seeds/work_list.dart',
+      ).readAsStringSync();
+      final sessionScope = File(
+        '$root/packages/grid_engine/lib/src/circuit/session_scope.dart',
+      ).readAsStringSync();
+      final amendment = File(
+        '$root/docs/decisions/2026-09-04-admission-authority-in-process-cut.md',
+      ).readAsStringSync();
+
+      const moved = [
+        '_mountedIds',
+        '_mountAttemptsScheduled',
+        '_mountEligibilityRefusals',
+        '_mountEligibilityRechecks',
+        '_mountEligibilityRecheckTimer',
+        '_trustRefusedReported',
+        '_surplusRetiresScheduled',
+        '_surplusAliveReported',
+        '_sessionAmbiguityReported',
+        '_gateSweepsScheduled',
+      ];
+      for (final name in moved) {
+        expect(authority, contains(name), reason: '$name stays behind owner');
+        expect(workList, isNot(contains(name)), reason: '$name moved out');
+      }
+      for (final incumbent in [
+        'recordMountAttempt',
+        'voidKeyFor',
+        'voidRetireMetadata',
+        'grid.voided_reason',
+      ]) {
+        expect(authority, contains(incumbent));
+      }
+      expect(workList, isNot(contains('recordMountAttempt')));
+
+      const directAttemptCalls = [
+        'writer.recordMountAttempt(',
+        'writer.createSession(',
+        'writer.createMolecule(',
+        'writer.closeSessionAndOpenGatesForTerminal(',
+        'writer.closeOpenGatesForTerminal(',
+        'writer.close(',
+      ];
+      for (final call in directAttemptCalls) {
+        expect(workList, isNot(contains(call)));
+        expect(sessionScope, isNot(contains(call)));
+      }
+      for (final retainedExecution in [
+        'createStepSuccessor',
+        'parkSessionAtGate',
+        'stepRearmed',
+        'worktreeReaped',
+        'sessionMinted',
+      ]) {
+        expect(sessionScope, contains(retainedExecution));
+      }
+
+      for (final libRoot in _libRoots()) {
+        for (final entity in libRoot.listSync(recursive: true)) {
+          if (entity is File && entity.path.endsWith('.dart')) {
+            expect(
+              entity.readAsStringSync(),
+              isNot(contains('work.sessionAmbiguous')),
+              reason: entity.path,
+            );
+          }
+        }
+      }
+
+      for (final stage3Only in [
+        'grid_trajectory',
+        'AdmissionGrantIssued',
+        'AdmissionGrantConsumed',
+        'AdmissionGrantClosed',
+        'AdmissionRefused',
+        'AdmissionRestored',
+        'grantId',
+        'fencingToken',
+        'leaseId',
+        'expiresAt',
+        '.append(',
+      ]) {
+        expect(authority, isNot(contains(stage3Only)));
+      }
+      expect(
+        amendment,
+        contains('updates: ["the_grid#admission-authority-boundary"]'),
+      );
+      expect(amendment, contains('belongs exclusively to tg-lt0s'));
+    },
+  );
+
   test('no lib/ source in the WORKSPACE carries a raw NUL byte — the escape, '
       'always', () {
     final roots = _libRoots();
