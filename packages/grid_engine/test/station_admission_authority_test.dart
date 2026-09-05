@@ -130,12 +130,12 @@ void main() {
         ],
       );
 
-      expect(first.admitted, isEmpty);
-      expect(first.waiting.map((candidate) => candidate.bead.id), [
+      expect(first.admitted.map((entry) => entry.candidate.bead.id), [
         'tg-a',
         'tg-b',
-        'tg-z',
       ]);
+      expect(first.admitted.map((entry) => entry.mountAttempt), [null, null]);
+      expect(first.waiting.map((candidate) => candidate.bead.id), ['tg-z']);
       // Only the first two own synchronous reservations; the third is held by
       // capacity and never receives a mount-attempt write.
       await _pump();
@@ -162,6 +162,7 @@ void main() {
         'tg-a',
         'tg-b',
       ]);
+      expect(second.admitted.map((entry) => entry.mountAttempt), [1, 1]);
       expect(second.waiting.map((candidate) => candidate.bead.id), ['tg-z']);
     },
   );
@@ -244,7 +245,7 @@ void main() {
   );
 
   test(
-    'a failed durable attempt releases, flares, and invalidates once after standard backoff',
+    'a failed durable attempt invalidates immediately and after standard backoff',
     () async {
       final runner = _FailingMountAttemptRunner();
       final authority = StationAdmissionAuthority(
@@ -271,13 +272,14 @@ void main() {
         services,
         [candidate],
       );
-      expect(writing.admitted, isEmpty);
-      expect(writing.waiting.single.bead.id, bead.id);
+      expect(writing.admitted.single.candidate.bead.id, bead.id);
+      expect(writing.admitted.single.mountAttempt, isNull);
+      expect(writing.waiting, isEmpty);
       await _pump();
 
       expect(transport.flares.single.name, 'work.mountAttemptRecordFailed');
       expect(transport.flares.single.data['beadId'], bead.id);
-      expect(notifications, 0, reason: 'failure waits for standard backoff');
+      expect(notifications, 1, reason: 'failure invalidates the mounted scope');
       expect(
         authority
             .admitPending(snapshot, _config, services, [candidate])
@@ -291,14 +293,13 @@ void main() {
       await Future<void>.delayed(
         Backoff.standard.delayFor(1) + const Duration(milliseconds: 50),
       );
-      expect(notifications, 1);
+      expect(notifications, 2, reason: 'standard backoff reopens admission');
 
-      authority.admitPending(snapshot, _config, services, [candidate]);
-      await _pump();
       final admitted = authority.admitPending(snapshot, _config, services, [
         candidate,
       ]);
       expect(admitted.admitted.single.candidate.bead.id, bead.id);
+      expect(admitted.admitted.single.mountAttempt, isNull);
     },
   );
 }

@@ -1,11 +1,16 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:state_notifier/state_notifier.dart';
 
+import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
+import '../domain/linked_sessions.dart';
+import '../domain/mount_attempt.dart';
+import '../domain/mount_eligibility.dart';
 import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
@@ -23,7 +28,8 @@ import 'work_bead.dart';
 ///
 /// This remains the sole joined-snapshot subscriber. It derives structural
 /// candidates from the settled graph, asks the station-owned authority, and
-/// renders only reservations the authority has admitted.
+/// renders only reservations the authority has admitted. A composition with
+/// no station services retains the synchronous, write-free offline fallback.
 class WorkList extends StatefulSeed with GridDiagnosticable {
   const WorkList({required this.substationConfig, super.key});
 
@@ -105,10 +111,6 @@ class _WorkListState extends State<WorkList>
     final stationServices = context.watch<StationServices>();
     final notifier = context.watch<JoinedSnapshotNotifier>();
     assert(
-      stationServices != null,
-      'WorkList requires ambient StationServices',
-    );
-    assert(
       notifier != null,
       'WorkList requires an ambient JoinedSnapshotNotifier',
     );
@@ -148,10 +150,6 @@ class _WorkListState extends State<WorkList>
   @override
   Seed build(TreeContext context) {
     final stationServices = context.watch<StationServices>();
-    assert(
-      stationServices != null,
-      'WorkList requires ambient StationServices',
-    );
     final services = context.watch<ServiceBundle>() ?? const ServiceBundle();
     _recorder = trajectoryRecorderOf(context);
     final ownership = BeadOwnershipPredicate(
@@ -179,13 +177,17 @@ class _WorkListState extends State<WorkList>
       );
     }
 
-    final batch = stationServices!.admission.admitPending(
-      _snapshot,
-      seed.substationConfig,
-      services,
-      candidates,
-    );
-    _projectTerminalAnswers(stationServices, services, candidates, batch);
+    final batch = stationServices == null
+        ? _admitOffline(services, candidates)
+        : stationServices.admission.admitPending(
+            _snapshot,
+            seed.substationConfig,
+            services,
+            candidates,
+          );
+    if (stationServices != null) {
+      _projectTerminalAnswers(stationServices, services, candidates, batch);
+    }
     for (final refusal in batch.refused) {
       if (refusal.clause == 'done' || refusal.clause == 'held') {
         _reportTerminalSkip(
@@ -198,20 +200,33 @@ class _WorkListState extends State<WorkList>
       }
     }
 
-    // Retain already-rendered siblings ahead of newly admitted branches. The
-    // authority has already applied priority/id ordering to the pending set;
-    // stable placement here keeps a new sibling from perturbing an unchanged
-    // mounted branch in genesis_tree's keyed reconcile.
+    // Keep already-rendered keyed siblings ahead of newly admitted branches.
+    // The authority's priority/id ordering governs pending reservations; this
+    // stable projection avoids perturbing an unchanged mounted branch.
+    final mountedOrder = <String, int>{};
+    var mountedIndex = 0;
+    for (final beadId in _mountedWorkBeadsById.keys) {
+      mountedOrder[beadId] = mountedIndex++;
+    }
     final projected = batch.admitted.toList()
       ..sort((left, right) {
-        final leftMounted = _mountedWorkBeadsById.containsKey(
-          left.candidate.bead.id,
-        );
-        final rightMounted = _mountedWorkBeadsById.containsKey(
-          right.candidate.bead.id,
-        );
-        if (leftMounted == rightMounted) return 0;
-        return leftMounted ? -1 : 1;
+        final leftIndex = mountedOrder[left.candidate.bead.id];
+        final rightIndex = mountedOrder[right.candidate.bead.id];
+        if (leftIndex != null && rightIndex != null) {
+          return leftIndex.compareTo(rightIndex);
+        }
+        if (leftIndex != null) return -1;
+        if (rightIndex != null) return 1;
+        final leftCarriesLive =
+            left.candidate.session != null &&
+            !left.candidate.session!.isTerminal;
+        final rightCarriesLive =
+            right.candidate.session != null &&
+            !right.candidate.session!.isTerminal;
+        if (leftCarriesLive != rightCarriesLive) {
+          return leftCarriesLive ? -1 : 1;
+        }
+        return 0;
       });
     final mounted = [
       for (final reservation in projected) _workBeadFor(reservation.candidate),
@@ -226,6 +241,198 @@ class _WorkListState extends State<WorkList>
       ],
       child: _WorkBeads(mounted),
     );
+  }
+
+  /// Preserves the pre-authority composition used by offline tree tests.
+  ///
+  /// This branch owns no station-wide state: it evaluates the same pure gate,
+  /// trust policy, linked-session disposition, deterministic ordering, and
+  /// substation ceiling as the former WorkList, but deliberately skips the
+  /// authority-only reservation and durable mount-attempt write.
+  StationAdmissionBatch _admitOffline(
+    ServiceBundle services,
+    List<StationAdmissionCandidate> candidates,
+  ) {
+    final mountEligibility = composeMountEligibility([
+      dispatchableWorkClause(resident: seed.substationConfig.resident),
+      driveListClause(seed.substationConfig.driveList),
+      crossLinkExclusionClause(
+        _snapshot.frontierExclusionsByBeadId,
+        _snapshot.sessionsByWorkBead,
+      ),
+      mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
+    ], services.mountEligibility);
+    final mounted = <StationAdmissionReservation>[];
+    final pending = <StationAdmissionCandidate>[];
+    final refused = <StationAdmissionRefusal>[];
+
+    for (final candidate in candidates) {
+      final bead = candidate.bead;
+      final MountEligibilityDecision eligibility;
+      try {
+        eligibility = mountEligibility(bead);
+      } on Object catch (error) {
+        refused.add(
+          StationAdmissionRefusal(
+            candidate: candidate,
+            clause: 'mount eligibility evaluation failed',
+            detail:
+                'mount eligibility evaluation failed: '
+                '${truncateReason('$error')}',
+          ),
+        );
+        continue;
+      }
+      if (eligibility case MountRefused(:final clause)) {
+        refused.add(
+          StationAdmissionRefusal(
+            candidate: candidate,
+            clause: _clauseName(clause),
+            detail: clause,
+          ),
+        );
+        continue;
+      }
+
+      if (services.trust != null) {
+        final reasons = <String>[];
+        final trusted = applyTrustGuard(
+          candidates: {bead.id},
+          beadsById: _snapshot.graph.beadsById,
+          floor: services.trustFloor,
+          trustConfigured: true,
+          onUnresolved: reasons.add,
+        );
+        if (!trusted.contains(bead.id)) {
+          refused.add(
+            StationAdmissionRefusal(
+              candidate: candidate,
+              clause: 'trust',
+              detail: reasons.single,
+            ),
+          );
+          continue;
+        }
+      }
+
+      final verdict = linkedSessionVerdictOf(_snapshot.linkedSessions(bead.id));
+      if (bead.isClosed) {
+        final disposition = sessionDispositionOf(verdict.winner);
+        final clause = switch (disposition) {
+          HeldSession() => 'held',
+          DoneSession() => 'done',
+          NoSession() || LiveSession() || VoidedSession() => 'work-terminal',
+        };
+        refused.add(
+          StationAdmissionRefusal(
+            candidate: candidate,
+            clause: clause,
+            detail: 'the work bead is terminal',
+          ),
+        );
+        continue;
+      }
+      switch (verdict) {
+        case AdoptLinkedSession(:final session, :final rivals):
+          if (rivals.isNotEmpty) {
+            refused.add(
+              StationAdmissionRefusal(
+                candidate: candidate,
+                clause: 'duplicate-live',
+                detail: 'more than one live durable session links this bead',
+              ),
+            );
+            continue;
+          }
+          mounted.add(
+            StationAdmissionReservation(
+              candidate: StationAdmissionCandidate(
+                bead: bead,
+                session: session,
+              ),
+              substationId: seed.substationConfig.substationId,
+              mountAttempt: null,
+              sessionId: session.sessionId,
+              adopted: session.sessionId?.isNotEmpty == true,
+            ),
+          );
+          continue;
+        case BlockedLinkedSession(:final session):
+          final disposition = sessionDispositionOf(session);
+          final clause = disposition is HeldSession ? 'held' : 'done';
+          refused.add(
+            StationAdmissionRefusal(
+              candidate: candidate,
+              clause: clause,
+              detail: 'the linked session is a blocking terminal ($clause)',
+            ),
+          );
+          continue;
+        case NoLinkedSession() || RemintLinkedSession():
+          break;
+      }
+
+      final retiredRound =
+          candidate.session != null &&
+          reworkRoundOf(bead.id, candidate.session!.workBeadId) != null;
+      final staysMounted =
+          retiredRound || _mountedWorkBeadsById.containsKey(bead.id);
+      if (!_snapshot.graph.readyIds.contains(bead.id) && !staysMounted) {
+        continue;
+      }
+      if (staysMounted) {
+        mounted.add(_offlineReservation(candidate));
+      } else {
+        pending.add(candidate);
+      }
+    }
+
+    int compareCandidates(
+      StationAdmissionCandidate left,
+      StationAdmissionCandidate right,
+    ) {
+      final byPriority = left.bead.priority.compareTo(right.bead.priority);
+      return byPriority != 0
+          ? byPriority
+          : left.bead.id.compareTo(right.bead.id);
+    }
+
+    pending.sort(compareCandidates);
+    final cap =
+        seed.substationConfig.maxConcurrentWork ?? kDefaultMaxConcurrentWork;
+    final slots = math.max(0, cap - mounted.length);
+    final newlyAdmitted = pending.take(slots).toList(growable: false);
+    final waiting = pending.skip(slots).toList(growable: false);
+    mounted.addAll(newlyAdmitted.map(_offlineReservation));
+    mounted.sort(
+      (left, right) => compareCandidates(left.candidate, right.candidate),
+    );
+    if (waiting.isNotEmpty) {
+      _flare(services, 'work.throttled', {
+        'count': '${waiting.length}',
+        'beadIds': waiting.map((candidate) => candidate.bead.id).join(','),
+      });
+    }
+    return StationAdmissionBatch(
+      admitted: mounted,
+      waiting: waiting,
+      refused: refused,
+    );
+  }
+
+  StationAdmissionReservation _offlineReservation(
+    StationAdmissionCandidate candidate,
+  ) => StationAdmissionReservation(
+    candidate: candidate,
+    substationId: seed.substationConfig.substationId,
+    mountAttempt: null,
+    sessionId: candidate.session?.sessionId,
+    adopted: candidate.session?.sessionId?.isNotEmpty == true,
+  );
+
+  static String _clauseName(String detail) {
+    final colon = detail.indexOf(':');
+    return colon < 0 ? detail : detail.substring(0, colon);
   }
 
   void _projectTerminalAnswers(

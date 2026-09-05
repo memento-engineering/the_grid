@@ -40,7 +40,16 @@ The authority reserves station and substation capacity synchronously, orders
 pending work by ascending priority then bead id, and evaluates the existing
 composed mount-eligibility predicate and trust guard. `SessionScope` asks the
 same object for attempt transitions while retaining tree-owned circuit and
-step execution.
+step execution. A fresh reservation mounts in the same deriving flush while
+its bead-backed mount-attempt write proceeds; the durable ordinal arrives by
+an additive authority invalidation after that exact write succeeds.
+
+When no ambient `StationServices` exists, `WorkList` retains the supported
+synchronous offline fallback: it composes the four engine eligibility clauses
+with the vended `ServiceBundle.mountEligibility`, orders by priority then bead
+id, and applies the substation ceiling with `kDefaultMaxConcurrentWork` as its
+fallback. This path owns no station-wide reservation, durable attempt write,
+timer, or authority invalidation.
 
 This cut keeps the existing bead-backed `recordMountAttempt` representation,
 the `_mountedIds` membership and every refusal/recheck/latch name as private
@@ -71,13 +80,10 @@ has not started.
 
 ## Decision Alignment
 
-This cut explicitly retires A43's ambient-absence branch, where
-`stationCap == null` (no ambient `StationServices`) meant only the
-substation-local cap applied. A `WorkList` can now mount only when composed
-with the station-owned `StationServices`; offline compositions provide the
-same fake-backed ambient instead of falling back to local admission logic.
-This preserves A43's substation and station ceilings while replacing its
-same-flush declare-and-check approximation with synchronous reservations.
+This cut preserves A43's ambient-absence branch as the synchronous offline
+fallback under `kDefaultMaxConcurrentWork`. When `StationServices` is ambient,
+the authority preserves A43's substation and station ceilings while replacing
+its same-flush declare-and-check approximation with synchronous reservations.
 
 The `dry-bd-seam-mints-under-the-owning-prefix` decision remains unchanged.
 `StationWorkRuntime` continues to use the existing per-substation

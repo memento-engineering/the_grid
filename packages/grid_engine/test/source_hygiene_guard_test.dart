@@ -143,6 +143,9 @@ void main() {
         amendment,
         contains('updates: ["the_grid#admission-authority-boundary"]'),
       );
+      expect(amendment, contains('retains the supported'));
+      expect(amendment, contains('synchronous offline fallback'));
+      expect(amendment, contains('under `kDefaultMaxConcurrentWork`'));
       expect(amendment, contains('belongs exclusively to tg-lt0s'));
     },
   );

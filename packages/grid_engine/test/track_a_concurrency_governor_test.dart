@@ -95,6 +95,7 @@ Seed _root({
   required SubstationConfigNotifier substationConfig,
   ServiceBundle services = const ServiceBundle(),
   StationServices? stationServices,
+  bool includeStationServices = true,
 }) {
   Seed root = InheritedSeed<JoinedSnapshotNotifier>(
     value: joined,
@@ -109,6 +110,7 @@ Seed _root({
       ]),
     ),
   );
+  if (!includeStationServices) return root;
   return InheritedSeed<StationServices>(
     value: stationServices ?? buildFakes().ctx,
     child: root,
@@ -258,8 +260,6 @@ void main() {
             ),
           ),
         );
-        await _settleAdmissions(owner);
-
         expect(_mountedWorkIds(root), {'a-first', 'a-second'});
         expect(recorder.events.take(2), [
           'START work(a-first)',
@@ -576,9 +576,8 @@ void main() {
     });
 
     test(
-      'nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
-      'fallback binds — no substation override, no ambient StationServices',
-      () async {
+      'offline default: no StationServices admits a ready bead in one synchronous flush',
+      () {
         final recorder = _Recorder();
         final transport = _RecordingTransport();
         // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
@@ -605,14 +604,13 @@ void main() {
                 ),
               ),
               services: ServiceBundle(transport: transport),
+              includeStationServices: false,
               // No ambient `StationServices` at all — the offline-test default
               // this file's other cases wire deliberately, exercised here as the
               // genuinely-nothing-configured case.
             ),
           ),
         );
-        await _settleAdmissions(owner);
-
         expect(
           recorder.events,
           List.generate(

@@ -814,7 +814,7 @@ void main() {
       // No close, no fresh mint — the retired session is marked, not retired.
       expect(f.runner.callsFor('close'), isEmpty);
       expect(f.runner.workCreates, isEmpty);
-      final updates = f.runner.callsFor('update');
+      final updates = f.runner.workUpdates;
       final markers = [
         for (var i = 0; i < updates.length; i++)
           if (updates[i][1] == 'tgdog-live') f.runner.metadataOfUpdate(i),
@@ -862,7 +862,7 @@ void main() {
         hasLength(1),
       );
       expect(f.runner.callsFor('close'), isEmpty);
-      final updates = f.runner.callsFor('update');
+      final updates = f.runner.workUpdates;
       final declineMarkers = [
         for (var i = 0; i < updates.length; i++) f.runner.metadataOfUpdate(i),
       ].where((meta) => meta.containsKey('grid.rework_declined'));

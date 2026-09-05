@@ -127,7 +127,7 @@ StationServices _withLiveness(StationServices base, AllocationLiveness probe) =>
     );
 
 List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
-  final updates = runner.callsFor('update');
+  final updates = runner.workUpdates;
   return [
     for (var i = 0; i < updates.length; i++)
       if (updates[i].length > 1 && updates[i][1] == id)

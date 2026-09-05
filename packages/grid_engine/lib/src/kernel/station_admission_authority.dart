@@ -85,7 +85,8 @@ final class StationAdmissionBatch {
   /// Reservations that may mount now.
   final List<StationAdmissionReservation> admitted;
 
-  /// Candidates held behind capacity or an in-flight mount-attempt write.
+  /// Candidates held behind capacity, retry backoff, or another scope's
+  /// reservation.
   final List<StationAdmissionCandidate> waiting;
 
   /// Candidates rejected by a fail-closed clause.
@@ -472,11 +473,7 @@ final class StationAdmissionAuthority {
       }
       if (reservation != null) {
         scope._mountedIds.add(bead.id);
-        if (reservation.writeState == _MountAttemptWriteState.writing) {
-          waiting.add(candidate);
-        } else {
-          admitted.add(_reservationValue(candidate, reservation));
-        }
+        admitted.add(_reservationValue(candidate, reservation));
         continue;
       }
 
@@ -517,7 +514,7 @@ final class StationAdmissionAuthority {
       );
       _reservations[bead.id] = reservation;
       scope._mountedIds.add(bead.id);
-      waiting.add(candidate);
+      admitted.add(_reservationValue(candidate, reservation));
       _scheduleMountAttempt(scope, services, bead.id, attempt, reservation);
     }
 
@@ -610,7 +607,9 @@ final class StationAdmissionAuthority {
   ) => StationAdmissionReservation(
     candidate: candidate,
     substationId: reservation.scopeKey.substationId,
-    mountAttempt: reservation.mountAttempt,
+    mountAttempt: reservation.writeState == _MountAttemptWriteState.recorded
+        ? reservation.mountAttempt
+        : null,
     sessionId: reservation.sessionId,
     adopted: false,
   );
@@ -662,6 +661,7 @@ final class StationAdmissionAuthority {
           'reason': truncateReason('$error'),
         });
         _scheduleRetryInvalidation(workBeadId);
+        _notifyListeners();
       }
     });
   }
@@ -689,7 +689,8 @@ final class StationAdmissionAuthority {
     _notifyListeners();
   }
 
-  /// Creates and binds the session for an already-recorded reservation.
+  /// Creates and binds the session for a reservation, awaiting its exact
+  /// authority-owned mount-attempt write when that write is still in flight.
   Future<({String? sessionId, StationAdmissionRefusal? refusal})>
   createSessionAttempt(
     JoinedSnapshot snapshot,
@@ -728,7 +729,6 @@ final class StationAdmissionAuthority {
     }
     final reservation = _reservations[candidate.bead.id];
     if (reservation == null ||
-        reservation.writeState != _MountAttemptWriteState.recorded ||
         reservation.sessionId != null ||
         reservation.minting) {
       return (
@@ -742,6 +742,23 @@ final class StationAdmissionAuthority {
     }
     reservation.minting = true;
     try {
+      if (reservation.writeState == _MountAttemptWriteState.writing) {
+        final attempt = reservation.mountAttempt;
+        final write = attempt == null
+            ? null
+            : _mountAttemptWrites['${candidate.bead.id}:$attempt'];
+        if (write == null) {
+          throw StateError(
+            'the in-flight mount-attempt reservation has no owned write',
+          );
+        }
+        await write;
+        if (!identical(_reservations[candidate.bead.id], reservation)) {
+          throw StateError(
+            'the admission reservation was released while its write settled',
+          );
+        }
+      }
       final id = await _writer.createSession(
         substation: _stateSubstation,
         title: title,

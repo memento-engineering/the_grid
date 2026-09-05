@@ -176,34 +176,84 @@ _Harness _mountHarness({
 void main() {
   test(
     'the authority evaluates the vended mount eligibility predicate without copying it',
-    () {
+    () async {
       final fakes = buildFakes();
       addTearDown(fakes.ctx.dispose);
       final bead = _task();
       final snapshot = _snapshot(bead, 0);
+      const live = SessionProjection(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-live',
+      );
+      final liveSnapshot = _snapshot(
+        bead,
+        1,
+        sessionsByWorkBead: const {'tg-1': live},
+      );
       var evaluations = 0;
+      var invalidations = 0;
+      var decision = const MountEligibilityDecision.refused(
+        clause: 'vended-policy',
+      );
+      var throws = false;
+      fakes.ctx.admission.addInvalidationListener(() => invalidations++);
+      final services = ServiceBundle(
+        mountEligibility: (evaluated) {
+          evaluations++;
+          expect(evaluated, same(bead));
+          if (throws) throw StateError('vended-policy-failed');
+          return decision;
+        },
+      );
+      const config = SubstationConfig(
+        substationId: 'test',
+        ownedSubstations: {'tg'},
+        maxConcurrentWork: 10,
+      );
+      final candidate = StationAdmissionCandidate(bead: bead, session: null);
       final batch = fakes.ctx.admission.admitPending(
         snapshot,
-        const SubstationConfig(
-          substationId: 'test',
-          ownedSubstations: {'tg'},
-          maxConcurrentWork: 10,
-        ),
-        ServiceBundle(
-          mountEligibility: (evaluated) {
-            evaluations++;
-            expect(evaluated, same(bead));
-            return const MountEligibilityDecision.refused(
-              clause: 'vended-policy',
-            );
-          },
-        ),
-        [StationAdmissionCandidate(bead: bead, session: null)],
+        config,
+        services,
+        [candidate],
       );
 
       expect(evaluations, 1);
       expect(batch.admitted, isEmpty);
       expect(batch.refused.single.detail, 'vended-policy');
+
+      await Future<void>.delayed(Duration.zero);
+      expect(invalidations, 1, reason: 'one bounded refusal recheck');
+      await Future<void>.delayed(Duration.zero);
+      expect(invalidations, 1, reason: 'a stable refusal cannot hot-loop');
+
+      decision = const MountEligibilityDecision.eligible();
+      final restored = fakes.ctx.admission.admitPending(
+        liveSnapshot,
+        config,
+        services,
+        [StationAdmissionCandidate(bead: bead, session: live)],
+      );
+      expect(evaluations, 2);
+      expect(restored.admitted.single.adopted, isTrue);
+
+      throws = true;
+      final failed = fakes.ctx.admission.admitPending(
+        liveSnapshot,
+        config,
+        services,
+        [StationAdmissionCandidate(bead: bead, session: live)],
+      );
+      expect(evaluations, 3);
+      expect(failed.admitted, isEmpty);
+      expect(
+        failed.refused.single.detail,
+        contains('mount eligibility evaluation failed'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(invalidations, 2, reason: 'the throwing clause gets one recheck');
+      await Future<void>.delayed(Duration.zero);
+      expect(invalidations, 2);
       expect(fakes.runner.calls, isEmpty);
     },
   );

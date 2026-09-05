@@ -428,11 +428,12 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
       .where((c) => c.length > 1 && c[0] == 'create' && c[1] == '--graph')
       .toList();
 
-  /// The metadata object of the `update` call at [index] — decoded from
-  /// `--metadata '<json>'` when present, else assembled from the op-shaped
+  /// The metadata object of the session/step `update` call at [index] — decoded
+  /// from `--metadata '<json>'` when present, else assembled from the op-shaped
   /// `--set-metadata key=value` pairs (BdCliService's atomic-merge emission).
+  /// Mount-attempt metadata is intentionally excluded through [workUpdates].
   Map<String, dynamic> metadataOfUpdate(int index) {
-    final updates = callsFor('update');
+    final updates = workUpdates;
     final c = updates[index];
     final i = c.indexOf('--metadata');
     if (i != -1) return jsonDecode(c[i + 1]) as Map<String, dynamic>;

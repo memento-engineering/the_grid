@@ -360,15 +360,8 @@ void main() {
         const ServiceBundle(),
         [candidate],
       );
-      expect(first.waiting, [candidate]);
-      await _pump();
-      final admitted = station.admission.admitPending(
-        snapshot,
-        config,
-        const ServiceBundle(),
-        [candidate],
-      );
-      expect(admitted.admitted, hasLength(1));
+      expect(first.admitted, hasLength(1));
+      expect(first.admitted.single.mountAttempt, isNull);
       final created = await station.admission.createSessionAttempt(
         snapshot,
         candidate,
@@ -427,7 +420,8 @@ void main() {
         const ServiceBundle(),
         [rival],
       );
-      expect(reusable.waiting.single.bead.id, 'tg-2');
+      expect(reusable.admitted.single.candidate.bead.id, 'tg-2');
+      expect(reusable.admitted.single.mountAttempt, isNull);
       await _pump();
       expect(
         station.admission

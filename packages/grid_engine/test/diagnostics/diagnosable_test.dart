@@ -156,7 +156,7 @@ void main() {
   });
 
   group('semantic tree walker', () {
-    test('projects the mounted engine topology and removes plumbing', () async {
+    test('projects the mounted engine topology and removes plumbing', () {
       final bead = _task('tg-1');
       final joined = JoinedSnapshotNotifier(_joinedOne(bead));
       final fakes = buildFakes();
@@ -184,10 +184,6 @@ void main() {
           ),
         ),
       );
-      await Future<void>.delayed(Duration.zero);
-      owner.flush();
-      await Future<void>.delayed(Duration.zero);
-      owner.flush();
 
       final snapshot = DiagnosticsTreeWalker().walk(
         root,
