@@ -453,7 +453,7 @@ class CapabilityHostState extends State<CapabilityHost>
         if (_completed) return;
         _completed = true;
         _firePersist('complete', () => _persistComplete(payload));
-      case AllocationFailed(:final reason, :final kind):
+      case AllocationFailed(:final reason, :final kind, :final kindDeclared):
         if (_completed) return;
         _completed = true;
         if (reason.contains('sourceless-workspace')) {
@@ -463,7 +463,11 @@ class CapabilityHostState extends State<CapabilityHost>
         }
         _firePersist(
           'failure',
-          () => _persistReportedFailure(reason, kind: kind),
+          () => _persistReportedFailure(
+            reason,
+            kind: kind,
+            kindDeclared: kindDeclared,
+          ),
           recoverable: false,
         );
       case AllocationAdvanced(:final payload):
@@ -781,6 +785,7 @@ class CapabilityHostState extends State<CapabilityHost>
   Future<void> _persistReportedFailure(
     String reason, {
     required CapabilityFailureKind kind,
+    required bool kindDeclared,
   }) async {
     if (_cancelled || !context.mounted) return;
     final timing = _terminalTiming();
@@ -788,7 +793,11 @@ class CapabilityHostState extends State<CapabilityHost>
     final ranFor = startedAt == null
         ? null
         : timing.finishedAt.difference(startedAt);
-    final failureClass = resolveFailureClass(kind: kind, ranFor: ranFor);
+    final failureClass = resolveFailureClass(
+      kind: kind,
+      ranFor: ranFor,
+      kindDeclared: kindDeclared,
+    );
     if (failureClass != StepFailureClass.infra) {
       await _persistFailureClassed(
         reason,

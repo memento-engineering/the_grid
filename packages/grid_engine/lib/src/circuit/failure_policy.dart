@@ -15,20 +15,24 @@ import 'harness_throttle.dart';
 
 /// The durable class for a reported [kind] plus the host's [ranFor] evidence.
 ///
-/// A fast [CapabilityFailureKind.noResult] specializes to
-/// [StepFailureClass.infra] — the existing harness-silence evidence, unchanged.
-/// `StepFailureClass.storeUnavailable` is never produced here: it is a host
-/// observation about its OWN write, not a capability outcome.
+/// A protocol-declared [CapabilityFailureKind.noResult] is
+/// [StepFailureClass.infra] irrespective of elapsed time. An undeclared fast
+/// `noResult` specializes to `infra` through the existing harness-silence
+/// evidence, unchanged. `StepFailureClass.storeUnavailable` is never produced
+/// here: it is a host observation about its OWN write, not a capability
+/// outcome.
 StepFailureClass resolveFailureClass({
   required CapabilityFailureKind kind,
   required Duration? ranFor,
-}) => switch (kind) {
-  CapabilityFailureKind.work => StepFailureClass.work,
-  CapabilityFailureKind.noResult =>
+  bool kindDeclared = false,
+}) => switch ((kind, kindDeclared)) {
+  (CapabilityFailureKind.work, _) => StepFailureClass.work,
+  (CapabilityFailureKind.noResult, true) => StepFailureClass.infra,
+  (CapabilityFailureKind.noResult, false) =>
     isHarnessSilence(kind: kind, ranFor: ranFor)
         ? StepFailureClass.infra
         : StepFailureClass.noResult,
-  CapabilityFailureKind.invalidResult => StepFailureClass.invalidResult,
+  (CapabilityFailureKind.invalidResult, _) => StepFailureClass.invalidResult,
 };
 
 /// The exhaustion behaviour a [kind] gets when the capability declares none.

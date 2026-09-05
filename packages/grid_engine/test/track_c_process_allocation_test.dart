@@ -89,6 +89,9 @@ class _JobCap extends ProcessCapability {
 }
 
 class _FlatChannelSession implements ProcessSession {
+  _FlatChannelSession(this.terminal);
+
+  final ProcessSessionUpdate terminal;
   final StreamController<ProcessSessionUpdate> _updates =
       StreamController<ProcessSessionUpdate>();
 
@@ -97,9 +100,7 @@ class _FlatChannelSession implements ProcessSession {
 
   @override
   Future<void> start() async {
-    _updates.add(
-      const ProcessSessionUpdate.completed(result: {'channel': 'shared'}),
-    );
+    _updates.add(terminal);
   }
 
   @override
@@ -179,15 +180,22 @@ void main() {
     () async {
       final reports = <AllocationReport>[];
       final provider = FakeRuntimeProvider();
-      final allocation = _ChannelJobCap(_FlatChannelSession()).createAllocation(
-        _ctx(
-          transport: provider,
-          sink: reports.add,
-          cancel: CancelToken(),
-          kind: StepKind.job,
-          fence: const AdoptFence(),
-        ),
-      );
+      final allocation =
+          _ChannelJobCap(
+            _FlatChannelSession(
+              const ProcessSessionUpdate.completed(
+                result: {'channel': 'shared'},
+              ),
+            ),
+          ).createAllocation(
+            _ctx(
+              transport: provider,
+              sink: reports.add,
+              cancel: CancelToken(),
+              kind: StepKind.job,
+              fence: const AdoptFence(),
+            ),
+          );
 
       await allocation.startOrAdopt();
       await _pump();
@@ -197,6 +205,69 @@ void main() {
       expect(reports.whereType<AllocationCompleted>().single.payload, {
         'channel': 'shared',
       });
+    },
+  );
+
+  test('channel failure preserves declared non-result kinds', () async {
+    for (final kind in <CapabilityFailureKind>[
+      CapabilityFailureKind.noResult,
+      CapabilityFailureKind.invalidResult,
+    ]) {
+      final reports = <AllocationReport>[];
+      final allocation =
+          _ChannelJobCap(
+            _FlatChannelSession(
+              ProcessSessionUpdate.failed(reason: 'declared $kind', kind: kind),
+            ),
+          ).createAllocation(
+            _ctx(
+              transport: FakeRuntimeProvider(),
+              sink: reports.add,
+              cancel: CancelToken(),
+              kind: StepKind.job,
+              fence: const AdoptFence(),
+            ),
+          );
+
+      await allocation.startOrAdopt();
+      await _pump();
+
+      final failed = reports.whereType<AllocationFailed>().single;
+      expect(failed.kind, kind);
+      expect(failed.kindDeclared, isTrue);
+    }
+  });
+
+  test(
+    'channel failure without a non-result declaration remains work',
+    () async {
+      for (final kind in <CapabilityFailureKind?>[
+        null,
+        CapabilityFailureKind.work,
+      ]) {
+        final reports = <AllocationReport>[];
+        final allocation =
+            _ChannelJobCap(
+              _FlatChannelSession(
+                ProcessSessionUpdate.failed(reason: 'default work', kind: kind),
+              ),
+            ).createAllocation(
+              _ctx(
+                transport: FakeRuntimeProvider(),
+                sink: reports.add,
+                cancel: CancelToken(),
+                kind: StepKind.job,
+                fence: const AdoptFence(),
+              ),
+            );
+
+        await allocation.startOrAdopt();
+        await _pump();
+
+        final failed = reports.whereType<AllocationFailed>().single;
+        expect(failed.kind, CapabilityFailureKind.work);
+        expect(failed.kindDeclared, isFalse);
+      }
     },
   );
 

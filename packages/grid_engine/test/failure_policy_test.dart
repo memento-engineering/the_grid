@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 
 const _fast = Duration(seconds: 9);
 const _slow = Duration(seconds: 31);
+const _long = Duration(minutes: 5);
 
 void main() {
   group('resolveFailureClass', () {
@@ -42,6 +43,39 @@ void main() {
         resolveFailureClass(
           kind: CapabilityFailureKind.invalidResult,
           ranFor: _fast,
+        ),
+        StepFailureClass.invalidResult,
+      );
+    });
+
+    test('declared noResult is infra without changing inferred silence', () {
+      expect(
+        resolveFailureClass(
+          kind: CapabilityFailureKind.noResult,
+          ranFor: _long,
+          kindDeclared: true,
+        ),
+        StepFailureClass.infra,
+      );
+      expect(
+        resolveFailureClass(
+          kind: CapabilityFailureKind.noResult,
+          ranFor: _long,
+        ),
+        StepFailureClass.noResult,
+      );
+      expect(
+        resolveFailureClass(
+          kind: CapabilityFailureKind.noResult,
+          ranFor: _fast,
+        ),
+        StepFailureClass.infra,
+      );
+      expect(
+        resolveFailureClass(
+          kind: CapabilityFailureKind.invalidResult,
+          ranFor: _long,
+          kindDeclared: true,
         ),
         StepFailureClass.invalidResult,
       );
@@ -91,6 +125,24 @@ void main() {
       );
       expect(r.backoff, Backoff.harnessThrottle);
       expect(r.onExhaustion, ExhaustionBehavior.parkAtGate);
+    });
+
+    test('declared noResult inherits infra retry and exhaustion policy', () {
+      final failureClass = resolveFailureClass(
+        kind: CapabilityFailureKind.noResult,
+        ranFor: _long,
+        kindDeclared: true,
+      );
+      final retry = resolveRetryPolicy(
+        declared: const SupervisionPolicy.inherit(),
+        kind: CapabilityFailureKind.noResult,
+        failureClass: failureClass,
+        circuitBackoff: Backoff.standard,
+        circuitMaxRestarts: 3,
+      );
+
+      expect(retry.backoff, Backoff.harnessThrottle);
+      expect(retry.onExhaustion, ExhaustionBehavior.parkAtGate);
     });
 
     test('a non-result parks at a gate; work latches', () {
