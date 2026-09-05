@@ -1,3 +1,7 @@
+## 0.2.0-rc.9
+
+- Fixed: `ProcessBdRunner` decodes a child's pipes with `Utf8Decoder(allowMalformed: true)`. Its deadline SIGKILLs a wedged `bd`; a pipe cut between the bytes of one multibyte character made the strict decoder throw `Unfinished UTF-8 octet sequence` from its close as the pipe's done event landed — before `process.exitCode` resolved, so the done-future errored with no listener and the error was UNCAUGHT in the zone. The resident isolate died on it ~90 s into every lunar boot on 2026-09-05 (epoch 39), right after the boot burst's 15 s bd timeouts. A torn tail is U+FFFD now and the call fails as it already did, with `BdTimeoutException` (tg-jbji, #326).
+
 ## 0.2.0-rc.8
 
 - The SQL ready port and the CLI snapshot reader carry a ready-only fallback merge, so a bead the store reports ready is never silently absent from a joined snapshot (tg-vdt0, #311).
