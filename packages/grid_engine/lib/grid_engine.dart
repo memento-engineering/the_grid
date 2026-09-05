@@ -137,6 +137,7 @@ export 'src/domain/mount_eligibility.dart';
 // + the adopt-liveness seam. Substation-scoped concerns (source control, the
 // workspace/branch layout) live on the SubstationScope's ServiceBundle, not here.
 export 'src/kernel/station_services.dart';
+export 'src/kernel/station_admission_authority.dart';
 
 // Stage 1 (tg-zfek) — the ONE new ambient value (stage1-wiring §1.1): the
 // harness's derivation layer, handed to the in-tree observation sites. The

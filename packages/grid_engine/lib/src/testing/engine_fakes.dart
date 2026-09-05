@@ -778,6 +778,7 @@ Fakes buildFakes({
   String createdId = 'tgdog-sess1',
   WorkSignalProbe? workSignal,
   List<String>? eventLog,
+  int maxConcurrentWork = kDefaultMaxConcurrentWork,
 }) {
   final runner = RecordingBdRunner(createdId: createdId, eventLog: eventLog);
   final provider = FakeRuntimeProvider();
@@ -797,6 +798,7 @@ Fakes buildFakes({
       provider: provider,
       writer: writer,
       stateSubstation: stateSubstation,
+      maxConcurrentWork: maxConcurrentWork,
       // The COMPLETION FENCE's probe — null (the default) leaves the fence inert,
       // so every existing test is unchanged.
       workSignal: workSignal,
