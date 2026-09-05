@@ -63,6 +63,10 @@ class _WorkListState extends State<WorkList>
   final Map<String, WorkBead> _mountedWorkBeadsById = <String, WorkBead>{};
   final Set<String> _terminalSkipReported = <String>{};
 
+  /// Bead ids whose current park has already been reported. A later mount
+  /// clears the latch so pausing the same session again remains observable.
+  final Set<String> _pausedReported = <String>{};
+
   StationTrajectoryRecorder _recorder =
       TrajectoryRecorderScope.disabled.recorder;
 
@@ -84,6 +88,7 @@ class _WorkListState extends State<WorkList>
 
   WorkBead _workBeadFor(StationAdmissionCandidate candidate) {
     final bead = candidate.bead;
+    _pausedReported.remove(bead.id);
     final cached = _mountedWorkBeadsById[bead.id];
     if (cached != null &&
         cached.bead == bead &&
@@ -197,6 +202,13 @@ class _WorkListState extends State<WorkList>
           refusal.candidate.bead.id,
           refusal.candidate.session?.sessionId ?? '',
           refusal.clause,
+          refusal.detail,
+        );
+      } else if (refusal.clause == 'paused') {
+        _reportPaused(
+          services,
+          refusal.candidate.bead.id,
+          refusal.candidate.session?.sessionId ?? '',
           refusal.detail,
         );
       }
@@ -332,7 +344,10 @@ class _WorkListState extends State<WorkList>
         final clause = switch (disposition) {
           HeldSession() => 'held',
           DoneSession() => 'done',
-          NoSession() || LiveSession() || VoidedSession() => 'work-terminal',
+          NoSession() ||
+          LiveSession() ||
+          VoidedSession() ||
+          PausedSession() => 'work-terminal',
         };
         refused.add(
           StationAdmissionRefusal(
@@ -355,6 +370,10 @@ class _WorkListState extends State<WorkList>
             );
             continue;
           }
+          final awaitsReadmission =
+              session.pauseState == SessionPauseState.resumed &&
+              !_mountedWorkBeadsById.containsKey(bead.id);
+          if (awaitsReadmission) break;
           mounted.add(
             StationAdmissionReservation(
               candidate: StationAdmissionCandidate(
@@ -370,7 +389,14 @@ class _WorkListState extends State<WorkList>
           continue;
         case BlockedLinkedSession(:final session):
           final disposition = sessionDispositionOf(session);
-          final clause = disposition is HeldSession ? 'held' : 'done';
+          final clause = switch (disposition) {
+            HeldSession() => 'held',
+            PausedSession() => 'paused',
+            DoneSession() => 'done',
+            NoSession() ||
+            LiveSession() ||
+            VoidedSession() => 'blocked-session',
+          };
           refused.add(
             StationAdmissionRefusal(
               candidate: candidate,
@@ -518,6 +544,20 @@ class _WorkListState extends State<WorkList>
       'beadId': beadId,
       'sessionId': sessionId,
       'disposition': disposition,
+      'reason': truncateReason(reason),
+    });
+  }
+
+  void _reportPaused(
+    ServiceBundle services,
+    String beadId,
+    String sessionId,
+    String reason,
+  ) {
+    if (!_pausedReported.add(beadId)) return;
+    _flare(services, 'work.paused', {
+      'beadId': beadId,
+      'sessionId': sessionId,
       'reason': truncateReason(reason),
     });
   }

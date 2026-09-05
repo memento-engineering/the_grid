@@ -24,6 +24,7 @@ import '../molecule/molecule_codec.dart' show projectMoleculeCursor;
 import '../sdk/circuit.dart';
 import '../sdk/cursor.dart' show NodeCursor;
 import 'joined_snapshot.dart';
+import 'session_bead.dart' show SessionPauseState;
 import 'step_cursor_read.dart' show effectiveStepCursor;
 
 part 'wedge.freezed.dart';
@@ -185,7 +186,11 @@ WedgeSample sampleWedge(JoinedSnapshot snapshot, {required DateTime now}) {
   var gated = 0;
   var cooling = 0;
   for (final session in snapshot.sessionsByWorkBead.values) {
-    if (session.isTerminal) continue;
+    // A paused session is deliberately not being driven and cannot contribute
+    // running work or mask a real station wedge.
+    if (session.isTerminal || session.pauseState == SessionPauseState.paused) {
+      continue;
+    }
     live++;
     // The model split is the EXPLICIT discriminator, never inferred from the
     // buckets (`DESIGN-tg-pm6.md` §12): a molecule pour that crashed before

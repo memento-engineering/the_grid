@@ -2,6 +2,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/cursor.dart';
+import 'session_bead.dart';
 import 'trajectory_views.dart';
 
 part 'session_projection.freezed.dart';
@@ -38,6 +39,12 @@ abstract class SessionProjection with _$SessionProjection {
     /// never re-queries the store; A39). Null only in synthetic/test
     /// projections — the join bridge always populates it.
     String? sessionId,
+
+    /// The operator pause axis. Historical sessions default to
+    /// [SessionPauseState.none].
+    /// It is meaningful only while [isTerminal] is false; terminal disposition
+    /// always wins over a stale pause marker.
+    @Default(SessionPauseState.none) SessionPauseState pauseState,
 
     /// True once the session bead is CLOSED. NOT on its own a statement that the
     /// work is DONE — three different things close a session, and only the

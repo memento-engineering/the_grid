@@ -274,6 +274,31 @@ void main() {
           ),
         );
 
+        for (final entry in const [
+          ('grid/session/pause', 'pause-1', '10'),
+          ('grid/session/resume', 'resume-1', '11'),
+        ]) {
+          final response = await _post(
+            control.url,
+            '/command',
+            token: 't',
+            fence: entry.$3,
+            idempotencyKey: entry.$2,
+            body: {
+              'id': entry.$2,
+              'method': entry.$1,
+              'params': {'beadId': 'tg-1'},
+            },
+          );
+          expect(response.statusCode, HttpStatus.ok);
+          expect(
+            handler.calls.last,
+            entry.$1.endsWith('pause')
+                ? const GridCommandRequest.pauseSession(beadId: 'tg-1')
+                : const GridCommandRequest.resumeSession(beadId: 'tg-1'),
+          );
+        }
+
         final refused = _FakeCommandHandler(
           result: const GridCommandResult.refused(
             code: 'gate_closed',

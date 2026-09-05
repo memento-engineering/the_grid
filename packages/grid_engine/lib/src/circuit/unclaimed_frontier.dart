@@ -15,6 +15,7 @@
 library;
 
 import '../domain/joined_snapshot.dart';
+import '../domain/session_bead.dart' show SessionPauseState;
 import '../domain/step_cursor_read.dart';
 import '../sdk/capability_facts.dart';
 import '../sdk/claim.dart';
@@ -79,7 +80,11 @@ List<UnclaimedRequirement> stationUnclaimedFrontier(
   final now = registry.now();
   final unclaimed = <UnclaimedRequirement>[];
   for (final session in snapshot.sessionsByWorkBead.values) {
-    if (session.isTerminal) continue;
+    // A paused branch mounts nothing, so peers must not claim capability slots
+    // for requirements that are not currently being driven.
+    if (session.isTerminal || session.pauseState == SessionPauseState.paused) {
+      continue;
+    }
     final bead = snapshot.graph.beadsById[session.workBeadId];
     if (bead == null) continue;
     final root = rootCircuitFor(bead);

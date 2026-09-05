@@ -55,7 +55,7 @@ extension SessionDispositionPatterns on SessionDisposition {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NoSession value)?  none,TResult Function( LiveSession value)?  live,TResult Function( DoneSession value)?  done,TResult Function( HeldSession value)?  held,TResult Function( VoidedSession value)?  voided,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NoSession value)?  none,TResult Function( LiveSession value)?  live,TResult Function( DoneSession value)?  done,TResult Function( HeldSession value)?  held,TResult Function( VoidedSession value)?  voided,TResult Function( PausedSession value)?  paused,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case NoSession() when none != null:
@@ -63,7 +63,8 @@ return none(_that);case LiveSession() when live != null:
 return live(_that);case DoneSession() when done != null:
 return done(_that);case HeldSession() when held != null:
 return held(_that);case VoidedSession() when voided != null:
-return voided(_that);case _:
+return voided(_that);case PausedSession() when paused != null:
+return paused(_that);case _:
   return orElse();
 
 }
@@ -81,7 +82,7 @@ return voided(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NoSession value)  none,required TResult Function( LiveSession value)  live,required TResult Function( DoneSession value)  done,required TResult Function( HeldSession value)  held,required TResult Function( VoidedSession value)  voided,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NoSession value)  none,required TResult Function( LiveSession value)  live,required TResult Function( DoneSession value)  done,required TResult Function( HeldSession value)  held,required TResult Function( VoidedSession value)  voided,required TResult Function( PausedSession value)  paused,}){
 final _that = this;
 switch (_that) {
 case NoSession():
@@ -89,7 +90,8 @@ return none(_that);case LiveSession():
 return live(_that);case DoneSession():
 return done(_that);case HeldSession():
 return held(_that);case VoidedSession():
-return voided(_that);}
+return voided(_that);case PausedSession():
+return paused(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -103,7 +105,7 @@ return voided(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NoSession value)?  none,TResult? Function( LiveSession value)?  live,TResult? Function( DoneSession value)?  done,TResult? Function( HeldSession value)?  held,TResult? Function( VoidedSession value)?  voided,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NoSession value)?  none,TResult? Function( LiveSession value)?  live,TResult? Function( DoneSession value)?  done,TResult? Function( HeldSession value)?  held,TResult? Function( VoidedSession value)?  voided,TResult? Function( PausedSession value)?  paused,}){
 final _that = this;
 switch (_that) {
 case NoSession() when none != null:
@@ -111,7 +113,8 @@ return none(_that);case LiveSession() when live != null:
 return live(_that);case DoneSession() when done != null:
 return done(_that);case HeldSession() when held != null:
 return held(_that);case VoidedSession() when voided != null:
-return voided(_that);case _:
+return voided(_that);case PausedSession() when paused != null:
+return paused(_that);case _:
   return null;
 
 }
@@ -128,14 +131,15 @@ return voided(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  none,TResult Function()?  live,TResult Function()?  done,TResult Function( String reason)?  held,TResult Function( String reason)?  voided,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  none,TResult Function()?  live,TResult Function()?  done,TResult Function( String reason)?  held,TResult Function( String reason)?  voided,TResult Function( String reason)?  paused,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case NoSession() when none != null:
 return none();case LiveSession() when live != null:
 return live();case DoneSession() when done != null:
 return done();case HeldSession() when held != null:
 return held(_that.reason);case VoidedSession() when voided != null:
-return voided(_that.reason);case _:
+return voided(_that.reason);case PausedSession() when paused != null:
+return paused(_that.reason);case _:
   return orElse();
 
 }
@@ -153,14 +157,15 @@ return voided(_that.reason);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  none,required TResult Function()  live,required TResult Function()  done,required TResult Function( String reason)  held,required TResult Function( String reason)  voided,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  none,required TResult Function()  live,required TResult Function()  done,required TResult Function( String reason)  held,required TResult Function( String reason)  voided,required TResult Function( String reason)  paused,}) {final _that = this;
 switch (_that) {
 case NoSession():
 return none();case LiveSession():
 return live();case DoneSession():
 return done();case HeldSession():
 return held(_that.reason);case VoidedSession():
-return voided(_that.reason);}
+return voided(_that.reason);case PausedSession():
+return paused(_that.reason);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -174,14 +179,15 @@ return voided(_that.reason);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  none,TResult? Function()?  live,TResult? Function()?  done,TResult? Function( String reason)?  held,TResult? Function( String reason)?  voided,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  none,TResult? Function()?  live,TResult? Function()?  done,TResult? Function( String reason)?  held,TResult? Function( String reason)?  voided,TResult? Function( String reason)?  paused,}) {final _that = this;
 switch (_that) {
 case NoSession() when none != null:
 return none();case LiveSession() when live != null:
 return live();case DoneSession() when done != null:
 return done();case HeldSession() when held != null:
 return held(_that.reason);case VoidedSession() when voided != null:
-return voided(_that.reason);case _:
+return voided(_that.reason);case PausedSession() when paused != null:
+return paused(_that.reason);case _:
   return null;
 
 }
@@ -194,7 +200,7 @@ return voided(_that.reason);case _:
 
 class NoSession extends SessionDisposition {
   const NoSession(): super._();
-  
+
 
 
 
@@ -409,6 +415,72 @@ class _$VoidedSessionCopyWithImpl<$Res>
 /// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
   return _then(VoidedSession(
+reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class PausedSession extends SessionDisposition {
+  const PausedSession({required this.reason}): super._();
+
+
+ final  String reason;
+
+/// Create a copy of SessionDisposition
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$PausedSessionCopyWith<PausedSession> get copyWith => _$PausedSessionCopyWithImpl<PausedSession>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is PausedSession&&(identical(other.reason, reason) || other.reason == reason));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,reason);
+
+@override
+String toString() {
+  return 'SessionDisposition.paused(reason: $reason)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $PausedSessionCopyWith<$Res> implements $SessionDispositionCopyWith<$Res> {
+  factory $PausedSessionCopyWith(PausedSession value, $Res Function(PausedSession) _then) = _$PausedSessionCopyWithImpl;
+@useResult
+$Res call({
+ String reason
+});
+
+
+
+
+}
+/// @nodoc
+class _$PausedSessionCopyWithImpl<$Res>
+    implements $PausedSessionCopyWith<$Res> {
+  _$PausedSessionCopyWithImpl(this._self, this._then);
+
+  final PausedSession _self;
+  final $Res Function(PausedSession) _then;
+
+/// Create a copy of SessionDisposition
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
+  return _then(PausedSession(
 reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
 as String,
   ));

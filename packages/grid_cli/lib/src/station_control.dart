@@ -566,6 +566,14 @@ class StationControl {
           append: append,
         );
       }
+    } else if (method == 'grid/session/pause' ||
+        method == 'grid/session/resume') {
+      final beadId = params['beadId'];
+      if (beadId is String && beadId.isNotEmpty) {
+        command = method == 'grid/session/pause'
+            ? GridCommandRequest.pauseSession(beadId: beadId)
+            : GridCommandRequest.resumeSession(beadId: beadId);
+      }
     } else if (method == 'grid/bead/board') {
       final stores = params['stores'] ?? const <Object?>[];
       final statuses = params['statuses'] ?? const <Object?>[];

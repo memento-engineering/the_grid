@@ -19,6 +19,8 @@ Future<void> main(List<String> arguments) async {
         ..addCommand(GateCommand())
         ..addCommand(SubstationCommand())
         ..addCommand(ReworkCommand())
+        ..addCommand(PauseCommand())
+        ..addCommand(ResumeCommand())
         ..addCommand(BeadCommand())
         ..addCommand(DemoCommand())
         // Stage 0's forensics verbs. Composed here for local measurement; a
