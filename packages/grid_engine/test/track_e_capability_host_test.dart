@@ -86,6 +86,16 @@ class _RecordingProcessCap extends ProcessCapability {
   Future<void> teardown(StepArgs args) async => log.add('teardown');
 }
 
+class _ThrowingResultProcessCap extends _RecordingProcessCap {
+  _ThrowingResultProcessCap(super.log);
+
+  @override
+  Future<Map<String, String>?> result(
+    TreeContext context,
+    StepArgs args,
+  ) async => throw const FormatException('verdict is unparseable');
+}
+
 class _ServiceCap extends ServiceCapability {
   _ServiceCap(this.outcome, this.log);
   final StepOutcome outcome;
@@ -180,11 +190,15 @@ InheritedCircuit _moleculeCircuit({String nodePath = 'tg-1/agent'}) =>
 /// The step bead's expected timing metadata for a TERMINAL write under the
 /// fixed [_clock] (`stepBeadMetadata` normalizes to UTC — an intentional
 /// divergence from the retired flat codec, `host_molecule_targeting_test.dart`).
-Map<String, String> _timing() => {
-  MoleculeStepKeys.startedAt: _clock.toUtc().toIso8601String(),
-  MoleculeStepKeys.finishedAt: _clock.toUtc().toIso8601String(),
-  MoleculeStepKeys.durationMs: '0',
-};
+Map<String, String> _timing({DateTime? finishedAt}) {
+  final finished = finishedAt ?? _clock;
+  return {
+    MoleculeStepKeys.startedAt: _clock.toUtc().toIso8601String(),
+    MoleculeStepKeys.finishedAt: finished.toUtc().toIso8601String(),
+    MoleculeStepKeys.durationMs:
+        '${finished.difference(_clock).inMilliseconds}',
+  };
+}
 
 /// The REAL transport-backed lease vendor (tg-h4u): routes a molecule-mode
 /// `ProcessCapability` through `stationProcessSpawner`/`stationProcessDispatcher`
@@ -202,6 +216,7 @@ const _realVendor = SelfManagedProcessVendor(
   Workspace? workspace,
   StepMount? mount,
   ProcessLeaseVendor? leaseVendor,
+  DateTime Function()? nowFn,
 }) {
   final fakes = buildFakes();
   final owner = TreeOwner();
@@ -225,7 +240,7 @@ const _realVendor = SelfManagedProcessVendor(
     InheritedSeed<StationServices>(
       value: fakes.ctx,
       child: InheritedSeed<CapabilityRegistry>(
-        value: RecordingCapabilityRegistry(clock: _clock),
+        value: RecordingCapabilityRegistry(clock: _clock, nowFn: nowFn),
         child: InheritedSeed<ServiceBundle>(
           value: services,
           child: InheritedSeed<Workspace>(
@@ -504,34 +519,43 @@ void main() {
       },
     );
 
-    test('a non-zero Exited writes the SUPERVISED failure (failed + restartCount '
-        '+ backoff cooldown — D-5)', () async {
-      final log = <String>[];
-      final h = _host(_RecordingProcessCap(log));
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
-      h.fakes.provider.emit(
-        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1),
-      );
-      await _pump();
-      // restartCount bumped to 1; cooldown = clock + Backoff.standard.delayFor(1)
-      // (= 1s). Within budget (maxRestarts default 3), so a cooldown is written.
-      // The dispatcher's generic `interpretEvent` → failed signal carries no
-      // capability-authored diagnostic → the generic dispatch reason.
-      expect(h.fakes.runner.metadataOfUpdate(0), {
-        MoleculeStepKeys.state: 'failed',
-        MoleculeStepKeys.restartCount: '1',
-        MoleculeStepKeys.cooldownUntil: _clock
-            .add(const Duration(seconds: 1))
-            .toUtc()
-            .toIso8601String(),
-        MoleculeStepKeys.failureReason: 'the spawned process failed',
-        ..._timing(),
-      });
-    });
+    test(
+      'a non-zero Exited within budget writes failed with standard cooldown',
+      () async {
+        final log = <String>[];
+        final flares = RecordingExplorationTransport();
+        var now = _clock;
+        final h = _host(
+          _RecordingProcessCap(log),
+          services: ServiceBundle(transport: flares),
+          nowFn: () => now,
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
+        now = _clock.add(kHarnessSilenceFloor + const Duration(seconds: 1));
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1),
+        );
+        await _pump();
+        // restartCount bumped to 1; cooldown = clock + Backoff.standard.delayFor(1)
+        // (= 1s). The process ran beyond the harness-silence floor, so its typed
+        // noResult remains no_result and uses the ordinary circuit backoff.
+        expect(h.fakes.runner.metadataOfUpdate(0), {
+          MoleculeStepKeys.state: 'failed',
+          MoleculeStepKeys.restartCount: '1',
+          MoleculeStepKeys.cooldownUntil: now
+              .add(const Duration(seconds: 1))
+              .toUtc()
+              .toIso8601String(),
+          MoleculeStepKeys.failureReason: 'the spawned process failed',
+          ..._timing(finishedAt: now),
+        });
+        expect(flares.named(kHarnessThrottledFlare), isEmpty);
+      },
+    );
 
     test(
       'a killed process event (Died BEFORE SessionStarted) fails the ACQUIRE '
@@ -567,32 +591,111 @@ void main() {
       },
     );
 
-    test('the LAST restart (exhausted) writes failed + restartCount, NO cooldown '
-        '(circuit-broken → SessionScope escalates)', () async {
-      final log = <String>[];
-      // The node is already at restartCount 2; one more failure → 3 == maxRestarts
-      // → exhausted.
-      final h = _host(
-        _RecordingProcessCap(log),
-        mount: _mount(_RecordingProcessCap(log), restartCount: 2),
-      );
-      addTearDown(() {
-        h.owner.dispose();
-        unawaited(h.fakes.provider.close());
-      });
-      await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
-      h.fakes.provider.emit(
-        const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1),
-      );
-      await _pump();
-      expect(h.fakes.runner.metadataOfUpdate(0), {
-        MoleculeStepKeys.state: 'failed',
-        MoleculeStepKeys.restartCount: '3', // == maxRestarts → exhausted
-        // no cooldownUntil key — the breaker is tripped.
-        MoleculeStepKeys.failureReason: 'the spawned process failed',
-        ..._timing(),
-      });
-    });
+    test(
+      'an exhausted leased process failure parks at one gate with one flare',
+      () async {
+        final log = <String>[];
+        final cap = _RecordingProcessCap(log);
+        final flares = RecordingExplorationTransport();
+        var now = _clock;
+        // The node is already at restartCount 2; one more failure → 3 == maxRestarts
+        // → exhausted.
+        final h = _host(
+          cap,
+          mount: _mount(cap, restartCount: 2),
+          services: ServiceBundle(transport: flares),
+          nowFn: () => now,
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
+        now = _clock.add(kHarnessSilenceFloor + const Duration(seconds: 1));
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 1),
+        );
+        await _pump();
+        final gated = h.fakes.runner.metadataOfUpdate(0);
+        expect(gated[MoleculeStepKeys.state], 'gated');
+        expect(gated[MoleculeStepKeys.restartCount], '3');
+        expect(
+          gated[MoleculeStepKeys.failureReason],
+          'the spawned process failed',
+        );
+        expect(gated, isNot(contains(MoleculeStepKeys.cooldownUntil)));
+
+        final creates = h.fakes.runner.callsFor('create');
+        expect(creates, hasLength(1));
+        expect(creates.single, containsAllInOrder(['--type', 'gate']));
+        final gate = [
+          for (var i = 0; i < h.fakes.runner.callsFor('update').length; i++)
+            h.fakes.runner.metadataOfUpdate(i),
+        ].singleWhere((metadata) => metadata.containsKey('reason'));
+        expect(gate['reason'], contains('tg-1/agent'));
+        expect(gate['reason'], contains('the spawned process failed'));
+        for (var i = 0; i < h.fakes.runner.callsFor('update').length; i++) {
+          expect(
+            h.fakes.runner.metadataOfUpdate(i)[MoleculeStepKeys.state],
+            isNot('failed'),
+          );
+        }
+        expect(flares.named('step.gated'), hasLength(1));
+        expect(flares.named(kHarnessThrottledFlare), isEmpty);
+      },
+    );
+
+    test(
+      'an exhausted leased result exception parks at one gate with one flare',
+      () async {
+        final log = <String>[];
+        final cap = _ThrowingResultProcessCap(log);
+        final flares = RecordingExplorationTransport();
+        final h = _host(
+          cap,
+          mount: _mount(cap, restartCount: 2),
+          services: ServiceBundle(transport: flares),
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _startThenIsolate(h.fakes, 'tgdog-s/tg-1/agent');
+        h.fakes.provider.emit(
+          const Exited(name: 'tgdog-s/tg-1/agent', exitCode: 0),
+        );
+        await _pump();
+
+        final gated = h.fakes.runner.metadataOfUpdate(0);
+        expect(gated[MoleculeStepKeys.state], 'gated');
+        expect(gated[MoleculeStepKeys.restartCount], '3');
+        expect(
+          gated[MoleculeStepKeys.failureReason],
+          contains('FormatException: verdict is unparseable'),
+        );
+        expect(gated, isNot(contains(MoleculeStepKeys.cooldownUntil)));
+
+        final creates = h.fakes.runner.callsFor('create');
+        expect(creates, hasLength(1));
+        expect(creates.single, containsAllInOrder(['--type', 'gate']));
+        final gate = [
+          for (var i = 0; i < h.fakes.runner.callsFor('update').length; i++)
+            h.fakes.runner.metadataOfUpdate(i),
+        ].singleWhere((metadata) => metadata.containsKey('reason'));
+        expect(gate['reason'], contains('tg-1/agent'));
+        expect(
+          gate['reason'],
+          contains('FormatException: verdict is unparseable'),
+        );
+        for (var i = 0; i < h.fakes.runner.callsFor('update').length; i++) {
+          expect(
+            h.fakes.runner.metadataOfUpdate(i)[MoleculeStepKeys.state],
+            isNot('failed'),
+          );
+        }
+        expect(flares.named('step.gated'), hasLength(1));
+      },
+    );
 
     test(
       'dispose STOPS the spawned group (dispose == RELEASE, ADR-0009 D4). The '
@@ -768,6 +871,37 @@ void main() {
         ..._timing(),
       });
     });
+
+    test(
+      'an exhausted default work failure latches failed without gate or flare',
+      () async {
+        const outcome = Failed('nope');
+        expect(outcome.kind, CapabilityFailureKind.work);
+
+        final log = <String>[];
+        final cap = _ServiceCap(outcome, log);
+        final flares = RecordingExplorationTransport();
+        final h = _host(
+          cap,
+          mount: _mount(cap, restartCount: 2),
+          services: ServiceBundle(transport: flares),
+        );
+        addTearDown(() {
+          h.owner.dispose();
+          unawaited(h.fakes.provider.close());
+        });
+        await _pump();
+
+        expect(h.fakes.runner.metadataOfUpdate(0), {
+          MoleculeStepKeys.state: 'failed',
+          MoleculeStepKeys.restartCount: '3',
+          MoleculeStepKeys.failureReason: 'nope',
+          ..._timing(),
+        });
+        expect(h.fakes.runner.callsFor('create'), isEmpty);
+        expect(flares.named('step.gated'), isEmpty);
+      },
+    );
   });
 
   group('Track E — the daemon ready→death path (no latch on ready, OQ-5)', () {

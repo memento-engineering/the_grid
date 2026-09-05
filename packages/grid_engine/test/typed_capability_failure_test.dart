@@ -1,7 +1,8 @@
 // A capability that NAMES its failure keeps the kind through the direct
-// ProcessAllocation path AND the lease-vended dispatcher; an untyped throw
-// stays work. No allocation-local wrapper is introduced: the one seam is
-// ProcessLeaseVendor → ProcessAllocation → AllocationFailed → CapabilityHost.
+// ProcessAllocation path AND the lease-vended dispatcher. At the live leased
+// result boundary, a failed signal is noResult and an untyped result exception
+// is invalidResult; the direct ProcessAllocation keeps an untyped throw as
+// work. No public signature or allocation-local wrapper is introduced.
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/molecule/process_lease_vendor.dart';
@@ -12,6 +13,7 @@ import 'package:test/test.dart';
 
 const _name = 'tgdog-s/tg-1/critic';
 const _exit = Exited(name: _name, exitCode: 0);
+const _failedExit = Exited(name: _name, exitCode: 1);
 
 class _NamingCap extends ProcessCapability {
   const _NamingCap({
@@ -81,11 +83,14 @@ Future<List<AllocationReport>> _direct(_NamingCap capability) async {
   return reports;
 }
 
-Future<StepOutcome> _leased(_NamingCap capability) async {
+Future<StepOutcome> _leased(
+  _NamingCap capability, {
+  RuntimeEvent terminal = _exit,
+}) async {
   final transport = FakeRuntimeProvider();
   addTearDown(transport.close);
   final context = _ctx(transport, (_) {});
-  transport.emit(_exit);
+  transport.emit(terminal);
   return stationProcessDispatcher(
     const ProcessHandle(pgid: 1, pid: 1, token: 'token'),
     ProcessLeaseRequest(
@@ -145,7 +150,7 @@ void main() {
   });
 
   test(
-    'an UNKNOWN throw stays work on both paths (backward compatible)',
+    'an UNKNOWN throw stays work on the DIRECT path (backward compatible)',
     () async {
       final reports = await _direct(
         _NamingCap(onResult: StateError('the result file is unreadable')),
@@ -153,12 +158,29 @@ void main() {
       final failed = reports.whereType<AllocationFailed>().single;
       expect(failed.kind, CapabilityFailureKind.work);
       expect(failed.reason, contains('result threw'));
+    },
+  );
 
+  test(
+    'a leased dispatcher failed signal is noResult and preserves its diagnostic',
+    () async {
+      final outcome = await _leased(const _NamingCap(), terminal: _failedExit);
+      final failed = outcome as Failed;
+      expect(failed.kind, CapabilityFailureKind.noResult);
+      expect(failed.reason, 'the spawned process failed');
+    },
+  );
+
+  test(
+    'a leased dispatcher untyped result exception is invalidResult and preserves its diagnostic',
+    () async {
       final outcome = await _leased(
-        _NamingCap(onResult: StateError('the result file is unreadable')),
+        _NamingCap(onResult: const FormatException('verdict is unparseable')),
       );
-      expect((outcome as Failed).kind, CapabilityFailureKind.work);
-      expect(outcome.reason, contains('result threw'));
+      final failed = outcome as Failed;
+      expect(failed.kind, CapabilityFailureKind.invalidResult);
+      expect(failed.reason, contains('result threw: FormatException'));
+      expect(failed.reason, contains('verdict is unparseable'));
     },
   );
 
