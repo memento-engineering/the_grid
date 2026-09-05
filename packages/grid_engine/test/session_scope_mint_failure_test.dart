@@ -381,6 +381,25 @@ StationServices _ctxOver(
   return (owner: owner, root: root);
 }
 
+DiagnosticsFlagProperty _mintFailedPropertyOf(Branch root) {
+  final snapshot = DiagnosticsTreeWalker().walk(
+    root,
+    projectedAt: DateTime.utc(2026, 9, 5),
+  );
+  final nodes = <TreeNode>[];
+  void collect(TreeNode node) {
+    nodes.add(node);
+    node.children.forEach(collect);
+  }
+
+  collect(snapshot.root);
+  final scope = nodes.singleWhere((node) => node.seedType == 'SessionScope');
+  return scope.properties.singleWhere(
+        (property) => property.name == 'mintFailed',
+      )
+      as DiagnosticsFlagProperty;
+}
+
 void main() {
   test(
     'tg-akc8 boot burst: a timed-out mint is voided and a live bead refuses a second attempt',
@@ -567,6 +586,11 @@ void main() {
           runner.workCreates,
           hasLength(5),
           reason: 'the mint is retried a bounded number of times (5), no more',
+        );
+        expect(
+          _mintFailedPropertyOf(m.root).value,
+          isTrue,
+          reason: 'the mounted scope retains its exhausted mint failure',
         );
 
         // LOUD: every attempt under budget flared `session.mintFailed`, and the
@@ -1029,6 +1053,11 @@ void main() {
         );
         // RECOVERED: the minted session inflated the first step.
         expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
+        expect(
+          _mintFailedPropertyOf(m.root).value,
+          isFalse,
+          reason: 'successful recovery clears the active mint failure',
+        );
       },
     );
   });

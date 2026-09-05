@@ -293,6 +293,7 @@ class SessionScopeState extends State<SessionScope>
   @override
   void debugFillProperties(DiagnosticsBuilder properties) {
     super.debugFillProperties(properties);
+    properties.addTyped(FlagProperty('mintFailed', _mintFailureActive));
     if (_sessionId case final sessionId?) {
       properties.addTyped(
         ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
@@ -302,6 +303,7 @@ class SessionScopeState extends State<SessionScope>
 
   bool _resolving = true;
   bool _failed = false;
+  bool _mintFailureActive = false;
   bool _cancelled = false;
   bool _terminalScheduled = false;
   bool _deliveryOutcomeBlocked = false;
@@ -874,6 +876,7 @@ class SessionScopeState extends State<SessionScope>
       _resolving = false;
       _isMolecule = true;
       _moleculeSessionId = null;
+      _mintFailureActive = false;
     });
   }
 
@@ -919,6 +922,7 @@ class SessionScopeState extends State<SessionScope>
     setState(() {
       _failed = true;
       _resolving = false;
+      _mintFailureActive = false;
     });
   }
 
@@ -987,9 +991,10 @@ class SessionScopeState extends State<SessionScope>
   /// Every failed attempt FLARES through the emit-only [ExplorationTransport]
   /// (the SAME sink `CapabilityHost._emitFlare` and [_flareRearmFailed] use), so
   /// a dead mint is OBSERVABLE — leonard reads it over the exploration host
-  /// (A39/A40), an operator counts which scopes are dead-minting — never an
-  /// invisible `mounted=0` (the FIRST-LIVE-ARM incident, 2026-07-10, boot #1:
-  /// every `createSession` threw and the station stood ARMED-but-silently-dead).
+  /// (A39/A40), while `mintFailed` projects the active failure into the
+  /// StationControl status counts — never an invisible `mounted=0` (the
+  /// FIRST-LIVE-ARM incident, 2026-07-10, boot #1: every `createSession` threw
+  /// and the station stood ARMED-but-silently-dead).
   ///
   /// Under the [_maxMintAttempts] budget it RETRIES (scheduled off `build`,
   /// never a write IN `build`), so a TRANSIENT bd blip recovers with no
@@ -999,9 +1004,14 @@ class SessionScopeState extends State<SessionScope>
   ///
   /// There is NO session bead on the mint path (the mint is what failed), so —
   /// unlike breaker-exhaustion (D-5), which marks its OWN session bead — the
-  /// flare is the only escalation channel; a human fixes the store and bounces
-  /// the station.
+  /// scope retains the active diagnostic beside its flares; a human fixes the
+  /// store and bounces the station.
   void _onMintFailed(Object error) {
+    if (!_mintFailureActive) {
+      setState(() {
+        _mintFailureActive = true;
+      });
+    }
     if (_mintAttempts < _maxMintAttempts) {
       _flareMint(_mintFailedFlare, error);
       // Retry off `build` (invariant 2) — the scope stays `resolving` (it was
@@ -1599,6 +1609,7 @@ class SessionScopeState extends State<SessionScope>
     _stepSuccessorMintAttemptsByPath.clear();
     _mintAttempts = 0;
     _moleculeSessionId = null;
+    _mintFailureActive = false;
     _requiresFreshMintSnapshot = true;
     scheduleMicrotask(() => unawaited(_mint()));
   }

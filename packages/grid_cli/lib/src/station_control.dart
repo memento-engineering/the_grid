@@ -76,6 +76,7 @@ class SubstationStatus {
     required this.ready,
     required this.mounted,
     required this.live,
+    this.mintFailedScopes = 0,
   });
 
   /// The owned substation id (an `args.substations` member).
@@ -93,6 +94,10 @@ class SubstationStatus {
   /// This substation's live non-terminal session count.
   final int live;
 
+  /// Mounted scopes with an unresolved session-mint failure, distinct from
+  /// healthy [mounted] work and from sessions that reached [live].
+  final int mintFailedScopes;
+
   /// Serializes to the wire shape.
   Map<String, Object?> toJson() => <String, Object?>{
     'substation': substation,
@@ -100,6 +105,7 @@ class SubstationStatus {
     'ready': ready,
     'mounted': mounted,
     'live': live,
+    'mintFailedScopes': mintFailedScopes,
   };
 }
 
@@ -120,6 +126,7 @@ class StationStatus {
     required this.mounted,
     required this.liveSessions,
     required this.lastSyncAt,
+    this.mintFailedScopes = 0,
     this.perSubstation = const <SubstationStatus>[],
     this.wedge = kNotWedged,
     this.sync = const <String, Object?>{},
@@ -162,6 +169,10 @@ class StationStatus {
 
   /// The count of owned sessions that have not yet reached a terminal cursor.
   final int liveSessions;
+
+  /// The count of mounted scopes with an unresolved session-mint failure,
+  /// distinct from healthy [mounted] work and [liveSessions].
+  final int mintFailedScopes;
 
   /// The wall-clock capture time of the work snapshot this status was built
   /// from, or null when no work baseline has arrived yet.
@@ -207,6 +218,7 @@ class StationStatus {
       'ready': ready,
       'mounted': mounted,
       'liveSessions': liveSessions,
+      'mintFailedScopes': mintFailedScopes,
       'lastSyncAt': lastSyncAt?.toIso8601String(),
       'perSubstation': [for (final s in perSubstation) s.toJson()],
     },
