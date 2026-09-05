@@ -352,12 +352,12 @@ void main() {
       );
       expect(
         runner.workCreates.where((call) => !call.contains('--graph')),
-        hasLength(1),
+        isEmpty,
         reason: 'calls=${runner.calls} flares=${transport.flares}',
       );
       expect(
         runner.workCreates.where((call) => call.contains('--graph')),
-        hasLength(1),
+        isEmpty,
       );
     });
 

@@ -543,7 +543,8 @@ void main() {
           m.owner.flush();
         }
 
-        await runner.entered.future;
+        await _pumpUntil(m.owner, () => runner.entered.isCompleted);
+        expect(runner.entered.isCompleted, isTrue);
         m.owner.dispose();
         runner.release.complete();
         await _waitUntil(

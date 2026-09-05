@@ -1,8 +1,8 @@
 /// The engine-private session lifecycle owner (ADR-0008 D4 / M4-P1 D-2).
 ///
 /// `SessionScope` is mounted by `WorkBead` ABOVE the circuit fan-out (the
-/// resolver returns it). It **adopt-or-mints** the the_grid session bead, holds
-/// `{resolving | ready | failed}`, and on `ready` provides a stable
+/// resolver returns it). It projects the authority's adopted or reserved
+/// attempt into `{resolving | ready | failed}`, and on `ready` provides a stable
 /// `InheritedSeed<SessionHandle>` over the `CircuitScope` so the inflater + every
 /// `CapabilityHost` attach to the SAME session — establishing the session is a
 /// tree *state* (a loading state, `const Idle()` until resolved), not a
@@ -12,11 +12,10 @@
 /// the per-substation `SourceControl`) and the `SiblingView` (this session's
 /// cursor + results) — the values an effect reads with the non-binding lookup.
 ///
-/// It owns the session lifecycle END-TO-END: it also CLOSES the session on the
-/// circuit's positive terminal (D-2 — one owner for open+close, not the terminal
-/// step's host). The close is SCHEDULED off `build` (never a write IN `build` —
-/// invariant 2) and latched once. Breaker-exhaustion close + escalation fold in
-/// at Track G.
+/// It owns tree execution END-TO-END and asks `StationAdmissionAuthority` for
+/// each durable attempt transition, including the positive-terminal close. The
+/// request is SCHEDULED off `build` (never a write IN `build` — invariant 2)
+/// and latched once. Breaker-exhaustion close + escalation fold in at Track G.
 ///
 /// **Adopt-or-mint DISPOSITIONS a closed session (I-10, tg-4rw).** An existing
 /// session bead is not simply "there or not": it is `live` (adopt), `done` /
@@ -68,6 +67,7 @@ import '../domain/session_projection.dart';
 import '../domain/rework.dart' show kMaxReworkRounds, reworkRoundOf;
 import '../domain/step_cursor_read.dart' show effectiveStepCursor;
 import '../kernel/station_services.dart';
+import '../kernel/station_admission_authority.dart';
 import '../kernel/idle.dart';
 import '../kernel/trajectory_scope.dart';
 import '../molecule/bead_path_key.dart';
@@ -77,7 +77,6 @@ import '../molecule/live_frontier.dart'
 import '../molecule/molecule_codec.dart';
 import '../molecule/molecule_schema.dart' show MoleculeStepKeys;
 import '../restart/restart_reconciler.dart' show ReapWorktree;
-import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/cursor.dart';
 import '../sdk/circuit.dart';
@@ -89,13 +88,15 @@ import 'capability_registry.dart';
 import 'circuit_scope.dart';
 import 'session_handle.dart';
 
-/// The adopt-or-mint session lifecycle owner for one work [bead]'s [circuit]
-/// (D-2). Key it `ValueKey('${bead.id}:session')` so it persists across cursor
-/// ticks while the work node keeps its branch identity.
+/// The tree execution lifecycle for one admitted work [bead]'s [circuit].
+///
+/// It asks the station admission authority for durable attempt transitions.
+/// Key it `ValueKey('${bead.id}:session')` so it persists across cursor ticks
+/// while the work node keeps its branch identity.
 class SessionScope extends StatefulSeed with GridDiagnosticable {
   /// Creates the scope for [bead] running [circuit], with the bead's linked
-  /// [existingSession] (null until a session exists — then `SessionScope` mints
-  /// one; non-null → it adopts).
+  /// [existingSession] (null until the authority creates one; non-null means
+  /// the authority admitted an adoption or a retire-then-remint lifecycle).
   const SessionScope({
     required this.bead,
     required this.circuit,
@@ -201,10 +202,11 @@ class SessionScopeState extends State<SessionScope>
     SessionDisposition disposition,
   ) async {
     try {
-      await _ctx!.writer.closeOpenGatesForTerminal(
+      await _ctx!.admission.closeTerminalGates(
         sessionId: sessionId,
-        trigger: cause,
+        cause: cause,
         disposition: _gateSweepDisposition(disposition),
+        services: _services,
       );
     } on Object catch (error) {
       _flare('gate.autoCloseFailed', {
@@ -217,10 +219,11 @@ class SessionScopeState extends State<SessionScope>
 
   Future<void> _closeRetiredReworkSession(String sessionId) async {
     try {
-      await _ctx!.writer.closeSessionAndOpenGatesForTerminal(
+      await _ctx!.admission.closeRetiredReworkSession(
+        workBeadId: seed.bead.id,
         sessionId: sessionId,
-        closeReason: 'reworked',
-        trigger: GateCloseCause.supersededRound,
+        reapMolecule: _isMolecule,
+        services: _services,
       );
       // §2.3's `attempt.round.retired` row, second observation site: the
       // command handler saw the re-key, this scope sees the retired round
@@ -241,6 +244,7 @@ class SessionScopeState extends State<SessionScope>
         'cause': GateCloseCause.supersededRound.wireValue,
         'reason': truncateReason('$error'),
       });
+      rethrow;
     }
   }
 
@@ -301,11 +305,10 @@ class SessionScopeState extends State<SessionScope>
   /// ADOPT (`initState`'s `LiveSession()` arm reads
   /// `seed.existingSession!.isMolecule`) or on a successful [_mint] (every
   /// fresh mint is molecule); retained through rework retirement so the old
-  /// graph is collected before round N+1. False only for an ADOPTED historical flat session,
-  /// which the engine no longer drives. Read by [_reapMoleculeForClose]
-  /// (captured-field async use, D-H rule 1) to decide whether every
-  /// engine-owned close also fires [StationBeadWriter.reapMolecule]
-  /// (R6's session-close collection).
+  /// graph is collected before round N+1. False only for an ADOPTED historical
+  /// flat session, which the engine no longer drives. Captured before async
+  /// authority completion calls to decide whether an engine-owned close also
+  /// reaps the molecule (R6's session-close collection).
   bool _isMolecule = false;
 
   /// The session id already minted for an IN-PROGRESS molecule mint (tg-6nf)
@@ -636,12 +639,21 @@ class SessionScopeState extends State<SessionScope>
     final retiredId = _retiredReworkSessionId;
     if (retiredId != null) {
       _retiredReworkSessionId = null;
-      await _reapMoleculeForClose(
-        _ctx!,
-        sessionId: retiredId,
-        closeReason: 'reworked',
-      );
-      await _closeRetiredReworkSession(retiredId);
+      try {
+        await _closeRetiredReworkSession(retiredId);
+      } on Object {
+        if (_stopAbandonedMint(
+          stage: 'retired-gates-close-failed',
+          retiredSessionId: retiredId,
+        )) {
+          return;
+        }
+        setState(() {
+          _failed = true;
+          _resolving = false;
+        });
+        return;
+      }
       if (_stopAbandonedMint(
         stage: 'retired-gates-closed',
         retiredSessionId: retiredId,
@@ -677,19 +689,12 @@ class SessionScopeState extends State<SessionScope>
       // engine-automatic member (`voidKeyFor`, never a `#r<N>` rework round).
       final dead = _voidSession;
       if (dead != null) {
-        if (!_staleFencesAreDead(dead)) {
-          _refuseVoidMint(dead);
-          return;
-        }
         final deadId = dead.sessionId ?? '';
         if (deadId.isNotEmpty) {
-          await _ctx!.writer.update(
-            deadId,
-            metadata: voidRetireMetadata(
-              workBeadId: seed.bead.id,
-              deadSessionId: deadId,
-              reason: _voidReason,
-            ),
+          await _ctx!.admission.retireVoidedSession(
+            workBeadId: seed.bead.id,
+            deadSession: dead,
+            reason: _voidReason,
           );
           // §2.3's `attempt.terminal(lost)` row: the DEAD KEY's terminal, and
           // the round it retires. The record carries the ORIGINAL work bead id
@@ -765,12 +770,30 @@ class SessionScopeState extends State<SessionScope>
   Future<void> _mintMolecule({required String? retiredSessionId}) async {
     var id = _moleculeSessionId;
     if (id == null) {
-      id = await _ctx!.writer.createSession(
-        substation: _ctx!.stateSubstation,
+      final result = await _ctx!.admission.createSessionAttempt(
+        _joinedSnapshot ?? JoinedSnapshot.empty(),
+        StationAdmissionCandidate(bead: seed.bead, session: _voidSession),
         title: 'grid session ${seed.bead.id}',
-        workBeadId: seed.bead.id,
         metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
       );
+      switch (result) {
+        case (sessionId: final createdId?, refusal: null):
+          id = createdId;
+        case (sessionId: null, refusal: final refusal?):
+          _recordMintRefused('${refusal.clause}: ${refusal.detail}');
+          _flare('session.mintRefused', {
+            'workBeadId': seed.bead.id,
+            'clause': refusal.clause,
+            'reason': refusal.detail,
+          });
+          setState(() {
+            _failed = true;
+            _resolving = false;
+          });
+          return;
+        default:
+          throw StateError('invalid session-attempt result');
+      }
       _moleculeSessionId = id;
       // §2.3's `attempt.session.started` row, derived at `createSession`'s SOLE
       // caller: rig and model are the same two values the birth-stamping merge
@@ -801,12 +824,38 @@ class SessionScopeState extends State<SessionScope>
       circuitById: _registry?.circuit,
     );
     try {
-      await _ctx!.writer.createMolecule(
+      await _ctx!.admission.pourMolecule(
         plan,
-        substation: _ctx!.stateSubstation,
+        workBeadId: seed.bead.id,
         sessionId: id,
         rootCrumbs: root.crumbs,
       );
+    } on StationMintVoided catch (voided) {
+      _recorder.sessionVoided(
+        sessionId: voided.retiredSessionId,
+        workBeadId: voided.workBeadId,
+        reason: 'mint-timeout',
+      );
+      _recorder.roundRetired(
+        sessionId: voided.retiredSessionId,
+        cause: RoundRetireCause.voided,
+        oldRound: 0,
+      );
+      _flare(_mintAbandonedFlare, {
+        'workBeadId': voided.workBeadId,
+        'retiredSessionId': voided.retiredSessionId,
+        'stage': 'molecule-pour',
+        'reason': 'mint-timeout',
+      });
+      _moleculeSessionId = null;
+      _sessionId = null;
+      if (!_cancelled && context.mounted) {
+        setState(() {
+          _failed = true;
+          _resolving = false;
+        });
+      }
+      return;
     } on Object catch (error) {
       await _parkFailedMoleculePour(
         id,
@@ -867,44 +916,6 @@ class SessionScopeState extends State<SessionScope>
     )) {
       return;
     }
-    setState(() {
-      _failed = true;
-      _resolving = false;
-    });
-  }
-
-  /// Whether EVERY process fence the VOIDED [session] still records is provably
-  /// DEAD — the fail-closed half of the I-10 re-mint.
-  ///
-  /// The probe is the ambient engine liveness seam (`StationServices.liveness`,
-  /// ADR-0009 D4) — the SAME pgid-alive half the daemon adopt-proof uses. It
-  /// NARROWS the re-mint; it is not its precondition. UNWIRED (the P1/offline
-  /// default, [neverLive]) nothing probes alive and the mint proceeds on the two
-  /// structural guarantees that stand without it: a work bead whose session went
-  /// terminal UNMOUNTS, and unmount DISPOSES its allocations (kill); and a station
-  /// restart SWEEPS a terminal session's live groups before the tree re-mounts
-  /// (`RestartReconciler`'s live-group sweep). WIRED (the live arm), a fence that
-  /// is STILL alive refuses the mint LOUD — a truly-live orphan is never
-  /// double-run.
-  bool _staleFencesAreDead(SessionProjection session) {
-    final probe = _ctx?.liveness ?? neverLive;
-    for (final fence in staleFences(session)) {
-      if (probe(fence)) return false;
-    }
-    return true;
-  }
-
-  /// LOUD-refuses the I-10 re-mint: the dead session still records a LIVE process
-  /// group, so minting would double-run it. Says WHY once (naming the pgids) and
-  /// goes inert — an operator kills the orphan group, or `grid rework` retires the
-  /// round. Never a silent wedge (the guard principle).
-  void _refuseVoidMint(SessionProjection session) {
-    _flare('session.voidRefused', {
-      'workBeadId': seed.bead.id,
-      'deadSessionId': session.sessionId ?? '',
-      'pgids': staleFences(session).map((f) => '${f.pgid}').join(','),
-      'reason': truncateReason(_voidReason),
-    });
     setState(() {
       _failed = true;
       _resolving = false;
@@ -1081,18 +1092,19 @@ class SessionScopeState extends State<SessionScope>
     final ctx = _ctx;
     if (ctx == null) return;
     try {
-      await ctx.writer.update(id, metadata: sessionCompleteMetadata());
+      await ctx.admission.completeSession(
+        workBeadId: seed.bead.id,
+        sessionId: id,
+        outcomeMarked: false,
+        reapMolecule: _isMolecule,
+        services: _services,
+      );
     } on Object catch (error) {
       _flare('session.outcomeUnmarked', {
         'sessionId': id,
         'reason': truncateReason('$error'),
       });
     }
-    await _reapMoleculeForClose(
-      ctx,
-      sessionId: id,
-      closeReason: 'positive-terminal',
-    );
     final reapWorktree = seed.reapWorktree;
     final workRoot = seed.workRoot;
     final sourceControl = _services.sourceControl;
@@ -1143,7 +1155,13 @@ class SessionScopeState extends State<SessionScope>
       }
     }
     try {
-      await ctx.writer.close(id);
+      await ctx.admission.completeSession(
+        workBeadId: seed.bead.id,
+        sessionId: id,
+        outcomeMarked: true,
+        reapMolecule: _isMolecule,
+        services: _services,
+      );
       // §2.3's `attempt.terminal(succeeded)` row — derived at the
       // OUTCOME-BEARING caller (r2 major 6). The bare `writer.close` is the
       // shared close for every disposition and carries no outcome, so it is
@@ -1308,9 +1326,9 @@ class SessionScopeState extends State<SessionScope>
         nodePath: seed.bead.id,
         circuitById: _registry?.circuit,
       );
-      await ctx.writer.createMolecule(
+      await ctx.admission.pourMolecule(
         plan,
-        substation: ctx.stateSubstation,
+        workBeadId: seed.bead.id,
         sessionId: sessionId,
         rootCrumbs: root.crumbs,
       );
@@ -1585,12 +1603,10 @@ class SessionScopeState extends State<SessionScope>
   Future<void> _declineRework(String retiredId) async {
     final ctx = _ctx;
     if (ctx == null) return;
-    await ctx.writer.update(
-      retiredId,
-      metadata: {
-        SessionBeadKeys.reworkDeclined: 'true',
-        SessionBeadKeys.reworkDeclinedReason: _reworkDeclinedReason,
-      },
+    await ctx.admission.markReworkDeclined(
+      workBeadId: seed.bead.id,
+      sessionId: retiredId,
+      reason: _reworkDeclinedReason,
     );
     // §2.3's `attempt.rework_declined` row: after the HELD merge landed.
     _recorder.reworkDeclined(
@@ -1609,20 +1625,13 @@ class SessionScopeState extends State<SessionScope>
     // marker + close must be durable (uses the captured ctx, never `context`).
     final ctx = _ctx;
     if (ctx == null) return;
-    await ctx.writer.update(
-      id,
-      metadata: {
-        SessionBeadKeys.escalation: 'breaker-exhausted',
-        // Capture-only (FT-1): the failing node + reason, beside the marker.
-        if (reason.isNotEmpty) SessionBeadKeys.escalationReason: reason,
-      },
-    );
-    await _reapMoleculeForClose(
-      ctx,
+    await ctx.admission.escalateAndCloseSession(
+      workBeadId: seed.bead.id,
       sessionId: id,
-      closeReason: 'breaker-exhausted',
+      reason: reason,
+      reapMolecule: _isMolecule,
+      services: _services,
     );
-    await ctx.writer.close(id, reason: 'breaker-exhausted');
     // §2.3's `attempt.terminal(escalated)` row — the reason is the same
     // `grid.escalation_reason` the marker write above carried.
     _recorder.sessionEscalated(
@@ -1635,26 +1644,6 @@ class SessionScopeState extends State<SessionScope>
       'disposition': 'held',
       'reason': truncateReason(reason),
     });
-  }
-
-  /// Collects the durable graph before any engine-owned molecule-session
-  /// close. Failure is loud but non-fatal so terminal lifecycle progress is
-  /// never held hostage by cleanup.
-  Future<void> _reapMoleculeForClose(
-    StationServices ctx, {
-    required String sessionId,
-    required String closeReason,
-  }) async {
-    if (!_isMolecule) return;
-    try {
-      await ctx.writer.reapMolecule(sessionId: sessionId);
-    } on Object catch (error) {
-      _flare('session.moleculeReapFailed', {
-        'sessionId': sessionId,
-        'closeReason': closeReason,
-        'reason': truncateReason('$error'),
-      });
-    }
   }
 
   @override

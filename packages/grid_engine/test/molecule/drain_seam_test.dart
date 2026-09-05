@@ -74,6 +74,15 @@ Future<void> _pumpUntil(bool Function() condition, {int maxTries = 500}) async {
   }
 }
 
+Map<String, dynamic> _metadataContaining(RecordingBdRunner runner, String key) {
+  final updates = runner.callsFor('update');
+  for (var index = 0; index < updates.length; index += 1) {
+    final metadata = runner.metadataOfUpdate(index);
+    if (metadata.containsKey(key)) return metadata;
+  }
+  return const {};
+}
+
 JoinedSnapshot _joined({
   required List<Bead> beads,
   required Set<String> ready,
@@ -293,7 +302,7 @@ void main() {
           (c) => !c.contains('--graph'),
         );
         expect(plainCreates, hasLength(1), reason: 'the session mint');
-        final stamp = f.runner.metadataOfUpdate(0);
+        final stamp = _metadataContaining(f.runner, SessionBeadKeys.model);
         expect(stamp[SessionBeadKeys.model], kSessionModelMolecule);
 
         expect(
@@ -458,7 +467,10 @@ void main() {
         );
         expect(f.runner.graphApplyCalls, hasLength(1));
         expect(
-          f.runner.metadataOfUpdate(0)[SessionBeadKeys.model],
+          _metadataContaining(
+            f.runner,
+            SessionBeadKeys.model,
+          )[SessionBeadKeys.model],
           kSessionModelMolecule,
         );
         expect(f.runner.graphApplyCalls.single, isNot(contains('--ephemeral')));
