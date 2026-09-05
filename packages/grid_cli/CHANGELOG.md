@@ -1,3 +1,12 @@
+## 0.5.0-rc.16
+
+- Added: the `grid/substation/attach` and `detach` control commands decode on the resident door, and `up` renders status from the live roster instead of the launch-time arming (tg-wv9, #282).
+- Fixed: `StationDiagnosticsReporter` buckets its 30 s flare rate limit on `nodePath ?? beadId ?? workBeadId ?? sessionId ?? bead`, so refusals for different beads no longer collapse into one line per flare name — the silence that hid two days of mount-eligibility refusals on lunar (tg-ym3t, #333).
+- Added: pause and resume verbs for live work sessions (tg-5kb, #334).
+- Added: `StationStatus` / `SubstationStatus` carry `mintFailedScopes`, derived from the tree snapshot's `mintFailed` flags, so a dead-minting scope is visible in status (tg-f6r, #335).
+- Fixed: `status` distinguishes a slow resident door (`SlowUp`, "station: UP — alive but slow (N s)", soft threshold 3 s, hard bound 15 s, pid probe first) from a dead one, and `/status` serves a cached snapshot refreshed off the request path (tg-k5hl, #337).
+- Floors `beads_dart` to `^0.2.0-rc.10`, `grid_engine` to `^0.3.0-rc.20`, `grid_runtime` to `^0.2.0-rc.13` and `grid_sdk` to `^0.3.0-rc.16`.
+
 ## 0.5.0-rc.15
 
 - Breaking: `AttachResult.Stale` is replaced by `Starting` (a lock at `acquired` whose pid is alive — the station is booting) and `Unreachable` (a dead pid or an unreachable control endpoint), so a booting station is no longer reported as crashed; every `switch` over the sealed class must name both. Migration: replace the `Stale` arm with `Starting` + `Unreachable`.

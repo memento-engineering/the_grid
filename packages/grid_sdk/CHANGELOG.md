@@ -1,3 +1,11 @@
+## 0.3.0-rc.16
+
+- Added: attach and detach live substations — `SubstationRoster.attach` / `detach` with named refusals (`invalid_identity`, `identity_collision`, `root_invalid`, `store_absent`, `store_unparsed`, `provision_failed`, `not_attached`, `already_draining`, `sessions_live`, forced draining), a lazy drain settle that requeries the state store only while a seat drains, and the `grid/substation/attach` / `detach` control commands (tg-wv9, #282).
+- Added: `StationServices` constructs and disposes the single `StationAdmissionAuthority` the engine's work admission runs through (tg-1u3c, #328).
+- Added: the pause/resume handler writes only `grid.session.pause_state` on the single owned open session (tg-5kb, #334).
+- Changed: the bd-backed attach integration tests skip by reason when no `bd` binary is on PATH instead of dying in the CI runner (tg-nh5e, #332).
+- Floors `beads_dart` to `^0.2.0-rc.10`, `grid_engine` to `^0.3.0-rc.20` and `grid_runtime` to `^0.2.0-rc.13`.
+
 ## 0.3.0-rc.15
 
 - Added: `GridAssetDefinition.teaches` — the top-level commands a skill asset teaches, declared beside `artifacts` (default empty) and validated at the pack boundary by `GridAssetPackDefinition` (well-formed command names, no duplicates per asset; `ArgumentError.value` names the offending asset). Round-trips unchanged through pack and registry (tg-onap, #318).
