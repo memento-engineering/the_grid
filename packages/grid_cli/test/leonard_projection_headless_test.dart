@@ -97,6 +97,13 @@ Future<int> _streamStatus(Uri controlUrl, String token) async {
   }
 }
 
+Future<void> _settleAdmissions(TreeOwner owner) async {
+  for (var turn = 0; turn < 12; turn++) {
+    await Future<void>.delayed(Duration.zero);
+    owner.flush();
+  }
+}
+
 void main() {
   test(
     'headless client discovers the door and observes a closed bead',
@@ -110,6 +117,7 @@ void main() {
       );
       addTearDown(joined.dispose);
       final fakes = buildFakes();
+      addTearDown(fakes.ctx.dispose);
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
@@ -134,6 +142,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       var tick = 0;
       final projector = TreeProjector(
         clock: () => DateTime.utc(2026, 7, 25, 0, 0, tick++),

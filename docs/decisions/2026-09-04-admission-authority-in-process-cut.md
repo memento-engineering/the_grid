@@ -69,6 +69,23 @@ has not started.
 * This is one-process authority only. Federation semantics remain deferred to
   the parent decision's later deployment.
 
+## Decision Alignment
+
+This cut explicitly retires A43's ambient-absence branch, where
+`stationCap == null` (no ambient `StationServices`) meant only the
+substation-local cap applied. A `WorkList` can now mount only when composed
+with the station-owned `StationServices`; offline compositions provide the
+same fake-backed ambient instead of falling back to local admission logic.
+This preserves A43's substation and station ceilings while replacing its
+same-flush declare-and-check approximation with synchronous reservations.
+
+The `dry-bd-seam-mints-under-the-owning-prefix` decision remains unchanged.
+`StationWorkRuntime` continues to use the existing per-substation
+`NoOpBdRunner` seams, whose returned ids follow the owning prefix. Moving the
+chokepoint's durable attempt writes behind `StationAdmissionAuthority` does
+not create or migrate a second dry-run id discipline; the seam's id shape
+follows that chokepoint unchanged.
+
 ## Review log
 
 * 2026-09-04 — accepted by **nico** + **agent** as the in-process implementation amendment.
