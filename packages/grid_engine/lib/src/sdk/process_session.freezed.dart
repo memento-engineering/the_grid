@@ -122,12 +122,12 @@ return failed(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( Map<String, String> fields)?  progress,TResult Function( Map<String, String> result)?  completed,TResult Function( String reason)?  failed,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( Map<String, String> fields)?  progress,TResult Function( Map<String, String> result)?  completed,TResult Function( String reason,  CapabilityFailureKind? kind)?  failed,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case ProcessSessionProgress() when progress != null:
 return progress(_that.fields);case ProcessSessionCompleted() when completed != null:
 return completed(_that.result);case ProcessSessionFailed() when failed != null:
-return failed(_that.reason);case _:
+return failed(_that.reason,_that.kind);case _:
   return orElse();
 
 }
@@ -145,12 +145,12 @@ return failed(_that.reason);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( Map<String, String> fields)  progress,required TResult Function( Map<String, String> result)  completed,required TResult Function( String reason)  failed,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( Map<String, String> fields)  progress,required TResult Function( Map<String, String> result)  completed,required TResult Function( String reason,  CapabilityFailureKind? kind)  failed,}) {final _that = this;
 switch (_that) {
 case ProcessSessionProgress():
 return progress(_that.fields);case ProcessSessionCompleted():
 return completed(_that.result);case ProcessSessionFailed():
-return failed(_that.reason);}
+return failed(_that.reason,_that.kind);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -164,12 +164,12 @@ return failed(_that.reason);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( Map<String, String> fields)?  progress,TResult? Function( Map<String, String> result)?  completed,TResult? Function( String reason)?  failed,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( Map<String, String> fields)?  progress,TResult? Function( Map<String, String> result)?  completed,TResult? Function( String reason,  CapabilityFailureKind? kind)?  failed,}) {final _that = this;
 switch (_that) {
 case ProcessSessionProgress() when progress != null:
 return progress(_that.fields);case ProcessSessionCompleted() when completed != null:
 return completed(_that.result);case ProcessSessionFailed() when failed != null:
-return failed(_that.reason);case _:
+return failed(_that.reason,_that.kind);case _:
   return null;
 
 }
@@ -325,10 +325,11 @@ as Map<String, String>,
 
 
 class ProcessSessionFailed extends ProcessSessionUpdate {
-  const ProcessSessionFailed({required this.reason}): super._();
+  const ProcessSessionFailed({required this.reason, this.kind}): super._();
 
 
  final  String reason;
+ final  CapabilityFailureKind? kind;
 
 /// Create a copy of ProcessSessionUpdate
 /// with the given fields replaced by the non-null parameter values.
@@ -340,16 +341,16 @@ $ProcessSessionFailedCopyWith<ProcessSessionFailed> get copyWith => _$ProcessSes
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ProcessSessionFailed&&(identical(other.reason, reason) || other.reason == reason));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ProcessSessionFailed&&(identical(other.reason, reason) || other.reason == reason)&&(identical(other.kind, kind) || other.kind == kind));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,reason);
+int get hashCode => Object.hash(runtimeType,reason,kind);
 
 @override
 String toString() {
-  return 'ProcessSessionUpdate.failed(reason: $reason)';
+  return 'ProcessSessionUpdate.failed(reason: $reason, kind: $kind)';
 }
 
 
@@ -360,7 +361,7 @@ abstract mixin class $ProcessSessionFailedCopyWith<$Res> implements $ProcessSess
   factory $ProcessSessionFailedCopyWith(ProcessSessionFailed value, $Res Function(ProcessSessionFailed) _then) = _$ProcessSessionFailedCopyWithImpl;
 @useResult
 $Res call({
- String reason
+ String reason, CapabilityFailureKind? kind
 });
 
 
@@ -377,10 +378,11 @@ class _$ProcessSessionFailedCopyWithImpl<$Res>
 
 /// Create a copy of ProcessSessionUpdate
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? reason = null,Object? kind = freezed,}) {
   return _then(ProcessSessionFailed(
 reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
-as String,
+as String,kind: freezed == kind ? _self.kind : kind // ignore: cast_nullable_to_non_nullable
+as CapabilityFailureKind?,
   ));
 }
 

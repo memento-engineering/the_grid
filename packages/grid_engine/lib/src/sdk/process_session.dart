@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
+import 'capability_failure.dart';
 import 'step_signal.dart';
 
 part 'process_session.freezed.dart';
@@ -23,8 +24,14 @@ sealed class ProcessSessionUpdate with _$ProcessSessionUpdate {
   }) = ProcessSessionCompleted;
 
   /// Reports a protocol or runtime failure.
-  const factory ProcessSessionUpdate.failed({required String reason}) =
-      ProcessSessionFailed;
+  ///
+  /// A null [kind] preserves the historical untyped failure. Protocol adapters
+  /// may supply the existing capability-failure vocabulary when they can
+  /// identify the result boundary without parsing [reason].
+  const factory ProcessSessionUpdate.failed({
+    required String reason,
+    CapabilityFailureKind? kind,
+  }) = ProcessSessionFailed;
 
   /// Cursor signal derived only from this protocol update.
   StepSignal get signal => switch (this) {

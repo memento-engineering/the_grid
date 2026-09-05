@@ -222,17 +222,23 @@ class AllocationCompleted extends AllocationReport {
 class AllocationFailed extends AllocationReport {
   /// Reports a substantive WORK failure with an optional diagnostic [reason].
   const AllocationFailed([this.reason = ''])
-    : kind = CapabilityFailureKind.work;
+    : kind = CapabilityFailureKind.work,
+      kindDeclared = false;
 
   /// Reports an effect that produced NO usable result.
   const AllocationFailed.noResult([this.reason = ''])
-    : kind = CapabilityFailureKind.noResult;
+    : kind = CapabilityFailureKind.noResult,
+      kindDeclared = false;
 
   /// Reports a result that violates its declared contract.
   const AllocationFailed.invalidResult([this.reason = ''])
-    : kind = CapabilityFailureKind.invalidResult;
+    : kind = CapabilityFailureKind.invalidResult,
+      kindDeclared = false;
 
-  const AllocationFailed._(this.kind, this.reason);
+  const AllocationFailed._(this.kind, this.reason) : kindDeclared = false;
+
+  const AllocationFailed._declared(this.kind, this.reason)
+    : kindDeclared = true;
 
   /// Preserves [outcome]'s kind + reason when mapping from [StepOutcome] — the
   /// ONE `Failed`→report mapping used by service and lease allocations.
@@ -249,6 +255,10 @@ class AllocationFailed extends AllocationReport {
   /// WHY the effect failed — the discriminant the Host maps to a durable
   /// `StepFailureClass`.
   final CapabilityFailureKind kind;
+
+  /// Whether [kind] was declared by the protocol session at its result
+  /// boundary, rather than inferred by an engine-owned adapter.
+  final bool kindDeclared;
 }
 
 /// The route ADVANCED (M5 D-4a) — the cursor moves forward. The Host persists
@@ -808,9 +818,16 @@ class ProcessAllocation extends Allocation {
       case ProcessSessionCompleted(:final result):
         state = AllocationState.gone;
         context.sink(AllocationCompleted(result));
-      case ProcessSessionFailed(:final reason):
+      case ProcessSessionFailed(:final reason, :final kind):
         state = AllocationState.gone;
-        context.sink(AllocationFailed(reason));
+        context.sink(switch (kind) {
+          null || CapabilityFailureKind.work => AllocationFailed(reason),
+          CapabilityFailureKind.noResult ||
+          CapabilityFailureKind.invalidResult => AllocationFailed._declared(
+            kind,
+            reason,
+          ),
+        });
       case ProcessSessionProgress():
         throw StateError('session driver returned progress');
     }
