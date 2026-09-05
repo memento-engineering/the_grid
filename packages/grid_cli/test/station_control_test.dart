@@ -19,10 +19,8 @@ import 'package:test/test.dart';
 ///      → 404; a non-GET method → 405;
 ///  (b) the bind is loopback-only (127.0.0.1);
 ///  (e) dispose releases the port;
-///  the `view` getter is called fresh per request — never polled, never
-///  cached (the no-requery proof lives at the wiring layer, station_control_
-///  wiring_test.dart; this file proves the HTTP layer never calls `view`
-///  itself except in direct response to a request).
+///  the `view` getter is refreshed outside the request path and `/status`
+///  serves the last fully encoded successful snapshot.
 void main() {
   group('StationControl — HTTP round-trips', () {
     test('(b) binds loopback-only (127.0.0.1), not 0.0.0.0', () async {
@@ -614,30 +612,65 @@ void main() {
       expect(Uri.parse(rebind.url).port, boundPort);
     });
 
-    test('the view getter is called exactly once per /status request — '
-        'never polled in the background', () async {
-      var calls = 0;
-      final control = await StationControl.start(
-        port: 0,
-        token: 't',
-        view: () {
-          calls++;
-          return _sampleStatus();
-        },
-        commandHandler: _FakeCommandHandler(),
-      );
-      addTearDown(control.dispose);
+    test(
+      'status serves a cached body while one refresh is in flight, replaces '
+      'it atomically, preserves it on failure, and cancels its timer',
+      () async {
+        var calls = 0;
+        final refreshStarted = Completer<void>();
+        final releaseRefresh = Completer<void>();
+        final failedRefresh = Completer<void>();
+        final control = await StationControl.start(
+          port: 0,
+          token: 't',
+          view: () async {
+            calls++;
+            if (calls == 1) return _sampleStatus(ready: 1);
+            if (calls == 2) {
+              refreshStarted.complete();
+              await releaseRefresh.future;
+              return _sampleStatus(ready: 2);
+            }
+            if (!failedRefresh.isCompleted) failedRefresh.complete();
+            throw StateError('refresh failed');
+          },
+          commandHandler: _FakeCommandHandler(),
+          statusSnapshotInterval: const Duration(milliseconds: 20),
+        );
+        addTearDown(control.dispose);
 
-      await _get(control.url, '/status', token: 't');
-      expect(calls, 1);
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      expect(calls, 1, reason: 'no background timer/poll ever calls view()');
-      await _get(control.url, '/status', token: 't');
-      expect(calls, 2);
-      // /healthz never touches the view at all.
-      await _get(control.url, '/healthz', token: 't');
-      expect(calls, 2);
-    });
+        expect(calls, 1);
+        await refreshStarted.future;
+        expect(calls, 2);
+        final stopwatch = Stopwatch()..start();
+        final cached = await _get(control.url, '/status', token: 't');
+        stopwatch.stop();
+        expect(stopwatch.elapsed, lessThan(const Duration(milliseconds: 250)));
+        expect(calls, 2);
+        expect(
+          (jsonDecode(cached.body) as Map<String, Object?>)['work'],
+          containsPair('ready', 1),
+        );
+
+        releaseRefresh.complete();
+        await failedRefresh.future;
+        final refreshed = await _get(control.url, '/status', token: 't');
+        expect(
+          (jsonDecode(refreshed.body) as Map<String, Object?>)['work'],
+          containsPair('ready', 2),
+          reason: 'a failed refresh keeps the last fully encoded good body',
+        );
+
+        await control.dispose();
+        final callsAfterDispose = calls;
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(
+          calls,
+          callsAfterDispose,
+          reason: 'dispose cancels refresh ticks',
+        );
+      },
+    );
 
     test('authenticated GET /hooks resolves encoded query parameters and '
         'returns exact JSON', () async {
@@ -827,7 +860,7 @@ Future<_Response> _hooksGet(StationControl control, String worktree) => _get(
   token: 't',
 );
 
-StationStatus _sampleStatus() => StationStatus(
+StationStatus _sampleStatus({int ready = 0}) => StationStatus(
   substation: 'tgdog',
   stateStore: null,
   workRoot: null,
@@ -835,7 +868,7 @@ StationStatus _sampleStatus() => StationStatus(
   pid: 1,
   startedAt: DateTime.utc(2026, 7, 2),
   version: 'test-vm',
-  ready: 0,
+  ready: ready,
   mounted: 0,
   liveSessions: 0,
   lastSyncAt: null,

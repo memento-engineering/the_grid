@@ -71,6 +71,10 @@ class StatusCommand extends Command<int> {
       StateWorkspaceFound(:final home, :final workspace) =>
         switch (await _attach.status(stateWorkspaceDir: home)) {
           Up(:final payload) => _renderUp(payload),
+          SlowUp(:final payload, :final elapsed) => _renderUp(
+            payload,
+            slowElapsed: elapsed,
+          ),
           Down() => await _renderDownFallback(args, workspace),
           Starting(:final pid) => _renderRefusal(
             '$stationName status: station is BOOTING (pid $pid).',
@@ -99,12 +103,16 @@ class StatusCommand extends Command<int> {
     return code;
   }
 
-  int _renderUp(Map<String, Object?> payload) {
+  int _renderUp(Map<String, Object?> payload, {Duration? slowElapsed}) {
     final station = payload['station'] as Map<String, Object?>? ?? const {};
     final process = payload['process'] as Map<String, Object?>? ?? const {};
     final work = payload['work'] as Map<String, Object?>? ?? const {};
+    final firstLine = slowElapsed == null
+        ? 'station: UP'
+        : 'station: UP — alive but slow '
+              '(${(slowElapsed.inMilliseconds / 1000).toStringAsFixed(1)} s)';
     stdout
-      ..writeln('station: UP')
+      ..writeln(firstLine)
       ..writeln('  substation: ${station['substation']}')
       ..writeln('  state store: ${station['stateStore']}')
       ..writeln('  work root: ${station['workRoot']}')
