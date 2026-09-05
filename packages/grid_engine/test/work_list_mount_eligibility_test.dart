@@ -43,18 +43,57 @@ final class _RecordingResolver implements SessionResolver {
   }
 }
 
+final class _LifecycleRecordingResolver implements SessionResolver {
+  final events = <String>[];
+
+  @override
+  Seed sessionFor({required Bead bead, SessionProjection? session}) =>
+      _LifecycleChild(
+        beadId: bead.id,
+        events: events,
+        key: ValueKey('session:${bead.id}'),
+      );
+}
+
+final class _LifecycleChild extends StatefulSeed {
+  const _LifecycleChild({
+    required this.beadId,
+    required this.events,
+    super.key,
+  });
+
+  final String beadId;
+  final List<String> events;
+
+  @override
+  State<_LifecycleChild> createState() => _LifecycleChildState();
+}
+
+final class _LifecycleChildState extends State<_LifecycleChild> {
+  @override
+  void initState() => seed.events.add('start:${seed.beadId}');
+
+  @override
+  void dispose() => seed.events.add('dispose:${seed.beadId}');
+
+  @override
+  Seed build(TreeContext context) => const Idle();
+}
+
 final class _Harness {
   _Harness({
     required this.owner,
     required this.root,
     required this.joined,
     required this.bead,
+    required this.runner,
   });
 
   final TreeOwner owner;
   final Branch root;
   final JoinedSnapshotNotifier joined;
   final Bead bead;
+  final RecordingBdRunner runner;
   var _second = 1;
 
   void pushAndFlush({
@@ -124,6 +163,7 @@ _Harness _mountHarness({
   Map<String, String> frontierExclusionsByBeadId = const {},
   Map<String, SessionProjection> sessionsByWorkBead = const {},
   SessionResolver? resolver,
+  bool includeStationServices = true,
 }) {
   final bead = _task();
   final joined = JoinedSnapshotNotifier(
@@ -137,43 +177,138 @@ _Harness _mountHarness({
     ),
   );
   final owner = TreeOwner();
-  final stationServices = buildFakes().ctx;
-  final root = owner.mountRoot(
-    ProviderScope(
-      child: InheritedSeed<StationServices>(
-        value: stationServices,
-        child: InheritedSeed<JoinedSnapshotNotifier>(
-          value: joined,
-          child: InheritedSeed<SessionResolver>(
-            value: resolver ?? _RecordingResolver(),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(
-                  const SubstationConfig(
-                    substationId: 'test',
-                    ownedSubstations: {'tg'},
-                    maxConcurrentWork: 10,
-                  ),
-                ),
-                services: ServiceBundle(
-                  transport: transport,
-                  mountEligibility: mountEligibility,
-                ),
-              ),
-            ]),
+  final fakes = buildFakes();
+  Seed station = InheritedSeed<JoinedSnapshotNotifier>(
+    value: joined,
+    child: InheritedSeed<SessionResolver>(
+      value: resolver ?? _RecordingResolver(),
+      child: Station([
+        SubstationScope(
+          configNotifier: SubstationConfigNotifier(
+            const SubstationConfig(
+              substationId: 'test',
+              ownedSubstations: {'tg'},
+              maxConcurrentWork: 10,
+            ),
+          ),
+          services: ServiceBundle(
+            transport: transport,
+            mountEligibility: mountEligibility,
           ),
         ),
-      ),
+      ]),
     ),
   );
+  if (includeStationServices) {
+    station = InheritedSeed<StationServices>(value: fakes.ctx, child: station);
+  }
+  final root = owner.mountRoot(ProviderScope(child: station));
   addTearDown(() {
     owner.dispose();
-    stationServices.dispose();
+    fakes.ctx.dispose();
   });
-  return _Harness(owner: owner, root: root, joined: joined, bead: bead);
+  return _Harness(
+    owner: owner,
+    root: root,
+    joined: joined,
+    bead: bead,
+    runner: fakes.runner,
+  );
 }
 
 void main() {
+  test('warm live branch keeps identity and refusal flares once', () async {
+    const staleApproval = 'approval: stale - rerun the approve verb';
+    const liveSessions = {
+      'tg-1': SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-live'),
+    };
+    final eligibility = _MutableEligibility();
+    final transport = _RecordingTransport();
+    final resolver = _LifecycleRecordingResolver();
+    final harness = _mountHarness(
+      mountEligibility: eligibility.call,
+      transport: transport,
+      readyIds: const {},
+      sessionsByWorkBead: liveSessions,
+      resolver: resolver,
+    );
+    final mounted = harness.workBeads().single;
+    expect(resolver.events, ['start:tg-1']);
+
+    eligibility.decision = const MountEligibilityDecision.refused(
+      clause: staleApproval,
+    );
+    harness.pushAndFlush(readyIds: const {}, sessionsByWorkBead: liveSessions);
+    harness.pushAndFlush(readyIds: const {}, sessionsByWorkBead: liveSessions);
+    await _settleAdmissions(harness);
+
+    expect(harness.workBeads().single, same(mounted));
+    expect(resolver.events, ['start:tg-1']);
+    expect(transport.flares, hasLength(1));
+    expect(transport.flares.single.name, 'work.mountEligibilityRefused');
+    expect(transport.flares.single.data, {
+      'beadId': 'tg-1',
+      'clause': staleApproval,
+    });
+  });
+
+  test(
+    'cold live row mounts through refusing eligibility without writes',
+    () async {
+      const staleApproval = 'approval: stale - rerun the approve verb';
+      final eligibility = _MutableEligibility()
+        ..decision = const MountEligibilityDecision.refused(
+          clause: staleApproval,
+        );
+      final transport = _RecordingTransport();
+      final resolver = _LifecycleRecordingResolver();
+      final harness = _mountHarness(
+        mountEligibility: eligibility.call,
+        transport: transport,
+        readyIds: const {},
+        sessionsByWorkBead: const {
+          'tg-1': SessionProjection(
+            workBeadId: 'tg-1',
+            sessionId: 'tgdog-live',
+          ),
+        },
+        resolver: resolver,
+      );
+      await _settleAdmissions(harness);
+
+      expect(harness.workBeads().map((work) => work.bead.id), ['tg-1']);
+      expect(resolver.events, ['start:tg-1']);
+      expect(transport.flares, hasLength(1));
+      expect(transport.flares.single.name, 'work.mountEligibilityRefused');
+      expect(transport.flares.single.data, {
+        'beadId': 'tg-1',
+        'clause': staleApproval,
+      });
+      expect(harness.runner.calls, isEmpty);
+    },
+  );
+
+  test('offline fallback keeps live row through refusing eligibility', () {
+    final eligibility = _MutableEligibility()
+      ..decision = const MountEligibilityDecision.refused(
+        clause: 'approval: stale - rerun the approve verb',
+      );
+    final resolver = _LifecycleRecordingResolver();
+    final harness = _mountHarness(
+      mountEligibility: eligibility.call,
+      readyIds: const {},
+      sessionsByWorkBead: const {
+        'tg-1': SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-live'),
+      },
+      resolver: resolver,
+      includeStationServices: false,
+    );
+
+    expect(harness.workBeads().map((work) => work.bead.id), ['tg-1']);
+    expect(resolver.events, ['start:tg-1']);
+    expect(harness.runner.calls, isEmpty);
+  });
+
   test(
     'the authority evaluates the vended mount eligibility predicate without copying it',
     () async {
@@ -245,11 +380,8 @@ void main() {
         [StationAdmissionCandidate(bead: bead, session: live)],
       );
       expect(evaluations, 3);
-      expect(failed.admitted, isEmpty);
-      expect(
-        failed.refused.single.detail,
-        contains('mount eligibility evaluation failed'),
-      );
+      expect(failed.admitted.single.adopted, isTrue);
+      expect(failed.refused, isEmpty);
       await Future<void>.delayed(Duration.zero);
       expect(invalidations, 2, reason: 'the throwing clause gets one recheck');
       await Future<void>.delayed(Duration.zero);
@@ -259,16 +391,16 @@ void main() {
   );
 
   test('refusal edges exclude work and carry bead id plus clause', () async {
-    final eligibility = _MutableEligibility();
+    final eligibility = _MutableEligibility()
+      ..decision = const MountEligibilityDecision.refused(
+        clause: 'required-field',
+      );
     final transport = _RecordingTransport();
     final harness = _mountHarness(
       mountEligibility: eligibility.call,
       transport: transport,
     );
 
-    eligibility.decision = const MountEligibilityDecision.refused(
-      clause: 'required-field',
-    );
     harness.pushAndFlush();
     expect(harness.workBeads(), isEmpty);
     expect(transport.flares, hasLength(1));
@@ -429,7 +561,8 @@ void main() {
       ),
     );
     final owner = TreeOwner();
-    final stationServices = buildFakes(maxConcurrentWork: 10).ctx;
+    final fakes = buildFakes(maxConcurrentWork: 10);
+    final stationServices = fakes.ctx;
     addTearDown(() {
       owner.dispose();
       stationServices.dispose();
@@ -468,7 +601,13 @@ void main() {
       ),
     );
     await _settleAdmissions(
-      _Harness(owner: owner, root: root, joined: joined, bead: first),
+      _Harness(
+        owner: owner,
+        root: root,
+        joined: joined,
+        bead: first,
+        runner: fakes.runner,
+      ),
     );
 
     expect(_workBeads(root).map((work) => work.bead.id), ['tg-2']);
@@ -546,13 +685,13 @@ void main() {
       null,
       _ThrowingTransport(),
     ]) {
-      final eligibility = _MutableEligibility();
+      final eligibility = _MutableEligibility()
+        ..decision = const MountEligibilityDecision.refused(
+          clause: 'required-field',
+        );
       final harness = _mountHarness(
         mountEligibility: eligibility.call,
         transport: transport,
-      );
-      eligibility.decision = const MountEligibilityDecision.refused(
-        clause: 'required-field',
       );
       expect(harness.pushAndFlush, returnsNormally);
       expect(harness.workBeads(), isEmpty);
