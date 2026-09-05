@@ -29,7 +29,13 @@ final class StationDiagnosticsReporter implements ExplorationTransport {
 
   /// The rate-limit bucket for one flare name about one subject.
   static String _bucketFor(String name, Map<String, String> data) {
-    final subject = data['nodePath'] ?? data['bead'] ?? '';
+    final subject =
+        data['nodePath'] ??
+        data['beadId'] ??
+        data['workBeadId'] ??
+        data['sessionId'] ??
+        data['bead'] ??
+        '';
     return '$name\u0000$subject';
   }
 

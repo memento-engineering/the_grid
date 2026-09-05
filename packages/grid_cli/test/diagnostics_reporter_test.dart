@@ -84,6 +84,99 @@ void main() {
     expect(lines, hasLength(6));
   });
 
+  test('work-axis flare rate limits use the named subject', () {
+    final now = DateTime.utc(2026, 9, 5);
+    final lines = <String>[];
+    final reporter = StationDiagnosticsReporter(
+      writeLine: lines.add,
+      now: () => now,
+    );
+
+    reporter.flare('work.mountEligibilityRefused', {
+      'beadId': 'tg-a',
+      'clause': 'approval: stale',
+    });
+    reporter.flare('work.mountEligibilityRefused', {
+      'beadId': 'tg-a',
+      'clause': 'attempt-cap: 3 mount attempts, cap 3',
+    });
+    reporter.flare('work.mountEligibilityRefused', {
+      'beadId': 'tg-b',
+      'clause': 'approval: stale',
+    });
+    reporter.flare('work.mountEligibilityRefused', {
+      'nodePath': 'tg-a/review',
+      'beadId': 'tg-a',
+      'clause': 'approval: stale',
+    });
+    reporter.flare('gate.autoCloseFailed', {
+      'sessionId': 's-a',
+      'reason': 'first failure',
+    });
+    reporter.flare('gate.autoCloseFailed', {
+      'sessionId': 's-a',
+      'reason': 'second failure',
+    });
+    reporter.flare('gate.autoCloseFailed', {
+      'sessionId': 's-b',
+      'reason': 'first failure',
+    });
+    reporter.flare('session.mintRefused', {
+      'workBeadId': 'w-a',
+      'reason': 'first refusal',
+    });
+    reporter.flare('session.mintRefused', {
+      'workBeadId': 'w-a',
+      'reason': 'second refusal',
+    });
+    reporter.flare('session.mintRefused', {
+      'workBeadId': 'w-b',
+      'reason': 'first refusal',
+    });
+
+    expect(lines.map(jsonDecode).toList(), <Object?>[
+      {
+        'type': 'flare',
+        'name': 'work.mountEligibilityRefused',
+        'data': {'beadId': 'tg-a', 'clause': 'approval: stale'},
+      },
+      {
+        'type': 'flare',
+        'name': 'work.mountEligibilityRefused',
+        'data': {'beadId': 'tg-b', 'clause': 'approval: stale'},
+      },
+      {
+        'type': 'flare',
+        'name': 'work.mountEligibilityRefused',
+        'data': {
+          'nodePath': 'tg-a/review',
+          'beadId': 'tg-a',
+          'clause': 'approval: stale',
+        },
+      },
+      {
+        'type': 'flare',
+        'name': 'gate.autoCloseFailed',
+        'data': {'sessionId': 's-a', 'reason': 'first failure'},
+      },
+      {
+        'type': 'flare',
+        'name': 'gate.autoCloseFailed',
+        'data': {'sessionId': 's-b', 'reason': 'first failure'},
+      },
+      {
+        'type': 'flare',
+        'name': 'session.mintRefused',
+        'data': {'workBeadId': 'w-a', 'reason': 'first refusal'},
+      },
+      {
+        'type': 'flare',
+        'name': 'session.mintRefused',
+        'data': {'workBeadId': 'w-b', 'reason': 'first refusal'},
+      },
+    ]);
+  });
+
   test('dispose closes the projector snapshots', () async {
     final reporter = StationDiagnosticsReporter(writeLine: (_) {});
     final done = expectLater(reporter.treeProjector.snapshots, emitsDone);
