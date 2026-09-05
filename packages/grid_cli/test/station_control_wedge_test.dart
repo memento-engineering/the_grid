@@ -111,11 +111,10 @@ void main() {
     'ALL sessions gated + 0 running, sustained past M → the status route reports '
     'wedged:true with since + reason',
     () async {
-      final control = await serve();
-
       monitor.poll(); // t0 — the stall begins
       now = t0.add(const Duration(minutes: 10));
       monitor.poll();
+      final control = await serve();
 
       final wedge = (await statusOf(control))['wedge']! as Map<String, Object?>;
       expect(wedge['wedged'], isTrue);
@@ -129,11 +128,10 @@ void main() {
 
   test('under M minutes → wedged:false (no false alarm on a between-stages '
       'transition)', () async {
-    final control = await serve();
-
     monitor.poll();
     now = t0.add(const Duration(minutes: 9, seconds: 59));
     monitor.poll();
+    final control = await serve();
 
     final wedge = (await statusOf(control))['wedge']! as Map<String, Object?>;
     expect(wedge['wedged'], isFalse);
@@ -142,12 +140,11 @@ void main() {
 
   test('any running session → wedged:false, even with a gate open elsewhere (a '
       'routine gate-open is NOT a wedge)', () async {
-    final control = await serve();
-
     monitor.poll();
     now = t0.add(const Duration(minutes: 20));
     sessions['tg-a'] = moleculeSession('tg-a', StepState.running);
     monitor.poll();
+    final control = await serve();
 
     final wedge = (await statusOf(control))['wedge']! as Map<String, Object?>;
     expect(wedge['wedged'], isFalse);

@@ -110,8 +110,8 @@ class SubstationStatus {
 }
 
 /// A value-snapshot of the running station — the whole `/status` payload.
-/// Composed ONCE per request by the runner's own `/status` view (never
-/// cached, never polled).
+/// The runner's view composes this value on the control's refresh timer; the
+/// request path serves the last fully encoded successful snapshot.
 class StationStatus {
   /// Creates an immutable status snapshot.
   const StationStatus({
@@ -255,18 +255,20 @@ class StationControl {
   StationControl._(
     this._server,
     this._token,
-    StationStatus Function() view,
+    this._statusView,
+    this._statusBody,
     this._hooksResolver,
     this._assetCatalogResolver,
     this._commandHandler,
     this._treeProjector,
   ) : _routes = <String, Map<String, Object?> Function()>{
         '/healthz': () => const <String, Object?>{'ok': true},
-        '/status': () => view().toJson(),
       };
 
   final HttpServer _server;
   final String _token;
+  final FutureOr<StationStatus> Function() _statusView;
+  String _statusBody;
   final Map<String, Map<String, Object?> Function()> _routes;
   final HooksResolver _hooksResolver;
   final AssetCatalogResolver _assetCatalogResolver;
@@ -276,6 +278,9 @@ class StationControl {
   final Map<WebSocket, StreamSubscription<TreeSnapshot>>
   _snapshotSubscriptions = <WebSocket, StreamSubscription<TreeSnapshot>>{};
   final Map<String, _IdempotentCommand> _commands = {};
+  Timer? _statusRefreshTimer;
+  bool _statusRefreshInFlight = false;
+  bool _disposed = false;
   int _highestFence = -1;
 
   /// The bound URL, e.g. `http://127.0.0.1:54321`.
@@ -284,8 +289,11 @@ class StationControl {
   /// Binds a fresh [StationControl] to [address], defaulting to loopback
   /// (`0` = an ephemeral port).
   /// [token] is minted by the caller ([mintControlToken]) so the mint stays
-  /// visibly tied to the lock file that carries it; [view] is a
-  /// value-snapshot getter with NO subscriptions (called fresh per request).
+  /// visibly tied to the lock file that carries it. [view] is a synchronous or
+  /// asynchronous value-snapshot getter with NO subscriptions. One initial
+  /// snapshot is fully encoded before the socket binds; afterward it refreshes
+  /// at [statusSnapshotInterval], with at most one refresh in flight. The
+  /// request path always serves the last fully encoded successful body.
   /// [hooksResolver] performs read-only hook declaration resolution.
   /// [assetCatalogResolver] performs read-only content/capability declaration
   /// resolution. Per ADR-0011's two-family asset umbrella, `/assets` excludes
@@ -294,13 +302,15 @@ class StationControl {
   static Future<StationControl> start({
     required int port,
     required String token,
-    required StationStatus Function() view,
+    required FutureOr<StationStatus> Function() view,
     required GridCommandHandler commandHandler,
     HooksResolver hooksResolver = const HooksResolver(),
     AssetCatalogResolver assetCatalogResolver = const AssetCatalogResolver(),
     InternetAddress? address,
     TreeProjector? treeProjector,
+    Duration statusSnapshotInterval = const Duration(seconds: 1),
   }) async {
+    final initialStatusBody = jsonEncode((await view()).toJson());
     final server = await HttpServer.bind(
       address ?? InternetAddress.loopbackIPv4,
       port,
@@ -309,13 +319,35 @@ class StationControl {
       server,
       token,
       view,
+      initialStatusBody,
       hooksResolver,
       assetCatalogResolver,
       commandHandler,
       treeProjector,
     );
     server.listen(control._handle);
+    control._startStatusRefresh(statusSnapshotInterval);
     return control;
+  }
+
+  void _startStatusRefresh(Duration interval) {
+    _statusRefreshTimer = Timer.periodic(interval, (_) {
+      if (_disposed || _statusRefreshInFlight) return;
+      _statusRefreshInFlight = true;
+      unawaited(_refreshStatus());
+    });
+  }
+
+  Future<void> _refreshStatus() async {
+    try {
+      final nextBody = jsonEncode((await _statusView()).toJson());
+      if (!_disposed) _statusBody = nextBody;
+    } on Object {
+      // A failed refresh cannot poison the status door. Keep serving the last
+      // complete body and let the next timer tick retry the view.
+    } finally {
+      _statusRefreshInFlight = false;
+    }
   }
 
   Future<void> _handle(HttpRequest request) async {
@@ -341,11 +373,13 @@ class StationControl {
     }
     final isHooks = request.uri.path == '/hooks';
     final isAssets = request.uri.path == _assetsPath;
+    final isStatus = request.uri.path == '/status';
     final route = _routes[request.uri.path];
     final isKnownPath =
         request.uri.path == _commandPath ||
         isHooks ||
         isAssets ||
+        isStatus ||
         route != null;
     if (!isKnownPath) {
       await _respond(request, HttpStatus.notFound, <String, Object?>{
@@ -365,6 +399,10 @@ class StationControl {
     }
     if (isAssets) {
       await _handleAssets(request);
+      return;
+    }
+    if (isStatus) {
+      await _respondEncoded(request, HttpStatus.ok, _statusBody);
       return;
     }
     await _respond(request, HttpStatus.ok, route!());
@@ -718,11 +756,25 @@ class StationControl {
     await request.response.close();
   }
 
+  Future<void> _respondEncoded(
+    HttpRequest request,
+    int statusCode,
+    String body,
+  ) async {
+    request.response
+      ..statusCode = statusCode
+      ..headers.contentType = ContentType.json
+      ..write(body);
+    await request.response.close();
+  }
+
   /// Stops accepting connections and releases the bound port. Idempotent in
   /// practice (the graceful path and the start-throw unwind never both run),
   /// but never throws on a second call — `HttpServer.close` is itself
   /// idempotent.
   Future<void> dispose() async {
+    _disposed = true;
+    _statusRefreshTimer?.cancel();
     final subscriptions = _snapshotSubscriptions.values.toList();
     final sockets = _webSockets.toList();
     _snapshotSubscriptions.clear();

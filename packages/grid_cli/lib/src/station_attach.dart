@@ -15,6 +15,11 @@
 /// file is likewise
 /// out of scope here — a lingering stale lock is the NEXT `up`'s stale-steal
 /// to reap ([StationLockService]), not this client's job.
+/// Per
+/// `the_grid#station-lock-holds-never-steals-an-unreadable-record`, readers
+/// remain non-arbitrating: [_readLock] still treats an unreadable record as no
+/// station and never steals or rewrites it. Only the live-door classification
+/// below changes.
 ///
 /// No `Command`/`CommandRunner` lives here (scope fence) — that composition,
 /// and the store-fallback render `space status` does when a station is down,
@@ -72,6 +77,28 @@ class Up extends AttachResult {
 
   /// The lock record this attach was made through.
   final StationLockRecord record;
+}
+
+/// The station answered `GET /status` successfully, but only after the soft
+/// responsiveness threshold. This remains an UP result: [payload] and
+/// [record] have the same meaning as on [Up], while [elapsed] is the monotonic
+/// end-to-end duration of the attach request.
+final class SlowUp extends AttachResult {
+  /// Creates a slow-up result carrying the decoded response and elapsed time.
+  const SlowUp({
+    required this.payload,
+    required this.record,
+    required this.elapsed,
+  });
+
+  /// The decoded `/status` JSON body.
+  final Map<String, Object?> payload;
+
+  /// The lock record this attach was made through.
+  final StationLockRecord record;
+
+  /// The monotonic end-to-end duration of the successful status request.
+  final Duration elapsed;
 }
 
 /// No station is attached: no lock file at all (nothing has ever bound this
@@ -211,12 +238,15 @@ class StationAttach {
   /// signalable [StationLifecyclePhase.acquired] record → [Starting]; a
   /// signalable [StationLifecyclePhase.releasing] record → [Unreachable]; and
   /// only a signalable [StationLifecyclePhase.live] record attempts
-  /// `GET /status` over the advertised `controlUrl` with a bounded [timeout].
-  /// A valid 200 returns [Up], a 401 returns [Unauthorized], and every other
+  /// `GET /status` over the advertised `controlUrl`. The whole connect,
+  /// authenticated response, body read, and decode is bounded by [timeout]. A
+  /// valid 200 completed at or below [slowThreshold] returns [Up], a later
+  /// valid 200 returns [SlowUp], a 401 returns [Unauthorized], and every other
   /// live-phase transport outcome returns [Unreachable].
   Future<AttachResult> status({
     required String stateWorkspaceDir,
-    Duration timeout = const Duration(seconds: 3),
+    Duration slowThreshold = const Duration(seconds: 3),
+    Duration timeout = const Duration(seconds: 15),
   }) async {
     final record = await _readLock(stateWorkspaceDir);
     if (record == null) return const Down();
@@ -238,34 +268,35 @@ class StationAttach {
       return Unreachable(pid: record.pid, record: record);
     }
 
+    final stopwatch = Stopwatch()..start();
     final client = _httpClientFactory()..connectionTimeout = timeout;
     try {
-      final request = await client
-          .getUrl(Uri.parse('$controlUrl/status'))
-          .timeout(timeout);
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      final response = await request.close().timeout(timeout);
+      return await (() async {
+        final request = await client.getUrl(Uri.parse('$controlUrl/status'));
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+        final response = await request.close();
 
-      if (response.statusCode == HttpStatus.unauthorized) {
-        await response.drain<void>();
-        return Unauthorized(record);
-      }
-      final body = await response
-          .transform(const Utf8Decoder())
-          .join()
-          .timeout(timeout);
-      if (response.statusCode != HttpStatus.ok) {
-        return Unreachable(pid: record.pid, record: record);
-      }
-      return Up(
-        payload: jsonDecode(body) as Map<String, Object?>,
-        record: record,
-      );
+        if (response.statusCode == HttpStatus.unauthorized) {
+          await response.drain<void>();
+          return Unauthorized(record);
+        }
+        final body = await response.transform(const Utf8Decoder()).join();
+        if (response.statusCode != HttpStatus.ok) {
+          return Unreachable(pid: record.pid, record: record);
+        }
+        final payload = jsonDecode(body) as Map<String, Object?>;
+        final elapsed = stopwatch.elapsed;
+        if (elapsed > slowThreshold) {
+          return SlowUp(payload: payload, record: record, elapsed: elapsed);
+        }
+        return Up(payload: payload, record: record);
+      })().timeout(timeout);
     } on Object {
       // Connection refused, DNS failure, a timeout, or a malformed body — a
       // live pid that is not answering correctly.
       return Unreachable(pid: record.pid, record: record);
     } finally {
+      stopwatch.stop();
       client.close(force: true);
     }
   }

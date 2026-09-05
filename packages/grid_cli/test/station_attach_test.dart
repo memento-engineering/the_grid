@@ -212,6 +212,43 @@ void main() {
       );
     });
 
+    test('a live pid whose door answers after the soft threshold → SlowUp '
+        'with monotonic elapsed time', () async {
+      final store = _tempStore();
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode(_sampleStatus.toJson()));
+        await request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      _mintLock(
+        store,
+        pid: 4242,
+        controlUrl: 'http://127.0.0.1:${server.port}',
+        token: 'right-token',
+      );
+      final attach = StationAttach(isPidAlive: (_) => true);
+
+      final result = await attach.status(
+        stateWorkspaceDir: store.path,
+        slowThreshold: const Duration(milliseconds: 20),
+        timeout: const Duration(seconds: 1),
+      );
+
+      expect(result, isA<SlowUp>());
+      final slow = result as SlowUp;
+      expect(slow.record.pid, 4242);
+      expect(slow.elapsed, greaterThan(const Duration(milliseconds: 20)));
+      expect(
+        (slow.payload['station']! as Map<String, Object?>)['substation'],
+        'tgdog',
+      );
+    });
+
     test('(c) a live pid, a live control surface, the WRONG bearer → '
         'Unauthorized — DISTINCT from Unreachable, never swallowed', () async {
       final store = _tempStore();
