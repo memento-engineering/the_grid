@@ -220,6 +220,24 @@ class _FailCreateRunner implements BdRunner {
   }
 }
 
+/// A lifecycle reader whose first gate-session assertion fails, then behaves
+/// like an empty store so the fresh-mint retry can re-pour the retained session.
+class _ThrowOnceGateReader extends RecordingBdRunner {
+  _ThrowOnceGateReader(TimeoutException error) : _error = error;
+
+  TimeoutException? _error;
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    final error = _error;
+    if (error != null) {
+      _error = null;
+      throw error;
+    }
+    return super.beadById(id, types: types);
+  }
+}
+
 /// A [StationServices] whose chokepoint writes through [runner], owning
 /// [stateSubstation] — the same shape [buildFakes] builds, over a caller-
 /// supplied runner so a test asserts against it directly.
@@ -419,6 +437,65 @@ void main() {
       // INERT: the parked session never inflates the circuit.
       expect(reg.events, isEmpty);
     });
+
+    test(
+      'a fresh-mint park failure propagates to the bounded mint retry',
+      () async {
+        final runner = _FailCreateRunner(failCreates: 0, failGraphApplies: 1);
+        final gateTimeout = TimeoutException('fake gate assertion timed out');
+        final ctx = _ctxOver(runner, reader: _ThrowOnceGateReader(gateTimeout));
+        final transport = _RecordingTransport();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final bridge = StationJoinBridge(
+          work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
+          state: FakeSnapshotSource(_state(const [])),
+        )..start();
+        addTearDown(bridge.dispose);
+
+        final m = _mountFull(
+          joined: bridge.notifier,
+          ctx: ctx,
+          registry: reg,
+          services: ServiceBundle(transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
+        await _pumpUntil(
+          m.owner,
+          () =>
+              reg.events.isNotEmpty &&
+              runner.calls
+                      .where((c) => c.length > 1 && c[1] == '--graph')
+                      .length >=
+                  2,
+        );
+
+        final pourFailures = transport
+            .named('session.moleculePourFailed')
+            .toList();
+        expect(pourFailures, hasLength(1));
+        expect(
+          pourFailures.single.data['reason'],
+          contains('fake molecule graph pour refused'),
+        );
+
+        final mintFailures = transport.named('session.mintFailed').toList();
+        expect(mintFailures, hasLength(1));
+        expect(mintFailures.single.data['reason'], contains('$gateTimeout'));
+        expect(
+          runner.workCreates.where((c) => c.length <= 1 || c[1] != '--graph'),
+          hasLength(1),
+          reason: 'the retry reuses the first durable session id',
+        );
+        expect(
+          runner.calls.where((c) => c.length > 1 && c[1] == '--graph'),
+          hasLength(2),
+        );
+        expect(reg.events, ['START agent(tgdog-sess1/tg-1/agent)']);
+        expect(transport.named('session.mintExhausted'), isEmpty);
+      },
+    );
 
     test('a timed-out molecule dedup read flares and parks without burning the '
         'mint budget', () async {

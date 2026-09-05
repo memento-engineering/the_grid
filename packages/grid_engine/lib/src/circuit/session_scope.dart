@@ -181,6 +181,11 @@ class SessionScopeState extends State<SessionScope>
   /// is parked at a durable gate for operator repair and rework.
   static const _moleculePourFailedFlare = 'session.moleculePourFailed';
 
+  /// An adopted session's failed molecule pour could not be parked durably.
+  /// The scope remains retryable and reports the failed park without allowing
+  /// its unawaited orphan-resume microtask to escape into the resident's zone.
+  static const _moleculePourParkFailedFlare = 'session.moleculePourParkFailed';
+
   GateSweepSessionDisposition _gateSweepDisposition(
     SessionDisposition disposition,
   ) => switch (disposition) {
@@ -1309,18 +1314,30 @@ class SessionScopeState extends State<SessionScope>
         sessionId: sessionId,
         rootCrumbs: root.crumbs,
       );
-      // tg-q3q0 (deep): reset on SUCCESS too. createMolecule's R6 dedup can
-      // no-op (steps exist but closed, or the projection lags) — the old
-      // reset-only-on-failure posture then idled this scope FOREVER: every
-      // build saw the empty projection, hit the latched guard, and returned
-      // Idle. Re-submission is dedup-safe and builds are snapshot-gated, so
-      // resetting here is bounded, not a hot loop.
-      _resumingOrphanedPour = false;
     } on Object catch (error) {
       // Same terminal park as the fresh-mint path: the session bead EXISTS
       // (this scope adopted it), so a thrown pour is made LOUD and durable
       // instead of silently retried against the same cause forever.
-      await _parkFailedMoleculePour(sessionId, error, retiredSessionId: null);
+      try {
+        await _parkFailedMoleculePour(sessionId, error, retiredSessionId: null);
+      } on Object catch (parkError) {
+        // Recovery invariant: the gate write did not land, so no durable park
+        // exists and this adopted step-less session must remain non-terminal.
+        // Clearing the in-flight latch lets a later snapshot-driven build
+        // re-attempt the dedup-safe pour; this flare keeps that retryable debt
+        // LOUD without escaping the unawaited resident microtask.
+        _flare(_moleculePourParkFailedFlare, {
+          'sessionId': sessionId,
+          'workBeadId': seed.bead.id,
+          'reason': truncateReason('$parkError'),
+        });
+      }
+    } finally {
+      // tg-q3q0 (deep): reset after EVERY outcome. createMolecule's R6 dedup
+      // can no-op (steps exist but closed, or the projection lags), while a
+      // failed park must remain retryable because no durable terminal exists.
+      // Re-submission is dedup-safe and builds are snapshot-gated, so resetting
+      // here is bounded, not a hot loop.
       _resumingOrphanedPour = false;
     }
   }
