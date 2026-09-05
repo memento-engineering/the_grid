@@ -4,11 +4,14 @@
 // and demotes nothing; a surplus row whose fence is ALIVE holds the bead.
 //
 // Zero I/O — the recording chokepoint + a fake transport (Fakes, not mocks).
+import 'dart:async';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:grid_engine/testing.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 const _code = Circuit(
@@ -34,6 +37,21 @@ class _RecordingTransport implements ExplorationTransport {
 
   List<({String name, Map<String, String> data})> named(String name) =>
       flares.where((flare) => flare.name == name).toList();
+}
+
+final class _TimeoutGateUpdateRunner extends RecordingBdRunner {
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (args.length > 1 && args.first == 'update' && args[1] == 'tgdog-gate') {
+      throw TimeoutException('Future not completed');
+    }
+    return result;
+  }
 }
 
 Future<void> _pump() async {
@@ -137,6 +155,75 @@ List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
 
 void main() {
   group('a work bead with many linked session rows', () {
+    test(
+      'WorkList gate auto-close failures retain SQL deadline provenance',
+      () async {
+        final runner = _TimeoutGateUpdateRunner();
+        runner.exportBeads = const [
+          Bead(
+            id: 'tgdog-done',
+            issueType: GridIssueTypes.session,
+            status: BeadStatus.closed,
+            metadata: {
+              'rig': stateSubstation,
+              'work_bead': 'tg-1',
+              'grid.outcome': 'complete',
+            },
+          ),
+          Bead(
+            id: 'tgdog-gate',
+            issueType: GridIssueTypes.gate,
+            metadata: {
+              'rig': stateSubstation,
+              'blocks': 'tgdog-done',
+              'node': 'tg-1/route',
+            },
+          ),
+        ];
+        final provider = FakeRuntimeProvider();
+        addTearDown(provider.close);
+        final station = StationServices(
+          provider: provider,
+          writer: StationBeadWriter(
+            bd: BdCliService(runner),
+            reader: runner,
+            ownership: BeadOwnershipPredicate(const {stateSubstation}),
+          ),
+          stateSubstation: stateSubstation,
+        );
+        addTearDown(station.dispose);
+        final transport = _RecordingTransport();
+        final mounted = _mount(
+          joined: JoinedSnapshotNotifier(
+            _joined(const {
+              'tg-1': SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-done',
+                isTerminal: true,
+                completed: true,
+              ),
+            }),
+          ),
+          ctx: station,
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          transport: transport,
+        );
+        addTearDown(mounted.owner.dispose);
+
+        await _pumpUntil(
+          mounted.owner,
+          () => transport.named('gate.autoCloseFailed').isNotEmpty,
+        );
+        final failed = transport.named('gate.autoCloseFailed').single;
+        expect(failed.data['sessionId'], 'tgdog-done');
+        expect(
+          failed.data,
+          containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
+        );
+        expect(failed.data, containsPair('deadlineMs', '10000'));
+      },
+    );
+
     test('a ready bead whose ONE linked row is a closed dead key mints a '
         'FRESH round at the circuit first step, on the BARE work_bead key '
         '(round 0)', () async {
@@ -350,13 +437,13 @@ void main() {
       expect(alive.single.data['sessionIds'], 'tgdog-live-twin');
     });
 
-    test('TWO OPEN rows: duplicate-live is refused before any mint and no row '
-        'is demoted', () async {
-      final f = buildFakes();
-      final transport = _RecordingTransport();
-      final reg = RecordingCapabilityRegistry(circuits: const {});
-      final mounted = _mount(
-        joined: JoinedSnapshotNotifier(
+    test(
+      'TWO OPEN rows retire the rival before a later winner adoption',
+      () async {
+        final f = buildFakes();
+        final transport = _RecordingTransport();
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final joined = JoinedSnapshotNotifier(
           _joined(
             {
               'tg-1': SessionProjection(
@@ -375,23 +462,54 @@ void main() {
               ],
             },
           ),
-        ),
-        ctx: f.ctx,
-        registry: reg,
-        transport: transport,
-      );
-      addTearDown(mounted.owner.dispose);
+        );
+        final mounted = _mount(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          transport: transport,
+        );
+        addTearDown(mounted.owner.dispose);
 
-      await _pump();
-      mounted.owner.flush();
+        await _pumpUntil(
+          mounted.owner,
+          () => transport.named('work.sessionSurplusRetired').isNotEmpty,
+        );
 
-      expect(reg.events, isEmpty);
-      expect(f.runner.workUpdates, isEmpty);
-      expect(f.runner.workCreates, isEmpty);
-      final refused = transport.named('work.duplicateLiveRefused');
-      expect(refused, hasLength(1));
-      expect(refused.single.data['beadId'], 'tg-1');
-      expect(refused.single.data['rivalSessionIds'], 'tgdog-live-old');
-    });
+        expect(reg.events, isEmpty);
+        expect(f.runner.workCreates, isEmpty);
+        final refused = transport.named('work.duplicateLiveRefused');
+        expect(refused, hasLength(1));
+        expect(refused.single.data['beadId'], 'tg-1');
+        expect(refused.single.data['rivalSessionIds'], 'tgdog-live-old');
+        final retired = transport.named('work.sessionSurplusRetired');
+        expect(retired, hasLength(1));
+        expect(retired.single.data['sessionId'], 'tgdog-live-old');
+        final closeIndex = f.runner.calls.indexWhere(
+          (call) => call.isNotEmpty && call.first == 'close',
+        );
+        final voidIndex = f.runner.calls.indexWhere(
+          (call) => call.any(
+            (arg) =>
+                arg == '${SessionBeadKeys.workBead}=tg-1#void-tgdog-live-old',
+          ),
+        );
+        expect(closeIndex, isNonNegative);
+        expect(closeIndex, lessThan(voidIndex));
+
+        joined.push(
+          _joined({
+            'tg-1': SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-live-new',
+              startedAt: DateTime.utc(2026, 9, 2),
+            ),
+          }),
+        );
+        mounted.owner.flush();
+        await _pumpUntil(mounted.owner, () => reg.events.isNotEmpty);
+        expect(reg.events, ['START agent(tgdog-live-new/tg-1/agent)']);
+      },
+    );
   });
 }

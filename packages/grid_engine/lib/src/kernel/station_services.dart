@@ -34,6 +34,7 @@ class StationServices {
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
   }) : admission = StationAdmissionAuthority(
          writer: writer,
+         provider: provider,
          stateSubstation: stateSubstation,
          maxConcurrentWork: maxConcurrentWork,
          liveness: liveness,

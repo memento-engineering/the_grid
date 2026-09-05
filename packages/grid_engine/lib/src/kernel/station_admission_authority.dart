@@ -4,6 +4,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../bridge/trust_guard.dart';
+import '../diagnostics/state_store_deadline.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/linked_sessions.dart';
 import '../domain/mount_attempt.dart';
@@ -100,6 +101,7 @@ final class StationMintVoided implements Exception {
   const StationMintVoided({
     required this.workBeadId,
     required this.retiredSessionId,
+    required this.cause,
   });
 
   /// The work bead whose timed-out attempt was retired.
@@ -107,6 +109,9 @@ final class StationMintVoided implements Exception {
 
   /// The session id that was durably voided and closed.
   final String retiredSessionId;
+
+  /// The raw SQL timeout that triggered compensation.
+  final Object cause;
 
   @override
   String toString() =>
@@ -147,6 +152,8 @@ final class _AdmissionScopeState {
   final Set<String> _surplusRetiresScheduled = <String>{};
   final Set<String> _surplusAliveReported = <String>{};
   final Set<String> _sessionAmbiguityReported = <String>{};
+  final Set<String> _rivalRetiresRequired = <String>{};
+  final Set<String> _rivalCleanupsInFlight = <String>{};
   final Set<String> _gateSweepsScheduled = <String>{};
   String? _capacityWaitingSignature;
 }
@@ -160,15 +167,18 @@ final class StationAdmissionAuthority {
   /// Creates the one in-process admission owner for a station.
   StationAdmissionAuthority({
     required StationBeadWriter writer,
+    required RuntimeProvider provider,
     required String stateSubstation,
     required int maxConcurrentWork,
     AllocationLiveness? liveness,
   }) : _writer = writer,
+       _provider = provider,
        _stateSubstation = stateSubstation,
        _maxConcurrentWork = maxConcurrentWork,
        _liveness = liveness ?? neverLive;
 
   final StationBeadWriter _writer;
+  final RuntimeProvider _provider;
   final String _stateSubstation;
   final int _maxConcurrentWork;
   final AllocationLiveness _liveness;
@@ -268,6 +278,9 @@ final class StationAdmissionAuthority {
             row;
       }
     }
+    scope._surplusRetiresScheduled.removeWhere(
+      (sessionId) => !durableRows.containsKey(sessionId),
+    );
     final durableLiveIds = {
       for (final entry in durableRows.entries)
         if (!entry.value.isTerminal) entry.key,
@@ -363,9 +376,33 @@ final class StationAdmissionAuthority {
       }
       switch (verdict) {
         case AdoptLinkedSession(:final session, :final rivals):
-          if (rivals.isNotEmpty) {
+          for (final rival in rivals) {
+            final rivalId = rival.sessionId ?? '';
+            if (rivalId.isNotEmpty &&
+                !scope._surplusRetiresScheduled.contains(rivalId)) {
+              scope._rivalRetiresRequired.add(rivalId);
+            }
+          }
+          final requiredRivals = linked
+              .where((row) {
+                final id = row.sessionId ?? '';
+                return id.isNotEmpty &&
+                    scope._rivalRetiresRequired.contains(id);
+              })
+              .toList(growable: false);
+          if (rivals.isNotEmpty || requiredRivals.isNotEmpty) {
             _reportDuplicateLive(scope, services, bead.id, session, rivals);
             _release(bead.id, onlyScope: scopeKey);
+            final keptSessionId = session.sessionId ?? '';
+            for (final rival in requiredRivals) {
+              _scheduleRivalCleanup(
+                scope,
+                services,
+                workBeadId: bead.id,
+                keptSessionId: keptSessionId,
+                rival: rival,
+              );
+            }
             refused.add(
               StationAdmissionRefusal(
                 candidate: candidate,
@@ -659,6 +696,7 @@ final class StationAdmissionAuthority {
           'beadId': workBeadId,
           'attempt': '$attempt',
           'reason': truncateReason('$error'),
+          ...stateStoreDeadlineMetadata(error),
         });
         _scheduleRetryInvalidation(workBeadId);
         _notifyListeners();
@@ -781,6 +819,7 @@ final class StationAdmissionAuthority {
     required String workBeadId,
     required String sessionId,
     required Iterable<String> rootCrumbs,
+    required ServiceBundle services,
   }) async {
     try {
       final result = await _writer.createMolecule(
@@ -791,30 +830,67 @@ final class StationAdmissionAuthority {
       );
       _notifyListeners();
       return result;
-    } on TimeoutException {
+    } on TimeoutException catch (error) {
       final reservation = _reservations[workBeadId];
       if (reservation?.sessionId != sessionId) rethrow;
-      try {
-        await _writer.reapMolecule(sessionId: sessionId);
-      } on Object {
-        // Best effort: durable void + close remains the release fence.
-      }
-      await _writer.update(
-        sessionId,
-        metadata: voidRetireMetadata(
-          workBeadId: workBeadId,
-          deadSessionId: sessionId,
-          reason: 'mint-timeout',
-        ),
+      await _voidCreatedSession(
+        workBeadId: workBeadId,
+        sessionId: sessionId,
+        reason: kMintTimeoutVoidReason,
+        services: services,
+        retryAfterClose: true,
       );
-      await _writer.close(sessionId, reason: 'mint-timeout');
-      _release(workBeadId);
-      _scheduleRetryInvalidation(workBeadId);
       throw StationMintVoided(
         workBeadId: workBeadId,
         retiredSessionId: sessionId,
+        cause: error,
       );
     }
+  }
+
+  /// Compensates a lifecycle cancellation only when this authority still owns
+  /// the created session attempt. Null and stale ids are harmless no-ops.
+  Future<String?> abandonSessionAttempt({
+    required String workBeadId,
+    required String? sessionId,
+    required ServiceBundle services,
+  }) async {
+    if (sessionId == null ||
+        _reservations[workBeadId]?.sessionId != sessionId) {
+      return null;
+    }
+    return _voidCreatedSession(
+      workBeadId: workBeadId,
+      sessionId: sessionId,
+      reason: 'mint-abandoned',
+      services: services,
+      retryAfterClose: false,
+    );
+  }
+
+  Future<String> _voidCreatedSession({
+    required String workBeadId,
+    required String sessionId,
+    required String reason,
+    required ServiceBundle services,
+    required bool retryAfterClose,
+  }) async {
+    await _bestEffortReap(sessionId, reason, services);
+    await _writer.update(
+      sessionId,
+      metadata: voidRetireMetadata(
+        workBeadId: workBeadId,
+        deadSessionId: sessionId,
+        reason: reason,
+      ),
+    );
+    await _writer.close(sessionId, reason: reason);
+    _releaseSession(workBeadId, sessionId);
+    if (retryAfterClose) {
+      _scheduleRetryInvalidation(workBeadId);
+    }
+    _notifyListeners();
+    return sessionId;
   }
 
   /// Writes the completion marker when [outcomeMarked] is false; on the true
@@ -940,7 +1016,8 @@ final class StationAdmissionAuthority {
   }
 
   /// Demotes terminal-only surplus linked rows through the incumbent void-key
-  /// shape. A live rival is refused and never rewritten.
+  /// shape. Pre-authority open rivals reach this batch only after the authority
+  /// has stopped their runtimes and closed them durably.
   Future<void> retireSurplusSessions({
     required String workBeadId,
     required String keptSessionId,
@@ -954,7 +1031,7 @@ final class StationAdmissionAuthority {
     for (final row in ordered) {
       final deadId = row.sessionId ?? '';
       if (deadId.isEmpty || !row.isTerminal) continue;
-      if (staleFences(row).any(_liveness)) {
+      if (_hasLiveFence(row)) {
         if (scope != null) {
           _reportSurplusAlive(scope, services, workBeadId, [row]);
         }
@@ -963,9 +1040,7 @@ final class StationAdmissionAuthority {
       if (scope != null && !scope._surplusRetiresScheduled.add(deadId)) {
         continue;
       }
-      final reason =
-          'surplus linked session: "$workBeadId" keeps "$keptSessionId"; '
-          'this closed row was demoted so the join stays single-valued';
+      final reason = _surplusRetirementReason(workBeadId, keptSessionId);
       try {
         await _writer.update(
           deadId,
@@ -981,16 +1056,74 @@ final class StationAdmissionAuthority {
           'workBeadKey': voidKeyFor(workBeadId, deadId),
           'keptSessionId': keptSessionId,
         });
+        scope?._rivalRetiresRequired.remove(deadId);
+        scope?._rivalCleanupsInFlight.remove(deadId);
         _notifyListeners();
       } on Object catch (error) {
         _flare(services, 'work.sessionSurplusRetireFailed', {
           'beadId': workBeadId,
           'sessionId': deadId,
           'reason': truncateReason('$error'),
+          ...stateStoreDeadlineMetadata(error),
         });
+        if (scope?._rivalRetiresRequired.contains(deadId) ?? false) {
+          scope!._rivalCleanupsInFlight.remove(deadId);
+          scope._surplusRetiresScheduled.remove(deadId);
+        }
       }
     }
   }
+
+  void _scheduleRivalCleanup(
+    _AdmissionScopeState scope,
+    ServiceBundle services, {
+    required String workBeadId,
+    required String keptSessionId,
+    required SessionProjection rival,
+  }) {
+    final rivalId = rival.sessionId ?? '';
+    if (rivalId.isEmpty || !scope._rivalCleanupsInFlight.add(rivalId)) return;
+    scheduleMicrotask(() async {
+      try {
+        final running = _provider.listRunning('$rivalId/');
+        for (final runtime in running) {
+          await _provider.stop(runtime);
+        }
+        if (_hasLiveFence(rival)) {
+          _reportSurplusAlive(scope, services, workBeadId, [rival]);
+          scope._rivalCleanupsInFlight.remove(rivalId);
+          return;
+        }
+        final reason = _surplusRetirementReason(workBeadId, keptSessionId);
+        await _bestEffortReap(rivalId, reason, services);
+        await _writer.close(rivalId, reason: reason);
+        await retireSurplusSessions(
+          workBeadId: workBeadId,
+          keptSessionId: keptSessionId,
+          surplus: [rival.copyWith(isTerminal: true)],
+          services: services,
+        );
+      } on Object catch (error) {
+        _flare(services, 'work.sessionSurplusRetireFailed', {
+          'beadId': workBeadId,
+          'sessionId': rivalId,
+          'reason': truncateReason('$error'),
+          ...stateStoreDeadlineMetadata(error),
+        });
+        scope._rivalCleanupsInFlight.remove(rivalId);
+        scope._surplusRetiresScheduled.remove(rivalId);
+      }
+    });
+  }
+
+  bool _hasLiveFence(SessionProjection row) => staleFences(row).any(_liveness);
+
+  static String _surplusRetirementReason(
+    String workBeadId,
+    String keptSessionId,
+  ) =>
+      'surplus linked session: "$workBeadId" keeps "$keptSessionId"; '
+      'this closed row was demoted so the join stays single-valued';
 
   Future<void> _bestEffortReap(
     String sessionId,
@@ -1004,6 +1137,7 @@ final class StationAdmissionAuthority {
         'sessionId': sessionId,
         'closeReason': closeReason,
         'reason': truncateReason('$error'),
+        ...stateStoreDeadlineMetadata(error),
       });
     }
   }

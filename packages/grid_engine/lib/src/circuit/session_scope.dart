@@ -60,6 +60,7 @@ import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../diagnostics/diagnosable.dart';
+import '../diagnostics/state_store_deadline.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
@@ -213,6 +214,7 @@ class SessionScopeState extends State<SessionScope>
         'sessionId': sessionId,
         'cause': cause.wireValue,
         'reason': truncateReason('$error'),
+        ...stateStoreDeadlineMetadata(error),
       });
     }
   }
@@ -243,6 +245,7 @@ class SessionScopeState extends State<SessionScope>
         'sessionId': sessionId,
         'cause': GateCloseCause.supersededRound.wireValue,
         'reason': truncateReason('$error'),
+        ...stateStoreDeadlineMetadata(error),
       });
       rethrow;
     }
@@ -642,7 +645,7 @@ class SessionScopeState extends State<SessionScope>
       try {
         await _closeRetiredReworkSession(retiredId);
       } on Object {
-        if (_stopAbandonedMint(
+        if (await _stopAbandonedMint(
           stage: 'retired-gates-close-failed',
           retiredSessionId: retiredId,
         )) {
@@ -654,7 +657,7 @@ class SessionScopeState extends State<SessionScope>
         });
         return;
       }
-      if (_stopAbandonedMint(
+      if (await _stopAbandonedMint(
         stage: 'retired-gates-closed',
         retiredSessionId: retiredId,
       )) {
@@ -664,13 +667,13 @@ class SessionScopeState extends State<SessionScope>
     if (_requiresFreshMintSnapshot) {
       final snapshotReady = await _awaitFreshReadySnapshot();
       if (!snapshotReady) {
-        _stopAbandonedMint(
+        await _stopAbandonedMint(
           stage: 'fresh-snapshot',
           retiredSessionId: retiredId,
         );
         return;
       }
-      if (_stopAbandonedMint(
+      if (await _stopAbandonedMint(
         stage: 'fresh-snapshot-ready',
         retiredSessionId: retiredId,
       )) {
@@ -720,7 +723,7 @@ class SessionScopeState extends State<SessionScope>
               dead.workBeadId,
             ).round,
           );
-          if (_stopAbandonedMint(
+          if (await _stopAbandonedMint(
             stage: 'void-session-retired',
             retiredSessionId: retiredId,
           )) {
@@ -739,13 +742,13 @@ class SessionScopeState extends State<SessionScope>
       // molecule graph (tg-eli phase 2: molecule is the only circuit engine).
       await _mintMolecule(retiredSessionId: retiredId);
     } on Object catch (error) {
-      if (_stopAbandonedMint(
+      if (await _stopAbandonedMint(
         stage: 'mint-catch',
         retiredSessionId: retiredId,
       )) {
         return;
       }
-      _onMintFailed('$error');
+      _onMintFailed(error);
     }
   }
 
@@ -755,18 +758,16 @@ class SessionScopeState extends State<SessionScope>
   /// lifecycle position: a `createSession` throw happens BEFORE a durable
   /// session exists and propagates to [_mint]'s `catch` under the
   /// [_maxMintAttempts] budget; a `createMolecule` throw happens AFTER the
-  /// session exists and parks it durably via [_parkFailedMoleculePour] —
-  /// terminal, budget-untouched. Only a throwing PARK (the gate write itself
-  /// failing) falls back to [_mint]'s bounded retry.
+  /// session exists. A raw SQL timeout is compensated by the authority before
+  /// this scope reports abandonment; every other failure parks the session
+  /// durably via [_parkFailedMoleculePour] — terminal, budget-untouched. Only a
+  /// throwing PARK (the gate write itself failing) falls back to [_mint]'s
+  /// bounded retry.
   ///
-  /// [_moleculeSessionId] makes a retry-after-`createMolecule`-throws SAFE: on
-  /// re-entry the session id from the FIRST attempt is reused (`??=`
-  /// short-circuits the second `createSession` call entirely), so a transient
-  /// pour failure can never strand an un-poured session bead behind a fresh
-  /// second mint (`DESIGN-tg-pm6.md` §3 conflict 2's exact "crashed pour"
-  /// ambiguity, avoided here rather than merely detected on restart).
-  /// `createMolecule` itself is ALSO re-entry-safe (R6's own dedup probe), so
-  /// the two guards compose rather than race.
+  /// [_moleculeSessionId] keeps a post-create attempt tied to the authority's
+  /// reservation until pour or compensation finishes. It therefore cannot
+  /// mint a rival while the first id is being retired. `createMolecule` itself
+  /// remains re-entry-safe for adopted orphan-pour recovery (R6's dedup probe).
   Future<void> _mintMolecule({required String? retiredSessionId}) async {
     var id = _moleculeSessionId;
     if (id == null) {
@@ -809,7 +810,7 @@ class SessionScopeState extends State<SessionScope>
         mountAttemptMetadata: _mountAttemptMetadata,
       );
     }
-    if (_stopAbandonedMint(
+    if (await _stopAbandonedMint(
       stage: 'molecule-session-created',
       retiredSessionId: retiredSessionId,
     )) {
@@ -829,12 +830,13 @@ class SessionScopeState extends State<SessionScope>
         workBeadId: seed.bead.id,
         sessionId: id,
         rootCrumbs: root.crumbs,
+        services: _services,
       );
     } on StationMintVoided catch (voided) {
       _recorder.sessionVoided(
         sessionId: voided.retiredSessionId,
         workBeadId: voided.workBeadId,
-        reason: 'mint-timeout',
+        reason: kMintTimeoutVoidReason,
       );
       _recorder.roundRetired(
         sessionId: voided.retiredSessionId,
@@ -845,16 +847,11 @@ class SessionScopeState extends State<SessionScope>
         'workBeadId': voided.workBeadId,
         'retiredSessionId': voided.retiredSessionId,
         'stage': 'molecule-pour',
-        'reason': 'mint-timeout',
+        'reason': kMintTimeoutVoidReason,
+        ...stateStoreDeadlineMetadata(voided.cause),
       });
       _moleculeSessionId = null;
       _sessionId = null;
-      if (!_cancelled && context.mounted) {
-        setState(() {
-          _failed = true;
-          _resolving = false;
-        });
-      }
       return;
     } on Object catch (error) {
       await _parkFailedMoleculePour(
@@ -864,7 +861,7 @@ class SessionScopeState extends State<SessionScope>
       );
       return;
     }
-    if (_stopAbandonedMint(
+    if (await _stopAbandonedMint(
       stage: 'molecule-poured',
       retiredSessionId: retiredSessionId,
     )) {
@@ -900,6 +897,7 @@ class SessionScopeState extends State<SessionScope>
       'sessionId': sessionId,
       'workBeadId': seed.bead.id,
       'reason': reason,
+      ...stateStoreDeadlineMetadata(error),
     });
     // The chokepoint's session-lifecycle park — NOT the router's gate-mint
     // verb (tg-6gn one-router): no step exists, so there is no route verdict
@@ -910,7 +908,7 @@ class SessionScopeState extends State<SessionScope>
       nodePath: seed.bead.id,
       reason: reason,
     );
-    if (_stopAbandonedMint(
+    if (await _stopAbandonedMint(
       stage: 'molecule-pour-parked',
       retiredSessionId: retiredSessionId,
     )) {
@@ -933,16 +931,34 @@ class SessionScopeState extends State<SessionScope>
     }
   }
 
-  bool _stopAbandonedMint({
+  Future<bool> _stopAbandonedMint({
     required String stage,
     required String? retiredSessionId,
-  }) {
+  }) async {
     final reason = _cancelled
         ? 'cancelled'
         : !context.mounted
         ? 'unmounted'
         : null;
     if (reason == null) return false;
+    final retiredMintSessionId = await _ctx?.admission.abandonSessionAttempt(
+      workBeadId: seed.bead.id,
+      sessionId: _moleculeSessionId,
+      services: _services,
+    );
+    if (retiredMintSessionId != null) {
+      _recorder.sessionVoided(
+        sessionId: retiredMintSessionId,
+        workBeadId: seed.bead.id,
+        reason: 'mint-abandoned',
+      );
+      _recorder.roundRetired(
+        sessionId: retiredMintSessionId,
+        cause: RoundRetireCause.voided,
+        oldRound: 0,
+      );
+      _moleculeSessionId = null;
+    }
     // §2.3's mint row: `abandoned` ENDS the mount sequence, so the next mint
     // sequence for this work bead gets a fresh mount_attempt_id.
     _recorder.mintOutcome(
@@ -956,7 +972,7 @@ class SessionScopeState extends State<SessionScope>
     );
     _flare(_mintAbandonedFlare, {
       'workBeadId': seed.bead.id,
-      'retiredSessionId': retiredSessionId ?? '',
+      'retiredSessionId': retiredMintSessionId ?? retiredSessionId ?? '',
       'stage': stage,
       'reason': reason,
     });
@@ -983,9 +999,9 @@ class SessionScopeState extends State<SessionScope>
   /// unlike breaker-exhaustion (D-5), which marks its OWN session bead — the
   /// flare is the only escalation channel; a human fixes the store and bounces
   /// the station.
-  void _onMintFailed(String reason) {
+  void _onMintFailed(Object error) {
     if (_mintAttempts < _maxMintAttempts) {
-      _flareMint(_mintFailedFlare, reason);
+      _flareMint(_mintFailedFlare, error);
       // Retry off `build` (invariant 2) — the scope stays `resolving` (it was
       // never rendered ready), so no setState is needed. The guard re-checks
       // liveness before re-entering the mint; a disposed scope drops the retry.
@@ -995,7 +1011,7 @@ class SessionScopeState extends State<SessionScope>
       });
       return;
     }
-    _flareMint(_mintExhaustedFlare, reason);
+    _flareMint(_mintExhaustedFlare, error);
     setState(() {
       _failed = true;
       _resolving = false;
@@ -1012,7 +1028,8 @@ class SessionScopeState extends State<SessionScope>
   /// The trajectory record rides HERE rather than at the two call sites so the
   /// flare and the append can never disagree about which mint outcome just
   /// happened: [name] is the discriminator both read.
-  void _flareMint(String name, String reason) {
+  void _flareMint(String name, Object error) {
+    final reason = '$error';
     _recorder.mintOutcome(
       workBeadId: seed.bead.id,
       // `exhausted` ends the mount sequence (the budget is spent and the scope
@@ -1031,6 +1048,7 @@ class SessionScopeState extends State<SessionScope>
         'attempt': '$_mintAttempts',
         'maxAttempts': '$_maxMintAttempts',
         'reason': truncateReason(reason),
+        ...stateStoreDeadlineMetadata(error),
       });
     } catch (_) {
       // A throwing transport never re-breaks the mint microtask — swallow.
@@ -1331,6 +1349,7 @@ class SessionScopeState extends State<SessionScope>
         workBeadId: seed.bead.id,
         sessionId: sessionId,
         rootCrumbs: root.crumbs,
+        services: _services,
       );
     } on Object catch (error) {
       // Same terminal park as the fresh-mint path: the session bead EXISTS

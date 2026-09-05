@@ -80,6 +80,24 @@ void main() {
         expect(authority, contains(name), reason: '$name stays behind owner');
         expect(workList, isNot(contains(name)), reason: '$name moved out');
       }
+      for (final authorityOnly in [
+        '_surplusRetiresScheduled',
+        '_surplusAliveReported',
+        '_rivalRetiresRequired',
+        '_rivalCleanupsInFlight',
+        '_scheduleRivalCleanup',
+      ]) {
+        expect(
+          authority,
+          contains(authorityOnly),
+          reason: '$authorityOnly stays behind the admission owner',
+        );
+        expect(workList, isNot(contains(authorityOnly)));
+        expect(sessionScope, isNot(contains(authorityOnly)));
+      }
+      expect(authority, contains("listRunning('\$rivalId/')"));
+      expect(workList, isNot(contains('listRunning(')));
+      expect(sessionScope, isNot(contains('listRunning(')));
       for (final incumbent in [
         'recordMountAttempt',
         'voidKeyFor',
@@ -112,12 +130,17 @@ void main() {
         expect(sessionScope, contains(retainedExecution));
       }
 
-      for (final libRoot in _libRoots()) {
-        for (final entity in libRoot.listSync(recursive: true)) {
-          if (entity is File && entity.path.endsWith('.dart')) {
+      for (final retiredFlare in [
+        'work.sessionRivalAlive',
+        'work.sessionAmbiguous',
+        'work.sessionRivalRetireFailed',
+      ]) {
+        for (final libRoot in _libRoots()) {
+          for (final entity in libRoot.listSync(recursive: true)) {
+            if (entity is! File || !entity.path.endsWith('.dart')) continue;
             expect(
               entity.readAsStringSync(),
-              isNot(contains('work.sessionAmbiguous')),
+              isNot(contains(retiredFlare)),
               reason: entity.path,
             );
           }

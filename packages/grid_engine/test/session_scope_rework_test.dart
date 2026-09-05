@@ -31,11 +31,16 @@ const _code = Circuit(
 );
 
 class _RecordingTransport implements ExplorationTransport {
+  _RecordingTransport([this.eventLog]);
+
+  final List<String>? eventLog;
   final List<({String name, Map<String, String> data})> flares = [];
 
   @override
-  void flare(String name, Map<String, String> data) =>
-      flares.add((name: name, data: data));
+  void flare(String name, Map<String, String> data) {
+    eventLog?.add('flare:$name');
+    flares.add((name: name, data: data));
+  }
 
   List<({String name, Map<String, String> data})> named(String name) =>
       flares.where((flare) => flare.name == name).toList();
@@ -80,6 +85,7 @@ class _StageGatedRunner extends RecordingBdRunner {
   _StageGatedRunner({
     required this.gateCall,
     this.throwAfterRelease = false,
+    super.eventLog,
     super.createdId = 'tgdog-round2',
   });
 
@@ -88,6 +94,7 @@ class _StageGatedRunner extends RecordingBdRunner {
   final entered = Completer<void>();
   final release = Completer<void>();
   var _gated = false;
+  var _sessionCreates = 0;
 
   @override
   Future<BdResult> run(
@@ -103,7 +110,18 @@ class _StageGatedRunner extends RecordingBdRunner {
         throw StateError('controlled bd failure');
       }
     }
-    return super.run(args, timeout: timeout, stdin: stdin);
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (_isPlainCreateOf(args, GridIssueTypes.session.wire)) {
+      _sessionCreates += 1;
+      if (_sessionCreates > 1) {
+        return const BdResult(
+          exitCode: 0,
+          stdout: '{"schema_version":1,"data":{"id":"tgdog-round3"}}',
+          stderr: '',
+        );
+      }
+    }
+    return result;
   }
 }
 
@@ -490,16 +508,30 @@ void main() {
     ];
 
     for (final abandonmentCase in abandonmentCases) {
-      test('disposing at ${abandonmentCase.stage.wireName} emits its literal '
-          'abandonment stage and stops the lifecycle', () async {
+      final testName =
+          abandonmentCase.stage == _AbandonmentStage.moleculeSessionCreated
+          ? 'abandoned post-create mint voids its session before flare and '
+                'remints next tick'
+          : 'disposing at ${abandonmentCase.stage.wireName} emits its literal '
+                'abandonment stage and stops the lifecycle';
+      test(testName, () async {
+        final events = <String>[];
         final runner = _StageGatedRunner(
           gateCall: abandonmentCase.gateCall,
           throwAfterRelease: abandonmentCase.throwAfterRelease,
+          eventLog: events,
           createdId: 'tgdog-round2',
         );
-        final transport = _RecordingTransport();
+        final transport = _RecordingTransport(events);
         final isVoid =
             abandonmentCase.stage == _AbandonmentStage.voidSessionRetired;
+        final minted = switch (abandonmentCase.stage) {
+          _AbandonmentStage.moleculeSessionCreated ||
+          _AbandonmentStage.moleculePoured ||
+          _AbandonmentStage.moleculePourParked => true,
+          _AbandonmentStage.voidSessionRetired ||
+          _AbandonmentStage.mintCatch => false,
+        };
         final now = DateTime.now();
         final joined = JoinedSnapshotNotifier(
           _joined(
@@ -519,9 +551,12 @@ void main() {
                   },
           ),
         );
+        final station = _servicesFor(runner);
+        addTearDown(station.dispose);
+        final authority = station.admission;
         final m = _mountFull(
           joined: joined,
-          ctx: _servicesFor(runner),
+          ctx: station,
           registry: RecordingCapabilityRegistry(circuits: const {}),
           rootCircuit: (_) => _code,
           transport: transport,
@@ -553,7 +588,11 @@ void main() {
 
         _expectAbandonment(
           transport,
-          retiredSessionId: isVoid ? '' : 'tgdog-round1',
+          retiredSessionId: minted
+              ? 'tgdog-round2'
+              : isVoid
+              ? ''
+              : 'tgdog-round1',
           stage: abandonmentCase.stage.wireName,
           reason: anyOf('cancelled', 'unmounted'),
         );
@@ -571,6 +610,53 @@ void main() {
               ),
               hasLength(1),
             );
+        }
+        if (minted) {
+          final updates = runner.callsFor('update');
+          final voidMetadata =
+              [
+                for (var i = 0; i < updates.length; i++)
+                  if (updates[i].length > 1 && updates[i][1] == 'tgdog-round2')
+                    runner.metadataOfUpdate(i),
+              ].singleWhere(
+                (metadata) =>
+                    metadata.containsKey(SessionBeadKeys.voidedReason),
+              );
+          expect(
+            voidMetadata[SessionBeadKeys.workBead],
+            'tg-1#void-tgdog-round2',
+          );
+          expect(voidMetadata[SessionBeadKeys.voidedReason], 'mint-abandoned');
+          final closeIndex = events.indexOf('bd:close');
+          final flareIndex = events.indexOf('flare:session.mintAbandoned');
+          expect(closeIndex, isNonNegative);
+          expect(closeIndex, lessThan(flareIndex));
+        }
+        if (abandonmentCase.stage == _AbandonmentStage.moleculeSessionCreated) {
+          final replacementRegistry = RecordingCapabilityRegistry(
+            circuits: const {},
+          );
+          final replacementTree = _mountFull(
+            joined: JoinedSnapshotNotifier(
+              _joined(
+                beads: [_task('tg-1')],
+                ready: {'tg-1'},
+                capturedAt: DateTime.now().add(const Duration(days: 2)),
+              ),
+            ),
+            ctx: station,
+            registry: replacementRegistry,
+            rootCircuit: (_) => _code,
+          );
+          addTearDown(replacementTree.owner.dispose);
+          expect(station.admission, same(authority));
+          await _pumpUntil(
+            replacementTree.owner,
+            () => replacementRegistry.events.isNotEmpty,
+          );
+          expect(replacementRegistry.events, [
+            'START agent(tgdog-round3/tg-1/agent)',
+          ]);
         }
       });
     }

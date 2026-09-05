@@ -61,6 +61,10 @@ void main() {
   // against a fake connection, no real socket required.
   // ------------------------------------------------------------------------
   group('DoltQueryService (offline, fake connection)', () {
+    test('the SQL read deadline is named', () {
+      expect(DoltQueryService.queryTimeout, const Duration(seconds: 10));
+    });
+
     const endpoint = DoltEndpoint(
       host: '127.0.0.1',
       port: 34947,

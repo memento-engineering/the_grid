@@ -7,6 +7,7 @@ import 'package:state_notifier/state_notifier.dart';
 
 import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
+import '../diagnostics/state_store_deadline.dart';
 import '../domain/joined_snapshot.dart';
 import '../domain/linked_sessions.dart';
 import '../domain/mount_attempt.dart';
@@ -472,6 +473,7 @@ class _WorkListState extends State<WorkList>
                   'sessionId': sessionId,
                   'cause': GateCloseCause.workBeadClosed.wireValue,
                   'reason': truncateReason('$error'),
+                  ...stateStoreDeadlineMetadata(error),
                 });
               }),
         );
@@ -492,6 +494,7 @@ class _WorkListState extends State<WorkList>
                   'sessionId': sessionId,
                   'cause': GateCloseCause.sessionTerminal.wireValue,
                   'reason': truncateReason('$error'),
+                  ...stateStoreDeadlineMetadata(error),
                 });
               }),
         );
