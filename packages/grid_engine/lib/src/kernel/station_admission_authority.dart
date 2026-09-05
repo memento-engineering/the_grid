@@ -311,6 +311,16 @@ final class StationAdmissionAuthority {
       if (projectedSessionId != null && projectedSessionId.isNotEmpty) {
         _scopeBySessionId[projectedSessionId] = scopeKey;
       }
+      // The candidate carries the join's ordered frontier winner (or a retired
+      // re-key). This classifies lifecycle only: the linked-session verdict
+      // below still owns rival, disposition, and process-liveness refusals.
+      // A mounted branch can need a fresh session reservation across the
+      // close/re-key gap without spending another durable mount attempt.
+      final retiredRound =
+          candidate.session != null &&
+          reworkRoundOf(bead.id, candidate.session!.workBeadId) != null;
+      final alreadyMounted =
+          scope._mountedIds.contains(bead.id) || retiredRound;
       final eligibility = _evaluateEligibility(
         snapshot,
         config,
@@ -319,16 +329,18 @@ final class StationAdmissionAuthority {
       );
       switch (eligibility) {
         case MountRefused(:final clause):
-          _release(bead.id, onlyScope: scopeKey);
           _noteEligibilityRefusal(scope, services, bead.id, clause);
-          refused.add(
-            StationAdmissionRefusal(
-              candidate: candidate,
-              clause: _clauseName(clause),
-              detail: clause,
-            ),
-          );
-          continue;
+          if (!alreadyMounted) {
+            _release(bead.id, onlyScope: scopeKey);
+            refused.add(
+              StationAdmissionRefusal(
+                candidate: candidate,
+                clause: _clauseName(clause),
+                detail: clause,
+              ),
+            );
+            continue;
+          }
         case MountEligible():
           _noteEligibilityRestored(scope, services, bead.id);
       }
@@ -514,13 +526,6 @@ final class StationAdmissionAuthority {
         continue;
       }
 
-      // A mounted branch can need a fresh session reservation across the
-      // close/re-key gap without spending another durable mount attempt.
-      final retiredRound =
-          candidate.session != null &&
-          reworkRoundOf(bead.id, candidate.session!.workBeadId) != null;
-      final alreadyMounted =
-          scope._mountedIds.contains(bead.id) || retiredRound;
       if (!_hasCapacity(
         scope,
         config,

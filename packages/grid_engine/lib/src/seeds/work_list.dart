@@ -270,30 +270,39 @@ class _WorkListState extends State<WorkList>
 
     for (final candidate in candidates) {
       final bead = candidate.bead;
-      final MountEligibilityDecision eligibility;
+      // This is the join-selected frontier row (or a retired re-key). It makes
+      // eligibility advisory for lifecycle preservation without bypassing the
+      // linked-session verdict below.
+      final retiredRound =
+          candidate.session != null &&
+          reworkRoundOf(bead.id, candidate.session!.workBeadId) != null;
+      final staysMounted =
+          candidate.session?.isTerminal == false ||
+          retiredRound ||
+          _mountedWorkBeadsById.containsKey(bead.id);
+      late final MountEligibilityDecision eligibility;
       try {
         eligibility = mountEligibility(bead);
       } on Object catch (error) {
-        refused.add(
-          StationAdmissionRefusal(
-            candidate: candidate,
-            clause: 'mount eligibility evaluation failed',
-            detail:
-                'mount eligibility evaluation failed: '
-                '${truncateReason('$error')}',
-          ),
+        eligibility = MountEligibilityDecision.refused(
+          clause:
+              'mount eligibility evaluation failed: '
+              '${truncateReason('$error')}',
         );
-        continue;
       }
-      if (eligibility case MountRefused(:final clause)) {
-        refused.add(
-          StationAdmissionRefusal(
-            candidate: candidate,
-            clause: _clauseName(clause),
-            detail: clause,
-          ),
-        );
-        continue;
+      switch (eligibility) {
+        case MountRefused(:final clause):
+          if (!staysMounted) {
+            refused.add(
+              StationAdmissionRefusal(
+                candidate: candidate,
+                clause: _clauseName(clause),
+                detail: clause,
+              ),
+            );
+            continue;
+          }
+        case MountEligible():
       }
 
       if (services.trust != null) {
@@ -374,11 +383,6 @@ class _WorkListState extends State<WorkList>
           break;
       }
 
-      final retiredRound =
-          candidate.session != null &&
-          reworkRoundOf(bead.id, candidate.session!.workBeadId) != null;
-      final staysMounted =
-          retiredRound || _mountedWorkBeadsById.containsKey(bead.id);
       if (!_snapshot.graph.readyIds.contains(bead.id) && !staysMounted) {
         continue;
       }
