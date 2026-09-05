@@ -86,6 +86,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required this.stateSubstation,
     required this.readPathName,
     required this.openStores,
+    required int workStoreConnectionStart,
     required StationDriver driver,
     required RestartReconciler restart,
     required RuntimeProvider provider,
@@ -125,6 +126,7 @@ class StationWorkRuntime implements SubstationProvisioner {
        _writersByOwnedPrefix = writersByOwnedPrefix,
        _rootsByName = rootsByName,
        _specsByName = specsByName,
+       _workStoreConnectionStart = workStoreConnectionStart,
        _dryRun = dryRun,
        _buildMember = buildMember,
        _buildWorkWriter = buildWorkWriter;
@@ -186,6 +188,9 @@ class StationWorkRuntime implements SubstationProvisioner {
   final Map<String, StationBeadWriter> _writersByOwnedPrefix;
   final Map<String, RootCheckout> _rootsByName;
   final Map<String, SubstationWorkSpec> _specsByName;
+  final Map<String, DoltStoreConnection> _attachedStoreConnections =
+      <String, DoltStoreConnection>{};
+  final int _workStoreConnectionStart;
   final bool _dryRun;
   final _MemberFactory _buildMember;
   final _WorkWriterFactory _buildWorkWriter;
@@ -310,9 +315,9 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// The settle is ASYNC and rides the handler's serialized tail, so a failure
   /// cannot surface at [afterFlush]'s synchronous call site: fire-and-forget
   /// would let it escape to the ROOT ZONE and take the resident down. The
-  /// posture is the kernel's own (`StationKernel._runFlushPass` guards
-  /// `_driver.afterFlush` the same way) — a post-flush rail reports LOUD
-  /// through the refusal sink and the loop keeps flushing.
+  /// posture composes with `runGrid`'s guarded post-flush rail: this async
+  /// settle reports LOUD through the refusal sink while the sole production
+  /// flush coordinator keeps flushing.
   Future<void> _settleRosterDrainsGuarded() async {
     try {
       await _handler.settleRosterDrains();
@@ -357,9 +362,11 @@ class StationWorkRuntime implements SubstationProvisioner {
               head: spec.head,
             );
       final source = _RuntimeSnapshotSource(bundle.runtime);
-      _federated.addMember(spec.name, source);
+      _federated.addMember(spec.name, source, prefix: spec.prefix);
       memberAdded = true;
       final binding = WorkCommandStore(
+        substation: spec.name,
+        root: workspace.root,
         source: source,
         refresh: bundle.runtime.requery,
         writer: _buildWorkWriter(spec, bundle),
@@ -377,6 +384,12 @@ class StationWorkRuntime implements SubstationProvisioner {
       _handler.registerWorkStore(spec, binding);
       handlerRegistered = true;
       await bundle.runtime.requery();
+      if (bundle.dolt case final dolt?) {
+        _vendAttachedStoreConnection(
+          spec.name,
+          DoltStoreConnection(spec.name, dolt),
+        );
+      }
     } on Object {
       if (handlerRegistered) _handler.unregisterWorkStore(spec);
       _commandStores
@@ -395,6 +408,27 @@ class StationWorkRuntime implements SubstationProvisioner {
       await bundle.shutdown();
       rethrow;
     }
+  }
+
+  void _vendAttachedStoreConnection(
+    String name,
+    DoltStoreConnection connection,
+  ) {
+    if (_attachedStoreConnections.containsKey(name)) {
+      throw StateError(
+        'StationWorkRuntime: "$name" already has an attached store handle.',
+      );
+    }
+    var insertion = openStores.length;
+    for (var i = _workStoreConnectionStart; i < openStores.length; i++) {
+      final candidate = openStores[i];
+      if (candidate.name.compareTo(name) > 0) {
+        insertion = i;
+        break;
+      }
+    }
+    openStores.insert(insertion, connection);
+    _attachedStoreConnections[name] = connection;
   }
 
   @override
@@ -451,6 +485,10 @@ class StationWorkRuntime implements SubstationProvisioner {
       return reaped;
     } finally {
       await bundle.shutdown();
+      final connection = _attachedStoreConnections.remove(name);
+      if (connection != null) {
+        openStores.removeWhere((candidate) => identical(candidate, connection));
+      }
     }
   }
 
@@ -1100,6 +1138,13 @@ Future<StationWorkRuntime> assembleStationWork({
     _ => resolver,
   };
 
+  final openStores = orderedStoreConnections(
+    state: stateBundle.dolt,
+    trajectory: trajectory,
+    work: {for (final e in bundles.entries) e.key: e.value.dolt},
+  );
+  final workStoreConnectionStart = (stateBundle.dolt == null ? 0 : 1) + 1;
+
   final runtime = StationWorkRuntime._(
     wiring: StationWorkWiring(
       notifier: bridge.notifier,
@@ -1121,11 +1166,8 @@ Future<StationWorkRuntime> assembleStationWork({
     trajectory: trajectory,
     stateSubstation: stateSubstation,
     readPathName: readPathName,
-    openStores: orderedStoreConnections(
-      state: stateBundle.dolt,
-      trajectory: trajectory,
-      work: {for (final e in bundles.entries) e.key: e.value.dolt},
-    ),
+    openStores: openStores,
+    workStoreConnectionStart: workStoreConnectionStart,
     driver: driver,
     restart: restart,
     provider: provider,
@@ -1167,6 +1209,8 @@ Future<StationWorkRuntime> assembleStationWork({
     ),
     buildWorkWriter: (spec, bundle) => StationBeadWriter(
       bd: BdCliService(
+        // Runtime-attached dry seats obey the same ownership rule as coded
+        // seats: mint under the prefix this writer will assert.
         dryRun
             ? NoOpBdRunner(substation: spec.prefix)
             : ProcessBdRunner(workspaceRoot: spec.root),

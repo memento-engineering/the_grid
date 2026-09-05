@@ -212,9 +212,15 @@ void _seedStore(String root, {String? database}) {
   );
 }
 
-Future<void> _initializeStore(String root, {required String database}) async {
+const _testStorePassword = 'grid-sdk-test';
+
+Future<void> _initializeStore(
+  String root, {
+  required String database,
+  bool sqlCapable = false,
+}) async {
   Directory(root).createSync(recursive: true);
-  final result = await Process.run('bd', [
+  final args = <String>[
     'init',
     '--non-interactive',
     '--quiet',
@@ -222,9 +228,49 @@ Future<void> _initializeStore(String root, {required String database}) async {
     '--skip-hooks',
     '--prefix',
     database,
-  ], workingDirectory: root);
+    if (sqlCapable) ...[
+      '--proxied-server',
+      '--proxied-server-idle-timeout',
+      '0',
+    ],
+  ];
+  final result = await Process.run('bd', args, workingDirectory: root);
   if (result.exitCode != 0) {
     throw StateError('bd init failed: ${result.stderr}');
+  }
+  if (!sqlCapable) return;
+
+  await Process.run('bd', ['dolt', 'stop'], workingDirectory: root);
+  final user = await Process.run('dolt', [
+    '--data-dir=$root/.beads/dolt',
+    '--use-db=$database',
+    'sql',
+    '-q',
+    "CREATE USER IF NOT EXISTS 'beads_dart'@'%' IDENTIFIED BY "
+        "'$_testStorePassword'; GRANT SELECT ON *.* TO 'beads_dart'@'%';",
+  ]);
+  if (user.exitCode != 0) {
+    throw StateError('dolt user provisioning failed: ${user.stderr}');
+  }
+  final secret = File('$root/.beads/dolt/beads_dart.secret')
+    ..writeAsStringSync(_testStorePassword);
+  final chmod = await Process.run('chmod', ['600', secret.path]);
+  if (chmod.exitCode != 0) {
+    throw StateError('secret chmod failed: ${chmod.stderr}');
+  }
+  final start = await Process.run('bd', [
+    'dolt',
+    'start',
+  ], workingDirectory: root);
+  if (start.exitCode != 0) {
+    throw StateError('dolt start failed: ${start.stderr}');
+  }
+  final proxy = await Process.run('bd', [
+    'list',
+    '--json',
+  ], workingDirectory: root);
+  if (proxy.exitCode != 0) {
+    throw StateError('dolt proxy start failed: ${proxy.stderr}');
   }
 }
 
@@ -345,6 +391,70 @@ void main() {
     expect(resolver.mounted, isNot(contains('ea-2')));
     expect(provisioner.decommissions, 0);
   });
+
+  test(
+    'live attached Dolt store joins and leaves the shell close list',
+    tags: ['integration'],
+    () async {
+      final temp = Directory.systemTemp.createTempSync('attach-store-handle-');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final home = '${temp.path}/home';
+      final bootRoot = '${temp.path}/mars';
+      final attachedRoot = '${temp.path}/earth';
+      final roots = ['$home/.grid', bootRoot, attachedRoot];
+      addTearDown(() async {
+        for (final root in roots) {
+          if (Directory(root).existsSync()) {
+            await Process.run('bd', ['dolt', 'stop'], workingDirectory: root);
+          }
+        }
+      });
+      await _initializeStore(roots[0], database: 'tgstate', sqlCapable: true);
+      await _initializeStore(roots[1], database: 'mars', sqlCapable: true);
+      await _initializeStore(roots[2], database: 'earth', sqlCapable: true);
+
+      final work = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot(home),
+        substations: [SubstationWorkSpec(name: 'mars', root: bootRoot)],
+        resolver: _RecordingResolver(),
+        dryRun: true,
+      );
+      addTearDown(work.shutdown);
+      await work.start();
+
+      final bootStores = List<StoreConnection>.of(work.openStores);
+      expect(work.openStores.map((store) => store.name), [
+        'state',
+        'trajectory',
+        'mars',
+      ]);
+
+      final attached = await work.roster.attach(
+        name: 'earth',
+        prefix: 'ea',
+        root: attachedRoot,
+      );
+      expect(attached, isA<RosterAttached>());
+      expect(work.ownedIdentityTokens, containsAll(<String>['earth', 'ea']));
+      expect(work.openStores.map((store) => store.name), [
+        'state',
+        'trajectory',
+        'earth',
+        'mars',
+      ]);
+      for (final connection in bootStores) {
+        expect(work.openStores, contains(same(connection)));
+      }
+
+      final detached = await work.roster.detach(
+        name: 'earth',
+        inFlightOf: (_) => const <String>{},
+      );
+      expect(detached, isA<RosterDetached>());
+      expect(work.ownedIdentityTokens, isNot(contains('ea')));
+      expect(work.openStores, orderedEquals(bootStores));
+    },
+  );
 
   test(
     'a throwing drain settle is reported LOUD and flushing continues',
