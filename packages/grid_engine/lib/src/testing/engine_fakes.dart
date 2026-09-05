@@ -428,11 +428,12 @@ class RecordingBdRunner implements BdRunner, BeadProbeReader {
       .where((c) => c.length > 1 && c[0] == 'create' && c[1] == '--graph')
       .toList();
 
-  /// The metadata object of the `update` call at [index] — decoded from
-  /// `--metadata '<json>'` when present, else assembled from the op-shaped
+  /// The metadata object of the session/step `update` call at [index] — decoded
+  /// from `--metadata '<json>'` when present, else assembled from the op-shaped
   /// `--set-metadata key=value` pairs (BdCliService's atomic-merge emission).
+  /// Mount-attempt metadata is intentionally excluded through [workUpdates].
   Map<String, dynamic> metadataOfUpdate(int index) {
-    final updates = callsFor('update');
+    final updates = workUpdates;
     final c = updates[index];
     final i = c.indexOf('--metadata');
     if (i != -1) return jsonDecode(c[i + 1]) as Map<String, dynamic>;
@@ -778,6 +779,7 @@ Fakes buildFakes({
   String createdId = 'tgdog-sess1',
   WorkSignalProbe? workSignal,
   List<String>? eventLog,
+  int maxConcurrentWork = kDefaultMaxConcurrentWork,
 }) {
   final runner = RecordingBdRunner(createdId: createdId, eventLog: eventLog);
   final provider = FakeRuntimeProvider();
@@ -797,6 +799,7 @@ Fakes buildFakes({
       provider: provider,
       writer: writer,
       stateSubstation: stateSubstation,
+      maxConcurrentWork: maxConcurrentWork,
       // The COMPLETION FENCE's probe — null (the default) leaves the fence inert,
       // so every existing test is unchanged.
       workSignal: workSignal,

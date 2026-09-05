@@ -421,7 +421,7 @@ void main() {
         }
 
         bool hasStepStamp(String beadId, StepState state) {
-          final updates = f.runner.callsFor('update');
+          final updates = f.runner.workUpdates;
           for (var i = 0; i < updates.length; i++) {
             if (updates[i].length > 1 &&
                 updates[i][1] == beadId &&

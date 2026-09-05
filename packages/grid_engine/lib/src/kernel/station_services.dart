@@ -1,6 +1,7 @@
 import 'package:grid_runtime/grid_runtime.dart';
 
 import '../sdk/allocation.dart';
+import 'station_admission_authority.dart';
 
 /// The STATION-level ambient services a node resolves from the tree in one
 /// inherited lookup (ADR-0009 D2/D3 — the MediaQuery pattern: related ambient
@@ -16,22 +17,27 @@ import '../sdk/allocation.dart';
 /// so a non-git / non-source effect is expressible and the engine holds no
 /// worktree-layout opinion (ADR-0007 §1).
 ///
-/// Immutable and value-light: a handle to long-lived collaborators, not state. A
-/// node captures it once in `didChangeDependencies` and uses the captured
-/// reference across async gaps so it never touches the `TreeContext` (which
-/// throws post-unmount) for I/O.
+/// A station-lifetime owner and handle to long-lived collaborators. A node
+/// captures it in `didChangeDependencies` and uses the captured reference
+/// across async gaps so it never touches the `TreeContext` (which throws
+/// post-unmount) for I/O.
 class StationServices {
   /// Bundles the station's process transport [provider], the bd write [writer],
   /// the owned [stateSubstation], the optional adopt-liveness seam [liveness],
   /// and the concurrency-governor station default/ceiling [maxConcurrentWork].
-  const StationServices({
+  StationServices({
     required this.provider,
     required this.writer,
     required this.stateSubstation,
     this.liveness,
     this.workSignal,
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
-  });
+  }) : admission = StationAdmissionAuthority(
+         writer: writer,
+         stateSubstation: stateSubstation,
+         maxConcurrentWork: maxConcurrentWork,
+         liveness: liveness,
+       );
 
   /// The process transport — spawn (`start`), kill (`stop`), and the broadcast
   /// lifecycle [RuntimeProvider.events] stream the effect subscribes to.
@@ -77,6 +83,12 @@ class StationServices {
   /// (`StationArgs.maxAgents`); defaults to [kDefaultMaxConcurrentWork] so a
   /// single-bead flow is unchanged.
   final int maxConcurrentWork;
+
+  /// The single station-owned admission and durable attempt-transition owner.
+  final StationAdmissionAuthority admission;
+
+  /// Disposes the station admission owner. Idempotent.
+  void dispose() => admission.dispose();
 }
 
 /// The concurrency governor's generous default station cap (tg-42f) — chosen

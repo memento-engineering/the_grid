@@ -127,7 +127,7 @@ StationServices _withLiveness(StationServices base, AllocationLiveness probe) =>
     );
 
 List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
-  final updates = runner.callsFor('update');
+  final updates = runner.workUpdates;
   return [
     for (var i = 0; i < updates.length; i++)
       if (updates[i].length > 1 && updates[i][1] == id)
@@ -350,8 +350,8 @@ void main() {
       expect(alive.single.data['sessionIds'], 'tgdog-live-twin');
     });
 
-    test('TWO OPEN rows: the newest is adopted, nothing is demoted, and the '
-        'collision is LOUD', () async {
+    test('TWO OPEN rows: duplicate-live is refused before any mint and no row '
+        'is demoted', () async {
       final f = buildFakes();
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
@@ -385,12 +385,13 @@ void main() {
       await _pump();
       mounted.owner.flush();
 
-      expect(reg.events, ['START agent(tgdog-live-new/tg-1/agent)']);
+      expect(reg.events, isEmpty);
       expect(f.runner.workUpdates, isEmpty);
-      final ambiguous = transport.named('work.sessionAmbiguous');
-      expect(ambiguous, hasLength(1));
-      expect(ambiguous.single.data['beadId'], 'tg-1');
-      expect(ambiguous.single.data['rivalSessionIds'], 'tgdog-live-old');
+      expect(f.runner.workCreates, isEmpty);
+      final refused = transport.named('work.duplicateLiveRefused');
+      expect(refused, hasLength(1));
+      expect(refused.single.data['beadId'], 'tg-1');
+      expect(refused.single.data['rivalSessionIds'], 'tgdog-live-old');
     });
   });
 }

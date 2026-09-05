@@ -24,6 +24,8 @@ import 'dart:convert';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/molecule/bead_path_key.dart';
+import 'package:grid_engine/src/molecule/molecule_codec.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -95,6 +97,26 @@ class _RecordingTransport implements ExplorationTransport {
       flares.where((f) => f.name == name);
 }
 
+final class _CountingReapReader implements BeadProbeReader {
+  final beadIds = <String>[];
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) async {
+    beadIds.add(id);
+    return null;
+  }
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) async => const [];
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) async => const [];
+}
+
 /// A [BdRunner] that THROWS the first [failCreates] `create` calls (as the live
 /// store did — `bd create -t session` rejected) then succeeds. `failCreates`
 /// larger than the mint budget models the PERSISTENT misconfiguration; `1`
@@ -103,16 +125,20 @@ class _FailCreateRunner implements BdRunner {
   _FailCreateRunner({
     required this.failCreates,
     this.failGraphApplies = 0,
+    this.rawGraphTimeouts = 0,
     this.failListsWithTimeout = false,
   });
 
   final int failCreates;
   final int failGraphApplies;
+  final int rawGraphTimeouts;
   final bool failListsWithTimeout;
   final List<List<String>> calls = <List<String>>[];
   int _creates = 0;
   int _graphApplies = 0;
   int _listTimeoutCount = 0;
+  Completer<void>? closeEntered;
+  Completer<void>? closeGate;
 
   /// The `key → id` map a `bd create --graph` pour reports (mirrors
   /// [RecordingBdRunner.graphApplyIds]) — `createMolecule`'s graph-apply pour
@@ -155,6 +181,10 @@ class _FailCreateRunner implements BdRunner {
   }) async {
     calls.add(List<String>.unmodifiable(args));
     final sub = args.isNotEmpty ? args.first : '';
+    if (sub == 'close' && closeGate != null) {
+      closeEntered?.complete();
+      await closeGate!.future;
+    }
     if (sub == 'list' &&
         failListsWithTimeout &&
         args.length > 2 &&
@@ -188,6 +218,9 @@ class _FailCreateRunner implements BdRunner {
         sub == 'create' && args.length > 1 && args[1] == '--graph';
     if (isGraphApply) {
       _graphApplies++;
+      if (_graphApplies <= rawGraphTimeouts) {
+        throw TimeoutException('fake raw molecule timeout');
+      }
       if (_graphApplies <= failGraphApplies) {
         throw StateError('fake molecule graph pour refused');
       }
@@ -200,7 +233,12 @@ class _FailCreateRunner implements BdRunner {
         stderr: '',
       );
     }
-    if (sub == 'create') {
+    final typeIndex = args.indexOf('--type');
+    final isMountAttempt =
+        typeIndex >= 0 &&
+        typeIndex + 1 < args.length &&
+        args[typeIndex + 1] == GridIssueTypes.mountAttempt.wire;
+    if (sub == 'create' && !isMountAttempt) {
       _creates++;
       if (_creates <= failCreates) {
         throw StateError(
@@ -293,6 +331,157 @@ StationServices _ctxOver(
 }
 
 void main() {
+  test(
+    'tg-akc8 boot burst: a timed-out mint is voided and a live bead refuses a second attempt',
+    () async {
+      final runner = _FailCreateRunner(failCreates: 0, rawGraphTimeouts: 1);
+      runner.closeEntered = Completer<void>();
+      runner.closeGate = Completer<void>();
+      final reapReader = _CountingReapReader();
+      final station = _ctxOver(runner, reader: reapReader);
+      addTearDown(station.dispose);
+      const config = SubstationConfig(
+        substationId: 'tg',
+        ownedSubstations: {'tg'},
+        maxConcurrentWork: 1,
+      );
+      final workBead = bead('tg-1');
+      final candidate = StationAdmissionCandidate(
+        bead: workBead,
+        session: null,
+      );
+      final snapshot = JoinedSnapshot(graph: _work([workBead], {'tg-1'}));
+      var invalidations = 0;
+      station.admission.addInvalidationListener(() => invalidations++);
+
+      final first = station.admission.admitPending(
+        snapshot,
+        config,
+        const ServiceBundle(),
+        [candidate],
+      );
+      expect(first.admitted, hasLength(1));
+      expect(first.admitted.single.mountAttempt, isNull);
+      final created = await station.admission.createSessionAttempt(
+        snapshot,
+        candidate,
+        title: 'grid session tg-1',
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      );
+      expect(created.sessionId, 'tgdog-sess1');
+
+      final plan = instantiateMolecule(
+        _code,
+        sessionId: created.sessionId!,
+        root: BeadPathKey(['tg-1', created.sessionId!]),
+        nodePath: 'tg-1',
+      );
+      final pour = station.admission.pourMolecule(
+        plan,
+        workBeadId: 'tg-1',
+        sessionId: created.sessionId!,
+        rootCrumbs: ['tg-1', created.sessionId!],
+      );
+      await runner.closeEntered!.future;
+      final rivalBead = bead('tg-2');
+      final rival = StationAdmissionCandidate(bead: rivalBead, session: null);
+      final bothSnapshot = JoinedSnapshot(
+        graph: _work([workBead, rivalBead], {'tg-1', 'tg-2'}),
+      );
+      final heldBeforeClose = station.admission.admitPending(
+        bothSnapshot,
+        config,
+        const ServiceBundle(),
+        [candidate, rival],
+      );
+      expect(
+        heldBeforeClose.waiting.map((entry) => entry.bead.id),
+        contains('tg-2'),
+      );
+
+      runner.closeGate!.complete();
+      await expectLater(
+        pour,
+        throwsA(
+          isA<StationMintVoided>()
+              .having((error) => error.workBeadId, 'workBeadId', 'tg-1')
+              .having(
+                (error) => error.retiredSessionId,
+                'retiredSessionId',
+                'tgdog-sess1',
+              ),
+        ),
+      );
+      expect(reapReader.beadIds, contains('tgdog-sess1'));
+
+      final reusable = station.admission.admitPending(
+        bothSnapshot,
+        config,
+        const ServiceBundle(),
+        [rival],
+      );
+      expect(reusable.admitted.single.candidate.bead.id, 'tg-2');
+      expect(reusable.admitted.single.mountAttempt, isNull);
+      await _pump();
+      expect(
+        station.admission
+            .admitPending(bothSnapshot, config, const ServiceBundle(), [rival])
+            .admitted
+            .single
+            .candidate
+            .bead
+            .id,
+        'tg-2',
+      );
+
+      final updateIndex = runner.calls.indexWhere(
+        (call) => call.isNotEmpty && call.first == 'update',
+      );
+      final closeIndex = runner.calls.indexWhere(
+        (call) => call.isNotEmpty && call.first == 'close',
+      );
+      expect(updateIndex, greaterThanOrEqualTo(0));
+      expect(closeIndex, greaterThan(updateIndex));
+      final updateCalls = runner.callsFor('update');
+      final voidUpdate = updateCalls.indexWhere(
+        (call) => call.any((arg) => arg.contains('tg-1#void-tgdog-sess1')),
+      );
+      expect(voidUpdate, greaterThanOrEqualTo(0));
+      final voidMetadata = runner.metadataOfUpdate(voidUpdate);
+      expect(voidMetadata[SessionBeadKeys.workBead], 'tg-1#void-tgdog-sess1');
+      expect(voidMetadata[SessionBeadKeys.voidedReason], 'mint-timeout');
+      expect(
+        runner.callsFor('create').where((call) => call.contains('gate')),
+        isEmpty,
+      );
+
+      const live = SessionProjection(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-live',
+      );
+      final liveSnapshot = JoinedSnapshot(
+        graph: snapshot.graph,
+        sessionsByWorkBead: const {'tg-1': live},
+      );
+      final second = await station.admission.createSessionAttempt(
+        liveSnapshot,
+        StationAdmissionCandidate(bead: workBead, session: live),
+        title: 'second session',
+        metadata: const {},
+      );
+      expect(second.sessionId, isNull);
+      expect(second.refusal?.clause, 'live-attempt');
+      expect(
+        runner.workCreates.where((call) => !call.contains('--graph')),
+        hasLength(1),
+      );
+
+      final beforeBackoff = invalidations;
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(invalidations, beforeBackoff + 1);
+    },
+  );
+
   group('SessionScope mint failure (tg-6nf)', () {
     test(
       'a PERSISTENT mint failure FLARES every attempt, retries a BOUNDED number '

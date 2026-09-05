@@ -110,6 +110,7 @@ void main() {
       );
       addTearDown(joined.dispose);
       final fakes = buildFakes();
+      addTearDown(fakes.ctx.dispose);
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
