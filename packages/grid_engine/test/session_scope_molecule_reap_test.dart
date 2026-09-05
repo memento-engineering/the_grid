@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
@@ -26,9 +28,10 @@ class _Transport implements ExplorationTransport {
 }
 
 class _SelectiveThrowingReader implements BeadProbeReader {
-  const _SelectiveThrowingReader(this.delegate);
+  const _SelectiveThrowingReader(this.delegate, this.error);
 
   final BeadProbeReader delegate;
+  final Object error;
 
   @override
   Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
@@ -42,7 +45,7 @@ class _SelectiveThrowingReader implements BeadProbeReader {
   }) {
     if (types.contains(GridIssueTypes.molecule) ||
         types.contains(GridIssueTypes.step)) {
-      throw StateError('reap exploded');
+      throw error;
     }
     return delegate.openBeads(
       types: types,
@@ -56,15 +59,19 @@ class _SelectiveThrowingReader implements BeadProbeReader {
       delegate.openSuperseding(priorIds);
 }
 
-StationServices _servicesWithFailingReap(Fakes fakes) => StationServices(
-  provider: fakes.provider,
-  writer: StationBeadWriter(
-    bd: BdCliService(fakes.runner),
-    reader: _SelectiveThrowingReader(fakes.runner),
-    ownership: BeadOwnershipPredicate(const {stateSubstation}),
-  ),
-  stateSubstation: stateSubstation,
-);
+StationServices _servicesWithFailingReap(Fakes fakes, {Object? error}) =>
+    StationServices(
+      provider: fakes.provider,
+      writer: StationBeadWriter(
+        bd: BdCliService(fakes.runner),
+        reader: _SelectiveThrowingReader(
+          fakes.runner,
+          error ?? StateError('reap exploded'),
+        ),
+        ownership: BeadOwnershipPredicate(const {stateSubstation}),
+      ),
+      stateSubstation: stateSubstation,
+    );
 
 JoinedSnapshot _joined(SessionProjection projection, {DateTime? capturedAt}) =>
     JoinedSnapshot(
@@ -198,6 +205,8 @@ void _expectLoudNonFatalReapFailure(
   RecordingBdRunner runner, {
   required String sessionId,
   required String closeReason,
+  String reason = 'reap exploded',
+  bool hasSqlDeadline = false,
 }) {
   final flares = transport.flares
       .where((flare) => flare.name == 'session.moleculeReapFailed')
@@ -205,7 +214,17 @@ void _expectLoudNonFatalReapFailure(
   expect(flares, hasLength(1));
   expect(flares.single.data, containsPair('sessionId', sessionId));
   expect(flares.single.data, containsPair('closeReason', closeReason));
-  expect(flares.single.data['reason'], contains('reap exploded'));
+  expect(flares.single.data['reason'], contains(reason));
+  if (hasSqlDeadline) {
+    expect(
+      flares.single.data,
+      containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
+    );
+    expect(flares.single.data, containsPair('deadlineMs', '10000'));
+  } else {
+    expect(flares.single.data, isNot(contains('deadlineConstant')));
+    expect(flares.single.data, isNot(contains('deadlineMs')));
+  }
   expect(_closedInOrder(runner), contains(sessionId));
 }
 
@@ -457,7 +476,13 @@ void main() {
         ),
       ),
     );
-    final mounted = _mount(joined, _servicesWithFailingReap(fakes));
+    final mounted = _mount(
+      joined,
+      _servicesWithFailingReap(
+        fakes,
+        error: TimeoutException('Future not completed'),
+      ),
+    );
     addTearDown(mounted.owner.dispose);
 
     joined.push(
@@ -500,6 +525,8 @@ void main() {
       fakes.runner,
       sessionId: sessionId,
       closeReason: 'positive-terminal',
+      reason: 'Future not completed',
+      hasSqlDeadline: true,
     );
   });
 

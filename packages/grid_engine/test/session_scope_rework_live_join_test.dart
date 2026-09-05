@@ -50,7 +50,7 @@ final class _ThrowingGateUpdateRunner extends RecordingBdRunner {
   }) async {
     final result = await super.run(args, timeout: timeout, stdin: stdin);
     if (args.length > 1 && args.first == 'update' && args[1] == 'gate-1') {
-      throw StateError('controlled gate update failure');
+      throw TimeoutException('Future not completed');
     }
     return result;
   }
@@ -350,6 +350,11 @@ void main() {
         failed.single.data,
         containsPair('cause', GateCloseCause.supersededRound.wireValue),
       );
+      expect(
+        failed.single.data,
+        containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
+      );
+      expect(failed.single.data, containsPair('deadlineMs', '10000'));
       expect(
         runner.workCreates.where((call) => !call.contains('--graph')),
         isEmpty,

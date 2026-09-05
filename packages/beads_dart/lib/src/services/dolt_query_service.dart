@@ -53,8 +53,17 @@ typedef SelectRunner = Future<List<Map<String, Object?>>> Function(String sql);
 ///
 /// Writes are impossible by construction: there is no mutate method, and the
 /// single generic entry point ([_runSelect]) rejects any non-SELECT statement.
-/// All mutations go through the bd CLI (never SQL) per CLAUDE.md / ADR-0001.
+/// All ledger mutations go through the bd CLI (never SQL) per CLAUDE.md /
+/// ADR-0001. `the_grid#trajectory-direct-sql-scope` does not widen this
+/// read-only service or reuse its credential for the separate trajectory
+/// database's sole-appender write path.
 class DoltQueryService {
+  /// Deadline applied by `mysql_client` to the Dolt SQL connection and queries.
+  ///
+  /// This is distinct from [BdCliService.pourTimeout], which applies only to
+  /// the atomic `bd create --graph` process.
+  static const Duration queryTimeout = Duration(seconds: 10);
+
   DoltQueryService(
     this.endpoint, {
     int poolSize = 2,
@@ -633,7 +642,7 @@ class DoltQueryService {
       // gc-managed server offers no TLS (DoltEndpoint docs / ADR-0000 A8).
       secure: false,
     );
-    await conn.connect();
+    await conn.connect(timeoutMs: queryTimeout.inMilliseconds);
     return _RealConnection(conn);
   }
 }

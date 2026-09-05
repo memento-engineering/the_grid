@@ -87,11 +87,16 @@ GraphSnapshot _state(List<Bead> beads) => GraphSnapshot.fromParts(
 /// An [ExplorationTransport] that records every LOUD flare — the emit-only sink
 /// the mint-failed / mint-exhausted signals fire through.
 class _RecordingTransport implements ExplorationTransport {
+  _RecordingTransport([this.eventLog]);
+
+  final List<String>? eventLog;
   final List<({String name, Map<String, String> data})> flares = [];
 
   @override
-  void flare(String name, Map<String, String> data) =>
-      flares.add((name: name, data: data));
+  void flare(String name, Map<String, String> data) {
+    eventLog?.add('flare:$name');
+    flares.add((name: name, data: data));
+  }
 
   Iterable<({String name, Map<String, String> data})> named(String name) =>
       flares.where((f) => f.name == name);
@@ -127,12 +132,18 @@ class _FailCreateRunner implements BdRunner {
     this.failGraphApplies = 0,
     this.rawGraphTimeouts = 0,
     this.failListsWithTimeout = false,
+    this.graphApplyError,
+    this.sessionCreateError,
+    this.eventLog,
   });
 
   final int failCreates;
   final int failGraphApplies;
   final int rawGraphTimeouts;
   final bool failListsWithTimeout;
+  final Object? graphApplyError;
+  final Object? sessionCreateError;
+  final List<String>? eventLog;
   final List<List<String>> calls = <List<String>>[];
   int _creates = 0;
   int _graphApplies = 0;
@@ -179,6 +190,7 @@ class _FailCreateRunner implements BdRunner {
     Duration? timeout,
     String? stdin,
   }) async {
+    eventLog?.add('bd:${args.join(' ')}');
     calls.add(List<String>.unmodifiable(args));
     final sub = args.isNotEmpty ? args.first : '';
     if (sub == 'close' && closeGate != null) {
@@ -222,7 +234,7 @@ class _FailCreateRunner implements BdRunner {
         throw TimeoutException('fake raw molecule timeout');
       }
       if (_graphApplies <= failGraphApplies) {
-        throw StateError('fake molecule graph pour refused');
+        throw graphApplyError ?? StateError('fake molecule graph pour refused');
       }
       return BdResult(
         exitCode: 0,
@@ -234,17 +246,24 @@ class _FailCreateRunner implements BdRunner {
       );
     }
     final typeIndex = args.indexOf('--type');
-    final isMountAttempt =
-        typeIndex >= 0 &&
-        typeIndex + 1 < args.length &&
-        args[typeIndex + 1] == GridIssueTypes.mountAttempt.wire;
-    if (sub == 'create' && !isMountAttempt) {
+    final type = typeIndex >= 0 && typeIndex + 1 < args.length
+        ? args[typeIndex + 1]
+        : '';
+    if (sub == 'create' && type == GridIssueTypes.session.wire) {
       _creates++;
       if (_creates <= failCreates) {
+        final error = sessionCreateError;
+        if (error != null) throw error;
         throw StateError(
           'fake bd create rejected #$_creates (no types.custom)',
         );
       }
+      return BdResult(
+        exitCode: 0,
+        stdout:
+            '{"schema_version":1,"data":{"id":"tgdog-sess${_creates - failCreates}"}}',
+        stderr: '',
+      );
     }
     final data = switch (sub) {
       'create' => '{"id":"tgdog-sess1"}',
@@ -256,6 +275,38 @@ class _FailCreateRunner implements BdRunner {
       stderr: '',
     );
   }
+}
+
+final class _TimeoutFirstMoleculeRead implements BeadProbeReader {
+  _TimeoutFirstMoleculeRead(this.delegate);
+
+  final BeadProbeReader delegate;
+  bool _timedOut = false;
+
+  @override
+  Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
+      delegate.beadById(id, types: types);
+
+  @override
+  Future<List<Bead>> openBeads({
+    required Set<IssueType> types,
+    Map<String, String> metadataAll = const {},
+    Map<String, String> metadataAny = const {},
+  }) {
+    if (!_timedOut && types.contains(GridIssueTypes.molecule)) {
+      _timedOut = true;
+      throw TimeoutException('Future not completed');
+    }
+    return delegate.openBeads(
+      types: types,
+      metadataAll: metadataAll,
+      metadataAny: metadataAny,
+    );
+  }
+
+  @override
+  Future<List<Bead>> openSuperseding(Set<String> priorIds) =>
+      delegate.openSuperseding(priorIds);
 }
 
 /// A lifecycle reader whose first gate-session assertion fails, then behaves
@@ -381,6 +432,7 @@ void main() {
         workBeadId: 'tg-1',
         sessionId: created.sessionId!,
         rootCrumbs: ['tg-1', created.sessionId!],
+        services: const ServiceBundle(),
       );
       await runner.closeEntered!.future;
       final rivalBead = bead('tg-2');
@@ -536,6 +588,12 @@ void main() {
         expect(exhausted.single.data['attempt'], '5');
         expect(exhausted.single.data['maxAttempts'], '5');
         expect(exhausted.single.data['reason'], isNotEmpty);
+        expect(exhausted.single.data, isNot(contains('deadlineConstant')));
+        expect(exhausted.single.data, isNot(contains('deadlineMs')));
+        for (final failed in transport.named('session.mintFailed')) {
+          expect(failed.data, isNot(contains('deadlineConstant')));
+          expect(failed.data, isNot(contains('deadlineMs')));
+        }
 
         // INERT: no session minted → no leaf inflated (the scope renders Idle).
         expect(
@@ -550,6 +608,49 @@ void main() {
           ),
           isTrue,
         );
+      },
+    );
+
+    test(
+      'mint retries and exhaustion retain raw SQL deadline provenance',
+      () async {
+        final runner = _FailCreateRunner(
+          failCreates: 100,
+          sessionCreateError: TimeoutException('Future not completed'),
+        );
+        final ctx = _ctxOver(runner);
+        addTearDown(ctx.dispose);
+        final transport = _RecordingTransport();
+        final bridge = StationJoinBridge(
+          work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
+          state: FakeSnapshotSource(_state(const [])),
+        )..start();
+        addTearDown(bridge.dispose);
+        final m = _mountFull(
+          joined: bridge.notifier,
+          ctx: ctx,
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          services: ServiceBundle(transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+
+        await _pumpUntil(
+          m.owner,
+          () => transport.named('session.mintExhausted').isNotEmpty,
+        );
+
+        final deadlineFlares = [
+          ...transport.named('session.mintFailed'),
+          ...transport.named('session.mintExhausted'),
+        ];
+        expect(deadlineFlares, hasLength(5));
+        for (final flare in deadlineFlares) {
+          expect(
+            flare.data,
+            containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
+          );
+          expect(flare.data, containsPair('deadlineMs', '10000'));
+        }
       },
     );
 
@@ -594,6 +695,8 @@ void main() {
         parked.single.data['reason'],
         contains('fake molecule graph pour refused'),
       );
+      expect(parked.single.data, isNot(contains('deadlineConstant')));
+      expect(parked.single.data, isNot(contains('deadlineMs')));
 
       // ONE pour attempt — the park is terminal, never a blind re-pour.
       expect(
@@ -624,6 +727,143 @@ void main() {
       expect(transport.named('session.mintExhausted'), isEmpty);
 
       // INERT: the parked session never inflates the circuit.
+      expect(reg.events, isEmpty);
+    });
+
+    test(
+      'raw SQL timeout voids the created session before flare and remints',
+      () async {
+        final events = <String>[];
+        final runner = _FailCreateRunner(failCreates: 0, eventLog: events);
+        final ctx = _ctxOver(
+          runner,
+          reader: _TimeoutFirstMoleculeRead(const EmptyBeadProbeReader()),
+        );
+        addTearDown(ctx.dispose);
+        final transport = _RecordingTransport(events);
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final bridge = StationJoinBridge(
+          work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
+          state: FakeSnapshotSource(_state(const [])),
+        )..start();
+        addTearDown(bridge.dispose);
+
+        final m = _mountFull(
+          joined: bridge.notifier,
+          ctx: ctx,
+          registry: reg,
+          services: ServiceBundle(transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+        await _pumpUntil(
+          m.owner,
+          () => transport.named('session.mintAbandoned').isNotEmpty,
+        );
+
+        final abandoned = transport.named('session.mintAbandoned').single;
+        expect(abandoned.data['retiredSessionId'], 'tgdog-sess1');
+        expect(abandoned.data['reason'], 'mint-timeout');
+        expect(
+          abandoned.data,
+          containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
+        );
+        expect(abandoned.data, containsPair('deadlineMs', '10000'));
+        expect(transport.named('session.moleculePourFailed'), isEmpty);
+        expect(transport.named('session.mintFailed'), isEmpty);
+        expect(reg.events, isEmpty);
+
+        final voidUpdate = runner
+            .callsFor('update')
+            .singleWhere(
+              (call) =>
+                  call.length > 1 &&
+                  call[1] == 'tgdog-sess1' &&
+                  call.contains(
+                    '${SessionBeadKeys.workBead}=tg-1#void-tgdog-sess1',
+                  ),
+            );
+        expect(
+          voidUpdate,
+          contains('${SessionBeadKeys.voidedReason}=mint-timeout'),
+        );
+        final closeIndex = events.indexWhere(
+          (event) => event.startsWith('bd:close tgdog-sess1 '),
+        );
+        final flareIndex = events.indexOf('flare:session.mintAbandoned');
+        expect(closeIndex, isNonNegative);
+        expect(closeIndex, lessThan(flareIndex));
+        expect(
+          runner.callsFor('create').where((call) => call.contains('gate')),
+          isEmpty,
+        );
+
+        await Future<void>.delayed(
+          Backoff.standard.delayFor(1) + const Duration(milliseconds: 50),
+        );
+        await _pumpUntil(m.owner, () => reg.events.isNotEmpty);
+        final sessionCreates = runner.workCreates.where((call) {
+          final typeIndex = call.indexOf('--type');
+          return typeIndex >= 0 &&
+              call[typeIndex + 1] == GridIssueTypes.session.wire;
+        });
+        expect(sessionCreates, hasLength(2));
+        expect(
+          runner.calls.where((call) => call.contains('--graph')),
+          hasLength(1),
+        );
+        expect(reg.events, ['START agent(tgdog-sess2/tg-1/agent)']);
+      },
+    );
+
+    test('60-second graph timeout parks once and is not retried', () async {
+      final runner = _FailCreateRunner(
+        failCreates: 0,
+        failGraphApplies: 1,
+        graphApplyError: const BdTimeoutException(
+          command: ['create', '--graph', 'plan.json'],
+          timeout: BdCliService.pourTimeout,
+        ),
+      );
+      final ctx = _ctxOver(runner);
+      addTearDown(ctx.dispose);
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final bridge = StationJoinBridge(
+        work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
+        state: FakeSnapshotSource(_state(const [])),
+      )..start();
+      addTearDown(bridge.dispose);
+
+      final m = _mountFull(
+        joined: bridge.notifier,
+        ctx: ctx,
+        registry: reg,
+        services: ServiceBundle(transport: transport),
+      );
+      addTearDown(m.owner.dispose);
+      await _pumpUntil(
+        m.owner,
+        () => transport.named('session.moleculePourFailed').isNotEmpty,
+      );
+
+      final failed = transport.named('session.moleculePourFailed').single;
+      expect(
+        failed.data,
+        containsPair('deadlineConstant', 'BdCliService.pourTimeout'),
+      );
+      expect(failed.data, containsPair('deadlineMs', '60000'));
+      expect(
+        runner.calls.where((call) => call.contains('--graph')),
+        hasLength(1),
+      );
+      final gateCreates = runner.workCreates.where((call) {
+        final typeIndex = call.indexOf('--type');
+        return typeIndex >= 0 &&
+            call[typeIndex + 1] == GridIssueTypes.gate.wire;
+      });
+      expect(gateCreates, hasLength(1));
+      expect(transport.named('session.mintFailed'), isEmpty);
+      expect(transport.named('session.mintExhausted'), isEmpty);
       expect(reg.events, isEmpty);
     });
 
