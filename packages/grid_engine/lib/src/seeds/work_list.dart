@@ -167,7 +167,8 @@ class _WorkListState extends State<WorkList>
           _snapshot.graph.readyIds.contains(bead.id) ||
           _snapshot.frontierExclusionsByBeadId.containsKey(bead.id) ||
           linked.isNotEmpty ||
-          retired != null;
+          retired != null ||
+          _mountedWorkBeadsById.containsKey(bead.id);
       if (!participates) continue;
       candidates.add(
         StationAdmissionCandidate(

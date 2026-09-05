@@ -80,6 +80,15 @@ has not started.
 
 ## Decision Alignment
 
+The `the_grid#admission-orders-by-priority-then-bead-id` decision also keeps
+the mounted-work invariant: "a bead carrying a live session is still NEVER
+evicted for budget reasons, and a higher-priority bead waits for a natural
+slot rather than displacing a live one; positive-terminal-only unmount stays
+the only unmount trigger." Candidate derivation therefore retains an already
+mounted `WorkBead` across a transient readiness drop, including while its only
+session is re-keyed to the `#void-<id>` shape. Moving admission behind the
+authority does not turn a budget or readiness change into an eviction.
+
 This cut preserves A43's ambient-absence branch as the synchronous offline
 fallback under `kDefaultMaxConcurrentWork`. When `StationServices` is ambient,
 the authority preserves A43's substation and station ceilings while replacing

@@ -214,6 +214,22 @@ Set<String> _mountedWorkIds(Branch root) {
   return ids;
 }
 
+WorkBead _mountedWorkBeadFor(Branch root, String beadId) {
+  WorkBead? found;
+  void visit(Branch branch) {
+    if (branch.seed case final WorkBead work when work.bead.id == beadId) {
+      if (found != null) {
+        throw StateError('more than one WorkBead mounted for $beadId');
+      }
+      found = work;
+    }
+    branch.visitChildren(visit);
+  }
+
+  visit(root);
+  return found ?? (throw StateError('no WorkBead mounted for $beadId'));
+}
+
 Future<void> _settleAdmissions(TreeOwner owner) async {
   for (var turn = 0; turn < 12; turn += 1) {
     await Future<void>.delayed(Duration.zero);
@@ -278,7 +294,7 @@ void main() {
         // station slot; B wins it because that WorkList reconciles before C.
         joined.push(
           _joined(
-            beads: beads,
+            beads: [aSecond, cFirst, aBlocked, bFirst],
             ready: {'a-blocked', 'a-second', 'b-first', 'c-first'},
           ),
         );
@@ -295,7 +311,7 @@ void main() {
         );
         joined.push(
           _joined(
-            beads: [aSecond, cFirst, aBlocked, bClosed, aFirst],
+            beads: [aSecond, cFirst, aBlocked, bClosed],
             ready: {'a-blocked', 'a-second', 'b-first', 'c-first'},
             sessions: const {
               'b-first': SessionProjection(
@@ -311,7 +327,7 @@ void main() {
 
         joined.push(
           _joined(
-            beads: [aSecond, cFirst, aBlocked, bClosed, aFirst],
+            beads: [aSecond, cFirst, aBlocked, bClosed],
             ready: {'a-blocked', 'a-second', 'b-first', 'c-first'},
             sessions: const {
               'b-first': SessionProjection(
@@ -706,6 +722,68 @@ void main() {
         // START) — killing the very branch that would close the retired
         // session and mint the fresh round. Fixed: the branch stays mounted.
         expect(recorder.events, isEmpty);
+      },
+    );
+
+    test(
+      'tg-zat/I-10: a mounted bead survives a readyIds drop while its only session is re-keyed to the void shape',
+      () async {
+        final fakes = buildFakes(maxConcurrentWork: 1);
+        final recorder = _Recorder();
+        final bead = _bead('tg-1');
+        final joined = JoinedSnapshotNotifier(
+          _joined(beads: [bead], ready: {bead.id}),
+        );
+        final owner = TreeOwner();
+        addTearDown(() {
+          owner.dispose();
+          joined.dispose();
+          fakes.ctx.dispose();
+        });
+        final root = owner.mountRoot(
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              substationConfig: SubstationConfigNotifier(
+                const SubstationConfig(
+                  substationId: 'tg',
+                  ownedSubstations: {'tg'},
+                  maxConcurrentWork: 1,
+                ),
+              ),
+              stationServices: fakes.ctx,
+            ),
+          ),
+        );
+        final mounted = _mountedWorkBeadFor(root, bead.id);
+        expect(recorder.events, ['START work(tg-1)']);
+
+        final voidKey = voidKeyFor(bead.id, 'tgdog-session');
+        joined.push(
+          _joined(
+            beads: [bead],
+            ready: const {},
+            sessions: {
+              voidKey: SessionProjection(
+                workBeadId: voidKey,
+                sessionId: 'tgdog-session',
+                isTerminal: true,
+              ),
+            },
+          ),
+        );
+        owner.flush();
+
+        expect(_mountedWorkBeadFor(root, bead.id), same(mounted));
+        expect(recorder.events, ['START work(tg-1)']);
+
+        owner.flush();
+        expect(_mountedWorkBeadFor(root, bead.id), same(mounted));
+        expect(recorder.events, ['START work(tg-1)']);
+
+        await _settleAdmissions(owner);
+        expect(_mountedWorkBeadFor(root, bead.id), same(mounted));
       },
     );
 
