@@ -316,6 +316,11 @@ void _resolveAlreadyExisting(
 /// FIRST non-`none` signal through the request capability's own
 /// `interpretEvent` — `ready` for a daemon's up-signal, `complete` (with the
 /// capability's result payload) for a job's clean exit, `failed` for a crash.
+/// At this LIVE leased-process result boundary, a `failed` signal is a
+/// `noResult` failure and an untyped exception reading a completed result is an
+/// `invalidResult` failure. Named [CapabilityFailure] values retain their kind.
+/// This is deliberately narrower than direct `ProcessAllocation`, where an
+/// untyped result exception remains the default substantive `work` failure.
 /// Never returns on `none`; `LeaseAllocation`'s dispose unwinds a cancelled
 /// wait via release.
 Future<StepOutcome> stationProcessDispatcher(
@@ -416,11 +421,13 @@ Future<StepOutcome> stationProcessDispatcher(
         return Failed.from(e);
       } on Object catch (e) {
         // A completion whose result cannot be read must not advance the
-        // circuit silently (mirrors ProcessAllocation._reportComplete).
-        return Failed('result threw: $e');
+        // circuit silently. At this live leased-process result boundary the
+        // unreadable result is invalid; direct ProcessAllocation keeps its
+        // backward-compatible default-work classification.
+        return Failed.invalidResult('result threw: $e');
       }
     case StepSignal.failed:
-      return const Failed('the spawned process failed');
+      return const Failed.noResult('the spawned process failed');
   }
 }
 
