@@ -265,6 +265,7 @@ class StationWorkRuntime {
     if (_shutdown) return;
     _shutdown = true;
     _driver.dispose();
+    wiring.services.admission.dispose();
     // Trajectory down BEFORE the stores it reads (§1.2 shutdown order) —
     // guarded so it NEVER blocks sources shutdown (r2, major 9): the harness
     // settles every step internally (queue drain → fixpoint → boundary

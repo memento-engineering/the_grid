@@ -464,4 +464,56 @@ void main() {
       expect(builderCalled, isFalse);
     });
   });
+
+  test(
+    'station runtime disposes its assembled admission authority once',
+    () async {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      final stateRunner = _RecordingBdRunner();
+      final runtime = await assembleStationWork(
+        stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+        substations: [
+          SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+        ],
+        resolver: const _NullResolver(),
+        dryRun: true,
+        stateBdOverride: BdCliService(stateRunner),
+      );
+      final admission = runtime.wiring.services.admission;
+      expect(admission, same(runtime.wiring.services.admission));
+      var notifications = 0;
+      admission.addInvalidationListener(() => notifications++);
+
+      await runtime.shutdown();
+      await runtime.shutdown();
+
+      const bead = Bead(
+        id: 'proj-1',
+        issueType: IssueType.task,
+        status: BeadStatus.open,
+      );
+      final result = admission.admitPending(
+        engine.JoinedSnapshot(
+          graph: GraphSnapshot.fromParts(
+            beads: const [bead],
+            dependencies: const [],
+            readyIds: const {'proj-1'},
+            capturedAt: DateTime.utc(2026, 9, 4),
+          ),
+        ),
+        const engine.SubstationConfig(
+          substationId: 'proj',
+          ownedSubstations: {'proj'},
+        ),
+        const engine.ServiceBundle(),
+        const [engine.StationAdmissionCandidate(bead: bead, session: null)],
+      );
+      expect(result.admitted, isEmpty);
+      expect(result.waiting, isEmpty);
+      expect(result.refused.single.clause, 'disposed');
+      expect(stateRunner.calls, isEmpty);
+      expect(notifications, 0);
+    },
+  );
 }
