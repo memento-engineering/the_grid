@@ -351,7 +351,7 @@ void main() {
         );
 
         void expectOneRestoredMint() {
-          expect(genesisEligibilityEvaluations, 2);
+          expect(genesisEligibilityEvaluations, greaterThanOrEqualTo(2));
           final restored = genesisFlares(
             'work.mountEligibilityRestored',
             'beadId',

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/testing.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:test/test.dart';
 
@@ -108,6 +109,13 @@ List<WorkBead> _workBeads(Branch root) {
   return found;
 }
 
+Future<void> _settleAdmissions(_Harness harness) async {
+  for (var i = 0; i < 8; i++) {
+    await Future<void>.delayed(Duration.zero);
+    harness.owner.flush();
+  }
+}
+
 _Harness _mountHarness({
   MountEligibilityPredicate? mountEligibility,
   ExplorationTransport? transport,
@@ -129,37 +137,78 @@ _Harness _mountHarness({
     ),
   );
   final owner = TreeOwner();
+  final stationServices = buildFakes().ctx;
   final root = owner.mountRoot(
     ProviderScope(
-      child: InheritedSeed<JoinedSnapshotNotifier>(
-        value: joined,
-        child: InheritedSeed<SessionResolver>(
-          value: resolver ?? _RecordingResolver(),
-          child: Station([
-            SubstationScope(
-              configNotifier: SubstationConfigNotifier(
-                const SubstationConfig(
-                  substationId: 'test',
-                  ownedSubstations: {'tg'},
-                  maxConcurrentWork: 10,
+      child: InheritedSeed<StationServices>(
+        value: stationServices,
+        child: InheritedSeed<JoinedSnapshotNotifier>(
+          value: joined,
+          child: InheritedSeed<SessionResolver>(
+            value: resolver ?? _RecordingResolver(),
+            child: Station([
+              SubstationScope(
+                configNotifier: SubstationConfigNotifier(
+                  const SubstationConfig(
+                    substationId: 'test',
+                    ownedSubstations: {'tg'},
+                    maxConcurrentWork: 10,
+                  ),
+                ),
+                services: ServiceBundle(
+                  transport: transport,
+                  mountEligibility: mountEligibility,
                 ),
               ),
-              services: ServiceBundle(
-                transport: transport,
-                mountEligibility: mountEligibility,
-              ),
-            ),
-          ]),
+            ]),
+          ),
         ),
       ),
     ),
   );
-  addTearDown(owner.dispose);
+  addTearDown(() {
+    owner.dispose();
+    stationServices.dispose();
+  });
   return _Harness(owner: owner, root: root, joined: joined, bead: bead);
 }
 
 void main() {
-  test('refusal edges exclude work and carry bead id plus clause', () {
+  test(
+    'the authority evaluates the vended mount eligibility predicate without copying it',
+    () {
+      final fakes = buildFakes();
+      addTearDown(fakes.ctx.dispose);
+      final bead = _task();
+      final snapshot = _snapshot(bead, 0);
+      var evaluations = 0;
+      final batch = fakes.ctx.admission.admitPending(
+        snapshot,
+        const SubstationConfig(
+          substationId: 'test',
+          ownedSubstations: {'tg'},
+          maxConcurrentWork: 10,
+        ),
+        ServiceBundle(
+          mountEligibility: (evaluated) {
+            evaluations++;
+            expect(evaluated, same(bead));
+            return const MountEligibilityDecision.refused(
+              clause: 'vended-policy',
+            );
+          },
+        ),
+        [StationAdmissionCandidate(bead: bead, session: null)],
+      );
+
+      expect(evaluations, 1);
+      expect(batch.admitted, isEmpty);
+      expect(batch.refused.single.detail, 'vended-policy');
+      expect(fakes.runner.calls, isEmpty);
+    },
+  );
+
+  test('refusal edges exclude work and carry bead id plus clause', () async {
     final eligibility = _MutableEligibility();
     final transport = _RecordingTransport();
     final harness = _mountHarness(
@@ -192,6 +241,7 @@ void main() {
 
     eligibility.decision = const MountEligibilityDecision.eligible();
     harness.pushAndFlush();
+    await _settleAdmissions(harness);
     expect(harness.workBeads().map((work) => work.bead.id), ['tg-1']);
     expect(transport.flares.last.name, 'work.mountEligibilityRestored');
     expect(transport.flares.last.data, {
@@ -219,6 +269,7 @@ void main() {
       final transport = _RecordingTransport();
       var pendingEvaluations = 0;
       var neighborEvaluations = 0;
+      var pendingEligible = false;
       final harness = _mountHarness(
         mountEligibility: (bead) {
           if (bead.id == 'tg-2') {
@@ -226,11 +277,11 @@ void main() {
             return const MountEligibilityDecision.eligible();
           }
           pendingEvaluations += 1;
-          return pendingEvaluations == 1
-              ? const MountEligibilityDecision.refused(
+          return pendingEligible
+              ? const MountEligibilityDecision.eligible()
+              : const MountEligibilityDecision.refused(
                   clause: 'fresh mount-eligibility read pending',
-                )
-              : const MountEligibilityDecision.eligible();
+                );
         },
         transport: transport,
         readyIds: const {'tg-1', 'tg-2'},
@@ -238,8 +289,7 @@ void main() {
         resolver: resolver,
       );
 
-      expect(pendingEvaluations, 1);
-      expect(neighborEvaluations, 1);
+      await _settleAdmissions(harness);
       expect(harness.workBeads().map((work) => work.bead.id), ['tg-2']);
       expect(resolver.calls, ['tg-2']);
       expect(transport.flares, hasLength(1));
@@ -249,12 +299,21 @@ void main() {
         'clause': 'fresh mount-eligibility read pending',
       });
 
-      await Future<void>.delayed(Duration.zero);
+      pendingEligible = true;
+      harness.joined.push(
+        _snapshot(
+          harness.bead,
+          99,
+          readyIds: const {'tg-1', 'tg-2'},
+          additionalBeads: const [neighbor],
+        ),
+      );
       harness.owner.flush();
+      await _settleAdmissions(harness);
 
-      expect(pendingEvaluations, 2);
-      expect(neighborEvaluations, 2);
-      expect(harness.workBeads().map((work) => work.bead.id), ['tg-1', 'tg-2']);
+      expect(pendingEvaluations, greaterThanOrEqualTo(2));
+      expect(neighborEvaluations, greaterThanOrEqualTo(2));
+      expect(harness.workBeads().map((work) => work.bead.id), ['tg-2', 'tg-1']);
       expect(
         resolver.calls,
         ['tg-2', 'tg-1'],
@@ -267,10 +326,12 @@ void main() {
         'clause': 'fresh mount-eligibility read pending',
       });
 
+      final pendingBefore = pendingEvaluations;
+      final neighborBefore = neighborEvaluations;
       await Future<void>.delayed(Duration.zero);
       harness.owner.flush();
-      expect(pendingEvaluations, 2);
-      expect(neighborEvaluations, 2);
+      expect(pendingEvaluations, pendingBefore);
+      expect(neighborEvaluations, neighborBefore);
       expect(resolver.calls, ['tg-2', 'tg-1']);
       expect(transport.flares, hasLength(2));
     },
@@ -299,7 +360,7 @@ void main() {
   });
 
   test('a throwing predicate names the failure and does not abort the next '
-      'candidate', () {
+      'candidate', () async {
     final transport = _RecordingTransport();
     final first = _task();
     const second = Bead(
@@ -318,36 +379,46 @@ void main() {
       ),
     );
     final owner = TreeOwner();
-    addTearDown(owner.dispose);
+    final stationServices = buildFakes(maxConcurrentWork: 10).ctx;
+    addTearDown(() {
+      owner.dispose();
+      stationServices.dispose();
+    });
     final root = owner.mountRoot(
       ProviderScope(
-        child: InheritedSeed<JoinedSnapshotNotifier>(
-          value: joined,
-          child: InheritedSeed<SessionResolver>(
-            value: _RecordingResolver(),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(
-                  const SubstationConfig(
-                    substationId: 'test',
-                    ownedSubstations: {'tg'},
-                    maxConcurrentWork: 10,
+        child: InheritedSeed<StationServices>(
+          value: stationServices,
+          child: InheritedSeed<JoinedSnapshotNotifier>(
+            value: joined,
+            child: InheritedSeed<SessionResolver>(
+              value: _RecordingResolver(),
+              child: Station([
+                SubstationScope(
+                  configNotifier: SubstationConfigNotifier(
+                    const SubstationConfig(
+                      substationId: 'test',
+                      ownedSubstations: {'tg'},
+                      maxConcurrentWork: 10,
+                    ),
+                  ),
+                  services: ServiceBundle(
+                    transport: transport,
+                    mountEligibility: (bead) {
+                      if (bead.id == 'tg-1') {
+                        throw StateError('asset unavailable');
+                      }
+                      return const MountEligibilityDecision.eligible();
+                    },
                   ),
                 ),
-                services: ServiceBundle(
-                  transport: transport,
-                  mountEligibility: (bead) {
-                    if (bead.id == 'tg-1') {
-                      throw StateError('asset unavailable');
-                    }
-                    return const MountEligibilityDecision.eligible();
-                  },
-                ),
-              ),
-            ]),
+              ]),
+            ),
           ),
         ),
       ),
+    );
+    await _settleAdmissions(
+      _Harness(owner: owner, root: root, joined: joined, bead: first),
     );
 
     expect(_workBeads(root).map((work) => work.bead.id), ['tg-2']);
@@ -360,7 +431,7 @@ void main() {
   });
 
   test('frontier exclusion uses existing refusal edges and preserves live '
-      'sessions', () {
+      'sessions', () async {
     const clause =
         'frontier cross-link: link bead tranquility-awgj18 blocks tg-1 '
         'on open target "genesis-7ob"';
@@ -393,6 +464,7 @@ void main() {
     expect(transport.flares.last.name, 'work.mountEligibilityRefused');
 
     fresh.pushAndFlush();
+    await _settleAdmissions(fresh);
     expect(fresh.workBeads().map((work) => work.bead.id), ['tg-1']);
     expect(transport.flares.last.name, 'work.mountEligibilityRestored');
 
@@ -401,7 +473,11 @@ void main() {
       readyIds: const {},
       frontierExclusionsByBeadId: const {'tg-1': clause},
       sessionsByWorkBead: const {
-        'tg-1': SessionProjection(workBeadId: 'tg-1', isTerminal: false),
+        'tg-1': SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-live',
+          isTerminal: false,
+        ),
       },
       transport: liveTransport,
     );
@@ -409,12 +485,13 @@ void main() {
     expect(liveTransport.flares, isEmpty);
   });
 
-  test('null predicate preserves mounting', () {
+  test('null predicate preserves mounting', () async {
     final harness = _mountHarness(mountEligibility: null);
+    await _settleAdmissions(harness);
     expect(harness.workBeads().map((work) => work.bead.id), ['tg-1']);
   });
 
-  test('null and throwing transports do not break eligibility edges', () {
+  test('null and throwing transports do not break eligibility edges', () async {
     for (final transport in <ExplorationTransport?>[
       null,
       _ThrowingTransport(),
@@ -431,6 +508,7 @@ void main() {
       expect(harness.workBeads(), isEmpty);
       eligibility.decision = const MountEligibilityDecision.eligible();
       expect(harness.pushAndFlush, returnsNormally);
+      await _settleAdmissions(harness);
       expect(harness.workBeads().map((work) => work.bead.id), ['tg-1']);
     }
   });

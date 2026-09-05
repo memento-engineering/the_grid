@@ -13,6 +13,7 @@
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
 
@@ -102,17 +103,20 @@ Seed _root({
   required SessionResolver resolver,
   required SubstationConfigNotifier substationConfig,
   ServiceBundle services = const ServiceBundle(),
-}) => InheritedSeed<JoinedSnapshotNotifier>(
-  value: joined,
-  child: InheritedSeed<SessionResolver>(
-    value: resolver,
-    child: Station([
-      SubstationScope(
-        configNotifier: substationConfig,
-        services: services,
-        key: const ValueKey('scope.tg'),
-      ),
-    ]),
+}) => InheritedSeed<StationServices>(
+  value: buildFakes(maxConcurrentWork: 100).ctx,
+  child: InheritedSeed<JoinedSnapshotNotifier>(
+    value: joined,
+    child: InheritedSeed<SessionResolver>(
+      value: resolver,
+      child: Station([
+        SubstationScope(
+          configNotifier: substationConfig,
+          services: services,
+          key: const ValueKey('scope.tg'),
+        ),
+      ]),
+    ),
   ),
 );
 
@@ -155,9 +159,16 @@ SubstationConfig _tgConfig() => const SubstationConfig(
   maxConcurrentWork: 100,
 );
 
+Future<void> _settleAdmissions(TreeOwner owner) async {
+  for (var i = 0; i < 8; i++) {
+    await Future<void>.delayed(Duration.zero);
+    owner.flush();
+  }
+}
+
 void main() {
   group('Track A — reconcile is the work lifecycle', () {
-    test('two ready owned beads mount one work subtree each', () {
+    test('two ready owned beads mount one work subtree each', () async {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1'), _bead('tg-2')], ready: {'tg-1', 'tg-2'}),
@@ -174,6 +185,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // mount = spawn the bead's work subtree, one per ready owned bead.
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
@@ -183,7 +195,7 @@ void main() {
       'a cursor advance is a reconcile transition: WorkList alone drains, the '
       'WorkBead AND its subtree-root child persist (config threads down in '
       'place — no WorkBead-level swap), config + sibling absent from the drain',
-      () {
+      () async {
         final recorder = _Recorder();
         final joined = JoinedSnapshotNotifier(
           _joined(
@@ -202,6 +214,7 @@ void main() {
             ),
           ),
         );
+        await _settleAdmissions(owner);
 
         expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
         final wb1IdBefore = _workBead(root, 'tg-1')!.branchId;
@@ -262,7 +275,7 @@ void main() {
 
   group('Track A — the config axis is separate and live', () {
     test('a config tick rebuilds the config scope and starts/stops no work '
-        'subtree (the inverse of the work-tick guardrail)', () {
+        'subtree (the inverse of the work-tick guardrail)', () async {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1')], ready: {'tg-1'}),
@@ -279,6 +292,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       expect(recorder.events, ['START work(tg-1)']);
       recorder.events.clear();
 
@@ -305,7 +319,7 @@ void main() {
 
   group('Track A — the corrected child-set predicate', () {
     test('positive-terminal-only unmount: a ready→blocked bead with a live '
-        'session stays mounted; a closed bead unmounts and kills', () {
+        'session stays mounted; a closed bead unmounts and kills', () async {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(beads: [_bead('tg-1')], ready: {'tg-1'}),
@@ -321,6 +335,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       expect(recorder.events, ['START work(tg-1)']);
 
       // tg-1 leaves the ready-set (blocked) but keeps a live (non-terminal)
@@ -368,7 +383,7 @@ void main() {
 
     test('a terminal session cursor also unmounts (the foreign-bead arm: the '
         'cursor is on the_grid own bead, so done shows even if the work bead '
-        'never closes)', () {
+        'never closes)', () async {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -393,6 +408,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       expect(recorder.events, ['START work(tg-1)']);
 
       recorder.events.clear();
@@ -424,7 +440,7 @@ void main() {
 
     test('allow-list type gate (A41): only core work mounts — every the_grid '
         'custom type (convergence, infra, AND the orchestration nouns bd ready '
-        'leaks) mounts ZERO work beads', () {
+        'leaks) mounts ZERO work beads', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       // Every the_grid custom IssueType, all owned + ready. NONE may mount —
@@ -461,6 +477,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // Only the plain task mounted a work subtree.
       expect(recorder.events, ['START work(tg-1)']);
@@ -478,41 +495,45 @@ void main() {
       expect(transport.flares.first.data['clause'], startsWith('issue type '));
     });
 
-    test('core work types each mount (the allow-list is not over-narrow)', () {
-      final recorder = _Recorder();
-      final core = <String, IssueType>{
-        for (final (index, type) in IssueType.coreTypes.indexed)
-          'tg-core-$index': type,
-      };
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [for (final e in core.entries) _bead(e.key, type: e.value)],
-          ready: core.keys.toSet(),
-        ),
-      );
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      final root = owner.mountRoot(
-        ProviderScope(
-          child: _root(
-            joined: joined,
-            resolver: _FakeSessionResolver(recorder),
-            substationConfig: SubstationConfigNotifier(_tgConfig()),
+    test(
+      'core work types each mount (the allow-list is not over-narrow)',
+      () async {
+        final recorder = _Recorder();
+        final core = <String, IssueType>{
+          for (final (index, type) in IssueType.coreTypes.indexed)
+            'tg-core-$index': type,
+        };
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [for (final e in core.entries) _bead(e.key, type: e.value)],
+            ready: core.keys.toSet(),
           ),
-        ),
-      );
+        );
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        final root = owner.mountRoot(
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              substationConfig: SubstationConfigNotifier(_tgConfig()),
+            ),
+          ),
+        );
+        await _settleAdmissions(owner);
 
-      for (final id in core.keys) {
-        expect(_workBead(root, id), isNotNull, reason: '$id should mount');
-      }
-      expect(recorder.events.length, core.length);
-    });
+        for (final id in core.keys) {
+          expect(_workBead(root, id), isNotNull, reason: '$id should mount');
+        }
+        expect(recorder.events.length, core.length);
+      },
+    );
 
     test(
       'resident config (RS-3/D-R4): narrows the allow-list further to the '
       'DRIVEABLE-WORK boundary — organizational core types (epic/decision/'
       'spike/story/milestone) never mount even when ready + owned + core',
-      () {
+      () async {
         final recorder = _Recorder();
         final organizational = <String, IssueType>{
           'tg-epic': IssueType.epic,
@@ -550,6 +571,7 @@ void main() {
             ),
           ),
         );
+        await _settleAdmissions(owner);
 
         for (final id in driveable.keys) {
           expect(
@@ -571,7 +593,7 @@ void main() {
 
     test('resident sanity control: the SAME organizational beads mount under '
         'the LEGACY (non-resident) config — proving the exclusion above is '
-        'resident-specific, not a pre-existing A41 gate', () {
+        'resident-specific, not a pre-existing A41 gate', () async {
       final recorder = _Recorder();
       final organizational = <String, IssueType>{
         'tg-epic': IssueType.epic,
@@ -599,6 +621,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       for (final id in organizational.keys) {
         expect(
@@ -609,36 +632,43 @@ void main() {
       }
     });
 
-    test('an unowned bead (foreign prefix) never mounts (fail-closed)', () {
-      final recorder = _Recorder();
-      final transport = _RecordingTransport();
-      final joined = JoinedSnapshotNotifier(
-        _joined(beads: [_bead('tg-1'), _bead('gc-9')], ready: {'tg-1', 'gc-9'}),
-      );
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      final root = owner.mountRoot(
-        ProviderScope(
-          child: _root(
-            joined: joined,
-            resolver: _FakeSessionResolver(recorder),
-            substationConfig: SubstationConfigNotifier(_tgConfig()),
-            services: ServiceBundle(transport: transport),
+    test(
+      'an unowned bead (foreign prefix) never mounts (fail-closed)',
+      () async {
+        final recorder = _Recorder();
+        final transport = _RecordingTransport();
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_bead('tg-1'), _bead('gc-9')],
+            ready: {'tg-1', 'gc-9'},
           ),
-        ),
-      );
+        );
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        final root = owner.mountRoot(
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              substationConfig: SubstationConfigNotifier(_tgConfig()),
+              services: ServiceBundle(transport: transport),
+            ),
+          ),
+        );
+        await _settleAdmissions(owner);
 
-      expect(recorder.events, ['START work(tg-1)']);
-      expect(_workBead(root, 'gc-9'), isNull);
-      expect(
-        transport.flares,
-        isEmpty,
-        reason: 'ownership is a silent federated routing filter',
-      );
-    });
+        expect(recorder.events, ['START work(tg-1)']);
+        expect(_workBead(root, 'gc-9'), isNull);
+        expect(
+          transport.flares,
+          isEmpty,
+          reason: 'ownership is a silent federated routing filter',
+        );
+      },
+    );
 
     test('approved-bead drive-list (ADR-0006): when non-empty, ONLY listed beads '
-        'mount — owned, ready, core beads not approved stay dormant', () {
+        'mount — owned, ready, core beads not approved stay dormant', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
@@ -661,6 +691,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // Only the approved bead mounted; the other owned/ready/core beads did not.
       expect(recorder.events, ['START work(tg-2)']);
@@ -683,7 +714,7 @@ void main() {
     });
 
     test('the drive-list NARROWS, never widens: an approved bead still fails the '
-        'ownership + type gates', () {
+        'ownership + type gates', () async {
       final recorder = _Recorder();
       final joined = JoinedSnapshotNotifier(
         _joined(
@@ -715,6 +746,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       expect(recorder.events, ['START work(tg-1)']);
       expect(_workBead(root, 'gc-9'), isNull);

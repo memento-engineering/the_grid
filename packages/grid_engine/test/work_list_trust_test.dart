@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/testing.dart';
 import 'package:test/test.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
 
@@ -70,11 +71,14 @@ Seed _root({
   required JoinedSnapshotNotifier joined,
   required SessionResolver resolver,
   required List<SubstationScope> scopes,
-}) => InheritedSeed<JoinedSnapshotNotifier>(
-  value: joined,
-  child: InheritedSeed<SessionResolver>(
-    value: resolver,
-    child: Station(scopes),
+}) => InheritedSeed<StationServices>(
+  value: buildFakes().ctx,
+  child: InheritedSeed<JoinedSnapshotNotifier>(
+    value: joined,
+    child: InheritedSeed<SessionResolver>(
+      value: resolver,
+      child: Station(scopes),
+    ),
   ),
 );
 
@@ -89,68 +93,79 @@ List<WorkBead> _workBeads(Branch root) {
   return found;
 }
 
-void main() {
-  test('the origin floor is isolated at each substation mount boundary', () {
-    final bead = _bead('tg-1', _stamp('external'));
-    final joined = JoinedSnapshotNotifier(_snapshot(bead));
-    final strictTrust = _ThrowingTrust();
-    final strictTransport = _RecordingTransport();
-    final legacyTransport = _RecordingTransport();
-    final resolver = _RecordingResolver();
-    final owner = TreeOwner();
-    addTearDown(owner.dispose);
-
-    final root = owner.mountRoot(
-      ProviderScope(
-        child: _root(
-          joined: joined,
-          resolver: resolver,
-          scopes: [
-            SubstationScope(
-              configNotifier: _config('strict'),
-              services: ServiceBundle(
-                trust: strictTrust,
-                trustFloor: const TrustFloor(TrustLevel.trusted),
-                transport: strictTransport,
-              ),
-              key: const ValueKey('strict'),
-            ),
-            SubstationScope(
-              configNotifier: _config('legacy'),
-              services: ServiceBundle(transport: legacyTransport),
-              key: const ValueKey('legacy'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    expect(_workBeads(root).map((work) => work.bead.id), ['tg-1']);
-    expect(resolver.mounted, ['tg-1']);
-    expect(strictTrust.calls, 0);
-    expect(legacyTransport.flares, isEmpty);
-    expect(strictTransport.flares, hasLength(1));
-    expect(strictTransport.flares.single.name, 'work.trustRefused');
-    expect(strictTransport.flares.single.data, {
-      'beadId': 'tg-1',
-      'origin': 'github:octocat',
-      'floor': 'trusted',
-      'reason':
-          'grid: tg-1 origin trust external is below floor trusted — '
-          'excluding tg-1 from ready.',
-    });
-
-    joined.push(_snapshot(bead, 1));
+Future<void> _settleAdmissions(TreeOwner owner) async {
+  for (var i = 0; i < 8; i++) {
+    await Future<void>.delayed(Duration.zero);
     owner.flush();
-    expect(strictTransport.flares, hasLength(1));
-    expect(strictTrust.calls, 0);
-  });
+  }
+}
+
+void main() {
+  test(
+    'the origin floor is isolated at each substation mount boundary',
+    () async {
+      final bead = _bead('tg-1', _stamp('external'));
+      final joined = JoinedSnapshotNotifier(_snapshot(bead));
+      final strictTrust = _ThrowingTrust();
+      final strictTransport = _RecordingTransport();
+      final legacyTransport = _RecordingTransport();
+      final resolver = _RecordingResolver();
+      final owner = TreeOwner();
+      addTearDown(owner.dispose);
+
+      final root = owner.mountRoot(
+        ProviderScope(
+          child: _root(
+            joined: joined,
+            resolver: resolver,
+            scopes: [
+              SubstationScope(
+                configNotifier: _config('strict'),
+                services: ServiceBundle(
+                  trust: strictTrust,
+                  trustFloor: const TrustFloor(TrustLevel.trusted),
+                  transport: strictTransport,
+                ),
+                key: const ValueKey('strict'),
+              ),
+              SubstationScope(
+                configNotifier: _config('legacy'),
+                services: ServiceBundle(transport: legacyTransport),
+                key: const ValueKey('legacy'),
+              ),
+            ],
+          ),
+        ),
+      );
+      await _settleAdmissions(owner);
+
+      expect(_workBeads(root).map((work) => work.bead.id), ['tg-1']);
+      expect(resolver.mounted, ['tg-1']);
+      expect(strictTrust.calls, 0);
+      expect(legacyTransport.flares, isEmpty);
+      expect(strictTransport.flares, hasLength(1));
+      expect(strictTransport.flares.single.name, 'work.trustRefused');
+      expect(strictTransport.flares.single.data, {
+        'beadId': 'tg-1',
+        'origin': 'github:octocat',
+        'floor': 'trusted',
+        'reason':
+            'grid: tg-1 origin trust external is below floor trusted — '
+            'excluding tg-1 from ready.',
+      });
+
+      joined.push(_snapshot(bead, 1));
+      owner.flush();
+      expect(strictTransport.flares, hasLength(1));
+      expect(strictTrust.calls, 0);
+    },
+  );
 
   for (final scenario in [
     (name: 'unstamped', metadata: <String, dynamic>{}),
     (name: 'at-floor', metadata: _stamp('trusted')),
   ]) {
-    test('${scenario.name} work mounts with configured trust', () {
+    test('${scenario.name} work mounts with configured trust', () async {
       final bead = _bead('tg-1', scenario.metadata);
       final trust = _ThrowingTrust();
       final joined = JoinedSnapshotNotifier(_snapshot(bead));
@@ -173,6 +188,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       expect(_workBeads(root).map((work) => work.bead.id), ['tg-1']);
       expect(trust.calls, 0);
     });

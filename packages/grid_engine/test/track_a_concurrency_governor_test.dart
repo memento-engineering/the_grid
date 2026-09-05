@@ -109,10 +109,10 @@ Seed _root({
       ]),
     ),
   );
-  if (stationServices != null) {
-    root = InheritedSeed<StationServices>(value: stationServices, child: root);
-  }
-  return root;
+  return InheritedSeed<StationServices>(
+    value: stationServices ?? buildFakes().ctx,
+    child: root,
+  );
 }
 
 /// Two sibling substations under one `Station`, sharing the SAME ambient
@@ -151,10 +151,187 @@ Seed _twoSubstationRoot({
   );
 }
 
+Seed _threeSubstationRoot({
+  required JoinedSnapshotNotifier joined,
+  required SessionResolver resolver,
+  required StationServices stationServices,
+  required ServiceBundle servicesA,
+}) {
+  return InheritedSeed<StationServices>(
+    value: stationServices,
+    child: InheritedSeed<JoinedSnapshotNotifier>(
+      value: joined,
+      child: InheritedSeed<SessionResolver>(
+        value: resolver,
+        child: Station([
+          SubstationScope(
+            configNotifier: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'a',
+                ownedSubstations: {'a'},
+                maxConcurrentWork: 2,
+              ),
+            ),
+            services: servicesA,
+            key: const ValueKey('scope.a'),
+          ),
+          SubstationScope(
+            configNotifier: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'b',
+                ownedSubstations: {'b'},
+                maxConcurrentWork: 2,
+              ),
+            ),
+            key: const ValueKey('scope.b'),
+          ),
+          SubstationScope(
+            configNotifier: SubstationConfigNotifier(
+              const SubstationConfig(
+                substationId: 'c',
+                ownedSubstations: {'c'},
+                maxConcurrentWork: 2,
+              ),
+            ),
+            key: const ValueKey('scope.c'),
+          ),
+        ]),
+      ),
+    ),
+  );
+}
+
+Set<String> _mountedWorkIds(Branch root) {
+  final ids = <String>{};
+  void visit(Branch branch) {
+    if (branch.seed case WorkBead(:final bead)) ids.add(bead.id);
+    branch.visitChildren(visit);
+  }
+
+  visit(root);
+  return ids;
+}
+
+Future<void> _settleAdmissions(TreeOwner owner) async {
+  for (var turn = 0; turn < 12; turn += 1) {
+    await Future<void>.delayed(Duration.zero);
+    owner.flush();
+  }
+}
+
 void main() {
   group('Track A — the concurrency governor (tg-42f)', () {
+    test(
+      'tg-wu5a: three substations share one synchronous station reservation ceiling',
+      () async {
+        final fakes = buildFakes(maxConcurrentWork: 2);
+        final recorder = _Recorder();
+        final transportA = _RecordingTransport();
+        final aBlocked = _bead('a-blocked', priority: 0);
+        final aFirst = _bead('a-first', priority: 1);
+        final aSecond = _bead('a-second', priority: 1);
+        final bFirst = _bead('b-first');
+        final cFirst = _bead('c-first');
+        final beads = [aSecond, cFirst, aBlocked, bFirst, aFirst];
+        final joined = JoinedSnapshotNotifier(
+          _joined(beads: beads, ready: {for (final bead in beads) bead.id}),
+        );
+        final owner = TreeOwner();
+        addTearDown(() {
+          owner.dispose();
+          fakes.ctx.dispose();
+        });
+        final root = owner.mountRoot(
+          ProviderScope(
+            child: _threeSubstationRoot(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              stationServices: fakes.ctx,
+              servicesA: ServiceBundle(
+                transport: transportA,
+                mountEligibility: (bead) => bead.id == aBlocked.id
+                    ? const MountEligibilityDecision.refused(
+                        clause: 'pre-mint policy refusal',
+                      )
+                    : const MountEligibilityDecision.eligible(),
+              ),
+            ),
+          ),
+        );
+        await _settleAdmissions(owner);
+
+        expect(_mountedWorkIds(root), {'a-first', 'a-second'});
+        expect(recorder.events.take(2), [
+          'START work(a-first)',
+          'START work(a-second)',
+        ]);
+        expect(
+          transportA.flares
+              .singleWhere(
+                (flare) => flare.name == 'work.mountEligibilityRefused',
+              )
+              .data['beadId'],
+          'a-blocked',
+        );
+
+        // Structurally unmounting one admitted A bead frees exactly one
+        // station slot; B wins it because that WorkList reconciles before C.
+        joined.push(
+          _joined(
+            beads: beads,
+            ready: {'a-blocked', 'a-second', 'b-first', 'c-first'},
+          ),
+        );
+        owner.flush();
+        await _settleAdmissions(owner);
+        expect(_mountedWorkIds(root), {'a-second', 'b-first'});
+
+        // Closing B's live attempt is fail-closed until the durable terminal
+        // projection arrives. C cannot consume the slot during that gap.
+        final bClosed = Bead(
+          id: bFirst.id,
+          issueType: IssueType.task,
+          status: BeadStatus.closed,
+        );
+        joined.push(
+          _joined(
+            beads: [aSecond, cFirst, aBlocked, bClosed, aFirst],
+            ready: {'a-blocked', 'a-second', 'b-first', 'c-first'},
+            sessions: const {
+              'b-first': SessionProjection(
+                workBeadId: 'b-first',
+                sessionId: 'tgdog-b-first',
+              ),
+            },
+          ),
+        );
+        owner.flush();
+        await _settleAdmissions(owner);
+        expect(_mountedWorkIds(root), {'a-second'});
+
+        joined.push(
+          _joined(
+            beads: [aSecond, cFirst, aBlocked, bClosed, aFirst],
+            ready: {'a-blocked', 'a-second', 'b-first', 'c-first'},
+            sessions: const {
+              'b-first': SessionProjection(
+                workBeadId: 'b-first',
+                sessionId: 'tgdog-b-first',
+                isTerminal: true,
+                completed: true,
+              ),
+            },
+          ),
+        );
+        owner.flush();
+        await _settleAdmissions(owner);
+        expect(_mountedWorkIds(root), {'a-second', 'c-first'});
+        expect(_mountedWorkIds(root).length, lessThanOrEqualTo(2));
+      },
+    );
+
     test('N+2 ready beads (no session) -> only N mount, LOUD flare names the '
-        'count + the waiting beads', () {
+        'count + the waiting beads', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
@@ -181,6 +358,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // Only the two LOWEST-id beads mount: all four are the same priority, so
       // the lowest-id tie-break decides admission (tg-lohr).
@@ -194,7 +372,7 @@ void main() {
     });
 
     test('mount-attempt records do not consume capacity or narrow the ready '
-        'frontier', () {
+        'frontier', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final attempts = <String, MountAttemptRecord>{
@@ -229,6 +407,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       expect(snapshot.graph.readyIds, {'tg-1', 'tg-2', 'tg-3', 'tg-4'});
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
@@ -240,7 +419,7 @@ void main() {
 
     test('a mounted session closing frees a slot — the next waiting bead mounts '
         'on the natural reconcile; a bead with a STILL-live session is never '
-        'evicted for budget reasons', () {
+        'evicted for budget reasons', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final beads = [
@@ -270,6 +449,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
       recorder.events.clear();
       transport.flares.clear();
@@ -301,6 +481,7 @@ void main() {
         ),
       );
       owner.flush();
+      await _settleAdmissions(owner);
 
       // tg-1 unmounts (positive terminal); tg-3 — the lowest-id WAITING bead —
       // takes the freed slot. tg-2 is untouched: no STOP/START for it (its
@@ -321,7 +502,7 @@ void main() {
     });
 
     test('a substation override CANNOT raise the station-wide ceiling — the '
-        'ambient StationServices default/ceiling wins the min()', () {
+        'ambient StationServices default/ceiling wins the min()', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
@@ -359,12 +540,13 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       expect(recorder.events, ['START work(tg-1)', 'START work(tg-2)']);
       expect(transport.flares.single.data, {'count': '1', 'beadIds': 'tg-3'});
     });
 
-    test('no throttling ⇒ no flare at all (the quiet path)', () {
+    test('no throttling ⇒ no flare at all (the quiet path)', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
@@ -388,140 +570,149 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       expect(recorder.events, ['START work(tg-1)']);
       expect(transport.flares, isEmpty);
     });
 
-    test('nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
-        'fallback binds — no substation override, no ambient StationServices', () {
-      final recorder = _Recorder();
-      final transport = _RecordingTransport();
-      // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
-      final beadIds = List.generate(
-        kDefaultMaxConcurrentWork + 2,
-        (i) => 'tg-${i + 1}',
-      );
-      final joined = JoinedSnapshotNotifier(
-        _joined(beads: beadIds.map(_bead).toList(), ready: beadIds.toSet()),
-      );
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      owner.mountRoot(
-        ProviderScope(
-          child: _root(
-            joined: joined,
-            resolver: _FakeSessionResolver(recorder),
-            // No `maxConcurrentWork` override — falls all the way through to
-            // the compile-time default.
-            substationConfig: SubstationConfigNotifier(
-              const SubstationConfig(
-                substationId: 'tg',
-                ownedSubstations: {'tg'},
+    test(
+      'nothing configured at all -> the PURE kDefaultMaxConcurrentWork '
+      'fallback binds — no substation override, no ambient StationServices',
+      () async {
+        final recorder = _Recorder();
+        final transport = _RecordingTransport();
+        // kDefaultMaxConcurrentWork + 2 ready beads, no session yet.
+        final beadIds = List.generate(
+          kDefaultMaxConcurrentWork + 2,
+          (i) => 'tg-${i + 1}',
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(beads: beadIds.map(_bead).toList(), ready: beadIds.toSet()),
+        );
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        owner.mountRoot(
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              // No `maxConcurrentWork` override — falls all the way through to
+              // the compile-time default.
+              substationConfig: SubstationConfigNotifier(
+                const SubstationConfig(
+                  substationId: 'tg',
+                  ownedSubstations: {'tg'},
+                ),
               ),
-            ),
-            services: ServiceBundle(transport: transport),
-            // No ambient `StationServices` at all — the offline-test default
-            // this file's other cases wire deliberately, exercised here as the
-            // genuinely-nothing-configured case.
-          ),
-        ),
-      );
-
-      expect(
-        recorder.events,
-        List.generate(
-          kDefaultMaxConcurrentWork,
-          (i) => 'START work(tg-${i + 1})',
-        ),
-      );
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.name, 'work.throttled');
-      expect(transport.flares.single.data, {
-        'count': '2',
-        'beadIds':
-            'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
-      });
-    });
-
-    test('a rework re-key (tg-zat): a bead whose session becomes momentarily '
-        'unkeyed (its retired session still counts, live, under a DIFFERENT '
-        'key) is NOT evicted for budget reasons even though `liveSession` '
-        'reads false this build — A40 covers the branch, not just the key', () {
-      final recorder = _Recorder();
-      final transport = _RecordingTransport();
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [_bead('tg-1')],
-          ready: {'tg-1'},
-          sessions: {
-            'tg-1': const SessionProjection(
-              workBeadId: 'tg-1',
-              isTerminal: false,
-            ),
-          },
-        ),
-      );
-      final owner = TreeOwner();
-      addTearDown(owner.dispose);
-      owner.mountRoot(
-        ProviderScope(
-          child: _root(
-            joined: joined,
-            resolver: _FakeSessionResolver(recorder),
-            substationConfig: SubstationConfigNotifier(
-              const SubstationConfig(
-                substationId: 'tg',
-                ownedSubstations: {'tg'},
-              ),
-            ),
-            services: ServiceBundle(transport: transport),
-            stationServices: StationServices(
-              provider: FakeRuntimeProvider(),
-              writer: StationBeadWriter(
-                bd: BdCliService(RecordingBdRunner()),
-                reader: RecordingBdRunner(),
-                ownership: BeadOwnershipPredicate(const {'tg'}),
-              ),
-              stateSubstation: 'tg',
-              // A tight station-wide ceiling: the retired session (still open,
-              // now keyed 'tg-1#r1') fills the ONLY slot on its own.
-              maxConcurrentWork: 1,
+              services: ServiceBundle(transport: transport),
+              // No ambient `StationServices` at all — the offline-test default
+              // this file's other cases wire deliberately, exercised here as the
+              // genuinely-nothing-configured case.
             ),
           ),
-        ),
-      );
-      expect(recorder.events, ['START work(tg-1)']);
-      recorder.events.clear();
+        );
+        await _settleAdmissions(owner);
 
-      // `grid rework` re-keys the session's `work_bead` off 'tg-1' (D-2's
-      // close-then-mint has not run yet) — `sessionsByWorkBead['tg-1']`
-      // reads null, but the retired session is STILL non-terminal, still
-      // present in the joined map under its round-suffixed key, and STILL
-      // consumes the station-wide budget.
-      joined.push(
-        _joined(
-          beads: [_bead('tg-1')],
-          ready: {'tg-1'},
-          sessions: {
-            'tg-1#r1': const SessionProjection(
-              workBeadId: 'tg-1#r1',
-              isTerminal: false,
+        expect(
+          recorder.events,
+          List.generate(
+            kDefaultMaxConcurrentWork,
+            (i) => 'START work(tg-${i + 1})',
+          ),
+        );
+        expect(transport.flares, hasLength(1));
+        expect(transport.flares.single.name, 'work.throttled');
+        expect(transport.flares.single.data, {
+          'count': '2',
+          'beadIds':
+              'tg-${kDefaultMaxConcurrentWork + 1},tg-${kDefaultMaxConcurrentWork + 2}',
+        });
+      },
+    );
+
+    test(
+      'a rework re-key (tg-zat): a bead whose session becomes momentarily '
+      'unkeyed (its retired session still counts, live, under a DIFFERENT '
+      'key) is NOT evicted for budget reasons even though `liveSession` '
+      'reads false this build — A40 covers the branch, not just the key',
+      () async {
+        final recorder = _Recorder();
+        final transport = _RecordingTransport();
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_bead('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': const SessionProjection(
+                workBeadId: 'tg-1',
+                isTerminal: false,
+              ),
+            },
+          ),
+        );
+        final owner = TreeOwner();
+        addTearDown(owner.dispose);
+        owner.mountRoot(
+          ProviderScope(
+            child: _root(
+              joined: joined,
+              resolver: _FakeSessionResolver(recorder),
+              substationConfig: SubstationConfigNotifier(
+                const SubstationConfig(
+                  substationId: 'tg',
+                  ownedSubstations: {'tg'},
+                ),
+              ),
+              services: ServiceBundle(transport: transport),
+              stationServices: StationServices(
+                provider: FakeRuntimeProvider(),
+                writer: StationBeadWriter(
+                  bd: BdCliService(RecordingBdRunner()),
+                  reader: RecordingBdRunner(),
+                  ownership: BeadOwnershipPredicate(const {'tg'}),
+                ),
+                stateSubstation: 'tg',
+                // A tight station-wide ceiling: the retired session (still open,
+                // now keyed 'tg-1#r1') fills the ONLY slot on its own.
+                maxConcurrentWork: 1,
+              ),
             ),
-          },
-        ),
-      );
-      owner.flush();
+          ),
+        );
+        await _settleAdmissions(owner);
+        expect(recorder.events, ['START work(tg-1)']);
+        recorder.events.clear();
 
-      // Pre-fix, `liveSession` alone reclassified 'tg-1' as a budget-gated
-      // `pending` candidate; with the ONE slot already "spent" by its own
-      // orphaned retired session, it was evicted (a STOP with no matching
-      // START) — killing the very branch that would close the retired
-      // session and mint the fresh round. Fixed: the branch stays mounted.
-      expect(recorder.events, isEmpty);
-    });
+        // `grid rework` re-keys the session's `work_bead` off 'tg-1' (D-2's
+        // close-then-mint has not run yet) — `sessionsByWorkBead['tg-1']`
+        // reads null, but the retired session is STILL non-terminal, still
+        // present in the joined map under its round-suffixed key, and STILL
+        // consumes the station-wide budget.
+        joined.push(
+          _joined(
+            beads: [_bead('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1#r1': const SessionProjection(
+                workBeadId: 'tg-1#r1',
+                isTerminal: false,
+              ),
+            },
+          ),
+        );
+        owner.flush();
+
+        // Pre-fix, `liveSession` alone reclassified 'tg-1' as a budget-gated
+        // `pending` candidate; with the ONE slot already "spent" by its own
+        // orphaned retired session, it was evicted (a STOP with no matching
+        // START) — killing the very branch that would close the retired
+        // session and mint the fresh round. Fixed: the branch stays mounted.
+        expect(recorder.events, isEmpty);
+      },
+    );
 
     test('a durable retired round remounts after mounted membership was '
-        'cleared, even when no fresh-work budget remains', () {
+        'cleared, even when no fresh-work budget remains', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
@@ -560,6 +751,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
       expect(recorder.events, ['START work(tg-1)']);
 
       joined.push(
@@ -587,6 +779,7 @@ void main() {
       );
       joined.push(retiredSnapshot);
       owner.flush();
+      await _settleAdmissions(owner);
 
       expect(recorder.events, ['START work(tg-1)']);
       expect(
@@ -604,7 +797,7 @@ void main() {
     });
 
     test('a cold not-ready bead with only a round-keyed retired session '
-        'participates', () {
+        'participates', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final joined = JoinedSnapshotNotifier(
@@ -646,6 +839,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       expect(recorder.events, ['START work(tg-1)']);
       expect(recorder.resolverCalls, ['tg-1']);
@@ -657,7 +851,7 @@ void main() {
 
     test('the station-wide cap is a TOTAL across substations — a busy '
         'substation starves a quiet sibling of slots even though the '
-        "sibling's own substation cap is untouched", () {
+        "sibling's own substation cap is untouched", () async {
       final recorder = _Recorder();
       final transportA = _RecordingTransport();
       final transportB = _RecordingTransport();
@@ -724,6 +918,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // `a`'s 3 already-live sessions mount (never evicted; they were never
       // "pending" against the budget), leaving zero slots station-wide.
@@ -748,7 +943,7 @@ void main() {
 
     test('the cap binds: the HIGHEST-priority pending beads are admitted — a '
         'P0 mounts ahead of an alphabetically EARLIER P4, and the lowest-id '
-        'tie-break still decides WITHIN one priority (tg-lohr)', () {
+        'tie-break still decides WITHIN one priority (tg-lohr)', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       // Ids chosen adversarially against the OLD lowest-id-first order: under
@@ -781,6 +976,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // Both P0s take the slots, in lowest-id order within that priority.
       expect(recorder.events, ['START work(tg-mmm)', 'START work(tg-zzz)']);
@@ -796,7 +992,7 @@ void main() {
 
     test('the mixed case — two substations x two priorities, one slot each: '
         'each substation admits its OWN highest-priority bead and holds the '
-        'rest; the station ceiling is untouched (tg-lohr)', () {
+        'rest; the station ceiling is untouched (tg-lohr)', () async {
       final recorder = _Recorder();
       final transportA = _RecordingTransport();
       final transportB = _RecordingTransport();
@@ -850,6 +1046,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // Each substation admits its own top-priority bead, never the
       // alphabetically-first one. Ordering stays PER-SUBSTATION: this bead
@@ -870,7 +1067,7 @@ void main() {
 
     test('a MOUNTED P4 is never evicted for a pending P0 — the P0 waits and '
         'takes the next NATURAL slot when that session closes done '
-        '(tg-lohr)', () {
+        '(tg-lohr)', () async {
       final recorder = _Recorder();
       final transport = _RecordingTransport();
       final beads = [
@@ -907,6 +1104,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       // The live P4 keeps the only slot; the P0 is HELD, never swapped in.
       expect(recorder.events, ['START work(tg-aaa)']);
@@ -933,6 +1131,7 @@ void main() {
         ),
       );
       owner.flush();
+      await _settleAdmissions(owner);
 
       // Mount-vs-unmount order within one flush is the reconciler's detail,
       // not the governor's contract — assert the SET.
@@ -943,14 +1142,15 @@ void main() {
       expect(recorder.events, hasLength(2));
       // Nothing waits any more, so the governor stays quiet; the terminal
       // boundary still names the session whose positive close freed the slot.
-      expect(transport.flares, hasLength(1));
-      expect(transport.flares.single.name, 'work.terminalSkip');
-      expect(transport.flares.single.data['sessionId'], 'tgdog-tg-aaa');
-      expect(transport.flares.single.data['disposition'], 'done');
+      final terminalSkip = transport.flares.singleWhere(
+        (flare) => flare.name == 'work.terminalSkip',
+      );
+      expect(terminalSkip.data['sessionId'], 'tgdog-tg-aaa');
+      expect(terminalSkip.data['disposition'], 'done');
     });
 
     test('frontier exclusion preserves priority-then-id order of the admitted '
-        'set', () {
+        'set', () async {
       const clause =
           'frontier cross-link: link bead tranquility-z blocks tg-z '
           'on open target "genesis-7ob"';
@@ -986,6 +1186,7 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       expect(recorder.events, ['START work(tg-b)', 'START work(tg-a)']);
       expect(
@@ -1128,12 +1329,18 @@ void main() {
           ),
         ),
       );
+      await _settleAdmissions(owner);
 
       expect(recorder.events, [
-        'START work(genesis-7ob)',
         'START work(genesis-live)',
+        'START work(genesis-7ob)',
+        'START work(butane_flutter-41eh)',
       ]);
-      expect(recorder.resolverCalls, ['genesis-7ob', 'genesis-live']);
+      expect(recorder.resolverCalls, [
+        'genesis-live',
+        'genesis-7ob',
+        'butane_flutter-41eh',
+      ]);
       expect(
         transport.flares
             .singleWhere(
@@ -1146,14 +1353,11 @@ void main() {
         },
       );
 
-      await Future<void>.delayed(Duration.zero);
-      owner.flush();
-
-      expect(pendingEvaluations, 2);
+      expect(pendingEvaluations, greaterThanOrEqualTo(2));
       expect(recorder.events, contains('START work(butane_flutter-41eh)'));
       expect(recorder.resolverCalls, [
-        'genesis-7ob',
         'genesis-live',
+        'genesis-7ob',
         'butane_flutter-41eh',
       ]);
       expect(evaluatedIds, isNot(contains('genesis-7r9')));

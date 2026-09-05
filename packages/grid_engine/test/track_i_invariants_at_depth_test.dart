@@ -424,7 +424,7 @@ void main() {
 
   group('Invariant 3 AT DEPTH — convergence never mounts a circuit subtree', () {
     test('a convergence-typed bead in the ready set mounts ZERO circuit nodes; a '
-        'plain owned bead mounts a full one', () {
+        'plain owned bead mounts a full one', () async {
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [
@@ -436,6 +436,8 @@ void main() {
       );
       final m = _mount(joined: joined, config: _tg);
       addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
 
       // Exactly one WorkBead (tg-ok) — the convergence bead mounts nothing (the
       // A41 isCore allow-list excludes it; a circuit selects capabilities, never
@@ -450,7 +452,7 @@ void main() {
       'organizational core type (epic) both mount ZERO circuit nodes under '
       'an all-ready resident config, at depth — a plain owned task is the '
       'live sanity control proving the mount pipeline itself still works',
-      () {
+      () async {
         final joined = JoinedSnapshotNotifier(
           _joined(
             beads: [
@@ -463,6 +465,8 @@ void main() {
         );
         final m = _mount(joined: joined, config: _tg.copyWith(resident: true));
         addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
 
         final workBeads = _all(
           m.root,
@@ -472,26 +476,33 @@ void main() {
       },
     );
 
-    test('resident mode sanity control: the SAME epic bead mounts under the '
-        'LEGACY (non-resident) config — the exclusion above is '
-        'resident-specific, not a pre-existing A41 gate (epic IS core)', () {
-      final joined = JoinedSnapshotNotifier(
-        _joined(
-          beads: [_bead('tg-epic', type: IssueType.epic)],
-          ready: {'tg-epic'},
-        ),
-      );
-      final m = _mount(joined: joined, config: _tg);
-      addTearDown(m.owner.dispose);
+    test(
+      'resident mode sanity control: the SAME epic bead mounts under the '
+      'LEGACY (non-resident) config — the exclusion above is '
+      'resident-specific, not a pre-existing A41 gate (epic IS core)',
+      () async {
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_bead('tg-epic', type: IssueType.epic)],
+            ready: {'tg-epic'},
+          ),
+        );
+        final m = _mount(joined: joined, config: _tg);
+        addTearDown(m.owner.dispose);
+        await _pump();
+        m.owner.flush();
 
-      final workBeads = _all(m.root).where((b) => b.seed is WorkBead).toList();
-      expect(workBeads, hasLength(1));
-      expect((workBeads.single.seed as WorkBead).bead.id, 'tg-epic');
-    });
+        final workBeads = _all(
+          m.root,
+        ).where((b) => b.seed is WorkBead).toList();
+        expect(workBeads, hasLength(1));
+        expect((workBeads.single.seed as WorkBead).bead.id, 'tg-epic');
+      },
+    );
 
     test('a `type=link` bead in the ready set mounts ZERO circuit nodes — a '
         'cross-repo link is a fact ABOUT work, never work itself; a plain '
-        'owned bead is the live sanity control', () {
+        'owned bead is the live sanity control', () async {
       final joined = JoinedSnapshotNotifier(
         _joined(
           beads: [
@@ -503,6 +514,8 @@ void main() {
       );
       final m = _mount(joined: joined, config: _tg);
       addTearDown(m.owner.dispose);
+      await _pump();
+      m.owner.flush();
 
       final workBeads = _all(m.root).where((b) => b.seed is WorkBead).toList();
       expect(workBeads, hasLength(1));

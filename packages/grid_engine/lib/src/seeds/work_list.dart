@@ -1,51 +1,32 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:genesis_tree/genesis_tree.dart';
-import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:state_notifier/state_notifier.dart';
 
-import '../domain/mount_eligibility.dart';
-import '../bridge/trust_guard.dart';
 import '../diagnostics/diagnosable.dart';
 import '../domain/joined_snapshot.dart';
-import '../domain/linked_sessions.dart';
-import '../domain/mount_attempt.dart';
 import '../domain/rework.dart';
 import '../domain/session_bead.dart';
 import '../domain/session_disposition.dart';
 import '../domain/session_projection.dart';
 import '../domain/substation_config.dart';
+import '../kernel/station_admission_authority.dart';
 import '../kernel/station_services.dart';
 import '../kernel/trajectory_scope.dart';
 import '../notifiers/joined_snapshot_notifier.dart';
-import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
-import 'work_bead.dart';
 import 'provider.dart';
+import 'work_bead.dart';
 
-/// The work axis observer and keyed-reconcile container — **the heart**.
+/// The work-axis observer and projection of the station admission authority.
 ///
-/// It is the SINGLE tree node that subscribes into the snapshot pipeline (via
-/// the ambient [JoinedSnapshotNotifier]); every other node is config (an
-/// ancestor) or pure-config-driven (`WorkBead` / effects). On each emission
-/// only THIS node marks dirty (observational isolation — derailment-invariant
-/// 1); its rebuild reconciles the `WorkBead` set, so a changed bead's WorkBead
-/// is force-rebuilt by *this* cascade — and is therefore excluded from
-/// `TreeOwner.flush()` — never by observing the notifier itself.
-///
-/// `root.markNeedsRebuild()` is banned; a single over-broad observation would
-/// re-create the "config built 100×" bug ADR-0007 §6.1 exists to prevent.
+/// This remains the sole joined-snapshot subscriber. It derives structural
+/// candidates from the settled graph, asks the station-owned authority, and
+/// renders only reservations the authority has admitted.
 class WorkList extends StatefulSeed with GridDiagnosticable {
-  /// Creates the work list under [substationConfig]. The list itself uses the
-  /// value as data for ownership, drive-list, resident, and budget decisions;
-  /// its build output re-provides the same value as `InheritedSeed` so
-  /// descendant lifecycle owners observe the one substation config value.
   const WorkList({required this.substationConfig, super.key});
 
-  /// The substation config, as data — its [SubstationConfig.ownedSubstations] builds the ownership
-  /// predicate.
   final SubstationConfig substationConfig;
 
   @override
@@ -66,159 +47,17 @@ class WorkList extends StatefulSeed with GridDiagnosticable {
 
 class _WorkListState extends State<WorkList>
     with Diagnosticable, GridDiagnosticable {
-  RemoveListener? _remove;
+  RemoveListener? _removeSnapshotListener;
+  void Function()? _removeAdmissionListener;
   JoinedSnapshotNotifier? _notifier;
+  StationAdmissionAuthority? _admission;
   late JoinedSnapshot _snapshot;
 
-  /// Bead ids whose `WorkBead` branch is mounted as of the last build — the
-  /// A40 "already-mounted work is never evicted for budget reasons" invariant's
-  /// OWN bookkeeping (tg-zat). `liveSession` alone misses a gap this invariant
-  /// must still cover: `grid rework` re-keys a session bead's `work_bead` OFF
-  /// this bead's id while it is still open (not yet closed) — so
-  /// `sessionsByWorkBead[bead.id]` reads null for one-or-more snapshots while
-  /// `SessionScope` schedules the close-then-re-mint transition. Without this
-  /// set, that gap reclassifies the bead as a budget-gated `pending` candidate,
-  /// and the concurrency governor can evict the very branch that would have
-  /// closed the retired session and minted the fresh round — wedging the
-  /// retired session open forever with no fresh mint. Membership tracks the
-  /// BRANCH, not the session: added whenever a bead mounts, removed only on a
-  /// genuine positive terminal.
-  final Set<String> _mountedIds = <String>{};
-
-  /// The value-config seeds currently emitted for mounted work branches.
-  ///
-  /// `WorkList` can rebuild without a new joined snapshot when the bounded
-  /// mount-eligibility recheck fires. Reusing an unchanged seed instance lets
-  /// genesis_tree's identity fast path prune that branch, so a sibling's
-  /// refusal cannot re-run an already-mounted `SessionResolver` and mint a
-  /// duplicate session. Entries live only while the corresponding branch is
-  /// present in this build's mounted projection.
   final Map<String, WorkBead> _mountedWorkBeadsById = <String, WorkBead>{};
-
-  /// Bead ids whose TERMINAL-cursor skip has already been reported (tg-83k1) —
-  /// the flare is LOUD but said ONCE per bead per station lifetime.
   final Set<String> _terminalSkipReported = <String>{};
 
-  /// Surplus session ids already scheduled for demotion. The projection lags
-  /// the write by a store round-trip, so without the latch every rebuild in
-  /// that window would re-key the same row again.
-  final Set<String> _surplusRetiresScheduled = <String>{};
-  final Set<String> _surplusAliveReported = <String>{};
-  final Set<String> _sessionAmbiguityReported = <String>{};
-  final Set<String> _gateSweepsScheduled = <String>{};
-
-  /// `<workBeadId>:<attempt>` pairs already written to the DURABLE remount
-  /// budget (tg-zlfu) — the same rising-edge discipline as the sets above. The
-  /// projection lags the write by a store round-trip, so without this every
-  /// rebuild in that window would re-write the same attempt number.
-  final Set<String> _mountAttemptsScheduled = <String>{};
-
-  final Set<String> _trustRefusedReported = <String>{};
-  final Map<String, String> _mountEligibilityRefusals = <String, String>{};
-  final Set<({String beadId, String clause})> _mountEligibilityRechecks =
-      <({String beadId, String clause})>{};
-  Timer? _mountEligibilityRecheckTimer;
-
-  /// The Stage-1 derivation layer (stage1-wiring §2), resolved off the ambient
-  /// scope on each build. Absent it is a counting no-op.
   StationTrajectoryRecorder _recorder =
       TrajectoryRecorderScope.disabled.recorder;
-
-  void _scheduleGateSweep(
-    StationServices stationServices,
-    ServiceBundle? services, {
-    required Bead workBead,
-    required String sessionId,
-    required GateCloseCause cause,
-    required GateSweepSessionDisposition disposition,
-    Bead? terminalWorkBead,
-  }) {
-    final latch = '$sessionId:${cause.wireValue}';
-    if (!_gateSweepsScheduled.add(latch)) return;
-    // Captured at SCHEDULE time: the microtask below outlives this build, and
-    // reaching back into the tree from it is exactly the async-gap mistake the
-    // captured-field discipline (D-H rule 1) exists to prevent.
-    final recorder = _recorder;
-    scheduleMicrotask(() async {
-      try {
-        await stationServices.writer.closeOpenGatesForTerminal(
-          sessionId: sessionId,
-          trigger: cause,
-          disposition: disposition,
-          terminalWorkBead: terminalWorkBead,
-        );
-        // §2.3's `attempt.terminal(settled)` row, at the OBSERVED of
-        // `settleSessionForTerminalWork`'s two callers (r2 major 6's
-        // outcome-bearing-caller rule). ONLY the `live` disposition settles:
-        // that is the arm where the sweep routes through the settlement
-        // because the WORK bead went terminal under a still-open session.
-        // Every other disposition sweeps gates over an already-terminal
-        // session and settles nothing, so a record there would shadow a write
-        // that never happened.
-        if (disposition == GateSweepSessionDisposition.live &&
-            terminalWorkBead != null) {
-          recorder.sessionSettled(
-            sessionId: sessionId,
-            workBeadId: terminalWorkBead.id,
-            workTerminalReason:
-                StationBeadWriter.workTerminalReasonWorkBeadClosed,
-          );
-        }
-      } on Object catch (error) {
-        services?.transport?.flare('gate.autoCloseFailed', {
-          'sessionId': sessionId,
-          'cause': cause.wireValue,
-          'reason': truncateReason('$error'),
-        });
-      }
-    });
-  }
-
-  /// Records one DURABLE mount attempt against [workBeadId] (tg-zlfu).
-  ///
-  /// Called at ADMISSION — the transition from `pending` into `mounted`, which
-  /// is exactly "the frontier re-derived this bead and mounted it again". A
-  /// bead that merely STAYS mounted across rebuilds is not a new attempt and
-  /// never reaches here.
-  ///
-  /// Latched per (bead, attempt) so a rebuild storm between the write and the
-  /// next snapshot cannot double-count: the projection only advances when the
-  /// state store round-trips, so without the latch every rebuild in that window
-  /// would re-write the same number and append a duplicate note.
-  ///
-  /// The next count is computed from the PROJECTION, never from a fresh read:
-  /// the writer merges the two budget keys server-side in a row-locked
-  /// transaction, so it preserves every other key on the record and there is no
-  /// whole-map read-modify-write to lose a concurrent edit.
-  void _scheduleMountAttempt(
-    StationServices stationServices,
-    ServiceBundle? services, {
-    required String workBeadId,
-  }) {
-    final prior = _snapshot.mountAttemptsByWorkBead[workBeadId]?.count ?? 0;
-    final attempt = prior + 1;
-    if (!_mountAttemptsScheduled.add('$workBeadId:$attempt')) return;
-    scheduleMicrotask(() async {
-      try {
-        await stationServices.writer.recordMountAttempt(
-          substation: stationServices.stateSubstation,
-          workBeadId: workBeadId,
-          attempt: attempt,
-          note: 'mount attempt $attempt of $kMaxMountAttempts',
-        );
-      } on Object catch (error) {
-        // LOUD, and deliberately non-blocking: a budget that cannot be written
-        // must not also stop the station from working. The flare is how the
-        // degradation stays visible — a silently unrecorded attempt is an
-        // unbounded loop wearing the costume of a bounded one.
-        services?.transport?.flare('work.mountAttemptRecordFailed', {
-          'beadId': workBeadId,
-          'attempt': '$attempt',
-          'reason': truncateReason('$error'),
-        });
-      }
-    });
-  }
 
   static SessionProjection? _latestRetiredSession(
     String beadId,
@@ -236,14 +75,17 @@ class _WorkListState extends State<WorkList>
     return latest;
   }
 
-  WorkBead _workBeadFor({required Bead bead, SessionProjection? session}) {
+  WorkBead _workBeadFor(StationAdmissionCandidate candidate) {
+    final bead = candidate.bead;
     final cached = _mountedWorkBeadsById[bead.id];
-    if (cached != null && cached.bead == bead && cached.session == session) {
+    if (cached != null &&
+        cached.bead == bead &&
+        cached.session == candidate.session) {
       return cached;
     }
     return _mountedWorkBeadsById[bead.id] = WorkBead(
       bead: bead,
-      session: session,
+      session: candidate.session,
       key: ValueKey(bead.id),
     );
   }
@@ -251,380 +93,132 @@ class _WorkListState extends State<WorkList>
   @override
   void debugFillProperties(DiagnosticsBuilder properties) {
     super.debugFillProperties(properties);
-    properties.addTyped(IntProperty('mountedWorkCount', _mountedIds.length));
+    properties.addTyped(
+      IntProperty('mountedWorkCount', _mountedWorkBeadsById.length),
+    );
   }
 
   @override
   void didChangeDependencies() {
-    // Resolve the ambient work-axis notifier and subscribe. The notifier
-    // instance is stable in P0; the identity guard makes a re-run (or a future
-    // instance swap) idempotent.
+    // Always watch both dependencies before either identity guard. Their
+    // listener lifetimes are independent.
+    final stationServices = context.watch<StationServices>();
     final notifier = context.watch<JoinedSnapshotNotifier>();
     assert(
-      notifier != null,
-      'WorkList requires an ambient JoinedSnapshotNotifier provided above Station',
+      stationServices != null,
+      'WorkList requires ambient StationServices',
     );
-    if (identical(notifier, _notifier)) return;
-    _remove?.call();
-    _notifier = notifier;
-    // The initial read IS the subscription (D-H rule 2: never a sync accessor
-    // that dodges `@protected state`): fireImmediately delivers the baseline
-    // synchronously into the listener — assigned directly (setState during the
-    // build phase is illegal); every later fire goes through setState.
-    var first = true;
-    _remove = notifier!.addListener((snapshot) {
-      if (first) {
-        first = false;
-        _snapshot = snapshot;
-        return;
-      }
-      setState(() => _snapshot = snapshot);
-    }, fireImmediately: true);
+    assert(
+      notifier != null,
+      'WorkList requires an ambient JoinedSnapshotNotifier',
+    );
+
+    if (!identical(stationServices?.admission, _admission)) {
+      _removeAdmissionListener?.call();
+      _admission = stationServices?.admission;
+      _removeAdmissionListener = _admission?.addInvalidationListener(() {
+        if (!context.mounted) return;
+        setState(() {});
+      });
+    }
+
+    if (!identical(notifier, _notifier)) {
+      _removeSnapshotListener?.call();
+      _notifier = notifier;
+      var first = true;
+      _removeSnapshotListener = notifier!.addListener((snapshot) {
+        if (first) {
+          first = false;
+          _snapshot = snapshot;
+          return;
+        }
+        setState(() => _snapshot = snapshot);
+      }, fireImmediately: true);
+    }
   }
 
   @override
   void dispose() {
-    _mountEligibilityRecheckTimer?.cancel();
-    _mountEligibilityRecheckTimer = null;
-    _remove?.call();
-    _remove = null;
+    _removeSnapshotListener?.call();
+    _removeSnapshotListener = null;
+    _removeAdmissionListener?.call();
+    _removeAdmissionListener = null;
   }
 
   @override
   Seed build(TreeContext context) {
+    final stationServices = context.watch<StationServices>();
+    assert(
+      stationServices != null,
+      'WorkList requires ambient StationServices',
+    );
+    final services = context.watch<ServiceBundle>() ?? const ServiceBundle();
+    _recorder = trajectoryRecorderOf(context);
     final ownership = BeadOwnershipPredicate(
       seed.substationConfig.ownedSubstations,
     );
-    // The ambient ServiceBundle (per-`SubstationScope`, fixed-at-mount —
-    // ADR-0008 D5) is depended on HERE, not just at `SessionScope`, so a
-    // rooting refusal can flare through its `ExplorationTransport` (D-8) —
-    // the SAME emit-only sink every other engine LOUD signal uses. This is a
-    // config-axis dependency (never notifies once mounted), not the snapshot
-    // pipeline — derailment-invariant 1 stays about the JOINED SNAPSHOT axis.
-    final services = context.watch<ServiceBundle>();
-    // The Stage-1 derivation layer, resolved with the effect verb (see
-    // `trajectoryRecorderOf`): station-lifetime, so there is nothing here to
-    // rebuild on. Re-read every build rather than cached at mount, the same
-    // discipline as every other reference above.
-    _recorder = trajectoryRecorderOf(context);
-    // The concurrency governor's ambient station default/ceiling (tg-42f) —
-    // a config-axis lookup exactly like `ServiceBundle` above: a stable,
-    // fixed-at-mount value that never notifies, so this new dependency stays
-    // outside derailment-invariant 1 (the snapshot axis). Null (no
-    // `StationServices` provided — the offline-test default) falls back to
-    // the same generous constant `StationServices` itself defaults to.
-    final stationServices = context.watch<StationServices>();
-    // Two bins: `mounted` already carries a live (non-terminal) session — an
-    // in-flight agent that is NEVER evicted for budget reasons (positive-
-    // terminal-only unmount stays the only unmount trigger). `pending` is
-    // freshly ready with no session yet — these are what the slot budget
-    // below actually governs.
-    // The content gate the loop below calls once per candidate: the engine's
-    // DURABLE attempt-cap clause, closed over the projection the join already
-    // put in memory (the predicate is synchronous and cannot read the store),
-    // composed with the station's own eligibility predicate when one exists.
-    final mountEligibility = composeMountEligibility([
-      dispatchableWorkClause(resident: seed.substationConfig.resident),
-      driveListClause(seed.substationConfig.driveList),
-      crossLinkExclusionClause(
-        _snapshot.frontierExclusionsByBeadId,
-        _snapshot.sessionsByWorkBead,
-      ),
-      mountAttemptClause(_snapshot.mountAttemptsByWorkBead),
-    ], services?.mountEligibility);
-    final mounted = <WorkBead>[];
-    final emittedMountedIds = <String>{};
-    // A43's pending bin, unchanged in MEANING (freshly ready, no live session —
-    // the only bin the budget gates) and richer by one field: a VOIDED bead
-    // (I-10) enters it too, and its `SessionScope` needs the DEAD projection in
-    // order to retire it before minting.
-    final pending = <({Bead bead, SessionProjection? session})>[];
-    for (final bead in _snapshot.graph.beadsById.values) {
-      // Ownership is the one intentionally silent filter: each WorkList sees
-      // the shared federated graph, but only the owning substation may explain
-      // or mount a bead. Every LOCAL exclusion below is a named eligibility
-      // clause instead.
-      if (!ownership.owns(bead)) continue;
 
-      final inReady = _snapshot.graph.readyIds.contains(bead.id);
-      final linkedSessions = _snapshot.linkedSessions(bead.id);
-      final retiredSession = linkedSessions.isEmpty
+    final candidates = <StationAdmissionCandidate>[];
+    for (final bead in _snapshot.graph.beadsById.values) {
+      if (!ownership.owns(bead)) continue;
+      final linked = _snapshot.linkedSessions(bead.id);
+      final retired = linked.isEmpty
           ? _latestRetiredSession(bead.id, _snapshot.sessionsByWorkBead.values)
           : null;
-      final participatesInReconciliation =
-          inReady ||
+      final participates =
+          _snapshot.graph.readyIds.contains(bead.id) ||
           _snapshot.frontierExclusionsByBeadId.containsKey(bead.id) ||
-          linkedSessions.isNotEmpty ||
-          retiredSession != null ||
-          _mountedIds.contains(bead.id);
-      if (!participatesInReconciliation) continue;
-
-      // ONE content gate, several clauses (tg-zlfu). The engine's own DURABLE
-      // remount budget composes with whatever eligibility the station itself
-      // composed, so a capped bead is refused through the SAME edge-triggered
-      // refusal/restoration flares as any other clause — a parallel check here
-      // would duplicate that machinery and then drift from it. The composed
-      // predicate is never null: the attempt clause applies even on a station
-      // that composes no eligibility assets at all.
-      final decision = _evaluateMountEligibility(mountEligibility, bead);
-      switch (decision) {
-        case MountEligible():
-          _restoreMountEligibility(services, bead.id);
-        case MountRefused(:final clause):
-          _refuseMountEligibility(services, bead.id, clause);
-          continue;
-      }
-
-      final trust = services?.trust;
-      if (trust != null) {
-        final reasons = <String>[];
-        final admitted = applyTrustGuard(
-          candidates: {bead.id},
-          beadsById: _snapshot.graph.beadsById,
-          floor: services!.trustFloor,
-          trustConfigured: true,
-          onUnresolved: reasons.add,
-        );
-        if (!admitted.contains(bead.id)) {
-          _reportTrustRefused(services, bead, reasons.single);
-          continue;
-        }
-      }
-
-      // THE JOIN, over ALL of this bead's linked rows (tg-83k1) — not just the
-      // one the map publishes. `verdict.winner` IS
-      // `_snapshot.sessionsByWorkBead[bead.id]`; the verdict additionally
-      // states what the OTHER rows mean.
-      final verdict = linkedSessionVerdictOf(linkedSessions);
-      final session = verdict.winner;
-      final scopeSession = session ?? retiredSession;
-      final disposition = sessionDispositionOf(session);
-
-      // Positive-terminal-only unmount, DISPOSITIONED (I-10, tg-4rw): the work
-      // bead `closed`, OR the joined session BLOCKS the mount — it is `done`
-      // (the engine's own close path stamped `grid.outcome=complete`, or a
-      // legacy all-positive-terminal cursor) or `held` (a human marker: an
-      // escalation / a declined rework). A `voided` session — closed mid-flight
-      // with an in-flight cursor and NO human marker — is a DEAD KEY: neither
-      // adoptable NOR blocking, so the bead MOUNTS and `SessionScope` retires
-      // the dead key and mints a fresh round. Before this, EVERY closed session
-      // blocked, so an operator-closed orphan wedged its bead forever, silently
-      // (I-10: 62 minutes, recovered by a hand re-key).
-      //
-      // Still NEVER a ready-set exit — a live agent's bead can transiently leave
-      // readyIds (blocked, gc-edited) mid-flight, and treating that as done
-      // would kill the live agent.
-      if (bead.isClosed || disposition.blocksMount) {
-        _mountedIds.remove(bead.id);
-        final liveSessionId = session?.sessionId ?? '';
-        if (bead.isClosed &&
-            disposition is LiveSession &&
-            liveSessionId.isNotEmpty &&
-            stationServices != null) {
-          // ADR-0008 D-2 gives SessionScope the formula-positive and breaker
-          // endings. This is a third ending: the parent frontier observes the
-          // closed work bead and removes the keyed scope without rebuilding
-          // it. The existing workBeadClosed sweep therefore owns durable
-          // session settlement before it closes the gates.
-          _scheduleGateSweep(
-            stationServices,
-            services,
-            workBead: bead,
-            sessionId: liveSessionId,
-            cause: GateCloseCause.workBeadClosed,
-            disposition: GateSweepSessionDisposition.live,
-            terminalWorkBead: bead,
-          );
-        } else {
-          switch (disposition) {
-            case DoneSession():
-              final sessionId = session?.sessionId ?? '';
-              _reportTerminalSkip(
-                services,
-                bead.id,
-                sessionId,
-                'done',
-                'the session closed at a positive terminal — landed work is '
-                    'never re-driven',
-              );
-              if (sessionId.isNotEmpty && stationServices != null) {
-                _scheduleGateSweep(
-                  stationServices,
-                  services,
-                  workBead: bead,
-                  sessionId: sessionId,
-                  cause: GateCloseCause.sessionTerminal,
-                  disposition: GateSweepSessionDisposition.done,
-                );
-              }
-            case HeldSession(:final reason):
-              _reportTerminalSkip(
-                services,
-                bead.id,
-                session?.sessionId ?? '',
-                'held',
-                reason,
-              );
-            case NoSession() || LiveSession() || VoidedSession():
-              break;
-          }
-        }
-        continue;
-      }
-
-      // THE SURPLUS DEMOTION (tg-83k1). Re-key the older dead rows off this
-      // bead through the SAME `voidRetireMetadata` payload and the SAME
-      // `voidKeyFor` shape `SessionScope` writes — one re-key mechanic, never a
-      // second — so the join goes single-valued and A48's retire-then-mint path
-      // runs exactly as it does for a bead that only ever had one row.
-      if (_holdForLinkedSessions(
-        stationServices,
-        services,
-        bead: bead,
-        verdict: verdict,
-      )) {
-        continue;
-      }
-
-      // A43's "live session" bin is about the ROW, not about what `SessionScope`
-      // will do with it: any non-terminal session row is in-flight work that is
-      // never evicted for budget reasons (a row that names no session bead is
-      // still a live round — only the adopt-or-mint decision cares about the id).
-      // The only CLOSED session that reaches here is a `voided` DEAD KEY, and it
-      // is deliberately NOT live: it carries no running work, so its bead is a
-      // budget-gated `pending` candidate exactly like a fresh one (a re-mint
-      // spawns an agent — it must cost a slot).
-      final liveSession = session != null && !session.isTerminal;
-      // A40's "already-mounted work is never evicted for budget reasons" also
-      // covers a bead whose branch is ALREADY mounted even when `liveSession`
-      // reads false THIS build (tg-zat): `grid rework` re-keys a session's
-      // `work_bead` off this bead's id while it is still open, so
-      // `sessionsByWorkBead[bead.id]` reads null for one-or-more snapshots
-      // while `SessionScope` schedules its close-then-re-mint transition.
-      // Falling back to `liveSession` alone here would drop the branch from
-      // `mounted` and hand it to the budget gate below — evicting the very
-      // SessionScope that would have closed the retired session and minted
-      // the fresh round, wedging the retired session open forever.
-      final hasRetiredRound = retiredSession != null;
-      final staysMounted =
-          liveSession || hasRetiredRound || _mountedIds.contains(bead.id);
-      // Mount if freshly ready OR still carrying/keeping a live session (the
-      // latter is what keeps a transiently-unready bead's agent mounted).
-      if (!inReady && !staysMounted) continue;
-
-      // v3 single-root: a substation names ONE root, and an owned bead's root
-      // IS its substation's root (resolved bead → substation → root). There is
-      // no per-bead `metadata.grid.root` selector and no registered-root gate —
-      // an owned, dispatchable, ready bead mounts.
-      if (staysMounted) {
-        _mountedIds.add(bead.id);
-        emittedMountedIds.add(bead.id);
-        mounted.add(_workBeadFor(bead: bead, session: scopeSession));
-      } else {
-        pending.add((bead: bead, session: scopeSession));
-      }
+          linked.isNotEmpty ||
+          retired != null;
+      if (!participates) continue;
+      candidates.add(
+        StationAdmissionCandidate(
+          bead: bead,
+          session: _snapshot.sessionsByWorkBead[bead.id] ?? retired,
+        ),
+      );
     }
 
-    // The concurrency governor (tg-42f, declare-and-check — ADR-0008 D8's
-    // general per-leaf `DartEnvironment` permit governor is a separate,
-    // deferred track): a substation cap ABOVE which freshly-ready beads stay
-    // ready-unmounted — no session minted, no spawn, no cost — and mount on
-    // the natural reconcile once a slot frees (a mounted session closes and
-    // the positive-terminal unmount above drops it from `mounted` next tick).
-    // Already-mounted work (`mounted`, live session) is NEVER evicted for
-    // budget reasons — only `pending` candidates are gated.
-    //
-    // `stationCap` is null when no `StationServices` is ambient (an offline
-    // test that never wires the governor) — every REAL run always composes
-    // one (`buildLiveWiring` → `StationWork`), so the station-wide ceiling
-    // below is only ever skipped by a test that doesn't care about it. A
-    // substation's own override still applies either way, defaulting to
-    // [kDefaultMaxConcurrentWork] when nothing is configured at all.
-    final stationCap = stationServices?.maxConcurrentWork;
-    final substationCap =
-        seed.substationConfig.maxConcurrentWork ??
-        stationCap ??
-        kDefaultMaxConcurrentWork;
-    final substationSlots = math.max(0, substationCap - mounted.length);
-    final int slotsAvailable;
-    if (stationCap == null) {
-      slotsAvailable = substationSlots;
-    } else {
-      // The station-wide total (tg-42f "and a station-wide cap above it"):
-      // every non-terminal session in the shared `JoinedSnapshot` — global
-      // across every substation this station mounts, read at zero extra cost
-      // since `_snapshot` is already the ambient value this node observes.
-      // This is a snapshot of the LAST SETTLED state (accurate across
-      // flushes); two substations deciding to admit in the SAME flush can
-      // transiently overshoot by however many substations raced —
-      // declare-and-check, not a distributed lock — and self-corrects once
-      // the newly-minted sessions land in the next snapshot.
-      final stationWideLive = _snapshot.sessionsByWorkBead.values
-          .where((s) => !s.isTerminal)
-          .length;
-      final stationSlots = math.max(0, stationCap - stationWideLive);
-      slotsAvailable = math.min(substationSlots, stationSlots);
-    }
-
-    // Deterministic admission order: HIGHEST PRIORITY first, then lowest bead
-    // id WITHIN one priority (tg-lohr). bd priority is ascending-urgent — P0
-    // is `0` — so the priority leg is a plain ascending `compareTo`, matching
-    // beads_dart's own `ORDER BY priority ASC` ready-work sort. The id leg is
-    // what keeps admission reproducible across reconciles; on its own it was
-    // arbitrary (ids carry a random-ish suffix), which made priority
-    // decorative at the mount boundary: a P0 filed as `tg-zzzz` lost its slot
-    // to a P4 filed as `tg-aaaa`, every reconcile.
-    //
-    // This decides only WHICH pending beads take the free slots. It never
-    // evicts a mounted bead (a higher-priority bead waits for a natural slot),
-    // and it never reorders ACROSS substations — each substation's `WorkList`
-    // sorts only its own pending bin, so the per-substation and station-wide
-    // caps keep exactly their A43 meaning.
-    pending.sort((a, b) {
-      final byPriority = a.bead.priority.compareTo(b.bead.priority);
-      return byPriority != 0 ? byPriority : a.bead.id.compareTo(b.bead.id);
-    });
-    final admitted = pending.take(slotsAvailable);
-    final waiting = pending.skip(slotsAvailable).toList();
-    for (final entry in admitted) {
-      _mountedIds.add(entry.bead.id);
-      // ADMISSION is the attempt (tg-zlfu): this bead was re-derived by the
-      // frontier and is being mounted now. A bead that merely stays mounted
-      // across rebuilds never reaches here, so the budget counts remounts
-      // rather than rebuilds.
-      if (stationServices != null) {
-        _scheduleMountAttempt(
-          stationServices,
-          services,
-          workBeadId: entry.bead.id,
-        );
-      }
-      // The session rides down even for a freshly-admitted bead: null for a
-      // first round, and the DEAD projection for a voided one (I-10) — which is
-      // what `SessionScope` retires before it mints. Once admitted, `_mountedIds`
-      // keeps the branch mounted across the retire→mint gap (the same tg-zat
-      // mechanism that carries a `grid rework` re-key), so the governor can never
-      // evict the very scope that is minting the fresh round.
-      emittedMountedIds.add(entry.bead.id);
-      mounted.add(_workBeadFor(bead: entry.bead, session: entry.session));
-    }
-    if (waiting.isNotEmpty) {
-      _reportThrottled(services, [for (final w in waiting) w.bead]);
-    }
-
-    // Keep the mounted projection in the same priority-then-id order used for
-    // admission. All children are keyed, so an existing branch still
-    // reconciles by key and is never evicted merely because priorities move.
-    mounted.sort((a, b) {
-      final byPriority = a.bead.priority.compareTo(b.bead.priority);
-      return byPriority != 0 ? byPriority : a.bead.id.compareTo(b.bead.id);
-    });
-    _mountedWorkBeadsById.removeWhere(
-      (beadId, _) => !emittedMountedIds.contains(beadId),
+    final batch = stationServices!.admission.admitPending(
+      _snapshot,
+      seed.substationConfig,
+      services,
+      candidates,
     );
-    // Re-provide the settled joined snapshot and data config as observed VALUES
-    // for descendants. WorkList remains the only notifier subscriber;
-    // SessionScope consumes these values through ambient tree seams.
+    _projectTerminalAnswers(stationServices, services, candidates, batch);
+    for (final refusal in batch.refused) {
+      if (refusal.clause == 'done' || refusal.clause == 'held') {
+        _reportTerminalSkip(
+          services,
+          refusal.candidate.bead.id,
+          refusal.candidate.session?.sessionId ?? '',
+          refusal.clause,
+          refusal.detail,
+        );
+      }
+    }
+
+    // Retain already-rendered siblings ahead of newly admitted branches. The
+    // authority has already applied priority/id ordering to the pending set;
+    // stable placement here keeps a new sibling from perturbing an unchanged
+    // mounted branch in genesis_tree's keyed reconcile.
+    final projected = batch.admitted.toList()
+      ..sort((left, right) {
+        final leftMounted = _mountedWorkBeadsById.containsKey(
+          left.candidate.bead.id,
+        );
+        final rightMounted = _mountedWorkBeadsById.containsKey(
+          right.candidate.bead.id,
+        );
+        if (leftMounted == rightMounted) return 0;
+        return leftMounted ? -1 : 1;
+      });
+    final mounted = [
+      for (final reservation in projected) _workBeadFor(reservation.candidate),
+    ];
+    final emitted = {for (final work in mounted) work.bead.id};
+    _mountedWorkBeadsById.removeWhere((id, _) => !emitted.contains(id));
+
     return Nest(
       children: [
         Provider<JoinedSnapshot>.value(_snapshot),
@@ -634,211 +228,78 @@ class _WorkListState extends State<WorkList>
     );
   }
 
-  MountEligibilityDecision _evaluateMountEligibility(
-    MountEligibilityPredicate mountEligibility,
-    Bead bead,
+  void _projectTerminalAnswers(
+    StationServices station,
+    ServiceBundle services,
+    List<StationAdmissionCandidate> candidates,
+    StationAdmissionBatch batch,
   ) {
-    try {
-      return mountEligibility(bead);
-    } on Object catch (error) {
-      return MountEligibilityDecision.refused(
-        clause:
-            'mount eligibility evaluation failed: ${truncateReason('$error')}',
-      );
+    final refusedById = {
+      for (final refusal in batch.refused) refusal.candidate.bead.id: refusal,
+    };
+    for (final candidate in candidates) {
+      final bead = candidate.bead;
+      final session = candidate.session;
+      final sessionId = session?.sessionId ?? '';
+      if (sessionId.isEmpty) continue;
+      final disposition = sessionDispositionOf(session);
+      if (bead.isClosed && disposition is LiveSession) {
+        unawaited(
+          station.admission
+              .settleWorkTerminalSession(
+                terminalWorkBead: bead,
+                sessionId: sessionId,
+                services: services,
+              )
+              .then((_) {
+                _recorder.sessionSettled(
+                  sessionId: sessionId,
+                  workBeadId: bead.id,
+                  workTerminalReason:
+                      StationBeadWriter.workTerminalReasonWorkBeadClosed,
+                );
+              })
+              .catchError((Object error) {
+                _flare(services, 'gate.autoCloseFailed', {
+                  'sessionId': sessionId,
+                  'cause': GateCloseCause.workBeadClosed.wireValue,
+                  'reason': truncateReason('$error'),
+                });
+              }),
+        );
+        continue;
+      }
+      final refusal = refusedById[bead.id];
+      if (refusal?.clause == 'done') {
+        unawaited(
+          station.admission
+              .closeTerminalGates(
+                sessionId: sessionId,
+                cause: GateCloseCause.sessionTerminal,
+                disposition: GateSweepSessionDisposition.done,
+                services: services,
+              )
+              .catchError((Object error) {
+                _flare(services, 'gate.autoCloseFailed', {
+                  'sessionId': sessionId,
+                  'cause': GateCloseCause.sessionTerminal.wireValue,
+                  'reason': truncateReason('$error'),
+                });
+              }),
+        );
+      }
     }
   }
 
-  void _refuseMountEligibility(
-    ServiceBundle? services,
-    String beadId,
-    String clause,
-  ) {
-    final formerClause = _mountEligibilityRefusals[beadId];
-    _mountEligibilityRefusals[beadId] = clause;
-    _scheduleMountEligibilityRecheck(beadId, clause);
-    if (formerClause == clause) return;
-    _emitMountEligibilityFlare(
-      services,
-      'work.mountEligibilityRefused',
-      beadId,
-      clause,
-    );
-  }
-
-  void _restoreMountEligibility(ServiceBundle? services, String beadId) {
-    _clearMountEligibilityRechecks(beadId);
-    final formerClause = _mountEligibilityRefusals.remove(beadId);
-    if (formerClause == null) return;
-    _emitMountEligibilityFlare(
-      services,
-      'work.mountEligibilityRestored',
-      beadId,
-      formerClause,
-    );
-  }
-
-  /// Gives a newly observed refusal one local next-event-tick re-evaluation.
-  ///
-  /// This closes the transient "fresh read pending" gap without adding a
-  /// second snapshot observer. The retry key remains latched through the second
-  /// identical refusal, so a permanent clause cannot hot-loop; restoration
-  /// clears it so a later refusal edge receives its own bounded retry.
-  void _scheduleMountEligibilityRecheck(String beadId, String clause) {
-    if (!_mountEligibilityRechecks.add((beadId: beadId, clause: clause))) {
-      return;
-    }
-    _mountEligibilityRecheckTimer ??= Timer(Duration.zero, () {
-      _mountEligibilityRecheckTimer = null;
-      if (!context.mounted) return;
-      setState(() {});
-    });
-  }
-
-  void _clearMountEligibilityRechecks(String beadId) {
-    _mountEligibilityRechecks.removeWhere((retry) => retry.beadId == beadId);
-  }
-
-  static void _emitMountEligibilityFlare(
-    ServiceBundle? services,
-    String name,
-    String beadId,
-    String clause,
-  ) {
-    try {
-      services?.transport?.flare(name, {'beadId': beadId, 'clause': clause});
-    } catch (_) {
-      // A throwing transport never breaks mount reconciliation.
-    }
-  }
-
-  /// Emits ONE LOUD line (tg-42f) when the concurrency governor holds
-  /// [waiting] beads ready-unmounted for lack of a slot — count + which beads
-  /// wait, through the same reserved emit-only [ExplorationTransport] (D-8)
-  /// every other engine LOUD signal uses. ONE flare per build (never one per
-  /// throttled bead) so a wide backlog doesn't flood the sink. A null
-  /// [services]/`transport` is the offline/no-op default; a throwing
-  /// transport never breaks the mount reconcile.
-  static void _reportThrottled(ServiceBundle? services, List<Bead> waiting) {
-    try {
-      services?.transport?.flare('work.throttled', {
-        'count': '${waiting.length}',
-        'beadIds': waiting.map((b) => b.id).join(','),
-      });
-    } catch (_) {
-      // A throwing transport never breaks the mount reconcile — swallow.
-    }
-  }
-
-  /// Whether [verdict]'s surplus rows HOLD [bead] out of this build.
-  ///
-  /// True only for the fail-closed case: a surplus dead row whose recorded
-  /// process fences still probe ALIVE. Minting beside a running twin
-  /// double-runs the work, so the bead waits — LOUD — until the operator kills
-  /// the group. This is A48's liveness clause ("Any fence still ALIVE refuses
-  /// the mint LOUD … and the scope goes inert") applied at the surplus, which
-  /// `SessionScope` never sees.
-  bool _holdForLinkedSessions(
-    StationServices? stationServices,
-    ServiceBundle? services, {
-    required Bead bead,
-    required LinkedSessionVerdict verdict,
-  }) {
-    switch (verdict) {
-      case RemintLinkedSession(:final session, :final surplus):
-        if (surplus.isEmpty) return false;
-        final probe = stationServices?.liveness ?? neverLive;
-        final alive = surplus
-            .where((row) => staleFences(row).any(probe))
-            .toList(growable: false);
-        if (alive.isNotEmpty) {
-          _reportSurplusAlive(services, bead.id, alive);
-          return true;
-        }
-        if (stationServices != null) {
-          _scheduleSurplusRetire(
-            stationServices,
-            services,
-            workBeadId: bead.id,
-            keptSessionId: session.sessionId ?? '',
-            surplus: surplus,
-          );
-        }
-        return false;
-      case AdoptLinkedSession(:final session, :final rivals):
-        if (rivals.isNotEmpty) {
-          _reportSessionAmbiguity(services, bead.id, session, rivals);
-        }
-        return false;
-      case NoLinkedSession() || BlockedLinkedSession():
-        return false;
-    }
-  }
-
-  /// Re-keys every row in [surplus] off [workBeadId], off `build` (invariant 2)
-  /// and through the ONE chokepoint (invariant 3), latched per session id.
-  void _scheduleSurplusRetire(
-    StationServices stationServices,
-    ServiceBundle? services, {
-    required String workBeadId,
-    required String keptSessionId,
-    required List<SessionProjection> surplus,
-  }) {
-    for (final row in surplus) {
-      final deadId = row.sessionId ?? '';
-      if (deadId.isEmpty) continue;
-      if (!_surplusRetiresScheduled.add(deadId)) continue;
-      final reason =
-          'surplus linked session: "$workBeadId" keeps "$keptSessionId"; this '
-          'closed row was demoted so the join stays single-valued';
-      scheduleMicrotask(() async {
-        try {
-          await stationServices.writer.update(
-            deadId,
-            metadata: voidRetireMetadata(
-              workBeadId: workBeadId,
-              deadSessionId: deadId,
-              reason: reason,
-            ),
-          );
-          _flareWork(services, 'work.sessionSurplusRetired', {
-            'beadId': workBeadId,
-            'sessionId': deadId,
-            'workBeadKey': voidKeyFor(workBeadId, deadId),
-            'keptSessionId': keptSessionId,
-          });
-        } on Object catch (error) {
-          // LOUD and deliberately non-blocking, exactly like the mount-attempt
-          // budget: a demotion that cannot be written must not also stop the
-          // station from working. The latch is NOT released — a write storm
-          // against a failing store would be a worse failure than one bead
-          // waiting for the operator this flare summons.
-          _flareWork(services, 'work.sessionSurplusRetireFailed', {
-            'beadId': workBeadId,
-            'sessionId': deadId,
-            'reason': truncateReason('$error'),
-          });
-        }
-      });
-    }
-  }
-
-  /// Emits ONE LOUD line when a bead is SKIPPED because its joined session
-  /// cursor is a BLOCKING terminal (A48 `done` / `held`).
-  ///
-  /// tg-83k1 point 3: the trap state must never be inferred from an ABSENCE.
-  /// Before this, `done` skipped in total silence — the operator had to
-  /// cross-reference a closed-session list against an open PR list to see it —
-  /// and only `held` said anything (`work.held`, which this replaces: one
-  /// concept, one flare, carrying WHICH terminal it was).
   void _reportTerminalSkip(
-    ServiceBundle? services,
+    ServiceBundle services,
     String beadId,
     String sessionId,
     String disposition,
     String reason,
   ) {
     if (!_terminalSkipReported.add(beadId)) return;
-    _flareWork(services, 'work.terminalSkip', {
+    _flare(services, 'work.terminalSkip', {
       'beadId': beadId,
       'sessionId': sessionId,
       'disposition': disposition,
@@ -846,73 +307,19 @@ class _WorkListState extends State<WorkList>
     });
   }
 
-  void _reportSurplusAlive(
-    ServiceBundle? services,
-    String beadId,
-    List<SessionProjection> alive,
-  ) {
-    if (!_surplusAliveReported.add(beadId)) return;
-    _flareWork(services, 'work.sessionSurplusAlive', {
-      'beadId': beadId,
-      'sessionIds': alive.map((row) => row.sessionId ?? '').join(','),
-    });
-  }
-
-  void _reportSessionAmbiguity(
-    ServiceBundle? services,
-    String beadId,
-    SessionProjection adopted,
-    List<SessionProjection> rivals,
-  ) {
-    if (!_sessionAmbiguityReported.add(beadId)) return;
-    _flareWork(services, 'work.sessionAmbiguous', {
-      'beadId': beadId,
-      'adoptedSessionId': adopted.sessionId ?? '',
-      'rivalSessionIds': rivals.map((row) => row.sessionId ?? '').join(','),
-    });
-  }
-
-  static void _flareWork(
-    ServiceBundle? services,
+  static void _flare(
+    ServiceBundle services,
     String name,
     Map<String, String> data,
   ) {
     try {
-      services?.transport?.flare(name, data);
-    } catch (_) {
-      // A throwing transport never breaks the mount reconcile.
-    }
-  }
-
-  void _reportTrustRefused(ServiceBundle services, Bead bead, String reason) {
-    if (!_trustRefusedReported.add(bead.id)) return;
-    final scheme = bead.metadata[OriginTrustKeys.scheme];
-    final actor = bead.metadata[OriginTrustKeys.actor];
-    final origin =
-        scheme is String &&
-            scheme.isNotEmpty &&
-            actor is String &&
-            actor.isNotEmpty
-        ? '$scheme:$actor'
-        : 'malformed';
-    try {
-      services.transport?.flare('work.trustRefused', {
-        'beadId': bead.id,
-        'origin': origin,
-        'floor': services.trustFloor.level.name,
-        'reason': reason,
-      });
-    } catch (_) {
-      // A throwing transport never breaks mount reconciliation.
+      services.transport?.flare(name, data);
+    } on Object {
+      // A throwing transport never breaks reconciliation.
     }
   }
 }
 
-/// The keyed-reconcile container `WorkList` builds — an impl detail of the work
-/// axis (a `StatefulSeed` builds one child; this holds the many `WorkBead`s).
-///
-/// Each `WorkBead` is keyed by bead id, so reconcile preserves a bead's branch
-/// — and its running effect — across snapshot ticks.
 class _WorkBeads extends MultiChildSeed {
   _WorkBeads(List<WorkBead> beads) : super(children: beads);
 }
