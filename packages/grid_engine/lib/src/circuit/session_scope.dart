@@ -698,11 +698,21 @@ class SessionScopeState extends State<SessionScope>
       if (dead != null) {
         final deadId = dead.sessionId ?? '';
         if (deadId.isNotEmpty) {
-          await _ctx!.admission.retireVoidedSession(
-            workBeadId: seed.bead.id,
+          final refusal = await _ctx!.admission.retireVoidedSession(
+            workBead: seed.bead,
             deadSession: dead,
             reason: _voidReason,
+            services: _services,
           );
+          if (refusal != null) {
+            _mintAttempts--;
+            if (_cancelled || !context.mounted) return;
+            setState(() {
+              _failed = true;
+              _resolving = false;
+            });
+            return;
+          }
           // §2.3's `attempt.terminal(lost)` row: the DEAD KEY's terminal, and
           // the round it retires. The record carries the ORIGINAL work bead id
           // while the legacy write is re-keying the dead session onto

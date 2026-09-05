@@ -762,26 +762,49 @@ final class StationAdmissionAuthority {
   }
 
   /// Retires a voided dead key after verifying its recorded process fences.
-  Future<void> retireVoidedSession({
-    required String workBeadId,
+  ///
+  /// Returns null when retirement completed or the session id was empty. A
+  /// non-null refusal means this authority already reported the fail-closed
+  /// result and released the candidate's reservation.
+  Future<StationAdmissionRefusal?> retireVoidedSession({
+    required Bead workBead,
     required SessionProjection deadSession,
     required String reason,
+    required ServiceBundle services,
   }) async {
-    if (staleFences(deadSession).any(_liveness)) {
-      throw StateError('void retirement refused: a process fence is live');
+    final alive = staleFences(deadSession).where(_liveness).toList();
+    if (alive.isNotEmpty) {
+      final scope = _scopeForBead(workBead.id);
+      if (scope == null) {
+        throw StateError(
+          'void retirement refused: the work bead has no admission scope',
+        );
+      }
+      _reportVoidRefused(scope, services, workBead.id, deadSession, alive);
+      _release(workBead.id);
+      _notifyListeners();
+      return StationAdmissionRefusal(
+        candidate: StationAdmissionCandidate(
+          bead: workBead,
+          session: deadSession,
+        ),
+        clause: 'live-fence',
+        detail: 'a voided linked session still has a live process',
+      );
     }
     final deadId = deadSession.sessionId ?? '';
-    if (deadId.isEmpty) return;
+    if (deadId.isEmpty) return null;
     await _writer.update(
       deadId,
       metadata: voidRetireMetadata(
-        workBeadId: workBeadId,
+        workBeadId: workBead.id,
         deadSessionId: deadId,
         reason: reason,
       ),
     );
-    _releaseSession(workBeadId, deadId);
+    _releaseSession(workBead.id, deadId);
     _notifyListeners();
+    return null;
   }
 
   /// Creates and binds the session for a reservation, awaiting its exact

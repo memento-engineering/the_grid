@@ -39,6 +39,15 @@ class _RecordingTransport implements ExplorationTransport {
       flares.where((f) => f.name == name).toList();
 }
 
+final class _FlippingLiveness {
+  int checks = 0;
+
+  bool call(AdoptFence fence) {
+    checks++;
+    return checks > 1;
+  }
+}
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -304,6 +313,52 @@ void main() {
         expect(refused.single.data['deadSessionId'], 'tgdog-dead');
       },
     );
+
+    test('RACE: liveness flips alive between admission and retirement — one '
+        'void refusal, no mint retry, scope inert', () async {
+      final f = buildFakes();
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final liveness = _FlippingLiveness();
+      final m = _mount(
+        joined: JoinedSnapshotNotifier(_joined(const {'tg-1': _deadKey})),
+        ctx: _withLiveness(f.ctx, liveness.call),
+        registry: reg,
+        transport: transport,
+      );
+      addTearDown(m.owner.dispose);
+      await _pumpUntil(
+        m.owner,
+        () => transport.named('session.voidRefused').isNotEmpty,
+      );
+
+      expect(liveness.checks, greaterThanOrEqualTo(2));
+      final refused = transport.named('session.voidRefused');
+      expect(refused, hasLength(1));
+      expect(refused.single.data['workBeadId'], 'tg-1');
+      expect(refused.single.data['deadSessionId'], 'tgdog-dead');
+      expect(refused.single.data['pgids'], '4242');
+      expect(_updatesFor(f.runner, 'tgdog-dead'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
+      expect(reg.events, isEmpty);
+      expect(transport.named('session.voided'), isEmpty);
+      expect(transport.named('session.mintRefused'), isEmpty);
+      expect(transport.named('session.mintFailed'), isEmpty);
+      expect(transport.named('session.mintExhausted'), isEmpty);
+
+      await _pump();
+      m.owner.flush();
+      await _pump();
+
+      expect(transport.named('session.voidRefused'), hasLength(1));
+      expect(_updatesFor(f.runner, 'tgdog-dead'), isEmpty);
+      expect(f.runner.workCreates, isEmpty);
+      expect(reg.events, isEmpty);
+      expect(transport.named('session.voided'), isEmpty);
+      expect(transport.named('session.mintRefused'), isEmpty);
+      expect(transport.named('session.mintFailed'), isEmpty);
+      expect(transport.named('session.mintExhausted'), isEmpty);
+    });
 
     test('CONTROL — a DONE session (the grid.outcome marker) still blocks: no '
         'mount, no mint, no retire (landed work is never re-driven)', () async {
