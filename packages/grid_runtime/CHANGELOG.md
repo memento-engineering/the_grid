@@ -1,3 +1,8 @@
+## 0.2.0-rc.13
+
+- Added: `BeadOwnershipPredicate.admit` / `revoke` — the live ownership allow-set widens and narrows as substations attach and detach at runtime; a double admit or an absent revoke throws `StateError` so the attach collision gate stays the only widening path (tg-wv9, #282).
+- Floors `beads_dart` to `^0.2.0-rc.10`.
+
 ## 0.2.0-rc.12
 
 - Floors `grid_trajectory` to `^0.2.0-rc.4`, where the re-exported `StepFailureClass.noResult` and `StepFailureClass.invalidResult` members were introduced.

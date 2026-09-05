@@ -1,3 +1,7 @@
+## 0.2.0-rc.10
+
+- Added: `DoltQueryService.queryTimeout` (10 s) is applied to the Dolt SQL connection and its queries through `mysql_client`'s connect timeout, so a state store that never answers no longer hangs a mint; distinct from `BdCliService.pourTimeout`, which bounds only the atomic `bd create --graph` process (tg-akc8, #329).
+
 ## 0.2.0-rc.9
 
 - Fixed: `ProcessBdRunner` decodes a child's pipes with `Utf8Decoder(allowMalformed: true)`. Its deadline SIGKILLs a wedged `bd`; a pipe cut between the bytes of one multibyte character made the strict decoder throw `Unfinished UTF-8 octet sequence` from its close as the pipe's done event landed — before `process.exitCode` resolved, so the done-future errored with no listener and the error was UNCAUGHT in the zone. The resident isolate died on it ~90 s into every lunar boot on 2026-09-05 (epoch 39), right after the boot burst's 15 s bd timeouts. A torn tail is U+FFFD now and the call fails as it already did, with `BdTimeoutException` (tg-jbji, #326).

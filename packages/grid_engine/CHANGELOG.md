@@ -1,3 +1,15 @@
+## 0.3.0-rc.20
+
+- Added: `StationAdmissionAuthority` — one station-owned service (created and disposed by `StationServices`) owns capacity reservation, priority-then-bead-id ordering and every durable attempt transition; `WorkList` derives candidates and `SessionScope` routes its nine transitions through it. A composition with no ambient `StationServices` keeps the synchronous offline default (the same eligibility clauses and `kDefaultMaxConcurrentWork`), a fresh reservation is visible in the flush that derived it, and a bead whose branch is mounted always participates — the mounted-work guard from tg-zat (tg-1u3c, #328).
+- Fixed: a mint that times out on the state store is voided — reap, void metadata, close before release, one backoff invalidation — instead of leaving a counted ghost session; adopt-with-rivals routes through the authority's existing surplus retirement (tg-akc8, #329).
+- Fixed: the leased process dispatcher classifies a `StepSignal.failed` as `Failed.noResult` and an untyped `result()` exception as `Failed.invalidResult`, so a latched-failed critic step parks at a gate instead of stranding its session (tg-cg94, #330).
+- Fixed: a bead carrying a live session, or already mounted, KEEPS its branch when the content gate refuses it (stale approval, cached read failure); the refusal still flares edge-triggered but no longer disposes the running round — four live rounds were killed this way on lunar epoch 43 (tg-b7ro, #331).
+- Added: pause and resume for live work sessions — the three-valued `grid.session.pause_state` axis, a `PausedSession` disposition that blocks mount, and the authority refusing a paused linked session with clause `paused` (tg-5kb, #334).
+- Added: `SessionScope` exposes a `mintFailed` diagnostics flag, set on the first unresolved mint failure and cleared on recovery or rework, for the station status projection (tg-f6r, #335).
+- Fixed: `retireVoidedSession` returns a typed live-fence refusal that `SessionScope` settles as inert without charging the mint budget, flaring `session.voidRefused` once (tg-m3ud, #336).
+- Added: `ProcessSessionUpdate.failed` carries an optional `CapabilityFailureKind`; `ProcessAllocation._driveChannel` threads it into `AllocationFailed`, and a declared non-result classifies as `infra` regardless of how long the turn ran while inferred silence is unchanged (tg-bqed, #338).
+- Floors `beads_dart` to `^0.2.0-rc.10` and `grid_runtime` to `^0.2.0-rc.13`.
+
 ## 0.3.0-rc.19
 
 - Fixed: a store timeout while PARKING a failed orphan pour no longer escapes as an unawaited microtask that kills the resident (exit 255). `SessionScopeState._resumeOrphanedPour` wraps its `_parkFailedMoleculePour` await in the same containment the fresh-mint path already had, clears the in-flight guard on either outcome, and flares the park failure by name instead of throwing past `runZonedGuarded` (tg-j94f, #324).
