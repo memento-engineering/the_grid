@@ -7,6 +7,27 @@ import 'package:grid_runtime/grid_runtime.dart' show BeadWorktree, RootCheckout;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
+/// Why the two bd-backed tests below skip when `bd` is absent: they bootstrap
+/// REAL proxied stores with `bd init --proxied-server` and tear them down with
+/// `bd dolt stop`, and the trajectory-guards CI job runs `dart test -t
+/// integration` on a runner that has dolt but no bd binary. Without this guard
+/// every such run died with `ProcessException: No such file or directory`
+/// and the merge queue ejected every the_grid PR (tg-nh5e, main red at 81df860).
+/// Wherever bd IS on PATH the tests still run — a skip reason, not an exclusion.
+final String? _bdMissing = _probeBd();
+
+String? _probeBd() {
+  try {
+    final result = Process.runSync('bd', ['--version']);
+    if (result.exitCode == 0) return null;
+    return 'bd --version exited ${result.exitCode}; these tests bootstrap '
+        'proxied bd stores (tg-nh5e)';
+  } on ProcessException catch (error) {
+    return 'bd is not on PATH (${error.message}); these tests bootstrap '
+        'proxied bd stores (tg-nh5e)';
+  }
+}
+
 final class _FakeProvisioner implements SubstationProvisioner {
   final Set<String> owned = {'coded', 'co', 'state'};
   var provisions = 0;
@@ -395,6 +416,7 @@ void main() {
   test(
     'live attached Dolt store joins and leaves the shell close list',
     tags: ['integration'],
+    skip: _bdMissing,
     () async {
       final temp = Directory.systemTemp.createTempSync('attach-store-handle-');
       addTearDown(() => temp.deleteSync(recursive: true));
@@ -459,8 +481,10 @@ void main() {
   test(
     'a throwing drain settle is reported LOUD and flushing continues',
     // Integration tier: assembleStationWork needs a REAL state store, so this
-    // shells out to `bd init` — absent on the unit-tier CI runner.
+    // shells out to `bd init` — absent on the unit-tier CI runner, and skipped
+    // by reason (not excluded) wherever bd is not on PATH.
     tags: ['integration'],
+    skip: _bdMissing,
     () async {
       final temp = Directory.systemTemp.createTempSync('settle-guard-');
       addTearDown(() => temp.deleteSync(recursive: true));
