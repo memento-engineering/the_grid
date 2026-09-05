@@ -147,14 +147,19 @@ class ProcessBdRunner implements BdRunner {
     // Drain both pipes concurrently so a full stderr buffer can never deadlock
     // the child while we wait on stdout. BUFFERED listens (not `join()`) so
     // the bounded drain below can detach and still return everything read.
+    // MALFORMED-TOLERANT decoding: the timeout below SIGKILLs the child, and a
+    // pipe cut between the bytes of one multibyte character makes the STRICT
+    // decoder throw `Unfinished UTF-8 octet sequence` from its close — inside
+    // the transformer's done handler, which routes to the zone's uncaught
+    // handler, NOT to this subscription's onError. No listener can catch it;
+    // the resident isolate dies (lunar epoch 39, 2026-09-05, twice). A torn
+    // tail decodes to U+FFFD instead; the caller already sees the kill as
+    // [BdTimeoutException].
+    const decoder = Utf8Decoder(allowMalformed: true);
     final stdoutBuf = StringBuffer();
     final stderrBuf = StringBuffer();
-    final stdoutSub = process.stdout
-        .transform(utf8.decoder)
-        .listen(stdoutBuf.write);
-    final stderrSub = process.stderr
-        .transform(utf8.decoder)
-        .listen(stderrBuf.write);
+    final stdoutSub = process.stdout.transform(decoder).listen(stdoutBuf.write);
+    final stderrSub = process.stderr.transform(decoder).listen(stderrBuf.write);
     // Capture the done-futures AT LISTEN TIME: `asFuture` attached after an
     // `await` would miss a `done` that fired during that await (the event is
     // delivered to a subscription with no onDone handler and dropped), and
