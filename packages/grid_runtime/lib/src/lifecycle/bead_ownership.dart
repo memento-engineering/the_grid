@@ -47,6 +47,26 @@ class BeadOwnershipPredicate {
   /// the chokepoint can be constructed from the identical instance.
   Set<String> get substations => Set<String>.unmodifiable(_substations);
 
+  /// Adds [substation] to the live ownership allow-set.
+  void admit(String substation) {
+    if (!_substations.add(substation)) {
+      throw StateError(
+        'BeadOwnershipPredicate.admit: "$substation" is already owned — '
+        'the attach collision gate must refuse before ownership widens.',
+      );
+    }
+  }
+
+  /// Removes [substation] from the live ownership allow-set.
+  void revoke(String substation) {
+    if (!_substations.remove(substation)) {
+      throw StateError(
+        'BeadOwnershipPredicate.revoke: "$substation" is not owned — '
+        'there is nothing to revoke.',
+      );
+    }
+  }
+
   /// Whether the_grid owns [bead] — may dispatch against it and mutate it.
   bool owns(Bead bead) =>
       _ownsRig(_ownedPrefixOf(bead.id), markerOf(bead.metadata));

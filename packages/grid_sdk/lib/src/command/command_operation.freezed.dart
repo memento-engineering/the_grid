@@ -55,7 +55,7 @@ extension GridCommandRequestPatterns on GridCommandRequest {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,TResult Function( GridSetBeadText value)?  setBeadText,TResult Function( GridBeadBoard value)?  board,TResult Function( GridBeadRound value)?  beadRound,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( GridRework value)?  rework,TResult Function( GridGateLs value)?  listGates,TResult Function( GridGateResolve value)?  resolveGate,TResult Function( GridSetBeadText value)?  setBeadText,TResult Function( GridBeadBoard value)?  board,TResult Function( GridBeadRound value)?  beadRound,TResult Function( GridAttachSubstation value)?  attachSubstation,TResult Function( GridDetachSubstation value)?  detachSubstation,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
@@ -64,7 +64,9 @@ return listGates(_that);case GridGateResolve() when resolveGate != null:
 return resolveGate(_that);case GridSetBeadText() when setBeadText != null:
 return setBeadText(_that);case GridBeadBoard() when board != null:
 return board(_that);case GridBeadRound() when beadRound != null:
-return beadRound(_that);case _:
+return beadRound(_that);case GridAttachSubstation() when attachSubstation != null:
+return attachSubstation(_that);case GridDetachSubstation() when detachSubstation != null:
+return detachSubstation(_that);case _:
   return orElse();
 
 }
@@ -82,7 +84,7 @@ return beadRound(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,required TResult Function( GridSetBeadText value)  setBeadText,required TResult Function( GridBeadBoard value)  board,required TResult Function( GridBeadRound value)  beadRound,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( GridRework value)  rework,required TResult Function( GridGateLs value)  listGates,required TResult Function( GridGateResolve value)  resolveGate,required TResult Function( GridSetBeadText value)  setBeadText,required TResult Function( GridBeadBoard value)  board,required TResult Function( GridBeadRound value)  beadRound,required TResult Function( GridAttachSubstation value)  attachSubstation,required TResult Function( GridDetachSubstation value)  detachSubstation,}){
 final _that = this;
 switch (_that) {
 case GridRework():
@@ -91,7 +93,9 @@ return listGates(_that);case GridGateResolve():
 return resolveGate(_that);case GridSetBeadText():
 return setBeadText(_that);case GridBeadBoard():
 return board(_that);case GridBeadRound():
-return beadRound(_that);}
+return beadRound(_that);case GridAttachSubstation():
+return attachSubstation(_that);case GridDetachSubstation():
+return detachSubstation(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -105,7 +109,7 @@ return beadRound(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,TResult? Function( GridSetBeadText value)?  setBeadText,TResult? Function( GridBeadBoard value)?  board,TResult? Function( GridBeadRound value)?  beadRound,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( GridRework value)?  rework,TResult? Function( GridGateLs value)?  listGates,TResult? Function( GridGateResolve value)?  resolveGate,TResult? Function( GridSetBeadText value)?  setBeadText,TResult? Function( GridBeadBoard value)?  board,TResult? Function( GridBeadRound value)?  beadRound,TResult? Function( GridAttachSubstation value)?  attachSubstation,TResult? Function( GridDetachSubstation value)?  detachSubstation,}){
 final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
@@ -114,7 +118,9 @@ return listGates(_that);case GridGateResolve() when resolveGate != null:
 return resolveGate(_that);case GridSetBeadText() when setBeadText != null:
 return setBeadText(_that);case GridBeadBoard() when board != null:
 return board(_that);case GridBeadRound() when beadRound != null:
-return beadRound(_that);case _:
+return beadRound(_that);case GridAttachSubstation() when attachSubstation != null:
+return attachSubstation(_that);case GridDetachSubstation() when detachSubstation != null:
+return detachSubstation(_that);case _:
   return null;
 
 }
@@ -131,7 +137,7 @@ return beadRound(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult Function( String beadId)?  beadRound,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult Function()?  listGates,TResult Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult Function( String beadId)?  beadRound,TResult Function( String name,  String root,  String? prefix)?  attachSubstation,TResult Function( String name,  bool force)?  detachSubstation,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
@@ -139,7 +145,9 @@ return listGates();case GridGateResolve() when resolveGate != null:
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText() when setBeadText != null:
 return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case GridBeadBoard() when board != null:
 return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound() when beadRound != null:
-return beadRound(_that.beadId);case _:
+return beadRound(_that.beadId);case GridAttachSubstation() when attachSubstation != null:
+return attachSubstation(_that.name,_that.root,_that.prefix);case GridDetachSubstation() when detachSubstation != null:
+return detachSubstation(_that.name,_that.force);case _:
   return orElse();
 
 }
@@ -157,7 +165,7 @@ return beadRound(_that.beadId);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,required TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)  setBeadText,required TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)  board,required TResult Function( String beadId)  beadRound,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String beadId,  String? note,  bool beyondCap,  String? actor)  rework,required TResult Function()  listGates,required TResult Function( String gateId,  Map<String, String> grades,  String? rationale)  resolveGate,required TResult Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)  setBeadText,required TResult Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)  board,required TResult Function( String beadId)  beadRound,required TResult Function( String name,  String root,  String? prefix)  attachSubstation,required TResult Function( String name,  bool force)  detachSubstation,}) {final _that = this;
 switch (_that) {
 case GridRework():
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs():
@@ -165,7 +173,9 @@ return listGates();case GridGateResolve():
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText():
 return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case GridBeadBoard():
 return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound():
-return beadRound(_that.beadId);}
+return beadRound(_that.beadId);case GridAttachSubstation():
+return attachSubstation(_that.name,_that.root,_that.prefix);case GridDetachSubstation():
+return detachSubstation(_that.name,_that.force);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -179,7 +189,7 @@ return beadRound(_that.beadId);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult? Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,TResult? Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult? Function( String beadId)?  beadRound,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String beadId,  String? note,  bool beyondCap,  String? actor)?  rework,TResult? Function()?  listGates,TResult? Function( String gateId,  Map<String, String> grades,  String? rationale)?  resolveGate,TResult? Function( String beadId,  OperatorBeadTextField field,  String content,  bool append)?  setBeadText,TResult? Function( Set<String> stores,  Set<String> statuses,  bool blockedOnly,  bool? approved)?  board,TResult? Function( String beadId)?  beadRound,TResult? Function( String name,  String root,  String? prefix)?  attachSubstation,TResult? Function( String name,  bool force)?  detachSubstation,}) {final _that = this;
 switch (_that) {
 case GridRework() when rework != null:
 return rework(_that.beadId,_that.note,_that.beyondCap,_that.actor);case GridGateLs() when listGates != null:
@@ -187,7 +197,9 @@ return listGates();case GridGateResolve() when resolveGate != null:
 return resolveGate(_that.gateId,_that.grades,_that.rationale);case GridSetBeadText() when setBeadText != null:
 return setBeadText(_that.beadId,_that.field,_that.content,_that.append);case GridBeadBoard() when board != null:
 return board(_that.stores,_that.statuses,_that.blockedOnly,_that.approved);case GridBeadRound() when beadRound != null:
-return beadRound(_that.beadId);case _:
+return beadRound(_that.beadId);case GridAttachSubstation() when attachSubstation != null:
+return attachSubstation(_that.name,_that.root,_that.prefix);case GridDetachSubstation() when detachSubstation != null:
+return detachSubstation(_that.name,_that.force);case _:
   return null;
 
 }
@@ -452,7 +464,7 @@ as bool,
 
 class GridBeadBoard implements GridCommandRequest {
   const GridBeadBoard({final  Set<String> stores = const <String>{}, final  Set<String> statuses = const <String>{}, this.blockedOnly = false, this.approved}): _stores = stores,_statuses = statuses;
-
+  
 
  final  Set<String> _stores;
 @JsonKey() Set<String> get stores {
@@ -536,7 +548,7 @@ as bool?,
 
 class GridBeadRound implements GridCommandRequest {
   const GridBeadRound({required this.beadId});
-
+  
 
  final  String beadId;
 
@@ -591,6 +603,144 @@ class _$GridBeadRoundCopyWithImpl<$Res>
   return _then(GridBeadRound(
 beadId: null == beadId ? _self.beadId : beadId // ignore: cast_nullable_to_non_nullable
 as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridAttachSubstation implements GridCommandRequest {
+  const GridAttachSubstation({required this.name, required this.root, this.prefix});
+  
+
+ final  String name;
+ final  String root;
+ final  String? prefix;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridAttachSubstationCopyWith<GridAttachSubstation> get copyWith => _$GridAttachSubstationCopyWithImpl<GridAttachSubstation>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridAttachSubstation&&(identical(other.name, name) || other.name == name)&&(identical(other.root, root) || other.root == root)&&(identical(other.prefix, prefix) || other.prefix == prefix));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,name,root,prefix);
+
+@override
+String toString() {
+  return 'GridCommandRequest.attachSubstation(name: $name, root: $root, prefix: $prefix)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridAttachSubstationCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridAttachSubstationCopyWith(GridAttachSubstation value, $Res Function(GridAttachSubstation) _then) = _$GridAttachSubstationCopyWithImpl;
+@useResult
+$Res call({
+ String name, String root, String? prefix
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridAttachSubstationCopyWithImpl<$Res>
+    implements $GridAttachSubstationCopyWith<$Res> {
+  _$GridAttachSubstationCopyWithImpl(this._self, this._then);
+
+  final GridAttachSubstation _self;
+  final $Res Function(GridAttachSubstation) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? name = null,Object? root = null,Object? prefix = freezed,}) {
+  return _then(GridAttachSubstation(
+name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,root: null == root ? _self.root : root // ignore: cast_nullable_to_non_nullable
+as String,prefix: freezed == prefix ? _self.prefix : prefix // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class GridDetachSubstation implements GridCommandRequest {
+  const GridDetachSubstation({required this.name, this.force = false});
+  
+
+ final  String name;
+@JsonKey() final  bool force;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GridDetachSubstationCopyWith<GridDetachSubstation> get copyWith => _$GridDetachSubstationCopyWithImpl<GridDetachSubstation>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GridDetachSubstation&&(identical(other.name, name) || other.name == name)&&(identical(other.force, force) || other.force == force));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,name,force);
+
+@override
+String toString() {
+  return 'GridCommandRequest.detachSubstation(name: $name, force: $force)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GridDetachSubstationCopyWith<$Res> implements $GridCommandRequestCopyWith<$Res> {
+  factory $GridDetachSubstationCopyWith(GridDetachSubstation value, $Res Function(GridDetachSubstation) _then) = _$GridDetachSubstationCopyWithImpl;
+@useResult
+$Res call({
+ String name, bool force
+});
+
+
+
+
+}
+/// @nodoc
+class _$GridDetachSubstationCopyWithImpl<$Res>
+    implements $GridDetachSubstationCopyWith<$Res> {
+  _$GridDetachSubstationCopyWithImpl(this._self, this._then);
+
+  final GridDetachSubstation _self;
+  final $Res Function(GridDetachSubstation) _then;
+
+/// Create a copy of GridCommandRequest
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? name = null,Object? force = null,}) {
+  return _then(GridDetachSubstation(
+name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,force: null == force ? _self.force : force // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 

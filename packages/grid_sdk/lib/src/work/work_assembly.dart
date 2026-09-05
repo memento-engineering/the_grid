@@ -8,11 +8,23 @@ import 'package:path/path.dart' as p;
 
 import '../command/command_operation.dart';
 import '../command/station_command_handler.dart';
+import '../roster/substation_roster.dart';
 import '../stores/stores.dart';
 import '../trajectory/trajectory_config.dart';
 import '../trajectory/trajectory_harness.dart';
 import 'store_connection.dart';
 import 'station_work.dart';
+
+typedef _MemberFactory =
+    Future<GridRuntimeBundle> Function(
+      BeadsWorkspace workspace,
+      String storeName,
+    );
+typedef _WorkWriterFactory =
+    StationBeadWriter Function(
+      SubstationWorkSpec spec,
+      GridRuntimeBundle bundle,
+    );
 
 /// One substation's assembly identity — mirrors the `Substation` the author
 /// mounts (same name / ONE root / prefix axes), because the OFF-tree machinery
@@ -65,7 +77,7 @@ class SubstationWorkSpec {
 /// await grid.teardown();                    // unmount → effects kill → SWEEP
 /// await work.shutdown();                    // bridge + controllers down
 /// ```
-class StationWorkRuntime {
+class StationWorkRuntime implements SubstationProvisioner {
   StationWorkRuntime._({
     required this.wiring,
     required this.commands,
@@ -74,6 +86,7 @@ class StationWorkRuntime {
     required this.stateSubstation,
     required this.readPathName,
     required this.openStores,
+    required int workStoreConnectionStart,
     required StationDriver driver,
     required RestartReconciler restart,
     required RuntimeProvider provider,
@@ -84,6 +97,17 @@ class StationWorkRuntime {
     required Future<void> Function() freshnessBarrier,
     required Map<String, GraphSyncStats> Function() syncStats,
     required Map<String, MemberFreshness> Function() workFreshness,
+    required BeadOwnershipPredicate stateOwnership,
+    required StationCommandHandler handler,
+    required FederatedSnapshotSource federated,
+    required Map<String, GridRuntimeBundle> bundles,
+    required Map<String, WorkCommandStore> commandStores,
+    required Map<String, StationBeadWriter> writersByOwnedPrefix,
+    required Map<String, RootCheckout> rootsByName,
+    required Map<String, SubstationWorkSpec> specsByName,
+    required bool dryRun,
+    required _MemberFactory buildMember,
+    required _WorkWriterFactory buildWorkWriter,
   }) : _driver = driver,
        _restart = restart,
        _provider = provider,
@@ -93,7 +117,19 @@ class StationWorkRuntime {
        _sourcesShutdown = sourcesShutdown,
        _freshnessBarrier = freshnessBarrier,
        _syncStats = syncStats,
-       _workFreshness = workFreshness;
+       _workFreshness = workFreshness,
+       _stateOwnership = stateOwnership,
+       _handler = handler,
+       _federated = federated,
+       _bundles = bundles,
+       _commandStores = commandStores,
+       _writersByOwnedPrefix = writersByOwnedPrefix,
+       _rootsByName = rootsByName,
+       _specsByName = specsByName,
+       _workStoreConnectionStart = workStoreConnectionStart,
+       _dryRun = dryRun,
+       _buildMember = buildMember,
+       _buildWorkWriter = buildWorkWriter;
 
   /// The ambient VALUES the tree's [StationWork] provides.
   final StationWorkWiring wiring;
@@ -144,6 +180,36 @@ class StationWorkRuntime {
   final Future<void> Function() _freshnessBarrier;
   final Map<String, GraphSyncStats> Function() _syncStats;
   final Map<String, MemberFreshness> Function() _workFreshness;
+  final BeadOwnershipPredicate _stateOwnership;
+  final StationCommandHandler _handler;
+  final FederatedSnapshotSource _federated;
+  final Map<String, GridRuntimeBundle> _bundles;
+  final Map<String, WorkCommandStore> _commandStores;
+  final Map<String, StationBeadWriter> _writersByOwnedPrefix;
+  final Map<String, RootCheckout> _rootsByName;
+  final Map<String, SubstationWorkSpec> _specsByName;
+  final Map<String, DoltStoreConnection> _attachedStoreConnections =
+      <String, DoltStoreConnection>{};
+  final int _workStoreConnectionStart;
+  final bool _dryRun;
+  final _MemberFactory _buildMember;
+  final _WorkWriterFactory _buildWorkWriter;
+  SubstationRoster? _roster;
+
+  /// The runtime-attached roster, bound during assembly.
+  SubstationRoster get roster =>
+      _roster ??
+      (throw StateError('StationWorkRuntime: roster was not bound.'));
+
+  void _bindRoster(SubstationRoster roster) {
+    if (_roster != null) {
+      throw StateError('StationWorkRuntime: roster is already bound.');
+    }
+    _roster = roster;
+  }
+
+  @override
+  Set<String> get ownedIdentityTokens => _stateOwnership.substations;
 
   /// Per-store sync-loop counters (tg-zd4v LOUD, the `/status` half): every
   /// work store's + the state store's (`state`) [GraphSyncStats] — per-origin
@@ -238,8 +304,193 @@ class StationWorkRuntime {
   }
 
   /// The `runGrid(onFlushed:)` hook — the driver's post-flush cooldown +
-  /// unclaimed-frontier re-scans (D-5/F1).
-  void afterFlush() => _driver.afterFlush();
+  /// unclaimed-frontier re-scans (D-5/F1), then the roster drain settle.
+  void afterFlush() {
+    _driver.afterFlush();
+    unawaited(_settleRosterDrainsGuarded());
+  }
+
+  /// Settles draining roster seats, reporting a failure instead of raising it.
+  ///
+  /// The settle is ASYNC and rides the handler's serialized tail, so a failure
+  /// cannot surface at [afterFlush]'s synchronous call site: fire-and-forget
+  /// would let it escape to the ROOT ZONE and take the resident down. The
+  /// posture composes with `runGrid`'s guarded post-flush rail: this async
+  /// settle reports LOUD through the refusal sink while the sole production
+  /// flush coordinator keeps flushing.
+  Future<void> _settleRosterDrainsGuarded() async {
+    try {
+      await _handler.settleRosterDrains();
+    } on Object catch (error) {
+      _onRefusal(
+        'grid: roster drain settle failed (the station keeps flushing) — '
+        '$error',
+      );
+    }
+  }
+
+  @override
+  Future<void> provision(SubstationWorkSpec spec) async {
+    final locator = StoreLocator();
+    locator.locateWorkStore(
+      root: p.canonicalize(spec.root),
+      substationName: spec.name,
+    );
+    final workspace = BeadsWorkspace.discover(start: spec.root);
+    if (workspace == null || !_sameCanonicalRoot(workspace.root, spec.root)) {
+      throw StoreRefusal(
+        'provision "${spec.name}": could not parse the work store at '
+        '${spec.root}/.beads (resolved: ${workspace?.root ?? 'nothing'}).',
+      );
+    }
+
+    final bundle = await _buildMember(workspace, spec.name);
+    var memberAdded = false;
+    var handlerRegistered = false;
+    final admittedTokens = <String>[];
+    try {
+      await bundle.runtime.start();
+      _rootsByName[spec.name] = _dryRun
+          ? RootCheckout(
+              path: spec.root,
+              defaultBranch: 'main',
+              substation: spec.name,
+            )
+          : await git.registerRootCheckout(
+              path: spec.root,
+              substation: spec.name,
+              head: spec.head,
+            );
+      final source = _RuntimeSnapshotSource(bundle.runtime);
+      _federated.addMember(spec.name, source, prefix: spec.prefix);
+      memberAdded = true;
+      final binding = WorkCommandStore(
+        substation: spec.name,
+        root: workspace.root,
+        source: source,
+        refresh: bundle.runtime.requery,
+        writer: _buildWorkWriter(spec, bundle),
+      );
+      for (final token in <String>{spec.name, spec.prefix}) {
+        _stateOwnership.admit(token);
+        admittedTokens.add(token);
+      }
+      _bundles[spec.name] = bundle;
+      _specsByName[spec.name] = spec;
+      _commandStores[spec.name] = binding;
+      _commandStores[spec.prefix] = binding;
+      _writersByOwnedPrefix[spec.name] = binding.writer;
+      _writersByOwnedPrefix[spec.prefix] = binding.writer;
+      _handler.registerWorkStore(spec, binding);
+      handlerRegistered = true;
+      await bundle.runtime.requery();
+      if (bundle.dolt case final dolt?) {
+        _vendAttachedStoreConnection(
+          spec.name,
+          DoltStoreConnection(spec.name, dolt),
+        );
+      }
+    } on Object {
+      if (handlerRegistered) _handler.unregisterWorkStore(spec);
+      _commandStores
+        ..remove(spec.name)
+        ..remove(spec.prefix);
+      _writersByOwnedPrefix
+        ..remove(spec.name)
+        ..remove(spec.prefix);
+      _specsByName.remove(spec.name);
+      _bundles.remove(spec.name);
+      for (final token in admittedTokens.reversed) {
+        _stateOwnership.revoke(token);
+      }
+      if (memberAdded) _federated.removeMember(spec.name);
+      _rootsByName.remove(spec.name);
+      await bundle.shutdown();
+      rethrow;
+    }
+  }
+
+  void _vendAttachedStoreConnection(
+    String name,
+    DoltStoreConnection connection,
+  ) {
+    if (_attachedStoreConnections.containsKey(name)) {
+      throw StateError(
+        'StationWorkRuntime: "$name" already has an attached store handle.',
+      );
+    }
+    var insertion = openStores.length;
+    for (var i = _workStoreConnectionStart; i < openStores.length; i++) {
+      final candidate = openStores[i];
+      if (candidate.name.compareTo(name) > 0) {
+        insertion = i;
+        break;
+      }
+    }
+    openStores.insert(insertion, connection);
+    _attachedStoreConnections[name] = connection;
+  }
+
+  @override
+  Future<int> decommission(String name) async {
+    final spec = _specsByName[name];
+    if (spec == null) {
+      throw StateError(
+        'StationWorkRuntime.decommission: "$name" was not provisioned by '
+        'this runtime.',
+      );
+    }
+    final bundle = _bundles[name];
+    if (bundle == null) {
+      throw StateError(
+        'StationWorkRuntime.decommission: "$name" has no controller bundle.',
+      );
+    }
+    _specsByName.remove(name);
+    _bundles.remove(name);
+    final root = _rootsByName.remove(name);
+    _federated.removeMember(name);
+    _handler.unregisterWorkStore(spec);
+    _commandStores
+      ..remove(spec.name)
+      ..remove(spec.prefix);
+    _writersByOwnedPrefix
+      ..remove(spec.name)
+      ..remove(spec.prefix);
+    _stateOwnership.revoke(spec.name);
+    if (spec.prefix != spec.name) _stateOwnership.revoke(spec.prefix);
+
+    var reaped = 0;
+    try {
+      if (root != null) {
+        final worktrees = await git.listBeadWorktrees(root);
+        if (worktrees == null) {
+          _onRefusal(
+            'grid: detach "$name" could not list worktrees under '
+            '${root.path}; none were removed.',
+          );
+        }
+        for (final worktree in worktrees ?? const <BeadWorktree>[]) {
+          final outcome = await git.reap(root: root, worktree: worktree);
+          if (outcome.removed) {
+            reaped += 1;
+          } else {
+            _onRefusal(
+              'grid: detach "$name" left worktree ${worktree.path} in place '
+              '— ${outcome.refusedReason}',
+            );
+          }
+        }
+      }
+      return reaped;
+    } finally {
+      await bundle.shutdown();
+      final connection = _attachedStoreConnections.remove(name);
+      if (connection != null) {
+        openStores.removeWhere((candidate) => identical(candidate, connection));
+      }
+    }
+  }
 
   /// The `runGrid(orphanSweep:)` hook — the teardown-time ORPHAN SWEEP.
   /// `GridHandle.teardown()` runs it AFTER the unmount, so the station is
@@ -521,10 +772,11 @@ Future<StationWorkRuntime> assembleStationWork({
   // (name = the `metadata.rig` marker, prefix = the issue-id shape) + the
   // grid's own state partition, so the chokepoint owns the session beads it
   // mints (A32/A36) whichever axis a bead presents.
-  final allowSet = Set<String>.unmodifiable(<String>{
+  final allowSet = <String>{
     for (final s in substations) ...{s.name, s.prefix},
     stateSubstation,
-  });
+  };
+  final stateOwnership = BeadOwnershipPredicate(allowSet);
 
   // --- the bd write chokepoint: dry-run → a recording no-op runner; live →
   // the real ProcessBdRunner over the grid's OWN state store. The chokepoint
@@ -538,7 +790,7 @@ Future<StationWorkRuntime> assembleStationWork({
   final writer = StationBeadWriter(
     bd: bd,
     reader: stateBundle.probeReader,
-    ownership: BeadOwnershipPredicate(allowSet),
+    ownership: stateOwnership,
     onRefusal: refusalSink,
     // C8a (cut-wiring): the STATE writer's flares were null-sunk — the work
     // writers below wired `onFlare` and this one did not, so `session.minted`,
@@ -700,7 +952,7 @@ Future<StationWorkRuntime> assembleStationWork({
     stateSource: stateSource,
     refreshState: stateBundle.runtime.requery,
     stateWriter: writer,
-    stateOwnership: BeadOwnershipPredicate(allowSet),
+    stateOwnership: stateOwnership,
     workStoresByIdentity: workCommandStores,
     // `grid rework`'s re-key is one of `attempt.round.retired`'s two
     // observation sites (stage1-wiring §2.3).
@@ -887,7 +1139,14 @@ Future<StationWorkRuntime> assembleStationWork({
     _ => resolver,
   };
 
-  return StationWorkRuntime._(
+  final openStores = orderedStoreConnections(
+    state: stateBundle.dolt,
+    trajectory: trajectory,
+    work: {for (final e in bundles.entries) e.key: e.value.dolt},
+  );
+  final workStoreConnectionStart = (stateBundle.dolt == null ? 0 : 1) + 1;
+
+  final runtime = StationWorkRuntime._(
     wiring: StationWorkWiring(
       notifier: bridge.notifier,
       services: services,
@@ -908,11 +1167,8 @@ Future<StationWorkRuntime> assembleStationWork({
     trajectory: trajectory,
     stateSubstation: stateSubstation,
     readPathName: readPathName,
-    openStores: orderedStoreConnections(
-      state: stateBundle.dolt,
-      trajectory: trajectory,
-      work: {for (final e in bundles.entries) e.key: e.value.dolt},
-    ),
+    openStores: openStores,
+    workStoreConnectionStart: workStoreConnectionStart,
     driver: driver,
     restart: restart,
     provider: provider,
@@ -933,7 +1189,43 @@ Future<StationWorkRuntime> assembleStationWork({
       'state': stateBundle.runtime.stats,
     },
     workFreshness: () => work.freshness,
+    stateOwnership: stateOwnership,
+    handler: commands,
+    federated: work,
+    bundles: bundles,
+    commandStores: workCommandStores,
+    writersByOwnedPrefix: writersByOwnedPrefix,
+    rootsByName: rootsByName,
+    specsByName: <String, SubstationWorkSpec>{},
+    dryRun: dryRun,
+    buildMember: (workspace, storeName) => GridRuntimeFactory.build(
+      workspace: workspace,
+      preferSql: preferSql,
+      syncFloorInterval: syncFloorInterval,
+      lifecycleTypes: {...IssueType.coreTypes, ...GridIssueTypes.all},
+      onDirtySourceClosed: (source) => transport?.flare(
+        'sync.dirtySignalsClosed',
+        {'substation': storeName, 'source': source},
+      ),
+    ),
+    buildWorkWriter: (spec, bundle) => StationBeadWriter(
+      bd: BdCliService(
+        // Runtime-attached dry seats obey the same ownership rule as coded
+        // seats: mint under the prefix this writer will assert.
+        dryRun
+            ? NoOpBdRunner(substation: spec.prefix)
+            : ProcessBdRunner(workspaceRoot: spec.root),
+      ),
+      reader: bundle.probeReader,
+      ownership: BeadOwnershipPredicate({spec.name, spec.prefix}),
+      onRefusal: refusalSink,
+      onFlare: transport?.flare,
+    ),
   );
+  final roster = SubstationRoster(provisioner: runtime);
+  runtime._bindRoster(roster);
+  commands.bindRoster(roster);
+  return runtime;
 }
 
 /// The station's WORK-SIGNAL probe — the live binding of the engine's COMPLETION

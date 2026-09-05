@@ -5,6 +5,7 @@ import 'package:grid_engine/grid_engine.dart' hide SubstationScope;
 import 'package:grid_engine/src/seeds/provider.dart';
 
 import '../composition/scopes.dart';
+import '../roster/roster_seat.dart' show SubstationDrain;
 
 /// The station-level work-axis wiring — the ambient VALUES [StationWork]
 /// provides to the work subtree (the stack mounted above the engine's
@@ -179,12 +180,15 @@ class SubstationWork extends StatelessSeed {
     final stationWiring = context.watch<StationWorkWiring>();
     final transport = stationWiring?.transport;
     final inherited = context.watch<ServiceBundle>() ?? const ServiceBundle();
+    final drainIds =
+        context.watch<SubstationDrain>()?.beadIds ?? const <String>{};
+    final effectiveDriveList = drainIds.isEmpty ? driveList : drainIds;
     final workList = WorkList(
       substationConfig: SubstationConfig(
         substationId: scope.name,
         ownedSubstations: {scope.name, scope.prefix},
         resident: resident,
-        driveList: driveList,
+        driveList: effectiveDriveList,
         maxConcurrentWork: maxConcurrentWork,
       ),
       key: ValueKey<String>('worklist:${scope.name}'),
