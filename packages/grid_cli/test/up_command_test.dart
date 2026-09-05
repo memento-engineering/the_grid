@@ -6,7 +6,12 @@ import 'package:beads_dart/beads_dart.dart'
     show Bead, BeadStatus, GraphSnapshot;
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_engine/grid_engine.dart'
-    show MoleculeStepKeys, SessionProjection, StepState, WedgeMonitor;
+    show
+        GridDiagnosticable,
+        MoleculeStepKeys,
+        SessionProjection,
+        StepState,
+        WedgeMonitor;
 import 'package:grid_exploration/grid_exploration.dart' show armDevMode;
 import 'package:grid_runtime/grid_runtime.dart'
     show GridIssueTypes, PrimaryCheckoutFreshness, PrimaryCheckoutState;
@@ -546,6 +551,42 @@ SessionProjection _statusSession(String id, StepState state) =>
       ],
     );
 
+final class _ProjectedDiagnosticsNode extends MultiChildSeed
+    with GridDiagnosticable {
+  _ProjectedDiagnosticsNode({
+    this.beadId,
+    this.mintFailed,
+    super.children = const <Seed>[],
+  });
+
+  final String? beadId;
+  final bool? mintFailed;
+
+  @override
+  void debugFillProperties(DiagnosticsBuilder properties) {
+    super.debugFillProperties(properties);
+    if (beadId case final id?) {
+      properties.add(
+        DiagnosticsProperty.reference(
+          name: 'bead',
+          level: DiagnosticsLevel.info,
+          referenceKind: ReferenceKind.bead,
+          value: id,
+        ),
+      );
+    }
+    if (mintFailed case final failed?) {
+      properties.add(
+        DiagnosticsProperty.flag(
+          name: 'mintFailed',
+          level: DiagnosticsLevel.info,
+          value: failed,
+        ),
+      );
+    }
+  }
+}
+
 void main() {
   test('status projection uses one snapshot', () async {
     final fixtures = <({JoinedSnapshot snapshot, int gated, bool ripens})>[
@@ -599,6 +640,7 @@ void main() {
       final work = body['work'] as Map<String, Object?>;
       expect(wedge['live'], work['liveSessions']);
       expect(wedge['gated'], fixture.gated);
+      expect(work['mintFailedScopes'], 0);
 
       if (fixture.ripens) {
         now = now.add(const Duration(minutes: 10));
@@ -637,6 +679,21 @@ void main() {
     final run = h.run(untimed: true);
     await h.stationUp.future;
 
+    final diagnosticsOwner = TreeOwner();
+    addTearDown(diagnosticsOwner.dispose);
+    final diagnosticsRoot = diagnosticsOwner.mountRoot(
+      _ProjectedDiagnosticsNode(
+        children: [
+          _ProjectedDiagnosticsNode(beadId: 'earth-failed-a', mintFailed: true),
+          _ProjectedDiagnosticsNode(beadId: 'earth-failed-b', mintFailed: true),
+          _ProjectedDiagnosticsNode(beadId: 'dark-failed', mintFailed: true),
+          _ProjectedDiagnosticsNode(beadId: 'earth-healthy', mintFailed: false),
+          _ProjectedDiagnosticsNode(beadId: 'mars-unowned', mintFailed: true),
+        ],
+      ),
+    );
+    h.gridProjector!.afterFlush(diagnosticsRoot);
+
     final status = h.statusView!();
     final rows = {for (final row in status.perSubstation) row.substation: row};
     expect(rows.keys, {'earth', 'dark'});
@@ -644,14 +701,18 @@ void main() {
     expect(rows['earth']!.ready, 1);
     expect(rows['earth']!.live, 1);
     expect(rows['earth']!.mounted, 2);
+    expect(rows['earth']!.mintFailedScopes, 2);
     expect(rows['dark']!.root, h.missingRoot);
     expect(rows['dark']!.ready, 0);
     expect(rows['dark']!.live, 0);
     expect(rows['dark']!.mounted, 0);
+    expect(rows['dark']!.mintFailedScopes, 1);
     expect(status.ready, 1);
     expect(status.liveSessions, 1);
     expect(status.mounted, 2);
+    expect(status.mintFailedScopes, 3);
     final wireWork = status.toJson()['work'] as Map<String, Object?>;
+    expect(wireWork['mintFailedScopes'], 3);
     final wireRows = wireWork['perSubstation'] as List<Object?>;
     expect(wireRows, hasLength(2));
     expect(
@@ -660,6 +721,12 @@ void main() {
       )['live'],
       0,
     );
+    final rowsByName = {
+      for (final row in wireRows.cast<Map<String, Object?>>())
+        row['substation']: row,
+    };
+    expect(rowsByName['earth']!['mintFailedScopes'], 2);
+    expect(rowsByName['dark']!['mintFailedScopes'], 1);
 
     h.release.complete();
     expect(await run, 0);

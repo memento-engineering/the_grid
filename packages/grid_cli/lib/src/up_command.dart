@@ -7,6 +7,20 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart'
     show BdCliService, BeadsWorkspace, GraphSnapshot, ProcessBdRunner;
+import 'package:genesis_foundation/genesis_foundation.dart'
+    show
+        DiagnosticsDoubleProperty,
+        DiagnosticsDurationProperty,
+        DiagnosticsEnumProperty,
+        DiagnosticsFlagProperty,
+        DiagnosticsIntProperty,
+        DiagnosticsObjectProperty,
+        DiagnosticsReferenceProperty,
+        DiagnosticsStringProperty,
+        DiagnosticsTimestampProperty,
+        ReferenceKind,
+        TreeNode,
+        TreeSnapshot;
 import 'package:grid_engine/grid_engine.dart'
     show SessionProjection, configuredBdTypeNames;
 import 'package:grid_exploration/grid_exploration.dart'
@@ -568,8 +582,13 @@ class UpCommand extends Command<int> {
         // Per-request reads come off the LIVE delegate — roster included: a
         // hot restart re-resolves the armed roster, and a closure capturing
         // the launch-time list would render retired substations forever.
-        view: () =>
-            _status(config, live.liveRoster, startedAt, live.stationView),
+        view: () => _status(
+          config,
+          live.liveRoster,
+          startedAt,
+          live.stationView,
+          treeProjector.latest,
+        ),
         commandHandler: _LiveDelegateCommandHandler(() => live),
         assetCatalogResolver: assetCatalogResolver,
         treeProjector: treeProjector,
@@ -671,6 +690,7 @@ class UpCommand extends Command<int> {
     List<SubstationWorkSpec> armed,
     DateTime startedAt,
     StationView? view,
+    TreeSnapshot? treeSnapshot,
   ) {
     final latest = view?.latest;
     final liveEntries =
@@ -686,6 +706,10 @@ class UpCommand extends Command<int> {
     final prefixes = armed.map((substation) => substation.prefix).toSet();
     String? ownerOf(String id) =>
         BeadOwnershipPredicate.ownedPrefixOf(id, prefixes);
+    final mintFailedBySubstation = _mintFailedScopesBySubstation(
+      latest == null ? null : treeSnapshot,
+      prefixes,
+    );
     final perSubstation = <SubstationStatus>[
       for (final substation in armed)
         () {
@@ -704,6 +728,7 @@ class UpCommand extends Command<int> {
             ready: readyIds.length,
             mounted: <String>{...readyIds, ...liveIds}.length,
             live: liveIds.length,
+            mintFailedScopes: mintFailedBySubstation[substation.prefix] ?? 0,
           );
         }(),
     ];
@@ -721,6 +746,10 @@ class UpCommand extends Command<int> {
       ready: latest?.graph.readyIds.length ?? 0,
       mounted: mountedIds.length,
       liveSessions: liveEntries.length,
+      mintFailedScopes: perSubstation.fold(
+        0,
+        (total, row) => total + row.mintFailedScopes,
+      ),
       lastSyncAt: capturedAt == null || capturedAt.millisecondsSinceEpoch == 0
           ? null
           : capturedAt,
@@ -729,6 +758,51 @@ class UpCommand extends Command<int> {
       sync: view?.syncStatus() ?? const <String, Object?>{},
     );
   }
+}
+
+Map<String, int> _mintFailedScopesBySubstation(
+  TreeSnapshot? snapshot,
+  Set<String> prefixes,
+) {
+  if (snapshot == null) return const <String, int>{};
+  final counts = <String, int>{};
+
+  void visit(TreeNode node) {
+    String? beadId;
+    var mintFailed = false;
+    for (final property in node.properties) {
+      switch (property) {
+        case DiagnosticsReferenceProperty(
+          :final name,
+          :final referenceKind,
+          :final value,
+        ):
+          if (name == 'bead' && referenceKind == ReferenceKind.bead) {
+            beadId = value;
+          }
+        case DiagnosticsFlagProperty(:final name, :final value):
+          if (name == 'mintFailed' && value) mintFailed = true;
+        case DiagnosticsStringProperty() ||
+            DiagnosticsIntProperty() ||
+            DiagnosticsDoubleProperty() ||
+            DiagnosticsEnumProperty() ||
+            DiagnosticsDurationProperty() ||
+            DiagnosticsTimestampProperty() ||
+            DiagnosticsObjectProperty():
+          break;
+      }
+    }
+    if (mintFailed && beadId != null) {
+      final owner = BeadOwnershipPredicate.ownedPrefixOf(beadId, prefixes);
+      if (owner != null) {
+        counts.update(owner, (count) => count + 1, ifAbsent: () => 1);
+      }
+    }
+    node.children.forEach(visit);
+  }
+
+  visit(snapshot.root);
+  return counts;
 }
 
 /// Reads the LIVE delegate's vended view or refuses LOUD when the station

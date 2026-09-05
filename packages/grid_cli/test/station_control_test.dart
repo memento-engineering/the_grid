@@ -71,6 +71,7 @@ void main() {
           ready: 3,
           mounted: 2,
           liveSessions: 1,
+          mintFailedScopes: 2,
           lastSyncAt: null,
         ),
         commandHandler: _FakeCommandHandler(),
@@ -104,9 +105,24 @@ void main() {
         'ready': 3,
         'mounted': 2,
         'liveSessions': 1,
+        'mintFailedScopes': 2,
         'lastSyncAt': null,
         'perSubstation': <Object?>[],
       });
+    });
+
+    test('status constructors always serialize zero mint failures', () {
+      final work = _sampleStatus().toJson()['work'] as Map<String, Object?>;
+      expect(work['mintFailedScopes'], 0);
+
+      const substation = SubstationStatus(
+        substation: 'earth',
+        root: '/tmp/earth',
+        ready: 1,
+        mounted: 1,
+        live: 1,
+      );
+      expect(substation.toJson()['mintFailedScopes'], 0);
     });
 
     test('missing Authorization header → 401', () async {

@@ -13,9 +13,11 @@
 /// the station already computed and no watcher re-derives it from raw sessions.
 ///
 /// NOT in scope (and NOT a wedge): a station with ready work but ZERO live
-/// sessions — a dead mint already flares `session.mintFailed`/
-/// `session.mintExhausted` (tg-6nf), and a governor-throttled backlog already
-/// flares `work.throttled` and never becomes live (A43).
+/// sessions. Wedge remains a live-session forward-progress signal; dead minting
+/// is independently visible through `session.mintFailed`/
+/// `session.mintExhausted` and StationControl's `work.mintFailedScopes` plus
+/// `perSubstation[].mintFailedScopes` counts. A governor-throttled backlog
+/// already flares `work.throttled` and never becomes live (A43).
 library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
