@@ -13,7 +13,7 @@ register:
   obsoletes: []
   updates: [trajectory-ledger-split]
   obsoleted-by: null
-  updated-by: []
+  updated-by: [wave-2-entry-criteria-rulings]
   bead: tg-whf6
   legacy-id: null
 ---
