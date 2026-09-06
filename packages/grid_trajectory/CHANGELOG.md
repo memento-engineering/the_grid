@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-rc.5
+
+- `traj shadow-diff` names a cause only on evidence (tg-ilug): the `non_atomic_crash` class is assigned when the row's attempt shows a started-without-exited, a lease swept by a successor boot, or an unregained liveness loss; a new `lost_append` class names a loss the recorder counted (`--dropped`/`--suppressed`, now joinable to a row via the new `--epoch` flag) or a claimed epoch the log holds zero rows for; everything else is `unexplained` and blocks the cut. Every row prints its basis. `ShadowMismatchClassifier` now takes a `ShadowMismatchSubject` (attempts, epochs, corroboration) and answers a `ShadowClassification`; `ShadowCompare.compare` gains a `corroboration` parameter; `TrajectoryLogReader` gains `epochClaims()`; the mount-ordinal lane runs the injected classifier instead of hardcoding a class. Breaking for classifier injectors and `ShadowCompare`/`TrajectoryLogReader` implementers.
+
 ## 0.2.0-rc.4
 
 - The capability-failure kind introduced by grid_engine 0.3.0-rc.15 rides the trajectory's failure records (tg-e32f, #309). No wire change for readers that ignore the new field.

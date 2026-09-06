@@ -31,6 +31,7 @@ class _Lane implements ShadowCompare {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async {
     calls.add('$sessionId/${round ?? '-'}');
     if (incomplete case final String why) {

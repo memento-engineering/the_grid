@@ -128,13 +128,42 @@ void main() {
     expect(caught.mismatches.single.foldValue, '3');
   });
 
-  test('a ledger counting remounts with NO ordinal on any record is the '
-      'non-atomic-crash class', () async {
-    final result = await _compare({_bead: 3}, [_started()]);
+  test('a ledger counting remounts with NO ordinal on any record is '
+      'unexplained — the record LANDED without the field, which is not a '
+      'lost append, and the basis names the landed seq', () async {
+    final result = await _compare({_bead: 3}, [_started(seq: 17)]);
     final row = result.mismatches.single;
     expect(row.legacyValue, '3');
     expect(row.foldValue, isNull);
-    expect(row.classification, ShadowMismatchClass.nonAtomicCrash);
+    expect(row.seq, 17);
+    expect(row.classification, ShadowMismatchClass.unexplained);
+    expect(row.basis, contains('landed at seq 17'));
+  });
+
+  test('the lane runs its INJECTED classifier like every other lane — '
+      'nothing is hardcoded', () async {
+    final subjects = <ShadowMismatchSubject>[];
+    final lane = MountOrdinalShadow(
+      _ScriptedLedger({_bead: 3}),
+      classifier: (subject) {
+        subjects.add(subject);
+        return const ShadowClassification(
+          ShadowMismatchClass.lostAppend,
+          'spy',
+        );
+      },
+    );
+    final result = await lane.compare(
+      sessionId: _session,
+      records: SubjectRecords(records: [_started(seq: 17)]),
+    );
+    expect(
+      result.mismatches.single.classification,
+      ShadowMismatchClass.lostAppend,
+    );
+    expect(subjects.single.field, mountOrdinalField);
+    expect(subjects.single.foldRecordSeq, 17);
+    expect(subjects.single.epochs, {1});
   });
 
   test('a first-try mount with no ordinal anywhere agrees', () async {

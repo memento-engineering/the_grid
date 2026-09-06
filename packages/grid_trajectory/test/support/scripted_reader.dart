@@ -5,10 +5,23 @@ library;
 import 'package:grid_trajectory/grid_trajectory.dart';
 
 class ScriptedReader implements TrajectoryLogReader {
-  ScriptedReader(this.rows, {this.staleness, this.truncateCompleteReadsAt});
+  ScriptedReader(
+    this.rows, {
+    this.staleness,
+    this.truncateCompleteReadsAt,
+    List<EpochClaim>? epochs,
+  }) : _epochs = epochs;
 
   final List<TrajectoryEnvelope> rows;
   final FoldStaleness? staleness;
+
+  /// The claimed epochs; null derives one claim per distinct `bootEpoch` in
+  /// [rows] with its row count (a log with no dark epochs).
+  final List<EpochClaim>? _epochs;
+
+  /// Every subject handed to a read, in order — the recording seam the verb
+  /// tests assert on (which sessions and attempts were consulted).
+  final subjectsRead = <String>[];
 
   /// Forces [allRecordsForSubject] to report a CUT stream at this many rows —
   /// the reader-side truncation the §9 comparator must refuse to fold.
@@ -32,13 +45,17 @@ class ScriptedReader implements TrajectoryLogReader {
   Future<List<TrajectoryEnvelope>> rowsForSubject(
     String subject, {
     int limit = defaultReadLimit,
-  }) async => _forSubject(subject).take(limit).toList();
+  }) async {
+    subjectsRead.add(subject);
+    return _forSubject(subject).take(limit).toList();
+  }
 
   @override
   Future<SubjectRecords> allRecordsForSubject(
     String subject, {
     int ceiling = completeReadCeiling,
   }) async {
+    subjectsRead.add(subject);
     final matched = _forSubject(subject);
     final cut = truncateCompleteReadsAt ?? ceiling;
     if (matched.length > cut) {
@@ -78,6 +95,21 @@ class ScriptedReader implements TrajectoryLogReader {
     for (final row in rows)
       if (row.sessionId case final String id) id,
   }.take(limit).toList();
+
+  @override
+  Future<List<EpochClaim>> epochClaims() async {
+    subjectsRead.add('traj_epoch');
+    if (_epochs case final List<EpochClaim> claims) return claims;
+    final counts = <int, int>{};
+    for (final row in rows) {
+      counts[row.bootEpoch] = (counts[row.bootEpoch] ?? 0) + 1;
+    }
+    final epochs = counts.keys.toList()..sort();
+    return [
+      for (final epoch in epochs)
+        EpochClaim(station: 'lunar', epoch: epoch, records: counts[epoch]!),
+    ];
+  }
 
   @override
   Future<void> close() async {

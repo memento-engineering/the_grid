@@ -236,6 +236,9 @@ final class _Reader implements TrajectoryLogReader {
   }) async => SubjectRecords(records: rows.take(ceiling).toList());
 
   @override
+  Future<List<EpochClaim>> epochClaims() async => const [];
+
+  @override
   Future<SubjectRecords> recordsInWindow({
     DateTime? since,
     int? bootEpoch,

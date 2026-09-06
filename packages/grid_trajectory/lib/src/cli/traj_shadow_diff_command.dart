@@ -18,7 +18,9 @@ import 'package:args/args.dart' show ArgResults;
 import 'package:args/command_runner.dart';
 import 'package:meta/meta.dart';
 
+import '../shadow/shadow_corroboration.dart';
 import 'shadow_accounting.dart';
+import 'shadow_corroboration_reader.dart';
 import 'traj_flags.dart';
 import 'trajectory_reader.dart';
 
@@ -35,8 +37,20 @@ enum ShadowMismatchClass {
 
   /// A crash between the legacy write and the trajectory append. The
   /// recorder appends only after legacy success (§2.3), so the shadow never
-  /// leads the incumbent — but it can lag it by exactly one crash.
+  /// leads the incumbent. Assigned ONLY on corroboration (tg-ilug): the
+  /// attempt's own records show a started-without-exited, a lease swept by
+  /// the successor boot, or a liveness loss never regained — the class names
+  /// which, per row, in its basis.
   nonAtomicCrash('non_atomic_crash'),
+
+  /// An append the recorder itself COUNTED away — `dropped` (queue overflow,
+  /// server error) or `suppressed` (a fenced-out / halted / degraded latch,
+  /// stage1-wiring §2.5/§3) — or never attempted because the recorder was
+  /// dark for the whole epoch, in an epoch the row is joinable to. Not a
+  /// crash: the station lived and said so. Allow-listed and counted
+  /// separately; the accounting for that epoch already keeps the round from
+  /// minting clean.
+  lostAppend('lost_append'),
 
   /// **stop-races-spawn** (§2.3, r2 minor 16). A teardown deregisters a
   /// session while the spawner is suspended; the provider kills the process
@@ -75,6 +89,7 @@ class ShadowMismatch {
     required this.seq,
     this.stepPath,
     this.classification = ShadowMismatchClass.unexplained,
+    this.basis,
   });
 
   final String sessionId;
@@ -93,6 +108,11 @@ class ShadowMismatch {
   /// back into `traj show`.
   final int? seq;
   final ShadowMismatchClass classification;
+
+  /// The corroboration that assigned [classification] — printed per row so a
+  /// reader audits one row without re-deriving it (tg-ilug). Null on a row
+  /// built without a classifier pass.
+  final String? basis;
 }
 
 /// One session's comparison outcome. `incomplete` is a THIRD state, not a
@@ -143,11 +163,14 @@ abstract interface class ShadowCompare {
   /// The outcome for one session's [records] — the COMPLETE `seq`-ordered
   /// stream, or a stream the reader marked truncated, which a strategy that
   /// folds must refuse as [ShadowCompareResult.incomplete]. Scoped to [round]
-  /// when the operator named one.
+  /// when the operator named one. [corroboration] is what the verb assembled
+  /// for the named-gap classifiers (tg-ilug); the default knows nothing, and
+  /// a lane that classifies must then say so rather than name a cause.
   Future<ShadowCompareResult> compare({
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   });
 }
 
@@ -196,6 +219,7 @@ class UncomparableShadow implements ShadowCompare {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async => const ShadowCompareResult([]);
 }
 
@@ -255,6 +279,13 @@ class TrajShadowDiffCommand extends Command<int> {
             "This round's suppressed-append count from /status (appends "
             'short-circuited after a fenced-out/halted/degraded latch). '
             'Disqualifies on the same grounds as --dropped.',
+      )
+      ..addOption(
+        'epoch',
+        help:
+            'The boot epoch the --dropped/--suppressed counters were read '
+            "for, from the /status trajectory block's `epoch:` line. Without "
+            'it the counters disqualify the ROUND but join no mismatch row.',
       );
   }
 
@@ -311,6 +342,8 @@ class TrajShadowDiffCommand extends Command<int> {
     if (suppressed == null && argResults!.option('suppressed') != null) {
       return 64;
     }
+    final epoch = _countFrom(argResults!, 'epoch');
+    if (epoch == null && argResults!.option('epoch') != null) return 64;
     return runTrajShadowDiff(
       gridHome: gridHome,
       open: _open,
@@ -321,6 +354,7 @@ class TrajShadowDiffCommand extends Command<int> {
           : ShadowRunAccounting(
               dropped: dropped ?? 0,
               suppressed: suppressed ?? 0,
+              epoch: epoch,
             ),
       accountingFor: _accountingFor,
       sessions: argResults!.multiOption('session'),
@@ -440,6 +474,11 @@ Future<int> runTrajShadowDiff({
         _writeLimits(write, compare);
         _writeAccounting(write, accounting);
 
+        // The corroboration ledger for the named-gap classes (tg-ilug): one
+        // epoch read per run, then one attempt read per attempt per session.
+        // SELECT only — the ONE appender is untouched.
+        final epochs = await readEpochEvidence(reader, accounting: accounting);
+        var attemptsRead = 0;
         final mismatches = <ShadowMismatch>[];
         final incomplete = <String>[];
         for (final sessionId in scope) {
@@ -450,16 +489,36 @@ Future<int> runTrajShadowDiff({
             sessionId,
             ceiling: limit,
           );
+          final corroboration = await readSessionCorroboration(
+            reader,
+            records,
+            epochs: epochs,
+            ceiling: limit,
+          );
+          attemptsRead += corroboration.attemptsRead;
           final result = await compare.compare(
             sessionId: sessionId,
             records: records,
             round: round,
+            corroboration: corroboration.corroboration,
           );
           mismatches.addAll(result.mismatches);
           if (result.incompleteReason case final String reason) {
             incomplete.add('$sessionId — $reason');
           }
+          if (corroboration.incompleteAttempts.isNotEmpty) {
+            // A cut attempt read corroborates nothing and must not let a
+            // crash class be denied on a prefix either: the session is
+            // disqualified, its mismatches kept (same rule as a partial
+            // lane).
+            incomplete.add(
+              '$sessionId — corroboration read cut for attempt'
+              '${corroboration.incompleteAttempts.length == 1 ? '' : 's'} '
+              '${corroboration.incompleteAttempts.join(', ')}',
+            );
+          }
         }
+        _writeCorroboration(write, epochs, attemptsRead);
 
         if (compare.comparableFields.isEmpty) {
           write(
@@ -596,7 +655,34 @@ void _writeMismatches(
       '${row.field.padRight(20)}'
       '${(row.legacyValue ?? '-').padRight(20)}'
       '${(row.foldValue ?? '-').padRight(20)}'
-      '${row.seq ?? '-'}  [${row.classification.wire}]',
+      '${row.seq ?? '-'}  [${row.classification.wire}'
+      '${row.basis == null ? '' : ' — ${row.basis}'}]',
     );
   }
+}
+
+/// What the named-gap classes could join against this run — printed so a
+/// report full of `unexplained` rows says whether that is a finding or a
+/// missing ledger.
+void _writeCorroboration(
+  void Function(String) write,
+  Map<int, EpochEvidence> epochs,
+  int attemptsRead,
+) {
+  if (epochs.isEmpty) {
+    write(
+      '  corroboration: $attemptsRead attempt'
+      '${attemptsRead == 1 ? '' : 's'} read; no epoch claims in the log',
+    );
+    return;
+  }
+  final keys = epochs.keys.toList()..sort();
+  final dark = epochs.values.where((e) => e.dark).length;
+  final counted = epochs.values.where((e) => e.countedLoss).length;
+  final known = epochs.values.where((e) => e.dropped != null).length;
+  write(
+    '  corroboration: $attemptsRead attempt${attemptsRead == 1 ? '' : 's'} '
+    'read; epochs ${keys.first}..${keys.last} (${keys.length} claimed, '
+    '$dark dark, $counted with a counted loss, accounting known for $known)',
+  );
 }

@@ -34,6 +34,7 @@ import 'package:grid_trajectory/grid_trajectory.dart'
         MountOrdinalShadow,
         ShadowCompare,
         ShadowCompareResult,
+        ShadowCorroboration,
         StepTransitionShadow,
         SubjectRecords;
 
@@ -192,6 +193,7 @@ class LegacyStoreUnavailableShadow implements ShadowCompare {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async => const ShadowCompareResult([]);
 }
 

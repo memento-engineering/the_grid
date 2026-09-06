@@ -29,6 +29,7 @@ class _ScriptedCompare implements ShadowCompare {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async {
     compared.add(
       '$sessionId/${records.records.length}/${round ?? '-'}'
@@ -368,10 +369,15 @@ void main() {
         err: out.add,
       );
       final text = out.join('\n');
-      expect(code, 0);
+      // The open session's presence row has nothing to join, so it is
+      // unexplained (tg-ilug) and blocks — the point here is the SCOPE.
+      expect(code, 1);
       expect(text, contains('scope: $open'));
-      expect(text, contains('[non_atomic_crash]'));
-      expect(text, contains('1 mismatch, 0 unexplained'));
+      expect(
+        text,
+        contains('[unexplained — no corroboration: no attempt to join'),
+      );
+      expect(text, contains('1 mismatch, 1 unexplained'));
       expect(text, isNot(contains('skipped in-flight:')));
       expect(text, isNot(contains('skipped voided:')));
     });
