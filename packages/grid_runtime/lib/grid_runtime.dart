@@ -204,13 +204,19 @@ export 'src/trajectory/station_trajectory_recorder.dart'
 // writes bd or the filesystem (stage1-wiring §2.4).
 export 'src/trajectory/stage1_obligations.dart'
     show
+        AppendQueuedProbe,
+        ExternalCloseTerminalObligation,
         LastActivityPoll,
         LivenessDetectorObligation,
+        SessionClosure,
+        SessionClosureProbe,
         UnknownTerminalSettlementObligation,
         WorktreeReapedBackfillObligation,
         buildStage1ObligationQueries,
+        kDefaultExternalCloseGrace,
         kDefaultLivenessThreshold,
         kDefaultPulseCoalesce,
+        kExternalCloseTerminalObligation,
         kLivenessDetectorObligation,
         kObligationBatchSize,
         kPulseViaRuntime,

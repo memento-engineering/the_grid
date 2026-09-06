@@ -10,6 +10,7 @@ import '../command/command_operation.dart';
 import '../command/station_command_handler.dart';
 import '../roster/substation_roster.dart';
 import '../stores/stores.dart';
+import '../trajectory/session_closure.dart';
 import '../trajectory/trajectory_config.dart';
 import '../trajectory/trajectory_harness.dart';
 import 'store_connection.dart';
@@ -825,6 +826,15 @@ Future<StationWorkRuntime> assembleStationWork({
         // 3); the worktree `.grid` mtime scan is the other surface and needs
         // nothing wired — it reads the paths P6 already carries.
         lastActivity: provider.lastActivity,
+        // The external-close obligation's ledger input (tg-ffl6, ruling Q6):
+        // the state store's CURRENT snapshot, the same in-memory value the
+        // join bridge joins — one map lookup per candidate row per tick and
+        // never a bd round trip. `stateSource` is constructed above and
+        // resolved at CALL time, so the probe follows every state emission.
+        sessionClosure: (sessionId) {
+          final bead = stateSource.current?.beadsById[sessionId];
+          return bead == null ? null : sessionClosureOf(bead);
+        },
         // §1.1's runtime-event subscriber (harness-internal, over
         // `provider.events`): the observation surface for
         // `attempt.process.started`/`.exited` (§2.3 rows 2–3). The harness

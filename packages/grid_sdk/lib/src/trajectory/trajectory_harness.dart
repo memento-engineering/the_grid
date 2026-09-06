@@ -39,6 +39,7 @@ import 'package:grid_runtime/grid_runtime.dart'
         Exited,
         LastActivityPoll,
         RuntimeEvent,
+        SessionClosureProbe,
         SessionStarted,
         StationTrajectoryRecorder,
         StuckObligationAccountant,
@@ -202,6 +203,7 @@ class TrajectoryHarness {
     required TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
     required List<ObligationQuery>? tickQueries,
     required LastActivityPoll? lastActivity,
+    required SessionClosureProbe? sessionClosure,
     required Stream<RuntimeEvent>? runtimeEvents,
     required Timer Function(Duration, void Function()) scheduleTimer,
     required DateTime Function() clock,
@@ -215,6 +217,7 @@ class TrajectoryHarness {
        _appenderFactory = appenderFactory,
        _tickQueries = tickQueries,
        _lastActivity = lastActivity,
+       _sessionClosure = sessionClosure,
        _runtimeEvents = runtimeEvents,
        _scheduleTimer = scheduleTimer,
        _clock = clock,
@@ -240,6 +243,7 @@ class TrajectoryHarness {
     TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
     List<ObligationQuery>? tickQueries,
     LastActivityPoll? lastActivity,
+    SessionClosureProbe? sessionClosure,
     Stream<RuntimeEvent>? runtimeEvents,
     Timer Function(Duration, void Function())? scheduleTimer,
     DateTime Function()? clock,
@@ -272,6 +276,7 @@ class TrajectoryHarness {
       appenderFactory: appenderFactory,
       tickQueries: tickQueries,
       lastActivity: lastActivity,
+      sessionClosure: sessionClosure,
       runtimeEvents: runtimeEvents,
       scheduleTimer: scheduleTimer ?? Timer.new,
       clock: clock ?? DateTime.now,
@@ -341,6 +346,12 @@ class TrajectoryHarness {
   /// provider wired, e.g. a dry arm) leaves the worktree mtime scanner
   /// answering alone.
   final LastActivityPoll? _lastActivity;
+
+  /// The LEDGER's closure answer for the external-close obligation (tg-ffl6,
+  /// ruling Q6): read off the state snapshot the assembly's join bridge holds,
+  /// one lookup per candidate row per tick. Null (a bare harness) leaves that
+  /// obligation inert — it never heals on no evidence.
+  final SessionClosureProbe? _sessionClosure;
 
   /// `RuntimeProvider.events` — §1.1's runtime-event subscriber (harness-
   /// internal): the observation surface for §2.3's `attempt.process.started`
@@ -672,6 +683,11 @@ class TrajectoryHarness {
     // (the tick skips) rather than reading a stale value.
     bootEpoch: () => _epoch ?? 0,
     lastActivity: _lastActivity,
+    // The external-close obligation's two external inputs (tg-ffl6): the
+    // ledger's closure, and this harness's own queue — a heal must never race
+    // a terminal record that is about to land (r8 — V2-B1).
+    sessionClosure: _sessionClosure,
+    appendQueued: hasQueuedAppendFor,
     livenessThreshold: config.livenessThreshold,
     pulseCoalesce: config.pulseCoalesce,
     clock: _clock,
@@ -737,13 +753,21 @@ class TrajectoryHarness {
         request.report(TerminalReconcileOutcome.skippedGuard);
         return;
       }
+      // ONE vocabulary for two triggers (tg-ffl6): the comparator's heal and
+      // the tick's external-close obligation share this record's idem key, so
+      // whichever fires first must write what the other would have — the
+      // ledger-derived outcome when the closure probe can supply it.
+      final closure = _sessionClosure?.call(request.sessionId);
+      final ledgerReason = closure?.reason;
       recorder.sessionTerminalReconciled(
         sessionId: request.sessionId,
         attemptId: request.attemptId,
         workBeadId: request.workBeadId.isEmpty ? null : request.workBeadId,
+        outcome: closure?.outcome ?? TerminalOutcome.unknown,
         reason:
-            'terminal-reconcile: the ledger closed this session and no '
-            'terminal record was ever observed for its attempt',
+            'terminal-reconcile: the ledger closed this session'
+            '${ledgerReason == null || ledgerReason.isEmpty ? '' : ' ($ledgerReason)'}'
+            ' and no terminal record was ever observed for its attempt',
       );
       request.report(TerminalReconcileOutcome.appended);
     } on Object catch (error) {
@@ -1558,13 +1582,15 @@ class TrajectoryHarness {
     // `off` the P1 entry renders the PRE-CUT column shape, so a home that
     // never ran the quiesced reshape appends exactly as it did on main (r13).
     folds: _dualReadArmed ? kStage1FoldDeltas : kPreCutFoldDeltas,
-    // THE RESOLVING PRE-READ IS THE POSTURE'S TOO (r13): it exists to convert
-    // a reconstructed terminal into its settling form, and reconstructed
-    // terminals are appended only when the dual read is armed. At `off` it
-    // would be a pure added in-transaction SELECT on the serialized writer
-    // lane, per session terminal, whose answer is structurally always null —
-    // so `off` takes the pre-Stage-1 collision semantics instead.
-    resolveTerminals: _dualReadArmed,
+    // THE RESOLVING PRE-READ IS NO LONGER THE POSTURE'S (tg-ffl6). r13 gated
+    // it on the dual read because reconstructed terminals were appended only
+    // when the comparator was armed. The external-close obligation now appends
+    // them at EVERY posture (ruling Q6: the ledger's close is a terminal
+    // input), so TESTIMONY YIELDS TO OBSERVATION has to hold at `off` too — a
+    // reconstructed heal that lands after the real record must be refused,
+    // never turned into a guard-PK corruption halt. One in-transaction SELECT
+    // per session terminal is the price; it rides the serialized writer lane.
+    resolveTerminals: true,
     // The Stage-0 notification seam rides the same flare transport as every
     // other engine LOUD signal, rate-limited under the standing 30 s bucket.
     onEvent: (event) => _flareLimited('trajectory.service.${event.kind.wire}', {

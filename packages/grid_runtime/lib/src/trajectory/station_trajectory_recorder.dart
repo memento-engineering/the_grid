@@ -818,6 +818,7 @@ class StationTrajectoryRecorder {
     required String attemptId,
     String? workBeadId,
     String? reason,
+    TerminalOutcome outcome = TerminalOutcome.unknown,
     DateTime? occurredAt,
   }) {
     _terminal(
@@ -825,8 +826,13 @@ class StationTrajectoryRecorder {
       sessionId: sessionId,
       workBeadId: workBeadId,
       attemptId: attemptId,
-      outcome: TerminalOutcome.unknown,
-      unknownReason: kExternalCloseUnknownReason,
+      // The LEDGER-DERIVED outcome when the caller has one (tg-ffl6 — the same
+      // rule [buildTerminalReconciled] documents); `unknown`/`external-close`
+      // is the form a caller without the ledger's facts takes.
+      outcome: outcome,
+      unknownReason: outcome == TerminalOutcome.unknown
+          ? kExternalCloseUnknownReason
+          : null,
       healBasis: kTerminalReconcileBasis,
       reason: reason,
       provenance: TrajectoryProvenance.reconstructed,
@@ -1487,6 +1493,39 @@ class StationTrajectoryRecorder {
     workBeadId: workBeadId,
     reason: reason,
     resolvesRecordId: resolvesRecordId,
+  );
+
+  /// The `terminal-reconcile` heal as a BUILT record — the external-close
+  /// obligation's form of [sessionTerminalReconciled] (tg-ffl6): the same
+  /// `attempt.terminal(outcome=unknown, unknown_reason='external-close')`
+  /// with the same idem grammar (`terminal-reconcile:<attemptId>`), so the
+  /// comparator-driven heal and the tick-driven one can never land two rows
+  /// for one attempt — whichever fires second dedupes. Provenance is the
+  /// CALLER's to stamp on its `ObligationAppend`: `reconstructed`, basis
+  /// [kTerminalReconcileBasis], exactly as the observation method stamps it.
+  ///
+  /// [outcome] is what the LEDGER's own facts support (`escalated` for a human
+  /// marker, `succeeded` for the engine's DONE marker, `lost` for a void
+  /// re-key, `cancelled` for any other close); the default `unknown` carries
+  /// `unknown_reason='external-close'` and is the form a caller takes when it
+  /// cannot derive one. A derived outcome is still testimony — the station
+  /// never observed the process end — so the provenance stays `reconstructed`.
+  DerivedRecord buildTerminalReconciled({
+    required String sessionId,
+    required String attemptId,
+    String? workBeadId,
+    String? reason,
+    TerminalOutcome outcome = TerminalOutcome.unknown,
+  }) => _buildTerminal(
+    sessionId: sessionId,
+    attemptId: attemptId,
+    outcome: outcome,
+    workBeadId: workBeadId,
+    reason: reason,
+    unknownReason: outcome == TerminalOutcome.unknown
+        ? kExternalCloseUnknownReason
+        : null,
+    healBasis: kTerminalReconcileBasis,
   );
 
   /// The `worktree.reaped` record — the observation method's builder, and the

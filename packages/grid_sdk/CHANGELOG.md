@@ -1,3 +1,7 @@
+## 0.3.0-rc.17
+
+- `TrajectoryHarness.build` takes a `sessionClosure` probe and threads it, with its own `hasQueuedAppendFor`, into the Stage-1 obligation set; `sessionClosureOf(Bead)` derives the ledger's terminal outcome from the same markers legacy's disposition reads, and the assembly wires it off the state snapshot source (tg-ffl6). The appender's resolving pre-read now runs at EVERY posture (`resolveTerminals: true`): reconstructed terminals are appended at `off` too, so testimony must yield to observation there as well — one in-transaction SELECT per session terminal is the price, and r13's byte-identity claim for `off` is narrowed to decisions.
+
 ## 0.3.0-rc.16
 
 - Added: attach and detach live substations — `SubstationRoster.attach` / `detach` with named refusals (`invalid_identity`, `identity_collision`, `root_invalid`, `store_absent`, `store_unparsed`, `provision_failed`, `not_attached`, `already_draining`, `sessions_live`, forced draining), a lazy drain settle that requeries the state store only while a seat drains, and the `grid/substation/attach` / `detach` control commands (tg-wv9, #282).

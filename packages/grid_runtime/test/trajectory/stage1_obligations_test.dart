@@ -85,7 +85,7 @@ String _serverInstant(DateTime value) => sqlDateTime6(value);
 
 void main() {
   group('the set (§2.4)', () {
-    test('arms exactly the three shadow-posture obligations, in order', () {
+    test('arms exactly the four shadow-posture obligations, in order', () {
       final queries = buildStage1ObligationQueries(
         recorder: _recorder(),
         db: _FakeDb(),
@@ -93,8 +93,13 @@ void main() {
         bootEpoch: () => 7,
       );
 
+      // The external-close heal sits between settlement and the reaped
+      // backfill: it CLOSES heads the backfill's `h.status = 'closed'` scan
+      // then sees on the same fixpoint run, and settlement never touches its
+      // reconstructed output (the record-keyed exclusion).
       expect(queries.map((query) => query.name), [
         kUnknownTerminalSettlementObligation,
+        kExternalCloseTerminalObligation,
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
@@ -243,6 +248,177 @@ void main() {
         expect(appends, isEmpty);
       },
     );
+  });
+
+  group('the external-close terminal (tg-ffl6, ruling Q6)', () {
+    Map<String, String?> row({
+      String sessionId = 'tranquility-1',
+      String? attemptId = 'A1',
+      String? workBeadId = 'tg-abc',
+    }) => {
+      'session_id': sessionId,
+      'work_bead_id': workBeadId,
+      'attempt_id': attemptId,
+      'last_seq': '40',
+    };
+
+    final clock = _FakeClock();
+
+    ExternalCloseTerminalObligation build({
+      SessionClosureProbe? closure,
+      AppendQueuedProbe? queued,
+      StationTrajectoryRecorder? recorder,
+    }) => ExternalCloseTerminalObligation(
+      recorder: recorder ?? _recorder(),
+      station: 'tranquility',
+      clock: clock.call,
+      sessionClosure: closure,
+      appendQueued: queued,
+    );
+
+    SessionClosure? closed(String _) => const SessionClosure();
+
+    test('scans the OPEN heads of THIS station whose attempt never reached '
+        'the terminal guard, oldest first — pre-spawn heads (no attempt id) '
+        'are left out so they cannot hold the window', () {
+      final query = build();
+
+      expect(query.sql, contains("h.status = 'open'"));
+      expect(query.sql, contains('h.attempt_id IS NOT NULL'));
+      expect(query.sql, contains('LEFT JOIN traj_terminal_guard g'));
+      expect(query.sql, contains('g.attempt_id IS NULL'));
+      expect(query.sql, contains('h.rig = :station'));
+      expect(query.sql, contains('ORDER BY h.last_seq'));
+      expect(query.parameters, {'station': 'tranquility'});
+    });
+
+    test('an unwired ledger probe leaves the obligation INERT — it never '
+        'heals on no evidence', () async {
+      final appends = await build().repair([row()]);
+      expect(appends, isEmpty);
+    });
+
+    test('a session the ledger still reads OPEN is a live round: nothing '
+        'appends, and any earlier sighting is forgotten', () async {
+      var closedNow = true;
+      final query = build(
+        closure: (_) => closedNow ? const SessionClosure() : null,
+      );
+      expect(await query.repair([row()]), isEmpty); // first sighting
+      closedNow = false;
+      clock.advance(const Duration(minutes: 5));
+      expect(await query.repair([row()]), isEmpty);
+      expect(query.lastOpenInLedger, 1);
+      closedNow = true;
+      // The grace restarts from this sighting — no heal yet.
+      expect(await query.repair([row()]), isEmpty);
+      expect(query.lastWithinGrace, 1);
+    });
+
+    test('holds the heal for the grace from its OWN first sighting, then '
+        'appends ONE reconstructed external-close terminal with the heal\'s '
+        'idem basis', () async {
+      final query = build(closure: closed);
+      expect(await query.repair([row()]), isEmpty);
+      expect(query.lastWithinGrace, 1);
+      clock.advance(kDefaultExternalCloseGrace - const Duration(seconds: 1));
+      expect(await query.repair([row()]), isEmpty);
+      clock.advance(const Duration(seconds: 1));
+
+      final appends = await query.repair([row()]);
+
+      expect(appends, hasLength(1));
+      final append = appends.single;
+      expect(append.provenance, TrajectoryProvenance.reconstructed);
+      expect(append.provenanceBasis, kTerminalReconcileBasis);
+      expect(append.substation, 'tg');
+      final record = append.record as AttemptTerminal;
+      expect(record.sessionId, 'tranquility-1');
+      expect(record.attemptId, 'A1');
+      expect(record.workBeadId, 'tg-abc');
+      expect(record.outcome, TerminalOutcome.unknown);
+      expect(record.unknownReason, kExternalCloseUnknownReason);
+      expect(record.healBasis, kTerminalReconcileBasis);
+      expect(record.attemptIdBasis, isNull, reason: 'never minted here');
+      // The same idem key the comparator's heal takes: whichever fires second
+      // dedupes rather than landing a second terminal.
+      final comparatorForm = _recorder().buildTerminalReconciled(
+        sessionId: 'tranquility-1',
+        attemptId: 'A1',
+      );
+      expect(
+        record.idemKeyText(
+          const IdemContext(station: 'tranquility', bootEpoch: 7),
+        ),
+        comparatorForm.record.idemKeyText(
+          const IdemContext(station: 'tranquility', bootEpoch: 7),
+        ),
+      );
+    });
+
+    test('a queued or in-flight append for the attempt defers the heal to '
+        'the next pass — the real record is about to land', () async {
+      var queued = true;
+      final query = build(closure: closed, queued: (_) => queued);
+      expect(await query.repair([row()]), isEmpty);
+      clock.advance(const Duration(minutes: 2));
+      expect(await query.repair([row()]), isEmpty);
+      expect(query.lastAppendQueued, 1);
+      queued = false;
+      expect(await query.repair([row()]), hasLength(1));
+    });
+
+    test(
+      'the ledger\'s closed_at, when the chokepoint stamped one, is '
+      'carried in the reason; a hand close without one still heals',
+      () async {
+        final stamped = build(
+          closure: (_) =>
+              SessionClosure(closedAt: DateTime.utc(2026, 9, 5, 20)),
+        );
+        final bare = build(closure: closed);
+        await stamped.repair([row()]);
+        await bare.repair([row(sessionId: 'tranquility-2')]);
+        clock.advance(const Duration(minutes: 2));
+
+        final withStamp =
+            (await stamped.repair([row()])).single.record as AttemptTerminal;
+        final withoutStamp =
+            (await bare.repair([row(sessionId: 'tranquility-2')])).single.record
+                as AttemptTerminal;
+
+        expect(withStamp.reason, contains('2026-09-05T20:00:00.000Z'));
+        expect(withoutStamp.reason, isNot(contains('at 2026')));
+        expect(withoutStamp.outcome, TerminalOutcome.unknown);
+      },
+    );
+
+    test('a ledger-derived outcome rides the record as-is — no '
+        'unknown_reason, same heal basis, still reconstructed', () async {
+      final query = build(
+        closure: (_) => const SessionClosure(
+          outcome: TerminalOutcome.cancelled,
+          reason: 'ledger close: reworked',
+        ),
+      );
+      await query.repair([row()]);
+      clock.advance(const Duration(minutes: 2));
+
+      final append = (await query.repair([row()])).single;
+      final record = append.record as AttemptTerminal;
+
+      expect(record.outcome, TerminalOutcome.cancelled);
+      expect(record.unknownReason, isNull);
+      expect(record.healBasis, kTerminalReconcileBasis);
+      expect(record.reason, contains('(ledger close: reworked)'));
+      expect(append.provenance, TrajectoryProvenance.reconstructed);
+    });
+
+    test('a row without an attempt id is skipped, never minted', () async {
+      final query = build(closure: closed);
+      clock.advance(const Duration(hours: 1));
+      expect(await query.repair([row(attemptId: null)]), isEmpty);
+    });
   });
 
   group('obligation 2 — worktree.reaped backfill', () {

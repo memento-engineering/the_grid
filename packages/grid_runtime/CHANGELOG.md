@@ -1,3 +1,7 @@
+## 0.2.0-rc.14
+
+- The external-close terminal obligation (tg-ffl6; decision `wave-2-flip-scope-soak-and-kill-date`, Q6): every session bead the ledger closes gets exactly one `attempt.terminal`, at every dual-read posture. The `terminal-reconcile` heal is re-homed off the comparator into a fourth Stage-1 tick obligation keyed on an OPEN P1 head with no `traj_terminal_guard` row; the ledger's closure arrives through the new `SessionClosureProbe` seam (a state-snapshot lookup, never a bd round trip), the outcome is the ledger's own (`escalated` for a human marker, `succeeded` for the DONE marker, `lost` for a void re-key, otherwise `cancelled`), and the heal waits a 90 s grace from its own first sighting and defers to any queued append. `StationTrajectoryRecorder.buildTerminalReconciled` is the tick-side builder; `sessionTerminalReconciled` takes the same derived `outcome`. Before this, 267 of lunar's 521 sessions sat open in the fold forever because the heal fired only under `observe`/`primary`.
+
 ## 0.2.0-rc.13
 
 - Added: `BeadOwnershipPredicate.admit` / `revoke` — the live ownership allow-set widens and narrows as substations attach and detach at runtime; a double admit or an absent revoke throws `StateError` so the attach collision gate stays the only widening path (tg-wv9, #282).

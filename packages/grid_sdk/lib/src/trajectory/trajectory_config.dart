@@ -85,10 +85,17 @@ final class TrajectoryConfig {
   ///   * no boot reshape probe — an EXISTING home upgrading with `off` arms
   ///     exactly as it does on main, so the rollback is a rollback for the
   ///     population that most needs one;
-  ///   * no appender resolving pre-read — a terminal append takes the
-  ///     pre-Stage-1 collision semantics, with no added in-transaction SELECT
-  ///     on the serialized writer lane;
-  ///   * NONE of the new observer appends.
+  ///   * NONE of the comparator-driven observer appends.
+  ///
+  /// TWO THINGS `off` DOES ARM, since tg-ffl6 (decision
+  /// `wave-2-flip-scope-soak-and-kill-date`, Q6 — bd remains an input to
+  /// terminal truth at every posture): the external-close terminal obligation
+  /// on the Stage-1 tick, which appends a reconstructed `attempt.terminal` for
+  /// a session the LEDGER closed and the fold never saw end; and, because such
+  /// records now exist at `off`, the appender's resolving pre-read — one
+  /// in-transaction SELECT per session terminal — so a late real terminal
+  /// converts the reconstructed row instead of hitting the guard's PK. `off`
+  /// is therefore byte-equivalent to main on DECISIONS, not on the log.
   ///
   /// THE ONE EXCEPTION, adjudicated and deliberate: C8a's flare delivery. The
   /// state-store writer's `onFlare` was null-sunk on main — `session.minted`,
@@ -104,17 +111,10 @@ final class TrajectoryConfig {
   /// the flag is absent and to [DualReadMode.off] when neither is set, and
   /// hands the result here. A station that arms nothing arms `off`.
   ///
-  /// **THE ONE DOWNGRADE CAVEAT.** Going `observe` → `off` after an
-  /// observe-era soak is safe for every ordinary head, but a head whose
-  /// terminal was RECONSTRUCTED under `observe` still carries an unsettled
-  /// `traj_terminal_guard` row and a `terminal_provenance='reconstructed'`
-  /// mark. Under `off` the resolving pre-read that converts a late REAL
-  /// terminal into its settling form does not run, so that late terminal hits
-  /// the guard's PK and lands as the corruption class — a halt, loudly, not a
-  /// silent loss. The cure is one bounce back to `observe`, which converts the
-  /// reconstructed row and settles the head; then `off` is clean. Downgrade a
-  /// home with no reconstructed rows freely; downgrade a soaked one through an
-  /// `observe` boot.
+  /// **THE DOWNGRADE CAVEAT IS RETIRED (tg-ffl6).** It existed because the
+  /// resolving pre-read did not run at `off`; it runs at every posture now, so
+  /// a reconstructed head carried out of an `observe` soak converts on the
+  /// late real terminal exactly as it would under `observe`. Downgrade freely.
   ///
   /// [DualReadMode.observe] — C2's whole scope, and the posture the soak runs
   /// in. DECISIONS STAY LEGACY, but this is NOT a read-only posture and must
