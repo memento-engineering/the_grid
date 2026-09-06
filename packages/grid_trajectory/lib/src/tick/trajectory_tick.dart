@@ -200,6 +200,7 @@ class TrajectoryTick {
           substation: repair.substation,
           provenance: repair.provenance,
           provenanceBasis: repair.provenanceBasis,
+          occurredAt: repair.occurredAt,
         );
         switch (outcome) {
           case Appended():

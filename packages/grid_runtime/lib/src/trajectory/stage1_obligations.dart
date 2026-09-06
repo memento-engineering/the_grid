@@ -42,12 +42,69 @@ import 'worktree_pulse_scanner.dart';
 /// (`AllocationAddress.providerName`).
 typedef LastActivityPoll = DateTime? Function(String providerName);
 
+/// What the LEDGER says about one session bead's closure — the one bd fact the
+/// external-close obligation consumes (decision
+/// `wave-2-flip-scope-soak-and-kill-date`, Q6: bd remains an input to terminal
+/// truth). A null answer from a [SessionClosureProbe] means "open, or not in
+/// the snapshot" — nothing to heal.
+///
+/// [closedAt] is the bead's `closed_at` telemetry when the chokepoint stamped
+/// one; a hand `bd close` carries none, which is why the obligation keys its
+/// grace on its OWN first sighting rather than on this value.
+///
+/// [outcome] is the terminal outcome the LEDGER's own facts support — derived
+/// by the caller from the same bead markers legacy's disposition reads (a
+/// human marker ⇒ `escalated`, the engine's DONE marker ⇒ `succeeded`, a void
+/// re-key ⇒ `lost`, anything else closed ⇒ `cancelled`), so a head healed from
+/// it dispositions under `primary` exactly as the bead does under legacy. Null
+/// means the caller could not say, and the heal falls back to
+/// `unknown` / `external-close`. [reason] is the ledger's own close reason.
+final class SessionClosure {
+  const SessionClosure({
+    this.closedAt,
+    this.outcome,
+    this.reason,
+    this.retiredRound = false,
+  });
+
+  final DateTime? closedAt;
+  final TerminalOutcome? outcome;
+  final String? reason;
+
+  /// The ledger closed this bead because its round was RETIRED by rework
+  /// (`#rN` key). The fold keeps such heads open by schema design (the round
+  /// bump is the retirement); the obligation counts and skips them.
+  final bool retiredRound;
+}
+
+/// The engine-side answer to "is this session bead closed in bd?" — read off
+/// the state snapshot the join bridge already holds in memory (one lookup per
+/// row per tick, never a bd round trip). Null when the seam is unwired (a
+/// bare harness) or the bead is open/unknown.
+typedef SessionClosureProbe = SessionClosure? Function(String sessionId);
+
+/// The harness's answer to "is an append for this attempt, or a terminal for
+/// this session, still queued or mid-flight?" The heal must not race a
+/// terminal record that is about to land (r8 — V2-B1) — and it must ask by
+/// SESSION too, because the head's attempt id is the spawn's while an
+/// observed session terminal carries the recorder's per-session id.
+typedef AppendQueuedProbe =
+    bool Function({required String sessionId, required String attemptId});
+
 /// Obligation names — stable identifiers for the tick's telemetry and for the
 /// stuck-obligation accounting (schema §5).
 const String kUnknownTerminalSettlementObligation =
     'unknown-terminal-settlement';
+const String kExternalCloseTerminalObligation = 'external-close-terminal';
 const String kWorktreeReapedBackfillObligation = 'worktree-reaped-backfill';
 const String kLivenessDetectorObligation = 'liveness-detector';
+
+/// How long a ledger-closed session must stay closed-in-bd / open-in-P1 before
+/// the external-close obligation appends its reconstructed terminal. Every
+/// NORMAL terminal transits that state briefly — bd is written first and the
+/// record appended after — so an eager heal would race the real record (r8 —
+/// V2-B1). The comparator's heal uses the same 90 s.
+const Duration kDefaultExternalCloseGrace = Duration(seconds: 90);
 
 /// How stale a beat must be before the detector calls the attempt LOST. The
 /// house's sustained-stall threshold (`kDefaultWedgeThreshold`), reused
@@ -75,23 +132,36 @@ const int kObligationBatchSize = 64;
 /// unknown rule is written against it (a beat from a prior epoch is not a beat
 /// this epoch observed). [lastActivity] is the provider's poll; null (a station
 /// with no provider wired, e.g. a dry arm) simply leaves surface (b) silent and
-/// the scanner answering alone.
+/// the scanner answering alone. [sessionClosure] is the ledger's answer for the
+/// external-close obligation; null (unwired) leaves that obligation inert, and
+/// [appendQueued] is the harness's in-flight check it consults before healing.
 List<ObligationQuery> buildStage1ObligationQueries({
   required StationTrajectoryRecorder recorder,
   required TrajectoryDb db,
   required String station,
   required int Function() bootEpoch,
   LastActivityPoll? lastActivity,
+  SessionClosureProbe? sessionClosure,
+  AppendQueuedProbe? appendQueued,
   WorktreePulseScanner scanner = const WorktreePulseScanner(),
   ProcessGroupController? processes,
   Duration livenessThreshold = kDefaultLivenessThreshold,
   Duration pulseCoalesce = kDefaultPulseCoalesce,
+  Duration externalCloseGrace = kDefaultExternalCloseGrace,
   DateTime Function()? clock,
 }) => [
   UnknownTerminalSettlementObligation(
     recorder: recorder,
     station: station,
     processes: processes ?? SystemProcessGroupController(),
+  ),
+  ExternalCloseTerminalObligation(
+    recorder: recorder,
+    station: station,
+    clock: clock ?? DateTime.now,
+    sessionClosure: sessionClosure,
+    appendQueued: appendQueued,
+    grace: externalCloseGrace,
   ),
   WorktreeReapedBackfillObligation(recorder: recorder),
   LivenessDetectorObligation(
@@ -202,6 +272,178 @@ final class UnknownTerminalSettlementObligation extends ObligationQuery {
           substation: derived.substation,
           provenance: TrajectoryProvenance.inferred,
           provenanceBasis: kTickUnknownSettlementBasis,
+        ),
+      );
+    }
+    return appends;
+  }
+}
+
+/// The external-close obligation (tg-ffl6; decision
+/// `wave-2-flip-scope-soak-and-kill-date`, Q6) — every session bead the LEDGER
+/// closed gets exactly one `attempt.terminal`, whatever the dual-read posture.
+///
+/// This is the `terminal-reconcile` heal, RE-HOMED. On main the heal fires only
+/// from the comparator's `terminalLag` tracker, which exists only under
+/// `DualReadMode.observe`/`primary`; at the default `off` posture no externally
+/// closed session ever gets a terminal, and lunar carried 267 of them. The
+/// obligation keys on the projection instead: an OPEN P1 head whose attempt has
+/// no `traj_terminal_guard` row is "no terminal ever landed", and the ledger's
+/// closure — read through [SessionClosureProbe] off the in-memory state
+/// snapshot, never a bd round trip — is the external half schema §5 demands.
+///
+/// Three guards keep it from racing the real record:
+///
+///   * a row is healed only after it has read closed-in-bd / open-in-P1 for
+///     [grace] measured from this obligation's OWN first sighting (bd is
+///     written first and the observed terminal appended after, so every
+///     normal terminal transits this state briefly);
+///   * a queued or in-flight append for the attempt ([AppendQueuedProbe])
+///     defers the heal to the next pass;
+///   * the appender's resolving pre-read refuses the reconstructed record
+///     outright if an observed terminal landed between the scan and the
+///     append (TESTIMONY YIELDS TO OBSERVATION), and the record's idem key is
+///     the heal's own (`terminal-reconcile:<attemptId>`), so the comparator's
+///     heal and this one dedupe against each other.
+///
+/// A head with no `attempt_id` predates process start: `AttemptTerminal`
+/// requires the id and none is ever minted here, so those rows are left out of
+/// the scan by construction (they would otherwise hold the oldest-first window
+/// forever) and stay open until a real attempt is observed — the same SKIP the
+/// comparator's heal counts.
+///
+/// The bd write this record is ABOUT already happened; nothing here writes bd
+/// or the filesystem (the wave-1 invariant). A settled successor is never
+/// derived for it: the settlement obligation excludes reconstructed testimony
+/// on the record, so the head reads `unknown` until an observed terminal lands
+/// and truth monotonicity clears the mark.
+final class ExternalCloseTerminalObligation extends ObligationQuery {
+  ExternalCloseTerminalObligation({
+    required StationTrajectoryRecorder recorder,
+    required String station,
+    required DateTime Function() clock,
+    SessionClosureProbe? sessionClosure,
+    AppendQueuedProbe? appendQueued,
+    this.grace = kDefaultExternalCloseGrace,
+    this.batch = kObligationBatchSize,
+  }) : _recorder = recorder,
+       _station = station,
+       _clock = clock,
+       _sessionClosure = sessionClosure,
+       _appendQueued = appendQueued;
+
+  final StationTrajectoryRecorder _recorder;
+  final String _station;
+  final DateTime Function() _clock;
+  final SessionClosureProbe? _sessionClosure;
+  final AppendQueuedProbe? _appendQueued;
+  final Duration grace;
+  final int batch;
+
+  /// When each candidate was FIRST seen closed in bd while open in P1 — the
+  /// grace clock. An entry leaves when the row heals, or when the ledger reads
+  /// the session open again (a reopened bead restarts the wait).
+  final Map<String, DateTime> _firstSeenClosed = {};
+
+  /// Rows this obligation declined on its last pass because the ledger still
+  /// read them OPEN, and rows still inside [grace] — telemetry for the
+  /// operator's "why is this head still open" question.
+  int lastOpenInLedger = 0;
+  int lastWithinGrace = 0;
+  int lastAppendQueued = 0;
+  int lastRetiredRound = 0;
+
+  @override
+  String get name => kExternalCloseTerminalObligation;
+
+  /// The open heads of THIS station whose attempt never reached the terminal
+  /// guard. `g.attempt_id IS NULL` IS "no terminal of any provenance landed"
+  /// (the guard is written in the same transaction as every terminal append);
+  /// `h.attempt_id IS NOT NULL` keeps the un-healable pre-spawn heads out of
+  /// the oldest-first window. Live sessions match too — the ledger probe is
+  /// what tells them apart, and they cost one map lookup each.
+  @override
+  String get sql =>
+      'SELECT h.session_id AS session_id, h.work_bead_id AS work_bead_id, '
+      'h.attempt_id AS attempt_id, h.last_seq AS last_seq '
+      'FROM proj_session_head h '
+      'LEFT JOIN traj_terminal_guard g ON g.attempt_id = h.attempt_id '
+      "WHERE h.status = 'open' AND h.attempt_id IS NOT NULL "
+      'AND g.attempt_id IS NULL AND h.rig = :station '
+      'ORDER BY h.last_seq LIMIT $batch';
+
+  @override
+  Map<String, Object?> get parameters => {'station': _station};
+
+  @override
+  Future<List<ObligationAppend>> repair(List<Map<String, String?>> rows) async {
+    final probe = _sessionClosure;
+    lastOpenInLedger = 0;
+    lastWithinGrace = 0;
+    lastAppendQueued = 0;
+    lastRetiredRound = 0;
+    // Unwired seam (a bare harness, a test without a state snapshot): the
+    // obligation is inert, never a guess. Nothing is healed on no evidence.
+    if (probe == null) return const [];
+    final appends = <ObligationAppend>[];
+    final now = _clock();
+    for (final row in rows) {
+      final sessionId = row['session_id'];
+      final attemptId = row['attempt_id'];
+      if (sessionId == null || attemptId == null) continue;
+      final closure = probe(sessionId);
+      if (closure == null) {
+        // Open in bd (or not in the snapshot): a live round, or a head the
+        // ledger has not caught up with. Forget any earlier sighting — a
+        // reopened bead restarts the grace.
+        _firstSeenClosed.remove(sessionId);
+        lastOpenInLedger += 1;
+        continue;
+      }
+      if (closure.retiredRound) {
+        // The fold's own model: a retired round is an open head with its
+        // round bumped, not a terminal. Closing it is a schema decision
+        // (worksheet E9 / Q9), not a heal — count it and leave it.
+        _firstSeenClosed.remove(sessionId);
+        lastRetiredRound += 1;
+        continue;
+      }
+      final firstSeen = _firstSeenClosed.putIfAbsent(sessionId, () => now);
+      if (now.difference(firstSeen) < grace) {
+        lastWithinGrace += 1;
+        continue;
+      }
+      if (_appendQueued?.call(sessionId: sessionId, attemptId: attemptId) ??
+          false) {
+        // The real record is about to land; the guard row will exclude this
+        // head from the next scan.
+        lastAppendQueued += 1;
+        continue;
+      }
+      final closedAt = closure.closedAt;
+      final ledgerReason = closure.reason;
+      final derived = _recorder.buildTerminalReconciled(
+        sessionId: sessionId,
+        attemptId: attemptId,
+        workBeadId: row['work_bead_id'],
+        outcome: closure.outcome ?? TerminalOutcome.unknown,
+        reason:
+            'terminal-reconcile: the ledger closed this session'
+            '${closedAt == null ? '' : ' at ${closedAt.toUtc().toIso8601String()}'}'
+            '${ledgerReason == null || ledgerReason.isEmpty ? '' : ' ($ledgerReason)'}'
+            ' and no terminal record was ever observed for its attempt '
+            '(tick obligation, posture-independent)',
+      );
+      _firstSeenClosed.remove(sessionId);
+      appends.add(
+        ObligationAppend(
+          derived.record,
+          substation: derived.substation,
+          provenance: TrajectoryProvenance.reconstructed,
+          provenanceBasis: kTerminalReconcileBasis,
+          // The head's `closed_at` is served under `primary`: it must be the
+          // ledger's instant, never the heal's (a backlog heal is days late).
+          occurredAt: closedAt,
         ),
       );
     }

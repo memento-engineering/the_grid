@@ -167,6 +167,7 @@ export 'package:grid_trajectory/grid_trajectory.dart'
 // fold read surface, implementing the ENGINE's `TrajectoryHeadSnapshot` seam
 // over `grid_trajectory`'s row types. Exported so a status surface can read
 // the snapshot; nothing consumes it for DECISIONS until C2/C3.
+export 'src/trajectory/session_closure.dart' show sessionClosureOf;
 export 'src/trajectory/session_head_mirror.dart';
 // The P2 MIRROR (C4) — the same surface for the step axis, implementing the
 // engine's `TrajectoryStepSnapshot` seam and its `byP2SessionId` index.

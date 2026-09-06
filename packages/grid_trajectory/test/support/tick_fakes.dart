@@ -120,6 +120,7 @@ class FakeTickAppender implements TickAppender {
   List<AppendOutcome> outcomes;
 
   final List<TrajectoryRecord> appended = [];
+  final List<DateTime?> occurredAts = [];
 
   /// The substation each append carried, in order — the repair's derived
   /// substation rides through the tick untouched.
@@ -135,8 +136,10 @@ class FakeTickAppender implements TickAppender {
     String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
+    DateTime? occurredAt,
   }) async {
     appended.add(record);
+    occurredAts.add(occurredAt);
     substations.add(substation);
     if (outcomes.isEmpty) {
       return fakeAppended(

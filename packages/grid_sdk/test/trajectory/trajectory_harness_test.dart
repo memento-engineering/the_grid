@@ -1573,6 +1573,7 @@ void main() {
       expect(const TrajectoryConfig().obligationQueryExtensions, isEmpty);
       expect(h.tick!.queries.map((query) => query.name), [
         kUnknownTerminalSettlementObligation,
+        kExternalCloseTerminalObligation,
         kWorktreeReapedBackfillObligation,
         kLivenessDetectorObligation,
       ]);
@@ -1585,15 +1586,16 @@ void main() {
       final statements = connected.single.statements;
       expect(statements.take(7), everyElement(startsWith('SELECT')));
       expect(statements.first, contains('information_schema.columns'));
-      // Then the boot pass ran the obligations: three SELECTs on the same
-      // serial lane, plus the detector's pulse prune.
+      // Then the boot pass ran the obligations: four SELECTs on the same
+      // serial lane (the external-close heal joined the set in tg-ffl6), plus
+      // the detector's pulse prune.
       final passStatements = statements.skip(7);
       expect(
         passStatements.where((sql) => sql.startsWith('SELECT')),
-        hasLength(3),
+        hasLength(4),
       );
       expect(h.tick!.lastPass!.disposition, TickPassDisposition.ran);
-      expect(h.tick!.lastPass!.queriesRun, 3);
+      expect(h.tick!.lastPass!.queriesRun, 4);
       expect(h.tick!.lastPass!.refusals, isEmpty);
     });
 
@@ -1614,6 +1616,7 @@ void main() {
 
         expect(h.tick!.queries.map((query) => query.name), [
           kUnknownTerminalSettlementObligation,
+          kExternalCloseTerminalObligation,
           kWorktreeReapedBackfillObligation,
           kLivenessDetectorObligation,
           'first-extension',
@@ -1641,7 +1644,7 @@ void main() {
         expect(fixpoint, isNotNull);
         expect(fixpoint!.reached, isTrue);
         expect(fixpoint.passes.single.quiet, isTrue);
-        expect(fixpoint.passes.single.queriesRun, 5);
+        expect(fixpoint.passes.single.queriesRun, 6);
         expect(order, [
           'first-extension',
           'second-extension',
@@ -1711,8 +1714,9 @@ void main() {
       expect(h.stuckObligations, isEmpty, reason: 'streaks reset on filing');
       expect(
         appender.calls.where((call) => call == 'append:attempt.note'),
-        // One note per refusing obligation that reached N.
-        hasLength(3),
+        // One note per refusing obligation that reached N — the four Stage-1
+        // queries all SELECT, and every SELECT fails here.
+        hasLength(4),
       );
       expect(flareNames(), contains('trajectory.obligationStuck'));
     });

@@ -27,6 +27,7 @@ abstract interface class TickAppender {
     String? substation,
     TrajectoryProvenance provenance,
     String? provenanceBasis,
+    DateTime? occurredAt,
   });
 
   /// The §5 dolt-commit cadence. The tick calls it once per pass so cadence
@@ -57,11 +58,13 @@ final class AppenderTickPort implements TickAppender {
     String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
+    DateTime? occurredAt,
   }) async => _appender.append(
     record,
     substation: substation,
     provenance: provenance,
     provenanceBasis: provenanceBasis,
+    occurredAt: occurredAt,
   );
 
   @override
