@@ -1,3 +1,8 @@
+## 0.5.0-rc.17
+
+- Changed: `LegacyStoreUnavailableShadow` names `ShadowCompare.compare`'s new `corroboration` parameter, so the bd-absent shadow stub compiles against grid_trajectory 0.2.0-rc.5's classifier surface (tg-ilug, #342).
+- Floors `grid_runtime` to `^0.2.0-rc.14`, `grid_sdk` to `^0.3.0-rc.17` and `grid_trajectory` to `^0.2.0-rc.5`.
+
 ## 0.5.0-rc.16
 
 - Added: the `grid/substation/attach` and `detach` control commands decode on the resident door, and `up` renders status from the live roster instead of the launch-time arming (tg-wv9, #282).

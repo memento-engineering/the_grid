@@ -1,6 +1,7 @@
 ## 0.3.0-rc.17
 
 - `TrajectoryHarness.build` takes a `sessionClosure` probe and threads it, with its own `hasQueuedAppendFor`, into the Stage-1 obligation set; `sessionClosureOf(Bead)` derives the ledger's terminal outcome from the same markers legacy's disposition reads, and the assembly wires it off the state snapshot source (tg-ffl6). `TrajectoryConfig.reconcileLedgerCloses` (default true) arms it at EVERY posture and turns the appender's resolving pre-read on with it, so testimony yields to observation at `off` too — one in-transaction SELECT per session terminal is the price, r13's byte-identity claim for `off` is narrowed to decisions, and `reconcileLedgerCloses: false` is the rollback line. The comparator's own heal takes the same derived outcome and the ledger's `closed_at` through the same probe, so the two triggers write one shape. `ObligationAppend` and `TickAppender.append` carry an `occurredAt`.
+- Floors `grid_runtime` to `^0.2.0-rc.14` and `grid_trajectory` to `^0.2.0-rc.5`.
 
 ## 0.3.0-rc.16
 
