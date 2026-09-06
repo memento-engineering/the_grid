@@ -1,6 +1,7 @@
 ## 0.2.0-rc.14
 
 - The external-close terminal obligation (tg-ffl6; decision `wave-2-flip-scope-soak-and-kill-date`, Q6): every session bead the ledger closes gets exactly one `attempt.terminal`, at every dual-read posture. The `terminal-reconcile` heal is re-homed off the comparator into a fourth Stage-1 tick obligation keyed on an OPEN P1 head with no `traj_terminal_guard` row; the ledger's closure arrives through the new `SessionClosureProbe` seam (a state-snapshot lookup, never a bd round trip), the outcome is the ledger's own (`escalated` for a human marker, `succeeded` for the DONE marker, `lost` for a void re-key, otherwise `cancelled`), the heal waits a 90 s grace from its own first sighting, defers to a queued append for the attempt OR a queued terminal for the session (two attempt-id spaces meet here), stamps the ledger's `closed_at` as the record's `occurred_at`, and leaves retired rework rounds (`#rN` keys) open — the fold keeps those open by schema design and their fate is the wave-2 schema question. `StationTrajectoryRecorder.buildTerminalReconciled` is the tick-side builder; `sessionTerminalReconciled` takes the same derived `outcome`. Before this, 267 of lunar's 521 sessions sat open in the fold forever because the heal fired only under `observe`/`primary`.
+- Floors `grid_trajectory` to `^0.2.0-rc.5`, where `ObligationAppend.occurredAt` and `TickAppender.append`'s `occurredAt` were introduced.
 
 ## 0.2.0-rc.13
 
