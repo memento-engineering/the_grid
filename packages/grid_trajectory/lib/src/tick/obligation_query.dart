@@ -48,9 +48,16 @@ final class ObligationAppend {
     this.substation,
     this.provenance = TrajectoryProvenance.observed,
     this.provenanceBasis,
+    this.occurredAt,
   });
 
   final TrajectoryRecord record;
+
+  /// When the fact this record testifies to HAPPENED, when the repair knows
+  /// (the ledger's own `closed_at` for a reconciled terminal); null stamps the
+  /// append instant, which for a backlog heal is days after the fact and is
+  /// served as the head's `closed_at` (tg-ffl6).
+  final DateTime? occurredAt;
 
   /// The derivation layer's substation for this record when the repair derived
   /// one (stage1-wiring §2.2's substation row: `ownedPrefixOf` over the

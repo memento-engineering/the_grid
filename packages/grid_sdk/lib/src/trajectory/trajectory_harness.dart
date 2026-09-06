@@ -438,6 +438,10 @@ class TrajectoryHarness {
   /// loop dequeues before it awaits ([hasQueuedAppendFor]).
   String? _inFlightAttemptId;
 
+  /// The session whose TERMINAL is mid-flight, for the session-keyed half of
+  /// [hasQueuedAppendForAttemptOrSession].
+  String? _inFlightTerminalSessionId;
+
   /// The one serial lane every statement on the SQL session rides — the
   /// writer loop, the tick's passes, gc, and the boundary commit never
   /// interleave on the single `mysql_client` session.
@@ -686,8 +690,11 @@ class TrajectoryHarness {
     // The external-close obligation's two external inputs (tg-ffl6): the
     // ledger's closure, and this harness's own queue — a heal must never race
     // a terminal record that is about to land (r8 — V2-B1).
-    sessionClosure: _sessionClosure,
-    appendQueued: hasQueuedAppendFor,
+    // `reconcileLedgerCloses: false` is the rollback line: the obligation
+    // stays in the set (its name is stable for the stuck accounting) but has
+    // no ledger to read, so it heals nothing.
+    sessionClosure: config.reconcileLedgerCloses ? _sessionClosure : null,
+    appendQueued: hasQueuedAppendForAttemptOrSession,
     livenessThreshold: config.livenessThreshold,
     pulseCoalesce: config.pulseCoalesce,
     clock: _clock,
@@ -707,6 +714,27 @@ class TrajectoryHarness {
     if (_inFlightAttemptId == attemptId) return true;
     for (final request in _queue) {
       if (_attemptIdOf(request.record) == attemptId) return true;
+    }
+    return false;
+  }
+
+  /// The external-close obligation's queue check (tg-ffl6): an append for
+  /// the attempt OR a TERMINAL for the session. Two attempt-id spaces meet
+  /// here — the P1 head carries the SPAWN's id (`process.started`), while an
+  /// observed session terminal carries the recorder's per-session id — so a
+  /// check keyed on the head's attempt alone would never see the queued
+  /// observed terminal it exists to yield to.
+  bool hasQueuedAppendForAttemptOrSession({
+    required String sessionId,
+    required String attemptId,
+  }) {
+    if (hasQueuedAppendFor(attemptId)) return true;
+    if (_inFlightTerminalSessionId == sessionId) return true;
+    for (final request in _queue) {
+      if (request.record.isTerminal &&
+          _correlationOf(request.record, 'session_id') == sessionId) {
+        return true;
+      }
     }
     return false;
   }
@@ -764,6 +792,7 @@ class TrajectoryHarness {
         attemptId: request.attemptId,
         workBeadId: request.workBeadId.isEmpty ? null : request.workBeadId,
         outcome: closure?.outcome ?? TerminalOutcome.unknown,
+        occurredAt: closure?.closedAt,
         reason:
             'terminal-reconcile: the ledger closed this session'
             '${ledgerReason == null || ledgerReason.isEmpty ? '' : ' ($ledgerReason)'}'
@@ -1207,6 +1236,9 @@ class TrajectoryHarness {
 
   Future<void> _appendOne(TrajectoryAppendRequest request) async {
     _inFlightAttemptId = _attemptIdOf(request.record);
+    _inFlightTerminalSessionId = request.record.isTerminal
+        ? _correlationOf(request.record, 'session_id')
+        : null;
     try {
       if (_needsReconnect) {
         // Debounced (quality M3): eager on the first append after the
@@ -1318,6 +1350,7 @@ class TrajectoryHarness {
       );
     } finally {
       _inFlightAttemptId = null;
+      _inFlightTerminalSessionId = null;
     }
   }
 
@@ -1590,7 +1623,7 @@ class TrajectoryHarness {
     // reconstructed heal that lands after the real record must be refused,
     // never turned into a guard-PK corruption halt. One in-transaction SELECT
     // per session terminal is the price; it rides the serialized writer lane.
-    resolveTerminals: true,
+    resolveTerminals: _dualReadArmed || config.reconcileLedgerCloses,
     // The Stage-0 notification seam rides the same flare transport as every
     // other engine LOUD signal, rate-limited under the standing 30 s bucket.
     onEvent: (event) => _flareLimited('trajectory.service.${event.kind.wire}', {
@@ -1703,11 +1736,13 @@ final class _SerializedTickAppender implements TickAppender {
     String? substation,
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
+    DateTime? occurredAt,
   }) => _harness._serialize(
     () => _appender.append(
       record,
       substation: substation,
       provenance: provenance,
+      occurredAt: occurredAt,
       provenanceBasis: provenanceBasis,
     ),
   );

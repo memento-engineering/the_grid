@@ -48,12 +48,20 @@ SessionClosure? sessionClosureOf(Bead bead) {
     // §0.3's table to the same arms.
     outcome = TerminalOutcome.cancelled;
   }
+  // A retired rework round: the ledger closed the `#rN` bead when the next
+  // round minted, but the fold models that as a ROUND BUMP on an open head —
+  // "stays status='open' FOREVER, by schema design" (cut-wiring §0.2, the
+  // comparator's steady state). Whether such heads should close is the
+  // wave-2 schema question (worksheet E9 / Q9); the heal reports it and
+  // leaves it.
+  final retiredRound = !voided && RegExp(r'#r\d+$').hasMatch(workBead);
   final closeReason = bead.closeReason.trim();
   final voidedReason = (bead.metadata[SessionBeadKeys.voidedReason] as String?)
       ?.trim();
   return SessionClosure(
     closedAt: projection.closedAt ?? bead.closedAt,
     outcome: outcome,
+    retiredRound: retiredRound,
     reason: closeReason.isNotEmpty
         ? 'ledger close: $closeReason'
         : (voidedReason == null || voidedReason.isEmpty

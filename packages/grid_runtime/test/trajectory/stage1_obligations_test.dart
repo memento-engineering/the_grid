@@ -359,13 +359,55 @@ void main() {
     test('a queued or in-flight append for the attempt defers the heal to '
         'the next pass — the real record is about to land', () async {
       var queued = true;
-      final query = build(closure: closed, queued: (_) => queued);
+      final asked = <String>[];
+      final query = build(
+        closure: closed,
+        queued: ({required sessionId, required attemptId}) {
+          asked.add('$sessionId/$attemptId');
+          return queued;
+        },
+      );
       expect(await query.repair([row()]), isEmpty);
       clock.advance(const Duration(minutes: 2));
       expect(await query.repair([row()]), isEmpty);
       expect(query.lastAppendQueued, 1);
+      // Asked by SESSION and attempt: the head's attempt is the spawn's, the
+      // observed terminal carries the recorder's per-session id.
+      expect(asked.last, 'tranquility-1/A1');
       queued = false;
       expect(await query.repair([row()]), hasLength(1));
+    });
+
+    test('a RETIRED rework round is counted and left open — the fold keeps '
+        'it open by schema design, and closing it is Q9\'s call', () async {
+      final query = build(
+        closure: (_) => const SessionClosure(
+          outcome: TerminalOutcome.cancelled,
+          reason: 'ledger close: reworked',
+          retiredRound: true,
+        ),
+      );
+      clock.advance(const Duration(hours: 1));
+      expect(await query.repair([row()]), isEmpty);
+      expect(await query.repair([row()]), isEmpty);
+      expect(query.lastRetiredRound, 1);
+      expect(query.lastWithinGrace, 0);
+    });
+
+    test('the ledger\'s closed_at rides the append as occurredAt, so the head '
+        'closes at the ledger\'s instant, never the heal\'s', () async {
+      final query = build(
+        closure: (_) => SessionClosure(
+          closedAt: DateTime.utc(2026, 9, 5, 20),
+          outcome: TerminalOutcome.cancelled,
+        ),
+      );
+      await query.repair([row()]);
+      clock.advance(const Duration(minutes: 2));
+
+      final append = (await query.repair([row()])).single;
+
+      expect(append.occurredAt, DateTime.utc(2026, 9, 5, 20));
     });
 
     test(

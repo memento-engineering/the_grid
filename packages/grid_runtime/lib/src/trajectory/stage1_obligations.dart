@@ -60,11 +60,21 @@ typedef LastActivityPoll = DateTime? Function(String providerName);
 /// means the caller could not say, and the heal falls back to
 /// `unknown` / `external-close`. [reason] is the ledger's own close reason.
 final class SessionClosure {
-  const SessionClosure({this.closedAt, this.outcome, this.reason});
+  const SessionClosure({
+    this.closedAt,
+    this.outcome,
+    this.reason,
+    this.retiredRound = false,
+  });
 
   final DateTime? closedAt;
   final TerminalOutcome? outcome;
   final String? reason;
+
+  /// The ledger closed this bead because its round was RETIRED by rework
+  /// (`#rN` key). The fold keeps such heads open by schema design (the round
+  /// bump is the retirement); the obligation counts and skips them.
+  final bool retiredRound;
 }
 
 /// The engine-side answer to "is this session bead closed in bd?" — read off
@@ -73,10 +83,13 @@ final class SessionClosure {
 /// bare harness) or the bead is open/unknown.
 typedef SessionClosureProbe = SessionClosure? Function(String sessionId);
 
-/// The harness's answer to "is an append for this attempt still queued or
-/// mid-flight?" (`TrajectoryHarness.hasQueuedAppendFor`). The heal must not
-/// race a terminal record that is about to land (r8 — V2-B1).
-typedef AppendQueuedProbe = bool Function(String attemptId);
+/// The harness's answer to "is an append for this attempt, or a terminal for
+/// this session, still queued or mid-flight?" The heal must not race a
+/// terminal record that is about to land (r8 — V2-B1) — and it must ask by
+/// SESSION too, because the head's attempt id is the spawn's while an
+/// observed session terminal carries the recorder's per-session id.
+typedef AppendQueuedProbe =
+    bool Function({required String sessionId, required String attemptId});
 
 /// Obligation names — stable identifiers for the tick's telemetry and for the
 /// stuck-obligation accounting (schema §5).
@@ -338,6 +351,7 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
   int lastOpenInLedger = 0;
   int lastWithinGrace = 0;
   int lastAppendQueued = 0;
+  int lastRetiredRound = 0;
 
   @override
   String get name => kExternalCloseTerminalObligation;
@@ -367,6 +381,7 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
     lastOpenInLedger = 0;
     lastWithinGrace = 0;
     lastAppendQueued = 0;
+    lastRetiredRound = 0;
     // Unwired seam (a bare harness, a test without a state snapshot): the
     // obligation is inert, never a guess. Nothing is healed on no evidence.
     if (probe == null) return const [];
@@ -385,12 +400,21 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
         lastOpenInLedger += 1;
         continue;
       }
+      if (closure.retiredRound) {
+        // The fold's own model: a retired round is an open head with its
+        // round bumped, not a terminal. Closing it is a schema decision
+        // (worksheet E9 / Q9), not a heal — count it and leave it.
+        _firstSeenClosed.remove(sessionId);
+        lastRetiredRound += 1;
+        continue;
+      }
       final firstSeen = _firstSeenClosed.putIfAbsent(sessionId, () => now);
       if (now.difference(firstSeen) < grace) {
         lastWithinGrace += 1;
         continue;
       }
-      if (_appendQueued?.call(attemptId) ?? false) {
+      if (_appendQueued?.call(sessionId: sessionId, attemptId: attemptId) ??
+          false) {
         // The real record is about to land; the guard row will exclude this
         // head from the next scan.
         lastAppendQueued += 1;
@@ -417,6 +441,9 @@ final class ExternalCloseTerminalObligation extends ObligationQuery {
           substation: derived.substation,
           provenance: TrajectoryProvenance.reconstructed,
           provenanceBasis: kTerminalReconcileBasis,
+          // The head's `closed_at` is served under `primary`: it must be the
+          // ledger's instant, never the heal's (a backlog heal is days late).
+          occurredAt: closedAt,
         ),
       );
     }

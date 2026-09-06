@@ -61,6 +61,7 @@ final class TrajectoryConfig {
     this.pulseCoalesce = kDefaultPulseCoalesce,
     this.shutdownDrainTimeout = kDefaultShutdownDrainTimeout,
     this.dualRead = DualReadMode.off,
+    this.reconcileLedgerCloses = true,
   });
 
   final TrajectoryConfigMode mode;
@@ -154,6 +155,18 @@ final class TrajectoryConfig {
   /// arming nothing boots exactly as it did on main.
   final DualReadMode dualRead;
 
+  /// THE LEDGER-CLOSE RECONCILE (tg-ffl6; decision
+  /// `wave-2-flip-scope-soak-and-kill-date`, Q6). ON by default at EVERY
+  /// posture: the external-close obligation reads the state snapshot and
+  /// appends a reconstructed terminal for a session the ledger closed and the
+  /// fold never saw end, and the appender's resolving pre-read runs so that
+  /// testimony yields to observation. `false` is the rollback line r13's
+  /// `off` used to be for this class: no ledger read, no reconstructed
+  /// append, the pre-read back to posture-keyed. Retired rework rounds
+  /// (`#rN` keys) are never reconciled either way — their fate is the
+  /// wave-2 schema question (worksheet E9 / Q9), not a heal.
+  final bool reconcileLedgerCloses;
+
   /// The service tick's interval (§1.2 step 2; Stage-0 default 30 s).
   final Duration tickInterval;
 
@@ -198,5 +211,6 @@ final class TrajectoryConfig {
     pulseCoalesce: pulseCoalesce,
     shutdownDrainTimeout: shutdownDrainTimeout,
     dualRead: dualRead,
+    reconcileLedgerCloses: reconcileLedgerCloses,
   );
 }

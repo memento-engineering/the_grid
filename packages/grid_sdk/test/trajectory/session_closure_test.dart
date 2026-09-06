@@ -44,6 +44,19 @@ void main() {
     expect(closure.outcome, TerminalOutcome.cancelled);
     expect(closure.reason, 'ledger close: reworked');
     expect(closure.closedAt, DateTime.utc(2026, 9, 5, 20));
+    // …and it is flagged as a retired round, which the heal leaves open.
+    expect(closure.retiredRound, isTrue);
+  });
+
+  test('a void re-key on a retired round is a void, not a retirement', () {
+    final closure = sessionClosureOf(
+      _session(
+        closed: true,
+        metadata: {SessionBeadKeys.workBead: 'tg-abc#void-tranquility-1'},
+      ),
+    )!;
+    expect(closure.retiredRound, isFalse);
+    expect(closure.outcome, TerminalOutcome.lost);
   });
 
   test('a hand close with a bare key and no stamp is CANCELLED too, and '
