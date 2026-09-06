@@ -14,7 +14,7 @@ register:
   obsoletes: []
   updates: []
   obsoleted-by: null
-  updated-by: []
+  updated-by: [wave-2-flip-scope-soak-and-kill-date]
   bead: tg-5l4p
   legacy-id: null
 ---
