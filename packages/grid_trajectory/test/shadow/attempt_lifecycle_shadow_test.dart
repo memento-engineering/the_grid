@@ -49,6 +49,31 @@ void main() {
     ),
   ];
 
+  TrajectoryEnvelope processStarted({required int seq}) => envelope(
+    recordType: 'attempt.process.started',
+    family: TrajectoryFamily.attempt,
+    seq: seq,
+    sessionId: 's1',
+    attemptId: attempt,
+    incarnation: 1,
+    stepPath: 'root.implement',
+    payload: const {'pid': 4242, 'pgid': 4242},
+  );
+
+  TrajectoryEnvelope processExited({required int seq}) => envelope(
+    recordType: 'attempt.process.exited',
+    family: TrajectoryFamily.attempt,
+    seq: seq,
+    sessionId: 's1',
+    attemptId: attempt,
+    payload: const {
+      'pid': 4242,
+      'exit_code': 0,
+      'exit_kind': 'exited',
+      'inferred': false,
+    },
+  );
+
   const agreeingLegacy = LegacySessionView(
     sessionId: 's1',
     workBeadId: 'tg-9abc',
@@ -122,7 +147,8 @@ void main() {
       expect(only.classification, ShadowMismatchClass.unexplained);
     });
 
-    test('status (fold lagging) — classified non_atomic_crash', () async {
+    test('status (fold lagging) WITHOUT corroboration is unexplained, and '
+        'the basis says nothing was supplied', () async {
       final mismatches = await compare(
         // Only the start reached the trajectory; the ledger already closed.
         records: closedLifecycle().sublist(0, 1),
@@ -132,9 +158,56 @@ void main() {
       final status = mismatches.singleWhere((m) => m.field == 'status');
       expect(status.legacyValue, 'closed');
       expect(status.foldValue, 'open');
-      expect(status.classification, ShadowMismatchClass.nonAtomicCrash);
+      expect(status.classification, ShadowMismatchClass.unexplained);
+      expect(status.basis, 'no corroboration supplied');
       final outcome = mismatches.singleWhere((m) => m.field == 'outcome');
-      expect(outcome.classification, ShadowMismatchClass.nonAtomicCrash);
+      expect(outcome.classification, ShadowMismatchClass.unexplained);
+    });
+
+    test('status (fold lagging) WITH a crash shape on the session\'s attempt '
+        'is non_atomic_crash, basis naming the attempt', () async {
+      final records = [closedLifecycle().first, processStarted(seq: 2)];
+      final result =
+          await AttemptLifecycleShadow(
+            _ScriptedLegacy(const {'s1': agreeingLegacy}),
+          ).compare(
+            sessionId: 's1',
+            records: SubjectRecords(records: records),
+            corroboration: ShadowCorroboration(
+              attempts: {attempt: foldAttemptEvidence(attempt, records)},
+            ),
+          );
+      final status = result.mismatches.singleWhere((m) => m.field == 'status');
+      expect(status.classification, ShadowMismatchClass.nonAtomicCrash);
+      expect(status.basis, contains(attempt));
+      expect(status.basis, contains('started without exit'));
+    });
+
+    test('status (fold lagging) with a clean attempt but a dark epoch is '
+        'lost_append', () async {
+      final records = [
+        closedLifecycle().first,
+        processStarted(seq: 2),
+        processExited(seq: 3),
+      ];
+      final result =
+          await AttemptLifecycleShadow(
+            _ScriptedLegacy(const {'s1': agreeingLegacy}),
+          ).compare(
+            sessionId: 's1',
+            records: SubjectRecords(records: records),
+            corroboration: ShadowCorroboration(
+              attempts: {attempt: foldAttemptEvidence(attempt, records)},
+              epochs: foldEpochEvidence(
+                claims: const [
+                  EpochClaim(station: 'lunar', epoch: 1, records: 0),
+                ],
+              ),
+            ),
+          );
+      final status = result.mismatches.singleWhere((m) => m.field == 'status');
+      expect(status.classification, ShadowMismatchClass.lostAppend);
+      expect(status.basis, contains('dark'));
     });
 
     test('outcome (both terminal, disagreeing) — unexplained', () async {
@@ -213,7 +286,8 @@ void main() {
       expect(only.field, 'held');
       expect(only.legacyValue, 'true');
       expect(only.foldValue, 'false');
-      expect(only.classification, ShadowMismatchClass.nonAtomicCrash);
+      // The fold-lag DIRECTION alone earns no named class (tg-ilug).
+      expect(only.classification, ShadowMismatchClass.unexplained);
     });
 
     test('presence: ledger session the fold never saw', () async {
@@ -225,7 +299,9 @@ void main() {
       expect(only.field, 'presence');
       expect(only.legacyValue, 'present');
       expect(only.foldValue, isNull);
-      expect(only.classification, ShadowMismatchClass.nonAtomicCrash);
+      // Nothing to join — no attempt, no epoch — so nothing can be named.
+      expect(only.classification, ShadowMismatchClass.unexplained);
+      expect(only.basis, 'no corroboration supplied');
     });
 
     test('presence: fold session the ledger never saw — unexplained', () async {
@@ -374,8 +450,11 @@ void main() {
   });
 
   test('a classifier can only classify, never suppress', () async {
-    ShadowMismatchClass allowEverything(String f, String? l, String? r) =>
-        ShadowMismatchClass.nonAtomicCrash;
+    ShadowClassification allowEverything(ShadowMismatchSubject _) =>
+        const ShadowClassification(
+          ShadowMismatchClass.nonAtomicCrash,
+          'test: everything is a crash',
+        );
     final shadow = AttemptLifecycleShadow(
       _ScriptedLegacy(const {'s1': agreeingLegacy}),
       classifier: allowEverything,
@@ -390,6 +469,7 @@ void main() {
       result.mismatches.single.classification,
       ShadowMismatchClass.nonAtomicCrash,
     );
+    expect(result.mismatches.single.basis, 'test: everything is a crash');
   });
 
   group('unshadowable fields are refused AT EMIT', () {
@@ -417,9 +497,14 @@ void main() {
 
     test('every field the real comparator emits passes the guard', () async {
       final seen = <String>{};
-      ShadowMismatchClass spy(String field, String? l, String? r) {
-        seen.add(field);
-        return ShadowMismatchClass.unexplained;
+      final joined = <Set<String>>[];
+      ShadowClassification spy(ShadowMismatchSubject subject) {
+        seen.add(subject.field);
+        joined.add(subject.attemptIds);
+        return const ShadowClassification(
+          ShadowMismatchClass.unexplained,
+          'spy',
+        );
       }
 
       await AttemptLifecycleShadow(
@@ -433,6 +518,9 @@ void main() {
       );
       expect(seen, isNotEmpty);
       expect(seen.intersection(unshadowableMismatchFields), isEmpty);
+      // The subject carries the session's attempts, so a classifier CAN
+      // corroborate — the seam the old (field, legacy, fold) shape lacked.
+      expect(joined.single, {attempt});
     });
   });
 }
@@ -450,6 +538,7 @@ class _BannedFieldShadow extends AttemptLifecycleShadow {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async => ShadowCompareResult([
     buildMismatch(
       sessionId: sessionId,

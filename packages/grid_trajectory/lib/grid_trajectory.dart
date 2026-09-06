@@ -74,6 +74,8 @@ export 'src/fold/step_cursor_row.dart'; // the proj_step_cursor row image + two-
 
 // SECTION: shadow — the §9 comparator over the injected legacy read seam.
 export 'src/shadow/attempt_lifecycle_shadow.dart'; // the real Family-1 ShadowCompare + allow-list seam
+export 'src/shadow/shadow_corroboration.dart'; // the named-gap corroboration: subject, classification, evidence folds (tg-ilug)
+export 'src/cli/shadow_corroboration_reader.dart'; // the verb's SELECT-only corroboration assembly
 export 'src/shadow/legacy_session_reader.dart'; // dependency-free legacy session view + reader interface
 
 // SECTION: shadow, Stage 1 — the step + mount-ordinal lanes (stage1-wiring W8).

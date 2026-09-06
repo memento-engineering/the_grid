@@ -37,6 +37,23 @@ TrajectoryEnvelope _transition({
   },
 );
 
+const String _attemptB = '01J8ATTEMPT000000000000002';
+
+TrajectoryEnvelope _started({
+  required int seq,
+  required String stepPath,
+  required String attemptId,
+}) => envelope(
+  recordType: 'attempt.process.started',
+  family: TrajectoryFamily.attempt,
+  seq: seq,
+  sessionId: _session,
+  attemptId: attemptId,
+  incarnation: 1,
+  stepPath: stepPath,
+  payload: const {'pid': 4242, 'pgid': 4242},
+);
+
 SubjectRecords _records(List<TrajectoryEnvelope> rows) =>
     SubjectRecords(records: rows);
 
@@ -88,8 +105,9 @@ void main() {
     expect(result.isIncomplete, isFalse);
   });
 
-  test('a step bead the fold never recorded is the non-atomic-crash '
-      'class', () async {
+  test('a step bead the fold never recorded is counted, and WITHOUT '
+      'corroboration it is unexplained — the pending shape is named in '
+      'the value', () async {
     final result =
         await _lane([
           const LegacyStepView(stepPath: 'build', state: 'running'),
@@ -108,8 +126,40 @@ void main() {
     final row = result.mismatches.single;
     expect(row.field, 'step_presence');
     expect(row.stepPath, 'review');
+    expect(row.legacyValue, 'present (pending, no process for path)');
     expect(row.foldValue, isNull);
+    expect(row.classification, ShadowMismatchClass.unexplained);
+    expect(row.basis, 'no corroboration supplied');
+  });
+
+  test('a step bead the fold never recorded WITH a crashed process for its '
+      'path is non_atomic_crash — the join reaches the process record by '
+      'step_path', () async {
+    final records = [
+      _transition(
+        seq: 1,
+        stepPath: 'build',
+        state: 'running',
+        attemptId: '01J8ATTEMPT000000000000001',
+      ),
+      _started(seq: 2, stepPath: 'review', attemptId: _attemptB),
+    ];
+    final result =
+        await _lane([
+          const LegacyStepView(stepPath: 'build', state: 'running'),
+          const LegacyStepView(stepPath: 'review', state: 'running'),
+        ]).compare(
+          sessionId: _session,
+          records: _records(records),
+          corroboration: ShadowCorroboration(
+            attempts: {_attemptB: foldAttemptEvidence(_attemptB, records)},
+          ),
+        );
+    final row = result.mismatches.single;
+    expect(row.field, 'step_presence');
+    expect(row.stepPath, 'review');
     expect(row.classification, ShadowMismatchClass.nonAtomicCrash);
+    expect(row.basis, contains(_attemptB));
   });
 
   test('a REAPED molecule is nothing to compare, never a fold-side '
@@ -131,27 +181,43 @@ void main() {
     expect(result.mismatches, isEmpty);
   });
 
-  test('a fold LAGGING the ledger on state is the non-atomic-crash '
-      'class', () async {
-    final result =
-        await _lane([
-          const LegacyStepView(stepPath: 'build', state: 'complete'),
-        ]).compare(
-          sessionId: _session,
-          records: _records([
-            _transition(
-              seq: 1,
-              stepPath: 'build',
-              state: 'running',
-              attemptId: '01J8ATTEMPT000000000000001',
-            ),
-          ]),
-        );
-    final row = result.mismatches.single;
+  test('a fold LAGGING the ledger on state is non_atomic_crash only when '
+      'the row\'s attempt shows a crash; unexplained otherwise', () async {
+    final records = [
+      _transition(
+        seq: 1,
+        stepPath: 'build',
+        state: 'running',
+        attemptId: '01J8ATTEMPT000000000000001',
+      ),
+    ];
+    final legacy = [const LegacyStepView(stepPath: 'build', state: 'complete')];
+    final bare = await _lane(
+      legacy,
+    ).compare(sessionId: _session, records: _records(records));
+    final row = bare.mismatches.single;
     expect(row.field, 'step_state');
     expect(row.legacyValue, 'complete');
     expect(row.foldValue, 'running');
-    expect(row.classification, ShadowMismatchClass.nonAtomicCrash);
+    expect(row.classification, ShadowMismatchClass.unexplained);
+
+    final corroborated = await _lane(legacy).compare(
+      sessionId: _session,
+      records: _records(records),
+      corroboration: ShadowCorroboration(
+        attempts: {
+          '01J8ATTEMPT000000000000001': const AttemptEvidence(
+            attemptId: '01J8ATTEMPT000000000000001',
+            startedSeq: 1,
+          ),
+        },
+      ),
+    );
+    expect(
+      corroborated.mismatches.single.classification,
+      ShadowMismatchClass.nonAtomicCrash,
+    );
+    expect(corroborated.mismatches.single.basis, contains('started'));
   });
 
   test('a fold AHEAD of the ledger on state stays unexplained and blocks the '
@@ -195,6 +261,7 @@ void main() {
     expect(row.legacyValue, 'ran');
     expect(row.foldValue, isNull);
     expect(row.classification, ShadowMismatchClass.stopRacesSpawn);
+    expect(row.basis, contains('no attempt on the fold row'));
   });
 
   test('a PENDING step with no attempt is not a gap — nothing ran '
@@ -344,6 +411,10 @@ void main() {
     expect(result.mismatches.map((row) => row.classification).toSet(), {
       ShadowMismatchClass.uninstrumentedResume,
     });
+    expect(
+      result.mismatches.map((row) => row.basis).toSet().single,
+      contains('predecessor step_round 0'),
+    );
   });
 
   test('--round scopes the comparable rows', () async {

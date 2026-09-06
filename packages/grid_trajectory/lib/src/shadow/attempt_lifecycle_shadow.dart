@@ -5,10 +5,12 @@
 ///
 /// The legacy path is the incumbent oracle during its own replacement (§9):
 /// an unexplained mismatch presumes the FOLD wrong, blocks the stage cut, and
-/// is rendered by `traj shadow-diff`. The one named allow-list class —
+/// is rendered by `traj shadow-diff`. The named allow-list classes —
 /// `non_atomic_crash`, a crash between the legacy write and the trajectory
-/// append — is classified by the injectable [ShadowMismatchClassifier] seam
-/// and adjudicated once by the operator, never silently dropped.
+/// append, and `lost_append`, a loss the recorder itself counted — are
+/// assigned by the injectable [ShadowMismatchClassifier] seam ONLY on
+/// corroboration the log or the accounting holds (tg-ilug), and adjudicated
+/// once by the operator, never silently dropped.
 library;
 
 import 'package:meta/meta.dart';
@@ -19,6 +21,7 @@ import '../codec/envelope.dart';
 import '../fold/session_head_fold.dart';
 import '../fold/session_head_row.dart';
 import 'legacy_session_reader.dart';
+import 'shadow_corroboration.dart';
 
 /// §9's unshadowable facts as mismatch-field names: these MUST NEVER appear
 /// in a mismatch report — they have no legacy counterpart, and a comparator
@@ -33,48 +36,20 @@ const Set<String> unshadowableMismatchFields = {
   'incarnation',
 };
 
-/// Classifies one mismatch against the §9 allow-list.
-typedef ShadowMismatchClassifier =
-    ShadowMismatchClass Function(
-      String field,
-      String? legacyValue,
-      String? foldValue,
-    );
-
-/// The default classifier: the `non_atomic_crash` shape is the FOLD side
-/// missing a fact the legacy side already holds — exactly what a crash
-/// between the legacy write and the trajectory append leaves behind. The
-/// reverse direction (the fold ahead of the ledger) is never that crash and
-/// stays unexplained.
-///
-/// The `held` arm is narrow ON PURPOSE. It classifies a fold that genuinely
-/// LOST a hold record, and nothing else: the escalated class no longer
-/// reaches it at all, because escalation is folded into the comparator's
-/// comparable-held projection ([AttemptLifecycleShadow._comparableHeld])
-/// rather than being waved through here as a crash it never was.
-ShadowMismatchClass nonAtomicCrashClassifier(
-  String field,
-  String? legacyValue,
-  String? foldValue,
-) {
-  final foldLags = switch (field) {
-    'presence' => foldValue == null,
-    'status' => legacyValue == 'closed' && foldValue == 'open',
-    'outcome' => legacyValue != null && foldValue == null,
-    'held' => legacyValue == 'true' && foldValue == 'false',
-    _ => false,
-  };
-  return foldLags
-      ? ShadowMismatchClass.nonAtomicCrash
-      : ShadowMismatchClass.unexplained;
-}
-
 /// The Family-1 [ShadowCompare] strategy — the seam `traj shadow-diff` runs
 /// when a station composes a real [LegacySessionReader] (grid_cli does).
+///
+/// The default classifier is [corroboratedGapClassifier]: the fold-lag
+/// DIRECTION (`presence`, `status`, `outcome`, `held` — the fold missing a
+/// fact the ledger holds) is necessary for a named gap but never sufficient;
+/// the class is earned by the attempt's own records or the epoch's
+/// accounting. The `held` arm stays narrow ON PURPOSE: escalation is folded
+/// into the comparable-held projection ([_comparableHeld]) rather than waved
+/// through as a crash it never was.
 class AttemptLifecycleShadow implements ShadowCompare, ShadowDefaultScope {
   AttemptLifecycleShadow(
     this._legacy, {
-    ShadowMismatchClassifier classifier = nonAtomicCrashClassifier,
+    ShadowMismatchClassifier classifier = corroboratedGapClassifier,
   }) : _classify = classifier;
 
   final LegacySessionReader _legacy;
@@ -112,6 +87,9 @@ class AttemptLifecycleShadow implements ShadowCompare, ShadowDefaultScope {
     required String? legacyValue,
     required String? foldValue,
     required int? seq,
+    Set<String> attemptIds = const {},
+    Set<int> epochs = const {},
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) {
     if (unshadowableMismatchFields.contains(field)) {
       throw StateError(
@@ -119,13 +97,24 @@ class AttemptLifecycleShadow implements ShadowCompare, ShadowDefaultScope {
         '"$field" — §9 excludes it from the window',
       );
     }
+    final classified = _classify(
+      ShadowMismatchSubject(
+        field: field,
+        legacyValue: legacyValue,
+        foldValue: foldValue,
+        attemptIds: attemptIds,
+        epochs: epochs,
+        corroboration: corroboration,
+      ),
+    );
     return ShadowMismatch(
       sessionId: sessionId,
       field: field,
       legacyValue: legacyValue,
       foldValue: foldValue,
       seq: seq,
-      classification: _classify(field, legacyValue, foldValue),
+      classification: classified.classification,
+      basis: classified.basis,
     );
   }
 
@@ -160,6 +149,7 @@ class AttemptLifecycleShadow implements ShadowCompare, ShadowDefaultScope {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async {
     if (records.truncatedAt case final int at) {
       // A fold over a cut stream is not a comparison: the head it produces is
@@ -175,6 +165,15 @@ class AttemptLifecycleShadow implements ShadowCompare, ShadowDefaultScope {
     final fold = foldSessionHeads(records.records);
     final row = fold.rows[sessionId];
     final legacy = await _legacy.sessionView(sessionId);
+    // What a classifier may join this session's rows to: every attempt the
+    // stream names plus the head's own, and the epochs the stream spans. A
+    // presence mismatch with NO records carries empty sets, and the
+    // classifier says so rather than naming a cause.
+    final attemptIds = attemptIdsOf(
+      records.records,
+      headAttemptId: row?.attemptId,
+    );
+    final epochs = epochsOf(records.records);
 
     final mismatches = <ShadowMismatch>[];
     void mismatch(String field, String? legacyValue, String? foldValue) =>
@@ -185,6 +184,9 @@ class AttemptLifecycleShadow implements ShadowCompare, ShadowDefaultScope {
             legacyValue: legacyValue,
             foldValue: foldValue,
             seq: row?.lastSeq,
+            attemptIds: attemptIds,
+            epochs: epochs,
+            corroboration: corroboration,
           ),
         );
 

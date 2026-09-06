@@ -27,6 +27,7 @@ class _AgreeingCompare implements ShadowCompare {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async => ShadowCompareResult(mismatches);
 }
 

@@ -71,6 +71,12 @@ abstract interface class TrajectoryLogReader {
   /// Distinct `session_id`s present in the log, oldest first.
   Future<List<String>> sessions({int limit = defaultReadLimit});
 
+  /// Every boot epoch this station ever CLAIMED (`traj_epoch`), with the
+  /// number of log rows each holds — the corroboration ledger for the §9
+  /// comparator's lost-append class (tg-ilug): a claimed epoch with zero rows
+  /// is a station that ran legacy-only, an uncounted loss that is not a crash.
+  Future<List<EpochClaim>> epochClaims();
+
   /// The fold frontier vs the log's head — null when the log is empty.
   Future<FoldStaleness?> foldStaleness();
 
@@ -92,6 +98,24 @@ class FoldStaleness {
   final int appliedSeq;
 
   int get lag => maxSeq - appliedSeq;
+}
+
+/// One claimed boot epoch and the log's coverage of it.
+@immutable
+class EpochClaim {
+  const EpochClaim({
+    required this.station,
+    required this.epoch,
+    required this.records,
+    this.advancedAt,
+  });
+
+  final String station;
+  final int epoch;
+
+  /// Rows in `trajectory` stamped with this epoch.
+  final int records;
+  final DateTime? advancedAt;
 }
 
 /// Rows read per verb invocation unless `--limit` says otherwise. A forensics
@@ -236,6 +260,16 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
       'WHERE session_id IS NOT NULL '
       'GROUP BY session_id ORDER BY first_seq LIMIT :limit';
 
+  /// The claimed epochs LEFT JOINed to their row counts (ix_type is not
+  /// needed: the join is on the epoch column). SELECT only.
+  static const String epochClaimsSql =
+      'SELECT e.station AS station, e.epoch AS epoch, '
+      'e.advanced_at AS advanced_at, COUNT(t.seq) AS records '
+      'FROM traj_epoch e '
+      'LEFT JOIN trajectory t ON t.station = e.station '
+      'AND t.boot_epoch = e.epoch '
+      'GROUP BY e.station, e.epoch, e.advanced_at ORDER BY e.epoch';
+
   static const String stalenessSql =
       'SELECT (SELECT MAX(seq) FROM trajectory) AS max_seq, '
       '(SELECT applied_seq FROM proj_meta '
@@ -305,6 +339,23 @@ class SqlTrajectoryLogReader implements TrajectoryLogReader {
     return [
       for (final row in result.rows)
         if (row['session_id'] case final String id) id,
+    ];
+  }
+
+  @override
+  Future<List<EpochClaim>> epochClaims() async {
+    final result = await _db.execute(epochClaimsSql);
+    return [
+      for (final row in result.rows)
+        EpochClaim(
+          station: '${row['station']}',
+          epoch: int.parse('${row['epoch']}'),
+          records: int.parse('${row['records'] ?? 0}'),
+          advancedAt: switch (row['advanced_at']) {
+            final String text => DateTime.tryParse(text),
+            _ => null,
+          },
+        ),
     ];
   }
 

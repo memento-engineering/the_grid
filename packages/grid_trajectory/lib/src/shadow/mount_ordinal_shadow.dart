@@ -18,13 +18,19 @@
 ///
 ///   * the fold claims an ordinal the ledger has never reached — the fold
 ///     ahead of the incumbent, which §9 presumes wrong (unexplained);
-///   * the ledger counts remounts and the fold carries no ordinal at all —
-///     the missing-record direction, which is the non-atomic-crash class.
+///   * the ledger counts remounts and the fold carries no ordinal at all.
+///     This is NOT the missing-record direction (tg-ilug): the session's
+///     `session.started` / `mint.outcome` record LANDED and merely lacks the
+///     optional `legacy_attempt_count`, so a lost append is refuted by
+///     construction and the row classifies unexplained with the landed seq as
+///     its basis — through the same injectable classifier every lane runs.
 ///
 /// Deliberately NOT round-scoped: the mount ordinal is per WORK BEAD across
 /// every round (a rework mints a fresh session against the same budget), so a
 /// `--round` filter would hide exactly the remount history it measures.
 library;
+
+import 'package:meta/meta.dart';
 
 import '../cli/traj_shadow_diff_command.dart';
 import '../cli/trajectory_reader.dart';
@@ -32,15 +38,56 @@ import '../codec/codec_registry.dart';
 import '../codec/envelope.dart';
 import '../codec/trajectory_record.dart';
 import 'legacy_mount_attempt_reader.dart';
+import 'shadow_corroboration.dart';
 
 /// The one field this lane compares.
 const String mountOrdinalField = 'legacy_attempt_count';
 
 /// The Family-1 mount-ordinal lane.
 class MountOrdinalShadow implements ShadowCompare {
-  MountOrdinalShadow(this._legacy);
+  MountOrdinalShadow(
+    this._legacy, {
+    ShadowMismatchClassifier classifier = corroboratedGapClassifier,
+  }) : _classify = classifier;
 
   final LegacyMountAttemptReader _legacy;
+  final ShadowMismatchClassifier _classify;
+
+  /// Every row this lane emits runs the classifier — no lane hardcodes a
+  /// class (tg-ilug). [foldRecordSeq] is the landed record's seq when the
+  /// fold side is a record missing the field rather than a missing record.
+  @protected
+  @visibleForTesting
+  ShadowMismatch buildMismatch({
+    required String sessionId,
+    required String? legacyValue,
+    required String? foldValue,
+    required int? foldRecordSeq,
+    required Set<String> attemptIds,
+    required Set<int> epochs,
+    required ShadowCorroboration corroboration,
+  }) {
+    final classified = _classify(
+      ShadowMismatchSubject(
+        field: mountOrdinalField,
+        legacyValue: legacyValue,
+        foldValue: foldValue,
+        attemptIds: attemptIds,
+        epochs: epochs,
+        foldRecordSeq: foldRecordSeq,
+        corroboration: corroboration,
+      ),
+    );
+    return ShadowMismatch(
+      sessionId: sessionId,
+      field: mountOrdinalField,
+      legacyValue: legacyValue,
+      foldValue: foldValue,
+      seq: foldRecordSeq,
+      classification: classified.classification,
+      basis: classified.basis,
+    );
+  }
 
   @override
   Set<String> get comparableFields => const {mountOrdinalField};
@@ -53,6 +100,7 @@ class MountOrdinalShadow implements ShadowCompare {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async {
     if (records.truncatedAt case final int at) {
       return ShadowCompareResult.incomplete(
@@ -66,8 +114,10 @@ class MountOrdinalShadow implements ShadowCompare {
     // order across a bounce is not a guarantee the counter itself makes.
     final observed = <String, int>{};
     // Work beads the session touched even without an ordinal on the record —
-    // the fold-lags direction needs the bead id to ask the ledger about.
+    // the fold-lags direction needs the bead id to ask the ledger about — and
+    // the seq of the record that LANDED without one (rule C's basis).
     final touched = <String>{};
+    final landedWithoutCount = <String, int?>{};
     for (final envelope in records.records) {
       if (envelope.family != TrajectoryFamily.attempt) continue;
       final workBeadId = envelope.workBeadId;
@@ -83,11 +133,16 @@ class MountOrdinalShadow implements ShadowCompare {
           continue;
       }
       touched.add(workBeadId);
-      if (count == null) continue;
+      if (count == null) {
+        landedWithoutCount.putIfAbsent(workBeadId, () => envelope.seq);
+        continue;
+      }
       final held = observed[workBeadId];
       if (held == null || count > held) observed[workBeadId] = count;
     }
     if (touched.isEmpty) return const ShadowCompareResult([]);
+    final attemptIds = attemptIdsOf(records.records);
+    final epochs = epochsOf(records.records);
 
     final mismatches = <ShadowMismatch>[];
     for (final workBeadId in touched) {
@@ -99,13 +154,14 @@ class MountOrdinalShadow implements ShadowCompare {
         // nothing; a ledger counting remounts does not.
         if (ledger == null || ledger <= 1) continue;
         mismatches.add(
-          ShadowMismatch(
+          buildMismatch(
             sessionId: sessionId,
-            field: mountOrdinalField,
             legacyValue: '$ledger',
             foldValue: null,
-            seq: null,
-            classification: ShadowMismatchClass.nonAtomicCrash,
+            foldRecordSeq: landedWithoutCount[workBeadId],
+            attemptIds: attemptIds,
+            epochs: epochs,
+            corroboration: corroboration,
           ),
         );
         continue;
@@ -114,12 +170,14 @@ class MountOrdinalShadow implements ShadowCompare {
       // the fold observed. Ahead is history, behind is divergence.
       if (ledger != null && ledger >= fold) continue;
       mismatches.add(
-        ShadowMismatch(
+        buildMismatch(
           sessionId: sessionId,
-          field: mountOrdinalField,
           legacyValue: ledger == null ? null : '$ledger',
           foldValue: '$fold',
-          seq: null,
+          foldRecordSeq: null,
+          attemptIds: attemptIds,
+          epochs: epochs,
+          corroboration: corroboration,
         ),
       );
     }

@@ -25,6 +25,7 @@ library;
 
 import '../cli/traj_shadow_diff_command.dart';
 import '../cli/trajectory_reader.dart';
+import 'shadow_corroboration.dart';
 
 /// The lane composition. Order is preserved into the report so a mismatch
 /// list reads family by family.
@@ -80,6 +81,7 @@ class CompositeShadow implements ShadowCompare, ShadowDefaultScope {
     required String sessionId,
     required SubjectRecords records,
     int? round,
+    ShadowCorroboration corroboration = const ShadowCorroboration.none(),
   }) async {
     final mismatches = <ShadowMismatch>[];
     final incomplete = <String>[];
@@ -88,6 +90,7 @@ class CompositeShadow implements ShadowCompare, ShadowDefaultScope {
         sessionId: sessionId,
         records: records,
         round: round,
+        corroboration: corroboration,
       );
       mismatches.addAll(result.mismatches);
       if (result.incompleteReason case final String reason) {
