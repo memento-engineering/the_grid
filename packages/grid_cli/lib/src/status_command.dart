@@ -1,6 +1,7 @@
 /// The reusable resident `status` command.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
@@ -41,7 +42,12 @@ class StatusCommand extends Command<int> {
         abbr: 'r',
         help: 'Owned substation token used by the down fallback.',
       )
-      ..addMultiOption('owner', help: 'Alias for --substation.');
+      ..addMultiOption('owner', help: 'Alias for --substation.')
+      ..addFlag(
+        'json',
+        negatable: false,
+        help: 'Write the complete resident status payload as JSON.',
+      );
   }
 
   /// The composing runner's operator-facing station name.
@@ -70,10 +76,11 @@ class StatusCommand extends Command<int> {
       ),
       StateWorkspaceFound(:final home, :final workspace) =>
         switch (await _attach.status(stateWorkspaceDir: home)) {
-          Up(:final payload) => _renderUp(payload),
+          Up(:final payload) => _renderUp(payload, json: args.flag('json')),
           SlowUp(:final payload, :final elapsed) => _renderUp(
             payload,
             slowElapsed: elapsed,
+            json: args.flag('json'),
           ),
           Down() => await _renderDownFallback(args, workspace),
           Starting(:final pid) => _renderRefusal(
@@ -103,7 +110,15 @@ class StatusCommand extends Command<int> {
     return code;
   }
 
-  int _renderUp(Map<String, Object?> payload, {Duration? slowElapsed}) {
+  int _renderUp(
+    Map<String, Object?> payload, {
+    Duration? slowElapsed,
+    required bool json,
+  }) {
+    if (json) {
+      stdout.writeln(jsonEncode(payload));
+      return 0;
+    }
     final station = payload['station'] as Map<String, Object?>? ?? const {};
     final process = payload['process'] as Map<String, Object?>? ?? const {};
     final work = payload['work'] as Map<String, Object?>? ?? const {};
@@ -129,6 +144,14 @@ class StatusCommand extends Command<int> {
         'live sessions: ${work['liveSessions']}  ·  last sync: '
         '${work['lastSyncAt']}',
       );
+    final admission = payload['admission'];
+    if (admission is Map<String, Object?>) {
+      final maxAgents = admission['maxAgents'];
+      final reservations = admission['reservations'];
+      if (maxAgents is int && reservations is List<Object?>) {
+        stdout.writeln('  budget: ${reservations.length}/$maxAgents');
+      }
+    }
     return 0;
   }
 

@@ -21,19 +21,33 @@ import 'package:test/test.dart';
 
 import 'support/recording_stdout.dart';
 
+final _emptyAdmission = StationAdmissionStatus(
+  maxAgents: 4,
+  reservations: const [],
+  refusals: const [],
+);
+
 final class _View implements StationView {
-  _View(this._label, {JoinedSnapshot? snapshot, WedgeMonitor? monitor})
-    : snapshot = snapshot ?? JoinedSnapshot.empty(),
-      monitor = monitor ?? WedgeMonitor(latest: JoinedSnapshot.empty);
+  _View(
+    this._label, {
+    JoinedSnapshot? snapshot,
+    WedgeMonitor? monitor,
+    StationAdmissionStatus? admission,
+  }) : _admission = admission,
+       snapshot = snapshot ?? JoinedSnapshot.empty(),
+       monitor = monitor ?? WedgeMonitor(latest: JoinedSnapshot.empty);
   final String _label;
   final JoinedSnapshot snapshot;
   final WedgeMonitor monitor;
+  final StationAdmissionStatus? _admission;
   @override
   String get stateSubstation => 'lunar-state';
   @override
   String get readPathName => _label;
   @override
   JoinedSnapshot get latest => snapshot;
+  @override
+  StationAdmissionStatus get admission => _admission ?? _emptyAdmission;
   @override
   WedgeState get wedge => monitor.state;
   @override
@@ -61,6 +75,7 @@ final class _Delegate extends GridDelegate {
     this.vendsViews = true,
     this.snapshot,
     this.monitor,
+    this.admission,
   });
 
   final List<String> events;
@@ -68,6 +83,7 @@ final class _Delegate extends GridDelegate {
   final String label;
   final JoinedSnapshot? snapshot;
   final WedgeMonitor? monitor;
+  final StationAdmissionStatus? admission;
 
   /// False = the ABSENCE posture: this station vends neither a status view
   /// nor a command handler (the unified base's null defaults, tg-at3r), and
@@ -92,7 +108,12 @@ final class _Delegate extends GridDelegate {
     if (_disposed) {
       throw StateError('stationView read on disposed delegate "$label"');
     }
-    return _View(label, snapshot: snapshot, monitor: monitor);
+    return _View(
+      label,
+      snapshot: snapshot,
+      monitor: monitor,
+      admission: admission,
+    );
   }
 
   @override
@@ -135,6 +156,7 @@ final class _Harness {
     required this.typesError,
     required this.snapshot,
     required this.monitor,
+    required this.admission,
   });
 
   static Future<_Harness> create({
@@ -150,6 +172,7 @@ final class _Harness {
     Object? typesError,
     JoinedSnapshot? snapshot,
     WedgeMonitor? monitor,
+    StationAdmissionStatus? admission,
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -176,6 +199,7 @@ final class _Harness {
       typesError: typesError,
       snapshot: snapshot,
       monitor: monitor,
+      admission: admission,
     );
   }
 
@@ -195,6 +219,7 @@ final class _Harness {
   final Object? typesError;
   final JoinedSnapshot? snapshot;
   final WedgeMonitor? monitor;
+  final StationAdmissionStatus? admission;
   final events = <String>[];
   final _stdout = ByteConsumer();
   final _stderr = ByteConsumer();
@@ -255,6 +280,7 @@ final class _Harness {
           vendsViews: vendsViews,
           snapshot: snapshot,
           monitor: monitor,
+          admission: admission,
         );
         built.add(delegate);
         return delegate;
@@ -659,6 +685,49 @@ void main() {
       h.release.complete();
       expect(await run, 0);
     }
+  });
+
+  test('status projection forwards the live view admission snapshot', () async {
+    final admission = StationAdmissionStatus(
+      maxAgents: 4,
+      reservations: [
+        (bead: 'earth-1', sessionId: null, since: DateTime.utc(2026, 9, 7, 10)),
+      ],
+      refusals: [
+        (
+          bead: 'earth-2',
+          clause: 'approval: not approved - run the approve verb',
+          since: DateTime.utc(2026, 9, 7, 11),
+        ),
+      ],
+    );
+    final h = await _Harness.create(holdOpen: true, admission: admission);
+    addTearDown(h.dispose);
+    final run = h.run(untimed: true);
+    await h.stationUp.future;
+
+    final status = h.statusView!();
+    expect(status.admission, same(admission));
+    expect(status.toJson()['admission'], {
+      'maxAgents': 4,
+      'reservations': [
+        {
+          'bead': 'earth-1',
+          'sessionId': null,
+          'since': '2026-09-07T10:00:00.000Z',
+        },
+      ],
+      'refusals': [
+        {
+          'bead': 'earth-2',
+          'clause': 'approval: not approved - run the approve verb',
+          'since': '2026-09-07T11:00:00.000Z',
+        },
+      ],
+    });
+
+    h.release.complete();
+    expect(await run, 0);
   });
 
   test('status projection populates every armed substation', () async {
@@ -1542,6 +1611,7 @@ void main() {
       expect(status.lastSyncAt, isNull);
       expect(status.wedge, kNotWedged);
       expect(status.sync, isEmpty);
+      expect(status.admission, isNull);
 
       // POST /command refuses with a clear message — never a throw across
       // the control surface, never a silent success.

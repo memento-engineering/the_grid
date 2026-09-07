@@ -18,6 +18,30 @@ import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
 
+/// A read-only station admission snapshot for operator status surfaces.
+///
+/// Only bead identities, refusal clauses, and reservation/refusal timing cross
+/// this boundary. Candidate bodies and mutable authority state remain private.
+final class StationAdmissionStatus {
+  /// Creates an immutable snapshot of the station admission budget.
+  StationAdmissionStatus({
+    required this.maxAgents,
+    required List<({String bead, String? sessionId, DateTime since})>
+    reservations,
+    required List<({String bead, String clause, DateTime since})> refusals,
+  }) : reservations = List.unmodifiable(reservations),
+       refusals = List.unmodifiable(refusals);
+
+  /// The station-wide concurrency ceiling.
+  final int maxAgents;
+
+  /// Every authority-owned reservation, including pre-session reservations.
+  final List<({String bead, String? sessionId, DateTime since})> reservations;
+
+  /// Every currently active mount-eligibility refusal across all scopes.
+  final List<({String bead, String clause, DateTime since})> refusals;
+}
+
 /// A work bead and the session projection that must ride with its mount.
 final class StationAdmissionCandidate {
   const StationAdmissionCandidate({required this.bead, required this.session});
@@ -136,11 +160,13 @@ final class _UnsnapshottedReservation {
     required this.mountAttempt,
     required this.writeState,
     required this.reservationToken,
+    required this.since,
   });
 
   final _ScopeKey scopeKey;
   final int? mountAttempt;
   final Object reservationToken;
+  final DateTime since;
   _MountAttemptWriteState writeState;
   String? sessionId;
   bool minting = false;
@@ -154,7 +180,8 @@ final class _UnsnapshottedReservation {
 final class _AdmissionScopeState {
   final Set<String> _mountedIds = <String>{};
   final Set<String> _mountAttemptsScheduled = <String>{};
-  final Map<String, String> _mountEligibilityRefusals = <String, String>{};
+  final Map<String, ({String clause, DateTime since})>
+  _mountEligibilityRefusals = <String, ({String clause, DateTime since})>{};
   final Set<({String beadId, String clause})> _mountEligibilityRechecks =
       <({String beadId, String clause})>{};
   Timer? _mountEligibilityRecheckTimer;
@@ -181,17 +208,20 @@ final class StationAdmissionAuthority {
     required String stateSubstation,
     required int maxConcurrentWork,
     AllocationLiveness? liveness,
+    DateTime Function()? clock,
   }) : _writer = writer,
        _provider = provider,
        _stateSubstation = stateSubstation,
        _maxConcurrentWork = maxConcurrentWork,
-       _liveness = liveness ?? neverLive;
+       _liveness = liveness ?? neverLive,
+       _clock = clock ?? DateTime.now;
 
   final StationBeadWriter _writer;
   final RuntimeProvider _provider;
   final String _stateSubstation;
   final int _maxConcurrentWork;
   final AllocationLiveness _liveness;
+  final DateTime Function() _clock;
 
   final Map<_ScopeKey, _AdmissionScopeState> _scopes =
       <_ScopeKey, _AdmissionScopeState>{};
@@ -205,6 +235,39 @@ final class StationAdmissionAuthority {
       <String, Future<void>>{};
   final Set<String> _retryBlocked = <String>{};
   bool _disposed = false;
+
+  /// Copies the current admission budget and refusal state for status views.
+  ///
+  /// The returned rows are deterministically ordered and cannot mutate the
+  /// authority's private collections.
+  StationAdmissionStatus get admissionStatus {
+    final reservations = <({String bead, String? sessionId, DateTime since})>[
+      for (final entry in _reservations.entries)
+        (
+          bead: entry.key,
+          sessionId: entry.value.sessionId,
+          since: entry.value.since,
+        ),
+    ]..sort((a, b) => a.bead.compareTo(b.bead));
+    final refusals =
+        <({String bead, String clause, DateTime since})>[
+          for (final scope in _scopes.values)
+            for (final entry in scope._mountEligibilityRefusals.entries)
+              (
+                bead: entry.key,
+                clause: entry.value.clause,
+                since: entry.value.since,
+              ),
+        ]..sort((a, b) {
+          final byBead = a.bead.compareTo(b.bead);
+          return byBead != 0 ? byBead : a.clause.compareTo(b.clause);
+        });
+    return StationAdmissionStatus(
+      maxAgents: _maxConcurrentWork,
+      reservations: reservations,
+      refusals: refusals,
+    );
+  }
 
   /// Adds a station-lifetime invalidation callback and returns an idempotent
   /// remover. No mutable authority state is exposed through this hook.
@@ -622,6 +685,7 @@ final class StationAdmissionAuthority {
           mountAttempt: null,
           writeState: _MountAttemptWriteState.recorded,
           reservationToken: Object(),
+          since: _clock().toUtc(),
         );
         _reservations[bead.id] = reservation;
         admitted.add(_reservationValue(candidate, reservation));
@@ -635,6 +699,7 @@ final class StationAdmissionAuthority {
         mountAttempt: attempt,
         writeState: _MountAttemptWriteState.writing,
         reservationToken: Object(),
+        since: _clock().toUtc(),
       );
       _reservations[bead.id] = reservation;
       scope._mountedIds.add(bead.id);
@@ -1276,14 +1341,19 @@ final class StationAdmissionAuthority {
     String clause,
   ) {
     final former = scope._mountEligibilityRefusals[beadId];
-    scope._mountEligibilityRefusals[beadId] = clause;
+    scope._mountEligibilityRefusals[beadId] = (
+      clause: clause,
+      since: former != null && former.clause == clause
+          ? former.since
+          : _clock().toUtc(),
+    );
     if (scope._mountEligibilityRechecks.add((beadId: beadId, clause: clause))) {
       scope._mountEligibilityRecheckTimer ??= Timer(Duration.zero, () {
         scope._mountEligibilityRecheckTimer = null;
         _notifyListeners();
       });
     }
-    if (former != clause) {
+    if (former?.clause != clause) {
       _flare(services, 'work.mountEligibilityRefused', {
         'beadId': beadId,
         'clause': clause,
@@ -1303,7 +1373,7 @@ final class StationAdmissionAuthority {
     if (former != null) {
       _flare(services, 'work.mountEligibilityRestored', {
         'beadId': beadId,
-        'clause': former,
+        'clause': former.clause,
       });
     }
   }

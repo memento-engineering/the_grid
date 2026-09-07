@@ -485,34 +485,59 @@ void main() {
       var notifications = 0;
       admission.addInvalidationListener(() => notifications++);
 
-      await runtime.shutdown();
-      await runtime.shutdown();
-
       const bead = Bead(
         id: 'proj-1',
         issueType: IssueType.task,
         status: BeadStatus.open,
       );
-      final result = admission.admitPending(
-        engine.JoinedSnapshot(
-          graph: GraphSnapshot.fromParts(
-            beads: const [bead],
-            dependencies: const [],
-            readyIds: const {'proj-1'},
-            capturedAt: DateTime.utc(2026, 9, 4),
-          ),
+      final snapshot = engine.JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: const [bead],
+          dependencies: const [],
+          readyIds: const {'proj-1'},
+          capturedAt: DateTime.utc(2026, 9, 4),
         ),
-        const engine.SubstationConfig(
-          substationId: 'proj',
-          ownedSubstations: {'proj'},
-        ),
+      );
+      const config = engine.SubstationConfig(
+        substationId: 'proj',
+        ownedSubstations: {'proj'},
+      );
+      const candidate = engine.StationAdmissionCandidate(
+        bead: bead,
+        session: null,
+      );
+      final admitted = admission.admitPending(
+        snapshot,
+        config,
         const engine.ServiceBundle(),
-        const [engine.StationAdmissionCandidate(bead: bead, session: null)],
+        const [candidate],
+      );
+      expect(admitted.admitted.single.candidate.bead.id, 'proj-1');
+      final status = runtime.admission;
+      expect(status.maxAgents, 4);
+      expect(status.reservations.single.bead, 'proj-1');
+      expect(status.reservations.single.sessionId, isNull);
+      expect(status.reservations.single.since.isUtc, isTrue);
+      expect(status.refusals, isEmpty);
+      expect(() => status.reservations.clear(), throwsUnsupportedError);
+      final nextStatus = runtime.admission;
+      expect(nextStatus, isNot(same(status)));
+      expect(nextStatus.reservations, status.reservations);
+
+      await runtime.shutdown();
+      await runtime.shutdown();
+
+      final callsAfterShutdown = stateRunner.calls.length;
+      final result = admission.admitPending(
+        snapshot,
+        config,
+        const engine.ServiceBundle(),
+        const [candidate],
       );
       expect(result.admitted, isEmpty);
       expect(result.waiting, isEmpty);
       expect(result.refused.single.clause, 'disposed');
-      expect(stateRunner.calls, isEmpty);
+      expect(stateRunner.calls, hasLength(callsAfterShutdown));
       expect(notifications, 0);
     },
   );
