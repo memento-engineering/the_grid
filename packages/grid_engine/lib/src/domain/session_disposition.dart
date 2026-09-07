@@ -33,10 +33,8 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/allocation.dart';
 import '../sdk/circuit.dart';
-import '../sdk/cursor.dart';
 import 'session_bead.dart';
 import 'session_projection.dart';
-import 'step_cursor_read.dart';
 
 part 'session_disposition.freezed.dart';
 
@@ -110,7 +108,7 @@ SessionDisposition sessionDispositionOf(SessionProjection? session) {
     );
   }
   if (session.completed) return const SessionDisposition.done();
-  final cursor = _mountCursorOf(session);
+  final cursor = session.trajCursor ?? session.cursor;
   final inFlight = <String>[
     for (final entry in cursor.entries)
       if (!entry.value.isPositiveTerminal)
@@ -144,9 +142,9 @@ SessionDisposition sessionDispositionOf(SessionProjection? session) {
 /// the composer's adopt proof, while the mint decision needs only the identity
 /// triple. Same rule, two shapes.
 List<AdoptFence> staleFences(SessionProjection session) {
-  final cursor = _mountCursorOf(session);
-  if (session.trajCursor != null) {
-    final hasLiveNode = cursor.values.any(
+  final foldCursor = session.trajCursor;
+  if (foldCursor != null) {
+    final hasLiveNode = foldCursor.values.any(
       (node) =>
           node.state == StepState.running || node.state == StepState.ready,
     );
@@ -159,7 +157,7 @@ List<AdoptFence> staleFences(SessionProjection session) {
   }
   final fences = <AdoptFence>[];
   final seen = <int>{};
-  cursor.forEach((_, node) {
+  session.cursor.forEach((_, node) {
     final live =
         node.state == StepState.running || node.state == StepState.ready;
     final pgid = node.pgid;
@@ -176,16 +174,4 @@ List<AdoptFence> staleFences(SessionProjection session) {
     }
   }
   return fences;
-}
-
-/// The cursor read shared by both mount-boundary decisions.
-///
-/// `legacyStepCursorOf` is the actual bead carrier for molecule sessions;
-/// their projection field is structurally empty. `effectiveStepCursor` owns
-/// fold engagement and its no-demotion, P2-miss, stale-rung, and never-creates
-/// rules. Keeping the selection here means disposition and fencing cannot
-/// silently invent a weaker cursor read beside the other C4 consumers.
-CircuitCursor _mountCursorOf(SessionProjection session) {
-  final legacy = legacyStepCursorOf(session);
-  return effectiveStepCursor(session, siteCursor: legacy, beadCursor: legacy);
 }

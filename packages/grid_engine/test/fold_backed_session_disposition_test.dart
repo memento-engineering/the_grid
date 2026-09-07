@@ -162,16 +162,18 @@ Bead _work() => const Bead(
   status: BeadStatus.open,
 );
 
-Bead _sessionBead({bool terminal = false}) => Bead(
+Bead _sessionBead({bool terminal = false, bool scalarFence = true}) => Bead(
   id: 'session-1',
   issueType: GridIssueTypes.session,
   status: terminal ? BeadStatus.closed : BeadStatus.open,
-  metadata: const {
+  metadata: {
     'work_bead': 'work-1',
     SessionBeadKeys.model: kSessionModelMolecule,
-    SessionBeadKeys.pgid: '10',
-    SessionBeadKeys.pid: '11',
-    SessionBeadKeys.token: 'legacy-attempt',
+    if (scalarFence) ...{
+      SessionBeadKeys.pgid: '10',
+      SessionBeadKeys.pid: '11',
+      SessionBeadKeys.token: 'legacy-attempt',
+    },
   },
 );
 
@@ -209,13 +211,17 @@ SessionProjection _moleculeSession({
   required TrajectoryStepSnapshot steps,
   StepState legacyState = StepState.running,
   bool terminal = false,
+  bool scalarFence = true,
 }) {
   final accounting = DualReadAccounting();
   final stepObserver = DualReadStepObserver(mode: mode, accounting: accounting);
   final bridge = StationJoinBridge(
     work: _Source(_graph([_work()])),
     state: _Source(
-      _graph([_sessionBead(terminal: terminal), _stepBead(legacyState)]),
+      _graph([
+        _sessionBead(terminal: terminal, scalarFence: scalarFence),
+        _stepBead(legacyState),
+      ]),
     ),
     headSnapshot: () => head,
     stepSnapshot: () => steps,
@@ -230,6 +236,32 @@ SessionProjection _moleculeSession({
 }
 
 void main() {
+  test('off and observe keep the raw molecule cursor', () {
+    for (final mode in [DualReadMode.off, DualReadMode.observe]) {
+      final joined = _bridge(
+        mode: mode,
+        head: _HeadSnapshot([
+          _Head(isOpen: false, outcome: SessionHeadOutcome.failed),
+        ]),
+        steps: _StepSnapshot([_StepRow(stepState: 'complete')]),
+        legacyState: StepState.complete,
+        terminal: true,
+        scalarFence: false,
+      );
+      addTearDown(joined.bridge.dispose);
+      final session = joined.bridge.latest.sessionsByWorkBead['work-1']!;
+      expect(session.trajCursor, isNull, reason: mode.name);
+      expect(session.cursor, isEmpty, reason: mode.name);
+      expect(session.moleculeBeads, isNotEmpty, reason: mode.name);
+      expect(
+        sessionDispositionOf(session),
+        isA<VoidedSession>(),
+        reason: mode.name,
+      );
+      expect(staleFences(session), isEmpty, reason: mode.name);
+    }
+  });
+
   test('primary reads P2 and P1 for disposition and fences', () {
     final terminalHead = _Head(
       isOpen: false,
@@ -307,29 +339,21 @@ void main() {
     expect(p1Gap.accounting.fallbacks, 1);
   });
 
-  test('empty cursor rule follows the selected fold cursor', () {
-    final head = _Head(isOpen: false, outcome: SessionHeadOutcome.failed);
-    final structurallyEmpty = foldBackedSessionProjection(
-      const SessionProjection(
-        workBeadId: 'work-1',
-        sessionId: 'session-1',
-        isTerminal: true,
-        isMolecule: true,
-        cursor: {'synthetic': NodeCursor(state: StepState.complete)},
-      ),
-      head,
-      const [],
-    );
-    // A molecule's legacy carrier is its step beads, not the synthetic cursor
-    // field. Both the actual legacy carrier and P2 are empty here.
-    expect(sessionDispositionOf(structurallyEmpty), isA<VoidedSession>());
+  test('empty cursor rule follows the literal fold cursor', () {
+    final emptyFold = _moleculeSession(
+      state: StepState.complete,
+    ).copyWith(trajCursor: const {});
+    expect(emptyFold.moleculeBeads, isNotEmpty);
+    expect(sessionDispositionOf(emptyFold), isA<VoidedSession>());
 
-    final foldedComplete = foldBackedSessionProjection(
-      _moleculeSession(state: StepState.complete),
-      head,
-      [_StepRow(stepState: 'complete')],
+    const foldedComplete = SessionProjection(
+      workBeadId: 'work-1',
+      sessionId: 'session-1',
+      isTerminal: true,
+      isMolecule: true,
+      trajCursor: {'build': NodeCursor(state: StepState.complete)},
     );
-    expect(foldedComplete.cursor, isEmpty);
+    expect(foldedComplete.moleculeBeads, isEmpty);
     expect(sessionDispositionOf(foldedComplete), isA<DoneSession>());
   });
 
@@ -389,12 +413,22 @@ void main() {
     );
     agreeing.observe(
       {
-        'work-1': _moleculeSession(
-          state: StepState.running,
-          pgid: 20,
-          pid: 21,
-          token: 'fold-attempt',
-        ),
+        'work-1':
+            _moleculeSession(
+              state: StepState.running,
+              pgid: 20,
+              pid: 21,
+              token: 'fold-attempt',
+            ).copyWith(
+              cursor: const {
+                'build': NodeCursor(
+                  state: StepState.running,
+                  pgid: 20,
+                  pid: 21,
+                  token: 'fold-attempt',
+                ),
+              },
+            ),
       },
       _HeadSnapshot([head]),
       steps: _StepSnapshot([_StepRow(stepState: 'running')]),
