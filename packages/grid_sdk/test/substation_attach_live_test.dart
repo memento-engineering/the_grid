@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:beads_dart/beads_dart.dart';
@@ -8,12 +9,13 @@ import 'package:grid_sdk/grid_sdk.dart';
 import 'package:test/test.dart';
 
 /// Why the two bd-backed tests below skip when `bd` is absent: they bootstrap
-/// REAL proxied stores with `bd init --proxied-server` and tear them down with
-/// `bd dolt stop`, and the trajectory-guards CI job runs `dart test -t
-/// integration` on a runner that has dolt but no bd binary. Without this guard
-/// every such run died with `ProcessException: No such file or directory`
-/// and the merge queue ejected every the_grid PR (tg-nh5e, main red at 81df860).
-/// Wherever bd IS on PATH the tests still run — a skip reason, not an exclusion.
+/// REAL proxied stores with `bd init --proxied-server` and tear them down with a
+/// graceful `bd dolt stop --force` followed by a PID-file SIGKILL fence, and the
+/// trajectory-guards CI job runs `dart test -t integration` on a runner that has
+/// dolt but no bd binary. Without this guard every such run died with
+/// `ProcessException: No such file or directory` and the merge queue ejected
+/// every the_grid PR (tg-nh5e, main red at 81df860). Wherever bd IS on PATH the
+/// tests still run — a skip reason, not an exclusion.
 final String? _bdMissing = _probeBd();
 
 String? _probeBd() {
@@ -249,11 +251,7 @@ Future<void> _initializeStore(
     '--skip-hooks',
     '--prefix',
     database,
-    if (sqlCapable) ...[
-      '--proxied-server',
-      '--proxied-server-idle-timeout',
-      '0',
-    ],
+    if (sqlCapable) '--proxied-server',
   ];
   final result = await Process.run('bd', args, workingDirectory: root);
   if (result.exitCode != 0) {
@@ -293,6 +291,133 @@ Future<void> _initializeStore(
   if (proxy.exitCode != 0) {
     throw StateError('dolt proxy start failed: ${proxy.stderr}');
   }
+}
+
+/// True when [pid] still names a live process (SIGWINCH is a harmless probe).
+bool _pidAlive(int pid) => Process.killPid(pid, ProcessSignal.sigwinch);
+
+int? _parsePidFile(String contents) {
+  final plainPid = int.tryParse(contents.trim());
+  if (plainPid != null && plainPid > 0) return plainPid;
+  try {
+    final decoded = jsonDecode(contents);
+    if (decoded case {'pid': final int pid} when pid > 0) return pid;
+  } on FormatException {
+    // Older bd releases used a bare PID; neither supported format matched.
+  }
+  return null;
+}
+
+Future<bool> _waitForPidExit(int pid) async {
+  for (var poll = 0; poll < 100; poll++) {
+    if (!_pidAlive(pid)) return true;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  return !_pidAlive(pid);
+}
+
+Future<List<String>> _doltSqlServersUnder(String tempPath) async {
+  final result = await Process.run('ps', ['-axo', 'command=']);
+  expect(result.exitCode, 0, reason: 'ps census failed: ${result.stderr}');
+
+  final resolvedTemp = Directory(tempPath).resolveSymbolicLinksSync();
+  final tempPrefix = '$resolvedTemp${Platform.pathSeparator}';
+  final configArgument = RegExp(
+    r'''(?:^|\s)--config(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))''',
+  );
+
+  return (result.stdout as String)
+      .split('\n')
+      .where((command) {
+        if (!command.contains('dolt sql-server')) return false;
+        for (final match in configArgument.allMatches(command)) {
+          final configPath =
+              match.group(1) ?? match.group(2) ?? match.group(3)!;
+          final config = File(configPath);
+          final resolvedConfig = config.existsSync()
+              ? config.resolveSymbolicLinksSync()
+              : config.absolute.path;
+          if (resolvedConfig.startsWith(tempPrefix)) return true;
+        }
+        return false;
+      })
+      .toList(growable: false);
+}
+
+Future<void> _fenceProxiedStores(List<String> roots, String tempPath) async {
+  const pidFilePaths = [
+    '.beads/dolt/proxy.pid',
+    '.beads/dolt/proxy-child.pid',
+    // `_initializeStore` also uses `bd dolt start` after offline user setup;
+    // that command owns a shared-server-style process outside the proxy dir.
+    '.beads/dolt-server.pid',
+  ];
+  final recordedPids = <String, int>{};
+  final pidReadFailures = <String>[];
+
+  // Capture both proxied processes and the server started for user setup before
+  // another bd command can change or remove their PID files.
+  for (final root in roots) {
+    if (!Directory(root).existsSync()) continue;
+    for (final relativePath in pidFilePaths) {
+      final path = '$root/$relativePath';
+      try {
+        final value = _parsePidFile(File(path).readAsStringSync());
+        if (value == null) {
+          pidReadFailures.add('$path did not contain a positive PID');
+        } else {
+          recordedPids[path] = value;
+        }
+      } on Object catch (error) {
+        pidReadFailures.add('$path: $error');
+      }
+    }
+  }
+
+  // This is only a graceful first pass: bd may restart a proxy on a later
+  // command, so the recorded PIDs below are the authoritative fence.
+  for (final root in roots) {
+    if (!Directory(root).existsSync()) continue;
+    try {
+      await Process.run('bd', [
+        'dolt',
+        'stop',
+        '--force',
+      ], workingDirectory: root);
+    } on ProcessException {
+      // Best effort; the hard fence still runs for every captured PID.
+    }
+  }
+
+  for (final pid in recordedPids.values) {
+    Process.killPid(pid, ProcessSignal.sigkill);
+  }
+  final pidExited = await Future.wait(
+    recordedPids.entries.map(
+      (entry) async => MapEntry(entry.key, await _waitForPidExit(entry.value)),
+    ),
+  );
+  final stillLivePids = [
+    for (final entry in pidExited)
+      if (!entry.value) '${entry.key}: ${recordedPids[entry.key]}',
+  ];
+  final survivingServers = await _doltSqlServersUnder(tempPath);
+
+  expect(
+    pidReadFailures,
+    isEmpty,
+    reason: 'failed to capture every proxied-store PID before cleanup',
+  );
+  expect(
+    stillLivePids,
+    isEmpty,
+    reason: 'proxied-store processes survived SIGKILL',
+  );
+  expect(
+    survivingServers,
+    isEmpty,
+    reason: 'Dolt sql-server processes survived under $tempPath',
+  );
 }
 
 void main() {
@@ -424,13 +549,7 @@ void main() {
       final bootRoot = '${temp.path}/mars';
       final attachedRoot = '${temp.path}/earth';
       final roots = ['$home/.grid', bootRoot, attachedRoot];
-      addTearDown(() async {
-        for (final root in roots) {
-          if (Directory(root).existsSync()) {
-            await Process.run('bd', ['dolt', 'stop'], workingDirectory: root);
-          }
-        }
-      });
+      addTearDown(() => _fenceProxiedStores(roots, temp.path));
       await _initializeStore(roots[0], database: 'tgstate', sqlCapable: true);
       await _initializeStore(roots[1], database: 'mars', sqlCapable: true);
       await _initializeStore(roots[2], database: 'earth', sqlCapable: true);
