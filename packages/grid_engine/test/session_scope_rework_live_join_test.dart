@@ -56,7 +56,7 @@ final class _ThrowingGateUpdateRunner extends RecordingBdRunner {
   }
 }
 
-Fakes _fakesOver(RecordingBdRunner runner) {
+Fakes _fakesOver(RecordingBdRunner runner, {ExplorationTransport? transport}) {
   final provider = FakeRuntimeProvider();
   final git = RecordingGitRunner();
   final pr = FakePrOpener();
@@ -67,6 +67,7 @@ Fakes _fakesOver(RecordingBdRunner runner) {
         bd: BdCliService(runner),
         reader: runner,
         ownership: BeadOwnershipPredicate(const {stateSubstation, 'gate'}),
+        onFlare: transport?.flare,
       ),
       stateSubstation: stateSubstation,
     ),
@@ -81,6 +82,27 @@ Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
   }
+}
+
+bool _isPlainCreateOf(List<String> args, String type) {
+  final typeIndex = args.indexOf('--type');
+  return args.isNotEmpty &&
+      args.first == 'create' &&
+      (args.length < 2 || args[1] != '--graph') &&
+      typeIndex >= 0 &&
+      typeIndex + 1 < args.length &&
+      args[typeIndex + 1] == type;
+}
+
+List<WorkBead> _workBeads(Branch root) {
+  final found = <WorkBead>[];
+  void walk(Branch branch) {
+    if (branch.seed case final WorkBead workBead) found.add(workBead);
+    branch.visitChildren(walk);
+  }
+
+  walk(root);
+  return found;
 }
 
 /// Drains the microtask queue and renders every dirty rebuild it produced,
@@ -213,6 +235,7 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
   required CapabilityRegistry registry,
   required RootCircuitFor rootCircuit,
   ExplorationTransport? transport,
+  MountEligibilityPredicate? mountEligibility,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -233,7 +256,10 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
                       ownedSubstations: {'tg'},
                     ),
                   ),
-                  services: ServiceBundle(transport: transport),
+                  services: ServiceBundle(
+                    transport: transport,
+                    mountEligibility: mountEligibility,
+                  ),
                   key: const ValueKey('scope.tg'),
                 ),
               ]),
@@ -248,6 +274,47 @@ Bead _openGate(String id, {required String sessionId}) => Bead(
 
 void main() {
   group('SessionScope rework re-arm through the REAL StationJoinBridge', () {
+    test('retired eligibility refusal ends before mint', () async {
+      final runner = RecordingBdRunner(createdId: 'tgdog-round2');
+      final transport = _RecordingTransport();
+      final f = _fakesOver(runner, transport: transport);
+      final retired = _round1Session('tgdog-round1', workBead: 'tg-1#r1');
+      runner.exportBeads = [retired];
+      final workSrc = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+      final stateSrc = FakeSnapshotSource(_state([retired]));
+      final bridge = StationJoinBridge(work: workSrc, state: stateSrc)..start();
+      addTearDown(bridge.dispose);
+      final mounted = _mountFull(
+        joined: bridge.notifier,
+        ctx: f.ctx,
+        registry: RecordingCapabilityRegistry(circuits: const {}),
+        rootCircuit: (_) => _code,
+        transport: transport,
+        mountEligibility: (_) => const MountEligibilityDecision.refused(
+          clause: 'approval: not approved - run the approve verb',
+        ),
+      );
+      addTearDown(mounted.owner.dispose);
+
+      await _pump();
+      mounted.owner.flush();
+      await _pump();
+
+      expect(_workBeads(mounted.root), isEmpty);
+      expect(transport.flares.last.name, 'work.mountEligibilityRefused');
+      expect(transport.flares.last.data, {
+        'beadId': 'tg-1',
+        'clause': 'approval: not approved - run the approve verb',
+      });
+      expect(transport.named('session.minted'), isEmpty);
+      expect(
+        runner.workCreates.where(
+          (call) => _isPlainCreateOf(call, GridIssueTypes.session.wire),
+        ),
+        isEmpty,
+      );
+    });
+
     Future<void> runStaleGateRework({
       required RecordingBdRunner runner,
       required _RecordingTransport transport,

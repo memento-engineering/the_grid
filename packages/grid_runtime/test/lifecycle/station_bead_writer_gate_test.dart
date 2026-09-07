@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:beads_dart/beads_dart.dart';
@@ -5,6 +6,28 @@ import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 import 'support/recording_bd_runner.dart';
+
+final class _TimeoutGateUpdateRunner extends RecordingBdRunner {
+  final error = TimeoutException('controlled gate update timeout');
+  var _failed = false;
+
+  @override
+  Future<BdResult> run(
+    List<String> args, {
+    Duration? timeout,
+    String? stdin,
+  }) async {
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
+    if (!_failed &&
+        args.length > 1 &&
+        args.first == 'update' &&
+        args[1] == 'tgdog-gate') {
+      _failed = true;
+      throw error;
+    }
+    return result;
+  }
+}
 
 /// Tests for `StationBeadWriter.createGate` (D-7): the_grid mints a `type=gate`
 /// bead in its OWN store to functionally block parked work — NEVER a mutation of
@@ -378,6 +401,74 @@ void main() {
       ]);
     },
   );
+
+  test(
+    'failed gate close is tolerated when the retry census is closed',
+    () async {
+      const gate = Bead(
+        id: 'tgdog-gate',
+        issueType: GridIssueTypes.gate,
+        metadata: {'rig': 'tgdog', 'blocks': 'tgdog-s', 'node': 'review/route'},
+      );
+      final timeoutRunner = _TimeoutGateUpdateRunner();
+      bd = BdCliService(timeoutRunner);
+      timeoutRunner.exportBeads = [session('tgdog-s')];
+      final reader = _SequencedGateReader(
+        timeoutRunner,
+        beadReads: [session('tgdog-s')],
+        firstOpenBeads: const [gate],
+      );
+
+      final receipts =
+          await writerWith(
+            reader: reader,
+            onFlare: (name, data) => flares.add((name: name, data: data)),
+          ).closeSessionAndOpenGatesForTerminal(
+            sessionId: 'tgdog-s',
+            closeReason: 'reworked',
+            trigger: GateCloseCause.supersededRound,
+          );
+
+      expect(receipts, isEmpty);
+      expect(flares, hasLength(1));
+      expect(flares.single.name, 'gate.autoCloseFailed');
+      expect(flares.single.data['sessionId'], 'tgdog-s');
+      expect(
+        flares.single.data['cause'],
+        GateCloseCause.supersededRound.wireValue,
+      );
+      expect(flares.single.data['reason'], contains('${timeoutRunner.error}'));
+    },
+  );
+
+  test('failed gate close still throws while retry census is open', () async {
+    const gate = Bead(
+      id: 'tgdog-gate',
+      issueType: GridIssueTypes.gate,
+      metadata: {'rig': 'tgdog', 'blocks': 'tgdog-s', 'node': 'review/route'},
+    );
+    final timeoutRunner = _TimeoutGateUpdateRunner();
+    bd = BdCliService(timeoutRunner);
+    timeoutRunner.exportBeads = [session('tgdog-s'), gate];
+    final reader = _SequencedGateReader(
+      timeoutRunner,
+      beadReads: [session('tgdog-s')],
+      firstOpenBeads: const [gate],
+    );
+
+    await expectLater(
+      writerWith(
+        reader: reader,
+        onFlare: (name, data) => flares.add((name: name, data: data)),
+      ).closeSessionAndOpenGatesForTerminal(
+        sessionId: 'tgdog-s',
+        closeReason: 'reworked',
+        trigger: GateCloseCause.supersededRound,
+      ),
+      throwsA(same(timeoutRunner.error)),
+    );
+    expect(flares, isEmpty);
+  });
 
   test('session close still refuses an A48 held gate sweep', () async {
     runner.exportBeads = [

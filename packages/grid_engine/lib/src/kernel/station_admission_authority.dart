@@ -37,6 +37,7 @@ final class StationAdmissionReservation {
     required this.mountAttempt,
     required this.sessionId,
     required this.adopted,
+    required this.reservationToken,
   });
 
   /// The candidate whose capacity is synchronously held.
@@ -53,6 +54,13 @@ final class StationAdmissionReservation {
 
   /// Whether [sessionId] was adopted from the supplied snapshot.
   final bool adopted;
+
+  /// Opaque in-process capability for releasing an unconsumed reservation.
+  ///
+  /// The authority compares this value by identity. Adopted, anonymous-live,
+  /// and offline reservations carry null because they own no releasable
+  /// unsnapshotted grant.
+  final Object? reservationToken;
 }
 
 /// A fail-closed admission answer carrying its named clause and explanation.
@@ -127,10 +135,12 @@ final class _UnsnapshottedReservation {
     required this.scopeKey,
     required this.mountAttempt,
     required this.writeState,
+    required this.reservationToken,
   });
 
   final _ScopeKey scopeKey;
   final int? mountAttempt;
+  final Object reservationToken;
   _MountAttemptWriteState writeState;
   String? sessionId;
   bool minting = false;
@@ -329,6 +339,13 @@ final class StationAdmissionAuthority {
           reworkRoundOf(bead.id, candidate.session!.workBeadId) != null;
       final alreadyMounted =
           scope._mountedIds.contains(bead.id) || retiredRound;
+      final protectsLiveWork = switch (candidate.session) {
+        final session? =>
+          !session.isTerminal &&
+              session.pauseState == SessionPauseState.none &&
+              !retiredRound,
+        null => false,
+      };
       final linked = snapshot.linkedSessions(bead.id);
       final verdict = linkedSessionVerdictOf(linked);
       if (!bead.isClosed && verdict is BlockedLinkedSession) {
@@ -353,7 +370,7 @@ final class StationAdmissionAuthority {
       switch (eligibility) {
         case MountRefused(:final clause):
           _noteEligibilityRefusal(scope, services, bead.id, clause);
-          if (!alreadyMounted) {
+          if (!protectsLiveWork) {
             _release(bead.id, onlyScope: scopeKey);
             refused.add(
               StationAdmissionRefusal(
@@ -483,11 +500,24 @@ final class StationAdmissionAuthority {
                 mountAttempt: null,
                 sessionId: null,
                 adopted: false,
+                reservationToken: null,
               ),
             );
             continue;
           }
           scope._mountedIds.add(bead.id);
+          final ownedReservation = _reservations[bead.id];
+          if (ownedReservation != null &&
+              ownedReservation.scopeKey == scopeKey &&
+              ownedReservation.sessionId == sessionId) {
+            admitted.add(
+              _reservationValue(
+                StationAdmissionCandidate(bead: bead, session: session),
+                ownedReservation,
+              ),
+            );
+            continue;
+          }
           admitted.add(
             StationAdmissionReservation(
               candidate: StationAdmissionCandidate(
@@ -498,6 +528,7 @@ final class StationAdmissionAuthority {
               mountAttempt: null,
               sessionId: sessionId,
               adopted: true,
+              reservationToken: null,
             ),
           );
           continue;
@@ -590,6 +621,7 @@ final class StationAdmissionAuthority {
           scopeKey: scopeKey,
           mountAttempt: null,
           writeState: _MountAttemptWriteState.recorded,
+          reservationToken: Object(),
         );
         _reservations[bead.id] = reservation;
         admitted.add(_reservationValue(candidate, reservation));
@@ -602,6 +634,7 @@ final class StationAdmissionAuthority {
         scopeKey: scopeKey,
         mountAttempt: attempt,
         writeState: _MountAttemptWriteState.writing,
+        reservationToken: Object(),
       );
       _reservations[bead.id] = reservation;
       scope._mountedIds.add(bead.id);
@@ -706,6 +739,7 @@ final class StationAdmissionAuthority {
         : null,
     sessionId: reservation.sessionId,
     adopted: false,
+    reservationToken: reservation.reservationToken,
   );
 
   void _scheduleMountAttempt(
@@ -929,14 +963,27 @@ final class StationAdmissionAuthority {
   }
 
   /// Compensates a lifecycle cancellation only when this authority still owns
-  /// the created session attempt. Null and stale ids are harmless no-ops.
+  /// the supplied attempt. Null and stale identities are harmless no-ops.
   Future<String?> abandonSessionAttempt({
     required String workBeadId,
     required String? sessionId,
+    required Object? reservationToken,
     required ServiceBundle services,
   }) async {
-    if (sessionId == null ||
-        _reservations[workBeadId]?.sessionId != sessionId) {
+    final reservation = _reservations[workBeadId];
+    if (sessionId == null) {
+      if (reservationToken == null ||
+          reservation == null ||
+          !identical(reservation.reservationToken, reservationToken) ||
+          reservation.sessionId != null ||
+          reservation.minting) {
+        return null;
+      }
+      _release(workBeadId);
+      _notifyListeners();
+      return null;
+    }
+    if (reservation?.sessionId != sessionId) {
       return null;
     }
     return _voidCreatedSession(

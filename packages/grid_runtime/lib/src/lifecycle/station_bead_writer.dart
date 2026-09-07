@@ -340,12 +340,30 @@ class StationBeadWriter {
     required GateCloseCause trigger,
   }) async {
     await close(sessionId, reason: closeReason);
-    return _closeOpenGatesForTerminal(
-      sessionId: sessionId,
-      trigger: trigger,
-      disposition: GateSweepSessionDisposition.voided,
-      sessionClosedByWriter: true,
-    );
+    try {
+      return await _closeOpenGatesForTerminal(
+        sessionId: sessionId,
+        trigger: trigger,
+        disposition: GateSweepSessionDisposition.voided,
+        sessionClosedByWriter: true,
+      );
+    } on Object catch (error, stackTrace) {
+      try {
+        final openGates = await _findOpenGates(sessionId: sessionId);
+        if (openGates.isEmpty) {
+          _flare('gate.autoCloseFailed', {
+            'sessionId': sessionId,
+            'cause': trigger.wireValue,
+            'reason': _truncateGateFlareReason('$error'),
+          });
+          return const <GateAutoCloseReceipt>[];
+        }
+      } on Object {
+        // The original gate-sweep failure remains authoritative when the
+        // reconciliation census itself cannot prove that every gate closed.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   Future<List<GateAutoCloseReceipt>> closeOpenGatesForTerminal({
