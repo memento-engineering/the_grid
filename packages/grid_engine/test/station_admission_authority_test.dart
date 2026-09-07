@@ -281,6 +281,139 @@ void main() {
   });
 
   test(
+    'admission status is ordered, sanitized, immutable, and retains since',
+    () async {
+      final runner = RecordingBdRunner(createdId: 'tg-session');
+      final provider = FakeRuntimeProvider();
+      var now = DateTime(2026, 9, 7, 10);
+      final authority = StationAdmissionAuthority(
+        writer: StationBeadWriter(
+          bd: BdCliService(runner),
+          reader: runner,
+          ownership: BeadOwnershipPredicate(const {'tg'}),
+        ),
+        provider: provider,
+        stateSubstation: 'tg',
+        maxConcurrentWork: 4,
+        clock: () => now,
+      );
+      addTearDown(authority.dispose);
+      const bodySentinel = 'SECRET BODY PROSE MUST NOT CROSS STATUS';
+      final beads = [
+        _bead('tg-z', priority: 0).copyWith(description: bodySentinel),
+        _bead('tg-y', priority: 1),
+        _bead('tg-b', priority: 2).copyWith(title: bodySentinel),
+        _bead('tg-a', priority: 3),
+      ];
+      final candidates = [
+        for (final bead in beads)
+          StationAdmissionCandidate(bead: bead, session: null),
+      ];
+      final snapshot = _snapshot(beads);
+      final clauses = <String, String>{
+        'tg-y': 'fresh mount-eligibility read pending',
+        'tg-b': 'approval: not approved - run the approve verb',
+      };
+      MountEligibilityDecision eligibility(Bead bead) {
+        final clause = clauses[bead.id];
+        return clause == null
+            ? const MountEligibilityDecision.eligible()
+            : MountEligibilityDecision.refused(clause: clause);
+      }
+
+      authority.admitPending(
+        snapshot,
+        _config.copyWith(maxConcurrentWork: 4),
+        ServiceBundle(mountEligibility: eligibility),
+        candidates,
+      );
+
+      final firstSince = now.toUtc();
+      final initial = authority.admissionStatus;
+      expect(initial.maxAgents, 4);
+      expect(initial.reservations, [
+        (bead: 'tg-a', sessionId: null, since: firstSince),
+        (bead: 'tg-z', sessionId: null, since: firstSince),
+      ]);
+      expect(initial.refusals, [
+        (
+          bead: 'tg-b',
+          clause: 'approval: not approved - run the approve verb',
+          since: firstSince,
+        ),
+        (
+          bead: 'tg-y',
+          clause: 'fresh mount-eligibility read pending',
+          since: firstSince,
+        ),
+      ]);
+      expect(initial.reservations.every((row) => row.since.isUtc), isTrue);
+      expect(initial.refusals.every((row) => row.since.isUtc), isTrue);
+      final exposedText = <String>[
+        for (final row in initial.reservations)
+          '${row.bead}|${row.sessionId}|${row.since.toIso8601String()}',
+        for (final row in initial.refusals)
+          '${row.bead}|${row.clause}|${row.since.toIso8601String()}',
+      ].join('\n');
+      expect(exposedText, isNot(contains(bodySentinel)));
+      expect(
+        () => initial.reservations.add((
+          bead: 'tg-nope',
+          sessionId: null,
+          since: firstSince,
+        )),
+        throwsUnsupportedError,
+      );
+      expect(() => initial.refusals.clear(), throwsUnsupportedError);
+
+      now = DateTime(2026, 9, 7, 11);
+      final created = await authority.createSessionAttempt(
+        snapshot,
+        candidates.first,
+        title: 'session title',
+        metadata: const {SessionBeadKeys.model: kSessionModelMolecule},
+      );
+      expect(created.sessionId, 'tg-session');
+      expect(created.refusal, isNull);
+      authority.admitPending(
+        snapshot,
+        _config.copyWith(maxConcurrentWork: 4),
+        ServiceBundle(mountEligibility: eligibility),
+        candidates,
+      );
+      final repeated = authority.admissionStatus;
+      expect(repeated.reservations, [
+        (bead: 'tg-a', sessionId: null, since: firstSince),
+        (bead: 'tg-z', sessionId: 'tg-session', since: firstSince),
+      ]);
+      expect(repeated.refusals, initial.refusals);
+
+      now = DateTime(2026, 9, 7, 12);
+      clauses['tg-b'] = 'approval: policy changed';
+      authority.admitPending(
+        snapshot,
+        _config.copyWith(maxConcurrentWork: 4),
+        ServiceBundle(mountEligibility: eligibility),
+        candidates,
+      );
+      final changed = authority.admissionStatus;
+      expect(changed.refusals, [
+        (bead: 'tg-b', clause: 'approval: policy changed', since: now.toUtc()),
+        initial.refusals.last,
+      ]);
+
+      clauses.remove('tg-b');
+      authority.admitPending(
+        snapshot,
+        _config.copyWith(maxConcurrentWork: 4),
+        ServiceBundle(mountEligibility: eligibility),
+        candidates,
+      );
+      expect(authority.admissionStatus.refusals, [initial.refusals.last]);
+    },
+  );
+
+  test(
     'priority then bead id reserves synchronously under both ceilings',
     () async {
       final fakes = buildFakes();

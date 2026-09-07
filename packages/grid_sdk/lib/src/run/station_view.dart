@@ -1,4 +1,5 @@
-import 'package:grid_engine/grid_engine.dart' show JoinedSnapshot, WedgeState;
+import 'package:grid_engine/grid_engine.dart'
+    show JoinedSnapshot, StationAdmissionStatus, WedgeState;
 
 /// The narrow status view a station delegate vends — the VALUES the command
 /// shell's banner, `/status` view, and dev-mode seat read. A view over the
@@ -12,6 +13,9 @@ abstract interface class StationView {
 
   /// The producer-side latest join (status counts read THIS).
   JoinedSnapshot get latest;
+
+  /// The station's current immutable admission budget and refusal snapshot.
+  StationAdmissionStatus get admission;
 
   /// The station's wedge signal — one truth for "is the grid stuck?".
   WedgeState get wedge;

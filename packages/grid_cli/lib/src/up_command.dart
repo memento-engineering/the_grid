@@ -756,6 +756,7 @@ class UpCommand extends Command<int> {
       perSubstation: perSubstation,
       wedge: wedge,
       sync: view?.syncStatus() ?? const <String, Object?>{},
+      admission: view?.admission,
     );
   }
 }

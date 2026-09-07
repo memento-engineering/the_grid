@@ -41,6 +41,7 @@ import 'package:grid_sdk/grid_sdk.dart'
         GridCommandRefused,
         GridCommandRequest,
         GridCommandResult,
+        StationAdmissionStatus,
         WedgeState,
         kNotWedged;
 
@@ -130,6 +131,7 @@ class StationStatus {
     this.perSubstation = const <SubstationStatus>[],
     this.wedge = kNotWedged,
     this.sync = const <String, Object?>{},
+    this.admission,
   });
 
   /// The owned substation allow-set, joined for display.
@@ -200,6 +202,12 @@ class StationStatus {
   /// work runtime (or an older runner predates the field).
   final Map<String, Object?> sync;
 
+  /// The optional station admission budget and refusal snapshot.
+  ///
+  /// Null keeps payloads built without a station work view wire-compatible
+  /// with older residents.
+  final StationAdmissionStatus? admission;
+
   /// Serializes to the wire shape `/status` returns.
   Map<String, Object?> toJson() => <String, Object?>{
     'station': <String, Object?>{
@@ -222,6 +230,26 @@ class StationStatus {
       'lastSyncAt': lastSyncAt?.toIso8601String(),
       'perSubstation': [for (final s in perSubstation) s.toJson()],
     },
+    if (admission case final admission?)
+      'admission': <String, Object?>{
+        'maxAgents': admission.maxAgents,
+        'reservations': <Object?>[
+          for (final row in admission.reservations)
+            <String, Object?>{
+              'bead': row.bead,
+              'sessionId': row.sessionId,
+              'since': row.since.toIso8601String(),
+            },
+        ],
+        'refusals': <Object?>[
+          for (final row in admission.refusals)
+            <String, Object?>{
+              'bead': row.bead,
+              'clause': row.clause,
+              'since': row.since.toIso8601String(),
+            },
+        ],
+      },
     // First-class, top-level — a watcher reads THIS, never the gate list.
     'wedge': wedge.toJson(),
     if (sync.isNotEmpty) 'sync': sync,

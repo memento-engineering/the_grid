@@ -80,6 +80,22 @@ void main() {
         expect(authority, contains(name), reason: '$name stays behind owner');
         expect(workList, isNot(contains(name)), reason: '$name moved out');
       }
+      expect(authority, contains('_reservations'));
+      expect(authority, contains('_mountEligibilityRefusals'));
+      final statusStart = authority.indexOf(
+        'final class StationAdmissionStatus',
+      );
+      final statusEnd = authority.indexOf(
+        '/// A work bead and the session projection',
+        statusStart,
+      );
+      expect(statusStart, greaterThanOrEqualTo(0));
+      expect(statusEnd, greaterThan(statusStart));
+      expect(
+        authority.substring(statusStart, statusEnd),
+        isNot(contains('set ')),
+        reason: 'the public admission snapshot has no mutable setter surface',
+      );
       for (final authorityOnly in [
         '_surplusRetiresScheduled',
         '_surplusAliveReported',

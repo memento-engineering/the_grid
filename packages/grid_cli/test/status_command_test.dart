@@ -82,14 +82,15 @@ void main() {
       runWithAttach(_FakeAttach(result), extra);
 
   Future<({int? code, String stderr, String stdout})> runCapturedWithAttach(
-    StationAttach attach,
-  ) async {
+    StationAttach attach, [
+    List<String> extra = const [],
+  ]) async {
     final stdoutBytes = ByteConsumer();
     final stdoutSink = RecordingStdout(stdoutBytes);
     final stderrBytes = ByteConsumer();
     final stderrSink = RecordingStdout(stderrBytes);
     final code = await IOOverrides.runZoned(
-      () => runWithAttach(attach),
+      () => runWithAttach(attach, extra),
       stdout: () => stdoutSink,
       stderr: () => stderrSink,
     );
@@ -98,8 +99,9 @@ void main() {
   }
 
   Future<({int? code, String stderr, String stdout})> runCaptured(
-    AttachResult result,
-  ) => runCapturedWithAttach(_FakeAttach(result));
+    AttachResult result, [
+    List<String> extra = const [],
+  ]) => runCapturedWithAttach(_FakeAttach(result), extra);
 
   test('live payload retains the exact station UP first line', () async {
     final result = await runCaptured(
@@ -108,6 +110,71 @@ void main() {
 
     expect(result.code, 0);
     expect(const LineSplitter().convert(result.stdout).first, 'station: UP');
+    expect(result.stderr, isEmpty);
+  });
+
+  test('admission renders a budget and remains raw in JSON mode', () async {
+    final payload = <String, Object?>{
+      ...statusPayload,
+      'admission': <String, Object?>{
+        'maxAgents': 4,
+        'reservations': <Object?>[
+          <String, Object?>{
+            'bead': 'tg-null-session',
+            'sessionId': null,
+            'since': '2026-09-07T10:00:00.000Z',
+          },
+        ],
+        'refusals': <Object?>[
+          <String, Object?>{
+            'bead': 'tg-refused',
+            'clause': 'approval: not approved - run the approve verb',
+            'since': '2026-09-07T11:00:00.000Z',
+          },
+        ],
+      },
+    };
+
+    final human = await runCaptured(Up(record: record(), payload: payload));
+    expect(human.code, 0);
+    expect(human.stdout, contains('  budget: 1/4\n'));
+    expect(human.stderr, isEmpty);
+
+    final json = await runCaptured(Up(record: record(), payload: payload), [
+      '--json',
+    ]);
+    expect(json.code, 0);
+    expect(const LineSplitter().convert(json.stdout), hasLength(1));
+    final decoded = jsonDecode(json.stdout) as Map<String, Object?>;
+    expect(decoded, payload);
+    final admission = decoded['admission'] as Map<String, Object?>;
+    final reservations = admission['reservations'] as List<Object?>;
+    final reservation = reservations.single as Map<String, Object?>;
+    expect(reservation['sessionId'], isNull);
+    final refusals = admission['refusals'] as List<Object?>;
+    expect(
+      refusals.single,
+      containsPair('clause', 'approval: not approved - run the approve verb'),
+    );
+    expect(json.stderr, isEmpty);
+  });
+
+  test('a payload without admission preserves the legacy UP output', () async {
+    final result = await runCaptured(
+      Up(record: record(), payload: statusPayload),
+    );
+
+    expect(result.code, 0);
+    expect(
+      result.stdout,
+      'station: UP\n'
+      '  substation: lunar\n'
+      '  state store: /tmp/state\n'
+      '  work root: /tmp/work\n'
+      '  mode: LIVE\n'
+      '  pid: 42  ·  uptime: 10s  ·  version: test-vm\n'
+      '  ready: 1  ·  mounted: 1  ·  live sessions: 1  ·  last sync: null\n',
+    );
     expect(result.stderr, isEmpty);
   });
 

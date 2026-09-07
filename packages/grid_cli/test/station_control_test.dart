@@ -71,6 +71,23 @@ void main() {
           liveSessions: 1,
           mintFailedScopes: 2,
           lastSyncAt: null,
+          admission: StationAdmissionStatus(
+            maxAgents: 4,
+            reservations: [
+              (
+                bead: 'tg-null-session',
+                sessionId: null,
+                since: DateTime.utc(2026, 9, 7, 10),
+              ),
+            ],
+            refusals: [
+              (
+                bead: 'tg-refused',
+                clause: 'approval: not approved - run the approve verb',
+                since: DateTime.utc(2026, 9, 7, 11),
+              ),
+            ],
+          ),
         ),
         commandHandler: _FakeCommandHandler(),
       );
@@ -107,11 +124,32 @@ void main() {
         'lastSyncAt': null,
         'perSubstation': <Object?>[],
       });
+      expect(body['admission'], {
+        'maxAgents': 4,
+        'reservations': [
+          {
+            'bead': 'tg-null-session',
+            'sessionId': null,
+            'since': '2026-09-07T10:00:00.000Z',
+          },
+        ],
+        'refusals': [
+          {
+            'bead': 'tg-refused',
+            'clause': 'approval: not approved - run the approve verb',
+            'since': '2026-09-07T11:00:00.000Z',
+          },
+        ],
+      });
+      expect(response.body, isNot(contains('SECRET BEAD TITLE')));
+      expect(response.body, isNot(contains('SECRET BEAD DESCRIPTION')));
     });
 
     test('status constructors always serialize zero mint failures', () {
-      final work = _sampleStatus().toJson()['work'] as Map<String, Object?>;
+      final json = _sampleStatus().toJson();
+      final work = json['work'] as Map<String, Object?>;
       expect(work['mintFailedScopes'], 0);
+      expect(json, isNot(contains('admission')));
 
       const substation = SubstationStatus(
         substation: 'earth',
@@ -620,16 +658,40 @@ void main() {
         final refreshStarted = Completer<void>();
         final releaseRefresh = Completer<void>();
         final failedRefresh = Completer<void>();
+        final initialAdmission = StationAdmissionStatus(
+          maxAgents: 4,
+          reservations: [
+            (
+              bead: 'tg-initial',
+              sessionId: null,
+              since: DateTime.utc(2026, 9, 7, 10),
+            ),
+          ],
+          refusals: const [],
+        );
+        final replacementAdmission = StationAdmissionStatus(
+          maxAgents: 2,
+          reservations: const [],
+          refusals: [
+            (
+              bead: 'tg-replacement',
+              clause: 'fresh mount-eligibility read pending',
+              since: DateTime.utc(2026, 9, 7, 11),
+            ),
+          ],
+        );
         final control = await StationControl.start(
           port: 0,
           token: 't',
           view: () async {
             calls++;
-            if (calls == 1) return _sampleStatus(ready: 1);
+            if (calls == 1) {
+              return _sampleStatus(ready: 1, admission: initialAdmission);
+            }
             if (calls == 2) {
               refreshStarted.complete();
               await releaseRefresh.future;
-              return _sampleStatus(ready: 2);
+              return _sampleStatus(ready: 2, admission: replacementAdmission);
             }
             if (!failedRefresh.isCompleted) failedRefresh.complete();
             throw StateError('refresh failed');
@@ -651,6 +713,17 @@ void main() {
           (jsonDecode(cached.body) as Map<String, Object?>)['work'],
           containsPair('ready', 1),
         );
+        expect((jsonDecode(cached.body) as Map<String, Object?>)['admission'], {
+          'maxAgents': 4,
+          'reservations': [
+            {
+              'bead': 'tg-initial',
+              'sessionId': null,
+              'since': '2026-09-07T10:00:00.000Z',
+            },
+          ],
+          'refusals': <Object?>[],
+        });
 
         releaseRefresh.complete();
         await failedRefresh.future;
@@ -659,6 +732,20 @@ void main() {
           (jsonDecode(refreshed.body) as Map<String, Object?>)['work'],
           containsPair('ready', 2),
           reason: 'a failed refresh keeps the last fully encoded good body',
+        );
+        expect(
+          (jsonDecode(refreshed.body) as Map<String, Object?>)['admission'],
+          {
+            'maxAgents': 2,
+            'reservations': <Object?>[],
+            'refusals': [
+              {
+                'bead': 'tg-replacement',
+                'clause': 'fresh mount-eligibility read pending',
+                'since': '2026-09-07T11:00:00.000Z',
+              },
+            ],
+          },
         );
 
         await control.dispose();
@@ -860,7 +947,10 @@ Future<_Response> _hooksGet(StationControl control, String worktree) => _get(
   token: 't',
 );
 
-StationStatus _sampleStatus({int ready = 0}) => StationStatus(
+StationStatus _sampleStatus({
+  int ready = 0,
+  StationAdmissionStatus? admission,
+}) => StationStatus(
   substation: 'tgdog',
   stateStore: null,
   workRoot: null,
@@ -872,6 +962,7 @@ StationStatus _sampleStatus({int ready = 0}) => StationStatus(
   mounted: 0,
   liveSessions: 0,
   lastSyncAt: null,
+  admission: admission,
 );
 
 Future<_Response> _get(String base, String path, {String? token}) async {

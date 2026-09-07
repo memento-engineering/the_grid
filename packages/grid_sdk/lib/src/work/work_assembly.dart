@@ -248,6 +248,10 @@ class StationWorkRuntime implements SubstationProvisioner {
   /// last pushed), never the notifier's reactive state (D-H rule 2).
   JoinedSnapshot get latest => _driver.bridge.latest;
 
+  /// The current immutable admission budget and refusal snapshot.
+  StationAdmissionStatus get admission =>
+      wiring.services.admission.admissionStatus;
+
   /// The station's WEDGE signal (tg-jwh) — the single source of truth a runner
   /// hands to its status view, so a watcher never re-derives "is the grid
   /// stuck?" from raw sessions. A plain derived VALUE, read fresh per request.

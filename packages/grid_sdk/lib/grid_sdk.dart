@@ -239,6 +239,7 @@ export 'package:grid_engine/grid_engine.dart'
         OrphanSweepReport,
         ResultMetricFields,
         ResultTransport,
+        StationAdmissionStatus,
         TreeProjector,
         RestartReconciler,
         RestartReport,
