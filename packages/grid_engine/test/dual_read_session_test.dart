@@ -483,6 +483,7 @@ void main() {
       expect(DualReadDivergenceCause.values, const [
         DualReadDivergenceCause.operatorStoreEdit,
         DualReadDivergenceCause.foldAheadOfLegacy,
+        DualReadDivergenceCause.foldBackedMountFacts,
         DualReadDivergenceCause.unexplained,
       ]);
       var now = DateTime.utc(2026, 9, 1, 16);
@@ -804,6 +805,8 @@ void main() {
             expect(observer.accounting.unexplainedDivergences, 0);
           case DualReadDivergenceCause.foldAheadOfLegacy:
             fail('the session comparator never mints fold-ahead-of-legacy');
+          case DualReadDivergenceCause.foldBackedMountFacts:
+            fail('this probe does not compare fold-backed mount facts');
           case DualReadDivergenceCause.unexplained:
             expect(observer.accounting.unexplainedDivergences, greaterThan(0));
             expect(observer.accounting.operatorStoreEditDivergences, 0);

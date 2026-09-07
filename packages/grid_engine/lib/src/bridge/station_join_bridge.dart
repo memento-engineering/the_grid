@@ -373,24 +373,29 @@ class StationJoinBridge {
     // made just above — rides its own live carrier, because wave 1 retires no
     // writer.
     if (head != null) {
-      final overlays = dualRead?.observe(sessions, head);
+      final overlays = dualRead?.observe(sessions, head, steps: steps);
       if (overlays != null && overlays.isNotEmpty) sessions.addAll(overlays);
     }
     // THE STEP AXIS (C4) runs AFTER the session overlay is spliced, so it
     // compares against the projections a decision would actually read — and
     // so a session the session axis just marked terminal is skipped rather
     // than compared node by node. Same discipline: the pass RETURNS the
-    // `trajCursor` entries and the join splices them, one writer for the map.
+    // complete P2 cursor/P1 identity carrier and the join splices it, one
+    // writer for the map.
     if (steps != null) {
-      final cursors = stepDualRead?.observe(sessions, steps);
+      final cursors = stepDualRead?.observe(sessions, steps, head: head);
       cursors?.forEach((key, overlay) {
         final projection = sessions[key];
         if (projection == null) return;
-        // BOTH halves or neither: the ladder views come from the same rows as
-        // the cursor, so a projection never carries one without the other.
+        // Every part together: ladder views come from the same rows as the
+        // cursor and the identity comes from the same P1 pair used to qualify
+        // it, so the mount boundary never sees a mixed carrier.
         sessions[key] = projection.copyWith(
           trajCursor: overlay.cursor,
           trajStepViews: overlay.views,
+          trajPgid: overlay.trajPgid,
+          trajPid: overlay.trajPid,
+          trajAttemptId: overlay.trajAttemptId,
         );
       });
     }
