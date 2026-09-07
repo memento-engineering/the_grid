@@ -243,6 +243,7 @@ void main() {
       mountAttempt: 1,
       sessionId: null,
       adopted: false,
+      reservationToken: null,
     );
     final refusal = StationAdmissionRefusal(
       candidate: candidate,
@@ -770,6 +771,149 @@ void main() {
     },
   );
 
+  test('reservation token release returns pre-session capacity', () async {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final first = _bead('tg-1');
+    final rival = _bead('tg-2');
+    final snapshot = _snapshot([first, rival]);
+    final config = _config.copyWith(maxConcurrentWork: 1);
+    final candidates = [
+      StationAdmissionCandidate(bead: first, session: null),
+      StationAdmissionCandidate(bead: rival, session: null),
+    ];
+
+    final held = station.admission.admitPending(
+      snapshot,
+      config,
+      const ServiceBundle(),
+      candidates,
+    );
+    final reservation = held.admitted.single;
+    expect(reservation.candidate.bead.id, 'tg-1');
+    expect(reservation.reservationToken, isNotNull);
+    expect(held.waiting.single.bead.id, 'tg-2');
+
+    await station.admission.abandonSessionAttempt(
+      workBeadId: 'tg-1',
+      sessionId: null,
+      reservationToken: reservation.reservationToken,
+      services: const ServiceBundle(),
+    );
+
+    final released = station.admission.admitPending(
+      snapshot,
+      config,
+      const ServiceBundle(),
+      [candidates.last],
+    );
+    expect(released.admitted.single.candidate.bead.id, 'tg-2');
+    expect(released.waiting, isEmpty);
+  });
+
+  test(
+    'reservation token is reused only while one held grant survives',
+    () async {
+      final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+      addTearDown(station.dispose);
+      final first = _bead('tg-1');
+      final rival = _bead('tg-2');
+      final snapshot = _snapshot([first, rival]);
+      final config = _config.copyWith(maxConcurrentWork: 1);
+      final candidates = [
+        StationAdmissionCandidate(bead: first, session: null),
+        StationAdmissionCandidate(bead: rival, session: null),
+      ];
+
+      final initial = station.admission.admitPending(
+        snapshot,
+        config,
+        const ServiceBundle(),
+        candidates,
+      );
+      final initialToken = initial.admitted.single.reservationToken;
+      final repeated = station.admission.admitPending(
+        snapshot,
+        config,
+        const ServiceBundle(),
+        candidates,
+      );
+      expect(repeated.admitted.single.reservationToken, same(initialToken));
+
+      await station.admission.abandonSessionAttempt(
+        workBeadId: 'tg-1',
+        sessionId: null,
+        reservationToken: initialToken,
+        services: const ServiceBundle(),
+      );
+      final readmitted = station.admission.admitPending(
+        snapshot,
+        config,
+        const ServiceBundle(),
+        candidates,
+      );
+      final freshToken = readmitted.admitted.single.reservationToken;
+      expect(freshToken, isNotNull);
+      expect(identical(freshToken, initialToken), isFalse);
+
+      await station.admission.abandonSessionAttempt(
+        workBeadId: 'tg-1',
+        sessionId: null,
+        reservationToken: initialToken,
+        services: const ServiceBundle(),
+      );
+      final staleRelease = station.admission.admitPending(
+        snapshot,
+        config,
+        const ServiceBundle(),
+        candidates,
+      );
+      expect(staleRelease.admitted.single.candidate.bead.id, 'tg-1');
+      expect(staleRelease.admitted.single.reservationToken, same(freshToken));
+      expect(staleRelease.waiting.single.bead.id, 'tg-2');
+    },
+  );
+
+  test('null reservation token cannot release pre-session capacity', () async {
+    final station = _stationOver(RecordingBdRunner(), maxConcurrentWork: 1);
+    addTearDown(station.dispose);
+    final first = _bead('tg-1');
+    final rival = _bead('tg-2');
+    final snapshot = _snapshot([first, rival]);
+    final config = _config.copyWith(maxConcurrentWork: 1);
+    final candidates = [
+      StationAdmissionCandidate(bead: first, session: null),
+      StationAdmissionCandidate(bead: rival, session: null),
+    ];
+
+    final held = station.admission.admitPending(
+      snapshot,
+      config,
+      const ServiceBundle(),
+      candidates,
+    );
+    expect(held.admitted.single.candidate.bead.id, 'tg-1');
+
+    await station.admission.abandonSessionAttempt(
+      workBeadId: 'tg-1',
+      sessionId: null,
+      reservationToken: null,
+      services: const ServiceBundle(),
+    );
+    final retained = station.admission.admitPending(
+      snapshot,
+      config,
+      const ServiceBundle(),
+      candidates,
+    );
+    expect(retained.admitted.single.candidate.bead.id, 'tg-1');
+    expect(
+      retained.admitted.single.reservationToken,
+      same(held.admitted.single.reservationToken),
+    );
+    expect(retained.waiting.single.bead.id, 'tg-2');
+  });
+
   test(
     'abandonment ignores stale ids and compensates an owned session',
     () async {
@@ -787,6 +931,7 @@ void main() {
         await station.admission.abandonSessionAttempt(
           workBeadId: 'tg-1',
           sessionId: null,
+          reservationToken: null,
           services: const ServiceBundle(),
         ),
         isNull,
@@ -795,6 +940,7 @@ void main() {
         await station.admission.abandonSessionAttempt(
           workBeadId: 'tg-1',
           sessionId: 'tg-stale',
+          reservationToken: null,
           services: const ServiceBundle(),
         ),
         isNull,
@@ -805,6 +951,7 @@ void main() {
         await station.admission.abandonSessionAttempt(
           workBeadId: 'tg-1',
           sessionId: owned.sessionId,
+          reservationToken: null,
           services: const ServiceBundle(),
         ),
         'tg-s1',

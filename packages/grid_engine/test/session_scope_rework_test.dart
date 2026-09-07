@@ -228,7 +228,10 @@ const _voidedSession = SessionProjection(
   },
 );
 
-StationServices _servicesFor(RecordingBdRunner runner) => StationServices(
+StationServices _servicesFor(
+  RecordingBdRunner runner, {
+  int maxConcurrentWork = kDefaultMaxConcurrentWork,
+}) => StationServices(
   provider: FakeRuntimeProvider(),
   writer: StationBeadWriter(
     bd: BdCliService(runner),
@@ -236,6 +239,7 @@ StationServices _servicesFor(RecordingBdRunner runner) => StationServices(
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   ),
   stateSubstation: stateSubstation,
+  maxConcurrentWork: maxConcurrentWork,
 );
 
 ({TreeOwner owner, Branch root}) _mountFull({
@@ -244,6 +248,7 @@ StationServices _servicesFor(RecordingBdRunner runner) => StationServices(
   required CapabilityRegistry registry,
   required RootCircuitFor rootCircuit,
   ExplorationTransport? transport,
+  SubstationConfig config = _tgConfig,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -258,7 +263,7 @@ StationServices _servicesFor(RecordingBdRunner runner) => StationServices(
               value: CircuitResolver(rootCircuit),
               child: Station([
                 SubstationScope(
-                  configNotifier: SubstationConfigNotifier(_tgConfig),
+                  configNotifier: SubstationConfigNotifier(config),
                   services: ServiceBundle(transport: transport),
                   key: const ValueKey('scope.tg'),
                 ),
@@ -274,6 +279,89 @@ StationServices _servicesFor(RecordingBdRunner runner) => StationServices(
 
 void main() {
   group('SessionScope rework re-arm (tg-x1j v2) — the gated case re-mints', () {
+    test(
+      'pre-session abandonment returns its grant and frees capacity',
+      () async {
+        final runner = _GatedCloseRunner();
+        addTearDown(() {
+          if (!runner.releaseClose.isCompleted) runner.releaseClose.complete();
+        });
+        final station = _servicesFor(runner, maxConcurrentWork: 1);
+        addTearDown(station.dispose);
+        final transport = _RecordingTransport();
+        const config = SubstationConfig(
+          substationId: 'tg',
+          ownedSubstations: {'tg'},
+          driveList: {'tg-1', 'tg-2'},
+          maxConcurrentWork: 1,
+        );
+        final firstTree = _mountFull(
+          joined: JoinedSnapshotNotifier(
+            _joined(
+              beads: [_task('tg-1')],
+              ready: {'tg-1'},
+              capturedAt: DateTime.now(),
+              sessions: const {
+                'tg-1#r1': SessionProjection(
+                  workBeadId: 'tg-1#r1',
+                  sessionId: 'tgdog-round1',
+                ),
+              },
+            ),
+          ),
+          ctx: station,
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          rootCircuit: (_) => _code,
+          transport: transport,
+          config: config,
+        );
+
+        await runner.closeEntered.future;
+        firstTree.owner.dispose();
+        runner.releaseClose.complete();
+        await _waitUntil(
+          () => transport.named('session.mintAbandoned').isNotEmpty,
+        );
+
+        _expectAbandonment(
+          transport,
+          retiredSessionId: 'tgdog-round1',
+          stage: 'retired-gates-closed',
+          reason: anyOf('cancelled', 'unmounted'),
+        );
+        expect(runner.workCreates, isEmpty);
+
+        final rivalRegistry = RecordingCapabilityRegistry(circuits: const {});
+        final rivalTree = _mountFull(
+          joined: JoinedSnapshotNotifier(
+            _joined(
+              beads: [_task('tg-2')],
+              ready: {'tg-2'},
+              capturedAt: DateTime.now().add(const Duration(seconds: 1)),
+            ),
+          ),
+          ctx: station,
+          registry: rivalRegistry,
+          rootCircuit: (_) => _code,
+          config: config,
+        );
+        addTearDown(rivalTree.owner.dispose);
+        await _pumpUntil(
+          rivalTree.owner,
+          () => rivalRegistry.events.isNotEmpty,
+        );
+
+        expect(rivalRegistry.events, ['START agent(tgdog-sess1/tg-2/agent)']);
+        expect(
+          runner.workCreates.where(
+            (call) => _isPlainCreateOf(call, GridIssueTypes.session.wire),
+          ),
+          hasLength(1),
+        );
+        expect(transport.named('session.mintAbandoned'), hasLength(1));
+      },
+    );
+
     test('disposing after retirement begins emits one reasoned abandonment '
         'flare and creates no successor', () async {
       final runner = _GatedCloseRunner();

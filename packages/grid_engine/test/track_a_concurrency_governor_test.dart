@@ -230,6 +230,22 @@ WorkBead _mountedWorkBeadFor(Branch root, String beadId) {
   return found ?? (throw StateError('no WorkBead mounted for $beadId'));
 }
 
+Branch _mountedWorkBranchFor(Branch root, String beadId) {
+  Branch? found;
+  void visit(Branch branch) {
+    if (branch.seed case WorkBead(:final bead) when bead.id == beadId) {
+      if (found != null) {
+        throw StateError('more than one WorkBead mounted for $beadId');
+      }
+      found = branch;
+    }
+    branch.visitChildren(visit);
+  }
+
+  visit(root);
+  return found ?? (throw StateError('no WorkBead mounted for $beadId'));
+}
+
 Future<void> _settleAdmissions(TreeOwner owner) async {
   for (var turn = 0; turn < 12; turn += 1) {
     await Future<void>.delayed(Duration.zero);
@@ -666,7 +682,7 @@ void main() {
         );
         final owner = TreeOwner();
         addTearDown(owner.dispose);
-        owner.mountRoot(
+        final root = owner.mountRoot(
           ProviderScope(
             child: _root(
               joined: joined,
@@ -695,6 +711,7 @@ void main() {
         );
         await _settleAdmissions(owner);
         expect(recorder.events, ['START work(tg-1)']);
+        final workBranchId = _mountedWorkBranchFor(root, 'tg-1').branchId;
         recorder.events.clear();
 
         // `grid rework` re-keys the session's `work_bead` off 'tg-1' (D-2's
@@ -716,12 +733,11 @@ void main() {
         );
         owner.flush();
 
-        // Pre-fix, `liveSession` alone reclassified 'tg-1' as a budget-gated
-        // `pending` candidate; with the ONE slot already "spent" by its own
-        // orphaned retired session, it was evicted (a STOP with no matching
-        // START) — killing the very branch that would close the retired
-        // session and mint the fresh round. Fixed: the branch stays mounted.
-        expect(recorder.events, isEmpty);
+        // The WorkBead remains the same admitted branch. Its descendant scope
+        // deliberately remounts around the fresh authority grant so the old
+        // scope cannot later release that grant with a stale teardown token.
+        expect(_mountedWorkBranchFor(root, 'tg-1').branchId, workBranchId);
+        expect(recorder.events, ['STOP work(tg-1)', 'START work(tg-1)']);
       },
     );
 

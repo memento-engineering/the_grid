@@ -86,18 +86,51 @@ class _WorkListState extends State<WorkList>
     return latest;
   }
 
-  WorkBead _workBeadFor(StationAdmissionCandidate candidate) {
+  WorkBead _workBeadFor(StationAdmissionReservation reservation) {
+    final candidate = reservation.candidate;
     final bead = candidate.bead;
     _pausedReported.remove(bead.id);
     final cached = _mountedWorkBeadsById[bead.id];
+    final carriedReservation = reservation.reservationToken == null
+        ? cached?.admissionReservation ?? reservation
+        : reservation;
+    final priorSession = cached?.session;
+    var mountToken =
+        carriedReservation.reservationToken ??
+        WorkBead.nullReservationMountToken;
+    if (cached != null &&
+        priorSession != null &&
+        !priorSession.isTerminal &&
+        reworkRoundOf(bead.id, priorSession.workBeadId) == null &&
+        candidate.session == null &&
+        cached.admissionReservation?.reservationToken == null) {
+      // A live row disappearing without a durable #rN projection is not a
+      // rework grant. Keep that live scope mounted so its state can refuse the
+      // malformed disappearance loudly; its prior release token was null, so
+      // watching the newly held value cannot make a stale token authoritative.
+      mountToken = cached.effectiveAdmissionReservationMountToken;
+    } else if (cached != null &&
+        identical(
+          cached.admissionReservation?.reservationToken,
+          carriedReservation.reservationToken,
+        )) {
+      mountToken = cached.effectiveAdmissionReservationMountToken;
+    }
     if (cached != null &&
         cached.bead == bead &&
-        cached.session == candidate.session) {
+        cached.session == candidate.session &&
+        identical(
+          cached.admissionReservation?.reservationToken,
+          carriedReservation.reservationToken,
+        ) &&
+        identical(cached.effectiveAdmissionReservationMountToken, mountToken)) {
       return cached;
     }
     return _mountedWorkBeadsById[bead.id] = WorkBead(
       bead: bead,
       session: candidate.session,
+      admissionReservation: carriedReservation,
+      admissionReservationMountToken: mountToken,
       key: ValueKey(bead.id),
     );
   }
@@ -243,7 +276,7 @@ class _WorkListState extends State<WorkList>
         return 0;
       });
     final mounted = [
-      for (final reservation in projected) _workBeadFor(reservation.candidate),
+      for (final reservation in projected) _workBeadFor(reservation),
     ];
     final emitted = {for (final work in mounted) work.bead.id};
     _mountedWorkBeadsById.removeWhere((id, _) => !emitted.contains(id));
@@ -384,6 +417,7 @@ class _WorkListState extends State<WorkList>
               mountAttempt: null,
               sessionId: session.sessionId,
               adopted: session.sessionId?.isNotEmpty == true,
+              reservationToken: null,
             ),
           );
           continue;
@@ -460,6 +494,7 @@ class _WorkListState extends State<WorkList>
     mountAttempt: null,
     sessionId: candidate.session?.sessionId,
     adopted: candidate.session?.sessionId?.isNotEmpty == true,
+    reservationToken: null,
   );
 
   static String _clauseName(String detail) {

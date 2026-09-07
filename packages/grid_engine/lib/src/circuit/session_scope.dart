@@ -255,6 +255,9 @@ class SessionScopeState extends State<SessionScope>
 
   StationServices? _ctx;
 
+  /// The fixed-at-descendant-mount authority grant returned on async teardown.
+  StationAdmissionReservation? _admissionReservation;
+
   /// The Stage-1 derivation layer (stage1-wiring §2), re-resolved on every
   /// `didChangeDependencies` like every other captured reference (D-H rule 1)
   /// and held for the off-build observation sites — every write this scope
@@ -386,6 +389,7 @@ class SessionScopeState extends State<SessionScope>
       'SessionScope requires an ambient InheritedSeed<StationServices>',
     );
     _ctx = ctx;
+    _admissionReservation = context.watch<StationAdmissionReservation>();
     // Capture the (fixed-at-mount) ambient bundle for the off-build re-arm
     // flare (tg-boq) — same discipline as `CapabilityHostState._services`.
     _services = context.watch<ServiceBundle>() ?? const ServiceBundle();
@@ -960,6 +964,7 @@ class SessionScopeState extends State<SessionScope>
     final retiredMintSessionId = await _ctx?.admission.abandonSessionAttempt(
       workBeadId: seed.bead.id,
       sessionId: _moleculeSessionId,
+      reservationToken: _admissionReservation?.reservationToken,
       services: _services,
     );
     if (retiredMintSessionId != null) {

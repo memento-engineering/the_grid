@@ -4,6 +4,7 @@ import '../diagnostics/diagnosable.dart';
 import 'package:beads_dart/beads_dart.dart';
 
 import '../domain/session_projection.dart';
+import '../kernel/station_admission_authority.dart';
 import '../kernel/session_resolver.dart';
 import 'provider.dart';
 
@@ -17,12 +18,23 @@ import 'provider.dart';
 /// and [session] are injected by `WorkList` (the lone observer). A cursor
 /// advance arrives as a NEW WorkBead config (same bead-id key); the subtree root
 /// is re-keyed identically, so reconcile threads the new cursor down in place
-/// while THIS branch keeps its identity.
+/// while THIS branch keeps its identity. A fresh admission grant changes only
+/// the nested reservation provider's key, deliberately remounting the session
+/// subtree while the WorkBead itself remains stable.
 class WorkBead extends StatelessSeed with GridDiagnosticable {
+  /// Stable provider-key component for reservations that carry no token.
+  static const Object nullReservationMountToken = _NullReservationMountToken();
+
   /// Creates a work node for [bead] with its linked [session]. Key it
   /// `ValueKey(bead.id)` at the `WorkList` level so reconcile keeps the branch
   /// across snapshot ticks.
-  const WorkBead({required this.bead, this.session, super.key});
+  const WorkBead({
+    required this.bead,
+    this.session,
+    this.admissionReservation,
+    this.admissionReservationMountToken,
+    super.key,
+  });
 
   /// The work bead (from the read-only work source).
   final Bead bead;
@@ -30,6 +42,22 @@ class WorkBead extends StatelessSeed with GridDiagnosticable {
   /// The bead's linked session projection (null until a session exists);
   /// injected so the subtree can write its cursor pull-free (A39).
   final SessionProjection? session;
+
+  /// The authority grant carried by this tree projection, when online.
+  final StationAdmissionReservation? admissionReservation;
+
+  /// Identity used to key the descendant admission-provider mount.
+  ///
+  /// This normally equals the reservation token. WorkList retains the prior
+  /// null identity only for a live row's non-retired disappearance, allowing
+  /// that already-live scope to apply its orphan-decline rule in place.
+  final Object? admissionReservationMountToken;
+
+  /// The effective provider-key identity, deriving from the grant by default.
+  Object get effectiveAdmissionReservationMountToken =>
+      admissionReservationMountToken ??
+      admissionReservation?.reservationToken ??
+      nullReservationMountToken;
 
   @override
   void debugFillProperties(DiagnosticsBuilder properties) {
@@ -56,9 +84,20 @@ class WorkBead extends StatelessSeed with GridDiagnosticable {
     // reads it with the non-binding lookup instead of having it threaded
     // through every mount. Bead is a freezed value type, so a re-provide with
     // an unchanged bead never notifies dependents.
-    return Provider<Bead>.value(
+    final subtree = Provider<Bead>.value(
       bead,
       child: resolver!.sessionFor(bead: bead, session: session),
     );
+    final reservation = admissionReservation;
+    if (reservation == null) return subtree;
+    return Provider<StationAdmissionReservation>.value(
+      reservation,
+      key: ValueKey((bead.id, effectiveAdmissionReservationMountToken)),
+      child: subtree,
+    );
   }
+}
+
+final class _NullReservationMountToken {
+  const _NullReservationMountToken();
 }
