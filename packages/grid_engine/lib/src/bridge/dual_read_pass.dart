@@ -20,6 +20,9 @@
 /// flip rather than a different code path.
 library;
 
+import 'dart:convert';
+
+import '../domain/session_disposition.dart';
 import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
 import '../domain/step_cursor_read.dart' show legacyStepCursorOf;
@@ -154,11 +157,15 @@ class DualReadSessionObserver {
   /// Returns THE OVERLAY ENTRIES the join should splice, keyed by the same map
   /// key — empty under `observe`, empty while the boot is disengaged, and
   /// empty on the pass where every head agrees with its projection. The pass
-  /// never mutates [sessions]: the join owns its map.
+  /// never mutates [sessions]: the join owns its map. When [steps] is present,
+  /// the same pass also compares the derived legacy and fold-backed mount fact
+  /// tuple; rowless or non-live P2 skips that comparison because primary uses
+  /// the counted legacy fallback there.
   Map<String, SessionProjection> observe(
     Map<String, SessionProjection> sessions,
-    TrajectoryHeadSnapshot snapshot,
-  ) {
+    TrajectoryHeadSnapshot snapshot, {
+    TrajectoryStepSnapshot? steps,
+  }) {
     if (_finished) return const <String, SessionProjection>{};
     // THE ROLLBACK POSTURE: `off` runs no pass at all. Not "runs and serves
     // nothing" — nothing observable happens, so a boot under `off` writes the
@@ -241,6 +248,14 @@ class DualReadSessionObserver {
         case SessionOverlayOutcome.suppressedDemotion:
           accounting.overlaysSuppressed += 1;
       }
+
+      _compareFoldBackedMountFacts(
+        legacy,
+        head,
+        steps,
+        snapshot,
+        activeStepPath: activeStepPath,
+      );
 
       // RETIREMENT LAG precedes the terminal-lag read: the retire path closes
       // the bd bead and emits ONLY `roundRetired`, so between the re-key and
@@ -399,6 +414,95 @@ class DualReadSessionObserver {
   }
 
   // ── internals ──────────────────────────────────────────────────────────
+
+  void _compareFoldBackedMountFacts(
+    SessionProjection legacy,
+    SessionHeadView head,
+    TrajectoryStepSnapshot? steps,
+    TrajectoryHeadSnapshot snapshot, {
+    required String? activeStepPath,
+  }) {
+    if (steps == null || steps.health != TrajectorySnapshotHealth.live) return;
+    final rows = steps.byP2SessionId(head.sessionId).toList(growable: false);
+    if (rows.isEmpty) return;
+
+    final fold = foldBackedSessionProjection(legacy, head, rows);
+    final legacyDisposition = sessionDispositionOf(legacy);
+    final foldDisposition = sessionDispositionOf(fold);
+    final legacyFenceValue = _canonicalFences(legacy);
+    final foldFenceValue = _canonicalFences(fold);
+    final mismatches = <DualReadFieldMismatch>[
+      if (legacyDisposition != foldDisposition)
+        DualReadFieldMismatch(
+          field: 'sessionDisposition',
+          foldValue: _renderDisposition(foldDisposition),
+          legacyValue: _renderDisposition(legacyDisposition),
+        ),
+      if (legacyFenceValue != foldFenceValue)
+        DualReadFieldMismatch(
+          field: 'staleFences',
+          foldValue: foldFenceValue,
+          legacyValue: legacyFenceValue,
+        ),
+    ];
+    if (mismatches.isEmpty) return;
+    _recordAndFlare(
+      DualReadComparison(
+        sessionId: head.sessionId,
+        workBeadId: head.workBeadId,
+        classification: DualReadClass.divergence,
+        mismatches: mismatches,
+      ),
+      snapshot,
+      cause: DualReadDivergenceCause.foldBackedMountFacts,
+      activeStepPath: activeStepPath,
+    );
+  }
+
+  String _renderDisposition(SessionDisposition disposition) =>
+      jsonEncode(switch (disposition) {
+        NoSession() => const <String, String>{'arm': 'none'},
+        LiveSession() => const <String, String>{'arm': 'live'},
+        DoneSession() => const <String, String>{'arm': 'done'},
+        HeldSession(:final reason) => <String, String>{
+          'arm': 'held',
+          'reason': reason,
+        },
+        VoidedSession(:final reason) => <String, String>{
+          'arm': 'voided',
+          'reason': reason,
+        },
+        PausedSession(:final reason) => <String, String>{
+          'arm': 'paused',
+          'reason': reason,
+        },
+      });
+
+  String _canonicalFences(SessionProjection session) {
+    final fences = [...staleFences(session)]
+      ..sort((left, right) {
+        final byPgid = _compareNullableInt(left.pgid, right.pgid);
+        if (byPgid != 0) return byPgid;
+        final byPid = _compareNullableInt(left.pid, right.pid);
+        if (byPid != 0) return byPid;
+        return _compareNullableString(left.token, right.token);
+      });
+    return jsonEncode([
+      for (final fence in fences) [fence.pgid, fence.pid, fence.token],
+    ]);
+  }
+
+  int _compareNullableInt(int? left, int? right) {
+    if (left == null) return right == null ? 0 : -1;
+    if (right == null) return 1;
+    return left.compareTo(right);
+  }
+
+  int _compareNullableString(String? left, String? right) {
+    if (left == null) return right == null ? 0 : -1;
+    if (right == null) return 1;
+    return left.compareTo(right);
+  }
 
   void _handleTerminalLag(
     DualReadComparison comparison,

@@ -108,8 +108,9 @@ abstract class SessionProjection with _$SessionProjection {
     /// PROMOTION the monotone rule cannot catch, which is why identity, not
     /// monotonicity, is the guard here. Every other [NodeCursor] field is left
     /// at its default and never read — `restartCount`, `cooldownUntil` and the
-    /// pgid/pid/token fence stay BEAD-READ for all of wave 1 (B-M2: the
-    /// breaker's read never moves).
+    /// per-node pgid/pid/token fields stay BEAD-READ for all of wave 1 (B-M2:
+    /// the breaker's read never moves). The mount-only fence read uses the
+    /// sibling P1 trajectory fields below when this cursor is engaged.
     ///
     /// **NULL IS THE POSTURE.** It is filled only under `dualRead: primary`
     /// with snapshot health `live` and a boot that has not disengaged, so no
@@ -119,6 +120,20 @@ abstract class SessionProjection with _$SessionProjection {
     /// (the per-node P2-miss rule, monotone no-demotion, the never-creates
     /// rule) live in `step_cursor_read.dart` and are what make it safe.
     CircuitCursor? trajCursor,
+
+    /// P1's process-group identity for the fold-backed mount decision.
+    ///
+    /// These three fields form one carrier with [trajCursor]: the bridge fills
+    /// all of them only when `dualRead: primary` can serve an identity-matched
+    /// live P1/P2 pair. They never overwrite the legacy scalar fence above,
+    /// and remain null under `off`, `observe`, and counted legacy fallback.
+    int? trajPgid,
+
+    /// P1's process leader identity for the fold-backed mount decision.
+    int? trajPid,
+
+    /// P1's attempt identity, used as the fold-backed freshness token.
+    String? trajAttemptId,
 
     /// THE LADDER EVIDENCE behind [trajCursor] — this session's collapsed P2
     /// rows, keyed by `step_path`, spliced by the same bridge writer and under

@@ -31,18 +31,28 @@ import 'dual_read_pass.dart' show DualReadFlareSink;
 
 /// ONE session's step-axis overlay, as the pass hands it to the join.
 ///
-/// Two halves because the consumers need both: [cursor] is the STATE the merge
+/// The step carrier has two cursor halves: [cursor] is the STATE the merge
 /// serves, [views] is the collapsed P2 row behind each node — the
 /// round/step-round/incarnation/supersedes ladder a consumer-site
 /// `StepNodeComparison` reports. They are minted from the SAME rows in the
 /// same pass, so a projection can never carry a cursor whose ladder came from
-/// a different read.
+/// a different read. When the P1 snapshot is supplied, the three trajectory
+/// identity fields ride that same overlay for the mount fence decision.
 @immutable
 final class StepCursorOverlay {
-  const StepCursorOverlay({required this.cursor, required this.views});
+  const StepCursorOverlay({
+    required this.cursor,
+    required this.views,
+    this.trajPgid,
+    this.trajPid,
+    this.trajAttemptId,
+  });
 
   final CircuitCursor cursor;
   final Map<String, StepCursorView> views;
+  final int? trajPgid;
+  final int? trajPid;
+  final String? trajAttemptId;
 }
 
 /// Subscribes to the P2 mirror's published snapshots and returns the remover
@@ -145,11 +155,15 @@ class DualReadStepObserver {
   ///
   /// Returns the step overlay entries the join should splice, keyed by the
   /// sessions map's own key — empty under `off` and `observe`, empty while the
-  /// boot is disengaged, and empty when the snapshot is not `live`.
+  /// boot is disengaged, and empty when the snapshot is not `live`. With no
+  /// [head], this retains the original C4 state-only overlay. With a P1
+  /// snapshot, an entry is returned only for a usable identity-matched P1/P2
+  /// pair and includes the mount fence identity as one complete carrier.
   Map<String, StepCursorOverlay> observe(
     Map<String, SessionProjection> sessions,
-    TrajectoryStepSnapshot snapshot,
-  ) {
+    TrajectoryStepSnapshot snapshot, {
+    TrajectoryHeadSnapshot? head,
+  }) {
     // THE ROLLBACK POSTURE: `off` runs no pass at all — see the session pass's
     // twin guard and [DualReadMode.off].
     if (!armed) return const <String, StepCursorOverlay>{};
@@ -161,11 +175,29 @@ class DualReadStepObserver {
       // No flares: the compromise already flared once, at the latch.
       accounting.overlayDisengaged = true;
       accounting.stepFallbacks += sessions.length;
+      if (_mode == DualReadMode.primary &&
+          head?.health == TrajectorySnapshotHealth.live) {
+        for (final legacy in sessions.values) {
+          final sessionId = legacy.sessionId;
+          if (sessionId == null || sessionId.isEmpty) continue;
+          if (isRetiredWorkBeadKey(legacy.workBeadId)) continue;
+          final row = head!.bySessionId(sessionId);
+          if (row == null || _hasHeadCardinalityBreach(head, row)) continue;
+          accounting.fallbacks += 1;
+        }
+      }
       _stepLag.retainOnly(const <String>{});
       _compareWindowByNode.clear();
       _foldAheadByNode.clear();
       _operatorEditedNodes.clear();
       return const <String, StepCursorOverlay>{};
+    }
+    if (head != null && head.health != TrajectorySnapshotHealth.live) {
+      // A complete mount carrier depends on both mirrors. Production's
+      // session pass normally latches this first; keeping the step pass total
+      // when called on its own prevents it from advertising an engaged axis
+      // against an untrusted P1 snapshot.
+      accounting.overlayDisengaged = true;
     }
     final engaged = stepAxisEngaged;
     final now = _clock();
@@ -178,15 +210,61 @@ class DualReadStepObserver {
       final sessionId = legacy.sessionId;
       if (sessionId == null || sessionId.isEmpty) continue;
       if (isRetiredWorkBeadKey(legacy.workBeadId)) continue;
+      final rows = snapshot.byP2SessionId(sessionId).toList(growable: false);
+      final headRow = head?.health == TrajectorySnapshotHealth.live
+          ? head?.bySessionId(sessionId)
+          : null;
+      final headCardinalityBreach =
+          head != null &&
+          headRow != null &&
+          _hasHeadCardinalityBreach(head, headRow);
+      final completeCarrierAvailable =
+          headRow != null && !headCardinalityBreach && rows.isNotEmpty;
+      var completeFallbackCounted = false;
+      if (head != null &&
+          _mode == DualReadMode.primary &&
+          (!engaged || !completeCarrierAvailable)) {
+        accounting.stepFallbacks += 1;
+        completeFallbackCounted = true;
+        // A missing or non-live P1 was already counted by the session pass,
+        // as was a cardinality retraction. The step pass owns only the P2 gap
+        // (including the shared latch declining an otherwise complete pair).
+        if (head.health == TrajectorySnapshotHealth.live &&
+            headRow != null &&
+            !headCardinalityBreach) {
+          accounting.fallbacks += 1;
+        }
+      }
+
+      if (engaged && rows.isNotEmpty && (head != null || !legacy.isTerminal)) {
+        if (head == null) {
+          // The pre-extension C4 surface: callers without P1 retain a
+          // state-only overlay.
+          cursors[entry.key] = StepCursorOverlay(
+            cursor: trajCursorOf(rows),
+            views: collapseStepCursors(rows),
+          );
+          accounting.stepCursorsServed += 1;
+        } else if (completeCarrierAvailable) {
+          final projection = foldBackedSessionProjection(legacy, headRow, rows);
+          cursors[entry.key] = StepCursorOverlay(
+            cursor: projection.trajCursor!,
+            views: projection.trajStepViews,
+            trajPgid: projection.trajPgid,
+            trajPid: projection.trajPid,
+            trajAttemptId: projection.trajAttemptId,
+          );
+          accounting.stepCursorsServed += 1;
+        }
+      }
       // A terminal session has nothing left to mount and no cursor a decision
-      // reads; comparing it would count its whole node set as lag forever
-      // after the last transition record folded.
+      // compares; its fold carrier was nevertheless formed above because
+      // disposition and stale-fence decisions still read terminal sessions.
       if (legacy.isTerminal) continue;
       // THE OVERLAY IDENTITY RULE, step axis (r6 — J10-B2/J11-B2): the
       // same-session lookup, never a `byWorkBead` winner. A session with no
       // same-session rows takes the P2-miss rule per node — the LEGACY BEAD —
       // and never a sibling's rows.
-      final rows = snapshot.byP2SessionId(sessionId).toList(growable: false);
       final beadCursor = legacyStepCursorOf(
         _winningLegacyRoundOf(legacy, sessionId),
       );
@@ -194,7 +272,7 @@ class DualReadStepObserver {
         // No P2 at all for this session: every node is a miss, which is the
         // per-node rule applied wholesale. Counted, never a divergence, and
         // the cursor stays the bead's.
-        accounting.stepFallbacks += 1;
+        if (!completeFallbackCounted) accounting.stepFallbacks += 1;
         accounting.p2Miss += beadCursor.length;
         // The structurally-absent share, on the SAME per-node rule the
         // hit path applies below: a step that has never transitioned has no
@@ -216,19 +294,6 @@ class DualReadStepObserver {
         _observeCompareWindow(node, collapsed[node.stepPath], comparedNodes);
         _recordNode(node, snapshot, now: now, lagging: lagging);
       }
-      if (engaged) {
-        // What the JOIN splices is P2's OWN cursor, not the merge's output:
-        // the merge rules belong to the consumer's `effectiveStepCursor`, so
-        // there is exactly one implementation of them and a projection never
-        // carries a pre-merged value some other site would merge again. The
-        // COLLAPSED rows ride along unchanged — same rows, same pass — so the
-        // consumer's own merge reports the same ladder this one did.
-        cursors[entry.key] = StepCursorOverlay(
-          cursor: trajCursorOf(rows),
-          views: collapsed,
-        );
-        accounting.stepCursorsServed += 1;
-      }
     }
 
     _stepLag.retainOnly(lagging);
@@ -240,6 +305,11 @@ class DualReadStepObserver {
     _operatorEditedNodes.retainAll(comparedNodes);
     return cursors;
   }
+
+  bool _hasHeadCardinalityBreach(
+    TrajectoryHeadSnapshot snapshot,
+    SessionHeadView row,
+  ) => snapshot.byWorkBead(row.workBeadId) is SessionHeadCardinalityBreach;
 
   void _observeCompareWindow(
     StepNodeComparison node,

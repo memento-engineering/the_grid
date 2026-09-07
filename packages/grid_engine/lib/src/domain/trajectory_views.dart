@@ -90,13 +90,16 @@ abstract interface class SessionHeadView {
   /// pgid/pid presence pair.
   String? get workTerminalReason;
 
-  /// Observed as a PRESENCE PAIR by the comparator and never served: the
-  /// fence identity triple stays whole on its legacy carrier, because an
-  /// overlaid null would turn I-10's never-double-run-a-survivor fence
-  /// fail-open (§0.3, r4 — J6-B1/J7-B1).
+  /// Observed as a PRESENCE PAIR by the original C3 tuple comparator. The
+  /// value is never written over the legacy scalar; the fold-backed mount
+  /// carrier copies it into `SessionProjection.trajPgid` only alongside a
+  /// usable same-session P2 cursor. An incomplete pgid/pid pair produces no
+  /// fold fence, rather than a partially identified liveness target.
   int? get pgid;
   int? get pid;
 
+  /// The attempt identity becomes the fold-backed fence's freshness token,
+  /// on the same complete P1/P2 carrier as [pgid] and [pid].
   String? get attemptId;
 
   /// The wave-1 cut columns (r6–r11): why an `unknown` head is unknown, and

@@ -33,8 +33,10 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../sdk/allocation.dart';
 import '../sdk/circuit.dart';
+import '../sdk/cursor.dart';
 import 'session_bead.dart';
 import 'session_projection.dart';
+import 'step_cursor_read.dart';
 
 part 'session_disposition.freezed.dart';
 
@@ -108,15 +110,16 @@ SessionDisposition sessionDispositionOf(SessionProjection? session) {
     );
   }
   if (session.completed) return const SessionDisposition.done();
+  final cursor = _mountCursorOf(session);
   final inFlight = <String>[
-    for (final entry in session.cursor.entries)
+    for (final entry in cursor.entries)
       if (!entry.value.isPositiveTerminal)
         '${entry.key}=${entry.value.state.name}',
   ]..sort();
   // LEGACY (pre-`grid.outcome`): a non-empty cursor whose every node reached a
   // positive terminal is a finished round. An EMPTY cursor is NOT — nothing ever
   // ran, so there is nothing to preserve.
-  if (session.cursor.isNotEmpty && inFlight.isEmpty) {
+  if (cursor.isNotEmpty && inFlight.isEmpty) {
     return const SessionDisposition.done();
   }
   return SessionDisposition.voided(
@@ -127,19 +130,36 @@ SessionDisposition sessionDispositionOf(SessionProjection? session) {
   );
 }
 
-/// The process fences a VOIDED [session] still records — every `running`/`ready`
-/// node's `pgid`+`pid`+`token`, deduped by pgid, falling back to the legacy
-/// scalar session fence when no per-node target exists. What the re-mint must
-/// prove DEAD before it spawns again (fail-closed: never double-run a survivor).
+/// The process fences a VOIDED [session] still records.
+///
+/// On the legacy carrier this is every `running`/`ready` node's
+/// `pgid`+`pid`+`token`, deduped by pgid, falling back to the legacy scalar
+/// session fence. On the complete fold carrier, live state comes through the
+/// protected P2 merge and identity is the singleton P1 pgid/pid/attempt tuple.
+/// What the re-mint must prove DEAD before it spawns again (fail-closed: never
+/// double-run a survivor).
 ///
 /// Deliberately parallel to `RestartReconciler`'s live-group scan, not shared
 /// with it: the reconciler needs each group's `nodePath` + `NodeCursor` to hand
 /// the composer's adopt proof, while the mint decision needs only the identity
 /// triple. Same rule, two shapes.
 List<AdoptFence> staleFences(SessionProjection session) {
+  final cursor = _mountCursorOf(session);
+  if (session.trajCursor != null) {
+    final hasLiveNode = cursor.values.any(
+      (node) =>
+          node.state == StepState.running || node.state == StepState.ready,
+    );
+    final pgid = session.trajPgid;
+    final pid = session.trajPid;
+    if (hasLiveNode && pgid != null && pid != null) {
+      return [AdoptFence(pgid: pgid, pid: pid, token: session.trajAttemptId)];
+    }
+    return const <AdoptFence>[];
+  }
   final fences = <AdoptFence>[];
   final seen = <int>{};
-  session.cursor.forEach((_, node) {
+  cursor.forEach((_, node) {
     final live =
         node.state == StepState.running || node.state == StepState.ready;
     final pgid = node.pgid;
@@ -156,4 +176,16 @@ List<AdoptFence> staleFences(SessionProjection session) {
     }
   }
   return fences;
+}
+
+/// The cursor read shared by both mount-boundary decisions.
+///
+/// `legacyStepCursorOf` is the actual bead carrier for molecule sessions;
+/// their projection field is structurally empty. `effectiveStepCursor` owns
+/// fold engagement and its no-demotion, P2-miss, stale-rung, and never-creates
+/// rules. Keeping the selection here means disposition and fencing cannot
+/// silently invent a weaker cursor read beside the other C4 consumers.
+CircuitCursor _mountCursorOf(SessionProjection session) {
+  final legacy = legacyStepCursorOf(session);
+  return effectiveStepCursor(session, siteCursor: legacy, beadCursor: legacy);
 }

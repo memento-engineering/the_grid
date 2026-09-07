@@ -37,6 +37,7 @@ import 'dart:convert';
 import 'package:meta/meta.dart';
 
 import 'session_projection.dart';
+import 'step_cursor_read.dart';
 import 'trajectory_views.dart';
 
 /// The dual-read posture (cut-wiring C2's config line).
@@ -86,6 +87,7 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'divergences': 'cumulative',
   'divergences_by_field': 'cumulative',
   'operator_store_edit_divergences': 'cumulative',
+  'fold_backed_mount_fact_divergences': 'cumulative',
   'unexplained_divergences': 'cumulative',
   'terminal_lag': 'cumulative',
   'terminal_lag_open': 'gauge',
@@ -232,8 +234,11 @@ SessionHeadFacts legacyFactsOf(SessionProjection legacy) => SessionHeadFacts(
 ///     exactly the shape the gates make mandatory. Compare-only.
 ///   * **`round`** (F-M1): P1's `round` is the retired-INTO marker, 0 on every
 ///     live head. Round parity is a `bySessionId` check on RETIRED rows.
-///   * `token`, `results`, `startedAt`, molecule/gate attachments, the cursor —
-///     all still written by live carriers in wave 1.
+///   * the legacy `token`, `results`, `startedAt`, molecule/gate attachments,
+///     and cursor fields — all still written by live carriers in wave 1. The
+///     separate fold-backed mount carrier is added later by
+///     [foldBackedSessionProjection]; this four-field overlay never rewrites
+///     those legacy values.
 ///
 /// Returns [legacy] UNCHANGED (identical instance) whenever the overlay would
 /// be unsafe: a reconstructed-provenance head (fold bookkeeping, never
@@ -335,6 +340,30 @@ SessionOverlayResult resolveSessionOverlay(
   );
 }
 
+/// Builds the complete fold-backed carrier consumed by mount decisions.
+///
+/// The existing C3 head overlay remains the authority for terminal facts, and
+/// the existing C4 helpers remain the authority for collapsing P2. The cursor
+/// stored here is deliberately P2's unmerged state: consumers pass it through
+/// `effectiveStepCursor`, which applies the monotone and per-node fallback
+/// rules at the read boundary. All five trajectory fields are copied together
+/// by the join, so a projection cannot mix a cursor from one fold read with a
+/// fence identity from another.
+SessionProjection foldBackedSessionProjection(
+  SessionProjection legacy,
+  SessionHeadView head,
+  List<StepCursorView> rows,
+) {
+  final projection = resolveSessionOverlay(legacy, head).projection;
+  return projection.copyWith(
+    trajCursor: trajCursorOf(rows),
+    trajStepViews: collapseStepCursors(rows),
+    trajPgid: head.pgid,
+    trajPid: head.pid,
+    trajAttemptId: head.attemptId,
+  );
+}
+
 /// MONOTONIC TERMINALITY's predicate, stated generally (§0.3): `isTerminal`
 /// true→false, `completed` true→false and `humanHeld` true→false are demotions
 /// the overlay never performs. A P1 value that would demote a legacy terminal
@@ -412,6 +441,10 @@ enum DualReadDivergenceCause {
   /// write order seen from the fold's side, mechanically explained rather
   /// than adjudicated. Minted by the STEP comparator only.
   foldAheadOfLegacy('fold-ahead-of-legacy'),
+
+  /// A derived mount decision disagreed while the legacy and fold carriers
+  /// were compared side by side during the soak.
+  foldBackedMountFacts('fold-backed-mount-facts'),
 
   /// No append-absence proof exists; operator adjudication uses the detail.
   unexplained('unexplained');
@@ -679,6 +712,11 @@ class DualReadAccounting {
   int missPostEpoch = 0;
   int missLegacyEra = 0;
   int nullStartedAt = 0;
+
+  /// Sessions that served legacy because P1 could not supply the C3 head or,
+  /// under `primary`, because the complete P1/P2 mount carrier was unavailable.
+  /// The session and step passes share this gauge and partition ownership so a
+  /// missing P1 plus missing P2 is counted once, never once per axis.
   int fallbacks = 0;
   int p1Orphan = 0;
   int openTerminalLag = 0;
@@ -715,6 +753,7 @@ class DualReadAccounting {
   // Accumulators — deduped events across the boot.
   int divergences = 0;
   int operatorStoreEditDivergences = 0;
+  int foldBackedMountFactDivergences = 0;
   int unexplainedDivergences = 0;
   int terminalLagObserved = 0;
   int retirementLagObserved = 0;
@@ -907,6 +946,8 @@ class DualReadAccounting {
       switch (cause) {
         case DualReadDivergenceCause.operatorStoreEdit:
           operatorStoreEditDivergences += 1;
+        case DualReadDivergenceCause.foldBackedMountFacts:
+          foldBackedMountFactDivergences += 1;
         // The session comparator cannot mint `foldAheadOfLegacy`; if a future
         // caller does, it lands in the bucket that asks for adjudication.
         case DualReadDivergenceCause.foldAheadOfLegacy:
@@ -945,6 +986,8 @@ class DualReadAccounting {
         stepOperatorStoreEditDivergences += 1;
       case DualReadDivergenceCause.foldAheadOfLegacy:
         stepFoldAheadOfLegacyDivergences += 1;
+      case DualReadDivergenceCause.foldBackedMountFacts:
+        foldBackedMountFactDivergences += 1;
       case DualReadDivergenceCause.unexplained:
         stepUnexplainedDivergences += 1;
     }
@@ -1018,6 +1061,7 @@ class DualReadAccounting {
     'divergences': divergences,
     'divergences_by_field': Map<String, int>.from(divergencesByField),
     'operator_store_edit_divergences': operatorStoreEditDivergences,
+    'fold_backed_mount_fact_divergences': foldBackedMountFactDivergences,
     'unexplained_divergences': unexplainedDivergences,
     'terminal_lag': terminalLagObserved,
     'terminal_lag_open': openTerminalLag,
