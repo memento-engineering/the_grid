@@ -1,3 +1,7 @@
+## 0.5.0-rc.18
+
+- Floors `grid_engine` to `^0.3.0-rc.21`, `grid_runtime` to `^0.2.0-rc.15` and `grid_sdk` to `^0.3.0-rc.18` (the tg-g230 admission fixes, #345); no API change of its own.
+
 ## 0.5.0-rc.17
 
 - Changed: `LegacyStoreUnavailableShadow` names `ShadowCompare.compare`'s new `corroboration` parameter, so the bd-absent shadow stub compiles against grid_trajectory 0.2.0-rc.5's classifier surface (tg-ilug, #342).

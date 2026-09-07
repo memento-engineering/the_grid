@@ -1,3 +1,9 @@
+## 0.3.0-rc.21
+
+- Fixed: a confirmed `MountRefused` now binds unless the candidate's linked session is live — non-terminal, unpaused and not a retired `#rN` round (`protectsLiveWork`); before, any bead in the mounted set or carrying a retired round kept its reservation and re-minted through a refusal, which is how an un-stamped bead ran during the dual-read soak (tg-g230, #345).
+- Fixed: `StationAdmissionReservation` carries an identity-compared `reservationToken`; `SessionScope` hands it back on an abandoned mint and `abandonSessionAttempt` releases an unconsumed reservation only for the identical token, so a scope torn down between admission and `createSession` returns its capacity instead of holding a null-session slot for the epoch (three per boot burst against `--max-agents`). `WorkBead` keys its reservation provider on the token so a fresh grant remounts the session subtree deliberately (tg-g230, #345).
+- Floors `grid_runtime` to `^0.2.0-rc.15`, where the reconciled gate close was introduced.
+
 ## 0.3.0-rc.20
 
 - Added: `StationAdmissionAuthority` — one station-owned service (created and disposed by `StationServices`) owns capacity reservation, priority-then-bead-id ordering and every durable attempt transition; `WorkList` derives candidates and `SessionScope` routes its nine transitions through it. A composition with no ambient `StationServices` keeps the synchronous offline default (the same eligibility clauses and `kDefaultMaxConcurrentWork`), a fresh reservation is visible in the flush that derived it, and a bead whose branch is mounted always participates — the mounted-work guard from tg-zat (tg-1u3c, #328).
