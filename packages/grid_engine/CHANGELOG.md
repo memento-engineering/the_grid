@@ -1,3 +1,10 @@
+## 0.3.0-rc.23
+
+- Fixed: a mint refused after admission (the fresh-ready-frontier absence, or any refusal that leaves no session) releases its reservation through the token path, and a dependency-blocked bead is quarantined until it is fresh-ready without evicting a live retired-round session from the substation cap; the re-key closes the retired session exactly once (tg-i3bq, #373).
+- Fixed: consecutive molecule-pour voids are bounded at three with a `session.moleculePourExhausted` flare, and a pour void no longer resets the create-session failure budget (tg-e3rj, #367).
+- Fixed: federated stale-ready expiry advances on a re-armed deadline timer when every member is silent (tg-718q, #369).
+- Tests: a reconciled in-process capability step is pinned to re-run at the step boundary (tg-e5ak, #371); the drain-seam poll fails loudly and survives parallel load (tg-rxvl, #368).
+
 ## 0.3.0-rc.22
 
 - Added: under `TrajectoryDiscipline.cut` a decision-bearing append loss HALTS admission through `TrajectoryAdmissionHalt` (latch-only, cleared by the operator) and opens the station-and-node gate instead of demoting the mirror; under `shadow` the mirror-compromised latch is unchanged. `SessionScope._rearm` failure under cut gates once without `gate.rearmFailed`; `WorkList` binds the ambient `TrajectoryRecorderScope` through the availability registry, so a WorkList-mounting root needs the production `ProviderScope` (tg-ppo5, #364).
