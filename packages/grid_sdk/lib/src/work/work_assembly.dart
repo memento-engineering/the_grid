@@ -281,6 +281,14 @@ class StationWorkRuntime implements SubstationProvisioner {
         '$error',
       );
     }
+    // The cut is one lever: a caller cannot pair it with a weaker requested
+    // posture. This read belongs after trajectory attachment but before the
+    // freshness/restart rails and tree build, so a contradiction neither
+    // reaches attempt admission nor mints a mount-attempt write. It throws
+    // outside the harness catch because this is a named boot refusal, not a
+    // non-fatal trajectory failure.
+    final cutPostureRefusal = trajectory.config.cutPostureRefusal;
+    if (cutPostureRefusal != null) throw cutPostureRefusal;
     await _freshnessBarrier();
     final report = await _restart.reconcile();
     _lastRestartReport = report;

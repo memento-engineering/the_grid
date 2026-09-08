@@ -71,6 +71,107 @@ void main() {
     expect(const TrajectoryConfig().dualRead, DualReadMode.off);
   });
 
+  test('discipline defaults to shadow and has exactly shadow and cut', () {
+    expect(TrajectoryDiscipline.values, [
+      TrajectoryDiscipline.shadow,
+      TrajectoryDiscipline.cut,
+    ]);
+    expect(const TrajectoryConfig().discipline, TrajectoryDiscipline.shadow);
+  });
+
+  test('cut resolves every requested mode and dualRead pair', () {
+    for (final requestedMode in TrajectoryConfigMode.values) {
+      for (final requestedDualRead in DualReadMode.values) {
+        final config = TrajectoryConfig(
+          discipline: TrajectoryDiscipline.cut,
+          mode: requestedMode,
+          dualRead: requestedDualRead,
+        );
+        expect(
+          config.mode,
+          TrajectoryConfigMode.required,
+          reason:
+              'requested mode=${requestedMode.name}, '
+              'dualRead=${requestedDualRead.name}',
+        );
+        expect(
+          config.dualRead,
+          DualReadMode.primary,
+          reason:
+              'requested mode=${requestedMode.name}, '
+              'dualRead=${requestedDualRead.name}',
+        );
+      }
+    }
+  });
+
+  test('cut accepts omitted and matching posture requests', () {
+    expect(
+      const TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+      ).cutPostureRefusal,
+      isNull,
+    );
+    expect(
+      const TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+        mode: TrajectoryConfigMode.required,
+      ).cutPostureRefusal,
+      isNull,
+    );
+    expect(
+      const TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+        dualRead: DualReadMode.primary,
+      ).cutPostureRefusal,
+      isNull,
+    );
+    expect(
+      const TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+        mode: TrajectoryConfigMode.required,
+        dualRead: DualReadMode.primary,
+      ).cutPostureRefusal,
+      isNull,
+    );
+  });
+
+  test('cut refusal names requested and resolved values in posture order', () {
+    final refusal = const TrajectoryConfig(
+      discipline: TrajectoryDiscipline.cut,
+      mode: TrajectoryConfigMode.disabled,
+      dualRead: DualReadMode.observe,
+    ).cutPostureRefusal!;
+
+    expect(refusal.requestedMode, TrajectoryConfigMode.disabled);
+    expect(refusal.resolvedMode, TrajectoryConfigMode.required);
+    expect(refusal.requestedDualRead, DualReadMode.observe);
+    expect(refusal.resolvedDualRead, DualReadMode.primary);
+    expect(
+      refusal.toString(),
+      'CutPostureRefused(requested dualRead=observe, resolved '
+      'dualRead=primary; requested mode=disabled, resolved mode=required)',
+    );
+  });
+
+  test('asDisabled preserves discipline and the cut implication', () {
+    const shadow = TrajectoryConfig(dualRead: DualReadMode.observe);
+    final disabledShadow = shadow.asDisabled;
+    expect(disabledShadow.discipline, TrajectoryDiscipline.shadow);
+    expect(disabledShadow.mode, TrajectoryConfigMode.disabled);
+    expect(disabledShadow.dualRead, DualReadMode.observe);
+
+    const cut = TrajectoryConfig(
+      discipline: TrajectoryDiscipline.cut,
+      mode: TrajectoryConfigMode.required,
+      dualRead: DualReadMode.primary,
+    );
+    final disabledCut = cut.asDisabled;
+    expect(disabledCut.discipline, TrajectoryDiscipline.cut);
+    expect(disabledCut.mode, TrajectoryConfigMode.required);
+    expect(disabledCut.dualRead, DualReadMode.primary);
+  });
+
   group('the composition seams (textual — these construction sites are only '
       'reachable from the live assembly)', () {
     late String source;
