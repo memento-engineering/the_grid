@@ -9,7 +9,7 @@ import 'dart:convert';
 
 import 'committee_report.dart';
 
-/// The human table: gate causes, then one row per lane, then one per bead.
+/// The human table, followed by per-rule shadow evidence when it was observed.
 List<String> renderCommitteeReport(CommitteeReport report) {
   final lines = <String>[
     'traj committee-report — ${report.recordsRead} record'
@@ -23,6 +23,12 @@ List<String> renderCommitteeReport(CommitteeReport report) {
     '${sources.usageFromTelemetry} telemetry / ${sources.usageFromStep} '
     'step.transition / ${sources.usageFromFallback} fallback',
   );
+  if (sources.shadowSelectionsFromStep > 0) {
+    lines.add(
+      '  shadow selections: ${sources.shadowSelectionsFromStep} '
+      'step.transition',
+    );
+  }
   if (report.gateCauses.isEmpty) {
     lines.add('  gates: none opened in this window');
   } else {
@@ -63,6 +69,9 @@ List<String> renderCommitteeReport(CommitteeReport report) {
       '${_money(bead.costUsd)}',
     );
   }
+  if (sources.shadowSelectionsFromStep > 0) {
+    _renderShadowSelection(lines, report);
+  }
   return lines;
 }
 
@@ -81,3 +90,138 @@ String _money(double? value) =>
 
 String _seconds(int? milliseconds) =>
     milliseconds == null ? '-' : (milliseconds / 1000).toStringAsFixed(1);
+
+void _renderShadowSelection(List<String> lines, CommitteeReport report) {
+  final shadow = report.shadowSelection;
+  lines.add('');
+  lines.add(
+    'shadow committee selection — ${shadow.distinctSampleCount} distinct '
+    'samples (${report.sources.shadowSelectionsFromStep} observations; '
+    '${shadow.unidentifiedSampleCount} unidentified)',
+  );
+  for (final group in shadow.groups) {
+    lines.add(
+      'policy ${group.policyVersion} · stage ${group.stage} · rule '
+      '${group.ruleId} — ${group.sampleCount} samples '
+      '[${group.sampleIds.join(', ')}]${group.truncated ? ' · TRUNCATED' : ''}',
+    );
+    lines.add('  scope coverage: ${_histogram(group.scopeCoverage)}');
+    lines.add(
+      '  change-shape coverage: ${_histogram(group.changeShapeCoverage)}',
+    );
+    lines.add('  actual: ${_usageAggregate(group.actual)}');
+    lines.add('  counterfactual: ${_usageAggregate(group.counterfactual)}');
+    for (final sample in group.samples) {
+      lines.add('  sample ${sample.identity}');
+      lines.add(
+        '    join: ${_joinState(sample.joinState)} · sampleId '
+        '${_field(sample.sampleId, _text)} · joinId '
+        '${_field(sample.joinId, _text)} · conflicts '
+        '${sample.conflictingKeys.isEmpty ? '(empty)' : sample.conflictingKeys.join(',')}',
+      );
+      lines.add(
+        '    lanes: selected ${_field(sample.selected, _list)} · omitted '
+        '${_field(sample.omitted, _list)}',
+      );
+      lines.add(
+        '    omitted grades: ${_field(sample.omittedLaneGrades, _omittedMap)}',
+      );
+      lines.add(
+        '    omitted transports: '
+        '${_field(sample.omittedLaneTransports, _omittedMap)}',
+      );
+      lines.add(
+        '    omitted dispositions: '
+        '${_field(sample.omittedLaneDispositions, _omittedMap)}',
+      );
+      lines.add(
+        '    selection: source ${_field(sample.source, _text)} · rules '
+        '${_field(sample.matchedRules, _list)} · classifierAttempts '
+        '${_field(sample.classifierAttempts, _number)} · classifierKinds '
+        '${_field(sample.classifierAttemptKinds, _list)}',
+      );
+      lines.add(
+        '    evidence: digest ${_field(sample.evidenceDigest, _text)} · '
+        'missing ${_field(sample.missingEvidenceIds, _list)} · lane inputs '
+        '${_field(sample.laneInputDigests, _stringMap)}',
+      );
+      lines.add(
+        '    route: bead ${_field(sample.workBeadId, _text)} · round '
+        '${_field(sample.round, _number)} · selector path '
+        '${_field(sample.selectorNodePath, _text)} · route path '
+        '${_field(sample.routeNodePath, _text)}',
+      );
+      lines.add(
+        '    route outcome: action lanes '
+        '${_field(sample.actionLaneIds, _list)} · gate '
+        '${_field(sample.gateDisposition, _text)} · downstream '
+        '${_field(sample.downstreamJoinKeys, _stringMap)}',
+      );
+      lines.add('    actual usage: ${_usageObservation(sample.actual)}');
+      lines.add(
+        '    counterfactual usage: '
+        '${_usageObservation(sample.counterfactual)}',
+      );
+      lines.add(
+        '    truncated: ${_field(sample.truncated, _boolean)} · '
+        'missingFields: ${_field(sample.missingFields, _list)}',
+      );
+    }
+  }
+}
+
+String _histogram(Map<String, int> values) => values.isEmpty
+    ? '(empty)'
+    : values.entries.map((entry) => '${entry.key}=${entry.value}').join(', ');
+
+String _usageAggregate(ShadowUsageAggregate usage) =>
+    'tokens in ${_metric(usage.tokensIn)} · '
+    'tokens out ${_metric(usage.tokensOut)} · '
+    'cost USD ${_metric(usage.costUsd)}';
+
+String _metric(ShadowMetricAggregate metric) =>
+    '${metric.observedTotal ?? 'not available'} '
+    '[observed=${metric.observedSampleCount}, '
+    'not observed=${metric.notObservedSampleCount}, '
+    'missing=${metric.missingSampleCount}, invalid=${metric.invalidSampleCount}]';
+
+String _usageObservation(ShadowUsageObservation usage) =>
+    'contributors ${_field(usage.contributingRunIds, _list)} · '
+    'missing lanes ${_field(usage.missingLaneIds, _list)} · '
+    'tokens in ${_field(usage.tokensIn, _number)} · '
+    'tokens out ${_field(usage.tokensOut, _number)} · '
+    'cost USD ${_field(usage.costUsd, _number)}';
+
+String _field<T>(ShadowField<T> field, String Function(T value) observed) =>
+    switch (field.state) {
+      ShadowFieldState.missing => 'missing',
+      ShadowFieldState.notObserved => 'not observed',
+      ShadowFieldState.invalid => 'invalid',
+      ShadowFieldState.observed => observed(field.value as T),
+    };
+
+String _text(String value) => value.isEmpty ? '(empty)' : value;
+
+String _list(List<String> values) =>
+    values.isEmpty ? '(empty)' : values.join(',');
+
+String _number(num value) => value.toString();
+
+String _boolean(bool value) => value.toString();
+
+String _joinState(ShadowJoinState state) => switch (state) {
+  ShadowJoinState.joined => 'joined',
+  ShadowJoinState.selectorOnly => 'selector-only',
+  ShadowJoinState.routeOnly => 'route-only',
+  ShadowJoinState.conflict => 'conflict',
+};
+
+String _stringMap(Map<String, String> values) => values.isEmpty
+    ? '(empty)'
+    : values.entries.map((entry) => '${entry.key}=${entry.value}').join(',');
+
+String _omittedMap(Map<String, ShadowField<String>> values) => values.isEmpty
+    ? '(empty)'
+    : values.entries
+          .map((entry) => '${entry.key}=${_field(entry.value, _text)}')
+          .join(',');

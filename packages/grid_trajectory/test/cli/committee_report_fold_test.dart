@@ -3,6 +3,9 @@
 /// `.usage.json` fallback.
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:test/test.dart';
 
@@ -311,6 +314,198 @@ List<TrajectoryEnvelope> fixtureRows() {
   ];
 }
 
+Map<String, String> _selectorProjection({
+  required String sampleId,
+  required String joinId,
+  String policyVersion = 'policy-v1',
+  String stage = 'implementation',
+  String workBeadId = 'bead-a',
+  String nodePath = 'review/select',
+  String selected = 'coherence,code-validation',
+  String omitted = 'security',
+  String matchedRules = 'rule-a',
+  String evidenceDigest = 'evidence-a',
+  Set<String> omitKeys = const {},
+  Map<String, String> overrides = const {},
+}) {
+  final result = <String, String>{
+    StepResultKeys.shadow: 'selection',
+    StepResultKeys.source: 'policy',
+    StepResultKeys.stage: stage,
+    StepResultKeys.selected: selected,
+    StepResultKeys.matchedRules: matchedRules,
+    StepResultKeys.classifierAttempts: '1',
+    StepResultKeys.sampleId: sampleId,
+    StepResultKeys.joinId: joinId,
+    StepResultKeys.policyVersion: policyVersion,
+    StepResultKeys.workBeadId: workBeadId,
+    StepResultKeys.round: '1',
+    StepResultKeys.nodePath: nodePath,
+    StepResultKeys.omitted: omitted,
+    StepResultKeys.evidenceDigest: evidenceDigest,
+    StepResultKeys.missingEvidenceIds: '',
+    StepResultKeys.laneInputDigests: jsonEncode({
+      'code-validation': 'input-code',
+      'coherence': 'input-coherence',
+    }),
+    StepResultKeys.classifierAttemptKinds: 'selected',
+  }..addAll(overrides);
+  for (final key in omitKeys) {
+    result.remove(key);
+  }
+  return result;
+}
+
+Map<String, String> _shadowRouteProjection({
+  required String sampleId,
+  required String joinId,
+  String policyVersion = 'policy-v1',
+  String stage = 'implementation',
+  String workBeadId = 'bead-a',
+  String nodePath = 'review/select',
+  String routeNodePath = 'review/route',
+  String selected = 'coherence,code-validation',
+  String omitted = 'security',
+  String matchedRules = 'rule-a',
+  String evidenceDigest = 'evidence-a',
+  Map<String, Object?> omittedGrades = const {'security': 'D'},
+  Map<String, Object?> omittedTransports = const {'security': 'artifact'},
+  Map<String, Object?> omittedDispositions = const {'security': 'upheld'},
+  int? actualTokensIn = 100,
+  int? actualTokensOut = 20,
+  num? actualCostUsd = 1.5,
+  int? counterfactualTokensIn = 60,
+  int? counterfactualTokensOut = 10,
+  num? counterfactualCostUsd = 0.8,
+  bool truncated = false,
+  String missingFields = '',
+  Set<String> omitKeys = const {},
+  Map<String, String> overrides = const {},
+}) {
+  final result = <String, String>{
+    StepResultKeys.committeeShadowSampleId: sampleId,
+    StepResultKeys.committeeShadowJoinId: joinId,
+    StepResultKeys.committeeShadowPolicyVersion: policyVersion,
+    StepResultKeys.committeeShadowWorkBeadId: workBeadId,
+    StepResultKeys.committeeShadowRound: '1',
+    StepResultKeys.committeeShadowNodePath: nodePath,
+    StepResultKeys.committeeShadowRouteNodePath: routeNodePath,
+    StepResultKeys.committeeShadowStage: stage,
+    StepResultKeys.committeeShadowSource: 'policy',
+    StepResultKeys.committeeShadowSelected: selected,
+    StepResultKeys.committeeShadowOmitted: omitted,
+    StepResultKeys.committeeShadowMatchedRules: matchedRules,
+    StepResultKeys.committeeShadowEvidenceDigest: evidenceDigest,
+    StepResultKeys.committeeShadowMissingEvidenceIds: '',
+    StepResultKeys.committeeShadowLaneInputDigests: jsonEncode({
+      'code-validation': 'input-code',
+      'coherence': 'input-coherence',
+    }),
+    StepResultKeys.committeeShadowClassifierAttemptKinds: 'selected',
+    StepResultKeys.committeeShadowActionLaneIds: 'security',
+    StepResultKeys.committeeShadowGateDisposition: jsonEncode('upheld'),
+    StepResultKeys.committeeShadowDownstreamJoinKeys: jsonEncode({
+      'routeNodePath': routeNodePath,
+      'workBeadId': workBeadId,
+    }),
+    StepResultKeys.committeeShadowOmittedLaneGrades: jsonEncode(omittedGrades),
+    StepResultKeys.committeeShadowOmittedLaneTransports: jsonEncode(
+      omittedTransports,
+    ),
+    StepResultKeys.committeeShadowOmittedLaneDispositions: jsonEncode(
+      omittedDispositions,
+    ),
+    StepResultKeys.committeeShadowActualContributingRunIds: 'run-full',
+    StepResultKeys.committeeShadowActualMissingLaneIds: '',
+    StepResultKeys.committeeShadowActualTokensIn: jsonEncode(actualTokensIn),
+    StepResultKeys.committeeShadowActualTokensOut: jsonEncode(actualTokensOut),
+    StepResultKeys.committeeShadowActualCostUsd: jsonEncode(actualCostUsd),
+    StepResultKeys.committeeShadowCounterfactualContributingRunIds:
+        'run-selected',
+    StepResultKeys.committeeShadowCounterfactualMissingLaneIds: '',
+    StepResultKeys.committeeShadowCounterfactualTokensIn: jsonEncode(
+      counterfactualTokensIn,
+    ),
+    StepResultKeys.committeeShadowCounterfactualTokensOut: jsonEncode(
+      counterfactualTokensOut,
+    ),
+    StepResultKeys.committeeShadowCounterfactualCostUsd: jsonEncode(
+      counterfactualCostUsd,
+    ),
+    StepResultKeys.committeeShadowTruncated: jsonEncode(truncated),
+    StepResultKeys.committeeShadowMissingFields: missingFields,
+  }..addAll(overrides);
+  for (final key in omitKeys) {
+    result.remove(key);
+  }
+  return result;
+}
+
+List<TrajectoryEnvelope> _shadowPair({
+  required String sampleId,
+  required String joinId,
+  String session = 'shadow-session',
+  Map<String, String>? selector,
+  Map<String, String>? route,
+  bool routeFirst = false,
+}) {
+  final selectorRow = _step(
+    session: session,
+    node: 'review/select',
+    state: StepState.complete,
+    result: selector ?? _selectorProjection(sampleId: sampleId, joinId: joinId),
+  );
+  final routeRow = _step(
+    session: session,
+    node: 'review/route',
+    state: StepState.complete,
+    result: route ?? _shadowRouteProjection(sampleId: sampleId, joinId: joinId),
+  );
+  return routeFirst ? [routeRow, selectorRow] : [selectorRow, routeRow];
+}
+
+List<TrajectoryEnvelope> _mixedShadowRows() {
+  _seq = 0;
+  return [
+    ..._shadowPair(sampleId: 'sample-full', joinId: 'join-full'),
+    ..._shadowPair(
+      sampleId: 'sample-sparse',
+      joinId: 'join-sparse',
+      selector: _selectorProjection(
+        sampleId: 'sample-sparse',
+        joinId: 'join-sparse',
+        workBeadId: 'bead-b',
+        nodePath: 'review/sparse-select',
+        matchedRules: 'rule-sparse',
+        omitted: 'security,tests',
+        omitKeys: {StepResultKeys.selected},
+      ),
+      route: _shadowRouteProjection(
+        sampleId: 'sample-sparse',
+        joinId: 'join-sparse',
+        workBeadId: 'bead-b',
+        nodePath: 'review/sparse-select',
+        routeNodePath: 'review/sparse-route',
+        matchedRules: 'rule-sparse',
+        omitted: 'security,tests',
+        omittedGrades: const {'security': null, 'tests': 'B'},
+        omittedTransports: const {'security': null, 'tests': 'envelope'},
+        omittedDispositions: const {'security': null, 'tests': null},
+        actualTokensIn: null,
+        actualCostUsd: 0,
+        truncated: true,
+        missingFields: 'lanes.security.grade,actual.tokensIn',
+        omitKeys: {StepResultKeys.committeeShadowSelected},
+        overrides: {
+          StepResultKeys.committeeShadowActualTokensOut: '{malformed',
+          StepResultKeys.committeeShadowActualMissingLaneIds: '',
+          StepResultKeys.committeeShadowCounterfactualTokensIn: '0',
+        },
+      ),
+    ),
+  ];
+}
+
 void main() {
   group('gate causes', () {
     test('classifies each named reason, and nothing else', () {
@@ -596,6 +791,393 @@ void main() {
         isNot(contains('lenny-qxx.7')),
       );
       expect(report.lanes.map((row) => row.lane), isNot(contains('readiness')));
+    });
+  });
+
+  group('shadow selection fold', () {
+    test('groups shadow samples by policy stage and rule', () {
+      _seq = 0;
+      final report = foldCommitteeReport([
+        ..._shadowPair(
+          sampleId: 'sample-b',
+          joinId: 'join-b',
+          selector: _selectorProjection(
+            sampleId: 'sample-b',
+            joinId: 'join-b',
+            matchedRules: 'rule-b',
+          ),
+          route: _shadowRouteProjection(
+            sampleId: 'sample-b',
+            joinId: 'join-b',
+            matchedRules: 'rule-b',
+          ),
+        ),
+        ..._shadowPair(
+          sampleId: 'sample-a',
+          joinId: 'join-a',
+          selector: _selectorProjection(
+            sampleId: 'sample-a',
+            joinId: 'join-a',
+            matchedRules: 'rule-a',
+          ),
+          route: _shadowRouteProjection(
+            sampleId: 'sample-a',
+            joinId: 'join-a',
+            matchedRules: 'rule-a',
+          ),
+        ),
+      ]);
+
+      expect(report.shadowSelection.groups.map((group) => group.ruleId), [
+        'rule-a',
+        'rule-b',
+      ]);
+      final group = report.shadowSelection.groups.first;
+      expect(group.sampleCount, 1);
+      expect(group.sampleIds, ['sample-a']);
+      final sample = group.samples.single;
+      expect(sample.selected.value, ['coherence', 'code-validation']);
+      expect(sample.omitted.value, ['security']);
+      expect(sample.omittedLaneGrades.value!['security']!.value, 'D');
+      expect(
+        sample.omittedLaneTransports.value!['security']!.value,
+        'artifact',
+      );
+    });
+
+    test('overlapping rules preserve distinct sample total', () {
+      _seq = 0;
+      final report = foldCommitteeReport([
+        ..._shadowPair(
+          sampleId: 'sample-overlap',
+          joinId: 'join-overlap',
+          selector: _selectorProjection(
+            sampleId: 'sample-overlap',
+            joinId: 'join-overlap',
+            matchedRules: 'rule-a,rule-b',
+          ),
+          route: _shadowRouteProjection(
+            sampleId: 'sample-overlap',
+            joinId: 'join-overlap',
+            matchedRules: 'rule-a,rule-b',
+          ),
+        ),
+        ..._shadowPair(
+          sampleId: 'sample-none',
+          joinId: 'join-none',
+          selector: _selectorProjection(
+            sampleId: 'sample-none',
+            joinId: 'join-none',
+            matchedRules: '',
+          ),
+          route: _shadowRouteProjection(
+            sampleId: 'sample-none',
+            joinId: 'join-none',
+            matchedRules: '',
+          ),
+        ),
+      ]);
+
+      expect(report.shadowSelection.distinctSampleCount, 2);
+      expect(report.shadowSelection.groups.map((group) => group.ruleId), [
+        kNoMatchedRuleId,
+        'rule-a',
+        'rule-b',
+      ]);
+      expect(
+        report.shadowSelection.groups
+            .map((group) => group.sampleCount)
+            .reduce((left, right) => left + right),
+        3,
+      );
+      expect(
+        report.shadowSelection.groups
+            .where((group) => group.ruleId != kNoMatchedRuleId)
+            .every((group) => group.sampleIds.contains('sample-overlap')),
+        isTrue,
+      );
+    });
+
+    test('reports scope shape and usage aggregates', () {
+      _seq = 0;
+      final report = foldCommitteeReport([
+        ..._shadowPair(
+          sampleId: 'sample-a',
+          joinId: 'join-a',
+          selector: _selectorProjection(
+            sampleId: 'sample-a',
+            joinId: 'join-a',
+            workBeadId: 'bead-a',
+            nodePath: 'review/a',
+            matchedRules: 'rule-a,rule-shared',
+          ),
+          route: _shadowRouteProjection(
+            sampleId: 'sample-a',
+            joinId: 'join-a',
+            workBeadId: 'bead-a',
+            nodePath: 'review/a',
+            matchedRules: 'rule-a,rule-shared',
+            actualTokensIn: 100,
+            actualTokensOut: 20,
+            actualCostUsd: 1.25,
+            counterfactualTokensIn: 50,
+            counterfactualTokensOut: 10,
+            counterfactualCostUsd: 0.5,
+          ),
+        ),
+        ..._shadowPair(
+          sampleId: 'sample-b',
+          joinId: 'join-b',
+          selector: _selectorProjection(
+            sampleId: 'sample-b',
+            joinId: 'join-b',
+            workBeadId: 'bead-b',
+            nodePath: 'review/b',
+            matchedRules: 'rule-a',
+          ),
+          route: _shadowRouteProjection(
+            sampleId: 'sample-b',
+            joinId: 'join-b',
+            workBeadId: 'bead-b',
+            nodePath: 'review/b',
+            matchedRules: 'rule-a',
+            actualTokensIn: 200,
+            actualTokensOut: null,
+            actualCostUsd: 2.75,
+            counterfactualTokensIn: 75,
+            counterfactualTokensOut: 15,
+            counterfactualCostUsd: 0.75,
+          ),
+        ),
+      ]);
+      final group = report.shadowSelection.groups.firstWhere(
+        (value) => value.ruleId == 'rule-a',
+      );
+
+      expect(group.scopeCoverage, {'bead-a|review/a': 1, 'bead-b|review/b': 1});
+      expect(group.changeShapeCoverage, {'rule-a': 1, 'rule-a,rule-shared': 1});
+      expect(group.actual.tokensIn.observedTotal, 300);
+      expect(group.actual.tokensIn.observedSampleCount, 2);
+      expect(group.actual.tokensOut.observedTotal, 20);
+      expect(group.actual.tokensOut.notObservedSampleCount, 1);
+      expect(group.actual.costUsd.observedTotal, 4.0);
+      expect(group.counterfactual.tokensIn.observedTotal, 125);
+      expect(group.counterfactual.tokensOut.observedTotal, 25);
+      expect(group.counterfactual.costUsd.observedTotal, 1.25);
+    });
+
+    test('renders missing null empty and truncated distinctly', () {
+      final report = foldCommitteeReport(_mixedShadowRows());
+      final group = report.shadowSelection.groups.firstWhere(
+        (value) => value.ruleId == 'rule-sparse',
+      );
+      final sample = group.samples.single;
+
+      expect(sample.selected.state, ShadowFieldState.missing);
+      expect(sample.actual.tokensIn.state, ShadowFieldState.notObserved);
+      expect(sample.actual.tokensOut.state, ShadowFieldState.invalid);
+      expect(sample.actual.costUsd.state, ShadowFieldState.observed);
+      expect(sample.actual.costUsd.value, 0);
+      expect(sample.actual.missingLaneIds.state, ShadowFieldState.observed);
+      expect(sample.actual.missingLaneIds.value, isEmpty);
+      expect(
+        sample.omittedLaneGrades.value!['security']!.state,
+        ShadowFieldState.notObserved,
+      );
+      expect(sample.truncated.value, isTrue);
+      expect(sample.missingFields.value, [
+        'lanes.security.grade',
+        'actual.tokensIn',
+      ]);
+      expect(group.truncated, isTrue);
+
+      final json = sample.toJson();
+      expect((json['selected']! as Map)['state'], 'missing');
+      final actual = json['actual']! as Map;
+      expect((actual['tokens_in']! as Map)['state'], 'not_observed');
+      expect((actual['tokens_out']! as Map)['state'], 'invalid');
+      expect((actual['cost_usd']! as Map), {'state': 'observed', 'value': 0});
+      expect((actual['missing_lane_ids']! as Map)['value'], isEmpty);
+      final grades = json['omitted_lane_grades']! as Map;
+      final gradeValues = grades['value']! as Map;
+      expect((gradeValues['security']! as Map)['state'], 'not_observed');
+
+      final rendered = renderCommitteeReport(report).join('\n');
+      expect(rendered, contains('rule rule-sparse — 1 samples'));
+      expect(rendered, contains('· TRUNCATED'));
+      expect(rendered, contains('lanes: selected missing'));
+      expect(rendered, contains('security=not observed'));
+      expect(rendered, contains('missing lanes (empty)'));
+      expect(rendered, contains('tokens in not observed'));
+      expect(rendered, contains('tokens out invalid'));
+      expect(rendered, contains('cost USD 0'));
+      expect(rendered, contains('missingFields: lanes.security.grade'));
+    });
+
+    test('joins selector and shadow route out of order', () {
+      _seq = 0;
+      final rows = <TrajectoryEnvelope>[
+        ..._shadowPair(
+          sampleId: 'sample-joined',
+          joinId: 'join-joined',
+          routeFirst: true,
+        ),
+        _step(
+          session: 'selector-only',
+          node: 'review/select',
+          state: StepState.complete,
+          result: _selectorProjection(
+            sampleId: 'sample-selector',
+            joinId: 'join-selector',
+          ),
+        ),
+        _step(
+          session: 'route-only',
+          node: 'review/route',
+          state: StepState.complete,
+          result: _shadowRouteProjection(
+            sampleId: 'sample-route',
+            joinId: 'join-route',
+          ),
+        ),
+        ..._shadowPair(
+          sampleId: 'sample-conflict',
+          joinId: 'join-conflict',
+          selector: _selectorProjection(
+            sampleId: 'sample-conflict',
+            joinId: 'join-conflict',
+            policyVersion: 'policy-old',
+          ),
+          route: _shadowRouteProjection(
+            sampleId: 'sample-conflict',
+            joinId: 'join-conflict',
+            policyVersion: 'policy-new',
+          ),
+        ),
+        _step(
+          session: 'unpaired',
+          node: 'review/route',
+          state: StepState.complete,
+          result: _shadowRouteProjection(
+            sampleId: 'sample-unpaired',
+            joinId: 'unused',
+            omitKeys: {StepResultKeys.committeeShadowJoinId},
+          ),
+        ),
+      ];
+      final report = foldCommitteeReport(rows);
+      final samples = {
+        for (final group in report.shadowSelection.groups)
+          for (final sample in group.samples) sample.identity: sample,
+      };
+
+      expect(report.shadowSelection.distinctSampleCount, 5);
+      expect(samples['sample-joined']!.joinState, ShadowJoinState.joined);
+      expect(
+        samples['sample-selector']!.joinState,
+        ShadowJoinState.selectorOnly,
+      );
+      expect(samples['sample-route']!.joinState, ShadowJoinState.routeOnly);
+      expect(samples['sample-conflict']!.joinState, ShadowJoinState.conflict);
+      expect(
+        samples['sample-conflict']!.conflictingKeys,
+        contains(StepResultKeys.policyVersion),
+      );
+      expect(samples['sample-conflict']!.policyVersion.value, 'policy-new');
+      expect(samples['sample-unpaired']!.joinState, ShadowJoinState.routeOnly);
+      expect(
+        samples['sample-unpaired']!.joinId.state,
+        ShadowFieldState.missing,
+      );
+    });
+
+    test('mixed shadow window matches the golden', () {
+      final report = foldCommitteeReport(_mixedShadowRows());
+      final json = report.toJson();
+      expect(json, contains('shadow_selection'));
+      final shadow = json['shadow_selection']! as Map;
+      expect(shadow['distinct_sample_count'], 2);
+      final groups = shadow['groups']! as List;
+      expect(groups.map((value) => (value as Map)['rule_id']), [
+        'rule-a',
+        'rule-sparse',
+      ]);
+      expect(
+        ((groups.first as Map)['samples']! as List).map(
+          (value) => (value as Map)['identity'],
+        ),
+        ['sample-full'],
+      );
+      expect(
+        (((groups.last as Map)['samples']! as List).single as Map)['identity'],
+        'sample-sparse',
+      );
+      final actual = (groups.last as Map)['actual']! as Map;
+      expect((actual['tokens_in']! as Map)['not_observed_sample_count'], 1);
+      expect((actual['tokens_out']! as Map)['invalid_sample_count'], 1);
+
+      final rendered = renderCommitteeReport(report).join('\n');
+      final golden = File(
+        'test/cli/fixtures/committee_report_shadow.golden.txt',
+      ).readAsStringSync();
+      expect(rendered, golden);
+    });
+
+    test('reports shadow provenance without changing empty windows', () {
+      final shadow = foldCommitteeReport(_mixedShadowRows());
+      expect(shadow.sources.shadowSelectionsFromStep, 2);
+      expect(
+        shadow.sources.toJson(),
+        containsPair('shadow_selections_from_step_transition', 2),
+      );
+      expect(
+        renderCommitteeReport(shadow),
+        contains('  shadow selections: 2 step.transition'),
+      );
+
+      final empty = foldCommitteeReport(const []);
+      expect(empty.sources.shadowSelectionsFromStep, 0);
+      expect(empty.sources.verdictsFromRecord, 0);
+      expect(empty.sources.verdictsFromStep, 0);
+      expect(empty.sources.usageFromTelemetry, 0);
+      expect(empty.sources.usageFromStep, 0);
+      expect(empty.sources.usageFromFallback, 0);
+      expect(empty.shadowSelection.distinctSampleCount, 0);
+      expect(empty.shadowSelection.groups, isEmpty);
+      final rendered = renderCommitteeReport(empty);
+      expect(rendered, [
+        'traj committee-report — 0 records',
+        '  sources: verdicts 0 record / 0 step.transition · usage '
+            '0 telemetry / 0 step.transition / 0 fallback',
+        '  gates: none opened in this window',
+        '',
+        '  lane                  grades                  gated  ovr  uph  '
+            r'unres  respec      $/run    s/run',
+        '',
+        r'  bead                  rounds   total $',
+      ]);
+      expect(empty.lanes, isEmpty);
+      expect(empty.beads, isEmpty);
+      expect(empty.gateCauses, isEmpty);
+    });
+
+    test('shadow fold is step-only and package stays a leaf', () {
+      final shadow = foldCommitteeReport(_mixedShadowRows());
+      final dedicated = foldCommitteeReport(fixtureRows());
+      expect(shadow.sources.shadowSelectionsFromStep, 2);
+      expect(dedicated.sources.shadowSelectionsFromStep, 0);
+
+      final pubspec = File('pubspec.yaml').readAsStringSync();
+      expect(
+        RegExp(r'^\s+grid_[^:]*:', multiLine: true).hasMatch(pubspec),
+        isFalse,
+      );
+      final source = File(
+        'lib/src/cli/committee_report.dart',
+      ).readAsStringSync();
+      expect(source, isNot(contains('package:grid_assets')));
+      expect(source, isNot(contains('shadow_accounting.dart')));
+      expect(source, isNot(contains('shadow_corroboration_reader.dart')));
     });
   });
 }

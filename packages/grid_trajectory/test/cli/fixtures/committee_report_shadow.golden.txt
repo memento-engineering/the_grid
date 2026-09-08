@@ -1,0 +1,46 @@
+traj committee-report — 4 records
+  sources: verdicts 0 record / 0 step.transition · usage 0 telemetry / 0 step.transition / 0 fallback
+  shadow selections: 2 step.transition
+  gates: none opened in this window
+
+  lane                  grades                  gated  ovr  uph  unres  respec      $/run    s/run
+
+  bead                  rounds   total $
+
+shadow committee selection — 2 distinct samples (2 observations; 0 unidentified)
+policy policy-v1 · stage implementation · rule rule-a — 1 samples [sample-full]
+  scope coverage: bead-a|review/select=1
+  change-shape coverage: rule-a=1
+  actual: tokens in 100 [observed=1, not observed=0, missing=0, invalid=0] · tokens out 20 [observed=1, not observed=0, missing=0, invalid=0] · cost USD 1.5 [observed=1, not observed=0, missing=0, invalid=0]
+  counterfactual: tokens in 60 [observed=1, not observed=0, missing=0, invalid=0] · tokens out 10 [observed=1, not observed=0, missing=0, invalid=0] · cost USD 0.8 [observed=1, not observed=0, missing=0, invalid=0]
+  sample sample-full
+    join: joined · sampleId sample-full · joinId join-full · conflicts (empty)
+    lanes: selected coherence,code-validation · omitted security
+    omitted grades: security=D
+    omitted transports: security=artifact
+    omitted dispositions: security=upheld
+    selection: source policy · rules rule-a · classifierAttempts 1 · classifierKinds selected
+    evidence: digest evidence-a · missing (empty) · lane inputs code-validation=input-code,coherence=input-coherence
+    route: bead bead-a · round 1 · selector path review/select · route path review/route
+    route outcome: action lanes security · gate upheld · downstream routeNodePath=review/route,workBeadId=bead-a
+    actual usage: contributors run-full · missing lanes (empty) · tokens in 100 · tokens out 20 · cost USD 1.5
+    counterfactual usage: contributors run-selected · missing lanes (empty) · tokens in 60 · tokens out 10 · cost USD 0.8
+    truncated: false · missingFields: (empty)
+policy policy-v1 · stage implementation · rule rule-sparse — 1 samples [sample-sparse] · TRUNCATED
+  scope coverage: bead-b|review/sparse-select=1
+  change-shape coverage: rule-sparse=1
+  actual: tokens in not available [observed=0, not observed=1, missing=0, invalid=0] · tokens out not available [observed=0, not observed=0, missing=0, invalid=1] · cost USD 0 [observed=1, not observed=0, missing=0, invalid=0]
+  counterfactual: tokens in 0 [observed=1, not observed=0, missing=0, invalid=0] · tokens out 10 [observed=1, not observed=0, missing=0, invalid=0] · cost USD 0.8 [observed=1, not observed=0, missing=0, invalid=0]
+  sample sample-sparse
+    join: joined · sampleId sample-sparse · joinId join-sparse · conflicts (empty)
+    lanes: selected missing · omitted security,tests
+    omitted grades: security=not observed,tests=B
+    omitted transports: security=not observed,tests=envelope
+    omitted dispositions: security=not observed,tests=not observed
+    selection: source policy · rules rule-sparse · classifierAttempts 1 · classifierKinds selected
+    evidence: digest evidence-a · missing (empty) · lane inputs code-validation=input-code,coherence=input-coherence
+    route: bead bead-b · round 1 · selector path review/sparse-select · route path review/sparse-route
+    route outcome: action lanes security · gate upheld · downstream routeNodePath=review/sparse-route,workBeadId=bead-b
+    actual usage: contributors run-full · missing lanes (empty) · tokens in not observed · tokens out invalid · cost USD 0
+    counterfactual usage: contributors run-selected · missing lanes (empty) · tokens in 0 · tokens out 10 · cost USD 0.8
+    truncated: true · missingFields: lanes.security.grade,actual.tokensIn
