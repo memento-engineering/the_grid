@@ -130,6 +130,23 @@ final class TrajectoryConfig {
            ? DualReadMode.primary
            : dualRead ?? DualReadMode.off;
 
+  TrajectoryConfig._disabledFrom(TrajectoryConfig source)
+    : discipline = source.discipline,
+      mode = TrajectoryConfigMode.disabled,
+      _requestedMode = source._requestedMode,
+      tickInterval = source.tickInterval,
+      obligationQueryExtensions = source.obligationQueryExtensions,
+      gcInterval = source.gcInterval,
+      commitCadence = source.commitCadence,
+      queueBound = source.queueBound,
+      livenessThreshold = source.livenessThreshold,
+      pulseCoalesce = source.pulseCoalesce,
+      shutdownDrainTimeout = source.shutdownDrainTimeout,
+      dualRead = source.dualRead,
+      _requestedDualRead = source._requestedDualRead,
+      soakWindowEpoch = source.soakWindowEpoch,
+      reconcileLedgerCloses = source.reconcileLedgerCloses;
+
   /// The single trajectory cut lever.
   final TrajectoryDiscipline discipline;
 
@@ -235,15 +252,18 @@ final class TrajectoryConfig {
   /// a contradiction.
   CutPostureRefused? get cutPostureRefusal {
     if (discipline != TrajectoryDiscipline.cut) return null;
+    const resolvedMode = TrajectoryConfigMode.required;
+    const resolvedDualRead = DualReadMode.primary;
     final dualReadDisagrees =
-        _requestedDualRead != null && _requestedDualRead != dualRead;
-    final modeDisagrees = _requestedMode != null && _requestedMode != mode;
+        _requestedDualRead != null && _requestedDualRead != resolvedDualRead;
+    final modeDisagrees =
+        _requestedMode != null && _requestedMode != resolvedMode;
     if (!dualReadDisagrees && !modeDisagrees) return null;
     return CutPostureRefused._(
       requestedMode: _requestedMode,
-      resolvedMode: mode,
+      resolvedMode: resolvedMode,
       requestedDualRead: _requestedDualRead,
-      resolvedDualRead: dualRead,
+      resolvedDualRead: resolvedDualRead,
     );
   }
 
@@ -298,23 +318,8 @@ final class TrajectoryConfig {
   /// teardown step) — see [kDefaultShutdownDrainTimeout].
   final Duration shutdownDrainTimeout;
 
-  /// The same config with a requested [TrajectoryConfigMode.disabled] mode —
-  /// how dry-run forces the no-write posture under [TrajectoryDiscipline.shadow].
-  /// A [TrajectoryDiscipline.cut] config preserves its stronger resolved
-  /// `required`/`primary` posture.
-  TrajectoryConfig get asDisabled => TrajectoryConfig(
-    discipline: discipline,
-    mode: TrajectoryConfigMode.disabled,
-    tickInterval: tickInterval,
-    obligationQueryExtensions: obligationQueryExtensions,
-    gcInterval: gcInterval,
-    commitCadence: commitCadence,
-    queueBound: queueBound,
-    livenessThreshold: livenessThreshold,
-    pulseCoalesce: pulseCoalesce,
-    shutdownDrainTimeout: shutdownDrainTimeout,
-    dualRead: _requestedDualRead,
-    soakWindowEpoch: soakWindowEpoch,
-    reconcileLedgerCloses: reconcileLedgerCloses,
-  );
+  /// The same config with trajectory writes disabled for dry-run under both
+  /// disciplines, retaining the source cut-implied [dualRead] posture and the
+  /// caller requests captured by the public constructor.
+  TrajectoryConfig get asDisabled => TrajectoryConfig._disabledFrom(this);
 }
