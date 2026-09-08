@@ -9,6 +9,9 @@ import 'package:grid_sdk/grid_sdk.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
+const _samePortRebindAttempts = 6;
+const _samePortRebindDelay = Duration(milliseconds: 200);
+
 /// RS-4 (D-C2, `docs/SCRATCH-resident-station.md` §3): `StationControl` — the
 /// loopback-only HTTP control surface. Real HTTP round-trips over
 /// an ephemeral port; NO live stores, NO real `claude`/`git`/`bd`. What this
@@ -640,14 +643,30 @@ void main() {
 
       await control.dispose();
 
-      final rebind = await StationControl.start(
-        port: boundPort,
+      final rebind = await _startControlOnSamePortWithRetry(boundPort);
+      addTearDown(rebind.dispose);
+      expect(Uri.parse(rebind.url).port, boundPort);
+
+      final response = await _get(rebind.url, '/healthz', token: 't');
+      expect(response.statusCode, HttpStatus.ok);
+      expect(response.body, '{"ok":true}');
+    });
+
+    test('negative control: a listener held for the full rebind window still '
+        'throws SocketException', () async {
+      final control = await StationControl.start(
+        port: 0,
         token: 't',
         view: _sampleStatus,
         commandHandler: _FakeCommandHandler(),
       );
-      addTearDown(rebind.dispose);
-      expect(Uri.parse(rebind.url).port, boundPort);
+      addTearDown(control.dispose);
+      final boundPort = Uri.parse(control.url).port;
+
+      await expectLater(
+        _startControlOnSamePortWithRetry(boundPort),
+        throwsA(isA<SocketException>()),
+      );
     });
 
     test(
@@ -927,6 +946,22 @@ void main() {
       });
     });
   });
+}
+
+Future<StationControl> _startControlOnSamePortWithRetry(int port) async {
+  for (var attempt = 1; ; attempt++) {
+    try {
+      return await StationControl.start(
+        port: port,
+        token: 't',
+        view: _sampleStatus,
+        commandHandler: _FakeCommandHandler(),
+      );
+    } on SocketException {
+      if (attempt == _samePortRebindAttempts) rethrow;
+    }
+    await Future<void>.delayed(_samePortRebindDelay);
+  }
 }
 
 Future<StationControl> _controlWith(HooksResolver resolver) =>
