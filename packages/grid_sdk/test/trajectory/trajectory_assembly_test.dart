@@ -5,6 +5,7 @@
 // never blocking either.
 import 'dart:io';
 
+import 'package:grid_engine/grid_engine.dart' show DualReadMode;
 import 'package:grid_sdk/grid_sdk.dart';
 import 'package:grid_trajectory/grid_trajectory.dart'
     show SqlResult, TrajectoryDb;
@@ -42,6 +43,16 @@ final class _NoOpQuery extends ObligationQuery {
   Future<List<ObligationAppend>> repair(
     List<Map<String, String?>> rows,
   ) async => const [];
+}
+
+final class _BuildProbeDelegate extends GridDelegate {
+  bool built = false;
+
+  @override
+  Seed build(TreeContext context, GridConfiguration configuration) {
+    built = true;
+    return const RawAssetGrid(root: '/probe');
+  }
 }
 
 void _seedStore(String dir, {String? database}) {
@@ -175,6 +186,77 @@ void main() {
       isTrue,
       reason: 'shutdown() settled the harness (connection closed)',
     );
+  });
+
+  test(
+    'cut contradiction throws named requested and resolved posture',
+    () async {
+      final db = _FakeDb();
+      final harness = await TrajectoryHarness.build(
+        config: const TrajectoryConfig(
+          discipline: TrajectoryDiscipline.cut,
+          dualRead: DualReadMode.observe,
+        ),
+        gridHome: '${tmp.path}/home',
+        station: 'tgstate',
+        connect: () async => db,
+      );
+      final work = await assemble(trajectoryOverride: harness);
+      addTearDown(work.shutdown);
+
+      await expectLater(
+        work.start(),
+        throwsA(
+          isA<CutPostureRefused>()
+              .having(
+                (error) => error.requestedDualRead,
+                'requestedDualRead',
+                DualReadMode.observe,
+              )
+              .having(
+                (error) => error.resolvedDualRead,
+                'resolvedDualRead',
+                DualReadMode.primary,
+              )
+              .having(
+                (error) => error.toString(),
+                'message',
+                allOf(
+                  contains('requested dualRead=observe'),
+                  contains('resolved dualRead=primary'),
+                ),
+              ),
+        ),
+      );
+    },
+  );
+
+  test('cut refusal runs after trajectory attach and before runGrid', () async {
+    var attached = false;
+    final db = _FakeDb();
+    final harness = await TrajectoryHarness.build(
+      config: const TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+        dualRead: DualReadMode.observe,
+      ),
+      gridHome: '${tmp.path}/home',
+      station: 'tgstate',
+      connect: () async {
+        attached = true;
+        return db;
+      },
+    );
+    final work = await assemble(trajectoryOverride: harness);
+    addTearDown(work.shutdown);
+    final delegate = _BuildProbeDelegate();
+
+    await expectLater(() async {
+      await work.start();
+      final grid = await runGrid(delegate);
+      await grid.teardown();
+    }(), throwsA(isA<CutPostureRefused>()));
+    expect(attached, isTrue);
+    expect(delegate.built, isFalse);
   });
 
   group('W4/W5 — the recorder reaches every observation site (§1.1)', () {

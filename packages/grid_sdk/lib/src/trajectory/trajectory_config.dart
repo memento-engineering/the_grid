@@ -31,6 +31,62 @@ enum TrajectoryConfigMode {
   required,
 }
 
+/// The station-wide trajectory write/read discipline.
+///
+/// [shadow] preserves the pre-cut posture selected by [TrajectoryConfig.mode]
+/// and [TrajectoryConfig.dualRead]. [cut] is the single cut lever: it resolves
+/// those fields to [TrajectoryConfigMode.required] and [DualReadMode.primary]
+/// so no caller can observe a cut config with a weaker posture.
+enum TrajectoryDiscipline {
+  /// Legacy writes remain authoritative while trajectory evidence shadows
+  /// them.
+  shadow,
+
+  /// The station has crossed the cut and requires the trajectory-primary
+  /// posture.
+  cut,
+}
+
+/// A cut boot whose explicitly requested posture contradicts the cut.
+///
+/// This is a boot refusal rather than a trajectory-harness failure: harness
+/// failures remain non-fatal, while allowing a cut station to boot with a
+/// retired carrier would violate the cut's single-lever invariant.
+@immutable
+final class CutPostureRefused implements Exception {
+  const CutPostureRefused._({
+    required this.requestedMode,
+    required this.resolvedMode,
+    required this.requestedDualRead,
+    required this.resolvedDualRead,
+  });
+
+  /// The caller's explicit mode request, or null when it was omitted.
+  final TrajectoryConfigMode? requestedMode;
+
+  /// The mode implied by the cut.
+  final TrajectoryConfigMode resolvedMode;
+
+  /// The caller's explicit dual-read request, or null when it was omitted.
+  final DualReadMode? requestedDualRead;
+
+  /// The dual-read posture implied by the cut.
+  final DualReadMode resolvedDualRead;
+
+  @override
+  String toString() {
+    final disagreements = <String>[
+      if (requestedDualRead != null && requestedDualRead != resolvedDualRead)
+        'requested dualRead=${requestedDualRead!.name}, '
+            'resolved dualRead=${resolvedDualRead.name}',
+      if (requestedMode != null && requestedMode != resolvedMode)
+        'requested mode=${requestedMode!.name}, '
+            'resolved mode=${resolvedMode.name}',
+    ];
+    return 'CutPostureRefused(${disagreements.join('; ')})';
+  }
+}
+
 /// The gc cadence (stage1-wiring §1.2 / M2): `CALL DOLT_GC()` every 5 minutes
 /// caps the working set; online, no quiesced window, never bd's proxy.
 const Duration kDefaultTrajectoryGcInterval = Duration(minutes: 5);
@@ -51,7 +107,8 @@ const Duration kDefaultShutdownDrainTimeout = Duration(seconds: 30);
 @immutable
 final class TrajectoryConfig {
   const TrajectoryConfig({
-    this.mode = TrajectoryConfigMode.auto,
+    this.discipline = TrajectoryDiscipline.shadow,
+    TrajectoryConfigMode? mode,
     this.tickInterval = kDefaultTickInterval,
     this.obligationQueryExtensions = const <ObligationQuery>[],
     this.gcInterval = kDefaultTrajectoryGcInterval,
@@ -60,11 +117,23 @@ final class TrajectoryConfig {
     this.livenessThreshold = kDefaultLivenessThreshold,
     this.pulseCoalesce = kDefaultPulseCoalesce,
     this.shutdownDrainTimeout = kDefaultShutdownDrainTimeout,
-    this.dualRead = DualReadMode.off,
+    DualReadMode? dualRead,
     this.reconcileLedgerCloses = true,
-  });
+  }) : _requestedMode = mode,
+       _requestedDualRead = dualRead,
+       mode = discipline == TrajectoryDiscipline.cut
+           ? TrajectoryConfigMode.required
+           : mode ?? TrajectoryConfigMode.auto,
+       dualRead = discipline == TrajectoryDiscipline.cut
+           ? DualReadMode.primary
+           : dualRead ?? DualReadMode.off;
+
+  /// The single trajectory cut lever.
+  final TrajectoryDiscipline discipline;
 
   final TrajectoryConfigMode mode;
+
+  final TrajectoryConfigMode? _requestedMode;
 
   /// THE DUAL-READ POSTURE (cut-wiring C2/C3), stated per posture so the
   /// rollback claim is honest about WRITES as well as decisions.
@@ -155,6 +224,27 @@ final class TrajectoryConfig {
   /// arming nothing boots exactly as it did on main.
   final DualReadMode dualRead;
 
+  final DualReadMode? _requestedDualRead;
+
+  /// The named refusal for an explicit request that contradicts [discipline].
+  ///
+  /// Omitted posture arguments accept the cut's implications. The resolved
+  /// public fields always remain `required`/`primary`, even when this reports
+  /// a contradiction.
+  CutPostureRefused? get cutPostureRefusal {
+    if (discipline != TrajectoryDiscipline.cut) return null;
+    final dualReadDisagrees =
+        _requestedDualRead != null && _requestedDualRead != dualRead;
+    final modeDisagrees = _requestedMode != null && _requestedMode != mode;
+    if (!dualReadDisagrees && !modeDisagrees) return null;
+    return CutPostureRefused._(
+      requestedMode: _requestedMode,
+      resolvedMode: mode,
+      requestedDualRead: _requestedDualRead,
+      resolvedDualRead: dualRead,
+    );
+  }
+
   /// THE LEDGER-CLOSE RECONCILE (tg-ffl6; decision
   /// `wave-2-flip-scope-soak-and-kill-date`, Q6). ON by default at EVERY
   /// posture: the external-close obligation reads the state snapshot and
@@ -197,10 +287,12 @@ final class TrajectoryConfig {
   /// teardown step) — see [kDefaultShutdownDrainTimeout].
   final Duration shutdownDrainTimeout;
 
-  /// The same config with [mode] forced to [TrajectoryConfigMode.disabled] —
-  /// how dry-run forces the no-write posture (§1.3: a dry arm must not claim
-  /// an epoch or write anything).
+  /// The same config with a requested [TrajectoryConfigMode.disabled] mode —
+  /// how dry-run forces the no-write posture under [TrajectoryDiscipline.shadow].
+  /// A [TrajectoryDiscipline.cut] config preserves its stronger resolved
+  /// `required`/`primary` posture.
   TrajectoryConfig get asDisabled => TrajectoryConfig(
+    discipline: discipline,
     mode: TrajectoryConfigMode.disabled,
     tickInterval: tickInterval,
     obligationQueryExtensions: obligationQueryExtensions,
@@ -210,7 +302,7 @@ final class TrajectoryConfig {
     livenessThreshold: livenessThreshold,
     pulseCoalesce: pulseCoalesce,
     shutdownDrainTimeout: shutdownDrainTimeout,
-    dualRead: dualRead,
+    dualRead: _requestedDualRead,
     reconcileLedgerCloses: reconcileLedgerCloses,
   );
 }

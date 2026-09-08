@@ -792,8 +792,11 @@ health-disengage; full engine suite green with a fake snapshot in primary.
 
 **Soak gate (wave-2 entry input):** 3 consecutive clean rounds under primary — zero
 divergence, zero drops, post-epoch fallback = 0, lag classes zero at round end, clean
-`traj shadow-diff` per round, same shape coverage as C2's gate. **Rollback:**
-`dualRead: observe` (config/env, one line) — instant, and legacy is still fully written.
+`traj shadow-diff` per round, same shape coverage as C2's gate.
+**Rollback (pre-cut only):** under `shadow`, demote to `dualRead: observe` (config/env,
+one line) — instant, and legacy is still fully written.
+Under `cut` there is no `dualRead` demotion; post-cut rollback is the
+quiesced flip back to `shadow`, never a posture change on a live station.
 
 ### C4 — Step-cursor dual-read (P2) — observe, then primary
 
@@ -913,8 +916,11 @@ C0's replay rehearsal re-run including P2 on live-copy data.
 
 **Soak gate (wave-2 entry input):** 3 clean rounds step-axis primary — zero step
 divergences, zero post-epoch step fallbacks, lag discipline as C3 — may be the same rounds
-as C3's; shape coverage must include at least one gate-park + re-arm cycle. **Rollback:**
-`dualRead` demotion; step axis observes; legacy cursor still fully written.
+as C3's; shape coverage must include at least one gate-park + re-arm cycle.
+**Rollback (pre-cut only):** under `shadow`, `dualRead` demotion makes the step axis
+observe while the legacy cursor remains fully written.
+Under `cut` there is no `dualRead` demotion; post-cut rollback is the
+quiesced flip back to `shadow`, never a posture change on a live station.
 
 ### C8b — MOVED TO WAVE 2 (r4, J7-B3)
 
