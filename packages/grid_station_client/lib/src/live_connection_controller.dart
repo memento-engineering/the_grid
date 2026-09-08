@@ -22,6 +22,10 @@ sealed class LiveConnectionState with _$LiveConnectionState {
   /// Local station discovery is in progress.
   const factory LiveConnectionState.discovering() = LiveDiscovering;
 
+  /// The current host cannot perform local station discovery.
+  const factory LiveConnectionState.discoveryUnavailable() =
+      LiveDiscoveryUnavailable;
+
   /// Manual credentials are required.
   const factory LiveConnectionState.manual({String? message}) = LiveManual;
 
@@ -76,6 +80,10 @@ final class LiveConnectionController
         throw const FormatException('station lock has no control bearer');
       }
       await _connect(controlUrl: controlUrl, token: token);
+    } on StationLockDiscoveryUnavailable {
+      if (!_disposed) {
+        value = const LiveConnectionState.discoveryUnavailable();
+      }
     } on Object catch (error) {
       if (!_disposed) {
         value = LiveConnectionState.manual(message: error.toString());

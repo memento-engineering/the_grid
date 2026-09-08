@@ -9,8 +9,9 @@ import 'package:grid_station_client/grid_station_client.dart';
 import 'fakes.dart';
 import 'fixtures.dart';
 
-StationLockDiscovery _discovery({bool available = true}) =>
+StationLockDiscovery _discovery({bool capable = true, bool available = true}) =>
     StationLockDiscovery(
+      isCapable: () async => capable,
       workspaceRoots: () async =>
           available ? <Uri>[Uri.parse('file:///workspace/')] : const <Uri>[],
       readFile: (_) async => jsonEncode({
@@ -23,6 +24,27 @@ StationLockDiscovery _discovery({bool available = true}) =>
     );
 
 void main() {
+  testWidgets('discovery unavailable status is readable and explicit', (
+    tester,
+  ) async {
+    final controller = CockpitConnectionController(
+      discovery: _discovery(capable: false),
+    );
+
+    await tester.pumpWidget(GridCockpitApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    const notice =
+        'Auto-connect is unavailable in this session. '
+        'Enter the station URL and token.';
+    final status = find.byKey(const Key('cockpit.status'));
+    expect(tester.widget<Text>(status).data, notice);
+    expect(controller.value, isA<CockpitDiscoveryUnavailable>());
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets('connected fake wire renders all four landed cockpit views', (
     tester,
   ) async {

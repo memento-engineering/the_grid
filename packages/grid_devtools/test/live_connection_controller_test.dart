@@ -24,6 +24,7 @@ final class _Source implements TreeSource {
 
 StationLockDiscovery _discovery({bool available = true}) =>
     StationLockDiscovery(
+      isCapable: () async => true,
       workspaceRoots: () async => [Uri.parse('file:///workspace/')],
       readFile: (_) async {
         if (!available) throw StateError('missing');

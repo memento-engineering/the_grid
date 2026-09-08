@@ -61,12 +61,13 @@ extension LiveConnectionStatePatterns on LiveConnectionState {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( LiveDisconnected value)?  disconnected,TResult Function( LiveDiscovering value)?  discovering,TResult Function( LiveManual value)?  manual,TResult Function( LiveConnecting value)?  connecting,TResult Function( LiveConnected value)?  connected,TResult Function( LiveFailed value)?  failed,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( LiveDisconnected value)?  disconnected,TResult Function( LiveDiscovering value)?  discovering,TResult Function( LiveDiscoveryUnavailable value)?  discoveryUnavailable,TResult Function( LiveManual value)?  manual,TResult Function( LiveConnecting value)?  connecting,TResult Function( LiveConnected value)?  connected,TResult Function( LiveFailed value)?  failed,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case LiveDisconnected() when disconnected != null:
 return disconnected(_that);case LiveDiscovering() when discovering != null:
-return discovering(_that);case LiveManual() when manual != null:
+return discovering(_that);case LiveDiscoveryUnavailable() when discoveryUnavailable != null:
+return discoveryUnavailable(_that);case LiveManual() when manual != null:
 return manual(_that);case LiveConnecting() when connecting != null:
 return connecting(_that);case LiveConnected() when connected != null:
 return connected(_that);case LiveFailed() when failed != null:
@@ -88,12 +89,13 @@ return failed(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( LiveDisconnected value)  disconnected,required TResult Function( LiveDiscovering value)  discovering,required TResult Function( LiveManual value)  manual,required TResult Function( LiveConnecting value)  connecting,required TResult Function( LiveConnected value)  connected,required TResult Function( LiveFailed value)  failed,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( LiveDisconnected value)  disconnected,required TResult Function( LiveDiscovering value)  discovering,required TResult Function( LiveDiscoveryUnavailable value)  discoveryUnavailable,required TResult Function( LiveManual value)  manual,required TResult Function( LiveConnecting value)  connecting,required TResult Function( LiveConnected value)  connected,required TResult Function( LiveFailed value)  failed,}){
 final _that = this;
 switch (_that) {
 case LiveDisconnected():
 return disconnected(_that);case LiveDiscovering():
-return discovering(_that);case LiveManual():
+return discovering(_that);case LiveDiscoveryUnavailable():
+return discoveryUnavailable(_that);case LiveManual():
 return manual(_that);case LiveConnecting():
 return connecting(_that);case LiveConnected():
 return connected(_that);case LiveFailed():
@@ -111,12 +113,13 @@ return failed(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( LiveDisconnected value)?  disconnected,TResult? Function( LiveDiscovering value)?  discovering,TResult? Function( LiveManual value)?  manual,TResult? Function( LiveConnecting value)?  connecting,TResult? Function( LiveConnected value)?  connected,TResult? Function( LiveFailed value)?  failed,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( LiveDisconnected value)?  disconnected,TResult? Function( LiveDiscovering value)?  discovering,TResult? Function( LiveDiscoveryUnavailable value)?  discoveryUnavailable,TResult? Function( LiveManual value)?  manual,TResult? Function( LiveConnecting value)?  connecting,TResult? Function( LiveConnected value)?  connected,TResult? Function( LiveFailed value)?  failed,}){
 final _that = this;
 switch (_that) {
 case LiveDisconnected() when disconnected != null:
 return disconnected(_that);case LiveDiscovering() when discovering != null:
-return discovering(_that);case LiveManual() when manual != null:
+return discovering(_that);case LiveDiscoveryUnavailable() when discoveryUnavailable != null:
+return discoveryUnavailable(_that);case LiveManual() when manual != null:
 return manual(_that);case LiveConnecting() when connecting != null:
 return connecting(_that);case LiveConnected() when connected != null:
 return connected(_that);case LiveFailed() when failed != null:
@@ -137,11 +140,12 @@ return failed(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  disconnected,TResult Function()?  discovering,TResult Function( String? message)?  manual,TResult Function()?  connecting,TResult Function( TreeSource source)?  connected,TResult Function( String message)?  failed,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  disconnected,TResult Function()?  discovering,TResult Function()?  discoveryUnavailable,TResult Function( String? message)?  manual,TResult Function()?  connecting,TResult Function( TreeSource source)?  connected,TResult Function( String message)?  failed,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case LiveDisconnected() when disconnected != null:
 return disconnected();case LiveDiscovering() when discovering != null:
-return discovering();case LiveManual() when manual != null:
+return discovering();case LiveDiscoveryUnavailable() when discoveryUnavailable != null:
+return discoveryUnavailable();case LiveManual() when manual != null:
 return manual(_that.message);case LiveConnecting() when connecting != null:
 return connecting();case LiveConnected() when connected != null:
 return connected(_that.source);case LiveFailed() when failed != null:
@@ -163,11 +167,12 @@ return failed(_that.message);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  disconnected,required TResult Function()  discovering,required TResult Function( String? message)  manual,required TResult Function()  connecting,required TResult Function( TreeSource source)  connected,required TResult Function( String message)  failed,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  disconnected,required TResult Function()  discovering,required TResult Function()  discoveryUnavailable,required TResult Function( String? message)  manual,required TResult Function()  connecting,required TResult Function( TreeSource source)  connected,required TResult Function( String message)  failed,}) {final _that = this;
 switch (_that) {
 case LiveDisconnected():
 return disconnected();case LiveDiscovering():
-return discovering();case LiveManual():
+return discovering();case LiveDiscoveryUnavailable():
+return discoveryUnavailable();case LiveManual():
 return manual(_that.message);case LiveConnecting():
 return connecting();case LiveConnected():
 return connected(_that.source);case LiveFailed():
@@ -185,11 +190,12 @@ return failed(_that.message);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  disconnected,TResult? Function()?  discovering,TResult? Function( String? message)?  manual,TResult? Function()?  connecting,TResult? Function( TreeSource source)?  connected,TResult? Function( String message)?  failed,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  disconnected,TResult? Function()?  discovering,TResult? Function()?  discoveryUnavailable,TResult? Function( String? message)?  manual,TResult? Function()?  connecting,TResult? Function( TreeSource source)?  connected,TResult? Function( String message)?  failed,}) {final _that = this;
 switch (_that) {
 case LiveDisconnected() when disconnected != null:
 return disconnected();case LiveDiscovering() when discovering != null:
-return discovering();case LiveManual() when manual != null:
+return discovering();case LiveDiscoveryUnavailable() when discoveryUnavailable != null:
+return discoveryUnavailable();case LiveManual() when manual != null:
 return manual(_that.message);case LiveConnecting() when connecting != null:
 return connecting();case LiveConnected() when connected != null:
 return connected(_that.source);case LiveFailed() when failed != null:
@@ -269,6 +275,44 @@ int get hashCode => runtimeType.hashCode;
 @override
 String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
   return 'LiveConnectionState.discovering()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class LiveDiscoveryUnavailable with DiagnosticableTreeMixin implements LiveConnectionState {
+  const LiveDiscoveryUnavailable();
+
+
+
+
+
+
+@override
+void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+  properties
+    ..add(DiagnosticsProperty('type', 'LiveConnectionState.discoveryUnavailable'))
+    ;
+}
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is LiveDiscoveryUnavailable);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
+  return 'LiveConnectionState.discoveryUnavailable()';
 }
 
 

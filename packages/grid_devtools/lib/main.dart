@@ -65,6 +65,11 @@ class _LiveGridDevToolsShell extends StatefulWidget {
 class _LiveGridDevToolsShellState extends State<_LiveGridDevToolsShell> {
   late final LiveConnectionController _live = LiveConnectionController(
     discovery: StationLockDiscovery(
+      isCapable: () async {
+        if (dtdManager.connection.value == null) return false;
+        final roots = (await dtdManager.workspaceRoots())?.ideWorkspaceRoots;
+        return roots?.isNotEmpty ?? false;
+      },
       workspaceRoots: () async =>
           (await dtdManager.workspaceRoots())?.ideWorkspaceRoots ??
           const <Uri>[],

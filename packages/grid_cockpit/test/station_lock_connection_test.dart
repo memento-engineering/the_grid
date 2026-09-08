@@ -39,6 +39,10 @@ void main() {
     expect(state, isA<CockpitDisconnected>());
   });
 
+  test('current-directory discovery is always capable', () async {
+    expect(await currentDirectoryStationDiscovery().isCapable(), isTrue);
+  });
+
   test(
     'shared discovery decodes an AOT lock and failures settle manual',
     () async {
@@ -47,6 +51,7 @@ void main() {
       String? observedToken;
       final source = _TreeSource();
       final discovery = StationLockDiscovery(
+        isCapable: () async => true,
         workspaceRoots: () async => [Uri.parse('file:///workspace/')],
         readFile: (uri) async {
           reads.add(uri);
@@ -75,14 +80,17 @@ void main() {
 
       final failures = <StationLockDiscovery>[
         StationLockDiscovery(
+          isCapable: () async => true,
           workspaceRoots: () async => const [],
           readFile: (_) async => throw UnimplementedError(),
         ),
         StationLockDiscovery(
+          isCapable: () async => true,
           workspaceRoots: () async => [Uri.parse('file:///workspace/')],
           readFile: (_) async => '{malformed',
         ),
         StationLockDiscovery(
+          isCapable: () async => true,
           workspaceRoots: () async => [Uri.parse('file:///workspace/')],
           readFile: (_) async => _lock(controlUrl: ' ', token: ' '),
         ),
@@ -106,6 +114,7 @@ void main() {
       var fail = true;
       final controller = CockpitConnectionController(
         discovery: StationLockDiscovery(
+          isCapable: () async => true,
           workspaceRoots: () async => const [],
           readFile: (_) async => throw UnimplementedError(),
         ),
@@ -146,6 +155,7 @@ void main() {
     var calls = 0;
     final controller = CockpitConnectionController(
       discovery: StationLockDiscovery(
+        isCapable: () async => true,
         workspaceRoots: () async => const [],
         readFile: (_) async => throw UnimplementedError(),
       ),

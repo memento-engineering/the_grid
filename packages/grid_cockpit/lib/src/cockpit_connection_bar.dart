@@ -36,6 +36,9 @@ final class _CockpitConnectionBarState extends State<CockpitConnectionBar> {
         final status = switch (state) {
           LiveDisconnected() => 'Station disconnected',
           LiveDiscovering() => 'Finding local station…',
+          LiveDiscoveryUnavailable() =>
+            'Auto-connect is unavailable in this session. '
+                'Enter the station URL and token.',
           LiveManual(:final message) => message ?? 'Enter station credentials.',
           LiveConnecting() => 'Connecting…',
           LiveConnected() => 'Station connected',

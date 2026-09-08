@@ -11,6 +11,7 @@ export 'package:grid_station_client/grid_station_client.dart'
         LiveConnectionState,
         LiveDisconnected,
         LiveDiscovering,
+        LiveDiscoveryUnavailable,
         LiveFailed,
         LiveManual,
         LiveTreeSourceConnector;
@@ -28,6 +29,9 @@ typedef CockpitDisconnected = LiveDisconnected;
 
 /// Cockpit vocabulary for the shared discovery-in-progress state.
 typedef CockpitDiscovering = LiveDiscovering;
+
+/// Cockpit vocabulary for unavailable local discovery.
+typedef CockpitDiscoveryUnavailable = LiveDiscoveryUnavailable;
 
 /// Cockpit vocabulary for the shared manual-credentials state.
 typedef CockpitManual = LiveManual;

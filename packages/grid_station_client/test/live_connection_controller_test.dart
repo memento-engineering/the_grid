@@ -24,6 +24,7 @@ final class _Source implements TreeSource {
 }
 
 StationLockDiscovery _discovery(String contents) => StationLockDiscovery(
+  isCapable: () async => true,
   workspaceRoots: () async => [Uri.parse('file:///workspace/')],
   readFile: (_) async => contents,
 );
@@ -37,6 +38,54 @@ String _lock({String? controlUrl, String? token}) => jsonEncode({
 });
 
 void main() {
+  test(
+    'unavailable discovery settles typed state without reading files',
+    () async {
+      var capabilityCalls = 0;
+      var rootCalls = 0;
+      var readCalls = 0;
+      var connectorCalls = 0;
+      final controller = LiveConnectionController(
+        discovery: StationLockDiscovery(
+          isCapable: () async {
+            capabilityCalls++;
+            return false;
+          },
+          workspaceRoots: () async {
+            rootCalls++;
+            return [Uri.parse('file:///workspace/')];
+          },
+          readFile: (_) async {
+            readCalls++;
+            return _lock();
+          },
+        ),
+        connectSource: ({required controlUrl, required token}) {
+          connectorCalls++;
+          return _Source();
+        },
+      );
+      final observed = <LiveConnectionState>[];
+      controller.addListener(() => observed.add(controller.value));
+
+      await controller.autoConnect();
+
+      expect(capabilityCalls, 1);
+      expect(rootCalls, 0);
+      expect(readCalls, 0);
+      expect(connectorCalls, 0);
+      expect(observed, const [
+        LiveConnectionState.discovering(),
+        LiveConnectionState.discoveryUnavailable(),
+      ]);
+      expect(
+        controller.value,
+        const LiveConnectionState.discoveryUnavailable(),
+      );
+      controller.dispose();
+    },
+  );
+
   test('auto connect trims AOT lock credentials', () async {
     Uri? observedUrl;
     String? observedToken;
@@ -63,6 +112,7 @@ void main() {
   test('discovery, decode, and validation errors settle manual', () async {
     final discoveries = <StationLockDiscovery>[
       StationLockDiscovery(
+        isCapable: () async => true,
         workspaceRoots: () async => const [],
         readFile: (_) async => throw UnimplementedError(),
       ),
