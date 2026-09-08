@@ -1,3 +1,12 @@
+## 0.3.0-rc.22
+
+- Added: under `TrajectoryDiscipline.cut` a decision-bearing append loss HALTS admission through `TrajectoryAdmissionHalt` (latch-only, cleared by the operator) and opens the station-and-node gate instead of demoting the mirror; under `shadow` the mirror-compromised latch is unchanged. `SessionScope._rearm` failure under cut gates once without `gate.rearmFailed`; `WorkList` binds the ambient `TrajectoryRecorderScope` through the availability registry, so a WorkList-mounting root needs the production `ProviderScope` (tg-ppo5, #364).
+- Added: the epoch-scoped dual-read soak instrument (`soakWindowEpoch`) and fold-backed mount facts served under dual-read primary; designed session dual-read lags are explained rather than counted as divergence (tg-esha #354, #350, tg-3yw5 #356).
+- Added: admission facts (reservations, mount-eligibility refusals, the cached read-failure set) exposed for `StationControl /status` (#349).
+- Fixed: a stalled molecule pour is re-armed and exposed instead of idling the scope silently (tg-kuux, #359).
+- Fixed: held session worktrees survive until the work bead closes and are collected on demand (#357, #361).
+- Floors `grid_runtime` to `^0.2.0-rc.16`, where `TrajectoryAppendResult` was introduced.
+
 ## 0.3.0-rc.21
 
 - Fixed: session dual-read now classifies Q9's positive retired-round/open-head shape as `retired-round-open-by-design` (counted by `retired_round_open_by_design_divergences`), a one-pass fold terminal lead as `fold-ahead-of-legacy`, and a legacy terminal still absent after reconciliation as `legacy-terminal-no-fold-terminal`; all three are cumulative explained classes rather than unexplained divergences.

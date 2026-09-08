@@ -1,3 +1,9 @@
+## 0.2.0-rc.16
+
+- Added: `TrajectoryAppendResult`, a sealed `{Acked, Dropped, Suppressed}` union, and `TrajectoryAckRecordSink.appendAcked` beside the void `TrajectoryRecordSink.enqueue`; `StationTrajectoryRecorder.stepRunning`, `stepRearmed`, `sessionCompleted`, `sessionEscalated` and `sessionVoided` return the result as decision-bearing appends (tg-ppo5, #364).
+- Added: boot-epoch station gates — a station-scoped gate keyed on the boot epoch, deduplicated by the existing gate writers (tg-v2rm, #352).
+- Added: `session collect` support — a held session's preserved worktree artifacts are collected before the cadence sweep can reap them (tg-yz4p, #361); a held worktree is preserved until its work bead closes (#357).
+
 ## 0.2.0-rc.15
 
 - Fixed: `closeSessionAndOpenGatesForTerminal` reconciles a failed gate sweep against the open-gate census — when the sweep throws (a state-store timeout during a boot burst) and a fresh census shows no open gate for the session, the close is tolerated with one `gate.autoCloseFailed` flare and an empty receipt list; a census that still shows an open gate, or cannot be read, rethrows the original failure. This is what fired `session.mintAbandoned` stage `retired-gates-close-failed` on every lunar boot (tg-g230, #345).
