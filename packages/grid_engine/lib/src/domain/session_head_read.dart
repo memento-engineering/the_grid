@@ -70,13 +70,18 @@ const Duration kRetirementLagGrace = Duration(seconds: 90);
 /// The `attempt.note` channel the durable round evidence rides (§0.4).
 const String kDualReadRoundSummaryChannel = 'dual-read-round-summary';
 
-/// Semantics for every counter emitted by [DualReadAccounting.toJson].
+/// Semantics for every scalar counter emitted by
+/// [DualReadAccounting.toJson], plus the original map-valued divergence row.
+/// Scoped map twins inherit that row's cumulative semantics (documented at
+/// their insertion point below) rather than widening this legacy flat index.
 const Map<String, String> kDualReadCounterSemantics = <String, String>{
+  'soak_window_epoch': 'gauge',
   'snapshot_version': 'cumulative',
   'snapshot_rows': 'gauge',
   'passes': 'cumulative',
   'hits': 'gauge',
   'miss_post_epoch': 'gauge',
+  'miss_post_epoch_total': 'cumulative',
   'miss_legacy_era': 'gauge',
   'null_started_at': 'gauge',
   'fallbacks': 'gauge',
@@ -86,20 +91,39 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'overlays_suppressed': 'gauge',
   'divergences': 'cumulative',
   'divergences_by_field': 'cumulative',
+  'divergences_in_window': 'cumulative',
+  'divergences_historical': 'cumulative',
+  // The two scoped `divergences_by_field` maps inherit the cumulative
+  // semantics of their unsuffixed map. They deliberately remain out of this
+  // flat scalar registry: its long-standing shape test recognizes the one
+  // map-valued family by that stable unsuffixed key, while every scalar row
+  // is enumerated here exactly.
+  'operator_store_edit_divergences_in_window': 'cumulative',
+  'operator_store_edit_divergences_historical': 'cumulative',
   'operator_store_edit_divergences': 'cumulative',
   'fold_backed_mount_fact_divergences': 'cumulative',
+  'fold_backed_mount_fact_divergences_in_window': 'cumulative',
+  'fold_backed_mount_fact_divergences_historical': 'cumulative',
   'unexplained_divergences': 'cumulative',
+  'unexplained_divergences_in_window': 'cumulative',
+  'unexplained_divergences_historical': 'cumulative',
   'terminal_lag': 'cumulative',
   'terminal_lag_open': 'gauge',
+  'terminal_lag_open_in_window': 'gauge',
+  'terminal_lag_open_historical': 'gauge',
   'terminal_lag_max_ms': 'cumulative',
   'retirement_lag': 'cumulative',
   'retirement_lag_open': 'gauge',
+  'retirement_lag_open_in_window': 'gauge',
+  'retirement_lag_open_historical': 'gauge',
   'retirement_lag_max_ms': 'cumulative',
   'incumbent_adjudications': 'cumulative',
   'reconstructed_terminals': 'cumulative',
   'reconstructed_terminal_skipped': 'cumulative',
   'teardown_replay_appends': 'cumulative',
   'cardinality_breaches': 'cumulative',
+  'cardinality_breaches_in_window': 'cumulative',
+  'cardinality_breaches_historical': 'cumulative',
   'heals_appended': 'cumulative',
   'heals_skipped': 'cumulative',
   'heals_failed': 'cumulative',
@@ -109,12 +133,21 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'step_fallbacks': 'gauge',
   'step_cursors_served': 'gauge',
   'p2_miss': 'gauge',
+  'p2_miss_total': 'cumulative',
   'p2_orphan': 'gauge',
   'step_fold_absent': 'gauge',
   'step_divergences': 'cumulative',
+  'step_divergences_in_window': 'cumulative',
+  'step_divergences_historical': 'cumulative',
   'step_operator_store_edit_divergences': 'cumulative',
+  'step_operator_store_edit_divergences_in_window': 'cumulative',
+  'step_operator_store_edit_divergences_historical': 'cumulative',
   'step_unexplained_divergences': 'cumulative',
+  'step_unexplained_divergences_in_window': 'cumulative',
+  'step_unexplained_divergences_historical': 'cumulative',
   'step_fold_ahead_of_legacy_divergences': 'cumulative',
+  'step_fold_ahead_of_legacy_divergences_in_window': 'cumulative',
+  'step_fold_ahead_of_legacy_divergences_historical': 'cumulative',
   'step_lag': 'cumulative',
   'step_lag_open': 'gauge',
   'step_lag_max_ms': 'cumulative',
@@ -125,6 +158,7 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'append_suppressed': 'cumulative',
   'append_refused_testimony': 'cumulative',
   'append_queue_depth': 'gauge',
+  'append_ack_p99_ms': 'gauge',
 };
 
 /// The flare a served-tuple mismatch raises. Axis-tagged, because C4 adds a
@@ -679,14 +713,22 @@ typedef DualReadAppendStats = ({
 /// ACCUMULATORS deduped by `(sessionId, field)`, so a divergence that persists
 /// across a hundred passes counts, and flares, exactly once.
 class DualReadAccounting {
-  DualReadAccounting({this.eventKeyBound = 4096, DateTime Function()? clock})
-    : _clock = clock ?? DateTime.now;
+  DualReadAccounting({
+    this.eventKeyBound = 4096,
+    this.soakWindowEpoch = 0,
+    DateTime Function()? clock,
+  }) : assert(soakWindowEpoch >= 0),
+       _clock = clock ?? DateTime.now;
 
   /// The bound on the dedupe key set — a busy boot must not grow it forever.
   /// Past it the oldest keys are evicted, so a long-lived divergence may flare
   /// a second time; that is the correct failure direction (louder, never
   /// quieter).
   final int eventKeyBound;
+
+  /// The first P1 head epoch admitted to the configured soak window.
+  /// Zero admits every event and preserves the original unscoped accounting.
+  final int soakWindowEpoch;
 
   final DateTime Function() _clock;
 
@@ -710,6 +752,7 @@ class DualReadAccounting {
   // Gauges — the LAST pass's populations.
   int hits = 0;
   int missPostEpoch = 0;
+  int missPostEpochTotal = 0;
   int missLegacyEra = 0;
   int nullStartedAt = 0;
 
@@ -720,7 +763,9 @@ class DualReadAccounting {
   int fallbacks = 0;
   int p1Orphan = 0;
   int openTerminalLag = 0;
+  int openTerminalLagInWindow = 0;
   int openRetirementLag = 0;
+  int openRetirementLagInWindow = 0;
   int maxTerminalLagMs = 0;
   int maxRetirementLagMs = 0;
 
@@ -752,14 +797,19 @@ class DualReadAccounting {
 
   // Accumulators — deduped events across the boot.
   int divergences = 0;
+  int divergencesInWindow = 0;
   int operatorStoreEditDivergences = 0;
+  int operatorStoreEditDivergencesInWindow = 0;
   int foldBackedMountFactDivergences = 0;
+  int foldBackedMountFactDivergencesInWindow = 0;
   int unexplainedDivergences = 0;
+  int unexplainedDivergencesInWindow = 0;
   int terminalLagObserved = 0;
   int retirementLagObserved = 0;
   int incumbentAdjudications = 0;
   int reconstructedTerminals = 0;
   int cardinalityBreaches = 0;
+  int cardinalityBreachesInWindow = 0;
   int healsAppended = 0;
   int healsSkipped = 0;
   int healsFailed = 0;
@@ -793,6 +843,7 @@ class DualReadAccounting {
   /// effective cursor with its bead state, because an omitted node reads as
   /// unclaimed and is re-mounted (I-10).
   int p2Miss = 0;
+  int p2MissTotal = 0;
 
   /// P2 rows for a node path the legacy session does not carry. Dropped from
   /// the effective cursor (the overlay never creates on this axis either) and
@@ -820,16 +871,21 @@ class DualReadAccounting {
   int stepLagObserved = 0;
   int stepLagEscalations = 0;
   int stepDivergences = 0;
+  int stepDivergencesInWindow = 0;
   int stepOperatorStoreEditDivergences = 0;
+  int stepOperatorStoreEditDivergencesInWindow = 0;
   int stepUnexplainedDivergences = 0;
+  int stepUnexplainedDivergencesInWindow = 0;
 
   /// Step divergences the write order explains
   /// ([DualReadDivergenceCause.foldAheadOfLegacy]) — counted apart from the
   /// unexplained ones so a gate reading the summary never has to re-derive the
   /// split from the details.
   int stepFoldAheadOfLegacyDivergences = 0;
+  int stepFoldAheadOfLegacyDivergencesInWindow = 0;
 
   final Map<String, int> divergencesByField = <String, int>{};
+  final Map<String, int> divergencesByFieldInWindow = <String, int>{};
   final List<DualReadDivergenceDetail> divergenceDetails =
       <DualReadDivergenceDetail>[];
 
@@ -850,6 +906,35 @@ class DualReadAccounting {
     return true;
   }
 
+  bool _isInWindow(int headEpoch) =>
+      soakWindowEpoch == 0 || headEpoch >= soakWindowEpoch;
+
+  /// Records a post-epoch P1 miss in both the current-pass gauge and the
+  /// boot-cumulative, per-session total.
+  void recordPostEpochMiss(String sessionId) {
+    missPostEpoch += 1;
+    if (noteEvent('missPostEpoch:$sessionId')) missPostEpochTotal += 1;
+  }
+
+  /// Records one session's missing P2 population.
+  ///
+  /// The pass gauge always sees the supplied node population. The cumulative
+  /// total admits only P1 heads inside the soak window (or every head under
+  /// the zero sentinel) and adds the population only on the session's first
+  /// observation this boot.
+  void recordP2Misses({
+    required String sessionId,
+    required int count,
+    required int headEpoch,
+  }) {
+    assert(count >= 0);
+    if (count == 0) return;
+    p2Miss += count;
+    if (_isInWindow(headEpoch) && noteEvent('p2Miss:$sessionId')) {
+      p2MissTotal += count;
+    }
+  }
+
   /// Zeroes the per-pass GAUGES. Accumulators and the dedupe set survive —
   /// they are the boot's record, not the pass's.
   void beginPass() {
@@ -861,7 +946,9 @@ class DualReadAccounting {
     fallbacks = 0;
     p1Orphan = 0;
     openTerminalLag = 0;
+    openTerminalLagInWindow = 0;
     openRetirementLag = 0;
+    openRetirementLagInWindow = 0;
     overlaysApplied = 0;
     overlaysServed = 0;
     overlaysSuppressed = 0;
@@ -887,14 +974,21 @@ class DualReadAccounting {
     DualReadComparison comparison, {
     DualReadDivergenceCause cause = DualReadDivergenceCause.unexplained,
     String? activeStepPath,
+    int headEpoch = 0,
   }) {
     switch (comparison.classification) {
       case DualReadClass.match:
         return false;
       case DualReadClass.divergence:
-        return _recordSessionDivergence(comparison, cause, activeStepPath);
+        return _recordSessionDivergence(
+          comparison,
+          cause,
+          activeStepPath,
+          headEpoch,
+        );
       case DualReadClass.terminalLag:
         openTerminalLag += 1;
+        if (_isInWindow(headEpoch)) openTerminalLagInWindow += 1;
         if (noteEvent('terminalLag:${comparison.sessionId}')) {
           terminalLagObserved += 1;
           return true;
@@ -902,6 +996,7 @@ class DualReadAccounting {
         return false;
       case DualReadClass.retirementLag:
         openRetirementLag += 1;
+        if (_isInWindow(headEpoch)) openRetirementLagInWindow += 1;
         if (noteEvent('retirementLag:${comparison.sessionId}')) {
           retirementLagObserved += 1;
           return true;
@@ -923,6 +1018,7 @@ class DualReadAccounting {
         fallbacks += 1;
         if (noteEvent('cardinality:${comparison.workBeadId}')) {
           cardinalityBreaches += 1;
+          if (_isInWindow(headEpoch)) cardinalityBreachesInWindow += 1;
           return true;
         }
         return false;
@@ -933,26 +1029,36 @@ class DualReadAccounting {
     DualReadComparison comparison,
     DualReadDivergenceCause cause,
     String? activeStepPath,
+    int headEpoch,
   ) {
     var first = false;
+    final inWindow = _isInWindow(headEpoch);
     final occurredAt = _clock().toUtc();
     for (final mismatch in comparison.mismatches) {
       final key = 'divergence:${comparison.sessionId}:${mismatch.field}';
       if (!noteEvent(key)) continue;
       first = true;
       divergences += 1;
+      if (inWindow) divergencesInWindow += 1;
       divergencesByField[mismatch.field] =
           (divergencesByField[mismatch.field] ?? 0) + 1;
+      if (inWindow) {
+        divergencesByFieldInWindow[mismatch.field] =
+            (divergencesByFieldInWindow[mismatch.field] ?? 0) + 1;
+      }
       switch (cause) {
         case DualReadDivergenceCause.operatorStoreEdit:
           operatorStoreEditDivergences += 1;
+          if (inWindow) operatorStoreEditDivergencesInWindow += 1;
         case DualReadDivergenceCause.foldBackedMountFacts:
           foldBackedMountFactDivergences += 1;
+          if (inWindow) foldBackedMountFactDivergencesInWindow += 1;
         // The session comparator cannot mint `foldAheadOfLegacy`; if a future
         // caller does, it lands in the bucket that asks for adjudication.
         case DualReadDivergenceCause.foldAheadOfLegacy:
         case DualReadDivergenceCause.unexplained:
           unexplainedDivergences += 1;
+          if (inWindow) unexplainedDivergencesInWindow += 1;
       }
       divergenceDetails.add(
         DualReadDivergenceDetail(
@@ -978,18 +1084,25 @@ class DualReadAccounting {
     required String legacyValue,
     required String foldValue,
     required DualReadDivergenceCause cause,
+    int headEpoch = 0,
   }) {
     if (!noteEvent('stepDivergence:$sessionId:$stepPath')) return false;
+    final inWindow = _isInWindow(headEpoch);
     stepDivergences += 1;
+    if (inWindow) stepDivergencesInWindow += 1;
     switch (cause) {
       case DualReadDivergenceCause.operatorStoreEdit:
         stepOperatorStoreEditDivergences += 1;
+        if (inWindow) stepOperatorStoreEditDivergencesInWindow += 1;
       case DualReadDivergenceCause.foldAheadOfLegacy:
         stepFoldAheadOfLegacyDivergences += 1;
+        if (inWindow) stepFoldAheadOfLegacyDivergencesInWindow += 1;
       case DualReadDivergenceCause.foldBackedMountFacts:
         foldBackedMountFactDivergences += 1;
+        if (inWindow) foldBackedMountFactDivergencesInWindow += 1;
       case DualReadDivergenceCause.unexplained:
         stepUnexplainedDivergences += 1;
+        if (inWindow) stepUnexplainedDivergencesInWindow += 1;
     }
     divergenceDetails.add(
       DualReadDivergenceDetail(
@@ -1011,6 +1124,117 @@ class DualReadAccounting {
   /// so a gate reading this ONE number covers both axes.
   int get openLagEntries => openTerminalLag + openRetirementLag + openStepLag;
 
+  /// The complete plain-value counter shape consumed by soak certification.
+  ///
+  /// The round note spreads this exact map, and `/status` reads it directly,
+  /// so the durable and live instruments cannot drift. Historical values are
+  /// derived from the original totals rather than independently incremented;
+  /// every original therefore equals in-window plus historical by
+  /// construction.
+  Map<String, Object?> toCertificationJson({
+    DateTime? firstEpochClaimedAt,
+    int appendAckP99Ms = 0,
+  }) {
+    final divergencesByFieldHistorical = <String, int>{
+      for (final entry in divergencesByField.entries)
+        entry.key: entry.value - (divergencesByFieldInWindow[entry.key] ?? 0),
+    };
+    return <String, Object?>{
+      'soak_window_epoch': soakWindowEpoch,
+      'passes': passes,
+      'hits': hits,
+      'miss_post_epoch': missPostEpoch,
+      'miss_post_epoch_total': missPostEpochTotal,
+      'miss_legacy_era': missLegacyEra,
+      'null_started_at': nullStartedAt,
+      'fallbacks': fallbacks,
+      'p1_orphan': p1Orphan,
+      'overlays_applied': overlaysApplied,
+      'overlays_served': overlaysServed,
+      'overlays_suppressed': overlaysSuppressed,
+      'divergences': divergences,
+      'divergences_in_window': divergencesInWindow,
+      'divergences_historical': divergences - divergencesInWindow,
+      'divergences_by_field': Map<String, int>.from(divergencesByField),
+      'divergences_by_field_in_window': Map<String, int>.from(
+        divergencesByFieldInWindow,
+      ),
+      'divergences_by_field_historical': divergencesByFieldHistorical,
+      'operator_store_edit_divergences': operatorStoreEditDivergences,
+      'operator_store_edit_divergences_in_window':
+          operatorStoreEditDivergencesInWindow,
+      'operator_store_edit_divergences_historical':
+          operatorStoreEditDivergences - operatorStoreEditDivergencesInWindow,
+      'fold_backed_mount_fact_divergences': foldBackedMountFactDivergences,
+      'fold_backed_mount_fact_divergences_in_window':
+          foldBackedMountFactDivergencesInWindow,
+      'fold_backed_mount_fact_divergences_historical':
+          foldBackedMountFactDivergences -
+          foldBackedMountFactDivergencesInWindow,
+      'unexplained_divergences': unexplainedDivergences,
+      'unexplained_divergences_in_window': unexplainedDivergencesInWindow,
+      'unexplained_divergences_historical':
+          unexplainedDivergences - unexplainedDivergencesInWindow,
+      'terminal_lag': terminalLagObserved,
+      'terminal_lag_open': openTerminalLag,
+      'terminal_lag_open_in_window': openTerminalLagInWindow,
+      'terminal_lag_open_historical': openTerminalLag - openTerminalLagInWindow,
+      'terminal_lag_max_ms': maxTerminalLagMs,
+      'retirement_lag': retirementLagObserved,
+      'retirement_lag_open': openRetirementLag,
+      'retirement_lag_open_in_window': openRetirementLagInWindow,
+      'retirement_lag_open_historical':
+          openRetirementLag - openRetirementLagInWindow,
+      'retirement_lag_max_ms': maxRetirementLagMs,
+      'incumbent_adjudications': incumbentAdjudications,
+      'reconstructed_terminals': reconstructedTerminals,
+      'reconstructed_terminal_skipped': reconstructedTerminalSkipped,
+      'teardown_replay_appends': teardownReplayAppends,
+      'cardinality_breaches': cardinalityBreaches,
+      'cardinality_breaches_in_window': cardinalityBreachesInWindow,
+      'cardinality_breaches_historical':
+          cardinalityBreaches - cardinalityBreachesInWindow,
+      'heals_appended': healsAppended,
+      'heals_skipped': healsSkipped,
+      'heals_failed': healsFailed,
+      'heal_escalations': healEscalations,
+      'step_passes': stepPasses,
+      'step_hits': stepHits,
+      'step_fallbacks': stepFallbacks,
+      'step_cursors_served': stepCursorsServed,
+      'p2_miss': p2Miss,
+      'p2_miss_total': p2MissTotal,
+      'p2_orphan': p2Orphan,
+      'step_fold_absent': stepFoldAbsent,
+      'step_divergences': stepDivergences,
+      'step_divergences_in_window': stepDivergencesInWindow,
+      'step_divergences_historical': stepDivergences - stepDivergencesInWindow,
+      'step_operator_store_edit_divergences': stepOperatorStoreEditDivergences,
+      'step_operator_store_edit_divergences_in_window':
+          stepOperatorStoreEditDivergencesInWindow,
+      'step_operator_store_edit_divergences_historical':
+          stepOperatorStoreEditDivergences -
+          stepOperatorStoreEditDivergencesInWindow,
+      'step_unexplained_divergences': stepUnexplainedDivergences,
+      'step_unexplained_divergences_in_window':
+          stepUnexplainedDivergencesInWindow,
+      'step_unexplained_divergences_historical':
+          stepUnexplainedDivergences - stepUnexplainedDivergencesInWindow,
+      'step_fold_ahead_of_legacy_divergences': stepFoldAheadOfLegacyDivergences,
+      'step_fold_ahead_of_legacy_divergences_in_window':
+          stepFoldAheadOfLegacyDivergencesInWindow,
+      'step_fold_ahead_of_legacy_divergences_historical':
+          stepFoldAheadOfLegacyDivergences -
+          stepFoldAheadOfLegacyDivergencesInWindow,
+      'step_lag': stepLagObserved,
+      'step_lag_open': openStepLag,
+      'step_lag_max_ms': maxStepLagMs,
+      'step_lag_escalations': stepLagEscalations,
+      'first_epoch_claimed_at': firstEpochClaimedAt?.toUtc().toIso8601String(),
+      'append_ack_p99_ms': appendAckP99Ms,
+    };
+  }
+
   /// The durable round summary's body (§0.4). JSON so `traj show` and the
   /// `/status` block read the SAME shape, and so a gate can diff two rounds
   /// mechanically rather than by eye.
@@ -1030,6 +1254,8 @@ class DualReadAccounting {
     bool overlayEngaged = false,
     bool stepAxisEngaged = false,
     DualReadAppendStats? appendStats,
+    DateTime? firstEpochClaimedAt,
+    int appendAckP99Ms = 0,
   }) => <String, Object?>{
     'channel': kDualReadRoundSummaryChannel,
     // BOTH axes ride one note (C4: "the round summary gains the step axis").
@@ -1048,57 +1274,16 @@ class DualReadAccounting {
     'snapshot_version': snapshotVersion,
     if (snapshotRows != null) 'snapshot_rows': snapshotRows,
     if (seededAt != null) 'seeded_at': seededAt.toUtc().toIso8601String(),
-    'passes': passes,
-    'hits': hits,
-    'miss_post_epoch': missPostEpoch,
-    'miss_legacy_era': missLegacyEra,
-    'null_started_at': nullStartedAt,
-    'fallbacks': fallbacks,
-    'p1_orphan': p1Orphan,
-    'overlays_applied': overlaysApplied,
-    'overlays_served': overlaysServed,
-    'overlays_suppressed': overlaysSuppressed,
-    'divergences': divergences,
-    'divergences_by_field': Map<String, int>.from(divergencesByField),
-    'operator_store_edit_divergences': operatorStoreEditDivergences,
-    'fold_backed_mount_fact_divergences': foldBackedMountFactDivergences,
-    'unexplained_divergences': unexplainedDivergences,
-    'terminal_lag': terminalLagObserved,
-    'terminal_lag_open': openTerminalLag,
-    'terminal_lag_max_ms': maxTerminalLagMs,
-    'retirement_lag': retirementLagObserved,
-    'retirement_lag_open': openRetirementLag,
-    'retirement_lag_max_ms': maxRetirementLagMs,
-    'incumbent_adjudications': incumbentAdjudications,
-    'reconstructed_terminals': reconstructedTerminals,
-    'reconstructed_terminal_skipped': reconstructedTerminalSkipped,
-    'teardown_replay_appends': teardownReplayAppends,
-    'cardinality_breaches': cardinalityBreaches,
-    'heals_appended': healsAppended,
-    'heals_skipped': healsSkipped,
-    'heals_failed': healsFailed,
-    'heal_escalations': healEscalations,
+    ...toCertificationJson(
+      firstEpochClaimedAt: firstEpochClaimedAt,
+      appendAckP99Ms: appendAckP99Ms,
+    ),
     'health_transitions': List<String>.from(healthTransitions),
     // THE STEP AXIS (C4). Same arithmetic as the session axis, one ladder
     // down: gates count `step_divergences` only, `step_lag_open` must be zero
     // at round end, and `step_axis_engaged` distinguishes a certified round
     // from one that quietly rode the bead cursor under `mode: primary`.
     'step_axis_engaged': stepAxisEngaged,
-    'step_passes': stepPasses,
-    'step_hits': stepHits,
-    'step_fallbacks': stepFallbacks,
-    'step_cursors_served': stepCursorsServed,
-    'p2_miss': p2Miss,
-    'p2_orphan': p2Orphan,
-    'step_fold_absent': stepFoldAbsent,
-    'step_divergences': stepDivergences,
-    'step_operator_store_edit_divergences': stepOperatorStoreEditDivergences,
-    'step_unexplained_divergences': stepUnexplainedDivergences,
-    'step_fold_ahead_of_legacy_divergences': stepFoldAheadOfLegacyDivergences,
-    'step_lag': stepLagObserved,
-    'step_lag_open': openStepLag,
-    'step_lag_max_ms': maxStepLagMs,
-    'step_lag_escalations': stepLagEscalations,
     // THE APPEND SIDE (§0.4's "drops"). The comparator cannot see a dropped
     // append — the hole it leaves in the fold looks exactly like a session
     // that never happened — so the gate reads the harness's own counters, on
@@ -1129,6 +1314,8 @@ class DualReadAccounting {
     bool overlayEngaged = false,
     bool stepAxisEngaged = false,
     DualReadAppendStats? appendStats,
+    DateTime? firstEpochClaimedAt,
+    int appendAckP99Ms = 0,
   }) => jsonEncode(
     toJson(
       mode: mode,
@@ -1140,6 +1327,8 @@ class DualReadAccounting {
       overlayEngaged: overlayEngaged,
       stepAxisEngaged: stepAxisEngaged,
       appendStats: appendStats,
+      firstEpochClaimedAt: firstEpochClaimedAt,
+      appendAckP99Ms: appendAckP99Ms,
     ),
   );
 }

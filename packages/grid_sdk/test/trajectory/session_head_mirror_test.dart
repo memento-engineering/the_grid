@@ -94,6 +94,7 @@ SessionHeadRow _row({
   SessionHeadStatus status = SessionHeadStatus.open,
   TerminalOutcome? outcome,
   int lastSeq = 1,
+  int headEpoch = 1,
   DateTime? startedAt,
 }) => SessionHeadRow(
   sessionId: sessionId,
@@ -102,7 +103,7 @@ SessionHeadRow _row({
   status: status,
   outcome: outcome,
   startedAt: startedAt ?? _boot,
-  headEpoch: 1,
+  headEpoch: headEpoch,
   lastSeq: lastSeq,
 );
 
@@ -131,6 +132,19 @@ void main() {
       expect(mirror.snapshot.seededAt, _boot);
       expect(mirror.snapshot.firstEpochClaimedAt, DateTime.utc(2026, 8, 1));
       expect(mirror.snapshot.bySessionId('s-1'), isNotNull);
+    });
+
+    test('the engine view carries head epoch', () {
+      final mirror = SessionHeadMirror()
+        ..seed(
+          rows: [_row(sessionId: 's-epoch', headEpoch: 73)],
+          seededAt: _boot,
+          stale: false,
+        );
+      final view = mirror.snapshot.bySessionId('s-epoch');
+      expect(view, isA<EpochScopedSessionHeadView>());
+      expect(sessionHeadEpochOf(view), 73);
+      expect(sessionHeadEpochOf(null), 0);
     });
 
     test('a STALE seed refuses for the boot — loud, never boot-blocking, and '

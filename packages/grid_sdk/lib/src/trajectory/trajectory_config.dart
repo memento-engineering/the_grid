@@ -118,8 +118,10 @@ final class TrajectoryConfig {
     this.pulseCoalesce = kDefaultPulseCoalesce,
     this.shutdownDrainTimeout = kDefaultShutdownDrainTimeout,
     DualReadMode? dualRead,
+    this.soakWindowEpoch = 0,
     this.reconcileLedgerCloses = true,
-  }) : _requestedMode = mode,
+  }) : assert(soakWindowEpoch >= 0),
+       _requestedMode = mode,
        _requestedDualRead = dualRead,
        mode = discipline == TrajectoryDiscipline.cut
            ? TrajectoryConfigMode.required
@@ -245,6 +247,15 @@ final class TrajectoryConfig {
     );
   }
 
+  /// The first trajectory head epoch admitted to the current soak window.
+  ///
+  /// Zero is the compatibility sentinel: every observed head is in-window,
+  /// so scoped accounting preserves the pre-window behavior exactly. A live
+  /// soak sets this to the first epoch where all required producers were
+  /// deployed on the home. This labels evidence only; it never changes the
+  /// dual-read posture or any served decision.
+  final int soakWindowEpoch;
+
   /// THE LEDGER-CLOSE RECONCILE (tg-ffl6; decision
   /// `wave-2-flip-scope-soak-and-kill-date`, Q6). ON by default at EVERY
   /// posture: the external-close obligation reads the state snapshot and
@@ -303,6 +314,7 @@ final class TrajectoryConfig {
     pulseCoalesce: pulseCoalesce,
     shutdownDrainTimeout: shutdownDrainTimeout,
     dualRead: _requestedDualRead,
+    soakWindowEpoch: soakWindowEpoch,
     reconcileLedgerCloses: reconcileLedgerCloses,
   );
 }

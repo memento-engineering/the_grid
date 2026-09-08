@@ -115,6 +115,22 @@ abstract interface class SessionHeadView {
   int get lastSeq;
 }
 
+/// A session-head view that carries the epoch which last advanced its fold.
+///
+/// This additive marker leaves older [SessionHeadView] implementations source
+/// compatible while allowing soak accounting to scope P1-backed evidence.
+abstract interface class EpochScopedSessionHeadView implements SessionHeadView {
+  /// The `proj_session_head.head_epoch` value for this head.
+  int get headEpoch;
+}
+
+/// Returns [view]'s fold epoch, or zero for no row or an older adapter.
+///
+/// Zero deliberately composes with the soak-window compatibility sentinel:
+/// when no threshold is configured every implementation remains in-window.
+int sessionHeadEpochOf(SessionHeadView? view) =>
+    view is EpochScopedSessionHeadView ? view.headEpoch : 0;
+
 /// One `proj_step_cursor` row, as the engine reads it (P2 — the round-bearing
 /// step cursor on the two-ladder key).
 ///

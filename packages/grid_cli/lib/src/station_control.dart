@@ -131,6 +131,7 @@ class StationStatus {
     this.perSubstation = const <SubstationStatus>[],
     this.wedge = kNotWedged,
     this.sync = const <String, Object?>{},
+    this.trajectory = const <String, Object?>{},
     this.admission,
   });
 
@@ -202,6 +203,11 @@ class StationStatus {
   /// work runtime (or an older runner predates the field).
   final Map<String, Object?> sync;
 
+  /// The trajectory harness posture and, when dual read is armed, the full
+  /// epoch-scoped soak-certification instrument. Empty keeps older status
+  /// producers wire-compatible.
+  final Map<String, Object?> trajectory;
+
   /// The optional station admission budget and refusal snapshot.
   ///
   /// Null keeps payloads built without a station work view wire-compatible
@@ -253,6 +259,7 @@ class StationStatus {
     // First-class, top-level — a watcher reads THIS, never the gate list.
     'wedge': wedge.toJson(),
     if (sync.isNotEmpty) 'sync': sync,
+    if (trajectory.isNotEmpty) 'trajectory': trajectory,
   };
 }
 

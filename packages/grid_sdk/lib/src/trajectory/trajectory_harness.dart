@@ -144,6 +144,7 @@ final class TrajectoryHarnessStatus {
     required this.queueDepth,
     this.exitJoinGaps = 0,
     this.refusedTestimony = 0,
+    this.appendAckP99Ms = 0,
   });
 
   final TrajectoryHarnessMode mode;
@@ -181,6 +182,11 @@ final class TrajectoryHarnessStatus {
   /// rising count means the heal is racing something it should not be.
   final int refusedTestimony;
 
+  /// Nearest-rank p99 of committed append acknowledgements in the configured
+  /// soak window, rounded upward to milliseconds. Zero means no eligible
+  /// acknowledgement has completed this boot.
+  final int appendAckP99Ms;
+
   @override
   String toString() =>
       'TrajectoryHarnessStatus(${mode.name}'
@@ -188,7 +194,8 @@ final class TrajectoryHarnessStatus {
       'appended: $appended, deduped: $deduped, dropped: $dropped, '
       'suppressed: $suppressed, queue: $queueDepth'
       '${exitJoinGaps == 0 ? '' : ', exitJoinGaps: $exitJoinGaps'}'
-      '${refusedTestimony == 0 ? '' : ', refusedTestimony: $refusedTestimony'})';
+      '${refusedTestimony == 0 ? '' : ', refusedTestimony: $refusedTestimony'}'
+      ', appendAckP99Ms: $appendAckP99Ms)';
 }
 
 /// The fenced service's station-side owner (stage1-wiring §1.1).
@@ -207,6 +214,7 @@ class TrajectoryHarness {
     required Stream<RuntimeEvent>? runtimeEvents,
     required Timer Function(Duration, void Function()) scheduleTimer,
     required DateTime Function() clock,
+    required Stopwatch Function() stopwatch,
     required ({int pid, int pgid}) identity,
     required TrajectoryHarnessMode mode,
     required String? cause,
@@ -221,6 +229,7 @@ class TrajectoryHarness {
        _runtimeEvents = runtimeEvents,
        _scheduleTimer = scheduleTimer,
        _clock = clock,
+       _stopwatch = stopwatch,
        _identity = identity,
        _mode = mode,
        _cause = cause;
@@ -247,6 +256,7 @@ class TrajectoryHarness {
     Stream<RuntimeEvent>? runtimeEvents,
     Timer Function(Duration, void Function())? scheduleTimer,
     DateTime Function()? clock,
+    Stopwatch Function()? stopwatch,
     ({int pid, int pgid})? identity,
   }) async {
     var mode = TrajectoryHarnessMode.down;
@@ -280,6 +290,7 @@ class TrajectoryHarness {
       runtimeEvents: runtimeEvents,
       scheduleTimer: scheduleTimer ?? Timer.new,
       clock: clock ?? DateTime.now,
+      stopwatch: stopwatch ?? Stopwatch.new,
       // the_grid runs in its own process group; pid ≈ pgid here (the
       // SystemProcessGroupController.currentGroupId precedent).
       identity: identity ?? (pid: io.pid, pgid: io.pid),
@@ -361,6 +372,7 @@ class TrajectoryHarness {
   final Stream<RuntimeEvent>? _runtimeEvents;
   final Timer Function(Duration, void Function()) _scheduleTimer;
   final DateTime Function() _clock;
+  final Stopwatch Function() _stopwatch;
   final ({int pid, int pgid}) _identity;
 
   TrajectoryHarnessMode _mode;
@@ -452,6 +464,7 @@ class TrajectoryHarness {
   int _dropped = 0;
   int _suppressed = 0;
   int _refusedTestimony = 0;
+  final List<int> _appendAckMicros = <int>[];
 
   final Map<String, DateTime> _lastFlareAt = <String, DateTime>{};
 
@@ -517,7 +530,17 @@ class TrajectoryHarness {
     queueDepth: _queue.length,
     exitJoinGaps: _exitJoinGaps,
     refusedTestimony: _refusedTestimony,
+    appendAckP99Ms: _appendAckP99Ms,
   );
+
+  int get _appendAckP99Ms {
+    if (_appendAckMicros.isEmpty) return 0;
+    final sorted = List<int>.of(_appendAckMicros)..sort();
+    final index = ((sorted.length * 99 + 99) ~/ 100) - 1;
+    final micros = sorted[index];
+    return (micros + Duration.microsecondsPerMillisecond - 1) ~/
+        Duration.microsecondsPerMillisecond;
+  }
 
   /// The tick, for a status surface's `lastPass` — null until live.
   TrajectoryTick? get tick => _tick;
@@ -1264,18 +1287,29 @@ class TrajectoryHarness {
           return;
         }
       }
-      final outcome = await _serialize(
-        () => _appender!.append(
-          request.record,
-          occurredAt: request.occurredAt,
-          substation: request.substation,
-          provenance: request.provenance,
-          provenanceBasis: request.provenanceBasis,
-        ),
-      );
+      final stopwatch = _stopwatch()..start();
+      late final AppendOutcome outcome;
+      try {
+        outcome = await _serialize(
+          () => _appender!.append(
+            request.record,
+            occurredAt: request.occurredAt,
+            substation: request.substation,
+            provenance: request.provenance,
+            provenanceBasis: request.provenanceBasis,
+          ),
+        );
+      } finally {
+        stopwatch.stop();
+      }
       switch (outcome) {
         case Appended(:final envelope, :final seq):
           _appended += 1;
+          final epoch = _epoch;
+          if (config.soakWindowEpoch == 0 ||
+              (epoch != null && epoch >= config.soakWindowEpoch)) {
+            _appendAckMicros.add(stopwatch.elapsedMicroseconds);
+          }
           // POST-ACK, never at enqueue (B-B7): the transaction has COMMITTED,
           // and `seq` is the ordinal that same transaction wrote as
           // `proj_meta.applied_seq` — so the mirror's ordinal is earned.

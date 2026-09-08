@@ -77,6 +77,7 @@ class DualReadSessionObserver {
     DualReadFlareSink? onFlare,
     DualReadSummarySink? onRoundSummary,
     DualReadAppendStats Function()? appendStats,
+    int Function()? appendAckP99Ms,
     bool Function()? stepAxisEngaged,
     DualReadAccounting? accounting,
   }) : _mode = mode,
@@ -86,6 +87,7 @@ class DualReadSessionObserver {
        _onFlare = onFlare,
        _onRoundSummary = onRoundSummary,
        _appendStats = appendStats,
+       _appendAckP99Ms = appendAckP99Ms,
        _stepAxisEngaged = stepAxisEngaged,
        accounting = accounting ?? DualReadAccounting(clock: clock);
 
@@ -107,6 +109,10 @@ class DualReadSessionObserver {
   /// The harness's append counters, read at summary time (§0.4's "drops").
   /// Null off-tree, and the summary simply omits the block.
   final DualReadAppendStats Function()? _appendStats;
+
+  /// The harness's in-window committed-append latency, sampled at summary
+  /// time so every note carries the freshest boot p99.
+  final int Function()? _appendAckP99Ms;
 
   /// The STEP axis's posture at summary time (C4). It is the step observer's
   /// own `stepAxisEngaged`, read through a getter rather than passed as a
@@ -214,7 +220,7 @@ class DualReadSessionObserver {
         if (miss.nullStartedAt) accounting.nullStartedAt += 1;
         switch (miss.era) {
           case DualReadMissClass.postEpoch:
-            accounting.missPostEpoch += 1;
+            accounting.recordPostEpochMiss(sessionId);
           case DualReadMissClass.legacyEra:
             accounting.missLegacyEra += 1;
         }
@@ -301,6 +307,7 @@ class DualReadSessionObserver {
             snapshot,
             cause: cause,
             activeStepPath: activeStepPath,
+            headEpoch: sessionHeadEpochOf(head),
           );
         } else {
           accounting.record(
@@ -311,6 +318,7 @@ class DualReadSessionObserver {
             ),
             cause: cause,
             activeStepPath: activeStepPath,
+            headEpoch: sessionHeadEpochOf(head),
           );
         }
         continue;
@@ -334,6 +342,7 @@ class DualReadSessionObserver {
         snapshot,
         cause: cause,
         activeStepPath: activeStepPath,
+        headEpoch: sessionHeadEpochOf(head),
       );
     }
 
@@ -372,6 +381,12 @@ class DualReadSessionObserver {
           ],
         ),
         snapshot,
+        headEpoch: winner.rows
+            .map(sessionHeadEpochOf)
+            .fold<int>(
+              0,
+              (highest, epoch) => epoch > highest ? epoch : highest,
+            ),
       );
     }
 
@@ -456,6 +471,7 @@ class DualReadSessionObserver {
       snapshot,
       cause: DualReadDivergenceCause.foldBackedMountFacts,
       activeStepPath: activeStepPath,
+      headEpoch: sessionHeadEpochOf(head),
     );
   }
 
@@ -516,7 +532,12 @@ class DualReadSessionObserver {
     final attemptId = head.attemptId;
     final age = _terminalLag.ageOf(sessionId, now).inMilliseconds;
     if (age > accounting.maxTerminalLagMs) accounting.maxTerminalLagMs = age;
-    accounting.record(comparison, cause: cause, activeStepPath: activeStepPath);
+    accounting.record(
+      comparison,
+      cause: cause,
+      activeStepPath: activeStepPath,
+      headEpoch: sessionHeadEpochOf(head),
+    );
     final action = _terminalLag.observe(
       sessionId,
       now: now,
@@ -537,6 +558,7 @@ class DualReadSessionObserver {
             snapshot,
             cause: cause,
             activeStepPath: activeStepPath,
+            headEpoch: sessionHeadEpochOf(head),
           );
         }
         if (attemptId == null) {
@@ -593,6 +615,7 @@ class DualReadSessionObserver {
           snapshot,
           cause: cause,
           activeStepPath: activeStepPath,
+          headEpoch: sessionHeadEpochOf(head),
         );
     }
   }
@@ -673,11 +696,13 @@ class DualReadSessionObserver {
     TrajectoryHeadSnapshot snapshot, {
     DualReadDivergenceCause cause = DualReadDivergenceCause.unexplained,
     String? activeStepPath,
+    int headEpoch = 0,
   }) {
     final first = accounting.record(
       comparison,
       cause: cause,
       activeStepPath: activeStepPath,
+      headEpoch: headEpoch,
     );
     // A cardinality breach flares under the SAME name with `field:'cardinality'`
     // (§0.2 partition case 2) — it is its own accounting class only because the
@@ -745,6 +770,8 @@ class DualReadSessionObserver {
           overlayEngaged: overlayEngaged,
           stepAxisEngaged: _stepAxisEngaged?.call() ?? false,
           appendStats: _appendStats?.call(),
+          firstEpochClaimedAt: snapshot.firstEpochClaimedAt,
+          appendAckP99Ms: _appendAckP99Ms?.call() ?? 0,
         ),
       );
     } on Object {

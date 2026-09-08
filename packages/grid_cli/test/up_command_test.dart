@@ -33,13 +33,16 @@ final class _View implements StationView {
     JoinedSnapshot? snapshot,
     WedgeMonitor? monitor,
     StationAdmissionStatus? admission,
+    Map<String, Object?> trajectory = const <String, Object?>{},
   }) : _admission = admission,
+       _trajectory = trajectory,
        snapshot = snapshot ?? JoinedSnapshot.empty(),
        monitor = monitor ?? WedgeMonitor(latest: JoinedSnapshot.empty);
   final String _label;
   final JoinedSnapshot snapshot;
   final WedgeMonitor monitor;
   final StationAdmissionStatus? _admission;
+  final Map<String, Object?> _trajectory;
   @override
   String get stateSubstation => 'lunar-state';
   @override
@@ -55,6 +58,8 @@ final class _View implements StationView {
       monitor.pollSnapshot(snapshot);
   @override
   Map<String, Object?> syncStatus() => const <String, Object?>{};
+  @override
+  Map<String, Object?> trajectoryStatus() => _trajectory;
 }
 
 final class _Commands implements GridCommandHandler {
@@ -76,6 +81,7 @@ final class _Delegate extends GridDelegate {
     this.snapshot,
     this.monitor,
     this.admission,
+    this.trajectory = const <String, Object?>{},
   });
 
   final List<String> events;
@@ -84,6 +90,7 @@ final class _Delegate extends GridDelegate {
   final JoinedSnapshot? snapshot;
   final WedgeMonitor? monitor;
   final StationAdmissionStatus? admission;
+  final Map<String, Object?> trajectory;
 
   /// False = the ABSENCE posture: this station vends neither a status view
   /// nor a command handler (the unified base's null defaults, tg-at3r), and
@@ -113,6 +120,7 @@ final class _Delegate extends GridDelegate {
       snapshot: snapshot,
       monitor: monitor,
       admission: admission,
+      trajectory: trajectory,
     );
   }
 
@@ -157,6 +165,7 @@ final class _Harness {
     required this.snapshot,
     required this.monitor,
     required this.admission,
+    required this.trajectory,
   });
 
   static Future<_Harness> create({
@@ -173,6 +182,7 @@ final class _Harness {
     JoinedSnapshot? snapshot,
     WedgeMonitor? monitor,
     StationAdmissionStatus? admission,
+    Map<String, Object?> trajectory = const <String, Object?>{},
     Map<String, PrimaryCheckoutFreshness> checkoutFreshness =
         const <String, PrimaryCheckoutFreshness>{},
   }) async {
@@ -200,6 +210,7 @@ final class _Harness {
       snapshot: snapshot,
       monitor: monitor,
       admission: admission,
+      trajectory: trajectory,
     );
   }
 
@@ -220,6 +231,7 @@ final class _Harness {
   final JoinedSnapshot? snapshot;
   final WedgeMonitor? monitor;
   final StationAdmissionStatus? admission;
+  final Map<String, Object?> trajectory;
   final events = <String>[];
   final _stdout = ByteConsumer();
   final _stderr = ByteConsumer();
@@ -281,6 +293,7 @@ final class _Harness {
           snapshot: snapshot,
           monitor: monitor,
           admission: admission,
+          trajectory: trajectory,
         );
         built.add(delegate);
         return delegate;
@@ -800,6 +813,58 @@ void main() {
     h.release.complete();
     expect(await run, 0);
   });
+
+  test(
+    'status trajectory block carries the complete soak instrument',
+    () async {
+      const instrument = <String, Object?>{
+        'soak_window_epoch': 50,
+        'miss_post_epoch_total': 0,
+        'p2_miss_total': 0,
+        'divergences_in_window': 0,
+        'divergences_historical': 4,
+        'divergences_by_field_in_window': <String, int>{},
+        'divergences_by_field_historical': <String, int>{'completed': 4},
+        'operator_store_edit_divergences_in_window': 0,
+        'operator_store_edit_divergences_historical': 1,
+        'fold_backed_mount_fact_divergences_in_window': 0,
+        'fold_backed_mount_fact_divergences_historical': 1,
+        'unexplained_divergences_in_window': 0,
+        'unexplained_divergences_historical': 2,
+        'terminal_lag_open_in_window': 0,
+        'terminal_lag_open_historical': 0,
+        'retirement_lag_open_in_window': 0,
+        'retirement_lag_open_historical': 0,
+        'cardinality_breaches_in_window': 0,
+        'cardinality_breaches_historical': 1,
+        'step_divergences_in_window': 0,
+        'step_divergences_historical': 3,
+        'step_operator_store_edit_divergences_in_window': 0,
+        'step_operator_store_edit_divergences_historical': 1,
+        'step_unexplained_divergences_in_window': 0,
+        'step_unexplained_divergences_historical': 1,
+        'step_fold_ahead_of_legacy_divergences_in_window': 0,
+        'step_fold_ahead_of_legacy_divergences_historical': 1,
+        'null_started_at': 0,
+        'first_epoch_claimed_at': '2026-09-01T00:00:00.000Z',
+        'append_ack_p99_ms': 27,
+      };
+      final h = await _Harness.create(holdOpen: true, trajectory: instrument);
+      addTearDown(h.dispose);
+      final run = h.run(untimed: true);
+      await h.stationUp.future;
+
+      final wire = h.statusView!().toJson();
+      expect(wire['trajectory'], instrument);
+      expect(
+        wire.keys,
+        containsAll(<String>['station', 'process', 'work', 'wedge']),
+      );
+
+      h.release.complete();
+      expect(await run, 0);
+    },
+  );
 
   test('harness validation precedes store and delegate work', () async {
     final home = Directory.systemTemp.createTempSync('resident-up-');

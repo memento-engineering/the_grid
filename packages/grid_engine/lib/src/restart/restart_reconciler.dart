@@ -1289,7 +1289,7 @@ class RestartReconciler {
         if (miss.nullStartedAt) accounting.nullStartedAt += 1;
         switch (miss.era) {
           case DualReadMissClass.postEpoch:
-            accounting.missPostEpoch += 1;
+            accounting.recordPostEpochMiss(sessionId);
           case DualReadMissClass.legacyEra:
             accounting.missLegacyEra += 1;
         }
@@ -1311,6 +1311,7 @@ class RestartReconciler {
             classification: DualReadClass.incumbentAdjudication,
             mismatches: comparison.mismatches,
           ),
+          headEpoch: sessionHeadEpochOf(head),
         );
         _onOrphan(
           'dual-read incumbent adjudication ${entry.key}: legacy kept session '
@@ -1336,7 +1337,8 @@ class RestartReconciler {
         case SessionOverlayOutcome.suppressedDemotion:
           accounting.overlaysSuppressed += 1;
       }
-      if (accounting.record(comparison) && comparison.isDivergence) {
+      if (accounting.record(comparison, headEpoch: sessionHeadEpochOf(head)) &&
+          comparison.isDivergence) {
         for (final mismatch in comparison.mismatches) {
           _onFlare?.call(kDualReadDivergenceFlare, {
             'axis': 'session',

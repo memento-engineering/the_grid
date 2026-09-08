@@ -1687,6 +1687,7 @@ void main() {
       DualReadMode mode = DualReadMode.observe,
       TrajectorySnapshotHealth health = TrajectorySnapshotHealth.live,
       DualReadAccounting? accounting,
+      int headEpoch = 0,
     }) {
       final handler = _handler(
         state: _Source(
@@ -1726,6 +1727,7 @@ void main() {
         stepSnapshot: () => _StepSnapshot(rows, health: health),
         dualReadMode: mode,
         dualReadAccounting: accounting,
+        headEpochForSession: (_) => headEpoch,
       );
       return handler(const GridCommandRequest.rework(beadId: 'tg-1'));
     }
@@ -1839,6 +1841,41 @@ void main() {
         ),
         completion(notParked()),
       );
+    });
+
+    test('park P2 misses use the shared windowed boot total', () async {
+      final accounting = DualReadAccounting(soakWindowEpoch: 10);
+      await park(
+        beadState: StepState.running,
+        rows: const [],
+        mode: DualReadMode.primary,
+        accounting: accounting,
+        headEpoch: 10,
+      );
+      expect(accounting.p2Miss, 1);
+      expect(accounting.p2MissTotal, 1);
+
+      accounting.beginStepPass();
+      await park(
+        beadState: StepState.running,
+        rows: const [],
+        mode: DualReadMode.primary,
+        accounting: accounting,
+        headEpoch: 10,
+      );
+      expect(accounting.p2Miss, 1, reason: 'the last-pass gauge reset');
+      expect(accounting.p2MissTotal, 1, reason: 'the boot total dedupes');
+
+      final historical = DualReadAccounting(soakWindowEpoch: 10);
+      await park(
+        beadState: StepState.running,
+        rows: const [],
+        mode: DualReadMode.primary,
+        accounting: historical,
+        headEpoch: 9,
+      );
+      expect(historical.p2Miss, 1);
+      expect(historical.p2MissTotal, 0);
     });
   });
 }
@@ -1992,6 +2029,7 @@ StationCommandHandler _handler({
   String workIdentity = 'tg',
   StationTrajectoryRecorder? recorder,
   TrajectoryStepSnapshot Function()? stepSnapshot,
+  int Function(String sessionId)? headEpochForSession,
   DualReadMode dualReadMode = DualReadMode.observe,
   DualReadAccounting? dualReadAccounting,
 }) => StationCommandHandler(
@@ -1999,6 +2037,7 @@ StationCommandHandler _handler({
   refreshState: refreshState ?? () async {},
   // CONSUMER 3 of the step dual read (cut-wiring C4) — the park check.
   stepSnapshot: stepSnapshot,
+  headEpochForSession: headEpochForSession,
   dualReadMode: dualReadMode,
   dualReadAccounting: dualReadAccounting,
   stateWriter: StationBeadWriter(

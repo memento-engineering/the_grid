@@ -214,6 +214,7 @@ class DualReadStepObserver {
       final headRow = head?.health == TrajectorySnapshotHealth.live
           ? head?.bySessionId(sessionId)
           : null;
+      final headEpoch = sessionHeadEpochOf(headRow);
       final headCardinalityBreach =
           head != null &&
           headRow != null &&
@@ -273,7 +274,11 @@ class DualReadStepObserver {
         // per-node rule applied wholesale. Counted, never a divergence, and
         // the cursor stays the bead's.
         if (!completeFallbackCounted) accounting.stepFallbacks += 1;
-        accounting.p2Miss += beadCursor.length;
+        accounting.recordP2Misses(
+          sessionId: sessionId,
+          count: beadCursor.length,
+          headEpoch: headEpoch,
+        );
         // The structurally-absent share, on the SAME per-node rule the
         // hit path applies below: a step that has never transitioned has no
         // row to miss.
@@ -290,9 +295,22 @@ class DualReadStepObserver {
         traj: trajCursorOf(rows),
         collapsed: collapsed,
       );
+      accounting.recordP2Misses(
+        sessionId: sessionId,
+        count: merge.nodes
+            .where((node) => node.classification == StepNodeClass.p2Miss)
+            .length,
+        headEpoch: headEpoch,
+      );
       for (final node in merge.nodes) {
         _observeCompareWindow(node, collapsed[node.stepPath], comparedNodes);
-        _recordNode(node, snapshot, now: now, lagging: lagging);
+        _recordNode(
+          node,
+          snapshot,
+          now: now,
+          lagging: lagging,
+          headEpoch: headEpoch,
+        );
       }
     }
 
@@ -345,13 +363,13 @@ class DualReadStepObserver {
     TrajectoryStepSnapshot snapshot, {
     required DateTime now,
     required Set<String> lagging,
+    required int headEpoch,
   }) {
-    _resolveFoldAhead(node, snapshot, now: now);
+    _resolveFoldAhead(node, snapshot, now: now, headEpoch: headEpoch);
     switch (node.classification) {
       case StepNodeClass.match:
         return;
       case StepNodeClass.p2Miss:
-        accounting.p2Miss += 1;
         if (_foldRowCannotExistYet(node)) {
           // NOT LAG, and not evidence: the bead has never transitioned, so no
           // record was ever appended for this node and P2 — which has no mint
@@ -369,15 +387,27 @@ class DualReadStepObserver {
         // rides the same tracker and earns the same escalation — a node whose
         // transition append was dropped is exactly what that escalation is
         // for, under `observe` as much as under `primary`.
-        _observeLag(node, snapshot, now: now, lagging: lagging);
+        _observeLag(
+          node,
+          snapshot,
+          now: now,
+          lagging: lagging,
+          headEpoch: headEpoch,
+        );
       case StepNodeClass.stepLag:
-        _observeLag(node, snapshot, now: now, lagging: lagging);
+        _observeLag(
+          node,
+          snapshot,
+          now: now,
+          lagging: lagging,
+          headEpoch: headEpoch,
+        );
       case StepNodeClass.p2Orphan:
         // Structurally inert for decisions — the overlay never creates on this
         // axis either — but counted, like a `p1Orphan` head.
         accounting.p2Orphan += 1;
       case StepNodeClass.divergence:
-        _recordDivergence(node, snapshot, now: now);
+        _recordDivergence(node, snapshot, now: now, headEpoch: headEpoch);
     }
   }
 
@@ -401,6 +431,7 @@ class DualReadStepObserver {
     StepNodeComparison node,
     TrajectoryStepSnapshot snapshot, {
     required DateTime now,
+    required int headEpoch,
   }) {
     final key = StepLagTracker.keyFor(node.sessionId, node.stepPath);
     final cause = _causeFor(node);
@@ -420,6 +451,7 @@ class DualReadStepObserver {
         legacyValue: legacyWire,
         foldValue: foldWire,
         cause: cause,
+        headEpoch: headEpoch,
       );
       return;
     }
@@ -443,6 +475,7 @@ class DualReadStepObserver {
       legacyValue: window.legacyValue,
       foldValue: window.foldState.name,
       cause: DualReadDivergenceCause.unexplained,
+      headEpoch: headEpoch,
     );
   }
 
@@ -457,6 +490,7 @@ class DualReadStepObserver {
     StepNodeComparison node,
     TrajectoryStepSnapshot snapshot, {
     required DateTime now,
+    required int headEpoch,
   }) {
     if (node.classification == StepNodeClass.divergence) return;
     final window = _foldAheadByNode.remove(
@@ -476,6 +510,7 @@ class DualReadStepObserver {
       cause: caughtUp && withinGrace
           ? DualReadDivergenceCause.foldAheadOfLegacy
           : DualReadDivergenceCause.unexplained,
+      headEpoch: headEpoch,
     );
   }
 
@@ -484,6 +519,7 @@ class DualReadStepObserver {
     TrajectoryStepSnapshot snapshot, {
     required DateTime now,
     required Set<String> lagging,
+    required int headEpoch,
   }) {
     final key = StepLagTracker.keyFor(node.sessionId, node.stepPath);
     lagging.add(key);
@@ -506,6 +542,7 @@ class DualReadStepObserver {
       legacyValue: node.legacyState ?? '<no step bead>',
       foldValue: node.foldState ?? '<no P2 row>',
       cause: _causeFor(node),
+      headEpoch: headEpoch,
     );
   }
 
@@ -519,6 +556,7 @@ class DualReadStepObserver {
     required String legacyValue,
     required String foldValue,
     required DualReadDivergenceCause cause,
+    required int headEpoch,
   }) {
     if (accounting.recordStepDivergence(
       sessionId: node.sessionId,
@@ -527,6 +565,7 @@ class DualReadStepObserver {
       legacyValue: legacyValue,
       foldValue: foldValue,
       cause: cause,
+      headEpoch: headEpoch,
     )) {
       _flareStepDivergence(
         node,

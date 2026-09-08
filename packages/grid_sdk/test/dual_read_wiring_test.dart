@@ -47,11 +47,14 @@ void main() {
 
   tearDown(() => tmp.deleteSync(recursive: true));
 
-  Future<StationWorkRuntime> assemble() => assembleStationWork(
+  Future<StationWorkRuntime> assemble({
+    TrajectoryConfig trajectoryConfig = const TrajectoryConfig(),
+  }) => assembleStationWork(
     stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
     substations: [SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj')],
     resolver: const _NullResolver(),
     dryRun: true,
+    trajectoryConfig: trajectoryConfig,
   );
 
   test('a dry assembly stands up cleanly with the dual read composed, and the '
@@ -184,7 +187,7 @@ void main() {
         'reconciler', () {
       expect(
         RegExp(
-          r'final dualReadAccounting = dualReadArmed \? DualReadAccounting\(\)',
+          r'DualReadAccounting\(soakWindowEpoch: trajectoryConfig\.soakWindowEpoch\)',
         ).allMatches(source).length,
         1,
       );
@@ -258,6 +261,19 @@ void main() {
   });
 
   group('C3 — the flip is a CONFIG line, and the default is OFF', () {
+    test(
+      'soak window epoch defaults to zero, rejects negative, and survives disable',
+      () {
+        expect(const TrajectoryConfig().soakWindowEpoch, 0);
+        expect(
+          () => TrajectoryConfig(soakWindowEpoch: -1),
+          throwsA(isA<AssertionError>()),
+        );
+        const config = TrajectoryConfig(soakWindowEpoch: 41);
+        expect(config.asDisabled.soakWindowEpoch, 41);
+      },
+    );
+
     test('primary is expressible without disturbing any other field', () {
       const config = TrajectoryConfig(dualRead: DualReadMode.primary);
       expect(config.dualRead, DualReadMode.primary);
@@ -273,5 +289,26 @@ void main() {
         'ever inherited; both are runner-armed, one line apart', () {
       expect(const TrajectoryConfig().dualRead, DualReadMode.off);
     });
+  });
+
+  test('one accounting feeds the round note and trajectory status', () async {
+    final source = File('lib/src/work/work_assembly.dart').readAsStringSync();
+    expect(RegExp(r'DualReadAccounting\(').allMatches(source), hasLength(1));
+    expect(source, contains('accounting: dualReadAccounting'));
+    expect(source, contains('dualReadAccounting: dualReadAccounting'));
+    expect(source, contains('appendAckP99Ms:'));
+
+    final work = await assemble(
+      trajectoryConfig: const TrajectoryConfig(
+        dualRead: DualReadMode.observe,
+        soakWindowEpoch: 17,
+      ),
+    );
+    final status = work.trajectoryStatus();
+    expect(status['soak_window_epoch'], 17);
+    expect(status['miss_post_epoch_total'], 0);
+    expect(status['p2_miss_total'], 0);
+    expect(status['first_epoch_claimed_at'], isNull);
+    expect(status['append_ack_p99_ms'], 0);
   });
 }

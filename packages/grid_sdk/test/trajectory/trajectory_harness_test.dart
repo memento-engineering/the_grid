@@ -288,6 +288,39 @@ final class _FakeTimer implements Timer {
   int get tick => 0;
 }
 
+final class _FakeStopwatch implements Stopwatch {
+  _FakeStopwatch(this.elapsedMicroseconds);
+
+  @override
+  final int elapsedMicroseconds;
+
+  @override
+  Duration get elapsed => Duration(microseconds: elapsedMicroseconds);
+
+  @override
+  int get elapsedMilliseconds =>
+      elapsedMicroseconds ~/ Duration.microsecondsPerMillisecond;
+
+  @override
+  int get elapsedTicks => elapsedMicroseconds;
+
+  @override
+  int get frequency => Duration.microsecondsPerSecond;
+
+  @override
+  bool get isRunning => _isRunning;
+  bool _isRunning = false;
+
+  @override
+  void reset() {}
+
+  @override
+  void start() => _isRunning = true;
+
+  @override
+  void stop() => _isRunning = false;
+}
+
 TrajectoryAppendRequest _note(int ordinal, {String session = 's-1'}) =>
     TrajectoryAppendRequest(
       AttemptNote(
@@ -349,6 +382,7 @@ void main() {
     ),
     Stream<RuntimeEvent>? runtimeEvents,
     List<ObligationQuery>? tickQueries,
+    Stopwatch Function()? stopwatch,
   }) => TrajectoryHarness.build(
     config: config,
     gridHome: tmp.path,
@@ -371,6 +405,7 @@ void main() {
       return timer;
     },
     clock: () => now,
+    stopwatch: stopwatch,
     identity: (pid: 41, pgid: 42),
   );
 
@@ -671,6 +706,63 @@ void main() {
   });
 
   group('the append queue + single writer (§2.5)', () {
+    test('append ack p99 measures only in-window committed appends', () async {
+      final elapsed = <int>[
+        for (var i = 100; i >= 1; i -= 1) i * 1000 + 1,
+        900000,
+        800000,
+        700000,
+      ];
+      final h = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
+          soakWindowEpoch: 1,
+        ),
+        stopwatch: () => _FakeStopwatch(elapsed.removeAt(0)),
+      );
+      await h.start();
+      for (var i = 1; i <= 100; i += 1) {
+        h.enqueue(_note(i));
+      }
+      await h.runToFixpoint();
+      expect(h.status.appendAckP99Ms, 100);
+
+      appender.appendOutcomes.addAll(const <AppendOutcome>[
+        AppendDeduped(recordId: 'duplicate'),
+        AppendRefusedTestimony(
+          attemptId: 'testimony',
+          existingRecordId: 'observed',
+          reason: 'already observed',
+        ),
+        AppendInternalError(cause: 'failed'),
+      ]);
+      h.enqueue(_note(101));
+      h.enqueue(_note(102));
+      h.enqueue(_note(103));
+      await h.runToFixpoint();
+      expect(
+        h.status.appendAckP99Ms,
+        100,
+        reason: 'non-Appended outcomes never enter the sample',
+      );
+
+      appender = _FakeAppender(_FakeDb());
+      final historical = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          dualRead: DualReadMode.observe,
+          soakWindowEpoch: 2,
+        ),
+        stopwatch: () => _FakeStopwatch(999999),
+      );
+      await historical.start();
+      historical.enqueue(_note(1, session: 'historical'));
+      await historical.runToFixpoint();
+      expect(historical.status.appended, 1);
+      expect(historical.status.appendAckP99Ms, 0);
+    });
+
     test('enqueue returns synchronously and the writer drains FIFO', () async {
       final h = await harness();
       await h.start();
