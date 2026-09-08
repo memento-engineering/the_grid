@@ -89,8 +89,9 @@ export 'src/roster/substation_roster.dart';
 
 // ── runGrid + GridDelegate + GridConfiguration (Track C — tg-tv3) ────────────
 // The entry point + lifecycle rails: `await runGrid(delegate)` runs
-// `didLaunch → boot → mount`, returning a `GridHandle`; `initGrid → onReady`
-// follows as an unawaited kickoff. The delegate is held by
+// `didLaunch → optional state-store maintenance → boot → mount`, returning a
+// `GridHandle`; `initGrid → onReady` follows as an unawaited kickoff. The
+// delegate is held by
 // `runGrid` — it never rides the tree, so its `.state` can't be snapshotted
 // (ADR-0008 D-H); only its emitted `GridConfiguration` is ambient.
 //   GridDelegate      · the observable `StateNotifier<GridConfiguration>`; the
@@ -145,6 +146,14 @@ export 'src/run/substation_config.dart';
 // source is read-only). The state store is NOT a substation: distinct type,
 // distinct location (under `.grid/`), never in the `Substations` fan-out.
 export 'src/stores/stores.dart';
+export 'src/stores/state_store_gc.dart'
+    show
+        DirectorySizeReader,
+        MaintenanceClock,
+        MaintenanceProcessRunner,
+        MaintenanceSink,
+        StateStoreGc,
+        kStateStoreGcThresholdBytes;
 export 'src/stores/substation_init.dart';
 
 // ── The trajectory harness (Stage 1 — tg-zfek, stage1-wiring §1) ────────────

@@ -37,14 +37,6 @@ export 'src/station_reload.dart';
 // the up/down/status commands and their seams.
 export 'src/station_flags.dart';
 export 'src/state_workspace.dart';
-export 'src/state_store_gc.dart'
-    show
-        DirectorySizeReader,
-        MaintenanceClock,
-        MaintenanceProcessRunner,
-        MaintenanceSink,
-        StateStoreGc,
-        kStateStoreGcThresholdBytes;
 export 'src/up_command.dart';
 export 'src/diagnostics_reporter.dart';
 export 'src/composite_exploration_transport.dart';
