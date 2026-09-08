@@ -161,6 +161,7 @@ Future<_Outcome> _runUp(
     runMountedGrid:
         (
           delegate, {
+          required onError,
           required onFlushed,
           required orphanSweep,
           required onDelegateSwapped,

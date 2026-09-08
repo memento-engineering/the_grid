@@ -19,6 +19,37 @@ const Duration _kFlushRetryDelay = Duration(seconds: 1);
 /// and stuck; a hot loop is neither.
 const int _kMaxFlushRetries = 5;
 
+final Object _gridNodePathZoneKey = Object();
+final Object _gridStepIdZoneKey = Object();
+
+/// Runs [body] in a child zone carrying mounted-grid error attribution.
+///
+/// This adds values only: it does not install another error boundary, so an
+/// uncaught asynchronous failure still reaches the one guarded `runGrid`
+/// zone. Omitted values inherit any matching identity already present in the
+/// current zone. At least one non-empty identity is required.
+T runWithGridErrorAttribution<T>({
+  String? nodePath,
+  String? stepId,
+  required T Function() body,
+}) {
+  final hasNodePath = nodePath?.isNotEmpty ?? false;
+  final hasStepId = stepId?.isNotEmpty ?? false;
+  if (!hasNodePath && !hasStepId) {
+    throw ArgumentError(
+      'runWithGridErrorAttribution requires a non-empty nodePath or stepId',
+    );
+  }
+  return Zone.current
+      .fork(
+        zoneValues: <Object, Object>{
+          if (hasNodePath) _gridNodePathZoneKey: nodePath!,
+          if (hasStepId) _gridStepIdZoneKey: stepId!,
+        },
+      )
+      .run(body);
+}
+
 /// Launches a grid from [delegate] — **the entry point** (v3 §4 / GLOSSARY R15:
 /// the delegation pattern's `runGrid(delegate)`). The framework root is
 /// `final`; all station behaviour enters through the delegate.
@@ -52,10 +83,11 @@ const int _kMaxFlushRetries = 5;
 /// passes `work.sweepOrphans`.
 ///
 /// [onError] receives the captured refusals from the **post-mount** rails
-/// (`initGrid` / `onReady` / `onTeardown`). It defaults to rethrowing into the
-/// current zone (loud). A `didLaunch` failure does not go through [onError] —
-/// it is thrown from `runGrid` directly (the caller cannot proceed with a grid
-/// that never mounted).
+/// (`initGrid` / `onReady` / `onTeardown`) and uncaught asynchronous errors
+/// born in the mounted tree's guarded zone. The default prints the refusal's
+/// name and data loudly without making it fatal. `didLaunch`, `boot`, and
+/// synchronous first-mount failures remain outside containment and abort
+/// `runGrid` because no live tree exists to preserve.
 ///
 /// [onFlushed] fires once after EVERY completed tree flush (the initial mount
 /// flush included) — the seam a runner hangs off-tree post-flush machinery on
@@ -98,7 +130,7 @@ Future<GridHandle> runGrid(
   void Function(GridDelegate next)? onDelegateSwapped,
   Timer Function(Duration, void Function())? scheduleTimer,
 }) async {
-  final report = onError ?? _rethrowToZone;
+  final report = onError ?? _reportToZone;
 
   // 1. Pre-tree rail — synchronous; a failure aborts the launch (loud throw).
   try {
@@ -115,68 +147,93 @@ Future<GridHandle> runGrid(
     throw GridHookError('boot', delegate.runtimeType, error, stackTrace);
   }
 
-  // 3. Mount: configuration provision → build. The delegate is held here (by
-  //    construction), never provided ambiently (D-H).
-  final owner = TreeOwner();
-  // The dev-mode reassemble bus: held HERE and handed to the scope by
-  // construction — never ambient (D-H), exactly like the delegate.
-  final reassemble = ReassembleBus();
-  final handle = GridHandle._(
-    owner,
-    treeProjector,
-    delegate,
-    report,
-    onFlushed,
-    orphanSweep,
-    reassemble,
-    delegateFactory,
-    onDelegateSwapped,
-    scheduleTimer ?? Timer.new,
+  late GridHandle handle;
+  final guardedZone = Zone.current.fork(
+    specification: ZoneSpecification(
+      handleUncaughtError: (self, parent, origin, error, stackTrace) {
+        report(
+          GridHookError(
+            'uncaughtError',
+            handle._delegate.runtimeType,
+            error,
+            stackTrace,
+            nodePath: origin[_gridNodePathZoneKey] as String?,
+            stepId: origin[_gridStepIdZoneKey] as String?,
+          ),
+        );
+      },
+    ),
   );
-  // Wire the flush trigger BEFORE mounting: the first build runs synchronously
-  // in mountRoot with no markNeedsRebuild (the config scope assigns its
-  // baseline directly, never setState during mount), so onNeedsFlush cannot
-  // fire during it.
-  handle._wireFlush();
-  try {
-    final root = owner.mountRoot(
-      _GridConfigurationScope(delegate: delegate, reassemble: reassemble),
+
+  // 3. The whole live tree is born in one guarded zone. Synchronous failures
+  // still cross Zone.run to the caller; only uncaught ASYNCHRONOUS failures
+  // reach the zone's handler.
+  return guardedZone.run(() {
+    // Mount: configuration provision → build. The delegate is held here (by
+    // construction), never provided ambiently (D-H).
+    final owner = TreeOwner();
+    // The dev-mode reassemble bus: held HERE and handed to the scope by
+    // construction — never ambient (D-H), exactly like the delegate.
+    final reassemble = ReassembleBus();
+    handle = GridHandle._(
+      owner,
+      treeProjector,
+      delegate,
+      report,
+      onFlushed,
+      orphanSweep,
+      reassemble,
+      delegateFactory,
+      onDelegateSwapped,
+      scheduleTimer ?? Timer.new,
+      guardedZone,
     );
-    owner.flush();
-    handle._root = root;
-    treeProjector?.afterFlush(root);
-    onFlushed?.call();
-  } on Object {
-    // A throw anywhere between mount and the first completed flush must not
-    // strand the owner and the reassemble bus — release both, then let the
-    // error reach the caller raw (the composing shell owns the delegate's
-    // disposal on this path). RESIDUAL LIMIT: genesis_tree 0.2.0's
-    // `mountRoot` assigns its root only after `mount` returns, so a
-    // mid-mount throw leaves the partially mounted branches unreachable —
-    // `owner.dispose()` then unmounts nothing. That is an upstream seam (a
-    // bead will track it); do not fork or patch genesis_tree here.
-    // The handle dies with the rail: a branch dirtied during mount has already
-    // scheduled the coalesced flush microtask, and TreeOwner.dispose does not
-    // clear onNeedsFlush — marking the handle torn down makes that pending
-    // microtask take its early-out instead of flushing a disposed owner and
-    // reading the never-assigned root mid-unwind.
-    handle._tornDown = true;
-    owner.dispose();
-    reassemble.dispose();
-    rethrow;
-  }
+    // Wire the flush trigger BEFORE mounting: the first build runs
+    // synchronously in mountRoot with no markNeedsRebuild (the config scope
+    // assigns its baseline directly, never setState during mount), so
+    // onNeedsFlush cannot fire during it.
+    handle._wireFlush();
+    try {
+      final root = owner.mountRoot(
+        _GridConfigurationScope(delegate: delegate, reassemble: reassemble),
+      );
+      owner.flush();
+      handle._root = root;
+      treeProjector?.afterFlush(root);
+      onFlushed?.call();
+    } on Object {
+      // A throw anywhere between mount and the first completed flush must not
+      // strand the owner and the reassemble bus — release both, then let the
+      // error reach the caller raw (the composing shell owns the delegate's
+      // disposal on this path). RESIDUAL LIMIT: genesis_tree 0.2.0's
+      // `mountRoot` assigns its root only after `mount` returns, so a
+      // mid-mount throw leaves the partially mounted branches unreachable —
+      // `owner.dispose()` then unmounts nothing. That is an upstream seam (a
+      // bead will track it); do not fork or patch genesis_tree here.
+      // The handle dies with the rail: a branch dirtied during mount has
+      // already scheduled the coalesced flush microtask, and TreeOwner.dispose
+      // does not clear onNeedsFlush — marking the handle torn down makes that
+      // pending microtask take its early-out instead of flushing a disposed
+      // owner and reading the never-assigned root mid-unwind.
+      handle._tornDown = true;
+      owner.dispose();
+      reassemble.dispose();
+      rethrow;
+    }
 
-  // 4. Post-mount async kickoff — unawaited by the caller; onReady chained
-  // after it; both surfaced loud on failure.
-  unawaited(_kickoff(delegate, report));
+    // 4. Post-mount async kickoff — unawaited by the caller; onReady chained
+    // after it; both surfaced loud on failure. Detached work inherits the
+    // guarded zone because the kickoff itself is created here.
+    unawaited(_kickoff(delegate, report));
 
-  return handle;
+    return handle;
+  });
 }
 
-/// The default [runGrid] error sink: surface a refusal loudly into the current
-/// zone (the uncaught-error handler) so it is never swallowed.
-void _rethrowToZone(GridHookError refusal) =>
-    Zone.current.handleUncaughtError(refusal, refusal.causeStackTrace);
+/// The default [runGrid] error sink: report loudly without escalating the
+/// refusal to the process-root uncaught-error handler.
+void _reportToZone(GridHookError refusal) =>
+    Zone.current.print('${refusal.name}: ${refusal.data}');
 
 /// Runs the post-mount async rails in order: `initGrid` (unawaited kickoff) →
 /// `onReady` (only on success). Each failure is a captured, attributed, loud
@@ -221,6 +278,7 @@ class GridHandle {
     this._delegateFactory,
     this._onDelegateSwapped,
     this._scheduleTimer,
+    this._guardedZone,
   );
 
   final TreeOwner _owner;
@@ -266,6 +324,9 @@ class GridHandle {
   /// driven deterministically offline.
   final Timer Function(Duration, void Function()) _scheduleTimer;
 
+  /// The one post-boot async-error boundary in which the tree was mounted.
+  final Zone _guardedZone;
+
   /// Consecutive failed flush passes — reset by the first clean pass. Bounds
   /// [_rearmAfterFailedFlush] so a branch that throws every time degrades into
   /// a visible wedge instead of a hot retry loop.
@@ -281,9 +342,11 @@ class GridHandle {
   }
 
   void _scheduleFlush() {
-    if (_flushScheduled || _tornDown) return;
-    _flushScheduled = true;
-    scheduleMicrotask(_runFlushPass);
+    _guardedZone.run(() {
+      if (_flushScheduled || _tornDown) return;
+      _flushScheduled = true;
+      scheduleMicrotask(_runFlushPass);
+    });
   }
 
   /// One flush pass, FAIL-CLOSED (tg-60n, ported here by tg-um8k from the
@@ -519,7 +582,7 @@ class GridHandle {
       generation,
     );
     // The post-mount rails on the FRESH delegate, in runGrid's own order.
-    unawaited(_kickoff(next, _report));
+    _guardedZone.run(() => unawaited(_kickoff(next, _report)));
     return done;
   }
 
@@ -532,20 +595,22 @@ class GridHandle {
   ) {
     final waiter = _ReassembleWaiter(mode: mode, generation: generation);
     _flushWaiters.add(waiter);
-    try {
-      _reassemble.request(request);
-    } catch (error) {
-      _flushWaiters.remove(waiter);
-      // Delivered via the awaited report — no VM-service log side channel
-      // (ADR-0012 D2; the refusal's carrier is [ReassembleReport]).
-      waiter.completer.complete(
-        ReassembleReport.refusedAfterSourceSwap(
-          mode: mode,
-          generation: generation,
-          details: '$error',
-        ),
-      );
-    }
+    _guardedZone.run(() {
+      try {
+        _reassemble.request(request);
+      } catch (error) {
+        _flushWaiters.remove(waiter);
+        // Delivered via the awaited report — no VM-service log side channel
+        // (ADR-0012 D2; the refusal's carrier is [ReassembleReport]).
+        waiter.completer.complete(
+          ReassembleReport.refusedAfterSourceSwap(
+            mode: mode,
+            generation: generation,
+            details: '$error',
+          ),
+        );
+      }
+    });
     return waiter.completer.future;
   }
 
@@ -604,8 +669,10 @@ class GridHandle {
     }
     // Unmount first (the configuration scope's dispose removes its listener
     // off the delegate).
-    _owner.dispose();
-    _reassemble.dispose();
+    _guardedZone.run(() {
+      _owner.dispose();
+      _reassemble.dispose();
+    });
     // The sweep runs AFTER the unmount by construction — the stragglers it
     // reconciles against zero-expected only exist once the kills are in
     // flight — and BEFORE the delegate disposes: it is the reap on the

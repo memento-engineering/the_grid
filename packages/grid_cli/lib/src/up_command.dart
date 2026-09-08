@@ -56,6 +56,7 @@ import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 
 import 'asset_catalog_resolver.dart';
+import 'diagnostics_reporter.dart';
 import 'station_control.dart';
 import 'station_flags.dart';
 import 'station_lock.dart';
@@ -140,6 +141,7 @@ typedef LockAcquirer =
 typedef GridRunner =
     Future<GridResource> Function(
       GridDelegate delegate, {
+      required void Function(GridHookError refusal) onError,
       required void Function() onFlushed,
       required Future<void> Function() orphanSweep,
       required void Function(GridDelegate next) onDelegateSwapped,
@@ -191,7 +193,7 @@ Future<Map<String, dynamic>> _defaultReadStateStoreTypes({
 /// the delegate, never in. Teardown: unmount tree → orphan sweep → dispose
 /// the delegate (all inside the runner's teardown, in that order — the sweep
 /// reaps over the delegate's boot-assembled runtime, so the delegate must
-/// outlive it) → dispose the shell's projector → release lock.
+/// outlive it) → dispose the shell's diagnostics reporter → release lock.
 class UpCommand extends Command<int> {
   /// Creates a resident `up` command.
   ///
@@ -528,16 +530,18 @@ class UpCommand extends Command<int> {
     // forever after a FAILED restart boot.
     var live = delegate;
 
-    // The diagnostics projection is SHELL-owned and process-lifetime: one
-    // sink for `runGrid`'s flush rail and the control surface's `/stream`,
-    // surviving hot restarts (a fresh delegate's tree flushes into the same
-    // projector). The shell disposes it after the tree unmounts.
-    final treeProjector = TreeProjector();
+    // Diagnostics are SHELL-owned and process-lifetime: one reporter carries
+    // runGrid's root-error flares and owns the projector shared by the flush
+    // rail and control surface's `/stream`. It survives hot restarts and is
+    // disposed only after the tree unmounts.
+    final diagnostics = StationDiagnosticsReporter(writeLine: stderr.writeln);
+    final treeProjector = diagnostics.treeProjector;
 
     final GridResource grid;
     try {
       grid = await _runMountedGrid(
         delegate,
+        onError: (refusal) => diagnostics.flare(refusal.name, refusal.data),
         onFlushed: () => live.afterFlush(),
         orphanSweep: () => live.sweepOrphans(),
         onDelegateSwapped: (next) => live = next,
@@ -546,8 +550,8 @@ class UpCommand extends Command<int> {
       );
     } on Object catch (error) {
       // The runner's contract disposed the delegate; the shell's remaining
-      // steps are its own projector and the lock.
-      await settle('projector dispose', treeProjector.dispose);
+      // steps are its own diagnostics reporter and the lock.
+      await settle('diagnostics dispose', diagnostics.dispose);
       await settle('lock release', stationLock.release);
       stderr.writeln('$prefix: $error');
       return 64;
@@ -566,7 +570,7 @@ class UpCommand extends Command<int> {
       if (devMode != null) await settle('dev-mode dispose', devMode.dispose);
       if (control != null) await settle('control dispose', control.dispose);
       await settle('grid teardown', grid.teardown);
-      await settle('projector dispose', treeProjector.dispose);
+      await settle('diagnostics dispose', diagnostics.dispose);
       await closeStores(stores);
       await settle('lock release', stationLock.release);
       stderr.writeln('$prefix: $error');
@@ -663,7 +667,7 @@ class UpCommand extends Command<int> {
       }
       await settle('control dispose', control.dispose);
       await settle('grid teardown', grid.teardown);
-      await settle('projector dispose', treeProjector.dispose);
+      await settle('diagnostics dispose', diagnostics.dispose);
       await closeStores(stores);
       await settle('lock release', stationLock.release);
     }
@@ -900,6 +904,7 @@ final class _DevModeResource implements DevModeResource {
 @visibleForTesting
 Future<GridResource> defaultRunMountedGrid(
   GridDelegate delegate, {
+  required void Function(GridHookError refusal) onError,
   required void Function() onFlushed,
   required Future<void> Function() orphanSweep,
   required void Function(GridDelegate next) onDelegateSwapped,
@@ -910,6 +915,7 @@ Future<GridResource> defaultRunMountedGrid(
     return _GridResource(
       await runGrid(
         delegate,
+        onError: onError,
         onFlushed: onFlushed,
         orphanSweep: orphanSweep,
         treeProjector: treeProjector,
