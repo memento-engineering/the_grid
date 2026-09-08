@@ -54,21 +54,27 @@ class FederatedSnapshotSource implements SnapshotSource {
   /// BOTH axes are load-bearing (tg-mspw): ADR-0006 Decision 1 makes the
   /// issue-id PREFIX ownership's primary axis, and classifying with names
   /// alone resolved every production id to nothing.
+  ///
+  /// [scheduleTimer] is the injectable one-shot deadline seam for age-based
+  /// ready staleness. It defaults to [Timer.new].
   FederatedSnapshotSource(
     Map<String, SnapshotSource> members, {
     Map<String, String> memberPrefixes = const {},
     void Function(String message)? onUnresolvedExternalDep,
     Duration? readyStaleAge,
     DateTime Function() now = DateTime.now,
+    Timer Function(Duration, void Function())? scheduleTimer,
     void Function(String name, Map<String, String> data)? onFlare,
   }) : _onUnresolvedExternalDep = onUnresolvedExternalDep,
        _readyStaleAge = readyStaleAge,
        _now = now,
+       _scheduleTimer = scheduleTimer ?? Timer.new,
        _onFlare = onFlare {
     members.forEach(
       (name, source) => _attach(name, source, memberPrefixes[name] ?? name),
     );
     _current = _combine();
+    _scheduleStalenessDeadline();
   }
 
   final void Function(String message)? _onUnresolvedExternalDep;
@@ -77,13 +83,16 @@ class FederatedSnapshotSource implements SnapshotSource {
   /// (tg-zd4v face 2) — a bounded multiple of the sync floor, or null to
   /// judge staleness by stream error only (the pre-floor behavior).
   ///
-  /// Age is judged at every [_recompute] — event-driven, so a lone quiet
-  /// member is judged when any OTHER member's floor tick recomputes the
-  /// union. With the floor in place a healthy member re-captures every tick;
-  /// exceeding the window means the member has GENUINELY gone quiet — the
-  /// exact state that produced the stale mint.
+  /// Age is judged at every [_recompute]. Member events re-arm one exact
+  /// deadline for the earliest possible age edge, so even an entirely quiet
+  /// federation advances staleness on time. With the floor in place a healthy
+  /// member re-captures every tick; reaching the window means the member has
+  /// GENUINELY gone quiet — the exact state that produced the stale mint.
   final Duration? _readyStaleAge;
   final DateTime Function() _now;
+  final Timer Function(Duration, void Function()) _scheduleTimer;
+  Timer? _stalenessTimer;
+  bool _disposed = false;
 
   /// The rising-edge staleness flare sink (tg-zd4v face 3): fires ONCE when a
   /// member goes stale by age (`sync.memberStaleByAge`) and ONCE when it
@@ -153,15 +162,26 @@ class FederatedSnapshotSource implements SnapshotSource {
   DateTime? _freshCapturedAt(String id) =>
       _sources[id]?.current?.capturedAt ?? _latestByMember[id]?.capturedAt;
 
+  /// The exact instant at which [id]'s freshest known capture becomes stale.
+  DateTime? _ageDeadline(String id) {
+    final age = _readyStaleAge;
+    final capturedAt = _freshCapturedAt(id);
+    if (age == null || capturedAt == null) return null;
+    return capturedAt.add(age);
+  }
+
+  /// Whether [id] has reached its age deadline at [instant].
+  bool _isAgeStaleAt(String id, DateTime instant) {
+    final deadline = _ageDeadline(id);
+    return deadline != null && !instant.isBefore(deadline);
+  }
+
   /// A member is stale for READY purposes when its stream errored (D-Z4) OR
   /// its freshest known capture has aged past [_readyStaleAge] (tg-zd4v).
   /// Its beads stay visible either way (D-Z3 — absence is not deletion).
   bool _isStale(String id) {
     if (_staleByMember[id] == true) return true;
-    final age = _readyStaleAge;
-    final capturedAt = _freshCapturedAt(id);
-    if (age == null || capturedAt == null) return false;
-    return _now().difference(capturedAt) > age;
+    return _isAgeStaleAt(id, _now());
   }
 
   /// Detects age-staleness EDGES and flares each exactly once. Runs before
@@ -169,15 +189,16 @@ class FederatedSnapshotSource implements SnapshotSource {
   void _flareAgeEdges() {
     final sink = _onFlare;
     if (_readyStaleAge == null) return;
+    final now = _now();
     for (final id in _sources.keys) {
       final capturedAt = _freshCapturedAt(id);
-      final staleNow =
-          capturedAt != null && _now().difference(capturedAt) > _readyStaleAge;
+      final staleNow = _isAgeStaleAt(id, now);
       if (staleNow && _ageStale.add(id)) {
+        final staleCapturedAt = capturedAt!;
         sink?.call('sync.memberStaleByAge', {
           'substation': id,
-          'capturedAt': capturedAt.toIso8601String(),
-          'ageSeconds': '${_now().difference(capturedAt).inSeconds}',
+          'capturedAt': staleCapturedAt.toIso8601String(),
+          'ageSeconds': '${now.difference(staleCapturedAt).inSeconds}',
           'windowSeconds': '${_readyStaleAge.inSeconds}',
         });
       } else if (!staleNow && _ageStale.remove(id)) {
@@ -187,6 +208,35 @@ class FederatedSnapshotSource implements SnapshotSource {
         });
       }
     }
+  }
+
+  /// Re-arms one timer for the earliest future age-staleness edge. Members
+  /// without a capture and members already stale by age have no future edge,
+  /// so they contribute no deadline.
+  void _scheduleStalenessDeadline() {
+    _stalenessTimer?.cancel();
+    _stalenessTimer = null;
+    if (_disposed || _readyStaleAge == null) return;
+
+    final now = _now();
+    DateTime? earliest;
+    for (final id in _sources.keys) {
+      final deadline = _ageDeadline(id);
+      if (deadline == null || !deadline.isAfter(now)) continue;
+      if (earliest == null || deadline.isBefore(earliest)) {
+        earliest = deadline;
+      }
+    }
+    if (earliest == null) return;
+
+    late final Timer timer;
+    timer = _scheduleTimer(earliest.difference(now), () {
+      if (!identical(_stalenessTimer, timer)) return;
+      _stalenessTimer = null;
+      if (_disposed) return;
+      _recompute();
+    });
+    _stalenessTimer = timer;
   }
 
   /// Attaches a NEW member at runtime (D-Z1/D-Z2 — mutable membership; a
@@ -245,6 +295,7 @@ class FederatedSnapshotSource implements SnapshotSource {
     if (next != null && diffSnapshots(previous, next).isNotEmpty) {
       _controller.add(next);
     }
+    _scheduleStalenessDeadline();
   }
 
   /// Merges every member's latest known snapshot into one [GraphSnapshot]:
@@ -347,6 +398,10 @@ class FederatedSnapshotSource implements SnapshotSource {
   /// **not** dispose the member [SnapshotSource]s themselves — the caller
   /// that built them (`buildControllers`) owns their lifecycle.
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    _stalenessTimer?.cancel();
+    _stalenessTimer = null;
     for (final sub in _subs.values) {
       await sub.cancel();
     }
