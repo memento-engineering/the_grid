@@ -1,3 +1,10 @@
+## 0.3.0-rc.19
+
+- Added: `TrajectoryDiscipline {shadow, cut}` and the cut lever, with the dry-run refusal preserving the caller's posture (tg-rcm3 #351, tg-k0pb #353); `TrajectoryHarness.appendAcked` with the one-`tickInterval` queue-wait deadline that bounds queue residence only, split `decisionBearingDropped` / `fireAndForgetDropped` accounting, and the cut-only shared admission halt composed in `work_assembly` (tg-ppo5, #364).
+- Added: the epoch-scoped soak instrument and boot-epoch station gates wired through assembly (#354, #352); admission facts on the status payload (#349).
+- Fixed: proxied dolt test teardown is fenced so the attach tests no longer leak sql-servers (tg-qaux, #347).
+- Floors `grid_engine` to `^0.3.0-rc.22` and `grid_runtime` to `^0.2.0-rc.16`.
+
 ## 0.3.0-rc.18
 
 - Floors `grid_engine` to `^0.3.0-rc.21` and `grid_runtime` to `^0.2.0-rc.15` (the tg-g230 admission fixes, #345); no API change of its own.

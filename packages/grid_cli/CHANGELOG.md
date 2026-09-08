@@ -1,3 +1,9 @@
+## 0.5.0-rc.19
+
+- Added: `session collect` operator verb (tg-yz4p, #361); the status payload carries admission facts and the soak instrument (#349, #354, #352).
+- Fixed: the station port release probe retries instead of flaking (tg-6uuw, #360).
+- Floors `grid_engine` to `^0.3.0-rc.22`, `grid_sdk` to `^0.3.0-rc.19` and `grid_runtime` to `^0.2.0-rc.16`.
+
 ## 0.5.0-rc.18
 
 - Floors `grid_engine` to `^0.3.0-rc.21`, `grid_runtime` to `^0.2.0-rc.15` and `grid_sdk` to `^0.3.0-rc.18` (the tg-g230 admission fixes, #345); no API change of its own.
