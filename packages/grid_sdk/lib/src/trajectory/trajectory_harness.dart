@@ -11,8 +11,9 @@
 ///
 ///   * **Non-fatal with a narrow acknowledgement seam.** [enqueue] remains
 ///     synchronous for ordinary observations. The five decision-bearing
-///     recorder sites alone await [appendAcked], which has a one-tick bound and
-///     a sealed disposition. Boot and clean-down retain their existing awaits.
+///     recorder sites alone await [appendAcked], which has a one-tick queue-wait
+///     bound and a sealed disposition. Boot and clean-down retain their
+///     existing awaits.
 ///   * **The trajectory can degrade without crashing work** (§3). [start] and
 ///     [shutdown] catch everything: a failed connect, verify, or claim records
 ///     a mode + cause. Under cut, a lost decision record halts fresh admission
@@ -1236,7 +1237,9 @@ class TrajectoryHarness {
   }
 
   /// Enqueues a decision-bearing observation and always completes with its
-  /// committed, lost, or posture-suppressed disposition.
+  /// committed, lost, or posture-suppressed disposition. The one-tick
+  /// deadline bounds only residence in the queue; the appender's sealed
+  /// outcome and store deadline own completion after dequeue.
   Future<TrajectoryAppendResult> appendAcked(TrajectoryAppendRequest request) {
     final completer = Completer<TrajectoryAppendResult>();
     final entry = _TrajectoryQueueEntry(request, completer);
@@ -1288,8 +1291,7 @@ class TrajectoryHarness {
   }
 
   void _onAckDeadline(_TrajectoryQueueEntry entry) {
-    if (entry.settled) return;
-    _queue.remove(entry);
+    if (entry.settled || !_queue.remove(entry)) return;
     const reason = 'append acknowledgement deadline';
     _drop(entry, reason);
     _flareLimited(
@@ -1312,7 +1314,9 @@ class TrajectoryHarness {
   Future<void> _drainQueue() async {
     try {
       while (_mode == TrajectoryHarnessMode.live && _queue.isNotEmpty) {
-        await _appendOne(_queue.removeFirst());
+        final entry = _queue.removeFirst();
+        _cancelAckDeadline(entry);
+        await _appendOne(entry);
       }
     } finally {
       _writerActive = false;
@@ -1514,10 +1518,14 @@ class TrajectoryHarness {
   }) {
     if (entry.settled) return;
     entry.settled = true;
-    entry.deadline?.cancel();
-    entry.deadline = null;
+    _cancelAckDeadline(entry);
     beforeComplete?.call();
     entry.completer?.complete(result);
+  }
+
+  void _cancelAckDeadline(_TrajectoryQueueEntry entry) {
+    entry.deadline?.cancel();
+    entry.deadline = null;
   }
 
   void _haltAdmission(TrajectoryAppendRequest request, String reason) {

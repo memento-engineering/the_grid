@@ -887,6 +887,88 @@ void main() {
       expect(committed, isA<Acked>());
     });
 
+    test(
+      'ack deadline bounds queue wait only when in-flight append succeeds',
+      () async {
+        final blocked = Completer<AppendOutcome>();
+        appender.appendFutures.add(blocked.future);
+        final halts = <({String reason, String recordClass})>[];
+        final h = await harness(
+          config: const TrajectoryConfig(discipline: TrajectoryDiscipline.cut),
+          onAdmissionHalt: ({required reason, required recordClass}) {
+            halts.add((reason: reason, recordClass: recordClass));
+          },
+        );
+        await h.start();
+
+        final request = _note(1, decisionBearing: true);
+        final pending = h.appendAcked(request);
+        final deadline = timers.last;
+        await pumpEventQueue();
+
+        expect(appender.calls, contains('append:attempt.note'));
+        expect(deadline.$3.cancelled, isTrue);
+        deadline.$2();
+        expect(h.status.decisionBearingDropped, 0);
+        expect(halts, isEmpty);
+
+        blocked.complete(
+          Appended(
+            recordId: 'in-flight-success',
+            seq: 1,
+            epochSeq: 1,
+            envelope: committedEnvelope(
+              request.record,
+              recordId: 'in-flight-success',
+            ),
+          ),
+        );
+
+        expect(await pending, isA<Acked>());
+        expect(h.status.appended, 1);
+        expect(h.status.decisionBearingDropped, 0);
+        expect(h.status.fireAndForgetDropped, 0);
+        expect(halts, isEmpty);
+        expect(flareNames(), isNot(contains('trajectory.admissionHalted')));
+      },
+    );
+
+    test(
+      'ack deadline bounds queue wait only when in-flight append fails',
+      () async {
+        final blocked = Completer<AppendOutcome>();
+        appender.appendFutures.add(blocked.future);
+        final halts = <({String reason, String recordClass})>[];
+        final h = await harness(
+          config: const TrajectoryConfig(discipline: TrajectoryDiscipline.cut),
+          onAdmissionHalt: ({required reason, required recordClass}) {
+            halts.add((reason: reason, recordClass: recordClass));
+          },
+        );
+        await h.start();
+
+        final pending = h.appendAcked(_note(1, decisionBearing: true));
+        final deadline = timers.last;
+        await pumpEventQueue();
+
+        expect(appender.calls, contains('append:attempt.note'));
+        expect(deadline.$3.cancelled, isTrue);
+        deadline.$2();
+        expect(h.status.decisionBearingDropped, 0);
+        expect(halts, isEmpty);
+
+        blocked.complete(const AppendInternalError(cause: 'socket'));
+
+        expect(await pending, isA<Dropped>());
+        expect(h.status.decisionBearingDropped, 1);
+        expect(h.status.fireAndForgetDropped, 0);
+        expect(halts, hasLength(1));
+        expect(halts.single.recordClass, 'attempt.note');
+        expect(flareNames(), contains('trajectory.admissionHalted'));
+        expect(flareNames(), isNot(contains('trajectory.halted')));
+      },
+    );
+
     test('commit, dedupe, and refused testimony all acknowledge', () async {
       final outcomes = <AppendOutcome?>[
         null,
