@@ -60,26 +60,34 @@ Future<void> _pump() async {
   }
 }
 
-/// Polls [condition] with a short real delay for a nominal five seconds and
-/// fails with the labeled [what] when [maxTries] is exhausted — the robust
-/// variant [_pump]'s fixed microtask-count drain cannot guarantee: a
+const _pumpUntilTimeout = Duration(seconds: 30);
+
+/// Polls [condition] with a short real delay until the wall-clock [timeout]
+/// and fails with the labeled [what] when that deadline is exhausted — the
+/// robust variant [_pump]'s fixed microtask-count drain cannot guarantee: a
 /// molecule MINT's `createMolecule` pour rides the REAL `BdCliService`
 /// `applyGraph`, which writes a genuine temp file (`dart:io`) before the
-/// FAKE `BdRunner` boundary is ever reached — a bounded zero-duration pump
-/// is not reliably enough turns of the real event loop for that I/O to
-/// settle. Every other write in this suite resolves synchronously through
-/// [RecordingBdRunner] (no real I/O), so [_pump] stays the right tool there.
+/// FAKE `BdRunner` boundary is ever reached. That real I/O is bounded by
+/// elapsed wall-clock time because event-loop load can make a fixed attempt
+/// budget expire before it settles. Every other write in this suite resolves
+/// synchronously through [RecordingBdRunner] (no real I/O), so [_pump] stays
+/// the right tool there.
 Future<void> _pumpUntil(
   bool Function() condition, {
   required String what,
-  int maxTries = 5000,
+  Duration timeout = _pumpUntilTimeout,
 }) async {
-  for (var i = 0; i < maxTries; i++) {
+  final stopwatch = Stopwatch()..start();
+  while (stopwatch.elapsed < timeout) {
     if (condition()) return;
     await Future<void>.delayed(const Duration(milliseconds: 1));
   }
   if (condition()) return;
-  throw TestFailure('Timed out waiting for $what after $maxTries attempts');
+  stopwatch.stop();
+  final elapsed = stopwatch.elapsed;
+  throw TestFailure(
+    'Timed out waiting for $what after ${elapsed.inMilliseconds} ms',
+  );
 }
 
 JoinedSnapshot _joined({
@@ -218,17 +226,46 @@ void main() {
     '_pumpUntil fails loudly with its condition label on exhaustion',
     () async {
       await expectLater(
-        _pumpUntil(() => false, what: 'sentinel condition', maxTries: 2),
+        _pumpUntil(
+          () => false,
+          what: 'sentinel condition',
+          timeout: const Duration(milliseconds: 2),
+        ),
         throwsA(
           isA<TestFailure>().having(
             (failure) => failure.message,
             'message',
-            'Timed out waiting for sentinel condition after 2 attempts',
+            matches(
+              RegExp(
+                r'^Timed out waiting for sentinel condition after [0-9]+ ms$',
+              ),
+            ),
           ),
         ),
       );
     },
   );
+
+  test('_pumpUntil succeeds after 200 ms of busy microtasks', () async {
+    var conditionMet = false;
+    final busyStopwatch = Stopwatch()..start();
+    final spinner = () async {
+      while (busyStopwatch.elapsed < const Duration(milliseconds: 200)) {
+        await Future<void>.microtask(() {});
+      }
+      conditionMet = true;
+    }();
+
+    await _pumpUntil(() => conditionMet, what: 'busy event-loop condition');
+    await spinner;
+    busyStopwatch.stop();
+
+    expect(conditionMet, isTrue);
+    expect(
+      busyStopwatch.elapsed,
+      greaterThanOrEqualTo(const Duration(milliseconds: 200)),
+    );
+  });
 
   group('the drain seam — a historical flat session still ADOPTS', () {
     test(
