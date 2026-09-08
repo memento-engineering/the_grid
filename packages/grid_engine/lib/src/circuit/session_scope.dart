@@ -159,6 +159,11 @@ class SessionScopeState extends State<SessionScope>
   /// blip, and its EXHAUSTION is the escalation trigger.
   static const _maxMintAttempts = 5;
 
+  /// The number of consecutive authority-compensated molecule-pour timeouts
+  /// this mounted scope tolerates before escalating for operator repair. A
+  /// successful pour resets the budget; createSession failures do not.
+  static const _maxMoleculePourVoids = 3;
+
   /// The bounded successor-mint retry budget. Unlike [_maxMintAttempts], this
   /// budget is per node path because one live session can mint successors for
   /// several independently-invalidated nodes.
@@ -175,6 +180,9 @@ class SessionScopeState extends State<SessionScope>
   /// and session, and it also covers the post-void interval in which there is
   /// no live session for the station-wide sampler to count.
   static const _moleculePourStalledFlare = 'session.moleculePourStalled';
+
+  /// A mounted scope exhausted its consecutive molecule-pour void budget.
+  static const _moleculePourExhaustedFlare = 'session.moleculePourExhausted';
 
   /// The terminal mint-EXHAUSTED flare (tg-6nf) — the [_maxMintAttempts] budget
   /// is spent; the scope escalates LOUD and goes inert (a human must fix the
@@ -311,6 +319,7 @@ class SessionScopeState extends State<SessionScope>
   void debugFillProperties(DiagnosticsBuilder properties) {
     super.debugFillProperties(properties);
     properties.addTyped(FlagProperty('mintFailed', _mintFailureActive));
+    properties.addTyped(IntProperty('moleculePourVoids', _moleculePourVoids));
     if (_sessionId case final sessionId?) {
       properties.addTyped(
         ReferenceProperty('session', sessionId, kind: ReferenceKind.session),
@@ -353,6 +362,9 @@ class SessionScopeState extends State<SessionScope>
   String? _postVoidRetiredSessionId;
   bool _postVoidRemintPending = false;
   bool _postVoidRemintScheduled = false;
+
+  /// Consecutive molecule-pour timeout voids since the last successful pour.
+  int _moleculePourVoids = 0;
 
   /// Scope-local observation of a molecule graph that has not landed. The
   /// `(stage, sessionId)` pair is the episode identity, mirroring the
@@ -907,18 +919,33 @@ class SessionScopeState extends State<SessionScope>
         'reason': kMintTimeoutVoidReason,
         ...stateStoreDeadlineMetadata(voided.cause),
       });
+      _moleculeSessionId = null;
+      _sessionId = null;
+      _moleculePourVoids++;
+      if (_moleculePourVoids >= _maxMoleculePourVoids) {
+        _postVoidReservationToken = null;
+        _postVoidRetiredSessionId = null;
+        _postVoidRemintPending = false;
+        _postVoidRemintScheduled = false;
+        _clearMoleculePourStall();
+        _flare(_moleculePourExhaustedFlare, {
+          'workBeadId': voided.workBeadId,
+          'retiredSessionId': voided.retiredSessionId,
+          'attempt': '$_moleculePourVoids',
+          'maxAttempts': '$_maxMoleculePourVoids',
+          'reason': kMintTimeoutVoidReason,
+          ...stateStoreDeadlineMetadata(voided.cause),
+        });
+        setState(() {
+          _failed = true;
+          _resolving = false;
+        });
+        return;
+      }
       _postVoidReservationToken = _admissionReservation?.reservationToken;
       _postVoidRetiredSessionId = voided.retiredSessionId;
       _postVoidRemintPending = true;
       _postVoidRemintScheduled = false;
-      // A round nobody ran is not an operator-spent rework round, and a
-      // compensated pour timeout is not a createSession failure. The
-      // replacement grant therefore receives a fresh bounded create budget
-      // without activating the mint-failure latch.
-      _mintAttempts = 0;
-      _mintFailureActive = false;
-      _moleculeSessionId = null;
-      _sessionId = null;
       _observeMoleculePourStall(
         stage: 'post-void',
         sessionId: voided.retiredSessionId,
@@ -944,6 +971,7 @@ class SessionScopeState extends State<SessionScope>
       _isMolecule = true;
       _moleculeSessionId = null;
       _mintFailureActive = false;
+      _moleculePourVoids = 0;
     });
   }
 
