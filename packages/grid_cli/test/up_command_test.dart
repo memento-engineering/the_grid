@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 import 'package:beads_dart/beads_dart.dart'
-    show Bead, BeadStatus, GraphSnapshot;
+    show Bead, BeadStatus, GraphSnapshot, IssueType;
 import 'package:grid_cli/grid_cli.dart';
 import 'package:grid_engine/grid_engine.dart'
     show
@@ -569,17 +569,21 @@ final class _DevMode implements DevModeResource {
 }
 
 JoinedSnapshot _statusSnapshot({
+  required List<Bead> beads,
   required Set<String> readyIds,
   required Map<String, SessionProjection> sessions,
 }) => JoinedSnapshot(
   graph: GraphSnapshot.fromParts(
-    beads: const [],
+    beads: beads,
     dependencies: const [],
     readyIds: readyIds,
     capturedAt: DateTime.utc(2026, 8, 21),
   ),
   sessionsByWorkBead: sessions,
 );
+
+Bead _statusBead(String id, {IssueType issueType = IssueType.task}) =>
+    Bead(id: id, issueType: issueType, status: BeadStatus.open);
 
 SessionProjection _statusSession(String id, StepState state) =>
     SessionProjection(
@@ -639,12 +643,13 @@ void main() {
   test('status projection uses one snapshot', () async {
     final fixtures = <({JoinedSnapshot snapshot, int gated, bool ripens})>[
       (
-        snapshot: _statusSnapshot(readyIds: {}, sessions: {}),
+        snapshot: _statusSnapshot(beads: const [], readyIds: {}, sessions: {}),
         gated: 0,
         ripens: false,
       ),
       (
         snapshot: _statusSnapshot(
+          beads: [_statusBead('earth-running')],
           readyIds: {},
           sessions: {
             'earth-running': _statusSession('earth-running', StepState.running),
@@ -655,6 +660,9 @@ void main() {
       ),
       (
         snapshot: _statusSnapshot(
+          beads: [
+            for (final id in ['earth-a', 'earth-b', 'earth-c']) _statusBead(id),
+          ],
           readyIds: {},
           sessions: {
             for (final id in ['earth-a', 'earth-b', 'earth-c'])
@@ -752,76 +760,103 @@ void main() {
     expect(await run, 0);
   });
 
-  test('status projection populates every armed substation', () async {
-    final snapshot = _statusSnapshot(
-      readyIds: {'earth-ready'},
-      sessions: {'earth-live': _statusSession('earth-live', StepState.running)},
-    );
-    final monitor = WedgeMonitor(latest: () => snapshot);
-    addTearDown(monitor.dispose);
-    final h = await _Harness.create(
-      includeMissingCoded: true,
-      holdOpen: true,
-      snapshot: snapshot,
-      monitor: monitor,
-    );
-    addTearDown(h.dispose);
-    seedStore(h.missingRoot);
-    final run = h.run(untimed: true);
-    await h.stationUp.future;
-
-    final diagnosticsOwner = TreeOwner();
-    addTearDown(diagnosticsOwner.dispose);
-    final diagnosticsRoot = diagnosticsOwner.mountRoot(
-      _ProjectedDiagnosticsNode(
-        children: [
-          _ProjectedDiagnosticsNode(beadId: 'earth-failed-a', mintFailed: true),
-          _ProjectedDiagnosticsNode(beadId: 'earth-failed-b', mintFailed: true),
-          _ProjectedDiagnosticsNode(beadId: 'dark-failed', mintFailed: true),
-          _ProjectedDiagnosticsNode(beadId: 'earth-healthy', mintFailed: false),
-          _ProjectedDiagnosticsNode(beadId: 'mars-unowned', mintFailed: true),
+  test(
+    'status projection filters mounted candidates for every armed substation',
+    () async {
+      final snapshot = _statusSnapshot(
+        beads: [
+          _statusBead('earth-ready-task'),
+          _statusBead('earth-ready-epic', issueType: IssueType.epic),
+          _statusBead('mars-unowned'),
+          _statusBead('earth-live'),
         ],
-      ),
-    );
-    h.gridProjector!.afterFlush(diagnosticsRoot);
+        readyIds: {
+          'earth-ready-task',
+          'earth-ready-epic',
+          'mars-unowned',
+          'earth-missing',
+        },
+        sessions: {
+          'earth-live': _statusSession('earth-live', StepState.running),
+        },
+      );
+      final monitor = WedgeMonitor(latest: () => snapshot);
+      addTearDown(monitor.dispose);
+      final h = await _Harness.create(
+        includeMissingCoded: true,
+        holdOpen: true,
+        snapshot: snapshot,
+        monitor: monitor,
+      );
+      addTearDown(h.dispose);
+      seedStore(h.missingRoot);
+      final run = h.run(untimed: true);
+      await h.stationUp.future;
 
-    final status = h.statusView!();
-    final rows = {for (final row in status.perSubstation) row.substation: row};
-    expect(rows.keys, {'earth', 'dark'});
-    expect(rows['earth']!.root, h.workRoot);
-    expect(rows['earth']!.ready, 1);
-    expect(rows['earth']!.live, 1);
-    expect(rows['earth']!.mounted, 2);
-    expect(rows['earth']!.mintFailedScopes, 2);
-    expect(rows['dark']!.root, h.missingRoot);
-    expect(rows['dark']!.ready, 0);
-    expect(rows['dark']!.live, 0);
-    expect(rows['dark']!.mounted, 0);
-    expect(rows['dark']!.mintFailedScopes, 1);
-    expect(status.ready, 1);
-    expect(status.liveSessions, 1);
-    expect(status.mounted, 2);
-    expect(status.mintFailedScopes, 3);
-    final wireWork = status.toJson()['work'] as Map<String, Object?>;
-    expect(wireWork['mintFailedScopes'], 3);
-    final wireRows = wireWork['perSubstation'] as List<Object?>;
-    expect(wireRows, hasLength(2));
-    expect(
-      wireRows.cast<Map<String, Object?>>().singleWhere(
-        (row) => row['substation'] == 'dark',
-      )['live'],
-      0,
-    );
-    final rowsByName = {
-      for (final row in wireRows.cast<Map<String, Object?>>())
-        row['substation']: row,
-    };
-    expect(rowsByName['earth']!['mintFailedScopes'], 2);
-    expect(rowsByName['dark']!['mintFailedScopes'], 1);
+      final diagnosticsOwner = TreeOwner();
+      addTearDown(diagnosticsOwner.dispose);
+      final diagnosticsRoot = diagnosticsOwner.mountRoot(
+        _ProjectedDiagnosticsNode(
+          children: [
+            _ProjectedDiagnosticsNode(
+              beadId: 'earth-failed-a',
+              mintFailed: true,
+            ),
+            _ProjectedDiagnosticsNode(
+              beadId: 'earth-failed-b',
+              mintFailed: true,
+            ),
+            _ProjectedDiagnosticsNode(beadId: 'dark-failed', mintFailed: true),
+            _ProjectedDiagnosticsNode(
+              beadId: 'earth-healthy',
+              mintFailed: false,
+            ),
+            _ProjectedDiagnosticsNode(beadId: 'mars-unowned', mintFailed: true),
+          ],
+        ),
+      );
+      h.gridProjector!.afterFlush(diagnosticsRoot);
 
-    h.release.complete();
-    expect(await run, 0);
-  });
+      final status = h.statusView!();
+      final rows = {
+        for (final row in status.perSubstation) row.substation: row,
+      };
+      expect(rows.keys, {'earth', 'dark'});
+      expect(rows['earth']!.root, h.workRoot);
+      expect(rows['earth']!.ready, 3);
+      expect(rows['earth']!.live, 1);
+      expect(rows['earth']!.mounted, 2);
+      expect(rows['earth']!.mintFailedScopes, 2);
+      expect(rows['dark']!.root, h.missingRoot);
+      expect(rows['dark']!.ready, 0);
+      expect(rows['dark']!.live, 0);
+      expect(rows['dark']!.mounted, 0);
+      expect(rows['dark']!.mintFailedScopes, 1);
+      expect(status.ready, 4);
+      expect(status.liveSessions, 1);
+      expect(status.mounted, 3);
+      expect(status.mintFailedScopes, 3);
+      final wireWork = status.toJson()['work'] as Map<String, Object?>;
+      expect(wireWork['mintFailedScopes'], 3);
+      final wireRows = wireWork['perSubstation'] as List<Object?>;
+      expect(wireRows, hasLength(2));
+      expect(
+        wireRows.cast<Map<String, Object?>>().singleWhere(
+          (row) => row['substation'] == 'dark',
+        )['live'],
+        0,
+      );
+      final rowsByName = {
+        for (final row in wireRows.cast<Map<String, Object?>>())
+          row['substation']: row,
+      };
+      expect(rowsByName['earth']!['mintFailedScopes'], 2);
+      expect(rowsByName['dark']!['mintFailedScopes'], 1);
+
+      h.release.complete();
+      expect(await run, 0);
+    },
+  );
 
   test(
     'status trajectory block carries the complete soak instrument',
