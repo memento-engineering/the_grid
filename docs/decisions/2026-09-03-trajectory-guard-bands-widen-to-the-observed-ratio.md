@@ -14,7 +14,7 @@ register:
   obsoletes: []
   updates: ["trajectory-guard-pins-use-the-median-of-five-probes"]
   obsoleted-by: null
-  updated-by: []
+  updated-by: ["trajectory-guards-do-not-gate-merge-groups"]
   bead: tg-shry
   legacy-id: null
 ---
