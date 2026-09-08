@@ -104,6 +104,9 @@ const Map<String, String> kDualReadCounterSemantics = <String, String>{
   'fold_backed_mount_fact_divergences': 'cumulative',
   'fold_backed_mount_fact_divergences_in_window': 'cumulative',
   'fold_backed_mount_fact_divergences_historical': 'cumulative',
+  'retired_round_open_by_design_divergences': 'cumulative',
+  'fold_ahead_of_legacy_divergences': 'cumulative',
+  'legacy_terminal_no_fold_terminal_divergences': 'cumulative',
   'unexplained_divergences': 'cumulative',
   'unexplained_divergences_in_window': 'cumulative',
   'unexplained_divergences_historical': 'cumulative',
@@ -470,15 +473,24 @@ enum DualReadDivergenceCause {
   /// not advance during the compare window.
   operatorStoreEdit('operator-store-edit'),
 
-  /// The fold carried a STRICTLY LATER step state than the legacy bead and the
-  /// legacy caught up inside `kStepLagGrace` — the bead-first/append-later
-  /// write order seen from the fold's side, mechanically explained rather
-  /// than adjudicated. Minted by the STEP comparator only.
+  /// The fold carried a strictly later fact than the legacy carrier. On the
+  /// step axis this is a state that the bead catches up to inside
+  /// `kStepLagGrace`; on the session axis it is the one-pass boundary where a
+  /// newer fold sequence closes a head while the legacy tuple stays open.
   foldAheadOfLegacy('fold-ahead-of-legacy'),
 
   /// A derived mount decision disagreed while the legacy and fold carriers
   /// were compared side by side during the soak.
   foldBackedMountFacts('fold-backed-mount-facts'),
+
+  /// Q9's accepted shape: legacy re-keyed the identity-matched session to a
+  /// positive retired `#rN` key, while the P1 head deliberately remains open
+  /// until a terminal record exists.
+  retiredRoundOpenByDesign('retired-round-open-by-design'),
+
+  /// A legacy terminal remained absent from the fold after the terminal-lag
+  /// healer ran and the existing post-heal escalation boundary was crossed.
+  legacyTerminalNoFoldTerminal('legacy-terminal-no-fold-terminal'),
 
   /// No append-absence proof exists; operator adjudication uses the detail.
   unexplained('unexplained');
@@ -802,6 +814,9 @@ class DualReadAccounting {
   int operatorStoreEditDivergencesInWindow = 0;
   int foldBackedMountFactDivergences = 0;
   int foldBackedMountFactDivergencesInWindow = 0;
+  int retiredRoundOpenByDesignDivergences = 0;
+  int foldAheadOfLegacyDivergences = 0;
+  int legacyTerminalNoFoldTerminalDivergences = 0;
   int unexplainedDivergences = 0;
   int unexplainedDivergencesInWindow = 0;
   int terminalLagObserved = 0;
@@ -1019,6 +1034,12 @@ class DualReadAccounting {
         if (noteEvent('cardinality:${comparison.workBeadId}')) {
           cardinalityBreaches += 1;
           if (_isInWindow(headEpoch)) cardinalityBreachesInWindow += 1;
+          // Cardinality keeps its established arithmetic: it is not a tuple
+          // divergence. Q9 still needs one cumulative cause count because the
+          // positive retired-round identity is what explains this flare.
+          if (cause == DualReadDivergenceCause.retiredRoundOpenByDesign) {
+            retiredRoundOpenByDesignDivergences += 1;
+          }
           return true;
         }
         return false;
@@ -1055,7 +1076,12 @@ class DualReadAccounting {
           if (inWindow) foldBackedMountFactDivergencesInWindow += 1;
         // The session comparator cannot mint `foldAheadOfLegacy`; if a future
         // caller does, it lands in the bucket that asks for adjudication.
+        case DualReadDivergenceCause.retiredRoundOpenByDesign:
+          retiredRoundOpenByDesignDivergences += 1;
         case DualReadDivergenceCause.foldAheadOfLegacy:
+          foldAheadOfLegacyDivergences += 1;
+        case DualReadDivergenceCause.legacyTerminalNoFoldTerminal:
+          legacyTerminalNoFoldTerminalDivergences += 1;
         case DualReadDivergenceCause.unexplained:
           unexplainedDivergences += 1;
           if (inWindow) unexplainedDivergencesInWindow += 1;
@@ -1086,6 +1112,14 @@ class DualReadAccounting {
     required DualReadDivergenceCause cause,
     int headEpoch = 0,
   }) {
+    if (cause == DualReadDivergenceCause.retiredRoundOpenByDesign ||
+        cause == DualReadDivergenceCause.legacyTerminalNoFoldTerminal) {
+      throw ArgumentError.value(
+        cause,
+        'cause',
+        'session-only divergence cause cannot be recorded on the step axis',
+      );
+    }
     if (!noteEvent('stepDivergence:$sessionId:$stepPath')) return false;
     final inWindow = _isInWindow(headEpoch);
     stepDivergences += 1;
@@ -1100,6 +1134,9 @@ class DualReadAccounting {
       case DualReadDivergenceCause.foldBackedMountFacts:
         foldBackedMountFactDivergences += 1;
         if (inWindow) foldBackedMountFactDivergencesInWindow += 1;
+      case DualReadDivergenceCause.retiredRoundOpenByDesign:
+      case DualReadDivergenceCause.legacyTerminalNoFoldTerminal:
+        throw StateError('session-only cause passed step-axis validation');
       case DualReadDivergenceCause.unexplained:
         stepUnexplainedDivergences += 1;
         if (inWindow) stepUnexplainedDivergencesInWindow += 1;
@@ -1278,6 +1315,11 @@ class DualReadAccounting {
       firstEpochClaimedAt: firstEpochClaimedAt,
       appendAckP99Ms: appendAckP99Ms,
     ),
+    'retired_round_open_by_design_divergences':
+        retiredRoundOpenByDesignDivergences,
+    'fold_ahead_of_legacy_divergences': foldAheadOfLegacyDivergences,
+    'legacy_terminal_no_fold_terminal_divergences':
+        legacyTerminalNoFoldTerminalDivergences,
     'health_transitions': List<String>.from(healthTransitions),
     // THE STEP AXIS (C4). Same arithmetic as the session axis, one ladder
     // down: gates count `step_divergences` only, `step_lag_open` must be zero
