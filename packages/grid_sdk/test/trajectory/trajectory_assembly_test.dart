@@ -97,6 +97,29 @@ void main() {
     );
   });
 
+  test(
+    'cut composes one shared admission halt and shadow composes none',
+    () async {
+      final cut = await assemble(
+        trajectoryConfig: const TrajectoryConfig(
+          discipline: TrajectoryDiscipline.cut,
+        ),
+      );
+      final shadow = await assemble();
+      addTearDown(cut.shutdown);
+      addTearDown(shadow.shutdown);
+
+      final cutScope = cut.wiring.trajectory!;
+      expect(cutScope.admissionHalt, isNotNull);
+      expect(
+        cut.wiring.services.trajectoryAdmissionHalt,
+        same(cutScope.admissionHalt),
+      );
+      expect(shadow.wiring.trajectory!.admissionHalt, isNull);
+      expect(shadow.wiring.services.trajectoryAdmissionHalt, isNull);
+    },
+  );
+
   test('dry-run FORCES disabled — even a required config claims no epoch and '
       'writes nothing (§1.3)', () async {
     final work = await assemble(
@@ -309,7 +332,11 @@ void main() {
       addTearDown(work.shutdown);
       expect(work.trajectory.mode, TrajectoryHarnessMode.disabled);
       final recorder = work.trajectory.recorder;
-      recorder.sessionCompleted(sessionId: 's1', workBeadId: 'proj-1');
+      final result = await recorder.sessionCompleted(
+        sessionId: 's1',
+        workBeadId: 'proj-1',
+      );
+      expect(result, isA<Suppressed>());
       expect(recorder.stats.skipped, 1);
       expect(recorder.stats.derived, 0);
       expect(work.trajectory.status.appended, 0);

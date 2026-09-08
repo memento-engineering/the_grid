@@ -9,15 +9,15 @@
 ///
 /// Binding constraints (stage1-wiring, restated where the code enforces them):
 ///
-///   * **Non-blocking as well as non-fatal.** No engine hot path ever awaits
-///     an append — [enqueue] is synchronous and returns immediately; the only
-///     synchronous trajectory awaits in the whole system are at boot (belt
-///     verify, epoch claim — [start]) and at clean-down (the fixpoint drain —
-///     [shutdown]).
-///   * **The trajectory can degrade; work cannot** (§3). [start] and
-///     [shutdown] catch everything: a failed connect, verify, or claim
-///     records a mode + cause and the station runs legacy-only. No mount, no
-///     step, no close ever waits on the trajectory.
+///   * **Non-fatal with a narrow acknowledgement seam.** [enqueue] remains
+///     synchronous for ordinary observations. The five decision-bearing
+///     recorder sites alone await [appendAcked], which has a one-tick queue-wait
+///     bound and a sealed disposition. Boot and clean-down retain their
+///     existing awaits.
+///   * **The trajectory can degrade without crashing work** (§3). [start] and
+///     [shutdown] catch everything: a failed connect, verify, or claim records
+///     a mode + cause. Under cut, a lost decision record halts fresh admission
+///     while already-running work drains to its own terminal.
 ///   * **Sole appender.** One [TrajectoryAppender], driven only by the writer
 ///     loop and the tick — and every statement on the one SQL session
 ///     (writer-loop appends, tick passes, gc, the boundary commit) rides one
@@ -43,7 +43,8 @@ import 'package:grid_runtime/grid_runtime.dart'
         SessionStarted,
         StationTrajectoryRecorder,
         StuckObligationAccountant,
-        TrajectoryRecordSink,
+        TrajectoryAckRecordSink,
+        TrajectoryAppendResult,
         buildStage1ObligationQueries;
 import 'package:grid_engine/grid_engine.dart'
     show
@@ -62,6 +63,10 @@ import 'trajectory_config.dart';
 
 /// The flare seam — shape-compatible with `ExplorationTransport.flare`.
 typedef TrajectoryFlare = void Function(String name, Map<String, String> data);
+
+/// Synchronously latches the station's cut-only admission breaker.
+typedef TrajectoryAdmissionHaltCallback =
+    void Function({required String reason, required String recordClass});
 
 /// The one database the harness dials — `CREATE DATABASE trajectory` beside
 /// the ledger database (runbook step 2).
@@ -86,6 +91,7 @@ final class TrajectoryAppendRequest {
     this.substation,
     this.provenance = TrajectoryProvenance.observed,
     this.provenanceBasis,
+    this.decisionBearing = false,
   });
 
   final TrajectoryRecord record;
@@ -99,6 +105,18 @@ final class TrajectoryAppendRequest {
 
   final TrajectoryProvenance provenance;
   final String? provenanceBasis;
+
+  /// Whether losing this request removes a decision carrier under the cut.
+  final bool decisionBearing;
+}
+
+final class _TrajectoryQueueEntry {
+  _TrajectoryQueueEntry(this.request, [this.completer]);
+
+  final TrajectoryAppendRequest request;
+  final Completer<TrajectoryAppendResult>? completer;
+  Timer? deadline;
+  bool settled = false;
 }
 
 /// The harness's posture — what `/status` renders and the failure table in
@@ -139,7 +157,8 @@ final class TrajectoryHarnessStatus {
     required this.epoch,
     required this.appended,
     required this.deduped,
-    required this.dropped,
+    required this.decisionBearingDropped,
+    required this.fireAndForgetDropped,
     required this.suppressed,
     required this.queueDepth,
     this.exitJoinGaps = 0,
@@ -160,7 +179,13 @@ final class TrajectoryHarnessStatus {
 
   /// Appends lost to overflow, server errors, or failed reconnects — a round
   /// with any dropped append cannot count as a clean round (§3).
-  final int dropped;
+  int get dropped => decisionBearingDropped + fireAndForgetDropped;
+
+  /// Lost records whose append acknowledgement guards a station decision.
+  final int decisionBearingDropped;
+
+  /// Lost observational records that remain on the void enqueue surface.
+  final int fireAndForgetDropped;
 
   /// Appends short-circuited to a count after a latch (fenced out / halted /
   /// degraded) — the "counting no-op" posture (§1.1).
@@ -192,6 +217,8 @@ final class TrajectoryHarnessStatus {
       'TrajectoryHarnessStatus(${mode.name}'
       '${cause == null ? '' : ' ($cause)'}, epoch: $epoch, '
       'appended: $appended, deduped: $deduped, dropped: $dropped, '
+      'decisionBearingDropped: $decisionBearingDropped, '
+      'fireAndForgetDropped: $fireAndForgetDropped, '
       'suppressed: $suppressed, queue: $queueDepth'
       '${exitJoinGaps == 0 ? '' : ', exitJoinGaps: $exitJoinGaps'}'
       '${refusedTestimony == 0 ? '' : ', refusedTestimony: $refusedTestimony'}'
@@ -206,6 +233,7 @@ class TrajectoryHarness {
     required String station,
     required this.substationPrefixes,
     required TrajectoryFlare? onFlare,
+    required TrajectoryAdmissionHaltCallback? onAdmissionHalt,
     required Future<TrajectoryDb> Function()? connect,
     required TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
     required List<ObligationQuery>? tickQueries,
@@ -221,6 +249,7 @@ class TrajectoryHarness {
   }) : _gridHome = gridHome,
        _station = station,
        _onFlare = onFlare,
+       _onAdmissionHalt = onAdmissionHalt,
        _connect = connect,
        _appenderFactory = appenderFactory,
        _tickQueries = tickQueries,
@@ -248,6 +277,7 @@ class TrajectoryHarness {
     required String station,
     Set<String> substationPrefixes = const {},
     TrajectoryFlare? onFlare,
+    TrajectoryAdmissionHaltCallback? onAdmissionHalt,
     Future<TrajectoryDb> Function()? connect,
     TrajectoryAppender Function(TrajectoryDb db)? appenderFactory,
     List<ObligationQuery>? tickQueries,
@@ -282,6 +312,7 @@ class TrajectoryHarness {
       station: station,
       substationPrefixes: Set<String>.unmodifiable(substationPrefixes),
       onFlare: onFlare,
+      onAdmissionHalt: onAdmissionHalt,
       connect: connect,
       appenderFactory: appenderFactory,
       tickQueries: tickQueries,
@@ -341,6 +372,7 @@ class TrajectoryHarness {
   final String _gridHome;
   final String _station;
   final TrajectoryFlare? _onFlare;
+  final TrajectoryAdmissionHaltCallback? _onAdmissionHalt;
 
   /// The connect TEST seam; null selects the default resolve+secret+socket
   /// path in [_openConnection].
@@ -440,8 +472,7 @@ class TrajectoryHarness {
   /// these gaps leave behind.
   int _exitJoinGaps = 0;
 
-  final Queue<TrajectoryAppendRequest> _queue =
-      Queue<TrajectoryAppendRequest>();
+  final Queue<_TrajectoryQueueEntry> _queue = Queue<_TrajectoryQueueEntry>();
   bool _writerActive = false;
   Future<void> _writerDone = Future<void>.value();
 
@@ -461,7 +492,8 @@ class TrajectoryHarness {
 
   int _appended = 0;
   int _deduped = 0;
-  int _dropped = 0;
+  int _decisionBearingDropped = 0;
+  int _fireAndForgetDropped = 0;
   int _suppressed = 0;
   int _refusedTestimony = 0;
   final List<int> _appendAckMicros = <int>[];
@@ -525,7 +557,8 @@ class TrajectoryHarness {
     epoch: _epoch,
     appended: _appended,
     deduped: _deduped,
-    dropped: _dropped,
+    decisionBearingDropped: _decisionBearingDropped,
+    fireAndForgetDropped: _fireAndForgetDropped,
     suppressed: _suppressed,
     queueDepth: _queue.length,
     exitJoinGaps: _exitJoinGaps,
@@ -735,8 +768,8 @@ class TrajectoryHarness {
   /// BEFORE awaiting the append, so a queue-only read has a real hole.
   bool hasQueuedAppendFor(String attemptId) {
     if (_inFlightAttemptId == attemptId) return true;
-    for (final request in _queue) {
-      if (_attemptIdOf(request.record) == attemptId) return true;
+    for (final entry in _queue) {
+      if (_attemptIdOf(entry.request.record) == attemptId) return true;
     }
     return false;
   }
@@ -753,7 +786,8 @@ class TrajectoryHarness {
   }) {
     if (hasQueuedAppendFor(attemptId)) return true;
     if (_inFlightTerminalSessionId == sessionId) return true;
-    for (final request in _queue) {
+    for (final entry in _queue) {
+      final request = entry.request;
       if (request.record.isTerminal &&
           _correlationOf(request.record, 'session_id') == sessionId) {
         return true;
@@ -860,7 +894,7 @@ class TrajectoryHarness {
       'recordType': record.recordType,
       if (sessionId != null) 'sessionId': sessionId,
       if (stepPath != null) 'stepPath': stepPath,
-      'dropped': '$_dropped',
+      'dropped': '$_droppedTotal',
     };
   }
 
@@ -1027,9 +1061,9 @@ class TrajectoryHarness {
   /// The COMPROMISED latch — one flare on the transition, by the latch.
   ///
   /// BOTH mirrors latch together and the flare fires if EITHER transitioned:
-  /// an append that was dropped is a hole in the fold, and which projection
-  /// the lost record would have touched is exactly what the harness cannot
-  /// know. One station, one health.
+  /// a dropped decision-bearing append is a hole in the fold, and the two
+  /// overlays share one station-health verdict rather than serving different
+  /// authorities. One station, one health.
   void _latchMirrorCompromised(String reason) {
     // Nothing to compromise at `off`: no mirror was seeded and no reader is
     // wired, so the flare would report a health nobody consults (r13).
@@ -1039,7 +1073,7 @@ class TrajectoryHarness {
     if (!head && !step) return;
     _flare('trajectory.dualReadCompromised', {
       'reason': reason,
-      'dropped': '$_dropped',
+      'dropped': '$_droppedTotal',
       'suppressed': '$_suppressed',
       'effect': 'P1/P2 overlays disengaged for this boot; legacy stays primary',
     });
@@ -1199,38 +1233,71 @@ class TrajectoryHarness {
   /// call short-circuits to a count — no call site ever branches on "is the
   /// trajectory up".
   void enqueue(TrajectoryAppendRequest request) {
+    _submit(_TrajectoryQueueEntry(request));
+  }
+
+  /// Enqueues a decision-bearing observation and always completes with its
+  /// committed, lost, or posture-suppressed disposition. The one-tick
+  /// deadline bounds only residence in the queue; the appender's sealed
+  /// outcome and store deadline own completion after dequeue.
+  Future<TrajectoryAppendResult> appendAcked(TrajectoryAppendRequest request) {
+    final completer = Completer<TrajectoryAppendResult>();
+    final entry = _TrajectoryQueueEntry(request, completer);
+    entry.deadline = _scheduleTimer(
+      config.tickInterval,
+      () => _onAckDeadline(entry),
+    );
+    _submit(entry);
+    return completer.future;
+  }
+
+  void _submit(_TrajectoryQueueEntry entry) {
     switch (_mode) {
       case TrajectoryHarnessMode.disabled:
       case TrajectoryHarnessMode.unprovisioned:
-        return; // silent no-op — the station chose legacy-only.
+        _suppress(
+          entry,
+          'append suppressed: mode ${_mode.name}',
+          count: false,
+          compromiseMirror: false,
+        );
+        return;
       case TrajectoryHarnessMode.degraded:
       case TrajectoryHarnessMode.fencedOut:
       case TrajectoryHarnessMode.halted:
         // SUPPRESSION IS NOT A DROP (§0.2, r4 — J6-B3): a fenced-out or
-        // halted harness freezes the mirror while `_dropped` never moves, so
+        // halted harness freezes the mirror while the drop counters never
+        // move, so
         // a drops-only latch would keep serving a frozen fold as `live`.
-        _suppressed += 1;
-        _latchMirrorCompromised('append suppressed: mode ${_mode.name}');
+        _suppress(entry, 'append suppressed: mode ${_mode.name}');
         return;
       case TrajectoryHarnessMode.down:
       case TrajectoryHarnessMode.live:
         if (_isShutdown) {
-          _suppressed += 1;
-          _latchMirrorCompromised('append suppressed: shutting down');
+          _suppress(entry, 'append suppressed: shutting down');
           return;
         }
         if (_queue.length >= config.queueBound) {
-          _dropped += 1;
-          _latchMirrorCompromised('append dropped: queue overflow');
+          _drop(entry, 'append dropped: queue overflow');
           _flareLimited('trajectory.queueOverflow', {
             'queueBound': '${config.queueBound}',
-            'dropped': '$_dropped',
+            'dropped': '$_droppedTotal',
           });
           return;
         }
-        _queue.add(request);
+        _queue.add(entry);
         _pump();
     }
+  }
+
+  void _onAckDeadline(_TrajectoryQueueEntry entry) {
+    if (entry.settled || !_queue.remove(entry)) return;
+    const reason = 'append acknowledgement deadline';
+    _drop(entry, reason);
+    _flareLimited(
+      'trajectory.appendDropped',
+      _appendDroppedData(entry.request, reason),
+    );
   }
 
   void _pump() {
@@ -1247,7 +1314,9 @@ class TrajectoryHarness {
   Future<void> _drainQueue() async {
     try {
       while (_mode == TrajectoryHarnessMode.live && _queue.isNotEmpty) {
-        await _appendOne(_queue.removeFirst());
+        final entry = _queue.removeFirst();
+        _cancelAckDeadline(entry);
+        await _appendOne(entry);
       }
     } finally {
       _writerActive = false;
@@ -1257,7 +1326,8 @@ class TrajectoryHarness {
     }
   }
 
-  Future<void> _appendOne(TrajectoryAppendRequest request) async {
+  Future<void> _appendOne(_TrajectoryQueueEntry entry) async {
+    final request = entry.request;
     _inFlightAttemptId = _attemptIdOf(request.record);
     _inFlightTerminalSessionId = request.record.isTerminal
         ? _correlationOf(request.record, 'session_id')
@@ -1272,17 +1342,14 @@ class TrajectoryHarness {
         final debounced =
             last != null && _clock().difference(last) < kReconnectDebounce;
         if (debounced || !await _reconnect()) {
-          _dropped += 1;
-          _latchMirrorCompromised('append dropped: reconnect');
+          final lossReason = debounced
+              ? 'reconnect debounced (retry within '
+                    '${kReconnectDebounce.inSeconds}s)'
+              : 'reconnect failed; listener re-resolved next attempt';
+          _drop(entry, lossReason);
           _flareLimited(
             'trajectory.appendDropped',
-            _appendDroppedData(
-              request,
-              debounced
-                  ? 'reconnect debounced (retry within '
-                        '${kReconnectDebounce.inSeconds}s)'
-                  : 'reconnect failed; listener re-resolved next attempt',
-            ),
+            _appendDroppedData(request, lossReason),
           );
           return;
         }
@@ -1336,25 +1403,37 @@ class TrajectoryHarness {
             // non-step family, so a session record costs one family check.
             _stepCursors.applyAppended(envelope, seq: seq, decoded: decoded);
           }
+          _ack(entry);
         case AppendDeduped():
           // Applies NOTHING: the original row either landed this boot (already
           // applied) or predates it and rode the seed.
           _deduped += 1;
+          _ack(entry);
         case AppendRefusedTestimony():
           // Benign and COUNTED (§0.3): the attempt's real terminal already
           // landed, so the refused record has no fold effect to apply and no
           // health consequence — it is not a drop, not a failure, and not a
           // dedupe. Its own counter is what the round summary reports.
           _refusedTestimony += 1;
+          _ack(entry);
         case AppendFencedOut(:final reason):
           _latchFencedOut(reason);
+          _suppress(
+            entry,
+            'append suppressed: fenced out: $reason',
+            count: false,
+          );
         case AppendCorruptionHalt(:final reason):
           _latchHalted(reason);
+          _suppress(
+            entry,
+            'append suppressed: corruption halt: $reason',
+            count: false,
+          );
         case AppendGrantRefused(:final reason):
           // Cannot occur at Stage 1 (no grant-scoped appends) — counted as
           // dropped if it ever does (§3).
-          _dropped += 1;
-          _latchMirrorCompromised('append dropped: grant refused');
+          _drop(entry, 'append dropped: grant refused: $reason');
           _flareLimited(
             'trajectory.appendDropped',
             _appendDroppedData(request, reason),
@@ -1363,9 +1442,8 @@ class TrajectoryHarness {
           // Server hiccup / dead socket: count, flare rate-limited, keep
           // draining, and drive the guarded reconnect eagerly on the next
           // append (§3; M4: a typed ~20 ms outcome, no hang).
-          _dropped += 1;
           _needsReconnect = true;
-          _latchMirrorCompromised('append failed: $cause');
+          _drop(entry, 'append failed: $cause');
           _flareLimited(
             'trajectory.appendDropped',
             _appendDroppedData(request, '$cause'),
@@ -1375,9 +1453,8 @@ class TrajectoryHarness {
       // §5's sealed contract says append() never throws — belt and braces: a
       // throw is counted like any dropped append, never an unhandled zone
       // error out of the writer loop.
-      _dropped += 1;
       _needsReconnect = true;
-      _latchMirrorCompromised('append threw: $error');
+      _drop(entry, 'append threw: $error');
       _flareLimited(
         'trajectory.appendDropped',
         _appendDroppedData(request, '$error'),
@@ -1386,6 +1463,82 @@ class TrajectoryHarness {
       _inFlightAttemptId = null;
       _inFlightTerminalSessionId = null;
     }
+  }
+
+  int get _droppedTotal => _decisionBearingDropped + _fireAndForgetDropped;
+
+  void _ack(_TrajectoryQueueEntry entry) {
+    _settle(entry, const TrajectoryAppendResult.acked());
+  }
+
+  void _drop(_TrajectoryQueueEntry entry, String reason) {
+    _settle(
+      entry,
+      const TrajectoryAppendResult.dropped(),
+      beforeComplete: () {
+        if (entry.request.decisionBearing) {
+          _decisionBearingDropped += 1;
+          if (config.discipline == TrajectoryDiscipline.cut) {
+            _haltAdmission(entry.request, reason);
+          } else {
+            _latchMirrorCompromised(reason);
+          }
+        } else {
+          _fireAndForgetDropped += 1;
+        }
+      },
+    );
+  }
+
+  void _suppress(
+    _TrajectoryQueueEntry entry,
+    String reason, {
+    bool count = true,
+    bool compromiseMirror = true,
+  }) {
+    _settle(
+      entry,
+      const TrajectoryAppendResult.suppressed(),
+      beforeComplete: () {
+        if (count) _suppressed += 1;
+        if (entry.request.decisionBearing &&
+            config.discipline == TrajectoryDiscipline.cut) {
+          _haltAdmission(entry.request, reason);
+        } else if (compromiseMirror) {
+          _latchMirrorCompromised(reason);
+        }
+      },
+    );
+  }
+
+  void _settle(
+    _TrajectoryQueueEntry entry,
+    TrajectoryAppendResult result, {
+    void Function()? beforeComplete,
+  }) {
+    if (entry.settled) return;
+    entry.settled = true;
+    _cancelAckDeadline(entry);
+    beforeComplete?.call();
+    entry.completer?.complete(result);
+  }
+
+  void _cancelAckDeadline(_TrajectoryQueueEntry entry) {
+    entry.deadline?.cancel();
+    entry.deadline = null;
+  }
+
+  void _haltAdmission(TrajectoryAppendRequest request, String reason) {
+    final recordClass = request.record.recordType;
+    try {
+      _onAdmissionHalt?.call(reason: reason, recordClass: recordClass);
+    } on Object {
+      // The breaker callback is latch-only and must not break queue progress.
+    }
+    _flareLimited('trajectory.admissionHalted', {
+      'reason': reason,
+      'recordClass': recordClass,
+    });
   }
 
   /// Guarded reconnect: RE-RESOLVES the listener first (§4's reconnect rule —
@@ -1480,11 +1633,14 @@ class TrajectoryHarness {
       fixpoint = await runToFixpoint().timeout(config.shutdownDrainTimeout);
     } on TimeoutException {
       drainTimedOut = true;
-      _dropped += _queue.length;
+      final unflushed = _queue.length;
+      for (final entry in _queue.toList(growable: false)) {
+        _drop(entry, 'append dropped: shutdown drain timeout');
+      }
       _flare('trajectory.shutdownDrainTimeout', {
         'timeoutMs': '${config.shutdownDrainTimeout.inMilliseconds}',
-        'unflushed': '${_queue.length}',
-        'dropped': '$_dropped',
+        'unflushed': '$unflushed',
+        'dropped': '$_droppedTotal',
       });
       _queue.clear();
     } on Object catch (error) {
@@ -1529,7 +1685,7 @@ class TrajectoryHarness {
       'epoch': '${_epoch ?? ''}',
       'appended': '$_appended',
       'deduped': '$_deduped',
-      'dropped': '$_dropped',
+      'dropped': '$_droppedTotal',
       'suppressed': '$_suppressed',
       'refusedTestimony': '$_refusedTestimony',
       'fixpointReached': '${fixpoint?.reached ?? false}',
@@ -1675,7 +1831,9 @@ class TrajectoryHarness {
     if (_latched) return;
     _mode = TrajectoryHarnessMode.fencedOut;
     _cause = reason;
-    _suppressed += _queue.length;
+    for (final entry in _queue.toList(growable: false)) {
+      _suppress(entry, 'append suppressed: harness fenced out: $reason');
+    }
     _queue.clear();
     // ONCE, by the latch (§3): mirrors the appender's inert latch — quiet.
     _flare('trajectory.fencedOut', {
@@ -1690,7 +1848,9 @@ class TrajectoryHarness {
     if (_latched) return;
     _mode = TrajectoryHarnessMode.halted;
     _cause = reason;
-    _suppressed += _queue.length;
+    for (final entry in _queue.toList(growable: false)) {
+      _suppress(entry, 'append suppressed: harness halted: $reason');
+    }
     _queue.clear();
     // Loud on every status read is the /status surface's job; the flare fires
     // once at the latch (§3): the log is presumed damaged until a human looks.
@@ -1705,7 +1865,9 @@ class TrajectoryHarness {
   void _degrade(String cause) {
     _mode = TrajectoryHarnessMode.degraded;
     _cause = cause;
-    _suppressed += _queue.length;
+    for (final entry in _queue.toList(growable: false)) {
+      _suppress(entry, 'append suppressed: harness degraded: $cause');
+    }
     _queue.clear();
     _flare('trajectory.degraded', {'reason': cause});
     _latchMirrorCompromised('harness degraded: $cause');
@@ -1788,8 +1950,8 @@ final class _SerializedTickAppender implements TickAppender {
 
 /// The recorder's enqueue-only handle to the harness's queue (§2.5): the
 /// derivation layer holds THIS, never the appender, so the sole-appender and
-/// never-await invariants hold by construction.
-final class _HarnessRecordSink implements TrajectoryRecordSink {
+/// bounded-ack invariants hold by construction.
+final class _HarnessRecordSink implements TrajectoryAckRecordSink {
   _HarnessRecordSink(this._harness);
 
   final TrajectoryHarness _harness;
@@ -1818,6 +1980,25 @@ final class _HarnessRecordSink implements TrajectoryRecordSink {
       substation: substation,
       provenance: provenance,
       provenanceBasis: provenanceBasis,
+    ),
+  );
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) => _harness.appendAcked(
+    TrajectoryAppendRequest(
+      record,
+      occurredAt: occurredAt,
+      substation: substation,
+      provenance: provenance,
+      provenanceBasis: provenanceBasis,
+      decisionBearing: decisionBearing,
     ),
   );
 }

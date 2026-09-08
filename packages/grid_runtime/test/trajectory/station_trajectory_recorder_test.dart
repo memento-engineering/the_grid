@@ -71,6 +71,49 @@ final class _ThrowingSink implements TrajectoryRecordSink {
   }) => throw StateError('sink refused');
 }
 
+final class _CapturingAckSink implements TrajectoryAckRecordSink {
+  _CapturingAckSink({this.result = const TrajectoryAppendResult.acked()});
+
+  final TrajectoryAppendResult result;
+  final List<_Capture> enqueued = [];
+  final List<({TrajectoryRecord record, bool decisionBearing})> acked = [];
+
+  @override
+  bool accepting = true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {
+    enqueued.add(
+      _Capture(
+        record: record,
+        occurredAt: occurredAt,
+        substation: substation,
+        provenance: provenance,
+        provenanceBasis: provenanceBasis,
+      ),
+    );
+  }
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async {
+    acked.add((record: record, decisionBearing: decisionBearing));
+    return result;
+  }
+}
+
 /// 26-char Crockford ULID (the CHAR(26) identity classes mint).
 final Matcher isUlid = matches(RegExp(r'^[0-9A-HJKMNP-TV-Z]{26}$'));
 
@@ -89,6 +132,122 @@ void main() {
       clock: () => clockNow,
       onFlare: (name, data) => flares.add((name, data)),
     );
+  });
+
+  test(
+    'only the five decision observations use the acknowledged sink',
+    () async {
+      final ackSink = _CapturingAckSink();
+      final ackRecorder = StationTrajectoryRecorder(
+        sink: ackSink,
+        substationPrefixes: const {'tg'},
+        clock: () => clockNow,
+      );
+
+      final results = <TrajectoryAppendResult>[
+        await ackRecorder.stepRunning(
+          sessionId: 's1',
+          stepPath: 'build',
+          stepRound: 0,
+          incarnation: 0,
+        ),
+        await ackRecorder.stepRearmed(
+          sessionId: 's1',
+          stepPath: 'review',
+          fromStepRound: 0,
+          incarnation: 0,
+        ),
+        await ackRecorder.sessionCompleted(sessionId: 's2', workBeadId: 'tg-2'),
+        await ackRecorder.sessionEscalated(sessionId: 's3', workBeadId: 'tg-3'),
+        await ackRecorder.sessionVoided(sessionId: 's4', workBeadId: 'tg-4'),
+      ];
+      ackRecorder.sessionSettled(sessionId: 's5', workBeadId: 'tg-5');
+      ackRecorder.stepReady(
+        sessionId: 's1',
+        stepPath: 'ship',
+        stepRound: 0,
+        incarnation: 0,
+      );
+
+      expect([
+        for (final result in results)
+          switch (result) {
+            Acked() => 'acked',
+            Dropped() => 'dropped',
+            Suppressed() => 'suppressed',
+          },
+      ], everyElement('acked'));
+      expect(ackSink.acked, hasLength(5));
+      expect(ackSink.acked.map((entry) => entry.record.recordType), [
+        'step.transition',
+        'step.transition',
+        ...List.filled(3, 'attempt.terminal'),
+      ]);
+      expect(
+        ackSink.acked.map((entry) => entry.decisionBearing),
+        everyElement(isTrue),
+      );
+      expect(
+        ackSink.enqueued.map((entry) => entry.record.recordType),
+        ['attempt.terminal', 'step.transition'],
+        reason: 'settled and every non-decision observation stay void enqueue',
+      );
+    },
+  );
+
+  test('acknowledged observations name suppression and contain legacy sink '
+      'failures', () async {
+    final suppressedSink = _CapturingAckSink(
+      result: const TrajectoryAppendResult.suppressed(),
+    )..accepting = false;
+    final suppressedRecorder = StationTrajectoryRecorder(
+      sink: suppressedSink,
+      substationPrefixes: const {'tg'},
+    );
+    expect(
+      await suppressedRecorder.sessionCompleted(
+        sessionId: 's1',
+        workBeadId: 'tg-1',
+      ),
+      isA<Suppressed>(),
+    );
+    expect(
+      suppressedSink.acked,
+      hasLength(1),
+      reason: 'the ack-capable sink names suppression despite accepting=false',
+    );
+    expect(suppressedRecorder.stats.skipped, 1);
+
+    final legacy = _CapturingSink();
+    final legacyRecorder = StationTrajectoryRecorder(
+      sink: legacy,
+      substationPrefixes: const {'tg'},
+    );
+    expect(
+      await legacyRecorder.sessionCompleted(
+        sessionId: 's2',
+        workBeadId: 'tg-2',
+      ),
+      isA<Acked>(),
+    );
+    expect(legacy.captured, hasLength(1));
+
+    final flares = <(String, Map<String, String>)>[];
+    final throwingRecorder = StationTrajectoryRecorder(
+      sink: _ThrowingSink(),
+      substationPrefixes: const {'tg'},
+      onFlare: (name, data) => flares.add((name, data)),
+    );
+    expect(
+      await throwingRecorder.sessionCompleted(
+        sessionId: 's3',
+        workBeadId: 'tg-3',
+      ),
+      isA<Dropped>(),
+    );
+    expect(throwingRecorder.stats.deriveFailures, 1);
+    expect(throwingRecorder.stats.derived, 0);
+    expect(flares.single.$1, 'trajectory.deriveFailed');
   });
 
   /// Builds the envelope EXACTLY the way the appender's `_buildEnvelope`

@@ -6,9 +6,8 @@
 //
 //   1. the record derives AFTER the legacy write it shadows returned
 //      successfully — the shadow never leads the incumbent;
-//   2. it is ENQUEUE-ONLY — no engine path awaits an append (proven by the
-//      recorder's synchronous void API plus the legacy path finishing
-//      unchanged when the sink is slow to matter at all);
+//   2. ordinary observations remain enqueue-only; the five decision-bearing
+//      sites await the bounded sealed acknowledgement after their legacy write;
 //   3. it is NON-FATAL — a recorder that REFUSES (latched/degraded/disabled)
 //      or THROWS leaves the legacy path byte-identical. That is the falsifier
 //      that matters: an append failure must never fail, delay, or reorder a
@@ -39,7 +38,7 @@ import 'package:test/test.dart';
 // The three sink postures every hook is proven against (§3's failure table).
 // ---------------------------------------------------------------------------
 
-final class _CapturingSink implements TrajectoryRecordSink {
+class _CapturingSink implements TrajectoryRecordSink {
   final List<TrajectoryRecord> records = [];
   final List<TrajectoryProvenance> provenances = [];
   final List<String?> substations = [];
@@ -80,6 +79,35 @@ final class _CapturingSink implements TrajectoryRecordSink {
     final all = facts(recordType);
     expect(all, hasLength(1), reason: 'exactly one $recordType');
     return all.single;
+  }
+}
+
+final class _AckResultSink extends _CapturingSink
+    implements TrajectoryAckRecordSink {
+  _AckResultSink(this.result);
+
+  final TrajectoryAppendResult result;
+  final List<TrajectoryRecord> acknowledged = [];
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async {
+    expect(decisionBearing, isTrue);
+    acknowledged.add(record);
+    enqueue(
+      record,
+      occurredAt: occurredAt,
+      substation: substation,
+      provenance: provenance,
+      provenanceBasis: provenanceBasis,
+    );
+    return result;
   }
 }
 
@@ -171,6 +199,28 @@ class _ServiceCap extends ServiceCapability {
   Future<StepOutcome> run(TreeContext context, StepArgs args) async => outcome;
 }
 
+final class _StartedCap extends Capability {
+  const _StartedCap();
+
+  @override
+  Allocation createAllocation(AllocationContext ctx) => _StartedAllocation(ctx);
+}
+
+final class _StartedAllocation extends Allocation {
+  _StartedAllocation(super.context);
+
+  @override
+  Future<void> startOrAdopt() async {
+    state = AllocationState.live;
+    context.sink(const AllocationStarted(pid: 41, pgid: 42));
+  }
+
+  @override
+  Future<void> dispose() async {
+    state = AllocationState.gone;
+  }
+}
+
 /// A route that DECLINES — the escalate path, whose unbound handler defaults
 /// to `HumanGate` ⇒ `ParkAtGate` ⇒ the gated step half (§2.3's gated row).
 class _EscalatingRoute extends RouteCapability {
@@ -226,12 +276,13 @@ class _DroppingUpdateRunner implements BdRunner {
   }
 }
 
-({TreeOwner owner, Fakes fakes}) _host(
+({TreeOwner owner, Fakes fakes, TrajectoryAdmissionHalt? halt}) _host(
   Capability cap, {
   required TrajectoryRecordSink sink,
   StepMount? mount,
   int failUpdates = 0,
   ProcessLeaseVendor Function(Fakes fakes)? vendor,
+  bool cutAdmission = false,
 }) {
   var fakes = buildFakes();
   if (failUpdates > 0) {
@@ -248,6 +299,34 @@ class _DroppingUpdateRunner implements BdRunner {
         stateSubstation: stateSubstation,
       ),
       runner: runner,
+      provider: fakes.provider,
+      git: fakes.git,
+      pr: fakes.pr,
+    );
+  }
+  TrajectoryAdmissionHalt? halt;
+  if (cutAdmission) {
+    fakes.runner.exportBeads = const [
+      Bead(
+        id: 'tgdog-s',
+        issueType: GridIssueTypes.session,
+        status: BeadStatus.open,
+        metadata: {'rig': stateSubstation},
+      ),
+    ];
+    halt = TrajectoryAdmissionHalt(
+      writer: fakes.ctx.writer,
+      stateSubstation: stateSubstation,
+      bootEpoch: () => 7,
+    );
+    fakes = (
+      ctx: StationServices(
+        provider: fakes.provider,
+        writer: fakes.ctx.writer,
+        stateSubstation: stateSubstation,
+        trajectoryAdmissionHalt: halt,
+      ),
+      runner: fakes.runner,
       provider: fakes.provider,
       git: fakes.git,
       pr: fakes.pr,
@@ -273,7 +352,10 @@ class _DroppingUpdateRunner implements BdRunner {
       child: InheritedSeed<CapabilityRegistry>(
         value: RecordingCapabilityRegistry(clock: _clock),
         child: InheritedSeed<TrajectoryRecorderScope>(
-          value: TrajectoryRecorderScope(_recorderOver(sink)),
+          value: TrajectoryRecorderScope(
+            _recorderOver(sink),
+            admissionHalt: halt,
+          ),
           child: InheritedSeed<ServiceBundle>(
             value: const ServiceBundle(),
             child: InheritedSeed<Workspace>(
@@ -285,7 +367,7 @@ class _DroppingUpdateRunner implements BdRunner {
       ),
     ),
   );
-  return (owner: owner, fakes: fakes);
+  return (owner: owner, fakes: fakes, halt: halt);
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +408,7 @@ TreeOwner _mountFull({
   required TrajectoryRecordSink sink,
   ServiceBundle services = const ServiceBundle(),
   StationTrajectoryRecorder? recorder,
+  TrajectoryAdmissionHalt? admissionHalt,
 }) {
   final owner = TreeOwner();
   owner.mountRoot(
@@ -337,7 +420,10 @@ TreeOwner _mountFull({
           child: InheritedSeed<CapabilityRegistry>(
             value: RecordingCapabilityRegistry(circuits: const {}),
             child: InheritedSeed<TrajectoryRecorderScope>(
-              value: TrajectoryRecorderScope(recorder ?? _recorderOver(sink)),
+              value: TrajectoryRecorderScope(
+                recorder ?? _recorderOver(sink),
+                admissionHalt: admissionHalt,
+              ),
               child: InheritedSeed<SessionResolver>(
                 value: CircuitResolver((_) => _codeCircuit),
                 child: Station([
@@ -441,6 +527,56 @@ class _NullTreeContext implements TreeContext {
 
 void main() {
   group('W5 — the CapabilityHost persist sites (§2.3 step.transition)', () {
+    test('a lost running acknowledgement uses the actual open session and node '
+        'gate after the step write', () async {
+      final sink = _AckResultSink(const TrajectoryAppendResult.dropped());
+      final h = _host(
+        const _StartedCap(),
+        sink: sink,
+        cutAdmission: true,
+        vendor: (_) => SelfManagedProcessVendor(
+          spawn: (request, context, args) async =>
+              throw StateError('the custom allocation never spawns'),
+          dispatch: (handle, request, context, args) async =>
+              throw StateError('the custom allocation never dispatches'),
+        ),
+      );
+      addTearDown(h.owner.dispose);
+      await _pumpUntil(
+        h.owner,
+        () => h.fakes.runner.callsFor('create').isNotEmpty,
+      );
+
+      expect(h.fakes.ctx.trajectoryAdmissionHalt, same(h.halt));
+      expect(
+        sink.facts('step.transition').map((fact) => fact['state']),
+        contains('running'),
+      );
+      expect(
+        sink.acknowledged.map((record) => record.payloadToJson()['state']),
+        contains('running'),
+      );
+      expect(h.halt!.halted, isTrue);
+      final updates = h.fakes.runner.callsFor('update');
+      final running = updates.indexWhere(
+        (call) => call.join(' ').contains('grid.step.state=running'),
+      );
+      final gate = List.generate(
+        updates.length,
+        h.fakes.runner.metadataOfUpdate,
+      ).indexWhere((metadata) => metadata['blocks'] == 'tgdog-s');
+      expect(running, isNonNegative);
+      expect(gate, greaterThan(running));
+      expect(
+        h.fakes.runner.metadataOfUpdate(gate),
+        containsPair('node', 'tg-1/agent'),
+      );
+      expect(
+        h.fakes.runner.metadataOfUpdate(gate),
+        containsPair('reason', kTrajectoryAdmissionHaltGateReason),
+      );
+    });
+
     test('a completion appends complete AFTER the step-bead write', () async {
       final sink = _CapturingSink();
       final h = _host(_ServiceCap(const Ok({'grade': 'A'})), sink: sink);
@@ -870,6 +1006,80 @@ void main() {
         fakes.runner.callsFor('close').map((c) => c[1]),
         contains('tgdog-s'),
       );
+    });
+
+    test('a lost terminal acknowledgement opens only the epoch gate after the '
+        'session close', () async {
+      final sink = _AckResultSink(const TrajectoryAppendResult.suppressed());
+      final fakes = buildFakes();
+      final halt = TrajectoryAdmissionHalt(
+        writer: fakes.ctx.writer,
+        stateSubstation: stateSubstation,
+        bootEpoch: () => 9,
+      );
+      final ctx = StationServices(
+        provider: fakes.provider,
+        writer: fakes.ctx.writer,
+        stateSubstation: stateSubstation,
+        trajectoryAdmissionHalt: halt,
+      );
+      fakes.runner.exportBeads = const [
+        Bead(
+          id: 'tgdog-s',
+          issueType: GridIssueTypes.session,
+          status: BeadStatus.closed,
+          metadata: {'rig': 'tgdog', 'grid.outcome': 'complete'},
+        ),
+      ];
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [bead('tg-1')],
+          ready: {'tg-1'},
+          sessions: {'tg-1': live('tgdog-s', 'tg-1')},
+        ),
+      );
+      final owner = _mountFull(
+        joined: joined,
+        ctx: ctx,
+        sink: sink,
+        admissionHalt: halt,
+      );
+      addTearDown(owner.dispose);
+
+      joined.push(
+        _joined(
+          beads: [bead('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1': const SessionProjection(
+              workBeadId: 'tg-1',
+              sessionId: 'tgdog-s',
+              cursor: {
+                'tg-1/agent': NodeCursor(state: StepState.complete),
+                'tg-1/land': NodeCursor(state: StepState.complete),
+              },
+            ),
+          },
+        ),
+      );
+      owner.flush();
+      await _pumpUntil(owner, () => fakes.runner.callsFor('create').isNotEmpty);
+
+      final calls = fakes.runner.calls;
+      final close = calls.indexWhere(
+        (call) => call.first == 'close' && call[1] == 'tgdog-s',
+      );
+      final create = calls.indexWhere((call) => call.first == 'create');
+      expect(close, isNonNegative);
+      expect(create, greaterThan(close));
+      final updates = fakes.runner.callsFor('update');
+      final gateMetadata = List.generate(
+        updates.length,
+        fakes.runner.metadataOfUpdate,
+      ).firstWhere((metadata) => metadata['blocks'] == '$stateSubstation/9');
+      expect(gateMetadata, isNot(containsPair('node', anything)));
+      expect(halt.halted, isTrue);
+      expect(sink.fact('attempt.terminal')['outcome'], 'succeeded');
     });
 
     test(

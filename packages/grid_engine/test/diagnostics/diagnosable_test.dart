@@ -163,23 +163,25 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       final root = owner.mountRoot(
-        InheritedSeed<JoinedSnapshotNotifier>(
-          value: joined,
-          child: InheritedSeed<StationServices>(
-            value: fakes.ctx,
-            child: InheritedSeed<SessionResolver>(
-              value: const _IdleSessionResolver(),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(
-                    const SubstationConfig(
-                      substationId: 'tg',
-                      ownedSubstations: {'tg'},
+        ProviderScope(
+          child: InheritedSeed<JoinedSnapshotNotifier>(
+            value: joined,
+            child: InheritedSeed<StationServices>(
+              value: fakes.ctx,
+              child: InheritedSeed<SessionResolver>(
+                value: const _IdleSessionResolver(),
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(
+                      const SubstationConfig(
+                        substationId: 'tg',
+                        ownedSubstations: {'tg'},
+                      ),
                     ),
+                    key: const ValueKey('scope.tg'),
                   ),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+                ]),
+              ),
             ),
           ),
         ),

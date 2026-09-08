@@ -47,11 +47,19 @@ demotion.
 accounting splits into decision-bearing and fire-and-forget drops, and only
 the first feeds health. Under `cut`, `compromised` is a breaker: no new work
 is admitted, running sessions drain to terminal, a station gate opens, and
-`trajectory.halted` flares. It never demotes onto the legacy carrier.
+`trajectory.admissionHalted` flares. It never demotes onto the legacy carrier.
 `appendAcked` returns a sealed `{Acked, Dropped, Suppressed}` that always
 completes; a decision-bearing site treats `Dropped` or `Suppressed` as this
 breaker, and `_rearm`'s failure path becomes a gate, not a flare. This is
 also the storm budget the carried major O-M2 asked for.
+
+**Name correction (2026-09-08, implementation verification).** The flare name
+above corrects the original Q3 label without changing the ruling's substance.
+`trajectory.halted` is already the one-shot signal for a presumed-damaged log;
+that latch suppresses subsequent appends and therefore cannot also represent
+the admission-only breaker needed while running sessions drain their terminal
+records. The established corruption latch keeps its name and behavior, while
+the admission breaker has its own cause and recovery.
 
 **Q4 — restore under cut is a quiesced void-and-redrive (E3, shape b).** No
 head-stamp detector is built. A restore is a quiesced event that voids every

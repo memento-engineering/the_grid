@@ -163,6 +163,8 @@ export 'package:grid_trajectory/grid_trajectory.dart'
         TrajectoryTick,
         TrajectoryTickFixpoint,
         TrajectoryTickPass;
+export 'package:grid_runtime/grid_runtime.dart'
+    show Acked, Dropped, Suppressed, TrajectoryAppendResult;
 // The P1 MIRROR (the trajectory cut, wave 1 / C1): the harness's in-memory
 // fold read surface, implementing the ENGINE's `TrajectoryHeadSnapshot` seam
 // over `grid_trajectory`'s row types. Exported so a status surface can read

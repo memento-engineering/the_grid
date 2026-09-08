@@ -58,6 +58,8 @@ class _WorkListState extends State<WorkList>
   void Function()? _removeAdmissionListener;
   JoinedSnapshotNotifier? _notifier;
   StationAdmissionAuthority? _admission;
+  TrajectoryAdmissionHalt? _offlineTrajectoryAdmissionHalt;
+  void Function()? _removeTrajectoryAdmissionHaltListener;
   late JoinedSnapshot _snapshot;
 
   final Map<String, WorkBead> _mountedWorkBeadsById = <String, WorkBead>{};
@@ -149,6 +151,7 @@ class _WorkListState extends State<WorkList>
     // listener lifetimes are independent.
     final stationServices = context.watch<StationServices>();
     final notifier = context.watch<JoinedSnapshotNotifier>();
+    final trajectoryScope = context.watch<TrajectoryRecorderScope>();
     assert(
       notifier != null,
       'WorkList requires an ambient JoinedSnapshotNotifier',
@@ -162,6 +165,20 @@ class _WorkListState extends State<WorkList>
         setState(() {});
       });
     }
+
+    final offlineHalt = stationServices == null
+        ? trajectoryScope?.admissionHalt
+        : null;
+    if (!identical(offlineHalt, _offlineTrajectoryAdmissionHalt)) {
+      _removeTrajectoryAdmissionHaltListener?.call();
+      _offlineTrajectoryAdmissionHalt = offlineHalt;
+      _removeTrajectoryAdmissionHaltListener = offlineHalt?.addListener(() {
+        if (!context.mounted) return;
+        setState(() {});
+      });
+    }
+    _recorder =
+        trajectoryScope?.recorder ?? TrajectoryRecorderScope.disabled.recorder;
 
     if (!identical(notifier, _notifier)) {
       _removeSnapshotListener?.call();
@@ -184,13 +201,14 @@ class _WorkListState extends State<WorkList>
     _removeSnapshotListener = null;
     _removeAdmissionListener?.call();
     _removeAdmissionListener = null;
+    _removeTrajectoryAdmissionHaltListener?.call();
+    _removeTrajectoryAdmissionHaltListener = null;
   }
 
   @override
   Seed build(TreeContext context) {
     final stationServices = context.watch<StationServices>();
     final services = context.watch<ServiceBundle>() ?? const ServiceBundle();
-    _recorder = trajectoryRecorderOf(context);
     final ownership = BeadOwnershipPredicate(
       seed.substationConfig.ownedSubstations,
     );
@@ -301,6 +319,9 @@ class _WorkListState extends State<WorkList>
     List<StationAdmissionCandidate> candidates,
   ) {
     final mountEligibility = composeMountEligibility([
+      trajectoryAdmissionHaltedClause(
+        halted: _offlineTrajectoryAdmissionHalt?.halted ?? false,
+      ),
       dispatchableWorkClause(resident: seed.substationConfig.resident),
       driveListClause(seed.substationConfig.driveList),
       crossLinkExclusionClause(

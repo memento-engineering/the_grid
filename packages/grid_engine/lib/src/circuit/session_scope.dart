@@ -756,10 +756,12 @@ class SessionScopeState extends State<SessionScope>
           // the round it retires. The record carries the ORIGINAL work bead id
           // while the legacy write is re-keying the dead session onto
           // `#void-<sessionId>` — intact keys are the whole point of the row.
-          _recorder.sessionVoided(
-            sessionId: deadId,
-            workBeadId: seed.bead.id,
-            reason: _voidReason,
+          await _recordTerminal(
+            _recorder.sessionVoided(
+              sessionId: deadId,
+              workBeadId: seed.bead.id,
+              reason: _voidReason,
+            ),
           );
           // The retired round is DERIVED, never a bare 0 default (§2.1's
           // recoverable-only rule): the dead projection's own work_bead key
@@ -886,10 +888,12 @@ class SessionScopeState extends State<SessionScope>
         services: _services,
       );
     } on StationMintVoided catch (voided) {
-      _recorder.sessionVoided(
-        sessionId: voided.retiredSessionId,
-        workBeadId: voided.workBeadId,
-        reason: kMintTimeoutVoidReason,
+      await _recordTerminal(
+        _recorder.sessionVoided(
+          sessionId: voided.retiredSessionId,
+          workBeadId: voided.workBeadId,
+          reason: kMintTimeoutVoidReason,
+        ),
       );
       _recorder.roundRetired(
         sessionId: voided.retiredSessionId,
@@ -1131,10 +1135,12 @@ class SessionScopeState extends State<SessionScope>
       services: _services,
     );
     if (retiredMintSessionId != null) {
-      _recorder.sessionVoided(
-        sessionId: retiredMintSessionId,
-        workBeadId: seed.bead.id,
-        reason: 'mint-abandoned',
+      await _recordTerminal(
+        _recorder.sessionVoided(
+          sessionId: retiredMintSessionId,
+          workBeadId: seed.bead.id,
+          reason: 'mint-abandoned',
+        ),
       );
       _recorder.roundRetired(
         sessionId: retiredMintSessionId,
@@ -1376,7 +1382,9 @@ class SessionScopeState extends State<SessionScope>
       // deliberately not a derivation site; this method is the one that knows
       // the close means "done". ONE record, no tail: the four-step terminal
       // tail stays legacy for the whole shadow window.
-      _recorder.sessionCompleted(sessionId: id, workBeadId: seed.bead.id);
+      await _recordTerminal(
+        _recorder.sessionCompleted(sessionId: id, workBeadId: seed.bead.id),
+      );
       _flare('session.closed', {'sessionId': id, 'disposition': 'done'});
       await _closeTerminalGates(
         id,
@@ -1670,14 +1678,11 @@ class SessionScopeState extends State<SessionScope>
     }
   }
 
-  /// The re-arm write itself (tg-boq): flips the parked node to `pending`, then
-  /// clears the in-flight guard so the NEXT build retries on failure and a later
-  /// gate cycle can re-arm again. A dropped write is LOUD (a flare through the
-  /// emit-only transport) — never SILENT, never PERMANENT (the guard principle:
-  /// LOUD or GONE). It is NOT rethrown: an uncaught async error in a resident
-  /// station's root zone would terminate the isolate, so a transient bd blip
-  /// must not crash the whole station — the retry (via the cleared guard) is the
-  /// recovery, the flare is the signal.
+  /// The re-arm write itself (tg-boq): flips the parked node to `pending`.
+  /// Shadow preserves the existing clear-and-flare retry on failure. Cut keeps
+  /// the in-flight guard, halts fresh admission, and opens the node's gate with
+  /// no retry or `gate.rearmFailed` flare. Neither path rethrows into the
+  /// resident station's root zone.
   ///
   /// The write is a MINIMAL single-key `grid.step.state` merge write on the
   /// STEP bead [moleculeTarget] (never a full [stepBeadMetadata] rebuild,
@@ -1695,17 +1700,22 @@ class SessionScopeState extends State<SessionScope>
     final ctx = _ctx;
     if (ctx == null) {
       // Impossible for a mounted scope (`didChangeDependencies` captures `_ctx`
-      // before any build) — but do NOT drop silently if it ever happens: clear
-      // the guard (a later build retries) and flare.
-      _rearming.remove(nodePath);
-      _flareRearmFailed(nodePath, 'no StationServices captured');
+      // before any build) — but route every retryable failure through the one
+      // posture-aware failure helper rather than dropping it silently.
+      await _handleRearmFailure(
+        null,
+        id,
+        nodePath,
+        'no StationServices captured',
+      );
       return;
     }
     if (moleculeTarget == null) {
       // Unreachable by construction (see [_scheduleRearm]'s doc) — but never
       // fall back to the retired flat session-bead write; refuse LOUD.
-      _rearming.remove(nodePath);
-      _flareRearmFailed(
+      await _handleRearmFailure(
+        ctx,
+        id,
         nodePath,
         'no step bead maps nodePath "$nodePath" — cannot re-arm',
       );
@@ -1733,22 +1743,55 @@ class SessionScopeState extends State<SessionScope>
       // the record that kills the I-14 stale-join loop at the cut. During the
       // shadow window it only shadows the legacy single-key flip above, which
       // stays exactly as it is (nothing about what mounts changes).
-      _recorder.stepRearmed(
+      final result = await _recorder.stepRearmed(
         sessionId: id,
         stepPath: nodePath,
         fromStepRound: stepRound,
         incarnation: incarnation,
       );
-      // Settled OK: clear the guard. The store's `gated`→`pending` flip stops
-      // D-7 from re-firing (and frees a future gate cycle to re-arm).
-      _rearming.remove(nodePath);
+      await ctx.trajectoryAdmissionHalt?.handleStepResult(
+        result,
+        sessionId: id,
+        nodePath: nodePath,
+        recordClass: 'step.transition',
+      );
+      switch (result) {
+        case Acked():
+          // Settled OK: clear the guard. The store's `gated`→`pending` flip
+          // stops D-7 from re-firing and frees a future gate cycle.
+          _rearming.remove(nodePath);
+        case Dropped() || Suppressed():
+          // Cut re-gates this node, so its in-flight guard remains the storm
+          // budget. Shadow has no admission halt and retains its old behavior.
+          if (ctx.trajectoryAdmissionHalt == null) {
+            _rearming.remove(nodePath);
+          }
+      }
     } on Object catch (error) {
-      // Settled FAILED: clear the guard so the next build retries, and flare so
-      // the drop is not silent. NOT rethrown (see the method doc — a crash would
-      // be worse than the wedge this fixes).
-      _rearming.remove(nodePath);
-      _flareRearmFailed(nodePath, '$error');
+      // Under shadow, clear + flare preserves the retry path. Under cut, the
+      // admission breaker keeps the guard and opens the route gate instead.
+      await _handleRearmFailure(ctx, id, nodePath, '$error');
     }
+  }
+
+  Future<void> _handleRearmFailure(
+    StationServices? ctx,
+    String sessionId,
+    String nodePath,
+    String reason,
+  ) async {
+    final halt = ctx?.trajectoryAdmissionHalt;
+    if (halt != null) {
+      await halt.haltStep(
+        reason: reason,
+        recordClass: 'step.transition',
+        sessionId: sessionId,
+        nodePath: nodePath,
+      );
+      return;
+    }
+    _rearming.remove(nodePath);
+    _flareRearmFailed(nodePath, reason);
   }
 
   /// LOUD-signals a DROPPED gate re-arm (tg-boq) through the reserved emit-only
@@ -1844,16 +1887,26 @@ class SessionScopeState extends State<SessionScope>
     );
     // §2.3's `attempt.terminal(escalated)` row — the reason is the same
     // `grid.escalation_reason` the marker write above carried.
-    _recorder.sessionEscalated(
-      sessionId: id,
-      workBeadId: seed.bead.id,
-      reason: reason.isEmpty ? null : reason,
+    await _recordTerminal(
+      _recorder.sessionEscalated(
+        sessionId: id,
+        workBeadId: seed.bead.id,
+        reason: reason.isEmpty ? null : reason,
+      ),
     );
     _flare('session.closed', {
       'sessionId': id,
       'disposition': 'held',
       'reason': truncateReason(reason),
     });
+  }
+
+  Future<void> _recordTerminal(Future<TrajectoryAppendResult> result) async {
+    final disposition = await result;
+    await _ctx?.trajectoryAdmissionHalt?.handleTerminalResult(
+      disposition,
+      recordClass: 'attempt.terminal',
+    );
   }
 
   @override

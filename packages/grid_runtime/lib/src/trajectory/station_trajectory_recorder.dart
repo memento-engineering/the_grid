@@ -13,9 +13,10 @@
 ///   * every method is a PAST-TENSE observation — it is called after the
 ///     legacy write it shadows has returned successfully (the recorder appends
 ///     only on legacy success, so the shadow never leads the incumbent);
-///   * every method is synchronous `void` — there is nothing to await, so no
-///     engine hot path can ever block on, or be reordered by, an append
-///     (§2.5: enqueue, never await);
+///   * ordinary observations remain synchronous `void`; only `stepRunning`,
+///     `stepRearmed`, and the three decision-bearing session terminals expose
+///     an acknowledgement, while all other sites retain enqueue-never-await
+///     semantics;
 ///   * every method is NON-FATAL by construction — derivation is wrapped, a
 ///     throw is counted and flared (`trajectory.deriveFailed`), and the legacy
 ///     path is entirely unaffected (§3).
@@ -32,6 +33,7 @@ import 'package:grid_trajectory/grid_trajectory.dart';
 import 'package:meta/meta.dart';
 
 import '../lifecycle/bead_ownership.dart';
+import 'trajectory_append_result.dart';
 
 /// The flare seam — shape-compatible with `ExplorationTransport.flare` (and
 /// with the harness's rate-limited flare, which is what production passes).
@@ -53,9 +55,9 @@ typedef _StepObservationKey = ({
 /// synchronous and returns immediately).
 abstract interface class TrajectoryRecordSink {
   /// False once the harness latched (fenced out / halted), degraded, was
-  /// disabled, or is shutting down — the recorder short-circuits derivation to
-  /// a count instead of building records nobody will append (§3's "counting
-  /// no-op" posture).
+  /// disabled, or is shutting down. Ordinary observations short-circuit;
+  /// acknowledged observations still call an acknowledgement-capable sink so
+  /// it can return [Suppressed].
   bool get accepting;
 
   /// Hands one constructed record to the single writer and returns. Must
@@ -66,6 +68,26 @@ abstract interface class TrajectoryRecordSink {
     String? substation,
     TrajectoryProvenance provenance,
     String? provenanceBasis,
+  });
+}
+
+/// The acknowledgement-capable extension used only by decision-bearing
+/// recorder observations.
+///
+/// [TrajectoryRecordSink.enqueue] remains the synchronous default. A harness
+/// implements this additional port when the caller must distinguish a commit,
+/// a loss, and a posture suppression.
+abstract interface class TrajectoryAckRecordSink
+    implements TrajectoryRecordSink {
+  /// Hands one decision-bearing record to the single writer and completes with
+  /// its disposition. Implementations must complete exactly once.
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance,
+    String? provenanceBasis,
+    required bool decisionBearing,
   });
 }
 
@@ -662,13 +684,13 @@ class StationTrajectoryRecorder {
   /// `attempt.terminal(outcome=succeeded)` — at `_completeAndClose`, the
   /// outcome-bearing caller (r2, major 6; the bare writer `close` is NOT a
   /// derivation site). One record, NO tail.
-  void sessionCompleted({
+  Future<TrajectoryAppendResult> sessionCompleted({
     required String sessionId,
     required String workBeadId,
     String? reason,
     DateTime? occurredAt,
   }) {
-    _terminal(
+    return _terminalAcked(
       site: 'sessionCompleted',
       sessionId: sessionId,
       workBeadId: workBeadId,
@@ -680,13 +702,13 @@ class StationTrajectoryRecorder {
 
   /// `attempt.terminal(outcome=escalated)` — at `_escalateAndClose`; [reason]
   /// from `grid.escalation_reason`.
-  void sessionEscalated({
+  Future<TrajectoryAppendResult> sessionEscalated({
     required String sessionId,
     required String workBeadId,
     String? reason,
     DateTime? occurredAt,
   }) {
-    _terminal(
+    return _terminalAcked(
       site: 'sessionEscalated',
       sessionId: sessionId,
       workBeadId: workBeadId,
@@ -699,13 +721,13 @@ class StationTrajectoryRecorder {
   /// `attempt.terminal(outcome=lost)` — at the voidRetireMetadata write. The
   /// record carries the ORIGINAL work bead id (intact keys) while legacy
   /// still writes `#void-` (§2.3).
-  void sessionVoided({
+  Future<TrajectoryAppendResult> sessionVoided({
     required String sessionId,
     required String workBeadId,
     String? reason,
     DateTime? occurredAt,
   }) {
-    _terminal(
+    return _terminalAcked(
       site: 'sessionVoided',
       sessionId: sessionId,
       workBeadId: workBeadId,
@@ -1148,7 +1170,7 @@ class StationTrajectoryRecorder {
 
   /// `step.transition(running)` — after `_persistStarted`'s step-bead write.
   /// Non-terminal: it carries the kick instant and nothing else.
-  void stepRunning({
+  Future<TrajectoryAppendResult> stepRunning({
     required String sessionId,
     required String stepPath,
     required int stepRound,
@@ -1163,7 +1185,7 @@ class StationTrajectoryRecorder {
       stepRound: stepRound,
       incarnation: incarnation,
     );
-    _step(
+    return _stepAcked(
       site: 'stepRunning',
       sessionId: sessionId,
       stepPath: stepPath,
@@ -1330,7 +1352,7 @@ class StationTrajectoryRecorder {
   /// re-arm is exactly what bumps `step_round`. That bump is the record which
   /// kills the I-14 stale-join loop at the cut; during the shadow window it
   /// only shadows the legacy `gated → pending` flip.
-  void stepRearmed({
+  Future<TrajectoryAppendResult> stepRearmed({
     required String sessionId,
     required String stepPath,
     required int fromStepRound,
@@ -1338,7 +1360,7 @@ class StationTrajectoryRecorder {
     String? attemptId,
     DateTime? occurredAt,
   }) {
-    _step(
+    return _stepAcked(
       site: 'stepRearmed',
       sessionId: sessionId,
       stepPath: stepPath,
@@ -1691,6 +1713,66 @@ class StationTrajectoryRecorder {
     );
   }
 
+  Future<TrajectoryAppendResult> _observeAcked(
+    String site,
+    DerivedRecord Function() derive, {
+    DateTime? occurredAt,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    void Function()? afterEnqueue,
+  }) {
+    try {
+      final derived = derive();
+      final sink = _sink;
+      final accepting = sink.accepting;
+      if (!accepting) {
+        _skipped += 1;
+      }
+      if (sink is TrajectoryAckRecordSink) {
+        final result = sink.appendAcked(
+          derived.record,
+          occurredAt: occurredAt ?? _clock(),
+          substation: derived.substation,
+          provenance: provenance,
+          provenanceBasis: provenanceBasis,
+          decisionBearing: true,
+        );
+        if (accepting) {
+          _derived += 1;
+          afterEnqueue?.call();
+        }
+        return result.then(
+          (value) => value,
+          onError: (Object error, StackTrace stackTrace) {
+            _deriveFailures += 1;
+            _flare('trajectory.deriveFailed', {
+              'site': site,
+              'reason': '$error',
+            });
+            return const TrajectoryAppendResult.dropped();
+          },
+        );
+      }
+      if (!accepting) {
+        return Future.value(const TrajectoryAppendResult.suppressed());
+      }
+      sink.enqueue(
+        derived.record,
+        occurredAt: occurredAt ?? _clock(),
+        substation: derived.substation,
+        provenance: provenance,
+        provenanceBasis: provenanceBasis,
+      );
+      _derived += 1;
+      afterEnqueue?.call();
+      return Future.value(const TrajectoryAppendResult.acked());
+    } on Object catch (error) {
+      _deriveFailures += 1;
+      _flare('trajectory.deriveFailed', {'site': site, 'reason': '$error'});
+      return Future.value(const TrajectoryAppendResult.dropped());
+    }
+  }
+
   void _terminal({
     required String site,
     required String sessionId,
@@ -1727,6 +1809,26 @@ class StationTrajectoryRecorder {
       );
     });
   }
+
+  Future<TrajectoryAppendResult> _terminalAcked({
+    required String site,
+    required String sessionId,
+    required TerminalOutcome outcome,
+    String? workBeadId,
+    String? attemptId,
+    String? reason,
+    DateTime? occurredAt,
+  }) => _observeAcked(
+    site,
+    () => _buildTerminal(
+      sessionId: sessionId,
+      outcome: outcome,
+      workBeadId: workBeadId,
+      attemptId: attemptId,
+      reason: reason,
+    ),
+    occurredAt: occurredAt,
+  );
 
   DerivedRecord _buildTerminal({
     required String sessionId,
@@ -1850,6 +1952,37 @@ class StationTrajectoryRecorder {
     });
   }
 
+  Future<TrajectoryAppendResult> _stepAcked({
+    required String site,
+    required String sessionId,
+    required String stepPath,
+    required int stepRound,
+    required int incarnation,
+    required StepState state,
+    String? attemptId,
+    StepCause? cause,
+    DateTime? startedAt,
+    DateTime? occurredAt,
+    void Function()? afterEnqueue,
+  }) => _observeAcked(
+    site,
+    () => DerivedRecord(
+      StepTransition(
+        sessionId: sessionId,
+        round: _rounds[sessionId] ?? 0,
+        stepPath: stepPath,
+        stepRound: stepRound,
+        incarnation: incarnation,
+        attemptId: attemptId == null || attemptId.isEmpty ? null : attemptId,
+        state: state,
+        cause: cause,
+        startedAt: startedAt,
+      ),
+    ),
+    occurredAt: occurredAt,
+    afterEnqueue: afterEnqueue,
+  );
+
   void _liveness({
     required String site,
     required String attemptId,
@@ -1906,7 +2039,7 @@ class StationTrajectoryRecorder {
 }
 
 /// The disabled recorder's sink: never accepts, never reachable by a record.
-final class _NeverAccepting implements TrajectoryRecordSink {
+final class _NeverAccepting implements TrajectoryAckRecordSink {
   const _NeverAccepting();
 
   @override
@@ -1920,4 +2053,14 @@ final class _NeverAccepting implements TrajectoryRecordSink {
     TrajectoryProvenance provenance = TrajectoryProvenance.observed,
     String? provenanceBasis,
   }) {}
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async => const TrajectoryAppendResult.suppressed();
 }

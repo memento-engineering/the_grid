@@ -27,6 +27,7 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
@@ -172,6 +173,36 @@ class _RecordingTransport implements ExplorationTransport {
       flares.add((name: name, data: data));
 }
 
+final class _DroppedAckSink implements TrajectoryAckRecordSink {
+  int acknowledged = 0;
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) {}
+
+  @override
+  Future<TrajectoryAppendResult> appendAcked(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+    required bool decisionBearing,
+  }) async {
+    expect(decisionBearing, isTrue);
+    acknowledged += 1;
+    return const TrajectoryAppendResult.dropped();
+  }
+}
+
 class _RulingAwareRoute extends RouteCapability {
   const _RulingAwareRoute(this.lane, this.log);
 
@@ -213,30 +244,11 @@ class _RulingAwareRegistry implements CapabilityRegistry {
 /// A [BdRunner] that FAILS the first [failUpdates] `update` calls (throwing, as
 /// a live `bd` blip would) then succeeds — so a test can drive a DROPPED re-arm
 /// write and prove the next build retries. Records every argv in order.
-class _FailFirstUpdateRunner implements BdRunner {
+class _FailFirstUpdateRunner extends RecordingBdRunner {
   _FailFirstUpdateRunner({this.failUpdates = 1});
 
   final int failUpdates;
-  final List<List<String>> calls = <List<String>>[];
   int _updates = 0;
-
-  List<List<String>> callsFor(String sub) =>
-      calls.where((c) => c.isNotEmpty && c.first == sub).toList();
-
-  Map<String, dynamic> metadataOfUpdate(int index) {
-    final call = callsFor('update')[index];
-    final metadata = <String, dynamic>{};
-    for (var i = 0; i < call.length - 1; i++) {
-      if (call[i] != '--set-metadata') continue;
-      final assignment = call[i + 1];
-      final separator = assignment.indexOf('=');
-      if (separator < 0) continue;
-      metadata[assignment.substring(0, separator)] = assignment.substring(
-        separator + 1,
-      );
-    }
-    return metadata;
-  }
 
   @override
   Future<BdResult> run(
@@ -244,7 +256,7 @@ class _FailFirstUpdateRunner implements BdRunner {
     Duration? timeout,
     String? stdin,
   }) async {
-    calls.add(List<String>.unmodifiable(args));
+    final result = await super.run(args, timeout: timeout, stdin: stdin);
     final sub = args.isNotEmpty ? args.first : '';
     if (sub == 'update') {
       _updates++;
@@ -252,15 +264,7 @@ class _FailFirstUpdateRunner implements BdRunner {
         throw StateError('fake bd update failure #$_updates (tg-boq)');
       }
     }
-    final data = switch (sub) {
-      'create' => '{"id":"tgdog-sess1"}',
-      _ => '{"id":"${args.length >= 2 ? args[1] : ''}"}',
-    };
-    return BdResult(
-      exitCode: 0,
-      stdout: '{"schema_version":1,"data":$data}',
-      stderr: '',
-    );
+    return result;
   }
 }
 
@@ -282,29 +286,35 @@ StationServices _ctxOver(BdRunner runner) => StationServices(
   required StationServices ctx,
   required CapabilityRegistry registry,
   ServiceBundle services = const ServiceBundle(),
+  TrajectoryRecorderScope? trajectoryScope,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
-    InheritedSeed<JoinedSnapshotNotifier>(
-      value: joined,
-      child: InheritedSeed<StationServices>(
-        value: ctx,
-        child: InheritedSeed<CapabilityRegistry>(
-          value: registry,
-          child: InheritedSeed<SessionResolver>(
-            value: CircuitResolver((_) => _code),
-            child: Station([
-              SubstationScope(
-                configNotifier: SubstationConfigNotifier(
-                  const SubstationConfig(
-                    substationId: 'tg',
-                    ownedSubstations: {'tg'},
+    ProviderScope(
+      child: InheritedSeed<JoinedSnapshotNotifier>(
+        value: joined,
+        child: InheritedSeed<StationServices>(
+          value: ctx,
+          child: InheritedSeed<CapabilityRegistry>(
+            value: registry,
+            child: InheritedSeed<SessionResolver>(
+              value: CircuitResolver((_) => _code),
+              child: InheritedSeed<TrajectoryRecorderScope>(
+                value: trajectoryScope ?? TrajectoryRecorderScope.disabled,
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(
+                      const SubstationConfig(
+                        substationId: 'tg',
+                        ownedSubstations: {'tg'},
+                      ),
+                    ),
+                    services: services,
+                    key: const ValueKey('scope.tg'),
                   ),
-                ),
-                services: services,
-                key: const ValueKey('scope.tg'),
+                ]),
               ),
-            ]),
+            ),
           ),
         ),
       ),
@@ -662,5 +672,187 @@ void main() {
         hasLength(1),
       );
     });
+
+    test('cut re-arm failure halts admission, gates the open route, and keeps '
+        'the in-flight guard instead of flaring or retrying', () async {
+      final runner = _FailFirstUpdateRunner(failUpdates: 1);
+      runner.exportBeads = [_gatedSession('tgdog-s', workBead: 'tg-1')];
+      final writer = StationBeadWriter(
+        bd: BdCliService(runner),
+        reader: runner,
+        ownership: BeadOwnershipPredicate(const {stateSubstation}),
+      );
+      final halt = TrajectoryAdmissionHalt(
+        writer: writer,
+        stateSubstation: stateSubstation,
+        bootEpoch: () => 7,
+      );
+      final ctx = StationServices(
+        provider: FakeRuntimeProvider(),
+        writer: writer,
+        stateSubstation: stateSubstation,
+        trajectoryAdmissionHalt: halt,
+      );
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+      final state = FakeSnapshotSource(
+        _state([
+          _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _routeStep(
+            _routeStepId,
+            sessionId: 'tgdog-s',
+            state: StepState.gated,
+          ),
+          _gate('gate-1', sessionId: 'tgdog-s'),
+        ]),
+      );
+      final bridge = StationJoinBridge(work: work, state: state)..start();
+      addTearDown(bridge.dispose);
+
+      final mounted = _mountFull(
+        joined: bridge.notifier,
+        ctx: ctx,
+        registry: reg,
+        services: ServiceBundle(transport: transport),
+      );
+      addTearDown(mounted.owner.dispose);
+      await _pump();
+      mounted.owner.flush();
+      await _pump();
+
+      state.push(
+        _state([
+          _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _routeStep(
+            _routeStepId,
+            sessionId: 'tgdog-s',
+            state: StepState.gated,
+          ),
+          _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+        ], tick: 1),
+      );
+      await _pump();
+      mounted.owner.flush();
+      await _pump();
+
+      expect(halt.halted, isTrue);
+      expect(
+        transport.flares.map((flare) => flare.name),
+        isNot(contains('gate.rearmFailed')),
+      );
+      expect(runner.callsFor('create'), hasLength(1));
+      expect(runner.callsFor('update'), hasLength(2));
+      expect(runner.metadataOfUpdate(1), containsPair('blocks', 'tgdog-s'));
+      expect(runner.metadataOfUpdate(1), containsPair('node', 'tg-1/route'));
+
+      state.push(
+        _state([
+          _gatedSession('tgdog-s', workBead: 'tg-1'),
+          _routeStep(
+            _routeStepId,
+            sessionId: 'tgdog-s',
+            state: StepState.gated,
+          ),
+          _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+        ], tick: 2),
+      );
+      await _pump();
+      mounted.owner.flush();
+      await _pump();
+      expect(
+        runner.callsFor('update'),
+        hasLength(2),
+        reason: 'cut keeps the guard latched and schedules no retry',
+      );
+    });
+
+    test(
+      'cut keeps the re-arm guard when the decision append is dropped',
+      () async {
+        final runner = RecordingBdRunner();
+        runner.exportBeads = [_gatedSession('tgdog-s', workBead: 'tg-1')];
+        final writer = StationBeadWriter(
+          bd: BdCliService(runner),
+          reader: runner,
+          ownership: BeadOwnershipPredicate(const {stateSubstation}),
+        );
+        final halt = TrajectoryAdmissionHalt(
+          writer: writer,
+          stateSubstation: stateSubstation,
+          bootEpoch: () => 8,
+        );
+        final ctx = StationServices(
+          provider: FakeRuntimeProvider(),
+          writer: writer,
+          stateSubstation: stateSubstation,
+          trajectoryAdmissionHalt: halt,
+        );
+        final sink = _DroppedAckSink();
+        final work = FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'}));
+        final state = FakeSnapshotSource(
+          _state([
+            _gatedSession('tgdog-s', workBead: 'tg-1'),
+            _routeStep(
+              _routeStepId,
+              sessionId: 'tgdog-s',
+              state: StepState.gated,
+            ),
+            _gate('gate-1', sessionId: 'tgdog-s'),
+          ]),
+        );
+        final bridge = StationJoinBridge(work: work, state: state)..start();
+        addTearDown(bridge.dispose);
+        final mounted = _mountFull(
+          joined: bridge.notifier,
+          ctx: ctx,
+          registry: RecordingCapabilityRegistry(circuits: const {}),
+          trajectoryScope: TrajectoryRecorderScope(
+            StationTrajectoryRecorder(
+              sink: sink,
+              substationPrefixes: const {stateSubstation},
+            ),
+            admissionHalt: halt,
+          ),
+        );
+        addTearDown(mounted.owner.dispose);
+        await _pump();
+        mounted.owner.flush();
+
+        void publish(int tick) {
+          state.push(
+            _state([
+              _gatedSession('tgdog-s', workBead: 'tg-1'),
+              _routeStep(
+                _routeStepId,
+                sessionId: 'tgdog-s',
+                state: StepState.gated,
+              ),
+              _gate('gate-1', sessionId: 'tgdog-s', closed: true),
+            ], tick: tick),
+          );
+        }
+
+        publish(1);
+        await _pump();
+        mounted.owner.flush();
+        await _pump();
+        expect(sink.acknowledged, 1);
+        expect(halt.halted, isTrue);
+        expect(runner.callsFor('create'), hasLength(1));
+        expect(runner.callsFor('update'), hasLength(2));
+
+        publish(2);
+        await _pump();
+        mounted.owner.flush();
+        await _pump();
+        expect(sink.acknowledged, 1);
+        expect(
+          runner.callsFor('update'),
+          hasLength(2),
+          reason: 'the dropped decision append schedules no second re-arm',
+        );
+      },
+    );
   });
 }

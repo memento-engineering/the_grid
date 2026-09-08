@@ -2,6 +2,7 @@ import 'package:grid_runtime/grid_runtime.dart';
 
 import '../sdk/allocation.dart';
 import 'station_admission_authority.dart';
+import 'trajectory_scope.dart';
 
 /// The STATION-level ambient services a node resolves from the tree in one
 /// inherited lookup (ADR-0009 D2/D3 — the MediaQuery pattern: related ambient
@@ -31,6 +32,7 @@ class StationServices {
     required this.stateSubstation,
     this.liveness,
     this.workSignal,
+    this.trajectoryAdmissionHalt,
     this.maxConcurrentWork = kDefaultMaxConcurrentWork,
   }) : admission = StationAdmissionAuthority(
          writer: writer,
@@ -38,6 +40,7 @@ class StationServices {
          stateSubstation: stateSubstation,
          maxConcurrentWork: maxConcurrentWork,
          liveness: liveness,
+         trajectoryAdmissionHalt: trajectoryAdmissionHalt,
        );
 
   /// The process transport — spawn (`start`), kill (`stop`), and the broadcast
@@ -84,6 +87,9 @@ class StationServices {
   /// (`StationArgs.maxAgents`); defaults to [kDefaultMaxConcurrentWork] so a
   /// single-bead flow is unchanged.
   final int maxConcurrentWork;
+
+  /// The cut-only admission breaker shared with trajectory call sites.
+  final TrajectoryAdmissionHalt? trajectoryAdmissionHalt;
 
   /// The single station-owned admission and durable attempt-transition owner.
   final StationAdmissionAuthority admission;

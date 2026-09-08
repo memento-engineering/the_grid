@@ -687,16 +687,22 @@ class CapabilityHostState extends State<CapabilityHost>
       // `grid.lease.*`, never the step bead's cursor keys.
       metadata: _moleculeMetadata(StepState.running, terminal: false),
     );
-    // §2.3's `step.transition (running)` row — after the step-bead mutation
-    // returned, enqueued, never awaited (§2.5: no persist path pays append
-    // latency).
-    _recorder.stepRunning(
+    // §2.3's decision-bearing `step.transition (running)` row — after the
+    // step-bead mutation returned. Under the cut its acknowledgement is the
+    // second carrier's admission-breaker input.
+    final result = await _recorder.stepRunning(
       sessionId: _sessionId,
       stepPath: _nodePath,
       stepRound: _stepRound,
       incarnation: seed.mount.node.restartCount,
       attemptId: _attemptId,
       startedAt: _startedAt,
+    );
+    await _ctx?.trajectoryAdmissionHalt?.handleStepResult(
+      result,
+      sessionId: _sessionId,
+      nodePath: _nodePath,
+      recordClass: 'step.transition',
     );
   }
 

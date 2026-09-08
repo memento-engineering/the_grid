@@ -194,6 +194,18 @@ void main() {
         'issue type epic is not dispatchable for this substation',
       );
     });
+
+    test('trajectory admission halt is eligible before the latch and refuses '
+        'by its fixed clause after it', () {
+      final bead = work('tg-1', IssueType.task);
+      expect(
+        trajectoryAdmissionHaltedClause(halted: false)(bead),
+        isA<MountEligible>(),
+      );
+      final refused = trajectoryAdmissionHaltedClause(halted: true)(bead);
+      expect(refused, isA<MountRefused>());
+      expect((refused as MountRefused).clause, 'trajectory admission halted');
+    });
   });
 
   group('composeMountEligibility', () {

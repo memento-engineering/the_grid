@@ -11,6 +11,8 @@ import 'package:grid_cli/src/station_control.dart';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
     show StationLockRecord;
 import 'package:grid_engine/grid_engine.dart';
+// The availability registry root, imported the way run_grid.dart does.
+import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_sdk/grid_sdk.dart'
     show TreeOwner, GridCommandHandler, GridCommandRequest, GridCommandResult;
@@ -113,24 +115,29 @@ void main() {
       addTearDown(fakes.ctx.dispose);
       final owner = TreeOwner();
       addTearDown(owner.dispose);
+      // WorkList binds to the ambient TrajectoryRecorderScope through the
+      // availability registry, so the fixture root carries the same ONE
+      // ProviderScope the production root mounts (run_grid.dart).
       final root = owner.mountRoot(
-        InheritedSeed<JoinedSnapshotNotifier>(
-          value: joined,
-          child: InheritedSeed<StationServices>(
-            value: fakes.ctx,
-            child: InheritedSeed<SessionResolver>(
-              value: const _IdleResolver(),
-              child: Station([
-                SubstationScope(
-                  configNotifier: SubstationConfigNotifier(
-                    const SubstationConfig(
-                      substationId: 'tg',
-                      ownedSubstations: {'tg'},
+        ProviderScope(
+          child: InheritedSeed<JoinedSnapshotNotifier>(
+            value: joined,
+            child: InheritedSeed<StationServices>(
+              value: fakes.ctx,
+              child: InheritedSeed<SessionResolver>(
+                value: const _IdleResolver(),
+                child: Station([
+                  SubstationScope(
+                    configNotifier: SubstationConfigNotifier(
+                      const SubstationConfig(
+                        substationId: 'tg',
+                        ownedSubstations: {'tg'},
+                      ),
                     ),
+                    key: const ValueKey('scope.tg'),
                   ),
-                  key: const ValueKey('scope.tg'),
-                ),
-              ]),
+                ]),
+              ),
             ),
           ),
         ),
