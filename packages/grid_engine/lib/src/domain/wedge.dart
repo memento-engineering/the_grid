@@ -13,11 +13,19 @@
 /// the station already computed and no watcher re-derives it from raw sessions.
 ///
 /// NOT in scope (and NOT a wedge): a station with ready work but ZERO live
-/// sessions. Wedge remains a live-session forward-progress signal; dead minting
-/// is independently visible through `session.mintFailed`/
-/// `session.mintExhausted` and StationControl's `work.mintFailedScopes` plus
-/// `perSubstation[].mintFailedScopes` counts. A governor-throttled backlog
-/// already flares `work.throttled` and never becomes live (A43).
+/// sessions. Wedge remains a station-wide live-session forward-progress
+/// signal. Pre-session create failures are independently visible through
+/// `session.mintFailed` / `session.mintExhausted` and StationControl's
+/// `work.mintFailedScopes` plus `perSubstation[].mintFailedScopes` counts; the
+/// zero-live interval after a retryable molecule-pour void is observed by
+/// `SessionScope`'s per-attempt `session.moleculePourStalled` watchdog until the
+/// authority re-provides a replacement grant. That scope-local watchdog also
+/// names an empty-projection episode directly, while this sampler continues to
+/// count the same live session in the station aggregate. The two layers share
+/// a sustained/rising-edge shape but not ownership: neither watchdog starts a
+/// retry, and only the authority owns re-admission timing. A
+/// governor-throttled backlog already flares `work.throttled` and never becomes
+/// live (A43).
 library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
