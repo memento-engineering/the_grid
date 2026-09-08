@@ -12,9 +12,14 @@ void main() {
       tester,
     ) async {
       final client = FakeGridExplorationClient();
-      addTearDown(client.dispose);
+      final source = GridEventsSource(client);
+      addTearDown(() async {
+        await source.close();
+        await client.dispose();
+      });
+      await source.start();
 
-      await tester.pumpWidget(_host(EventsPanel(client: client)));
+      await tester.pumpWidget(_host(EventsPanel(source: source)));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('events.empty')), findsOneWidget);
@@ -30,9 +35,14 @@ void main() {
           GridEventRecord(type: 'readySetChanged'),
         ],
       );
-      addTearDown(client.dispose);
+      final source = GridEventsSource(client);
+      addTearDown(() async {
+        await source.close();
+        await client.dispose();
+      });
+      await source.start();
 
-      await tester.pumpWidget(_host(EventsPanel(client: client)));
+      await tester.pumpWidget(_host(EventsPanel(source: source)));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('events.list')), findsOneWidget);
@@ -44,9 +54,14 @@ void main() {
 
     testWidgets('appends live postEvent records newest-first', (tester) async {
       final client = FakeGridExplorationClient();
-      addTearDown(client.dispose);
+      final source = GridEventsSource(client);
+      addTearDown(() async {
+        await source.close();
+        await client.dispose();
+      });
+      await source.start();
 
-      await tester.pumpWidget(_host(EventsPanel(client: client)));
+      await tester.pumpWidget(_host(EventsPanel(source: source)));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('events.empty')), findsOneWidget);
 
@@ -66,6 +81,79 @@ void main() {
   });
 
   group('GridDevToolsShell handshake header', () {
+    testWidgets('captures a live event before the Events tab is visited', (
+      tester,
+    ) async {
+      final client = FakeGridExplorationClient();
+      addTearDown(client.dispose);
+
+      await tester.pumpWidget(_host(GridDevToolsShell(client: client)));
+
+      expect(client.fetchEventsLimits, <int?>[64]);
+      await tester.pump();
+      expect(client.hasEventListener, isTrue);
+
+      client.emit(
+        const GridEventRecord(type: 'beadCreated', id: 'before-visit'),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Events'));
+      await tester.pumpAndSettle();
+
+      final eventsList = find.byKey(const Key('events.list'));
+      expect(eventsList, findsOneWidget);
+      expect(
+        find.descendant(of: eventsList, matching: find.text('beadCreated')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: eventsList, matching: find.text('before-visit')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('replaces event capture once when the shell client changes', (
+      tester,
+    ) async {
+      final firstClient = FakeGridExplorationClient();
+      final secondClient = FakeGridExplorationClient();
+      addTearDown(() async {
+        await firstClient.dispose();
+        await secondClient.dispose();
+      });
+
+      await tester.pumpWidget(_host(GridDevToolsShell(client: firstClient)));
+      expect(firstClient.fetchEventsLimits, <int?>[64]);
+      await tester.pump();
+      expect(firstClient.hasEventListener, isTrue);
+
+      await tester.pumpWidget(_host(GridDevToolsShell(client: secondClient)));
+      expect(firstClient.hasEventListener, isFalse);
+      expect(firstClient.fetchEventsLimits, <int?>[64]);
+      expect(secondClient.fetchEventsLimits, <int?>[64]);
+      await tester.pump();
+      expect(secondClient.hasEventListener, isTrue);
+
+      firstClient.emit(
+        const GridEventRecord(type: 'oldClientEvent', id: 'old-client'),
+      );
+      secondClient.emit(
+        const GridEventRecord(type: 'newClientEvent', id: 'new-client'),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Events'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('newClientEvent'), findsOneWidget);
+      expect(find.text('new-client'), findsOneWidget);
+      expect(find.text('oldClientEvent'), findsNothing);
+      expect(find.text('old-client'), findsNothing);
+      expect(firstClient.fetchEventsLimits, <int?>[64]);
+      expect(secondClient.fetchEventsLimits, <int?>[64]);
+    });
+
     testWidgets('renders advertised plugins + tools on handshake success', (
       tester,
     ) async {

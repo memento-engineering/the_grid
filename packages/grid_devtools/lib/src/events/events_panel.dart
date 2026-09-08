@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../protocol/grid_exploration_client.dart';
+import '../protocol/grid_exploration_client.dart' show GridEventRecord;
 import 'events_source.dart';
 
 /// Events timeline panel — lists recent grid [GridEventRecord]s (type + id +
@@ -8,57 +8,18 @@ import 'events_source.dart';
 ///
 /// Seeds from the `events` tool and grows live off the
 /// `grid.controller.event` postEvent stream, both via [GridEventsSource].
-/// The panel constructs and owns its source from the injected
-/// [GridExplorationClient]; the client is the only seam, so a fake drives
-/// the whole widget in tests with no VM service.
-class EventsPanel extends StatefulWidget {
-  const EventsPanel({super.key, required this.client, this.seedLimit = 64});
+/// Capture ownership stays with the shell so events are collected before this
+/// lazily built panel is first visited.
+class EventsPanel extends StatelessWidget {
+  const EventsPanel({super.key, required this.source});
 
-  final GridExplorationClient client;
-
-  /// How many recent events to seed from the ring buffer on attach.
-  final int seedLimit;
-
-  @override
-  State<EventsPanel> createState() => _EventsPanelState();
-}
-
-class _EventsPanelState extends State<EventsPanel> {
-  late GridEventsSource _source;
-
-  @override
-  void initState() {
-    super.initState();
-    _start();
-  }
-
-  void _start() {
-    _source = GridEventsSource(widget.client);
-    // ignore: unawaited_futures
-    _source.start(seedLimit: widget.seedLimit);
-  }
-
-  @override
-  void didUpdateWidget(covariant EventsPanel oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.client != widget.client) {
-      // ignore: unawaited_futures
-      _source.close();
-      _start();
-    }
-  }
-
-  @override
-  void dispose() {
-    // ignore: unawaited_futures
-    _source.close();
-    super.dispose();
-  }
+  /// Started event source owned by the surrounding shell.
+  final GridEventsSource source;
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<List<GridEventRecord>>(
-      valueListenable: _source.records,
+      valueListenable: source.records,
       builder: (context, records, _) {
         if (records.isEmpty) {
           return const Center(

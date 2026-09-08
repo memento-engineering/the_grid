@@ -5,7 +5,8 @@
 /// It never imports beads_dart directly. The
 /// protocol-call layer ([GridExplorationClient]) is kept thin and separate
 /// from the widgets so the panels are unit-testable against a fake client
-/// with no live VM service.
+/// with no live VM service. [GridEventsSource] capture is owned above the
+/// lazily built [EventsPanel] and injected for rendering.
 library;
 
 export 'package:leonard_contract/leonard_contract.dart'

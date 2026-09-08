@@ -5,21 +5,21 @@ import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
 import 'package:genesis_foundation/genesis_foundation.dart';
 
 import '../events/events_panel.dart';
-import '../protocol/grid_exploration_client.dart';
+import '../events/events_source.dart';
 import '../replay/snapshot_json_loader.dart';
 
 /// Station, projected-tree inspector, and exploration event observations.
 final class ProjectionTabs extends StatefulWidget {
   /// Creates the three-tab surface over an injected diagnostics [source].
   const ProjectionTabs({
-    required this.client,
+    required this.eventsSource,
     required this.source,
     this.snapshotJsonPicker = pickSnapshotJson,
     super.key,
   });
 
-  /// Exploration client used only by the Events tab.
-  final GridExplorationClient client;
+  /// Event capture shared with the lazily built Events tab.
+  final GridEventsSource eventsSource;
 
   /// Transport-neutral source shared by the two projection tabs.
   final TreeSource source;
@@ -112,7 +112,7 @@ final class _ProjectionTabsState extends State<ProjectionTabs> {
                   key: ValueKey(_activeSource),
                   source: _activeSource,
                 ),
-                EventsPanel(client: widget.client),
+                EventsPanel(source: widget.eventsSource),
               ],
             ),
           ),
