@@ -27,4 +27,8 @@ abstract interface class StationView {
   /// per-store `GraphSyncStats` under `stats`, the federation's per-member
   /// freshness vector under `freshness`. Empty when the assembly exposes none.
   Map<String, Object?> syncStatus();
+
+  /// The JSON-shaped trajectory posture and soak instrument for `/status`.
+  /// Empty when this station exposes no trajectory data.
+  Map<String, Object?> trajectoryStatus();
 }

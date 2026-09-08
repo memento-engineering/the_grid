@@ -49,6 +49,7 @@ final class StationCommandHandler implements GridCommandHandler {
     required Map<String, WorkCommandStore> workStoresByIdentity,
     StationTrajectoryRecorder? recorder,
     TrajectoryStepSnapshot Function()? stepSnapshot,
+    int Function(String sessionId)? headEpochForSession,
     DualReadMode dualReadMode = DualReadMode.off,
     DualReadAccounting? dualReadAccounting,
   }) : _stateSource = stateSource,
@@ -57,6 +58,7 @@ final class StationCommandHandler implements GridCommandHandler {
        _stateOwnership = stateOwnership,
        _recorder = recorder ?? StationTrajectoryRecorder.disabled(),
        _stepSnapshot = stepSnapshot,
+       _headEpochForSession = headEpochForSession,
        _dualReadMode = dualReadMode,
        _dualReadAccounting = dualReadAccounting,
        _workStoresByIdentity = Map<String, WorkCommandStore>.of(
@@ -84,6 +86,7 @@ final class StationCommandHandler implements GridCommandHandler {
   /// from, and they are read the same way: `primary`, snapshot health `live`,
   /// and a boot that has not disengaged.
   final TrajectoryStepSnapshot Function()? _stepSnapshot;
+  final int Function(String sessionId)? _headEpochForSession;
   final DualReadMode _dualReadMode;
 
   /// The boot's SHARED accounting — the same object the bridge's passes use,
@@ -1068,12 +1071,17 @@ final class StationCommandHandler implements GridCommandHandler {
     if (_dualReadAccounting?.overlayDisengaged ?? false) return beadCursor;
     final snapshot = read();
     if (snapshot.health != TrajectorySnapshotHealth.live) return beadCursor;
+    final headEpoch = _headEpochForSession?.call(sessionId) ?? 0;
     final rows = snapshot.byP2SessionId(sessionId).toList(growable: false);
     if (rows.isEmpty) {
       // No same-session rows: the P2-miss rule applied wholesale — the legacy
       // bead for every node, never a sibling session's rows (the OVERLAY
       // IDENTITY RULE, step axis).
-      _dualReadAccounting?.p2Miss += beadCursor.length;
+      _dualReadAccounting?.recordP2Misses(
+        sessionId: sessionId,
+        count: beadCursor.length,
+        headEpoch: headEpoch,
+      );
       return beadCursor;
     }
     final merge = mergeStepCursor(
@@ -1084,20 +1092,31 @@ final class StationCommandHandler implements GridCommandHandler {
     );
     final accounting = _dualReadAccounting;
     if (accounting != null) {
+      accounting.recordP2Misses(
+        sessionId: sessionId,
+        count: merge.nodes
+            .where((node) => node.classification == StepNodeClass.p2Miss)
+            .length,
+        headEpoch: headEpoch,
+      );
       for (final node in merge.nodes) {
         switch (node.classification) {
           case StepNodeClass.p2Miss:
-            accounting.p2Miss += 1;
+            break;
           case StepNodeClass.p2Orphan:
             accounting.p2Orphan += 1;
           case StepNodeClass.stepLag:
             accounting.openStepLag += 1;
           case StepNodeClass.divergence:
-            if (accounting.noteEvent(
-              'stepDivergence:$sessionId:${node.stepPath}',
-            )) {
-              accounting.stepDivergences += 1;
-            }
+            accounting.recordStepDivergence(
+              sessionId: sessionId,
+              stepPath: node.stepPath,
+              field: 'state',
+              legacyValue: node.legacyState ?? '<no step bead>',
+              foldValue: node.foldState ?? '<no P2 row>',
+              cause: DualReadDivergenceCause.unexplained,
+              headEpoch: headEpoch,
+            );
           case StepNodeClass.match:
             break;
         }

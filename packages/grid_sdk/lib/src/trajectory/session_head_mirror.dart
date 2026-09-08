@@ -40,10 +40,13 @@ import 'package:state_notifier/state_notifier.dart' show RemoveListener;
 /// name; both vocabularies are the §4 DDL's, so a divergence would be a typo,
 /// not a design question.
 @immutable
-final class SessionHeadRowView implements SessionHeadView {
+final class SessionHeadRowView implements EpochScopedSessionHeadView {
   const SessionHeadRowView(this.row);
 
   final SessionHeadRow row;
+
+  @override
+  int get headEpoch => row.headEpoch;
 
   @override
   String get sessionId => row.sessionId;

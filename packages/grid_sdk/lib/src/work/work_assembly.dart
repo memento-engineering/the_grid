@@ -100,6 +100,7 @@ class StationWorkRuntime implements SubstationProvisioner {
     required Map<String, MemberFreshness> Function() workFreshness,
     required BeadOwnershipPredicate stateOwnership,
     required StationCommandHandler handler,
+    required DualReadAccounting? dualReadAccounting,
     required FederatedSnapshotSource federated,
     required Map<String, GridRuntimeBundle> bundles,
     required Map<String, WorkCommandStore> commandStores,
@@ -121,6 +122,7 @@ class StationWorkRuntime implements SubstationProvisioner {
        _workFreshness = workFreshness,
        _stateOwnership = stateOwnership,
        _handler = handler,
+       _dualReadAccounting = dualReadAccounting,
        _federated = federated,
        _bundles = bundles,
        _commandStores = commandStores,
@@ -183,6 +185,7 @@ class StationWorkRuntime implements SubstationProvisioner {
   final Map<String, MemberFreshness> Function() _workFreshness;
   final BeadOwnershipPredicate _stateOwnership;
   final StationCommandHandler _handler;
+  final DualReadAccounting? _dualReadAccounting;
   final FederatedSnapshotSource _federated;
   final Map<String, GridRuntimeBundle> _bundles;
   final Map<String, WorkCommandStore> _commandStores;
@@ -259,6 +262,35 @@ class StationWorkRuntime implements SubstationProvisioner {
 
   /// Samples [snapshot] through the owned wedge latch for one status request.
   WedgeState wedgeFor(JoinedSnapshot snapshot) => _driver.wedgeFor(snapshot);
+
+  /// A fresh plain-value read of the trajectory posture, append counters,
+  /// and—when dual read is armed—the shared soak-certification instrument.
+  Map<String, Object?> trajectoryStatus() {
+    final status = trajectory.status;
+    final harness = <String, Object?>{
+      'mode': status.mode.name,
+      'cause': status.cause,
+      'epoch': status.epoch,
+      'appends': status.appended,
+      'append_dedupes': status.deduped,
+      'append_drops': status.dropped,
+      'append_suppressed': status.suppressed,
+      'append_refused_testimony': status.refusedTestimony,
+      'append_queue_depth': status.queueDepth,
+      'exit_join_gaps': status.exitJoinGaps,
+      'append_ack_p99_ms': status.appendAckP99Ms,
+    };
+    final accounting = _dualReadAccounting;
+    if (accounting != null) {
+      harness.addAll(
+        accounting.toCertificationJson(
+          firstEpochClaimedAt: trajectory.sessionHeads.firstEpochClaimedAt,
+          appendAckP99Ms: status.appendAckP99Ms,
+        ),
+      );
+    }
+    return Map<String, Object?>.unmodifiable(harness);
+  }
 
   /// Brings the off-tree machinery up in the pinned ordering (ADR-0007 §4):
   /// controllers start → the freshness barrier completes → the restart
@@ -875,7 +907,9 @@ Future<StationWorkRuntime> assembleStationWork({
   // Under `observe` nothing here changes a decision: the comparator
   // classifies, flares, and writes evidence. `primary` (C3) serves the
   // certified overlay from the same functions.
-  final dualReadAccounting = dualReadArmed ? DualReadAccounting() : null;
+  final dualReadAccounting = dualReadArmed
+      ? DualReadAccounting(soakWindowEpoch: trajectoryConfig.soakWindowEpoch)
+      : null;
   // THE STEP-AXIS DUAL READ (cut-wiring C4) — the same accounting object, so
   // one boot owes one durable round summary carrying both axes, and so the
   // OVERLAY DISENGAGE LATCH covers both: a boot whose P1 mirror missed an
@@ -924,6 +958,7 @@ Future<StationWorkRuntime> assembleStationWork({
               queueDepth: status.queueDepth,
             );
           },
+          appendAckP99Ms: () => trajectory.status.appendAckP99Ms,
         );
   final workCommandStores = <String, WorkCommandStore>{};
   for (final spec in substations) {
@@ -984,6 +1019,10 @@ Future<StationWorkRuntime> assembleStationWork({
     // constructor — the same three inputs the bridge derives engagement from.
     // UNWIRED at `off` (r13): the handler never reaches the mirror at all.
     stepSnapshot: dualReadArmed ? () => trajectory.stepCursors : null,
+    headEpochForSession: dualReadArmed
+        ? (sessionId) =>
+              sessionHeadEpochOf(trajectory.sessionHeads.bySessionId(sessionId))
+        : null,
     dualReadMode: trajectoryConfig.dualRead,
     dualReadAccounting: dualReadAccounting,
   );
@@ -1213,6 +1252,7 @@ Future<StationWorkRuntime> assembleStationWork({
     workFreshness: () => work.freshness,
     stateOwnership: stateOwnership,
     handler: commands,
+    dualReadAccounting: dualReadAccounting,
     federated: work,
     bundles: bundles,
     commandStores: workCommandStores,
