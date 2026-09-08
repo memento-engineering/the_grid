@@ -210,7 +210,7 @@ return $default(_that.station,_that.controlDoor);case _:
 
 class _StationChoice extends StationChoice {
   const _StationChoice({required this.station, required this.controlDoor}): super._();
-
+  
 
 /// The advertised station identifier.
 @override final  String station;

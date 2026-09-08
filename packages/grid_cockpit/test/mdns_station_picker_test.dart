@@ -9,6 +9,7 @@ import 'package:zero_conf_grid_assets/zero_conf_grid_assets.dart';
 import 'fakes.dart';
 
 StationLockDiscovery _missingLock() => StationLockDiscovery(
+  isCapable: () async => true,
   workspaceRoots: () async => const <Uri>[],
   readFile: (_) async => throw StateError('unexpected lock read'),
 );

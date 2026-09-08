@@ -31,7 +31,12 @@ void main() {
       discovery: _discovery(capable: false),
     );
 
-    await tester.pumpWidget(GridCockpitApp(controller: controller));
+    await tester.pumpWidget(
+      GridCockpitApp(
+        controller: controller,
+        stationDiscovery: MdnsStationDiscovery(browser: FakeMdnsBrowser()),
+      ),
+    );
     await tester.pumpAndSettle();
 
     const notice =
