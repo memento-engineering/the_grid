@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '43 9 * * *'
   # Merge-queue validation: without this trigger, required checks never run on
   # queued merge groups and every enqueued PR hangs forever.
   merge_group:
@@ -58,6 +60,7 @@ jobs:
           echo "::endgroup::"
 
   trajectory-guards:
+    if: ${{ github.event_name != 'merge_group' }}
     name: Trajectory guards (dolt) — Stage-0 seven + Stage-1
     runs-on: ubuntu-latest
     # tg-2zao: this is a SHARED runner. W6's drain and p99 pins are
@@ -68,7 +71,11 @@ jobs:
     # runner-relative form (packages/grid_trajectory/test/support/
     # guard_budget.dart); every guard still RUNS and still fails closed
     # (decision: stage0-guards-gate-prs). Unset on a developer machine, the
-    # tight absolute values stay asserted.
+    # tight absolute values stay asserted. tg-d2bk: shared-runner W6 p99 is a
+    # trend signal rather than a merge-queue landing gate, so this job remains
+    # fail-closed on pull requests, pushes to main, and the daily schedule but
+    # does not run on merge groups (decision:
+    # trajectory-guards-do-not-gate-merge-groups).
     env:
       TRAJ_GUARD_SHARED_RUNNER: '1'
     steps:
