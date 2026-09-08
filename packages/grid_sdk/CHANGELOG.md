@@ -1,3 +1,9 @@
+## 0.3.0-rc.20
+
+- Added: `runGrid` mounts the tree inside one guarded zone; an uncaught asynchronous error born after mount is contained, attributed as a `GridHookError`, and reported through `onError`, whose default is now loud-but-non-fatal — the resident survives instead of dying (tg-co52, #372).
+- Added: boot state-store maintenance is homed on `runGrid` behind `GridDelegate.maintainsStateStoreOnBoot` (default `false`); `StateStoreGc` moved here from grid_cli; a maintenance failure is advisory and reported through `onError` or one stderr line, never thrown (tg-bq4i, #374).
+- Floors `grid_engine` to `^0.3.0-rc.23`.
+
 ## 0.3.0-rc.19
 
 - Added: `TrajectoryDiscipline {shadow, cut}` and the cut lever, with the dry-run refusal preserving the caller's posture (tg-rcm3 #351, tg-k0pb #353); `TrajectoryHarness.appendAcked` with the one-`tickInterval` queue-wait deadline that bounds queue residence only, split `decisionBearingDropped` / `fireAndForgetDropped` accounting, and the cut-only shared admission halt composed in `work_assembly` (tg-ppo5, #364).

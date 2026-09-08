@@ -1,3 +1,9 @@
+## 0.5.0-rc.20
+
+- Breaking: `StateStoreGc` and `maintainStateStore` moved to grid_sdk and are no longer exported here; `UpCommand` no longer runs its own boot maintenance step (tg-bq4i, #374).
+- Fixed: the resident survives an uncaught post-mount error (tg-co52, #372).
+- Floors `grid_engine` to `^0.3.0-rc.23` and `grid_sdk` to `^0.3.0-rc.20`.
+
 ## 0.5.0-rc.19
 
 - Added: `session collect` operator verb (tg-yz4p, #361); the status payload carries admission facts and the soak instrument (#349, #354, #352).
