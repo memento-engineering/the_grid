@@ -173,6 +173,8 @@ class SessionScopeState extends State<SessionScope>
   /// scope is still RETRYING under [_maxMintAttempts].
   static const _mintFailedFlare = 'session.mintFailed';
   static const _mintAbandonedFlare = 'session.mintAbandoned';
+  static const _freshReadyFrontierRefusalReason =
+      'work bead is absent from the fresh ready frontier';
 
   /// A molecule pour has not produced a driveable step projection within the
   /// pour-sized observation window. This is deliberately scope-local rather
@@ -308,7 +310,8 @@ class SessionScopeState extends State<SessionScope>
   CapabilityRegistry? _registry;
 
   JoinedSnapshot? _joinedSnapshot;
-  Completer<JoinedSnapshot?>? _mintReadiness;
+  Completer<({JoinedSnapshot? snapshot, String? refusalReason})>?
+  _mintReadiness;
   DateTime? _mintDecisionAt;
   bool _mintBlockedReported = false;
   bool _requiresFreshMintSnapshot = false;
@@ -548,8 +551,10 @@ class SessionScopeState extends State<SessionScope>
   Timer? _mintGraceTimer;
   bool _mintGraceLapsed = false;
 
-  Future<bool> _awaitFreshReadySnapshot() async {
-    final completer = Completer<JoinedSnapshot?>();
+  Future<({JoinedSnapshot? snapshot, String? refusalReason})>
+  _awaitFreshReadySnapshot() async {
+    final completer =
+        Completer<({JoinedSnapshot? snapshot, String? refusalReason})>();
     _mintDecisionAt = DateTime.now();
     _mintBlockedReported = false;
     // A fresh mint decision opens a fresh refusal window: its FIRST refusal
@@ -559,14 +564,14 @@ class SessionScopeState extends State<SessionScope>
     _mintGraceLapsed = false;
     _mintReadiness = completer;
     _considerMintReadiness();
-    final snapshot = await completer.future;
+    final readiness = await completer.future;
     if (identical(_mintReadiness, completer)) {
       _mintReadiness = null;
       _mintDecisionAt = null;
     }
     _mintGraceTimer?.cancel();
     _mintGraceTimer = null;
-    return snapshot != null;
+    return readiness;
   }
 
   void _considerMintReadiness() {
@@ -618,21 +623,26 @@ class SessionScopeState extends State<SessionScope>
       if (joined != null && !joined.isTerminal) return;
     }
     if (!snapshot.graph.readyIds.contains(seed.bead.id)) {
-      // Per-evaluation again, above the same latch (§2.3).
-      _recordMintRefused('work bead is absent from the fresh ready frontier');
+      // This fresh frontier is a refusal decision. Record and flare it once,
+      // then finish the barrier so the admitted attempt can be abandoned.
+      _recordMintRefused(_freshReadyFrontierRefusalReason);
       if (!_mintBlockedReported) {
         _mintBlockedReported = true;
         _flare('session.mintRefused', {
           'workBeadId': seed.bead.id,
-          'reason': 'work bead is absent from the fresh ready frontier',
+          'reason': _freshReadyFrontierRefusalReason,
           'snapshotCapturedAt': snapshot.graph.capturedAt
               .toUtc()
               .toIso8601String(),
         });
       }
+      completer.complete((
+        snapshot: null,
+        refusalReason: _freshReadyFrontierRefusalReason,
+      ));
       return;
     }
-    completer.complete(snapshot);
+    completer.complete((snapshot: snapshot, refusalReason: null));
   }
 
   /// The legacy mount-attempt bead's durable ordinal (`grid.attempt.count`),
@@ -651,23 +661,17 @@ class SessionScopeState extends State<SessionScope>
         : <String, dynamic>{kLegacyAttemptCountKey: count};
   }
 
-  /// The per-bead-per-window dedupe on refusal records (§2.5's amended note):
-  /// `_considerMintReadiness` runs on EVERY joined-snapshot publish, so a
-  /// publish storm against a persistently-refused bead would append one
-  /// refusal per publish, indefinitely — the noisiest record type racing the
-  /// 4096-entry queue whose overflow disqualifies the round. An IDENTICAL
-  /// (same-reason) refusal within the window dedupes; a reason CHANGE records
+  /// The per-bead-per-window dedupe on refusal records (§2.5's amended note).
+  /// An IDENTICAL refusal within the window dedupes; a reason CHANGE records
   /// immediately, and each fresh mint decision resets the window
-  /// ([_awaitFreshReadySnapshot]), so refusal pressure stays countable at the
-  /// tick's own granularity without being per-publish.
+  /// ([_awaitFreshReadySnapshot]).
   static const _mintRefusalDedupeWindow = Duration(seconds: 30);
 
   DateTime? _lastMintRefusalAt;
   String? _lastMintRefusalReason;
 
-  /// `attempt.mint.outcome(refused)` — per REFUSED evaluation of the
-  /// fresh-snapshot barrier (§2.3), above the flare latch, deduped per bead
-  /// per [_mintRefusalDedupeWindow] (see its doc).
+  /// `attempt.mint.outcome(refused)` — one refused mint decision (§2.3),
+  /// deduped per bead per [_mintRefusalDedupeWindow] (see its doc).
   void _recordMintRefused(String reason) {
     final now = DateTime.now();
     final last = _lastMintRefusalAt;
@@ -720,8 +724,24 @@ class SessionScopeState extends State<SessionScope>
       }
     }
     if (_requiresFreshMintSnapshot) {
-      final snapshotReady = await _awaitFreshReadySnapshot();
-      if (!snapshotReady) {
+      final readiness = await _awaitFreshReadySnapshot();
+      final refusalReason = readiness.refusalReason;
+      if (refusalReason != null) {
+        await _stopAbandonedMint(
+          stage: 'fresh-snapshot',
+          retiredSessionId: retiredId,
+          refusalReason: refusalReason,
+          blockUntilFreshReady: true,
+        );
+        if (!_cancelled && context.mounted) {
+          setState(() {
+            _failed = true;
+            _resolving = false;
+          });
+        }
+        return;
+      }
+      if (readiness.snapshot == null) {
         await _stopAbandonedMint(
           stage: 'fresh-snapshot',
           retiredSessionId: retiredId,
@@ -854,10 +874,17 @@ class SessionScopeState extends State<SessionScope>
             'clause': refusal.clause,
             'reason': refusal.detail,
           });
-          setState(() {
-            _failed = true;
-            _resolving = false;
-          });
+          await _stopAbandonedMint(
+            stage: 'session-attempt-refused',
+            retiredSessionId: retiredSessionId,
+            refusalReason: refusal.detail,
+          );
+          if (!_cancelled && context.mounted) {
+            setState(() {
+              _failed = true;
+              _resolving = false;
+            });
+          }
           return;
         default:
           throw StateError('invalid session-attempt result');
@@ -1149,18 +1176,24 @@ class SessionScopeState extends State<SessionScope>
   Future<bool> _stopAbandonedMint({
     required String stage,
     required String? retiredSessionId,
+    String? refusalReason,
+    bool blockUntilFreshReady = false,
   }) async {
-    final reason = _cancelled
-        ? 'cancelled'
-        : !context.mounted
-        ? 'unmounted'
-        : null;
+    final reason =
+        refusalReason ??
+        (_cancelled
+            ? 'cancelled'
+            : !context.mounted
+            ? 'unmounted'
+            : null);
     if (reason == null) return false;
+    final reservationToken = _admissionReservation?.reservationToken;
     final retiredMintSessionId = await _ctx?.admission.abandonSessionAttempt(
       workBeadId: seed.bead.id,
       sessionId: _moleculeSessionId,
-      reservationToken: _admissionReservation?.reservationToken,
+      reservationToken: reservationToken,
       services: _services,
+      blockUntilFreshReady: blockUntilFreshReady,
     );
     if (retiredMintSessionId != null) {
       await _recordTerminal(
@@ -1941,8 +1974,8 @@ class SessionScopeState extends State<SessionScope>
   void dispose() {
     final mintReadiness = _mintReadiness;
     if (mintReadiness != null && !mintReadiness.isCompleted) {
-      // Null completion means disposal; there is no other producer.
-      mintReadiness.complete(null);
+      // A null/null completion means disposal; there is no other producer.
+      mintReadiness.complete((snapshot: null, refusalReason: null));
     }
     _mintReadiness = null;
     _mintDecisionAt = null;

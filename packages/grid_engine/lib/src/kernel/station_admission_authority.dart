@@ -242,6 +242,7 @@ final class StationAdmissionAuthority {
   final Map<String, Future<void>> _mountAttemptWrites =
       <String, Future<void>>{};
   final Set<String> _retryBlocked = <String>{};
+  final Set<String> _blockedUntilFreshReady = <String>{};
   bool _disposed = false;
 
   /// Copies the current admission budget and refusal state for status views.
@@ -313,6 +314,10 @@ final class StationAdmissionAuthority {
         ],
       );
     }
+
+    _blockedUntilFreshReady.removeWhere(
+      (beadId) => !snapshot.graph.beadsById.containsKey(beadId),
+    );
 
     final scopeKey = (
       stateSubstation: _stateSubstation,
@@ -417,6 +422,29 @@ final class StationAdmissionAuthority {
               !retiredRound,
         null => false,
       };
+      if (_blockedUntilFreshReady.contains(bead.id)) {
+        if (snapshot.graph.readyIds.contains(bead.id) ||
+            protectsLiveWork ||
+            bead.isClosed) {
+          _blockedUntilFreshReady.remove(bead.id);
+        } else {
+          // The pause-is-a-non-terminal-blocking-disposition precedent keeps
+          // released, unmounted rows out of capacity until this authority
+          // synchronously readmits them. Keeping this row out of
+          // capacityWaiting lets the next ordered candidate claim the returned
+          // slot in this same admission flush.
+          if (candidate.session case final session?
+              when !session.isTerminal &&
+                  session.pauseState == SessionPauseState.none) {
+            // A live retired round still consumes substation capacity while
+            // its fresh successor remains quarantined.
+          } else {
+            scope._mountedIds.remove(bead.id);
+          }
+          waiting.add(candidate);
+          continue;
+        }
+      }
       final linked = snapshot.linkedSessions(bead.id);
       final verdict = linkedSessionVerdictOf(linked);
       if (!bead.isClosed && verdict is BlockedLinkedSession) {
@@ -1040,11 +1068,16 @@ final class StationAdmissionAuthority {
 
   /// Compensates a lifecycle cancellation only when this authority still owns
   /// the supplied attempt. Null and stale identities are harmless no-ops.
+  ///
+  /// [blockUntilFreshReady] quarantines only an identity-matched, unconsumed
+  /// pre-session reservation. The bead then rejoins ordinary priority and
+  /// capacity competition after a fresh snapshot reports it ready.
   Future<String?> abandonSessionAttempt({
     required String workBeadId,
     required String? sessionId,
     required Object? reservationToken,
     required ServiceBundle services,
+    bool blockUntilFreshReady = false,
   }) async {
     final reservation = _reservations[workBeadId];
     if (sessionId == null) {
@@ -1054,6 +1087,9 @@ final class StationAdmissionAuthority {
           reservation.sessionId != null ||
           reservation.minting) {
         return null;
+      }
+      if (blockUntilFreshReady) {
+        _blockedUntilFreshReady.add(workBeadId);
       }
       _release(workBeadId);
       _notifyListeners();
@@ -1125,6 +1161,9 @@ final class StationAdmissionAuthority {
     required bool reapMolecule,
     required ServiceBundle services,
   }) async {
+    final scope = _scopeForBead(workBeadId);
+    final latch = '$sessionId:${GateCloseCause.supersededRound.wireValue}';
+    if (scope != null && !scope._gateSweepsScheduled.add(latch)) return;
     if (reapMolecule) {
       await _bestEffortReap(sessionId, 'reworked', services);
     }
@@ -1546,6 +1585,7 @@ final class StationAdmissionAuthority {
     }
     _retryTimers.clear();
     _retryBlocked.clear();
+    _blockedUntilFreshReady.clear();
     _mountAttemptWrites.clear();
     _lastScopeByBead.clear();
     _scopeBySessionId.clear();

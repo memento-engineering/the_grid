@@ -429,7 +429,7 @@ void main() {
       addTearDown(() {
         SessionScopeState.freshMintSnapshotGrace = originalGrace;
       });
-      SessionScopeState.freshMintSnapshotGrace = Duration.zero;
+      SessionScopeState.freshMintSnapshotGrace = const Duration(days: 1);
       final runner = RecordingBdRunner(createdId: 'tgdog-round2');
       final transport = _RecordingTransport();
       final beforeDecision = DateTime.now().subtract(const Duration(days: 1));
@@ -469,12 +469,10 @@ void main() {
         ),
       );
       m.owner.flush();
-      await _pumpUntil(
-        m.owner,
-        () => transport.named('session.mintRefused').isNotEmpty,
-      );
+      await _waitUntil(() => runner.callsFor('close').isNotEmpty);
+      await _pump();
       expect(runner.workCreates, isEmpty);
-      expect(transport.named('session.mintRefused'), hasLength(1));
+      expect(transport.named('session.mintRefused'), isEmpty);
 
       m.owner.dispose();
       await _pump();
@@ -911,10 +909,26 @@ void main() {
           ),
         );
         m.owner.flush();
-        await _pump();
+        await _pumpUntil(
+          m.owner,
+          () => transport.named('session.mintAbandoned').isNotEmpty,
+        );
 
         expect(f.runner.workCreates, isEmpty);
-        expect(transport.named('session.mintRefused'), hasLength(1));
+        const refusalReason =
+            'work bead is absent from the fresh ready frontier';
+        final refused = transport.named('session.mintRefused');
+        expect(refused, hasLength(1));
+        expect(refused.single.data['reason'], refusalReason);
+        final abandoned = transport.named('session.mintAbandoned');
+        expect(abandoned, hasLength(1));
+        expect(abandoned.single.data['reason'], refusalReason);
+        expect(
+          f.ctx.admission.admissionStatus.reservations.where(
+            (reservation) => reservation.bead == 'tg-1',
+          ),
+          isEmpty,
+        );
 
         joined.push(
           _joined(
@@ -936,11 +950,33 @@ void main() {
         await _pumpUntil(m.owner, () => f.runner.workCreates.length >= 2);
 
         expect(f.runner.workCreates, hasLength(2));
+        final reworkedCloses = f.runner
+            .callsFor('close')
+            .where((call) => call[1] == 'tgdog-round1')
+            .toList();
+        expect(reworkedCloses, hasLength(1));
+        expect(reworkedCloses.single.join(' '), contains('reworked'));
         expect(
-          f.runner.callsFor('close').where((call) => call[1] == 'tgdog-round1'),
+          f.runner.workCreates.where(
+            (call) => call.length <= 1 || call[1] != '--graph',
+          ),
           hasLength(1),
         );
+        expect(
+          f.runner.workCreates.where(
+            (call) => call.length > 1 && call[1] == '--graph',
+          ),
+          hasLength(1),
+        );
+        final successorReservation = f
+            .ctx
+            .admission
+            .admissionStatus
+            .reservations
+            .singleWhere((reservation) => reservation.bead == 'tg-1');
+        expect(successorReservation.sessionId, 'tgdog-round2');
         expect(transport.named('session.mintRefused'), hasLength(1));
+        expect(transport.named('session.mintAbandoned'), hasLength(1));
       },
     );
 

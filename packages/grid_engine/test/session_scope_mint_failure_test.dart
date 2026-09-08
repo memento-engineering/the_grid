@@ -102,6 +102,22 @@ class _RecordingTransport implements ExplorationTransport {
       flares.where((f) => f.name == name);
 }
 
+final class _CapturingTrajectorySink implements TrajectoryRecordSink {
+  final records = <TrajectoryRecord>[];
+
+  @override
+  bool get accepting => true;
+
+  @override
+  void enqueue(
+    TrajectoryRecord record, {
+    DateTime? occurredAt,
+    String? substation,
+    TrajectoryProvenance provenance = TrajectoryProvenance.observed,
+    String? provenanceBasis,
+  }) => records.add(record);
+}
+
 final class _CountingReapReader implements BeadProbeReader {
   final beadIds = <String>[];
 
@@ -342,6 +358,7 @@ class _ThrowOnceGateReader extends RecordingBdRunner {
 StationServices _ctxOver(
   BdRunner runner, {
   BeadProbeReader reader = const EmptyBeadProbeReader(),
+  int maxConcurrentWork = kDefaultMaxConcurrentWork,
 }) => StationServices(
   provider: FakeRuntimeProvider(),
   writer: StationBeadWriter(
@@ -350,6 +367,7 @@ StationServices _ctxOver(
     ownership: BeadOwnershipPredicate(const {stateSubstation}),
   ),
   stateSubstation: stateSubstation,
+  maxConcurrentWork: maxConcurrentWork,
 );
 
 ({TreeOwner owner, Branch root}) _mountFull({
@@ -402,14 +420,16 @@ final class _MutableReservationHost extends StatefulSeed {
     required this.registry,
     required this.services,
     required this.onState,
+    this.trajectoryScope,
   });
 
   final StationAdmissionReservation initialReservation;
-  final JoinedSnapshot snapshot;
+  final JoinedSnapshot? snapshot;
   final StationServices ctx;
   final CapabilityRegistry registry;
   final ServiceBundle services;
   final void Function(_MutableReservationHostState state) onState;
+  final TrajectoryRecorderScope? trajectoryScope;
 
   @override
   State<_MutableReservationHost> createState() =>
@@ -429,10 +449,23 @@ final class _MutableReservationHostState
   void provide(StationAdmissionReservation reservation) =>
       setState(() => _reservation = reservation);
 
+  void refreshReservationDependency() {
+    final reservation = _reservation;
+    setState(() {
+      _reservation = StationAdmissionReservation(
+        candidate: reservation.candidate,
+        substationId: reservation.substationId,
+        mountAttempt: reservation.mountAttempt,
+        sessionId: reservation.sessionId,
+        adopted: reservation.adopted,
+        reservationToken: reservation.reservationToken,
+      );
+    });
+  }
+
   @override
-  Seed build(TreeContext context) => InheritedSeed<JoinedSnapshot>(
-    value: seed.snapshot,
-    child: InheritedSeed<StationServices>(
+  Seed build(TreeContext context) {
+    Seed child = InheritedSeed<StationServices>(
       value: seed.ctx,
       child: InheritedSeed<CapabilityRegistry>(
         value: seed.registry,
@@ -441,21 +474,36 @@ final class _MutableReservationHostState
           child: Provider<StationAdmissionReservation>.value(
             _reservation,
             key: const ValueKey('preserved-reservation'),
-            child: SessionScope(bead: bead('tg-1'), circuit: _code),
+            child: SessionScope(
+              bead: bead('tg-1'),
+              circuit: _code,
+              existingSession: _reservation.candidate.session,
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+    if (seed.snapshot case final snapshot?) {
+      child = InheritedSeed<JoinedSnapshot>(value: snapshot, child: child);
+    }
+    if (seed.trajectoryScope case final trajectoryScope?) {
+      child = InheritedSeed<TrajectoryRecorderScope>(
+        value: trajectoryScope,
+        child: child,
+      );
+    }
+    return child;
+  }
 }
 
 ({TreeOwner owner, Branch root}) _mountPreservedReservation({
   required StationAdmissionReservation reservation,
-  required JoinedSnapshot snapshot,
+  required JoinedSnapshot? snapshot,
   required StationServices ctx,
   required CapabilityRegistry registry,
   required ServiceBundle services,
   required void Function(_MutableReservationHostState state) onState,
+  TrajectoryRecorderScope? trajectoryScope,
 }) {
   final owner = TreeOwner();
   final root = owner.mountRoot(
@@ -467,6 +515,7 @@ final class _MutableReservationHostState
         registry: registry,
         services: services,
         onState: onState,
+        trajectoryScope: trajectoryScope,
       ),
     ),
   );
@@ -691,6 +740,222 @@ void main() {
       final beforeBackoff = invalidations;
       await Future<void>.delayed(const Duration(milliseconds: 1100));
       expect(invalidations, beforeBackoff + 1);
+    },
+  );
+
+  test(
+    'fresh-frontier refusal abandons its reservation and admits a rival in the same tick',
+    () async {
+      final runner = _FailCreateRunner(failCreates: 0);
+      final ctx = _ctxOver(runner, maxConcurrentWork: 2);
+      addTearDown(ctx.dispose);
+      final transport = _RecordingTransport();
+      final registry = RecordingCapabilityRegistry(circuits: const {});
+      final workBead = bead('tg-1');
+      final rivalBead = bead('tg-2');
+      const retired = SessionProjection(
+        workBeadId: 'tg-1#r1',
+        sessionId: 'tgdog-round1',
+      );
+      final candidate = StationAdmissionCandidate(
+        bead: workBead,
+        session: retired,
+      );
+      final rival = StationAdmissionCandidate(bead: rivalBead, session: null);
+      const config = SubstationConfig(
+        substationId: 'tg',
+        ownedSubstations: {'tg'},
+        maxConcurrentWork: 2,
+      );
+      final initiallyReady = JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: [workBead, rivalBead],
+          dependencies: const [],
+          readyIds: const {'tg-1', 'tg-2'},
+          capturedAt: DateTime.now(),
+        ),
+      );
+      final initial = ctx.admission.admitPending(
+        initiallyReady,
+        config,
+        ServiceBundle(transport: transport),
+        [candidate],
+      );
+      expect(initial.admitted.single.candidate.bead.id, 'tg-1');
+
+      final dependencyBlocked = JoinedSnapshot(
+        graph: GraphSnapshot.fromParts(
+          beads: [workBead, rivalBead],
+          dependencies: const [
+            BeadDependency(issueId: 'tg-1', dependsOnId: 'tg-2'),
+          ],
+          readyIds: const {'tg-2'},
+          capturedAt: DateTime.now().add(const Duration(seconds: 1)),
+        ),
+      );
+      final services = ServiceBundle(transport: transport);
+      final mounted = _mountPreservedReservation(
+        reservation: initial.admitted.single,
+        snapshot: dependencyBlocked,
+        ctx: ctx,
+        registry: registry,
+        services: services,
+        onState: (_) {},
+      );
+      addTearDown(mounted.owner.dispose);
+      await _pumpUntil(
+        mounted.owner,
+        () => transport.named('session.mintAbandoned').isNotEmpty,
+      );
+
+      const refusalReason = 'work bead is absent from the fresh ready frontier';
+      final refused = transport.named('session.mintRefused').single;
+      expect(refused.data['reason'], refusalReason);
+      final abandoned = transport.named('session.mintAbandoned').single;
+      expect(abandoned.data['stage'], 'fresh-snapshot');
+      expect(abandoned.data['reason'], refusalReason);
+      expect(ctx.admission.admissionStatus.reservations, isEmpty);
+      expect(runner.workCreates, isEmpty);
+
+      final sameSnapshotAdmission = ctx.admission.admitPending(
+        dependencyBlocked,
+        config,
+        services,
+        [candidate, rival],
+      );
+      expect(sameSnapshotAdmission.waiting.single.bead.id, 'tg-1');
+      expect(sameSnapshotAdmission.admitted.single.candidate.bead.id, 'tg-2');
+      expect(
+        ctx.admission.admissionStatus.reservations.map(
+          (reservation) => reservation.bead,
+        ),
+        ['tg-2'],
+      );
+    },
+  );
+
+  test('session-attempt refusal abandons an unconsumed reservation', () async {
+    final runner = _FailCreateRunner(failCreates: 0);
+    final ctx = _ctxOver(runner);
+    addTearDown(ctx.dispose);
+    final transport = _RecordingTransport();
+    final services = ServiceBundle(transport: transport);
+    final registry = RecordingCapabilityRegistry(circuits: const {});
+    final workBead = bead('tg-1');
+    final candidate = StationAdmissionCandidate(bead: workBead, session: null);
+    final reservationSnapshot = JoinedSnapshot(
+      graph: _work([workBead], {'tg-1'}),
+    );
+    final initial = ctx.admission.admitPending(
+      reservationSnapshot,
+      const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
+      services,
+      [candidate],
+    );
+    expect(initial.admitted, hasLength(1));
+
+    const live = SessionProjection(workBeadId: 'tg-1', sessionId: 'tgdog-live');
+    final liveSnapshot = JoinedSnapshot(
+      graph: reservationSnapshot.graph,
+      sessionsByWorkBead: const {'tg-1': live},
+    );
+    final mounted = _mountPreservedReservation(
+      reservation: initial.admitted.single,
+      snapshot: liveSnapshot,
+      ctx: ctx,
+      registry: registry,
+      services: services,
+      onState: (_) {},
+    );
+    addTearDown(mounted.owner.dispose);
+    await _pumpUntil(
+      mounted.owner,
+      () => transport.named('session.mintAbandoned').isNotEmpty,
+    );
+
+    final refused = transport.named('session.mintRefused').single;
+    expect(refused.data['clause'], 'live-attempt');
+    expect(
+      refused.data['reason'],
+      'a live durable attempt already links this bead',
+    );
+    final abandoned = transport.named('session.mintAbandoned').single;
+    expect(abandoned.data['stage'], 'session-attempt-refused');
+    expect(
+      abandoned.data['reason'],
+      'a live durable attempt already links this bead',
+    );
+    expect(ctx.admission.admissionStatus.reservations, isEmpty);
+    expect(runner.workCreates, isEmpty);
+  });
+
+  test(
+    'unavailable fresh snapshot remains a one-shot observable wait',
+    () async {
+      final runner = _FailCreateRunner(failCreates: 0);
+      final ctx = _ctxOver(runner);
+      addTearDown(ctx.dispose);
+      final transport = _RecordingTransport();
+      final services = ServiceBundle(transport: transport);
+      final registry = RecordingCapabilityRegistry(circuits: const {});
+      final sink = _CapturingTrajectorySink();
+      final trajectoryScope = TrajectoryRecorderScope(
+        StationTrajectoryRecorder(
+          sink: sink,
+          substationPrefixes: const {'tg', 'tgdog'},
+        ),
+      );
+      final workBead = bead('tg-1');
+      const retired = SessionProjection(
+        workBeadId: 'tg-1#r1',
+        sessionId: 'tgdog-round1',
+      );
+      final candidate = StationAdmissionCandidate(
+        bead: workBead,
+        session: retired,
+      );
+      final initial = ctx.admission.admitPending(
+        JoinedSnapshot(graph: _work([workBead], {'tg-1'})),
+        const SubstationConfig(substationId: 'tg', ownedSubstations: {'tg'}),
+        services,
+        [candidate],
+      );
+      expect(initial.admitted, hasLength(1));
+      late _MutableReservationHostState host;
+      final mounted = _mountPreservedReservation(
+        reservation: initial.admitted.single,
+        snapshot: null,
+        ctx: ctx,
+        registry: registry,
+        services: services,
+        onState: (state) => host = state,
+        trajectoryScope: trajectoryScope,
+      );
+      addTearDown(mounted.owner.dispose);
+      await _pumpUntil(
+        mounted.owner,
+        () => transport.named('session.mintRefused').isNotEmpty,
+      );
+
+      host.refreshReservationDependency();
+      mounted.owner.flush();
+      await _pump();
+      host.refreshReservationDependency();
+      mounted.owner.flush();
+      await _pump();
+
+      const unavailableReason = 'fresh joined snapshot is unavailable';
+      final refused = transport.named('session.mintRefused').single;
+      expect(refused.data['reason'], unavailableReason);
+      final outcomes = sink.records
+          .where((record) => record.recordType == 'attempt.mint.outcome')
+          .toList();
+      expect(outcomes, hasLength(1));
+      expect(outcomes.single.payloadToJson()['phase'], 'refused');
+      expect(outcomes.single.payloadToJson()['reason'], unavailableReason);
+      expect(transport.named('session.mintAbandoned'), isEmpty);
+      expect(runner.workCreates, isEmpty);
+      expect(ctx.admission.admissionStatus.reservations.single.bead, 'tg-1');
     },
   );
 
