@@ -8,6 +8,7 @@ const allowedRuntimeDependencies = <String>{
   'grid_cockpit_ui',
   'grid_diagnostics_contract',
   'grid_station_client',
+  'zero_conf_grid_assets',
 };
 
 const forbiddenText = <String>{

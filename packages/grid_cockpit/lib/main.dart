@@ -7,5 +7,6 @@ void main() => runApp(
     controller: CockpitConnectionController(
       discovery: currentDirectoryStationDiscovery(),
     ),
+    stationDiscovery: localNetworkStationDiscovery(),
   ),
 );

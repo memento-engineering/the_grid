@@ -20,6 +20,8 @@ export 'src/cockpit_dashboard.dart' show CockpitDashboard;
 export 'src/current_directory_station_discovery.dart'
     show currentDirectoryStationDiscovery;
 export 'src/grid_cockpit_app.dart' show GridCockpitApp;
+export 'src/mdns_station_discovery.dart'
+    show MdnsStationDiscovery, StationChoice, localNetworkStationDiscovery;
 
 /// Cockpit vocabulary for the shared live-connection state.
 typedef CockpitConnectionState = LiveConnectionState;

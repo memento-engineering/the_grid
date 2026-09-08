@@ -55,7 +55,12 @@ void main() {
           LiveTreeSource(wire),
     );
 
-    await tester.pumpWidget(GridCockpitApp(controller: controller));
+    await tester.pumpWidget(
+      GridCockpitApp(
+        controller: controller,
+        stationDiscovery: MdnsStationDiscovery(browser: FakeMdnsBrowser()),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.byType(StationOverviewView), findsOneWidget);
@@ -94,7 +99,12 @@ void main() {
         },
       );
 
-      await tester.pumpWidget(GridCockpitApp(controller: controller));
+      await tester.pumpWidget(
+        GridCockpitApp(
+          controller: controller,
+          stationDiscovery: MdnsStationDiscovery(browser: FakeMdnsBrowser()),
+        ),
+      );
       await tester.pumpAndSettle();
 
       final tokenField = tester.widget<TextField>(
