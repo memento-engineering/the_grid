@@ -139,41 +139,61 @@ void main() {
     );
   });
 
-  test('cut refusal names requested and resolved values in posture order', () {
-    final refusal = const TrajectoryConfig(
+  test('cut refusal names explicit weaker caller requests', () {
+    const modeConfig = TrajectoryConfig(
       discipline: TrajectoryDiscipline.cut,
       mode: TrajectoryConfigMode.disabled,
-      dualRead: DualReadMode.observe,
-    ).cutPostureRefusal!;
+    );
+    for (final config in [modeConfig, modeConfig.asDisabled]) {
+      final refusal = config.cutPostureRefusal!;
+      expect(refusal.requestedMode, TrajectoryConfigMode.disabled);
+      expect(refusal.resolvedMode, TrajectoryConfigMode.required);
+      expect(refusal.requestedDualRead, isNull);
+      expect(refusal.resolvedDualRead, DualReadMode.primary);
+    }
 
-    expect(refusal.requestedMode, TrajectoryConfigMode.disabled);
-    expect(refusal.resolvedMode, TrajectoryConfigMode.required);
-    expect(refusal.requestedDualRead, DualReadMode.observe);
-    expect(refusal.resolvedDualRead, DualReadMode.primary);
+    const dualReadConfig = TrajectoryConfig(
+      discipline: TrajectoryDiscipline.cut,
+      dualRead: DualReadMode.off,
+    );
+    for (final config in [dualReadConfig, dualReadConfig.asDisabled]) {
+      final refusal = config.cutPostureRefusal!;
+      expect(refusal.requestedMode, isNull);
+      expect(refusal.resolvedMode, TrajectoryConfigMode.required);
+      expect(refusal.requestedDualRead, DualReadMode.off);
+      expect(refusal.resolvedDualRead, DualReadMode.primary);
+    }
+
+    final refusal = dualReadConfig.cutPostureRefusal!;
     expect(
       refusal.toString(),
-      'CutPostureRefused(requested dualRead=observe, resolved '
-      'dualRead=primary; requested mode=disabled, resolved mode=required)',
+      'CutPostureRefused(requested dualRead=off, resolved dualRead=primary)',
     );
   });
 
-  test('asDisabled preserves discipline and the cut implication', () {
-    const shadow = TrajectoryConfig(dualRead: DualReadMode.observe);
-    final disabledShadow = shadow.asDisabled;
-    expect(disabledShadow.discipline, TrajectoryDiscipline.shadow);
-    expect(disabledShadow.mode, TrajectoryConfigMode.disabled);
-    expect(disabledShadow.dualRead, DualReadMode.observe);
+  test(
+    'asDisabled forces no-write mode without rewriting cut caller requests',
+    () {
+      const shadow = TrajectoryConfig(dualRead: DualReadMode.observe);
+      final disabledShadow = shadow.asDisabled;
+      expect(disabledShadow.discipline, TrajectoryDiscipline.shadow);
+      expect(disabledShadow.mode, TrajectoryConfigMode.disabled);
+      expect(disabledShadow.dualRead, DualReadMode.observe);
 
-    const cut = TrajectoryConfig(
-      discipline: TrajectoryDiscipline.cut,
-      mode: TrajectoryConfigMode.required,
-      dualRead: DualReadMode.primary,
-    );
-    final disabledCut = cut.asDisabled;
-    expect(disabledCut.discipline, TrajectoryDiscipline.cut);
-    expect(disabledCut.mode, TrajectoryConfigMode.required);
-    expect(disabledCut.dualRead, DualReadMode.primary);
-  });
+      const omittedCut = TrajectoryConfig(discipline: TrajectoryDiscipline.cut);
+      const matchingCut = TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+        mode: TrajectoryConfigMode.required,
+        dualRead: DualReadMode.primary,
+      );
+      for (final config in [omittedCut.asDisabled, matchingCut.asDisabled]) {
+        expect(config.discipline, TrajectoryDiscipline.cut);
+        expect(config.mode, TrajectoryConfigMode.disabled);
+        expect(config.dualRead, DualReadMode.primary);
+        expect(config.cutPostureRefusal, isNull);
+      }
+    },
+  );
 
   group('the composition seams (textual — these construction sites are only '
       'reachable from the live assembly)', () {

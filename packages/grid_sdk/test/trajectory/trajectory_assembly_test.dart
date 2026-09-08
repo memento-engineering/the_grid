@@ -110,6 +110,22 @@ void main() {
     await work.shutdown();
   });
 
+  test('dry-run cut assembly starts with trajectory disabled', () async {
+    final work = await assemble(
+      trajectoryConfig: const TrajectoryConfig(
+        discipline: TrajectoryDiscipline.cut,
+      ),
+    );
+    addTearDown(work.shutdown);
+
+    expect(work.trajectory.config.mode, TrajectoryConfigMode.disabled);
+    expect(work.trajectory.mode, TrajectoryHarnessMode.disabled);
+    expect(work.trajectory.config.cutPostureRefusal, isNull);
+
+    await work.start();
+    expect(work.lastRestartReport, isNotNull);
+  });
+
   test(
     'the default auto posture on an unprovisioned home is a quiet no-op',
     () async {
