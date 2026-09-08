@@ -22,6 +22,7 @@ library;
 
 import 'dart:convert';
 
+import '../domain/rework.dart' show reworkRoundOf;
 import '../domain/session_disposition.dart';
 import '../domain/session_head_read.dart';
 import '../domain/session_projection.dart';
@@ -56,10 +57,12 @@ final class _SessionCompareWindow {
   const _SessionCompareWindow({
     required this.legacy,
     required this.foldLastSeq,
+    required this.foldWasOpen,
   });
 
   final SessionHeadFacts legacy;
   final int foldLastSeq;
+  final bool foldWasOpen;
 }
 
 /// Runs the session-axis comparator and owns everything it accumulates.
@@ -130,6 +133,7 @@ class DualReadSessionObserver {
   final Map<String, _SessionCompareWindow> _compareWindowBySession =
       <String, _SessionCompareWindow>{};
   final Set<String> _operatorEditedSessions = <String>{};
+  final Set<String> _foldAheadOfLegacySessions = <String>{};
 
   /// Sessions already seen terminal — the transition edge the per-terminal
   /// round summary rides. A set, not a counter: the join recomputes on every
@@ -194,6 +198,7 @@ class DualReadSessionObserver {
       _retirementLag.retainOnly(const <String>{});
       _compareWindowBySession.clear();
       _operatorEditedSessions.clear();
+      _foldAheadOfLegacySessions.clear();
       _emitTerminalSummaries(sessions, snapshot);
       return const <String, SessionProjection>{};
     }
@@ -203,6 +208,7 @@ class DualReadSessionObserver {
     final laggingTerminals = <String>{};
     final laggingRetirements = <String>{};
     final beadsToSentinel = <String>{};
+    final q9EvidenceByBead = <String>{};
     final overlays = <String, SessionProjection>{};
     final overlaidBeadByKey = <String, String>{};
 
@@ -231,6 +237,10 @@ class DualReadSessionObserver {
       beadsToSentinel.add(head.workBeadId);
       _observeCompareWindow(legacy, head);
       final cause = _causeFor(sessionId);
+      final reworkRound = reworkRoundOf(head.workBeadId, legacy.workBeadId);
+      final q9RetiredRoundOpen =
+          reworkRound != null && reworkRound > 0 && head.isOpen;
+      if (q9RetiredRoundOpen) q9EvidenceByBead.add(head.workBeadId);
       final activeStepPath = _activeStepPathOf(legacy);
 
       // THE OVERLAY (C3), resolved for EVERY identity-matched head before any
@@ -267,19 +277,32 @@ class DualReadSessionObserver {
       // the bd bead and emits ONLY `roundRetired`, so between the re-key and
       // that record landing the pair reads legacy-terminal / P1-current-open —
       // which is the rework window, not a missing terminal.
-      final retired = isRetiredWorkBeadKey(legacy.workBeadId);
-      if (retired && head.isOpen && head.round > 0) {
-        // RETIREMENT IS LEGIBLE IN THE FOLD (§0.2), and this is its STEADY
-        // STATE, not a lag: `_closeRetiredReworkSession` closes the bd bead
-        // and emits ONLY `roundRetired`, so a retired session's P1 row stays
-        // `status='open'` FOREVER — by schema design. `round > 0` is what says
-        // so, and the two sides agree. Reading it as `terminalLag` would make
-        // every rework round an unhealable lag entry and the gates
-        // unsatisfiable.
+      final retiredKey = isRetiredWorkBeadKey(legacy.workBeadId);
+      if (q9RetiredRoundOpen && head.round > 0) {
+        // Q9: retirement is legible in both carriers, and P1 deliberately
+        // stays open until a terminal record exists. This is a divergence in
+        // the legacy tuple, but its cause is designed and separately counted.
+        _recordAndFlare(
+          DualReadComparison(
+            sessionId: sessionId,
+            workBeadId: head.workBeadId,
+            classification: DualReadClass.divergence,
+            mismatches: const [
+              DualReadFieldMismatch(
+                field: 'retirementLag',
+                foldValue: 'current-open',
+                legacyValue: 'retired-key',
+              ),
+            ],
+          ),
+          snapshot,
+          cause: DualReadDivergenceCause.retiredRoundOpenByDesign,
+          activeStepPath: activeStepPath,
+        );
         continue;
       }
       final currentOpen = head.isOpen && head.round == 0;
-      if (retired && currentOpen) {
+      if (retiredKey && currentOpen) {
         laggingRetirements.add(sessionId);
         final escalates = _retirementLag.observe(
           sessionId,
@@ -305,7 +328,9 @@ class DualReadSessionObserver {
               ],
             ),
             snapshot,
-            cause: cause,
+            cause: q9RetiredRoundOpen
+                ? DualReadDivergenceCause.retiredRoundOpenByDesign
+                : cause,
             activeStepPath: activeStepPath,
             headEpoch: sessionHeadEpochOf(head),
           );
@@ -316,7 +341,9 @@ class DualReadSessionObserver {
               workBeadId: head.workBeadId,
               classification: DualReadClass.retirementLag,
             ),
-            cause: cause,
+            cause: q9RetiredRoundOpen
+                ? DualReadDivergenceCause.retiredRoundOpenByDesign
+                : cause,
             activeStepPath: activeStepPath,
             headEpoch: sessionHeadEpochOf(head),
           );
@@ -387,6 +414,9 @@ class DualReadSessionObserver {
               0,
               (highest, epoch) => epoch > highest ? epoch : highest,
             ),
+        cause: q9EvidenceByBead.contains(workBeadId)
+            ? DualReadDivergenceCause.retiredRoundOpenByDesign
+            : DualReadDivergenceCause.unexplained,
       );
     }
 
@@ -405,6 +435,7 @@ class DualReadSessionObserver {
       (sessionId, _) => !matchedSessionIds.contains(sessionId),
     );
     _operatorEditedSessions.retainAll(matchedSessionIds);
+    _foldAheadOfLegacySessions.retainAll(matchedSessionIds);
     // THE NOTES RIDE THE END OF THE PASS, not its start (C3): `beginPass`
     // zeroes the GAUGES, and the gauges are half of what a gate reads —
     // `terminal_lag_open`, `miss_post_epoch`, `overlays_served`. A note
@@ -599,6 +630,10 @@ class DualReadSessionObserver {
         );
       case TerminalLagAction.escalate:
         accounting.healEscalations += 1;
+        final escalationCause =
+            cause == DualReadDivergenceCause.operatorStoreEdit
+            ? cause
+            : DualReadDivergenceCause.legacyTerminalNoFoldTerminal;
         _recordAndFlare(
           DualReadComparison(
             sessionId: sessionId,
@@ -613,7 +648,7 @@ class DualReadSessionObserver {
             ],
           ),
           snapshot,
-          cause: cause,
+          cause: escalationCause,
           activeStepPath: activeStepPath,
           headEpoch: sessionHeadEpochOf(head),
         );
@@ -659,16 +694,26 @@ class DualReadSessionObserver {
     final previous = _compareWindowBySession[sessionId];
     final attemptId = head.attemptId;
     final appendQueued = attemptId != null && _appendQueuedFor(attemptId);
+    _foldAheadOfLegacySessions.remove(sessionId);
     if (previous != null) {
       if (head.lastSeq != previous.foldLastSeq || appendQueued) {
         _operatorEditedSessions.remove(sessionId);
       } else if (_sessionFactsDiffer(previous.legacy, current)) {
         _operatorEditedSessions.add(sessionId);
       }
+      final foldAdvanced = head.lastSeq > previous.foldLastSeq;
+      if (previous.foldWasOpen &&
+          !head.isOpen &&
+          !previous.legacy.isTerminal &&
+          !_sessionFactsDiffer(previous.legacy, current) &&
+          foldAdvanced) {
+        _foldAheadOfLegacySessions.add(sessionId);
+      }
     }
     _compareWindowBySession[sessionId] = _SessionCompareWindow(
       legacy: current,
       foldLastSeq: head.lastSeq,
+      foldWasOpen: head.isOpen,
     );
   }
 
@@ -679,7 +724,9 @@ class DualReadSessionObserver {
       left.closedAt != right.closedAt;
 
   DualReadDivergenceCause _causeFor(String sessionId) =>
-      _operatorEditedSessions.contains(sessionId)
+      _foldAheadOfLegacySessions.contains(sessionId)
+      ? DualReadDivergenceCause.foldAheadOfLegacy
+      : _operatorEditedSessions.contains(sessionId)
       ? DualReadDivergenceCause.operatorStoreEdit
       : DualReadDivergenceCause.unexplained;
 

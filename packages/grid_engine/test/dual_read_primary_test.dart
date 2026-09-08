@@ -608,7 +608,9 @@ void main() {
           );
         }
       }
-      expect(observer.accounting.divergences, isZero);
+      expect(observer.accounting.divergences, 1);
+      expect(observer.accounting.retiredRoundOpenByDesignDivergences, 1);
+      expect(observer.accounting.unexplainedDivergences, isZero);
     });
   });
 

@@ -9,6 +9,9 @@
 /// normal-window race), V3-B1 (the guard skip).
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:grid_engine/grid_engine.dart';
 import 'package:test/test.dart';
 
@@ -484,8 +487,27 @@ void main() {
         DualReadDivergenceCause.operatorStoreEdit,
         DualReadDivergenceCause.foldAheadOfLegacy,
         DualReadDivergenceCause.foldBackedMountFacts,
+        DualReadDivergenceCause.retiredRoundOpenByDesign,
+        DualReadDivergenceCause.legacyTerminalNoFoldTerminal,
         DualReadDivergenceCause.unexplained,
       ]);
+      for (final cause in const [
+        DualReadDivergenceCause.retiredRoundOpenByDesign,
+        DualReadDivergenceCause.legacyTerminalNoFoldTerminal,
+      ]) {
+        expect(
+          () => DualReadAccounting().recordStepDivergence(
+            sessionId: 's1',
+            stepPath: 'a',
+            field: 'state',
+            legacyValue: 'running',
+            foldValue: 'complete',
+            cause: cause,
+          ),
+          throwsArgumentError,
+          reason: '${cause.wire} is session-only',
+        );
+      }
       var now = DateTime.utc(2026, 9, 1, 16);
       final observer = DualReadSessionObserver(
         mode: DualReadMode.observe,
@@ -644,6 +666,8 @@ void main() {
       final flare = sinks.divergences().single;
       expect(flare['field'], 'cardinality');
       expect(flare['session_id'], 's1,s2');
+      expect(flare['cause'], 'unexplained');
+      expect(observer.accounting.retiredRoundOpenByDesignDivergences, 0);
     });
 
     test('two current-open rows on DIFFERENT beads are not a breach', () {
@@ -664,47 +688,105 @@ void main() {
       expect(sinks.flares, isEmpty);
     });
 
-    test('a full REWORK lifecycle produces retirementLag transients, ZERO '
-        'divergences, and lag zero at round end', () {
-      final sinks = _Sinks();
-      var now = DateTime.utc(2026, 8, 31, 14);
-      final observer = DualReadSessionObserver(
+    test('Q9 retired rounds are explained on the session axis', () {
+      final steadySinks = _Sinks();
+      final steady = DualReadSessionObserver(
         mode: DualReadMode.observe,
-        onFlare: sinks.flare,
+        onFlare: steadySinks.flare,
+      );
+      steady.observe(
+        _map([
+          _legacy(
+            sessionId: 'steady',
+            workBeadId: 'tg-9abc#r2',
+            isTerminal: true,
+          ),
+        ]),
+        _Snapshot([_Head(sessionId: 'steady', round: 2)]),
+      );
+      expect(
+        steadySinks.divergences().single,
+        containsPair('cause', 'retired-round-open-by-design'),
+      );
+      expect(steadySinks.divergences().single['field'], 'retirementLag');
+
+      var now = DateTime.utc(2026, 8, 31, 14);
+      final darkSinks = _Sinks();
+      final dark = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: darkSinks.flare,
         clock: () => now,
       );
-      // 1. the re-key: the bd bead is closed and re-keyed `#r1`, the P1 row is
-      //    still CURRENT-open because `roundRetired` has not landed.
-      final retiredLegacy = _legacy(
-        sessionId: 's1',
-        workBeadId: 'tg-9abc#r1',
-        isTerminal: true,
+      final darkSessions = _map([
+        _legacy(sessionId: 'dark', workBeadId: 'tg-9abc#r1', isTerminal: true),
+        _legacy(sessionId: 'successor'),
+      ]);
+      final darkSnapshot = _Snapshot([
+        _Head(sessionId: 'dark'),
+        _Head(sessionId: 'successor'),
+      ]);
+      dark.observe(darkSessions, darkSnapshot);
+      expect(
+        darkSinks.divergences().single['field'],
+        'cardinality',
+        reason: 'the retirement mismatch still observes its grace',
       );
-      observer.observe(
-        _map([retiredLegacy]),
-        _Snapshot([_Head(sessionId: 's1')]),
+      expect(dark.accounting.retirementLagObserved, 1);
+      expect(dark.accounting.openRetirementLag, 1);
+      now = now.add(const Duration(seconds: 91));
+      dark.observe(darkSessions, darkSnapshot);
+      expect(
+        darkSinks.divergences().map(
+          (flare) => (flare['field'], flare['cause']),
+        ),
+        [
+          ('cardinality', 'retired-round-open-by-design'),
+          ('retirementLag', 'retired-round-open-by-design'),
+        ],
       );
-      expect(observer.accounting.retirementLagObserved, 1);
-      expect(observer.accounting.openRetirementLag, 1);
-      expect(observer.accounting.divergences, isZero);
-
-      // 2. `roundRetired` lands: the row leaves the CURRENT partition, and the
-      //    successor is minted. Both sides agree again.
-      now = now.add(const Duration(seconds: 5));
-      observer.observe(
-        _map([retiredLegacy, _legacy(sessionId: 's2')]),
+      dark.observe(
+        darkSessions,
         _Snapshot([
-          _Head(sessionId: 's1', round: 1, isOpen: true),
-          _Head(sessionId: 's2'),
+          _Head(sessionId: 'dark', round: 1),
+          _Head(sessionId: 'successor'),
         ]),
       );
-      expect(observer.accounting.divergences, isZero);
-      expect(observer.accounting.openRetirementLag, isZero);
-      expect(observer.accounting.openLagEntries, isZero);
+      expect(dark.accounting.openRetirementLag, 0);
+      expect(darkSinks.divergences(), hasLength(2));
+
+      for (final malformedKey in ['tg-9abc#r0', 'tg-9abc#void-dead']) {
+        final controlSinks = _Sinks();
+        var controlNow = DateTime.utc(2026, 8, 31, 14);
+        final control = DualReadSessionObserver(
+          mode: DualReadMode.observe,
+          onFlare: controlSinks.flare,
+          clock: () => controlNow,
+        );
+        final sessions = _map([
+          _legacy(
+            sessionId: 'control',
+            workBeadId: malformedKey,
+            isTerminal: true,
+          ),
+          _legacy(sessionId: 'successor'),
+        ]);
+        final snapshot = _Snapshot([
+          _Head(sessionId: 'control'),
+          _Head(sessionId: 'successor'),
+        ]);
+        control.observe(sessions, snapshot);
+        controlNow = controlNow.add(const Duration(seconds: 91));
+        control.observe(sessions, snapshot);
+        expect(
+          controlSinks.divergences().map((flare) => flare['cause']).toSet(),
+          {'unexplained'},
+          reason: malformedKey,
+        );
+        expect(control.accounting.retiredRoundOpenByDesignDivergences, 0);
+      }
     });
 
-    test('a retired row still CURRENT past the grace WITH the successor '
-        'present escalates to a divergence (r9)', () {
+    test('Q9 round-summary accounting is cumulative and deduped', () {
       final sinks = _Sinks();
       var now = DateTime.utc(2026, 8, 31, 14);
       final observer = DualReadSessionObserver(
@@ -720,21 +802,137 @@ void main() {
         _Head(sessionId: 's1'),
         _Head(sessionId: 's2'),
       ]);
-      List<String> fields() => [
-        for (final flare in sinks.divergences()) flare['field']!,
-      ];
       observer.observe(sessions, snapshot);
-      // The successor's arrival with the retired row still CURRENT is ALSO a
-      // genuine two-current-open partition, so the cardinality sentinel speaks
-      // immediately; the retirement escalation waits out its grace.
-      expect(fields(), ['cardinality']);
       now = now.add(const Duration(seconds: 91));
-      observer.observe(sessions, snapshot);
-      expect(fields(), ['cardinality', 'retirementLag']);
+      observer
+        ..observe(sessions, snapshot)
+        ..observe(sessions, snapshot)
+        ..observe(sessions, snapshot);
+
+      expect(sinks.divergences(), hasLength(2));
+      expect(observer.accounting.cardinalityBreaches, 1);
+      expect(observer.accounting.divergences, 1);
+      expect(observer.accounting.retiredRoundOpenByDesignDivergences, 2);
+      expect(observer.accounting.unexplainedDivergences, 0);
+      final json = observer.accounting.toJson(
+        mode: DualReadMode.observe,
+        health: TrajectorySnapshotHealth.live,
+        snapshotVersion: 7,
+      );
+      expect(json['retired_round_open_by_design_divergences'], 2);
+      final semantics = json['counter_semantics']! as Map<String, String>;
+      expect(
+        semantics['retired_round_open_by_design_divergences'],
+        'cumulative',
+      );
     });
   });
 
   group('MONOTONIC TERMINALITY — the ONE escalation rule (§0.3, r8)', () {
+    test('a fold terminal one pass ahead of legacy is explained', () {
+      final sinks = _Sinks();
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+      );
+      final sessions = _map([_legacy()]);
+      observer.observe(
+        sessions,
+        _Snapshot([_Head(sessionId: 's1', lastSeq: 20)]),
+      );
+      final closed = _Snapshot([
+        _Head(
+          sessionId: 's1',
+          isOpen: false,
+          outcome: SessionHeadOutcome.failed,
+          lastSeq: 21,
+        ),
+      ]);
+      observer.observe(sessions, closed);
+
+      final flare = sinks.divergences().single;
+      expect(flare['field'], 'isTerminal');
+      expect(flare['cause'], 'fold-ahead-of-legacy');
+      expect(observer.accounting.foldAheadOfLegacyDivergences, 1);
+      expect(observer.accounting.unexplainedDivergences, 0);
+      final summary = observer.accounting.toJson(
+        mode: DualReadMode.observe,
+        health: TrajectorySnapshotHealth.live,
+        snapshotVersion: closed.version,
+      );
+      expect(summary['fold_ahead_of_legacy_divergences'], 1);
+      expect(
+        (summary['counter_semantics']!
+            as Map<String, String>)['fold_ahead_of_legacy_divergences'],
+        'cumulative',
+      );
+
+      // With no further fold advance the one-pass marker is gone. The
+      // persistent field remains deduped rather than producing another flare.
+      observer.observe(sessions, closed);
+      expect(sinks.divergences(), hasLength(1));
+      expect(observer.accounting.foldAheadOfLegacyDivergences, 1);
+    });
+
+    test('a terminal-lag escalation names the missing fold terminal', () {
+      final sinks = _Sinks();
+      var now = DateTime.utc(2026, 9, 1, 17);
+      final observer = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        onFlare: sinks.flare,
+        clock: () => now,
+        healer: sinks.heal,
+      );
+      final terminal = _map([_legacy(isTerminal: true, completed: true)]);
+      final openFold = _Snapshot([_Head(sessionId: 's1', attemptId: 'att-1')]);
+      observer.observe(terminal, openFold);
+      now = now.add(const Duration(seconds: 91));
+      observer.observe(terminal, openFold);
+      observer.observe(terminal, openFold);
+
+      final flare = sinks.divergences().single;
+      expect(flare['field'], 'terminalLag');
+      expect(flare['cause'], 'legacy-terminal-no-fold-terminal');
+      expect(observer.accounting.legacyTerminalNoFoldTerminalDivergences, 1);
+      expect(observer.accounting.unexplainedDivergences, 0);
+      final summary = observer.accounting.toJson(
+        mode: DualReadMode.observe,
+        health: TrajectorySnapshotHealth.live,
+        snapshotVersion: openFold.version,
+      );
+      expect(summary['legacy_terminal_no_fold_terminal_divergences'], 1);
+      expect(
+        (summary['counter_semantics']!
+            as Map<
+              String,
+              String
+            >)['legacy_terminal_no_fold_terminal_divergences'],
+        'cumulative',
+      );
+
+      final operator = DualReadSessionObserver(
+        mode: DualReadMode.observe,
+        clock: () => now,
+      );
+      final unchangedHead = _Snapshot([
+        _Head(sessionId: 's1', attemptId: 'att-1', lastSeq: 5),
+      ]);
+      operator.observe(_map([_legacy()]), unchangedHead);
+      operator.observe(terminal, unchangedHead);
+      now = now.add(const Duration(seconds: 91));
+      operator.observe(terminal, unchangedHead);
+      expect(operator.accounting.operatorStoreEditDivergences, 2);
+      expect(operator.accounting.legacyTerminalNoFoldTerminalDivergences, 0);
+
+      final organic = DualReadSessionObserver(mode: DualReadMode.observe);
+      organic.observe(
+        _map([_legacy()]),
+        _Snapshot([_Head(sessionId: 's1', held: true)]),
+      );
+      expect(organic.accounting.unexplainedDivergences, 1);
+      expect(organic.accounting.legacyTerminalNoFoldTerminalDivergences, 0);
+    });
+
     test('classification affects counting only: append race still heals every '
         'cause', () {
       final healPayloads = <(String, String, String)>[];
@@ -787,7 +985,7 @@ void main() {
         observer.observe(terminal, postRaceSnapshot);
         expect(sinks.heals, hasLength(1));
         final expectedCause = foldAdvanced
-            ? DualReadDivergenceCause.unexplained
+            ? DualReadDivergenceCause.legacyTerminalNoFoldTerminal
             : DualReadDivergenceCause.operatorStoreEdit;
         expect(observer.accounting.divergenceDetails, isNotEmpty);
         expect(
@@ -807,6 +1005,14 @@ void main() {
             fail('the session comparator never mints fold-ahead-of-legacy');
           case DualReadDivergenceCause.foldBackedMountFacts:
             fail('this probe does not compare fold-backed mount facts');
+          case DualReadDivergenceCause.retiredRoundOpenByDesign:
+            fail('this probe does not compare a retired round');
+          case DualReadDivergenceCause.legacyTerminalNoFoldTerminal:
+            expect(
+              observer.accounting.legacyTerminalNoFoldTerminalDivergences,
+              greaterThan(0),
+            );
+            expect(observer.accounting.unexplainedDivergences, 0);
           case DualReadDivergenceCause.unexplained:
             expect(observer.accounting.unexplainedDivergences, greaterThan(0));
             expect(observer.accounting.operatorStoreEditDivergences, 0);
@@ -1295,5 +1501,67 @@ void main() {
       expect(semantics['step_lag_escalations'], 'cumulative');
       expect(semantics['step_lag_max_ms'], 'cumulative');
     });
+  });
+
+  test('lunar epoch 50 pow-gcx9 flares replay as Q9-designed', () {
+    final fixture = File('test/fixtures/lunar_epoch_50_dual_read_flares.jsonl')
+        .readAsLinesSync()
+        .map(
+          (line) => Map<String, String>.from(
+            jsonDecode(line) as Map<String, dynamic>,
+          ),
+        )
+        .toList(growable: false);
+    expect(fixture, hasLength(2));
+    expect(fixture.map((flare) => flare['cause']).toSet(), {'unexplained'});
+
+    const sessionIds = [
+      'tranquility-03w2ta',
+      'tranquility-5pj4vs',
+      'tranquility-752lb9',
+    ];
+    final sinks = _Sinks();
+    var now = DateTime.utc(2026, 9, 6, 12);
+    final observer = DualReadSessionObserver(
+      mode: DualReadMode.observe,
+      onFlare: sinks.flare,
+      clock: () => now,
+    );
+    final sessions = _map([
+      _legacy(
+        sessionId: sessionIds.first,
+        workBeadId: 'pow-gcx9#r1',
+        isTerminal: true,
+      ),
+    ]);
+    final snapshot = _Snapshot([
+      for (final sessionId in sessionIds)
+        _Head(sessionId: sessionId, workBeadId: 'pow-gcx9'),
+    ], version: 1);
+
+    observer.observe(sessions, snapshot);
+    now = now.add(kRetirementLagGrace + const Duration(seconds: 1));
+    observer.observe(sessions, snapshot);
+
+    final expected = [
+      for (final historical in fixture)
+        <String, String>{
+          ...historical,
+          'cause': 'retired-round-open-by-design',
+        },
+    ];
+    final actual = sinks.divergences().toList(growable: false);
+    expect(actual, expected);
+    expect(actual, hasLength(2));
+    expect(actual.map((flare) => flare['work_bead']).toSet(), {'pow-gcx9'});
+    expect(actual.map((flare) => flare['snapshot_version']).toSet(), {'1'});
+    expect(actual.map((flare) => flare['field']), [
+      'cardinality',
+      'retirementLag',
+    ]);
+    expect(actual.first['session_id']!.split(','), sessionIds);
+    expect(actual.last['session_id'], sessionIds.first);
+    expect(observer.accounting.retiredRoundOpenByDesignDivergences, 2);
+    expect(observer.accounting.unexplainedDivergences, 0);
   });
 }
