@@ -11,6 +11,23 @@ library;
 
 export 'package:leonard_contract/leonard_contract.dart'
     show kLeonardExtensionPrefix;
+export 'package:grid_station_client/grid_station_client.dart'
+    show
+        LiveConnected,
+        LiveConnecting,
+        LiveConnectionController,
+        LiveConnectionState,
+        LiveDisconnected,
+        LiveDiscovering,
+        LiveFailed,
+        LiveManual,
+        LiveTreeSourceConnector,
+        StationLockDiscovery,
+        StationLockDiscoveryFailure,
+        TextFileReader,
+        WebSocketConnector,
+        WebSocketTreeWireSource,
+        WorkspaceRootsReader;
 
 export 'src/events/events_panel.dart' show EventsPanel;
 export 'src/events/events_source.dart' show GridEventsSource;
@@ -23,25 +40,6 @@ export 'src/handshake_state.dart'
         HandshakeLoading,
         HandshakeState;
 export 'src/live/live_connection_bar.dart' show LiveConnectionBar;
-export 'src/live/live_connection_controller.dart'
-    show
-        LiveConnected,
-        LiveConnecting,
-        LiveConnectionController,
-        LiveConnectionState,
-        LiveDisconnected,
-        LiveDiscovering,
-        LiveFailed,
-        LiveManual,
-        LiveTreeSourceConnector;
-export 'src/live/station_lock_discovery.dart'
-    show
-        StationLockDiscovery,
-        StationLockDiscoveryFailure,
-        TextFileReader,
-        WorkspaceRootsReader;
-export 'src/live/websocket_tree_wire_source.dart'
-    show WebSocketConnector, WebSocketTreeWireSource;
 export 'src/protocol/grid_exploration_client.dart'
     show
         GridBindingMissing,

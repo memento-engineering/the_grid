@@ -3,27 +3,27 @@ import 'dart:convert';
 import 'package:grid_diagnostics_contract/grid_diagnostics_contract.dart'
     show StationLockRecord;
 
-/// Reads IDE workspace roots from the connected tooling daemon.
+/// Supplies candidate workspace roots in lookup order.
 typedef WorkspaceRootsReader = Future<List<Uri>> Function();
 
-/// Reads a UTF-8 text file through the tooling daemon.
+/// Reads a UTF-8 text file through an injected platform adapter.
 typedef TextFileReader = Future<String> Function(Uri uri);
 
-/// Finds the first usable station lock in IDE workspace order.
+/// Finds the first usable station lock in candidate-root order.
 final class StationLockDiscovery {
-  /// Creates a discovery service over injected DTD adapters.
+  /// Creates discovery over injected root and text-reading adapters.
   const StationLockDiscovery({
     required this.workspaceRoots,
     required this.readFile,
   });
 
-  /// Workspace-root adapter.
+  /// Candidate-root adapter.
   final WorkspaceRootsReader workspaceRoots;
 
-  /// File-reading adapter.
+  /// Text-reading adapter.
   final TextFileReader readFile;
 
-  /// Discovers the first record with both control fields.
+  /// Discovers the first record with non-blank control credentials.
   Future<StationLockRecord> discover() async {
     final failures = <Object>[];
     try {
@@ -33,8 +33,8 @@ final class StationLockDiscovery {
           final record = StationLockRecord.fromJson(
             (jsonDecode(text) as Map).cast<String, Object?>(),
           );
-          if ((record.controlUrl?.isNotEmpty ?? false) &&
-              (record.token?.isNotEmpty ?? false)) {
+          if ((record.controlUrl?.trim().isNotEmpty ?? false) &&
+              (record.token?.trim().isNotEmpty ?? false)) {
             return record;
           }
           failures.add(
@@ -53,14 +53,14 @@ final class StationLockDiscovery {
 
 /// Typed aggregate describing why local lock discovery was unavailable.
 final class StationLockDiscoveryFailure implements Exception {
-  /// Creates a failure from the attempts made in workspace order.
+  /// Creates a failure from the attempts made in candidate-root order.
   const StationLockDiscoveryFailure(this.failures);
 
-  /// Individual workspace or DTD failures.
+  /// Individual root-enumeration, read, or decode failures.
   final List<Object> failures;
 
   @override
   String toString() => failures.isEmpty
-      ? 'No IDE workspace roots are available'
+      ? 'No workspace roots are available'
       : 'No usable station lock found: ${failures.join('; ')}';
 }

@@ -1,10 +1,9 @@
 import 'package:devtools_extensions/devtools_extensions.dart';
 import 'package:dtd/dtd.dart';
 import 'package:flutter/material.dart';
+import 'package:grid_station_client/grid_station_client.dart';
 
 import 'src/grid_devtools_shell.dart';
-import 'src/live/live_connection_controller.dart';
-import 'src/live/station_lock_discovery.dart';
 import 'src/protocol/grid_exploration_client.dart';
 import 'src/protocol/vm_service_grid_client.dart';
 

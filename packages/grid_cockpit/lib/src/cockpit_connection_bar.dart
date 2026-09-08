@@ -1,25 +1,27 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:grid_station_client/grid_station_client.dart';
 
-/// Shell-level controls for discovering or manually connecting to a station.
-final class LiveConnectionBar extends StatefulWidget {
+/// Discovery and manual-connection controls for the standalone cockpit.
+final class CockpitConnectionBar extends StatefulWidget {
   /// Creates controls bound to [controller].
-  const LiveConnectionBar({super.key, required this.controller});
+  const CockpitConnectionBar({super.key, required this.controller});
 
-  /// The live connection state owner.
+  /// The shared live-connection owner.
   final LiveConnectionController controller;
 
   @override
-  State<LiveConnectionBar> createState() => _LiveConnectionBarState();
+  State<CockpitConnectionBar> createState() => _CockpitConnectionBarState();
 }
 
-class _LiveConnectionBarState extends State<LiveConnectionBar> {
-  final _url = TextEditingController();
+final class _CockpitConnectionBarState extends State<CockpitConnectionBar> {
+  final _host = TextEditingController();
   final _token = TextEditingController();
 
   @override
   void dispose() {
-    _url.dispose();
+    _host.dispose();
     _token.dispose();
     super.dispose();
   }
@@ -32,11 +34,11 @@ class _LiveConnectionBarState extends State<LiveConnectionBar> {
         final busy = state is LiveDiscovering || state is LiveConnecting;
         final connected = state is LiveConnected;
         final status = switch (state) {
-          LiveDisconnected() => 'Replay • live disconnected',
-          LiveDiscovering() => 'Discovering local station…',
+          LiveDisconnected() => 'Station disconnected',
+          LiveDiscovering() => 'Finding local station…',
           LiveManual(:final message) => message ?? 'Enter station credentials.',
           LiveConnecting() => 'Connecting…',
-          LiveConnected() => 'Live station connected',
+          LiveConnected() => 'Station connected',
           LiveFailed(:final message) => message,
         };
         return Material(
@@ -46,7 +48,7 @@ class _LiveConnectionBarState extends State<LiveConnectionBar> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(status, key: const Key('live.status')),
+                Text(status, key: const Key('cockpit.status')),
                 if (!connected) ...[
                   const SizedBox(height: 8),
                   Row(
@@ -54,19 +56,19 @@ class _LiveConnectionBarState extends State<LiveConnectionBar> {
                       Expanded(
                         flex: 2,
                         child: TextField(
-                          key: const Key('live.url'),
-                          controller: _url,
+                          key: const Key('cockpit.host'),
+                          controller: _host,
                           enabled: !busy,
                           decoration: const InputDecoration(
                             isDense: true,
-                            labelText: 'Station URL',
+                            labelText: 'Station host:port',
                           ),
                         ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: TextField(
-                          key: const Key('live.token'),
+                          key: const Key('cockpit.token'),
                           controller: _token,
                           enabled: !busy,
                           obscureText: true,
@@ -78,13 +80,17 @@ class _LiveConnectionBarState extends State<LiveConnectionBar> {
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
-                        key: const Key('live.connect'),
+                        key: const Key('cockpit.connect'),
                         onPressed: busy
                             ? null
-                            : () => widget.controller.connect(
-                                controlUrl: _url.text,
-                                token: _token.text,
-                              ),
+                            : () {
+                                unawaited(
+                                  widget.controller.connect(
+                                    controlUrl: _host.text,
+                                    token: _token.text,
+                                  ),
+                                );
+                              },
                         child: const Text('Connect'),
                       ),
                     ],
@@ -93,8 +99,10 @@ class _LiveConnectionBarState extends State<LiveConnectionBar> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      key: const Key('live.disconnect'),
-                      onPressed: widget.controller.disconnect,
+                      key: const Key('cockpit.disconnect'),
+                      onPressed: () {
+                        unawaited(widget.controller.disconnect());
+                      },
                       child: const Text('Disconnect'),
                     ),
                   ),
