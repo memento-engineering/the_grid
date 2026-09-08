@@ -22,7 +22,12 @@ import 'package:genesis_foundation/genesis_foundation.dart'
         TreeNode,
         TreeSnapshot;
 import 'package:grid_engine/grid_engine.dart'
-    show SessionProjection, configuredBdTypeNames;
+    show
+        MountEligible,
+        MountRefused,
+        SessionProjection,
+        configuredBdTypeNames,
+        dispatchableWorkClause;
 import 'package:grid_exploration/grid_exploration.dart'
     show DevModeHost, armDevMode, stationVmServiceUri;
 import 'package:grid_runtime/grid_runtime.dart'
@@ -685,10 +690,20 @@ class UpCommand extends Command<int> {
             .where((entry) => !entry.value.isTerminal)
             .toList(growable: false) ??
         const <MapEntry<String, SessionProjection>>[];
+    final dispatchableWork = dispatchableWorkClause(resident: true);
+    bool isMountedCandidate(String id) {
+      final bead = latest?.graph.beadsById[id];
+      if (bead == null) return false;
+      return switch (dispatchableWork(bead)) {
+        MountEligible() => true,
+        MountRefused() => false,
+      };
+    }
+
     final mountedIds = <String>{
       ...?latest?.graph.readyIds,
       for (final entry in liveEntries) entry.key,
-    };
+    }.where(isMountedCandidate).toSet();
     final wedge = latest == null ? kNotWedged : view!.wedgeFor(latest);
     final prefixes = armed.map((substation) => substation.prefix).toSet();
     String? ownerOf(String id) =>
@@ -713,7 +728,10 @@ class UpCommand extends Command<int> {
             substation: substation.name,
             root: substation.root,
             ready: readyIds.length,
-            mounted: <String>{...readyIds, ...liveIds}.length,
+            mounted: <String>{
+              ...readyIds,
+              ...liveIds,
+            }.where(isMountedCandidate).length,
             live: liveIds.length,
             mintFailedScopes: mintFailedBySubstation[substation.prefix] ?? 0,
           );

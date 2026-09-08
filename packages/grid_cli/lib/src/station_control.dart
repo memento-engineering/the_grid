@@ -164,10 +164,11 @@ class StationStatus {
   /// boundary — never a raw, workspace-wide `readyCount` (RS-3/D-R4).
   final int ready;
 
-  /// A coarse count of owned work beads currently eligible to be mounted
-  /// (ready OR carrying a live, non-terminal session, and not closed) — an
-  /// approximation of the tree's real `WorkList` mount set (D-C5: a floor;
-  /// it does not replicate the dispatchable-type gate).
+  /// A coarse count of the ready-or-live candidate set: work beads in the
+  /// ready frontier or carrying a live, non-terminal session. Candidates are
+  /// resolved through the joined graph and narrowed through the resident
+  /// dispatchable-type gate; absent graph records are excluded. This remains
+  /// an approximation of the tree's real `WorkList` mount set (D-C5: a floor).
   final int mounted;
 
   /// The count of owned sessions that have not yet reached a terminal cursor.
