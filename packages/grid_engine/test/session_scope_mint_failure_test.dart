@@ -129,6 +129,7 @@ final class _CountingReapReader implements BeadProbeReader {
 class _FailCreateRunner implements BdRunner {
   _FailCreateRunner({
     required this.failCreates,
+    this.failSessionCreateAttempts = const {},
     this.failGraphApplies = 0,
     this.rawGraphTimeouts = 0,
     this.failListsWithTimeout = false,
@@ -138,6 +139,7 @@ class _FailCreateRunner implements BdRunner {
   });
 
   final int failCreates;
+  final Set<int> failSessionCreateAttempts;
   final int failGraphApplies;
   final int rawGraphTimeouts;
   final bool failListsWithTimeout;
@@ -251,7 +253,8 @@ class _FailCreateRunner implements BdRunner {
         : '';
     if (sub == 'create' && type == GridIssueTypes.session.wire) {
       _creates++;
-      if (_creates <= failCreates) {
+      if (_creates <= failCreates ||
+          failSessionCreateAttempts.contains(_creates)) {
         final error = sessionCreateError;
         if (error != null) throw error;
         throw StateError(
@@ -277,11 +280,13 @@ class _FailCreateRunner implements BdRunner {
   }
 }
 
-final class _TimeoutFirstMoleculeRead implements BeadProbeReader {
-  _TimeoutFirstMoleculeRead(this.delegate);
+final class _TimeoutMoleculeReads implements BeadProbeReader {
+  _TimeoutMoleculeReads(this.delegate, {required this.remaining});
 
   final BeadProbeReader delegate;
-  bool _timedOut = false;
+  int remaining;
+  int timeoutCount = 0;
+  bool _allowRetirementRead = false;
 
   @override
   Future<Bead?> beadById(String id, {required Set<IssueType> types}) =>
@@ -293,8 +298,12 @@ final class _TimeoutFirstMoleculeRead implements BeadProbeReader {
     Map<String, String> metadataAll = const {},
     Map<String, String> metadataAny = const {},
   }) {
-    if (!_timedOut && types.contains(GridIssueTypes.molecule)) {
-      _timedOut = true;
+    if (_allowRetirementRead && types.contains(GridIssueTypes.molecule)) {
+      _allowRetirementRead = false;
+    } else if (remaining > 0 && types.contains(GridIssueTypes.molecule)) {
+      remaining--;
+      timeoutCount++;
+      _allowRetirementRead = true;
       throw TimeoutException('Future not completed');
     }
     return delegate.openBeads(
@@ -464,6 +473,36 @@ final class _MutableReservationHostState
   return (owner: owner, root: root);
 }
 
+void Function() _deliverReplacementReservations({
+  required StationServices ctx,
+  required JoinedSnapshot snapshot,
+  required SubstationConfig config,
+  required ServiceBundle services,
+  required StationAdmissionCandidate candidate,
+  required StationAdmissionReservation initialReservation,
+  required _MutableReservationHostState host,
+  void Function()? onDelivery,
+}) {
+  Object? replacementToken;
+  return ctx.admission.addInvalidationListener(() {
+    final batch = ctx.admission.admitPending(snapshot, config, services, [
+      candidate,
+    ]);
+    if (batch.admitted.isEmpty) return;
+    final next = batch.admitted.single;
+    final token = next.reservationToken;
+    if (next.sessionId != null ||
+        token == null ||
+        identical(token, initialReservation.reservationToken) ||
+        identical(token, replacementToken)) {
+      return;
+    }
+    replacementToken = token;
+    host.provide(next);
+    onDelivery?.call();
+  });
+}
+
 Branch _sessionScopeBranch(Branch root) {
   final all = <Branch>[];
   void collect(Branch branch) {
@@ -475,7 +514,7 @@ Branch _sessionScopeBranch(Branch root) {
   return all.singleWhere((branch) => branch.seed is SessionScope);
 }
 
-DiagnosticsFlagProperty _mintFailedPropertyOf(Branch root) {
+TreeNode _sessionScopeNodeOf(Branch root) {
   final snapshot = DiagnosticsTreeWalker().walk(
     root,
     projectedAt: DateTime.utc(2026, 9, 5),
@@ -487,12 +526,20 @@ DiagnosticsFlagProperty _mintFailedPropertyOf(Branch root) {
   }
 
   collect(snapshot.root);
-  final scope = nodes.singleWhere((node) => node.seedType == 'SessionScope');
-  return scope.properties.singleWhere(
-        (property) => property.name == 'mintFailed',
-      )
-      as DiagnosticsFlagProperty;
+  return nodes.singleWhere((node) => node.seedType == 'SessionScope');
 }
+
+DiagnosticsFlagProperty _mintFailedPropertyOf(Branch root) =>
+    _sessionScopeNodeOf(
+          root,
+        ).properties.singleWhere((property) => property.name == 'mintFailed')
+        as DiagnosticsFlagProperty;
+
+DiagnosticsIntProperty _moleculePourVoidsPropertyOf(Branch root) =>
+    _sessionScopeNodeOf(root).properties.singleWhere(
+          (property) => property.name == 'moleculePourVoids',
+        )
+        as DiagnosticsIntProperty;
 
 void main() {
   test(
@@ -853,10 +900,11 @@ void main() {
       () async {
         final events = <String>[];
         final runner = _FailCreateRunner(failCreates: 0, eventLog: events);
-        final ctx = _ctxOver(
-          runner,
-          reader: _TimeoutFirstMoleculeRead(const EmptyBeadProbeReader()),
+        final reader = _TimeoutMoleculeReads(
+          const EmptyBeadProbeReader(),
+          remaining: 1,
         );
+        final ctx = _ctxOver(runner, reader: reader);
         addTearDown(ctx.dispose);
         final transport = _RecordingTransport(events);
         final reg = RecordingCapabilityRegistry(circuits: const {});
@@ -887,25 +935,17 @@ void main() {
         );
         addTearDown(m.owner.dispose);
         final scopeBranchId = _sessionScopeBranch(m.root).branchId;
-        Object? replacementToken;
         var replacementDeliveries = 0;
-        final removeInvalidation = ctx.admission.addInvalidationListener(() {
-          final batch = ctx.admission.admitPending(snapshot, config, services, [
-            candidate,
-          ]);
-          if (batch.admitted.isEmpty) return;
-          final next = batch.admitted.single;
-          final token = next.reservationToken;
-          if (next.sessionId != null ||
-              token == null ||
-              identical(token, initialReservation.reservationToken) ||
-              identical(token, replacementToken)) {
-            return;
-          }
-          replacementToken = token;
-          replacementDeliveries++;
-          reservationHost.provide(next);
-        });
+        final removeInvalidation = _deliverReplacementReservations(
+          ctx: ctx,
+          snapshot: snapshot,
+          config: config,
+          services: services,
+          candidate: candidate,
+          initialReservation: initialReservation,
+          host: reservationHost,
+          onDelivery: () => replacementDeliveries++,
+        );
         addTearDown(removeInvalidation);
         await _pumpUntil(
           m.owner,
@@ -920,6 +960,7 @@ void main() {
           containsPair('deadlineConstant', 'DoltQueryService.queryTimeout'),
         );
         expect(abandoned.data, containsPair('deadlineMs', '10000'));
+        expect(_moleculePourVoidsPropertyOf(m.root).value, 1);
         expect(transport.named('session.moleculePourFailed'), isEmpty);
         expect(transport.named('session.mintFailed'), isEmpty);
         expect(reg.events, isEmpty);
@@ -970,8 +1011,177 @@ void main() {
         expect(transport.named('session.mintFailed'), isEmpty);
         expect(transport.named('session.mintExhausted'), isEmpty);
         expect(_mintFailedPropertyOf(m.root).value, isFalse);
+        expect(_moleculePourVoidsPropertyOf(m.root).value, 0);
       },
     );
+
+    test('consecutive pour timeouts exhaust after three voids', () async {
+      final runner = _FailCreateRunner(failCreates: 0);
+      final reader = _TimeoutMoleculeReads(
+        const EmptyBeadProbeReader(),
+        remaining: 4,
+      );
+      final ctx = _ctxOver(runner, reader: reader);
+      addTearDown(ctx.dispose);
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final workBead = bead('tg-1');
+      final snapshot = JoinedSnapshot(graph: _work([workBead], {'tg-1'}));
+      const config = SubstationConfig(
+        substationId: 'tg',
+        ownedSubstations: {'tg'},
+      );
+      final services = ServiceBundle(transport: transport);
+      final candidate = StationAdmissionCandidate(
+        bead: workBead,
+        session: null,
+      );
+      final initial = ctx.admission.admitPending(snapshot, config, services, [
+        candidate,
+      ]);
+      expect(initial.admitted, hasLength(1));
+      final initialReservation = initial.admitted.single;
+      late _MutableReservationHostState reservationHost;
+      final m = _mountPreservedReservation(
+        reservation: initialReservation,
+        snapshot: snapshot,
+        ctx: ctx,
+        registry: reg,
+        services: services,
+        onState: (state) => reservationHost = state,
+      );
+      addTearDown(m.owner.dispose);
+      var replacementDeliveries = 0;
+      final removeInvalidation = _deliverReplacementReservations(
+        ctx: ctx,
+        snapshot: snapshot,
+        config: config,
+        services: services,
+        candidate: candidate,
+        initialReservation: initialReservation,
+        host: reservationHost,
+        onDelivery: () => replacementDeliveries++,
+      );
+      addTearDown(removeInvalidation);
+
+      await _pumpUntil(
+        m.owner,
+        () => transport.named('session.moleculePourExhausted').isNotEmpty,
+        maxRounds: 4000,
+      );
+      expect(
+        transport.named('session.moleculePourExhausted'),
+        hasLength(1),
+        reason:
+            'deliveries=$replacementDeliveries timeouts=${reader.timeoutCount} creates=${runner.workCreates.length} flares=${transport.flares}',
+      );
+
+      await _pumpUntil(
+        m.owner,
+        () => replacementDeliveries >= 3,
+        maxRounds: 2000,
+      );
+      await _pump();
+      m.owner.flush();
+      await _pump();
+
+      final sessionCreates = runner.workCreates.where((call) {
+        final typeIndex = call.indexOf('--type');
+        return typeIndex >= 0 &&
+            call[typeIndex + 1] == GridIssueTypes.session.wire;
+      });
+      expect(reader.timeoutCount, 3);
+      expect(reader.remaining, 1);
+      expect(sessionCreates, hasLength(3));
+      expect(transport.named('session.mintAbandoned'), hasLength(3));
+      expect(runner.calls.where((call) => call.contains('--graph')), isEmpty);
+      expect(reg.events, isEmpty);
+      final exhausted = transport.named('session.moleculePourExhausted').single;
+      expect(exhausted.data, {
+        'workBeadId': 'tg-1',
+        'retiredSessionId': 'tgdog-sess3',
+        'attempt': '3',
+        'maxAttempts': '3',
+        'reason': 'mint-timeout',
+        'deadlineConstant': 'DoltQueryService.queryTimeout',
+        'deadlineMs': '10000',
+      });
+      expect(_moleculePourVoidsPropertyOf(m.root).value, 3);
+      expect(replacementDeliveries, 3);
+      expect(transport.named('session.mintExhausted'), isEmpty);
+      expect(transport.named('session.moleculePourStalled'), isEmpty);
+    });
+
+    test('pour void preserves the create-session failure budget', () async {
+      final runner = _FailCreateRunner(
+        failCreates: 0,
+        failSessionCreateAttempts: const {1, 3},
+      );
+      final reader = _TimeoutMoleculeReads(
+        const EmptyBeadProbeReader(),
+        remaining: 1,
+      );
+      final ctx = _ctxOver(runner, reader: reader);
+      addTearDown(ctx.dispose);
+      final transport = _RecordingTransport();
+      final reg = RecordingCapabilityRegistry(circuits: const {});
+      final workBead = bead('tg-1');
+      final snapshot = JoinedSnapshot(graph: _work([workBead], {'tg-1'}));
+      const config = SubstationConfig(
+        substationId: 'tg',
+        ownedSubstations: {'tg'},
+      );
+      final services = ServiceBundle(transport: transport);
+      final candidate = StationAdmissionCandidate(
+        bead: workBead,
+        session: null,
+      );
+      final initial = ctx.admission.admitPending(snapshot, config, services, [
+        candidate,
+      ]);
+      expect(initial.admitted, hasLength(1));
+      final initialReservation = initial.admitted.single;
+      late _MutableReservationHostState reservationHost;
+      final m = _mountPreservedReservation(
+        reservation: initialReservation,
+        snapshot: snapshot,
+        ctx: ctx,
+        registry: reg,
+        services: services,
+        onState: (state) => reservationHost = state,
+      );
+      addTearDown(m.owner.dispose);
+      var replacementDeliveries = 0;
+      final removeInvalidation = _deliverReplacementReservations(
+        ctx: ctx,
+        snapshot: snapshot,
+        config: config,
+        services: services,
+        candidate: candidate,
+        initialReservation: initialReservation,
+        host: reservationHost,
+        onDelivery: () => replacementDeliveries++,
+      );
+      addTearDown(removeInvalidation);
+      await _pumpUntil(
+        m.owner,
+        () => transport.named('session.mintAbandoned').isNotEmpty,
+      );
+      expect(transport.named('session.mintFailed').single.data['attempt'], '1');
+      expect(_mintFailedPropertyOf(m.root).value, isTrue);
+      expect(_moleculePourVoidsPropertyOf(m.root).value, 1);
+      await _pumpUntil(m.owner, () => reg.events.isNotEmpty, maxRounds: 2500);
+      final mintFailures = transport.named('session.mintFailed').toList();
+      expect(mintFailures, hasLength(2));
+      expect(mintFailures.map((flare) => flare.data['attempt']), ['1', '3']);
+      expect(_mintFailedPropertyOf(m.root).value, isFalse);
+      expect(_moleculePourVoidsPropertyOf(m.root).value, 0);
+      expect(reader.timeoutCount, 1);
+      expect(replacementDeliveries, 1);
+      expect(reg.events, ['START agent(tgdog-sess4/tg-1/agent)']);
+      expect(transport.named('session.mintExhausted'), isEmpty);
+      expect(transport.named('session.moleculePourExhausted'), isEmpty);
+    });
 
     test('60-second graph timeout parks once and is not retried', () async {
       final runner = _FailCreateRunner(
