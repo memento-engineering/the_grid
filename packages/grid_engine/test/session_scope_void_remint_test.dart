@@ -520,9 +520,9 @@ void main() {
     });
   });
 
-  group('tg-4rw — the positive-terminal close stamps the DONE evidence', () {
-    test('grid.outcome=complete is written through the chokepoint BEFORE the '
-        'bd close (so the next mount reads done, not a dead key)', () async {
+  group('tg-4rw — terminal close stamps its durable outcome evidence', () {
+    test('grid.outcome=commit_only is written through the chokepoint BEFORE '
+        'the bd close', () async {
       final f = buildFakes();
       final transport = _RecordingTransport();
       final reg = RecordingCapabilityRegistry(circuits: const {});
@@ -567,6 +567,13 @@ void main() {
         markIndex,
         greaterThanOrEqualTo(0),
         reason: 'the marker is stamped',
+      );
+      expect(
+        _updatesFor(
+          f.runner,
+          'tgdog-s',
+        ).where((metadata) => metadata.containsKey(SessionBeadKeys.outcome)),
+        [sessionCommitOnlyMetadata()],
       );
       expect(closeIndex, greaterThan(markIndex), reason: 'marker BEFORE close');
       expect(transport.named('session.outcomeUnmarked'), isEmpty);

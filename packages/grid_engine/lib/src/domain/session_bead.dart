@@ -303,8 +303,15 @@ String truncateReason(String reason) => reason.length <= kMaxReasonChars
     ? reason
     : reason.substring(0, kMaxReasonChars);
 
-/// The [SessionBeadKeys.outcome] value a POSITIVE-TERMINAL close stamps (I-10).
+/// The [SessionBeadKeys.outcome] value a delivered terminal close stamps.
 const String kSessionOutcomeComplete = 'complete';
+
+/// The [SessionBeadKeys.outcome] value an unbound delivery close stamps.
+///
+/// The circuit committed successfully, but no [DeliveryMethod] was present to
+/// land it. This is durable teardown evidence, not evidence that the work was
+/// delivered.
+const String kSessionOutcomeCommitOnly = 'commit_only';
 
 /// The [SessionBeadKeys.outcome] value stamped by the one-time A59 backfill.
 ///
@@ -313,11 +320,17 @@ const String kSessionOutcomeComplete = 'complete';
 /// mount; open rows remain live because disposition checks terminality first.
 const String kSessionOutcomeLegacy = 'legacy';
 
-/// The metadata payload the positive-terminal close writes through the
-/// chokepoint IMMEDIATELY BEFORE `bd close` (I-10) — the durable "this round
-/// finished" evidence the mount boundary reads. Merge-safe (one disjoint key).
+/// The metadata payload a delivered terminal close writes through the
+/// chokepoint IMMEDIATELY BEFORE `bd close` (I-10) — durable landing evidence
+/// the mount boundary reads. Merge-safe (one disjoint key).
 Map<String, String> sessionCompleteMetadata() => <String, String>{
   SessionBeadKeys.outcome: kSessionOutcomeComplete,
+};
+
+/// The metadata payload an unbound-delivery close writes through the same
+/// completion chokepoint as [sessionCompleteMetadata].
+Map<String, String> sessionCommitOnlyMetadata() => <String, String>{
+  SessionBeadKeys.outcome: kSessionOutcomeCommitOnly,
 };
 
 Map<String, String> sessionWorkTerminalMetadata() => <String, String>{
@@ -478,6 +491,7 @@ SessionProjection projectSession(Bead sessionBead) {
     // circuit, which the mount boundary does not have).
     completed:
         outcome == kSessionOutcomeComplete || outcome == kSessionOutcomeLegacy,
+    commitOnly: outcome == kSessionOutcomeCommitOnly,
     workTerminalReason: metadata[SessionBeadKeys.workTerminalReason] as String?,
     humanHeld:
         metadata.containsKey(SessionBeadKeys.escalation) ||

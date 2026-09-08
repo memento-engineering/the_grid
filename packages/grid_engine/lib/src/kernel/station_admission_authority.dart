@@ -1132,17 +1132,21 @@ final class StationAdmissionAuthority {
     return sessionId;
   }
 
-  /// Writes the completion marker when [outcomeMarked] is false; on the true
-  /// call, optionally reaps, closes, and releases the attempt.
+  /// Writes [outcomeMetadata] when [outcomeMarked] is false; on the true call,
+  /// optionally reaps, closes, and releases the attempt. This keeps the
+  /// transition on the same authority object ratified by
+  /// `the_grid#admission-authority-in-process-cut`; it adds no admission
+  /// trajectory record and changes none of the authority's private latches.
   Future<void> completeSession({
     required String workBeadId,
     required String sessionId,
     required bool outcomeMarked,
+    required Map<String, String> outcomeMetadata,
     required bool reapMolecule,
     required ServiceBundle services,
   }) async {
     if (!outcomeMarked) {
-      await _writer.update(sessionId, metadata: sessionCompleteMetadata());
+      await _writer.update(sessionId, metadata: outcomeMetadata);
       _notifyListeners();
       return;
     }

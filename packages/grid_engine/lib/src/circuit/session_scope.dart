@@ -13,7 +13,9 @@
 /// cursor + results) — the values an effect reads with the non-binding lookup.
 ///
 /// It owns tree execution END-TO-END and asks `StationAdmissionAuthority` for
-/// each durable attempt transition, including the positive-terminal close. The
+/// each durable attempt transition, including the positive-terminal close. Per
+/// `the_grid#admission-authority-in-process-cut`, that remains the same
+/// in-process authority object and adds no admission trajectory record. The
 /// request is SCHEDULED off `build` (never a write IN `build` — invariant 2)
 /// and latched once. Breaker-exhaustion close + escalation fold in at Track G.
 ///
@@ -88,6 +90,8 @@ import 'capability_host.dart' show persistRaisedEscalation;
 import 'capability_registry.dart';
 import 'circuit_scope.dart';
 import 'session_handle.dart';
+
+enum _DeliveryOutcome { delivered, commitOnly, missing }
 
 /// The tree execution lifecycle for one admitted work [bead]'s [circuit].
 ///
@@ -336,6 +340,7 @@ class SessionScopeState extends State<SessionScope>
   bool _cancelled = false;
   bool _terminalScheduled = false;
   bool _deliveryOutcomeBlocked = false;
+  bool _commitOnlyCompleteFlared = false;
 
   /// True once THIS scope's session is known to be molecule-mode — set on
   /// ADOPT (`initState`'s `LiveSession()` arm reads
@@ -1314,19 +1319,41 @@ class SessionScopeState extends State<SessionScope>
 
   /// Schedules the positive-terminal close — latched once, run off `build`
   /// (never a write IN `build`).
-  void _scheduleClose(String id) {
+  void _scheduleClose(
+    String id, {
+    required Map<String, String> outcomeMetadata,
+  }) {
     if (_terminalScheduled) return;
     _terminalScheduled = true;
-    scheduleMicrotask(() => unawaited(_completeAndClose(id)));
+    scheduleMicrotask(
+      () => unawaited(_completeAndClose(id, outcomeMetadata: outcomeMetadata)),
+    );
   }
 
   String get _rootDeliveryNodePath =>
       stepPath(seed.bead.id, seed.circuit.terminalStepId);
 
-  bool _deliveryOutcomeReady(Map<String, Map<String, String>> results) {
-    final method = _services.delivery;
-    if (method == null) return true;
-    return results[_rootDeliveryNodePath]?[ResultKeys.delivery] != null;
+  _DeliveryOutcome _deliveryOutcome(
+    String id,
+    Map<String, Map<String, String>> results,
+  ) {
+    final terminalStep = seed.circuit.stepById(seed.circuit.terminalStepId);
+    if (terminalStep is SubCircuitStep) {
+      if (!_deliveryOutcomeBlocked) {
+        _deliveryOutcomeBlocked = true;
+        _flare('deliver.unreachableTerminal', {
+          'circuitId': seed.circuit.id,
+          'terminalStepId': seed.circuit.terminalStepId,
+          'nodePath': _rootDeliveryNodePath,
+        });
+      }
+      return _DeliveryOutcome.missing;
+    }
+    if (results[_rootDeliveryNodePath]?[ResultKeys.delivery] != null) {
+      return _DeliveryOutcome.delivered;
+    }
+    if (_services.delivery == null) return _DeliveryOutcome.commitOnly;
+    return _DeliveryOutcome.missing;
   }
 
   void _flareDeliveryOutcomeMissing(String id) {
@@ -1341,11 +1368,20 @@ class SessionScopeState extends State<SessionScope>
     });
   }
 
-  /// Stamps the durable POSITIVE-TERMINAL marker (`grid.outcome=complete`, I-10)
-  /// through the chokepoint, THEN closes. The marker is what a later mount reads
-  /// to tell a FINISHED round from a session somebody closed mid-flight — without
-  /// it, the disposition falls back to cursor shape, which cannot see a circuit
-  /// closed BETWEEN steps (every WRITTEN node complete, the circuit not).
+  void _flareCommitOnlyComplete(String id) {
+    if (_commitOnlyCompleteFlared) return;
+    _commitOnlyCompleteFlared = true;
+    _flare('session.commitOnlyComplete', {
+      'sessionId': id,
+      'workBeadId': seed.bead.id,
+      'nodePath': _rootDeliveryNodePath,
+    });
+  }
+
+  /// Stamps the selected durable terminal marker through the chokepoint, THEN
+  /// closes. `complete` proves delivery; `commit_only` records that the circuit
+  /// committed with no delivery method bound. The marker is what a later mount
+  /// reads instead of trying to infer disposition from the cursor alone.
   ///
   /// Neither write rethrows: an unhandled async error in a resident station's
   /// root zone would terminate the isolate (the same discipline as `_rearm`). A
@@ -1358,12 +1394,14 @@ class SessionScopeState extends State<SessionScope>
   /// when its own `type=molecule`/`type=step` beads stop being needed live
   /// (`bd purge` reaps only ephemerals, and this pour is deliberately
   /// persistent — item 1). Placed AFTER the outcome stamp so a reader who
-  /// sees `grid.outcome=complete` before the reap lands still reads a
-  /// coherent "this round finished" signal; a reap failure is LOUD, never
-  /// fatal (the same non-rethrow discipline as the two writes above), and
-  /// the close ALWAYS still runs — an un-reaped molecule is inert leftover
-  /// state, not a wedge.
-  Future<void> _completeAndClose(String id) async {
+  /// sees either durable terminal marker before the reap lands can replay the
+  /// outstanding teardown tail; a reap failure is LOUD, never fatal (the same
+  /// non-rethrow discipline as the two writes above), and the close ALWAYS
+  /// still runs — an un-reaped molecule is inert leftover state, not a wedge.
+  Future<void> _completeAndClose(
+    String id, {
+    required Map<String, String> outcomeMetadata,
+  }) async {
     final ctx = _ctx;
     if (ctx == null) return;
     try {
@@ -1371,6 +1409,7 @@ class SessionScopeState extends State<SessionScope>
         workBeadId: seed.bead.id,
         sessionId: id,
         outcomeMarked: false,
+        outcomeMetadata: outcomeMetadata,
         reapMolecule: _isMolecule,
         services: _services,
       );
@@ -1434,6 +1473,7 @@ class SessionScopeState extends State<SessionScope>
         workBeadId: seed.bead.id,
         sessionId: id,
         outcomeMarked: true,
+        outcomeMetadata: outcomeMetadata,
         reapMolecule: _isMolecule,
         services: _services,
       );
@@ -1886,6 +1926,8 @@ class SessionScopeState extends State<SessionScope>
     _sessionId = null;
     _resolving = true;
     _terminalScheduled = false;
+    _deliveryOutcomeBlocked = false;
+    _commitOnlyCompleteFlared = false;
     _rearming.clear();
     _mintingSuccessorForPath.clear();
     _stepSuccessorMintAttemptsByPath.clear();
@@ -2285,10 +2327,17 @@ class SessionScopeState extends State<SessionScope>
             seed.bead.id,
             circuitById: registry.circuit,
           )) {
-            if (_deliveryOutcomeReady(results)) {
-              _scheduleClose(id);
-            } else {
-              _flareDeliveryOutcomeMissing(id);
+            switch (_deliveryOutcome(id, results)) {
+              case _DeliveryOutcome.delivered:
+                _scheduleClose(id, outcomeMetadata: sessionCompleteMetadata());
+              case _DeliveryOutcome.commitOnly:
+                _flareCommitOnlyComplete(id);
+                _scheduleClose(
+                  id,
+                  outcomeMetadata: sessionCommitOnlyMetadata(),
+                );
+              case _DeliveryOutcome.missing:
+                _flareDeliveryOutcomeMissing(id);
             }
           }
         }
