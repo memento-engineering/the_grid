@@ -114,6 +114,52 @@ void main() {
     },
   );
 
+  test(
+    'manual URL contract accepts explicit ports and rejects portless URLs',
+    () async {
+      final calls = <({Uri controlUrl, String token})>[];
+      final controller = LiveConnectionController(
+        discovery: _discovery(_lock()),
+        connectSource: ({required controlUrl, required token}) {
+          calls.add((controlUrl: controlUrl, token: token));
+          return _Source();
+        },
+      );
+
+      await controller.connect(
+        controlUrl: 'station.test:4242',
+        token: 'secret',
+      );
+      expect(calls, [
+        (controlUrl: Uri.parse('http://station.test:4242'), token: 'secret'),
+      ]);
+
+      await controller.connect(
+        controlUrl: 'https://station.test:4343',
+        token: 'secret',
+      );
+      expect(calls, [
+        (controlUrl: Uri.parse('http://station.test:4242'), token: 'secret'),
+        (controlUrl: Uri.parse('https://station.test:4343'), token: 'secret'),
+      ]);
+
+      await controller.connect(
+        controlUrl: 'https://station.test',
+        token: 'secret',
+      );
+      expect(calls, hasLength(2));
+      expect(
+        controller.value,
+        const LiveConnectionState.failed(
+          message:
+              'Enter host:port or an absolute http(s) control URL with an '
+              'explicit port and a non-empty token.',
+        ),
+      );
+      controller.dispose();
+    },
+  );
+
   test('manual validation requires HTTP(S), host, port, and token', () async {
     var calls = 0;
     final controller = LiveConnectionController(
