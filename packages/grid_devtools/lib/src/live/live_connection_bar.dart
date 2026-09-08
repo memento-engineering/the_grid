@@ -59,7 +59,7 @@ class _LiveConnectionBarState extends State<LiveConnectionBar> {
                           enabled: !busy,
                           decoration: const InputDecoration(
                             isDense: true,
-                            labelText: 'Station URL',
+                            labelText: 'Station control URL (host:port)',
                           ),
                         ),
                       ),
