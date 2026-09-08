@@ -37,13 +37,18 @@ abstract final class CrossLinkKeys {
 /// The one [CrossLinkKeys.type] value the engine enforces.
 const kCrossLinkBlocks = 'blocks';
 
+/// The lifecycle rule shared by engine and operator-facing cross-link text.
+const kCrossLinkTargetCloseRule =
+    'The edge lifts when the TARGET bead closes, not when the link bead closes.';
+
 /// One projected cross-repo blocking edge, read off an OPEN link bead.
 class CrossLink {
   /// Creates the projection of link bead [beadId].
   const CrossLink({required this.beadId, required this.from, required this.to});
 
   /// The link bead's own id — the receipt an operator closes to retire the
-  /// edge, and the id the LOUD messages name.
+  /// edge, and the id the LOUD messages name. Closing the target instead makes
+  /// the edge inert without retiring this receipt.
   final String beadId;
 
   /// The BLOCKED bead id.
@@ -58,9 +63,9 @@ class CrossLink {
 /// Projects every OPEN `type=link` bead in [state] (the station's own state
 /// store) into a [CrossLink].
 ///
-/// Lifecycle: a CLOSED link bead RETIRES its edge — it is skipped here, so the
-/// blocked bead re-enters the frontier on the next join (the close reason is
-/// where the receipts live).
+/// Lifecycle: a CLOSED link bead RETIRES its edge — it is skipped here. An OPEN
+/// link whose target is CLOSED remains projected but is INERT: the shared guard
+/// re-admits the blocked bead without auto-closing the link receipt.
 ///
 /// Fail-closed, never assume: [onMalformed] receives one LOUD line per link
 /// bead that cannot be read as an enforceable `blocks` edge, and the returned

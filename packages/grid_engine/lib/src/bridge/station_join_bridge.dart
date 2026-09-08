@@ -75,12 +75,15 @@ class StationJoinBridge {
     StepSnapshotSubscribe? onStepChanges,
     DualReadStepObserver? stepDualRead,
   }) {
+    final reportedTargetClosedCrossLinks =
+        <({String linkBeadId, String targetId})>{};
     final seed = _join(
       work.current,
       state.current,
       headSnapshot?.call(),
       stepSnapshot?.call(),
       onUnresolvedCrossLink: onUnresolvedCrossLink,
+      reportedTargetClosedCrossLinks: reportedTargetClosedCrossLinks,
       dualRead: dualRead,
       stepDualRead: stepDualRead,
     );
@@ -91,6 +94,7 @@ class StationJoinBridge {
       notifier: notifier ?? JoinedSnapshotNotifier(seed),
       latest: seed,
       onUnresolvedCrossLink: onUnresolvedCrossLink,
+      reportedTargetClosedCrossLinks: reportedTargetClosedCrossLinks,
       headSnapshot: headSnapshot,
       onHeadChanges: onHeadChanges,
       dualRead: dualRead,
@@ -107,6 +111,8 @@ class StationJoinBridge {
     required this.notifier,
     required JoinedSnapshot latest,
     required void Function(String message)? onUnresolvedCrossLink,
+    required Set<({String linkBeadId, String targetId})>
+    reportedTargetClosedCrossLinks,
     required TrajectoryHeadSnapshot Function()? headSnapshot,
     required HeadSnapshotSubscribe? onHeadChanges,
     required DualReadSessionObserver? dualRead,
@@ -118,6 +124,7 @@ class StationJoinBridge {
        _ownsNotifier = ownsNotifier,
        _latest = latest,
        _onUnresolvedCrossLink = onUnresolvedCrossLink,
+       _reportedTargetClosedCrossLinks = reportedTargetClosedCrossLinks,
        _headSnapshot = headSnapshot,
        _onHeadChanges = onHeadChanges,
        _dualRead = dualRead,
@@ -152,11 +159,20 @@ class StationJoinBridge {
   /// The step comparator's bookkeeper. Under `observe` it only counts.
   final DualReadStepObserver? _stepDualRead;
 
-  /// The LOUD sink an unenforceable cross-link is reported through — a
-  /// malformed link bead, or a `to` target no federated work member observes.
-  /// Emit-only; a null sink is the offline/no-op default and never changes what
-  /// the guard DOES (the block is applied either way).
+  /// The existing LOUD sink for cross-link enforcement and lifecycle signals:
+  /// a malformed link bead, an unobserved `to` target, or the first observation
+  /// that an OPEN link's target has CLOSED. Emit-only; a null sink is the
+  /// offline/no-op default and never changes what the guard DOES.
   final void Function(String message)? _onUnresolvedCrossLink;
+
+  /// Pairs whose target-close transition this bridge has already reported.
+  ///
+  /// This is emit-only bridge-lifetime memory, distinct from the joined
+  /// snapshot's durable session selection and surplus-row projection. A
+  /// retargeted link gets a new pair; repeated joins of the same pair stay
+  /// quiet until this bridge is disposed.
+  final Set<({String linkBeadId, String targetId})>
+  _reportedTargetClosedCrossLinks;
 
   JoinedSnapshot _latest;
 
@@ -231,6 +247,7 @@ class StationJoinBridge {
     _headSnapshot?.call(),
     _stepSnapshot?.call(),
     onUnresolvedCrossLink: _onUnresolvedCrossLink,
+    reportedTargetClosedCrossLinks: _reportedTargetClosedCrossLinks,
     dualRead: _dualRead,
     stepDualRead: _stepDualRead,
   );
@@ -314,6 +331,8 @@ class StationJoinBridge {
     TrajectoryHeadSnapshot? head,
     TrajectoryStepSnapshot? steps, {
     void Function(String message)? onUnresolvedCrossLink,
+    required Set<({String linkBeadId, String targetId})>
+    reportedTargetClosedCrossLinks,
     DualReadSessionObserver? dualRead,
     DualReadStepObserver? stepDualRead,
   }) {
@@ -355,7 +374,12 @@ class StationJoinBridge {
       }
       _attachMoleculeBeads(state, sessions);
       _attachGateState(state, sessions);
-      final crossLinks = _applyCrossLinks(work, state, onUnresolvedCrossLink);
+      final crossLinks = _applyCrossLinks(
+        work,
+        state,
+        onUnresolvedCrossLink,
+        reportedTargetClosedCrossLinks,
+      );
       graph = crossLinks.graph;
       frontierExclusionsByBeadId = crossLinks.frontierExclusionsByBeadId;
     }
@@ -439,6 +463,7 @@ class StationJoinBridge {
     GraphSnapshot work,
     GraphSnapshot state,
     void Function(String message)? onUnresolved,
+    Set<({String linkBeadId, String targetId})> reportedTargetClosedCrossLinks,
   ) {
     final links = projectCrossLinks(state, onMalformed: onUnresolved)
       ..sort((left, right) => left.beadId.compareTo(right.beadId));
@@ -452,7 +477,21 @@ class StationJoinBridge {
     final guarded = applyBlockGuard(
       candidates: work.readyIds,
       beadsById: work.beadsById,
-      edges: crossLinkEdges(links),
+      edges: crossLinkEdges(
+        links.map((link) {
+          final target = work.beadsById[link.to];
+          final pair = (linkBeadId: link.beadId, targetId: link.to);
+          if (target?.isClosed == true &&
+              reportedTargetClosedCrossLinks.add(pair)) {
+            onUnresolved?.call(
+              'crossLink.targetClosed: linkBeadId="${link.beadId}" '
+              'fromId="${link.from}" toId="${link.to}". '
+              '$kCrossLinkTargetCloseRule',
+            );
+          }
+          return link;
+        }),
+      ),
       onUnresolved: onUnresolved,
       onBlocked: (beadId, edge, target) {
         final targetState = target == null ? 'unobserved' : 'open';
@@ -461,7 +500,8 @@ class StationJoinBridge {
           beadId,
           () =>
               'frontier cross-link: ${edge.origin} blocks $beadId on '
-              '$targetState target "${edge.to}"$failClosed',
+              '$targetState target "${edge.to}"$failClosed. '
+              '$kCrossLinkTargetCloseRule',
         );
       },
     );
