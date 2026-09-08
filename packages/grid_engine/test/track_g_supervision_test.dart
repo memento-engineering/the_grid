@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:genesis_tree/genesis_tree.dart';
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
+import 'package:grid_engine/src/seeds/provider.dart';
 import 'package:test/test.dart';
 
 import 'package:grid_engine/testing.dart';
@@ -137,21 +138,23 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        InheritedSeed<JoinedSnapshotNotifier>(
-          value: joined,
-          child: InheritedSeed<StationServices>(
-            value: f.ctx,
-            child: InheritedSeed<CapabilityRegistry>(
-              value: reg,
-              child: InheritedSeed<SessionResolver>(
-                value: CircuitResolver((_) => _code),
-                child: Station([
-                  SubstationScope(
-                    configNotifier: SubstationConfigNotifier(_tgConfig),
-                    services: ServiceBundle(transport: transport),
-                    key: const ValueKey('scope.tg'),
-                  ),
-                ]),
+        ProviderScope(
+          child: InheritedSeed<JoinedSnapshotNotifier>(
+            value: joined,
+            child: InheritedSeed<StationServices>(
+              value: f.ctx,
+              child: InheritedSeed<CapabilityRegistry>(
+                value: reg,
+                child: InheritedSeed<SessionResolver>(
+                  value: CircuitResolver((_) => _code),
+                  child: Station([
+                    SubstationScope(
+                      configNotifier: SubstationConfigNotifier(_tgConfig),
+                      services: ServiceBundle(transport: transport),
+                      key: const ValueKey('scope.tg'),
+                    ),
+                  ]),
+                ),
               ),
             ),
           ),
@@ -207,20 +210,22 @@ void main() {
       final owner = TreeOwner();
       addTearDown(owner.dispose);
       owner.mountRoot(
-        InheritedSeed<JoinedSnapshotNotifier>(
-          value: joined,
-          child: InheritedSeed<StationServices>(
-            value: f.ctx,
-            child: InheritedSeed<CapabilityRegistry>(
-              value: reg,
-              child: InheritedSeed<SessionResolver>(
-                value: CircuitResolver((_) => _code),
-                child: Station([
-                  SubstationScope(
-                    configNotifier: SubstationConfigNotifier(_tgConfig),
-                    key: const ValueKey('scope.tg'),
-                  ),
-                ]),
+        ProviderScope(
+          child: InheritedSeed<JoinedSnapshotNotifier>(
+            value: joined,
+            child: InheritedSeed<StationServices>(
+              value: f.ctx,
+              child: InheritedSeed<CapabilityRegistry>(
+                value: reg,
+                child: InheritedSeed<SessionResolver>(
+                  value: CircuitResolver((_) => _code),
+                  child: Station([
+                    SubstationScope(
+                      configNotifier: SubstationConfigNotifier(_tgConfig),
+                      key: const ValueKey('scope.tg'),
+                    ),
+                  ]),
+                ),
               ),
             ),
           ),

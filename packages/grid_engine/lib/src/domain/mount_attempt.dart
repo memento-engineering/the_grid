@@ -68,6 +68,16 @@ const String kMountAttemptCapClause = 'attempt-cap';
 /// one-off.
 const int kMaxMountAttempts = 3;
 
+/// Refuses every fresh mount once trajectory decision evidence is unsafe.
+MountEligibilityPredicate trajectoryAdmissionHaltedClause({
+  required bool halted,
+}) =>
+    (bead) => halted
+    ? const MountEligibilityDecision.refused(
+        clause: 'trajectory admission halted',
+      )
+    : const MountEligibilityDecision.eligible();
+
 /// One work bead's durable attempt record, projected out of the state store.
 final class MountAttemptRecord {
   /// Creates a record for [workBeadId] at [count] attempts, carried by the

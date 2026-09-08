@@ -181,17 +181,18 @@ export 'src/trajectory/station_trajectory_recorder.dart'
     show
         DerivedRecord,
         StationTrajectoryRecorder,
-        TrajectoryRecordSink,
+        TrajectoryAckRecordSink,
         TrajectoryRecorderFlare,
         TrajectoryRecorderStats,
+        TrajectoryRecordSink,
         kDualReadRoundSummaryChannel,
         kExternalCloseUnknownReason,
         kLegacyAttemptCountKey,
         kObligationStuckChannel,
         kPreStage3GrantBasis,
-        kReconcilerMintedAttemptBasis,
         kRecorderCacheBound,
         kRecorderMintedAttemptBasis,
+        kReconcilerMintedAttemptBasis,
         kRestartReconcilerBasis,
         kTeardownReplayUnknownReason,
         kTerminalReconcileBasis,
@@ -199,6 +200,8 @@ export 'src/trajectory/station_trajectory_recorder.dart'
         kTickUnknownSettlementBasis,
         kUnownedSubstation,
         kUnownedSubstationBasis;
+export 'src/trajectory/trajectory_append_result.dart'
+    show Acked, Dropped, Suppressed, TrajectoryAppendResult;
 // Stage 1 (tg-zfek, chunk W7) — the tick's shadow-posture obligation set and
 // its two real liveness surfaces. The harness composes these; nothing here
 // writes bd or the filesystem (stage1-wiring §2.4).

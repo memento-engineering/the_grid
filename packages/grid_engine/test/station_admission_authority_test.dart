@@ -232,6 +232,78 @@ Future<void> _waitUntil(bool Function() condition) async {
 }
 
 void main() {
+  test('trajectory loss invalidates admission, preserves live work, and routes '
+      'step and terminal gates through their distinct seams', () async {
+    final runner = RecordingBdRunner(createdId: 'tg-gate');
+    runner.exportBeads = const [
+      Bead(
+        id: 'tg-live',
+        issueType: GridIssueTypes.session,
+        status: BeadStatus.open,
+        metadata: {'rig': 'tg'},
+      ),
+    ];
+    final writer = StationBeadWriter(
+      bd: BdCliService(runner),
+      reader: runner,
+      ownership: BeadOwnershipPredicate(const {'tg'}),
+    );
+    final halt = TrajectoryAdmissionHalt(
+      writer: writer,
+      stateSubstation: 'tg',
+      bootEpoch: () => 42,
+    );
+    final station = StationServices(
+      provider: FakeRuntimeProvider(),
+      writer: writer,
+      stateSubstation: 'tg',
+      trajectoryAdmissionHalt: halt,
+    );
+    addTearDown(station.dispose);
+    var invalidations = 0;
+    station.admission.addInvalidationListener(() => invalidations += 1);
+
+    final stepGate = halt.handleStepResult(
+      const TrajectoryAppendResult.dropped(),
+      sessionId: 'tg-live',
+      nodePath: 'tg-1/build',
+      recordClass: 'step.transition',
+    );
+    expect(halt.halted, isTrue, reason: 'the latch precedes gate I/O');
+    expect(invalidations, 1, reason: 'admission invalidates synchronously');
+    await stepGate;
+    expect(halt.reason, 'trajectory append dropped');
+    expect(halt.recordClass, 'step.transition');
+
+    const live = SessionProjection(workBeadId: 'tg-1', sessionId: 'tg-live');
+    final liveBead = _bead('tg-1');
+    final freshBead = _bead('tg-2');
+    final snapshot = _snapshot(
+      [liveBead, freshBead],
+      sessions: const {'tg-1': live},
+    );
+    final batch = station.admission
+        .admitPending(snapshot, _config, const ServiceBundle(), [
+          StationAdmissionCandidate(bead: liveBead, session: live),
+          StationAdmissionCandidate(bead: freshBead, session: null),
+        ]);
+    expect(batch.admitted.single.candidate.bead.id, 'tg-1');
+    expect(batch.refused.single.candidate.bead.id, 'tg-2');
+    expect(batch.refused.single.clause, 'trajectory admission halted');
+
+    await halt.handleTerminalResult(
+      const TrajectoryAppendResult.suppressed(),
+      recordClass: 'attempt.terminal',
+    );
+    expect(halt.reason, 'trajectory append dropped', reason: 'first loss wins');
+    expect(halt.recordClass, 'step.transition');
+    expect(runner.workUpdates, hasLength(2));
+    expect(runner.metadataOfUpdate(0), containsPair('blocks', 'tg-live'));
+    expect(runner.metadataOfUpdate(0), containsPair('node', 'tg-1/build'));
+    expect(runner.metadataOfUpdate(1), containsPair('blocks', 'tg/42'));
+    expect(runner.metadataOfUpdate(1), isNot(containsPair('node', anything)));
+  });
+
   test('value fields are exact and batch collections are immutable', () {
     final candidate = StationAdmissionCandidate(
       bead: _bead('tg-1'),

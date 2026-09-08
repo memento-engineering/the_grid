@@ -68,6 +68,10 @@ const _routingEffectCallSites = <String>[
 /// The ONE file allowed to EFFECT them (the router).
 const _router = 'circuit/capability_host.dart';
 
+/// The cut admission breaker reuses the route-gate writer for a lost
+/// decision-bearing step append. It does not effect a route verdict.
+const _trajectoryAdmissionGate = 'kernel/trajectory_scope.dart';
+
 /// The DEFINITION sites the fence must not trip on. None currently need an
 /// exemption (the flat `nodeRewoundMetadata` declaration retired with the
 /// flat cursor). The `DeliveryMethod` / `EscalationHandler` interfaces (and
@@ -201,6 +205,9 @@ void main() {
         if (rel == _router || _routingDefinitionFiles.contains(rel)) continue;
         final source = file.readAsStringSync();
         for (final site in _routingEffectCallSites) {
+          if (rel == _trajectoryAdmissionGate && site == '.createGate(') {
+            continue;
+          }
           if (source.contains(site)) offences.add('$rel effects "$site"');
         }
       }

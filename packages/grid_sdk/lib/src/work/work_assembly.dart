@@ -856,13 +856,31 @@ Future<StationWorkRuntime> assembleStationWork({
   final provider =
       providerOverride ?? (dryRun ? DryRunProvider() : SubprocessProvider());
 
+  late final TrajectoryHarness trajectory;
+  final trajectoryAdmissionHalt =
+      trajectoryConfig.discipline == TrajectoryDiscipline.cut
+      ? TrajectoryAdmissionHalt(
+          writer: writer,
+          stateSubstation: stateSubstation,
+          bootEpoch: () {
+            final epoch = trajectory.status.epoch;
+            if (epoch == null) {
+              throw StateError(
+                'trajectory admission halt requires a claimed boot epoch',
+              );
+            }
+            return epoch;
+          },
+        )
+      : null;
+
   // --- the trajectory harness (stage1-wiring §1.1), built beside the state
   // writer — the one place that knows everything the fenced service needs:
   // the grid home, the state partition, the substation allow-set, and the flare
   // transport. Dry-run forces `disabled` (§1.3): a dry arm must not claim an
   // epoch or write anything — same physics as the recording no-op bd.
   // [trajectoryOverride] is a TEST seam, like every other per-seam override.
-  final trajectory =
+  trajectory =
       trajectoryOverride ??
       await TrajectoryHarness.build(
         config: dryRun ? trajectoryConfig.asDisabled : trajectoryConfig,
@@ -870,6 +888,18 @@ Future<StationWorkRuntime> assembleStationWork({
         station: stateSubstation,
         substationPrefixes: allowSet,
         onFlare: transport?.flare,
+        onAdmissionHalt: trajectoryAdmissionHalt == null
+            ? null
+            : ({required reason, required recordClass}) {
+                assert(
+                  trajectory.status.epoch != null,
+                  'cut admission halt cannot latch before epoch claim',
+                );
+                trajectoryAdmissionHalt.latch(
+                  reason: reason,
+                  recordClass: recordClass,
+                );
+              },
         // The tick's liveness detector polls the provider (§2.4 obligation
         // 3); the worktree `.grid` mtime scan is the other surface and needs
         // nothing wired — it reads the paths P6 already carries.
@@ -1097,6 +1127,7 @@ Future<StationWorkRuntime> assembleStationWork({
     writer: writer,
     stateSubstation: stateSubstation,
     maxConcurrentWork: maxConcurrentWork,
+    trajectoryAdmissionHalt: trajectoryAdmissionHalt,
     // THE COMPLETION FENCE. A detached one-shot agent's vanish is reported as an
     // INFERRED clean exit — a murder and a completion look identical on the wire.
     // The engine advances the circuit on such an exit only for a capability that
@@ -1233,7 +1264,10 @@ Future<StationWorkRuntime> assembleStationWork({
       processLeaseVendor: leaseVendor,
       transport: transport,
       // Stage 1's ONE new ambient value (stage1-wiring §1.1).
-      trajectory: TrajectoryRecorderScope(recorder),
+      trajectory: TrajectoryRecorderScope(
+        recorder,
+        admissionHalt: trajectoryAdmissionHalt,
+      ),
     ),
     commands: commands,
     git: git,

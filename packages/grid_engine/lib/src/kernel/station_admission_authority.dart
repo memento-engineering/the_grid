@@ -17,6 +17,7 @@ import '../domain/substation_config.dart';
 import '../sdk/allocation.dart';
 import '../sdk/capability.dart';
 import '../sdk/circuit.dart';
+import 'trajectory_scope.dart';
 
 /// A read-only station admission snapshot for operator status surfaces.
 ///
@@ -208,13 +209,18 @@ final class StationAdmissionAuthority {
     required String stateSubstation,
     required int maxConcurrentWork,
     AllocationLiveness? liveness,
+    TrajectoryAdmissionHalt? trajectoryAdmissionHalt,
     DateTime Function()? clock,
   }) : _writer = writer,
        _provider = provider,
        _stateSubstation = stateSubstation,
        _maxConcurrentWork = maxConcurrentWork,
        _liveness = liveness ?? neverLive,
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now,
+       _trajectoryAdmissionHalt = trajectoryAdmissionHalt {
+    _removeTrajectoryAdmissionHaltListener = trajectoryAdmissionHalt
+        ?.addListener(_notifyListeners);
+  }
 
   final StationBeadWriter _writer;
   final RuntimeProvider _provider;
@@ -222,6 +228,8 @@ final class StationAdmissionAuthority {
   final int _maxConcurrentWork;
   final AllocationLiveness _liveness;
   final DateTime Function() _clock;
+  final TrajectoryAdmissionHalt? _trajectoryAdmissionHalt;
+  void Function()? _removeTrajectoryAdmissionHaltListener;
 
   final Map<_ScopeKey, _AdmissionScopeState> _scopes =
       <_ScopeKey, _AdmissionScopeState>{};
@@ -734,6 +742,9 @@ final class StationAdmissionAuthority {
     Bead bead,
   ) {
     final predicate = composeMountEligibility([
+      trajectoryAdmissionHaltedClause(
+        halted: _trajectoryAdmissionHalt?.halted ?? false,
+      ),
       dispatchableWorkClause(resident: config.resident),
       driveListClause(config.driveList),
       crossLinkExclusionClause(
@@ -1524,6 +1535,8 @@ final class StationAdmissionAuthority {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _removeTrajectoryAdmissionHaltListener?.call();
+    _removeTrajectoryAdmissionHaltListener = null;
     for (final scope in _scopes.values) {
       scope._mountEligibilityRecheckTimer?.cancel();
       scope._mountEligibilityRecheckTimer = null;

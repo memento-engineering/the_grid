@@ -187,6 +187,8 @@ final class _FakeAppender extends TrajectoryAppender {
 
   /// Consumed FIFO; empty falls back to a fresh [Appended].
   final List<AppendOutcome> appendOutcomes = [];
+  final List<Future<AppendOutcome>> appendFutures = [];
+  Object? appendError;
   ReconnectOutcome reconnectResult = const ReconnectResumed(epoch: 1);
   Object? commitError;
   bool fakeInert = false;
@@ -240,7 +242,10 @@ final class _FakeAppender extends TrajectoryAppender {
     calls.add('append:${record.recordType}');
     records.add(record);
     provenances.add(provenance);
+    final error = appendError;
+    if (error != null) throw error;
     if (appendNeverCompletes) return Completer<AppendOutcome>().future;
+    if (appendFutures.isNotEmpty) return appendFutures.removeAt(0);
     if (appendOutcomes.isNotEmpty) return appendOutcomes.removeAt(0);
     _seq += 1;
     return Appended(
@@ -321,15 +326,19 @@ final class _FakeStopwatch implements Stopwatch {
   void stop() => _isRunning = false;
 }
 
-TrajectoryAppendRequest _note(int ordinal, {String session = 's-1'}) =>
-    TrajectoryAppendRequest(
-      AttemptNote(
-        sessionId: session,
-        body: 'note $ordinal',
-        channel: 'test',
-        noteOrdinal: ordinal,
-      ),
-    );
+TrajectoryAppendRequest _note(
+  int ordinal, {
+  String session = 's-1',
+  bool decisionBearing = false,
+}) => TrajectoryAppendRequest(
+  AttemptNote(
+    sessionId: session,
+    body: 'note $ordinal',
+    channel: 'test',
+    noteOrdinal: ordinal,
+  ),
+  decisionBearing: decisionBearing,
+);
 
 /// A record carrying BOTH promoted correlation keys the drop flare reports.
 TrajectoryAppendRequest _stepTransition({
@@ -383,12 +392,14 @@ void main() {
     Stream<RuntimeEvent>? runtimeEvents,
     List<ObligationQuery>? tickQueries,
     Stopwatch Function()? stopwatch,
+    TrajectoryAdmissionHaltCallback? onAdmissionHalt,
   }) => TrajectoryHarness.build(
     config: config,
     gridHome: tmp.path,
     station: 'tranquility',
     substationPrefixes: const {'tg', 'the_grid', 'tranquility'},
     onFlare: (name, data) => flares.add((name, data)),
+    onAdmissionHalt: onAdmissionHalt,
     runtimeEvents: runtimeEvents,
     tickQueries: tickQueries,
     connect: () async {
@@ -808,6 +819,294 @@ void main() {
       expect(h.status.dropped, 0);
       expect(flares, isEmpty);
     });
+  });
+
+  group('decision-bearing acknowledgements', () {
+    test('disabled, unprovisioned, degraded, fenced-out, and halted always '
+        'complete Suppressed', () async {
+      Future<void> expectSuppressed(TrajectoryHarness h, int ordinal) async {
+        final result = await h.appendAcked(
+          _note(ordinal, decisionBearing: true),
+        );
+        expect(result, isA<Suppressed>());
+      }
+
+      final disabled = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.disabled),
+      );
+      await expectSuppressed(disabled, 1);
+
+      final unprovisioned = await harness(
+        config: const TrajectoryConfig(mode: TrajectoryConfigMode.auto),
+      );
+      await expectSuppressed(unprovisioned, 2);
+
+      connectError = StateError('offline');
+      final degraded = await harness();
+      await degraded.start();
+      await expectSuppressed(degraded, 3);
+      connectError = null;
+
+      final fenced = await harness();
+      appender.appendOutcomes.add(const AppendFencedOut(reason: 'stale'));
+      await fenced.start();
+      fenced.enqueue(_note(4));
+      await pumpEventQueue();
+      await expectSuppressed(fenced, 5);
+
+      appender = _FakeAppender(_FakeDb());
+      final halted = await harness();
+      appender.appendOutcomes.add(
+        const AppendCorruptionHalt(reason: 'damaged'),
+      );
+      await halted.start();
+      halted.enqueue(_note(6));
+      await pumpEventQueue();
+      await expectSuppressed(halted, 7);
+    });
+
+    test('down misses one tick deadline and live commits Acked', () async {
+      const interval = Duration(seconds: 17);
+      final down = await harness(
+        config: const TrajectoryConfig(
+          mode: TrajectoryConfigMode.required,
+          tickInterval: interval,
+        ),
+      );
+      final timed = down.appendAcked(_note(1, decisionBearing: true));
+      final deadline = timers.single;
+      expect(deadline.$1, interval);
+      deadline.$2();
+      expect(await timed, isA<Dropped>());
+      expect(down.status.decisionBearingDropped, 1);
+      expect(down.status.fireAndForgetDropped, 0);
+
+      final live = await harness();
+      await live.start();
+      final committed = await live.appendAcked(_note(2, decisionBearing: true));
+      expect(committed, isA<Acked>());
+    });
+
+    test('commit, dedupe, and refused testimony all acknowledge', () async {
+      final outcomes = <AppendOutcome?>[
+        null,
+        const AppendDeduped(recordId: 'existing'),
+        const AppendRefusedTestimony(
+          attemptId: 'attempt-1',
+          existingRecordId: 'record-1',
+          reason: 'real terminal already landed',
+        ),
+      ];
+      for (final outcome in outcomes) {
+        appender = _FakeAppender(_FakeDb());
+        if (outcome != null) appender.appendOutcomes.add(outcome);
+        final h = await harness();
+        await h.start();
+        expect(
+          await h.appendAcked(_note(1, decisionBearing: true)),
+          isA<Acked>(),
+        );
+      }
+    });
+
+    test(
+      'grant refusal and belt-and-braces throw both drop by request class',
+      () async {
+        appender.appendOutcomes.add(
+          const AppendGrantRefused(
+            grantId: 'grant-1',
+            predicate: 'fencing_token',
+            reason: 'no grant',
+          ),
+        );
+        final refused = await harness();
+        await refused.start();
+        expect(
+          await refused.appendAcked(_note(1, decisionBearing: true)),
+          isA<Dropped>(),
+        );
+        expect(refused.status.decisionBearingDropped, 1);
+        expect(refused.status.fireAndForgetDropped, 0);
+
+        appender = _FakeAppender(_FakeDb())
+          ..appendError = StateError('escaped appender contract');
+        final throwing = await harness();
+        await throwing.start();
+        expect(
+          await throwing.appendAcked(_note(2, decisionBearing: true)),
+          isA<Dropped>(),
+        );
+        expect(throwing.status.decisionBearingDropped, 1);
+        expect(throwing.status.fireAndForgetDropped, 0);
+      },
+    );
+
+    test(
+      'overflow and reconnect losses use only the incoming request class',
+      () async {
+        final blocked = Completer<AppendOutcome>();
+        appender.appendFutures.add(blocked.future);
+        final overflow = await harness(
+          config: const TrajectoryConfig(
+            mode: TrajectoryConfigMode.required,
+            dualRead: DualReadMode.observe,
+            queueBound: 1,
+          ),
+        );
+        await overflow.start();
+        overflow.enqueue(_note(1));
+        await pumpEventQueue();
+        overflow.enqueue(_note(2));
+        expect(
+          await overflow.appendAcked(_note(3, decisionBearing: true)),
+          isA<Dropped>(),
+        );
+        expect(overflow.status.decisionBearingDropped, 1);
+        expect(overflow.status.fireAndForgetDropped, 0);
+        blocked.complete(const AppendDeduped(recordId: 'released'));
+
+        appender = _FakeAppender(_FakeDb());
+        appender.appendOutcomes.add(
+          const AppendInternalError(cause: 'first socket loss'),
+        );
+        final reconnect = await harness();
+        await reconnect.start();
+        reconnect.enqueue(_note(4));
+        await reconnect.runToFixpoint();
+        connectError = StateError('listener stayed down');
+        expect(
+          await reconnect.appendAcked(_note(5, decisionBearing: true)),
+          isA<Dropped>(),
+        );
+        expect(reconnect.status.fireAndForgetDropped, 1);
+        expect(reconnect.status.decisionBearingDropped, 1);
+        expect(reconnect.status.dropped, 2);
+      },
+    );
+
+    test(
+      'shutdown drain loss completes a queued acknowledgement as Dropped',
+      () async {
+        appender.appendNeverCompletes = true;
+        final h = await harness(
+          config: const TrajectoryConfig(
+            mode: TrajectoryConfigMode.required,
+            dualRead: DualReadMode.observe,
+            shutdownDrainTimeout: Duration(milliseconds: 20),
+          ),
+        );
+        await h.start();
+        h.enqueue(_note(1));
+        await pumpEventQueue();
+        final pending = h.appendAcked(_note(2, decisionBearing: true));
+        await h.shutdown();
+        expect(await pending, isA<Dropped>());
+        expect(h.status.decisionBearingDropped, 1);
+        expect(h.status.fireAndForgetDropped, 0);
+      },
+    );
+
+    test('a later latch suppresses a queued ack exactly once', () async {
+      final blocked = Completer<AppendOutcome>();
+      appender.appendFutures.add(blocked.future);
+      final h = await harness();
+      await h.start();
+      h.enqueue(_note(1));
+      await pumpEventQueue();
+      final pending = h.appendAcked(_note(2, decisionBearing: true));
+      final deadline = timers.last;
+
+      blocked.complete(const AppendFencedOut(reason: 'successor'));
+      expect(await pending, isA<Suppressed>());
+      expect(h.status.suppressed, 1);
+      deadline.$2();
+      expect(h.status.suppressed, 1);
+      expect(h.status.decisionBearingDropped, 0);
+    });
+
+    test('cut decision loss halts admission before completing and uses its '
+        'distinct flare without mirror demotion', () async {
+      final halts = <({String reason, String recordClass})>[];
+      final order = <String>[];
+      appender.appendOutcomes.add(const AppendInternalError(cause: 'socket'));
+      final h = await harness(
+        config: const TrajectoryConfig(discipline: TrajectoryDiscipline.cut),
+        onAdmissionHalt: ({required reason, required recordClass}) {
+          order.add('halted');
+          halts.add((reason: reason, recordClass: recordClass));
+        },
+      );
+      await h.start();
+      final result = await h.appendAcked(_note(1, decisionBearing: true)).then((
+        result,
+      ) {
+        order.add('completed');
+        return result;
+      });
+
+      expect(result, isA<Dropped>());
+      expect(order, ['halted', 'completed']);
+      expect(halts, hasLength(1));
+      expect(halts.single.recordClass, 'attempt.note');
+      expect(h.status.decisionBearingDropped, 1);
+      expect(h.status.fireAndForgetDropped, 0);
+      expect(h.status.dropped, 1);
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+      expect(flareNames(), contains('trajectory.admissionHalted'));
+      expect(flareNames(), isNot(contains('trajectory.halted')));
+      expect(flareNames(), isNot(contains('trajectory.dualReadCompromised')));
+      final flare = flares.firstWhere(
+        (entry) => entry.$1 == 'trajectory.admissionHalted',
+      );
+      expect(flare.$2['reason'], contains('socket'));
+      expect(flare.$2['recordClass'], 'attempt.note');
+    });
+
+    test('cut suppression halts admission without mirror demotion', () async {
+      final halts = <({String reason, String recordClass})>[];
+      final h = await harness(
+        config: const TrajectoryConfig(discipline: TrajectoryDiscipline.cut),
+        onAdmissionHalt: ({required reason, required recordClass}) {
+          halts.add((reason: reason, recordClass: recordClass));
+        },
+      );
+      await h.start();
+      await h.shutdown();
+
+      expect(
+        await h.appendAcked(_note(1, decisionBearing: true)),
+        isA<Suppressed>(),
+      );
+      expect(halts, hasLength(1));
+      expect(halts.single.reason, contains('shutting down'));
+      expect(halts.single.recordClass, 'attempt.note');
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+      expect(flareNames(), contains('trajectory.admissionHalted'));
+      expect(flareNames(), isNot(contains('trajectory.dualReadCompromised')));
+      expect(flareNames(), isNot(contains('trajectory.halted')));
+    });
+
+    test(
+      'shadow decision loss compromises mirrors and never halts admission',
+      () async {
+        var halted = false;
+        appender.appendOutcomes.add(const AppendInternalError(cause: 'socket'));
+        final h = await harness(
+          onAdmissionHalt: ({required reason, required recordClass}) {
+            halted = true;
+          },
+        );
+        await h.start();
+        expect(
+          await h.appendAcked(_note(1, decisionBearing: true)),
+          isA<Dropped>(),
+        );
+        expect(halted, isFalse);
+        expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
+        expect(flareNames(), contains('trajectory.dualReadCompromised'));
+        expect(flareNames(), isNot(contains('trajectory.admissionHalted')));
+      },
+    );
   });
 
   group('sealed-outcome mapping (§3)', () {
@@ -1984,8 +2283,8 @@ void main() {
       expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
     });
 
-    test('a DROPPED append never reaches the mirror, and latches the snapshot '
-        'compromised — a frozen fold must never read live (B-B7)', () async {
+    test('a fire-and-forget drop never reaches the mirror and leaves its '
+        'health live', () async {
       dbScript = seedScript();
       final h = await harness();
       await h.start();
@@ -2002,8 +2301,10 @@ void main() {
       await pumpEventQueue();
 
       expect(h.sessionHeads.bySessionId('tranquility-9'), isNull);
-      expect(h.sessionHeads.health, TrajectorySnapshotHealth.compromised);
-      expect(flareNames(), contains('trajectory.dualReadCompromised'));
+      expect(h.sessionHeads.health, TrajectorySnapshotHealth.live);
+      expect(h.status.fireAndForgetDropped, 1);
+      expect(h.status.decisionBearingDropped, 0);
+      expect(flareNames(), isNot(contains('trajectory.dualReadCompromised')));
     });
 
     test('SUPPRESSION latches too — a fenced-out harness freezes the mirror '
@@ -2235,11 +2536,13 @@ void main() {
       final h = await harness();
       await h.start();
 
-      h.recorder.stepRunning(
-        sessionId: 'tranquility-9',
-        stepPath: 'build',
-        stepRound: 0,
-        incarnation: 0,
+      unawaited(
+        h.recorder.stepRunning(
+          sessionId: 'tranquility-9',
+          stepPath: 'build',
+          stepRound: 0,
+          incarnation: 0,
+        ),
       );
       await pumpEventQueue();
 
@@ -2258,11 +2561,13 @@ void main() {
           const AppendInternalError(cause: 'socket died'),
         );
 
-        h.recorder.stepRunning(
-          sessionId: 'tranquility-9',
-          stepPath: 'build',
-          stepRound: 0,
-          incarnation: 0,
+        unawaited(
+          h.recorder.stepRunning(
+            sessionId: 'tranquility-9',
+            stepPath: 'build',
+            stepRound: 0,
+            incarnation: 0,
+          ),
         );
         await pumpEventQueue();
 
@@ -2327,9 +2632,11 @@ void main() {
 
       // The terminal lands post-ACK on P1; P2 has no status column of its own,
       // so P1's terminality is the ONLY direction the rule can be driven from.
-      h.recorder.sessionCompleted(
-        sessionId: 'tranquility-1',
-        workBeadId: 'tg-9abc',
+      unawaited(
+        h.recorder.sessionCompleted(
+          sessionId: 'tranquility-1',
+          workBeadId: 'tg-9abc',
+        ),
       );
       await pumpEventQueue();
       now = now.add(const Duration(minutes: 1));
@@ -2363,22 +2670,26 @@ void main() {
       final versions = <int>[];
       final remove = h.onStepCursorsChanged((s) => versions.add(s.version));
 
-      h.recorder.stepRunning(
-        sessionId: 'tranquility-9',
-        stepPath: 'build',
-        stepRound: 0,
-        incarnation: 0,
+      unawaited(
+        h.recorder.stepRunning(
+          sessionId: 'tranquility-9',
+          stepPath: 'build',
+          stepRound: 0,
+          incarnation: 0,
+        ),
       );
       await pumpEventQueue();
       expect(versions, isNotEmpty);
 
       remove();
       final seen = versions.length;
-      h.recorder.stepRunning(
-        sessionId: 'tranquility-9',
-        stepPath: 'review',
-        stepRound: 0,
-        incarnation: 0,
+      unawaited(
+        h.recorder.stepRunning(
+          sessionId: 'tranquility-9',
+          stepPath: 'review',
+          stepRound: 0,
+          incarnation: 0,
+        ),
       );
       await pumpEventQueue();
       expect(versions, hasLength(seen));

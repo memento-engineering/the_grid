@@ -5,6 +5,7 @@ import 'package:genesis_tree/genesis_tree.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
 import 'package:grid_engine/src/seeds/provider.dart';
+import 'package:grid_runtime/grid_runtime.dart';
 import 'package:test/test.dart';
 
 final class _MutableEligibility {
@@ -164,6 +165,7 @@ _Harness _mountHarness({
   Map<String, SessionProjection> sessionsByWorkBead = const {},
   SessionResolver? resolver,
   bool includeStationServices = true,
+  TrajectoryRecorderScope? trajectoryScope,
 }) {
   final bead = _task();
   final joined = JoinedSnapshotNotifier(
@@ -202,6 +204,12 @@ _Harness _mountHarness({
   if (includeStationServices) {
     station = InheritedSeed<StationServices>(value: fakes.ctx, child: station);
   }
+  if (trajectoryScope != null) {
+    station = InheritedSeed<TrajectoryRecorderScope>(
+      value: trajectoryScope,
+      child: station,
+    );
+  }
   final root = owner.mountRoot(ProviderScope(child: station));
   addTearDown(() {
     owner.dispose();
@@ -217,6 +225,38 @@ _Harness _mountHarness({
 }
 
 void main() {
+  test(
+    'offline fallback refuses fresh work after the shared trajectory halt',
+    () {
+      final runner = RecordingBdRunner();
+      final writer = StationBeadWriter(
+        bd: BdCliService(runner),
+        reader: runner,
+        ownership: BeadOwnershipPredicate(const {'tg'}),
+      );
+      final halt = TrajectoryAdmissionHalt(
+        writer: writer,
+        stateSubstation: 'tg',
+        bootEpoch: () => 1,
+      );
+      final harness = _mountHarness(
+        includeStationServices: false,
+        readyIds: const {},
+        trajectoryScope: TrajectoryRecorderScope(
+          TrajectoryRecorderScope.disabled.recorder,
+          admissionHalt: halt,
+        ),
+      );
+
+      halt.latch(reason: 'controlled', recordClass: 'step.transition');
+      harness.owner.flush();
+      harness.pushAndFlush(readyIds: const {'tg-1'});
+
+      expect(harness.workBeads(), isEmpty);
+      expect(runner.calls, isEmpty);
+    },
+  );
+
   test('warm live branch keeps identity and refusal flares once', () async {
     const staleApproval = 'approval: stale - rerun the approve verb';
     const liveSessions = {
