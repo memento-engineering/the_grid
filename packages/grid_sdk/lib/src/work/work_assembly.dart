@@ -756,6 +756,16 @@ Future<StationWorkRuntime> assembleStationWork({
       'partition (re-seed the store; see docs/SUBSTATION-INIT.md).',
     );
   }
+  // A live state writer may bind only the endpoint resolved from the exact
+  // state workspace above. Dry-run is inert and intentionally retains the CLI
+  // fallback; a live missing endpoint is a terminal pre-tree refusal.
+  if (!dryRun && stateWs.endpointResolution.endpoint == null) {
+    throw StoreRefusal(
+      'assembleStationWork: the live grid state store at '
+      '${stateStore.runtimeDir} has no available SQL endpoint — '
+      '${stateWs.endpointResolution.diagnostic ?? 'endpoint resolution failed.'}',
+    );
+  }
 
   // --- the controllers (one per work store + the state store).
   final bundles = <String, GridRuntimeBundle>{};

@@ -64,6 +64,22 @@ void _seedStore(String dir, {String? database}) {
   );
 }
 
+void _seedProxiedStore(String dir, {required String database, int? port}) {
+  final doltDir = Directory(p.join(dir, '.beads', 'dolt'))
+    ..createSync(recursive: true);
+  File(p.join(dir, '.beads', 'metadata.json')).writeAsStringSync(
+    '{"dolt_mode":"proxied-server","dolt_database":"$database"}',
+  );
+  File(
+    p.join(doltDir.path, 'beads_dart.secret'),
+  ).writeAsStringSync('$database-secret');
+  if (port != null) {
+    File(
+      p.join(doltDir.path, 'proxy.pid'),
+    ).writeAsStringSync('{"pid":1,"port":$port}');
+  }
+}
+
 void main() {
   late Directory tmp;
   setUp(() => tmp = Directory.systemTemp.createTempSync('tg-yl8-'));
@@ -266,6 +282,54 @@ void main() {
       );
     });
 
+    test('a live state store with no own endpoint refuses instead of using '
+        'the parent work-store proxy', () async {
+      _seedStore('${tmp.path}/proj', database: 'pow');
+      _seedProxiedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      _seedProxiedStore('${tmp.path}/home', database: 'work', port: 65202);
+      final statePid = p.join(
+        tmp.path,
+        'home',
+        '.grid',
+        '.beads',
+        'dolt',
+        'proxy.pid',
+      );
+      final refusals = <String>[];
+
+      await expectLater(
+        assembleStationWork(
+          stateStore: GridStateStore.forGridRoot('${tmp.path}/home'),
+          substations: [
+            SubstationWorkSpec(name: 'proj', root: '${tmp.path}/proj'),
+          ],
+          resolver: const _NullResolver(),
+          dryRun: false,
+          preferSql: false,
+          onRefusal: refusals.add,
+        ),
+        throwsA(
+          isA<StoreRefusal>()
+              .having(
+                (refusal) => refusal.message,
+                'message',
+                contains('${tmp.path}/home/.grid'),
+              )
+              .having(
+                (refusal) => refusal.message,
+                'message',
+                contains(statePid),
+              )
+              .having(
+                (refusal) => refusal.message,
+                'message',
+                isNot(contains('65202')),
+              ),
+        ),
+      );
+      expect(refusals, isEmpty);
+    });
+
     test('the built runtime sweeps orphans against the OWNED state partition '
         '(the runner has one to hand to runGrid)', () async {
       _seedStore('${tmp.path}/proj', database: 'pow');
@@ -340,7 +404,11 @@ void main() {
     test('dryRun: false selects the REAL subprocess provider and live git '
         'service', () async {
       _seedStore('${tmp.path}/proj', database: 'pow');
-      _seedStore('${tmp.path}/home/.grid', database: 'tgstate');
+      _seedProxiedStore(
+        '${tmp.path}/home/.grid',
+        database: 'tgstate',
+        port: 65101,
+      );
       // A live assembly registers the root checkout against REAL git; the
       // assigned head skips the origin/HEAD probe (no remote in the fixture).
       await git(['init', '--initial-branch=main'], '${tmp.path}/proj');
@@ -356,6 +424,7 @@ void main() {
         ],
         resolver: const _NullResolver(),
         dryRun: false,
+        preferSql: false,
       );
       addTearDown(work.shutdown);
 
