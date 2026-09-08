@@ -381,6 +381,100 @@ StationServices _ctxOver(
   return (owner: owner, root: root);
 }
 
+/// Re-provides authority grants under one constant provider key so the
+/// descendant [SessionScope] retains its State across a post-void re-admission.
+/// This isolates the contract from WorkList's current unmount/remount side
+/// effect and proves the already-mounted execution surface consumes the grant.
+final class _MutableReservationHost extends StatefulSeed {
+  const _MutableReservationHost({
+    required this.initialReservation,
+    required this.snapshot,
+    required this.ctx,
+    required this.registry,
+    required this.services,
+    required this.onState,
+  });
+
+  final StationAdmissionReservation initialReservation;
+  final JoinedSnapshot snapshot;
+  final StationServices ctx;
+  final CapabilityRegistry registry;
+  final ServiceBundle services;
+  final void Function(_MutableReservationHostState state) onState;
+
+  @override
+  State<_MutableReservationHost> createState() =>
+      _MutableReservationHostState();
+}
+
+final class _MutableReservationHostState
+    extends State<_MutableReservationHost> {
+  late StationAdmissionReservation _reservation;
+
+  @override
+  void initState() {
+    _reservation = seed.initialReservation;
+    seed.onState(this);
+  }
+
+  void provide(StationAdmissionReservation reservation) =>
+      setState(() => _reservation = reservation);
+
+  @override
+  Seed build(TreeContext context) => InheritedSeed<JoinedSnapshot>(
+    value: seed.snapshot,
+    child: InheritedSeed<StationServices>(
+      value: seed.ctx,
+      child: InheritedSeed<CapabilityRegistry>(
+        value: seed.registry,
+        child: InheritedSeed<ServiceBundle>(
+          value: seed.services,
+          child: Provider<StationAdmissionReservation>.value(
+            _reservation,
+            key: const ValueKey('preserved-reservation'),
+            child: SessionScope(bead: bead('tg-1'), circuit: _code),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+({TreeOwner owner, Branch root}) _mountPreservedReservation({
+  required StationAdmissionReservation reservation,
+  required JoinedSnapshot snapshot,
+  required StationServices ctx,
+  required CapabilityRegistry registry,
+  required ServiceBundle services,
+  required void Function(_MutableReservationHostState state) onState,
+}) {
+  final owner = TreeOwner();
+  final root = owner.mountRoot(
+    ProviderScope(
+      child: _MutableReservationHost(
+        initialReservation: reservation,
+        snapshot: snapshot,
+        ctx: ctx,
+        registry: registry,
+        services: services,
+        onState: onState,
+      ),
+    ),
+  );
+  return (owner: owner, root: root);
+}
+
+Branch _sessionScopeBranch(Branch root) {
+  final all = <Branch>[];
+  void collect(Branch branch) {
+    all.add(branch);
+    branch.visitChildren(collect);
+  }
+
+  collect(root);
+  return all.singleWhere((branch) => branch.seed is SessionScope);
+}
+
 DiagnosticsFlagProperty _mintFailedPropertyOf(Branch root) {
   final snapshot = DiagnosticsTreeWalker().walk(
     root,
@@ -755,7 +849,7 @@ void main() {
     });
 
     test(
-      'raw SQL timeout voids the created session before flare and remints',
+      'raw SQL timeout re-mints from a replacement grant without remounting',
       () async {
         final events = <String>[];
         final runner = _FailCreateRunner(failCreates: 0, eventLog: events);
@@ -766,19 +860,53 @@ void main() {
         addTearDown(ctx.dispose);
         final transport = _RecordingTransport(events);
         final reg = RecordingCapabilityRegistry(circuits: const {});
-        final bridge = StationJoinBridge(
-          work: FakeSnapshotSource(_work([bead('tg-1')], {'tg-1'})),
-          state: FakeSnapshotSource(_state(const [])),
-        )..start();
-        addTearDown(bridge.dispose);
-
-        final m = _mountFull(
-          joined: bridge.notifier,
+        final workBead = bead('tg-1');
+        final snapshot = JoinedSnapshot(graph: _work([workBead], {'tg-1'}));
+        const config = SubstationConfig(
+          substationId: 'tg',
+          ownedSubstations: {'tg'},
+        );
+        final services = ServiceBundle(transport: transport);
+        final candidate = StationAdmissionCandidate(
+          bead: workBead,
+          session: null,
+        );
+        final initial = ctx.admission.admitPending(snapshot, config, services, [
+          candidate,
+        ]);
+        expect(initial.admitted, hasLength(1));
+        final initialReservation = initial.admitted.single;
+        late _MutableReservationHostState reservationHost;
+        final m = _mountPreservedReservation(
+          reservation: initialReservation,
+          snapshot: snapshot,
           ctx: ctx,
           registry: reg,
-          services: ServiceBundle(transport: transport),
+          services: services,
+          onState: (state) => reservationHost = state,
         );
         addTearDown(m.owner.dispose);
+        final scopeBranchId = _sessionScopeBranch(m.root).branchId;
+        Object? replacementToken;
+        var replacementDeliveries = 0;
+        final removeInvalidation = ctx.admission.addInvalidationListener(() {
+          final batch = ctx.admission.admitPending(snapshot, config, services, [
+            candidate,
+          ]);
+          if (batch.admitted.isEmpty) return;
+          final next = batch.admitted.single;
+          final token = next.reservationToken;
+          if (next.sessionId != null ||
+              token == null ||
+              identical(token, initialReservation.reservationToken) ||
+              identical(token, replacementToken)) {
+            return;
+          }
+          replacementToken = token;
+          replacementDeliveries++;
+          reservationHost.provide(next);
+        });
+        addTearDown(removeInvalidation);
         await _pumpUntil(
           m.owner,
           () => transport.named('session.mintAbandoned').isNotEmpty,
@@ -820,6 +948,7 @@ void main() {
           runner.callsFor('create').where((call) => call.contains('gate')),
           isEmpty,
         );
+        expect(_sessionScopeBranch(m.root).branchId, scopeBranchId);
 
         await Future<void>.delayed(
           Backoff.standard.delayFor(1) + const Duration(milliseconds: 50),
@@ -835,7 +964,12 @@ void main() {
           runner.calls.where((call) => call.contains('--graph')),
           hasLength(1),
         );
+        expect(replacementDeliveries, 1);
+        expect(_sessionScopeBranch(m.root).branchId, scopeBranchId);
         expect(reg.events, ['START agent(tgdog-sess2/tg-1/agent)']);
+        expect(transport.named('session.mintFailed'), isEmpty);
+        expect(transport.named('session.mintExhausted'), isEmpty);
+        expect(_mintFailedPropertyOf(m.root).value, isFalse);
       },
     );
 

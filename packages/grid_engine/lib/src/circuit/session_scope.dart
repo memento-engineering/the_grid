@@ -169,6 +169,13 @@ class SessionScopeState extends State<SessionScope>
   static const _mintFailedFlare = 'session.mintFailed';
   static const _mintAbandonedFlare = 'session.mintAbandoned';
 
+  /// A molecule pour has not produced a driveable step projection within the
+  /// pour-sized observation window. This is deliberately scope-local rather
+  /// than part of the station-wide [WedgeMonitor]: it names the affected work
+  /// and session, and it also covers the post-void interval in which there is
+  /// no live session for the station-wide sampler to count.
+  static const _moleculePourStalledFlare = 'session.moleculePourStalled';
+
   /// The terminal mint-EXHAUSTED flare (tg-6nf) — the [_maxMintAttempts] budget
   /// is spent; the scope escalates LOUD and goes inert (a human must fix the
   /// store — the exact FIRST-LIVE-ARM incident).
@@ -187,6 +194,13 @@ class SessionScopeState extends State<SessionScope>
   /// The scope remains retryable and reports the failed park without allowing
   /// its unawaited orphan-resume microtask to escape into the resident's zone.
   static const _moleculePourParkFailedFlare = 'session.moleculePourParkFailed';
+
+  /// How long a scope observes a molecule pour that has not landed before it
+  /// flares. This is an OBSERVATIONAL window, not a second bd deadline: the
+  /// pour itself remains governed solely by [BdCliService.pourTimeout]. Static
+  /// and mutable so an offline test can shrink the window; production never
+  /// changes it.
+  static Duration moleculePourStallWindow = BdCliService.pourTimeout;
 
   GateSweepSessionDisposition _gateSweepDisposition(
     SessionDisposition disposition,
@@ -331,6 +345,26 @@ class SessionScopeState extends State<SessionScope>
   /// conflict 2). Null before any mint attempt.
   String? _moleculeSessionId;
 
+  /// Identity of the authority grant consumed by a molecule attempt that was
+  /// subsequently voided on timeout. The authority alone decides WHEN a retry
+  /// may start; this scope consumes only a distinct replacement grant provided
+  /// through the tree after that authority-owned backoff lapses.
+  Object? _postVoidReservationToken;
+  String? _postVoidRetiredSessionId;
+  bool _postVoidRemintPending = false;
+  bool _postVoidRemintScheduled = false;
+
+  /// Scope-local observation of a molecule graph that has not landed. The
+  /// `(stage, sessionId)` pair is the episode identity, mirroring the
+  /// latch-since/rising-edge discipline of the station-wide [WedgeMonitor]
+  /// while covering a different lifecycle layer (including zero live
+  /// sessions after a compensated void).
+  Timer? _moleculePourStallTimer;
+  DateTime? _moleculePourStallObservedAt;
+  String? _moleculePourStallSessionId;
+  String? _moleculePourStallStage;
+  bool _moleculePourStallFlared = false;
+
   /// How many `createSession` attempts this scope has made (tg-6nf) — bounded
   /// by [_maxMintAttempts]; reaching the cap is the escalation trigger. Reset
   /// to 0 by [_scheduleRetiredRework] so round N+1 gets its own fresh budget.
@@ -401,6 +435,7 @@ class SessionScopeState extends State<SessionScope>
     // recorder is station-lifetime, so there is nothing here to rebuild on.
     _recorder = trajectoryRecorderOf(context);
     _considerMintReadiness();
+    _considerPostVoidRemint();
   }
 
   @override
@@ -868,8 +903,22 @@ class SessionScopeState extends State<SessionScope>
         'reason': kMintTimeoutVoidReason,
         ...stateStoreDeadlineMetadata(voided.cause),
       });
+      _postVoidReservationToken = _admissionReservation?.reservationToken;
+      _postVoidRetiredSessionId = voided.retiredSessionId;
+      _postVoidRemintPending = true;
+      _postVoidRemintScheduled = false;
+      // A round nobody ran is not an operator-spent rework round, and a
+      // compensated pour timeout is not a createSession failure. The
+      // replacement grant therefore receives a fresh bounded create budget
+      // without activating the mint-failure latch.
+      _mintAttempts = 0;
+      _mintFailureActive = false;
       _moleculeSessionId = null;
       _sessionId = null;
+      _observeMoleculePourStall(
+        stage: 'post-void',
+        sessionId: voided.retiredSessionId,
+      );
       return;
     } on Object catch (error) {
       await _parkFailedMoleculePour(
@@ -949,6 +998,120 @@ class SessionScopeState extends State<SessionScope>
     } catch (_) {
       // A throwing transport never breaks the scope's lifecycle — swallow.
     }
+  }
+
+  /// Starts or advances one molecule-pour stall episode. Re-observing the same
+  /// identity never resets its clock; a different `(stage, sessionId)` begins
+  /// a fresh episode.
+  void _observeMoleculePourStall({
+    required String stage,
+    required String sessionId,
+  }) {
+    if (_moleculePourStallStage != stage ||
+        _moleculePourStallSessionId != sessionId) {
+      _clearMoleculePourStall();
+      _moleculePourStallObservedAt = DateTime.now();
+      _moleculePourStallSessionId = sessionId;
+      _moleculePourStallStage = stage;
+    }
+    _considerMoleculePourStall();
+  }
+
+  /// Carries an observed stall through time even when no snapshot flush lands.
+  /// The flare is a rising-edge observation only; it neither retries nor
+  /// changes the authority-owned deadline/backoff mechanisms.
+  void _considerMoleculePourStall({bool deadlineLapsed = false}) {
+    _moleculePourStallTimer?.cancel();
+    _moleculePourStallTimer = null;
+    final observedAt = _moleculePourStallObservedAt;
+    final sessionId = _moleculePourStallSessionId;
+    final stage = _moleculePourStallStage;
+    if (observedAt == null ||
+        sessionId == null ||
+        stage == null ||
+        _cancelled ||
+        !context.mounted ||
+        _failed ||
+        _moleculePourStallFlared) {
+      return;
+    }
+    final stillActive = switch (stage) {
+      'empty-projection' => !_resolving && _sessionId == sessionId,
+      'post-void' =>
+        _postVoidRemintPending &&
+            _sessionId == null &&
+            _postVoidRetiredSessionId == sessionId,
+      _ => false,
+    };
+    if (!stillActive) return;
+    final elapsed = DateTime.now().difference(observedAt);
+    final remaining = moleculePourStallWindow - elapsed;
+    if (remaining > Duration.zero || !deadlineLapsed) {
+      _moleculePourStallTimer = Timer(
+        remaining > Duration.zero ? remaining : Duration.zero,
+        () => _considerMoleculePourStall(deadlineLapsed: true),
+      );
+      return;
+    }
+    _moleculePourStallFlared = true;
+    _flare(_moleculePourStalledFlare, {
+      'workBeadId': seed.bead.id,
+      'sessionId': sessionId,
+      'stage': stage,
+      'elapsedMs': '${elapsed.inMilliseconds}',
+    });
+  }
+
+  void _clearMoleculePourStall() {
+    _moleculePourStallTimer?.cancel();
+    _moleculePourStallTimer = null;
+    _moleculePourStallObservedAt = null;
+    _moleculePourStallSessionId = null;
+    _moleculePourStallStage = null;
+    _moleculePourStallFlared = false;
+  }
+
+  /// Schedules execution only after the authority has re-provided a distinct,
+  /// unconsumed reservation for this work bead. The authority's invalidation
+  /// remains the sole retry notification and its backoff remains the sole
+  /// retry clock.
+  void _considerPostVoidRemint() {
+    final reservation = _admissionReservation;
+    if (!_postVoidRemintPending ||
+        _postVoidRemintScheduled ||
+        _moleculeSessionId != null ||
+        reservation == null ||
+        reservation.candidate.bead.id != seed.bead.id ||
+        reservation.sessionId != null ||
+        reservation.reservationToken == null ||
+        identical(reservation.reservationToken, _postVoidReservationToken)) {
+      return;
+    }
+    _postVoidRemintScheduled = true;
+    scheduleMicrotask(() => _remintAfterVoid(reservation));
+  }
+
+  void _remintAfterVoid(StationAdmissionReservation reservation) {
+    if (_cancelled || !context.mounted) return;
+    final current = _admissionReservation;
+    if (!_postVoidRemintPending ||
+        _moleculeSessionId != null ||
+        current == null ||
+        current.candidate.bead.id != seed.bead.id ||
+        current.sessionId != null ||
+        !identical(current.reservationToken, reservation.reservationToken)) {
+      _postVoidRemintScheduled = false;
+      _considerPostVoidRemint();
+      return;
+    }
+    // The tree has consumed the replacement grant by committing it to the
+    // existing mint path. Only now does the post-void observation end.
+    _clearMoleculePourStall();
+    _postVoidReservationToken = null;
+    _postVoidRetiredSessionId = null;
+    _postVoidRemintPending = false;
+    _postVoidRemintScheduled = false;
+    unawaited(_mint());
   }
 
   Future<bool> _stopAbandonedMint({
@@ -1704,6 +1867,7 @@ class SessionScopeState extends State<SessionScope>
     _mintDecisionAt = null;
     _mintGraceTimer?.cancel();
     _mintGraceTimer = null;
+    _clearMoleculePourStall();
     _cancelled = true;
     _mintingSuccessorForPath.clear();
   }
@@ -1827,9 +1991,11 @@ class SessionScopeState extends State<SessionScope>
         // is re-entry-safe (R6's dedup probe), so case 1 degrades to a
         // no-op and case 2 completes the mint. Either way the next
         // snapshot carries the steps and this branch stops firing.
+        _observeMoleculePourStall(stage: 'empty-projection', sessionId: id);
         _scheduleOrphanedPourResume(id);
         return const Idle();
       }
+      _clearMoleculePourStall();
       structuralDepthByPath = supersedesDepthByPath(
         joined.moleculeBeads,
         joined.moleculeDependencies,
