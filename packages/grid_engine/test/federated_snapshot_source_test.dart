@@ -5,6 +5,8 @@
 // fail-closed for NEW mounts (D-Z4), mutable membership (D-Z1/D-Z2), and the
 // LOUD refusal of cross-store dependency rows (tg-mspw, which blocks off
 // D-F2's dep-row edge source). Pure-Dart, no I/O.
+import 'dart:async';
+
 import 'package:beads_dart/beads_dart.dart';
 import 'package:grid_engine/grid_engine.dart';
 import 'package:grid_engine/testing.dart';
@@ -25,6 +27,52 @@ GraphSnapshot graphOf(
 /// A [FakeSnapshotSource] delivers via a real broadcast stream (like the live
 /// runtime), so a listener only observes a push after a microtask turn.
 Future<void> settle() => Future<void>.delayed(Duration.zero);
+
+final class _RecordingTimer implements Timer {
+  _RecordingTimer(this.duration, this._callback);
+
+  final Duration duration;
+  final void Function() _callback;
+  bool cancelled = false;
+  bool _active = true;
+
+  void fire() {
+    if (!_active) throw StateError('timer is not active');
+    _active = false;
+    _callback();
+  }
+
+  /// Deliberately invokes a captured callback even after cancellation, to
+  /// simulate a timer callback already queued while disposal races it.
+  void invokeCallback() => _callback();
+
+  @override
+  void cancel() {
+    cancelled = true;
+    _active = false;
+  }
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  int get tick => 0;
+}
+
+final class _RecordingTimers {
+  final List<_RecordingTimer> timers = [];
+
+  List<_RecordingTimer> get active => [
+    for (final timer in timers)
+      if (timer.isActive) timer,
+  ];
+
+  Timer schedule(Duration duration, void Function() callback) {
+    final timer = _RecordingTimer(duration, callback);
+    timers.add(timer);
+    return timer;
+  }
+}
 
 void main() {
   group('FederatedSnapshotSource — union of LOCAL members', () {
@@ -175,98 +223,191 @@ void main() {
   });
 
   group('FederatedSnapshotSource — ready-staleness by AGE (tg-zd4v)', () {
+    test('all-silent members expire at the exact earliest deadline and publish '
+        'the ready-set change while retaining every bead', () async {
+      var now = DateTime.fromMillisecondsSinceEpoch(5000);
+      final timers = _RecordingTimers();
+      final older = FakeSnapshotSource();
+      final newer = FakeSnapshotSource();
+      final union = FederatedSnapshotSource(
+        {'older': older, 'newer': newer},
+        readyStaleAge: const Duration(seconds: 10),
+        now: () => now,
+        scheduleTimer: timers.schedule,
+      );
+      addTearDown(union.dispose);
+
+      older.push(graphOf([bead('older-1')], tick: 1000));
+      newer.push(graphOf([bead('newer-1')], tick: 4000));
+      await settle();
+      expect(union.current!.readyIds, {'older-1', 'newer-1'});
+      expect(timers.active, hasLength(1));
+      expect(timers.active.single.duration, const Duration(seconds: 6));
+
+      final events = <GraphSnapshot>[];
+      union.snapshots.listen(events.add);
+
+      // No member emits. The one-shot alone advances the union at the
+      // older capture's exact capturedAt + readyStaleAge boundary.
+      now = DateTime.fromMillisecondsSinceEpoch(11000);
+      timers.active.single.fire();
+      await settle();
+
+      expect(
+        union.current!.readyIds,
+        {'newer-1'},
+        reason: 'only the member whose exact deadline arrived ages out',
+      );
+      expect(
+        union.current!.beadsById.keys,
+        containsAll(['older-1', 'newer-1']),
+        reason: 'absence is not deletion (D-Z3) — beads stay visible',
+      );
+      expect(union.freshness['older']!.stale, isTrue);
+      expect(union.freshness['newer']!.stale, isFalse);
+      expect(events, hasLength(1));
+      expect(events.single.readyIds, {'newer-1'});
+      expect(timers.active, hasLength(1));
+      expect(timers.active.single.duration, const Duration(seconds: 3));
+    });
+
     test(
-      'a member that stops emitting stops contributing readyIds once its age '
-      'exceeds the window — beads stay visible — and recovers on re-capture',
+      'timer-driven stale and recovery edges flare once and recovery re-arms '
+      'from the freshest capture',
       () async {
-        var now = DateTime.fromMillisecondsSinceEpoch(0);
-        final tg = FakeSnapshotSource();
-        final quiet = FakeSnapshotSource();
-        final union = FederatedSnapshotSource(
-          {'tg': tg, 'quiet': quiet},
-          readyStaleAge: const Duration(seconds: 10),
-          now: () => now,
-        );
-        addTearDown(union.dispose);
-
-        tg.push(graphOf([bead('tg-1')], tick: 1000));
-        quiet.push(graphOf([bead('quiet-1')], tick: 1000));
-        await settle();
-        expect(union.current!.readyIds, {'tg-1', 'quiet-1'});
-        expect(union.freshness['quiet']!.stale, isFalse);
-
-        // 'quiet' goes silent; a healthy member's floor tick recomputes the
-        // union — the exact event-driven judgement a live resident performs.
-        now = DateTime.fromMillisecondsSinceEpoch(15000);
-        tg.push(graphOf([bead('tg-1')], tick: 15000));
-        await settle();
-
-        expect(
-          union.current!.readyIds,
-          {'tg-1'},
-          reason: 'an aged-out member mints no NEW ready ids (D-Z4 by age)',
-        );
-        expect(
-          union.current!.beadsById.keys,
-          containsAll(['tg-1', 'quiet-1']),
-          reason: 'absence is not deletion (D-Z3) — beads stay visible',
-        );
-        expect(union.freshness['quiet']!.stale, isTrue);
-
-        // The member re-captures: fresh again, ready ids restored.
-        quiet.push(graphOf([bead('quiet-1')], tick: 16000));
-        await settle();
-        expect(union.current!.readyIds, {'tg-1', 'quiet-1'});
-        expect(union.freshness['quiet']!.stale, isFalse);
-      },
-    );
-
-    test(
-      'stale-by-age and recovery each flare EXACTLY once per edge',
-      () async {
-        var now = DateTime.fromMillisecondsSinceEpoch(0);
+        var now = DateTime.fromMillisecondsSinceEpoch(5000);
+        final timers = _RecordingTimers();
         final flares = <String>[];
-        final tg = FakeSnapshotSource();
-        final quiet = FakeSnapshotSource();
+        final older = FakeSnapshotSource();
+        final newer = FakeSnapshotSource();
         final union = FederatedSnapshotSource(
-          {'tg': tg, 'quiet': quiet},
+          {'older': older, 'newer': newer},
           readyStaleAge: const Duration(seconds: 10),
           now: () => now,
+          scheduleTimer: timers.schedule,
           onFlare: (name, data) => flares.add('$name:${data['substation']}'),
         );
         addTearDown(union.dispose);
 
-        tg.push(graphOf([bead('tg-1')], tick: 1000));
-        quiet.push(graphOf([bead('quiet-1')], tick: 1000));
+        older.push(graphOf([bead('older-1')], tick: 1000));
+        newer.push(graphOf([bead('newer-1')], tick: 4000));
         await settle();
         expect(flares, isEmpty);
 
-        now = DateTime.fromMillisecondsSinceEpoch(15000);
-        tg.push(graphOf([bead('tg-1')], tick: 15000));
+        now = DateTime.fromMillisecondsSinceEpoch(11000);
+        timers.active.single.fire();
         await settle();
-        expect(flares, ['sync.memberStaleByAge:quiet']);
+        expect(flares, ['sync.memberStaleByAge:older']);
+        expect(union.current!.readyIds, {'newer-1'});
 
-        // More healthy ticks while 'quiet' stays stale: NO flare spam.
-        now = DateTime.fromMillisecondsSinceEpoch(20000);
-        tg.push(graphOf([bead('tg-1')], tick: 20000));
-        now = DateTime.fromMillisecondsSinceEpoch(25000);
-        tg.push(graphOf([bead('tg-1')], tick: 25000));
+        // A same-side member event re-arms the deadline but does not duplicate
+        // the already-observed stale edge.
+        final beforeSameSideRecompute = timers.active.single;
+        older.push(graphOf([bead('older-1')], tick: 1000));
         await settle();
-        expect(flares, ['sync.memberStaleByAge:quiet']);
+        expect(beforeSameSideRecompute.cancelled, isTrue);
+        expect(flares, ['sync.memberStaleByAge:older']);
 
-        // Recovery flares once, then healthy silence.
-        quiet.push(graphOf([bead('quiet-1')], tick: 26000));
+        // Both members' live captures advance to the same instant, but only
+        // the recovering member emits. Its event cancels the old deadline,
+        // restores READY membership, and schedules one exact replacement.
+        final beforeRecovery = timers.active.single;
+        now = DateTime.fromMillisecondsSinceEpoch(12000);
+        newer.refreshQuietly(graphOf([bead('newer-1')], tick: 12000));
+        older.push(graphOf([bead('older-1')], tick: 12000));
         await settle();
+        expect(beforeRecovery.cancelled, isTrue);
         expect(flares, [
-          'sync.memberStaleByAge:quiet',
-          'sync.memberRecovered:quiet',
+          'sync.memberStaleByAge:older',
+          'sync.memberRecovered:older',
         ]);
-        now = DateTime.fromMillisecondsSinceEpoch(27000);
-        tg.push(graphOf([bead('tg-1')], tick: 27000));
+        expect(union.current!.readyIds, {'older-1', 'newer-1'});
+        expect(timers.active, hasLength(1));
+        expect(timers.active.single.duration, const Duration(seconds: 10));
+
+        older.push(graphOf([bead('older-1')], tick: 12000));
         await settle();
         expect(flares, hasLength(2));
       },
     );
+
+    test('schedules only for future capture edges and leaves none after every '
+        'captured member expires', () async {
+      var now = DateTime.fromMillisecondsSinceEpoch(1000);
+      final noCaptureTimers = _RecordingTimers();
+      final noCapture = FederatedSnapshotSource(
+        {'empty': FakeSnapshotSource()},
+        readyStaleAge: const Duration(seconds: 10),
+        now: () => now,
+        scheduleTimer: noCaptureTimers.schedule,
+      );
+      expect(noCaptureTimers.timers, isEmpty);
+      await noCapture.dispose();
+
+      final disabledTimers = _RecordingTimers();
+      final disabled = FederatedSnapshotSource(
+        {
+          'member': FakeSnapshotSource(graphOf([bead('member-1')], tick: 1000)),
+        },
+        now: () => now,
+        scheduleTimer: disabledTimers.schedule,
+      );
+      expect(disabledTimers.timers, isEmpty);
+      await disabled.dispose();
+
+      final expiryTimers = _RecordingTimers();
+      final expires = FederatedSnapshotSource(
+        {
+          'member': FakeSnapshotSource(graphOf([bead('member-1')], tick: 1000)),
+        },
+        readyStaleAge: const Duration(seconds: 10),
+        now: () => now,
+        scheduleTimer: expiryTimers.schedule,
+      );
+      expect(expiryTimers.active, hasLength(1));
+      expect(expiryTimers.active.single.duration, const Duration(seconds: 10));
+
+      now = DateTime.fromMillisecondsSinceEpoch(11000);
+      expiryTimers.active.single.fire();
+      await settle();
+      expect(expires.current!.readyIds, isEmpty);
+      expect(expiryTimers.active, isEmpty);
+      await expires.dispose();
+    });
+
+    test('dispose cancels its deadline and a late callback is inert', () async {
+      var now = DateTime.fromMillisecondsSinceEpoch(1000);
+      final timers = _RecordingTimers();
+      final flares = <String>[];
+      final source = FakeSnapshotSource(
+        graphOf([bead('member-1')], tick: 1000),
+      );
+      final union = FederatedSnapshotSource(
+        {'member': source},
+        readyStaleAge: const Duration(seconds: 10),
+        now: () => now,
+        scheduleTimer: timers.schedule,
+        onFlare: (name, _) => flares.add(name),
+      );
+      final events = <GraphSnapshot>[];
+      union.snapshots.listen(events.add);
+      final currentBeforeDispose = union.current;
+      final deadline = timers.active.single;
+
+      await union.dispose();
+      expect(deadline.cancelled, isTrue);
+      expect(timers.active, isEmpty);
+
+      now = DateTime.fromMillisecondsSinceEpoch(11000);
+      deadline.invokeCallback();
+      await settle();
+      expect(union.current, same(currentBeforeDispose));
+      expect(events, isEmpty);
+      expect(flares, isEmpty);
+      expect(timers.timers, hasLength(1));
+      expect(timers.active, isEmpty);
+    });
+
     test(
       'a QUIETLY-refreshing member (floor ticks, unchanged store) never ages '
       'out — the age judgement reads the live heartbeat, not the last '
