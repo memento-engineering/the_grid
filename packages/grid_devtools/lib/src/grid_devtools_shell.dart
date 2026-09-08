@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
+import 'package:grid_station_client/grid_station_client.dart';
 
 import 'events/events_source.dart';
 import 'handshake_state.dart';
 import 'live/live_connection_bar.dart';
-import 'live/live_connection_controller.dart';
 import 'projection/projection_tabs.dart';
 import 'protocol/grid_exploration_client.dart';
 import 'replay/replay_fixture.dart';

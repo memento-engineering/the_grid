@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:grid_devtools/grid_devtools.dart';
 import 'package:genesis_foundation/genesis_foundation.dart';
+import 'package:grid_station_client/grid_station_client.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -65,30 +65,43 @@ TreeSnapshot _snapshot(int day) => TreeSnapshot(
 );
 
 void main() {
-  test(
-    'constructs browser stream URI with query bearer and no protocol',
-    () async {
-      final channel = _FakeChannel();
-      Uri? connectedUri;
-      Iterable<String>? connectedProtocols;
-      final source = WebSocketTreeWireSource.connect(
-        controlUrl: Uri.parse('https://user@host:42/control?q=x#fragment'),
-        token: 'padded-token==',
-        connector: (uri, {required protocols}) {
-          connectedUri = uri;
-          connectedProtocols = protocols;
-          return channel;
-        },
-      );
+  test('normalizes the stream URI with query bearer and no protocol', () async {
+    final channel = _FakeChannel();
+    Uri? connectedUri;
+    Iterable<String>? connectedProtocols;
+    final source = WebSocketTreeWireSource.connect(
+      controlUrl: Uri.parse('https://user@host:42/control?q=x#fragment'),
+      token: 'padded-token==',
+      connector: (uri, {required protocols}) {
+        connectedUri = uri;
+        connectedProtocols = protocols;
+        return channel;
+      },
+    );
 
-      expect(
-        connectedUri,
-        Uri.parse('wss://host:42/stream?token=padded-token%3D%3D'),
-      );
-      expect(connectedProtocols, isEmpty);
-      await source.dispose();
-    },
-  );
+    expect(
+      connectedUri,
+      Uri.parse('wss://host:42/stream?token=padded-token%3D%3D'),
+    );
+    expect(connectedProtocols, isEmpty);
+    await source.dispose();
+  });
+
+  test('uses ws for HTTP control URLs', () async {
+    final channel = _FakeChannel();
+    Uri? connectedUri;
+    final source = WebSocketTreeWireSource.connect(
+      controlUrl: Uri.parse('http://localhost:4242/status'),
+      token: 'secret',
+      connector: (uri, {required protocols}) {
+        connectedUri = uri;
+        return channel;
+      },
+    );
+
+    expect(connectedUri, Uri.parse('ws://localhost:4242/stream?token=secret'));
+    await source.dispose();
+  });
 
   test(
     'updates latest before ordered broadcasts and forwards errors',
@@ -124,4 +137,19 @@ void main() {
       expect(channel.output.closeCalls, 1);
     },
   );
+
+  test('a socket close closes the broadcast stream', () async {
+    final channel = _FakeChannel();
+    final source = WebSocketTreeWireSource.connect(
+      controlUrl: Uri.parse('http://localhost:42'),
+      token: 'secret',
+      connector: (_, {required protocols}) => channel,
+    );
+    final done = expectLater(source.snapshots, emitsDone);
+
+    await channel.input.close();
+
+    await done;
+    await source.dispose();
+  });
 }

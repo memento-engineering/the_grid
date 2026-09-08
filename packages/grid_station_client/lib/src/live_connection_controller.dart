@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
@@ -6,6 +8,10 @@ import 'station_lock_discovery.dart';
 import 'websocket_tree_wire_source.dart';
 
 part 'live_connection_controller.freezed.dart';
+
+const _manualValidationMessage =
+    'Enter host:port or an absolute http(s) control URL with an explicit port '
+    'and a non-empty token.';
 
 /// All observable live-connection outcomes.
 @freezed
@@ -19,14 +25,14 @@ sealed class LiveConnectionState with _$LiveConnectionState {
   /// Manual credentials are required.
   const factory LiveConnectionState.manual({String? message}) = LiveManual;
 
-  /// A manually supplied connection is being constructed.
+  /// A live connection is being constructed.
   const factory LiveConnectionState.connecting() = LiveConnecting;
 
   /// Live snapshots are available from [source].
   const factory LiveConnectionState.connected({required TreeSource source}) =
       LiveConnected;
 
-  /// The supplied connection details were invalid.
+  /// The supplied manual connection details were invalid or failed.
   const factory LiveConnectionState.failed({required String message}) =
       LiveFailed;
 }
@@ -59,12 +65,17 @@ final class LiveConnectionController
   bool _disposed = false;
 
   /// Attempts local lock discovery once, falling back to manual entry.
-  Future<void> autoDiscover() async {
+  Future<void> autoConnect() async {
     if (_disposed) return;
     value = const LiveConnectionState.discovering();
     try {
       final record = await _discovery.discover();
-      await connect(controlUrl: record.controlUrl!, token: record.token!);
+      final controlUrl = _discoveredControlUrl(record.controlUrl);
+      final token = record.token?.trim() ?? '';
+      if (token.isEmpty) {
+        throw const FormatException('station lock has no control bearer');
+      }
+      await _connect(controlUrl: controlUrl, token: token);
     } on Object catch (error) {
       if (!_disposed) {
         value = LiveConnectionState.manual(message: error.toString());
@@ -72,27 +83,25 @@ final class LiveConnectionController
     }
   }
 
-  /// Validates and connects with explicit station credentials.
+  /// Compatibility spelling for existing DevTools consumers.
+  Future<void> autoDiscover() => autoConnect();
+
+  /// Normalizes, validates, and connects with manually supplied credentials.
   Future<void> connect({
     required String controlUrl,
     required String token,
   }) async {
     if (_disposed) return;
-    final uri = Uri.tryParse(controlUrl.trim());
-    if (uri == null ||
-        !uri.isAbsolute ||
-        (uri.scheme != 'http' && uri.scheme != 'https') ||
-        token.trim().isEmpty) {
+    final uri = _manualControlUrl(controlUrl);
+    final bearer = token.trim();
+    if (uri == null || bearer.isEmpty) {
       value = const LiveConnectionState.failed(
-        message: 'Enter an absolute http(s) URL and a non-empty token.',
+        message: _manualValidationMessage,
       );
       return;
     }
-    value = const LiveConnectionState.connecting();
     try {
-      final source = _connectSource(controlUrl: uri, token: token.trim());
-      await _replaceSource(source);
-      if (!_disposed) value = LiveConnectionState.connected(source: source);
+      await _connect(controlUrl: uri, token: bearer);
     } on Object catch (error) {
       if (!_disposed) {
         value = LiveConnectionState.failed(message: error.toString());
@@ -104,6 +113,17 @@ final class LiveConnectionController
   Future<void> disconnect() async {
     await _replaceSource(null);
     if (!_disposed) value = const LiveConnectionState.disconnected();
+  }
+
+  Future<void> _connect({
+    required Uri controlUrl,
+    required String token,
+  }) async {
+    if (_disposed) return;
+    value = const LiveConnectionState.connecting();
+    final source = _connectSource(controlUrl: controlUrl, token: token);
+    await _replaceSource(source);
+    if (!_disposed) value = LiveConnectionState.connected(source: source);
   }
 
   Future<void> _replaceSource(TreeSource? replacement) async {
@@ -122,8 +142,34 @@ final class LiveConnectionController
     _ownedSource = null;
     if (source != null) {
       // ValueNotifier disposal cannot await transport shutdown.
-      source.dispose();
+      unawaited(source.dispose());
     }
     super.dispose();
   }
+}
+
+Uri _discoveredControlUrl(String? value) {
+  final uri = Uri.tryParse(value?.trim() ?? '');
+  if (uri == null ||
+      !uri.isAbsolute ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty) {
+    throw const FormatException('station lock has no valid control URL');
+  }
+  return uri;
+}
+
+Uri? _manualControlUrl(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return null;
+  final normalized = trimmed.contains('://') ? trimmed : 'http://$trimmed';
+  final uri = Uri.tryParse(normalized);
+  if (uri == null ||
+      !uri.isAbsolute ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty ||
+      !uri.hasPort) {
+    return null;
+  }
+  return uri;
 }

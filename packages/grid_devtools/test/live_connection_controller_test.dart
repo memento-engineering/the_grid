@@ -2,9 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
-import 'package:grid_devtools/src/live/live_connection_controller.dart';
-import 'package:grid_devtools/src/live/station_lock_discovery.dart';
 import 'package:genesis_foundation/genesis_foundation.dart';
+import 'package:grid_station_client/grid_station_client.dart';
 
 final class _Source implements TreeSource {
   final controller = StreamController<TreeSnapshot>.broadcast();
@@ -74,8 +73,8 @@ void main() {
       },
     );
 
-    await controller.connect(controlUrl: 'http://one.test', token: 'a');
-    await controller.connect(controlUrl: 'https://two.test', token: 'b');
+    await controller.connect(controlUrl: 'http://one.test:41', token: 'a');
+    await controller.connect(controlUrl: 'https://two.test:42', token: 'b');
     expect(sources.first.disposeCalls, 1);
     await controller.disconnect();
     expect(sources.last.disposeCalls, 1);

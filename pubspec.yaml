@@ -8,7 +8,9 @@ workspace:
   - packages/grid_exploration
   - packages/grid_diagnostics_contract
   - packages/grid_cockpit_ui
+  - packages/grid_station_client
   - packages/grid_devtools
+  - packages/grid_cockpit
   - packages/grid_runtime
   - packages/grid_engine
   # The public authoring surface over the private grid_engine (ADR-0008 D2 /

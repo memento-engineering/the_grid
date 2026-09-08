@@ -1,0 +1,29 @@
+name: grid_station_client
+version: 0.1.0
+description: Web-safe discovery and live TreeSnapshot client for grid stations.
+repository: https://github.com/memento-engineering/the_grid
+resolution: workspace
+publish_to: none
+
+environment:
+  flutter: ">=3.41.0"
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  freezed_annotation: ^3.0.0
+  genesis_foundation: ^0.2.0
+  grid_cockpit_ui:
+    path: ../grid_cockpit_ui
+  grid_diagnostics_contract:
+    path: ../grid_diagnostics_contract
+  web_socket_channel: ^3.0.3
+
+dev_dependencies:
+  build_runner: ^2.4.0
+  flutter_test:
+    sdk: flutter
+  freezed: ^3.0.0
+  lints: ^5.1.0
+  stream_channel: ^2.1.4

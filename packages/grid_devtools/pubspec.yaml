@@ -17,27 +17,22 @@ dependencies:
   file_selector: ^1.0.3
   flutter:
     sdk: flutter
-  freezed_annotation: ^3.0.0
   genesis_foundation: ^0.2.0
   grid_cockpit_ui:
     path: ../grid_cockpit_ui
-  grid_diagnostics_contract:
-    path: ../grid_diagnostics_contract
+  grid_station_client:
+    path: ../grid_station_client
   leonard_contract: ^0.2.0
   vm_service: ^14.2.0
-  web_socket_channel: ^3.0.3
 
 dev_dependencies:
-  build_runner: ^2.4.0
   flutter_test:
     sdk: flutter
-  freezed: ^3.0.0
   # Dev-only conformance input: checks DevTools method constants against the
   # host builders without adding grid_exploration to the runtime graph.
   grid_exploration:
     path: ../grid_exploration
   lints: ^5.1.0
-  stream_channel: ^2.1.4
   test: any
 
 # Match devtools_extensions' uses-material-design so icon glyphs render in

@@ -86,6 +86,8 @@ unchanged by D-BD1 or this stamp.
 |---|---|---|---|
 | **`genesis_foundation`** | The dependency-free versioned diagnostics projection wire contract and shared `Diagnosticable.debugFillProperties(DiagnosticsBuilder)` substrate. | P2 observability | Shared by engine-side projectors/reporters and Flutter/headless consumers; it sits below `genesis_tree`. |
 | **`grid_diagnostics_contract`** | The grid-local resident-station lock and bearer-subprotocol contract. | P2 observability | Owns `.grid/station.lock`, `StationLockRecord`, and the `grid.tree.bearer.` prefix across the CLI/DevTools boundary. |
+| **`grid_station_client`** | The dart:io-free shared station-lock discovery, live-connection state machine, and authenticated `TreeSnapshot` WebSocket client. | P2 observability | Shared by the web DevTools extension and standalone desktop clients; platform-specific lock reads stay in the host application. |
+| **`grid_cockpit`** | Watch-only standalone macOS client for the resident station's StationControl door. | P2 observability | Reads the on-box lock through an app-owned `dart:io` adapter, supports manual LAN credentials, and renders `grid_cockpit_ui` projections in AOT builds. |
 
 ## Decision 2 — Reactive domain projections, grounded in Gas City's primitive model
 
