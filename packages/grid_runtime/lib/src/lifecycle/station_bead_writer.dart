@@ -258,6 +258,15 @@ class StationBeadWriter {
   static const String gateRegatedAtKey = 'regated_at';
   static const String gateCloseCauseKey = 'grid.gate.close_cause';
 
+  /// Metadata key distinguishing a gate's blocking scope.
+  static const String stationGateScopeKey = 'grid.gate.scope';
+
+  /// Metadata key carrying the boot epoch blocked by a station gate.
+  static const String stationGateEpochKey = 'grid.gate.boot_epoch';
+
+  /// The [stationGateScopeKey] value for a station-scoped gate.
+  static const String stationGateScopeValue = 'station';
+
   /// The molecule model's owning-session JOIN keys (`DESIGN-tg-pm6.md` R1/R6)
   /// — string literals here (grid_runtime cannot import grid_engine's
   /// `MoleculeCircuitKeys`/`MoleculeStepKeys`; the dependency arc is
@@ -607,6 +616,64 @@ class StationBeadWriter {
       metadataAll: {mountAttemptWorkBeadKey: workBeadId},
     );
     return records.isEmpty ? null : records.first;
+  }
+
+  /// Mints a the_grid-owned `type=gate` bead blocking the station authority
+  /// record for [epoch], without requiring a live session or route node.
+  ///
+  /// The durable target is `<substation>/<epoch>`, matching the trajectory
+  /// authority id stamped for that boot. Open station gates deduplicate on the
+  /// exact ([epoch], [reason]) pair within this owned state-store namespace;
+  /// reuse applies the same guarded courtesy refresh as [createGate].
+  Future<String> createStationGate({
+    required String substation,
+    required int epoch,
+    required String reason,
+  }) async {
+    if (!_ownership.ownsTarget(
+      id: '$substation-pending',
+      metadata: {rigKey: substation},
+    )) {
+      _refuse('create', substation, substation);
+    }
+    final target = '$substation/$epoch';
+    final existing = await _findOpenStationGate(
+      substation: substation,
+      target: target,
+      epoch: epoch,
+      reason: reason,
+    );
+    if (existing != null) {
+      final priorCount =
+          int.tryParse('${existing.metadata[gateRegateCountKey] ?? ''}') ?? 0;
+      await update(
+        existing.id,
+        metadata: {
+          'reason': reason,
+          gateRegateCountKey: (priorCount + 1).toString(),
+          gateRegatedAtKey: _clock().toUtc().toIso8601String(),
+        },
+        ifAssignee: existing.assignee,
+        ifStatus: existing.status,
+      );
+      return existing.id;
+    }
+    final id = await _bd.create(
+      title: 'grid station gate $target',
+      type: GridIssueTypes.gate,
+    );
+    await _updateBead(
+      'createStationGate',
+      id,
+      mergeMetadata: {
+        rigKey: substation,
+        'blocks': target,
+        stationGateScopeKey: stationGateScopeValue,
+        stationGateEpochKey: '$epoch',
+        'reason': reason,
+      },
+    );
+    return id;
   }
 
   /// Mints a the_grid-owned `type=gate` bead in [substation] (the OWN state store)
@@ -1381,6 +1448,25 @@ class StationBeadWriter {
     final gates = await _findOpenGates(
       sessionId: sessionId,
       nodePath: nodePath,
+    );
+    return gates.isEmpty ? null : gates.first;
+  }
+
+  Future<Bead?> _findOpenStationGate({
+    required String substation,
+    required String target,
+    required int epoch,
+    required String reason,
+  }) async {
+    final gates = await _reader.openBeads(
+      types: {GridIssueTypes.gate},
+      metadataAll: {
+        rigKey: substation,
+        stationGateScopeKey: stationGateScopeValue,
+        stationGateEpochKey: '$epoch',
+        'blocks': target,
+        'reason': reason,
+      },
     );
     return gates.isEmpty ? null : gates.first;
   }
