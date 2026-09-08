@@ -1007,6 +1007,58 @@ void main() {
         expect(transport.named('delivery.outcomeMissing'), isEmpty);
       },
     );
+
+    test(
+      'delivery-bound terminal with recorded outcome closes exactly once',
+      () async {
+        final f = buildFakes();
+        final transport = RecordingExplorationTransport();
+        final method = RecordingDeliveryMethod(id: 'github-pr');
+        final reg = RecordingCapabilityRegistry(circuits: const {});
+        const terminal = SessionProjection(
+          workBeadId: 'tg-1',
+          sessionId: 'tgdog-s',
+          cursor: {
+            'tg-1/agent': NodeCursor(state: StepState.complete),
+            'tg-1/verify': NodeCursor(state: StepState.complete),
+            'tg-1/land': NodeCursor(state: StepState.complete),
+          },
+          results: {
+            'tg-1/land': {
+              ResultKeys.delivery: 'github-pr',
+              'pr_url': 'https://example.test/pr/66',
+            },
+          },
+        );
+        final joined = JoinedSnapshotNotifier(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
+        final m = _mountFull(
+          joined: joined,
+          ctx: f.ctx,
+          registry: reg,
+          rootCircuit: (_) => _code,
+          services: ServiceBundle(delivery: method, transport: transport),
+        );
+        addTearDown(m.owner.dispose);
+
+        await _pump();
+        m.owner.flush();
+        await _pump();
+
+        expect(
+          f.runner.callsFor('close').where((call) => call[1] == 'tgdog-s'),
+          hasLength(1),
+        );
+        expect(f.runner.metadataOfUpdate(0), sessionCompleteMetadata());
+        expect(transport.named('delivery.outcomeMissing'), isEmpty);
+        expect(method.requests, isEmpty);
+      },
+    );
   });
 
   group(
