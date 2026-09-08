@@ -92,6 +92,18 @@ void main() {
               status: BeadStatus.closed,
             ),
             const Bead(id: 'tgdog-a', issueType: GridIssueTypes.gate),
+            const Bead(
+              id: 'tgdog-station-gate',
+              issueType: GridIssueTypes.gate,
+              metadata: {
+                'rig': 'tgdog',
+                'blocks': 'tgdog/42',
+                StationBeadWriter.stationGateScopeKey:
+                    StationBeadWriter.stationGateScopeValue,
+                StationBeadWriter.stationGateEpochKey: '42',
+                'reason': 'admission-halted',
+              },
+            ),
             const Bead(id: 'tgdog-task', issueType: IssueType.task),
           ]);
         },
@@ -101,11 +113,20 @@ void main() {
 
       expect(refreshed, isTrue);
       final value = (result as GridCommandCompleted).value;
+      final gates = (value['gates']! as List<Object?>)
+          .cast<Map<String, Object?>>();
+      expect(gates.map((row) => row['id']), [
+        'tgdog-a',
+        'tgdog-station-gate',
+        'tgdog-z',
+      ]);
       expect(
-        (value['gates']! as List<Object?>).cast<Map<String, Object?>>().map(
-          (row) => row['id'],
+        gates.singleWhere((row) => row['id'] == 'tgdog-station-gate'),
+        allOf(
+          containsPair('blocks', 'tgdog/42'),
+          containsPair('node', null),
+          containsPair('reason', 'admission-halted'),
         ),
-        ['tgdog-a', 'tgdog-z'],
       );
     });
 
@@ -995,7 +1016,9 @@ void main() {
       },
     );
 
-    test('grid/gate/resolve without grades closes only the gate', () async {
+    // ADR-0014 D-C4: gate/resolve stays a resident-loop operator one-shot;
+    // station scope does not introduce a second runner or direct-bd surface.
+    test('grid/gate/resolve closes a station gate without grades', () async {
       final runner = _RecordingRunner();
       final handler = _handler(
         state: _Source(
@@ -1003,7 +1026,14 @@ void main() {
             const Bead(
               id: 'tgdog-gate',
               issueType: GridIssueTypes.gate,
-              metadata: {'rig': 'tgdog'},
+              metadata: {
+                'rig': 'tgdog',
+                'blocks': 'tgdog/42',
+                StationBeadWriter.stationGateScopeKey:
+                    StationBeadWriter.stationGateScopeValue,
+                StationBeadWriter.stationGateEpochKey: '42',
+                'reason': 'admission-halted',
+              },
             ),
           ]),
         ),
@@ -1017,6 +1047,14 @@ void main() {
       );
 
       expect(result, isA<GridCommandCompleted>());
+      expect(
+        (result as GridCommandCompleted).value,
+        allOf(
+          containsPair('gateId', 'tgdog-gate'),
+          containsPair('sessionId', 'tgdog/42'),
+          containsPair('node', null),
+        ),
+      );
       expect(runner.calls.map((call) => call.first), [
         'update',
         'update',
@@ -1027,7 +1065,7 @@ void main() {
         runner.calls.skip(1).every((call) => call.contains('tgdog-gate')),
         isTrue,
       );
-      expect(runner.calls.join(' '), isNot(contains('tgdog-session')));
+      expect(runner.calls.join(' '), isNot(contains('tgdog/42')));
       expect(runner.calls.join(' '), isNot(contains('grid.result.')));
       final causeUpdate = runner.calls.singleWhere(
         (call) => call.join(' ').contains('grid.gate.close_cause=adjudicated'),

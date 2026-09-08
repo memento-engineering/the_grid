@@ -14,6 +14,7 @@ import 'package:test/test.dart';
 /// second-process path: direct `GridStateStore` export/write assertions,
 /// state-prefix CLI guards, and CLI-side bead/gate/ownership/F-lane checks;
 /// those resident semantics are covered by station_command_handler_test.dart.
+/// This keeps gate/resolve on ADR-0014 D-C4's resident one-shot path.
 void main() {
   const fixture =
       "literal `cmd` and \$(cmd) and \$VAR and 'single'\n  trailing  ";
@@ -78,6 +79,37 @@ void main() {
       expect(
         output.join('\n'),
         allOf(contains('age 1m'), contains('re-gated 3x')),
+      );
+    });
+
+    test('station gate renders its authority target and absent node', () async {
+      final output = <String>[];
+      final code = await runGateLs(
+        gridRoot: '/grid',
+        client: FakeClient(
+          const StationCommandCompleted({
+            'gates': [
+              {
+                'id': 'tgdog-station-gate',
+                'blocks': 'tgdog/42',
+                'node': null,
+                'reason': 'admission-halted',
+              },
+            ],
+          }),
+        ),
+        out: output.add,
+      );
+
+      expect(code, 0);
+      expect(
+        output.join('\n'),
+        allOf(
+          contains('tgdog-station-gate'),
+          contains('blocks tgdog/42'),
+          contains('node <no node>'),
+          contains('reason: admission-halted'),
+        ),
       );
     });
 
@@ -162,6 +194,30 @@ void main() {
         0,
       );
       expect(client.params!['grades'], {'critic': 'A'});
+    });
+
+    test('station gate resolves through the resident without grades', () async {
+      final output = <String>[];
+      final client = FakeClient(const StationCommandCompleted({}));
+
+      final code = await runGateResolve(
+        gridRoot: '/grid',
+        gateId: 'tgdog-station-gate',
+        client: client,
+        out: output.add,
+      );
+
+      expect(code, 0);
+      expect(client.method, 'grid/gate/resolve');
+      expect(client.params, {
+        'gateId': 'tgdog-station-gate',
+        'grades': <String, String>{},
+        'rationale': null,
+      });
+      expect(
+        output.single,
+        'grid gate resolve — closed gate tgdog-station-gate.',
+      );
     });
 
     test('malformed pair refuses before dispatch', () async {
