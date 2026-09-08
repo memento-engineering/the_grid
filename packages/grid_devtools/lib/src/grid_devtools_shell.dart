@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:grid_cockpit_ui/grid_cockpit_ui.dart';
 
+import 'events/events_source.dart';
 import 'handshake_state.dart';
 import 'live/live_connection_bar.dart';
 import 'live/live_connection_controller.dart';
@@ -57,6 +58,7 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
   late final TreeSource? _defaultSource = widget.treeSource == null
       ? bundledReplayTreeSource()
       : null;
+  late GridEventsSource _eventsSource;
 
   /// Drops stale probe results — only the latest probe may publish.
   int _probeGen = 0;
@@ -64,6 +66,9 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
   @override
   void initState() {
     super.initState();
+    _eventsSource = GridEventsSource(widget.client);
+    // ignore: unawaited_futures
+    _eventsSource.start();
     widget.retrigger?.addListener(_onRetrigger);
     // ignore: unawaited_futures
     _probe();
@@ -77,6 +82,12 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
       widget.retrigger?.addListener(_onRetrigger);
     }
     if (oldWidget.client != widget.client) {
+      // Stop the old client before the replacement starts capturing.
+      // ignore: unawaited_futures
+      _eventsSource.close();
+      _eventsSource = GridEventsSource(widget.client);
+      // ignore: unawaited_futures
+      _eventsSource.start();
       // ignore: unawaited_futures
       _probe();
     }
@@ -85,6 +96,8 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
   @override
   void dispose() {
     widget.retrigger?.removeListener(_onRetrigger);
+    // ignore: unawaited_futures
+    _eventsSource.close();
     _handshake.dispose();
     final defaultSource = _defaultSource;
     if (defaultSource != null) {
@@ -150,7 +163,7 @@ class _GridDevToolsShellState extends State<GridDevToolsShell> {
           LiveConnectionBar(controller: connection),
         Expanded(
           child: ProjectionTabs(
-            client: widget.client,
+            eventsSource: _eventsSource,
             source: projectionSource,
             snapshotJsonPicker: widget.snapshotJsonPicker,
           ),

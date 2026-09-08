@@ -38,6 +38,9 @@ class FakeGridExplorationClient implements GridExplorationClient {
   int handshakeCalls = 0;
   final List<int?> fetchEventsLimits = <int?>[];
 
+  /// Whether event capture is currently listening to the live stream.
+  bool get hasEventListener => _controller.hasListener;
+
   @override
   Future<GridHandshake> handshake() async {
     handshakeCalls++;

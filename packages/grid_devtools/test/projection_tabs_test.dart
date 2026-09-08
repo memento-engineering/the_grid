@@ -99,14 +99,14 @@ TreeSnapshot _snapshot({
 
 Widget _host({
   required ReplayTreeSource source,
-  required FakeGridExplorationClient client,
+  required GridEventsSource eventsSource,
   SnapshotJsonPicker? picker,
   bool ambientStartAlignment = false,
 }) {
   final child = Scaffold(
     body: ProjectionTabs(
       source: source,
-      client: client,
+      eventsSource: eventsSource,
       snapshotJsonPicker: picker ?? () async => null,
     ),
   );
@@ -127,22 +127,30 @@ Widget _host({
 void main() {
   late ReplayTreeSource source;
   late FakeGridExplorationClient client;
+  late GridEventsSource eventsSource;
 
-  setUp(() {
+  setUp(() async {
     source = ReplayTreeSource([_snapshot()]);
     client = FakeGridExplorationClient(
       seedEvents: const [GridEventRecord(type: 'beadCreated', id: 'grid-1')],
     );
+    eventsSource = GridEventsSource(client);
+    await eventsSource.start();
   });
 
   tearDown(() async {
+    await eventsSource.close();
     await source.dispose();
     await client.dispose();
   });
 
   testWidgets('builds with ambient start tab alignment', (tester) async {
     await tester.pumpWidget(
-      _host(source: source, client: client, ambientStartAlignment: true),
+      _host(
+        source: source,
+        eventsSource: eventsSource,
+        ambientStartAlignment: true,
+      ),
     );
     await tester.pump();
 
@@ -153,7 +161,7 @@ void main() {
   testWidgets('renders Station Inspector and Events with independent events', (
     tester,
   ) async {
-    await tester.pumpWidget(_host(source: source, client: client));
+    await tester.pumpWidget(_host(source: source, eventsSource: eventsSource));
     await tester.pumpAndSettle();
     expect(find.text('Station'), findsOneWidget);
     expect(find.text('Inspector'), findsOneWidget);
@@ -168,7 +176,7 @@ void main() {
   testWidgets('navigates the Station operator flow in both directions', (
     tester,
   ) async {
-    await tester.pumpWidget(_host(source: source, client: client));
+    await tester.pumpWidget(_host(source: source, eventsSource: eventsSource));
     await tester.pumpAndSettle();
     expect(find.text('alpha'), findsOneWidget);
 
@@ -203,7 +211,7 @@ void main() {
         workId: 'next-work',
       ),
     ]);
-    await tester.pumpWidget(_host(source: source, client: client));
+    await tester.pumpWidget(_host(source: source, eventsSource: eventsSource));
     await tester.tap(find.text('Inspector'));
     await tester.pumpAndSettle();
     expect(find.text('Grid'), findsWidgets);
@@ -233,7 +241,7 @@ void main() {
     await tester.pumpWidget(
       _host(
         source: source,
-        client: client,
+        eventsSource: eventsSource,
         picker: () async => jsonEncode(replacement),
       ),
     );
@@ -261,7 +269,7 @@ void main() {
     await tester.pumpWidget(
       _host(
         source: source,
-        client: client,
+        eventsSource: eventsSource,
         picker: () async => contents.isEmpty ? null : contents,
       ),
     );
@@ -287,7 +295,11 @@ void main() {
   ) async {
     final picker = Completer<String?>();
     await tester.pumpWidget(
-      _host(source: source, client: client, picker: () => picker.future),
+      _host(
+        source: source,
+        eventsSource: eventsSource,
+        picker: () => picker.future,
+      ),
     );
     await tester.tap(find.byKey(const Key('projection.loadSnapshot')));
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
