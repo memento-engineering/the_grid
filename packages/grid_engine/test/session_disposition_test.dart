@@ -196,6 +196,35 @@ void main() {
         },
       );
 
+      test('a commit_only session dispositions VOIDED, not DONE', () {
+        final session =
+            projectSession(
+              sessionBead(
+                id: 'tgdog-s',
+                workBeadId: 'tg-1',
+                closed: true,
+                metadata: sessionCommitOnlyMetadata(),
+              ),
+            ).copyWith(
+              cursor: const {
+                'tg-1/agent': NodeCursor(state: StepState.complete),
+                'tg-1/verify': NodeCursor(state: StepState.complete),
+                'tg-1/land': NodeCursor(state: StepState.complete),
+              },
+            );
+
+        expect(session.commitOnly, isTrue);
+        expect(session.completed, isFalse);
+        final disposition = sessionDispositionOf(session);
+        expect(disposition, isA<VoidedSession>());
+        expect(
+          (disposition as VoidedSession).reason,
+          'closed with an unbound delivery method (commit-only); no landing '
+          'occurred',
+        );
+        expect(disposition.blocksMount, isFalse);
+      });
+
       test(
         'an OPEN session bead carrying the outcome marker is still LIVE — the '
         'marker only disambiguates a CLOSED one',

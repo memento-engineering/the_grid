@@ -1064,13 +1064,13 @@ class StationBeadWriter {
   /// parent-child, and supersedes edges. The proxied-server fallback consumes
   /// that identical order per bead. A cycle refuses the reap before any write.
   /// Every session whose teardown is OUTSTANDING — open, and already carrying
-  /// `grid.outcome=complete` (tg-tlea).
+  /// `grid.outcome=complete` or `grid.outcome=commit_only` (tg-tlea).
   ///
-  /// That conjunction IS the crash window. `_completeAndClose` stamps the
-  /// completion marker FIRST, on purpose, and closes the bead only after the
-  /// molecule reap, the worktree reap and the gate sweep have run; so a bead
-  /// that still carries the marker while open is a station that died partway
-  /// down its own teardown tail.
+  /// That conjunction IS the crash window. `_completeAndClose` stamps its
+  /// selected terminal marker FIRST, on purpose, and closes the bead only after
+  /// the molecule reap, the worktree reap and the gate sweep have run; so a
+  /// bead that still carries either marker while open is a station that died
+  /// partway down its own teardown tail.
   ///
   /// **The filter is SERVER-SIDE and that is load-bearing** (#192 pushed
   /// metadata filters into `bd list`). Expressed instead as "list every owned
@@ -1079,10 +1079,25 @@ class StationBeadWriter {
   /// backlog would then be walked on every boot. [BeadProbeReader.openBeads]
   /// also excludes closed beads, so the open half of the conjunction costs
   /// nothing extra.
-  Future<List<Bead>> sessionsAwaitingTeardown() => _reader.openBeads(
-    types: {GridIssueTypes.session},
-    metadataAll: const {'grid.outcome': 'complete'},
-  );
+  Future<List<Bead>> sessionsAwaitingTeardown() async {
+    final matches = await Future.wait([
+      _reader.openBeads(
+        types: {GridIssueTypes.session},
+        metadataAll: const {'grid.outcome': 'complete'},
+      ),
+      _reader.openBeads(
+        types: {GridIssueTypes.session},
+        metadataAll: const {'grid.outcome': 'commit_only'},
+      ),
+    ]);
+    final byId = <String, Bead>{};
+    for (final group in matches) {
+      for (final bead in group) {
+        byId[bead.id] = bead;
+      }
+    }
+    return byId.values.toList(growable: false);
+  }
 
   Future<void> reapMolecule({required String sessionId}) async {
     final session = await _reader.beadById(

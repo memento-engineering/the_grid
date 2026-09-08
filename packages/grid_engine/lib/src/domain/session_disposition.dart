@@ -4,13 +4,16 @@
 /// `SessionScope` (adopt, or mint?).
 ///
 /// A40's positive-terminal-only unmount reads EVERY closed session as "the work
-/// is done". Three different things close a session, and only two of them mean
-/// that:
+/// is done". Several different things close a session, and only delivered or
+/// legacy-complete rounds mean that:
 ///
 /// - the engine closed it at a **positive terminal** — blocking is correct AND
 ///   load-bearing: the work source is read-only (A37), so a landed bead stays
 ///   open + ready, and the closed session is the only latch that stops a
 ///   resident station re-driving finished work forever;
+/// - the engine closed it at a positive terminal with no delivery method bound
+///   (`grid.outcome=commit_only`) — blocking is WRONG: the circuit committed,
+///   but no landing occurred, so the next live boot must mint a fresh round;
 /// - the engine closed it on **breaker exhaustion** (`grid.escalation`) —
 ///   blocking is correct: a human owns it, and an auto re-mint would loop
 ///   escalate → close → re-mint → fail → escalate, spawning agents forever;
@@ -49,17 +52,17 @@ sealed class SessionDisposition with _$SessionDisposition {
   /// An OPEN session — the live round: ADOPT it (never a second mint).
   const factory SessionDisposition.live() = LiveSession;
 
-  /// CLOSED at a positive terminal — the work is DONE. Never re-mount, never
-  /// re-mint: this is the latch that keeps landed work from being re-driven.
+  /// CLOSED after a delivered positive terminal — the work is DONE. Never
+  /// re-mount, never re-mint: this keeps landed work from being re-driven.
   const factory SessionDisposition.done() = DoneSession;
 
   /// CLOSED carrying a HUMAN marker (escalation / declined rework) — a human owns
   /// this round. Never re-mount, never re-mint; say WHY once, LOUD.
   const factory SessionDisposition.held({required String reason}) = HeldSession;
 
-  /// CLOSED mid-flight, no human marker, the cursor not a positive terminal — a
-  /// DEAD KEY: never adoptable AND never blocking. The bead mounts; the scope
-  /// retires the dead key and mints a fresh round, LOUD.
+  /// CLOSED without landing — either mid-flight or after a commit-only terminal
+  /// — a DEAD KEY: never adoptable AND never blocking. The bead mounts; the
+  /// scope retires the dead key and mints a fresh round, LOUD.
   const factory SessionDisposition.voided({required String reason}) =
       VoidedSession;
 
@@ -80,9 +83,9 @@ sealed class SessionDisposition with _$SessionDisposition {
 }
 
 /// Dispositions [session] — pure, total, no I/O and no circuit (the mount
-/// boundary has neither). Order matters: a human marker outranks everything, the
-/// engine's own DONE evidence outranks the cursor, and only then does an
-/// in-flight cursor void the key.
+/// boundary has neither). Order matters: a human marker outranks everything,
+/// commit-only voids before either delivered evidence or the legacy cursor
+/// fallback, and only then does an in-flight cursor void the key.
 SessionDisposition sessionDispositionOf(SessionProjection? session) {
   if (session == null) return const SessionDisposition.none();
   if (!session.isTerminal) {
@@ -105,6 +108,13 @@ SessionDisposition sessionDispositionOf(SessionProjection? session) {
       reason:
           'closed carrying a human marker (escalation / declined rework) — a '
           'human owns this round; the grid never re-drives it',
+    );
+  }
+  if (session.commitOnly) {
+    return const SessionDisposition.voided(
+      reason:
+          'closed with an unbound delivery method (commit-only); no landing '
+          'occurred',
     );
   }
   if (session.completed) return const SessionDisposition.done();

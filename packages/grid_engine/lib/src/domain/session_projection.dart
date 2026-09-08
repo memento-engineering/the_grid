@@ -47,7 +47,7 @@ abstract class SessionProjection with _$SessionProjection {
     @Default(SessionPauseState.none) SessionPauseState pauseState,
 
     /// True once the session bead is CLOSED. NOT on its own a statement that the
-    /// work is DONE — three different things close a session, and only the
+    /// work is DONE — several outcomes close a session, and only the
     /// disposition (`sessionDispositionOf`) tells them apart (I-10, tg-4rw). Read
     /// it with [completed] / [humanHeld], never alone.
     @Default(false) bool isTerminal,
@@ -61,6 +61,11 @@ abstract class SessionProjection with _$SessionProjection {
     /// False for a legacy bead closed before the marker shipped — the disposition
     /// falls back to the cursor shape there.
     @Default(false) bool completed,
+
+    /// True when the session closed after committing its circuit with no
+    /// ambient delivery method (`grid.outcome=commit_only`). This is terminal
+    /// teardown evidence, but never evidence that the work landed.
+    @Default(false) bool commitOnly,
 
     /// Diagnostic cause when completion was forced by terminal work beneath
     /// a still-live session. This never implies [completed] by itself.

@@ -41,6 +41,18 @@ const _burn = Circuit(
   ],
 );
 
+const _nestedTerminal = Circuit(
+  id: 'nested',
+  terminalStepId: 'finish',
+  steps: [CapabilityStep(stepId: 'finish', capabilityId: 'finish')],
+);
+
+const _rootSubTerminal = Circuit(
+  id: 'root-sub-terminal',
+  terminalStepId: 'nested',
+  steps: [SubCircuitStep(stepId: 'nested', circuitId: 'nested')],
+);
+
 Future<void> _pump() async {
   for (var i = 0; i < 5; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -87,6 +99,36 @@ JoinedSnapshot _joined({
 
 Bead _task(String id, {BeadStatus status = BeadStatus.open}) =>
     Bead(id: id, issueType: IssueType.task, status: status);
+
+Bead _stepBead(
+  String id, {
+  required String sessionId,
+  required String path,
+  required StepState state,
+  Map<String, String> extra = const {},
+}) => Bead(
+  id: id,
+  issueType: GridIssueTypes.step,
+  metadata: {
+    'rig': stateSubstation,
+    MoleculeStepKeys.stepId: path.split('/').last,
+    MoleculeStepKeys.capability: path.split('/').last,
+    MoleculeStepKeys.kind: StepKind.job.name,
+    MoleculeStepKeys.path: path,
+    MoleculeStepKeys.session: sessionId,
+    MoleculeStepKeys.state: state.name,
+    ...extra,
+  },
+);
+
+List<Map<String, dynamic>> _updatesFor(RecordingBdRunner runner, String id) {
+  final updates = runner.workUpdates;
+  return [
+    for (var index = 0; index < updates.length; index++)
+      if (updates[index].length > 1 && updates[index][1] == id)
+        runner.metadataOfUpdate(index),
+  ];
+}
 
 const _tgConfig = SubstationConfig(
   substationId: 'tg',
@@ -529,7 +571,7 @@ void main() {
 
   group('Track C — SessionScope owns the positive-terminal close (D-2)', () {
     test(
-      'when the terminal step completes, the session is closed exactly once',
+      'an UNBOUND delivery method closes with the commit_only marker, never complete',
       () async {
         final f = buildFakes();
         final transport = RecordingExplorationTransport();
@@ -538,7 +580,7 @@ void main() {
             id: 'tgdog-s',
             issueType: GridIssueTypes.session,
             status: BeadStatus.closed,
-            metadata: {'rig': 'tgdog', 'grid.outcome': 'complete'},
+            metadata: {'rig': 'tgdog', 'grid.outcome': 'commit_only'},
           ),
           Bead(
             id: 'tgdog-terminal-gate',
@@ -618,6 +660,25 @@ void main() {
           f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
           hasLength(1),
         );
+        expect(
+          _updatesFor(
+            f.runner,
+            'tgdog-s',
+          ).where((metadata) => metadata.containsKey(SessionBeadKeys.outcome)),
+          [sessionCommitOnlyMetadata()],
+        );
+        expect(
+          _updatesFor(f.runner, 'tgdog-s'),
+          everyElement(
+            isNot(containsPair(SessionBeadKeys.outcome, 'complete')),
+          ),
+        );
+        expect(transport.named('session.commitOnlyComplete'), hasLength(1));
+        expect(transport.named('session.commitOnlyComplete').single.data, {
+          'sessionId': 'tgdog-s',
+          'workBeadId': 'tg-1',
+          'nodePath': 'tg-1/land',
+        });
         expect(transport.named('session.closed').single.data, {
           'sessionId': 'tgdog-s',
           'disposition': 'done',
@@ -643,6 +704,32 @@ void main() {
               )
               .join(' '),
           contains('grid.gate.close_cause=session-terminal'),
+        );
+
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {
+              'tg-1': const SessionProjection(
+                workBeadId: 'tg-1',
+                sessionId: 'tgdog-s',
+                cursor: {
+                  'tg-1/agent': NodeCursor(state: StepState.complete),
+                  'tg-1/verify': NodeCursor(state: StepState.complete),
+                  'tg-1/land': NodeCursor(state: StepState.complete),
+                },
+              ),
+            },
+          ),
+        );
+        m.owner.flush();
+        await _pump();
+
+        expect(transport.named('session.commitOnlyComplete'), hasLength(1));
+        expect(
+          f.runner.callsFor('close').where((c) => c[1] == 'tgdog-s'),
+          hasLength(1),
         );
       },
     );
@@ -758,27 +845,126 @@ void main() {
       },
     );
 
+    test('a BOUND delivery method still closes with complete', () async {
+      final f = buildFakes();
+      final transport = RecordingExplorationTransport();
+      final method = RecordingDeliveryMethod(id: 'github-pr');
+      final registry = DefaultCapabilityRegistry(
+        capabilities: {
+          'land': const FixedRouteCapability(Advance({'grade': 'A'})),
+        },
+        circuits: const {},
+        clock: () => DateTime(2026),
+      );
+      final agent = _stepBead(
+        'tgdog-agent',
+        sessionId: 'tgdog-s',
+        path: 'tg-1/agent',
+        state: StepState.complete,
+      );
+      final verify = _stepBead(
+        'tgdog-verify',
+        sessionId: 'tgdog-s',
+        path: 'tg-1/verify',
+        state: StepState.complete,
+      );
+      final land = _stepBead(
+        'tgdog-land',
+        sessionId: 'tgdog-s',
+        path: 'tg-1/land',
+        state: StepState.pending,
+      );
+      SessionProjection session(List<Bead> steps) => SessionProjection(
+        workBeadId: 'tg-1',
+        sessionId: 'tgdog-s',
+        isMolecule: true,
+        moleculeBeads: steps,
+      );
+      final joined = JoinedSnapshotNotifier(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1': session([agent, verify, land]),
+          },
+        ),
+      );
+      final m = _mountFull(
+        joined: joined,
+        ctx: f.ctx,
+        registry: registry,
+        rootCircuit: (_) => _code,
+        services: ServiceBundle(delivery: method, transport: transport),
+      );
+      addTearDown(m.owner.dispose);
+
+      await _pumpUntil(
+        m.owner,
+        () => _updatesFor(f.runner, 'tgdog-land').isNotEmpty,
+      );
+      final terminalUpdate = Map<String, String>.fromEntries(
+        _updatesFor(f.runner, 'tgdog-land').single.entries.map(
+          (entry) => MapEntry(entry.key, entry.value.toString()),
+        ),
+      );
+      expect(terminalUpdate[MoleculeStepKeys.state], StepState.complete.name);
+      expect(
+        terminalUpdate[ResultKeys.keyFor('tg-1/land', ResultKeys.delivery)],
+        'github-pr',
+      );
+      final completedLand = land.copyWith(
+        metadata: {...land.metadata, ...terminalUpdate},
+      );
+
+      joined.push(
+        _joined(
+          beads: [_task('tg-1')],
+          ready: {'tg-1'},
+          sessions: {
+            'tg-1': session([agent, verify, completedLand]),
+          },
+        ),
+      );
+      m.owner.flush();
+      await _pumpUntil(
+        m.owner,
+        () => f.runner
+            .callsFor('close')
+            .any((call) => call.length > 1 && call[1] == 'tgdog-s'),
+      );
+
+      expect(method.requests, hasLength(1));
+      expect(
+        _updatesFor(
+          f.runner,
+          'tgdog-s',
+        ).where((metadata) => metadata.containsKey(SessionBeadKeys.outcome)),
+        [sessionCompleteMetadata()],
+      );
+      expect(
+        _updatesFor(f.runner, 'tgdog-s'),
+        everyElement(
+          isNot(
+            containsPair(SessionBeadKeys.outcome, kSessionOutcomeCommitOnly),
+          ),
+        ),
+      );
+      expect(transport.named('session.commitOnlyComplete'), isEmpty);
+      expect(transport.named('delivery.outcomeMissing'), isEmpty);
+    });
+
     test(
-      'delivery-bound terminal with recorded outcome closes exactly once',
+      'a root terminal that is a SubCircuitStep fails closed and LOUD',
       () async {
         final f = buildFakes();
         final transport = RecordingExplorationTransport();
-        final method = RecordingDeliveryMethod(id: 'github-pr');
-        final reg = RecordingCapabilityRegistry(circuits: const {});
+        final registry = RecordingCapabilityRegistry(
+          circuits: const {'nested': _nestedTerminal},
+        );
         const terminal = SessionProjection(
           workBeadId: 'tg-1',
           sessionId: 'tgdog-s',
-          cursor: {
-            'tg-1/agent': NodeCursor(state: StepState.complete),
-            'tg-1/verify': NodeCursor(state: StepState.complete),
-            'tg-1/land': NodeCursor(state: StepState.complete),
-          },
-          results: {
-            'tg-1/land': {
-              ResultKeys.delivery: 'github-pr',
-              'pr_url': 'https://example.test/pr/66',
-            },
-          },
+          cursor: {'tg-1/nested/finish': NodeCursor(state: StepState.complete)},
         );
         final joined = JoinedSnapshotNotifier(
           _joined(
@@ -790,23 +976,35 @@ void main() {
         final m = _mountFull(
           joined: joined,
           ctx: f.ctx,
-          registry: reg,
-          rootCircuit: (_) => _code,
-          services: ServiceBundle(delivery: method, transport: transport),
+          registry: registry,
+          rootCircuit: (_) => _rootSubTerminal,
+          services: ServiceBundle(transport: transport),
         );
         addTearDown(m.owner.dispose);
 
         await _pump();
+        joined.push(
+          _joined(
+            beads: [_task('tg-1')],
+            ready: {'tg-1'},
+            sessions: {'tg-1': terminal},
+          ),
+        );
         m.owner.flush();
         await _pump();
 
+        expect(_updatesFor(f.runner, 'tgdog-s'), isEmpty);
         expect(
           f.runner.callsFor('close').where((call) => call[1] == 'tgdog-s'),
-          hasLength(1),
+          isEmpty,
         );
-        expect(f.runner.metadataOfUpdate(0), sessionCompleteMetadata());
+        expect(transport.named('deliver.unreachableTerminal'), hasLength(1));
+        expect(transport.named('deliver.unreachableTerminal').single.data, {
+          'circuitId': 'root-sub-terminal',
+          'terminalStepId': 'nested',
+          'nodePath': 'tg-1/nested',
+        });
         expect(transport.named('delivery.outcomeMissing'), isEmpty);
-        expect(method.requests, isEmpty);
       },
     );
   });

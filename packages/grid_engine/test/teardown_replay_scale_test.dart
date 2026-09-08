@@ -209,14 +209,17 @@ void main() {
       expect(refreshedOpenSteps, hasLength(81));
       expect(refreshedOpenMolecules, hasLength(15));
       expect(closedIds, isNot(containsAll(liveChildIds)));
-      expect(reader.sessionQueries, hasLength(1));
-      expect(
-        reader.sessionQueries.single.types,
-        unorderedEquals(<IssueType>{GridIssueTypes.session}),
-      );
-      expect(reader.sessionQueries.single.metadataAll, {
-        'grid.outcome': 'complete',
-      });
+      expect(reader.sessionQueries, hasLength(2));
+      for (final query in reader.sessionQueries) {
+        expect(
+          query.types,
+          unorderedEquals(<IssueType>{GridIssueTypes.session}),
+        );
+      }
+      expect(reader.sessionQueries.map((query) => query.metadataAll), [
+        {'grid.outcome': 'complete'},
+        {'grid.outcome': 'commit_only'},
+      ]);
     },
   );
 }

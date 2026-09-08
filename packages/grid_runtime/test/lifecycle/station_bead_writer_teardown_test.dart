@@ -30,22 +30,30 @@ void main() {
     metadata: {'rig': 'tgdog', ...metadata},
   );
 
-  test('the trigger is ONE server-side metadata-filtered query — never a walk '
-      'of every owned session filtered in Dart', () async {
-    runner.exportBeads = [session('tgdog-sess1')];
+  test(
+    'the trigger is TWO server-side metadata-filtered queries — never a walk '
+    'of every owned session filtered in Dart',
+    () async {
+      runner.exportBeads = [session('tgdog-sess1')];
 
-    await writer.sessionsAwaitingTeardown();
+      await writer.sessionsAwaitingTeardown();
 
-    final probe = runner.openBeadCalls.single;
-    expect(probe.types, {GridIssueTypes.session});
-    expect(
-      probe.metadataAll,
-      {'grid.outcome': 'complete'},
-      reason:
-          'a Dart-side filter would reintroduce exactly the unbounded '
-          'boot pass RestartReconciler documents itself refusing to do',
-    );
-  });
+      expect(runner.openBeadCalls, hasLength(2));
+      for (final probe in runner.openBeadCalls) {
+        expect(probe.types, {GridIssueTypes.session});
+      }
+      expect(
+        runner.openBeadCalls.map((probe) => probe.metadataAll),
+        [
+          {'grid.outcome': 'complete'},
+          {'grid.outcome': 'commit_only'},
+        ],
+        reason:
+            'a Dart-side filter would reintroduce exactly the unbounded '
+            'boot pass RestartReconciler documents itself refusing to do',
+      );
+    },
+  );
 
   test(
     'a session with no completion marker is not in the trigger set',
@@ -60,6 +68,32 @@ void main() {
     runner.exportBeads = [session('tgdog-sess1', closed: true)];
 
     expect(await writer.sessionsAwaitingTeardown(), isEmpty);
+  });
+
+  test('sessionsAwaitingTeardown picks up a commit_only tail', () async {
+    runner.exportBeads = [
+      session('tgdog-complete'),
+      session(
+        'tgdog-commit-only',
+        metadata: const {'grid.outcome': 'commit_only'},
+      ),
+      session('tgdog-unmarked', metadata: const {}),
+      session(
+        'tgdog-closed-commit-only',
+        closed: true,
+        metadata: const {'grid.outcome': 'commit_only'},
+      ),
+    ];
+
+    expect((await writer.sessionsAwaitingTeardown()).map((bead) => bead.id), [
+      'tgdog-complete',
+      'tgdog-commit-only',
+    ]);
+    expect(runner.openBeadCalls, hasLength(2));
+    expect(runner.openBeadCalls.map((probe) => probe.metadataAll), [
+      {'grid.outcome': 'complete'},
+      {'grid.outcome': 'commit_only'},
+    ]);
   });
 
   group('sessionDispositionOfMetadata — the ONE shared derivation', () {
@@ -95,6 +129,13 @@ void main() {
     test('neither marker means VOIDED', () {
       expect(
         sessionDispositionOfMetadata(const {}),
+        GateSweepSessionDisposition.voided,
+      );
+    });
+
+    test('sessionDispositionOfMetadata reads commit_only as voided', () {
+      expect(
+        sessionDispositionOfMetadata(const {'grid.outcome': 'commit_only'}),
         GateSweepSessionDisposition.voided,
       );
     });
