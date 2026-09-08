@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
@@ -33,7 +34,8 @@ class LinkCommand extends Command<int> {
       ..addOption('blocked-by')
       ..addOption('reason')
       ..addOption('reason-file')
-      ..addOption('actor');
+      ..addOption('actor')
+      ..addFlag('json', negatable: false);
   }
 
   final String stateStorePrefix;
@@ -44,7 +46,8 @@ class LinkCommand extends Command<int> {
   final String name = 'link';
 
   @override
-  final String description = 'Mint or list cross-repository links.';
+  final String description =
+      'Mint or list cross-repository links. $kCrossLinkTargetCloseRule';
 
   @override
   Future<int> run() => runLink(
@@ -103,16 +106,22 @@ Future<int> runLink({
       out ?? (message) => stdout.writeln(message);
   final void Function(String) writeErr =
       err ?? (message) => stderr.writeln(message);
+  final isList = arguments.rest.length == 1 && arguments.rest.single == 'ls';
+  final json = arguments.flag('json');
+  if (json && !isList) {
+    writeErr('grid link: --json is accepted only by link ls.');
+    return 64;
+  }
   final roster = _roster(endpoints, writeErr, 'link');
   if (roster == null) return 64;
 
-  if (arguments.rest.length == 1 && arguments.rest.single == 'ls') {
+  if (isList) {
     if (_hasValue(arguments, 'blocked-by') ||
         _hasValue(arguments, 'reason') ||
         _hasValue(arguments, 'reason-file') ||
         _hasValue(arguments, 'actor') ||
         arguments.multiOption('prefix').isNotEmpty) {
-      writeErr('grid link ls: only --grid-root is accepted.');
+      writeErr('grid link ls: only --grid-root and --json are accepted.');
       return 64;
     }
     final stateStore = _stateStore(arguments, writeErr, 'link ls');
@@ -153,13 +162,35 @@ Future<int> runLink({
         }
       }
       links.sort((a, b) => a.id.compareTo(b.id));
-      for (final bead in links) {
-        final from = _metadata(bead, CrossLinkKeys.from);
-        final to = _metadata(bead, CrossLinkKeys.to);
-        write(
-          '${bead.id} $from [${statuses[from] ?? 'unobserved'}] '
-          '--blocked-by $to [${statuses[to] ?? 'unobserved'}]',
-        );
+      final rows = links
+          .map((bead) {
+            final from = _metadata(bead, CrossLinkKeys.from);
+            final to = _metadata(bead, CrossLinkKeys.to);
+            final fromStatus = statuses[from] ?? 'unobserved';
+            final toStatus = statuses[to] ?? 'unobserved';
+            final edgeState = toStatus == BeadStatus.closed.wire
+                ? 'INERT (target closed)'
+                : 'ACTIVE';
+            return <String, String>{
+              'id': bead.id,
+              'from': from,
+              'fromStatus': fromStatus,
+              'to': to,
+              'toStatus': toStatus,
+              'edgeState': edgeState,
+            };
+          })
+          .toList(growable: false);
+      if (json) {
+        write(jsonEncode(rows));
+      } else {
+        for (final row in rows) {
+          write(
+            '${row['id']} ${row['from']} [${row['fromStatus']}] '
+            '--blocked-by ${row['to']} [${row['toStatus']}] '
+            '— ${row['edgeState']}',
+          );
+        }
       }
       return 0;
     } on StoreRefusal catch (e) {
