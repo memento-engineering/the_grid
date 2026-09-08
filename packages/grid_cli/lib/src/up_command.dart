@@ -56,7 +56,8 @@ import 'package:grid_sdk/grid_sdk.dart'
         SubstationWorkSpec,
         TreeProjector,
         kNotWedged,
-        runGrid;
+        runGrid,
+        settle;
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 
@@ -373,27 +374,10 @@ class UpCommand extends Command<int> {
     // POSTURE over the observations is the delegate's. A THROWING inspector
     // is an unexpected error, not a styled refusal: dispose the delegate the
     // probes run under, then let the error propagate in its own shape.
-    // One unwind step, loud-but-non-aborting (mirroring teardown's rail
-    // posture): a throwing dispose is reported to stderr and the unwind
-    // CONTINUES — every later step still runs, so the original error is
-    // never masked and a lock release at the tail is guaranteed regardless
-    // of which substation's dispose blew up.
-    Future<bool> settle(
-      String step,
-      FutureOr<void> Function() action, {
-      Duration? within,
-    }) async {
-      try {
-        final pending = action();
-        if (pending is Future<void>) {
-          await (within == null ? pending : pending.timeout(within));
-        }
-        return true;
-      } on Object catch (error) {
-        stderr.writeln('$prefix: unwind step "$step" failed: $error');
-        return false;
-      }
-    }
+    // One reporting sink for the shared unwind primitive: every throwing
+    // dispose stays loud while later steps continue to the lock-last tail.
+    void reportUnwindRefusal(String message) =>
+        stderr.writeln('$prefix: $message');
 
     // The socket half of the unwind: every store connection the live delegate
     // opened is closed here — state store first (it is the last writer) — each
@@ -407,6 +391,7 @@ class UpCommand extends Command<int> {
           'store close (${store.name})',
           store.close,
           within: kStoreCloseTimeout,
+          onRefusal: reportUnwindRefusal,
         );
         if (settled) closed += 1;
       }
@@ -427,7 +412,11 @@ class UpCommand extends Command<int> {
           ).then((value) => (substation: substation, value: value)),
       ]);
     } on Object {
-      await settle('delegate dispose', delegate.dispose);
+      await settle(
+        'delegate dispose',
+        delegate.dispose,
+        onRefusal: reportUnwindRefusal,
+      );
       rethrow;
     }
     final freshnessText = freshness
@@ -491,7 +480,11 @@ class UpCommand extends Command<int> {
         now: startedAt,
       );
     } on Object catch (error) {
-      await settle('delegate dispose', delegate.dispose);
+      await settle(
+        'delegate dispose',
+        delegate.dispose,
+        onRefusal: reportUnwindRefusal,
+      );
       stderr.writeln('$prefix: $error');
       return 64;
     }
@@ -504,8 +497,16 @@ class UpCommand extends Command<int> {
     try {
       vmServiceUri = await _readVmServiceUri();
     } on Object {
-      await settle('delegate dispose', delegate.dispose);
-      await settle('lock release', stationLock.release);
+      await settle(
+        'delegate dispose',
+        delegate.dispose,
+        onRefusal: reportUnwindRefusal,
+      );
+      await settle(
+        'lock release',
+        stationLock.release,
+        onRefusal: reportUnwindRefusal,
+      );
       rethrow;
     }
 
@@ -539,8 +540,16 @@ class UpCommand extends Command<int> {
     } on Object catch (error) {
       // The runner's contract disposed the delegate; the shell's remaining
       // steps are its own diagnostics reporter and the lock.
-      await settle('diagnostics dispose', diagnostics.dispose);
-      await settle('lock release', stationLock.release);
+      await settle(
+        'diagnostics dispose',
+        diagnostics.dispose,
+        onRefusal: reportUnwindRefusal,
+      );
+      await settle(
+        'lock release',
+        stationLock.release,
+        onRefusal: reportUnwindRefusal,
+      );
       stderr.writeln('$prefix: $error');
       return 64;
     }
@@ -555,12 +564,36 @@ class UpCommand extends Command<int> {
       DevModeResource? devMode,
     }) async {
       final stores = List<StoreConnection>.of(live.openStores);
-      if (devMode != null) await settle('dev-mode dispose', devMode.dispose);
-      if (control != null) await settle('control dispose', control.dispose);
-      await settle('grid teardown', grid.teardown);
-      await settle('diagnostics dispose', diagnostics.dispose);
+      if (devMode != null) {
+        await settle(
+          'dev-mode dispose',
+          devMode.dispose,
+          onRefusal: reportUnwindRefusal,
+        );
+      }
+      if (control != null) {
+        await settle(
+          'control dispose',
+          control.dispose,
+          onRefusal: reportUnwindRefusal,
+        );
+      }
+      await settle(
+        'grid teardown',
+        grid.teardown,
+        onRefusal: reportUnwindRefusal,
+      );
+      await settle(
+        'diagnostics dispose',
+        diagnostics.dispose,
+        onRefusal: reportUnwindRefusal,
+      );
       await closeStores(stores);
-      await settle('lock release', stationLock.release);
+      await settle(
+        'lock release',
+        stationLock.release,
+        onRefusal: reportUnwindRefusal,
+      );
       stderr.writeln('$prefix: $error');
       return 1;
     }
@@ -651,13 +684,33 @@ class UpCommand extends Command<int> {
       // sweep and the trajectory all read their stores on the way down.
       final stores = List<StoreConnection>.of(live.openStores);
       if (devMode case final host?) {
-        await settle('dev-mode dispose', host.dispose);
+        await settle(
+          'dev-mode dispose',
+          host.dispose,
+          onRefusal: reportUnwindRefusal,
+        );
       }
-      await settle('control dispose', control.dispose);
-      await settle('grid teardown', grid.teardown);
-      await settle('diagnostics dispose', diagnostics.dispose);
+      await settle(
+        'control dispose',
+        control.dispose,
+        onRefusal: reportUnwindRefusal,
+      );
+      await settle(
+        'grid teardown',
+        grid.teardown,
+        onRefusal: reportUnwindRefusal,
+      );
+      await settle(
+        'diagnostics dispose',
+        diagnostics.dispose,
+        onRefusal: reportUnwindRefusal,
+      );
       await closeStores(stores);
-      await settle('lock release', stationLock.release);
+      await settle(
+        'lock release',
+        stationLock.release,
+        onRefusal: reportUnwindRefusal,
+      );
     }
 
     if (config.runFor case final runFor?) {
