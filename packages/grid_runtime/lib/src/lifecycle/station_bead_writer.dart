@@ -406,13 +406,13 @@ class StationBeadWriter {
         session?.metadata['grid.escalation'] != null ||
         session?.metadata['grid.rework_declined'] != null;
     final eligible =
-        !sessionHeld &&
+        (!sessionHeld || workTerminal) &&
         switch (disposition) {
           GateSweepSessionDisposition.done ||
           GateSweepSessionDisposition.voided =>
             sessionClosedByWriter || (session?.isClosed ?? false),
           GateSweepSessionDisposition.live => workTerminal,
-          GateSweepSessionDisposition.held => false,
+          GateSweepSessionDisposition.held => workTerminal,
         };
     if (!eligible) {
       throw StateError(
